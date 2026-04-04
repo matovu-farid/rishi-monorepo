@@ -1,0 +1,22 @@
+{
+  "name": "rishi-worker",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --minify",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+  },
+  "dependencies": {
+    "@clerk/backend": "^2.29.0",
+    "@hono/clerk-auth": "^3.0.3",
+    "@sentry/cloudflare": "^10.32.1",
+    "@upstash/redis": "^1.36.0",
+    "axios": "^1.13.2",
+    "hono": "^4.10.6",
+    "openai": "^6.9.0",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "wrangler": "^4.4.0"
+  }
+}
