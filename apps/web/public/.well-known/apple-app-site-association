@@ -1,0 +1,17 @@
+{
+    "applinks": {
+        "details": [
+            {
+                "appIDs": [
+                    "rishi.org.fidexa.rishi"
+                ],
+                "components": [
+                    {
+                        "/": "/open/*",
+                        "comment": "Matches any URL whose path starts with /open/"
+                    }
+                ]
+            }
+        ]
+    }
+}

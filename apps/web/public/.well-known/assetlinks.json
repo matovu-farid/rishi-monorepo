@@ -1,0 +1,14 @@
+[
+    {
+        "relation": [
+            "delegate_permission/common.handle_all_urls"
+        ],
+        "target": {
+            "namespace": "android_app",
+            "package_name": "org.fidexa.rishi",
+            "sha256_cert_fingerprints": [
+                "0E:E0:74:E9:57:2B:D9:69:D4:CE:C3:5C:7D:91:9D:76:F6:36:7B:5E:C4:DB:9F:48:CD:4A:1F:C5:78:5C:C5:0E"
+            ]
+        }
+    }
+]
