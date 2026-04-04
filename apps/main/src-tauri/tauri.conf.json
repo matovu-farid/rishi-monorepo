@@ -1,0 +1,74 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "rishi",
+  "version": "0.1.0",
+  "identifier": "org.fidexa.rishi",
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "bun run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "rishi",
+        "width": 1024,
+        "height": 770
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' https://img.clerk.com  https://rishi-tauri.s3.us-east-1.amazonaws.com asset: http://asset.localhost data: blob:; font-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline' asset: http://asset.localhost blob:; script-src 'self' 'unsafe-inline'; media-src 'self' http://asset.localhost asset:; connect-src  ipc://localhost 'self' asset: http://asset.localhost",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPLOCALDATA/**",
+          "$APPLOCALDATA/public/**"
+        ]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IHJzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5ClJXUlRZMEl5UDl4UXFVM004bm9VSTNwQXExbWk3dWxKd1BQZkVsYVF3QU01ZTBGWHlya0FBQkFBQUFBQUFBQUFBQUlBQUFBQTZoSFRicVFaNVNNVllyRzlSOEcvZUVwZEVGelgzN3cyWkp0d29oRFZFQ2ZDeUVqM1Vjdml3VERaNHE5eGZJU3l2MEVxTmFiSlZSU1E4N3ZjWVNpVThZMTcxTUtrVlJRVEhjVWl4UWc5QnczamtCSWhOcTg4VUVlN090VjB0Ujd1K3l2RVB4MTBLeUE9Cg==",
+      "endpoints": [
+        "https://github.com/matovu-farid/rishi/releases/latest/download/latest.json"
+      ]
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "rishi"
+        ]
+      },
+      "mobile": [
+        {
+          "scheme": [
+            "rishi"
+          ],
+          "appLink": false
+        }
+      ]
+    },
+    "sql": {
+      "preload": [
+        "sqlite:rishi.db"
+      ]
+    }
+  },
+  "bundle": {
+    "createUpdaterArtifacts": true,
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "iOS": {
+      "developmentTeam": "rishi"
+    }
+  }
+}

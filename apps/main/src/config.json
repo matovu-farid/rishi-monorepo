@@ -1,0 +1,15 @@
+{
+    "development": {
+        "player": {
+        "recordPlayingState": true
+        },
+        "audio_worker_url": "https://rishi-worker.faridmato90.workers.dev/api/audio/speech"
+    },
+    "production": {
+        "player": {
+        "recordPlayingState": false
+        },
+        "audio_worker_url": "https://rishi-worker.faridmato90.workers.dev/api/audio/speech"
+
+    }
+}
