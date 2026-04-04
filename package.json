@@ -8,7 +8,9 @@
   },
   "dependencies": {
     "@clerk/backend": "^2.29.0",
+    "@hono/clerk-auth": "^3.0.3",
     "@sentry/cloudflare": "^10.32.1",
+    "@upstash/redis": "^1.36.0",
     "axios": "^1.13.2",
     "hono": "^4.10.6",
     "openai": "^6.9.0",
