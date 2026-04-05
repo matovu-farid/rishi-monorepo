@@ -14,7 +14,7 @@
     {
       "binding": "DB",
       "database_name": "rishi-sync",
-      "database_id": "REPLACE_AFTER_D1_CREATE",
+      "database_id": "cea3d366-7ee6-4b47-a865-38f0af220111",
       "migrations_dir": "drizzle/migrations"
     }
   ],
