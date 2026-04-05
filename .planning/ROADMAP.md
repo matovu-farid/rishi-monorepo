@@ -181,7 +181,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation & Auth | 2/2 | Complete   | 2026-04-05 |
-| 2. EPUB Reader | 0/3 | Planning complete | - |
+| 2. EPUB Reader | 2/3 | In Progress|  |
 | 3. PDF Reader & File Management | 0/? | Not started | - |
 | 4. Sync Infrastructure | 0/? | Not started | - |
 | 5. Reading Progress & Highlights | 0/? | Not started | - |
