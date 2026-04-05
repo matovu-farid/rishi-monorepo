@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-04-05T20:48:13.474Z"
+stopped_at: "Checkpoint pending: 03-02 Task 2 (human-verify)"
+last_updated: "2026-04-05T20:53:57.030Z"
 progress:
   total_phases: 8
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 7
-  completed_plans: 6
+  completed_plans: 7
 ---
 
 # Project State
@@ -77,6 +77,8 @@ Recent decisions affecting current work:
 - [Phase 02]: Settings table with key-value SQLite storage for reader preferences
 - [Phase 03]: Custom PDF toolbar instead of reusing EPUB ReaderToolbar (PDF has no themes/TOC)
 - [Phase 03]: Page navigation via controlled page prop state (react-native-pdf has no imperative setPage)
+- [Phase 03]: Alert-based format chooser for import (simple, no extra UI needed)
+- [Phase 03]: Trash icon button instead of swipe-to-delete for simplicity
 
 ### Pending Todos
 
@@ -90,6 +92,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-05T20:48:13.472Z
-Stopped at: Completed 03-01-PLAN.md
+Last session: 2026-04-05T20:53:51.728Z
+Stopped at: Checkpoint pending: 03-02 Task 2 (human-verify)
 Resume file: None

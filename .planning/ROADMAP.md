@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation & Auth** - Dev build infrastructure and Clerk authentication flow (completed 2026-04-05)
 - [x] **Phase 2: EPUB Reader** - EPUB rendering with pagination, themes, navigation, and file import (completed 2026-04-05)
-- [ ] **Phase 3: PDF Reader & File Management** - PDF rendering and unified library view for both formats
+- [x] **Phase 3: PDF Reader & File Management** - PDF rendering and unified library view for both formats (completed 2026-04-05)
 - [ ] **Phase 4: Sync Infrastructure** - D1/R2 backend, sync API, and offline-first mobile sync engine
 - [ ] **Phase 5: Reading Progress & Highlights** - Cross-device reading position, highlights, and annotations
 - [ ] **Phase 6: On-Device RAG & AI Conversations** - Text chunking, on-device embeddings, vector search, and AI Q&A
@@ -182,7 +182,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 |-------|----------------|--------|-----------|
 | 1. Foundation & Auth | 2/2 | Complete   | 2026-04-05 |
 | 2. EPUB Reader | 3/3 | Complete | 2026-04-05 |
-| 3. PDF Reader & File Management | 0/2 | Not started | - |
+| 3. PDF Reader & File Management | 2/2 | Complete   | 2026-04-05 |
 | 4. Sync Infrastructure | 0/? | Not started | - |
 | 5. Reading Progress & Highlights | 0/? | Not started | - |
 | 6. On-Device RAG & AI Conversations | 0/? | Not started | - |
