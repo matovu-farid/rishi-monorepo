@@ -55,11 +55,12 @@ Plans:
   5. User can navigate via table of contents
   6. Reading position is saved and restored when reopening a book (ePubCFI)
   7. Imported books are readable without network connection
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+- [ ] 02-01-PLAN.md -- Install dependencies, define types, create SQLite database, book storage service, file import utility
+- [ ] 02-02-PLAN.md -- Library screen with book list, empty state, import flow, navigation to reader
+- [ ] 02-03-PLAN.md -- EPUB reader screen with themes, font controls, TOC navigation, position persistence
 
 ### Phase 3: PDF Reader & File Management
 **Goal**: Users can import and read PDF books, and browse a unified library showing all their books with metadata.
@@ -180,7 +181,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation & Auth | 2/2 | Complete   | 2026-04-05 |
-| 2. EPUB Reader | 0/? | Not started | - |
+| 2. EPUB Reader | 0/3 | Planning complete | - |
 | 3. PDF Reader & File Management | 0/? | Not started | - |
 | 4. Sync Infrastructure | 0/? | Not started | - |
 | 5. Reading Progress & Highlights | 0/? | Not started | - |
