@@ -16,7 +16,7 @@
 ### Book Rendering
 
 - [x] **READ-01**: User can open and read an EPUB file with paginated view
-- [ ] **READ-02**: User can open and read a PDF file with native rendering
+- [x] **READ-02**: User can open and read a PDF file with native rendering
 - [x] **READ-03**: EPUB reader supports theme switching (light, dark, sepia)
 - [x] **READ-04**: EPUB reader supports font size adjustment
 - [x] **READ-05**: User can navigate EPUB via table of contents
@@ -26,7 +26,7 @@
 ### File Management
 
 - [x] **FILE-01**: User can import EPUB files from device storage via file picker
-- [ ] **FILE-02**: User can import PDF files from device storage via file picker
+- [x] **FILE-02**: User can import PDF files from device storage via file picker
 - [x] **FILE-03**: Imported books are copied to app document directory
 - [ ] **FILE-04**: User can view library of all imported books with metadata (title, author, cover)
 - [ ] **FILE-05**: User can delete books from library
@@ -129,14 +129,14 @@
 | AUTH-04 | Phase 1 | Complete |
 | AUTH-05 | Phase 1 | Complete |
 | READ-01 | Phase 2 | Complete |
-| READ-02 | Phase 3 | Pending |
+| READ-02 | Phase 3 | Complete |
 | READ-03 | Phase 2 | Complete |
 | READ-04 | Phase 2 | Complete |
 | READ-05 | Phase 2 | Complete |
 | READ-06 | Phase 3 | Pending |
 | READ-07 | Phase 2 | Complete |
 | FILE-01 | Phase 2 | Complete |
-| FILE-02 | Phase 3 | Pending |
+| FILE-02 | Phase 3 | Complete |
 | FILE-03 | Phase 2 | Complete |
 | FILE-04 | Phase 3 | Pending |
 | FILE-05 | Phase 3 | Pending |
