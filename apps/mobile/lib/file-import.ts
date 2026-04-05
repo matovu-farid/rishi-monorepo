@@ -1,33 +1,34 @@
-import * as DocumentPicker from 'expo-document-picker'
-import * as FileSystem from 'expo-file-system'
+import { File, Directory, Paths } from 'expo-file-system'
 import { Book } from '@/types/book'
-import { insertBook } from './book-storage'
+import { insertBook } from '@/lib/book-storage'
 
-const BOOKS_DIR = `${FileSystem.documentDirectory}books/`
+const BOOKS_DIR = new Directory(Paths.document, 'books')
 
 export async function importEpubFile(): Promise<Book | null> {
-  const result = await DocumentPicker.getDocumentAsync({
-    type: 'application/epub+zip',
-    copyToCacheDirectory: true,
-  })
+  const pickedFile = await File.pickFileAsync(undefined, 'application/epub+zip')
 
-  if (result.canceled || !result.assets || result.assets.length === 0) {
+  if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
     return null
   }
 
-  const asset = result.assets[0]
+  const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile
+
   const bookId = generateUUID()
-  const bookDir = `${BOOKS_DIR}${bookId}/`
-  const destPath = `${bookDir}book.epub`
+  const bookDir = new Directory(BOOKS_DIR, bookId)
 
-  // Ensure books directory exists
-  await FileSystem.makeDirectoryAsync(bookDir, { intermediates: true })
+  // Ensure books/bookId directory exists
+  if (!BOOKS_DIR.exists) {
+    BOOKS_DIR.create({ intermediates: true })
+  }
+  bookDir.create({ intermediates: true, idempotent: true })
 
-  // Copy file from cache to permanent storage
-  await FileSystem.copyAsync({ from: asset.uri, to: destPath })
+  // Copy file from picked location to permanent storage
+  const destFile = new File(bookDir, 'book.epub')
+  sourceFile.copy(destFile)
 
-  // Extract title from filename (strip .epub extension)
-  const rawName = asset.name || 'Unknown Book'
+  // Extract title from URI (strip .epub extension)
+  const uriParts = sourceFile.uri.split('/')
+  const rawName = decodeURIComponent(uriParts[uriParts.length - 1] || 'Unknown Book')
   const title = rawName.replace(/\.epub$/i, '')
 
   const book: Book = {
@@ -35,7 +36,7 @@ export async function importEpubFile(): Promise<Book | null> {
     title,
     author: 'Unknown',
     coverPath: null,
-    filePath: destPath,
+    filePath: destFile.uri,
     format: 'epub',
     currentCfi: null,
     createdAt: Date.now(),

@@ -1,5 +1,5 @@
 import { Book } from '@/types/book'
-import { getDb } from './db'
+import { getDb } from '@/lib/db'
 
 export function insertBook(book: Book): void {
   const db = getDb()
