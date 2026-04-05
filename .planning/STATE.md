@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 01-01-PLAN.md
-last_updated: "2026-04-05T15:05:07.796Z"
+stopped_at: "Checkpoint pending: 01-02-PLAN.md Task 4 (human-verify)"
+last_updated: "2026-04-05T15:10:54.760Z"
 progress:
   total_phases: 8
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -47,6 +47,7 @@ Plan: 2 of 2
 
 *Updated after each plan completion*
 | Phase 01 P01 | 5min | 2 tasks | 7 files |
+| Phase 01 P02 | 2min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -61,6 +62,8 @@ Recent decisions affecting current work:
 - [Init]: Desktop sync integration in scope as late phase (Phase 8) -- mobile standalone first
 - [Phase 01]: Used Slot instead of Stack in root layout for route group navigation
 - [Phase 01]: Custom sign-in UI with useSignIn/useOAuth hooks for NativeWind styling control
+- [Phase 01]: initApiClient pattern: pass getToken from useAuth hook to avoid hooks-in-non-component code
+- [Phase 01]: 5-minute expiry buffer on Worker JWT to proactively refresh before 401
 
 ### Pending Todos
 
@@ -74,6 +77,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-05T15:05:07.792Z
-Stopped at: Completed 01-01-PLAN.md
+Last session: 2026-04-05T15:10:45.595Z
+Stopped at: Checkpoint pending: 01-02-PLAN.md Task 4 (human-verify)
 Resume file: None

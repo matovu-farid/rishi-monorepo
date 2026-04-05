@@ -8,9 +8,9 @@
 ### Authentication
 
 - [x] **AUTH-01**: User can sign in via Clerk on mobile (email, social, or existing account)
-- [ ] **AUTH-02**: Mobile app exchanges Clerk session token for Worker JWT via existing /api/auth/exchange endpoint
-- [ ] **AUTH-03**: JWT persists in secure storage across app restarts
-- [ ] **AUTH-04**: Expired JWT triggers re-authentication flow
+- [x] **AUTH-02**: Mobile app exchanges Clerk session token for Worker JWT via existing /api/auth/exchange endpoint
+- [x] **AUTH-03**: JWT persists in secure storage across app restarts
+- [x] **AUTH-04**: Expired JWT triggers re-authentication flow
 - [x] **AUTH-05**: Unauthenticated users are redirected to sign-in screen
 
 ### Book Rendering
@@ -124,9 +124,9 @@
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | AUTH-01 | Phase 1 | Complete |
-| AUTH-02 | Phase 1 | Pending |
-| AUTH-03 | Phase 1 | Pending |
-| AUTH-04 | Phase 1 | Pending |
+| AUTH-02 | Phase 1 | Complete |
+| AUTH-03 | Phase 1 | Complete |
+| AUTH-04 | Phase 1 | Complete |
 | AUTH-05 | Phase 1 | Complete |
 | READ-01 | Phase 2 | Pending |
 | READ-02 | Phase 3 | Pending |
