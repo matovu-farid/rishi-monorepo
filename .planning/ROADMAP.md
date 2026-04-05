@@ -12,7 +12,7 @@ This roadmap delivers the Rishi Mobile App from empty scaffold to full desktop p
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation & Auth** - Dev build infrastructure and Clerk authentication flow
+- [x] **Phase 1: Foundation & Auth** - Dev build infrastructure and Clerk authentication flow (completed 2026-04-05)
 - [ ] **Phase 2: EPUB Reader** - EPUB rendering with pagination, themes, navigation, and file import
 - [ ] **Phase 3: PDF Reader & File Management** - PDF rendering and unified library view for both formats
 - [ ] **Phase 4: Sync Infrastructure** - D1/R2 backend, sync API, and offline-first mobile sync engine
@@ -179,7 +179,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation & Auth | 0/2 | Planning complete | - |
+| 1. Foundation & Auth | 2/2 | Complete   | 2026-04-05 |
 | 2. EPUB Reader | 0/? | Not started | - |
 | 3. PDF Reader & File Management | 0/? | Not started | - |
 | 4. Sync Infrastructure | 0/? | Not started | - |
