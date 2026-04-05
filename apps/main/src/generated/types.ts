@@ -70,6 +70,11 @@ export interface PollForUserParams {
   [key: string]: unknown;
 }
 
+export interface ExchangeTokenParams {
+  sessionToken: string;
+  [key: string]: unknown;
+}
+
 export interface GetContextForQueryParams {
   queryText: string;
   bookId: number;

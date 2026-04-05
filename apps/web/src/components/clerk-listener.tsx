@@ -15,7 +15,7 @@ export function ClerkListener() {
   );
   const [queryState] = useQueryState("state");
   const [queryProfileState] = useQueryState("profile", parseAsBoolean.withDefault(false));
-  const { isSignedIn } = useSession();
+  const { isSignedIn, session } = useSession();
   const { user } = useUser();
   const userId = user?.id;
 
@@ -30,8 +30,11 @@ export function ClerkListener() {
     if (isSignedIn) {
       if (!state || !userId) return;
       console.log(JSON.stringify(user));
-      void saveUser(userId, state);
-      window.location.href = `rishi://auth/callback?state=${state}&userId=${userId}`;
+      void (async () => {
+        const token = await session?.getToken();
+        void saveUser(userId, state);
+        window.location.href = `rishi://auth/callback?state=${state}&userId=${userId}&sessionToken=${encodeURIComponent(token ?? "")}`;
+      })();
 
       return;
     }

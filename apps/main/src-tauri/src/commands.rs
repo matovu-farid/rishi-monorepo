@@ -39,6 +39,7 @@ pub async fn process_job(
         .map_err(|e| format!("Failed to get app data directory: {:?}", e))?;
     sql::process_job(page_number, book_id, page_data, &app_data_dir).await
 }
+
 #[tauri::command]
 pub async fn poll_for_user(state: &str, timeout_sec: u64) -> Result<User, String> {
     let worker_url = "https://rishi-worker.faridmato90.workers.dev";
@@ -58,6 +59,60 @@ pub async fn poll_for_user(state: &str, timeout_sec: u64) -> Result<User, String
         elapsed += interval;
     }
     Err("Timeout reached while polling for user ID".to_string())
+}
+
+pub fn get_auth_token(app: &tauri::AppHandle) -> Result<String, String> {
+    let store = app.store("store.json").map_err(|e| e.to_string())?;
+    let token_value = store.get("auth_token").ok_or("Not authenticated")?;
+    token_value
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or("Invalid token format".to_string())
+}
+
+async fn authenticated_get(app: &tauri::AppHandle, url: &str) -> Result<reqwest::Response, String> {
+    let token = get_auth_token(app)?;
+    let client = reqwest::Client::new();
+    client
+        .get(url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn exchange_token(app: tauri::AppHandle, session_token: &str) -> Result<User, String> {
+    let worker_url = "https://rishi-worker.faridmato90.workers.dev";
+    let url = format!("{}/api/auth/exchange", worker_url);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", session_token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("Token exchange failed: {}", response.status()));
+    }
+
+    let exchange_response: serde_json::Value =
+        response.json().await.map_err(|e| e.to_string())?;
+
+    let token = exchange_response["token"]
+        .as_str()
+        .ok_or("Missing token")?;
+    let user: User = serde_json::from_value(exchange_response["user"].clone())
+        .map_err(|e| e.to_string())?;
+
+    let store = app.store("store.json").map_err(|e| e.to_string())?;
+    store.set("auth_token", json!(token));
+    store.set("user", json!(user));
+    store.save().map_err(|e| e.to_string())?;
+
+    Ok(user)
 }
 
 #[tauri::command]
@@ -99,16 +154,16 @@ pub fn get_state() -> String {
     let state = Uuid::new_v4().to_string();
     state
 }
+
 #[tauri::command]
 pub async fn signout(app: tauri::AppHandle) -> Result<(), String> {
     let store = app.store("store.json").map_err(|e| e.to_string())?;
-    let deleted = store.delete("user");
-    if !deleted {
-        return Err("User not found".to_string());
-    }
+    store.delete("user");
+    store.delete("auth_token");
     store.save().map_err(|e| e.to_string())?;
     Ok(())
 }
+
 #[tauri::command]
 pub fn get_user_from_store(app: tauri::AppHandle) -> Result<User, String> {
     let store = app.store("store.json").map_err(|e| e.to_string())?;
@@ -119,20 +174,16 @@ pub fn get_user_from_store(app: tauri::AppHandle) -> Result<User, String> {
 
 #[tauri::command]
 pub async fn get_user(app: tauri::AppHandle, user_id: &str) -> Result<User, String> {
-    // /api/clerk/user/:userId from the worker
     let worker_url = "https://rishi-worker.faridmato90.workers.dev";
-    let path = format!("/api/clerk/user/{}", user_id);
-    let url = format!("{}{}", worker_url, path);
-    let response = reqwest::get(url).await.map_err(|e| e.to_string())?;
-    println!("response: {:?}", response);
+    let url = format!("{}/api/clerk/user/{}", worker_url, user_id);
+    let response = authenticated_get(&app, &url).await?;
     let user = response.json::<User>().await.map_err(|e| e.to_string())?;
-    // save user to the database
-
     let store = app.store("store.json").map_err(|e| e.to_string())?;
     store.set("user", json!(user));
     store.save().map_err(|e| e.to_string())?;
     Ok(user)
 }
+
 #[tauri::command]
 pub fn search_vectors(
     app: tauri::AppHandle,
@@ -148,6 +199,7 @@ pub fn search_vectors(
 
     vectordb::search_vectors(app_data_dir, dim, name, query, k).map_err(|e| e.to_string())
 }
+
 #[tauri::command]
 pub fn get_pdf_data(app: tauri::AppHandle, path: &Path) -> Result<BookData, String> {
     let data = Pdf::new(path);

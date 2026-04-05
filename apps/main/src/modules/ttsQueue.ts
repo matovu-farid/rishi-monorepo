@@ -4,6 +4,7 @@ import type { TTSRequest } from "@/types";
 import { ttsCache } from "./ttsCache";
 import { TTSQueueEvents } from "./ipc_handles";
 import { fetch } from "@tauri-apps/plugin-http";
+import { load } from "@tauri-apps/plugin-store";
 import config from "@/config.json";
 
 export interface QueueItem extends TTSRequest {
@@ -259,10 +260,14 @@ export class TTSQueue extends EventEmitter {
         speed: 1.0,
       };
 
+      const store = await load("store.json");
+      const token = await store.get<string>("auth_token");
+
       const response = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(requestBody),
       });

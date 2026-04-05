@@ -1,5 +1,6 @@
 import axios, { AxiosError } from "axios";
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 
 import { OpenAI } from "openai";
 import { z } from "zod";
@@ -7,12 +8,7 @@ import { createClerkClient } from "@clerk/backend";
 import * as Sentry from "@sentry/cloudflare";
 import { Redis } from "@upstash/redis/cloudflare";
 import { clerkMiddleware, getAuth } from "@hono/clerk-auth";
-
-const app = new Hono<{ Bindings: CloudflareBindings }>();
-app.use("*", clerkMiddleware());
-app.get("/", (c) => {
-  return c.text("Hello Hono!");
-});
+import jwt from "@tsndr/cloudflare-worker-jwt";
 
 interface CloudflareBindings {
   DEEPGRAM_KEY: string;
@@ -21,24 +17,104 @@ interface CloudflareBindings {
   CLERK_PUBLISHABLE_KEY: string;
   UPSTASH_REDIS_REST_URL: string;
   UPSTASH_REDIS_REST_TOKEN: string;
+  JWT_SECRET: string;
 }
 
-app.get("/api/redis-test", async (c) => {
-  const auth = getAuth(c);
+const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string } }>();
 
-  if (!auth?.isAuthenticated) {
+// CORS must come before clerkMiddleware
+app.use(
+  "*",
+  cors({
+    origin: ["https://rishi.fidexa.org", "tauri://localhost", "http://tauri.localhost"],
+    allowHeaders: ["Content-Type", "Authorization"],
+    allowMethods: ["GET", "POST", "OPTIONS"],
+  })
+);
+
+app.use("*", clerkMiddleware());
+
+app.get("/", (c) => {
+  return c.text("Hello Hono!");
+});
+
+// ─── requireWorkerAuth middleware ────────────────────────────────────────────
+async function requireWorkerAuth(c: any, next: () => Promise<void>) {
+  const authHeader = c.req.header("Authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return c.json({ error: "Unauthorized" }, 401);
   }
+  const token = authHeader.slice(7);
+  try {
+    const isValid = await jwt.verify(token, c.env.JWT_SECRET);
+    if (!isValid) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    const decoded = jwt.decode(token);
+    const payload = decoded?.payload as { sub?: string; exp?: number } | undefined;
+    if (!payload?.sub) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    // Check expiry manually
+    const now = Math.floor(Date.now() / 1000);
+    if (payload.exp && payload.exp < now) {
+      return c.json({ error: "Token expired" }, 401);
+    }
+    c.set("userId", payload.sub);
+  } catch {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  await next();
+}
+
+// ─── POST /api/auth/exchange ─────────────────────────────────────────────────
+app.post("/api/auth/exchange", async (c) => {
+  const auth = getAuth(c);
+  if (!auth?.userId) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const userId = auth.userId;
+
+  const clerkClient = createClerkClient({ secretKey: c.env.CLERK_SECRET_KEY });
+  const clerkUser = await clerkClient.users.getUser(userId);
+
+  const iat = Math.floor(Date.now() / 1000);
+  const exp = iat + 60 * 60 * 24 * 7; // 7 days
+
+  const token = await jwt.sign({ sub: userId, iat, exp }, c.env.JWT_SECRET);
+
+  const user = {
+    id: clerkUser.id,
+    firstName: clerkUser.firstName,
+    lastName: clerkUser.lastName,
+    fullName: clerkUser.fullName,
+    username: clerkUser.username,
+    imageUrl: clerkUser.imageUrl,
+    hasImage: clerkUser.hasImage,
+    lastSignInAt: clerkUser.lastSignInAt,
+    externalId: clerkUser.externalId,
+  };
+
+  return c.json({ token, expiresAt: exp, user });
+});
+
+// ─── Protected routes ─────────────────────────────────────────────────────────
+app.get("/api/redis-test", requireWorkerAuth, async (c) => {
   const redis = Redis.fromEnv(c.env);
   await redis.set("foo", "bar");
   const value = await redis.get("foo");
   return c.json({ value });
 });
+
+// Backwards-compatible state route (deprecated)
 app.get("api/user/:state", async (c) => {
   try {
     const redis = Redis.fromEnv(c.env);
     const state = c.req.param("state");
-    const userId = (await redis.hget("users", state)) as string;
+    const userId = (await redis.get(`auth:state:${state}`)) as string | null;
+    if (!userId) {
+      return c.json({ error: "User not found" }, 404);
+    }
     const clerkClient = createClerkClient({
       secretKey: c.env.CLERK_SECRET_KEY,
     });
@@ -62,13 +138,14 @@ app.get("/health", (c) => {
     service: "openai-tts-proxy",
   });
 });
-app.get("/api/clerk/users", async (c) => {
+
+app.get("/api/clerk/users", requireWorkerAuth, async (c) => {
   const clerkClient = createClerkClient({ secretKey: c.env.CLERK_SECRET_KEY });
   const users = await clerkClient.users.getUserList();
   return c.json(users);
 });
 
-app.get("/api/clerk/user/:userId", async (c) => {
+app.get("/api/clerk/user/:userId", requireWorkerAuth, async (c) => {
   try {
     const clerkClient = createClerkClient({
       secretKey: c.env.CLERK_SECRET_KEY,
@@ -86,20 +163,10 @@ app.get("/api/clerk/user/:userId", async (c) => {
   }
 });
 
-// Proxy all requests to /api/openai/* to OpenAI API
-// app.use('/api/openai', createProxyMiddleware(openaiProxyOptions))
-
-app.post("/api/audio/speech", async (c) => {
-  const auth = getAuth(c);
-
-  if (!auth?.isAuthenticated) {
-    Sentry.captureException(new Error("Unauthorized"));
-    return c.json({ error: "Unauthorized" }, 401);
-  }
-  // Validate and fix the request body
-  const { model, input, voice, apiKey, ...otherParams } = await c.req.json();
+app.post("/api/audio/speech", requireWorkerAuth, async (c) => {
+  const { model, input, voice, ...otherParams } = await c.req.json();
   const openai = new OpenAI({
-    apiKey: apiKey || c.env.OPENAI_API_KEY,
+    apiKey: c.env.OPENAI_API_KEY,
   });
   const response = await openai.audio.speech.create({
     model: "tts-1",
@@ -110,15 +177,8 @@ app.post("/api/audio/speech", async (c) => {
   return response;
 });
 
-app.get("/api/realtime/client_secrets", async (c) => {
+app.get("/api/realtime/client_secrets", requireWorkerAuth, async (c) => {
   try {
-    const auth = getAuth(c);
-
-    if (!auth?.isAuthenticated) {
-      return c.json({ error: "Unauthorized" }, 401);
-    }
-    //console.log("env", c.env);
-
     const response = await axios.post(
       "https://api.openai.com/v1/realtime/client_secrets",
       {
@@ -137,7 +197,7 @@ app.get("/api/realtime/client_secrets", async (c) => {
           Authorization: `Bearer ${c.env.OPENAI_API_KEY}`,
           "Content-Type": "application/json",
         },
-      },
+      }
     );
     const responseSchema = z.object({
       value: z.string(),
@@ -149,7 +209,7 @@ app.get("/api/realtime/client_secrets", async (c) => {
     if (error instanceof z.ZodError) {
       return c.json(
         { error: "Failed to get client secrets, " + error.message },
-        500,
+        500
       );
     }
     if (error instanceof AxiosError) {
@@ -159,28 +219,23 @@ app.get("/api/realtime/client_secrets", async (c) => {
             "Failed to get client secrets, " +
             error.response?.data.error.message,
         },
-        500,
+        500
       );
     }
     if (error instanceof Error) {
       return c.json(
         { error: "Failed to get client secrets, " + error.message },
-        500,
+        500
       );
     }
     return c.json({ error: "Failed to get client secrets, " }, 500);
   }
 });
 
-app.post("/api/text/completions", async (c) => {
-  const auth = getAuth(c);
-
-  if (!auth?.isAuthenticated) {
-    return c.json({ error: "Unauthorized" }, 401);
-  }
-  const { input, apiKey, ...otherParams } = await c.req.json();
+app.post("/api/text/completions", requireWorkerAuth, async (c) => {
+  const { input, ...otherParams } = await c.req.json();
   const openai = new OpenAI({
-    apiKey: apiKey || c.env.OPENAI_API_KEY,
+    apiKey: c.env.OPENAI_API_KEY,
   });
   const response = await openai.responses.create({
     model: "gpt-5-nano",

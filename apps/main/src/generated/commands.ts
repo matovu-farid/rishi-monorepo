@@ -65,7 +65,11 @@ export async function pollForUser(params: types.PollForUserParams): Promise<type
   return invoke('poll_for_user', params);
 }
 
-export async function getContextForQuery(params: types.GetContextForQueryParams): Promise<types.string[]> {
+export async function exchangeToken(params: types.ExchangeTokenParams): Promise<types.User> {
+  return invoke('exchange_token', params);
+}
+
+export async function getContextForQuery(params: types.GetContextForQueryParams): Promise<string[]> {
   return invoke('get_context_for_query', params);
 }
 

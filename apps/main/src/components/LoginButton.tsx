@@ -1,10 +1,9 @@
 import { LogIn, LogOut } from "lucide-react";
 import { Button } from "./ui/Button";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { getState, getUserFromStore, signout } from "@/generated";
+import { getState, getUserFromStore, signout, exchangeToken } from "@/generated";
 import { useAtom, useAtomValue } from "jotai";
 import { isLoggedInAtom, userAtom } from "./pdf/atoms/user";
-import { pollForUser } from "@/generated";
 import {
   Avatar,
   AvatarFallback,
@@ -19,6 +18,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/components/ui/dropdown-menu";
+import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 
 export function LoginButton() {
   const [user, setUser] = useAtom(userAtom);
@@ -45,18 +45,38 @@ export function LoginButton() {
     })();
   }, []);
 
+  // Listen for deep link auth callbacks
+  useEffect(() => {
+    const unlisten = onOpenUrl(async (urls) => {
+      for (const url of urls) {
+        if (url.includes("auth/callback")) {
+          const params = new URL(url).searchParams;
+          const sessionToken = params.get("sessionToken");
+          if (sessionToken) {
+            try {
+              const user = await exchangeToken({
+                sessionToken: decodeURIComponent(sessionToken),
+              });
+              setUser(user);
+            } catch (error) {
+              console.error("Token exchange failed:", error);
+            }
+          }
+        }
+      }
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
   async function onProfileClicked() {
     if (!user) return;
     await openUrl(`https://rishi.fidexa.org?profile=true`);
   }
   async function login() {
     await openUrl(`https://rishi.fidexa.org?login=true&state=${state}`);
-    if (state) {
-      const user = await pollForUser({ state, timeoutSec: 60 * 5 });
-      console.log("user", user);
-      if (!user) return;
-      setUser(user);
-    }
+    // Deep link will be handled by the listener set up in useEffect
   }
   async function logout() {
     setUser(null);
@@ -82,7 +102,7 @@ export function LoginButton() {
               Profile
             </DropdownMenuItem>
 
-            {/* 
+            {/*
              <DropdownMenuItem>Billing</DropdownMenuItem>
             <DropdownMenuItem>Team</DropdownMenuItem>
             <DropdownMenuItem>Subscription</DropdownMenuItem>
