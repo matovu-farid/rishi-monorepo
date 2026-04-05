@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-04-05T21:02:56.069Z"
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-04-05T22:32:50.467Z"
 progress:
   total_phases: 8
   completed_phases: 3
-  total_plans: 7
-  completed_plans: 7
+  total_plans: 10
+  completed_plans: 8
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-05)
 
 **Core value:** Users can read their books and interact with AI on their phone with the same experience they get on desktop, with everything synced between devices.
-**Current focus:** Phase 03 — PDF Reader & File Management (COMPLETE)
+**Current focus:** Phase 04 — sync-infrastructure
 
 ## Current Position
 
-Phase: 03 (PDF Reader & File Management) — COMPLETE
-Plan: 2 of 2 (all done)
+Phase: 04 (sync-infrastructure) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Plan: 2 of 2 (all done)
 | Phase 02 P03 | 3min | 3 tasks | 7 files |
 | Phase 03 P01 | 2min | 2 tasks | 7 files |
 | Phase 03 P02 | 3min | 2 tasks | 4 files |
+| Phase 04 P01 | 15min | 3 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,12 @@ Recent decisions affecting current work:
 - [Phase 03]: Alert-based format chooser for import (simple, no extra UI needed)
 - [Phase 03]: Trash icon button instead of swipe-to-delete for simplicity
 - [Phase 03]: Conditional cover placeholder colors (red-100 for PDF, gray-200 for EPUB)
+- [Phase 04]: Shared schema in @rishi/shared workspace package for D1 and mobile SQLite parity
+- [Phase 04]: userId column on books table for server-side multi-user scoping (null on mobile)
+- [Phase 04]: filePath/coverPath stripped from D1 upserts and pull responses to prevent path contamination
+- [Phase 04]: aws4fetch with signQuery:true for presigned URLs (no Content-Type in signed headers)
+- [Phase 04]: LWW conflict resolution based on updatedAt timestamp comparison
+- [Phase 04]: Global file dedup by fileHash across all users
 
 ### Pending Todos
 
@@ -94,6 +101,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-05T20:59:03Z
-Stopped at: Completed 03-02-PLAN.md
+Last session: 2026-04-06T12:00:00Z
+Stopped at: Completed 04-01-PLAN.md
 Resume file: None
