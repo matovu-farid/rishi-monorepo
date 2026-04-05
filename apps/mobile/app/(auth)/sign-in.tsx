@@ -1,5 +1,6 @@
-import { useSignIn, useOAuth } from '@clerk/expo'
-import { useRouter } from 'expo-router'
+import { useSignIn } from '@clerk/expo'
+import { useSignInWithGoogle } from '@clerk/expo/google'
+import { useRouter, type Href } from 'expo-router'
 import { useState, useCallback } from 'react'
 import {
   View,
@@ -9,11 +10,12 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 
 export default function SignInScreen() {
-  const { signIn, setActive, isLoaded } = useSignIn()
+  const { signIn } = useSignIn()
+  const { startGoogleAuthenticationFlow } = useSignInWithGoogle()
   const router = useRouter()
 
   const [email, setEmail] = useState('')
@@ -22,20 +24,31 @@ export default function SignInScreen() {
   const [loading, setLoading] = useState(false)
 
   const onSignIn = useCallback(async () => {
-    if (!isLoaded) return
+    if (!signIn) return
 
     setLoading(true)
     setError('')
 
     try {
-      const result = await signIn.create({
-        identifier: email,
+      const { error: signInError } = await signIn.password({
+        emailAddress: email,
         password,
       })
 
-      if (result.status === 'complete') {
-        await setActive({ session: result.createdSessionId })
-        router.replace('/(tabs)')
+      if (signInError) {
+        setError(signInError.longMessage || signInError.message || 'Sign in failed')
+        return
+      }
+
+      if (signIn.status === 'complete') {
+        await signIn.finalize({
+          navigate: ({ session }) => {
+            if (session?.currentTask) {
+              return
+            }
+            router.replace('/(tabs)' as Href)
+          },
+        })
       } else {
         setError('Sign in could not be completed. Please try again.')
       }
@@ -45,22 +58,23 @@ export default function SignInScreen() {
     } finally {
       setLoading(false)
     }
-  }, [isLoaded, signIn, email, password, setActive, router])
-
-  const { startOAuthFlow: startGoogleFlow } = useOAuth({ strategy: 'oauth_google' })
+  }, [signIn, email, password, router])
 
   const onGoogleSignIn = useCallback(async () => {
+    if (Platform.OS !== 'ios' && Platform.OS !== 'android') return
+
     try {
-      const { createdSessionId, setActive: setOAuthActive } = await startGoogleFlow()
-      if (createdSessionId && setOAuthActive) {
-        await setOAuthActive({ session: createdSessionId })
-        router.replace('/(tabs)')
+      const { createdSessionId, setActive } = await startGoogleAuthenticationFlow()
+      if (createdSessionId && setActive) {
+        await setActive({ session: createdSessionId })
+        router.replace('/(tabs)' as Href)
       }
     } catch (err: any) {
+      if (err.code === 'SIGN_IN_CANCELLED' || err.code === '-5') return
       const message = err?.errors?.[0]?.longMessage || 'Google sign in failed'
       setError(message)
     }
-  }, [startGoogleFlow, router])
+  }, [startGoogleAuthenticationFlow, router])
 
   return (
     <SafeAreaView className="flex-1 bg-white dark:bg-black">
