@@ -92,12 +92,12 @@ Plans:
   3. Duplicate book files are deduplicated by content hash (not re-uploaded)
   4. Sync happens automatically on foreground, on write, and periodically
   5. All local operations (reading, importing, browsing library) work without network
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 04-01: TBD
-- [ ] 04-02: TBD
-- [ ] 04-03: TBD
+- [ ] 04-01-PLAN.md -- Shared Drizzle schema package, Worker D1/R2 bindings, sync push/pull API, presigned URL endpoints
+- [ ] 04-02-PLAN.md -- Mobile DB migration to Drizzle ORM, sync-aware CRUD with dirty tracking, sync engine with automatic triggers
+- [ ] 04-03-PLAN.md -- File hashing and R2 upload on import, on-demand file download for remote books, end-to-end sync verification
 
 ### Phase 5: Reading Progress & Highlights
 **Goal**: Users can create highlights and annotations in EPUB books, and reading progress and highlights sync across devices.
@@ -183,7 +183,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 | 1. Foundation & Auth | 2/2 | Complete   | 2026-04-05 |
 | 2. EPUB Reader | 3/3 | Complete | 2026-04-05 |
 | 3. PDF Reader & File Management | 2/2 | Complete   | 2026-04-05 |
-| 4. Sync Infrastructure | 0/? | Not started | - |
+| 4. Sync Infrastructure | 0/3 | Not started | - |
 | 5. Reading Progress & Highlights | 0/? | Not started | - |
 | 6. On-Device RAG & AI Conversations | 0/? | Not started | - |
 | 7. Audio (TTS & STT) | 0/? | Not started | - |
@@ -209,4 +209,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 
 ---
 *Roadmap created: 2026-04-05*
-*Last updated: 2026-04-05*
+*Last updated: 2026-04-06*
