@@ -74,11 +74,11 @@ Plans:
   3. User can navigate PDF via page numbers and thumbnails
   4. User can view a library of all imported books (EPUB and PDF) with title, author, and cover
   5. User can delete books from the library
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [ ] 03-01-PLAN.md -- Install react-native-pdf, extend types/DB/import for PDF, create PDF reader screen with page navigation and position persistence
+- [ ] 03-02-PLAN.md -- Unified library with format badge, format-aware routing, import chooser, book deletion with file cleanup
 
 ### Phase 4: Sync Infrastructure
 **Goal**: Books and their metadata sync between mobile devices via Cloudflare D1 and R2, with offline-first local operations.
@@ -181,8 +181,8 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation & Auth | 2/2 | Complete   | 2026-04-05 |
-| 2. EPUB Reader | 2/3 | In Progress|  |
-| 3. PDF Reader & File Management | 0/? | Not started | - |
+| 2. EPUB Reader | 3/3 | Complete | 2026-04-05 |
+| 3. PDF Reader & File Management | 0/2 | Not started | - |
 | 4. Sync Infrastructure | 0/? | Not started | - |
 | 5. Reading Progress & Highlights | 0/? | Not started | - |
 | 6. On-Device RAG & AI Conversations | 0/? | Not started | - |
