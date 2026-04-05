@@ -18,6 +18,10 @@ Users can read their books and interact with AI on their phone with the same exp
 - ✓ OpenAI integration (TTS, completions, realtime) via Worker — existing
 - ✓ Sentry error tracking infrastructure — existing
 - ✓ Expo project scaffolding with tab-based layout — existing
+- ✓ Mobile auth flow (Clerk Expo SDK + Worker JWT exchange) — Phase 1 complete
+- ✓ JWT persistence in secure storage across restarts — Phase 1 complete
+- ✓ Authenticated API client with 401 auto-refresh — Phase 1 complete
+- ✓ Custom Expo dev build (not Expo Go) — Phase 1 complete
 
 ### Active
 
@@ -76,4 +80,4 @@ Cloud sync is a new capability — the desktop app currently stores everything l
 | Desktop sync integration | Research found desktop changes required for bidirectional sync | In scope as late phase — mobile standalone first |
 
 ---
-*Last updated: 2026-04-05 after initialization*
+*Last updated: 2026-04-05 after Phase 1 completion*
