@@ -4,6 +4,7 @@ phase: 05
 phase_name: Reading Progress & Highlights
 design_system: NativeWind (Tailwind CSS for React Native)
 created: 2026-04-06
+revised: 2026-04-06
 ---
 
 # UI-SPEC: Phase 05 - Reading Progress & Highlights
@@ -23,8 +24,7 @@ Scale: 4px base unit (8-point system)
 |-------|-------|-------|
 | `p-1` | 4px | Icon-to-label gap in menu items |
 | `p-2` | 8px | Inner padding of highlight color swatches |
-| `p-3` | 12px | Vertical padding of list rows |
-| `p-4` | 16px | Horizontal screen padding, sheet content padding |
+| `p-4` | 16px | Vertical padding of list rows, horizontal screen padding, sheet content padding |
 | `p-6` | 24px | Sheet section spacing, bottom sheet content padding |
 | `p-8` | 32px | Empty state vertical padding |
 
@@ -86,14 +86,14 @@ These colors are passed to `@epubjs-react-native` `AnnotationStyles.color` and `
 
 ### New Components
 
-| Component | Type | Purpose |
-|-----------|------|---------|
-| `HighlightMenu` | Popover (absolute positioned View) | Appears above selected text with color swatches and "Add Note" action |
-| `AnnotationPopover` | Popover (absolute positioned View) | Appears when tapping existing highlight: shows note preview, "Edit Note", "Delete", "Change Color" |
-| `HighlightsSheet` | BottomSheet | Full highlights list for a book, opened from reader toolbar |
-| `HighlightRow` | List item (View) | Single highlight in the list: excerpt, note preview, color indicator, chapter label |
-| `NoteEditor` | BottomSheet with TextInput | Sheet for adding/editing a note on a highlight |
-| `SyncStatusBadge` | Inline View | Small indicator showing sync state (synced/pending/error) |
+| Component | Type | Purpose | Focal Point |
+|-----------|------|---------|-------------|
+| `HighlightMenu` | Popover (absolute positioned View) | Appears above selected text with color swatches and "Add Note" action | The color swatch row -- user's eye goes to the four colored circles first |
+| `AnnotationPopover` | Popover (absolute positioned View) | Appears when tapping existing highlight: shows note preview, "Edit Note", "Delete", "Change Color" | The action row at the bottom -- user's eye goes to the three action buttons |
+| `HighlightsSheet` | BottomSheet | Full highlights list for a book, opened from reader toolbar | The first highlight row -- the list content is the reason the sheet was opened |
+| `NoteEditor` | BottomSheet with TextInput | Sheet for adding/editing a note on a highlight | The TextInput field -- it is the primary interactive element |
+| `HighlightRow` | List item (View) | Single highlight in the list: excerpt, note preview, color indicator, chapter label | -- |
+| `SyncStatusBadge` | Inline View | Small indicator showing sync state (synced/pending/error) | -- |
 
 ### Modified Components
 
@@ -113,6 +113,8 @@ These colors are passed to `@epubjs-react-native` `AnnotationStyles.color` and `
 
 ### HighlightMenu (Text Selection Popover)
 
+**Focal point:** The color swatch row -- four colored circles draw the eye immediately on appear.
+
 ```
 +---------------------------------------------+
 |  [Yellow] [Green] [Blue] [Pink]  |  Add Note |
@@ -128,6 +130,8 @@ These colors are passed to `@epubjs-react-native` `AnnotationStyles.color` and `
 - Animation: FadeIn.duration(150)
 
 ### AnnotationPopover (Existing Highlight Tap)
+
+**Focal point:** The action row at the bottom -- three buttons ("Edit Note", "Change Color", "Delete") are the primary decision the user must make.
 
 ```
 +-------------------------------------------+
@@ -148,6 +152,8 @@ These colors are passed to `@epubjs-react-native` `AnnotationStyles.color` and `
 - Animation: FadeIn.duration(150)
 
 ### HighlightsSheet (Book Highlights List)
+
+**Focal point:** The first highlight row -- the list content is the reason the user opened the sheet.
 
 ```
 +-------------------------------------------+
@@ -172,6 +178,7 @@ These colors are passed to `@epubjs-react-native` `AnnotationStyles.color` and `
 - Handle indicator: `theme.color`, 36px wide, 4px tall (matches existing sheets)
 - Title: "Highlights ({count})" -- `text-lg font-semibold`
 - Each row:
+  - Vertical padding: `p-4` (16px)
   - Color indicator: 10px circle, left-aligned, matching highlight color
   - Chapter label: `text-xs`, secondary color
   - Excerpt: `text-sm`, primary color, 2 lines max
@@ -182,6 +189,8 @@ These colors are passed to `@epubjs-react-native` `AnnotationStyles.color` and `
 
 ### NoteEditor (Add/Edit Note Sheet)
 
+**Focal point:** The TextInput field -- it is the primary interactive element and occupies the largest area of the sheet.
+
 ```
 +-------------------------------------------+
 |  [handle indicator]                        |
@@ -191,7 +200,7 @@ These colors are passed to `@epubjs-react-native` `AnnotationStyles.color` and `
 |  ---------------------------------------- |
 |  [TextInput: multiline, placeholder]       |
 |  ---------------------------------------- |
-|  [Cancel]                      [Save Note] |
+|  [Discard Note]               [Save Note]  |
 +-------------------------------------------+
 ```
 
@@ -199,7 +208,7 @@ These colors are passed to `@epubjs-react-native` `AnnotationStyles.color` and `
 - Excerpt: `text-sm`, italic, secondary color, 2 lines max, top section
 - TextInput: multiline, 120px min height, `text-base`, primary color, border `border-gray-200 dark:border-gray-700`
 - "Save Note" button: accent background (`#0a7ea4`), white text, semibold, rounded-lg, 44px height
-- "Cancel" button: text-only, secondary color
+- "Discard Note" button (add mode) / "Discard Changes" button (edit mode): text-only, secondary color, 44px touch target
 - Keyboard-aware: sheet adjusts when keyboard appears (BottomSheet handles this)
 
 ## Interaction Contracts
@@ -208,8 +217,8 @@ These colors are passed to `@epubjs-react-native` `AnnotationStyles.color` and `
 
 1. User long-presses text in EPUB reader (enableSelection: true)
 2. Native text selection handles appear (OS-provided)
-3. `menuItems` prop shows custom context menu items: "Highlight" and "Highlight & Note"
-4. User taps "Highlight": `onSelected(text, cfiRange)` fires, highlight created with default yellow color, saved to SQLite, marked isDirty for sync
+3. `menuItems` prop shows custom context menu items: "Highlight Text" and "Highlight & Note"
+4. User taps "Highlight Text": `onSelected(text, cfiRange)` fires, highlight created with default yellow color, saved to SQLite, marked isDirty for sync
 5. User taps "Highlight & Note": same as above, then NoteEditor sheet opens
 6. Highlight appears immediately in the reader via `addAnnotation` from `useReader`
 
@@ -271,7 +280,7 @@ Sync columns follow the exact same pattern as the books table.
 ## Copywriting
 
 ### Primary CTA
-- "Highlight" -- menu item label when text is selected
+- "Highlight Text" -- menu item label when text is selected (verb + noun)
 - "Highlight & Note" -- menu item label for highlight with note
 
 ### Empty States
@@ -282,14 +291,15 @@ Sync columns follow the exact same pattern as the books table.
 - Sync conflict (user-visible only if data loss): not applicable -- union merge prevents loss
 
 ### Destructive Actions
-- Delete highlight: `Alert.alert("Delete Highlight", "This highlight and its note will be removed from all your devices.", [Cancel, Delete])` -- "Delete" button uses destructive style
+- Delete highlight: `Alert.alert("Delete Highlight", "This highlight and its note will be removed from all your devices.", [Cancel, Delete])` -- "Delete" button uses destructive style. Note: "Cancel" here is an OS Alert button (permitted), not a custom rendered button.
 - No bulk delete in v1
 
 ### Labels
 - ReaderToolbar highlights button: accessibilityLabel "Highlights"
 - HighlightMenu color swatches: accessibilityLabel "{Color} highlight"
 - NoteEditor save button: "Save Note"
-- NoteEditor cancel button: "Cancel"
+- NoteEditor discard button (add mode): "Discard Note"
+- NoteEditor discard button (edit mode): "Discard Changes"
 - NoteEditor placeholder: "Add a note about this passage..."
 - NoteEditor title (add): "Add Note"
 - NoteEditor title (edit): "Edit Note"
@@ -333,4 +343,4 @@ No registry safety gate required.
 | Package: @gorhom/bottom-sheet | Already installed, snap point patterns from TocSheet/AppearanceSheet |
 
 ---
-*Generated: 2026-04-06*
+*Generated: 2026-04-06 | Revised: 2026-04-06*
