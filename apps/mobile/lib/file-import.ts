@@ -39,6 +39,50 @@ export async function importEpubFile(): Promise<Book | null> {
     filePath: destFile.uri,
     format: 'epub',
     currentCfi: null,
+    currentPage: null,
+    createdAt: Date.now(),
+  }
+
+  insertBook(book)
+  return book
+}
+
+export async function importPdfFile(): Promise<Book | null> {
+  const pickedFile = await File.pickFileAsync(undefined, 'application/pdf')
+
+  if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
+    return null
+  }
+
+  const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile
+
+  const bookId = generateUUID()
+  const bookDir = new Directory(BOOKS_DIR, bookId)
+
+  // Ensure books/bookId directory exists
+  if (!BOOKS_DIR.exists) {
+    BOOKS_DIR.create({ intermediates: true })
+  }
+  bookDir.create({ intermediates: true, idempotent: true })
+
+  // Copy file from picked location to permanent storage
+  const destFile = new File(bookDir, 'book.pdf')
+  sourceFile.copy(destFile)
+
+  // Extract title from URI (strip .pdf extension)
+  const uriParts = sourceFile.uri.split('/')
+  const rawName = decodeURIComponent(uriParts[uriParts.length - 1] || 'Unknown Book')
+  const title = rawName.replace(/\.pdf$/i, '')
+
+  const book: Book = {
+    id: bookId,
+    title,
+    author: 'Unknown',
+    coverPath: null,
+    filePath: destFile.uri,
+    format: 'pdf',
+    currentCfi: null,
+    currentPage: null,
     createdAt: Date.now(),
   }
 

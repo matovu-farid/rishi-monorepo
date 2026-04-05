@@ -42,7 +42,8 @@
           }
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      "react-native-pdf"
     ],
     "experiments": {
       "typedRoutes": true,

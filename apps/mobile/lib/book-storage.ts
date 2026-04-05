@@ -4,8 +4,8 @@ import { getDb } from '@/lib/db'
 export function insertBook(book: Book): void {
   const db = getDb()
   db.runSync(
-    'INSERT INTO books (id, title, author, cover_path, file_path, format, current_cfi, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [book.id, book.title, book.author, book.coverPath, book.filePath, book.format, book.currentCfi, book.createdAt]
+    'INSERT INTO books (id, title, author, cover_path, file_path, format, current_cfi, current_page, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [book.id, book.title, book.author, book.coverPath, book.filePath, book.format, book.currentCfi, book.currentPage, book.createdAt]
   )
 }
 
@@ -26,6 +26,11 @@ export function updateBookCfi(id: string, cfi: string): void {
   db.runSync('UPDATE books SET current_cfi = ? WHERE id = ?', [cfi, id])
 }
 
+export function updateBookPage(id: string, page: number): void {
+  const db = getDb()
+  db.runSync('UPDATE books SET current_page = ? WHERE id = ?', [page, id])
+}
+
 export function deleteBook(id: string): void {
   const db = getDb()
   db.runSync('DELETE FROM books WHERE id = ?', [id])
@@ -38,8 +43,9 @@ function mapRowToBook(row: any): Book {
     author: row.author,
     coverPath: row.cover_path,
     filePath: row.file_path,
-    format: row.format as 'epub',
+    format: row.format as 'epub' | 'pdf',
     currentCfi: row.current_cfi,
+    currentPage: row.current_page ?? null,
     createdAt: row.created_at,
   }
 }
