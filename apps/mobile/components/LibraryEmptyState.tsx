@@ -14,7 +14,7 @@ export function LibraryEmptyState({ onImport, importing }: LibraryEmptyStateProp
         No books yet
       </Text>
       <Text className="text-base text-gray-500 dark:text-gray-400 text-center mt-2 mb-6">
-        Import an EPUB from your device to start reading.
+        Import an EPUB or PDF from your device to start reading.
       </Text>
       <TouchableOpacity
         className="w-full bg-[#0a7ea4] rounded-lg py-3 items-center"

@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { View, FlatList, TouchableOpacity, Alert, Text } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { useRouter } from 'expo-router'
+import { useRouter, useFocusEffect } from 'expo-router'
+import { Directory, Paths } from 'expo-file-system'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { BookRow } from '@/components/BookRow'
 import { LibraryEmptyState } from '@/components/LibraryEmptyState'
-import { getBooks } from '@/lib/book-storage'
-import { importEpubFile } from '@/lib/file-import'
+import { getBooks, deleteBook } from '@/lib/book-storage'
+import { importEpubFile, importPdfFile } from '@/lib/file-import'
 import { Book } from '@/types/book'
 
 export default function LibraryScreen() {
@@ -19,33 +20,82 @@ export default function LibraryScreen() {
     setBooks(loaded)
   }, [])
 
-  useEffect(() => {
-    loadBooks()
-  }, [loadBooks])
+  useFocusEffect(
+    useCallback(() => {
+      loadBooks()
+    }, [loadBooks])
+  )
 
-  const handleImport = useCallback(async () => {
-    setImporting(true)
-    try {
-      const book = await importEpubFile()
-      if (book) {
-        loadBooks()
+  const doImport = useCallback(
+    async (format: 'epub' | 'pdf') => {
+      setImporting(true)
+      try {
+        const book =
+          format === 'pdf' ? await importPdfFile() : await importEpubFile()
+        if (book) {
+          loadBooks()
+        }
+      } catch (error) {
+        Alert.alert(
+          'Import Failed',
+          `Could not import book. The file may be corrupted or not a valid ${format.toUpperCase()}.`
+        )
+        console.error('Import error:', error)
+      } finally {
+        setImporting(false)
       }
-    } catch (error) {
-      Alert.alert(
-        'Import Failed',
-        'Could not import book. The file may be corrupted or not a valid EPUB.'
-      )
-      console.error('Import error:', error)
-    } finally {
-      setImporting(false)
-    }
-  }, [loadBooks])
+    },
+    [loadBooks]
+  )
+
+  const handleImport = useCallback(() => {
+    Alert.alert('Import Book', 'Choose file format', [
+      { text: 'EPUB', onPress: () => doImport('epub') },
+      { text: 'PDF', onPress: () => doImport('pdf') },
+      { text: 'Cancel', style: 'cancel' },
+    ])
+  }, [doImport])
 
   const handleBookPress = useCallback(
     (book: Book) => {
-      router.push(`/reader/${book.id}`)
+      if (book.format === 'pdf') {
+        router.push(`/reader/pdf/${book.id}`)
+      } else {
+        router.push(`/reader/${book.id}`)
+      }
     },
     [router]
+  )
+
+  const handleDelete = useCallback(
+    (book: Book) => {
+      Alert.alert(
+        'Delete Book',
+        `Are you sure you want to delete "${book.title}"? This cannot be undone.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => {
+              // Delete from DB
+              deleteBook(book.id)
+              // Delete book files from disk
+              const bookDir = new Directory(
+                new Directory(Paths.document, 'books'),
+                book.id
+              )
+              if (bookDir.exists) {
+                bookDir.delete()
+              }
+              // Reload library
+              loadBooks()
+            },
+          },
+        ]
+      )
+    },
+    [loadBooks]
   )
 
   if (books.length === 0) {
@@ -67,7 +117,11 @@ export default function LibraryScreen() {
         data={books}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <BookRow book={item} onPress={handleBookPress} />
+          <BookRow
+            book={item}
+            onPress={handleBookPress}
+            onDelete={handleDelete}
+          />
         )}
         contentContainerClassName="pb-24"
       />

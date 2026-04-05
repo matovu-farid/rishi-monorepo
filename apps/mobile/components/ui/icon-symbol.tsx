@@ -23,6 +23,7 @@ const MAPPING = {
   'plus': 'add',
   'list.bullet': 'list',
   'paintpalette.fill': 'palette',
+  'trash': 'delete',
 } as IconMapping;
 
 /**
