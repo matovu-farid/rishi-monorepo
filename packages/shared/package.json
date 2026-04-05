@@ -1,0 +1,15 @@
+{
+  "name": "@rishi/shared",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema": "./src/schema.ts",
+    "./sync-types": "./src/sync-types.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.44.0"
+  }
+}

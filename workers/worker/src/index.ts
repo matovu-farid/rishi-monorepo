@@ -9,8 +9,10 @@ import * as Sentry from "@sentry/cloudflare";
 import { Redis } from "@upstash/redis/cloudflare";
 import { clerkMiddleware, getAuth } from "@hono/clerk-auth";
 import jwt from "@tsndr/cloudflare-worker-jwt";
+import { syncRoutes } from "./routes/sync";
+import { uploadRoutes } from "./routes/upload";
 
-interface CloudflareBindings {
+export interface CloudflareBindings {
   DEEPGRAM_KEY: string;
   OPENAI_API_KEY: string;
   CLERK_SECRET_KEY: string;
@@ -18,6 +20,11 @@ interface CloudflareBindings {
   UPSTASH_REDIS_REST_URL: string;
   UPSTASH_REDIS_REST_TOKEN: string;
   JWT_SECRET: string;
+  DB: D1Database;
+  BOOK_STORAGE: R2Bucket;
+  R2_ACCESS_KEY_ID: string;
+  R2_SECRET_ACCESS_KEY: string;
+  CLOUDFLARE_ACCOUNT_ID: string;
 }
 
 const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string } }>();
@@ -38,8 +45,12 @@ app.get("/", (c) => {
   return c.text("Hello Hono!");
 });
 
+// ─── Sync routes ─────────────────────────────────────────────────────────────
+app.route("/api/sync", syncRoutes);
+app.route("/api/sync", uploadRoutes);
+
 // ─── requireWorkerAuth middleware ────────────────────────────────────────────
-async function requireWorkerAuth(c: any, next: () => Promise<void>) {
+export async function requireWorkerAuth(c: any, next: () => Promise<void>) {
   const authHeader = c.req.header("Authorization");
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return c.json({ error: "Unauthorized" }, 401);
@@ -119,9 +130,19 @@ app.get("api/user/:state", async (c) => {
       secretKey: c.env.CLERK_SECRET_KEY,
     });
 
-    const user = await clerkClient.users.getUser(userId);
+    const clerkUser = await clerkClient.users.getUser(userId);
 
-    return c.json(user);
+    return c.json({
+      id: clerkUser.id,
+      firstName: clerkUser.firstName,
+      lastName: clerkUser.lastName,
+      fullName: clerkUser.fullName,
+      username: clerkUser.username,
+      imageUrl: clerkUser.imageUrl,
+      hasImage: clerkUser.hasImage,
+      lastSignInAt: clerkUser.lastSignInAt,
+      externalId: clerkUser.externalId,
+    });
   } catch (error) {
     if (error instanceof Error) {
       return c.json({ error: "Failed to get user, " + error.message }, 500);
@@ -152,9 +173,19 @@ app.get("/api/clerk/user/:userId", requireWorkerAuth, async (c) => {
     });
     const userId = c.req.param("userId");
 
-    const user = await clerkClient.users.getUser(userId);
+    const clerkUser = await clerkClient.users.getUser(userId);
 
-    return c.json(user);
+    return c.json({
+      id: clerkUser.id,
+      firstName: clerkUser.firstName,
+      lastName: clerkUser.lastName,
+      fullName: clerkUser.fullName,
+      username: clerkUser.username,
+      imageUrl: clerkUser.imageUrl,
+      hasImage: clerkUser.hasImage,
+      lastSignInAt: clerkUser.lastSignInAt,
+      externalId: clerkUser.externalId,
+    });
   } catch (error) {
     if (error instanceof Error) {
       return c.json({ error: "Failed to get user, " + error.message }, 500);

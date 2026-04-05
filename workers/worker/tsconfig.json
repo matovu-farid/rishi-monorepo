@@ -9,6 +9,10 @@
       "ESNext"
     ],
     "jsx": "react-jsx",
-    "jsxImportSource": "hono/jsx"
-  },
+    "jsxImportSource": "hono/jsx",
+    "paths": {
+      "@rishi/shared": ["../../packages/shared/src/index.ts"],
+      "@rishi/shared/*": ["../../packages/shared/src/*"]
+    }
+  }
 }

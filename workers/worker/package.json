@@ -9,15 +9,19 @@
   "dependencies": {
     "@clerk/backend": "^2.29.0",
     "@hono/clerk-auth": "^3.0.3",
+    "@rishi/shared": "file:../../packages/shared",
     "@sentry/cloudflare": "^10.32.1",
     "@tsndr/cloudflare-worker-jwt": "^3.2.1",
     "@upstash/redis": "^1.36.0",
+    "aws4fetch": "^1.0.20",
     "axios": "^1.13.2",
+    "drizzle-orm": "^0.44.0",
     "hono": "^4.10.6",
     "openai": "^6.9.0",
     "zod": "^4.1.13"
   },
   "devDependencies": {
+    "drizzle-kit": "^0.31.0",
     "wrangler": "^4.4.0"
   }
 }
