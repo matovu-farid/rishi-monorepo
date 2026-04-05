@@ -69,7 +69,7 @@ function ReaderContent({ book }: { book: Book }) {
 
   // Debounced CFI save on location change
   const handleLocationChange = useCallback(
-    (totalLocations: number, currentLocation: any, progress: number) => {
+    (_totalLocations: number, currentLocation: any, _progress: number) => {
       if (currentLocation?.start?.cfi) {
         currentCfiRef.current = currentLocation.start.cfi
         setCurrentHref(currentLocation.start.href || null)

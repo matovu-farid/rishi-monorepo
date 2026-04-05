@@ -58,7 +58,7 @@ export function TocSheet({ sheetRef, toc, currentHref, theme, onSelectChapter }:
       </View>
       <BottomSheetFlatList
         data={toc}
-        keyExtractor={(item) => item.id || item.href}
+        keyExtractor={(item: any) => item.id || item.href}
         renderItem={renderItem}
       />
     </BottomSheet>
