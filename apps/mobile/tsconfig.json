@@ -5,6 +5,12 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@rishi/shared": [
+        "../../packages/shared/src"
+      ],
+      "@rishi/shared/*": [
+        "../../packages/shared/src/*"
       ]
     }
   },
