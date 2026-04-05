@@ -35,11 +35,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. JWT persists across app restarts -- user does not need to re-authenticate on every launch
   4. Authenticated API calls to the Worker succeed; expired tokens trigger re-authentication
   5. App builds and runs as a custom Expo dev client (not Expo Go)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
+- [ ] 01-01-PLAN.md -- Install Clerk SDK, configure ClerkProvider, restructure routes with auth guards, create sign-in screen
+- [ ] 01-02-PLAN.md -- Token exchange service, secure JWT storage, API client with auto-refresh on 401, end-to-end verification
 
 ### Phase 2: EPUB Reader
 **Goal**: Users can import and read EPUB books with a polished reading experience including themes, font controls, and navigation.
@@ -179,7 +179,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation & Auth | 0/? | Not started | - |
+| 1. Foundation & Auth | 0/2 | Planning complete | - |
 | 2. EPUB Reader | 0/? | Not started | - |
 | 3. PDF Reader & File Management | 0/? | Not started | - |
 | 4. Sync Infrastructure | 0/? | Not started | - |
