@@ -19,7 +19,7 @@ import type {
 export async function hashBookFile(filePath: string): Promise<string> {
   try {
     const file = new File(filePath)
-    const base64 = file.base64()
+    const base64 = await file.base64()
     const hash = await Crypto.digestStringAsync(
       Crypto.CryptoDigestAlgorithm.SHA256,
       base64
@@ -62,11 +62,11 @@ export async function uploadBookFile(
 
     // Upload file to R2 via presigned URL (direct to R2, NOT via apiClient)
     const file = new File(filePath)
-    const blob = await file.blob()
+    const bytes = await file.bytes()
 
     const uploadRes = await fetch(data.uploadUrl!, {
       method: 'PUT',
-      body: blob,
+      body: bytes,
       headers: { 'Content-Type': contentType },
     })
 
@@ -114,11 +114,12 @@ export async function downloadBookFile(
       throw new Error(`R2 download failed: ${downloadRes.status} ${downloadRes.statusText}`)
     }
 
-    const blob = await downloadRes.blob()
+    const arrayBuffer = await downloadRes.arrayBuffer()
+    const bytes = new Uint8Array(arrayBuffer)
 
     // Write to local file
     const destFile = new File(bookDir, `book.${format}`)
-    destFile.write(blob)
+    destFile.write(bytes)
 
     // Update the book record with the local filePath
     db.update(books)

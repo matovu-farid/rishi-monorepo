@@ -8,11 +8,17 @@
     "lib": [
       "ESNext"
     ],
+    "types": [
+      "@cloudflare/workers-types"
+    ],
     "jsx": "react-jsx",
     "jsxImportSource": "hono/jsx",
     "paths": {
       "@rishi/shared": ["../../packages/shared/src/index.ts"],
-      "@rishi/shared/*": ["../../packages/shared/src/*"]
+      "@rishi/shared/*": ["../../packages/shared/src/*"],
+      "drizzle-orm": ["./node_modules/drizzle-orm"],
+      "drizzle-orm/*": ["./node_modules/drizzle-orm/*"]
     }
-  }
+  },
+  "include": ["src/**/*.ts", "drizzle.config.ts", "../../packages/shared/src/**/*.ts"]
 }

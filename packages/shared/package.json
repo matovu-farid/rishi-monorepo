@@ -9,7 +9,7 @@
     "./schema": "./src/schema.ts",
     "./sync-types": "./src/sync-types.ts"
   },
-  "dependencies": {
+  "peerDependencies": {
     "drizzle-orm": "^0.44.0"
   }
 }

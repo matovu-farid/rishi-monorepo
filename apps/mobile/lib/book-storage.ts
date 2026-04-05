@@ -63,7 +63,7 @@ export async function getBookForReading(id: string): Promise<Book | null> {
 
   if (!hasLocalFile && row.fileR2Key) {
     // Download from R2 -- this updates filePath in DB
-    const localPath = await downloadBookFile(
+    await downloadBookFile(
       id,
       row.fileR2Key,
       row.format as 'epub' | 'pdf'
