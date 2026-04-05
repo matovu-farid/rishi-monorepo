@@ -29,13 +29,15 @@ Users can read their books and interact with AI on their phone with the same exp
 - ✓ Reading position persistence via ePubCFI — Phase 2 complete
 - ✓ Local file import (EPUB from device storage) — Phase 2 complete
 - ✓ Book library view with import flow — Phase 2 complete
+- ✓ PDF book loading and rendering with native renderer — Phase 3 complete
+- ✓ PDF page navigation and position persistence — Phase 3 complete
+- ✓ Unified library (EPUB + PDF) with format badges — Phase 3 complete
+- ✓ Book deletion with confirmation — Phase 3 complete
+- ✓ Import chooser supporting both EPUB and PDF — Phase 3 complete
 
 ### Active
 
-- [ ] PDF book loading and rendering on mobile
-- [ ] Local file import (pick EPUB/PDF from device storage)
 - [ ] Cloud sync for books between desktop and mobile
-- [ ] Book metadata display and library view
 - [ ] Reading progress tracking and sync across devices
 - [ ] Text chunking and embedding for RAG (on-device preferred, server fallback)
 - [ ] Vector search for semantic retrieval on mobile
@@ -86,4 +88,4 @@ Cloud sync is a new capability — the desktop app currently stores everything l
 | Desktop sync integration | Research found desktop changes required for bidirectional sync | In scope as late phase — mobile standalone first |
 
 ---
-*Last updated: 2026-04-05 after Phase 2 completion*
+*Last updated: 2026-04-06 after Phase 3 completion*
