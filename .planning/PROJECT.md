@@ -41,7 +41,6 @@ Users can read their books and interact with AI on their phone with the same exp
 
 ### Out of Scope
 
-- Desktop app changes — mobile app consumes existing Worker APIs
 - Marketing website or landing page changes
 - Push notifications — not in desktop parity scope
 - Monetization or payment features
@@ -71,9 +70,10 @@ Cloud sync is a new capability — the desktop app currently stores everything l
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| On-device vs server-side processing | User prefers on-device for embeddings/vector search; research will determine feasibility | — Pending |
-| Build on existing Expo app vs fresh start | Existing app is minimal (placeholder screens); decision depends on scaffold quality | — Pending |
-| Sync architecture | Full cross-device sync needed for books, progress, highlights, AI history | — Pending |
+| On-device vs server-side processing | User prefers on-device; research confirms feasible via react-native-executorch + sqlite-vec | On-device with server fallback for bulk |
+| Build on existing Expo app vs fresh start | Existing scaffold is solid (Expo 54, RN 0.81.5, NativeWind, New Architecture) | Build on existing |
+| Sync architecture | Full cross-device sync needed for books, progress, highlights, AI history | D1 + R2 backend, LWW sync, expo-sqlite + Drizzle on mobile |
+| Desktop sync integration | Research found desktop changes required for bidirectional sync | In scope as late phase — mobile standalone first |
 
 ---
 *Last updated: 2026-04-05 after initialization*
