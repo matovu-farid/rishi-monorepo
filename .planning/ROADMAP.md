@@ -13,7 +13,7 @@ This roadmap delivers the Rishi Mobile App from empty scaffold to full desktop p
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation & Auth** - Dev build infrastructure and Clerk authentication flow (completed 2026-04-05)
-- [ ] **Phase 2: EPUB Reader** - EPUB rendering with pagination, themes, navigation, and file import
+- [x] **Phase 2: EPUB Reader** - EPUB rendering with pagination, themes, navigation, and file import (completed 2026-04-05)
 - [ ] **Phase 3: PDF Reader & File Management** - PDF rendering and unified library view for both formats
 - [ ] **Phase 4: Sync Infrastructure** - D1/R2 backend, sync API, and offline-first mobile sync engine
 - [ ] **Phase 5: Reading Progress & Highlights** - Cross-device reading position, highlights, and annotations
@@ -60,7 +60,7 @@ Plans:
 Plans:
 - [ ] 02-01-PLAN.md -- Install dependencies, define types, create SQLite database, book storage service, file import utility
 - [ ] 02-02-PLAN.md -- Library screen with book list, empty state, import flow, navigation to reader
-- [ ] 02-03-PLAN.md -- EPUB reader screen with themes, font controls, TOC navigation, position persistence
+- [x] 02-03-PLAN.md -- EPUB reader screen with themes, font controls, TOC navigation, position persistence
 
 ### Phase 3: PDF Reader & File Management
 **Goal**: Users can import and read PDF books, and browse a unified library showing all their books with metadata.

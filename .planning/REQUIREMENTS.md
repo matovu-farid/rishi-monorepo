@@ -15,13 +15,13 @@
 
 ### Book Rendering
 
-- [ ] **READ-01**: User can open and read an EPUB file with paginated view
+- [x] **READ-01**: User can open and read an EPUB file with paginated view
 - [ ] **READ-02**: User can open and read a PDF file with native rendering
-- [ ] **READ-03**: EPUB reader supports theme switching (light, dark, sepia)
-- [ ] **READ-04**: EPUB reader supports font size adjustment
-- [ ] **READ-05**: User can navigate EPUB via table of contents
+- [x] **READ-03**: EPUB reader supports theme switching (light, dark, sepia)
+- [x] **READ-04**: EPUB reader supports font size adjustment
+- [x] **READ-05**: User can navigate EPUB via table of contents
 - [ ] **READ-06**: User can navigate PDF via page numbers and thumbnails
-- [ ] **READ-07**: Reading position is tracked and restored on reopen (ePubCFI for EPUB, page number for PDF)
+- [x] **READ-07**: Reading position is tracked and restored on reopen (ePubCFI for EPUB, page number for PDF)
 
 ### File Management
 
@@ -128,13 +128,13 @@
 | AUTH-03 | Phase 1 | Complete |
 | AUTH-04 | Phase 1 | Complete |
 | AUTH-05 | Phase 1 | Complete |
-| READ-01 | Phase 2 | Pending |
+| READ-01 | Phase 2 | Complete |
 | READ-02 | Phase 3 | Pending |
-| READ-03 | Phase 2 | Pending |
-| READ-04 | Phase 2 | Pending |
-| READ-05 | Phase 2 | Pending |
+| READ-03 | Phase 2 | Complete |
+| READ-04 | Phase 2 | Complete |
+| READ-05 | Phase 2 | Complete |
 | READ-06 | Phase 3 | Pending |
-| READ-07 | Phase 2 | Pending |
+| READ-07 | Phase 2 | Complete |
 | FILE-01 | Phase 2 | Complete |
 | FILE-02 | Phase 3 | Pending |
 | FILE-03 | Phase 2 | Complete |
