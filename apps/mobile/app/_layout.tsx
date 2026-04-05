@@ -1,32 +1,34 @@
+import { ClerkProvider, ClerkLoaded } from '@clerk/expo'
+import { tokenCache } from '@clerk/expo/token-cache'
 import {
   DarkTheme,
   DefaultTheme,
   ThemeProvider,
-} from "@react-navigation/native";
-import { Stack } from "expo-router";
-import { StatusBar } from "expo-status-bar";
-import "react-native-reanimated";
-import "../global.css";
+} from '@react-navigation/native'
+import { Slot } from 'expo-router'
+import { StatusBar } from 'expo-status-bar'
+import 'react-native-reanimated'
+import '../global.css'
 
-import { useColorScheme } from "@/hooks/use-color-scheme";
+import { useColorScheme } from '@/hooks/use-color-scheme'
 
-export const unstable_settings = {
-  anchor: "(tabs)",
-};
+const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!
+
+if (!publishableKey) {
+  throw new Error('EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY is not set. Add it to your .env file.')
+}
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
+  const colorScheme = useColorScheme()
 
   return (
-    <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen
-          name="modal"
-          options={{ presentation: "modal", title: "Modal" }}
-        />
-      </Stack>
-      <StatusBar style="auto" />
-    </ThemeProvider>
-  );
+    <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>
+      <ClerkLoaded>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <Slot />
+          <StatusBar style="auto" />
+        </ThemeProvider>
+      </ClerkLoaded>
+    </ClerkProvider>
+  )
 }
