@@ -1,98 +1,89 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
-
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import { useAuth, useUser } from '@clerk/expo'
+import { useRouter } from 'expo-router'
+import { useCallback, useEffect, useState } from 'react'
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  ActivityIndicator,
+  SafeAreaView,
+  ScrollView,
+} from 'react-native'
+import { apiClient } from '@/lib/api'
+import { clearWorkerToken } from '@/lib/auth'
 
 export default function HomeScreen() {
+  const { signOut } = useAuth()
+  const { user } = useUser()
+  const router = useRouter()
+  const [healthStatus, setHealthStatus] = useState<string | null>(null)
+  const [apiError, setApiError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const checkHealth = useCallback(async () => {
+    setLoading(true)
+    setApiError(null)
+    try {
+      const response = await apiClient('/health')
+      const data = await response.json()
+      setHealthStatus(data.status || 'unknown')
+    } catch (err: any) {
+      setApiError(err.message || 'API call failed')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    checkHealth()
+  }, [checkHealth])
+
+  const handleSignOut = useCallback(async () => {
+    await clearWorkerToken()
+    await signOut()
+    router.replace('/(auth)/sign-in')
+  }, [signOut, router])
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+    <SafeAreaView className="flex-1 bg-white dark:bg-black">
+      <ScrollView className="flex-1 px-6 pt-12">
+        <Text className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+          Welcome{user?.firstName ? `, ${user.firstName}` : ''}
+        </Text>
+        <Text className="text-gray-500 dark:text-gray-400 mb-8">
+          {user?.primaryEmailAddress?.emailAddress || 'Signed in'}
+        </Text>
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
-  );
+        <View className="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 mb-6">
+          <Text className="text-sm font-semibold text-gray-600 dark:text-gray-300 mb-2">
+            Worker API Status
+          </Text>
+          {loading ? (
+            <ActivityIndicator />
+          ) : apiError ? (
+            <Text className="text-red-500">{apiError}</Text>
+          ) : (
+            <Text className="text-green-600 dark:text-green-400 font-mono">
+              {healthStatus}
+            </Text>
+          )}
+          <TouchableOpacity
+            className="mt-3 bg-blue-600 rounded-lg py-2"
+            onPress={checkHealth}
+          >
+            <Text className="text-white text-center font-semibold">
+              Test API Connection
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity
+          className="border border-red-300 rounded-lg py-3"
+          onPress={handleSignOut}
+        >
+          <Text className="text-red-600 text-center font-semibold">Sign Out</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
+  )
 }
-
-const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
-  },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
-  },
-});
