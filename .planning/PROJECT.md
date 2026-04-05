@@ -22,10 +22,16 @@ Users can read their books and interact with AI on their phone with the same exp
 - ✓ JWT persistence in secure storage across restarts — Phase 1 complete
 - ✓ Authenticated API client with 401 auto-refresh — Phase 1 complete
 - ✓ Custom Expo dev build (not Expo Go) — Phase 1 complete
+- ✓ EPUB book loading and rendering with paginated view — Phase 2 complete
+- ✓ EPUB theme switching (Light/Dark/Sepia) — Phase 2 complete
+- ✓ EPUB font size adjustment — Phase 2 complete
+- ✓ EPUB table of contents navigation — Phase 2 complete
+- ✓ Reading position persistence via ePubCFI — Phase 2 complete
+- ✓ Local file import (EPUB from device storage) — Phase 2 complete
+- ✓ Book library view with import flow — Phase 2 complete
 
 ### Active
 
-- [ ] EPUB book loading and rendering on mobile
 - [ ] PDF book loading and rendering on mobile
 - [ ] Local file import (pick EPUB/PDF from device storage)
 - [ ] Cloud sync for books between desktop and mobile
@@ -80,4 +86,4 @@ Cloud sync is a new capability — the desktop app currently stores everything l
 | Desktop sync integration | Research found desktop changes required for bidirectional sync | In scope as late phase — mobile standalone first |
 
 ---
-*Last updated: 2026-04-05 after Phase 1 completion*
+*Last updated: 2026-04-05 after Phase 2 completion*
