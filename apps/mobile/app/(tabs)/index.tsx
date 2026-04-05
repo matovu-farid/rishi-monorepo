@@ -6,9 +6,9 @@ import {
   Text,
   TouchableOpacity,
   ActivityIndicator,
-  SafeAreaView,
   ScrollView,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { apiClient } from '@/lib/api'
 import { clearWorkerToken } from '@/lib/auth'
 
