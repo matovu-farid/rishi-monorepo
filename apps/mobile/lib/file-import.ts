@@ -1,6 +1,10 @@
 import { File, Directory, Paths } from 'expo-file-system'
 import { Book } from '@/types/book'
 import { insertBook } from '@/lib/book-storage'
+import { hashBookFile, uploadBookFile } from '@/lib/sync/file-sync'
+import { db } from '@/lib/db'
+import { books } from '@rishi/shared/schema'
+import { eq } from 'drizzle-orm'
 
 const BOOKS_DIR = new Directory(Paths.document, 'books')
 
@@ -44,6 +48,30 @@ export async function importEpubFile(): Promise<Book | null> {
   }
 
   insertBook(book)
+
+  // Hash and upload file to R2 in background (non-blocking)
+  hashBookFile(destFile.uri)
+    .then((fileHash) => {
+      db.update(books)
+        .set({ fileHash, isDirty: true })
+        .where(eq(books.id, bookId))
+        .run()
+
+      uploadBookFile(destFile.uri, fileHash, 'epub')
+        .then(({ r2Key }) => {
+          db.update(books)
+            .set({ fileR2Key: r2Key, isDirty: true })
+            .where(eq(books.id, bookId))
+            .run()
+        })
+        .catch((err) => {
+          console.warn('Book upload failed (will retry on next sync):', err)
+        })
+    })
+    .catch((err) => {
+      console.warn('Book hashing failed:', err)
+    })
+
   return book
 }
 
@@ -87,6 +115,30 @@ export async function importPdfFile(): Promise<Book | null> {
   }
 
   insertBook(book)
+
+  // Hash and upload file to R2 in background (non-blocking)
+  hashBookFile(destFile.uri)
+    .then((fileHash) => {
+      db.update(books)
+        .set({ fileHash, isDirty: true })
+        .where(eq(books.id, bookId))
+        .run()
+
+      uploadBookFile(destFile.uri, fileHash, 'pdf')
+        .then(({ r2Key }) => {
+          db.update(books)
+            .set({ fileR2Key: r2Key, isDirty: true })
+            .where(eq(books.id, bookId))
+            .run()
+        })
+        .catch((err) => {
+          console.warn('Book upload failed (will retry on next sync):', err)
+        })
+    })
+    .catch((err) => {
+      console.warn('Book hashing failed:', err)
+    })
+
   return book
 }
 

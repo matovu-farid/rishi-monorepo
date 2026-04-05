@@ -1,8 +1,10 @@
+import { File } from 'expo-file-system'
 import { Book } from '@/types/book'
 import { db } from '@/lib/db'
 import { books } from '@rishi/shared/schema'
 import { eq, and, desc } from 'drizzle-orm'
 import { triggerSyncOnWrite } from '@/lib/sync/triggers'
+import { downloadBookFile } from '@/lib/sync/file-sync'
 
 export function insertBook(book: Book): void {
   db.insert(books)
@@ -41,6 +43,41 @@ export function getBookById(id: string): Book | null {
     .where(and(eq(books.id, id), eq(books.isDeleted, false)))
     .get()
   return row ? mapRowToBook(row) : null
+}
+
+/**
+ * Get a book ready for reading. If the book was synced from another device
+ * and has no local file, download it from R2 on-demand.
+ */
+export async function getBookForReading(id: string): Promise<Book | null> {
+  const row = db
+    .select()
+    .from(books)
+    .where(and(eq(books.id, id), eq(books.isDeleted, false)))
+    .get()
+
+  if (!row) return null
+
+  // Check if local file exists
+  const hasLocalFile = row.filePath && new File(row.filePath).exists
+
+  if (!hasLocalFile && row.fileR2Key) {
+    // Download from R2 -- this updates filePath in DB
+    const localPath = await downloadBookFile(
+      id,
+      row.fileR2Key,
+      row.format as 'epub' | 'pdf'
+    )
+    // Re-fetch the updated row
+    const updated = db
+      .select()
+      .from(books)
+      .where(eq(books.id, id))
+      .get()
+    return updated ? mapRowToBook(updated) : null
+  }
+
+  return mapRowToBook(row)
 }
 
 export function updateBookCfi(id: string, cfi: string): void {

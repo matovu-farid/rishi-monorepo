@@ -13,7 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import Pdf from 'react-native-pdf'
 import { IconSymbol } from '@/components/ui/icon-symbol'
-import { getBookById, updateBookPage } from '@/lib/book-storage'
+import { getBookForReading, updateBookPage } from '@/lib/book-storage'
 import { Book } from '@/types/book'
 
 export default function PdfReaderScreen() {
@@ -30,17 +30,24 @@ export default function PdfReaderScreen() {
   const pageSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const toolbarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Load book from DB
+  const [loading, setLoading] = useState(true)
+
+  // Load book from DB (async -- may download file from R2 for synced books)
   useEffect(() => {
     if (id) {
-      const loaded = getBookById(id)
-      if (loaded) {
-        setBook(loaded)
-        const startPage = loaded.currentPage || 1
-        setCurrentPage(startPage)
-        setTargetPage(startPage)
-        currentPageRef.current = startPage
-      }
+      setLoading(true)
+      getBookForReading(id)
+        .then((loaded) => {
+          if (loaded) {
+            setBook(loaded)
+            const startPage = loaded.currentPage || 1
+            setCurrentPage(startPage)
+            setTargetPage(startPage)
+            currentPageRef.current = startPage
+          }
+        })
+        .catch((err) => console.error('Failed to load book for reading:', err))
+        .finally(() => setLoading(false))
     }
   }, [id])
 
@@ -134,8 +141,20 @@ export default function PdfReaderScreen() {
     }
   }, [totalPages])
 
-  if (!book) {
-    return <View style={{ flex: 1, backgroundColor: '#000' }} />
+  if (loading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }}>
+        <Text style={{ color: '#fff', fontSize: 16 }}>Loading book...</Text>
+      </View>
+    )
+  }
+
+  if (!book || !book.filePath) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }}>
+        <Text style={{ color: '#fff', fontSize: 16 }}>Book file not available</Text>
+      </View>
+    )
   }
 
   return (

@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { View, AppState, AppStateStatus } from 'react-native'
+import { View, Text, AppState, AppStateStatus, ActivityIndicator } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Reader, ReaderProvider, useReader } from '@epubjs-react-native/core'
 import { useFileSystem } from '@epubjs-react-native/expo-file-system'
 import BottomSheet from '@gorhom/bottom-sheet'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 
-import { getBookById, updateBookCfi } from '@/lib/book-storage'
+import { getBookForReading, updateBookCfi } from '@/lib/book-storage'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
 import { ReaderToolbar } from '@/components/ReaderToolbar'
 import { TocSheet } from '@/components/TocSheet'
@@ -18,16 +18,34 @@ export default function ReaderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const [book, setBook] = useState<Book | null>(null)
 
-  // Load book from DB
+  const [loading, setLoading] = useState(true)
+
+  // Load book from DB (async -- may download file from R2 for synced books)
   useEffect(() => {
     if (id) {
-      const loaded = getBookById(id)
-      setBook(loaded)
+      setLoading(true)
+      getBookForReading(id)
+        .then((loaded) => setBook(loaded))
+        .catch((err) => console.error('Failed to load book for reading:', err))
+        .finally(() => setLoading(false))
     }
   }, [id])
 
-  if (!book) {
-    return <View style={{ flex: 1, backgroundColor: '#FFFFFF' }} />
+  if (loading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" />
+        <Text style={{ marginTop: 12, color: '#666' }}>Loading book...</Text>
+      </View>
+    )
+  }
+
+  if (!book || !book.filePath) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center' }}>
+        <Text style={{ color: '#666', fontSize: 16 }}>Book file not available</Text>
+      </View>
+    )
   }
 
   return (
