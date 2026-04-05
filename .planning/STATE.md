@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 04-02-PLAN.md
-last_updated: "2026-04-05T22:38:37Z"
+stopped_at: Completed 04-03-PLAN.md (checkpoint pending)
+last_updated: "2026-04-05T22:48:58.316Z"
 progress:
   total_phases: 8
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 10
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State
@@ -55,6 +55,7 @@ Plan: 3 of 3
 | Phase 03 P02 | 3min | 2 tasks | 4 files |
 | Phase 04 P01 | 15min | 3 tasks | 16 files |
 | Phase 04 P02 | 4min | 2 tasks | 11 files |
+| Phase 04 P03 | 3min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -94,6 +95,8 @@ Recent decisions affecting current work:
 - [Phase 04]: Soft delete (isDeleted flag) instead of hard DELETE for sync propagation
 - [Phase 04]: Pull never overwrites local filePath/coverPath (path contamination prevention)
 - [Phase 04]: isSyncing mutex prevents concurrent push/pull cycles
+- [Phase 04]: Fire-and-forget upload: import returns immediately, hash+upload runs in background
+- [Phase 04]: getBookForReading: async wrapper with on-demand R2 download for remote books
 
 ### Pending Todos
 
@@ -107,6 +110,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-05T22:38:37Z
-Stopped at: Completed 04-02-PLAN.md
+Last session: 2026-04-05T22:48:58.313Z
+Stopped at: Completed 04-03-PLAN.md (checkpoint pending)
 Resume file: None
