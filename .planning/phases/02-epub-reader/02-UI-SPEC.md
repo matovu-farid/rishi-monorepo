@@ -57,7 +57,7 @@ Exceptions:
 | Body | 16px | 400 (regular) | 1.5 |
 | Label | 14px | 600 (semibold) | 1.4 |
 | Heading | 20px | 600 (semibold) | 1.2 |
-| Display | 28px | 700 (bold) | 1.2 |
+| Display | 28px | 600 (semibold) | 1.2 |
 
 ### Reader Content (inside epub.js WebView)
 
@@ -240,6 +240,8 @@ Use `@epubjs-react-native` built-in swipe gesture handling. No custom animation 
 | Font size label | "Text Size" |
 | Reader loading | (ActivityIndicator only, no text -- matches desktop behavior) |
 | Back button (reader toolbar) | No label, chevron-left icon only. Accessibility label: "Back to library" |
+| TOC button (reader toolbar) | No label, list icon only. Accessibility label: "Table of contents" |
+| Theme button (reader toolbar) | No label, palette icon only. Accessibility label: "Reading appearance" |
 
 ---
 
