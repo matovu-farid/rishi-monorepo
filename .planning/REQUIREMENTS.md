@@ -25,12 +25,12 @@
 
 ### File Management
 
-- [ ] **FILE-01**: User can import EPUB files from device storage via file picker
+- [x] **FILE-01**: User can import EPUB files from device storage via file picker
 - [ ] **FILE-02**: User can import PDF files from device storage via file picker
-- [ ] **FILE-03**: Imported books are copied to app document directory
+- [x] **FILE-03**: Imported books are copied to app document directory
 - [ ] **FILE-04**: User can view library of all imported books with metadata (title, author, cover)
 - [ ] **FILE-05**: User can delete books from library
-- [ ] **FILE-06**: Books are available for offline reading after import
+- [x] **FILE-06**: Books are available for offline reading after import
 
 ### Sync Infrastructure
 
@@ -135,12 +135,12 @@
 | READ-05 | Phase 2 | Pending |
 | READ-06 | Phase 3 | Pending |
 | READ-07 | Phase 2 | Pending |
-| FILE-01 | Phase 2 | Pending |
+| FILE-01 | Phase 2 | Complete |
 | FILE-02 | Phase 3 | Pending |
-| FILE-03 | Phase 2 | Pending |
+| FILE-03 | Phase 2 | Complete |
 | FILE-04 | Phase 3 | Pending |
 | FILE-05 | Phase 3 | Pending |
-| FILE-06 | Phase 2 | Pending |
+| FILE-06 | Phase 2 | Complete |
 | SYNC-01 | Phase 4 | Pending |
 | SYNC-02 | Phase 4 | Pending |
 | SYNC-03 | Phase 4 | Pending |
