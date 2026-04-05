@@ -1,0 +1,178 @@
+import { db } from '@/lib/db'
+import { books, syncMeta } from '@rishi/shared/schema'
+import { eq } from 'drizzle-orm'
+import { apiClient } from '@/lib/api'
+import type { PushResponse, PullResponse } from '@rishi/shared/sync-types'
+
+let isSyncing = false
+
+/**
+ * Run a full push-then-pull sync cycle.
+ * All errors are caught internally -- this function never throws.
+ */
+export async function sync(): Promise<void> {
+  if (isSyncing) return
+  isSyncing = true
+  try {
+    await push()
+    await pull()
+  } catch (error) {
+    console.warn('[sync] cycle failed:', error)
+  } finally {
+    isSyncing = false
+  }
+}
+
+/**
+ * Push all locally dirty records to the server.
+ */
+async function push(): Promise<void> {
+  const dirtyBooks = db
+    .select()
+    .from(books)
+    .where(eq(books.isDirty, true))
+    .all()
+
+  if (dirtyBooks.length === 0) return
+
+  const response = await apiClient('/api/sync/push', {
+    method: 'POST',
+    body: JSON.stringify({ changes: { books: dirtyBooks } }),
+  })
+
+  if (!response.ok) {
+    console.warn('[sync:push] server responded', response.status)
+    return
+  }
+
+  const data: PushResponse = await response.json()
+
+  // Apply conflict resolutions from server
+  for (const conflict of data.conflicts) {
+    const c = conflict as Record<string, unknown>
+    if (typeof c.id === 'string') {
+      db.update(books)
+        .set({
+          title: c.title as string,
+          author: c.author as string,
+          format: c.format as string,
+          currentCfi: (c.currentCfi as string) ?? null,
+          currentPage: (c.currentPage as number) ?? null,
+          fileHash: (c.fileHash as string) ?? null,
+          fileR2Key: (c.fileR2Key as string) ?? null,
+          coverR2Key: (c.coverR2Key as string) ?? null,
+          createdAt: c.createdAt as number,
+          updatedAt: c.updatedAt as number,
+          syncVersion: data.syncVersion,
+          isDirty: false,
+          isDeleted: (c.isDeleted as boolean) ?? false,
+        })
+        .where(eq(books.id, c.id))
+        .run()
+    }
+  }
+
+  // Mark all pushed records as clean
+  const pushedIds = dirtyBooks.map((b) => b.id)
+  for (const id of pushedIds) {
+    db.update(books)
+      .set({ isDirty: false, syncVersion: data.syncVersion })
+      .where(eq(books.id, id))
+      .run()
+  }
+}
+
+/**
+ * Pull remote changes since the last known sync version.
+ * Never overwrites local filePath or coverPath with remote values.
+ * Skips records that are locally dirty (local changes take precedence).
+ */
+async function pull(): Promise<void> {
+  const meta = db
+    .select()
+    .from(syncMeta)
+    .where(eq(syncMeta.id, 'default'))
+    .get()
+
+  const lastVersion = meta?.lastSyncVersion ?? 0
+
+  const response = await apiClient(
+    `/api/sync/pull?since_version=${lastVersion}`,
+    { method: 'GET' }
+  )
+
+  if (!response.ok) {
+    console.warn('[sync:pull] server responded', response.status)
+    return
+  }
+
+  const data: PullResponse = await response.json()
+
+  for (const remote of data.changes.books) {
+    const r = remote as Record<string, unknown>
+    const remoteId = r.id as string
+    if (!remoteId) continue
+
+    const local = db
+      .select()
+      .from(books)
+      .where(eq(books.id, remoteId))
+      .get()
+
+    if (local) {
+      // Skip locally dirty records -- local changes take precedence until pushed
+      if (local.isDirty) continue
+
+      // Update metadata fields only -- NEVER overwrite filePath or coverPath
+      db.update(books)
+        .set({
+          title: r.title as string,
+          author: r.author as string,
+          format: r.format as string,
+          currentCfi: (r.currentCfi as string) ?? null,
+          currentPage: (r.currentPage as number) ?? null,
+          fileHash: (r.fileHash as string) ?? null,
+          fileR2Key: (r.fileR2Key as string) ?? null,
+          coverR2Key: (r.coverR2Key as string) ?? null,
+          createdAt: r.createdAt as number,
+          updatedAt: r.updatedAt as number,
+          syncVersion: (r.syncVersion as number) ?? 0,
+          isDirty: false,
+          isDeleted: (r.isDeleted as boolean) ?? false,
+        })
+        .where(eq(books.id, remoteId))
+        .run()
+    } else {
+      // New remote book -- insert with empty local paths (file not downloaded yet)
+      db.insert(books)
+        .values({
+          id: remoteId,
+          title: r.title as string,
+          author: (r.author as string) ?? 'Unknown',
+          filePath: '', // file not downloaded yet
+          coverPath: null,
+          format: (r.format as string) ?? 'epub',
+          currentCfi: (r.currentCfi as string) ?? null,
+          currentPage: (r.currentPage as number) ?? null,
+          fileHash: (r.fileHash as string) ?? null,
+          fileR2Key: (r.fileR2Key as string) ?? null,
+          coverR2Key: (r.coverR2Key as string) ?? null,
+          createdAt: (r.createdAt as number) ?? Date.now(),
+          updatedAt: (r.updatedAt as number) ?? Date.now(),
+          syncVersion: (r.syncVersion as number) ?? 0,
+          isDirty: false,
+          isDeleted: (r.isDeleted as boolean) ?? false,
+        })
+        .run()
+    }
+  }
+
+  // Update sync metadata
+  db.update(syncMeta)
+    .set({
+      lastSyncVersion: data.syncVersion,
+      lastSyncAt: Date.now(),
+    })
+    .where(eq(syncMeta.id, 'default'))
+    .run()
+}

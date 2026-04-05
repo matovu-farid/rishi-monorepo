@@ -7,6 +7,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol'
 import { Colors } from '@/constants/theme'
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { initApiClient } from '@/lib/api'
+import { startSyncTriggers, stopSyncTriggers } from '@/lib/sync/triggers'
 
 export default function TabLayout() {
   const colorScheme = useColorScheme()
@@ -15,6 +16,10 @@ export default function TabLayout() {
   useEffect(() => {
     if (isSignedIn) {
       initApiClient(getToken)
+      startSyncTriggers()
+      return () => {
+        stopSyncTriggers()
+      }
     }
   }, [isSignedIn, getToken])
 
