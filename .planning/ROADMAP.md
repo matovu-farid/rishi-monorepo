@@ -183,7 +183,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 | 1. Foundation & Auth | 2/2 | Complete   | 2026-04-05 |
 | 2. EPUB Reader | 3/3 | Complete | 2026-04-05 |
 | 3. PDF Reader & File Management | 2/2 | Complete   | 2026-04-05 |
-| 4. Sync Infrastructure | 1/3 | In Progress|  |
+| 4. Sync Infrastructure | 2/3 | In Progress|  |
 | 5. Reading Progress & Highlights | 0/? | Not started | - |
 | 6. On-Device RAG & AI Conversations | 0/? | Not started | - |
 | 7. Audio (TTS & STT) | 0/? | Not started | - |

@@ -37,10 +37,10 @@
 - [x] **SYNC-01**: Cloudflare D1 schema created for sync metadata (books, progress, highlights, conversations)
 - [x] **SYNC-02**: Cloudflare R2 configured for book file storage with hash-based deduplication
 - [x] **SYNC-03**: Worker exposes push/pull sync API endpoints authenticated by JWT
-- [ ] **SYNC-04**: Mobile app syncs on foreground, on write, and periodically (every 5 min)
+- [x] **SYNC-04**: Mobile app syncs on foreground, on write, and periodically (every 5 min)
 - [ ] **SYNC-05**: Book files upload to R2 via presigned URLs on import
 - [ ] **SYNC-06**: Book files download from R2 on-demand (lazy download) with local cache
-- [ ] **SYNC-07**: Sync works offline-first — all local operations succeed without network
+- [x] **SYNC-07**: Sync works offline-first — all local operations succeed without network
 
 ### Reading Progress & Highlights
 
@@ -144,10 +144,10 @@
 | SYNC-01 | Phase 4 | Complete |
 | SYNC-02 | Phase 4 | Complete |
 | SYNC-03 | Phase 4 | Complete |
-| SYNC-04 | Phase 4 | Pending |
+| SYNC-04 | Phase 4 | Complete |
 | SYNC-05 | Phase 4 | Pending |
 | SYNC-06 | Phase 4 | Pending |
-| SYNC-07 | Phase 4 | Pending |
+| SYNC-07 | Phase 4 | Complete |
 | HIGH-01 | Phase 5 | Pending |
 | HIGH-02 | Phase 5 | Pending |
 | HIGH-03 | Phase 5 | Pending |

@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 04-01-PLAN.md
-last_updated: "2026-04-05T22:32:50.467Z"
+stopped_at: Completed 04-02-PLAN.md
+last_updated: "2026-04-05T22:38:37Z"
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 10
-  completed_plans: 8
+  completed_plans: 9
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-04-05)
 ## Current Position
 
 Phase: 04 (sync-infrastructure) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Plan: 2 of 3
 | Phase 03 P01 | 2min | 2 tasks | 7 files |
 | Phase 03 P02 | 3min | 2 tasks | 4 files |
 | Phase 04 P01 | 15min | 3 tasks | 16 files |
+| Phase 04 P02 | 4min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,11 @@ Recent decisions affecting current work:
 - [Phase 04]: aws4fetch with signQuery:true for presigned URLs (no Content-Type in signed headers)
 - [Phase 04]: LWW conflict resolution based on updatedAt timestamp comparison
 - [Phase 04]: Global file dedup by fileHash across all users
+- [Phase 04]: ALTER TABLE migrations with try/catch for additive sync columns on mobile
+- [Phase 04]: Back-fill existing books as isDirty=true for first sync push
+- [Phase 04]: Soft delete (isDeleted flag) instead of hard DELETE for sync propagation
+- [Phase 04]: Pull never overwrites local filePath/coverPath (path contamination prevention)
+- [Phase 04]: isSyncing mutex prevents concurrent push/pull cycles
 
 ### Pending Todos
 
@@ -101,6 +107,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-06T12:00:00Z
-Stopped at: Completed 04-01-PLAN.md
+Last session: 2026-04-05T22:38:37Z
+Stopped at: Completed 04-02-PLAN.md
 Resume file: None
