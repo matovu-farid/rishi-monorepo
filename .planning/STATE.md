@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 06-01-PLAN.md
-last_updated: "2026-04-06T03:20:10.499Z"
+stopped_at: Completed 06-02-PLAN.md
+last_updated: "2026-04-06T03:24:25.478Z"
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 19
-  completed_plans: 16
+  completed_plans: 17
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-04-05)
 ## Current Position
 
 Phase: 06 (on-device-rag-ai-conversations) — EXECUTING
-Plan: 5 of 5
+Plan: 3 of 5
 
 ## Performance Metrics
 
@@ -62,6 +62,7 @@ Plan: 5 of 5
 | Phase 05 P04 | 1min | 2 tasks | 2 files |
 | Phase 06 P04 | 3min | 1 tasks | 4 files |
 | Phase 06 P01 | 7min | 3 tasks | 7 files |
+| Phase 06 P02 | 11min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -116,6 +117,10 @@ Recent decisions affecting current work:
 - [Phase 06]: JSZip for EPUB extraction: dynamic import to parse EPUB ZIP as base64
 - [Phase 06]: rawDb export from db.ts for sqlite-vec loadExtensionSync and raw SQL operations
 - [Phase 06]: chunks table + chunk_vectors vec0 virtual table with 384-dim float embeddings
+- [Phase 06]: Conversation conflict type detection via title+bookId fields (not filePath) to distinguish from books
+- [Phase 06]: Messages use append-only merge: never updated during sync, only new ones inserted
+- [Phase 06]: Pull messages via user conversation IDs (messages lack userId column)
+- [Phase 06]: Jest+ts-jest with schema/drizzle-orm mocks for mobile unit testing
 
 ### Pending Todos
 
@@ -129,6 +134,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-06T03:20:10.490Z
-Stopped at: Completed 06-01-PLAN.md
+Last session: 2026-04-06T03:24:25.475Z
+Stopped at: Completed 06-02-PLAN.md
 Resume file: None

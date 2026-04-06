@@ -74,9 +74,9 @@
 
 ### AI Conversations
 
-- [ ] **CONV-01**: User can have multi-turn AI conversations about a book
-- [ ] **CONV-02**: Conversation history persists locally per book
-- [ ] **CONV-03**: Conversation history syncs across devices (append-only)
+- [x] **CONV-01**: User can have multi-turn AI conversations about a book
+- [x] **CONV-02**: Conversation history persists locally per book
+- [x] **CONV-03**: Conversation history syncs across devices (append-only)
 - [ ] **CONV-04**: AI responses include source references to book passages
 
 ### Desktop Sync Integration
@@ -169,9 +169,9 @@
 | AUD-04 | Phase 7 | Pending |
 | AUD-05 | Phase 7 | Pending |
 | AUD-06 | Phase 7 | Pending |
-| CONV-01 | Phase 6 | Pending |
-| CONV-02 | Phase 6 | Pending |
-| CONV-03 | Phase 6 | Pending |
+| CONV-01 | Phase 6 | Complete |
+| CONV-02 | Phase 6 | Complete |
+| CONV-03 | Phase 6 | Complete |
 | CONV-04 | Phase 6 | Pending |
 | DSYNC-01 | Phase 8 | Pending |
 | DSYNC-02 | Phase 8 | Pending |
