@@ -131,12 +131,14 @@ Plans:
   4. User can have multi-turn conversations about a book, with history persisting locally
   5. Conversation history syncs across devices
   6. Server-side embedding fallback works for bulk book imports
-**Plans**: TBD
+**Plans**: 5 plans
 
 Plans:
-- [ ] 06-01: TBD
-- [ ] 06-02: TBD
-- [ ] 06-03: TBD
+- [ ] 06-01-PLAN.md -- RAG types, EPUB text chunking, sqlite-vec vector store with KNN search
+- [ ] 06-02-PLAN.md -- Conversation/message schema, CRUD storage with dirty tracking, sync engine and Worker extension
+- [ ] 06-03-PLAN.md -- react-native-executorch setup, embedding pipeline (extract -> chunk -> embed -> store), model download hook
+- [ ] 06-04-PLAN.md -- Server-side embedding fallback (Worker /api/embed endpoint + mobile client)
+- [ ] 06-05-PLAN.md -- Chat UI (conversations list, per-book chat screen, RAG query hook, source references, reader toolbar integration)
 
 ### Phase 7: Audio (TTS & STT)
 **Goal**: Users can listen to book content via text-to-speech and ask questions using voice input.
@@ -186,7 +188,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 | 3. PDF Reader & File Management | 2/2 | Complete   | 2026-04-05 |
 | 4. Sync Infrastructure | 3/3 | Complete   | 2026-04-05 |
 | 5. Reading Progress & Highlights | 0/3 | Not started | - |
-| 6. On-Device RAG & AI Conversations | 0/? | Not started | - |
+| 6. On-Device RAG & AI Conversations | 0/5 | Not started | - |
 | 7. Audio (TTS & STT) | 0/? | Not started | - |
 | 8. Desktop Sync Integration | 0/? | Not started | - |
 
