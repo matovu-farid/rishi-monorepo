@@ -96,3 +96,33 @@ export async function getHighlightsForBook(bookSyncId: string) {
     .where('is_deleted', '=', 0)
     .execute();
 }
+
+/**
+ * Update the note on an existing highlight.
+ */
+export async function updateHighlightNote(highlightId: string, note: string): Promise<void> {
+  await db.updateTable('highlights')
+    .set({ note, updated_at: Date.now(), is_dirty: 1 })
+    .where('id', '=', highlightId)
+    .execute();
+}
+
+/**
+ * Update the color of an existing highlight.
+ */
+export async function updateHighlightColor(highlightId: string, color: string): Promise<void> {
+  await db.updateTable('highlights')
+    .set({ color, updated_at: Date.now(), is_dirty: 1 })
+    .where('id', '=', highlightId)
+    .execute();
+}
+
+/**
+ * Soft-delete a highlight by its ID (sets is_deleted=1, is_dirty=1 for sync).
+ */
+export async function deleteHighlightById(highlightId: string): Promise<void> {
+  await db.updateTable('highlights')
+    .set({ is_deleted: 1, is_dirty: 1, updated_at: Date.now() })
+    .where('id', '=', highlightId)
+    .execute();
+}
