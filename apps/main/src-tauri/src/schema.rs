@@ -14,6 +14,17 @@ diesel::table! {
         version -> Integer,
         created_at -> Timestamp,
         updated_at -> Timestamp,
+        sync_id -> Nullable<Text>,
+        file_hash -> Nullable<Text>,
+        file_r2_key -> Nullable<Text>,
+        cover_r2_key -> Nullable<Text>,
+        format -> Text,
+        current_cfi -> Nullable<Text>,
+        current_page -> Nullable<Integer>,
+        user_id -> Nullable<Text>,
+        sync_version -> Integer,
+        is_dirty -> Integer,
+        is_deleted -> Integer,
     }
 }
 
@@ -28,4 +39,66 @@ diesel::table! {
     }
 }
 
-diesel::allow_tables_to_appear_in_same_query!(books, chunk_data,);
+diesel::table! {
+    highlights (id) {
+        id -> Text,
+        book_id -> Text,
+        user_id -> Nullable<Text>,
+        cfi_range -> Text,
+        text -> Text,
+        color -> Text,
+        note -> Nullable<Text>,
+        chapter -> Nullable<Text>,
+        created_at -> Integer,
+        updated_at -> Integer,
+        sync_version -> Integer,
+        is_dirty -> Integer,
+        is_deleted -> Integer,
+    }
+}
+
+diesel::table! {
+    conversations (id) {
+        id -> Text,
+        book_id -> Text,
+        user_id -> Nullable<Text>,
+        title -> Text,
+        created_at -> Integer,
+        updated_at -> Integer,
+        sync_version -> Integer,
+        is_dirty -> Integer,
+        is_deleted -> Integer,
+    }
+}
+
+diesel::table! {
+    messages (id) {
+        id -> Text,
+        conversation_id -> Text,
+        role -> Text,
+        content -> Text,
+        source_chunks -> Nullable<Text>,
+        created_at -> Integer,
+        updated_at -> Integer,
+        sync_version -> Integer,
+        is_dirty -> Integer,
+        is_deleted -> Integer,
+    }
+}
+
+diesel::table! {
+    sync_meta (id) {
+        id -> Text,
+        last_sync_version -> Integer,
+        last_sync_at -> Nullable<Integer>,
+    }
+}
+
+diesel::allow_tables_to_appear_in_same_query!(
+    books,
+    chunk_data,
+    highlights,
+    conversations,
+    messages,
+    sync_meta,
+);

@@ -36,6 +36,17 @@ pub struct BookInsertable {
     pub location: String,
     pub cover_kind: String,
     pub version: i32,
+    pub sync_id: Option<String>,
+    pub file_hash: Option<String>,
+    pub file_r2_key: Option<String>,
+    pub cover_r2_key: Option<String>,
+    pub format: Option<String>,
+    pub current_cfi: Option<String>,
+    pub current_page: Option<i32>,
+    pub user_id: Option<String>,
+    pub sync_version: Option<i32>,
+    pub is_dirty: Option<i32>,
+    pub is_deleted: Option<i32>,
 }
 
 // Serializable structs for Tauri commands
@@ -61,6 +72,17 @@ pub struct Book {
     pub location: String,
     pub cover_kind: String,
     pub version: i32,
+    pub sync_id: Option<String>,
+    pub file_hash: Option<String>,
+    pub file_r2_key: Option<String>,
+    pub cover_r2_key: Option<String>,
+    pub format: String,
+    pub current_cfi: Option<String>,
+    pub current_page: Option<i32>,
+    pub user_id: Option<String>,
+    pub sync_version: i32,
+    pub is_dirty: i32,
+    pub is_deleted: i32,
 }
 
 impl From<Books> for Book {
@@ -76,6 +98,17 @@ impl From<Books> for Book {
             location: book.location,
             cover_kind: book.cover_kind,
             version: book.version,
+            sync_id: book.sync_id,
+            file_hash: book.file_hash,
+            file_r2_key: book.file_r2_key,
+            cover_r2_key: book.cover_r2_key,
+            format: book.format,
+            current_cfi: book.current_cfi,
+            current_page: book.current_page,
+            user_id: book.user_id,
+            sync_version: book.sync_version,
+            is_dirty: book.is_dirty,
+            is_deleted: book.is_deleted,
         }
     }
 }
@@ -234,16 +267,25 @@ pub fn get_books() -> Result<Vec<Book>, String> {
 
 #[tauri::command]
 pub fn delete_book(book_id: i32) -> Result<(), String> {
-    use crate::schema::books::dsl::*;
-
     let pool = DB_POOL.get().ok_or("Database pool not initialized")?;
     let mut conn = pool
         .get()
         .map_err(|e| format!("Failed to get connection: {}", e))?;
 
-    diesel::delete(books.filter(id.eq(&book_id)))
-        .execute(&mut conn)
-        .map_err(|e| format!("Failed to delete book: {}", e))?;
+    // Delete associated chunk_data rows first to avoid orphaned records
+    {
+        use crate::schema::chunk_data::dsl::*;
+        diesel::delete(chunk_data.filter(bookId.eq(&book_id)))
+            .execute(&mut conn)
+            .map_err(|e| format!("Failed to delete chunk data for book: {}", e))?;
+    }
+
+    {
+        use crate::schema::books::dsl::*;
+        diesel::delete(books.filter(id.eq(&book_id)))
+            .execute(&mut conn)
+            .map_err(|e| format!("Failed to delete book: {}", e))?;
+    }
 
     Ok(())
 }
@@ -360,6 +402,9 @@ pub async fn get_context_for_query(
         },
     }];
     let embed_results = embed(embed_params).await?;
+    if embed_results.is_empty() {
+        return Err("No embedding results returned for query".to_string());
+    }
     let query = embed_results[0].embedding.clone();
     let dim = embed_results[0].embedding.len();
     let name = format!("{}-vectordb", book_id);
@@ -517,6 +562,17 @@ mod tests {
             location: "epubcfi(/6/4[chap01ref]!/4/2/2)".to_string(),
             cover_kind: "image/png".to_string(),
             version: 1,
+            sync_id: None,
+            file_hash: None,
+            file_r2_key: None,
+            cover_r2_key: None,
+            format: None,
+            current_cfi: None,
+            current_page: None,
+            user_id: None,
+            sync_version: None,
+            is_dirty: None,
+            is_deleted: None,
         };
 
         // Save the book
@@ -570,6 +626,17 @@ mod tests {
             location: "epubcfi(/6/4[chap02ref]!/4/2/2)".to_string(),
             cover_kind: "image/jpeg".to_string(),
             version: 2,
+            sync_id: None,
+            file_hash: None,
+            file_r2_key: None,
+            cover_r2_key: None,
+            format: None,
+            current_cfi: None,
+            current_page: None,
+            user_id: None,
+            sync_version: None,
+            is_dirty: None,
+            is_deleted: None,
         };
 
         // Save the book
@@ -613,6 +680,17 @@ mod tests {
             location: "epubcfi(/6/4[chap03ref]!/4/2/2)".to_string(),
             cover_kind: "image/png".to_string(),
             version: 1,
+            sync_id: None,
+            file_hash: None,
+            file_r2_key: None,
+            cover_r2_key: None,
+            format: None,
+            current_cfi: None,
+            current_page: None,
+            user_id: None,
+            sync_version: None,
+            is_dirty: None,
+            is_deleted: None,
         };
 
         // Save the book
