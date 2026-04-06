@@ -212,7 +212,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 8. Desktop Sync Integration | 3/3 | Complete   | 2026-04-06 |
 | 9. Synced-Book Data Path Fixes | 0/1 | Not started | - |
 | 10. Desktop Feature Parity | 3/3 | Complete    | 2026-04-06 |
-| 11. Mobile Feature Parity | 0/0 | Not started | - |
+| 11. Mobile Feature Parity | 0/3 | Not started | - |
 
 ## Coverage
 
@@ -230,8 +230,9 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | AI Conversations | CONV-01 through CONV-04 | Phase 6 | 4 |
 | Audio | AUD-01 through AUD-06 | Phase 7 | 6 |
 | Desktop Sync | DSYNC-01 through DSYNC-05 | Phase 8 | 5 |
+| Mobile Feature Parity | PARITY-M01 through PARITY-M04 | Phase 11 | 4 |
 
-**Total: 55/55 v1 requirements mapped. No orphans. 1 requirement reassigned to gap closure phase.**
+**Total: 55/55 v1 requirements mapped + 4 parity requirements. No orphans. 1 requirement reassigned to gap closure phase.**
 
 ### Phase 10: Desktop Feature Parity
 **Goal**: Desktop app gains all user-facing features that mobile already has — highlights management UI with multiple colors/notes/navigation, reader settings (font size, font family), voice input/transcription for chat, server embedding fallback for RAG, source chunk references in AI chat, and write-triggered sync.
@@ -257,17 +258,19 @@ Plans:
 **Goal**: Mobile app gains all user-facing features that desktop already has — OpenAI Realtime voice chat for live AI conversations, AI guardrails/tripwire system, sync status indicator UI, and Sentry error tracking.
 **Depends on**: Phase 10
 **Requirements**: PARITY-M01 through PARITY-M04
-**Risk**: High -- OpenAI Realtime API on React Native needs WebSocket handling; Sentry RN SDK integration with Expo
+**Risk**: High -- OpenAI Realtime API on React Native needs WebRTC handling; Sentry RN SDK integration with Expo
 **Success Criteria** (what must be TRUE):
   1. User can have live voice conversations with AI about their book (OpenAI Realtime API)
   2. AI responses are guarded against off-topic content with tripwire classification
   3. User can see sync status (synced, syncing, offline, failed) with last sync time in the app
   4. Crashes and errors are reported to Sentry with session tracking
-**Plans**: 0 plans
+**Plans**: 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 11 to break down)
+- [ ] 11-01-PLAN.md -- Sync status indicator (status module, hook, SyncStatusIndicator component, library wiring) and Sentry integration (SDK init, metro config, root layout wrap)
+- [ ] 11-02-PLAN.md -- Realtime voice session library (WebRTC via react-native-webrtc, tool call dispatch, data channel events) and guardrails module (server-side tripwire classification)
+- [ ] 11-03-PLAN.md -- Realtime voice UI (useRealtimeChat hook, RealtimeVoiceButton, GuardrailWarning banner) and reader toolbar integration
 
 ---
 *Roadmap created: 2026-04-05*
-*Last updated: 2026-04-06*
+*Last updated: 2026-04-07*
