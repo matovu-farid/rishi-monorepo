@@ -7,10 +7,24 @@ import {
 } from '@react-navigation/native'
 import { Slot } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
+import { initExecutorch } from 'react-native-executorch'
+import { ExpoResourceFetcher } from 'react-native-executorch-expo-resource-fetcher'
 import 'react-native-reanimated'
 import '../global.css'
 
 import { useColorScheme } from '@/hooks/use-color-scheme'
+import { initVectorExtension, ensureChunkTables } from '@/lib/rag/vector-store'
+
+// Initialize ExecuTorch before any hook usage
+initExecutorch({ resourceFetcher: ExpoResourceFetcher })
+
+// Initialize sqlite-vec and ensure chunk tables exist
+try {
+  initVectorExtension()
+  ensureChunkTables()
+} catch (e) {
+  console.warn('[vector-store] Failed to initialize:', e)
+}
 
 const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!
 

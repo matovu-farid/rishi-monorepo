@@ -46,6 +46,8 @@
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
     "react-native-blob-util": "^0.24.7",
+    "react-native-executorch": "^0.8.1",
+    "react-native-executorch-expo-resource-fetcher": "^0.8.0",
     "react-native-gesture-handler": "~2.28.0",
     "react-native-pdf": "^7.0.4",
     "react-native-reanimated": "~4.1.1",
