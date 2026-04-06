@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import { embedSingle, isEmbeddingReady } from '@/lib/rag/embedder'
+import { embedTextsOnServer } from '@/lib/rag/server-fallback'
 import { searchSimilarChunks } from '@/lib/rag/vector-store'
 import { apiClient } from '@/lib/api'
 import type { SourceChunk } from '@/types/conversation'
@@ -39,16 +40,24 @@ export function useRAGQuery(bookId: string) {
     question: string,
     conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>
   ): Promise<{ answer: string; sources: SourceChunk[] }> => {
-    if (!isEmbeddingReady()) {
-      throw new Error('Embedding model not ready')
-    }
-
     setIsLoading(true)
     setError(null)
 
     try {
-      // 1. Embed the query
-      const queryVector = await embedSingle(question)
+      // 1. Embed the query -- prefer on-device, fall back to server
+      let queryVector: number[]
+      if (isEmbeddingReady()) {
+        try {
+          queryVector = await embedSingle(question)
+        } catch (err) {
+          console.warn('[useRAGQuery] On-device embed failed, falling back to server:', err)
+          const [vec] = await embedTextsOnServer([question])
+          queryVector = vec
+        }
+      } else {
+        const [vec] = await embedTextsOnServer([question])
+        queryVector = vec
+      }
 
       // 2. Vector search for relevant chunks
       const results = searchSimilarChunks(bookId, queryVector, 5)
