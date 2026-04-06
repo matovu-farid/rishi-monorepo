@@ -127,10 +127,19 @@ describe('sync engine - conversations and messages', () => {
   })
 
   it('pull processes remote conversations and messages', async () => {
-    // All select calls return empty (nothing dirty for push)
-    mockDb.select.mockImplementation(() => createSelectChain([], { lastSyncVersion: 0 }))
+    // Select calls: first 4 return empty dirty arrays (push early return),
+    // then syncMeta get, then local lookups for each remote record (return undefined = new)
+    let selectCallCount = 0
+    mockDb.select.mockImplementation(() => {
+      selectCallCount++
+      // Calls 1-4: dirty queries in push() -- all empty
+      if (selectCallCount <= 4) return createSelectChain([], undefined)
+      // Call 5: syncMeta in pull()
+      if (selectCallCount === 5) return createSelectChain([], { lastSyncVersion: 0 })
+      // Remaining: local record lookups in pull -- return undefined (not found)
+      return createSelectChain([], undefined)
+    })
 
-    // Push: nothing dirty, so push should be skipped or return quickly
     // Pull response with conversations and messages
     mockApiClient.mockResolvedValueOnce({
       ok: true,

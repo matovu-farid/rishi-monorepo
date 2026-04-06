@@ -3,6 +3,28 @@
  * Mocks @/lib/db and @/lib/sync/triggers.
  */
 
+// ── Mock @rishi/shared/schema (avoid drizzle-orm/sqlite-core resolution) ────
+const fakeTable = (name: string) => {
+  return new Proxy({} as Record<string, unknown>, {
+    get: (_target, prop: string) => prop,
+  })
+}
+jest.mock('@rishi/shared/schema', () => ({
+  books: fakeTable('books'),
+  highlights: fakeTable('highlights'),
+  conversations: fakeTable('conversations'),
+  messages: fakeTable('messages'),
+  syncMeta: fakeTable('sync_meta'),
+}))
+
+// ── Mock drizzle-orm operators ───────────────────────────────────────────────
+jest.mock('drizzle-orm', () => ({
+  eq: jest.fn((_col, _val) => ({ eq: [_col, _val] })),
+  and: jest.fn((...args: unknown[]) => ({ and: args })),
+  desc: jest.fn((_col) => ({ desc: _col })),
+  asc: jest.fn((_col) => ({ asc: _col })),
+}))
+
 // ── Mock db ─────────────────────────────────────────────────────────────────
 const mockRun = jest.fn()
 const mockAll = jest.fn().mockReturnValue([])

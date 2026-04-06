@@ -3,7 +3,7 @@ import { eq, gt, sql, and, max } from "drizzle-orm";
 import type { CloudflareBindings } from "../index";
 import { requireWorkerAuth } from "../index";
 import { createDb } from "../db/drizzle";
-import { books, highlights } from "@rishi/shared/schema";
+import { books, highlights, conversations, messages } from "@rishi/shared/schema";
 import type { PushRequest, PushResponse, PullResponse } from "@rishi/shared/sync-types";
 
 export const syncRoutes = new Hono<{
@@ -117,15 +117,86 @@ syncRoutes.post("/push", requireWorkerAuth, async (c) => {
     }
   }
 
+  // ── Conversations upsert loop (LWW) ──────────────────────────────────────
+  const upsertedConversationIds: string[] = [];
+
+  for (const conv of body.changes.conversations ?? []) {
+    const { isDirty, ...serverFields } = conv as Record<string, unknown>;
+    const convId = serverFields.id as string;
+    if (!convId) continue;
+
+    const existing = await db
+      .select()
+      .from(conversations)
+      .where(and(eq(conversations.id, convId), eq(conversations.userId, userId)))
+      .get();
+
+    const pushedUpdatedAt = (serverFields.updatedAt as number) ?? 0;
+
+    if (!existing) {
+      await db.insert(conversations).values({
+        ...serverFields,
+        id: convId,
+        userId,
+        updatedAt: pushedUpdatedAt || Date.now(),
+        createdAt: (serverFields.createdAt as number) || Date.now(),
+      } as typeof conversations.$inferInsert);
+      upsertedConversationIds.push(convId);
+    } else if (pushedUpdatedAt > (existing.updatedAt ?? 0)) {
+      const { id, createdAt, ...updateFields } = serverFields;
+      await db
+        .update(conversations)
+        .set({
+          ...updateFields,
+          updatedAt: pushedUpdatedAt,
+        } as Partial<typeof conversations.$inferInsert>)
+        .where(and(eq(conversations.id, convId), eq(conversations.userId, userId)));
+      upsertedConversationIds.push(convId);
+    } else {
+      conflicts.push(existing as unknown as Record<string, unknown>);
+    }
+  }
+
+  // ── Messages upsert loop (append-only) ─────────────────────────────────
+  const upsertedMessageIds: string[] = [];
+
+  for (const msg of body.changes.messages ?? []) {
+    const { isDirty, ...serverFields } = msg as Record<string, unknown>;
+    const msgId = serverFields.id as string;
+    if (!msgId) continue;
+
+    const existing = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.id, msgId))
+      .get();
+
+    if (existing) {
+      // Append-only: never update existing messages, skip entirely
+      continue;
+    }
+
+    // New message -- insert (userId comes from the conversation's ownership)
+    await db.insert(messages).values({
+      ...serverFields,
+      id: msgId,
+      updatedAt: (serverFields.updatedAt as number) || Date.now(),
+      createdAt: (serverFields.createdAt as number) || Date.now(),
+    } as typeof messages.$inferInsert);
+    upsertedMessageIds.push(msgId);
+  }
+
   // ── Assign syncVersion to all upserted records ────────────────────────────
-  const totalUpserted = upsertedBookIds.length + upsertedHighlightIds.length;
+  const totalUpserted = upsertedBookIds.length + upsertedHighlightIds.length + upsertedConversationIds.length + upsertedMessageIds.length;
   let newSyncVersion = 0;
 
   if (totalUpserted > 0) {
-    // Get current max syncVersion across both tables
+    // Get current max syncVersion across all tables
     const maxBookVersion = (await db.select({ v: max(books.syncVersion) }).from(books).get())?.v ?? 0;
     const maxHighlightVersion = (await db.select({ v: max(highlights.syncVersion) }).from(highlights).get())?.v ?? 0;
-    newSyncVersion = Math.max(maxBookVersion, maxHighlightVersion) + 1;
+    const maxConvVersion = (await db.select({ v: max(conversations.syncVersion) }).from(conversations).get())?.v ?? 0;
+    const maxMsgVersion = (await db.select({ v: max(messages.syncVersion) }).from(messages).get())?.v ?? 0;
+    newSyncVersion = Math.max(maxBookVersion, maxHighlightVersion, maxConvVersion, maxMsgVersion) + 1;
 
     // Update all upserted books with the new syncVersion
     for (const id of upsertedBookIds) {
@@ -142,11 +213,29 @@ syncRoutes.post("/push", requireWorkerAuth, async (c) => {
         .set({ syncVersion: newSyncVersion, isDirty: false })
         .where(eq(highlights.id, id));
     }
+
+    // Update all upserted conversations with the new syncVersion
+    for (const id of upsertedConversationIds) {
+      await db
+        .update(conversations)
+        .set({ syncVersion: newSyncVersion, isDirty: false })
+        .where(eq(conversations.id, id));
+    }
+
+    // Update all upserted messages with the new syncVersion
+    for (const id of upsertedMessageIds) {
+      await db
+        .update(messages)
+        .set({ syncVersion: newSyncVersion, isDirty: false })
+        .where(eq(messages.id, id));
+    }
   } else {
-    // No upserts -- return current max version across both tables
+    // No upserts -- return current max version across all tables
     const maxBookVersion = (await db.select({ v: max(books.syncVersion) }).from(books).get())?.v ?? 0;
     const maxHighlightVersion = (await db.select({ v: max(highlights.syncVersion) }).from(highlights).get())?.v ?? 0;
-    newSyncVersion = Math.max(maxBookVersion, maxHighlightVersion);
+    const maxConvVersion = (await db.select({ v: max(conversations.syncVersion) }).from(conversations).get())?.v ?? 0;
+    const maxMsgVersion = (await db.select({ v: max(messages.syncVersion) }).from(messages).get())?.v ?? 0;
+    newSyncVersion = Math.max(maxBookVersion, maxHighlightVersion, maxConvVersion, maxMsgVersion);
   }
 
   const response: PushResponse = {
@@ -194,15 +283,55 @@ syncRoutes.get("/pull", requireWorkerAuth, async (c) => {
     )
     .all();
 
-  // Get current max syncVersion across both tables for this user
+  // ── Pull conversations ─────���───────────────────────────���──────────────────
+  const changedConversations = await db
+    .select()
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.userId, userId),
+        gt(conversations.syncVersion, sinceVersion)
+      )
+    )
+    .all();
+
+  // ── Pull messages (via user's conversations) ─────────────────────────────
+  // Get all conversation IDs belonging to this user
+  const userConvIds = (
+    await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(eq(conversations.userId, userId))
+      .all()
+  ).map((c) => c.id);
+
+  let changedMessages: Array<typeof messages.$inferSelect> = [];
+  if (userConvIds.length > 0) {
+    // Fetch messages for user's conversations that changed since sinceVersion
+    const allMessages = await db
+      .select()
+      .from(messages)
+      .where(gt(messages.syncVersion, sinceVersion))
+      .all();
+    changedMessages = allMessages.filter((m) => userConvIds.includes(m.conversationId));
+  }
+
+  // Get current max syncVersion across all tables for this user
   const maxBookVer = (await db.select({ v: max(books.syncVersion) }).from(books).where(eq(books.userId, userId)).get())?.v ?? 0;
   const maxHighVer = (await db.select({ v: max(highlights.syncVersion) }).from(highlights).where(eq(highlights.userId, userId)).get())?.v ?? 0;
-  const currentSyncVersion = Math.max(maxBookVer, maxHighVer);
+  const maxConvVer = (await db.select({ v: max(conversations.syncVersion) }).from(conversations).where(eq(conversations.userId, userId)).get())?.v ?? 0;
+  // Messages don't have userId directly, but we already filtered above
+  const maxMsgVer = changedMessages.length > 0
+    ? Math.max(...changedMessages.map((m) => m.syncVersion ?? 0))
+    : 0;
+  const currentSyncVersion = Math.max(maxBookVer, maxHighVer, maxConvVer, maxMsgVer);
 
   const response: PullResponse = {
     changes: {
       books: sanitizedBooks as unknown as Array<Record<string, unknown>>,
       highlights: changedHighlights as unknown as Array<Record<string, unknown>>,
+      conversations: changedConversations as unknown as Array<Record<string, unknown>>,
+      messages: changedMessages as unknown as Array<Record<string, unknown>>,
     },
     syncVersion: currentSyncVersion,
   };

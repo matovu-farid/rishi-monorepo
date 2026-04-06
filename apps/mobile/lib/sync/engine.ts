@@ -1,5 +1,5 @@
 import { db } from '@/lib/db'
-import { books, highlights, syncMeta } from '@rishi/shared/schema'
+import { books, highlights, conversations, messages, syncMeta } from '@rishi/shared/schema'
 import { eq } from 'drizzle-orm'
 import { apiClient } from '@/lib/api'
 import type { PushResponse, PullResponse } from '@rishi/shared/sync-types'
@@ -39,7 +39,24 @@ async function push(): Promise<void> {
     .where(eq(highlights.isDirty, true))
     .all()
 
-  if (dirtyBooks.length === 0 && dirtyHighlights.length === 0) return
+  const dirtyConversations = db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.isDirty, true))
+    .all()
+
+  const dirtyMessages = db
+    .select()
+    .from(messages)
+    .where(eq(messages.isDirty, true))
+    .all()
+
+  if (
+    dirtyBooks.length === 0 &&
+    dirtyHighlights.length === 0 &&
+    dirtyConversations.length === 0 &&
+    dirtyMessages.length === 0
+  ) return
 
   const response = await apiClient('/api/sync/push', {
     method: 'POST',
@@ -47,6 +64,8 @@ async function push(): Promise<void> {
       changes: {
         books: dirtyBooks,
         highlights: dirtyHighlights,
+        conversations: dirtyConversations,
+        messages: dirtyMessages,
       },
     }),
   })
@@ -79,6 +98,20 @@ async function push(): Promise<void> {
           isDeleted: (c.isDeleted as boolean) ?? false,
         })
         .where(eq(highlights.id, c.id))
+        .run()
+    } else if ('title' in c && 'bookId' in c && !('filePath' in c)) {
+      // Conversation conflict -- server version wins (LWW)
+      db.update(conversations)
+        .set({
+          title: c.title as string,
+          bookId: c.bookId as string,
+          createdAt: c.createdAt as number,
+          updatedAt: c.updatedAt as number,
+          syncVersion: data.syncVersion,
+          isDirty: false,
+          isDeleted: (c.isDeleted as boolean) ?? false,
+        })
+        .where(eq(conversations.id, c.id))
         .run()
     } else {
       // Book conflict -- existing logic
@@ -118,6 +151,24 @@ async function push(): Promise<void> {
     db.update(highlights)
       .set({ isDirty: false, syncVersion: data.syncVersion })
       .where(eq(highlights.id, id))
+      .run()
+  }
+
+  // Mark all pushed conversations as clean
+  const pushedConversationIds = dirtyConversations.map((c) => c.id)
+  for (const id of pushedConversationIds) {
+    db.update(conversations)
+      .set({ isDirty: false, syncVersion: data.syncVersion })
+      .where(eq(conversations.id, id))
+      .run()
+  }
+
+  // Mark all pushed messages as clean
+  const pushedMessageIds = dirtyMessages.map((m) => m.id)
+  for (const id of pushedMessageIds) {
+    db.update(messages)
+      .set({ isDirty: false, syncVersion: data.syncVersion })
+      .where(eq(messages.id, id))
       .run()
   }
 }
@@ -264,6 +315,89 @@ async function pull(): Promise<void> {
         })
         .run()
     }
+  }
+
+  // ── Pull conversations (LWW merge) ────────────────────────────────────────
+  for (const remote of data.changes.conversations ?? []) {
+    const r = remote as Record<string, unknown>
+    const remoteId = r.id as string
+    if (!remoteId) continue
+
+    const local = db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, remoteId))
+      .get()
+
+    if (local) {
+      // Skip locally dirty -- local changes take precedence until pushed
+      if (local.isDirty) continue
+
+      // LWW guard: only apply remote update if remote is newer or equal
+      const remoteUpdatedAt = (r.updatedAt as number) ?? 0
+      if (remoteUpdatedAt < (local.updatedAt ?? 0)) continue
+
+      db.update(conversations)
+        .set({
+          title: r.title as string,
+          bookId: r.bookId as string,
+          createdAt: r.createdAt as number,
+          updatedAt: r.updatedAt as number,
+          syncVersion: (r.syncVersion as number) ?? 0,
+          isDirty: false,
+          isDeleted: (r.isDeleted as boolean) ?? false,
+        })
+        .where(eq(conversations.id, remoteId))
+        .run()
+    } else {
+      // New remote conversation -- insert
+      db.insert(conversations)
+        .values({
+          id: remoteId,
+          bookId: (r.bookId as string) ?? '',
+          title: (r.title as string) ?? 'New conversation',
+          createdAt: (r.createdAt as number) ?? Date.now(),
+          updatedAt: (r.updatedAt as number) ?? Date.now(),
+          syncVersion: (r.syncVersion as number) ?? 0,
+          isDirty: false,
+          isDeleted: (r.isDeleted as boolean) ?? false,
+        })
+        .run()
+    }
+  }
+
+  // ── Pull messages (append-only merge) ────────────────────────────────────
+  for (const remote of data.changes.messages ?? []) {
+    const r = remote as Record<string, unknown>
+    const remoteId = r.id as string
+    if (!remoteId) continue
+
+    const local = db
+      .select()
+      .from(messages)
+      .where(eq(messages.id, remoteId))
+      .get()
+
+    if (local) {
+      // Append-only: never update existing messages, skip entirely
+      continue
+    }
+
+    // New remote message -- insert with isDirty=false
+    db.insert(messages)
+      .values({
+        id: remoteId,
+        conversationId: (r.conversationId as string) ?? '',
+        role: (r.role as string) ?? 'user',
+        content: (r.content as string) ?? '',
+        sourceChunks: (r.sourceChunks as string) ?? null,
+        createdAt: (r.createdAt as number) ?? Date.now(),
+        updatedAt: (r.updatedAt as number) ?? Date.now(),
+        syncVersion: (r.syncVersion as number) ?? 0,
+        isDirty: false,
+        isDeleted: (r.isDeleted as boolean) ?? false,
+      })
+      .run()
   }
 
   // Update sync metadata
