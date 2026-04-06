@@ -26,6 +26,11 @@ const MAPPING = {
   'trash': 'delete',
   'bookmark.fill': 'bookmark',
   'pencil.line': 'edit',
+  'message.fill': 'chat-bubble',
+  'sparkles': 'auto-awesome',
+  'arrow.down.circle': 'file-download',
+  'stop.fill': 'stop',
+  'arrow.up': 'arrow-upward',
 } as IconMapping;
 
 /**
