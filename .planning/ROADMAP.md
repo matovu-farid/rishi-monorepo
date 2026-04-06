@@ -21,7 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 7: Audio (TTS & STT)** - Text-to-speech playback and speech-to-text voice input
 - [x] **Phase 8: Desktop Sync Integration** - Bidirectional sync between desktop and mobile apps (completed 2026-04-06)
 - [ ] **Phase 9: Synced-Book Data Path Fixes** - Gap closure: fix synced-book RAG/TTS pipeline and server embedding fallback
-- [ ] **Phase 10: Desktop Feature Parity** - Add missing mobile features to desktop: highlights UI, reader settings, voice input, embedding fallback, source refs, write-triggered sync
+- [x] **Phase 10: Desktop Feature Parity** - Add missing mobile features to desktop: highlights UI, reader settings, voice input, embedding fallback, source refs, write-triggered sync (completed 2026-04-06)
 - [ ] **Phase 11: Mobile Feature Parity** - Add missing desktop features to mobile: realtime voice chat, AI guardrails, sync status indicator, Sentry error tracking
 
 ## Phase Details
@@ -211,7 +211,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 7. Audio (TTS & STT) | 0/2 | Not started | - |
 | 8. Desktop Sync Integration | 3/3 | Complete   | 2026-04-06 |
 | 9. Synced-Book Data Path Fixes | 0/1 | Not started | - |
-| 10. Desktop Feature Parity | 1/3 | In Progress|  |
+| 10. Desktop Feature Parity | 3/3 | Complete   | 2026-04-06 |
 | 11. Mobile Feature Parity | 0/0 | Not started | - |
 
 ## Coverage

@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 10-01-PLAN.md
-last_updated: "2026-04-06T18:38:54.884Z"
+stopped_at: Completed 10-02-PLAN.md
+last_updated: "2026-04-06T19:05:39.292Z"
 progress:
   total_phases: 11
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 28
-  completed_plans: 26
+  completed_plans: 28
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-04-05)
 ## Current Position
 
 Phase: 10 (desktop-feature-parity) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -72,6 +72,8 @@ Plan: 2 of 3
 | Phase 08 P03 | 8min | 3 tasks | 7 files |
 | Phase 09 P01 | 4min | 2 tasks | 4 files |
 | Phase 10 P01 | 4min | 2 tasks | 8 files |
+| Phase 10 P03 | 35min | 3 tasks | 8 files |
+| Phase 10 P02 | 45min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -154,6 +156,12 @@ Recent decisions affecting current work:
 - [Phase 10]: vi.hoisted Kysely mock chain pattern reused for highlight-storage tests
 - [Phase 10]: embedWithFallback catches on-device errors and maps server response to EmbedResult format
 - [Phase 10]: triggerSyncOnWrite uses setTimeout/clearTimeout debounce at 2000ms (zero external dependencies)
+- [Phase 10]: MediaRecorder MIME type: check audio/webm;codecs=opus support first, fall back to audio/webm
+- [Phase 10]: Source chunks retrieved by matching context text against chunk_data.data column (exact match)
+- [Phase 10]: rendition?.display(pageNumber) used for source chip navigation (spine index)
+- [Phase 10]: Conversation auto-created on first use per book (no explicit New Chat required)
+- [Phase 10]: Selection popover shows color picker instead of auto-creating yellow highlight on text select
+- [Phase 10]: ReaderSettings persisted via @tauri-apps/plugin-store under 'reader-settings' key for cross-session font state
 
 ### Roadmap Evolution
 
@@ -172,6 +180,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-06T18:38:54.882Z
-Stopped at: Completed 10-01-PLAN.md
+Last session: 2026-04-06T19:05:39.290Z
+Stopped at: Completed 10-02-PLAN.md
 Resume file: None
