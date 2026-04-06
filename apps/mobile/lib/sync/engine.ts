@@ -224,6 +224,10 @@ async function pull(): Promise<void> {
       // Skip locally dirty -- local changes take precedence until pushed
       if (local.isDirty) continue
 
+      // LWW guard: only apply remote update if remote is newer or equal
+      const remoteUpdatedAt = (r.updatedAt as number) ?? 0
+      if (remoteUpdatedAt < (local.updatedAt ?? 0)) continue
+
       // LWW per field: update with remote values
       db.update(highlights)
         .set({
