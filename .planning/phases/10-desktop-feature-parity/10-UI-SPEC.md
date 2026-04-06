@@ -52,11 +52,11 @@ Exceptions: none
 | Role | Size | Weight | Line Height |
 |------|------|--------|-------------|
 | Body | 14px | 400 (regular) | 1.5 |
-| Label | 12px | 500 (medium) | 1.4 |
+| Label | 12px | 400 (regular) | 1.4 |
 | Heading | 18px | 600 (semibold) | 1.2 |
 | Display | 24px | 600 (semibold) | 1.2 |
 
-Note: These values apply to the new Phase 10 components only. Existing app typography remains unchanged. The Inter font stack is inherited from the project baseline.
+Note: These values apply to the new Phase 10 components only. Existing app typography remains unchanged. The Inter font stack is inherited from the project baseline. Two weights only: 400 (regular) for body and label text, 600 (semibold) for headings and display.
 
 ---
 
@@ -84,6 +84,12 @@ These are content-level annotation colors applied as epub.js SVG overlays with 0
 
 ---
 
+## Visual Hierarchy
+
+**Primary focal point:** The EPUB reading area is the primary visual anchor on the reader screen. All panels (HighlightsPanel, ChatPanel, ReaderSettings) are secondary overlays that appear on top of or beside the reading area and must not compete for visual dominance. When no panel is open, 100% of the viewport is dedicated to the reading area. When a panel is open, the reading area remains visible and retains focus priority.
+
+---
+
 ## Component Inventory
 
 ### 1. SelectionPopover
@@ -106,6 +112,8 @@ These are content-level annotation colors applied as epub.js SVG overlays with 0
 - Note preview if present (12px, italic, muted-foreground, max 1 line)
 - Click row to navigate reader to that CFI location
 - Hover shows edit (lucide `Pencil`, 16px) and delete (lucide `Trash2`, 16px) icon buttons at row right
+  - Edit button: `aria-label="Edit note"`, tooltip "Edit note"
+  - Delete button: `aria-label="Delete highlight"`, tooltip "Delete highlight"
 **Empty state:** Centered in panel body
 **Footer:** Highlight count label (12px, muted-foreground): "{n} highlights"
 
@@ -115,19 +123,19 @@ These are content-level annotation colors applied as epub.js SVG overlays with 0
 **Component:** shadcn Dialog
 **Header:** "Edit Note" (18px semibold)
 **Body:** shadcn Textarea, 4 rows, placeholder "Add a note..."
-**Footer:** "Cancel" button (variant ghost) + "Save" button (variant default)
-**Keyboard:** Cmd+Enter saves, Escape cancels
+**Footer:** "Discard changes" button (variant ghost) + "Save note" button (variant default)
+**Keyboard:** Cmd+Enter saves, Escape discards changes
 
 ### 4. ReaderSettings
 
 **Trigger:** Toolbar button (lucide `Settings` icon) in the reader top bar
 **Component:** shadcn Popover, align="end", width 280px
 **Contents:**
-- **Font Size** label (12px medium) + value display (e.g. "1.2em")
+- **Font Size** label (12px regular) + value display (e.g. "1.2em")
   - shadcn Slider, min 0.8, max 2.0, step 0.1, default 1.2
   - Reset button (lucide `RotateCcw`, 14px) appears when value is not 1.2
 - Separator (8px vertical margin)
-- **Font Family** label (12px medium)
+- **Font Family** label (12px regular)
   - Two toggle buttons side by side: "Serif" (Georgia preview) / "Sans" (Inter preview)
   - Active button uses variant="default", inactive uses variant="outline"
 **Persistence:** Settings saved to Tauri store (`reader-settings`) on change. Loaded on reader mount.
@@ -180,6 +188,10 @@ These are content-level annotation colors applied as epub.js SVG overlays with 0
 | Destructive: delete conversation | "Delete conversation": "All messages in this conversation will be removed." |
 | Voice recording | "Recording..." (placeholder text in input while recording) |
 | Settings reset | "Reset to default" (tooltip on reset button) |
+| NoteEditor dismiss | "Discard changes" (ghost button in NoteEditor footer) |
+| NoteEditor confirm | "Save note" (default button in NoteEditor footer) |
+| Edit note (icon tooltip) | "Edit note" (tooltip and aria-label on highlight row edit button) |
+| Delete highlight (icon tooltip) | "Delete highlight" (tooltip and aria-label on highlight row delete button) |
 
 ---
 
