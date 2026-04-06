@@ -50,6 +50,11 @@ Users can read their books and interact with AI on their phone with the same exp
 - ✓ AI conversation history sync between desktop and mobile — Phase 6 complete
 - ✓ Local SQLite storage for books and chunk data on mobile — Phase 4 complete (Drizzle ORM)
 - ✓ Offline reading capability (books available without network) — Phase 4 complete
+- ✓ Desktop SQLite migration to UUID sync identifiers — Phase 8 complete
+- ✓ Shared TypeScript sync engine (desktop + mobile) — Phase 8 complete
+- ✓ Bidirectional book/progress/highlight sync between desktop and mobile — Phase 8 complete
+- ✓ Desktop epub.js highlight persistence to SQLite — Phase 8 complete
+- ✓ Desktop file hashing and R2 upload on book import — Phase 8 complete
 
 ### Out of Scope
 
@@ -85,7 +90,7 @@ Cloud sync is a new capability — the desktop app currently stores everything l
 | On-device vs server-side processing | User prefers on-device; research confirms feasible via react-native-executorch + sqlite-vec | On-device with server fallback for bulk |
 | Build on existing Expo app vs fresh start | Existing scaffold is solid (Expo 54, RN 0.81.5, NativeWind, New Architecture) | Build on existing |
 | Sync architecture | Full cross-device sync needed for books, progress, highlights, AI history | D1 + R2 backend, LWW sync, expo-sqlite + Drizzle on mobile |
-| Desktop sync integration | Research found desktop changes required for bidirectional sync | In scope as late phase — mobile standalone first |
+| Desktop sync integration | Research found desktop changes required for bidirectional sync | Phase 8 complete — UUID migration, shared sync engine, file sync, highlight persistence |
 
 ---
-*Last updated: 2026-04-06 after Phase 7 completion*
+*Last updated: 2026-04-06 after Phase 8 completion — all 8 phases complete, v1.0 milestone done*
