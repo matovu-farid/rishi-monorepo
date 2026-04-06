@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 06-03-PLAN.md
-last_updated: "2026-04-06T03:30:33.518Z"
+stopped_at: Completed 06-05-PLAN.md
+last_updated: "2026-04-06T03:59:47.420Z"
 progress:
   total_phases: 8
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 19
-  completed_plans: 18
+  completed_plans: 19
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-05)
 
 **Core value:** Users can read their books and interact with AI on their phone with the same experience they get on desktop, with everything synced between devices.
-**Current focus:** Phase 06 — on-device-rag-ai-conversations
+**Current focus:** Phase 06 complete — ready for Phase 07 (Audio TTS & STT)
 
 ## Current Position
 
-Phase: 06 (on-device-rag-ai-conversations) — EXECUTING
-Plan: 4 of 5
+Phase: 06 (on-device-rag-ai-conversations) — COMPLETE
+Plan: 5 of 5
 
 ## Performance Metrics
 
@@ -64,6 +64,7 @@ Plan: 4 of 5
 | Phase 06 P01 | 7min | 3 tasks | 7 files |
 | Phase 06 P02 | 11min | 2 tasks | 8 files |
 | Phase 06 P03 | 3min | 2 tasks | 7 files |
+| Phase 06 P05 | 8min | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -124,6 +125,9 @@ Recent decisions affecting current work:
 - [Phase 06]: Jest+ts-jest with schema/drizzle-orm mocks for mobile unit testing
 - [Phase 06]: Singleton forward function pattern: useEmbeddingModel hook registers forward fn via setEmbeddingForward so pipeline can embed outside React context
 - [Phase 06]: Batch size 10 with 50ms delay between batches to manage mobile memory pressure
+- [Phase 06]: RAG system prompt matches desktop version for consistent AI behavior across platforms
+- [Phase 06]: Conversation history limited to last 6 messages in LLM context to manage token budget
+- [Phase 06]: message.fill icon with chat-bubble Android MaterialIcons fallback for Chat tab
 
 ### Pending Todos
 
@@ -137,6 +141,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-06T03:30:33.512Z
-Stopped at: Completed 06-03-PLAN.md
+Last session: 2026-04-06T04:00:00.000Z
+Stopped at: Completed 06-05-PLAN.md (Phase 06 complete)
 Resume file: None

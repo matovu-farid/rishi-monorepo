@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: PDF Reader & File Management** - PDF rendering and unified library view for both formats (completed 2026-04-05)
 - [x] **Phase 4: Sync Infrastructure** - D1/R2 backend, sync API, and offline-first mobile sync engine (completed 2026-04-05)
 - [ ] **Phase 5: Reading Progress & Highlights** - Cross-device reading position, highlights, and annotations
-- [ ] **Phase 6: On-Device RAG & AI Conversations** - Text chunking, on-device embeddings, vector search, and AI Q&A
+- [x] **Phase 6: On-Device RAG & AI Conversations** - Text chunking, on-device embeddings, vector search, and AI Q&A (completed 2026-04-06)
 - [ ] **Phase 7: Audio (TTS & STT)** - Text-to-speech playback and speech-to-text voice input
 - [ ] **Phase 8: Desktop Sync Integration** - Bidirectional sync between desktop and mobile apps
 
@@ -188,7 +188,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 | 3. PDF Reader & File Management | 2/2 | Complete   | 2026-04-05 |
 | 4. Sync Infrastructure | 3/3 | Complete   | 2026-04-05 |
 | 5. Reading Progress & Highlights | 0/3 | Not started | - |
-| 6. On-Device RAG & AI Conversations | 1/5 | In progress | - |
+| 6. On-Device RAG & AI Conversations | 5/5 | Complete   | 2026-04-06 |
 | 7. Audio (TTS & STT) | 0/? | Not started | - |
 | 8. Desktop Sync Integration | 0/? | Not started | - |
 

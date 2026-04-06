@@ -57,9 +57,9 @@
 - [x] **RAG-01**: Books are chunked into text segments after import
 - [x] **RAG-02**: Text chunks are embedded on-device using all-MiniLM-L6-v2 via ExecuTorch
 - [x] **RAG-03**: Embeddings stored in expo-sqlite with sqlite-vec extension
-- [ ] **RAG-04**: User can ask natural language questions about a book
-- [ ] **RAG-05**: Relevant chunks retrieved via semantic vector search
-- [ ] **RAG-06**: Retrieved chunks sent to Worker LLM endpoint for answer generation
+- [x] **RAG-04**: User can ask natural language questions about a book
+- [x] **RAG-05**: Relevant chunks retrieved via semantic vector search
+- [x] **RAG-06**: Retrieved chunks sent to Worker LLM endpoint for answer generation
 - [x] **RAG-07**: Embedding model downloads on first use with progress indicator
 - [x] **RAG-08**: Server-side embedding fallback available for bulk book imports
 
@@ -77,7 +77,7 @@
 - [x] **CONV-01**: User can have multi-turn AI conversations about a book
 - [x] **CONV-02**: Conversation history persists locally per book
 - [x] **CONV-03**: Conversation history syncs across devices (append-only)
-- [ ] **CONV-04**: AI responses include source references to book passages
+- [x] **CONV-04**: AI responses include source references to book passages
 
 ### Desktop Sync Integration
 
@@ -158,9 +158,9 @@
 | RAG-01 | Phase 6 | Complete |
 | RAG-02 | Phase 6 | Complete |
 | RAG-03 | Phase 6 | Complete |
-| RAG-04 | Phase 6 | Pending |
-| RAG-05 | Phase 6 | Pending |
-| RAG-06 | Phase 6 | Pending |
+| RAG-04 | Phase 6 | Complete |
+| RAG-05 | Phase 6 | Complete |
+| RAG-06 | Phase 6 | Complete |
 | RAG-07 | Phase 6 | Complete |
 | RAG-08 | Phase 6 | Complete |
 | AUD-01 | Phase 7 | Pending |
@@ -172,7 +172,7 @@
 | CONV-01 | Phase 6 | Complete |
 | CONV-02 | Phase 6 | Complete |
 | CONV-03 | Phase 6 | Complete |
-| CONV-04 | Phase 6 | Pending |
+| CONV-04 | Phase 6 | Complete |
 | DSYNC-01 | Phase 8 | Pending |
 | DSYNC-02 | Phase 8 | Pending |
 | DSYNC-03 | Phase 8 | Pending |
