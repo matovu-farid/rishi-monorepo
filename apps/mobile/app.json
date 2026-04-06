@@ -42,7 +42,7 @@
           }
         }
       ],
-      "expo-sqlite",
+      ["expo-sqlite", { "withSQLiteVecExtension": true }],
       "react-native-pdf"
     ],
     "experiments": {

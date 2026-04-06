@@ -3,6 +3,7 @@ import { openDatabaseSync } from 'expo-sqlite'
 import * as schema from '@rishi/shared/schema'
 
 const expo = openDatabaseSync('rishi.db')
+export const rawDb = expo
 
 // ─── Migrations ───────────────────────────────────────────────────────────────
 // Ensure the base table exists (matches pre-Drizzle schema)
