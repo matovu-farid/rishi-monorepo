@@ -1,5 +1,4 @@
 import {
-  embed,
   EmbedParam,
   Metadata,
   saveVectors,
@@ -7,6 +6,7 @@ import {
 } from "@/generated";
 import { db, PageDataInsertable } from "./kysley";
 import { hasSavedEpubData, savePageDataMany } from "@/generated";
+import { embedWithFallback } from "./embed-fallback";
 function batchEmbed(embedParams: EmbedParam[]): EmbedParam[][] {
   const batchSize = 2;
   const batches: EmbedParam[][] = [];
@@ -44,7 +44,7 @@ export async function processEpubJob(
     await savePageDataMany({ pageData: pageData });
     const batches = batchEmbed(embedParams);
     for (const batch of batches) {
-      const embedResults = await embed({ embedparams: batch });
+      const embedResults = await embedWithFallback(batch);
 
       // const embedResults = await embed({ embedparams: embedParams });
 
