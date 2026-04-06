@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 08-03-PLAN.md
-last_updated: "2026-04-06T13:40:58.135Z"
+stopped_at: Completed 09-01-PLAN.md
+last_updated: "2026-04-06T15:18:09.349Z"
 progress:
-  total_phases: 8
-  completed_phases: 8
-  total_plans: 24
-  completed_plans: 24
+  total_phases: 9
+  completed_phases: 9
+  total_plans: 25
+  completed_plans: 25
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-05)
 
 **Core value:** Users can read their books and interact with AI on their phone with the same experience they get on desktop, with everything synced between devices.
-**Current focus:** Phase 08 — desktop-sync-integration
+**Current focus:** Phase 09 — synced-book-data-path-fixes
 
 ## Current Position
 
-Phase: 08 (desktop-sync-integration) — EXECUTING
-Plan: 3 of 3
+Phase: 09 (synced-book-data-path-fixes) — EXECUTING
+Plan: 1 of 1
 
 ## Performance Metrics
 
@@ -70,6 +70,7 @@ Plan: 3 of 3
 | Phase 08 P01 | 8min | 2 tasks | 7 files |
 | Phase 08 P02 | 5min | 2 tasks | 7 files |
 | Phase 08 P03 | 8min | 3 tasks | 7 files |
+| Phase 09 P01 | 4min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -147,6 +148,8 @@ Recent decisions affecting current work:
 - [Phase 08]: Web Crypto API crypto.subtle.digest for SHA-256 file hashing (no extra dependency)
 - [Phase 08]: Highlight persistence keyed by book sync_id (UUID) for cross-device sync compatibility
 - [Phase 08]: SyncStatusIndicator wired into __root.tsx sidebar footer (TanStack Router layout pattern)
+- [Phase 09]: embedBatchWithFallback as internal helper: try on-device embedBatch, catch and fall back to embedTextsOnServer
+- [Phase 09]: ModelDownloadCard as non-blocking ListFooterComponent banner instead of gate that hides entire chat UI
 
 ### Pending Todos
 
@@ -160,6 +163,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-06T13:37:11.582Z
-Stopped at: Completed 08-03-PLAN.md
+Last session: 2026-04-06T15:18:09.346Z
+Stopped at: Completed 09-01-PLAN.md
 Resume file: None

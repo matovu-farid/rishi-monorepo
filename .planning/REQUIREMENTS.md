@@ -162,7 +162,7 @@
 | RAG-05 | Phase 6 | Complete |
 | RAG-06 | Phase 6 | Complete |
 | RAG-07 | Phase 6 | Complete |
-| RAG-08 | Phase 9 | Pending |
+| RAG-08 | Phase 9 | Complete |
 | AUD-01 | Phase 7 | Complete |
 | AUD-02 | Phase 7 | Complete |
 | AUD-03 | Phase 7 | Complete |
