@@ -3,14 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Use vi.hoisted so mock fns are available when vi.mock factory runs
 const {
   mockExecute,
-  mockExecuteTakeFirst,
   mockWhere,
   mockSelectAll,
-  mockSelect,
   mockSelectFrom,
   mockSet,
   mockUpdateTable,
-  mockValues,
   mockInsertInto,
 } = vi.hoisted(() => {
   const mockExecute = vi.fn();

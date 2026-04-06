@@ -13,7 +13,7 @@ vi.mock('@tauri-apps/plugin-store', () => ({
   load: vi.fn().mockResolvedValue({ get: vi.fn() }),
 }));
 
-import { triggerSyncOnWrite, triggerSync } from './sync-triggers';
+import { triggerSyncOnWrite } from './sync-triggers';
 
 describe('triggerSyncOnWrite', () => {
   beforeEach(() => {
