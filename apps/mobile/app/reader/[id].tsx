@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { View, Text, AppState, AppStateStatus, ActivityIndicator } from 'react-native'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { View, Text, AppState, AppStateStatus, ActivityIndicator, AccessibilityInfo } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Reader, ReaderProvider, useReader } from '@epubjs-react-native/core'
 import { useFileSystem } from '@epubjs-react-native/expo-file-system'
@@ -8,11 +8,18 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'
 
 import { getBookForReading, updateBookCfi } from '@/lib/book-storage'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
+import { insertHighlight, getHighlightsByBookId, updateHighlight, deleteHighlight } from '@/lib/highlight-storage'
 import { ReaderToolbar } from '@/components/ReaderToolbar'
 import { TocSheet } from '@/components/TocSheet'
 import { AppearanceSheet } from '@/components/AppearanceSheet'
+import { HighlightsSheet } from '@/components/HighlightsSheet'
+import { NoteEditor } from '@/components/NoteEditor'
+import { AnnotationPopover } from '@/components/AnnotationPopover'
 import { READER_THEMES } from '@/constants/reader-themes'
 import { Book, ReaderSettings, ThemeName } from '@/types/book'
+import type { Highlight, HighlightColor } from '@/types/highlight'
+import { HIGHLIGHT_COLORS, HIGHLIGHT_OPACITY } from '@/types/highlight'
+import type { Annotation } from '@epubjs-react-native/core'
 
 export default function ReaderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
@@ -59,10 +66,20 @@ export default function ReaderScreen() {
 
 function ReaderContent({ book }: { book: Book }) {
   const router = useRouter()
-  const { toc, goToLocation, changeTheme, changeFontSize, changeFontFamily } = useReader()
+  const {
+    toc,
+    goToLocation,
+    changeTheme,
+    changeFontSize,
+    changeFontFamily,
+    addAnnotation,
+    removeAnnotationByCfi,
+  } = useReader()
 
   const tocSheetRef = useRef<BottomSheet>(null)
   const appearanceSheetRef = useRef<BottomSheet>(null)
+  const highlightsSheetRef = useRef<BottomSheet>(null)
+  const noteEditorSheetRef = useRef<BottomSheet>(null)
 
   const [settings, setSettings] = useState<ReaderSettings>(loadReaderSettings())
   const [toolbarVisible, setToolbarVisible] = useState(false)
@@ -70,7 +87,37 @@ function ReaderContent({ book }: { book: Book }) {
   const currentCfiRef = useRef<string | null>(book.currentCfi)
   const cfiSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Highlight state
+  const [highlights, setHighlights] = useState<Highlight[]>([])
+  const [selectedHighlight, setSelectedHighlight] = useState<Highlight | null>(null)
+  const [popoverVisible, setPopoverVisible] = useState(false)
+  const [popoverPosition, setPopoverPosition] = useState({ x: 0, y: 0 })
+
   const theme = READER_THEMES[settings.themeName]
+
+  // Load highlights on mount
+  useEffect(() => {
+    if (book.id) {
+      setHighlights(getHighlightsByBookId(book.id))
+    }
+  }, [book.id])
+
+  // Convert highlights to initialAnnotations for Reader
+  const initialAnnotations = useMemo(
+    () =>
+      highlights.map((h) => ({
+        type: 'highlight' as const,
+        cfiRange: h.cfiRange,
+        data: { id: h.id },
+        sectionIndex: 0,
+        cfiRangeText: h.text,
+        styles: {
+          color: HIGHLIGHT_COLORS.find((c) => c.name === h.color)?.hex ?? '#FBBF24',
+          opacity: HIGHLIGHT_OPACITY,
+        },
+      })),
+    [highlights]
+  )
 
   // Save CFI on app background
   useEffect(() => {
@@ -105,10 +152,14 @@ function ReaderContent({ book }: { book: Book }) {
     [book.id]
   )
 
-  // Toolbar toggle on tap
+  // Toolbar toggle on tap (dismiss popover if visible)
   const handleTap = useCallback(() => {
+    if (popoverVisible) {
+      setPopoverVisible(false)
+      return
+    }
     setToolbarVisible((prev) => !prev)
-  }, [])
+  }, [popoverVisible])
 
   // Auto-hide toolbar after 3 seconds
   const toolbarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -173,6 +224,136 @@ function ReaderContent({ book }: { book: Book }) {
     router.back()
   }, [book.id, router])
 
+  // --- Highlight handlers ---
+
+  // Text selection creates a highlight
+  const handleSelected = useCallback(
+    (selectedText: string, cfiRange: string) => {
+      const h = insertHighlight({
+        bookId: book.id,
+        cfiRange,
+        text: selectedText,
+        color: 'yellow',
+        note: null,
+        chapter: currentHref || null,
+      })
+      const hex = HIGHLIGHT_COLORS.find((c) => c.name === h.color)?.hex ?? '#FBBF24'
+      addAnnotation('highlight', cfiRange, { id: h.id }, { color: hex, opacity: HIGHLIGHT_OPACITY })
+      setHighlights((prev) => [h, ...prev])
+      AccessibilityInfo.announceForAccessibility('Highlight created')
+    },
+    [book.id, currentHref, addAnnotation]
+  )
+
+  // Menu items for text selection context menu
+  const menuItems = useMemo(
+    () => [
+      {
+        label: 'Highlight Text',
+        action: (cfiRange: string, text: string) => {
+          handleSelected(text, cfiRange)
+          return true // dismiss selection
+        },
+      },
+      {
+        label: 'Highlight & Note',
+        action: (cfiRange: string, text: string) => {
+          const h = insertHighlight({
+            bookId: book.id,
+            cfiRange,
+            text,
+            color: 'yellow',
+            note: null,
+            chapter: currentHref || null,
+          })
+          const hex = HIGHLIGHT_COLORS.find((c) => c.name === h.color)?.hex ?? '#FBBF24'
+          addAnnotation('highlight', cfiRange, { id: h.id }, { color: hex, opacity: HIGHLIGHT_OPACITY })
+          setHighlights((prev) => [h, ...prev])
+          setSelectedHighlight(h)
+          AccessibilityInfo.announceForAccessibility('Highlight created')
+          // Open note editor after a brief delay to let state settle
+          setTimeout(() => noteEditorSheetRef.current?.snapToIndex(0), 100)
+          return true
+        },
+      },
+    ],
+    [book.id, currentHref, addAnnotation, handleSelected]
+  )
+
+  // Tapping an existing annotation shows the popover
+  const handlePressAnnotation = useCallback(
+    (annotation: Annotation) => {
+      const match = highlights.find(
+        (h) => h.cfiRange === annotation.cfiRange || (annotation.data as any)?.id === h.id
+      )
+      if (match) {
+        setSelectedHighlight(match)
+        // Position popover roughly in center-top area of screen since we don't get pixel coords
+        const screenWidth = require('react-native').Dimensions.get('window').width
+        const screenHeight = require('react-native').Dimensions.get('window').height
+        setPopoverPosition({ x: screenWidth / 2, y: screenHeight * 0.35 })
+        setPopoverVisible(true)
+      }
+    },
+    [highlights]
+  )
+
+  // Annotation popover: edit note
+  const handleEditNote = useCallback((highlight: Highlight) => {
+    setPopoverVisible(false)
+    setSelectedHighlight(highlight)
+    noteEditorSheetRef.current?.snapToIndex(0)
+  }, [])
+
+  // Annotation popover: change color
+  const handleChangeColor = useCallback(
+    (highlightId: string, color: HighlightColor) => {
+      updateHighlight(highlightId, { color })
+      const updated = getHighlightsByBookId(book.id)
+      setHighlights(updated)
+      setPopoverVisible(false)
+      // Re-render annotation with new color
+      const h = highlights.find((h) => h.id === highlightId)
+      if (h) {
+        removeAnnotationByCfi(h.cfiRange)
+        const hex = HIGHLIGHT_COLORS.find((c) => c.name === color)?.hex ?? '#FBBF24'
+        addAnnotation('highlight', h.cfiRange, { id: h.id }, { color: hex, opacity: HIGHLIGHT_OPACITY })
+      }
+    },
+    [book.id, highlights, addAnnotation, removeAnnotationByCfi]
+  )
+
+  // Delete highlight
+  const handleDeleteHighlight = useCallback(
+    (highlightId: string) => {
+      const h = highlights.find((h) => h.id === highlightId)
+      deleteHighlight(highlightId)
+      if (h) removeAnnotationByCfi(h.cfiRange)
+      setHighlights(getHighlightsByBookId(book.id))
+      setPopoverVisible(false)
+    },
+    [book.id, highlights, removeAnnotationByCfi]
+  )
+
+  // Save note
+  const handleSaveNote = useCallback(
+    (highlightId: string, note: string) => {
+      updateHighlight(highlightId, { note: note || null })
+      setHighlights(getHighlightsByBookId(book.id))
+      noteEditorSheetRef.current?.close()
+    },
+    [book.id]
+  )
+
+  // Navigate to highlight from list
+  const handleNavigateToHighlight = useCallback(
+    (cfiRange: string) => {
+      goToLocation(cfiRange)
+      highlightsSheetRef.current?.close()
+    },
+    [goToLocation]
+  )
+
   return (
     <View style={{ flex: 1, backgroundColor: theme.background }}>
       <Reader
@@ -180,7 +361,7 @@ function ReaderContent({ book }: { book: Book }) {
         fileSystem={useFileSystem}
         flow="paginated"
         enableSwipe={true}
-        enableSelection={false}
+        enableSelection={true}
         initialLocation={book.currentCfi || undefined}
         defaultTheme={{
           body: {
@@ -188,8 +369,12 @@ function ReaderContent({ book }: { book: Book }) {
             color: theme.color,
           },
         }}
+        menuItems={menuItems}
+        initialAnnotations={initialAnnotations}
         onLocationChange={handleLocationChange}
         onSingleTap={handleTap}
+        onSelected={handleSelected}
+        onPressAnnotation={handlePressAnnotation}
       />
 
       <ReaderToolbar
@@ -199,6 +384,10 @@ function ReaderContent({ book }: { book: Book }) {
         onBack={handleBack}
         onTocPress={() => {
           tocSheetRef.current?.snapToIndex(0)
+          setToolbarVisible(false)
+        }}
+        onHighlightsPress={() => {
+          highlightsSheetRef.current?.snapToIndex(0)
           setToolbarVisible(false)
         }}
         onAppearancePress={() => {
@@ -223,6 +412,35 @@ function ReaderContent({ book }: { book: Book }) {
         onFontSizeChange={handleFontSizeChange}
         onFontFamilyChange={handleFontFamilyChange}
       />
+
+      <HighlightsSheet
+        sheetRef={highlightsSheetRef}
+        highlights={highlights}
+        theme={theme}
+        onNavigateToHighlight={handleNavigateToHighlight}
+        onDeleteHighlight={handleDeleteHighlight}
+      />
+
+      <NoteEditor
+        sheetRef={noteEditorSheetRef}
+        highlight={selectedHighlight}
+        theme={theme}
+        onSave={handleSaveNote}
+        onDiscard={() => noteEditorSheetRef.current?.close()}
+      />
+
+      {popoverVisible && selectedHighlight && (
+        <AnnotationPopover
+          visible={popoverVisible}
+          highlight={selectedHighlight}
+          position={popoverPosition}
+          theme={theme}
+          onEditNote={handleEditNote}
+          onChangeColor={handleChangeColor}
+          onDelete={handleDeleteHighlight}
+          onDismiss={() => setPopoverVisible(false)}
+        />
+      )}
     </View>
   )
 }

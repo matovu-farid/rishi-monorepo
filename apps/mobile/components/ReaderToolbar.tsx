@@ -10,6 +10,7 @@ interface ReaderToolbarProps {
   theme: ReaderTheme
   onBack: () => void
   onTocPress: () => void
+  onHighlightsPress: () => void
   onAppearancePress: () => void
 }
 
@@ -19,6 +20,7 @@ export function ReaderToolbar({
   theme,
   onBack,
   onTocPress,
+  onHighlightsPress,
   onAppearancePress,
 }: ReaderToolbarProps) {
   const insets = useSafeAreaInsets()
@@ -65,6 +67,14 @@ export function ReaderToolbar({
             accessibilityRole="button"
           >
             <IconSymbol name="list.bullet" size={22} color={theme.toolbarText} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={onHighlightsPress}
+            className="w-11 h-11 items-center justify-center"
+            accessibilityLabel="Highlights"
+            accessibilityRole="button"
+          >
+            <IconSymbol name="bookmark.fill" size={22} color={theme.toolbarText} />
           </TouchableOpacity>
           <TouchableOpacity
             onPress={onAppearancePress}
