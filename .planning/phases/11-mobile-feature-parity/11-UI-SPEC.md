@@ -48,9 +48,11 @@ Exceptions: Touch targets use 44px (w-11 h-11) per iOS Human Interface Guideline
 | Role | Size | Weight | Line Height |
 |------|------|--------|-------------|
 | Body | 16px (text-base) | 400 (normal) | 1.5 |
-| Label | 12px (text-xs) | 500 (font-medium) | 1.33 |
-| Heading | 20px (text-xl) | 600 (font-semibold) | 1.2 |
 | Caption | 14px (text-sm) | 400 (normal) | 1.43 |
+| Heading | 20px (text-xl) | 600 (font-semibold) | 1.2 |
+| Label | 12px (text-xs) | 600 (font-semibold) | 1.33 |
+
+Weights used: 400 (normal) for Body and Caption, 600 (font-semibold) for Heading and Label. A 12px/600 label is visually distinct from 16px/400 body text without needing an intermediate weight.
 
 Source: Extracted from existing mobile components (LibraryEmptyState, ChatMessage, ReaderToolbar, VoiceMicButton).
 
@@ -128,7 +130,7 @@ Accent reserved for: Send button active state, user message bubbles, realtime vo
 | error | `exclamationmark.triangle.fill` | "Sync failed" | `#F59E0B` (amber-500) |
 | offline | `wifi.slash` | "Offline" | `#9BA1A6` (muted) |
 
-**Layout:** Horizontal row: `[icon 16px] [4px gap] [label text-xs font-medium] [4px gap] [relative time text-xs text-muted]`
+**Layout:** Horizontal row: `[icon 16px] [4px gap] [label text-xs font-semibold] [4px gap] [relative time text-xs text-muted]`
 
 **Tap behavior:**
 - `synced`, `not-synced`, `error`: Tap triggers manual sync
@@ -151,7 +153,7 @@ Accent reserved for: Send button active state, user message bubbles, realtime vo
 | Background | `#FEF3C7` light (amber-100) / `#78350F` dark (amber-900) |
 | Border | 1px `#F59E0B` (amber-500) |
 | Border radius | 8px |
-| Padding | 12px horizontal, 8px vertical |
+| Padding | 16px horizontal, 8px vertical |
 | Icon | `exclamationmark.triangle.fill` 16px, `#F59E0B` |
 | Text | 14px (text-sm), normal weight |
 | Layout | `[icon] [8px] [text]` horizontal row |
