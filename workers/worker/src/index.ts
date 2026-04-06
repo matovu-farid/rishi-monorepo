@@ -277,6 +277,31 @@ app.post("/api/text/completions", requireWorkerAuth, async (c) => {
   return c.json(response.output_text);
 });
 
+// ─── POST /api/embed — Server-side embedding fallback ────────────────────────
+app.post("/api/embed", requireWorkerAuth, async (c) => {
+  const body = await c.req.json<{ texts: string[] }>();
+
+  if (!body.texts || body.texts.length === 0) {
+    return c.json({ error: "texts array is required and must not be empty" }, 400);
+  }
+
+  const openai = new OpenAI({
+    apiKey: c.env.OPENAI_API_KEY,
+  });
+
+  const response = await openai.embeddings.create({
+    model: "text-embedding-3-small",
+    input: body.texts,
+    dimensions: 384, // Match on-device all-MiniLM-L6-v2 dimensions
+  });
+
+  const embeddings = response.data
+    .sort((a, b) => a.index - b.index)
+    .map(item => item.embedding);
+
+  return c.json({ embeddings });
+});
+
 export default Sentry.withSentry((env: any) => {
   const { id: versionId } = env.CF_VERSION_METADATA;
   return {
