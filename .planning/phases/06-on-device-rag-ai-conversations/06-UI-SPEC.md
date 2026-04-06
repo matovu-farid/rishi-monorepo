@@ -25,9 +25,8 @@ Scale: 4px base unit (8-point system). Consistent with Phase 05.
 | Token | Value | Usage |
 |-------|-------|-------|
 | `p-1` | 4px | Icon-to-label gap, inline padding between avatar and message |
-| `p-2` | 8px | Inner padding of message bubbles, source reference chips |
-| `p-3` | 12px | Message bubble horizontal padding |
-| `p-4` | 16px | Screen horizontal padding, vertical gap between messages, input bar padding |
+| `p-2` | 8px | Inner vertical padding of message bubbles, source reference chip vertical padding |
+| `p-4` | 16px | Screen horizontal padding, vertical gap between messages, input bar padding, message bubble horizontal padding |
 | `p-6` | 24px | Section spacing, conversation list item padding |
 | `p-8` | 32px | Empty state vertical padding, model download card padding |
 
@@ -46,7 +45,7 @@ Font family: System fonts via `Fonts` constant (system-ui on iOS, normal on Andr
 | Sheet/Screen title | 18px | 600 (semibold) | 1.3 | `text-lg font-semibold` |
 | Body / message text | 16px | 400 (regular) | 1.5 | `text-base` |
 | Secondary / metadata | 14px | 400 (regular) | 1.4 | `text-sm` |
-| Source reference text | 13px | 400 (regular) | 1.4 | `text-[13px]` |
+| Source reference text | 12px | 400 (regular) | 1.4 | `text-xs` |
 
 Only 2 weights used: regular (400) and semibold (600). Matches existing pattern from Phase 05.
 
@@ -202,8 +201,8 @@ Only 2 weights used: regular (400) and semibold (600). Matches existing pattern 
 
 **Focal point:** The message text content.
 
-- User bubble: `bg-[#0a7ea4]` (accent), `text-white`, `rounded-2xl rounded-br-sm`, `px-3 py-2`, max-width 80%
-- Assistant bubble: `bg-gray-100 dark:bg-[#2A2D2F]`, primary text, `rounded-2xl rounded-bl-sm`, `px-3 py-2`, max-width 80%
+- User bubble: `bg-[#0a7ea4]` (accent), `text-white`, `rounded-2xl rounded-br-sm`, `px-4 py-2`, max-width 80%
+- Assistant bubble: `bg-gray-100 dark:bg-[#2A2D2F]`, primary text, `rounded-2xl rounded-bl-sm`, `px-4 py-2`, max-width 80%
 - Timestamps: not shown per-message (conversation context provides temporal flow)
 - Loading state (assistant typing): three animated dots in an assistant-colored bubble, FadeIn
 
@@ -217,8 +216,8 @@ Only 2 weights used: regular (400) and semibold (600). Matches existing pattern 
 +---------------------------+
 ```
 
-- Pressable, `bg-gray-200 dark:bg-gray-700`, `rounded-full`, `px-3 py-1`
-- Text: `text-[13px]`, secondary color
+- Pressable, `bg-gray-200 dark:bg-gray-700`, `rounded-full`, `px-2 py-1`
+- Text: `text-xs`, secondary color
 - Book icon: 12px, secondary color, left of text
 - Tap action: navigates to the reader at the referenced passage location (using CFI for EPUB, page for PDF)
 - Active state: opacity 0.7 on press
@@ -422,7 +421,7 @@ Only 2 weights used: regular (400) and semibold (600). Matches existing pattern 
 - Chat screen book not embedded and model ready: EmbeddingProgress card appears automatically (no empty state text needed)
 
 ### Error States
-- LLM request failure: Inline error message in assistant bubble position: "Could not get a response. Check your connection and try again." with a "Retry" text button (accent color).
+- LLM request failure: Inline error message in assistant bubble position: "Could not get a response. Check your connection and try again." with a "Try again" text button (accent color).
 - Embedding failure: EmbeddingProgress card shows: "Embedding failed. Tap to retry." with tap-to-retry action.
 - Model download failure: ModelDownloadCard shows: "Download failed. Check your connection and try again." with "Retry Download" button replacing the original download button.
 
