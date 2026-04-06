@@ -5,11 +5,10 @@ on:
     tags:
       - 'v*'
 
-permissions:
-  contents: write
-
 jobs:
   release:
+    permissions:
+      contents: write
     name: Build & Release (${{ matrix.platform }})
     timeout-minutes: 60
     strategy:
@@ -53,7 +52,7 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
-          echo $APPLE_CERTIFICATE | base64 --decode > certificate.p12
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security default-keychain -s build.keychain
@@ -88,3 +87,9 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
           uploadUpdaterJson: true
+
+      - name: Cleanup keychain
+        if: always() && matrix.platform == 'macos-latest'
+        run: |
+          security default-keychain -s login.keychain-db
+          security delete-keychain build.keychain || true
