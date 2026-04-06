@@ -17,10 +17,10 @@ created: 2026-04-06
 
 | Property | Value |
 |----------|-------|
-| **Framework** | vitest (mobile), jest (shared) |
-| **Config file** | apps/mobile/vitest.config.ts |
-| **Quick run command** | `cd apps/mobile && npx vitest run --reporter=verbose` |
-| **Full suite command** | `cd apps/mobile && npx vitest run && cd ../../packages/shared && npx vitest run` |
+| **Framework** | Jest + ts-jest |
+| **Config file** | apps/mobile/jest.config.js |
+| **Quick run command** | `cd apps/mobile && npx jest --no-coverage --reporter=verbose` |
+| **Full suite command** | `cd apps/mobile && npx jest --no-coverage` |
 | **Estimated runtime** | ~15 seconds |
 
 ---
@@ -38,17 +38,16 @@ created: 2026-04-06
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 09-01-01 | 01 | 1 | RAG-08 | integration | `cd apps/mobile && npx vitest run app/chat` | ❌ W0 | ⬜ pending |
-| 09-01-02 | 01 | 1 | RAG-08 | unit | `cd apps/mobile && npx vitest run lib/rag/pipeline.test` | ❌ W0 | ⬜ pending |
+| 09-01-01 | 01 | 1 | RAG-08 | unit | `cd apps/mobile && npx jest --testPathPattern="rag-pipeline" --no-coverage` | Exists (needs fallback tests) | pending |
+| 09-01-02 | 01 | 1 | RAG-08 | compilation | `cd apps/mobile && npx tsc --noEmit` | N/A (type check) | pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+*Status: pending / green / red / flaky*
 
 ---
 
 ## Wave 0 Requirements
 
-- [ ] Test stubs for chat screen book loading (async getBookForReading)
-- [ ] Test stubs for pipeline.ts server fallback behavior
+- [ ] Test stubs for pipeline.ts server fallback behavior (added in Task 1 TDD cycle)
 
 *If none: "Existing infrastructure covers all phase requirements."*
 
@@ -58,7 +57,7 @@ created: 2026-04-06
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| Synced book opens in chat and returns RAG answers | RAG-04, RAG-05 | Requires live R2 download + on-device embedding or server fallback | Import book on desktop, sync to mobile, open chat, ask question |
+| Synced book opens in chat and returns RAG answers | RAG-08 | Requires live R2 download + on-device embedding or server fallback | Import book on desktop, sync to mobile, open chat, ask question |
 | Server fallback triggers when model not downloaded | RAG-08 | Requires fresh install without model | Uninstall model, open chat for a book, verify embedding completes via server |
 
 ---
