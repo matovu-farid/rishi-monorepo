@@ -4,6 +4,7 @@ jest.mock('@/lib/rag/chunker', () => ({
 
 jest.mock('@/lib/rag/embedder', () => ({
   embedBatch: jest.fn(),
+  isEmbeddingReady: jest.fn(),
 }))
 
 jest.mock('@/lib/rag/vector-store', () => ({
@@ -12,16 +13,23 @@ jest.mock('@/lib/rag/vector-store', () => ({
   deleteBookChunks: jest.fn(),
 }))
 
+jest.mock('@/lib/rag/server-fallback', () => ({
+  embedTextsOnServer: jest.fn(),
+}))
+
 import { embedBook, reembedBook } from '@/lib/rag/pipeline'
 import { getChunks } from '@/lib/rag/chunker'
-import { embedBatch } from '@/lib/rag/embedder'
+import { embedBatch, isEmbeddingReady } from '@/lib/rag/embedder'
 import { insertChunkWithVector, isBookEmbedded, deleteBookChunks } from '@/lib/rag/vector-store'
+import { embedTextsOnServer } from '@/lib/rag/server-fallback'
 
 const mockGetChunks = getChunks as jest.MockedFunction<typeof getChunks>
 const mockEmbedBatch = embedBatch as jest.MockedFunction<typeof embedBatch>
 const mockIsBookEmbedded = isBookEmbedded as jest.MockedFunction<typeof isBookEmbedded>
 const mockInsertChunkWithVector = insertChunkWithVector as jest.MockedFunction<typeof insertChunkWithVector>
 const mockDeleteBookChunks = deleteBookChunks as jest.MockedFunction<typeof deleteBookChunks>
+const mockIsEmbeddingReady = isEmbeddingReady as jest.MockedFunction<typeof isEmbeddingReady>
+const mockEmbedTextsOnServer = embedTextsOnServer as jest.MockedFunction<typeof embedTextsOnServer>
 
 function makeChunks(count: number) {
   return Array.from({ length: count }, (_, i) => ({
@@ -37,6 +45,7 @@ function makeChunks(count: number) {
 describe('embedBook', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockIsEmbeddingReady.mockReturnValue(true)
   })
 
   it('returns early if book is already embedded', async () => {
@@ -124,6 +133,7 @@ describe('embedBook', () => {
 describe('reembedBook', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockIsEmbeddingReady.mockReturnValue(true)
   })
 
   it('deletes existing chunks then re-embeds', async () => {
@@ -135,5 +145,57 @@ describe('reembedBook', () => {
 
     expect(mockDeleteBookChunks).toHaveBeenCalledWith('book-1')
     expect(mockGetChunks).toHaveBeenCalled()
+  })
+})
+
+describe('embedBatchWithFallback (via embedBook)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+  })
+
+  it('uses server fallback when isEmbeddingReady returns false', async () => {
+    mockIsEmbeddingReady.mockReturnValue(false)
+    mockIsBookEmbedded.mockReturnValue(false)
+    const chunks = makeChunks(3)
+    mockGetChunks.mockResolvedValue(chunks)
+    const embedding = new Array(384).fill(0.5)
+    mockEmbedTextsOnServer.mockResolvedValue([embedding, embedding, embedding])
+
+    await embedBook('book-1', '/path/to/book.epub', 'epub')
+
+    expect(mockEmbedTextsOnServer).toHaveBeenCalled()
+    expect(mockEmbedBatch).not.toHaveBeenCalled()
+    expect(mockInsertChunkWithVector).toHaveBeenCalledTimes(3)
+  })
+
+  it('uses server fallback when embedBatch throws', async () => {
+    mockIsEmbeddingReady.mockReturnValue(true)
+    mockIsBookEmbedded.mockReturnValue(false)
+    const chunks = makeChunks(3)
+    mockGetChunks.mockResolvedValue(chunks)
+    mockEmbedBatch.mockRejectedValue(new Error('Model inference failed'))
+    const embedding = new Array(384).fill(0.5)
+    mockEmbedTextsOnServer.mockResolvedValue([embedding, embedding, embedding])
+
+    await embedBook('book-1', '/path/to/book.epub', 'epub')
+
+    expect(mockEmbedBatch).toHaveBeenCalled()
+    expect(mockEmbedTextsOnServer).toHaveBeenCalled()
+    expect(mockInsertChunkWithVector).toHaveBeenCalledTimes(3)
+  })
+
+  it('uses on-device when isEmbeddingReady returns true and embedBatch succeeds', async () => {
+    mockIsEmbeddingReady.mockReturnValue(true)
+    mockIsBookEmbedded.mockReturnValue(false)
+    const chunks = makeChunks(3)
+    mockGetChunks.mockResolvedValue(chunks)
+    const embedding = new Array(384).fill(0.1)
+    mockEmbedBatch.mockResolvedValue([embedding, embedding, embedding])
+
+    await embedBook('book-1', '/path/to/book.epub', 'epub')
+
+    expect(mockEmbedBatch).toHaveBeenCalled()
+    expect(mockEmbedTextsOnServer).not.toHaveBeenCalled()
+    expect(mockInsertChunkWithVector).toHaveBeenCalledTimes(3)
   })
 })
