@@ -68,9 +68,9 @@
 - [x] **AUD-01**: User can listen to book text via TTS (Worker /api/audio/speech endpoint)
 - [x] **AUD-02**: TTS playback has play/pause/stop controls
 - [x] **AUD-03**: TTS reads sequentially through book content with queue management
-- [ ] **AUD-04**: User can ask voice questions via speech input
-- [ ] **AUD-05**: Voice input transcribed via Worker Deepgram STT endpoint
-- [ ] **AUD-06**: Worker Deepgram STT endpoint created for transcription
+- [x] **AUD-04**: User can ask voice questions via speech input
+- [x] **AUD-05**: Voice input transcribed via Worker Deepgram STT endpoint
+- [x] **AUD-06**: Worker Deepgram STT endpoint created for transcription
 
 ### AI Conversations
 
@@ -166,9 +166,9 @@
 | AUD-01 | Phase 7 | Complete |
 | AUD-02 | Phase 7 | Complete |
 | AUD-03 | Phase 7 | Complete |
-| AUD-04 | Phase 7 | Pending |
-| AUD-05 | Phase 7 | Pending |
-| AUD-06 | Phase 7 | Pending |
+| AUD-04 | Phase 7 | Complete |
+| AUD-05 | Phase 7 | Complete |
+| AUD-06 | Phase 7 | Complete |
 | CONV-01 | Phase 6 | Complete |
 | CONV-02 | Phase 6 | Complete |
 | CONV-03 | Phase 6 | Complete |

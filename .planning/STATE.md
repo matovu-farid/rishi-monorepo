@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 07-01-PLAN.md
-last_updated: "2026-04-06T10:27:05.352Z"
+stopped_at: Completed 07-02-PLAN.md
+last_updated: "2026-04-06T10:27:56.770Z"
 progress:
   total_phases: 8
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 21
-  completed_plans: 20
+  completed_plans: 21
 ---
 
 # Project State
@@ -23,8 +23,8 @@ See: .planning/PROJECT.md (updated 2026-04-05)
 
 ## Current Position
 
-Phase: 07 (audio-tts-stt) — EXECUTING
-Plan: 2 of 2
+Phase: 07 (audio-tts-stt) — COMPLETE
+Plan: 2 of 2 (DONE)
 
 ## Performance Metrics
 
@@ -66,6 +66,7 @@ Plan: 2 of 2
 | Phase 06 P03 | 3min | 2 tasks | 7 files |
 | Phase 06 P05 | 8min | 3 tasks | 13 files |
 | Phase 07 P01 | 11min | 2 tasks | 9 files |
+| Phase 07 P02 | 12min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -132,6 +133,9 @@ Recent decisions affecting current work:
 - [Phase 07]: Used createAudioPlayer (non-React API) for TTSPlayer class since it runs outside React context
 - [Phase 07]: Base64 mp3 caching to FileSystem.cacheDirectory with prefetch-next-2 strategy
 - [Phase 07]: Disabled toolbar auto-hide when TTS active so user retains access to stop button
+- [Phase 07]: apiClient Content-Type default before spread: allows binary upload override without breaking JSON callers
+- [Phase 07]: externalText prop on ChatInput for transcript injection from parent (voice transcription)
+- [Phase 07]: Base64->Uint8Array conversion in useVoiceInput: expo-file-system reads base64, Worker expects raw binary
 
 ### Pending Todos
 
@@ -145,6 +149,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-06T10:27:05.344Z
-Stopped at: Completed 07-01-PLAN.md
+Last session: 2026-04-06T10:27:56.753Z
+Stopped at: Completed 07-02-PLAN.md
 Resume file: None
