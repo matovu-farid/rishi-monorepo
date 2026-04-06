@@ -10,6 +10,8 @@ import { getBookForReading, updateBookCfi } from '@/lib/book-storage'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
 import { insertHighlight, getHighlightsByBookId, updateHighlight, deleteHighlight } from '@/lib/highlight-storage'
 import { ReaderToolbar } from '@/components/ReaderToolbar'
+import { TTSControls } from '@/components/TTSControls'
+import { useTTSPlayer } from '@/hooks/useTTSPlayer'
 import { TocSheet } from '@/components/TocSheet'
 import { AppearanceSheet } from '@/components/AppearanceSheet'
 import { HighlightsSheet } from '@/components/HighlightsSheet'
@@ -93,6 +95,9 @@ function ReaderContent({ book }: { book: Book }) {
   const [popoverVisible, setPopoverVisible] = useState(false)
   const [popoverPosition, setPopoverPosition] = useState({ x: 0, y: 0 })
 
+  // TTS playback
+  const tts = useTTSPlayer(book.id, book.filePath, book.format as 'epub' | 'pdf')
+
   const theme = READER_THEMES[settings.themeName]
 
   // Load highlights on mount
@@ -161,17 +166,17 @@ function ReaderContent({ book }: { book: Book }) {
     setToolbarVisible((prev) => !prev)
   }, [popoverVisible])
 
-  // Auto-hide toolbar after 3 seconds
+  // Auto-hide toolbar after 3 seconds (disabled when TTS is active)
   const toolbarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    if (toolbarVisible) {
+    if (toolbarVisible && !tts.isActive) {
       if (toolbarTimerRef.current) clearTimeout(toolbarTimerRef.current)
       toolbarTimerRef.current = setTimeout(() => setToolbarVisible(false), 3000)
     }
     return () => {
       if (toolbarTimerRef.current) clearTimeout(toolbarTimerRef.current)
     }
-  }, [toolbarVisible])
+  }, [toolbarVisible, tts.isActive])
 
   // Theme change
   const handleThemeChange = useCallback(
@@ -394,6 +399,8 @@ function ReaderContent({ book }: { book: Book }) {
           setToolbarVisible(false)
         }}
         onChatPress={() => router.push(`/chat/${book.id}`)}
+        onTTSPress={() => tts.isActive ? tts.stop() : tts.play()}
+        ttsActive={tts.isActive}
       />
 
       <TocSheet
@@ -428,6 +435,19 @@ function ReaderContent({ book }: { book: Book }) {
         onSave={handleSaveNote}
         onDiscard={() => noteEditorSheetRef.current?.close()}
       />
+
+      {tts.isActive && (
+        <TTSControls
+          status={tts.status as 'loading' | 'playing' | 'paused'}
+          currentChunkIndex={tts.currentChunkIndex}
+          totalChunks={tts.totalChunks}
+          onPlay={tts.play}
+          onPause={tts.pause}
+          onStop={tts.stop}
+          onNext={tts.next}
+          onPrevious={tts.previous}
+        />
+      )}
 
       {popoverVisible && selectedHighlight && (
         <AnnotationPopover

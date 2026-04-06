@@ -31,6 +31,13 @@ const MAPPING = {
   'arrow.down.circle': 'file-download',
   'stop.fill': 'stop',
   'arrow.up': 'arrow-upward',
+  'mic.fill': 'mic',
+  'mic.slash.fill': 'mic-off',
+  'speaker.wave.2.fill': 'volume-up',
+  'backward.fill': 'skip-previous',
+  'forward.fill': 'skip-next',
+  'pause.fill': 'pause',
+  'play.fill': 'play-arrow',
 } as IconMapping;
 
 /**

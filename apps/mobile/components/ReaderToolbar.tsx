@@ -13,6 +13,8 @@ interface ReaderToolbarProps {
   onHighlightsPress: () => void
   onAppearancePress: () => void
   onChatPress?: () => void
+  onTTSPress?: () => void
+  ttsActive?: boolean
 }
 
 export function ReaderToolbar({
@@ -24,6 +26,8 @@ export function ReaderToolbar({
   onHighlightsPress,
   onAppearancePress,
   onChatPress,
+  onTTSPress,
+  ttsActive,
 }: ReaderToolbarProps) {
   const insets = useSafeAreaInsets()
 
@@ -94,6 +98,16 @@ export function ReaderToolbar({
               accessibilityRole="button"
             >
               <IconSymbol name="message.fill" size={22} color={theme.toolbarText} />
+            </TouchableOpacity>
+          )}
+          {onTTSPress && (
+            <TouchableOpacity
+              onPress={onTTSPress}
+              className="w-11 h-11 items-center justify-center"
+              accessibilityLabel={ttsActive ? 'Reading aloud' : 'Read aloud'}
+              accessibilityRole="button"
+            >
+              <IconSymbol name="speaker.wave.2.fill" size={22} color={ttsActive ? '#0a7ea4' : theme.toolbarText} />
             </TouchableOpacity>
           )}
         </View>
