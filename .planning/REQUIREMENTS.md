@@ -49,8 +49,8 @@
 - [x] **HIGH-03**: User can view list of all highlights for a book
 - [x] **HIGH-04**: User can delete highlights
 - [x] **HIGH-05**: Reading progress syncs across devices (ePubCFI for EPUB, page for PDF)
-- [ ] **HIGH-06**: Highlights sync across devices with union merge (no highlight lost)
-- [ ] **HIGH-07**: Annotations sync across devices with LWW per field
+- [x] **HIGH-06**: Highlights sync across devices with union merge (no highlight lost)
+- [x] **HIGH-07**: Annotations sync across devices with LWW per field
 
 ### On-Device RAG
 
@@ -153,8 +153,8 @@
 | HIGH-03 | Phase 5 | Complete |
 | HIGH-04 | Phase 5 | Complete |
 | HIGH-05 | Phase 5 | Complete |
-| HIGH-06 | Phase 5 | Pending |
-| HIGH-07 | Phase 5 | Pending |
+| HIGH-06 | Phase 5 | Complete |
+| HIGH-07 | Phase 5 | Complete |
 | RAG-01 | Phase 6 | Pending |
 | RAG-02 | Phase 6 | Pending |
 | RAG-03 | Phase 6 | Pending |

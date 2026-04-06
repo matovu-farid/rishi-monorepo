@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 05-01-PLAN.md
-last_updated: "2026-04-06T01:29:34.093Z"
+stopped_at: Completed 05-03-PLAN.md
+last_updated: "2026-04-06T01:33:44.160Z"
 progress:
   total_phases: 8
   completed_phases: 4
   total_plans: 13
-  completed_plans: 11
+  completed_plans: 12
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-04-05)
 ## Current Position
 
 Phase: 05 (reading-progress-highlights) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3 (PHASE COMPLETE)
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Plan: 2 of 3
 | Phase 04 P02 | 4min | 2 tasks | 11 files |
 | Phase 04 P03 | 3min | 2 tasks | 5 files |
 | Phase 05 P01 | 3min | 2 tasks | 5 files |
+| Phase 05 P03 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -99,6 +100,9 @@ Recent decisions affecting current work:
 - [Phase 04]: Fire-and-forget upload: import returns immediately, hash+upload runs in background
 - [Phase 04]: getBookForReading: async wrapper with on-demand R2 download for remote books
 - [Phase 05]: Used expo-crypto randomUUID for highlight ID generation (consistent with file-sync.ts)
+- [Phase 05]: Separate upsertedBookIds/upsertedHighlightIds arrays for syncVersion clarity
+- [Phase 05]: Conflict type detection via cfiRange field presence (highlights have cfiRange, books do not)
+- [Phase 05]: Global syncVersion computed as Math.max across books and highlights tables
 
 ### Pending Todos
 
@@ -112,6 +116,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-06T01:29:34.088Z
-Stopped at: Completed 05-01-PLAN.md
+Last session: 2026-04-06T01:33:44.157Z
+Stopped at: Completed 05-03-PLAN.md
 Resume file: None
