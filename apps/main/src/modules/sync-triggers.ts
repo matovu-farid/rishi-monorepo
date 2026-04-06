@@ -114,3 +114,15 @@ export function destroyDesktopSync(): void {
   }
   engine = null;
 }
+
+/**
+ * Debounced sync trigger for local writes.
+ * Fires triggerSync() 2 seconds after the last write, coalescing rapid writes.
+ */
+let writeTimeout: ReturnType<typeof setTimeout> | null = null;
+export function triggerSyncOnWrite(): void {
+  if (writeTimeout) clearTimeout(writeTimeout);
+  writeTimeout = setTimeout(() => {
+    void triggerSync();
+  }, 2000);
+}
