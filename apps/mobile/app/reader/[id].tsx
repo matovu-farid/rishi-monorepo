@@ -393,6 +393,7 @@ function ReaderContent({ book }: { book: Book }) {
           appearanceSheetRef.current?.snapToIndex(0)
           setToolbarVisible(false)
         }}
+        onChatPress={() => router.push(`/chat/${book.id}`)}
       />
 
       <TocSheet

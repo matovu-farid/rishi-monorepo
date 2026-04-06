@@ -12,6 +12,7 @@ interface ReaderToolbarProps {
   onTocPress: () => void
   onHighlightsPress: () => void
   onAppearancePress: () => void
+  onChatPress?: () => void
 }
 
 export function ReaderToolbar({
@@ -22,6 +23,7 @@ export function ReaderToolbar({
   onTocPress,
   onHighlightsPress,
   onAppearancePress,
+  onChatPress,
 }: ReaderToolbarProps) {
   const insets = useSafeAreaInsets()
 
@@ -84,6 +86,16 @@ export function ReaderToolbar({
           >
             <IconSymbol name="paintpalette.fill" size={22} color={theme.toolbarText} />
           </TouchableOpacity>
+          {onChatPress && (
+            <TouchableOpacity
+              onPress={onChatPress}
+              className="w-11 h-11 items-center justify-center"
+              accessibilityLabel="Ask AI about this book"
+              accessibilityRole="button"
+            >
+              <IconSymbol name="message.fill" size={22} color={theme.toolbarText} />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     </Animated.View>
