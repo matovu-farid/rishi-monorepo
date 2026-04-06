@@ -111,11 +111,12 @@ Plans:
   3. User can view all highlights for a book in a list and delete individual highlights
   4. Reading position syncs across devices -- opening a book on another device resumes where the user left off
   5. Highlights created on one device appear on another device after sync (no highlight lost)
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 05-01: TBD
-- [ ] 05-02: TBD
+- [ ] 05-01-PLAN.md -- Shared highlights schema, SQLite migration, highlight types, CRUD storage with dirty tracking
+- [ ] 05-02-PLAN.md -- EPUB reader highlight UI: text selection, annotation popover, highlights sheet, note editor, toolbar button
+- [ ] 05-03-PLAN.md -- Sync engine and Worker routes extended for highlights push/pull with union merge
 
 ### Phase 6: On-Device RAG & AI Conversations
 **Goal**: Users can ask natural language questions about their books and get AI answers grounded in book content, with conversation history that persists and syncs.
@@ -184,7 +185,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 | 2. EPUB Reader | 3/3 | Complete | 2026-04-05 |
 | 3. PDF Reader & File Management | 2/2 | Complete   | 2026-04-05 |
 | 4. Sync Infrastructure | 3/3 | Complete   | 2026-04-05 |
-| 5. Reading Progress & Highlights | 0/? | Not started | - |
+| 5. Reading Progress & Highlights | 0/3 | Not started | - |
 | 6. On-Device RAG & AI Conversations | 0/? | Not started | - |
 | 7. Audio (TTS & STT) | 0/? | Not started | - |
 | 8. Desktop Sync Integration | 0/? | Not started | - |
