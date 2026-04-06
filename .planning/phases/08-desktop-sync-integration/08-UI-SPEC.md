@@ -51,9 +51,9 @@ Exceptions: none
 |------|------|--------|-------------|
 | Body | 14px | 400 (regular) | 1.5 |
 | Label | 12px | 500 (medium) | 1.4 |
-| Heading | 18px | 600 (semibold) | 1.2 |
+| Heading | 18px | 500 (medium) | 1.2 |
 
-Note: Only 3 sizes declared. This phase introduces no display-level typography. The sync status indicator uses Label size. Toast messages use Body size.
+Note: 2 weights declared (400 regular, 500 medium). All three roles are distinguished by size (12px / 14px / 18px), not weight. This phase introduces no display-level typography. The sync status indicator uses Label size. Toast messages use Body size.
 
 ---
 
