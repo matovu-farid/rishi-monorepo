@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 05-02-PLAN.md
-last_updated: "2026-04-06T01:35:43.847Z"
+stopped_at: Completed 05-04-PLAN.md
+last_updated: "2026-04-06T02:13:24.898Z"
 progress:
   total_phases: 8
   completed_phases: 5
-  total_plans: 13
-  completed_plans: 13
+  total_plans: 14
+  completed_plans: 14
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-04-05)
 ## Current Position
 
 Phase: 05 (reading-progress-highlights) — EXECUTING
-Plan: 3 of 3 (PHASE COMPLETE)
+Plan: 4 of 4 (PHASE COMPLETE)
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Plan: 3 of 3 (PHASE COMPLETE)
 | Phase 05 P01 | 3min | 2 tasks | 5 files |
 | Phase 05 P03 | 2min | 2 tasks | 2 files |
 | Phase 05 P02 | 4min | 2 tasks | 6 files |
+| Phase 05 P04 | 1min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -107,6 +108,8 @@ Recent decisions affecting current work:
 - [Phase 05]: menuItems action returns boolean per @epubjs-react-native API (not string action names)
 - [Phase 05]: removeAnnotationByCfi for CFI-based removal (removeAnnotation requires full Annotation object)
 - [Phase 05]: AnnotationPopover positioned at screen center-top since onPressAnnotation lacks pixel coords
+- [Phase 05]: Removed onSelected prop entirely -- menuItems already cover all highlight creation paths
+- [Phase 05]: Pull-side LWW guard uses strict less-than so equal timestamps still apply remote syncVersion updates
 
 ### Pending Todos
 
@@ -120,6 +123,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-06T01:35:43.844Z
-Stopped at: Completed 05-02-PLAN.md
+Last session: 2026-04-06T02:12:53Z
+Stopped at: Completed 05-04-PLAN.md
 Resume file: None
