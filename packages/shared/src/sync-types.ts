@@ -1,6 +1,7 @@
 export interface PushRequest {
   changes: {
     books: Array<Record<string, unknown>>;
+    highlights?: Array<Record<string, unknown>>;
   };
 }
 
@@ -12,6 +13,7 @@ export interface PushResponse {
 export interface PullResponse {
   changes: {
     books: Array<Record<string, unknown>>;
+    highlights?: Array<Record<string, unknown>>;
   };
   syncVersion: number;
 }
