@@ -10,7 +10,7 @@ import { Radio, RadioGroup } from "@components/ui/Radio";
 import { ThemeType } from "@/themes/common";
 import { themes } from "@/themes/themes";
 import createIReactReaderTheme from "@/themes/readerThemes";
-import { Palette } from "lucide-react";
+import { Palette, Highlighter } from "lucide-react";
 import TTSControls from "@components/TTSControls";
 import { Rendition } from "epubjs/types";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -35,9 +35,15 @@ import { customStore } from "@/stores/jotai";
 import { Book } from "@/generated";
 import { updateBookLocation } from "@/generated";
 import { BackButton } from "./BackButton";
-import { saveHighlight, deleteHighlight, getHighlightsForBook } from "@/modules/highlight-storage";
+import { saveHighlight, getHighlightsForBook } from "@/modules/highlight-storage";
+import { triggerSyncOnWrite } from "@/modules/sync-triggers";
 import { db } from "@/modules/kysley";
+import { getHighlightHex } from "@/types/highlight";
+import type { HighlightColor } from "@/types/highlight";
 import type { Contents } from "epubjs";
+import { SelectionPopover } from "@/components/highlights/SelectionPopover";
+import { HighlightsPanel } from "@/components/highlights/HighlightsPanel";
+import { ReaderSettings } from "@/components/reader/ReaderSettings";
 
 function cn(...classes: string[]) {
   return classes.filter(Boolean).join(" ");
@@ -62,6 +68,10 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   const animationTriggerRef = useRef(0);
   const [rendition, setRendition] = useAtom(renditionAtom);
   const bookSyncIdRef = useRef<string | null>(null);
+  const [selectionInfo, setSelectionInfo] = useState<{
+    cfiRange: string; text: string; position: { x: number; y: number };
+  } | null>(null);
+  const [highlightsPanelOpen, setHighlightsPanelOpen] = useState(false);
 
   // Look up the book's sync_id for highlight storage
   useEffect(() => {
@@ -80,37 +90,50 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
     const syncId = bookSyncIdRef.current;
     getHighlightsForBook(syncId).then((highlights) => {
       for (const hl of highlights) {
-        highlightRange(rendition, hl.cfi_range);
+        const hex = getHighlightHex(hl.color as HighlightColor);
+        highlightRange(rendition, hl.cfi_range, {}, () => {}, 'epubjs-hl', {
+          fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': 'multiply',
+        });
       }
     });
   }, [rendition]);
 
-  // Handle user text selection to create highlights
+  // Handle user text selection -- show color picker popover instead of auto-highlight
   const handleTextSelected = useCallback((cfiRange: string, contents: Contents) => {
     const syncId = bookSyncIdRef.current;
     if (!syncId || !rendition) return;
 
-    // Get the selected text
     const selection = contents.window.getSelection();
     const selectedText = selection?.toString() ?? '';
     if (!selectedText.trim()) return;
 
-    // Apply visual highlight
-    highlightRange(rendition, cfiRange);
+    // Get selection position for popover placement
+    const range = selection?.getRangeAt(0);
+    const rect = range?.getBoundingClientRect();
+    const iframeEl = contents.document.defaultView?.frameElement;
+    const iframeRect = iframeEl?.getBoundingClientRect();
+    const x = (rect?.left ?? 0) + (iframeRect?.left ?? 0);
+    const y = (rect?.top ?? 0) + (iframeRect?.top ?? 0) - 50;
 
-    // Persist to SQLite
-    saveHighlight({
-      bookSyncId: syncId,
-      cfiRange,
-      text: selectedText,
-      color: 'yellow',
-    }).catch((err) => {
-      console.warn('[highlight-storage] Failed to save highlight:', err);
-    });
-
-    // Clear browser selection
-    selection?.removeAllRanges();
+    setSelectionInfo({ cfiRange, text: selectedText, position: { x, y } });
   }, [rendition]);
+
+  // Handle color selection from the popover
+  const handleHighlightColor = useCallback((color: HighlightColor) => {
+    if (!selectionInfo || !rendition || !bookSyncIdRef.current) return;
+    const hex = getHighlightHex(color);
+    highlightRange(rendition, selectionInfo.cfiRange, {}, () => {}, 'epubjs-hl', {
+      fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': 'multiply',
+    });
+    saveHighlight({
+      bookSyncId: bookSyncIdRef.current,
+      cfiRange: selectionInfo.cfiRange,
+      text: selectionInfo.text,
+      color,
+    }).then(() => triggerSyncOnWrite())
+      .catch((err) => console.warn('[highlight] save failed:', err));
+    setSelectionInfo(null);
+  }, [selectionInfo, rendition]);
 
   async function clearAllHighlights() {
     if (!rendition) return;
@@ -240,6 +263,15 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
       <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
         <BackButton />
 
+        <button
+          onClick={() => setHighlightsPanelOpen(true)}
+          className={cn("p-2 rounded-md", getTextColor())}
+          aria-label="Open highlights panel"
+        >
+          <Highlighter size={20} />
+        </button>
+        <ReaderSettings rendition={rendition} />
+
         <Menu
           trigger={
             <IconButton className={cn("hover:bg-transparent border-none")}>
@@ -298,6 +330,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
               bookId: book.id.toString(),
               location: epubcfi,
             });
+            triggerSyncOnWrite();
 
             setCurrentEpubLocation(epubcfi);
           }}
@@ -372,6 +405,25 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
 
       {/* TTS Controls - Draggable */}
       {<TTSControls bookId={book.id.toString()} />}
+
+      {/* Highlight color picker popover */}
+      {selectionInfo && (
+        <SelectionPopover
+          cfiRange={selectionInfo.cfiRange}
+          selectedText={selectionInfo.text}
+          position={selectionInfo.position}
+          onHighlight={handleHighlightColor}
+          onClose={() => setSelectionInfo(null)}
+        />
+      )}
+
+      {/* Highlights side panel */}
+      <HighlightsPanel
+        bookSyncId={bookSyncIdRef.current ?? ''}
+        rendition={rendition}
+        open={highlightsPanelOpen}
+        onOpenChange={setHighlightsPanelOpen}
+      />
     </div>
   );
 }
