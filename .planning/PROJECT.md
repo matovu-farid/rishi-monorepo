@@ -38,7 +38,7 @@ Users can read their books and interact with AI on their phone with the same exp
 ### Active
 
 - ✓ Cloud sync for books between desktop and mobile — Phase 4 complete
-- [ ] Reading progress tracking and sync across devices
+- ✓ Reading progress tracking and sync across devices — Phase 5 complete
 - [ ] Text chunking and embedding for RAG (on-device preferred, server fallback)
 - [ ] Vector search for semantic retrieval on mobile
 - [ ] AI Q&A about book content (RAG pipeline)
@@ -46,7 +46,7 @@ Users can read their books and interact with AI on their phone with the same exp
 - [ ] Speech input / voice interaction
 - [ ] Mobile auth flow (Clerk React Native SDK)
 - [ ] JWT-authenticated API calls to Cloudflare Worker
-- [ ] Highlights and annotations with cross-device sync
+- ✓ Highlights and annotations with cross-device sync — Phase 5 complete
 - [ ] AI conversation history sync between desktop and mobile
 - ✓ Local SQLite storage for books and chunk data on mobile — Phase 4 complete (Drizzle ORM)
 - ✓ Offline reading capability (books available without network) — Phase 4 complete
@@ -88,4 +88,4 @@ Cloud sync is a new capability — the desktop app currently stores everything l
 | Desktop sync integration | Research found desktop changes required for bidirectional sync | In scope as late phase — mobile standalone first |
 
 ---
-*Last updated: 2026-04-06 after Phase 4 completion*
+*Last updated: 2026-04-06 after Phase 5 completion*
