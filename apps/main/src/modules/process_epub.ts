@@ -4,7 +4,7 @@ import {
   saveVectors,
   Vector,
 } from "@/generated";
-import { db, PageDataInsertable } from "./kysley";
+import { PageDataInsertable } from "./kysley";
 import { hasSavedEpubData, savePageDataMany } from "@/generated";
 import { embedWithFallback } from "./embed-fallback";
 function batchEmbed(embedParams: EmbedParam[]): EmbedParam[][] {

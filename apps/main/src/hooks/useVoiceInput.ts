@@ -21,7 +21,6 @@ export function useVoiceInput(): UseVoiceInputReturn {
   const chunksRef = useRef<Blob[]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mimeTypeRef = useRef<string>('audio/webm');
-  const resolveStopRef = useRef<((transcript: string) => void) | null>(null);
 
   // Cleanup on unmount
   useEffect(() => {

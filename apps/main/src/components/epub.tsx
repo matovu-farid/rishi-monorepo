@@ -10,7 +10,7 @@ import { Radio, RadioGroup } from "@components/ui/Radio";
 import { ThemeType } from "@/themes/common";
 import { themes } from "@/themes/themes";
 import createIReactReaderTheme from "@/themes/readerThemes";
-import { Palette, Highlighter } from "lucide-react";
+import { Palette, Highlighter, MessageSquare } from "lucide-react";
 import TTSControls from "@components/TTSControls";
 import { Rendition } from "epubjs/types";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -44,6 +44,7 @@ import type { Contents } from "epubjs";
 import { SelectionPopover } from "@/components/highlights/SelectionPopover";
 import { HighlightsPanel } from "@/components/highlights/HighlightsPanel";
 import { ReaderSettings } from "@/components/reader/ReaderSettings";
+import { ChatPanel } from "@/components/chat/ChatPanel";
 
 function cn(...classes: string[]) {
   return classes.filter(Boolean).join(" ");
@@ -72,6 +73,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
     cfiRange: string; text: string; position: { x: number; y: number };
   } | null>(null);
   const [highlightsPanelOpen, setHighlightsPanelOpen] = useState(false);
+  const [chatPanelOpen, setChatPanelOpen] = useState(false);
 
   // Look up the book's sync_id for highlight storage
   useEffect(() => {
@@ -270,6 +272,13 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
         >
           <Highlighter size={20} />
         </button>
+        <button
+          onClick={() => setChatPanelOpen(true)}
+          className={cn("p-2 rounded-md", getTextColor())}
+          aria-label="Open chat panel"
+        >
+          <MessageSquare size={20} />
+        </button>
         <ReaderSettings rendition={rendition} />
 
         <Menu
@@ -423,6 +432,16 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
         rendition={rendition}
         open={highlightsPanelOpen}
         onOpenChange={setHighlightsPanelOpen}
+      />
+
+      {/* Chat Panel */}
+      <ChatPanel
+        bookId={book.id}
+        bookSyncId={bookSyncIdRef.current ?? ''}
+        bookTitle={book.title}
+        rendition={rendition}
+        open={chatPanelOpen}
+        onOpenChange={setChatPanelOpen}
       />
     </div>
   );
