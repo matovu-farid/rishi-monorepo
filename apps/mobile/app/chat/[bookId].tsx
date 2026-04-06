@@ -11,7 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated'
 
-import { getBookById } from '@/lib/book-storage'
+import { getBookForReading } from '@/lib/book-storage'
 import {
   createConversation,
   getConversationsForBook,
@@ -74,11 +74,12 @@ export default function BookChatScreen() {
     }
   }, [voice])
 
-  // Load book
+  // Load book (async -- triggers R2 download for synced books)
   useEffect(() => {
     if (bookId) {
-      const loaded = getBookById(bookId)
-      setBook(loaded)
+      getBookForReading(bookId).then(setBook).catch(err => {
+        console.error('Failed to load book for chat:', err)
+      })
     }
   }, [bookId])
 
@@ -97,17 +98,16 @@ export default function BookChatScreen() {
     }
   }, [bookId])
 
-  // Start embedding if needed
+  // Start embedding if needed (pipeline handles server fallback internally)
   useEffect(() => {
-    if (!bookId || !book || !modelReady) return
+    if (!bookId || !book || !book.filePath) return
     if (isBookEmbedded(bookId)) return
 
     setIsEmbedding(true)
-    // Estimate total chunks (will be refined as embedding proceeds)
     setEmbeddingTotal(100)
     setEmbeddingProcessed(0)
 
-    embedBook(bookId, book.filePath!, book.format, (progress) => {
+    embedBook(bookId, book.filePath, book.format, (progress) => {
       setEmbeddingProgress(progress)
       setEmbeddingProcessed(Math.round(progress * 100))
       if (progress >= 1) {
@@ -117,7 +117,7 @@ export default function BookChatScreen() {
       console.error('Embedding failed:', err)
       setIsEmbedding(false)
     })
-  }, [bookId, book, modelReady])
+  }, [bookId, book])
 
   // Send a message
   const handleSend = useCallback(
@@ -169,7 +169,7 @@ export default function BookChatScreen() {
   const isModelDownloading = !modelReady && downloadProgress > 0
 
   // Determine if chat input should be disabled
-  const chatDisabled = !modelReady || isEmbedding || !isBookEmbedded(bookId!)
+  const chatDisabled = isEmbedding || !isBookEmbedded(bookId!)
 
   // Inverted data for FlatList
   const invertedMessages = [...messageList].reverse()
@@ -203,19 +203,6 @@ export default function BookChatScreen() {
         </View>
 
         {/* Content area */}
-        {showModelDownload ? (
-          <View className="flex-1 items-center justify-center">
-            <ModelDownloadCard
-              downloadProgress={downloadProgress}
-              isDownloading={isModelDownloading}
-              onDownload={() => {
-                // useEmbeddingModel auto-downloads on mount; this is a no-op trigger
-                // The hook is already active so download should already be in progress
-              }}
-            />
-          </View>
-        ) : (
-          <>
             <FlatList
               ref={flatListRef}
               data={invertedMessages}
@@ -239,6 +226,15 @@ export default function BookChatScreen() {
                         processedChunks={embeddingProcessed}
                       />
                     </Animated.View>
+                  )}
+                  {showModelDownload && (
+                    <View className="px-4 py-2">
+                      <ModelDownloadCard
+                        downloadProgress={downloadProgress}
+                        isDownloading={isModelDownloading}
+                        onDownload={() => {}}
+                      />
+                    </View>
                   )}
                 </>
               }
@@ -292,8 +288,6 @@ export default function BookChatScreen() {
               permissionDenied={voice.permissionDenied}
               externalText={voiceText}
             />
-          </>
-        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   )
