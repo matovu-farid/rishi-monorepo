@@ -77,6 +77,37 @@ expo.execSync(`
   );
 `)
 
+// ─── Conversations table ──────────────────────────────────────────────────────
+expo.execSync(`
+  CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY NOT NULL,
+    book_id TEXT NOT NULL,
+    user_id TEXT,
+    title TEXT NOT NULL DEFAULT 'New conversation',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    sync_version INTEGER DEFAULT 0,
+    is_dirty INTEGER DEFAULT 1,
+    is_deleted INTEGER DEFAULT 0
+  );
+`)
+
+// ─── Messages table ──────────────────────────────────────────────────────────
+expo.execSync(`
+  CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY NOT NULL,
+    conversation_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    source_chunks TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    sync_version INTEGER DEFAULT 0,
+    is_dirty INTEGER DEFAULT 1,
+    is_deleted INTEGER DEFAULT 0
+  );
+`)
+
 // ─── Drizzle instance ─────────────────────────────────────────────────────────
 export const db = drizzle(expo, { schema })
 export type AppDb = typeof db

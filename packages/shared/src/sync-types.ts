@@ -2,6 +2,8 @@ export interface PushRequest {
   changes: {
     books: Array<Record<string, unknown>>;
     highlights?: Array<Record<string, unknown>>;
+    conversations?: Array<Record<string, unknown>>;
+    messages?: Array<Record<string, unknown>>;
   };
 }
 
@@ -14,6 +16,8 @@ export interface PullResponse {
   changes: {
     books: Array<Record<string, unknown>>;
     highlights?: Array<Record<string, unknown>>;
+    conversations?: Array<Record<string, unknown>>;
+    messages?: Array<Record<string, unknown>>;
   };
   syncVersion: number;
 }
