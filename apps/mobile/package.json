@@ -22,6 +22,7 @@
     "@rishi/shared": "file:../../packages/shared",
     "drizzle-orm": "^0.45.2",
     "expo": "~54.0.33",
+    "expo-audio": "~1.1.1",
     "expo-constants": "~18.0.13",
     "expo-crypto": "~15.0.8",
     "expo-dev-client": "~6.0.20",
