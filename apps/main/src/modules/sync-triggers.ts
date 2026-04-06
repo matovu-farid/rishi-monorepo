@@ -1,0 +1,116 @@
+import { createSyncEngine, type SyncEngine } from '@rishi/shared/sync-engine';
+import { DesktopSyncAdapter } from './sync-adapter';
+import { load } from '@tauri-apps/plugin-store';
+
+const WORKER_URL = 'https://rishi-worker.faridmato90.workers.dev';
+const SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+export type SyncStatus = 'not-synced' | 'syncing' | 'synced' | 'error' | 'offline';
+
+type SyncStatusListener = (status: SyncStatus, lastSyncAt: number | null) => void;
+
+let engine: SyncEngine | null = null;
+let syncStatus: SyncStatus = 'not-synced';
+let lastSyncAt: number | null = null;
+let intervalId: ReturnType<typeof setInterval> | null = null;
+const listeners: Set<SyncStatusListener> = new Set();
+
+function notifyListeners() {
+  for (const listener of listeners) {
+    listener(syncStatus, lastSyncAt);
+  }
+}
+
+export function onSyncStatusChange(listener: SyncStatusListener): () => void {
+  listeners.add(listener);
+  // Immediately call with current state
+  listener(syncStatus, lastSyncAt);
+  return () => listeners.delete(listener);
+}
+
+export function getSyncStatus(): { status: SyncStatus; lastSyncAt: number | null } {
+  return { status: syncStatus, lastSyncAt };
+}
+
+async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const store = await load('store.json');
+  const token = await store.get<string>('auth_token');
+
+  if (!token) {
+    throw new Error('No auth token available');
+  }
+
+  return fetch(`${WORKER_URL}${path}`, {
+    ...init,
+    headers: {
+      ...init?.headers,
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+export async function triggerSync(): Promise<void> {
+  if (!engine) return;
+  if (syncStatus === 'syncing') return;
+
+  syncStatus = 'syncing';
+  notifyListeners();
+
+  try {
+    await engine.sync();
+    syncStatus = 'synced';
+    lastSyncAt = Date.now();
+  } catch (error) {
+    console.warn('[desktop-sync] sync failed:', error);
+    // Check if offline
+    if (!navigator.onLine) {
+      syncStatus = 'offline';
+    } else {
+      syncStatus = 'error';
+    }
+  }
+
+  notifyListeners();
+}
+
+export function initDesktopSync(): void {
+  if (engine) return; // already initialized
+
+  const adapter = new DesktopSyncAdapter();
+  engine = createSyncEngine({ adapter, apiFetch });
+
+  // Sync on app focus
+  window.addEventListener('focus', () => {
+    triggerSync();
+  });
+
+  // Online/offline detection
+  window.addEventListener('online', () => {
+    if (syncStatus === 'offline') {
+      triggerSync();
+    }
+  });
+  window.addEventListener('offline', () => {
+    syncStatus = 'offline';
+    notifyListeners();
+  });
+
+  // Periodic sync every 5 minutes
+  intervalId = setInterval(() => {
+    if (navigator.onLine) {
+      triggerSync();
+    }
+  }, SYNC_INTERVAL_MS);
+
+  // Initial sync
+  triggerSync();
+}
+
+export function destroyDesktopSync(): void {
+  if (intervalId) {
+    clearInterval(intervalId);
+    intervalId = null;
+  }
+  engine = null;
+}

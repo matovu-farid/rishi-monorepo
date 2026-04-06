@@ -3,7 +3,7 @@ import { ReactReader } from "@components/react-reader";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "react-toastify";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { IconButton } from "@components/ui/IconButton";
 import { Menu } from "@components/ui/Menu";
 import { Radio, RadioGroup } from "@components/ui/Radio";
@@ -35,6 +35,9 @@ import { customStore } from "@/stores/jotai";
 import { Book } from "@/generated";
 import { updateBookLocation } from "@/generated";
 import { BackButton } from "./BackButton";
+import { saveHighlight, deleteHighlight, getHighlightsForBook } from "@/modules/highlight-storage";
+import { db } from "@/modules/kysley";
+import type { Contents } from "epubjs";
 
 function cn(...classes: string[]) {
   return classes.filter(Boolean).join(" ");
@@ -58,6 +61,56 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   const [animationKey, setAnimationKey] = useState(0);
   const animationTriggerRef = useRef(0);
   const [rendition, setRendition] = useAtom(renditionAtom);
+  const bookSyncIdRef = useRef<string | null>(null);
+
+  // Look up the book's sync_id for highlight storage
+  useEffect(() => {
+    db.selectFrom('books')
+      .select(['sync_id'])
+      .where('id', '=', book.id)
+      .executeTakeFirst()
+      .then((row) => {
+        bookSyncIdRef.current = row?.sync_id ?? null;
+      });
+  }, [book.id]);
+
+  // Load persisted highlights when rendition is ready
+  useEffect(() => {
+    if (!rendition || !bookSyncIdRef.current) return;
+    const syncId = bookSyncIdRef.current;
+    getHighlightsForBook(syncId).then((highlights) => {
+      for (const hl of highlights) {
+        highlightRange(rendition, hl.cfi_range);
+      }
+    });
+  }, [rendition]);
+
+  // Handle user text selection to create highlights
+  const handleTextSelected = useCallback((cfiRange: string, contents: Contents) => {
+    const syncId = bookSyncIdRef.current;
+    if (!syncId || !rendition) return;
+
+    // Get the selected text
+    const selection = contents.window.getSelection();
+    const selectedText = selection?.toString() ?? '';
+    if (!selectedText.trim()) return;
+
+    // Apply visual highlight
+    highlightRange(rendition, cfiRange);
+
+    // Persist to SQLite
+    saveHighlight({
+      bookSyncId: syncId,
+      cfiRange,
+      text: selectedText,
+      color: 'yellow',
+    }).catch((err) => {
+      console.warn('[highlight-storage] Failed to save highlight:', err);
+    });
+
+    // Clear browser selection
+    selection?.removeAllRanges();
+  }, [rendition]);
 
   async function clearAllHighlights() {
     if (!rendition) return;
@@ -250,6 +303,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
           }}
           swipeable={true}
           readerStyles={createIReactReaderTheme(themes[theme].readerTheme)}
+          handleTextSelected={handleTextSelected}
           getRendition={(_rendition) => {
             updateTheme(_rendition, theme);
             _rendition.on("rendered", () => {

@@ -2,14 +2,24 @@ import Loader from "../components/Loader";
 import { useQuery } from "@tanstack/react-query";
 import { createRootRoute, Outlet } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
-import type { JSX } from "react";
+import { useEffect, type JSX } from "react";
 import { getBooks } from "@/generated";
+import { initDesktopSync, destroyDesktopSync } from "@/modules/sync-triggers";
+import { SyncStatusIndicator } from "../components/SyncStatusIndicator";
 
 export const Route = createRootRoute({
   component: () => <RootComponent />,
 });
 
 function RootComponent(): JSX.Element {
+  // Initialize desktop sync on app mount
+  useEffect(() => {
+    initDesktopSync();
+    return () => {
+      destroyDesktopSync();
+    };
+  }, []);
+
   const {
     isPending,
     error,
@@ -54,6 +64,9 @@ function RootComponent(): JSX.Element {
             )
         )} */}
       <Outlet />
+      <div className="fixed bottom-4 left-4 z-50 w-40">
+        <SyncStatusIndicator />
+      </div>
       <TanStackRouterDevtools />
     </>
   );
