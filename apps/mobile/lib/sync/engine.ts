@@ -1,5 +1,5 @@
 import { db } from '@/lib/db'
-import { books, syncMeta } from '@rishi/shared/schema'
+import { books, highlights, syncMeta } from '@rishi/shared/schema'
 import { eq } from 'drizzle-orm'
 import { apiClient } from '@/lib/api'
 import type { PushResponse, PullResponse } from '@rishi/shared/sync-types'
@@ -24,7 +24,7 @@ export async function sync(): Promise<void> {
 }
 
 /**
- * Push all locally dirty records to the server.
+ * Push all locally dirty records (books + highlights) to the server.
  */
 async function push(): Promise<void> {
   const dirtyBooks = db
@@ -33,11 +33,22 @@ async function push(): Promise<void> {
     .where(eq(books.isDirty, true))
     .all()
 
-  if (dirtyBooks.length === 0) return
+  const dirtyHighlights = db
+    .select()
+    .from(highlights)
+    .where(eq(highlights.isDirty, true))
+    .all()
+
+  if (dirtyBooks.length === 0 && dirtyHighlights.length === 0) return
 
   const response = await apiClient('/api/sync/push', {
     method: 'POST',
-    body: JSON.stringify({ changes: { books: dirtyBooks } }),
+    body: JSON.stringify({
+      changes: {
+        books: dirtyBooks,
+        highlights: dirtyHighlights,
+      },
+    }),
   })
 
   if (!response.ok) {
@@ -50,7 +61,27 @@ async function push(): Promise<void> {
   // Apply conflict resolutions from server
   for (const conflict of data.conflicts) {
     const c = conflict as Record<string, unknown>
-    if (typeof c.id === 'string') {
+    if (typeof c.id !== 'string') continue
+
+    if ('cfiRange' in c) {
+      // Highlight conflict -- server version wins, apply it locally
+      db.update(highlights)
+        .set({
+          text: c.text as string,
+          color: c.color as string,
+          note: (c.note as string) ?? null,
+          chapter: (c.chapter as string) ?? null,
+          cfiRange: c.cfiRange as string,
+          createdAt: c.createdAt as number,
+          updatedAt: c.updatedAt as number,
+          syncVersion: data.syncVersion,
+          isDirty: false,
+          isDeleted: (c.isDeleted as boolean) ?? false,
+        })
+        .where(eq(highlights.id, c.id))
+        .run()
+    } else {
+      // Book conflict -- existing logic
       db.update(books)
         .set({
           title: c.title as string,
@@ -72,12 +103,21 @@ async function push(): Promise<void> {
     }
   }
 
-  // Mark all pushed records as clean
-  const pushedIds = dirtyBooks.map((b) => b.id)
-  for (const id of pushedIds) {
+  // Mark all pushed books as clean
+  const pushedBookIds = dirtyBooks.map((b) => b.id)
+  for (const id of pushedBookIds) {
     db.update(books)
       .set({ isDirty: false, syncVersion: data.syncVersion })
       .where(eq(books.id, id))
+      .run()
+  }
+
+  // Mark all pushed highlights as clean
+  const pushedHighlightIds = dirtyHighlights.map((h) => h.id)
+  for (const id of pushedHighlightIds) {
+    db.update(highlights)
+      .set({ isDirty: false, syncVersion: data.syncVersion })
+      .where(eq(highlights.id, id))
       .run()
   }
 }
@@ -108,6 +148,7 @@ async function pull(): Promise<void> {
 
   const data: PullResponse = await response.json()
 
+  // ── Pull books ──────────────────────────────────────────────────────────────
   for (const remote of data.changes.books) {
     const r = remote as Record<string, unknown>
     const remoteId = r.id as string
@@ -157,6 +198,60 @@ async function pull(): Promise<void> {
           fileHash: (r.fileHash as string) ?? null,
           fileR2Key: (r.fileR2Key as string) ?? null,
           coverR2Key: (r.coverR2Key as string) ?? null,
+          createdAt: (r.createdAt as number) ?? Date.now(),
+          updatedAt: (r.updatedAt as number) ?? Date.now(),
+          syncVersion: (r.syncVersion as number) ?? 0,
+          isDirty: false,
+          isDeleted: (r.isDeleted as boolean) ?? false,
+        })
+        .run()
+    }
+  }
+
+  // ── Pull highlights (union merge) ──────────────────────────────────────────
+  for (const remote of data.changes.highlights ?? []) {
+    const r = remote as Record<string, unknown>
+    const remoteId = r.id as string
+    if (!remoteId) continue
+
+    const local = db
+      .select()
+      .from(highlights)
+      .where(eq(highlights.id, remoteId))
+      .get()
+
+    if (local) {
+      // Skip locally dirty -- local changes take precedence until pushed
+      if (local.isDirty) continue
+
+      // LWW per field: update with remote values
+      db.update(highlights)
+        .set({
+          text: r.text as string,
+          color: r.color as string,
+          note: (r.note as string) ?? null,
+          chapter: (r.chapter as string) ?? null,
+          cfiRange: r.cfiRange as string,
+          bookId: r.bookId as string,
+          createdAt: r.createdAt as number,
+          updatedAt: r.updatedAt as number,
+          syncVersion: (r.syncVersion as number) ?? 0,
+          isDirty: false,
+          isDeleted: (r.isDeleted as boolean) ?? false,
+        })
+        .where(eq(highlights.id, remoteId))
+        .run()
+    } else {
+      // New remote highlight -- insert (union merge: always accept new highlights)
+      db.insert(highlights)
+        .values({
+          id: remoteId,
+          bookId: (r.bookId as string) ?? '',
+          text: (r.text as string) ?? '',
+          color: (r.color as string) ?? 'yellow',
+          note: (r.note as string) ?? null,
+          chapter: (r.chapter as string) ?? null,
+          cfiRange: (r.cfiRange as string) ?? '',
           createdAt: (r.createdAt as number) ?? Date.now(),
           updatedAt: (r.updatedAt as number) ?? Date.now(),
           syncVersion: (r.syncVersion as number) ?? 0,
