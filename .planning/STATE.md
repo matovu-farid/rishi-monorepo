@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 05-03-PLAN.md
-last_updated: "2026-04-06T01:33:44.160Z"
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-04-06T01:35:43.847Z"
 progress:
   total_phases: 8
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 13
-  completed_plans: 12
+  completed_plans: 13
 ---
 
 # Project State
@@ -58,6 +58,7 @@ Plan: 3 of 3 (PHASE COMPLETE)
 | Phase 04 P03 | 3min | 2 tasks | 5 files |
 | Phase 05 P01 | 3min | 2 tasks | 5 files |
 | Phase 05 P03 | 2min | 2 tasks | 2 files |
+| Phase 05 P02 | 4min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -103,6 +104,9 @@ Recent decisions affecting current work:
 - [Phase 05]: Separate upsertedBookIds/upsertedHighlightIds arrays for syncVersion clarity
 - [Phase 05]: Conflict type detection via cfiRange field presence (highlights have cfiRange, books do not)
 - [Phase 05]: Global syncVersion computed as Math.max across books and highlights tables
+- [Phase 05]: menuItems action returns boolean per @epubjs-react-native API (not string action names)
+- [Phase 05]: removeAnnotationByCfi for CFI-based removal (removeAnnotation requires full Annotation object)
+- [Phase 05]: AnnotationPopover positioned at screen center-top since onPressAnnotation lacks pixel coords
 
 ### Pending Todos
 
@@ -116,6 +120,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-06T01:33:44.157Z
-Stopped at: Completed 05-03-PLAN.md
+Last session: 2026-04-06T01:35:43.844Z
+Stopped at: Completed 05-02-PLAN.md
 Resume file: None
