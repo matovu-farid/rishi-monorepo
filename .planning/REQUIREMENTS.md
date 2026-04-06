@@ -65,9 +65,9 @@
 
 ### Audio
 
-- [ ] **AUD-01**: User can listen to book text via TTS (Worker /api/audio/speech endpoint)
-- [ ] **AUD-02**: TTS playback has play/pause/stop controls
-- [ ] **AUD-03**: TTS reads sequentially through book content with queue management
+- [x] **AUD-01**: User can listen to book text via TTS (Worker /api/audio/speech endpoint)
+- [x] **AUD-02**: TTS playback has play/pause/stop controls
+- [x] **AUD-03**: TTS reads sequentially through book content with queue management
 - [ ] **AUD-04**: User can ask voice questions via speech input
 - [ ] **AUD-05**: Voice input transcribed via Worker Deepgram STT endpoint
 - [ ] **AUD-06**: Worker Deepgram STT endpoint created for transcription
@@ -163,9 +163,9 @@
 | RAG-06 | Phase 6 | Complete |
 | RAG-07 | Phase 6 | Complete |
 | RAG-08 | Phase 6 | Complete |
-| AUD-01 | Phase 7 | Pending |
-| AUD-02 | Phase 7 | Pending |
-| AUD-03 | Phase 7 | Pending |
+| AUD-01 | Phase 7 | Complete |
+| AUD-02 | Phase 7 | Complete |
+| AUD-03 | Phase 7 | Complete |
 | AUD-04 | Phase 7 | Pending |
 | AUD-05 | Phase 7 | Pending |
 | AUD-06 | Phase 7 | Pending |
