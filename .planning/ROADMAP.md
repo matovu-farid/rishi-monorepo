@@ -20,6 +20,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 6: On-Device RAG & AI Conversations** - Text chunking, on-device embeddings, vector search, and AI Q&A (completed 2026-04-06)
 - [ ] **Phase 7: Audio (TTS & STT)** - Text-to-speech playback and speech-to-text voice input
 - [x] **Phase 8: Desktop Sync Integration** - Bidirectional sync between desktop and mobile apps (completed 2026-04-06)
+- [ ] **Phase 9: Synced-Book Data Path Fixes** - Gap closure: fix synced-book RAG/TTS pipeline and server embedding fallback
 
 ## Phase Details
 
@@ -177,10 +178,25 @@ Plans:
 - [ ] 08-02-PLAN.md -- SyncDbAdapter interface in shared package, shared sync engine with adapter pattern, Desktop Kysely-based adapter implementation
 - [ ] 08-03-PLAN.md -- Desktop file sync (R2 upload/download), sync triggers (focus/periodic/manual), SyncStatusIndicator sidebar UI
 
+### Phase 9: Synced-Book Data Path Fixes
+**Goal**: Synced books work correctly for RAG, TTS, and embedding on mobile — no broken flows when books arrive from another device.
+**Depends on**: Phase 6, Phase 8
+**Requirements**: RAG-08
+**Gap Closure**: Closes gaps from v1.0 milestone audit
+**Risk**: Low -- targeted fixes to 2 files (chat screen, pipeline.ts)
+**Success Criteria** (what must be TRUE):
+  1. Opening chat for a synced book triggers file download before embedding
+  2. RAG queries return relevant context for synced books (not empty results)
+  3. When on-device embedding model is not downloaded, server-side fallback auto-triggers
+**Plans**: TBD
+
+Plans:
+- [ ] 09-01: TBD
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -192,6 +208,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 | 6. On-Device RAG & AI Conversations | 5/5 | Complete   | 2026-04-06 |
 | 7. Audio (TTS & STT) | 0/2 | Not started | - |
 | 8. Desktop Sync Integration | 3/3 | Complete   | 2026-04-06 |
+| 9. Synced-Book Data Path Fixes | 0/? | Not started | - |
 
 ## Coverage
 
@@ -204,12 +221,13 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 | File Management (PDF/Library) | FILE-02, FILE-04, FILE-05 | Phase 3 | 3 |
 | Sync Infrastructure | SYNC-01 through SYNC-07 | Phase 4 | 7 |
 | Reading Progress & Highlights | HIGH-01 through HIGH-07 | Phase 5 | 7 |
-| On-Device RAG | RAG-01 through RAG-08 | Phase 6 | 8 |
+| On-Device RAG | RAG-01 through RAG-07 | Phase 6 | 7 |
+| On-Device RAG (gap closure) | RAG-08 | Phase 9 | 1 |
 | AI Conversations | CONV-01 through CONV-04 | Phase 6 | 4 |
 | Audio | AUD-01 through AUD-06 | Phase 7 | 6 |
 | Desktop Sync | DSYNC-01 through DSYNC-05 | Phase 8 | 5 |
 
-**Total: 55/55 v1 requirements mapped. No orphans.**
+**Total: 55/55 v1 requirements mapped. No orphans. 1 requirement reassigned to gap closure phase.**
 
 ---
 *Roadmap created: 2026-04-05*
