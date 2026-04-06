@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 06-04-PLAN.md
-last_updated: "2026-04-06T03:14:50Z"
+stopped_at: Completed 06-01-PLAN.md
+last_updated: "2026-04-06T03:20:10.499Z"
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 19
-  completed_plans: 15
+  completed_plans: 16
 ---
 
 # Project State
@@ -61,6 +61,7 @@ Plan: 5 of 5
 | Phase 05 P02 | 4min | 2 tasks | 6 files |
 | Phase 05 P04 | 1min | 2 tasks | 2 files |
 | Phase 06 P04 | 3min | 1 tasks | 4 files |
+| Phase 06 P01 | 7min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -112,6 +113,9 @@ Recent decisions affecting current work:
 - [Phase 05]: Removed onSelected prop entirely -- menuItems already cover all highlight creation paths
 - [Phase 05]: Pull-side LWW guard uses strict less-than so equal timestamps still apply remote syncVersion updates
 - [Phase 06]: Jest test infrastructure added to mobile app for TDD (jest, ts-jest, @types/jest)
+- [Phase 06]: JSZip for EPUB extraction: dynamic import to parse EPUB ZIP as base64
+- [Phase 06]: rawDb export from db.ts for sqlite-vec loadExtensionSync and raw SQL operations
+- [Phase 06]: chunks table + chunk_vectors vec0 virtual table with 384-dim float embeddings
 
 ### Pending Todos
 
@@ -125,6 +129,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-06T03:14:50Z
-Stopped at: Completed 06-04-PLAN.md
-Resume file: .planning/phases/06-on-device-rag-ai-conversations/06-05-PLAN.md
+Last session: 2026-04-06T03:20:10.490Z
+Stopped at: Completed 06-01-PLAN.md
+Resume file: None
