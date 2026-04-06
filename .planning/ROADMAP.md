@@ -170,11 +170,12 @@ Plans:
   3. Highlights and annotations created on either device appear on the other
   4. Desktop app uses UUID sync identifiers (migration from integer IDs complete)
   5. Sync logic lives in a shared TypeScript package used by both desktop and mobile
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 08-01: TBD
-- [ ] 08-02: TBD
+- [ ] 08-01-PLAN.md -- Diesel migration adding sync columns to books, creating highlights/conversations/messages/sync_meta tables, UUID backfill, Kysely schema update
+- [ ] 08-02-PLAN.md -- SyncDbAdapter interface in shared package, shared sync engine with adapter pattern, Desktop Kysely-based adapter implementation
+- [ ] 08-03-PLAN.md -- Desktop file sync (R2 upload/download), sync triggers (focus/periodic/manual), SyncStatusIndicator sidebar UI
 
 ## Progress
 
@@ -190,7 +191,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 | 5. Reading Progress & Highlights | 0/3 | Not started | - |
 | 6. On-Device RAG & AI Conversations | 5/5 | Complete   | 2026-04-06 |
 | 7. Audio (TTS & STT) | 0/2 | Not started | - |
-| 8. Desktop Sync Integration | 0/? | Not started | - |
+| 8. Desktop Sync Integration | 0/3 | Not started | - |
 
 ## Coverage
 
