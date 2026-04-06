@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 07-02-PLAN.md
-last_updated: "2026-04-06T10:34:38.332Z"
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-04-06T12:35:04.658Z"
 progress:
   total_phases: 8
   completed_phases: 7
-  total_plans: 21
+  total_plans: 24
   completed_plans: 21
 ---
 
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-05)
 
 **Core value:** Users can read their books and interact with AI on their phone with the same experience they get on desktop, with everything synced between devices.
-**Current focus:** Phase 07 — audio-tts-stt
+**Current focus:** Phase 08 — desktop-sync-integration
 
 ## Current Position
 
-Phase: 07 (audio-tts-stt) — COMPLETE
-Plan: 2 of 2 (DONE)
+Phase: 08 (desktop-sync-integration) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -67,6 +67,7 @@ Plan: 2 of 2 (DONE)
 | Phase 06 P05 | 8min | 3 tasks | 13 files |
 | Phase 07 P01 | 11min | 2 tasks | 9 files |
 | Phase 07 P02 | 12min | 2 tasks | 8 files |
+| Phase 08 P01 | 8min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -136,6 +137,9 @@ Recent decisions affecting current work:
 - [Phase 07]: apiClient Content-Type default before spread: allows binary upload override without breaking JSON callers
 - [Phase 07]: externalText prop on ChatInput for transcript injection from parent (voice transcription)
 - [Phase 07]: Base64->Uint8Array conversion in useVoiceInput: expo-file-system reads base64, Worker expects raw binary
+- [Phase 08]: Migration tests in db.rs module (not separate file) for access to embedded MIGRATIONS constant
+- [Phase 08]: Rust UUID backfill as safety net after SQL randomblob-based backfill in migration
+- [Phase 08]: Removed Kysely createTable calls -- Diesel migrations now manage all schema
 
 ### Pending Todos
 
@@ -149,6 +153,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-06T10:27:56.753Z
-Stopped at: Completed 07-02-PLAN.md
-Resume file: None
+Last session: 2026-04-06T12:44:00Z
+Stopped at: Completed 08-01-PLAN.md
+Resume file: .planning/phases/08-desktop-sync-integration/08-02-PLAN.md

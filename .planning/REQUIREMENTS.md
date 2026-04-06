@@ -81,7 +81,7 @@
 
 ### Desktop Sync Integration
 
-- [ ] **DSYNC-01**: Desktop SQLite schema migrated to include UUID sync identifiers
+- [x] **DSYNC-01**: Desktop SQLite schema migrated to include UUID sync identifiers
 - [ ] **DSYNC-02**: Desktop app gains push/pull sync engine using shared TypeScript package
 - [ ] **DSYNC-03**: Books imported on desktop sync to mobile and vice versa
 - [ ] **DSYNC-04**: Reading progress syncs bidirectionally between desktop and mobile
@@ -173,7 +173,7 @@
 | CONV-02 | Phase 6 | Complete |
 | CONV-03 | Phase 6 | Complete |
 | CONV-04 | Phase 6 | Complete |
-| DSYNC-01 | Phase 8 | Pending |
+| DSYNC-01 | Phase 8 | Complete |
 | DSYNC-02 | Phase 8 | Pending |
 | DSYNC-03 | Phase 8 | Pending |
 | DSYNC-04 | Phase 8 | Pending |
