@@ -61,7 +61,7 @@
 - [ ] **RAG-05**: Relevant chunks retrieved via semantic vector search
 - [ ] **RAG-06**: Retrieved chunks sent to Worker LLM endpoint for answer generation
 - [ ] **RAG-07**: Embedding model downloads on first use with progress indicator
-- [ ] **RAG-08**: Server-side embedding fallback available for bulk book imports
+- [x] **RAG-08**: Server-side embedding fallback available for bulk book imports
 
 ### Audio
 
@@ -162,7 +162,7 @@
 | RAG-05 | Phase 6 | Pending |
 | RAG-06 | Phase 6 | Pending |
 | RAG-07 | Phase 6 | Pending |
-| RAG-08 | Phase 6 | Pending |
+| RAG-08 | Phase 6 | Complete |
 | AUD-01 | Phase 7 | Pending |
 | AUD-02 | Phase 7 | Pending |
 | AUD-03 | Phase 7 | Pending |
