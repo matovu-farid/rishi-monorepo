@@ -58,6 +58,25 @@ expo.execSync(`
 `)
 expo.execSync("INSERT OR IGNORE INTO sync_meta (id, last_sync_version) VALUES ('default', 0)")
 
+// ─── Highlights table ──────────────────────────────────────────────────────────
+expo.execSync(`
+  CREATE TABLE IF NOT EXISTS highlights (
+    id TEXT PRIMARY KEY NOT NULL,
+    book_id TEXT NOT NULL,
+    user_id TEXT,
+    cfi_range TEXT NOT NULL,
+    text TEXT NOT NULL,
+    color TEXT NOT NULL DEFAULT 'yellow',
+    note TEXT,
+    chapter TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    sync_version INTEGER DEFAULT 0,
+    is_dirty INTEGER DEFAULT 1,
+    is_deleted INTEGER DEFAULT 0
+  );
+`)
+
 // ─── Drizzle instance ─────────────────────────────────────────────────────────
 export const db = drizzle(expo, { schema })
 export type AppDb = typeof db
