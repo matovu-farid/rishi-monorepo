@@ -39,9 +39,9 @@ export async function apiClient(
   const response = await fetch(url, {
     ...options,
     headers: {
+      'Content-Type': 'application/json',
       ...options.headers,
       'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
     },
   })
 
@@ -57,9 +57,9 @@ export async function apiClient(
     return fetch(url, {
       ...options,
       headers: {
+        'Content-Type': 'application/json',
         ...options.headers,
         'Authorization': `Bearer ${newToken}`,
-        'Content-Type': 'application/json',
       },
     })
   }

@@ -22,6 +22,7 @@ import { isBookEmbedded } from '@/lib/rag/vector-store'
 import { embedBook } from '@/lib/rag/pipeline'
 import { useEmbeddingModel } from '@/hooks/useEmbeddingModel'
 import { useRAGQuery } from '@/hooks/useRAGQuery'
+import { useVoiceInput } from '@/hooks/useVoiceInput'
 import { ChatMessage } from '@/components/ChatMessage'
 import { ChatInput } from '@/components/ChatInput'
 import { ModelDownloadCard } from '@/components/ModelDownloadCard'
@@ -57,6 +58,21 @@ export default function BookChatScreen() {
 
   // RAG query
   const { askQuestion, isLoading: isQuerying } = useRAGQuery(bookId!)
+
+  // Voice input
+  const voice = useVoiceInput()
+
+  const [voiceText, setVoiceText] = useState<string | null>(null)
+
+  const handleMicPress = useCallback(async () => {
+    if (voice.isRecording) {
+      const transcript = await voice.stopAndTranscribe()
+      if (transcript) setVoiceText(transcript)
+    } else {
+      setVoiceText(null)
+      await voice.startRecording()
+    }
+  }, [voice])
 
   // Load book
   useEffect(() => {
@@ -269,6 +285,12 @@ export default function BookChatScreen() {
               onSend={handleSend}
               isLoading={isQuerying}
               disabled={chatDisabled}
+              onMicPress={handleMicPress}
+              isRecording={voice.isRecording}
+              isTranscribing={voice.isTranscribing}
+              voiceError={voice.error}
+              permissionDenied={voice.permissionDenied}
+              externalText={voiceText}
             />
           </>
         )}

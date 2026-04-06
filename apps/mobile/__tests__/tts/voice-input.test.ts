@@ -123,6 +123,8 @@ describe('useVoiceInput', () => {
     const transcript = await hook.stopAndTranscribe()
 
     expect(transcript).toBeNull()
-    expect(hook.error).toBe('Could not transcribe audio. Try speaking again.')
+    // Re-read hook state after async mutation (mock useState stores are updated in place)
+    const updated = getHook()
+    expect(updated.error).toBe('Could not transcribe audio. Try speaking again.')
   })
 })
