@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-stopped_at: Completed 08-02-PLAN.md
-last_updated: "2026-04-06T12:58:08.089Z"
+status: complete
+stopped_at: Completed 08-03-PLAN.md
+last_updated: "2026-04-06T13:37:11.589Z"
 progress:
   total_phases: 8
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 24
-  completed_plans: 23
+  completed_plans: 24
 ---
 
 # Project State
@@ -69,6 +69,7 @@ Plan: 3 of 3
 | Phase 07 P02 | 12min | 2 tasks | 8 files |
 | Phase 08 P01 | 8min | 2 tasks | 7 files |
 | Phase 08 P02 | 5min | 2 tasks | 7 files |
+| Phase 08 P03 | 8min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -143,6 +144,9 @@ Recent decisions affecting current work:
 - [Phase 08]: Removed Kysely createTable calls -- Diesel migrations now manage all schema
 - [Phase 08]: DOM lib added to shared tsconfig for fetch/console types (both consumers have DOM)
 - [Phase 08]: vi.hoisted pattern for Kysely mock functions in vitest (factory hoisting requirement)
+- [Phase 08]: Web Crypto API crypto.subtle.digest for SHA-256 file hashing (no extra dependency)
+- [Phase 08]: Highlight persistence keyed by book sync_id (UUID) for cross-device sync compatibility
+- [Phase 08]: SyncStatusIndicator wired into __root.tsx sidebar footer (TanStack Router layout pattern)
 
 ### Pending Todos
 
@@ -156,6 +160,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-06T12:58:08.074Z
-Stopped at: Completed 08-02-PLAN.md
+Last session: 2026-04-06T13:37:11.582Z
+Stopped at: Completed 08-03-PLAN.md
 Resume file: None
