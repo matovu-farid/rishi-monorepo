@@ -42,8 +42,8 @@ Users can read their books and interact with AI on their phone with the same exp
 - ✓ Text chunking and embedding for RAG (on-device preferred, server fallback) — Phase 6 complete
 - ✓ Vector search for semantic retrieval on mobile — Phase 6 complete
 - ✓ AI Q&A about book content (RAG pipeline) — Phase 6 complete
-- [ ] Text-to-speech playback with queue, caching, and controls
-- [ ] Speech input / voice interaction
+- ✓ Text-to-speech playback with queue, caching, and controls — Phase 7 complete
+- ✓ Speech input / voice interaction — Phase 7 complete
 - [ ] Mobile auth flow (Clerk React Native SDK)
 - [ ] JWT-authenticated API calls to Cloudflare Worker
 - ✓ Highlights and annotations with cross-device sync — Phase 5 complete
@@ -88,4 +88,4 @@ Cloud sync is a new capability — the desktop app currently stores everything l
 | Desktop sync integration | Research found desktop changes required for bidirectional sync | In scope as late phase — mobile standalone first |
 
 ---
-*Last updated: 2026-04-06 after Phase 6 completion*
+*Last updated: 2026-04-06 after Phase 7 completion*
