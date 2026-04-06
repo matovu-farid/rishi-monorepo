@@ -188,10 +188,10 @@ Plans:
   1. Opening chat for a synced book triggers file download before embedding
   2. RAG queries return relevant context for synced books (not empty results)
   3. When on-device embedding model is not downloaded, server-side fallback auto-triggers
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 09-01: TBD
+- [ ] 09-01-PLAN.md — Wire server embedding fallback into pipeline and fix chat screen synced-book loading
 
 ## Progress
 
@@ -208,7 +208,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
 | 6. On-Device RAG & AI Conversations | 5/5 | Complete   | 2026-04-06 |
 | 7. Audio (TTS & STT) | 0/2 | Not started | - |
 | 8. Desktop Sync Integration | 3/3 | Complete   | 2026-04-06 |
-| 9. Synced-Book Data Path Fixes | 0/? | Not started | - |
+| 9. Synced-Book Data Path Fixes | 0/1 | Not started | - |
 
 ## Coverage
 
