@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test-desktop:
+    name: Desktop (lint + test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/main
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Test
+        run: bun run test -- --run
+
+  check-rust:
+    name: Rust (check + clippy)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/main/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/main/src-tauri
+
+      - name: Cargo check
+        run: cargo check
+
+      - name: Cargo clippy
+        run: cargo clippy -- -D warnings
+
+  lint-web:
+    name: Web (lint + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Build
+        run: bun run build
+
+  lint-mobile:
+    name: Mobile (lint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Lint
+        run: bun run lint
+
+  typecheck-worker:
+    name: Worker (typecheck)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install shared package dependencies
+        run: cd ../../packages/shared && bun install
+
+      - name: Typecheck
+        run: bunx tsc --noEmit
