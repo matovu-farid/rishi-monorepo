@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 06-02-PLAN.md
-last_updated: "2026-04-06T03:24:25.478Z"
+stopped_at: Completed 06-03-PLAN.md
+last_updated: "2026-04-06T03:30:33.518Z"
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 19
-  completed_plans: 17
+  completed_plans: 18
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-04-05)
 ## Current Position
 
 Phase: 06 (on-device-rag-ai-conversations) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 
 ## Performance Metrics
 
@@ -63,6 +63,7 @@ Plan: 3 of 5
 | Phase 06 P04 | 3min | 1 tasks | 4 files |
 | Phase 06 P01 | 7min | 3 tasks | 7 files |
 | Phase 06 P02 | 11min | 2 tasks | 8 files |
+| Phase 06 P03 | 3min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -121,6 +122,8 @@ Recent decisions affecting current work:
 - [Phase 06]: Messages use append-only merge: never updated during sync, only new ones inserted
 - [Phase 06]: Pull messages via user conversation IDs (messages lack userId column)
 - [Phase 06]: Jest+ts-jest with schema/drizzle-orm mocks for mobile unit testing
+- [Phase 06]: Singleton forward function pattern: useEmbeddingModel hook registers forward fn via setEmbeddingForward so pipeline can embed outside React context
+- [Phase 06]: Batch size 10 with 50ms delay between batches to manage mobile memory pressure
 
 ### Pending Todos
 
@@ -134,6 +137,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-06T03:24:25.475Z
-Stopped at: Completed 06-02-PLAN.md
+Last session: 2026-04-06T03:30:33.512Z
+Stopped at: Completed 06-03-PLAN.md
 Resume file: None

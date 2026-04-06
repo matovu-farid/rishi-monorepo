@@ -55,12 +55,12 @@
 ### On-Device RAG
 
 - [x] **RAG-01**: Books are chunked into text segments after import
-- [ ] **RAG-02**: Text chunks are embedded on-device using all-MiniLM-L6-v2 via ExecuTorch
+- [x] **RAG-02**: Text chunks are embedded on-device using all-MiniLM-L6-v2 via ExecuTorch
 - [x] **RAG-03**: Embeddings stored in expo-sqlite with sqlite-vec extension
 - [ ] **RAG-04**: User can ask natural language questions about a book
 - [ ] **RAG-05**: Relevant chunks retrieved via semantic vector search
 - [ ] **RAG-06**: Retrieved chunks sent to Worker LLM endpoint for answer generation
-- [ ] **RAG-07**: Embedding model downloads on first use with progress indicator
+- [x] **RAG-07**: Embedding model downloads on first use with progress indicator
 - [x] **RAG-08**: Server-side embedding fallback available for bulk book imports
 
 ### Audio
@@ -156,12 +156,12 @@
 | HIGH-06 | Phase 5 | Complete |
 | HIGH-07 | Phase 5 | Complete |
 | RAG-01 | Phase 6 | Complete |
-| RAG-02 | Phase 6 | Pending |
+| RAG-02 | Phase 6 | Complete |
 | RAG-03 | Phase 6 | Complete |
 | RAG-04 | Phase 6 | Pending |
 | RAG-05 | Phase 6 | Pending |
 | RAG-06 | Phase 6 | Pending |
-| RAG-07 | Phase 6 | Pending |
+| RAG-07 | Phase 6 | Complete |
 | RAG-08 | Phase 6 | Complete |
 | AUD-01 | Phase 7 | Pending |
 | AUD-02 | Phase 7 | Pending |
