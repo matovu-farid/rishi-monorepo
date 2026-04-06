@@ -7,7 +7,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./schema": "./src/schema.ts",
-    "./sync-types": "./src/sync-types.ts"
+    "./sync-types": "./src/sync-types.ts",
+    "./sync-adapter": "./src/sync-adapter.ts",
+    "./sync-engine": "./src/sync-engine.ts"
   },
   "peerDependencies": {
     "drizzle-orm": "^0.44.0"
