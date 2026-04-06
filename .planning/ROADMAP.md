@@ -152,11 +152,11 @@ Plans:
   3. TTS reads sequentially through book content (not just the current page)
   4. User can ask a question by voice and receive an AI answer
   5. Voice input is transcribed via the Worker Deepgram STT endpoint
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 07-01: TBD
-- [ ] 07-02: TBD
+- [ ] 07-01-PLAN.md -- TTS queue service, expo-audio player, useTTSPlayer hook, TTSControls floating bar, reader toolbar integration
+- [ ] 07-02-PLAN.md -- Worker Deepgram STT endpoint, useVoiceInput hook, VoiceMicButton component, ChatInput voice integration
 
 ### Phase 8: Desktop Sync Integration
 **Goal**: Books, reading progress, highlights, and conversations sync bidirectionally between the desktop Tauri app and mobile.
@@ -189,7 +189,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8
 | 4. Sync Infrastructure | 3/3 | Complete   | 2026-04-05 |
 | 5. Reading Progress & Highlights | 0/3 | Not started | - |
 | 6. On-Device RAG & AI Conversations | 5/5 | Complete   | 2026-04-06 |
-| 7. Audio (TTS & STT) | 0/? | Not started | - |
+| 7. Audio (TTS & STT) | 0/2 | Not started | - |
 | 8. Desktop Sync Integration | 0/? | Not started | - |
 
 ## Coverage
