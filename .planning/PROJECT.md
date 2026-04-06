@@ -57,6 +57,12 @@ Users can read their books and interact with AI on their phone with the same exp
 - ✓ Desktop file hashing and R2 upload on book import — Phase 8 complete
 - ✓ Synced-book R2 download on chat open (getBookForReading) — Phase 9 complete
 - ✓ Server-side embedding fallback when on-device model unavailable — Phase 9 complete
+- ✓ Desktop multi-color highlights UI (yellow, green, blue, pink) with notes and navigation — Phase 10 complete
+- ✓ Desktop reader settings (font size, font family) with persistence — Phase 10 complete
+- ✓ Desktop voice input for AI chat via MediaRecorder + server transcription — Phase 10 complete
+- ✓ Desktop RAG chat with source chunk references — Phase 10 complete
+- ✓ Server embedding fallback integrated into desktop process_epub — Phase 10 complete
+- ✓ Write-triggered sync (2s debounce) on desktop — Phase 10 complete
 
 ### Out of Scope
 
@@ -95,4 +101,4 @@ Cloud sync is a new capability — the desktop app currently stores everything l
 | Desktop sync integration | Research found desktop changes required for bidirectional sync | Phase 8 complete — UUID migration, shared sync engine, file sync, highlight persistence |
 
 ---
-*Last updated: 2026-04-06 after Phase 9 completion — gap closure for synced-book data path bugs*
+*Last updated: 2026-04-06 after Phase 10 completion — desktop feature parity achieved*
