@@ -21,6 +21,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 7: Audio (TTS & STT)** - Text-to-speech playback and speech-to-text voice input
 - [x] **Phase 8: Desktop Sync Integration** - Bidirectional sync between desktop and mobile apps (completed 2026-04-06)
 - [ ] **Phase 9: Synced-Book Data Path Fixes** - Gap closure: fix synced-book RAG/TTS pipeline and server embedding fallback
+- [ ] **Phase 10: Desktop Feature Parity** - Add missing mobile features to desktop: highlights UI, reader settings, voice input, embedding fallback, source refs, write-triggered sync
+- [ ] **Phase 11: Mobile Feature Parity** - Add missing desktop features to mobile: realtime voice chat, AI guardrails, sync status indicator, Sentry error tracking
 
 ## Phase Details
 
@@ -196,7 +198,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -209,6 +211,8 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
 | 7. Audio (TTS & STT) | 0/2 | Not started | - |
 | 8. Desktop Sync Integration | 3/3 | Complete   | 2026-04-06 |
 | 9. Synced-Book Data Path Fixes | 0/1 | Not started | - |
+| 10. Desktop Feature Parity | 0/3 | Not started | - |
+| 11. Mobile Feature Parity | 0/0 | Not started | - |
 
 ## Coverage
 
@@ -228,6 +232,41 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
 | Desktop Sync | DSYNC-01 through DSYNC-05 | Phase 8 | 5 |
 
 **Total: 55/55 v1 requirements mapped. No orphans. 1 requirement reassigned to gap closure phase.**
+
+### Phase 10: Desktop Feature Parity
+**Goal**: Desktop app gains all user-facing features that mobile already has — highlights management UI with multiple colors/notes/navigation, reader settings (font size, font family), voice input/transcription for chat, server embedding fallback for RAG, source chunk references in AI chat, and write-triggered sync.
+**Depends on**: Phase 9
+**Requirements**: PARITY-D01 through PARITY-D06
+**Risk**: Medium -- desktop uses different UI framework (React + shadcn) and Rust backend; some features need Tauri IPC additions
+**Success Criteria** (what must be TRUE):
+  1. User can create highlights in multiple colors (yellow, green, blue, pink) on desktop
+  2. User can add and edit notes on highlights, view all highlights in a list, and navigate to a highlight
+  3. User can adjust font size and toggle font family (serif/sans-serif) in the EPUB reader
+  4. User can use voice input to ask questions in AI chat on desktop
+  5. When on-device embedding fails, server-side embedding fallback triggers automatically
+  6. AI chat responses include clickable source chunk references linking to book passages
+  7. Local changes trigger sync within 2 seconds (write-triggered sync)
+**Plans**: 3 plans
+
+Plans:
+- [ ] 10-01-PLAN.md -- Foundation types, highlight-storage extensions, embed-fallback, write-triggered sync, Wave 0 tests
+- [ ] 10-02-PLAN.md -- Highlights UI (multi-color selection, panel, notes), reader settings (font size, font family), epub.tsx integration
+- [ ] 10-03-PLAN.md -- Chat panel with RAG + source references, voice input, process_epub embed fallback integration
+
+### Phase 11: Mobile Feature Parity
+**Goal**: Mobile app gains all user-facing features that desktop already has — OpenAI Realtime voice chat for live AI conversations, AI guardrails/tripwire system, sync status indicator UI, and Sentry error tracking.
+**Depends on**: Phase 10
+**Requirements**: PARITY-M01 through PARITY-M04
+**Risk**: High -- OpenAI Realtime API on React Native needs WebSocket handling; Sentry RN SDK integration with Expo
+**Success Criteria** (what must be TRUE):
+  1. User can have live voice conversations with AI about their book (OpenAI Realtime API)
+  2. AI responses are guarded against off-topic content with tripwire classification
+  3. User can see sync status (synced, syncing, offline, failed) with last sync time in the app
+  4. Crashes and errors are reported to Sentry with session tracking
+**Plans**: 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 11 to break down)
 
 ---
 *Roadmap created: 2026-04-05*
