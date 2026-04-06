@@ -373,7 +373,6 @@ function ReaderContent({ book }: { book: Book }) {
         initialAnnotations={initialAnnotations}
         onLocationChange={handleLocationChange}
         onSingleTap={handleTap}
-        onSelected={handleSelected}
         onPressAnnotation={handlePressAnnotation}
       />
 
