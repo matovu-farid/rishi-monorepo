@@ -2,7 +2,6 @@ import { appDataDir } from "@tauri-apps/api/path";
 import Database from "@tauri-apps/plugin-sql";
 import { ColumnType, Generated, Insertable, Kysely, Selectable } from "kysely";
 import { TauriSqliteDialect } from "kysely-dialect-tauri";
-import { sql } from "kysely";
 
 export interface DB {
   chunk_data: {
@@ -27,6 +26,65 @@ export interface DB {
     version: number;
     created_at: ColumnType<Date, string | undefined, never>;
     updated_at: ColumnType<Date, string | undefined, never>;
+    // Sync columns
+    sync_id: string | null;
+    format: string;
+    current_cfi: string | null;
+    current_page: number | null;
+    file_hash: string | null;
+    file_r2_key: string | null;
+    cover_r2_key: string | null;
+    user_id: string | null;
+    sync_version: number;
+    is_dirty: number; // 0 or 1
+    is_deleted: number; // 0 or 1
+  };
+
+  highlights: {
+    id: string;
+    book_id: string; // sync_id of the book (NOT integer id)
+    user_id: string | null;
+    cfi_range: string;
+    text: string;
+    color: string;
+    note: string | null;
+    chapter: string | null;
+    created_at: number;
+    updated_at: number;
+    sync_version: number;
+    is_dirty: number;
+    is_deleted: number;
+  };
+
+  conversations: {
+    id: string;
+    book_id: string; // sync_id of the book
+    user_id: string | null;
+    title: string;
+    created_at: number;
+    updated_at: number;
+    sync_version: number;
+    is_dirty: number;
+    is_deleted: number;
+  };
+
+  messages: {
+    id: string;
+    conversation_id: string;
+    role: string;
+    content: string;
+    source_chunks: string | null;
+    created_at: number;
+    updated_at: number;
+    sync_version: number;
+    is_dirty: number;
+    is_deleted: number;
+  };
+
+  sync_meta: {
+    id: string;
+    last_sync_version: number;
+    last_sync_at: number | null;
   };
 }
 
@@ -40,46 +98,14 @@ export const db = new Kysely<DB>({
     },
   }),
 });
-await db.schema
-  .createTable("chunk_data")
-  .ifNotExists()
-  .addColumn("id", "integer", (cb) => cb.primaryKey())
-  .addColumn("bookId", "integer")
-  .addColumn("pageNumber", "integer")
-  .addColumn("data", "text")
-  .addColumn("created_at", "timestamp", (col) =>
-    col.defaultTo(sql`CURRENT_TIMESTAMP`)
-  )
-  .addColumn("updated_at", "timestamp", (col) =>
-    col.defaultTo(sql`CURRENT_TIMESTAMP`)
-  )
-  .execute();
 
-await db.schema
-  .createTable("books")
-  .ifNotExists()
-  .addColumn("id", "integer", (col) => col.primaryKey())
-  .addColumn("kind", "text")
-  .addColumn("cover", "blob")
-  .addColumn("title", "text")
-  .addColumn("author", "text")
-  .addColumn("publisher", "text")
-  .addColumn("filepath", "text")
-  .addColumn("location", "text")
-  .addColumn("cover_kind", "text")
-  .addColumn("version", "integer")
-  .addColumn("created_at", "timestamp", (col) =>
-    col.defaultTo(sql`CURRENT_TIMESTAMP`)
-  )
-  .addColumn("updated_at", "timestamp", (col) =>
-    col.defaultTo(sql`CURRENT_TIMESTAMP`)
-  )
-  // unique filepath
-  .addUniqueConstraint("filepath", ["filepath"])
-  .execute();
 export type PageData = DB["chunk_data"];
 export type PageDataInsertable = Insertable<PageData>;
 export type Book = Selectable<DB["books"]>;
 export type BookInsertable = Insertable<DB["books"]>;
 export type ChunkInsertable = Insertable<DB["chunk_data"]>;
 export type BookData = Book & { id: string };
+export type HighlightRow = DB["highlights"];
+export type ConversationRow = DB["conversations"];
+export type MessageRow = DB["messages"];
+export type SyncMetaRow = DB["sync_meta"];
