@@ -24,6 +24,8 @@ const MAPPING = {
   'list.bullet': 'list',
   'paintpalette.fill': 'palette',
   'trash': 'delete',
+  'bookmark.fill': 'bookmark',
+  'pencil.line': 'edit',
 } as IconMapping;
 
 /**
