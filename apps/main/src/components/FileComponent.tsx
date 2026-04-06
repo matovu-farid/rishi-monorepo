@@ -15,6 +15,8 @@ import {
   saveBook,
 } from "@/generated";
 import { copyBookToAppData } from "@/modules/books";
+import { hashBookFile, uploadBookFile } from "@/modules/file-sync";
+import { db } from "@/modules/kysley";
 import { useTauriDragDrop } from "./hooks/use-tauri-drag-drop";
 import { motion, AnimatePresence } from "framer-motion";
 import { atom, useSetAtom } from "jotai";
@@ -155,6 +157,23 @@ function FileDrop(): React.JSX.Element {
           cover: bookData.cover,
         },
       });
+
+      // Hash + R2 upload (non-blocking for UX failures, but awaited for data integrity)
+      try {
+        const fileHash = await hashBookFile(epubPath);
+        const { r2Key } = await uploadBookFile(epubPath, fileHash, 'epub');
+        await db.updateTable('books')
+          .set({
+            file_hash: fileHash,
+            file_r2_key: r2Key,
+            is_dirty: 1,
+          })
+          .where('id', '=', book.id)
+          .execute();
+      } catch (err) {
+        console.warn('[file-sync] Failed to hash/upload epub file, will retry on next sync:', err);
+      }
+
       return book;
     },
 
@@ -194,6 +213,23 @@ function FileDrop(): React.JSX.Element {
           cover: bookData.cover,
         },
       });
+
+      // Hash + R2 upload (non-blocking for UX failures, but awaited for data integrity)
+      try {
+        const fileHash = await hashBookFile(pdfPath);
+        const { r2Key } = await uploadBookFile(pdfPath, fileHash, 'pdf');
+        await db.updateTable('books')
+          .set({
+            file_hash: fileHash,
+            file_r2_key: r2Key,
+            is_dirty: 1,
+          })
+          .where('id', '=', book.id)
+          .execute();
+      } catch (err) {
+        console.warn('[file-sync] Failed to hash/upload pdf file, will retry on next sync:', err);
+      }
+
       return book;
     },
 
