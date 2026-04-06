@@ -302,6 +302,40 @@ app.post("/api/embed", requireWorkerAuth, async (c) => {
   return c.json({ embeddings });
 });
 
+// ─── POST /api/audio/transcribe — Deepgram STT proxy ──────────────────────────
+app.post("/api/audio/transcribe", requireWorkerAuth, async (c) => {
+  const contentType = c.req.header("Content-Type") || "audio/webm";
+  const audioData = await c.req.arrayBuffer();
+
+  if (audioData.byteLength === 0) {
+    return c.json({ error: "Empty audio data" }, 400);
+  }
+
+  const dgResponse = await fetch(
+    "https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true&language=en",
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Token ${c.env.DEEPGRAM_KEY}`,
+        "Content-Type": contentType,
+      },
+      body: audioData,
+    }
+  );
+
+  if (!dgResponse.ok) {
+    const errorText = await dgResponse.text();
+    console.error("Deepgram error:", dgResponse.status, errorText);
+    return c.json({ error: "Transcription failed" }, 502);
+  }
+
+  const result = await dgResponse.json() as any;
+  const transcript =
+    result?.results?.channels?.[0]?.alternatives?.[0]?.transcript || "";
+
+  return c.json({ transcript });
+});
+
 export default Sentry.withSentry((env: any) => {
   const { id: versionId } = env.CF_VERSION_METADATA;
   return {
