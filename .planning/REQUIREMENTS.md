@@ -44,11 +44,11 @@
 
 ### Reading Progress & Highlights
 
-- [ ] **HIGH-01**: User can create text highlights in EPUB books
-- [ ] **HIGH-02**: User can add notes to highlights
-- [ ] **HIGH-03**: User can view list of all highlights for a book
-- [ ] **HIGH-04**: User can delete highlights
-- [ ] **HIGH-05**: Reading progress syncs across devices (ePubCFI for EPUB, page for PDF)
+- [x] **HIGH-01**: User can create text highlights in EPUB books
+- [x] **HIGH-02**: User can add notes to highlights
+- [x] **HIGH-03**: User can view list of all highlights for a book
+- [x] **HIGH-04**: User can delete highlights
+- [x] **HIGH-05**: Reading progress syncs across devices (ePubCFI for EPUB, page for PDF)
 - [ ] **HIGH-06**: Highlights sync across devices with union merge (no highlight lost)
 - [ ] **HIGH-07**: Annotations sync across devices with LWW per field
 
@@ -148,11 +148,11 @@
 | SYNC-05 | Phase 4 | Complete |
 | SYNC-06 | Phase 4 | Complete |
 | SYNC-07 | Phase 4 | Complete |
-| HIGH-01 | Phase 5 | Pending |
-| HIGH-02 | Phase 5 | Pending |
-| HIGH-03 | Phase 5 | Pending |
-| HIGH-04 | Phase 5 | Pending |
-| HIGH-05 | Phase 5 | Pending |
+| HIGH-01 | Phase 5 | Complete |
+| HIGH-02 | Phase 5 | Complete |
+| HIGH-03 | Phase 5 | Complete |
+| HIGH-04 | Phase 5 | Complete |
+| HIGH-05 | Phase 5 | Complete |
 | HIGH-06 | Phase 5 | Pending |
 | HIGH-07 | Phase 5 | Pending |
 | RAG-01 | Phase 6 | Pending |

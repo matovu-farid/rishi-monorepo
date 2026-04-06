@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Phase 05 UI-SPEC approved
-last_updated: "2026-04-05T23:48:37.179Z"
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-04-06T01:29:34.093Z"
 progress:
   total_phases: 8
   completed_phases: 4
-  total_plans: 10
-  completed_plans: 10
+  total_plans: 13
+  completed_plans: 11
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-05)
 
 **Core value:** Users can read their books and interact with AI on their phone with the same experience they get on desktop, with everything synced between devices.
-**Current focus:** Phase 04 complete — ready for Phase 05
+**Current focus:** Phase 05 — reading-progress-highlights
 
 ## Current Position
 
-Phase: 04 (sync-infrastructure) — COMPLETE
-Plan: 3 of 3 (all complete)
+Phase: 05 (reading-progress-highlights) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Plan: 3 of 3 (all complete)
 | Phase 04 P01 | 15min | 3 tasks | 16 files |
 | Phase 04 P02 | 4min | 2 tasks | 11 files |
 | Phase 04 P03 | 3min | 2 tasks | 5 files |
+| Phase 05 P01 | 3min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -97,6 +98,7 @@ Recent decisions affecting current work:
 - [Phase 04]: isSyncing mutex prevents concurrent push/pull cycles
 - [Phase 04]: Fire-and-forget upload: import returns immediately, hash+upload runs in background
 - [Phase 04]: getBookForReading: async wrapper with on-demand R2 download for remote books
+- [Phase 05]: Used expo-crypto randomUUID for highlight ID generation (consistent with file-sync.ts)
 
 ### Pending Todos
 
@@ -110,6 +112,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-05T23:48:37.175Z
-Stopped at: Phase 05 UI-SPEC approved
-Resume file: .planning/phases/05-reading-progress-highlights/05-UI-SPEC.md
+Last session: 2026-04-06T01:29:34.088Z
+Stopped at: Completed 05-01-PLAN.md
+Resume file: None
