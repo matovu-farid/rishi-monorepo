@@ -2,107 +2,91 @@
 
 ## What This Is
 
-A mobile reading app (iOS & Android) built with Expo/React Native that achieves full feature parity with the Rishi Tauri desktop app. Users can load EPUB and PDF books, read them with a polished viewer, ask AI questions about book content (RAG), listen via text-to-speech, and use speech input — all synced across desktop and mobile.
+A cross-platform reading app (iOS, Android, macOS, Windows, Linux) with full desktop-mobile feature parity. Users can load EPUB and PDF books, read them with a polished viewer, ask AI questions about book content via on-device RAG, listen via text-to-speech, have live voice conversations with AI, and sync everything across devices.
 
 ## Core Value
 
-Users can read their books and interact with AI on their phone with the same experience they get on desktop, with everything synced between devices.
+Users can read their books and interact with AI on any device with the same experience, with everything synced seamlessly between desktop and mobile.
+
+## Current State
+
+**Shipped:** v1.0 (2026-04-07)
+**Stack:** Expo/React Native (mobile), Tauri/Rust (desktop), Cloudflare Worker (API), D1/R2 (sync backend)
+**Platforms:** iOS, Android, macOS (Windows blocked by webrtc-audio-processing autotools dependency)
 
 ## Requirements
 
 ### Validated
 
-- ✓ Cloudflare Worker API gateway (auth exchange, TTS proxy, LLM completions, realtime secrets) — existing
-- ✓ Clerk authentication provider — existing
-- ✓ Upstash Redis auth state relay — existing
-- ✓ OpenAI integration (TTS, completions, realtime) via Worker — existing
-- ✓ Sentry error tracking infrastructure — existing
-- ✓ Expo project scaffolding with tab-based layout — existing
-- ✓ Mobile auth flow (Clerk Expo SDK + Worker JWT exchange) — Phase 1 complete
-- ✓ JWT persistence in secure storage across restarts — Phase 1 complete
-- ✓ Authenticated API client with 401 auto-refresh — Phase 1 complete
-- ✓ Custom Expo dev build (not Expo Go) — Phase 1 complete
-- ✓ EPUB book loading and rendering with paginated view — Phase 2 complete
-- ✓ EPUB theme switching (Light/Dark/Sepia) — Phase 2 complete
-- ✓ EPUB font size adjustment — Phase 2 complete
-- ✓ EPUB table of contents navigation — Phase 2 complete
-- ✓ Reading position persistence via ePubCFI — Phase 2 complete
-- ✓ Local file import (EPUB from device storage) — Phase 2 complete
-- ✓ Book library view with import flow — Phase 2 complete
-- ✓ PDF book loading and rendering with native renderer — Phase 3 complete
-- ✓ PDF page navigation and position persistence — Phase 3 complete
-- ✓ Unified library (EPUB + PDF) with format badges — Phase 3 complete
-- ✓ Book deletion with confirmation — Phase 3 complete
-- ✓ Import chooser supporting both EPUB and PDF — Phase 3 complete
+- ✓ Mobile auth flow (Clerk Expo SDK + Worker JWT exchange) — v1.0
+- ✓ JWT persistence in secure storage across restarts — v1.0
+- ✓ Authenticated API client with 401 auto-refresh — v1.0
+- ✓ Custom Expo dev build (not Expo Go) — v1.0
+- ✓ EPUB rendering with paginated view, themes, font controls, TOC — v1.0
+- ✓ PDF rendering with page navigation and position persistence — v1.0
+- ✓ Unified library (EPUB + PDF) with import, deletion, and metadata — v1.0
+- ✓ Offline-first cloud sync via D1/R2 with LWW conflict resolution — v1.0
+- ✓ Book file deduplication by content hash — v1.0
+- ✓ On-demand R2 download for synced books — v1.0
+- ✓ Text highlights with notes, multi-color support, and cross-device sync — v1.0
+- ✓ Reading progress sync across devices (ePubCFI/page number) — v1.0
+- ✓ On-device RAG: ExecuTorch embeddings, sqlite-vec vector search — v1.0
+- ✓ AI Q&A about book content with source passage references — v1.0
+- ✓ Server-side embedding fallback when on-device model unavailable — v1.0
+- ✓ AI conversation history sync (append-only merge) — v1.0
+- ✓ TTS playback with queue, caching, and play/pause/stop controls — v1.0
+- ✓ Voice input via speech transcription (Deepgram STT) — v1.0
+- ✓ Bidirectional desktop-mobile sync with shared TypeScript engine — v1.0
+- ✓ Desktop UUID migration and highlight persistence — v1.0
+- ✓ Desktop highlights UI (multi-color, notes, navigation) — v1.0
+- ✓ Desktop reader settings (font size, font family) with persistence — v1.0
+- ✓ Desktop voice input and RAG chat with source refs — v1.0
+- ✓ Write-triggered sync (2s debounce) — v1.0
+- ✓ OpenAI Realtime voice chat on mobile (WebRTC) — v1.0
+- ✓ AI guardrails/tripwire system — v1.0
+- ✓ Sync status indicator UI — v1.0
+- ✓ Sentry error tracking on mobile — v1.0
 
 ### Active
 
-- ✓ Cloud sync for books between desktop and mobile — Phase 4 complete
-- ✓ Reading progress tracking and sync across devices — Phase 5 complete
-- ✓ Text chunking and embedding for RAG (on-device preferred, server fallback) — Phase 6 complete
-- ✓ Vector search for semantic retrieval on mobile — Phase 6 complete
-- ✓ AI Q&A about book content (RAG pipeline) — Phase 6 complete
-- ✓ Text-to-speech playback with queue, caching, and controls — Phase 7 complete
-- ✓ Speech input / voice interaction — Phase 7 complete
-- [ ] Mobile auth flow (Clerk React Native SDK)
-- [ ] JWT-authenticated API calls to Cloudflare Worker
-- ✓ Highlights and annotations with cross-device sync — Phase 5 complete
-- ✓ AI conversation history sync between desktop and mobile — Phase 6 complete
-- ✓ Local SQLite storage for books and chunk data on mobile — Phase 4 complete (Drizzle ORM)
-- ✓ Offline reading capability (books available without network) — Phase 4 complete
-- ✓ Desktop SQLite migration to UUID sync identifiers — Phase 8 complete
-- ✓ Shared TypeScript sync engine (desktop + mobile) — Phase 8 complete
-- ✓ Bidirectional book/progress/highlight sync between desktop and mobile — Phase 8 complete
-- ✓ Desktop epub.js highlight persistence to SQLite — Phase 8 complete
-- ✓ Desktop file hashing and R2 upload on book import — Phase 8 complete
-- ✓ Synced-book R2 download on chat open (getBookForReading) — Phase 9 complete
-- ✓ Server-side embedding fallback when on-device model unavailable — Phase 9 complete
-- ✓ Desktop multi-color highlights UI (yellow, green, blue, pink) with notes and navigation — Phase 10 complete
-- ✓ Desktop reader settings (font size, font family) with persistence — Phase 10 complete
-- ✓ Desktop voice input for AI chat via MediaRecorder + server transcription — Phase 10 complete
-- ✓ Desktop RAG chat with source chunk references — Phase 10 complete
-- ✓ Server embedding fallback integrated into desktop process_epub — Phase 10 complete
-- ✓ Write-triggered sync (2s debounce) on desktop — Phase 10 complete
-- ✓ OpenAI Realtime voice chat on mobile (WebRTC via react-native-webrtc) — Phase 11 complete
-- ✓ AI guardrails/tripwire system on mobile (server-side classification) — Phase 11 complete
-- ✓ Sync status indicator UI (synced/syncing/offline/failed with last sync time) — Phase 11 complete
-- ✓ Sentry error tracking with session tracking on mobile — Phase 11 complete
+(None — fresh for next milestone)
 
 ### Out of Scope
 
-- Marketing website or landing page changes
-- Push notifications — not in desktop parity scope
+- PDF thumbnail navigation — descoped from v1, candidate for v2
+- Push notifications — not in current scope
 - Monetization or payment features
 - Social/sharing features
+- Book store / purchasing
+- OPDS catalog support
 
 ## Context
 
-The Rishi monorepo already has four apps: a Tauri desktop app (the primary product), a Next.js web app (auth landing page), a Cloudflare Worker (API gateway), and a skeleton Expo mobile app with placeholder screens.
+Shipped v1.0 across 11 phases and 31 plans in 3 days. The monorepo has four active apps: Tauri desktop (`apps/main`), Expo mobile (`apps/mobile`), Next.js web (`apps/web`), and Cloudflare Worker (`workers/worker`). Shared sync schema lives in `packages/shared`.
 
-The desktop app's core features live in Rust: EPUB/PDF parsing, local embedding via `embed_anything`, HNSW vector search, and SQLite via Diesel. These Rust capabilities don't exist on mobile, so the mobile app needs either React Native equivalents or server-side processing via the Worker.
+Desktop Rust backend handles EPUB/PDF parsing, local embeddings via `embed_anything`, HNSW vector search, and SQLite via Diesel. Mobile uses React Native equivalents (ExecuTorch, sqlite-vec) with server fallback.
 
-The existing Expo app at `apps/mobile/` uses Expo Router ~6 with tab-based navigation. Whether to build on it or re-scaffold depends on research into the current setup's viability.
-
-Auth on desktop uses a browser redirect flow (Tauri → web app → Clerk → deep link back). Mobile will likely use Clerk's React Native SDK directly, which is simpler.
-
-Cloud sync is a new capability — the desktop app currently stores everything locally. This will require new Worker endpoints and a sync protocol for books, reading progress, highlights, and AI history.
+Windows builds are currently blocked by `webrtc-audio-processing-sys` requiring autotools (documented in `.planning/`).
 
 ## Constraints
 
-- **Tech stack**: Must use Expo/React Native (already in monorepo); must integrate with existing Cloudflare Worker
-- **Auth provider**: Must use Clerk (existing infrastructure)
-- **API gateway**: All AI/LLM calls must go through the Cloudflare Worker (never direct from client)
-- **On-device preference**: Prefer on-device processing for embeddings and vector search if feasible on mobile; fall back to server-side if research shows it's impractical
-- **Monorepo**: Must live in `apps/mobile/` within the existing monorepo structure
+- **Tech stack**: Expo/React Native (mobile), Tauri/Rust (desktop), Cloudflare Worker (API)
+- **Auth provider**: Clerk (existing infrastructure)
+- **API gateway**: All AI/LLM calls go through Cloudflare Worker (never direct from client)
+- **On-device preference**: On-device processing for embeddings/vector search with server fallback
+- **Monorepo**: Mobile at `apps/mobile/`, desktop at `apps/main/`, shared at `packages/shared/`
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| On-device vs server-side processing | User prefers on-device; research confirms feasible via react-native-executorch + sqlite-vec | On-device with server fallback for bulk |
-| Build on existing Expo app vs fresh start | Existing scaffold is solid (Expo 54, RN 0.81.5, NativeWind, New Architecture) | Build on existing |
-| Sync architecture | Full cross-device sync needed for books, progress, highlights, AI history | D1 + R2 backend, LWW sync, expo-sqlite + Drizzle on mobile |
-| Desktop sync integration | Research found desktop changes required for bidirectional sync | Phase 8 complete — UUID migration, shared sync engine, file sync, highlight persistence |
+| On-device embeddings with server fallback | User prefers on-device; ExecuTorch + sqlite-vec feasible | ✓ Good — works on iOS/Android, fallback covers model-not-downloaded |
+| Build on existing Expo scaffold | Expo 54, RN 0.81.5, NativeWind, New Architecture already solid | ✓ Good — no re-scaffold needed |
+| D1 + R2 sync with LWW | Offline-first with simple conflict resolution | ✓ Good — works across desktop and mobile |
+| Desktop sync as late phase | Mobile standalone first, desktop integration Phase 8 | ✓ Good — allowed focused mobile development |
+| Shared TypeScript sync engine | Same push/pull logic for desktop and mobile | ✓ Good — reduced duplication |
+| WebRTC for mobile realtime voice | @openai/agents has no RN support; raw WebRTC works | ✓ Good — direct control over connection lifecycle |
+| Fail-open AI guardrails | Server-side classification, errors don't block user | ✓ Good — safety without degraded UX |
 
 ---
-*Last updated: 2026-04-07 after Phase 11 completion — mobile feature parity achieved (voice chat, guardrails, sync status, Sentry)*
+*Last updated: 2026-04-07 after v1.0 milestone*
