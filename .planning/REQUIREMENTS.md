@@ -37,17 +37,17 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PDFT-01 | — | Pending |
-| PDFT-02 | — | Pending |
-| PDFT-03 | — | Pending |
-| PDFT-04 | — | Pending |
-| PDFT-05 | — | Pending |
+| PDFT-01 | Phase 12 | Pending |
+| PDFT-02 | Phase 12 | Pending |
+| PDFT-03 | Phase 12 | Pending |
+| PDFT-04 | Phase 12 | Pending |
+| PDFT-05 | Phase 12 | Pending |
 
 **Coverage:**
 - v1.1 requirements: 5 total
-- Mapped to phases: 0
-- Unmapped: 5 ⚠️
+- Mapped to phases: 5
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-07*
-*Last updated: 2026-04-07 after v1.1 milestone definition*
+*Last updated: 2026-04-07 after v1.1 roadmap creation*

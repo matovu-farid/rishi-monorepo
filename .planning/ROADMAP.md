@@ -3,12 +3,12 @@
 ## Milestones
 
 - ✅ **v1.0 Rishi Mobile App** — Phases 1-11 (shipped 2026-04-07)
-- 🔧 **v1.0 Gap Closure** — Phases 12-13 (audit fixes)
+- 🚧 **v1.1 PDF Thumbnail Navigation** — Phase 12 (in progress)
 
 ## Phases
 
 <details>
-<summary>✅ v1.0 Rishi Mobile App (Phases 1-11) — SHIPPED 2026-04-07</summary>
+<summary>v1.0 Rishi Mobile App (Phases 1-11) — SHIPPED 2026-04-07</summary>
 
 - [x] Phase 1: Foundation & Auth (2/2 plans) — completed 2026-04-05
 - [x] Phase 2: EPUB Reader (3/3 plans) — completed 2026-04-05
@@ -24,44 +24,44 @@
 
 Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 
+**v1.0 Gap Closure (superseded):**
+- Phase 12 (API Contract Mismatches) and Phase 13 (PDF Thumbnails) were planned as v1.0 gap closure but never executed. Phase 13 scope is now covered by v1.1. Phase 12 (API fixes) deferred.
+
 </details>
 
-### v1.0 Gap Closure (Phases 12-13)
+### v1.1 PDF Thumbnail Navigation (In Progress)
 
-### Phase 12: Fix API Contract Mismatches
-**Goal:** Align client-side API calls with Worker response formats so desktop chat, mobile realtime voice, and guardrails all function correctly at runtime.
-**Requirements:** PARITY-D04, PARITY-M01, PARITY-M02
-**Gap Closure:** Closes 3 integration gaps + 2 broken E2E flows from audit
-**Plans:** 1 plan
+**Milestone Goal:** Users can visually browse and jump between PDF pages using a thumbnail sidebar.
+
+- [ ] **Phase 12: PDF Thumbnail Sidebar** - Thumbnail navigation for quick page jumping in PDF reader
+
+## Phase Details
+
+### Phase 12: PDF Thumbnail Sidebar
+**Goal**: Users can visually browse and navigate PDF pages through a thumbnail sidebar
+**Depends on**: v1.0 complete (Phase 11)
+**Requirements**: PDFT-01, PDFT-02, PDFT-03, PDFT-04, PDFT-05
+**Success Criteria** (what must be TRUE):
+  1. User can open and close a thumbnail sidebar while reading a PDF without losing their reading position
+  2. User sees page preview images for every page in the document within the sidebar
+  3. User can identify which page they are currently reading by its visual highlight in the sidebar
+  4. User can tap any thumbnail to instantly navigate to that page
+  5. User experiences no perceptible lag or freeze when opening the sidebar on a 100+ page PDF
+**Plans**: TBD
 
 Plans:
-- [ ] 12-01-PLAN.md — Fix desktop chat body/response, Worker client_secrets JSON shape, mobile guardrails parsing
-
-### Phase 13: PDF Page Navigation & Thumbnails
-**Goal:** Implement PDF page number navigation and thumbnail strip so users can browse PDFs efficiently.
-**Requirements:** READ-06
-**Gap Closure:** Closes 1 unsatisfied requirement from audit
-
-- [ ] Phase 13: PDF Page Navigation & Thumbnails (0/0 plans) — pending
+- [ ] 12-01: TBD
 
 ## Progress
 
+**Execution Order:**
+Phases execute in numeric order.
+
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 1. Foundation & Auth | v1.0 | 2/2 | Complete | 2026-04-05 |
-| 2. EPUB Reader | v1.0 | 3/3 | Complete | 2026-04-05 |
-| 3. PDF Reader & File Management | v1.0 | 2/2 | Complete | 2026-04-05 |
-| 4. Sync Infrastructure | v1.0 | 3/3 | Complete | 2026-04-05 |
-| 5. Reading Progress & Highlights | v1.0 | 4/4 | Complete | 2026-04-05 |
-| 6. On-Device RAG & AI Conversations | v1.0 | 5/5 | Complete | 2026-04-06 |
-| 7. Audio (TTS & STT) | v1.0 | 2/2 | Complete | 2026-04-06 |
-| 8. Desktop Sync Integration | v1.0 | 3/3 | Complete | 2026-04-06 |
-| 9. Synced-Book Data Path Fixes | v1.0 | 1/1 | Complete | 2026-04-06 |
-| 10. Desktop Feature Parity | v1.0 | 3/3 | Complete | 2026-04-06 |
-| 11. Mobile Feature Parity | v1.0 | 3/3 | Complete | 2026-04-07 |
-| 12. Fix API Contract Mismatches | v1.0-fix | 0/1 | Planned | — |
-| 13. PDF Page Navigation & Thumbnails | v1.0-fix | 0/0 | Pending | — |
+| 1-11 | v1.0 | 31/31 | Complete | 2026-04-07 |
+| 12. PDF Thumbnail Sidebar | v1.1 | 0/? | Not started | - |
 
 ---
 *Roadmap created: 2026-04-05*
-*Last updated: 2026-04-07 after phase 12 planning*
+*Last updated: 2026-04-07 after v1.1 roadmap creation*
