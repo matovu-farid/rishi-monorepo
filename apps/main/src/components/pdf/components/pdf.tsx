@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { IconButton } from "@components/ui/IconButton";
 import { ThemeType } from "@/themes/common";
-import { Loader2, Menu as MenuIcon } from "lucide-react";
+import { Loader2, Menu as MenuIcon, LayoutGrid } from "lucide-react";
 import { Document, Outline, pdfjs } from "react-pdf";
 import type { DocumentInitParameters } from "pdfjs-dist/types/src/display/api";
 import "../subscriptions/bus.ts";
@@ -17,8 +17,13 @@ import {
   pageCountAtom,
   resetParaphStateAtom,
   setPageNumberAtom,
+  thumbnailSidebarOpenAtom,
+  pdfDocumentProxyAtom,
+  bookNavigationStateAtom,
+  BookNavigationState,
 } from "@components/pdf/atoms/paragraph-atoms";
-import { useAtomValue, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { ThumbnailSidebar } from "./thumbnail-sidebar";
 import TTSControls from "@/components/TTSControls";
 import {
   Sheet,
@@ -57,6 +62,9 @@ export function PdfView({
 }): React.JSX.Element {
   const [theme] = useState<ThemeType>(ThemeType.White);
   const [tocOpen, setTocOpen] = useState(false);
+  const [thumbOpen, setThumbOpen] = useAtom(thumbnailSidebarOpenAtom);
+  const setPdfDocProxy = useSetAtom(pdfDocumentProxyAtom);
+  const setBookNavState = useSetAtom(bookNavigationStateAtom);
   useAtomValue(eventBusLogsAtom);
 
   const setPageNumber = useSetAtom(setPageNumberAtom);
@@ -72,6 +80,8 @@ export function PdfView({
   useEffect(() => {
     return () => {
       resetParaphState();
+      setThumbOpen(false);
+      setPdfDocProxy(null);
     };
   }, []);
 
@@ -134,6 +144,7 @@ export function PdfView({
 
   function onDocumentLoadSuccess(pdf: PDFDocumentProxy): void {
     setPageCount(pdf.numPages);
+    setPdfDocProxy(pdf);
   }
 
   const pageWidth = isDualPage ? dualPageWidth : pdfWidth;
@@ -159,6 +170,22 @@ export function PdfView({
       location: itemPageNumber.toString(),
     });
   }
+
+  function onThumbnailNavigate(pageNumber: number) {
+    // Reset navigation state to Idle so setPageNumber is not a no-op
+    // (setPageNumberAtom skips if BookNavigationState is Navigating)
+    setBookNavState(BookNavigationState.Idle);
+    virtualizer.scrollToIndex(pageNumber - 1, {
+      align: "start",
+      behavior: "smooth",
+    });
+    setPageNumber(pageNumber);
+    updateBookLocationMutation.mutate({
+      bookId: book.id.toString(),
+      location: pageNumber.toString(),
+    });
+  }
+
   return (
     <div
       ref={scrollContainerRef}
@@ -193,6 +220,16 @@ export function PdfView({
             aria-label="Open table of contents"
           >
             <MenuIcon size={20} />
+          </IconButton>
+          <IconButton
+            onClick={() => setThumbOpen(true)}
+            className={cn(
+              "hover:bg-black/10 dark:hover:bg-white/10 border-none",
+              getTextColor()
+            )}
+            aria-label="Open page thumbnails"
+          >
+            <LayoutGrid size={20} />
           </IconButton>
 
           <div className="flex items-center gap-2 bg-white">
@@ -334,6 +371,37 @@ export function PdfView({
             >
               <Outline onItemClick={onItemClick} />
             </Document>
+          </div>
+        </SheetContent>
+      </Sheet>
+      {/* Thumbnail Sidebar */}
+      <Sheet open={thumbOpen} onOpenChange={setThumbOpen}>
+        <SheetContent
+          side="left"
+          className={cn(
+            "w-[200px] sm:w-[240px] p-0",
+            theme === ThemeType.Dark
+              ? "bg-gray-900 border-gray-700"
+              : "bg-white border-gray-200"
+          )}
+        >
+          <SheetHeader
+            className={cn(
+              "p-4 border-b sticky top-0 z-10",
+              theme === ThemeType.Dark
+                ? "border-gray-700 bg-gray-900"
+                : "border-gray-200 bg-white"
+            )}
+          >
+            <SheetTitle className={getTextColor()}>
+              Pages
+            </SheetTitle>
+          </SheetHeader>
+          <div className="h-[calc(100vh-73px)]">
+            <ThumbnailSidebar
+              onClose={() => setThumbOpen(false)}
+              onNavigate={onThumbnailNavigate}
+            />
           </div>
         </SheetContent>
       </Sheet>
