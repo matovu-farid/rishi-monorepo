@@ -4,6 +4,7 @@ import { atomWithImmer } from "jotai-immer";
 import { atom } from "jotai";
 
 import { TextItem, TextMarkedContent, type TextContent } from "react-pdf";
+import { PDFDocumentProxy } from "pdfjs-dist";
 
 import { freezeAtom } from "jotai/utils";
 import { customStore } from "@/stores/jotai";
@@ -255,3 +256,9 @@ isPdfRenderedAtom.debugLabel = "isPdfRenderedAtom";
 pdfsRenderedAtom.debugLabel = "PdfsRenderedAtom";
 booksAtom.debugLabel = "booksAtom";
 bookNavigationStateAtom.debugLabel = "bookNavigationStateAtom";
+
+export const thumbnailSidebarOpenAtom = atom(false);
+thumbnailSidebarOpenAtom.debugLabel = "thumbnailSidebarOpenAtom";
+
+export const pdfDocumentProxyAtom = atom<PDFDocumentProxy | null>(null);
+pdfDocumentProxyAtom.debugLabel = "pdfDocumentProxyAtom";
