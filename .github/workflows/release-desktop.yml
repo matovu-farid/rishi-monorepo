@@ -63,6 +63,9 @@ jobs:
           security find-identity -v -p codesigning build.keychain
           rm certificate.p12
 
+      - name: Install tauri-typegen
+        run: cargo install tauri-typegen --version 0.3.2
+
       - name: Install frontend dependencies
         run: cd apps/main && bun install
 
