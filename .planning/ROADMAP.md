@@ -32,8 +32,10 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 **Goal:** Align client-side API calls with Worker response formats so desktop chat, mobile realtime voice, and guardrails all function correctly at runtime.
 **Requirements:** PARITY-D04, PARITY-M01, PARITY-M02
 **Gap Closure:** Closes 3 integration gaps + 2 broken E2E flows from audit
+**Plans:** 1 plan
 
-- [ ] Phase 12: Fix API Contract Mismatches (0/0 plans) — pending
+Plans:
+- [ ] 12-01-PLAN.md — Fix desktop chat body/response, Worker client_secrets JSON shape, mobile guardrails parsing
 
 ### Phase 13: PDF Page Navigation & Thumbnails
 **Goal:** Implement PDF page number navigation and thumbnail strip so users can browse PDFs efficiently.
@@ -57,9 +59,9 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 | 9. Synced-Book Data Path Fixes | v1.0 | 1/1 | Complete | 2026-04-06 |
 | 10. Desktop Feature Parity | v1.0 | 3/3 | Complete | 2026-04-06 |
 | 11. Mobile Feature Parity | v1.0 | 3/3 | Complete | 2026-04-07 |
-| 12. Fix API Contract Mismatches | v1.0-fix | 0/0 | Pending | — |
+| 12. Fix API Contract Mismatches | v1.0-fix | 0/1 | Planned | — |
 | 13. PDF Page Navigation & Thumbnails | v1.0-fix | 0/0 | Pending | — |
 
 ---
 *Roadmap created: 2026-04-05*
-*Last updated: 2026-04-07 after gap closure phases added*
+*Last updated: 2026-04-07 after phase 12 planning*
