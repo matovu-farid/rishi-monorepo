@@ -1,5 +1,15 @@
 # Milestones
 
+## v1.1 PDF Thumbnail Navigation (Shipped: 2026-04-07)
+
+**Phases completed:** 1 phases, 2 plans, 0 tasks
+
+**Key accomplishments:**
+
+- (none recorded)
+
+---
+
 ## v1.0 Rishi Mobile App (Shipped: 2026-04-07)
 
 **Phases completed:** 11 phases, 31 plans, 0 tasks

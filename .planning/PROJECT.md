@@ -52,15 +52,6 @@ Users can read their books and interact with AI on any device with the same expe
 
 (None — fresh for next milestone)
 
-## Current Milestone: v1.1 Gap Closure
-
-**Goal:** Close the PDF thumbnail navigation gap descoped from v1.0.
-
-**Completed:** Phase 12 — PDF thumbnail sidebar (desktop) and thumbnail modal (mobile)
-
-**Target features:**
-- ✓ PDF thumbnail navigation
-
 ### Out of Scope
 - Push notifications — not in current scope
 - Monetization or payment features
@@ -70,11 +61,13 @@ Users can read their books and interact with AI on any device with the same expe
 
 ## Context
 
-Shipped v1.0 across 11 phases and 31 plans in 3 days. The monorepo has four active apps: Tauri desktop (`apps/main`), Expo mobile (`apps/mobile`), Next.js web (`apps/web`), and Cloudflare Worker (`workers/worker`). Shared sync schema lives in `packages/shared`.
+Shipped v1.0 across 11 phases and 31 plans in 3 days. v1.1 added PDF thumbnail navigation (1 phase, 2 plans) on the same day. The monorepo has four active apps: Tauri desktop (`apps/main`), Expo mobile (`apps/mobile`), Next.js web (`apps/web`), and Cloudflare Worker (`workers/worker`). Shared sync schema lives in `packages/shared`.
 
 Desktop Rust backend handles EPUB/PDF parsing, local embeddings via `embed_anything`, HNSW vector search, and SQLite via Diesel. Mobile uses React Native equivalents (ExecuTorch, sqlite-vec) with server fallback.
 
 Windows builds are currently blocked by `webrtc-audio-processing-sys` requiring autotools (documented in `.planning/`).
+
+No known gaps remain from v1.0 or v1.1.
 
 ## Constraints
 
@@ -95,6 +88,8 @@ Windows builds are currently blocked by `webrtc-audio-processing-sys` requiring 
 | Shared TypeScript sync engine | Same push/pull logic for desktop and mobile | ✓ Good — reduced duplication |
 | WebRTC for mobile realtime voice | @openai/agents has no RN support; raw WebRTC works | ✓ Good — direct control over connection lifecycle |
 | Fail-open AI guardrails | Server-side classification, errors don't block user | ✓ Good — safety without degraded UX |
+| react-pdf Thumbnail + useVirtualizer for desktop thumbnails | Reuse existing libraries, avoid new dependencies | ✓ Good — virtualized, no double PDF load |
+| react-native-pdf-thumbnail for mobile | Only viable Expo-compatible native thumbnail library | ✓ Good — lazy generation, small footprint |
 
 ---
-*Last updated: 2026-04-07 after v1.1 Phase 12 completion*
+*Last updated: 2026-04-07 after v1.1 milestone completion*

@@ -48,12 +48,48 @@
 
 ---
 
+## Milestone: v1.1 — PDF Thumbnail Navigation
+
+**Shipped:** 2026-04-07
+**Phases:** 1 | **Plans:** 2
+
+### What Was Built
+- Desktop virtualized thumbnail sidebar using react-pdf Thumbnail + @tanstack/react-virtual in a Sheet panel
+- Mobile thumbnail modal with native react-native-pdf-thumbnail generation in a FlatList grid
+- BookNavigationState race condition fix for reliable thumbnail click navigation
+
+### What Worked
+- Single-phase milestone kept scope tight — shipped same day as planned
+- Parallel plan execution (desktop + mobile) was efficient — no cross-plan dependencies
+- Research phase identified the BookNavigationState race condition before it became a bug
+- Plan checker caught Wave 0 test gap and race condition — both fixed before execution
+
+### What Was Inefficient
+- Old v1.0 gap closure phase directories (12, 13) lingered and confused init tools — had to manually clean up
+- Phase 12 directory was named `fix-api-contract-mismatches` from old scope — renaming mid-flight caused tool confusion
+
+### Patterns Established
+- `pdfDocumentProxyAtom` pattern: capture PDFDocumentProxy in atom to avoid double-loading PDF in separate Document components
+- Native thumbnail generation with `PdfThumbnail.generate` per visible FlatList item — lazy, avoids upfront batch generation
+
+### Key Lessons
+1. Clean up stale phase directories before starting new milestones — init tools resolve by directory name
+2. Single-feature milestones are fast and clean — no coordination overhead
+3. Plan checker verification loop adds real value — caught 2 blockers that would have caused execution failures
+
+### Cost Observations
+- 2 plans executed in ~8 minutes total (parallel)
+- Research + planning + verification took longer than execution
+- Single session, same day as v1.0 completion
+
+---
+
 ## Cross-Milestone Trends
 
-| Metric | v1.0 |
-|--------|------|
-| Phases | 11 |
-| Plans | 31 |
-| Avg plan duration | ~8 min |
-| Audit gaps found | 2 req + 2 integration |
-| Gaps closed | All except READ-06 (descoped) |
+| Metric | v1.0 | v1.1 |
+|--------|------|------|
+| Phases | 11 | 1 |
+| Plans | 31 | 2 |
+| Avg plan duration | ~8 min | ~4 min |
+| Audit gaps found | 2 req + 2 integration | 0 |
+| Gaps closed | All except READ-06 | READ-06 (PDF thumbnails) |
