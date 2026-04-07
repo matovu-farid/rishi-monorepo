@@ -34,7 +34,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 
 **Milestone Goal:** Users can visually browse and jump between PDF pages using a thumbnail sidebar.
 
-- [x] **Phase 12: PDF Thumbnail Sidebar** - Thumbnail navigation for quick page jumping in PDF reader (completed 2026-04-07)
+- [ ] **Phase 12: PDF Thumbnail Sidebar** - Thumbnail navigation for quick page jumping in PDF reader
 
 ## Phase Details
 
@@ -48,10 +48,11 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
   3. User can identify which page they are currently reading by its visual highlight in the sidebar
   4. User can tap any thumbnail to instantly navigate to that page
   5. User experiences no perceptible lag or freeze when opening the sidebar on a 100+ page PDF
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 12-01: TBD
+- [ ] 12-01-PLAN.md — Desktop thumbnail sidebar with virtualized react-pdf Thumbnails
+- [ ] 12-02-PLAN.md — Mobile thumbnail modal with native react-native-pdf-thumbnail
 
 ## Progress
 
@@ -61,8 +62,8 @@ Phases execute in numeric order.
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1-11 | v1.0 | 31/31 | Complete | 2026-04-07 |
-| 12. PDF Thumbnail Sidebar | v1.1 | Complete    | 2026-04-07 | - |
+| 12. PDF Thumbnail Sidebar | v1.1 | 0/2 | In Progress | - |
 
 ---
 *Roadmap created: 2026-04-05*
-*Last updated: 2026-04-07 after Phase 12 (API Contract Mismatches) completion*
+*Last updated: 2026-04-07 after Phase 12 planning*
