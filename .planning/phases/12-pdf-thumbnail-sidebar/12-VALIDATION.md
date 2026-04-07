@@ -2,8 +2,8 @@
 phase: 12
 slug: pdf-thumbnail-sidebar
 status: draft
-nyquist_compliant: false
-wave_0_complete: false
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-04-07
 ---
 
@@ -38,20 +38,21 @@ created: 2026-04-07
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 12-01-01 | 01 | 1 | PDFT-01 | manual-only | N/A - requires PDF rendering in browser | N/A | ⬜ pending |
-| 12-01-02 | 01 | 1 | PDFT-02 | unit | `cd apps/main && npx vitest run src/components/pdf/components/thumbnail-sidebar.test.tsx -x` | ❌ W0 | ⬜ pending |
-| 12-01-03 | 01 | 1 | PDFT-03 | unit | `cd apps/main && npx vitest run src/components/pdf/components/thumbnail-sidebar.test.tsx -x` | ❌ W0 | ⬜ pending |
-| 12-01-04 | 01 | 1 | PDFT-04 | unit | `cd apps/main && npx vitest run src/components/pdf/components/thumbnail-sidebar.test.tsx -x` | ❌ W0 | ⬜ pending |
-| 12-01-05 | 01 | 1 | PDFT-05 | unit | `cd apps/main && npx vitest run src/components/pdf/hooks/useThumbnailVirtualization.test.tsx -x` | ❌ W0 | ⬜ pending |
+| 12-01-00 | 01 | 1 | PDFT-02,03,04,05 | unit (stubs) | `cd apps/main && npx vitest run src/components/pdf/components/thumbnail-sidebar.test.tsx -x` | W0 (Task 0 creates) | pending |
+| 12-01-01 | 01 | 1 | PDFT-01 | manual-only | N/A - requires PDF rendering in browser | N/A | pending |
+| 12-01-02 | 01 | 1 | PDFT-02 | unit | `cd apps/main && npx vitest run src/components/pdf/components/thumbnail-sidebar.test.tsx -x` | W0 | pending |
+| 12-01-03 | 01 | 1 | PDFT-03 | unit | `cd apps/main && npx vitest run src/components/pdf/components/thumbnail-sidebar.test.tsx -x` | W0 | pending |
+| 12-01-04 | 01 | 1 | PDFT-04 | unit | `cd apps/main && npx vitest run src/components/pdf/components/thumbnail-sidebar.test.tsx -x` | W0 | pending |
+| 12-01-05 | 01 | 1 | PDFT-05 | unit | `cd apps/main && npx vitest run src/components/pdf/components/thumbnail-sidebar.test.tsx -x` | W0 | pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+*Status: pending / green / red / flaky*
 
 ---
 
 ## Wave 0 Requirements
 
-- [ ] `apps/main/src/components/pdf/components/thumbnail-sidebar.test.tsx` — stubs for PDFT-02, PDFT-03, PDFT-04
-- [ ] `apps/main/src/components/pdf/hooks/useThumbnailVirtualization.test.tsx` — stubs for PDFT-05
+- [x] `apps/main/src/components/pdf/components/thumbnail-sidebar.test.tsx` -- stubs for PDFT-02, PDFT-03, PDFT-04, PDFT-05 (created by 12-01-PLAN Task 0)
+- ~~`apps/main/src/components/pdf/hooks/useThumbnailVirtualization.test.tsx`~~ -- NOT NEEDED: virtualization is inlined in ThumbnailSidebar component, not a separate hook. PDFT-05 coverage redirected to `thumbnail-sidebar.test.tsx`.
 - Mobile tests are manual-only (React Native PDF rendering cannot be unit tested meaningfully)
 
 ---
@@ -67,11 +68,11 @@ created: 2026-04-07
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 15s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 15s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved (Wave 0 handled by 12-01-PLAN Task 0; PDFT-05 redirected to thumbnail-sidebar.test.tsx)
