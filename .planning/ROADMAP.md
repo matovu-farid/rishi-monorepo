@@ -34,7 +34,7 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 
 **Milestone Goal:** Users can visually browse and jump between PDF pages using a thumbnail sidebar.
 
-- [ ] **Phase 12: PDF Thumbnail Sidebar** - Thumbnail navigation for quick page jumping in PDF reader
+- [x] **Phase 12: PDF Thumbnail Sidebar** - Thumbnail navigation for quick page jumping in PDF reader (completed 2026-04-07)
 
 ## Phase Details
 
@@ -61,7 +61,7 @@ Phases execute in numeric order.
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1-11 | v1.0 | 31/31 | Complete | 2026-04-07 |
-| 12. PDF Thumbnail Sidebar | v1.1 | 0/? | Not started | - |
+| 12. PDF Thumbnail Sidebar | v1.1 | Complete    | 2026-04-07 | - |
 
 ---
 *Roadmap created: 2026-04-05*
