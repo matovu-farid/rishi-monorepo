@@ -3,6 +3,7 @@
 ## Milestones
 
 - ✅ **v1.0 Rishi Mobile App** — Phases 1-11 (shipped 2026-04-07)
+- 🔧 **v1.0 Gap Closure** — Phases 12-13 (audit fixes)
 
 ## Phases
 
@@ -25,6 +26,22 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 
 </details>
 
+### v1.0 Gap Closure (Phases 12-13)
+
+### Phase 12: Fix API Contract Mismatches
+**Goal:** Align client-side API calls with Worker response formats so desktop chat, mobile realtime voice, and guardrails all function correctly at runtime.
+**Requirements:** PARITY-D04, PARITY-M01, PARITY-M02
+**Gap Closure:** Closes 3 integration gaps + 2 broken E2E flows from audit
+
+- [ ] Phase 12: Fix API Contract Mismatches (0/0 plans) — pending
+
+### Phase 13: PDF Page Navigation & Thumbnails
+**Goal:** Implement PDF page number navigation and thumbnail strip so users can browse PDFs efficiently.
+**Requirements:** READ-06
+**Gap Closure:** Closes 1 unsatisfied requirement from audit
+
+- [ ] Phase 13: PDF Page Navigation & Thumbnails (0/0 plans) — pending
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -40,7 +57,9 @@ Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 | 9. Synced-Book Data Path Fixes | v1.0 | 1/1 | Complete | 2026-04-06 |
 | 10. Desktop Feature Parity | v1.0 | 3/3 | Complete | 2026-04-06 |
 | 11. Mobile Feature Parity | v1.0 | 3/3 | Complete | 2026-04-07 |
+| 12. Fix API Contract Mismatches | v1.0-fix | 0/0 | Pending | — |
+| 13. PDF Page Navigation & Thumbnails | v1.0-fix | 0/0 | Pending | — |
 
 ---
 *Roadmap created: 2026-04-05*
-*Last updated: 2026-04-07 after v1.0 milestone completion*
+*Last updated: 2026-04-07 after gap closure phases added*
