@@ -49,7 +49,14 @@ Users can read their books and interact with AI on any device with the same expe
 
 ### Active
 
-(None — fresh for next milestone)
+- [ ] PDF thumbnail navigation for quick page jumping
+
+## Current Milestone: v1.1 Gap Closure
+
+**Goal:** Close the PDF thumbnail navigation gap descoped from v1.0.
+
+**Target features:**
+- PDF thumbnail navigation
 
 ### Out of Scope
 
@@ -89,4 +96,4 @@ Windows builds are currently blocked by `webrtc-audio-processing-sys` requiring 
 | Fail-open AI guardrails | Server-side classification, errors don't block user | ✓ Good — safety without degraded UX |
 
 ---
-*Last updated: 2026-04-07 after v1.0 milestone*
+*Last updated: 2026-04-07 after v1.1 milestone started*
