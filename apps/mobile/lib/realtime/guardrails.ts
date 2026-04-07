@@ -26,7 +26,7 @@ export async function checkGuardrail(agentOutput: string): Promise<boolean> {
 
     if (!response.ok) return false
 
-    const text = await response.text()
+    const text = await response.json() as string
     // Parse the LLM response -- may be wrapped in markdown code fences
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (!jsonMatch) return false
