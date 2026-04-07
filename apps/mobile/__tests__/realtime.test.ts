@@ -108,11 +108,15 @@ afterAll(() => {
 import { createRealtimeSession, closeRealtimeSession } from '@/lib/realtime/session'
 
 describe('realtime session', () => {
+  let mockTrackStop: jest.Mock
+
   beforeEach(() => {
     jest.clearAllMocks()
     mockPermissionRequest.mockResolvedValue('granted')
+    mockTrackStop = jest.fn()
+    const tracks = [{ stop: mockTrackStop, kind: 'audio' }]
     mockGetUserMedia.mockResolvedValue({
-      getTracks: () => [{ stop: jest.fn(), kind: 'audio' }],
+      getTracks: () => tracks,
     })
     dcOnOpen = null
     dcOnMessage = null
@@ -246,13 +250,9 @@ describe('realtime session', () => {
   it('closes session: stops tracks and closes PC', async () => {
     await createRealtimeSession({ bookId: 'book-1' })
 
-    // Capture the mock stream tracks before closing
-    const mockStream = await mockGetUserMedia.mock.results[0].value
-    const tracks = mockStream.getTracks()
-
     closeRealtimeSession()
 
-    expect(tracks[0].stop).toHaveBeenCalled()
+    expect(mockTrackStop).toHaveBeenCalled()
     expect(mockDcClose).toHaveBeenCalled()
     expect(mockClosePC).toHaveBeenCalled()
   })
