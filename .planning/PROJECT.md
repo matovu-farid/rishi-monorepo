@@ -55,6 +55,8 @@ Users can read their books and interact with AI on any device with the same expe
 
 **Goal:** Close the PDF thumbnail navigation gap descoped from v1.0.
 
+**Completed:** Phase 12 — Fixed 3 API contract mismatches (desktop chat, mobile realtime session, mobile guardrails)
+
 **Target features:**
 - PDF thumbnail navigation
 
@@ -96,4 +98,4 @@ Windows builds are currently blocked by `webrtc-audio-processing-sys` requiring 
 | Fail-open AI guardrails | Server-side classification, errors don't block user | ✓ Good — safety without degraded UX |
 
 ---
-*Last updated: 2026-04-07 after v1.1 milestone started*
+*Last updated: 2026-04-07 after Phase 12 completion*
