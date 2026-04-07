@@ -15,6 +15,7 @@ import Pdf from 'react-native-pdf'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { getBookForReading, updateBookPage } from '@/lib/book-storage'
 import { Book } from '@/types/book'
+import { ThumbnailModal } from './thumbnail-modal'
 
 export default function PdfReaderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
@@ -25,6 +26,7 @@ export default function PdfReaderScreen() {
   const [targetPage, setTargetPage] = useState<number | null>(null)
   const [totalPages, setTotalPages] = useState(0)
   const [toolbarVisible, setToolbarVisible] = useState(false)
+  const [thumbnailModalVisible, setThumbnailModalVisible] = useState(false)
 
   const currentPageRef = useRef(1)
   const pageSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -126,6 +128,12 @@ export default function PdfReaderScreen() {
       Alert.alert('Go to Page', `Current page: ${currentPageRef.current} of ${totalPages}`)
     }
   }, [totalPages])
+
+  // Navigate to selected thumbnail page
+  const handleThumbnailSelect = useCallback((page: number) => {
+    setTargetPage(page)
+    setThumbnailModalVisible(false)
+  }, [])
 
   // Navigate to previous page
   const handlePrevPage = useCallback(() => {
@@ -248,6 +256,21 @@ export default function PdfReaderScreen() {
             }}
           >
             <TouchableOpacity
+              onPress={() => {
+                setThumbnailModalVisible(true)
+                setToolbarVisible(false)
+              }}
+              style={{
+                width: 44,
+                height: 44,
+                justifyContent: 'center',
+                alignItems: 'center',
+              }}
+            >
+              <IconSymbol name="square.grid.2x2" size={24} color="#fff" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
               onPress={handlePrevPage}
               style={{
                 width: 44,
@@ -282,6 +305,16 @@ export default function PdfReaderScreen() {
             </TouchableOpacity>
           </View>
         </SafeAreaView>
+      )}
+      {book?.filePath && (
+        <ThumbnailModal
+          visible={thumbnailModalVisible}
+          onClose={() => setThumbnailModalVisible(false)}
+          onSelectPage={handleThumbnailSelect}
+          filePath={book.filePath}
+          totalPages={totalPages}
+          currentPage={currentPage}
+        />
       )}
     </View>
   )
