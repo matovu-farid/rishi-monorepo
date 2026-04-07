@@ -50,6 +50,18 @@ jobs:
         if: matrix.platform == 'macos-latest'
         run: brew install libtool autoconf automake
 
+      - name: Install system dependencies (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: autoconf automake libtool pkg-config make
+
+      - name: Add MSYS2 to PATH (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: echo "D:\a\_temp\msys64\usr\bin" | Out-File -Append -FilePath $env:GITHUB_PATH
+
       - name: Import Apple Developer Certificate
         if: matrix.platform == 'macos-latest'
         env:
@@ -87,7 +99,6 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/main
           tagName: ${{ github.ref_name }}
