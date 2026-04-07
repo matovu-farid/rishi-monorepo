@@ -66,6 +66,9 @@ jobs:
       - name: Install tauri-typegen
         run: cargo install tauri-typegen --version 0.3.2
 
+      - name: Install shared package dependencies
+        run: cd packages/shared && bun install
+
       - name: Install frontend dependencies
         run: cd apps/main && bun install
 

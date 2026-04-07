@@ -33,6 +33,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-bun-
 
+      - name: Install shared package dependencies
+        run: cd ../../packages/shared && bun install
+
       - name: Install frontend dependencies
         run: bun install
 
