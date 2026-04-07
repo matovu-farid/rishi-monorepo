@@ -19,10 +19,10 @@ const mockDcClose = jest.fn()
 const mockDataChannel = {
   send: mockDcSend,
   close: mockDcClose,
-  set onopen(fn: () => void) { dcOnOpen = fn },
-  get onopen() { return dcOnOpen },
-  set onmessage(fn: (event: { data: string }) => void) { dcOnMessage = fn },
-  get onmessage() { return dcOnMessage },
+  addEventListener(event: string, fn: (...args: any[]) => void) {
+    if (event === 'open') dcOnOpen = fn
+    if (event === 'message') dcOnMessage = fn as (event: { data: string }) => void
+  },
 }
 
 const mockCreateDataChannel = jest.fn().mockReturnValue(mockDataChannel)
