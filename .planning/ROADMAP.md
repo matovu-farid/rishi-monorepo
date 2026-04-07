@@ -24,8 +24,9 @@
 
 Full details: [milestones/v1.0-ROADMAP.md](milestones/v1.0-ROADMAP.md)
 
-**v1.0 Gap Closure (superseded):**
-- Phase 12 (API Contract Mismatches) and Phase 13 (PDF Thumbnails) were planned as v1.0 gap closure but never executed. Phase 13 scope is now covered by v1.1. Phase 12 (API fixes) deferred.
+**v1.0 Gap Closure:**
+- Phase 12 (API Contract Mismatches): COMPLETED 2026-04-07 (1/1 plan) -- fixed desktop chat, Worker client_secrets, and mobile guardrails API contracts
+- Phase 13 (PDF Thumbnails) scope is now covered by v1.1.
 
 </details>
 
@@ -64,4 +65,4 @@ Phases execute in numeric order.
 
 ---
 *Roadmap created: 2026-04-05*
-*Last updated: 2026-04-07 after v1.1 roadmap creation*
+*Last updated: 2026-04-07 after Phase 12 (API Contract Mismatches) completion*
