@@ -98,10 +98,9 @@ export async function createRealtimeSession(
   }
 
   // i. Set up dc open handler: send session config + initial greeting
-  // Cast to EventTarget to access addEventListener (react-native-webrtc's RTCDataChannel
-  // extends event-target-shim's EventTarget but TS doesn't always resolve the method)
-  const dcEvents = dc as unknown as EventTarget
-  dcEvents.addEventListener('open', () => {
+  // react-native-webrtc's RTCDataChannel uses event-target-shim internally
+  // but TS types don't expose onopen/addEventListener — use any cast
+  ;(dc as any).onopen = () => {
     // Send session.update with tools and instructions
     dc.send(
       JSON.stringify({
@@ -132,17 +131,17 @@ export async function createRealtimeSession(
 
     // Trigger response
     dc.send(JSON.stringify({ type: 'response.create' }))
-  })
+  }
 
   // j. Set up dc message handler: parse JSON and dispatch
-  dcEvents.addEventListener('message', ((event: Event) => {
+  ;(dc as any).onmessage = (event: { data: string }) => {
     try {
-      const serverEvent: ServerEvent = JSON.parse((event as unknown as { data: string }).data)
+      const serverEvent: ServerEvent = JSON.parse(event.data)
       handleServerEvent(serverEvent, handle)
     } catch (err) {
       console.warn('[realtime] Failed to parse server event:', err)
     }
-  }) as EventListener)
+  }
 
   // k. Store and return
   activeSession = handle

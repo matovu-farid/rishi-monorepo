@@ -11,18 +11,14 @@ const mockSetLocalDescription = jest.fn().mockResolvedValue(undefined)
 const mockSetRemoteDescription = jest.fn().mockResolvedValue(undefined)
 const mockClosePC = jest.fn()
 
-let dcOnOpen: (() => void) | null = null
-let dcOnMessage: ((event: { data: string }) => void) | null = null
 const mockDcSend = jest.fn()
 const mockDcClose = jest.fn()
 
 const mockDataChannel = {
   send: mockDcSend,
   close: mockDcClose,
-  addEventListener(event: string, fn: (...args: any[]) => void) {
-    if (event === 'open') dcOnOpen = fn
-    if (event === 'message') dcOnMessage = fn as (event: { data: string }) => void
-  },
+  onopen: null as (() => void) | null,
+  onmessage: null as ((event: { data: string }) => void) | null,
 }
 
 const mockCreateDataChannel = jest.fn().mockReturnValue(mockDataChannel)
@@ -118,8 +114,8 @@ describe('realtime session', () => {
     mockGetUserMedia.mockResolvedValue({
       getTracks: () => tracks,
     })
-    dcOnOpen = null
-    dcOnMessage = null
+    mockDataChannel.onopen = null
+    mockDataChannel.onmessage = null
   })
 
   // Test 1: createRealtimeSession calls apiClient for ephemeral key
@@ -169,8 +165,8 @@ describe('realtime session', () => {
   it('sends session.update with tools on data channel open', async () => {
     await createRealtimeSession({ bookId: 'book-1' })
 
-    expect(dcOnOpen).toBeTruthy()
-    dcOnOpen!()
+    expect(mockDataChannel.onopen).toBeTruthy()
+    mockDataChannel.onopen!()
 
     const sessionUpdateCall = mockDcSend.mock.calls.find((call: unknown[]) => {
       const parsed = JSON.parse(call[0] as string)
@@ -187,7 +183,7 @@ describe('realtime session', () => {
   it('sends initial greeting and response.create on dc open', async () => {
     await createRealtimeSession({ bookId: 'book-1' })
 
-    dcOnOpen!()
+    mockDataChannel.onopen!()
 
     const calls = mockDcSend.mock.calls.map((c: unknown[]) => JSON.parse(c[0] as string))
     const greetingMsg = calls.find(
@@ -204,9 +200,9 @@ describe('realtime session', () => {
   it('handles bookContext tool call with RAG pipeline', async () => {
     await createRealtimeSession({ bookId: 'book-1' })
 
-    expect(dcOnMessage).toBeTruthy()
+    expect(mockDataChannel.onmessage).toBeTruthy()
 
-    dcOnMessage!({
+    mockDataChannel.onmessage!({
       data: JSON.stringify({
         type: 'response.function_call_arguments.done',
         name: 'bookContext',
@@ -232,7 +228,7 @@ describe('realtime session', () => {
     const onSessionEnded = jest.fn()
     await createRealtimeSession({ bookId: 'book-1', onSessionEnded })
 
-    dcOnMessage!({
+    mockDataChannel.onmessage!({
       data: JSON.stringify({
         type: 'response.function_call_arguments.done',
         name: 'endConversation',
