@@ -1,199 +1,53 @@
 # Requirements: Rishi Mobile App
 
 **Defined:** 2026-04-05
-**Core Value:** Users can read their books and interact with AI on their phone with the same experience they get on desktop, with everything synced between devices.
+**Core Value:** Users can read their books and interact with AI on any device with the same experience, with everything synced seamlessly between desktop and mobile.
 
-## v1 Requirements
+## v1.1 Requirements
 
-### Authentication
+Requirements for milestone v1.1 — closing the PDF thumbnail navigation gap from v1.0.
 
-- [x] **AUTH-01**: User can sign in via Clerk on mobile (email, social, or existing account)
-- [x] **AUTH-02**: Mobile app exchanges Clerk session token for Worker JWT via existing /api/auth/exchange endpoint
-- [x] **AUTH-03**: JWT persists in secure storage across app restarts
-- [x] **AUTH-04**: Expired JWT triggers re-authentication flow
-- [x] **AUTH-05**: Unauthenticated users are redirected to sign-in screen
+### PDF Thumbnails
 
-### Book Rendering
+- [ ] **PDFT-01**: User can open a thumbnail sidebar while reading a PDF
+- [ ] **PDFT-02**: Thumbnail sidebar shows page preview images for all pages
+- [ ] **PDFT-03**: Current page is visually highlighted in the thumbnail sidebar
+- [ ] **PDFT-04**: User can tap a thumbnail to navigate to that page
+- [ ] **PDFT-05**: Thumbnails load lazily for performance with large PDFs
 
-- [x] **READ-01**: User can open and read an EPUB file with paginated view
-- [x] **READ-02**: User can open and read a PDF file with native rendering
-- [x] **READ-03**: EPUB reader supports theme switching (light, dark, sepia)
-- [x] **READ-04**: EPUB reader supports font size adjustment
-- [x] **READ-05**: User can navigate EPUB via table of contents
-- [ ] **READ-06**: User can navigate PDF via page numbers and thumbnails
-- [x] **READ-07**: Reading position is tracked and restored on reopen (ePubCFI for EPUB, page number for PDF)
+## Future Requirements
 
-### File Management
+Deferred to future milestones.
 
-- [x] **FILE-01**: User can import EPUB files from device storage via file picker
-- [x] **FILE-02**: User can import PDF files from device storage via file picker
-- [x] **FILE-03**: Imported books are copied to app document directory
-- [x] **FILE-04**: User can view library of all imported books with metadata (title, author, cover)
-- [x] **FILE-05**: User can delete books from library
-- [x] **FILE-06**: Books are available for offline reading after import
-
-### Sync Infrastructure
-
-- [x] **SYNC-01**: Cloudflare D1 schema created for sync metadata (books, progress, highlights, conversations)
-- [x] **SYNC-02**: Cloudflare R2 configured for book file storage with hash-based deduplication
-- [x] **SYNC-03**: Worker exposes push/pull sync API endpoints authenticated by JWT
-- [x] **SYNC-04**: Mobile app syncs on foreground, on write, and periodically (every 5 min)
-- [x] **SYNC-05**: Book files upload to R2 via presigned URLs on import
-- [x] **SYNC-06**: Book files download from R2 on-demand (lazy download) with local cache
-- [x] **SYNC-07**: Sync works offline-first — all local operations succeed without network
-
-### Reading Progress & Highlights
-
-- [x] **HIGH-01**: User can create text highlights in EPUB books
-- [x] **HIGH-02**: User can add notes to highlights
-- [x] **HIGH-03**: User can view list of all highlights for a book
-- [x] **HIGH-04**: User can delete highlights
-- [x] **HIGH-05**: Reading progress syncs across devices (ePubCFI for EPUB, page for PDF)
-- [x] **HIGH-06**: Highlights sync across devices with union merge (no highlight lost)
-- [x] **HIGH-07**: Annotations sync across devices with LWW per field
-
-### On-Device RAG
-
-- [x] **RAG-01**: Books are chunked into text segments after import
-- [x] **RAG-02**: Text chunks are embedded on-device using all-MiniLM-L6-v2 via ExecuTorch
-- [x] **RAG-03**: Embeddings stored in expo-sqlite with sqlite-vec extension
-- [x] **RAG-04**: User can ask natural language questions about a book
-- [x] **RAG-05**: Relevant chunks retrieved via semantic vector search
-- [x] **RAG-06**: Retrieved chunks sent to Worker LLM endpoint for answer generation
-- [x] **RAG-07**: Embedding model downloads on first use with progress indicator
-- [x] **RAG-08**: Server-side embedding fallback available for bulk book imports
-
-### Audio
-
-- [x] **AUD-01**: User can listen to book text via TTS (Worker /api/audio/speech endpoint)
-- [x] **AUD-02**: TTS playback has play/pause/stop controls
-- [x] **AUD-03**: TTS reads sequentially through book content with queue management
-- [x] **AUD-04**: User can ask voice questions via speech input
-- [x] **AUD-05**: Voice input transcribed via Worker Deepgram STT endpoint
-- [x] **AUD-06**: Worker Deepgram STT endpoint created for transcription
-
-### AI Conversations
-
-- [x] **CONV-01**: User can have multi-turn AI conversations about a book
-- [x] **CONV-02**: Conversation history persists locally per book
-- [x] **CONV-03**: Conversation history syncs across devices (append-only)
-- [x] **CONV-04**: AI responses include source references to book passages
-
-### Desktop Sync Integration
-
-- [x] **DSYNC-01**: Desktop SQLite schema migrated to include UUID sync identifiers
-- [x] **DSYNC-02**: Desktop app gains push/pull sync engine using shared TypeScript package
-- [x] **DSYNC-03**: Books imported on desktop sync to mobile and vice versa
-- [x] **DSYNC-04**: Reading progress syncs bidirectionally between desktop and mobile
-- [x] **DSYNC-05**: Highlights and annotations sync bidirectionally
-
-### Feature Parity (Gap Closure)
-
-- [ ] **PARITY-D04**: Desktop RAG chat with source references (API contract fix)
-- [ ] **PARITY-M01**: Live voice conversations via OpenAI Realtime (session key exchange fix)
-- [ ] **PARITY-M02**: AI guardrails/tripwire (response parsing fix)
-
-## v2 Requirements
-
-### Enhanced Reading
-
-- **READ-V2-01**: PDF annotation creation (highlights, notes on PDF)
-- **READ-V2-02**: Full-text search within books
-- **READ-V2-03**: Bookmarks (separate from highlights)
-- **READ-V2-04**: Reading statistics (time spent, pages per session)
-
-### Enhanced Audio
-
-- **AUD-V2-01**: Real-time streaming STT via WebSocket to Deepgram
-- **AUD-V2-02**: Background TTS playback (continues when app is backgrounded)
-- **AUD-V2-03**: TTS voice selection
-
-### Enhanced Sync
-
-- **SYNC-V2-01**: Real-time sync notifications via WebSocket/SSE
-- **SYNC-V2-02**: Embedding vectors sync across devices (avoid re-embedding)
-- **SYNC-V2-03**: Selective sync (choose which books to download on mobile)
+- Push notifications
+- PDF thumbnail grid modal (full-screen grid for jumping to distant pages)
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Push notifications | Not in desktop parity scope |
-| Monetization / payments | Not in current scope |
-| Social / sharing features | Not in current scope |
-| Marketing website changes | Separate concern |
-| Book store / purchasing | Out of scope for v1 |
-| OPDS catalog support | Out of scope for v1 |
+| PDF annotation/markup | Not in current scope — reading-focused |
+| PDF text reflow | Complex, not part of thumbnail feature |
+| Monetization / payments | Not planned |
+| Social / sharing | Not planned |
 
 ## Traceability
 
+Which phases cover which requirements. Updated during roadmap creation.
+
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| AUTH-01 | Phase 1 | Complete |
-| AUTH-02 | Phase 1 | Complete |
-| AUTH-03 | Phase 1 | Complete |
-| AUTH-04 | Phase 1 | Complete |
-| AUTH-05 | Phase 1 | Complete |
-| READ-01 | Phase 2 | Complete |
-| READ-02 | Phase 3 | Complete |
-| READ-03 | Phase 2 | Complete |
-| READ-04 | Phase 2 | Complete |
-| READ-05 | Phase 2 | Complete |
-| READ-06 | Phase 13 | Pending |
-| READ-07 | Phase 2 | Complete |
-| FILE-01 | Phase 2 | Complete |
-| FILE-02 | Phase 3 | Complete |
-| FILE-03 | Phase 2 | Complete |
-| FILE-04 | Phase 3 | Complete |
-| FILE-05 | Phase 3 | Complete |
-| FILE-06 | Phase 2 | Complete |
-| SYNC-01 | Phase 4 | Complete |
-| SYNC-02 | Phase 4 | Complete |
-| SYNC-03 | Phase 4 | Complete |
-| SYNC-04 | Phase 4 | Complete |
-| SYNC-05 | Phase 4 | Complete |
-| SYNC-06 | Phase 4 | Complete |
-| SYNC-07 | Phase 4 | Complete |
-| HIGH-01 | Phase 5 | Complete |
-| HIGH-02 | Phase 5 | Complete |
-| HIGH-03 | Phase 5 | Complete |
-| HIGH-04 | Phase 5 | Complete |
-| HIGH-05 | Phase 5 | Complete |
-| HIGH-06 | Phase 5 | Complete |
-| HIGH-07 | Phase 5 | Complete |
-| RAG-01 | Phase 6 | Complete |
-| RAG-02 | Phase 6 | Complete |
-| RAG-03 | Phase 6 | Complete |
-| RAG-04 | Phase 6 | Complete |
-| RAG-05 | Phase 6 | Complete |
-| RAG-06 | Phase 6 | Complete |
-| RAG-07 | Phase 6 | Complete |
-| RAG-08 | Phase 9 | Complete |
-| AUD-01 | Phase 7 | Complete |
-| AUD-02 | Phase 7 | Complete |
-| AUD-03 | Phase 7 | Complete |
-| AUD-04 | Phase 7 | Complete |
-| AUD-05 | Phase 7 | Complete |
-| AUD-06 | Phase 7 | Complete |
-| CONV-01 | Phase 6 | Complete |
-| CONV-02 | Phase 6 | Complete |
-| CONV-03 | Phase 6 | Complete |
-| CONV-04 | Phase 6 | Complete |
-| DSYNC-01 | Phase 8 | Complete |
-| DSYNC-02 | Phase 8 | Complete |
-| DSYNC-03 | Phase 8 | Complete |
-| DSYNC-04 | Phase 8 | Complete |
-| DSYNC-05 | Phase 8 | Complete |
-| PARITY-D04 | Phase 12 | Pending |
-| PARITY-M01 | Phase 12 | Pending |
-| PARITY-M02 | Phase 12 | Pending |
+| PDFT-01 | — | Pending |
+| PDFT-02 | — | Pending |
+| PDFT-03 | — | Pending |
+| PDFT-04 | — | Pending |
+| PDFT-05 | — | Pending |
 
 **Coverage:**
-- v1 requirements: 54 total (51 original + 3 parity gap closure)
-- Satisfied: 51
-- Pending: 3 (READ-06, PARITY-D04, PARITY-M01, PARITY-M02)
-- Unmapped: 0
+- v1.1 requirements: 5 total
+- Mapped to phases: 0
+- Unmapped: 5 ⚠️
 
 ---
-*Requirements defined: 2026-04-05*
-*Last updated: 2026-04-07 after gap closure phase assignments*
+*Requirements defined: 2026-04-07*
+*Last updated: 2026-04-07 after v1.1 milestone definition*
