@@ -109,6 +109,184 @@ app.post("/api/auth/exchange", async (c) => {
   return c.json({ token, expiresAt: exp, user });
 });
 
+// ─── POST /api/auth/complete ────────────────────────────────────────────────
+// Desktop PKCE auth completion: looks up userId from Redis using state,
+// verifies code_verifier against stored code_challenge, issues a JWT.
+app.post("/api/auth/complete", async (c) => {
+  try {
+    const body = await c.req.json<{ state: string; code_verifier: string }>();
+    const { state, code_verifier } = body;
+
+    if (!state || !code_verifier) {
+      return c.json({ error: "Missing state or code_verifier" }, 400);
+    }
+
+    const redis = Redis.fromEnv(c.env);
+    const redisKey = `auth:state:${state}`;
+
+    // Look up auth flow data from Redis
+    const rawData = await redis.get(redisKey);
+    if (!rawData) {
+      return c.json({ error: "Auth state not found or expired" }, 404);
+    }
+
+    // Parse the stored auth flow data
+    const authData = typeof rawData === "string" ? JSON.parse(rawData) : rawData as {
+      userId: string;
+      status: string;
+      retryCount?: number;
+      createdAt?: number;
+      codeChallenge?: string;
+    };
+
+    if (!authData.userId) {
+      return c.json({ error: "Invalid auth state data" }, 400);
+    }
+
+    // If already completed, prevent replay
+    if (authData.status === "completed") {
+      return c.json({ error: "Auth state already used" }, 409);
+    }
+
+    // If another exchange is in progress, signal retry
+    if (authData.status === "exchanging") {
+      return c.json({ error: "Token exchange in progress" }, 409);
+    }
+
+    // Verify PKCE code_challenge if one was stored
+    if (authData.codeChallenge) {
+      const encoded = new TextEncoder().encode(code_verifier);
+      const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const computedChallenge = hashArray
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+
+      if (computedChallenge !== authData.codeChallenge) {
+        return c.json({ error: "PKCE verification failed" }, 403);
+      }
+    }
+
+    // Mark as exchanging to prevent concurrent attempts
+    await redis.set(redisKey, JSON.stringify({
+      ...authData,
+      status: "exchanging",
+    }), { ex: 600 });
+
+    // Fetch user from Clerk and issue JWT
+    const clerkClient = createClerkClient({ secretKey: c.env.CLERK_SECRET_KEY });
+    const clerkUser = await clerkClient.users.getUser(authData.userId);
+
+    const iat = Math.floor(Date.now() / 1000);
+    const exp = iat + 60 * 60 * 24 * 7; // 7 days
+
+    const token = await jwt.sign({ sub: authData.userId, iat, exp }, c.env.JWT_SECRET);
+
+    const user = {
+      id: clerkUser.id,
+      firstName: clerkUser.firstName,
+      lastName: clerkUser.lastName,
+      fullName: clerkUser.fullName,
+      username: clerkUser.username,
+      imageUrl: clerkUser.imageUrl,
+      hasImage: clerkUser.hasImage,
+      lastSignInAt: clerkUser.lastSignInAt,
+      externalId: clerkUser.externalId,
+    };
+
+    // Mark as completed and log success
+    await redis.set(redisKey, JSON.stringify({
+      ...authData,
+      status: "completed",
+    }), { ex: 60 }); // Short TTL after completion
+
+    await redis.lpush(`auth:log:${state}`, JSON.stringify({
+      step: "token_issued",
+      timestamp: Date.now(),
+    }));
+
+    return c.json({ token, expiresAt: exp, user });
+  } catch (error) {
+    if (error instanceof Error) {
+      return c.json({ error: "Auth completion failed: " + error.message }, 500);
+    }
+    return c.json({ error: "Auth completion failed" }, 500);
+  }
+});
+
+// ─── GET /api/auth/status/:state ────────────────────────────────────────────
+// Check auth flow status from Redis for monitoring and retry decisions.
+app.get("/api/auth/status/:state", async (c) => {
+  try {
+    const state = c.req.param("state");
+    if (!state) {
+      return c.json({ error: "Missing state parameter" }, 400);
+    }
+
+    const redis = Redis.fromEnv(c.env);
+    const rawData = await redis.get(`auth:state:${state}`);
+
+    if (!rawData) {
+      return c.json({ status: "not_found" });
+    }
+
+    const authData = typeof rawData === "string" ? JSON.parse(rawData) : rawData as {
+      userId?: string;
+      status?: string;
+      retryCount?: number;
+      createdAt?: number;
+    };
+
+    return c.json({
+      status: authData.status || "unknown",
+      retryCount: authData.retryCount || 0,
+      createdAt: authData.createdAt || null,
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      return c.json({ error: "Status check failed: " + error.message }, 500);
+    }
+    return c.json({ error: "Status check failed" }, 500);
+  }
+});
+
+// ─── POST /api/auth/revoke ──────────────────────────────────────────────────
+// Invalidate a desktop JWT by adding it to a Redis deny-list.
+// Best-effort: the desktop client calls this on sign-out.
+app.post("/api/auth/revoke", async (c) => {
+  try {
+    const authHeader = c.req.header("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    const token = authHeader.slice(7);
+
+    // Decode to get expiry so we can set an appropriate TTL on the revocation entry
+    let exp = 0;
+    try {
+      const decoded = jwt.decode(token);
+      const payload = decoded?.payload as { sub?: string; exp?: number } | undefined;
+      exp = payload?.exp || 0;
+    } catch {
+      // If we can't decode, still attempt to revoke
+    }
+
+    const redis = Redis.fromEnv(c.env);
+
+    // Store the token in a revocation list with TTL matching token expiry
+    const now = Math.floor(Date.now() / 1000);
+    const ttl = exp > now ? exp - now : 60 * 60 * 24 * 7; // Default 7 days if no expiry
+    await redis.set(`auth:revoked:${token}`, "1", { ex: ttl });
+
+    return c.json({ success: true });
+  } catch (error) {
+    if (error instanceof Error) {
+      return c.json({ error: "Revocation failed: " + error.message }, 500);
+    }
+    return c.json({ error: "Revocation failed" }, 500);
+  }
+});
+
 // ─── Protected routes ─────────────────────────────────────────────────────────
 app.get("/api/redis-test", requireWorkerAuth, async (c) => {
   const redis = Redis.fromEnv(c.env);
@@ -118,7 +296,7 @@ app.get("/api/redis-test", requireWorkerAuth, async (c) => {
 });
 
 // Backwards-compatible state route (deprecated)
-app.get("api/user/:state", async (c) => {
+app.get("api/user/:state", requireWorkerAuth, async (c) => {
   try {
     const redis = Redis.fromEnv(c.env);
     const state = c.req.param("state");
@@ -235,7 +413,7 @@ app.get("/api/realtime/client_secrets", requireWorkerAuth, async (c) => {
       expires_at: z.number(),
     });
     const parsedResponse = responseSchema.parse(response.data);
-    return c.text(parsedResponse.value);
+    return c.json({ client_secret: { value: parsedResponse.value } });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return c.json(
