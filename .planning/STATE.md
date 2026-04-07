@@ -4,11 +4,11 @@ milestone: v1.1
 milestone_name: PDF Thumbnail Navigation
 status: unknown
 stopped_at: Completed 12-01-PLAN.md
-last_updated: "2026-04-07T11:26:29.543Z"
+last_updated: "2026-04-07T11:49:28.166Z"
 progress:
-  total_phases: 2
+  total_phases: 1
   completed_phases: 0
-  total_plans: 0
+  total_plans: 2
   completed_plans: 1
 ---
 
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-07)
 
 **Core value:** Users can read their books and interact with AI on any device with the same experience, with everything synced seamlessly between desktop and mobile.
-**Current focus:** Phase 12 — Fix API Contract Mismatches
+**Current focus:** Phase 12 — PDF Thumbnail Sidebar
 
 ## Current Position
 
-Phase: 12 (Fix API Contract Mismatches) — COMPLETE
-Plan: 1 of 1 (all complete)
+Phase: 12 (PDF Thumbnail Sidebar) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -45,7 +45,7 @@ Plan: 1 of 1 (all complete)
 - New milestone, no v1.1 data yet
 
 *Updated after each plan completion*
-| Phase 12 P01 | 2min | 3 tasks | 3 files |
+| Phase 12 P01 | 4min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -55,6 +55,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 No new decisions for v1.1 yet.
 
 - [Phase 12]: Surgical fixes only -- changed minimum lines to align API contracts without refactoring
+- [Phase 12-01]: Pass PDFDocumentProxy via atom to avoid double Document loading
+- [Phase 12-01]: Reset BookNavigationState to Idle before thumbnail navigation to prevent silent no-op
 
 ### Pending Todos
 
@@ -66,6 +68,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-07T11:23:04.204Z
+Last session: 2026-04-07T11:48:40Z
 Stopped at: Completed 12-01-PLAN.md
 Resume file: None

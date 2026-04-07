@@ -9,11 +9,11 @@ Requirements for milestone v1.1 — closing the PDF thumbnail navigation gap fro
 
 ### PDF Thumbnails
 
-- [ ] **PDFT-01**: User can open a thumbnail sidebar while reading a PDF
-- [ ] **PDFT-02**: Thumbnail sidebar shows page preview images for all pages
-- [ ] **PDFT-03**: Current page is visually highlighted in the thumbnail sidebar
-- [ ] **PDFT-04**: User can tap a thumbnail to navigate to that page
-- [ ] **PDFT-05**: Thumbnails load lazily for performance with large PDFs
+- [x] **PDFT-01**: User can open a thumbnail sidebar while reading a PDF
+- [x] **PDFT-02**: Thumbnail sidebar shows page preview images for all pages
+- [x] **PDFT-03**: Current page is visually highlighted in the thumbnail sidebar
+- [x] **PDFT-04**: User can tap a thumbnail to navigate to that page
+- [x] **PDFT-05**: Thumbnails load lazily for performance with large PDFs
 
 ## Future Requirements
 
@@ -37,11 +37,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PDFT-01 | Phase 12 | Pending |
-| PDFT-02 | Phase 12 | Pending |
-| PDFT-03 | Phase 12 | Pending |
-| PDFT-04 | Phase 12 | Pending |
-| PDFT-05 | Phase 12 | Pending |
+| PDFT-01 | Phase 12 | Complete |
+| PDFT-02 | Phase 12 | Complete |
+| PDFT-03 | Phase 12 | Complete |
+| PDFT-04 | Phase 12 | Complete |
+| PDFT-05 | Phase 12 | Complete |
 
 **Coverage:**
 - v1.1 requirements: 5 total
