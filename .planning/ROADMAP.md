@@ -62,7 +62,7 @@ Phases execute in numeric order.
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1-11 | v1.0 | 31/31 | Complete | 2026-04-07 |
-| 12. PDF Thumbnail Sidebar | 2/2 | Complete   | 2026-04-07 | - |
+| 12. PDF Thumbnail Sidebar | 2/2 | Complete    | 2026-04-07 | - |
 
 ---
 *Roadmap created: 2026-04-05*
