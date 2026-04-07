@@ -10,7 +10,7 @@ Users can read their books and interact with AI on any device with the same expe
 
 ## Current State
 
-**Shipped:** v1.0 (2026-04-07)
+**Shipped:** v1.1 (2026-04-07)
 **Stack:** Expo/React Native (mobile), Tauri/Rust (desktop), Cloudflare Worker (API), D1/R2 (sync backend)
 **Platforms:** iOS, Android, macOS (Windows blocked by webrtc-audio-processing autotools dependency)
 
@@ -46,23 +46,22 @@ Users can read their books and interact with AI on any device with the same expe
 - ✓ AI guardrails/tripwire system — v1.0
 - ✓ Sync status indicator UI — v1.0
 - ✓ Sentry error tracking on mobile — v1.0
+- ✓ PDF thumbnail navigation (desktop sidebar + mobile modal) — v1.1
 
 ### Active
 
-- [ ] PDF thumbnail navigation for quick page jumping
+(None — fresh for next milestone)
 
 ## Current Milestone: v1.1 Gap Closure
 
 **Goal:** Close the PDF thumbnail navigation gap descoped from v1.0.
 
-**Completed:** Phase 12 — Fixed 3 API contract mismatches (desktop chat, mobile realtime session, mobile guardrails)
+**Completed:** Phase 12 — PDF thumbnail sidebar (desktop) and thumbnail modal (mobile)
 
 **Target features:**
-- PDF thumbnail navigation
+- ✓ PDF thumbnail navigation
 
 ### Out of Scope
-
-- PDF thumbnail navigation — descoped from v1, candidate for v2
 - Push notifications — not in current scope
 - Monetization or payment features
 - Social/sharing features
@@ -98,4 +97,4 @@ Windows builds are currently blocked by `webrtc-audio-processing-sys` requiring 
 | Fail-open AI guardrails | Server-side classification, errors don't block user | ✓ Good — safety without degraded UX |
 
 ---
-*Last updated: 2026-04-07 after Phase 12 completion*
+*Last updated: 2026-04-07 after v1.1 Phase 12 completion*
