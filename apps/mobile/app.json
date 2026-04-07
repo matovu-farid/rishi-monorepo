@@ -9,7 +9,10 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Rishi uses your microphone for live voice conversations with AI about your books."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -43,7 +46,8 @@
         }
       ],
       ["expo-sqlite", { "withSQLiteVecExtension": true }],
-      "react-native-pdf"
+      "react-native-pdf",
+      "@sentry/react-native/expo"
     ],
     "experiments": {
       "typedRoutes": true,

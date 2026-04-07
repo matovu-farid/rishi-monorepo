@@ -20,6 +20,7 @@
     "@react-navigation/elements": "^2.6.3",
     "@react-navigation/native": "^7.1.8",
     "@rishi/shared": "file:../../packages/shared",
+    "@sentry/react-native": "~7.2.0",
     "drizzle-orm": "^0.45.2",
     "expo": "~54.0.33",
     "expo-audio": "~1.1.1",

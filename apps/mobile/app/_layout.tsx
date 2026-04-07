@@ -7,6 +7,7 @@ import {
 } from '@react-navigation/native'
 import { Slot } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
+import * as Sentry from '@sentry/react-native'
 import { initExecutorch } from 'react-native-executorch'
 import { ExpoResourceFetcher } from 'react-native-executorch-expo-resource-fetcher'
 import 'react-native-reanimated'
@@ -14,6 +15,13 @@ import '../global.css'
 
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { initVectorExtension, ensureChunkTables } from '@/lib/rag/vector-store'
+
+Sentry.init({
+  dsn: process.env.EXPO_PUBLIC_SENTRY_DSN ?? '',
+  tracesSampleRate: 1.0,
+  enableAutoSessionTracking: true,
+  sessionTrackingIntervalMillis: 30000,
+})
 
 // Initialize ExecuTorch before any hook usage
 initExecutorch({ resourceFetcher: ExpoResourceFetcher })
@@ -32,7 +40,7 @@ if (!publishableKey) {
   throw new Error('EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY is not set. Add it to your .env file.')
 }
 
-export default function RootLayout() {
+function RootLayout() {
   const colorScheme = useColorScheme()
 
   return (
@@ -46,3 +54,5 @@ export default function RootLayout() {
     </ClerkProvider>
   )
 }
+
+export default Sentry.wrap(RootLayout)

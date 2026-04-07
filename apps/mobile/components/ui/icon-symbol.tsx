@@ -38,6 +38,12 @@ const MAPPING = {
   'forward.fill': 'skip-next',
   'pause.fill': 'pause',
   'play.fill': 'play-arrow',
+  'arrow.2.circlepath': 'sync',
+  'checkmark.circle.fill': 'check-circle',
+  'exclamationmark.triangle.fill': 'warning',
+  'wifi.slash': 'wifi-off',
+  'phone.fill': 'phone',
+  'waveform': 'graphic-eq',
 } as IconMapping;
 
 /**

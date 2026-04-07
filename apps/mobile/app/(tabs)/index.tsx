@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { Directory, Paths } from 'expo-file-system'
 import { IconSymbol } from '@/components/ui/icon-symbol'
+import { SyncStatusIndicator } from '@/components/SyncStatusIndicator'
 import { BookRow } from '@/components/BookRow'
 import { LibraryEmptyState } from '@/components/LibraryEmptyState'
 import { getBooks, deleteBook } from '@/lib/book-storage'
@@ -108,10 +109,11 @@ export default function LibraryScreen() {
 
   return (
     <SafeAreaView className="flex-1 bg-white dark:bg-[#151718]">
-      <View className="px-6 pt-4 pb-2">
+      <View className="px-6 pt-4 pb-2 flex-row items-center justify-between">
         <Text className="text-2xl font-semibold text-gray-900 dark:text-white">
           Library
         </Text>
+        <SyncStatusIndicator />
       </View>
       <FlatList
         data={books}
