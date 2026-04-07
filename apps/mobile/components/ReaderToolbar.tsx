@@ -1,7 +1,9 @@
 import { View, Text, TouchableOpacity } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { IconSymbol } from '@/components/ui/icon-symbol'
+import { RealtimeVoiceButton } from '@/components/RealtimeVoiceButton'
 import { ReaderTheme } from '@/types/book'
+import type { RealtimeStatus } from '@/lib/realtime/types'
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated'
 
 interface ReaderToolbarProps {
@@ -15,6 +17,8 @@ interface ReaderToolbarProps {
   onChatPress?: () => void
   onTTSPress?: () => void
   ttsActive?: boolean
+  onRealtimePress?: () => void
+  realtimeStatus?: RealtimeStatus
 }
 
 export function ReaderToolbar({
@@ -28,6 +32,8 @@ export function ReaderToolbar({
   onChatPress,
   onTTSPress,
   ttsActive,
+  onRealtimePress,
+  realtimeStatus,
 }: ReaderToolbarProps) {
   const insets = useSafeAreaInsets()
 
@@ -109,6 +115,12 @@ export function ReaderToolbar({
             >
               <IconSymbol name="speaker.wave.2.fill" size={22} color={ttsActive ? '#0a7ea4' : theme.toolbarText} />
             </TouchableOpacity>
+          )}
+          {onRealtimePress && (
+            <RealtimeVoiceButton
+              status={realtimeStatus ?? 'idle'}
+              onPress={onRealtimePress}
+            />
           )}
         </View>
       </View>

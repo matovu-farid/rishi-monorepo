@@ -6,12 +6,15 @@ import { useFileSystem } from '@epubjs-react-native/expo-file-system'
 import BottomSheet from '@gorhom/bottom-sheet'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { getBookForReading, updateBookCfi } from '@/lib/book-storage'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
 import { insertHighlight, getHighlightsByBookId, updateHighlight, deleteHighlight } from '@/lib/highlight-storage'
 import { ReaderToolbar } from '@/components/ReaderToolbar'
 import { TTSControls } from '@/components/TTSControls'
 import { useTTSPlayer } from '@/hooks/useTTSPlayer'
+import { useRealtimeChat } from '@/hooks/useRealtimeChat'
+import { GuardrailWarning } from '@/components/GuardrailWarning'
 import { TocSheet } from '@/components/TocSheet'
 import { AppearanceSheet } from '@/components/AppearanceSheet'
 import { HighlightsSheet } from '@/components/HighlightsSheet'
@@ -68,6 +71,7 @@ export default function ReaderScreen() {
 
 function ReaderContent({ book }: { book: Book }) {
   const router = useRouter()
+  const insets = useSafeAreaInsets()
   const {
     toc,
     goToLocation,
@@ -97,6 +101,9 @@ function ReaderContent({ book }: { book: Book }) {
 
   // TTS playback
   const tts = useTTSPlayer(book.id, book.filePath, book.format as 'epub' | 'pdf')
+
+  // Realtime voice chat
+  const { status: realtimeStatus, showGuardrailWarning, toggle: toggleRealtime, isActive: realtimeActive } = useRealtimeChat(book.id)
 
   const theme = READER_THEMES[settings.themeName]
 
@@ -166,17 +173,17 @@ function ReaderContent({ book }: { book: Book }) {
     setToolbarVisible((prev) => !prev)
   }, [popoverVisible])
 
-  // Auto-hide toolbar after 3 seconds (disabled when TTS is active)
+  // Auto-hide toolbar after 3 seconds (disabled when TTS or realtime voice is active)
   const toolbarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    if (toolbarVisible && !tts.isActive) {
+    if (toolbarVisible && !tts.isActive && !realtimeActive) {
       if (toolbarTimerRef.current) clearTimeout(toolbarTimerRef.current)
       toolbarTimerRef.current = setTimeout(() => setToolbarVisible(false), 3000)
     }
     return () => {
       if (toolbarTimerRef.current) clearTimeout(toolbarTimerRef.current)
     }
-  }, [toolbarVisible, tts.isActive])
+  }, [toolbarVisible, tts.isActive, realtimeActive])
 
   // Theme change
   const handleThemeChange = useCallback(
@@ -401,7 +408,13 @@ function ReaderContent({ book }: { book: Book }) {
         onChatPress={() => router.push(`/chat/${book.id}`)}
         onTTSPress={() => tts.isActive ? tts.stop() : tts.play()}
         ttsActive={tts.isActive}
+        onRealtimePress={toggleRealtime}
+        realtimeStatus={realtimeStatus}
       />
+
+      <View style={{ position: 'absolute', top: insets.top + 48 + 8, left: 16, right: 16, zIndex: 11 }}>
+        <GuardrailWarning visible={showGuardrailWarning} />
+      </View>
 
       <TocSheet
         sheetRef={tocSheetRef}
