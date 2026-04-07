@@ -3,6 +3,7 @@ import { books, highlights, conversations, messages, syncMeta } from '@rishi/sha
 import { eq } from 'drizzle-orm'
 import { apiClient } from '@/lib/api'
 import type { PushResponse, PullResponse } from '@rishi/shared/sync-types'
+import { setSyncStatus } from './status'
 
 let isSyncing = false
 
@@ -13,13 +14,18 @@ let isSyncing = false
 export async function sync(): Promise<void> {
   if (isSyncing) return
   isSyncing = true
+  setSyncStatus('syncing')
+  let syncError = false
   try {
     await push()
     await pull()
   } catch (error) {
+    syncError = true
+    setSyncStatus('error')
     console.warn('[sync] cycle failed:', error)
   } finally {
     isSyncing = false
+    if (!syncError) setSyncStatus('synced')
   }
 }
 
