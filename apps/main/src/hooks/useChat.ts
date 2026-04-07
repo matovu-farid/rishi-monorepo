@@ -159,7 +159,7 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          messages: [
+          input: [
             { role: 'system', content: systemPrompt },
             ...recentMessages.map((m) => ({ role: m.role, content: m.content })),
             { role: 'user', content: text },
@@ -171,7 +171,7 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
         throw new Error(`LLM request failed: ${response.status}`);
       }
 
-      const data = await response.json() as { message: string };
+      const data = await response.json() as string;
 
       // 8. Save assistant message to DB
       const assistantMsgId = crypto.randomUUID();
@@ -180,7 +180,7 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
         id: assistantMsgId,
         conversation_id: conversationId,
         role: 'assistant',
-        content: data.message,
+        content: data,
         source_chunks: JSON.stringify(sourceChunks),
         created_at: assistantNow,
         updated_at: assistantNow,
@@ -200,7 +200,7 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
         id: assistantMsgId,
         conversationId,
         role: 'assistant',
-        content: data.message,
+        content: data,
         sourceChunks: sourceChunks.length > 0 ? sourceChunks : null,
         createdAt: assistantNow,
       };
