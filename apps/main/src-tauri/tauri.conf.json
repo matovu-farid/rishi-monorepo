@@ -30,7 +30,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDcwMDZEREJDQUQ4NUY5NEMKUldSTStZV3R2TjBHY0lXV0ppbFJLL3VZdm9velc3dE9IakM0MktXcENNM2oybldFVUNGUWE1ZTMK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJDNzNEMkU1OTZDODc4RDEKUldUUmVNaVc1ZEp6dkNqRitLT3pKUGRTTlZLZ21VSWhtVTgrMFlDd3QrQW9JTVdFUk80QnlNYnQK",
       "endpoints": [
         "https://github.com/matovu-farid/rishi-monorepo/releases/latest/download/latest.json"
       ]
