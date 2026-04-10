@@ -1,0 +1,33 @@
+appId: com.rishi.mobile
+---
+- runFlow: common/launch.yaml
+
+# Wait for sign-in screen
+- extendedWaitUntil:
+    visible:
+      text: "Welcome to Rishi"
+    timeout: 30000
+
+# Test email input interaction
+- tapOn:
+    id: "email-input"
+- inputText: "test@example.com"
+
+# Test password input interaction
+- tapOn:
+    id: "password-input"
+- inputText: "testpassword123"
+
+- takeScreenshot: "04-email-password-filled"
+
+# Tap sign in — will fail but shouldn't crash
+- tapOn:
+    id: "sign-in-button"
+
+# Wait and verify app stays stable
+- extendedWaitUntil:
+    visible:
+      text: "Welcome to Rishi"
+    timeout: 10000
+
+- takeScreenshot: "04-after-sign-in-attempt"

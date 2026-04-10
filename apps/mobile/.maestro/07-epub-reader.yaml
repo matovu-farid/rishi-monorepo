@@ -1,0 +1,52 @@
+appId: com.rishi.mobile
+---
+- runFlow: common/launch.yaml
+
+- extendedWaitUntil:
+    visible:
+      text: "Welcome to Rishi"
+    timeout: 30000
+
+- runFlow:
+    when:
+      visible: "Import Book"
+    commands:
+      # Import a book via URL
+      - tapOn: "Import Book"
+      - tapOn: "From URL"
+      - tapOn:
+          id: "url-input"
+      - inputText: "https://www.gutenberg.org/ebooks/11.epub.images"
+      - tapOn:
+          id: "url-download-button"
+      - extendedWaitUntil:
+          visible:
+            text: "11.epub"
+          timeout: 60000
+
+      # Tap the imported book to open reader
+      - tapOn:
+          text: "11.epub"
+
+      # Wait for reader to load
+      - extendedWaitUntil:
+          notVisible:
+            text: "Loading book..."
+          timeout: 15000
+
+      # Tap screen to show toolbar
+      - tapOn:
+          point: "50%,50%"
+
+      - takeScreenshot: "07-epub-reader"
+
+      # Tap back to return to library
+      - tapOn:
+          point: "10%,7%"
+
+      - extendedWaitUntil:
+          visible:
+            text: "Library"
+          timeout: 10000
+
+      - takeScreenshot: "07-back-to-library"

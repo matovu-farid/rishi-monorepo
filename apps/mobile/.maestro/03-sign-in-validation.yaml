@@ -1,0 +1,35 @@
+appId: com.rishi.mobile
+---
+- runFlow: common/launch.yaml
+
+# Wait for sign-in screen
+- extendedWaitUntil:
+    visible:
+      text: "Welcome to Rishi"
+    timeout: 30000
+
+# Try signing in with empty fields
+- tapOn:
+    id: "sign-in-button"
+
+# App should still show sign-in screen (not crash)
+- assertVisible:
+    text: "Welcome to Rishi"
+
+# Enter invalid credentials
+- tapOn:
+    id: "email-input"
+- inputText: "invalid-email"
+
+- tapOn:
+    id: "password-input"
+- inputText: "short"
+
+- tapOn:
+    id: "sign-in-button"
+
+# Should remain on sign-in screen
+- assertVisible:
+    text: "Welcome to Rishi"
+
+- takeScreenshot: "03-sign-in-validation"

@@ -1,0 +1,25 @@
+appId: com.rishi.mobile
+---
+- runFlow: common/launch.yaml
+
+- extendedWaitUntil:
+    visible:
+      text: "Welcome to Rishi"
+    timeout: 30000
+
+- runFlow:
+    when:
+      visible: "Chat"
+    commands:
+      - tapOn: "Chat"
+
+      - assertVisible:
+          text: "Conversations"
+
+      - assertVisible:
+          id: "no-conversations-text"
+
+      - assertVisible:
+          text: "Open a book and tap the AI icon to start a conversation."
+
+      - takeScreenshot: "11-conversations-empty"

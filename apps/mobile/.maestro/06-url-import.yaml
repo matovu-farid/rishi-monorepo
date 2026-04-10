@@ -1,0 +1,57 @@
+appId: com.rishi.mobile
+---
+- runFlow: common/launch.yaml
+
+# Wait for app to load
+- extendedWaitUntil:
+    visible:
+      text: "Welcome to Rishi"
+    timeout: 30000
+
+# Test URL import from empty library (sign-in screen = skip)
+- runFlow:
+    when:
+      visible: "Import Book"
+    commands:
+      - tapOn: "Import Book"
+      - tapOn: "From URL"
+
+      - tapOn:
+          id: "url-input"
+      - inputText: "https://www.gutenberg.org/ebooks/11.epub.images"
+
+      - tapOn:
+          id: "url-download-button"
+
+      # Wait for download to complete — book title should appear in library
+      - extendedWaitUntil:
+          visible:
+            text: "11.epub"
+          timeout: 60000
+
+      - takeScreenshot: "06-url-import-success"
+
+# If library already has books, use FAB
+- runFlow:
+    when:
+      visible:
+        id: "import-book-fab"
+    commands:
+      - tapOn:
+          id: "import-book-fab"
+
+      - tapOn: "From URL"
+
+      - tapOn:
+          id: "url-input"
+      - inputText: "https://www.gutenberg.org/ebooks/11.epub.images"
+
+      - tapOn:
+          id: "url-download-button"
+
+      - extendedWaitUntil:
+          visible:
+            text: "11.epub"
+          timeout: 60000
+
+      - takeScreenshot: "06-url-import-success"

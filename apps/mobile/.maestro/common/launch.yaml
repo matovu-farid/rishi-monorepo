@@ -1,0 +1,23 @@
+appId: com.rishi.mobile
+---
+# Common launch flow: connects to dev server and dismisses any dev menus
+- launchApp:
+    clearState: true
+
+# Dev build shows Expo launcher — tap the dev server to load the app
+- tapOn:
+    text: "http://localhost:8081"
+    optional: true
+
+# Dismiss the first-launch "Continue" dialog
+- tapOn:
+    text: "Continue"
+    optional: true
+
+# Dismiss the dev menu sheet by swiping down and tapping outside
+- swipe:
+    direction: DOWN
+    duration: 500
+
+- tapOn:
+    point: "50%,15%"

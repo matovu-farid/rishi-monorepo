@@ -1,0 +1,33 @@
+appId: com.rishi.mobile
+---
+- runFlow: common/launch.yaml
+
+# Wait for sign-in screen
+- extendedWaitUntil:
+    visible:
+      text: "Welcome to Rishi"
+    timeout: 30000
+
+# Verify all sign-in screen elements
+- assertVisible:
+    text: "Welcome to Rishi"
+
+- assertVisible:
+    id: "email-input"
+
+- assertVisible:
+    id: "password-input"
+
+- assertVisible:
+    id: "sign-in-button"
+
+- assertVisible:
+    id: "google-sign-in-button"
+
+- assertVisible:
+    text: "Sign In"
+
+- assertVisible:
+    text: "Continue with Google"
+
+- takeScreenshot: "02-sign-in-screen"

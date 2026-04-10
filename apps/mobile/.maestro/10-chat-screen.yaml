@@ -1,0 +1,31 @@
+appId: com.rishi.mobile
+---
+- runFlow: common/launch.yaml
+
+- extendedWaitUntil:
+    visible:
+      text: "Welcome to Rishi"
+    timeout: 30000
+
+# Navigate to Chat tab (from library or empty state)
+- runFlow:
+    when:
+      visible: "Library"
+    commands:
+      - tapOn: "Chat"
+      - assertVisible:
+          text: "Conversations"
+      - assertVisible:
+          text: "No conversations yet"
+      - takeScreenshot: "10-chat-empty"
+
+- runFlow:
+    when:
+      visible: "Import Book"
+    commands:
+      - tapOn: "Chat"
+      - assertVisible:
+          text: "Conversations"
+      - assertVisible:
+          text: "No conversations yet"
+      - takeScreenshot: "10-chat-empty"

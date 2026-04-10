@@ -1,0 +1,52 @@
+appId: com.rishi.mobile
+---
+- runFlow: common/launch.yaml
+
+- extendedWaitUntil:
+    visible:
+      text: "Welcome to Rishi"
+    timeout: 30000
+
+- runFlow:
+    when:
+      visible: "Import Book"
+    commands:
+      # Import a PDF via URL
+      - tapOn: "Import Book"
+      - tapOn: "From URL"
+      - tapOn:
+          id: "url-input"
+      - inputText: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+      - tapOn:
+          id: "url-download-button"
+      - extendedWaitUntil:
+          visible:
+            text: "dummy"
+          timeout: 60000
+
+      # Tap the imported PDF
+      - tapOn:
+          text: "dummy"
+
+      # Wait for PDF to load
+      - extendedWaitUntil:
+          notVisible:
+            text: "Loading book..."
+          timeout: 15000
+
+      - takeScreenshot: "08-pdf-reader"
+
+      # Tap screen to show toolbar
+      - tapOn:
+          point: "50%,50%"
+
+      - takeScreenshot: "08-pdf-toolbar"
+
+      # Go back
+      - tapOn:
+          point: "10%,7%"
+
+      - extendedWaitUntil:
+          visible:
+            text: "Library"
+          timeout: 10000

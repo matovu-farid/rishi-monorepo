@@ -1,0 +1,14 @@
+appId: com.rishi.mobile
+---
+- runFlow: common/launch.yaml
+
+# Wait for the sign-in screen to appear
+- extendedWaitUntil:
+    visible:
+      text: "Welcome to Rishi"
+    timeout: 30000
+
+- assertVisible:
+    text: "Welcome to Rishi"
+
+- takeScreenshot: "01-app-launch"

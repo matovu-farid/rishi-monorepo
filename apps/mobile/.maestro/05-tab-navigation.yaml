@@ -1,0 +1,31 @@
+appId: com.rishi.mobile
+---
+# Tab navigation — requires authenticated session.
+# Falls back to verifying sign-in screen if not logged in.
+- runFlow: common/launch.yaml
+
+# Wait for app to load
+- extendedWaitUntil:
+    visible:
+      text: "Welcome to Rishi"
+    timeout: 30000
+
+- takeScreenshot: "05-initial-state"
+
+# If tabs are visible (authenticated), test navigation
+- runFlow:
+    when:
+      visible: "Library"
+    commands:
+      - tapOn: "Chat"
+      - assertVisible:
+          text: "Conversations"
+      - takeScreenshot: "05-chat-tab"
+
+      - tapOn: "Explore"
+      - assertVisible:
+          text: "Explore"
+      - takeScreenshot: "05-explore-tab"
+
+      - tapOn: "Library"
+      - takeScreenshot: "05-library-tab"
