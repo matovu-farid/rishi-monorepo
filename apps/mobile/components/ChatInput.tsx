@@ -54,6 +54,7 @@ export function ChatInput({
     <View>
       <View className="flex-row items-end p-2 border-t border-gray-200 dark:border-gray-700">
         <TextInput
+          testID="chat-input"
           className="flex-1 bg-gray-100 dark:bg-[#2A2D2F] rounded-full px-4 py-2 text-base text-gray-900 dark:text-gray-100"
           placeholder={placeholder}
           placeholderTextColor="#687076"
@@ -78,6 +79,7 @@ export function ChatInput({
         )}
 
         <TouchableOpacity
+          testID="chat-send-button"
           onPress={showStop ? undefined : handleSend}
           disabled={!canSend && !showStop}
           className={`w-10 h-10 rounded-full items-center justify-center ml-2 ${

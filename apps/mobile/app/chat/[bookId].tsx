@@ -175,7 +175,7 @@ export default function BookChatScreen() {
   const invertedMessages = [...messageList].reverse()
 
   return (
-    <SafeAreaView className="flex-1 bg-white dark:bg-[#151718]" edges={['top']}>
+    <SafeAreaView testID="chat-screen" className="flex-1 bg-white dark:bg-[#151718]" edges={['top']}>
       <KeyboardAvoidingView
         className="flex-1"
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}

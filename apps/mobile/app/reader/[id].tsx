@@ -45,7 +45,7 @@ export default function ReaderScreen() {
 
   if (loading) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center' }}>
+      <View testID="reader-loading" style={{ flex: 1, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" />
         <Text style={{ marginTop: 12, color: '#666' }}>Loading book...</Text>
       </View>
@@ -54,7 +54,7 @@ export default function ReaderScreen() {
 
   if (!book || !book.filePath) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center' }}>
+      <View testID="reader-error" style={{ flex: 1, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center' }}>
         <Text style={{ color: '#666', fontSize: 16 }}>Book file not available</Text>
       </View>
     )

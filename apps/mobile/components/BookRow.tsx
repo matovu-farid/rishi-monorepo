@@ -32,6 +32,7 @@ export function BookRow({ book, onPress, onDelete }: BookRowProps) {
       </View>
       <View className="flex-1">
         <Text
+          testID="book-row-title"
           className="text-base font-semibold text-gray-900 dark:text-white"
           numberOfLines={1}
         >
