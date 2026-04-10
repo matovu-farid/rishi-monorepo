@@ -142,6 +142,113 @@ export async function importPdfFile(): Promise<Book | null> {
   return book
 }
 
+type BookFormat = 'epub' | 'pdf'
+
+function detectFormatFromUrl(url: string): BookFormat | null {
+  const pathname = new URL(url).pathname.toLowerCase()
+  if (pathname.endsWith('.epub')) return 'epub'
+  if (pathname.endsWith('.pdf')) return 'pdf'
+  return null
+}
+
+function detectFormatFromContentType(contentType: string | null): BookFormat | null {
+  if (!contentType) return null
+  if (contentType.includes('application/epub+zip')) return 'epub'
+  if (contentType.includes('application/pdf')) return 'pdf'
+  return null
+}
+
+function extractTitleFromUrl(url: string): string {
+  const pathname = new URL(url).pathname
+  const filename = decodeURIComponent(pathname.split('/').pop() || 'Unknown Book')
+  return filename.replace(/\.(epub|pdf)$/i, '')
+}
+
+export async function importBookFromUrl(url: string): Promise<Book> {
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    throw new Error('Invalid URL — must start with http:// or https://')
+  }
+
+  let format = detectFormatFromUrl(url)
+
+  if (!format) {
+    try {
+      const headRes = await fetch(url, { method: 'HEAD' })
+      format = detectFormatFromContentType(headRes.headers.get('content-type'))
+    } catch {
+      // HEAD failed, will try download anyway and check content-type there
+    }
+  }
+
+  const downloadRes = await fetch(url)
+
+  if (!downloadRes.ok) {
+    throw new Error(`Download failed: ${downloadRes.status} ${downloadRes.statusText}`)
+  }
+
+  if (!format) {
+    format = detectFormatFromContentType(downloadRes.headers.get('content-type'))
+  }
+
+  if (!format) {
+    throw new Error('Unsupported format — only EPUB and PDF are supported')
+  }
+
+  const arrayBuffer = await downloadRes.arrayBuffer()
+  const bytes = new Uint8Array(arrayBuffer)
+
+  const bookId = generateUUID()
+  const bookDir = new Directory(BOOKS_DIR, bookId)
+
+  if (!BOOKS_DIR.exists) {
+    BOOKS_DIR.create({ intermediates: true })
+  }
+  bookDir.create({ intermediates: true, idempotent: true })
+
+  const destFile = new File(bookDir, `book.${format}`)
+  destFile.write(bytes)
+
+  const title = extractTitleFromUrl(url)
+
+  const book: Book = {
+    id: bookId,
+    title,
+    author: 'Unknown',
+    coverPath: null,
+    filePath: destFile.uri,
+    format,
+    currentCfi: null,
+    currentPage: null,
+    createdAt: Date.now(),
+  }
+
+  insertBook(book)
+
+  hashBookFile(destFile.uri)
+    .then((fileHash) => {
+      db.update(books)
+        .set({ fileHash, isDirty: true })
+        .where(eq(books.id, bookId))
+        .run()
+
+      uploadBookFile(destFile.uri, fileHash, format!)
+        .then(({ r2Key }) => {
+          db.update(books)
+            .set({ fileR2Key: r2Key, isDirty: true })
+            .where(eq(books.id, bookId))
+            .run()
+        })
+        .catch((err) => {
+          console.warn('Book upload failed (will retry on next sync):', err)
+        })
+    })
+    .catch((err) => {
+      console.warn('Book hashing failed:', err)
+    })
+
+  return book
+}
+
 function generateUUID(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID()
