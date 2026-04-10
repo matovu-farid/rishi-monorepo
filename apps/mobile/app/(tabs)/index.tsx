@@ -1,12 +1,15 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { View, FlatList, TouchableOpacity, Alert, Text } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { Directory, Paths } from 'expo-file-system'
+import BottomSheet from '@gorhom/bottom-sheet'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { SyncStatusIndicator } from '@/components/SyncStatusIndicator'
 import { BookRow } from '@/components/BookRow'
 import { LibraryEmptyState } from '@/components/LibraryEmptyState'
+import { UrlImportSheet } from '@/components/UrlImportSheet'
 import { getBooks, deleteBook } from '@/lib/book-storage'
 import { importEpubFile, importPdfFile } from '@/lib/file-import'
 import { Book } from '@/types/book'
@@ -15,6 +18,7 @@ export default function LibraryScreen() {
   const router = useRouter()
   const [books, setBooks] = useState<Book[]>([])
   const [importing, setImporting] = useState(false)
+  const urlSheetRef = useRef<BottomSheet>(null)
 
   const loadBooks = useCallback(() => {
     const loaded = getBooks()
@@ -53,6 +57,7 @@ export default function LibraryScreen() {
     Alert.alert('Import Book', 'Choose file format', [
       { text: 'EPUB', onPress: () => doImport('epub') },
       { text: 'PDF', onPress: () => doImport('pdf') },
+      { text: 'From URL', onPress: () => urlSheetRef.current?.snapToIndex(0) },
       { text: 'Cancel', style: 'cancel' },
     ])
   }, [doImport])
@@ -101,42 +106,49 @@ export default function LibraryScreen() {
 
   if (books.length === 0) {
     return (
-      <SafeAreaView className="flex-1 bg-white dark:bg-[#151718]">
-        <LibraryEmptyState onImport={handleImport} importing={importing} />
-      </SafeAreaView>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <SafeAreaView className="flex-1 bg-white dark:bg-[#151718]">
+          <LibraryEmptyState onImport={handleImport} importing={importing} />
+          <UrlImportSheet sheetRef={urlSheetRef} onImported={() => loadBooks()} />
+        </SafeAreaView>
+      </GestureHandlerRootView>
     )
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-white dark:bg-[#151718]">
-      <View className="px-6 pt-4 pb-2 flex-row items-center justify-between">
-        <Text className="text-2xl font-semibold text-gray-900 dark:text-white">
-          Library
-        </Text>
-        <SyncStatusIndicator />
-      </View>
-      <FlatList
-        data={books}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <BookRow
-            book={item}
-            onPress={handleBookPress}
-            onDelete={handleDelete}
-          />
-        )}
-        contentContainerClassName="pb-24"
-      />
-      {/* FAB for importing when library has books */}
-      <TouchableOpacity
-        className="absolute bottom-6 right-6 w-14 h-14 rounded-full bg-[#0a7ea4] items-center justify-center shadow-lg"
-        onPress={handleImport}
-        disabled={importing}
-        accessibilityRole="button"
-        accessibilityLabel="Import Book"
-      >
-        <IconSymbol name="plus" size={24} color="#FFFFFF" />
-      </TouchableOpacity>
-    </SafeAreaView>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaView className="flex-1 bg-white dark:bg-[#151718]">
+        <View className="px-6 pt-4 pb-2 flex-row items-center justify-between">
+          <Text testID="library-title" className="text-2xl font-semibold text-gray-900 dark:text-white">
+            Library
+          </Text>
+          <SyncStatusIndicator />
+        </View>
+        <FlatList
+          data={books}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <BookRow
+              book={item}
+              onPress={handleBookPress}
+              onDelete={handleDelete}
+            />
+          )}
+          contentContainerClassName="pb-24"
+        />
+        {/* FAB for importing when library has books */}
+        <TouchableOpacity
+          testID="import-book-fab"
+          className="absolute bottom-6 right-6 w-14 h-14 rounded-full bg-[#0a7ea4] items-center justify-center shadow-lg"
+          onPress={handleImport}
+          disabled={importing}
+          accessibilityRole="button"
+          accessibilityLabel="Import Book"
+        >
+          <IconSymbol name="plus" size={24} color="#FFFFFF" />
+        </TouchableOpacity>
+        <UrlImportSheet sheetRef={urlSheetRef} onImported={() => loadBooks()} />
+      </SafeAreaView>
+    </GestureHandlerRootView>
   )
 }
