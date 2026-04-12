@@ -4,13 +4,15 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "react-toastify";
 import { IconButton } from "./ui/IconButton";
 import { Button } from "./ui/Button";
-import { Trash2, Plus, LogIn } from "lucide-react";
+import { Trash2, Plus } from "lucide-react";
 import { chooseFiles } from "@/modules/chooseFiles";
 import {
   Book,
   deleteBook,
   getBookData,
   getBooks,
+  getDjvuData,
+  getMobiData,
   getPdfData,
   saveBook,
 } from "@/generated";
@@ -21,10 +23,10 @@ import { useTauriDragDrop } from "./hooks/use-tauri-drag-drop";
 import { motion, AnimatePresence } from "framer-motion";
 import { atom, useSetAtom } from "jotai";
 import { customStore } from "@/stores/jotai";
+import { useEffect, useMemo } from "react";
 
 import {
   pdfsControllerAtom,
-  setPageNumberAtom,
 } from "@components/pdf/atoms/paragraph-atoms";
 import { LoginButton } from "./LoginButton";
 
@@ -92,6 +94,33 @@ function bytesToBlobUrl(bytes: number[]): string {
 
   const blob = new Blob([uint8Array], { type: mimeType });
   return URL.createObjectURL(blob);
+}
+
+/** Memoize blob URL creation and revoke old URLs on change/unmount. */
+function useCoverBlobUrl(cover: number[]): string {
+  const url = useMemo(() => bytesToBlobUrl(cover), [cover]);
+
+  useEffect(() => {
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [url]);
+
+  return url;
+}
+
+function BookCoverImage({ book }: { book: Book }) {
+  const coverUrl = useCoverBlobUrl(book.cover);
+  return (
+    <img
+      id={book.id.toString() + "cover"}
+      className="object-fill shadow-3xl drop-shadow-lg"
+      src={coverUrl}
+      width={200}
+      height={400}
+      alt="cover image"
+    />
+  );
 }
 
 function FileDrop(): React.JSX.Element {
@@ -249,6 +278,112 @@ function FileDrop(): React.JSX.Element {
     },
   });
 
+  const storeMobiMutation = useMutation({
+    mutationKey: ["getMobiData"],
+    mutationFn: async ({ filePath }: { filePath: string }) => {
+      const mobiPath = await copyBookToAppData(filePath);
+
+      const bookData = await getMobiData({ path: mobiPath });
+      const book = await saveBook({
+        book: {
+          coverKind: bookData.coverKind || "",
+          title: bookData.title || "",
+          author: bookData.author || "",
+          publisher: bookData.publisher || "",
+          filepath: mobiPath,
+          location: "0",
+          version: 0,
+          kind: bookData.kind,
+          cover: bookData.cover,
+        },
+      });
+
+      // Hash + R2 upload (non-blocking for UX failures, but awaited for data integrity)
+      try {
+        const fileHash = await hashBookFile(mobiPath);
+        const { r2Key } = await uploadBookFile(mobiPath, fileHash, 'mobi');
+        await db.updateTable('books')
+          .set({
+            file_hash: fileHash,
+            file_r2_key: r2Key,
+            is_dirty: 1,
+          })
+          .where('id', '=', book.id)
+          .execute();
+      } catch (err) {
+        console.warn('[file-sync] Failed to hash/upload mobi file, will retry on next sync:', err);
+      }
+
+      return book;
+    },
+
+    onError(error) {
+      console.error("Error storing MOBI:", error);
+      toast.error("Can't upload book");
+    },
+    onSuccess(bookData) {
+      void queryClient.invalidateQueries({ queryKey: ["books"] });
+
+      setNewBookId(null);
+      setTimeout(() => {
+        setNewBookId(bookData.id.toString());
+      }, 0);
+    },
+  });
+
+  const storeDjvuMutation = useMutation({
+    mutationKey: ["getDjvuData"],
+    mutationFn: async ({ filePath }: { filePath: string }) => {
+      const djvuPath = await copyBookToAppData(filePath);
+
+      const bookData = await getDjvuData({ path: djvuPath });
+      const book = await saveBook({
+        book: {
+          coverKind: bookData.coverKind || "",
+          title: bookData.title || "",
+          author: bookData.author || "",
+          publisher: bookData.publisher || "",
+          filepath: djvuPath,
+          location: "1",
+          version: 0,
+          kind: bookData.kind,
+          cover: bookData.cover,
+        },
+      });
+
+      // Hash + R2 upload (non-blocking for UX failures, but awaited for data integrity)
+      try {
+        const fileHash = await hashBookFile(djvuPath);
+        const { r2Key } = await uploadBookFile(djvuPath, fileHash, 'djvu');
+        await db.updateTable('books')
+          .set({
+            file_hash: fileHash,
+            file_r2_key: r2Key,
+            is_dirty: 1,
+          })
+          .where('id', '=', book.id)
+          .execute();
+      } catch (err) {
+        console.warn('[file-sync] Failed to hash/upload djvu file, will retry on next sync:', err);
+      }
+
+      return book;
+    },
+
+    onError(error) {
+      console.error("Error storing DJVU:", error);
+      toast.error("Can't upload book");
+    },
+    onSuccess(bookData) {
+      void queryClient.invalidateQueries({ queryKey: ["books"] });
+
+      setNewBookId(null);
+      setTimeout(() => {
+        setNewBookId(bookData.id.toString());
+      }, 0);
+    },
+  });
+
   // Extract file processing logic to be reusable
   const processFilePaths = (filePaths: string[]) => {
     if (filePaths.length > 0) {
@@ -257,6 +392,10 @@ function FileDrop(): React.JSX.Element {
           storeBookDataMutation.mutate({ filePath });
         } else if (filePath.endsWith(".pdf")) {
           storePdfMutation.mutate({ filePath });
+        } else if (filePath.endsWith(".mobi") || filePath.endsWith(".azw3")) {
+          storeMobiMutation.mutate({ filePath });
+        } else if (filePath.endsWith(".djvu")) {
+          storeDjvuMutation.mutate({ filePath });
         }
       });
     }
@@ -275,7 +414,7 @@ function FileDrop(): React.JSX.Element {
 
   // Handle drag and drop using Tauri native API
   const { isDragging } = useTauriDragDrop({
-    allowedExtensions: [".epub", ".pdf"],
+    allowedExtensions: [".epub", ".pdf", ".mobi", ".azw3", ".djvu"],
     onFilesDropped: (filePaths) => {
       processFilePaths(filePaths);
     },
@@ -363,14 +502,7 @@ function FileDrop(): React.JSX.Element {
                     params={{ id: book.id.toString() }}
                     className="rounded-3xl z-5  bg-transparent shadow-none overflow-visible hover:bg-transparent hover:shadow-none"
                   >
-                    <img
-                      id={book.id.toString() + "cover"}
-                      className="object-fill shadow-3xl drop-shadow-lg"
-                      src={bytesToBlobUrl(book.cover)}
-                      width={200}
-                      height={400}
-                      alt="cover image"
-                    />
+                    <BookCoverImage book={book} />
                   </Link>
                 </div>
               </motion.div>
