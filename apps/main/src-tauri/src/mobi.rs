@@ -204,3 +204,81 @@ fn create_placeholder_cover() -> Vec<u8> {
 
     buffer
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn strip_html_tags_basic() {
+        assert_eq!(strip_html_tags("<p>hello</p>"), "hello");
+    }
+
+    #[test]
+    fn strip_html_tags_nested() {
+        assert_eq!(strip_html_tags("<div><span>text</span></div>"), "text");
+    }
+
+    #[test]
+    fn strip_html_tags_empty() {
+        assert_eq!(strip_html_tags(""), "");
+    }
+
+    #[test]
+    fn strip_html_tags_no_tags() {
+        assert_eq!(strip_html_tags("plain text"), "plain text");
+    }
+
+    #[test]
+    fn strip_html_tags_with_attributes() {
+        assert_eq!(strip_html_tags(r#"<a href="url">link</a>"#), "link");
+    }
+
+    #[test]
+    fn placeholder_cover_is_non_empty_png() {
+        let cover = create_placeholder_cover();
+        assert!(!cover.is_empty(), "Placeholder cover should not be empty");
+        // PNG magic bytes: 0x89 P N G
+        assert_eq!(
+            &cover[..4],
+            &[137, 80, 78, 71],
+            "Placeholder cover should start with PNG magic bytes"
+        );
+    }
+
+    #[test]
+    fn get_chapters_invalid_path_returns_error() {
+        let bad_path = PathBuf::from("/nonexistent/fake.mobi");
+        let result = get_chapters(&bad_path);
+        assert!(result.is_err(), "get_chapters with invalid path should error");
+    }
+
+    #[test]
+    fn get_chapter_invalid_path_returns_error() {
+        let bad_path = PathBuf::from("/nonexistent/fake.mobi");
+        let result = get_chapter(&bad_path, 0);
+        assert!(result.is_err(), "get_chapter with invalid path should error");
+    }
+
+    #[test]
+    fn get_chapter_count_invalid_path_returns_error() {
+        let bad_path = PathBuf::from("/nonexistent/fake.mobi");
+        let result = get_chapter_count(&bad_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn extract_nonexistent_file_returns_error() {
+        let bad_path = PathBuf::from("/nonexistent/fake.mobi");
+        let mobi = Mobi::new(&bad_path);
+        let result = mobi.extract();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("File not found"),
+            "Expected 'File not found' error, got: {}",
+            err_msg
+        );
+    }
+}

@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 pub enum BookKind {
     Epub = 0,
     Pdf = 1,
+    Mobi = 2,
+    Djvu = 3,
 }
 
 impl BookKind {
@@ -10,6 +12,8 @@ impl BookKind {
         match self {
             BookKind::Epub => "epub".to_string(),
             BookKind::Pdf => "pdf".to_string(),
+            BookKind::Mobi => "mobi".to_string(),
+            BookKind::Djvu => "djvu".to_string(),
         }
     }
 }
@@ -17,14 +21,14 @@ impl BookKind {
 #[serde(rename_all = "camelCase")]
 pub struct BookData {
     pub id: String,
-    kind: String,
-    cover: Vec<u8>,
-    title: Option<String>,
-    author: Option<String>,
-    publisher: Option<String>,
-    filepath: String,
-    location: String,
-    cover_kind: Option<String>,
+    pub(crate) kind: String,
+    pub(crate) cover: Vec<u8>,
+    pub(crate) title: Option<String>,
+    pub(crate) author: Option<String>,
+    pub(crate) publisher: Option<String>,
+    pub(crate) filepath: String,
+    pub(crate) location: String,
+    pub(crate) cover_kind: Option<String>,
     version: u32,
 }
 

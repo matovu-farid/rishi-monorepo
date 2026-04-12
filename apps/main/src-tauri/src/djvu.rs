@@ -212,3 +212,90 @@ fn create_placeholder_cover() -> Vec<u8> {
 
     buffer
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn placeholder_cover_is_non_empty_png() {
+        let cover = create_placeholder_cover();
+        assert!(!cover.is_empty(), "Placeholder cover should not be empty");
+        assert_eq!(
+            &cover[..4],
+            &[137, 80, 78, 71],
+            "Placeholder cover should start with PNG magic bytes"
+        );
+    }
+
+    #[test]
+    fn extract_nonexistent_file_returns_file_not_found() {
+        let bad_path = PathBuf::from("/nonexistent/fake.djvu");
+        let djvu = Djvu::new(&bad_path);
+        let result = djvu.extract();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("File not found"),
+            "Expected 'File not found' error, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn extract_invalid_magic_bytes_returns_error() {
+        let tmp = tempfile::NamedTempFile::new().expect("Failed to create temp file");
+        std::fs::write(tmp.path(), b"NOT_DJVU_CONTENT").expect("Failed to write temp file");
+
+        let djvu = Djvu::new(tmp.path());
+        let result = djvu.extract();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Not a valid DJVU file"),
+            "Expected 'Not a valid DJVU file' error, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn extract_valid_magic_bytes_succeeds() {
+        let tmp = tempfile::NamedTempFile::with_suffix(".djvu")
+            .expect("Failed to create temp file");
+        let mut file = std::fs::File::create(tmp.path()).expect("Failed to open temp file");
+        // Write AT&T magic bytes followed by some padding
+        file.write_all(b"AT&TFORM\x00\x00\x00\x00DJVU")
+            .expect("Failed to write");
+        drop(file);
+
+        let djvu = Djvu::new(tmp.path());
+        let result = djvu.extract();
+        assert!(result.is_ok(), "extract should succeed with AT&T magic bytes: {:?}", result.err());
+
+        let data = result.unwrap();
+        assert_eq!(data.kind, "djvu");
+        assert_eq!(data.location, "1");
+        assert!(data.title.is_some(), "Title should be derived from filename");
+        assert!(!data.cover.is_empty(), "Cover should be non-empty placeholder");
+        // Verify cover is PNG
+        assert_eq!(&data.cover[..4], &[137, 80, 78, 71]);
+    }
+
+    #[test]
+    fn extract_empty_file_returns_invalid_magic_bytes() {
+        let tmp = tempfile::NamedTempFile::new().expect("Failed to create temp file");
+        // Write empty content (less than 4 bytes)
+        std::fs::write(tmp.path(), b"").expect("Failed to write");
+
+        let djvu = Djvu::new(tmp.path());
+        let result = djvu.extract();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Not a valid DJVU file"),
+            "Expected 'Not a valid DJVU file' error, got: {}",
+            err_msg
+        );
+    }
+}
