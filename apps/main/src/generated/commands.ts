@@ -117,6 +117,18 @@ export async function getMobiData(params: types.GetMobiDataParams): Promise<type
   return invoke('get_mobi_data', params);
 }
 
+export async function getMobiChapter(params: types.GetMobiChapterParams): Promise<string> {
+  return invoke('get_mobi_chapter', params);
+}
+
+export async function getMobiChapterCount(params: types.GetMobiChapterCountParams): Promise<number> {
+  return invoke('get_mobi_chapter_count', params);
+}
+
+export async function getMobiText(params: types.GetMobiTextParams): Promise<string[]> {
+  return invoke('get_mobi_text', params);
+}
+
 export async function getDjvuData(params: types.GetDjvuDataParams): Promise<types.BookData> {
   return invoke('get_djvu_data', params);
 }
