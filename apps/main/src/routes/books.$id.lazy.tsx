@@ -5,6 +5,8 @@ import { createLazyFileRoute } from "@tanstack/react-router";
 import React, { useEffect } from "react";
 import { EpubView } from "@components/epub";
 import { PdfView } from "@components/pdf/components/pdf";
+import { MobiView } from "@components/mobi/MobiView";
+import { DjvuView } from "@components/djvu/DjvuView";
 import { motion } from "framer-motion";
 import { useSetAtom } from "jotai";
 import {
@@ -86,22 +88,8 @@ function BookView(): React.JSX.Element {
         />
       )}
       {book?.kind === "epub" && <EpubView key={book.id} book={book} />}
-      {book?.kind === "mobi" && (
-        <div className="w-full h-screen flex items-center justify-center">
-          <div className="text-center">
-            <h2 className="text-xl font-semibold mb-2">{book.title}</h2>
-            <p className="text-muted-foreground">MOBI viewer coming in Phase 2</p>
-          </div>
-        </div>
-      )}
-      {book?.kind === "djvu" && (
-        <div className="w-full h-screen flex items-center justify-center">
-          <div className="text-center">
-            <h2 className="text-xl font-semibold mb-2">{book.title}</h2>
-            <p className="text-muted-foreground">DJVU viewer coming in Phase 2</p>
-          </div>
-        </div>
-      )}
+      {book?.kind === "mobi" && <MobiView key={book.id} book={book} />}
+      {book?.kind === "djvu" && <DjvuView key={book.id} book={book} />}
     </motion.div>
   );
 }
