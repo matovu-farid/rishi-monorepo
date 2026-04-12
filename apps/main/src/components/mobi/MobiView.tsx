@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtom } from "jotai";
+import { useSetAtom } from "jotai";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "react-toastify";
 
 import {
   getMobiChapter,
   getMobiChapterCount,
+  getMobiText,
+  hasSavedEpubData,
   updateBookLocation,
 } from "@/generated";
 import type { Book } from "@/generated";
@@ -14,10 +17,18 @@ import TTSControls from "@components/TTSControls";
 import { IconButton } from "@components/ui/IconButton";
 import { Menu } from "@components/ui/Menu";
 import { Radio, RadioGroup } from "@components/ui/Radio";
-import { ChevronLeft, ChevronRight, Palette } from "lucide-react";
-import { themeAtom } from "@/stores/epub_atoms";
+import { ChevronLeft, ChevronRight, MessageSquare, Palette } from "lucide-react";
+import { bookIdAtom, themeAtom } from "@/stores/epub_atoms";
 import { themes } from "@/themes/themes";
 import { ThemeType } from "@/themes/common";
+import { eventBus, EventBusEvent } from "@/utils/bus";
+import type { ParagraphWithIndex } from "@/utils/bus";
+import { processEpubJob } from "@/modules/process_epub";
+import type { PageDataInsertable } from "@/modules/kysley";
+import { ChatPanel } from "@/components/chat/ChatPanel";
+import { useRequireAuth } from "@/hooks/useRequireAuth";
+import { db } from "@/modules/kysley";
+import { stringToNumberID } from "@components/lib/utils";
 
 export function MobiView({ book }: { book: Book }): React.JSX.Element {
   const [theme, setTheme] = useAtom(themeAtom);
@@ -30,6 +41,27 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
   const [chapterHtml, setChapterHtml] = useState("");
   const [loading, setLoading] = useState(true);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const embeddingsProcessedRef = useRef(false);
+  const [chatPanelOpen, setChatPanelOpen] = useState(false);
+  const { requireAuth, AuthDialog } = useRequireAuth();
+  const bookSyncIdRef = useRef<string | null>(null);
+
+  // Set bookIdAtom for voice chat
+  const setBookId = useSetAtom(bookIdAtom);
+  useEffect(() => {
+    setBookId(book.id.toString());
+  }, [book.id, setBookId]);
+
+  // Look up the book's sync_id for chat
+  useEffect(() => {
+    db.selectFrom("books")
+      .select(["sync_id"])
+      .where("id", "=", book.id)
+      .executeTakeFirst()
+      .then((row) => {
+        bookSyncIdRef.current = row?.sync_id ?? null;
+      });
+  }, [book.id]);
 
   // Fetch total chapter count on mount
   useEffect(() => {
@@ -96,6 +128,103 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [goNext, goPrev]);
 
+  // Publish paragraphs to event bus for TTS
+  useEffect(() => {
+    if (chapterCount === 0) return;
+
+    // Current chapter paragraphs
+    getMobiText({ path: book.filepath, chapterIndex })
+      .then((texts) => {
+        const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
+          text,
+          index: `mobi-${chapterIndex}-${i}`,
+        }));
+        eventBus.publish(EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, paragraphs);
+      })
+      .catch((err) => console.warn("[MobiView] failed to get text for TTS:", err));
+
+    // Prefetch next chapter paragraphs
+    if (chapterIndex < chapterCount - 1) {
+      getMobiText({ path: book.filepath, chapterIndex: chapterIndex + 1 })
+        .then((texts) => {
+          const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
+            text,
+            index: `mobi-${chapterIndex + 1}-${i}`,
+          }));
+          eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
+        })
+        .catch((err) => console.warn("[MobiView] failed to prefetch next chapter:", err));
+    } else {
+      eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, []);
+    }
+
+    // Prefetch previous chapter paragraphs
+    if (chapterIndex > 0) {
+      getMobiText({ path: book.filepath, chapterIndex: chapterIndex - 1 })
+        .then((texts) => {
+          const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
+            text,
+            index: `mobi-${chapterIndex - 1}-${i}`,
+          }));
+          eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
+        })
+        .catch((err) => console.warn("[MobiView] failed to prefetch prev chapter:", err));
+    } else {
+      eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, []);
+    }
+  }, [book.filepath, chapterIndex, chapterCount]);
+
+  // Handle page-turn events from Player (TTS exhausted current chapter)
+  useEffect(() => {
+    const handleNextEmptied = () => {
+      setChapterIndex((prev) => Math.min(prev + 1, chapterCount - 1));
+    };
+    const handlePrevEmptied = () => {
+      setChapterIndex((prev) => Math.max(prev - 1, 0));
+    };
+
+    eventBus.on(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
+    eventBus.on(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
+
+    return () => {
+      eventBus.off(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
+      eventBus.off(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
+    };
+  }, [chapterCount]);
+
+  // Generate embeddings on first open (for AI chat)
+  useEffect(() => {
+    if (chapterCount === 0 || embeddingsProcessedRef.current) return;
+    embeddingsProcessedRef.current = true;
+
+    (async () => {
+      try {
+        const alreadySaved = await hasSavedEpubData({ bookId: book.id });
+        if (alreadySaved) return;
+
+        const allPageData: PageDataInsertable[] = [];
+        for (let i = 0; i < chapterCount; i++) {
+          const texts = await getMobiText({ path: book.filepath, chapterIndex: i });
+          const combined = texts.join("\n").trim();
+          if (combined.length > 0) {
+            allPageData.push({
+              id: stringToNumberID(`${book.id}-mobi-${i}`),
+              pageNumber: i + 1,
+              bookId: book.id,
+              data: combined,
+            });
+          }
+        }
+
+        if (allPageData.length > 0) {
+          await processEpubJob(book.id, allPageData);
+        }
+      } catch (err) {
+        console.warn("[MobiView] failed to generate embeddings:", err);
+      }
+    })();
+  }, [book.id, book.filepath, chapterCount]);
+
   // Build themed srcdoc
   const srcdoc = useMemo(() => {
     const t = themes[theme];
@@ -145,6 +274,13 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
     >
       {/* Top bar */}
       <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
+        <button
+          onClick={() => requireAuth(() => setChatPanelOpen(true))}
+          className={`p-2 rounded-md ${getTextColor()}`}
+          aria-label="Open chat panel"
+        >
+          <MessageSquare size={20} />
+        </button>
         <BackButton />
         <Menu
           trigger={
@@ -229,6 +365,18 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
 
       {/* TTS Controls */}
       <TTSControls bookId={book.id.toString()} />
+
+      {AuthDialog}
+
+      {/* Chat Panel */}
+      <ChatPanel
+        bookId={book.id}
+        bookSyncId={bookSyncIdRef.current ?? ""}
+        bookTitle={book.title}
+        rendition={null}
+        open={chatPanelOpen}
+        onOpenChange={setChatPanelOpen}
+      />
     </div>
   );
 }

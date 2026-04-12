@@ -1,14 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSetAtom } from "jotai";
 import {
   getDjvuPage,
   getDjvuPageCount,
+  getDjvuPageText,
+  hasSavedEpubData,
   updateBookLocation,
 } from "@/generated";
 import type { Book } from "@/generated";
 import { BackButton } from "@components/BackButton";
 import TTSControls from "@components/TTSControls";
 import { IconButton } from "@components/ui/IconButton";
-import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronLeft, ChevronRight, MessageSquare, ZoomIn, ZoomOut } from "lucide-react";
+import { bookIdAtom } from "@/stores/epub_atoms";
+import { eventBus, EventBusEvent } from "@/utils/bus";
+import type { ParagraphWithIndex } from "@/utils/bus";
+import { processEpubJob } from "@/modules/process_epub";
+import type { PageDataInsertable } from "@/modules/kysley";
+import { ChatPanel } from "@/components/chat/ChatPanel";
+import { useRequireAuth } from "@/hooks/useRequireAuth";
+import { db } from "@/modules/kysley";
+import { stringToNumberID } from "@components/lib/utils";
 
 const PAGE_CACHE_SIZE = 5;
 const MIN_ZOOM = 0.5;
@@ -34,6 +46,27 @@ export function DjvuView({ book }: { book: Book }) {
 
   const cacheRef = useRef<PageCache>({ urls: new Map(), order: [] });
   const mountedRef = useRef(true);
+  const embeddingsProcessedRef = useRef(false);
+  const [chatPanelOpen, setChatPanelOpen] = useState(false);
+  const { requireAuth, AuthDialog } = useRequireAuth();
+  const bookSyncIdRef = useRef<string | null>(null);
+
+  // Set bookIdAtom for voice chat
+  const setBookId = useSetAtom(bookIdAtom);
+  useEffect(() => {
+    setBookId(book.id.toString());
+  }, [book.id, setBookId]);
+
+  // Look up the book's sync_id for chat
+  useEffect(() => {
+    db.selectFrom("books")
+      .select(["sync_id"])
+      .where("id", "=", book.id)
+      .executeTakeFirst()
+      .then((row) => {
+        bookSyncIdRef.current = row?.sync_id ?? null;
+      });
+  }, [book.id]);
 
   // Load total page count on mount
   useEffect(() => {
@@ -202,11 +235,115 @@ export function DjvuView({ book }: { book: Book }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [goPrev, goNext, zoomIn, zoomOut]);
 
+  // Publish paragraphs to event bus for TTS
+  useEffect(() => {
+    if (pageCount === 0) return;
+
+    // Current page paragraphs
+    getDjvuPageText({ path: book.filepath, pageNumber: currentPage })
+      .then((texts) => {
+        const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
+          text,
+          index: `djvu-${currentPage}-${i}`,
+        }));
+        eventBus.publish(EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, paragraphs);
+      })
+      .catch((err) => console.warn("[DjvuView] failed to get text for TTS:", err));
+
+    // Prefetch next page paragraphs
+    if (currentPage < pageCount) {
+      getDjvuPageText({ path: book.filepath, pageNumber: currentPage + 1 })
+        .then((texts) => {
+          const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
+            text,
+            index: `djvu-${currentPage + 1}-${i}`,
+          }));
+          eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
+        })
+        .catch((err) => console.warn("[DjvuView] failed to prefetch next page:", err));
+    } else {
+      eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, []);
+    }
+
+    // Prefetch previous page paragraphs
+    if (currentPage > 1) {
+      getDjvuPageText({ path: book.filepath, pageNumber: currentPage - 1 })
+        .then((texts) => {
+          const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
+            text,
+            index: `djvu-${currentPage - 1}-${i}`,
+          }));
+          eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
+        })
+        .catch((err) => console.warn("[DjvuView] failed to prefetch prev page:", err));
+    } else {
+      eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, []);
+    }
+  }, [book.filepath, currentPage, pageCount]);
+
+  // Handle page-turn events from Player (TTS exhausted current page)
+  useEffect(() => {
+    const handleNextEmptied = () => {
+      setCurrentPage((prev) => Math.min(prev + 1, pageCount));
+    };
+    const handlePrevEmptied = () => {
+      setCurrentPage((prev) => Math.max(prev - 1, 1));
+    };
+
+    eventBus.on(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
+    eventBus.on(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
+
+    return () => {
+      eventBus.off(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
+      eventBus.off(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
+    };
+  }, [pageCount]);
+
+  // Generate embeddings on first open (for AI chat)
+  useEffect(() => {
+    if (pageCount === 0 || embeddingsProcessedRef.current) return;
+    embeddingsProcessedRef.current = true;
+
+    (async () => {
+      try {
+        const alreadySaved = await hasSavedEpubData({ bookId: book.id });
+        if (alreadySaved) return;
+
+        const allPageData: PageDataInsertable[] = [];
+        for (let page = 1; page <= pageCount; page++) {
+          const texts = await getDjvuPageText({ path: book.filepath, pageNumber: page });
+          const combined = texts.join("\n").trim();
+          if (combined.length > 0) {
+            allPageData.push({
+              id: stringToNumberID(`${book.id}-djvu-${page}`),
+              pageNumber: page,
+              bookId: book.id,
+              data: combined,
+            });
+          }
+        }
+
+        if (allPageData.length > 0) {
+          await processEpubJob(book.id, allPageData);
+        }
+      } catch (err) {
+        console.warn("[DjvuView] failed to generate embeddings:", err);
+      }
+    })();
+  }, [book.id, book.filepath, pageCount]);
+
   return (
     <div className="relative h-screen w-full flex flex-col bg-gray-900">
       {/* Top bar */}
       <div className="fixed top-0 left-0 right-0 z-50 bg-transparent">
-        <div className="flex items-center justify-end px-4 pt-5">
+        <div className="flex items-center justify-end gap-2 px-4 pt-5">
+          <button
+            onClick={() => requireAuth(() => setChatPanelOpen(true))}
+            className="p-2 rounded-md text-white hover:bg-white/10"
+            aria-label="Open chat panel"
+          >
+            <MessageSquare size={20} />
+          </button>
           <BackButton />
         </div>
       </div>
@@ -297,6 +434,18 @@ export function DjvuView({ book }: { book: Book }) {
 
       {/* TTS Controls */}
       <TTSControls key={book.id.toString()} bookId={book.id.toString()} />
+
+      {AuthDialog}
+
+      {/* Chat Panel */}
+      <ChatPanel
+        bookId={book.id}
+        bookSyncId={bookSyncIdRef.current ?? ""}
+        bookTitle={book.title}
+        rendition={null}
+        open={chatPanelOpen}
+        onOpenChange={setChatPanelOpen}
+      />
     </div>
   );
 }
