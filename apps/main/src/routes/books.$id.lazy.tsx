@@ -86,6 +86,22 @@ function BookView(): React.JSX.Element {
         />
       )}
       {book?.kind === "epub" && <EpubView key={book.id} book={book} />}
+      {book?.kind === "mobi" && (
+        <div className="w-full h-screen flex items-center justify-center">
+          <div className="text-center">
+            <h2 className="text-xl font-semibold mb-2">{book.title}</h2>
+            <p className="text-muted-foreground">MOBI viewer coming in Phase 2</p>
+          </div>
+        </div>
+      )}
+      {book?.kind === "djvu" && (
+        <div className="w-full h-screen flex items-center justify-center">
+          <div className="text-center">
+            <h2 className="text-xl font-semibold mb-2">{book.title}</h2>
+            <p className="text-muted-foreground">DJVU viewer coming in Phase 2</p>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }
