@@ -6,7 +6,9 @@ use zip::ZipArchive;
 // At the top of commands.rs
 use crate::embed::EmbedResult;
 use crate::embed::{embed_text, EmbedParam};
+use crate::djvu::Djvu;
 use crate::epub::Epub;
+use crate::mobi::Mobi;
 use crate::pdf::Pdf;
 use crate::shared::books::store_book_data;
 use crate::shared::books::Extractable;
@@ -18,6 +20,58 @@ use crate::vectordb::{self, SearchResult, Vector};
 use serde_json::json;
 use tauri::Manager;
 use tauri_plugin_store::StoreExt;
+
+const KEYRING_SERVICE: &str = "com.fidexa.rishi";
+
+/// Store a value in the OS keychain.
+fn keyring_set(key: &str, value: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, key).map_err(|e| e.to_string())?;
+    entry.set_password(value).map_err(|e| e.to_string())
+}
+
+/// Read a value from the OS keychain. Returns None if not found.
+fn keyring_get(key: &str) -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, key).map_err(|e| e.to_string())?;
+    match entry.get_password() {
+        Ok(val) => Ok(Some(val)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Delete a value from the OS keychain. Ignores "not found" errors.
+fn keyring_delete(key: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYRING_SERVICE, key).map_err(|e| e.to_string())?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Migrate auth secrets from store.json to OS keychain (one-time, on app startup).
+pub fn migrate_auth_to_keychain(app: &tauri::AppHandle) -> Result<(), String> {
+    let store = app.store("store.json").map_err(|e| e.to_string())?;
+
+    // Only migrate if token exists in store but NOT in keychain
+    if let Some(token_value) = store.get("auth_token") {
+        if let Some(token) = token_value.as_str() {
+            if keyring_get("auth_token")?.is_none() {
+                keyring_set("auth_token", token)?;
+
+                if let Some(exp) = store.get("auth_expires_at") {
+                    keyring_set("auth_expires_at", &exp.to_string())?;
+                }
+
+                // Clean up secrets from the plain-text store
+                store.delete("auth_token");
+                store.delete("auth_expires_at");
+                store.save().map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
 
 #[tauri::command]
 pub fn get_book_data(app: tauri::AppHandle, path: &Path) -> Result<BookData, String> {
@@ -40,62 +94,37 @@ pub async fn process_job(
     sql::process_job(page_number, book_id, page_data, &app_data_dir).await
 }
 
+/// Complete auth flow using the state parameter from the deep link.
+/// The worker looks up the userId from Redis (stored by the web app),
+/// verifies with Clerk, and issues a JWT — no tokens pass through the deep link.
+/// Sends the code_verifier for PKCE-like proof-of-possession.
 #[tauri::command]
-pub async fn poll_for_user(state: &str, timeout_sec: u64) -> Result<User, String> {
-    let worker_url = "https://rishi-worker.faridmato90.workers.dev";
-    let path = format!("/api/user/{}", state);
-    let url = format!("{}{}", worker_url, path);
-
-    let client = reqwest::Client::new();
-    let mut elapsed = 0;
-    let interval = 2; // seconds
-    while elapsed < timeout_sec {
-        let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
-        if response.status().is_success() {
-            let user: User = response.json::<User>().await.map_err(|e| e.to_string())?;
-            return Ok(user);
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
-        elapsed += interval;
-    }
-    Err("Timeout reached while polling for user ID".to_string())
-}
-
-pub fn get_auth_token(app: &tauri::AppHandle) -> Result<String, String> {
+pub async fn complete_auth(app: tauri::AppHandle, state: &str) -> Result<User, String> {
+    // Read code_verifier from the persistent store
     let store = app.store("store.json").map_err(|e| e.to_string())?;
-    let token_value = store.get("auth_token").ok_or("Not authenticated")?;
-    token_value
+    let code_verifier = store
+        .get("auth_code_verifier")
+        .ok_or("Missing code_verifier — please login again")?;
+    let code_verifier = code_verifier
         .as_str()
-        .map(|s| s.to_string())
-        .ok_or("Invalid token format".to_string())
-}
+        .ok_or("Invalid code_verifier format")?
+        .to_string();
 
-async fn authenticated_get(app: &tauri::AppHandle, url: &str) -> Result<reqwest::Response, String> {
-    let token = get_auth_token(app)?;
-    let client = reqwest::Client::new();
-    client
-        .get(url)
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn exchange_token(app: tauri::AppHandle, session_token: &str) -> Result<User, String> {
     let worker_url = "https://rishi-worker.faridmato90.workers.dev";
-    let url = format!("{}/api/auth/exchange", worker_url);
+    let url = format!("{}/api/auth/complete", worker_url);
 
     let client = reqwest::Client::new();
     let response = client
         .post(&url)
-        .header("Authorization", format!("Bearer {}", session_token))
+        .json(&json!({ "state": state, "code_verifier": code_verifier }))
         .send()
         .await
         .map_err(|e| e.to_string())?;
 
     if !response.status().is_success() {
-        return Err(format!("Token exchange failed: {}", response.status()));
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Auth completion failed ({}): {}", status, body));
     }
 
     let exchange_response: serde_json::Value =
@@ -103,17 +132,98 @@ pub async fn exchange_token(app: tauri::AppHandle, session_token: &str) -> Resul
 
     let token = exchange_response["token"]
         .as_str()
-        .ok_or("Missing token")?;
+        .ok_or("Missing token in response")?;
     let user: User = serde_json::from_value(exchange_response["user"].clone())
         .map_err(|e| e.to_string())?;
 
+    let expires_at = exchange_response["expiresAt"]
+        .as_i64()
+        .unwrap_or(0);
+
+    // Store token and expiry in OS keychain (not plain JSON)
+    keyring_set("auth_token", token)?;
+    keyring_set("auth_expires_at", &expires_at.to_string())?;
+
+    // User profile (non-secret) stays in store.json for easy TS access
     let store = app.store("store.json").map_err(|e| e.to_string())?;
-    store.set("auth_token", json!(token));
     store.set("user", json!(user));
     store.save().map_err(|e| e.to_string())?;
 
     Ok(user)
 }
+
+/// Check auth flow status from Redis for monitoring and retry decisions.
+#[tauri::command]
+pub async fn check_auth_status(app: tauri::AppHandle, state: &str) -> Result<serde_json::Value, String> {
+    // Validate state is a well-formed UUID before interpolating into a URL
+    uuid::Uuid::parse_str(state)
+        .map_err(|_| "Invalid state parameter — expected UUID format".to_string())?;
+
+    // Read the stored code_verifier and compute code_challenge so the status
+    // endpoint can verify we own this auth flow.
+    let store = app.store("store.json").map_err(|e| e.to_string())?;
+    let code_verifier = store
+        .get("auth_code_verifier")
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .ok_or_else(|| "No code_verifier in store".to_string())?;
+
+    use sha2::{Sha256, Digest};
+    let hash = Sha256::digest(code_verifier.as_bytes());
+    let code_challenge = hash.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+
+    let worker_url = "https://rishi-worker.faridmato90.workers.dev";
+    let url = format!("{}/api/auth/status/{}?code_challenge={}", worker_url, state, code_challenge);
+    let client = reqwest::Client::new();
+    let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    let value: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    Ok(value)
+}
+
+pub fn get_auth_token(_app: &tauri::AppHandle) -> Result<String, String> {
+    // Check expiry from keychain
+    if let Some(exp_str) = keyring_get("auth_expires_at")? {
+        let expires_at: u64 = exp_str.parse().map_err(|_| "Invalid auth_expires_at format")?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_secs();
+        if now > expires_at {
+            return Err("Token expired — please log in again".to_string());
+        }
+    }
+
+    keyring_get("auth_token")?.ok_or_else(|| "Not authenticated".to_string())
+}
+
+/// Tauri command wrapper so the TS frontend can retrieve the auth token
+/// without direct store access. The token never transits to JS unless
+/// explicitly requested via this IPC call.
+#[tauri::command]
+pub fn get_auth_token_cmd(app: tauri::AppHandle) -> Result<String, String> {
+    get_auth_token(&app)
+}
+
+async fn authenticated_get(app: &tauri::AppHandle, url: &str) -> Result<reqwest::Response, String> {
+    let token = get_auth_token(app)?;
+    let client = reqwest::Client::new();
+    let response = client
+        .get(url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("Session expired — please log in again".to_string());
+    }
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Request failed ({}): {}", status, body));
+    }
+    Ok(response)
+}
+
 
 #[tauri::command]
 pub async fn get_context_for_query(
@@ -148,18 +258,56 @@ pub fn save_vectors(
 }
 
 #[tauri::command]
-pub fn get_state() -> String {
+pub fn get_state(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use rand::RngCore;
     use uuid::Uuid;
-    // create a random state
+
+    // Generate a random state UUID
     let state = Uuid::new_v4().to_string();
-    state
+
+    // Generate a random code_verifier (32 bytes, base64url-encoded)
+    let mut verifier_bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut verifier_bytes);
+    let code_verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);
+
+    // Persist both in the Tauri store so they survive restarts
+    let store = app.store("store.json").map_err(|e| e.to_string())?;
+    store.set("auth_state", json!(state));
+    store.set("auth_code_verifier", json!(code_verifier));
+    store.save().map_err(|e| e.to_string())?;
+
+    // Compute code_challenge = hex(SHA-256(code_verifier)) so the verifier
+    // never leaves the Rust process.
+    use sha2::{Sha256, Digest};
+    let hash = Sha256::digest(code_verifier.as_bytes());
+    let code_challenge = hash.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+
+    Ok(json!({ "state": state, "codeChallenge": code_challenge }))
 }
 
 #[tauri::command]
 pub async fn signout(app: tauri::AppHandle) -> Result<(), String> {
+    // Best-effort: revoke the token on the server before deleting locally
+    if let Some(token) = keyring_get("auth_token")? {
+        let worker_url = "https://rishi-worker.faridmato90.workers.dev";
+        let url = format!("{}/api/auth/revoke", worker_url);
+        let client = reqwest::Client::new();
+        let _ = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await;
+    }
+
+    // Delete secrets from keychain
+    keyring_delete("auth_token")?;
+    keyring_delete("auth_expires_at")?;
+
+    // Delete non-secret user profile from store
     let store = app.store("store.json").map_err(|e| e.to_string())?;
     store.delete("user");
-    store.delete("auth_token");
     store.save().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -208,6 +356,35 @@ pub fn get_pdf_data(app: tauri::AppHandle, path: &Path) -> Result<BookData, Stri
 }
 
 #[tauri::command]
+pub fn get_mobi_data(app: tauri::AppHandle, path: &Path) -> Result<BookData, String> {
+    let data = Mobi::new(path);
+    store_book_data(app, &data).map_err(|e| e.to_string())?;
+    data.extract().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_djvu_data(app: tauri::AppHandle, path: &Path) -> Result<BookData, String> {
+    let data = Djvu::new(path);
+    store_book_data(app, &data).map_err(|e| e.to_string())?;
+    data.extract().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_djvu_page(path: &Path, page_number: u32, dpi: u32) -> Result<Vec<u8>, String> {
+    crate::djvu::render_page_to_png(path, page_number, dpi).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_djvu_page_count(path: &Path) -> Result<u32, String> {
+    crate::djvu::get_page_count(path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_djvu_page_text(path: &Path, page_number: u32) -> Result<Vec<String>, String> {
+    crate::djvu::get_page_text(path, page_number).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn embed(embedparams: Vec<EmbedParam>) -> Result<Vec<EmbedResult>, String> {
     let res = embed_text(embedparams).await.map_err(|e| e.to_string())?;
     Ok(res)
@@ -216,6 +393,21 @@ pub async fn embed(embedparams: Vec<EmbedParam>) -> Result<Vec<EmbedResult>, Str
 #[tauri::command]
 pub fn is_dev() -> bool {
     tauri::is_dev()
+}
+
+#[tauri::command]
+pub fn get_mobi_chapter(path: &Path, chapter_index: u32) -> Result<String, String> {
+    crate::mobi::get_chapter(path, chapter_index).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_mobi_chapter_count(path: &Path) -> Result<u32, String> {
+    crate::mobi::get_chapter_count(path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_mobi_text(path: &Path, chapter_index: u32) -> Result<Vec<String>, String> {
+    crate::mobi::get_chapter_text(path, chapter_index).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -231,9 +423,26 @@ pub fn unzip(file_path: &str, out_dir: &str) -> Result<PathBuf, String> {
     fs::create_dir_all(&output_dir).map_err(|e| e.to_string())?;
 
     // Extract all files (like AdmZip's `extractAllTo`)
+    let canonical_output_dir = fs::canonicalize(&output_dir).map_err(|e| e.to_string())?;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
-        let outpath = output_dir.join(file.name());
+
+        // Use enclosed_name() to prevent Zip Slip path traversal
+        let entry_name = match file.enclosed_name() {
+            Some(name) => name.to_owned(),
+            None => {
+                // Skip entries with unsafe paths (e.g., containing "..")
+                continue;
+            }
+        };
+        let outpath = output_dir.join(&entry_name);
+
+        // Double-check the resolved path stays within output_dir
+        if let Ok(canonical) = fs::canonicalize(outpath.parent().unwrap_or(&output_dir)) {
+            if !canonical.starts_with(&canonical_output_dir) {
+                continue;
+            }
+        }
 
         if file.name().ends_with('/') {
             fs::create_dir_all(&outpath).map_err(|e| e.to_string())?;

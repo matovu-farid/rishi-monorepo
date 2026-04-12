@@ -1,7 +1,9 @@
-mod commands;
+pub(crate) mod commands;
 pub mod embed;
 mod epub;
 mod pdf;
+mod mobi;
+pub(crate) mod djvu;
 mod shared;
 pub mod vectordb;
 
@@ -29,8 +31,11 @@ pub mod test_helpers;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let client = sentry::init((
+    let sentry_dsn = option_env!("SENTRY_DSN").unwrap_or(
         "https://e67d34cb7b6a7fa22a04e39ab2100227@o4510586781958144.ingest.de.sentry.io/4510588300361808",
+    );
+    let client = sentry::init((
+        sentry_dsn,
         sentry::ClientOptions {
             release: sentry::release_name!(),
             enable_logs: true,
@@ -56,9 +61,11 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_mic_recorder::init())
         .setup(|app| {
-            //let _conn = db::init_database(app.handle())?;
             db::setup_database(app.handle())?;
-            // You can store this conn somewhere global if needed
+            // Migrate auth secrets from plain-text store.json to OS keychain
+            if let Err(e) = commands::migrate_auth_to_keychain(app.handle()) {
+                eprintln!("Keychain migration warning: {}", e);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -66,6 +73,14 @@ pub fn run() {
             commands::unzip,
             commands::get_book_data,
             commands::get_pdf_data,
+            commands::get_mobi_data,
+            commands::get_mobi_chapter,
+            commands::get_mobi_chapter_count,
+            commands::get_mobi_text,
+            commands::get_djvu_data,
+            commands::get_djvu_page,
+            commands::get_djvu_page_count,
+            commands::get_djvu_page_text,
             commands::embed,
             commands::save_vectors,
             commands::search_vectors,
@@ -75,8 +90,9 @@ pub fn run() {
             commands::get_user,
             commands::signout,
             commands::get_user_from_store,
-            commands::poll_for_user,
-            commands::exchange_token,
+            commands::complete_auth,
+            commands::check_auth_status,
+            commands::get_auth_token_cmd,
             api::get_realtime_client_secret,
             // SQL commands
             sql::save_page_data_many,
