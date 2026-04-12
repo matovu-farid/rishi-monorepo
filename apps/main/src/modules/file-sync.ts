@@ -1,5 +1,5 @@
 import { readFile, mkdir, writeFile } from '@tauri-apps/plugin-fs';
-import { load } from '@tauri-apps/plugin-store';
+import { getAuthToken } from './auth';
 import type { UploadUrlRequest, UploadUrlResponse, DownloadUrlRequest, DownloadUrlResponse } from '@rishi/shared/sync-types';
 import { db } from './kysley';
 import { appDataDir } from '@tauri-apps/api/path';
@@ -7,8 +7,7 @@ import { appDataDir } from '@tauri-apps/api/path';
 const WORKER_URL = 'https://rishi-worker.faridmato90.workers.dev';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
-  const store = await load('store.json');
-  const token = await store.get<string>('auth_token');
+  const token = await getAuthToken();
   return {
     'Authorization': `Bearer ${token}`,
     'Content-Type': 'application/json',
@@ -34,9 +33,15 @@ export async function hashBookFile(filePath: string): Promise<string> {
 export async function uploadBookFile(
   filePath: string,
   fileHash: string,
-  format: 'epub' | 'pdf'
+  format: 'epub' | 'pdf' | 'mobi' | 'djvu'
 ): Promise<{ r2Key: string }> {
-  const contentType = format === 'epub' ? 'application/epub+zip' : 'application/pdf';
+  const contentTypes: Record<string, string> = {
+    epub: 'application/epub+zip',
+    pdf: 'application/pdf',
+    mobi: 'application/x-mobipocket-ebook',
+    djvu: 'image/vnd.djvu',
+  };
+  const contentType = contentTypes[format] ?? 'application/octet-stream';
   const headers = await getAuthHeaders();
 
   // Request presigned upload URL
