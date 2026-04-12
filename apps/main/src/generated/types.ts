@@ -64,14 +64,31 @@ export interface ProcessJobParams {
   [key: string]: unknown;
 }
 
-export interface PollForUserParams {
+export interface CompleteAuthParams {
   state: string;
-  timeoutSec: number;
   [key: string]: unknown;
 }
 
-export interface ExchangeTokenParams {
-  sessionToken: string;
+export interface CheckAuthStatusParams {
+  state: string;
+  [key: string]: unknown;
+}
+
+export interface AuthState {
+  state: string;
+  codeChallenge: string;
+}
+
+export interface AuthFlowStatus {
+  status: "authenticated" | "completing" | "completed" | "failed" | "expired" | "not_found";
+  createdAt: number | null;
+  retryCount: number;
+  log: AuthLogEntry[];
+}
+
+export interface AuthLogEntry {
+  step: string;
+  timestamp: number;
   [key: string]: unknown;
 }
 
@@ -209,5 +226,15 @@ export interface BookInsertable {
   location: string;
   coverKind: string;
   version: number;
+}
+
+export interface GetMobiDataParams {
+  path: Path;
+  [key: string]: unknown;
+}
+
+export interface GetDjvuDataParams {
+  path: Path;
+  [key: string]: unknown;
 }
 

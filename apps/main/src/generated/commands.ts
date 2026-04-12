@@ -61,12 +61,12 @@ export async function processJob(params: types.ProcessJobParams): Promise<void> 
   return invoke('process_job', params);
 }
 
-export async function pollForUser(params: types.PollForUserParams): Promise<types.User> {
-  return invoke('poll_for_user', params);
+export async function completeAuth(params: types.CompleteAuthParams): Promise<types.User> {
+  return invoke('complete_auth', params);
 }
 
-export async function exchangeToken(params: types.ExchangeTokenParams): Promise<types.User> {
-  return invoke('exchange_token', params);
+export async function checkAuthStatus(params: types.CheckAuthStatusParams): Promise<types.AuthFlowStatus> {
+  return invoke('check_auth_status', params);
 }
 
 export async function getContextForQuery(params: types.GetContextForQueryParams): Promise<string[]> {
@@ -77,7 +77,7 @@ export async function saveVectors(params: types.SaveVectorsParams): Promise<void
   return invoke('save_vectors', params);
 }
 
-export async function getState(): Promise<string> {
+export async function getState(): Promise<types.AuthState> {
   return invoke('get_state');
 }
 
@@ -111,5 +111,13 @@ export async function isDev(): Promise<boolean> {
 
 export async function unzip(params: types.UnzipParams): Promise<types.PathBuf> {
   return invoke('unzip', params);
+}
+
+export async function getMobiData(params: types.GetMobiDataParams): Promise<types.BookData> {
+  return invoke('get_mobi_data', params);
+}
+
+export async function getDjvuData(params: types.GetDjvuDataParams): Promise<types.BookData> {
+  return invoke('get_djvu_data', params);
 }
 
