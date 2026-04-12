@@ -121,3 +121,15 @@ export async function getDjvuData(params: types.GetDjvuDataParams): Promise<type
   return invoke('get_djvu_data', params);
 }
 
+export async function getDjvuPage(params: types.GetDjvuPageParams): Promise<number[]> {
+  return invoke('get_djvu_page', params);
+}
+
+export async function getDjvuPageCount(params: types.GetDjvuPageCountParams): Promise<number> {
+  return invoke('get_djvu_page_count', params);
+}
+
+export async function getDjvuPageText(params: types.GetDjvuPageTextParams): Promise<string[]> {
+  return invoke('get_djvu_page_text', params);
+}
+

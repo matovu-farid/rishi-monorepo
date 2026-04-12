@@ -238,3 +238,38 @@ export interface GetDjvuDataParams {
   [key: string]: unknown;
 }
 
+export interface GetMobiChapterParams {
+  path: string;
+  chapterIndex: number;
+  [key: string]: unknown;
+}
+
+export interface GetMobiChapterCountParams {
+  path: string;
+  [key: string]: unknown;
+}
+
+export interface GetMobiTextParams {
+  path: string;
+  chapterIndex: number;
+  [key: string]: unknown;
+}
+
+export interface GetDjvuPageParams {
+  path: string;
+  pageNumber: number;
+  dpi: number;
+  [key: string]: unknown;
+}
+
+export interface GetDjvuPageCountParams {
+  path: string;
+  [key: string]: unknown;
+}
+
+export interface GetDjvuPageTextParams {
+  path: string;
+  pageNumber: number;
+  [key: string]: unknown;
+}
+
