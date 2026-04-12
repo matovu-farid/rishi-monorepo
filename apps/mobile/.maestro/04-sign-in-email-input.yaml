@@ -1,33 +1,23 @@
 appId: com.rishi.mobile
 ---
+# Test the import alert shows all options including From URL
 - runFlow: common/launch.yaml
 
-# Wait for sign-in screen
-- extendedWaitUntil:
-    visible:
-      text: "Welcome to Rishi"
-    timeout: 30000
+- tapOn: "Import Book"
 
-# Test email input interaction
-- tapOn:
-    id: "email-input"
-- inputText: "test@example.com"
+- assertVisible:
+    text: "EPUB"
 
-# Test password input interaction
-- tapOn:
-    id: "password-input"
-- inputText: "testpassword123"
+- assertVisible:
+    text: "PDF"
 
-- takeScreenshot: "04-email-password-filled"
+- assertVisible:
+    text: "From URL"
 
-# Tap sign in — will fail but shouldn't crash
-- tapOn:
-    id: "sign-in-button"
+- assertVisible:
+    text: "Cancel"
 
-# Wait and verify app stays stable
-- extendedWaitUntil:
-    visible:
-      text: "Welcome to Rishi"
-    timeout: 10000
+- takeScreenshot: "04-import-options"
 
-- takeScreenshot: "04-after-sign-in-attempt"
+# Dismiss
+- tapOn: "Cancel"

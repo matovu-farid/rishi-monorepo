@@ -2,56 +2,35 @@ appId: com.rishi.mobile
 ---
 - runFlow: common/launch.yaml
 
-# Wait for app to load
+# Tap import
+- tapOn: "Import Book"
+
+# Wait for alert
 - extendedWaitUntil:
     visible:
-      text: "Welcome to Rishi"
-    timeout: 30000
+      text: "From URL"
+    timeout: 5000
 
-# Test URL import from empty library (sign-in screen = skip)
-- runFlow:
-    when:
-      visible: "Import Book"
-    commands:
-      - tapOn: "Import Book"
-      - tapOn: "From URL"
+- tapOn: "From URL"
 
-      - tapOn:
-          id: "url-input"
-      - inputText: "https://www.gutenberg.org/ebooks/11.epub.images"
+# Wait for inline sheet
+- extendedWaitUntil:
+    visible:
+      id: "url-input"
+    timeout: 5000
 
-      - tapOn:
-          id: "url-download-button"
+# Tap the input to focus it
+- tapOn:
+    id: "url-input"
 
-      # Wait for download to complete — book title should appear in library
-      - extendedWaitUntil:
-          visible:
-            text: "11.epub"
-          timeout: 60000
+# Type URL and press Enter to trigger onSubmitEditing
+- inputText: "https://www.gutenberg.org/cache/epub/11/pg11-images.epub"
+- pressKey: Enter
 
-      - takeScreenshot: "06-url-import-success"
+# Wait for download
+- extendedWaitUntil:
+    visible:
+      text: "pg11-images"
+    timeout: 60000
 
-# If library already has books, use FAB
-- runFlow:
-    when:
-      visible:
-        id: "import-book-fab"
-    commands:
-      - tapOn:
-          id: "import-book-fab"
-
-      - tapOn: "From URL"
-
-      - tapOn:
-          id: "url-input"
-      - inputText: "https://www.gutenberg.org/ebooks/11.epub.images"
-
-      - tapOn:
-          id: "url-download-button"
-
-      - extendedWaitUntil:
-          visible:
-            text: "11.epub"
-          timeout: 60000
-
-      - takeScreenshot: "06-url-import-success"
+- takeScreenshot: "06-url-import-success"

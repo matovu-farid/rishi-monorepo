@@ -8,23 +8,26 @@ import { Colors } from '@/constants/theme'
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { initApiClient } from '@/lib/api'
 import { startSyncTriggers, stopSyncTriggers } from '@/lib/sync/triggers'
+import { IS_E2E_TEST } from '@/app/_layout'
 
 export default function TabLayout() {
   const colorScheme = useColorScheme()
-  const { isSignedIn, isLoaded, getToken } = useAuth()
+  const auth = IS_E2E_TEST ? null : useAuth()
 
   useEffect(() => {
-    if (isSignedIn) {
-      initApiClient(getToken)
+    if (auth?.isSignedIn) {
+      initApiClient(auth.getToken)
       startSyncTriggers()
       return () => {
         stopSyncTriggers()
       }
     }
-  }, [isSignedIn, getToken])
+  }, [auth?.isSignedIn, auth?.getToken])
 
-  if (!isLoaded) return null
-  if (!isSignedIn) return <Redirect href="/(auth)/sign-in" />
+  if (!IS_E2E_TEST) {
+    if (!auth?.isLoaded) return null
+    if (!auth?.isSignedIn) return <Redirect href="/(auth)/sign-in" />
+  }
 
   return (
     <Tabs

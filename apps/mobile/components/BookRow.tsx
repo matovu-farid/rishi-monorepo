@@ -47,6 +47,7 @@ export function BookRow({ book, onPress, onDelete }: BookRowProps) {
       </View>
       {/* Delete button */}
       <TouchableOpacity
+        testID="book-delete-button"
         onPress={() => onDelete(book)}
         className="w-11 h-11 items-center justify-center"
         accessibilityRole="button"

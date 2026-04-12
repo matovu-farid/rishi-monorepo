@@ -2,41 +2,41 @@ appId: com.rishi.mobile
 ---
 - runFlow: common/launch.yaml
 
+# Import a book
+- tapOn: "Import Book"
+- tapOn: "From URL"
 - extendedWaitUntil:
     visible:
-      text: "Welcome to Rishi"
-    timeout: 30000
+      id: "url-input"
+    timeout: 5000
+- tapOn:
+    id: "url-input"
+- inputText: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+- pressKey: Enter
+- extendedWaitUntil:
+    visible:
+      text: "dummy"
+    timeout: 60000
 
-- runFlow:
-    when:
-      visible: "Import Book"
-    commands:
-      # Import a book first
-      - tapOn: "Import Book"
-      - tapOn: "From URL"
-      - tapOn:
-          id: "url-input"
-      - inputText: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
-      - tapOn:
-          id: "url-download-button"
-      - extendedWaitUntil:
-          visible:
-            text: "dummy"
-          timeout: 60000
+- takeScreenshot: "12-book-imported"
 
-      - takeScreenshot: "12-book-imported"
+# Tap the delete button (trash icon)
+- tapOn:
+    id: "book-delete-button"
 
-      # Long-press to delete
-      - longPressOn:
-          text: "dummy"
+# Wait for confirmation alert
+- extendedWaitUntil:
+    visible:
+      text: "Delete Book"
+    timeout: 5000
 
-      # Confirm delete
-      - tapOn: "Delete"
+# Confirm delete
+- tapOn: "Delete"
 
-      # Verify book is gone — should show empty state again
-      - extendedWaitUntil:
-          visible:
-            text: "No books yet"
-          timeout: 5000
+# Verify book is gone — should show empty state again
+- extendedWaitUntil:
+    visible:
+      text: "No books yet"
+    timeout: 5000
 
-      - takeScreenshot: "12-book-deleted"
+- takeScreenshot: "12-book-deleted"

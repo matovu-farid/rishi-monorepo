@@ -21,3 +21,9 @@ appId: com.rishi.mobile
 
 - tapOn:
     point: "50%,15%"
+
+# Wait for the app to load — either empty state or library with books
+- extendedWaitUntil:
+    visible:
+      text: "Import Book"
+    timeout: 30000

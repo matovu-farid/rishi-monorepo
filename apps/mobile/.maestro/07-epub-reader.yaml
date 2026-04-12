@@ -1,52 +1,50 @@
 appId: com.rishi.mobile
 ---
+# Test: import a book and open it in the reader
 - runFlow: common/launch.yaml
+
+# Import a PDF via URL (fast, reliable test fixture)
+- tapOn: "Import Book"
+- tapOn: "From URL"
+- extendedWaitUntil:
+    visible:
+      id: "url-input"
+    timeout: 5000
+- tapOn:
+    id: "url-input"
+- inputText: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+- pressKey: Enter
 
 - extendedWaitUntil:
     visible:
-      text: "Welcome to Rishi"
-    timeout: 30000
+      text: "dummy"
+    timeout: 60000
 
-- runFlow:
-    when:
-      visible: "Import Book"
-    commands:
-      # Import a book via URL
-      - tapOn: "Import Book"
-      - tapOn: "From URL"
-      - tapOn:
-          id: "url-input"
-      - inputText: "https://www.gutenberg.org/ebooks/11.epub.images"
-      - tapOn:
-          id: "url-download-button"
-      - extendedWaitUntil:
-          visible:
-            text: "11.epub"
-          timeout: 60000
+# Tap the imported book to open reader
+- tapOn:
+    text: "dummy"
 
-      # Tap the imported book to open reader
-      - tapOn:
-          text: "11.epub"
+# Wait for reader to load
+- extendedWaitUntil:
+    notVisible:
+      text: "Loading book..."
+    timeout: 15000
 
-      # Wait for reader to load
-      - extendedWaitUntil:
-          notVisible:
-            text: "Loading book..."
-          timeout: 15000
+- takeScreenshot: "07-reader-content"
 
-      # Tap screen to show toolbar
-      - tapOn:
-          point: "50%,50%"
+# Tap screen to show toolbar
+- tapOn:
+    point: "50%,50%"
 
-      - takeScreenshot: "07-epub-reader"
+- takeScreenshot: "07-reader-toolbar"
 
-      # Tap back to return to library
-      - tapOn:
-          point: "10%,7%"
+# Tap back to return to library
+- tapOn:
+    point: "10%,7%"
 
-      - extendedWaitUntil:
-          visible:
-            text: "Library"
-          timeout: 10000
+- extendedWaitUntil:
+    visible:
+      text: "dummy"
+    timeout: 15000
 
-      - takeScreenshot: "07-back-to-library"
+- takeScreenshot: "07-back-to-library"

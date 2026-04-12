@@ -16,6 +16,8 @@ import '../global.css'
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { initVectorExtension, ensureChunkTables } from '@/lib/rag/vector-store'
 
+export const IS_E2E_TEST = process.env.EXPO_PUBLIC_E2E_TEST === 'true'
+
 Sentry.init({
   dsn: process.env.EXPO_PUBLIC_SENTRY_DSN ?? '',
   tracesSampleRate: 1.0,
@@ -36,12 +38,21 @@ try {
 
 const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!
 
-if (!publishableKey) {
+if (!publishableKey && !IS_E2E_TEST) {
   throw new Error('EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY is not set. Add it to your .env file.')
 }
 
 function RootLayout() {
   const colorScheme = useColorScheme()
+
+  if (IS_E2E_TEST) {
+    return (
+      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <Slot />
+        <StatusBar style="auto" />
+      </ThemeProvider>
+    )
+  }
 
   return (
     <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>

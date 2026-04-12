@@ -2,24 +2,27 @@ appId: com.rishi.mobile
 ---
 - runFlow: common/launch.yaml
 
+# Go to Chat tab (center of tab bar)
+- tapOn:
+    point: "50%,96%"
+
 - extendedWaitUntil:
     visible:
-      text: "Welcome to Rishi"
-    timeout: 30000
+      text: "Conversations"
+    timeout: 5000
 
-- runFlow:
-    when:
-      visible: "Chat"
-    commands:
-      - tapOn: "Chat"
+- assertVisible:
+    id: "no-conversations-text"
 
-      - assertVisible:
-          text: "Conversations"
+# Tap the new conversation button
+- tapOn:
+    id: "new-conversation-button"
 
-      - assertVisible:
-          id: "no-conversations-text"
+- extendedWaitUntil:
+    visible:
+      text: "No Books Ready"
+    timeout: 5000
 
-      - assertVisible:
-          text: "Open a book and tap the AI icon to start a conversation."
+- takeScreenshot: "11-no-books-ready"
 
-      - takeScreenshot: "11-conversations-empty"
+- tapOn: "OK"

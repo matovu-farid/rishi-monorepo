@@ -1,33 +1,12 @@
 appId: com.rishi.mobile
 ---
+# Verify we land on Library tab with all UI elements
 - runFlow: common/launch.yaml
 
-# Wait for sign-in screen
-- extendedWaitUntil:
-    visible:
-      text: "Welcome to Rishi"
-    timeout: 30000
-
-# Verify all sign-in screen elements
 - assertVisible:
-    text: "Welcome to Rishi"
+    text: "No books yet"
 
 - assertVisible:
-    id: "email-input"
+    text: "Import Book"
 
-- assertVisible:
-    id: "password-input"
-
-- assertVisible:
-    id: "sign-in-button"
-
-- assertVisible:
-    id: "google-sign-in-button"
-
-- assertVisible:
-    text: "Sign In"
-
-- assertVisible:
-    text: "Continue with Google"
-
-- takeScreenshot: "02-sign-in-screen"
+- takeScreenshot: "02-library-loaded"
