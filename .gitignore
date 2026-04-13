@@ -1,0 +1,7 @@
+*.p12
+*.cer
+*.pem
+*.key
+.env
+.env.*
+.worktrees/
