@@ -30,6 +30,7 @@ import { db } from '@/modules/kysley';
 import { ReaderSettings } from './ReaderSettings';
 import { HighlightsPanel } from '@/components/highlights/HighlightsPanel';
 import { ChatPanel } from '@/components/chat/ChatPanel';
+import { updateStoredCoverImage } from '@/components/pdf/utils/updateStoredCoverImage';
 
 export function ReaderShell({ book }: { book: Book }) {
   const adapter = useBookAdapter(book);
@@ -123,6 +124,15 @@ export function ReaderShell({ book }: { book: Book }) {
     }, 1000);
     return () => clearTimeout(handle);
   }, [book.id, location]);
+
+  // Cover image generation for paged formats (runs once when content is ready)
+  useEffect(() => {
+    if (!adapter.content || adapter.content.kind !== 'paged') return;
+    if (book.coverKind !== 'fallback') return;
+    void updateStoredCoverImage(book).catch((err) => {
+      console.error('Cover gen failed:', err);
+    });
+  }, [adapter.content, book]);
 
   const swipeBind = useDrag(({ swipe: [swipeX] }) => {
     if (swipeX === -1) rendererRef.current?.next();
