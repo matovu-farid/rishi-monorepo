@@ -1,6 +1,6 @@
 // apps/main/src/components/reader/renderers/PagedRenderer.tsx
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import type { RenderedPage, RendererHandle } from '@/types/reader';
+import type { RenderedPage, RendererHandle, AppliedHighlight } from '@/types/reader';
 import type { PagedRendererProps } from './types';
 import { PageSlot } from './paged/PageSlot';
 
@@ -11,6 +11,7 @@ export const PagedRenderer = forwardRef<RendererHandle, PagedRendererProps>(
     const { content, location, viewport, invertedDarkMode, onLocationChange, onSelection } = props;
     const containerRef = useRef<HTMLDivElement>(null);
     const [pages, setPages] = useState<Map<number, RenderedPage>>(new Map());
+    const [appliedHighlights, setAppliedHighlights] = useState<AppliedHighlight[]>([]);
 
     useEffect(() => {
       let cancelled = false;
@@ -63,7 +64,7 @@ export const PagedRenderer = forwardRef<RendererHandle, PagedRendererProps>(
         onLocationChange(loc);
       },
       getCurrentLocation: () => ({ kind: 'paged', pageIndex: location.pageIndex }),
-      applyHighlights: () => { /* real impl in Task 26 */ },
+      applyHighlights: (highlights) => setAppliedHighlights(highlights),
     }), [content.pageCount, location.pageIndex, onLocationChange]);
 
     return (
@@ -71,7 +72,24 @@ export const PagedRenderer = forwardRef<RendererHandle, PagedRendererProps>(
         {Array.from(pages.entries())
           .sort(([a], [b]) => a - b)
           .map(([i, page]) => (
-            <PageSlot key={i} page={page} invertedDarkMode={invertedDarkMode} />
+            <div key={i} style={{ position: 'relative' }}>
+              <PageSlot page={page} invertedDarkMode={invertedDarkMode} />
+              <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+                {appliedHighlights
+                  .filter((h) => h.serialized.kind === 'paged' && h.serialized.pageIndex === i)
+                  .map((h) => h.serialized.kind === 'paged' ? (
+                    <div key={h.id}>
+                      {quadPointsToRects(h.serialized.quadPoints).map((rect, j) => (
+                        <div key={j} style={{
+                          position: 'absolute',
+                          left: rect.x, top: rect.y, width: rect.w, height: rect.h,
+                          background: h.color, opacity: 0.4, mixBlendMode: 'multiply',
+                        }} />
+                      ))}
+                    </div>
+                  ) : null)}
+              </div>
+            </div>
           ))}
       </div>
     );
@@ -82,6 +100,18 @@ function rectsToQuadPoints(rects: DOMRect[]): number[] {
   const out: number[] = [];
   for (const r of rects) {
     out.push(r.left, r.top, r.right, r.top, r.left, r.bottom, r.right, r.bottom);
+  }
+  return out;
+}
+
+function quadPointsToRects(quadPoints: number[]): { x: number; y: number; w: number; h: number }[] {
+  const out: { x: number; y: number; w: number; h: number }[] = [];
+  for (let i = 0; i + 7 < quadPoints.length; i += 8) {
+    const x = quadPoints[i];
+    const y = quadPoints[i + 1];
+    const w = quadPoints[i + 2] - x;
+    const h = quadPoints[i + 5] - y;
+    out.push({ x, y, w, h });
   }
   return out;
 }

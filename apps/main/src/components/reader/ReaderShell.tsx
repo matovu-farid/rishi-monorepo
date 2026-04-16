@@ -1,5 +1,5 @@
 // apps/main/src/components/reader/ReaderShell.tsx
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Player } from '@/models/PlayerClass';
 import TTSControls from '@/components/TTSControls';
 import { useAtomValue } from 'jotai';
@@ -7,6 +7,7 @@ import type { Book } from '@/generated';
 import type {
   Location, SelectionInfo, Paragraph, RendererHandle, AppliedHighlight, Viewport, BookContent,
 } from '@/types/reader';
+import type { SerializedSelection } from '@/types/reader';
 import { useDrag } from '@use-gesture/react';
 import { useBookAdapter } from './adapters/useBookAdapter';
 import { ReflowableRenderer } from './renderers/ReflowableRenderer';
@@ -22,6 +23,7 @@ import { decodeLocation, encodeLocation } from '@/utils/location-codec';
 import { updateBookLocation } from '@/generated';
 import { triggerSyncOnWrite } from '@/modules/sync-triggers';
 import type { BookKind } from '@/types/reader';
+import { getHighlightsForBook } from '@/modules/highlight-storage';
 
 export function ReaderShell({ book }: { book: Book }) {
   const adapter = useBookAdapter(book);
@@ -34,7 +36,23 @@ export function ReaderShell({ book }: { book: Book }) {
   const [openPanel, setOpenPanel] = useState<PanelId | null>(null);
   const [viewport] = useState<Viewport>({ scale: 1 });
   const rendererRef = useRef<RendererHandle>(null);
-  const highlights: AppliedHighlight[] = []; // wired in Task 26
+  const [highlightsState, setHighlightsState] = useState<AppliedHighlight[]>([]);
+
+  const refreshHighlights = useCallback(async () => {
+    const rows = await getHighlightsForBook(String(book.id));
+    setHighlightsState(rows
+      .filter((row) => isHighlightForCurrentLocation(row, location))
+      .map((row) => ({ id: String(row.id), serialized: deserializeHighlight(row), color: row.color })));
+  }, [book.id, location]);
+
+  useEffect(() => {
+    void refreshHighlights();
+  }, [refreshHighlights]);
+
+  useEffect(() => {
+    rendererRef.current?.applyHighlights(highlightsState);
+  }, [highlightsState]);
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const playerRef = useRef<Player | null>(null);
   // Force re-render when player is initialized so TTSControls can mount
@@ -114,7 +132,7 @@ export function ReaderShell({ book }: { book: Book }) {
             location={location}
             theme={theme}
             fontSettings={fontSettings}
-            highlights={highlights}
+            highlights={highlightsState}
             onLocationChange={setLocation}
             onVisibleParagraphsChange={setVisibleParagraphs}
             onSelection={setSelection}
@@ -128,7 +146,7 @@ export function ReaderShell({ book }: { book: Book }) {
             theme={theme}
             viewport={viewport}
             invertedDarkMode={invertedDarkMode}
-            highlights={highlights}
+            highlights={highlightsState}
             onLocationChange={setLocation}
             onVisibleParagraphsChange={setVisibleParagraphs}
             onSelection={setSelection}
@@ -165,4 +183,33 @@ function progressLabel(adapter: { content: BookContent | null }, loc: Location):
     return idx >= 0 ? `Chapter ${idx + 1} of ${total}` : '';
   }
   return '';
+}
+
+/**
+ * Determines whether a stored highlight row belongs to the current reader location.
+ *
+ * SCHEMA DEVIATION: The actual highlights table does not have a JSON `location` field.
+ * Instead it uses `cfi_range` (a string of the form `${chapterId}::${pathSpec}`).
+ * For reflowable content we match by chapterId prefix.
+ * Paged highlights are not stored in this schema, so they never match.
+ */
+function isHighlightForCurrentLocation(row: { cfi_range: string }, loc: Location): boolean {
+  if (loc.kind === 'reflowable') {
+    return row.cfi_range.startsWith(loc.chapterId + '::');
+  }
+  // Paged highlights are not stored in the current schema — nothing to apply.
+  return false;
+}
+
+/**
+ * Converts a highlight row into a SerializedSelection for the renderer.
+ *
+ * SCHEMA DEVIATION: `cfi_range` is the serialized range string produced by
+ * `serializeRange()` in ReflowableRenderer (`${chapterId}::${pathSpec}`).
+ * We extract the chapterId from the prefix and wrap it in the typed union.
+ */
+function deserializeHighlight(row: { cfi_range: string }): SerializedSelection {
+  const sepIdx = row.cfi_range.indexOf('::');
+  const chapterId = sepIdx >= 0 ? row.cfi_range.slice(0, sepIdx) : row.cfi_range;
+  return { kind: 'reflowable', chapterId, cfiRange: row.cfi_range };
 }

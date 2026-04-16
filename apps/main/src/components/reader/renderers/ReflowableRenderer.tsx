@@ -185,7 +185,57 @@ function pathFromRoot(node: Node): string {
   return parts.join('/');
 }
 
-function applyMarks(_root: ShadowRoot, _highlights: { id: string; serialized: SerializedSelection; color: string }[]): void {
-  // Real implementation lands in Task 26 (highlight loading + apply).
-  // Stub kept here so the imperative handle has a defined method signature.
+function applyMarks(root: ShadowRoot, highlights: { id: string; serialized: SerializedSelection; color: string }[]): void {
+  // Clear previous marks by unwrapping them back to plain text nodes
+  root.querySelectorAll('mark[data-highlight-id]').forEach((el) => {
+    const parent = el.parentNode;
+    if (!parent) return;
+    while (el.firstChild) parent.insertBefore(el.firstChild, el);
+    parent.removeChild(el);
+  });
+
+  for (const h of highlights) {
+    if (h.serialized.kind !== 'reflowable') continue;
+    const range = rangeFromSerialized(root, h.serialized.cfiRange);
+    if (!range) continue;
+    try {
+      const mark = document.createElement('mark');
+      mark.setAttribute('data-highlight-id', h.id);
+      mark.style.background = h.color;
+      mark.style.color = 'inherit';
+      range.surroundContents(mark);
+    } catch {
+      // Range crosses element boundaries — skip for v1
+    }
+  }
+}
+
+function rangeFromSerialized(root: ShadowRoot, serialized: string): Range | null {
+  const [, rest] = serialized.split('::');
+  if (!rest) return null;
+  const [startSpec, endSpec] = rest.split('/');
+  if (!startSpec || !endSpec) return null;
+  const startParts = startSpec.split(':');
+  const endParts = endSpec.split(':');
+  const startNode = nodeFromPath(root, startParts[0]);
+  const endNode = nodeFromPath(root, endParts[0]);
+  const startOffset = Number(startParts[1]);
+  const endOffset = Number(endParts[1]);
+  if (!startNode || !endNode) return null;
+  const range = document.createRange();
+  try {
+    range.setStart(startNode, startOffset);
+    range.setEnd(endNode, endOffset);
+    return range;
+  } catch { return null; }
+}
+
+function nodeFromPath(root: ShadowRoot, path: string): Node | null {
+  let current: Node = root;
+  for (const segment of path.split('/').filter(Boolean)) {
+    const idx = Number(segment);
+    if (!current.childNodes[idx]) return null;
+    current = current.childNodes[idx];
+  }
+  return current;
 }
