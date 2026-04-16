@@ -30,7 +30,7 @@ import { db } from '@/modules/kysley';
 import { ReaderSettings } from './ReaderSettings';
 import { HighlightsPanel } from '@/components/highlights/HighlightsPanel';
 import { ChatPanel } from '@/components/chat/ChatPanel';
-import { updateStoredCoverImage } from '@/components/pdf/utils/updateStoredCoverImage';
+import { updateStoredCoverImage } from '@/utils/updateStoredCoverImage';
 import { hasSavedEpubData } from '@/generated';
 
 export function ReaderShell({ book }: { book: Book }) {

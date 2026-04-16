@@ -3,7 +3,10 @@ import { ParagraphWithIndex } from "@/utils/bus";
 import { atomWithImmer } from "jotai-immer";
 import { atom } from "jotai";
 
-import { TextItem, TextMarkedContent, type TextContent } from "react-pdf";
+// Local type stubs replacing the former react-pdf imports (react-pdf removed in Task 38)
+type TextItem = { str: string; [key: string]: unknown };
+type TextMarkedContent = { type: string; [key: string]: unknown };
+type TextContent = { items: Array<TextItem | TextMarkedContent>; [key: string]: unknown };
 import { PDFDocumentProxy } from "pdfjs-dist";
 
 import { freezeAtom } from "jotai/utils";

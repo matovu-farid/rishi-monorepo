@@ -1,7 +1,7 @@
 import { Book } from "@/generated";
 import { getBook, updateBookCover } from "@/generated";
 import { customStore } from "@/stores/jotai";
-import { pageNumberAtom, setPageNumberAtom } from "../atoms/paragraph-atoms";
+import { pageNumberAtom, setPageNumberAtom } from "@/components/pdf/atoms/paragraph-atoms";
 
 // Import required CSS for text and annotation layers
 
