@@ -281,7 +281,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
         >
           <MessageSquare size={20} />
         </button>
-        <ReaderSettings rendition={rendition} />
+        <ReaderSettings />
 
         <Menu
           trigger={

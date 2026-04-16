@@ -27,6 +27,7 @@ import { getHighlightsForBook, saveHighlight } from '@/modules/highlight-storage
 import { SelectionPopover } from '@/components/highlights/SelectionPopover';
 import type { HighlightColor } from '@/types/highlight';
 import { db } from '@/modules/kysley';
+import { ReaderSettings } from './ReaderSettings';
 
 export function ReaderShell({ book }: { book: Book }) {
   const adapter = useBookAdapter(book);
@@ -209,6 +210,9 @@ export function ReaderShell({ book }: { book: Book }) {
           toc={adapter.content?.metadata.tableOfContents ?? []}
           onJump={(loc) => { setLocation(loc); setOpenPanel(null); }}
         />
+      </SidePanel>
+      <SidePanel open={openPanel === 'settings'} title="Settings" onClose={() => setOpenPanel(null)}>
+        <ReaderSettings contentKind={adapter.content?.kind ?? 'reflowable'} />
       </SidePanel>
       {/* Other panels wired in feature tasks */}
     </div>
