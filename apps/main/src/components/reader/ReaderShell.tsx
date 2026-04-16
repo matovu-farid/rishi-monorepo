@@ -28,6 +28,8 @@ import { SelectionPopover } from '@/components/highlights/SelectionPopover';
 import type { HighlightColor } from '@/types/highlight';
 import { db } from '@/modules/kysley';
 import { ReaderSettings } from './ReaderSettings';
+import { HighlightsPanel } from '@/components/highlights/HighlightsPanel';
+import { ChatPanel } from '@/components/chat/ChatPanel';
 
 export function ReaderShell({ book }: { book: Book }) {
   const adapter = useBookAdapter(book);
@@ -214,7 +216,21 @@ export function ReaderShell({ book }: { book: Book }) {
       <SidePanel open={openPanel === 'settings'} title="Settings" onClose={() => setOpenPanel(null)}>
         <ReaderSettings contentKind={adapter.content?.kind ?? 'reflowable'} />
       </SidePanel>
-      {/* Other panels wired in feature tasks */}
+      {/* HighlightsPanel and ChatPanel manage their own Sheet; pass open/onOpenChange directly */}
+      <HighlightsPanel
+        bookSyncId={bookSyncIdRef.current ?? ''}
+        rendition={null}
+        open={openPanel === 'highlights'}
+        onOpenChange={(open) => { if (!open) setOpenPanel(null); }}
+      />
+      <ChatPanel
+        bookId={book.id}
+        bookSyncId={bookSyncIdRef.current ?? ''}
+        bookTitle={book.title}
+        rendition={null}
+        open={openPanel === 'chat'}
+        onOpenChange={(open) => { if (!open) setOpenPanel(null); }}
+      />
     </div>
   );
 }
