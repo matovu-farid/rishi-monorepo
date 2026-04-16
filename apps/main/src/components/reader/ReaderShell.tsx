@@ -23,7 +23,10 @@ import { decodeLocation, encodeLocation } from '@/utils/location-codec';
 import { updateBookLocation } from '@/generated';
 import { triggerSyncOnWrite } from '@/modules/sync-triggers';
 import type { BookKind } from '@/types/reader';
-import { getHighlightsForBook } from '@/modules/highlight-storage';
+import { getHighlightsForBook, saveHighlight } from '@/modules/highlight-storage';
+import { SelectionPopover } from '@/components/highlights/SelectionPopover';
+import type { HighlightColor } from '@/types/highlight';
+import { db } from '@/modules/kysley';
 
 export function ReaderShell({ book }: { book: Book }) {
   const adapter = useBookAdapter(book);
@@ -31,7 +34,17 @@ export function ReaderShell({ book }: { book: Book }) {
   const fontSettings = useAtomValue(fontSettingsAtom);
   const invertedDarkMode = useAtomValue(invertedDarkModeAtom);
   const [location, setLocation] = useState<Location>(() => decodeLocation(book.location, book.kind as BookKind));
-  const [_selection, setSelection] = useState<SelectionInfo | null>(null);
+  const [selection, setSelection] = useState<SelectionInfo | null>(null);
+  const bookSyncIdRef = useRef<string | null>(null);
+
+  // Look up the book's sync_id for highlight storage
+  useEffect(() => {
+    void db.selectFrom('books')
+      .select(['sync_id'])
+      .where('id', '=', book.id)
+      .executeTakeFirst()
+      .then((row) => { bookSyncIdRef.current = row?.sync_id ?? null; });
+  }, [book.id]);
   const [visibleParagraphs, setVisibleParagraphs] = useState<Paragraph[]>([]);
   const [openPanel, setOpenPanel] = useState<PanelId | null>(null);
   const [viewport] = useState<Viewport>({ scale: 1 });
@@ -152,6 +165,36 @@ export function ReaderShell({ book }: { book: Book }) {
             onSelection={setSelection}
           />
         )}
+        {selection && (() => {
+          const rect = selection.rects[0];
+          const position = rect
+            ? { x: rect.left + rect.width / 2, y: rect.top - 48 }
+            : { x: 0, y: 0 };
+          return (
+            <SelectionPopover
+              cfiRange={selection.serialized.kind === 'reflowable' ? selection.serialized.cfiRange : ''}
+              selectedText={selection.text}
+              position={position}
+              onHighlight={(color: HighlightColor) => {
+                const syncId = bookSyncIdRef.current;
+                if (!syncId) { setSelection(null); return; }
+                if (selection.serialized.kind === 'paged') {
+                  // TODO: paged highlights not yet supported in the cfi_range schema
+                  console.warn('Highlights for paged formats not yet supported');
+                  setSelection(null);
+                  return;
+                }
+                void saveHighlight({
+                  bookSyncId: syncId,
+                  cfiRange: selection.serialized.cfiRange,
+                  text: selection.text,
+                  color,
+                }).then(() => refreshHighlights()).then(() => setSelection(null));
+              }}
+              onClose={() => setSelection(null)}
+            />
+          );
+        })()}
       </div>
       <BottomBar>
         <audio ref={audioRef} hidden />
