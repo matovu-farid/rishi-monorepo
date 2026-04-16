@@ -24,7 +24,7 @@ export function EmbeddingProgress({
       <IconSymbol name="sparkles" size={24} color="#0a7ea4" />
 
       <Text className="text-base font-semibold text-gray-900 dark:text-gray-100 mt-2">
-        Preparing "{bookTitle}" for AI...
+        Preparing &ldquo;{bookTitle}&rdquo; for AI...
       </Text>
 
       {/* Progress bar */}

@@ -12,7 +12,9 @@ import { IS_E2E_TEST } from '@/app/_layout'
 
 export default function TabLayout() {
   const colorScheme = useColorScheme()
-  const auth = IS_E2E_TEST ? null : useAuth()
+  // Always call useAuth (rules-of-hooks); ignore its value in E2E mode.
+  const authHook = useAuth()
+  const auth = IS_E2E_TEST ? null : authHook
 
   useEffect(() => {
     if (auth?.isSignedIn) {
