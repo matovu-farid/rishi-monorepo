@@ -5,6 +5,7 @@ import type { Book } from '@/generated';
 import type {
   Location, SelectionInfo, Paragraph, RendererHandle, AppliedHighlight, Viewport, BookContent,
 } from '@/types/reader';
+import { useDrag } from '@use-gesture/react';
 import { useBookAdapter } from './adapters/useBookAdapter';
 import { ReflowableRenderer } from './renderers/ReflowableRenderer';
 import { PagedRenderer } from './renderers/PagedRenderer';
@@ -55,6 +56,11 @@ export function ReaderShell({ book }: { book: Book }) {
     return () => document.removeEventListener('keydown', handler);
   }, [openPanel]);
 
+  const swipeBind = useDrag(({ swipe: [swipeX] }) => {
+    if (swipeX === -1) rendererRef.current?.next();
+    if (swipeX === 1) rendererRef.current?.prev();
+  });
+
   const themeColors = themes[themeKey] ?? themes[Object.keys(themes)[0] as keyof typeof themes];
   const theme = { bg: themeColors.background, fg: themeColors.color, accent: '#06f' };
 
@@ -64,7 +70,7 @@ export function ReaderShell({ book }: { book: Book }) {
       height: '100vh', background: theme.bg, color: theme.fg,
     }}>
       <TopBar book={book} progressLabel={progressLabel(adapter, location)} onOpenPanel={setOpenPanel} />
-      <div style={{ position: 'relative', overflow: 'hidden' }}>
+      <div style={{ position: 'relative', overflow: 'hidden' }} {...swipeBind()}>
         {adapter.status === 'loading' && <div style={{ padding: 16 }}>Loading…</div>}
         {adapter.status === 'error' && <div style={{ padding: 16, color: 'crimson' }}>Failed to open: {adapter.error?.message}</div>}
         {adapter.content?.kind === 'reflowable' && location.kind === 'reflowable' && (
