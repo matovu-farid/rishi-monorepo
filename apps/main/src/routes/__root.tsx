@@ -6,12 +6,15 @@ import { useEffect, type JSX } from "react";
 import { getBooks } from "@/generated";
 import { initDesktopSync, destroyDesktopSync } from "@/modules/sync-triggers";
 import { SyncStatusIndicator } from "../components/SyncStatusIndicator";
+import { useStartupUpdateCheck } from "@/hooks/useStartupUpdateCheck";
 
 export const Route = createRootRoute({
   component: () => <RootComponent />,
 });
 
 function RootComponent(): JSX.Element {
+  useStartupUpdateCheck();
+
   // Initialize desktop sync on app mount
   useEffect(() => {
     initDesktopSync();
