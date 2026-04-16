@@ -1,5 +1,5 @@
 // apps/main/src/components/reader/ReaderShell.tsx
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAtomValue } from 'jotai';
 import type { Book } from '@/generated';
 import type {
@@ -30,6 +30,30 @@ export function ReaderShell({ book }: { book: Book }) {
   const [viewport] = useState<Viewport>({ scale: 1 });
   const rendererRef = useRef<RendererHandle>(null);
   const highlights: AppliedHighlight[] = []; // wired in Task 26
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (openPanel) {
+        if (e.key === 'Escape') { setOpenPanel(null); e.preventDefault(); }
+        return;
+      }
+      switch (e.key) {
+        case 'ArrowRight':
+        case 'PageDown':
+        case ' ':
+          rendererRef.current?.next();
+          e.preventDefault();
+          break;
+        case 'ArrowLeft':
+        case 'PageUp':
+          rendererRef.current?.prev();
+          e.preventDefault();
+          break;
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [openPanel]);
 
   const themeColors = themes[themeKey] ?? themes[Object.keys(themes)[0] as keyof typeof themes];
   const theme = { bg: themeColors.background, fg: themeColors.color, accent: '#06f' };
