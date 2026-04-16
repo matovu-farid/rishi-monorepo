@@ -420,10 +420,10 @@ pub fn unzip(file_path: &str, out_dir: &str) -> Result<PathBuf, String> {
     let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
 
     let output_dir = Path::new(out_dir);
-    fs::create_dir_all(&output_dir).map_err(|e| e.to_string())?;
+    fs::create_dir_all(output_dir).map_err(|e| e.to_string())?;
 
     // Extract all files (like AdmZip's `extractAllTo`)
-    let canonical_output_dir = fs::canonicalize(&output_dir).map_err(|e| e.to_string())?;
+    let canonical_output_dir = fs::canonicalize(output_dir).map_err(|e| e.to_string())?;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
 
@@ -438,7 +438,7 @@ pub fn unzip(file_path: &str, out_dir: &str) -> Result<PathBuf, String> {
         let outpath = output_dir.join(&entry_name);
 
         // Double-check the resolved path stays within output_dir
-        if let Ok(canonical) = fs::canonicalize(outpath.parent().unwrap_or(&output_dir)) {
+        if let Ok(canonical) = fs::canonicalize(outpath.parent().unwrap_or(output_dir)) {
             if !canonical.starts_with(&canonical_output_dir) {
                 continue;
             }

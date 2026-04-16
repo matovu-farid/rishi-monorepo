@@ -60,7 +60,7 @@ impl VectorStore {
         Ok(())
     }
 
-    /// Get the full path to the data file (for checking existence)
+    // Get the full path to the data file (for checking existence)
     // fn data_file_path(&self) -> PathBuf {
     //     self.directory.join(format!("{}.hnsw.data", self.basename))
     // }
@@ -97,7 +97,7 @@ impl VectorStore {
     where
         F: FnMut(&mut Hnsw<f32, DistL2>) -> anyhow::Result<R>,
     {
-        fs::create_dir_all(&directory)?;
+        fs::create_dir_all(directory)?;
         if Self::data_file_exists(directory, basename) {
             let mut reloader = HnswIo::new(directory, basename);
             let options = ReloadOptions::default().set_mmap(mmap);
@@ -146,9 +146,9 @@ impl VectorStore {
             hnsw.file_dump(&directory, &basename)
                 .map_err(|e| anyhow::anyhow!("Failed to save HNSW index: {}", e))
         })?;
-        let mut old_basename = self.basename.clone();
+        let old_basename = self.basename.clone();
 
-        self.overwrite_old_dump(&mut old_basename, &dump_name)?;
+        self.overwrite_old_dump(&old_basename, &dump_name)?;
 
         self.process_vectors()?;
 

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use crate::commands::embed;
 use crate::db::DB_POOL;
@@ -315,7 +315,7 @@ pub async fn process_job(
     page_number: i32,
     book_id: i32,
     page_data: Vec<ChunkDataInsertable>,
-    app_data_dir: &PathBuf,
+    app_data_dir: &Path,
 ) -> Result<(), String> {
     // Check if data already exists
     if has_saved_data(page_number, book_id)? {
@@ -367,7 +367,7 @@ pub async fn process_job(
 
     // save_vectors(app, &format!("{}-vectordb", book_id), dim, vectors)?;
     let name = format!("{}-vectordb", book_id);
-    vectordb::save_vectors(vectors, app_data_dir.clone(), dim, &name).map_err(|e| e.to_string())?;
+    vectordb::save_vectors(vectors, app_data_dir.to_path_buf(), dim, &name).map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -394,7 +394,7 @@ pub fn has_saved_epub_data(book_id: i32) -> Result<bool, String> {
 pub async fn get_context_for_query(
     query_text: String,
     book_id: u32,
-    app_data_dir: &PathBuf,
+    app_data_dir: &Path,
     k: usize,
 ) -> Result<Vec<String>, String> {
     let embed_params = vec![EmbedParam {
@@ -412,7 +412,7 @@ pub async fn get_context_for_query(
     let query = embed_results[0].embedding.clone();
     let dim = embed_results[0].embedding.len();
     let name = format!("{}-vectordb", book_id);
-    let search_embeddings = vectordb::search_vectors(app_data_dir.clone(), dim, &name, query, k)
+    let search_embeddings = vectordb::search_vectors(app_data_dir.to_path_buf(), dim, &name, query, k)
         .map_err(|e| e.to_string())?;
     // use the result to query the db for the actual text using the ids
     let text = search_embeddings

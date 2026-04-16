@@ -35,7 +35,7 @@ impl Extractable for Mobi {
         let publisher = m.publisher();
 
         // Try to extract cover from image records, fall back to placeholder
-        let cover = extract_cover(&m).unwrap_or_else(|| create_placeholder_cover());
+        let cover = extract_cover(&m).unwrap_or_else(create_placeholder_cover);
 
         let digest = md5::compute(path.to_string_lossy().to_string());
         let id = format!("{:x}", digest);

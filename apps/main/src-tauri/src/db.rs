@@ -24,10 +24,10 @@ impl r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error>
         use diesel::RunQueryDsl;
         diesel::sql_query("PRAGMA busy_timeout=5000;")
             .execute(conn)
-            .map_err(|e| diesel::r2d2::Error::QueryError(e))?;
+            .map_err(diesel::r2d2::Error::QueryError)?;
         diesel::sql_query("PRAGMA journal_mode=WAL;")
             .execute(conn)
-            .map_err(|e| diesel::r2d2::Error::QueryError(e))?;
+            .map_err(diesel::r2d2::Error::QueryError)?;
         Ok(())
     }
 }

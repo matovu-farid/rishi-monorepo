@@ -8,6 +8,8 @@ pub enum BookKind {
 }
 
 impl BookKind {
+    #[allow(clippy::wrong_self_convention)]
+    #[allow(clippy::inherent_to_string)]
     pub fn to_string(self) -> String {
         match self {
             BookKind::Epub => "epub".to_string(),
@@ -33,6 +35,7 @@ pub struct BookData {
 }
 
 impl BookData {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: String,
         kind: String,

@@ -18,8 +18,6 @@ pub mod sql;
 mod api;
 mod user;
 
-use sentry;
-use tauri_plugin_sentry;
 
 #[cfg(test)]
 pub mod test_fixtures;
