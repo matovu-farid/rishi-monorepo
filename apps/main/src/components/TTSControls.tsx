@@ -16,7 +16,8 @@ import {
 } from "lucide-react";
 import { toast } from "react-toastify";
 import { useEffect, useState } from "react";
-import player from "@/models/Player";
+import singletonPlayer from "@/models/Player";
+import { Player } from "@/models/PlayerClass";
 import { atom, useAtom, useAtomValue, useSetAtom } from "jotai";
 import { EventBusEvent, PlayingState } from "@/utils/bus";
 import { eventBus } from "@/utils/bus";
@@ -24,7 +25,8 @@ import { isChattingAtom, stopConversationAtom } from "@/stores/chat_atoms";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 
 interface TTSControlsProps {
-  bookId: string;
+  bookId?: string;
+  player?: Player;
   disabled?: boolean;
 }
 
@@ -55,27 +57,33 @@ const getDefaultChatPosition = (): { x: number; y: number } => {
   return { x: defaultX, y: defaultY };
 };
 
-const playerAtom = atom(player);
+const playerAtom = atom(singletonPlayer);
 playerAtom.debugLabel = "playerAtom";
 
 export default function TTSControls({
   bookId,
+  player: playerProp,
   disabled = false,
 }: TTSControlsProps) {
   const [showError, setShowError] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [hasShownError, setHasShownError] = useState(false);
-  const player = useAtomValue(playerAtom);
+  const atomPlayer = useAtomValue(playerAtom);
+  // Use injected player if provided, otherwise fall back to the global singleton
+  const player = playerProp ?? atomPlayer;
   const stopConversation = useSetAtom(stopConversationAtom);
   const error = errors.join("\n");
   const [isChatting, setIsChatting] = useAtom(isChattingAtom);
   const { requireAuth, AuthDialog } = useRequireAuth();
 
   useEffect(() => {
-    void (async () => {
-      await player.initialize(bookId);
-    })();
-  }, [bookId, player]);
+    // Only call initialize when using the legacy singleton path (no injected player)
+    // and a bookId is provided. When a player prop is passed, the caller (ReaderShell)
+    // is responsible for initialization.
+    if (!playerProp && bookId) {
+      void player.initialize(bookId);
+    }
+  }, [bookId, player, playerProp]);
 
   const [playingState, setPlayingState] = useState<PlayingState>(
     PlayingState.Stopped

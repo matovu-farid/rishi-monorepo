@@ -1,5 +1,7 @@
 // apps/main/src/components/reader/ReaderShell.tsx
 import { useEffect, useRef, useState } from 'react';
+import { Player } from '@/models/PlayerClass';
+import TTSControls from '@/components/TTSControls';
 import { useAtomValue } from 'jotai';
 import type { Book } from '@/generated';
 import type {
@@ -28,11 +30,15 @@ export function ReaderShell({ book }: { book: Book }) {
   const invertedDarkMode = useAtomValue(invertedDarkModeAtom);
   const [location, setLocation] = useState<Location>(() => decodeLocation(book.location, book.kind as BookKind));
   const [_selection, setSelection] = useState<SelectionInfo | null>(null);
-  const [_visibleParagraphs, setVisibleParagraphs] = useState<Paragraph[]>([]);
+  const [visibleParagraphs, setVisibleParagraphs] = useState<Paragraph[]>([]);
   const [openPanel, setOpenPanel] = useState<PanelId | null>(null);
   const [viewport] = useState<Viewport>({ scale: 1 });
   const rendererRef = useRef<RendererHandle>(null);
   const highlights: AppliedHighlight[] = []; // wired in Task 26
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const playerRef = useRef<Player | null>(null);
+  // Force re-render when player is initialized so TTSControls can mount
+  const [, forceRerender] = useState(0);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -57,6 +63,23 @@ export function ReaderShell({ book }: { book: Book }) {
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [openPanel]);
+
+  useEffect(() => {
+    if (!audioRef.current) return;
+    const player = new Player(audioRef.current);
+    playerRef.current = player;
+    void player.initialize(String(book.id));
+    player.onRequestNextPage = () => rendererRef.current?.next();
+    player.onRequestPrevPage = () => rendererRef.current?.prev();
+    forceRerender((n) => n + 1);
+    return () => { player.cleanup(); playerRef.current = null; };
+  }, [book.id]);
+
+  useEffect(() => {
+    // Map our Paragraph -> ParagraphWithIndex shape (text + index)
+    const mapped = visibleParagraphs.map((p) => ({ text: p.text, index: p.id }));
+    playerRef.current?.setVisibleParagraphs(mapped);
+  }, [visibleParagraphs]);
 
   useEffect(() => {
     const handle = setTimeout(() => {
@@ -112,7 +135,10 @@ export function ReaderShell({ book }: { book: Book }) {
           />
         )}
       </div>
-      <BottomBar>{null /* TTSControls wired in Task 25 */}</BottomBar>
+      <BottomBar>
+        <audio ref={audioRef} hidden />
+        {playerRef.current ? <TTSControls player={playerRef.current} /> : null}
+      </BottomBar>
       <SidePanel
         open={openPanel === 'toc'}
         title="Table of contents"

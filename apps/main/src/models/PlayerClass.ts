@@ -48,6 +48,30 @@ export class Player extends EventEmitter<PlayerEventMap> {
   private direction: Direction = Direction.Forward;
   private eventBusSubscriptions: Array<{ event: string; handler: (...args: any[]) => void }> = [];
 
+  public onRequestNextPage: (() => void) | null = null;
+  public onRequestPrevPage: (() => void) | null = null;
+
+  public setVisibleParagraphs(paragraphs: ParagraphWithIndex[]): void {
+    if (this.playingState === PlayingState.WaitingForNewParagraphs) {
+      this.setPlayingState(PlayingState.Playing);
+    }
+    if (isEqual(this.currentViewParagraphs, paragraphs)) return;
+    this.currentViewParagraphs = paragraphs;
+    if (this.playingState === PlayingState.Playing) {
+      void this.handleLocationChanged();
+    }
+  }
+
+  public setNextPageParagraphs(paragraphs: ParagraphWithIndex[]): void {
+    if (isEqual(this.nextPageParagraphs, paragraphs)) return;
+    this.nextPageParagraphs = paragraphs;
+  }
+
+  public setPreviousPageParagraphs(paragraphs: ParagraphWithIndex[]): void {
+    if (isEqual(this.previousPageParagraphs, paragraphs)) return;
+    this.previousPageParagraphs = [...paragraphs].reverse();
+  }
+
   constructor(audioElement: HTMLAudioElement) {
     super();
     this.audioElement = audioElement;
@@ -64,38 +88,20 @@ export class Player extends EventEmitter<PlayerEventMap> {
     // Clear any previous subscriptions to prevent leaks on re-initialize
     this.removeEventBusSubscriptions();
 
-    const onNewParagraphs = async (paragraphs: ParagraphWithIndex[]) => {
-      if (this.playingState === PlayingState.WaitingForNewParagraphs) {
-        this.setPlayingState(PlayingState.Playing);
-      }
-      if (isEqual(this.currentViewParagraphs, paragraphs)) return;
-      this.currentViewParagraphs = paragraphs;
-      if (this.playingState === PlayingState.Playing) {
-        await this.handleLocationChanged();
-      }
-    };
-    const onNextViewParagraphs = (paragraphs: ParagraphWithIndex[]) => {
-      if (isEqual(this.nextPageParagraphs, paragraphs)) return;
-      this.nextPageParagraphs = paragraphs;
-    };
-    const onPreviousViewParagraphs = (paragraphs: ParagraphWithIndex[]) => {
-      if (isEqual(this.previousPageParagraphs, paragraphs)) return;
-      this.previousPageParagraphs = [...paragraphs].reverse();
-    };
-    const onPageChanged = async () => {
-      await this.handleLocationChanged();
+    // Bridge: keep NEW_PARAGRAPHS_AVAILABLE subscription so that legacy callers
+    // (including existing unit tests) still work. This bridge delegates to the
+    // canonical setVisibleParagraphs() setter. The other three paragraph events
+    // (NEXT_VIEW_PARAGRAPHS_AVAILABLE, PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE,
+    // PAGE_CHANGED) are removed — callers should use the prop-based setters
+    // or callbacks instead. The bridge itself will be removed in Task 39.
+    const onNewParagraphs = (paragraphs: ParagraphWithIndex[]) => {
+      this.setVisibleParagraphs(paragraphs);
     };
 
     eventBus.subscribe(EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, onNewParagraphs);
-    eventBus.subscribe(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, onNextViewParagraphs);
-    eventBus.subscribe(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, onPreviousViewParagraphs);
-    eventBus.subscribe(EventBusEvent.PAGE_CHANGED, onPageChanged);
 
     this.eventBusSubscriptions = [
       { event: EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, handler: onNewParagraphs },
-      { event: EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, handler: onNextViewParagraphs },
-      { event: EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, handler: onPreviousViewParagraphs },
-      { event: EventBusEvent.PAGE_CHANGED, handler: onPageChanged },
     ];
 
     this.audioElement.onplay = async () => {
@@ -492,8 +498,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this.setPlayingState(PlayingState.WaitingForNewParagraphs);
     this.currentViewParagraphs = this.nextPageParagraphs;
     this.nextPageParagraphs = [];
-
-    eventBus.publish(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED);
+    this.onRequestNextPage?.();
     await this.stop();
     await this.resetParagraphs();
     await this.play();
@@ -502,8 +507,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this.setPlayingState(PlayingState.WaitingForNewParagraphs);
     this.currentViewParagraphs = [...this.previousPageParagraphs].reverse();
     this.previousPageParagraphs = [];
-
-    eventBus.publish(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED);
+    this.onRequestPrevPage?.();
     await this.stop();
     await this.resetParagraphs();
     await this.play();
