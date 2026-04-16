@@ -204,7 +204,7 @@ function PlatformRow({
               e.stopPropagation();
               setExpanded((v) => !v);
             }}
-            className="p-1 rounded hover:bg-muted"
+            className="p-1 rounded hover:bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
             {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
