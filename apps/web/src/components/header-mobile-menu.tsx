@@ -22,7 +22,10 @@ export function HeaderMobileMenu({ downloadButton }: Props) {
       </button>
 
       {isOpen && (
-        <div className="md:hidden border-t border-border px-6 py-4 space-y-3">
+        <nav
+          aria-label="Mobile navigation"
+          className="md:hidden border-t border-border px-6 py-4 space-y-3"
+        >
           <a
             href="#features"
             className="block text-sm text-muted-foreground hover:text-foreground transition"
@@ -36,7 +39,7 @@ export function HeaderMobileMenu({ downloadButton }: Props) {
             How it Works
           </a>
           {downloadButton}
-        </div>
+        </nav>
       )}
     </>
   );

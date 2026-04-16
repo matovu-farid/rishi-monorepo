@@ -56,6 +56,7 @@ export function DownloadButton({ variant, detectedOs, release }: Props) {
   );
   const chevronClass = cn(
     "flex items-center justify-center border-l border-black/10",
+    "outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
     isPrimary ? "px-3 py-3" : "px-2 py-2",
   );
 
