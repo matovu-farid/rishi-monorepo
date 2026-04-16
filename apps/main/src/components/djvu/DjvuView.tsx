@@ -59,7 +59,7 @@ export function DjvuView({ book }: { book: Book }) {
 
   // Look up the book's sync_id for chat
   useEffect(() => {
-    db.selectFrom("books")
+    void db.selectFrom("books")
       .select(["sync_id"])
       .where("id", "=", book.id)
       .executeTakeFirst()
@@ -146,7 +146,7 @@ export function DjvuView({ book }: { book: Book }) {
     setLoading(true);
     setError(null);
 
-    fetchPage(currentPage).then((url) => {
+    void fetchPage(currentPage).then((url) => {
       if (cancelled || !mountedRef.current) return;
       if (url) {
         setCurrentBlobUrl(url);
@@ -304,7 +304,7 @@ export function DjvuView({ book }: { book: Book }) {
     if (pageCount === 0 || embeddingsProcessedRef.current) return;
     embeddingsProcessedRef.current = true;
 
-    (async () => {
+    void (async () => {
       try {
         const alreadySaved = await hasSavedEpubData({ bookId: book.id });
         if (alreadySaved) return;

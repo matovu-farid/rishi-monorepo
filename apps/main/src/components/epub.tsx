@@ -79,7 +79,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
 
   // Look up the book's sync_id for highlight storage
   useEffect(() => {
-    db.selectFrom('books')
+    void db.selectFrom('books')
       .select(['sync_id'])
       .where('id', '=', book.id)
       .executeTakeFirst()
@@ -92,10 +92,10 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     if (!rendition || !bookSyncIdRef.current) return;
     const syncId = bookSyncIdRef.current;
-    getHighlightsForBook(syncId).then((highlights) => {
+    void getHighlightsForBook(syncId).then((highlights) => {
       for (const hl of highlights) {
         const hex = getHighlightHex(hl.color as HighlightColor);
-        highlightRange(rendition, hl.cfi_range, {}, () => {}, 'epubjs-hl', {
+        void highlightRange(rendition, hl.cfi_range, {}, () => {}, 'epubjs-hl', {
           fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': 'multiply',
         });
       }
@@ -126,10 +126,10 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   const handleHighlightColor = useCallback((color: HighlightColor) => {
     if (!selectionInfo || !rendition || !bookSyncIdRef.current) return;
     const hex = getHighlightHex(color);
-    highlightRange(rendition, selectionInfo.cfiRange, {}, () => {}, 'epubjs-hl', {
+    void highlightRange(rendition, selectionInfo.cfiRange, {}, () => {}, 'epubjs-hl', {
       fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': 'multiply',
     });
-    saveHighlight({
+    void saveHighlight({
       bookSyncId: bookSyncIdRef.current,
       cfiRange: selectionInfo.cfiRange,
       text: selectionInfo.text,

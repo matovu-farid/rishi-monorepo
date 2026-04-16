@@ -133,7 +133,7 @@ export class ReactReader extends PureComponent<
     // Actually navigate to the location in the book
     const node = this.readerRef.current;
     if (node && node.rendition) {
-      node.rendition.display(loc);
+      void node.rendition.display(loc);
     }
     this.setState(
       {
@@ -310,7 +310,7 @@ export class ReactReader extends PureComponent<
   componentDidUpdate(prevProps: IReactReaderProps) {
     // Trigger new search when search query changes
     if (prevProps.searchQuery !== this.props.searchQuery) {
-      this.searchInBook(this.props.searchQuery);
+      void this.searchInBook(this.props.searchQuery);
     }
 
     // Enable wheel listener for scroll-based page turning

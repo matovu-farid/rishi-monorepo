@@ -30,7 +30,7 @@ export function ReaderSettings({ rendition }: ReaderSettingsProps) {
 
   // Load persisted settings on mount
   useEffect(() => {
-    (async () => {
+    void (async () => {
       try {
         const store = await load('reader-settings');
         const savedSize = await store.get<number>('fontSize');
@@ -67,17 +67,17 @@ export function ReaderSettings({ rendition }: ReaderSettingsProps) {
   const handleFontSizeChange = (value: number[]) => {
     const newSize = Math.round(value[0] * 10) / 10;
     setFontSize(newSize);
-    persist(newSize, fontFamily);
+    void persist(newSize, fontFamily);
   };
 
   const handleResetFontSize = () => {
     setFontSize(DEFAULT_FONT_SIZE);
-    persist(DEFAULT_FONT_SIZE, fontFamily);
+    void persist(DEFAULT_FONT_SIZE, fontFamily);
   };
 
   const handleFontFamilyChange = (family: string) => {
     setFontFamily(family);
-    persist(fontSize, family);
+    void persist(fontSize, family);
   };
 
   return (

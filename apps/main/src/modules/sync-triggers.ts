@@ -77,13 +77,13 @@ export function initDesktopSync(): void {
 
   // Sync on app focus
   window.addEventListener('focus', () => {
-    triggerSync();
+    void triggerSync();
   });
 
   // Online/offline detection
   window.addEventListener('online', () => {
     if (syncStatus === 'offline') {
-      triggerSync();
+      void triggerSync();
     }
   });
   window.addEventListener('offline', () => {
@@ -94,12 +94,12 @@ export function initDesktopSync(): void {
   // Periodic sync every 5 minutes
   intervalId = setInterval(() => {
     if (navigator.onLine) {
-      triggerSync();
+      void triggerSync();
     }
   }, SYNC_INTERVAL_MS);
 
   // Initial sync
-  triggerSync();
+  void triggerSync();
 }
 
 export function destroyDesktopSync(): void {

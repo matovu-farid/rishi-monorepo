@@ -27,7 +27,7 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
     if (initialized.current || !bookSyncId) return;
     initialized.current = true;
 
-    (async () => {
+    void (async () => {
       try {
         // Find existing conversation for this book
         const existing = await db.selectFrom('conversations')

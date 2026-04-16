@@ -54,7 +54,7 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
 
   // Look up the book's sync_id for chat
   useEffect(() => {
-    db.selectFrom("books")
+    void db.selectFrom("books")
       .select(["sync_id"])
       .where("id", "=", book.id)
       .executeTakeFirst()
@@ -197,7 +197,7 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
     if (chapterCount === 0 || embeddingsProcessedRef.current) return;
     embeddingsProcessedRef.current = true;
 
-    (async () => {
+    void (async () => {
       try {
         const alreadySaved = await hasSavedEpubData({ bookId: book.id });
         if (alreadySaved) return;

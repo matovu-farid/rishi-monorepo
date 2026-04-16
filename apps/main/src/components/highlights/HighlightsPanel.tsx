@@ -50,7 +50,7 @@ export function HighlightsPanel({
 
   useEffect(() => {
     if (open && bookSyncId) {
-      refreshHighlights();
+      void refreshHighlights();
     }
   }, [open, bookSyncId, refreshHighlights]);
 
@@ -61,7 +61,7 @@ export function HighlightsPanel({
   };
 
   const handleNavigate = (cfiRange: string) => {
-    rendition?.display(cfiRange);
+    void rendition?.display(cfiRange);
   };
 
   return (
@@ -133,7 +133,7 @@ export function HighlightsPanel({
                               aria-label="Delete highlight"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleDelete(hl.id);
+                                void handleDelete(hl.id);
                               }}
                             >
                               <Trash2 size={16} />

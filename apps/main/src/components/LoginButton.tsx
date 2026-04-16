@@ -127,7 +127,7 @@ export function LoginButton() {
       }
     });
     return () => {
-      unlisten.then((fn) => fn());
+      void unlisten.then((fn) => fn());
     };
   }, []);
 

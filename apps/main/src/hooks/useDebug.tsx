@@ -9,7 +9,7 @@ export const useDebug = () => {
 
   const onPlayingStateChanged = useEffectEvent(async () => {
     player.on("playingStateChanged", (state) => {
-      shouldDebug().then((shouldDebugPlayer) => {
+      void shouldDebug().then((shouldDebugPlayer) => {
         setShouldDebug(shouldDebugPlayer);
         if (shouldDebugPlayer) {
           debugPlayingState.current.push(state);
@@ -19,7 +19,7 @@ export const useDebug = () => {
   });
 
   useEffect(() => {
-    onPlayingStateChanged();
+    void onPlayingStateChanged();
   }, [onPlayingStateChanged]);
   useEffect(() => {
     if (isDebugging) return;

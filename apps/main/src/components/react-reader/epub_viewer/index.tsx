@@ -123,7 +123,7 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
     // })
 
     // Once navigation data is loaded, extract TOC and initialize the reader
-    this.book?.loaded.navigation.then(({ toc }) => {
+    void this.book?.loaded.navigation.then(({ toc }) => {
       this.setState(
         {
           isLoaded: true,
@@ -197,7 +197,7 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
       prevProps.location !== this.props.location &&
       this.location !== this.props.location
     ) {
-      this.rendition?.display(this.props.location + "");
+      void this.rendition?.display(this.props.location + "");
     }
     // Reload book if URL changed (switching to different book)
     if (prevProps.url !== this.props.url) {
@@ -230,10 +230,10 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
 
         // Set up pagination navigation functions
         this.prevPage = () => {
-          rendition.prev();
+          void rendition.prev();
         };
         this.nextPage = () => {
-          rendition.next();
+          void rendition.next();
           rendition.emit("nextPage");
         };
 
@@ -245,11 +245,11 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
 
         // Display the book at the specified location or start from beginning
         if (typeof location === "string" || typeof location === "number") {
-          rendition.display(location + "");
+          void rendition.display(location + "");
         } else if (toc.length > 0 && toc[0].href) {
-          rendition.display(toc[0].href);
+          void rendition.display(toc[0].href);
         } else {
-          rendition.display("");
+          void rendition.display("");
         }
       }
     }
@@ -295,22 +295,22 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
             onPageParagraphsExtracted(pageParagraphsData);
           }
           if (onNextPageParagraphs) {
-            this.getNextViewParagraphs().then((nextPageParagraphsData) => {
+            void this.getNextViewParagraphs().then((nextPageParagraphsData) => {
               onNextPageParagraphs(nextPageParagraphsData);
             });
           } else {
             // Always log next page paragraphs even if no callback is provided
-            this.getNextViewParagraphs();
+            void this.getNextViewParagraphs();
           }
           if (onPreviousPageParagraphs) {
-            this.getPreviousViewParagraphs().then(
+            void this.getPreviousViewParagraphs().then(
               (previousPageParagraphsData) => {
                 onPreviousPageParagraphs(previousPageParagraphsData);
               }
             );
           } else {
             // Always log previous page paragraphs even if no callback is provided
-            this.getPreviousViewParagraphs();
+            void this.getPreviousViewParagraphs();
           }
         });
       }
@@ -464,7 +464,7 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
    */
   highlightParagraph = (cfiRange: string) => {
     if (this.rendition && cfiRange) {
-      highlightRange(this.rendition, cfiRange);
+      void highlightRange(this.rendition, cfiRange);
     }
   };
 
@@ -473,7 +473,7 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
    */
   removeHighlight = (cfiRange: string) => {
     if (this.rendition && cfiRange) {
-      removeHighlight(this.rendition, cfiRange);
+      void removeHighlight(this.rendition, cfiRange);
     }
   };
 

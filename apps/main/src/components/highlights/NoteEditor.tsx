@@ -47,7 +47,7 @@ export function NoteEditor({
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
-      handleSave();
+      void handleSave();
     }
   };
 

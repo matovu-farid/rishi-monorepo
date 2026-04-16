@@ -42,7 +42,7 @@ export function SyncStatusIndicator() {
 
   const handleClick = () => {
     if (config.clickable) {
-      triggerSync();
+      void triggerSync();
     }
   };
 

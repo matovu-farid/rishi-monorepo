@@ -39,7 +39,7 @@ export function ChatPanel({
 
   const handleSourceNavigate = (pageNumber: number) => {
     // Navigate the rendition to the page (epub.js accepts spine index)
-    rendition?.display(pageNumber);
+    void rendition?.display(pageNumber);
   };
 
   // Build the loading message placeholder
