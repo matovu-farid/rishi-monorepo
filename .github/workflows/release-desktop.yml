@@ -46,22 +46,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libclang-dev clang libsqlite3-dev
 
-      - name: Install system dependencies (macOS)
-        if: matrix.platform == 'macos-latest'
-        run: brew install libtool autoconf automake
-
-      - name: Install system dependencies (Windows)
-        if: matrix.platform == 'windows-latest'
-        uses: msys2/setup-msys2@v2
-        with:
-          update: true
-          install: autoconf automake libtool pkg-config make
-
-      - name: Add MSYS2 to PATH (Windows)
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: echo "D:\a\_temp\msys64\usr\bin" | Out-File -Append -FilePath $env:GITHUB_PATH
-
       - name: Import Apple Developer Certificate
         if: matrix.platform == 'macos-latest'
         env:

@@ -12,7 +12,7 @@ Users can read their books and interact with AI on any device with the same expe
 
 **Shipped:** v1.1 (2026-04-07)
 **Stack:** Expo/React Native (mobile), Tauri/Rust (desktop), Cloudflare Worker (API), D1/R2 (sync backend)
-**Platforms:** iOS, Android, macOS (Windows blocked by webrtc-audio-processing autotools dependency)
+**Platforms:** iOS, Android, macOS, Linux, Windows
 
 ## Requirements
 
@@ -64,8 +64,6 @@ Users can read their books and interact with AI on any device with the same expe
 Shipped v1.0 across 11 phases and 31 plans in 3 days. v1.1 added PDF thumbnail navigation (1 phase, 2 plans) on the same day. The monorepo has four active apps: Tauri desktop (`apps/main`), Expo mobile (`apps/mobile`), Next.js web (`apps/web`), and Cloudflare Worker (`workers/worker`). Shared sync schema lives in `packages/shared`.
 
 Desktop Rust backend handles EPUB/PDF parsing, local embeddings via `embed_anything`, HNSW vector search, and SQLite via Diesel. Mobile uses React Native equivalents (ExecuTorch, sqlite-vec) with server fallback.
-
-Windows builds are currently blocked by `webrtc-audio-processing-sys` requiring autotools (documented in `.planning/`).
 
 No known gaps remain from v1.0 or v1.1.
 

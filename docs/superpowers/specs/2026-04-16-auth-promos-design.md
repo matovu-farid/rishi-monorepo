@@ -353,6 +353,14 @@ that site; this is resolved at plan-writing time by inspecting each handler.
 
 ## Open Questions
 
-None at this point. The plan document (written next) will pin down the exact
-feature key per existing call site in `epub.tsx` / `djvu/DjvuView.tsx` /
-`mobi/MobiView.tsx` / `TTSControls.tsx`.
+Resolved. Feature keys were pinned in `docs/superpowers/plans/2026-04-16-auth-promos-plan.md` and ship in the codebase as follows (verified 2026-04-16):
+
+| Call site | Feature key |
+|-----------|-------------|
+| `apps/main/src/components/epub.tsx:278` (chat panel) | `"chat"` |
+| `apps/main/src/components/djvu/DjvuView.tsx:341` (chat panel) | `"chat"` |
+| `apps/main/src/components/mobi/MobiView.tsx:278` (chat panel) | `"chat"` |
+| `apps/main/src/components/TTSControls.tsx:132` (play) | `"tts"` |
+| `apps/main/src/components/TTSControls.tsx:145` (voice input) | `"voice-input"` |
+
+Registry defined in `apps/main/src/components/auth/features.ts` with keys `"tts" | "chat" | "voice-input" | "ai-generic"`.

@@ -88,7 +88,6 @@
 - `react-pdf` ^10.2 + `pdf` 0.9.0 (Rust) — PDF rendering and parsing
 - `@react-pdf/renderer` ^4.3 — PDF generation (desktop)
 - `cpal` 0.16 + `wav_io` 0.1 + `tauri-plugin-mic-recorder` 2 — Audio capture for speech features
-- `webrtc-audio-processing` 0.5 — Audio preprocessing
 
 ## Configuration
 

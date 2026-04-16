@@ -54,7 +54,6 @@ reqwest = "0.12.24"
 wav_io = "0.1.15"
 cpal = "0.16.0"
 tauri-plugin-mic-recorder = "2.0.0"
-webrtc-audio-processing = { version = "0.5.0", features = ["bundled"] }
 uuid = { version = "1.19.0", features = ["v4"] }
 rand = "0.8"
 base64 = "0.22"

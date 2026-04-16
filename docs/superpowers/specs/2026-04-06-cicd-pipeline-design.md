@@ -147,19 +147,16 @@ The Tauri app bundle identifier is `com.matovu-farid.com.rishi`, matching the Ap
 
 ## Known Issues
 
-### Windows Build Blocked
+### Windows Build Blocked — RESOLVED 2026-04-16
 
-**Status:** Windows builds are included in the release matrix but currently fail.
+**Status:** Resolved. The `webrtc-audio-processing` crate was declared in `apps/main/src-tauri/Cargo.toml` but had zero usages anywhere in the Rust source; TTS (`speach.rs`) uses a remote HTTP endpoint and needs no local audio-processing library. The crate was removed entirely, unblocking Windows builds and simplifying CI.
 
-**Root cause:** The `webrtc-audio-processing-sys` crate (v0.5.0, dependency of `webrtc-audio-processing` used for speech processing) requires GNU autotools (`libtoolize`, `autoconf`, `automake`) to build from source even with the `bundled` feature flag. These tools are not natively available on Windows. MSYS2 was added to the workflow but the autotools binaries are not found by the Rust build script's process spawning (which doesn't use the MSYS2 shell).
+**Changes:**
+- Removed `webrtc-audio-processing` from `apps/main/src-tauri/Cargo.toml` and regenerated `Cargo.lock` (dropped `webrtc-audio-processing-sys`, `autotools`, `fs_extra`, `prettyplease`).
+- Dropped macOS `brew install libtool autoconf automake` step from `.github/workflows/release-desktop.yml`.
+- Dropped the Windows MSYS2 autotools install step and the `Add MSYS2 to PATH` step from the same workflow.
 
-**Impact:** macOS and Linux releases build and publish successfully. Windows `.msi` and `.nsis` installers are not produced.
-
-**Possible fixes:**
-1. **Cross-compile from Linux** — use `cargo-xwin` or similar to cross-compile for Windows from a Linux runner, avoiding the autotools issue entirely
-2. **Conditional compilation** — gate the `webrtc-audio-processing` dependency behind a feature flag and disable it for Windows builds
-3. **Pre-built binaries** — vendor pre-built `webrtc-audio-processing` static libraries for Windows
-4. **Replace the crate** — find an alternative audio processing library that builds natively on Windows
+**Historical context:** The original spec proposed four alternative fixes (cross-compile via cargo-xwin, conditional compilation, vendored prebuilts, replacing the crate) before the root cause — that the dependency was dead code — was identified. If echo cancellation or noise suppression becomes a real requirement on the Rust side, revisit with a platform-aware selection (the OpenAI Realtime API already provides browser-side echo cancellation via WebRTC, see `.planning/milestones/v1.0-phases/11-mobile-feature-parity/11-RESEARCH.md`).
 
 ## What This Does NOT Cover
 

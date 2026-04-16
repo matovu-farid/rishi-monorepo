@@ -484,11 +484,9 @@ Cutover is one commit on the route file. `git revert <commit>` restores the prev
 
 ## Open questions
 
-None at design time. Implementation may surface specific decisions about:
+None at design time. Implementation details were pinned in the plan (`docs/superpowers/plans/2026-04-16-unified-reader.md`):
 
-- Exact CSS cascade-layer setup for theme overrides inside shadow root
-- Synthetic CFI path format for MOBI
-- Quad-points serialization specifics for PDF highlights
-- Whether to use `closed` or `open` shadow roots (closed by default for stronger isolation)
-
-These are implementation details to settle during the writing-plans phase.
+- **Shadow root mode**: `open` (not `closed`). Closed shadow roots don't provide real security isolation against same-document JS and make DevTools debugging painful; the spec's parenthetical preference for `closed` was revisited. See `ChapterFrame.tsx` — `host.attachShadow({ mode: 'open' })`.
+- **Synthetic CFI path format for MOBI/reflowable paragraphs**: `${chapterId}::${i}` for paragraph indices; `${chapterId}::page::${pageIdx}` for page-level locations. Internal only — not epubcfi-compliant.
+- **Quad-points serialization for PDF highlights**: flat `number[]` with 8 numbers per quad (`[x0, y0, x1, y0, x0, y1, x1, y1]`), matching PDF.js convention. See `rectsToQuadPoints` / `quadPointsToRects` in the plan.
+- **CSS cascade-layer setup**: not needed. Theme CSS is injected into the shadow root as a `<style>` child (style-isolation by construction); inverted-dark-mode is a single inline `filter: invert(1) hue-rotate(180deg)` on the host.
