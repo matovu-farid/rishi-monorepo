@@ -11,20 +11,50 @@ export async function getAuthToken(): Promise<string> {
 }
 
 /**
+ * Module-level cache for the in-flight OAuth state (state + PKCE
+ * code_challenge), shared between startSignInFlow (which sets it before
+ * opening the auth URL) and useHydrateAuth's deep-link listener (which
+ * validates the callback against it).
+ *
+ * Without this cache, the URL state and the validation state would diverge
+ * because they live in different modules with no link between them.
+ */
+let pendingOAuthState: { state: string; codeChallenge: string } | null = null;
+
+/**
+ * Returns the OAuth state currently expected for callback validation, or
+ * generates a fresh one (cold-start path: app opened via deep link with no
+ * prior in-flight flow). The result is always cached for the next caller.
+ */
+export async function ensureOAuthState(): Promise<{ state: string; codeChallenge: string }> {
+  if (pendingOAuthState) return pendingOAuthState;
+  pendingOAuthState = await getState();
+  return pendingOAuthState;
+}
+
+/** Reset the cache (called after a successful or terminal-failed auth round-trip). */
+export function clearPendingOAuthState(): void {
+  pendingOAuthState = null;
+}
+
+/**
  * Open the Rishi sign-in URL in the user's default browser. Generates a fresh
- * OAuth state + code_challenge for each call. Errors are logged but not
- * thrown — callers may invoke this from passive UI (banner, modal) where
- * surfacing a failure is worse than silently failing.
+ * OAuth state + code_challenge for each call and caches it so the deep-link
+ * callback listener can validate against the same value.
+ *
+ * Errors are logged but not thrown — callers may invoke this from passive UI
+ * (banner, modal) where surfacing a failure is worse than silently failing.
  *
  * The OAuth callback is handled by the deep-link listener in useHydrateAuth().
  */
 export async function startSignInFlow(): Promise<void> {
   try {
-    const { state, codeChallenge } = await getState();
+    const result = await getState();
+    pendingOAuthState = result;
     await openUrl(
       `https://rishi.fidexa.org?login=true` +
-        `&state=${encodeURIComponent(state)}` +
-        `&code_challenge=${encodeURIComponent(codeChallenge)}`,
+        `&state=${encodeURIComponent(result.state)}` +
+        `&code_challenge=${encodeURIComponent(result.codeChallenge)}`,
     );
   } catch (err) {
     console.error("[auth] failed to start sign-in flow:", err);

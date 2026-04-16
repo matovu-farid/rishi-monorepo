@@ -1,9 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useSetAtom } from "jotai";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import {
   getUserFromStore,
-  getState,
   completeAuth,
   checkAuthStatus,
 } from "@/generated";
@@ -12,6 +11,7 @@ import {
   authHydratedAtom,
   hydrateWelcomeSeenAtom,
 } from "@/atoms/authPromo";
+import { ensureOAuthState, clearPendingOAuthState } from "@/modules/auth";
 
 const MAX_AUTH_RETRIES = 3;
 const BASE_RETRY_DELAY_MS = 1500;
@@ -24,15 +24,14 @@ const BASE_RETRY_DELAY_MS = 1500;
  *    `authHydratedAtom = true` in `finally` so promo UI can decide what to show.
  * 3. Registers the OAuth deep-link callback listener with retry/backoff
  *    matching the previous logic in LoginButton.tsx.
+ *
+ * The OAuth state used for callback validation is shared with `startSignInFlow`
+ * via the module-level cache in `@/modules/auth`.
  */
 export function useHydrateAuth(): void {
   const setUser = useSetAtom(userAtom);
   const setAuthHydrated = useSetAtom(authHydratedAtom);
   const hydrateWelcomeSeen = useSetAtom(hydrateWelcomeSeenAtom);
-
-  // Lazy state for OAuth — generated when needed (login click or callback).
-  const stateRef = useRef<string | null>(null);
-  const codeChallengeRef = useRef<string | null>(null);
 
   // 1 + 2: hydrate localStorage + keychain user.
   useEffect(() => {
@@ -55,14 +54,6 @@ export function useHydrateAuth(): void {
 
   // 3: deep-link OAuth callback listener.
   useEffect(() => {
-    async function ensureState() {
-      if (!stateRef.current || !codeChallengeRef.current) {
-        const result = await getState();
-        stateRef.current = result.state;
-        codeChallengeRef.current = result.codeChallenge;
-      }
-    }
-
     const unlisten = onOpenUrl(async (urls) => {
       for (const url of urls) {
         if (!url.includes("auth/callback")) continue;
@@ -78,9 +69,9 @@ export function useHydrateAuth(): void {
         const callbackState = params.get("state");
         if (!callbackState) continue;
 
-        await ensureState();
+        const expected = await ensureOAuthState();
 
-        if (callbackState !== stateRef.current) {
+        if (callbackState !== expected.state) {
           console.error("[useHydrateAuth] auth callback state mismatch — ignoring");
           continue;
         }
@@ -89,9 +80,7 @@ export function useHydrateAuth(): void {
           try {
             const user = await completeAuth({ state: callbackState });
             setUser(user);
-            const fresh = await getState();
-            stateRef.current = fresh.state;
-            codeChallengeRef.current = fresh.codeChallenge;
+            clearPendingOAuthState();
             return;
           } catch (error) {
             const errMsg = String(error);
@@ -105,6 +94,7 @@ export function useHydrateAuth(): void {
               errMsg.includes("permanently failed") ||
               errMsg.includes("Max retries")
             ) {
+              clearPendingOAuthState();
               break;
             }
 
@@ -116,7 +106,9 @@ export function useHydrateAuth(): void {
 
               try {
                 const status = await checkAuthStatus({ state: callbackState });
+                console.log("[useHydrateAuth] auth flow status:", status);
                 if (status.status === "not_found" || status.status === "completed") {
+                  clearPendingOAuthState();
                   break;
                 }
               } catch {
