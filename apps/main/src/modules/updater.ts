@@ -113,6 +113,11 @@ export async function checkForUpdates(opts: { silent: boolean }): Promise<void> 
       customStore.set(updateStatusAtom, { kind: "idle" });
     } else {
       customStore.set(updateStatusAtom, { kind: "error", message: msg });
+      // Release the in-flight guard *before* the blocking error dialog so
+      // that a user who clicks "Check for Updates" again from the popover
+      // (possible on Linux WMs where message() isn't modal) isn't no-op'd.
+      // The finally block re-assigns the same value, which is idempotent.
+      checkInFlight = false;
       await message(
         "Unable to check for updates. Please check your connection.",
         { title: "Update check failed", kind: "error" }
