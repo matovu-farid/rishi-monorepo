@@ -25,6 +25,8 @@ dist-ssr
 CLAUDE.md
 testAudioData/*
 *test*
+!*.test.ts
+!*.test.tsx
 !*.test-d.ts
 src/__screenshots__/*
 .env
