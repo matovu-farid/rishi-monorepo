@@ -101,6 +101,12 @@ jobs:
 
       - name: Build
         run: bun run build
+        env:
+          # Clerk validates the publishable key format during prerender of any
+          # page using <ClerkProvider>. Use the real key from secrets when
+          # available, otherwise fall back to a format-valid dummy test key so
+          # the build can complete. The dummy decodes to `clerk.example.com$`.
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.CLERK_PUBLISHABLE_KEY || 'pk_test_Y2xlcmsuZXhhbXBsZS5jb20k' }}
 
   lint-mobile:
     name: Mobile (lint)
