@@ -29,6 +29,7 @@ export default defineConfig({
   },
   test: {
     globals: true,
+    setupFiles: ["./src/mock-setup.ts"],
     // Exclude browser test files from regular test runs
     exclude: [
       "**/*.browser.test.{ts,tsx}",

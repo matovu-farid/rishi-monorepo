@@ -13,7 +13,7 @@ export function TeacherMode() {
           <div>
             <h2 className="text-4xl md:text-5xl font-bold mb-6">Your book becomes your teacher</h2>
             <p className="text-xl text-muted-foreground text-pretty leading-relaxed max-w-2xl mx-auto">
-              Ever read a passage and wanted to dig deeper? Ask questions about what you're reading. The AI understands the context of your book and answers from what you've already learned. No generic responses—just insights connected to your reading.
+              Ever read a passage and wanted to dig deeper? Ask questions about what you&apos;re reading. The AI understands the context of your book and answers from what you&apos;ve already learned. No generic responses—just insights connected to your reading.
             </p>
           </div>
         </div>
