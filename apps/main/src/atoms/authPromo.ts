@@ -31,12 +31,12 @@ export const showSignInBannerAtom = atom((get) =>
 
 /** Mark welcome-seen: updates atom AND writes localStorage. Fail-closed on storage errors. */
 export const setWelcomeSeenAtom = atom(null, (_get, set) => {
+  set(welcomeSeenAtom, true);
   try {
     localStorage.setItem(WELCOME_SEEN_KEY, "1");
   } catch (err) {
     console.warn("[authPromo] failed to persist welcome-seen flag:", err);
   }
-  set(welcomeSeenAtom, true);
 });
 
 /** Dismiss banner for current session only (no localStorage write). */
