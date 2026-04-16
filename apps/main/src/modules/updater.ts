@@ -42,7 +42,7 @@ export async function checkForUpdates(opts: { silent: boolean }): Promise<void> 
   // Defense-in-depth: plugin-process / plugin-updater aren't bundled for mobile.
   // apps/mobile doesn't import this module today, but the guard prevents
   // crashes if that ever changes (e.g., via a shared packages/ layer).
-  const p = await platform();
+  const p = platform();
   if (p !== "macos" && p !== "windows" && p !== "linux") return;
 
   checkInFlight = true;
