@@ -49,7 +49,6 @@ export function useHydrateAuth(): void {
       }
     })();
     // run-once on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 3: deep-link OAuth callback listener.
@@ -127,6 +126,5 @@ export function useHydrateAuth(): void {
       void unlisten.then((fn) => fn());
     };
     // run-once on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 }
