@@ -152,9 +152,22 @@ pub async fn complete_auth(app: tauri::AppHandle, state: &str) -> Result<User, S
     Ok(user)
 }
 
+/// Response shape from the worker's `/api/auth/status/:state` endpoint.
+/// All fields are optional because the worker returns different shapes for
+/// not-found (`{ status: "not_found" }`), found (`{ status, retryCount,
+/// createdAt }`), and error (`{ error }`) cases.
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthStatusResponse {
+    pub status: Option<String>,
+    pub retry_count: Option<u32>,
+    pub created_at: Option<u64>,
+    pub error: Option<String>,
+}
+
 /// Check auth flow status from Redis for monitoring and retry decisions.
 #[tauri::command]
-pub async fn check_auth_status(app: tauri::AppHandle, state: &str) -> Result<serde_json::Value, String> {
+pub async fn check_auth_status(app: tauri::AppHandle, state: &str) -> Result<AuthStatusResponse, String> {
     // Validate state is a well-formed UUID before interpolating into a URL
     uuid::Uuid::parse_str(state)
         .map_err(|_| "Invalid state parameter — expected UUID format".to_string())?;
@@ -175,7 +188,7 @@ pub async fn check_auth_status(app: tauri::AppHandle, state: &str) -> Result<ser
     let url = format!("{}/api/auth/status/{}?code_challenge={}", worker_url, state, code_challenge);
     let client = reqwest::Client::new();
     let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
-    let value: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    let value: AuthStatusResponse = response.json().await.map_err(|e| e.to_string())?;
     Ok(value)
 }
 
@@ -257,8 +270,18 @@ pub fn save_vectors(
     vectordb::save_vectors(vectors, app_data_dir, dim, name).map_err(|e| e.to_string())
 }
 
+/// The OAuth `state` UUID plus the `code_challenge` derived from the
+/// internally-stored code_verifier. Returned by `get_state` so the frontend
+/// can construct the sign-in URL without ever seeing the code_verifier.
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct OAuthStateResponse {
+    pub state: String,
+    pub code_challenge: String,
+}
+
 #[tauri::command]
-pub fn get_state(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+pub fn get_state(app: tauri::AppHandle) -> Result<OAuthStateResponse, String> {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
     use rand::RngCore;
@@ -284,7 +307,7 @@ pub fn get_state(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let hash = Sha256::digest(code_verifier.as_bytes());
     let code_challenge = hash.iter().map(|b| format!("{:02x}", b)).collect::<String>();
 
-    Ok(json!({ "state": state, "codeChallenge": code_challenge }))
+    Ok(OAuthStateResponse { state, code_challenge })
 }
 
 #[tauri::command]
