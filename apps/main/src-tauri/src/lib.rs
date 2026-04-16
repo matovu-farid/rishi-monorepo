@@ -50,6 +50,7 @@ pub fn run() {
     // Everything after here runs in only the app process
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_sentry::init(&client))
         .plugin(tauri_plugin_sql::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
