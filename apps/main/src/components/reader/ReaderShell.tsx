@@ -16,7 +16,9 @@ import { TOCPanel } from './TOCPanel';
 import { themeAtom } from '@/stores/epub_atoms';
 import { themes } from '@/themes/themes';
 import { fontSettingsAtom, invertedDarkModeAtom } from '@/atoms/reader';
-import { decodeLocation } from '@/utils/location-codec';
+import { decodeLocation, encodeLocation } from '@/utils/location-codec';
+import { updateBookLocation } from '@/generated';
+import { triggerSyncOnWrite } from '@/modules/sync-triggers';
 import type { BookKind } from '@/types/reader';
 
 export function ReaderShell({ book }: { book: Book }) {
@@ -55,6 +57,15 @@ export function ReaderShell({ book }: { book: Book }) {
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [openPanel]);
+
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      void updateBookLocation({ bookId: book.id, newLocation: encodeLocation(location) })
+        .then(() => triggerSyncOnWrite())
+        .catch((err) => console.error('Failed to save location:', err));
+    }, 1000);
+    return () => clearTimeout(handle);
+  }, [book.id, location]);
 
   const swipeBind = useDrag(({ swipe: [swipeX] }) => {
     if (swipeX === -1) rendererRef.current?.next();
