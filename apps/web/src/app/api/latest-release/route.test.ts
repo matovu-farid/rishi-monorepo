@@ -31,13 +31,14 @@ describe("GET /api/latest-release", () => {
     const res = await GET();
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.version).toBe("1.1.1");
+    expect(body).toEqual(RELEASE);
   });
 
   it("sets a cache-control header allowing CDN caching", async () => {
     vi.mocked(getLatestRelease).mockResolvedValue(RELEASE);
     const res = await GET();
     const cacheControl = res.headers.get("cache-control") ?? "";
+    expect(cacheControl).toMatch(/\bpublic\b/);
     expect(cacheControl).toMatch(/s-maxage=600/);
     expect(cacheControl).toMatch(/stale-while-revalidate=86400/);
   });
