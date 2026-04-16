@@ -3,10 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { createLazyFileRoute } from "@tanstack/react-router";
 
 import React, { useEffect } from "react";
-import { EpubView } from "@components/epub";
-import { PdfView } from "@components/pdf/components/pdf";
-import { MobiView } from "@components/mobi/MobiView";
-import { DjvuView } from "@components/djvu/DjvuView";
 import { motion } from "framer-motion";
 import { useSetAtom } from "jotai";
 import {
@@ -14,8 +10,8 @@ import {
   BookNavigationState,
   bookNavigationStateAtom,
 } from "@components/pdf/atoms/paragraph-atoms";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { getBook } from "@/generated";
+import { ReaderShell } from "@/components/reader/ReaderShell";
 export const Route = createLazyFileRoute("/books/$id")({
   component: () => <BookView />,
 });
@@ -80,16 +76,7 @@ function BookView(): React.JSX.Element {
 
   return (
     <motion.div layout className="">
-      {book?.kind === "pdf" && (
-        <PdfView
-          filepath={convertFileSrc(book.filepath)}
-          key={book.id.toString()}
-          book={book}
-        />
-      )}
-      {book?.kind === "epub" && <EpubView key={book.id} book={book} />}
-      {book?.kind === "mobi" && <MobiView key={book.id} book={book} />}
-      {book?.kind === "djvu" && <DjvuView key={book.id} book={book} />}
+      {book && <ReaderShell key={book.id} book={book} />}
     </motion.div>
   );
 }
