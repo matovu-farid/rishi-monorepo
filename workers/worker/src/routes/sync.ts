@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, gt, sql, and, max } from "drizzle-orm";
+import { eq, gt, and, max } from "drizzle-orm";
 import type { CloudflareBindings } from "../index";
 import { requireWorkerAuth } from "../index";
 import { createDb } from "../db/drizzle";
@@ -176,7 +176,22 @@ syncRoutes.post("/push", requireWorkerAuth, async (c) => {
       continue;
     }
 
-    // New message -- insert (userId comes from the conversation's ownership)
+    // Verify the parent conversation belongs to this user before inserting
+    const convId = serverFields.conversationId as string;
+    if (!convId) continue;
+
+    const parentConv = await db
+      .select({ userId: conversations.userId })
+      .from(conversations)
+      .where(and(eq(conversations.id, convId), eq(conversations.userId, userId)))
+      .get();
+
+    if (!parentConv) {
+      // Conversation doesn't exist or doesn't belong to this user -- skip
+      continue;
+    }
+
+    // New message -- insert (userId verified via conversation ownership)
     await db.insert(messages).values({
       ...serverFields,
       id: msgId,
@@ -186,56 +201,79 @@ syncRoutes.post("/push", requireWorkerAuth, async (c) => {
     upsertedMessageIds.push(msgId);
   }
 
-  // ── Assign syncVersion to all upserted records ────────────────────────────
+  // ── Assign syncVersion to all upserted records (atomic via D1 batch) ────
   const totalUpserted = upsertedBookIds.length + upsertedHighlightIds.length + upsertedConversationIds.length + upsertedMessageIds.length;
   let newSyncVersion = 0;
 
   if (totalUpserted > 0) {
-    // Get current max syncVersion across all tables
-    const maxBookVersion = (await db.select({ v: max(books.syncVersion) }).from(books).get())?.v ?? 0;
-    const maxHighlightVersion = (await db.select({ v: max(highlights.syncVersion) }).from(highlights).get())?.v ?? 0;
-    const maxConvVersion = (await db.select({ v: max(conversations.syncVersion) }).from(conversations).get())?.v ?? 0;
-    const maxMsgVersion = (await db.select({ v: max(messages.syncVersion) }).from(messages).get())?.v ?? 0;
-    newSyncVersion = Math.max(maxBookVersion, maxHighlightVersion, maxConvVersion, maxMsgVersion) + 1;
+    // Use D1 batch to atomically compute MAX+1 and update all records.
+    // D1 batch executes all statements in a single transaction, preventing
+    // concurrent pushes from reading the same max version.
+    const d1 = c.env.DB;
 
-    // Update all upserted books with the new syncVersion
+    // Build a subquery that computes MAX(sync_version)+1 across all tables
+    const maxVersionSubquery = `(SELECT COALESCE(MAX(v), 0) + 1 FROM (
+      SELECT MAX(sync_version) AS v FROM books
+      UNION ALL SELECT MAX(sync_version) AS v FROM highlights
+      UNION ALL SELECT MAX(sync_version) AS v FROM conversations
+      UNION ALL SELECT MAX(sync_version) AS v FROM messages
+    ))`;
+
+    const batchStatements: D1PreparedStatement[] = [];
+
+    // Update all upserted books
     for (const id of upsertedBookIds) {
-      await db
-        .update(books)
-        .set({ syncVersion: newSyncVersion, isDirty: false })
-        .where(eq(books.id, id));
+      batchStatements.push(
+        d1.prepare(`UPDATE books SET sync_version = ${maxVersionSubquery}, is_dirty = 0 WHERE id = ?`).bind(id)
+      );
     }
 
-    // Update all upserted highlights with the new syncVersion
+    // Update all upserted highlights
     for (const id of upsertedHighlightIds) {
-      await db
-        .update(highlights)
-        .set({ syncVersion: newSyncVersion, isDirty: false })
-        .where(eq(highlights.id, id));
+      batchStatements.push(
+        d1.prepare(`UPDATE highlights SET sync_version = ${maxVersionSubquery}, is_dirty = 0 WHERE id = ?`).bind(id)
+      );
     }
 
-    // Update all upserted conversations with the new syncVersion
+    // Update all upserted conversations
     for (const id of upsertedConversationIds) {
-      await db
-        .update(conversations)
-        .set({ syncVersion: newSyncVersion, isDirty: false })
-        .where(eq(conversations.id, id));
+      batchStatements.push(
+        d1.prepare(`UPDATE conversations SET sync_version = ${maxVersionSubquery}, is_dirty = 0 WHERE id = ?`).bind(id)
+      );
     }
 
-    // Update all upserted messages with the new syncVersion
+    // Update all upserted messages
     for (const id of upsertedMessageIds) {
-      await db
-        .update(messages)
-        .set({ syncVersion: newSyncVersion, isDirty: false })
-        .where(eq(messages.id, id));
+      batchStatements.push(
+        d1.prepare(`UPDATE messages SET sync_version = ${maxVersionSubquery}, is_dirty = 0 WHERE id = ?`).bind(id)
+      );
     }
+
+    if (batchStatements.length > 0) {
+      await d1.batch(batchStatements);
+    }
+
+    // Read back the assigned syncVersion (all records got the same value)
+    const result = await d1.prepare(
+      `SELECT COALESCE(MAX(v), 0) AS v FROM (
+        SELECT MAX(sync_version) AS v FROM books
+        UNION ALL SELECT MAX(sync_version) AS v FROM highlights
+        UNION ALL SELECT MAX(sync_version) AS v FROM conversations
+        UNION ALL SELECT MAX(sync_version) AS v FROM messages
+      )`
+    ).first<{ v: number }>();
+    newSyncVersion = result?.v ?? 0;
   } else {
     // No upserts -- return current max version across all tables
-    const maxBookVersion = (await db.select({ v: max(books.syncVersion) }).from(books).get())?.v ?? 0;
-    const maxHighlightVersion = (await db.select({ v: max(highlights.syncVersion) }).from(highlights).get())?.v ?? 0;
-    const maxConvVersion = (await db.select({ v: max(conversations.syncVersion) }).from(conversations).get())?.v ?? 0;
-    const maxMsgVersion = (await db.select({ v: max(messages.syncVersion) }).from(messages).get())?.v ?? 0;
-    newSyncVersion = Math.max(maxBookVersion, maxHighlightVersion, maxConvVersion, maxMsgVersion);
+    const result = await c.env.DB.prepare(
+      `SELECT COALESCE(MAX(v), 0) AS v FROM (
+        SELECT MAX(sync_version) AS v FROM books
+        UNION ALL SELECT MAX(sync_version) AS v FROM highlights
+        UNION ALL SELECT MAX(sync_version) AS v FROM conversations
+        UNION ALL SELECT MAX(sync_version) AS v FROM messages
+      )`
+    ).first<{ v: number }>();
+    newSyncVersion = result?.v ?? 0;
   }
 
   const response: PushResponse = {

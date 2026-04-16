@@ -21,6 +21,7 @@ import { atom, useAtom, useAtomValue, useSetAtom } from "jotai";
 import { EventBusEvent, PlayingState } from "@/utils/bus";
 import { eventBus } from "@/utils/bus";
 import { isChattingAtom, stopConversationAtom } from "@/stores/chat_atoms";
+import { useRequireAuth } from "@/hooks/useRequireAuth";
 
 interface TTSControlsProps {
   bookId: string;
@@ -68,6 +69,7 @@ export default function TTSControls({
   const stopConversation = useSetAtom(stopConversationAtom);
   const error = errors.join("\n");
   const [isChatting, setIsChatting] = useAtom(isChattingAtom);
+  const { requireAuth, AuthDialog } = useRequireAuth();
 
   useEffect(() => {
     void (async () => {
@@ -118,6 +120,7 @@ export default function TTSControls({
   };
 
   const handlePlay = () => {
+    // Allow pause/resume without auth since playback was already started
     if (playingState === PlayingState.Playing) {
       player.pause();
       return;
@@ -126,7 +129,9 @@ export default function TTSControls({
       player.resume();
       return;
     }
-    return player.play();
+    requireAuth(() => {
+      void player.play();
+    });
   };
 
   const handleStop = async () => {
@@ -136,8 +141,10 @@ export default function TTSControls({
     setIsChatting((isChatting) => !isChatting);
   };
 
-  const handleChat = async () => {
-    void toggleChat();
+  const handleChat = () => {
+    requireAuth(() => {
+      void toggleChat();
+    });
   };
   const stopChat = async () => {
     void toggleChat();
@@ -177,6 +184,7 @@ export default function TTSControls({
 
   return (
     <>
+      {AuthDialog}
       {isChatting && (
         <Draggable
           storePath={STORE_PATH}

@@ -142,12 +142,142 @@ export async function importPdfFile(): Promise<Book | null> {
   return book
 }
 
-type BookFormat = 'epub' | 'pdf'
+export async function importMobiFile(): Promise<Book | null> {
+  const pickedFile = await File.pickFileAsync(undefined, 'application/x-mobipocket-ebook')
+
+  if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
+    return null
+  }
+
+  const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile
+
+  const bookId = generateUUID()
+  const bookDir = new Directory(BOOKS_DIR, bookId)
+
+  if (!BOOKS_DIR.exists) {
+    BOOKS_DIR.create({ intermediates: true })
+  }
+  bookDir.create({ intermediates: true, idempotent: true })
+
+  // Detect exact extension from picked file
+  const ext = sourceFile.uri.toLowerCase().endsWith('.azw3') ? 'azw3' : 'mobi'
+  const destFile = new File(bookDir, `book.${ext}`)
+  sourceFile.copy(destFile)
+
+  const uriParts = sourceFile.uri.split('/')
+  const rawName = decodeURIComponent(uriParts[uriParts.length - 1] || 'Unknown Book')
+  const title = rawName.replace(/\.(mobi|azw3)$/i, '')
+
+  const book: Book = {
+    id: bookId,
+    title,
+    author: 'Unknown',
+    coverPath: null,
+    filePath: destFile.uri,
+    format: 'mobi',
+    currentCfi: null,
+    currentPage: null,
+    createdAt: Date.now(),
+  }
+
+  insertBook(book)
+
+  hashBookFile(destFile.uri)
+    .then((fileHash) => {
+      db.update(books)
+        .set({ fileHash, isDirty: true })
+        .where(eq(books.id, bookId))
+        .run()
+
+      uploadBookFile(destFile.uri, fileHash, 'mobi')
+        .then(({ r2Key }) => {
+          db.update(books)
+            .set({ fileR2Key: r2Key, isDirty: true })
+            .where(eq(books.id, bookId))
+            .run()
+        })
+        .catch((err) => {
+          console.warn('Book upload failed (will retry on next sync):', err)
+        })
+    })
+    .catch((err) => {
+      console.warn('Book hashing failed:', err)
+    })
+
+  return book
+}
+
+export async function importDjvuFile(): Promise<Book | null> {
+  const pickedFile = await File.pickFileAsync(undefined, 'image/vnd.djvu')
+
+  if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
+    return null
+  }
+
+  const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile
+
+  const bookId = generateUUID()
+  const bookDir = new Directory(BOOKS_DIR, bookId)
+
+  if (!BOOKS_DIR.exists) {
+    BOOKS_DIR.create({ intermediates: true })
+  }
+  bookDir.create({ intermediates: true, idempotent: true })
+
+  const destFile = new File(bookDir, 'book.djvu')
+  sourceFile.copy(destFile)
+
+  const uriParts = sourceFile.uri.split('/')
+  const rawName = decodeURIComponent(uriParts[uriParts.length - 1] || 'Unknown Book')
+  const title = rawName.replace(/\.djvu$/i, '')
+
+  const book: Book = {
+    id: bookId,
+    title,
+    author: 'Unknown',
+    coverPath: null,
+    filePath: destFile.uri,
+    format: 'djvu',
+    currentCfi: null,
+    currentPage: null,
+    createdAt: Date.now(),
+  }
+
+  insertBook(book)
+
+  hashBookFile(destFile.uri)
+    .then((fileHash) => {
+      db.update(books)
+        .set({ fileHash, isDirty: true })
+        .where(eq(books.id, bookId))
+        .run()
+
+      uploadBookFile(destFile.uri, fileHash, 'djvu')
+        .then(({ r2Key }) => {
+          db.update(books)
+            .set({ fileR2Key: r2Key, isDirty: true })
+            .where(eq(books.id, bookId))
+            .run()
+        })
+        .catch((err) => {
+          console.warn('Book upload failed (will retry on next sync):', err)
+        })
+    })
+    .catch((err) => {
+      console.warn('Book hashing failed:', err)
+    })
+
+  return book
+}
+
+type BookFormat = 'epub' | 'pdf' | 'mobi' | 'djvu'
 
 function detectFormatFromUrl(url: string): BookFormat | null {
   const pathname = new URL(url).pathname.toLowerCase()
   if (pathname.endsWith('.epub')) return 'epub'
   if (pathname.endsWith('.pdf')) return 'pdf'
+  if (pathname.endsWith('.mobi') || pathname.endsWith('.azw3')) return 'mobi'
+  if (pathname.endsWith('.djvu')) return 'djvu'
   return null
 }
 
@@ -155,13 +285,15 @@ function detectFormatFromContentType(contentType: string | null): BookFormat | n
   if (!contentType) return null
   if (contentType.includes('application/epub+zip')) return 'epub'
   if (contentType.includes('application/pdf')) return 'pdf'
+  if (contentType.includes('application/x-mobipocket-ebook')) return 'mobi'
+  if (contentType.includes('image/vnd.djvu')) return 'djvu'
   return null
 }
 
 function extractTitleFromUrl(url: string): string {
   const pathname = new URL(url).pathname
   const filename = decodeURIComponent(pathname.split('/').pop() || 'Unknown Book')
-  return filename.replace(/\.(epub|pdf)$/i, '')
+  return filename.replace(/\.(epub|pdf|mobi|azw3|djvu)$/i, '')
 }
 
 export async function importBookFromUrl(url: string): Promise<Book> {
@@ -191,7 +323,7 @@ export async function importBookFromUrl(url: string): Promise<Book> {
   }
 
   if (!format) {
-    throw new Error('Unsupported format — only EPUB and PDF are supported')
+    throw new Error('Unsupported format — only EPUB, PDF, MOBI, and DJVU are supported')
   }
 
   const arrayBuffer = await downloadRes.arrayBuffer()

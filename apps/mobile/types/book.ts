@@ -4,7 +4,7 @@ export interface Book {
   author: string
   coverPath: string | null // Local file path to extracted cover image
   filePath: string // Local file path to the book file in app documents
-  format: 'epub' | 'pdf'
+  format: 'epub' | 'pdf' | 'mobi' | 'djvu'
   currentCfi: string | null // ePubCFI string for EPUB reading position
   currentPage: number | null // Page number for PDF reading position
   createdAt: number // Unix timestamp ms

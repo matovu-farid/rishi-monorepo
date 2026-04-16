@@ -22,6 +22,11 @@ export const uploadRoutes = new Hono<{
 // Does NOT sign Content-Type in headers (per research pitfall -- signQuery only).
 uploadRoutes.post("/upload-url", requireWorkerAuth, async (c) => {
   const body = await c.req.json<UploadUrlRequest>();
+
+  if (!body.fileHash || !/^[a-fA-F0-9]+$/.test(body.fileHash)) {
+    return c.json({ error: "Invalid fileHash format" }, 400);
+  }
+
   const userId = c.get("userId");
   const db = createDb(c.env.DB);
 
@@ -70,6 +75,13 @@ uploadRoutes.post("/upload-url", requireWorkerAuth, async (c) => {
 // Returns a presigned GET URL for downloading a file from R2.
 uploadRoutes.post("/download-url", requireWorkerAuth, async (c) => {
   const body = await c.req.json<DownloadUrlRequest>();
+  const userId = c.get("userId");
+
+  // Validate that the r2Key is scoped to this user's prefix to prevent path traversal
+  const expectedPrefix = `books/${userId}/`;
+  if (!body.r2Key || !body.r2Key.startsWith(expectedPrefix)) {
+    return c.json({ error: "Forbidden: invalid r2Key" }, 403);
+  }
 
   const bucketUrl = `https://${c.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com/rishi-books/${body.r2Key}`;
 

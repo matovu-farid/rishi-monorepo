@@ -10,11 +10,13 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.rishi.mobile",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Rishi uses your microphone for live voice conversations with AI about your books."
       }
     },
     "android": {
+      "package": "com.rishi.mobile",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -46,7 +48,6 @@
         }
       ],
       ["expo-sqlite", { "withSQLiteVecExtension": true }],
-      "react-native-pdf",
       "@sentry/react-native/expo"
     ],
     "experiments": {

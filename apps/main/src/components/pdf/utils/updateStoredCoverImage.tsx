@@ -11,7 +11,9 @@ export async function updateStoredCoverImage(book: Book) {
   if (customStore.get(pageNumberAtom) !== 1) {
     customStore.set(setPageNumberAtom, 1);
   }
-  const canvas = document.querySelector<HTMLCanvasElement>("canvas");
+  const canvas = document.querySelector<HTMLCanvasElement>(
+    '[data-page-number="1"] canvas'
+  );
   if (!canvas) return;
   console.log(">>> Found canvas for cover image extraction.");
 

@@ -1,10 +1,11 @@
 use serde_json::json;
 
-pub async fn get_llm_response(input: &str) -> Result<String, reqwest::Error> {
+pub async fn get_llm_response(input: &str, token: &str) -> Result<String, reqwest::Error> {
     let client = reqwest::Client::new();
     let map = json!({ "input": input });
     let response = client
         .post("https://rishi-worker.faridmato90.workers.dev/api/text/completions")
+        .header("Authorization", format!("Bearer {}", token))
         .json(&map)
         .send()
         .await?
@@ -16,9 +17,10 @@ pub async fn get_llm_response(input: &str) -> Result<String, reqwest::Error> {
 pub async fn get_llm_response_with_context(
     question: &str,
     context: &str,
+    token: &str,
 ) -> Result<String, reqwest::Error> {
     if context.is_empty() {
-        return get_llm_response(question).await;
+        return get_llm_response(question, token).await;
     }
     let map = json!({ "input": [
         {
@@ -35,7 +37,7 @@ pub async fn get_llm_response_with_context(
                 "<context>\n{context}\n</context>\n\n<question>\n{question}\n</question>\n\nPlease answer the question using only the context above." )
           }
     ]});
-    let response = get_llm_response(&map.to_string()).await?;
+    let response = get_llm_response(&map.to_string(), token).await?;
     Ok(response)
 }
 
@@ -47,13 +49,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_llm_response() {
-        let response = get_llm_response("Hello, world!").await.unwrap();
+        let response = get_llm_response("Hello, world!", "test-token").await.unwrap();
         println!("Response: {}", response);
         expect!(response).not_to(be_equal_to(""));
     }
     #[tokio::test]
     async fn test_get_llm_response_with_context() {
-        let response = get_llm_response_with_context("What is the main idea of the book?", "The main idea of the book is to help the user understand the specific book they are reading.").await.unwrap();
+        let response = get_llm_response_with_context("What is the main idea of the book?", "The main idea of the book is to help the user understand the specific book they are reading.", "test-token").await.unwrap();
         println!("Response: {}", response);
         expect!(response).not_to(be_equal_to(""));
     }
@@ -66,6 +68,7 @@ silent. He walked slowly, keeping his eyes on the narrow trail. The text never
 explains exactly why the forest was quiet, only that Jacob felt uneasy as he moved
 forward.
 ",
+            "test-token",
         )
         .await
         .unwrap();
@@ -75,7 +78,7 @@ forward.
 
     #[tokio::test]
     async fn test_get_llm_response_with_no_context() {
-        let response = get_llm_response_with_context("Explain this to me.", "")
+        let response = get_llm_response_with_context("Explain this to me.", "", "test-token")
             .await
             .unwrap();
         println!("Response: {}", response);

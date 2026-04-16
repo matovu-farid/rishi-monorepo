@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { load } from '@tauri-apps/plugin-store';
+import { getAuthToken } from '@/modules/auth';
 
 const WORKER_URL = 'https://rishi-worker.faridmato90.workers.dev';
 
@@ -105,8 +105,7 @@ export function useVoiceInput(): UseVoiceInputReturn {
 
         try {
           // POST to Worker STT endpoint
-          const store = await load('store.json');
-          const token = await store.get<string>('auth_token');
+          const token = await getAuthToken();
           const response = await fetch(`${WORKER_URL}/api/audio/transcribe`, {
             method: 'POST',
             headers: {

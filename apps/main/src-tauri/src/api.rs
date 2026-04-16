@@ -3,15 +3,23 @@ pub async fn get_realtime_client_secret(app: tauri::AppHandle) -> Result<String,
     let url = "https://rishi-worker.faridmato90.workers.dev/api/realtime/client_secrets";
     let token = crate::commands::get_auth_token(&app)?;
     let client = reqwest::Client::new();
-    let client_secret = client
+    let response = client
         .get(url)
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
-        .map_err(|e| e.to_string())?
-        .text()
-        .await
         .map_err(|e| e.to_string())?;
+
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("Session expired — please log in again".to_string());
+    }
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Failed to get client secret ({}): {}", status, body));
+    }
+
+    let client_secret = response.text().await.map_err(|e| e.to_string())?;
     Ok(client_secret)
 }
 

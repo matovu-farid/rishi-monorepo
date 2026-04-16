@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { db } from '@/modules/kysley';
 import { getContextForQuery } from '@/generated/commands';
-import { load } from '@tauri-apps/plugin-store';
+import { getAuthToken } from '@/modules/auth';
 import { triggerSyncOnWrite } from '@/modules/sync-triggers';
 import type { Message, SourceChunk } from '@/types/conversation';
 
@@ -150,8 +150,7 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
       const recentMessages = messages.slice(-6);
 
       // 7. Call Worker LLM endpoint
-      const store = await load('store.json');
-      const token = await store.get<string>('auth_token');
+      const token = await getAuthToken();
       const response = await fetch(`${WORKER_URL}/api/text/completions`, {
         method: 'POST',
         headers: {

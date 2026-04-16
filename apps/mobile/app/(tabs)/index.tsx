@@ -9,7 +9,7 @@ import { BookRow } from '@/components/BookRow'
 import { LibraryEmptyState } from '@/components/LibraryEmptyState'
 import { UrlImportSheet } from '@/components/UrlImportSheet'
 import { getBooks, deleteBook } from '@/lib/book-storage'
-import { importEpubFile, importPdfFile } from '@/lib/file-import'
+import { importEpubFile, importPdfFile, importMobiFile, importDjvuFile } from '@/lib/file-import'
 import { Book } from '@/types/book'
 
 export default function LibraryScreen() {
@@ -30,11 +30,11 @@ export default function LibraryScreen() {
   )
 
   const doImport = useCallback(
-    async (format: 'epub' | 'pdf') => {
+    async (format: 'epub' | 'pdf' | 'mobi' | 'djvu') => {
       setImporting(true)
       try {
-        const book =
-          format === 'pdf' ? await importPdfFile() : await importEpubFile()
+        const importFns = { epub: importEpubFile, pdf: importPdfFile, mobi: importMobiFile, djvu: importDjvuFile }
+        const book = await importFns[format]()
         if (book) {
           loadBooks()
         }
@@ -55,6 +55,8 @@ export default function LibraryScreen() {
     Alert.alert('Import Book', 'Choose file format', [
       { text: 'EPUB', onPress: () => doImport('epub') },
       { text: 'PDF', onPress: () => doImport('pdf') },
+      { text: 'MOBI', onPress: () => doImport('mobi') },
+      { text: 'DJVU', onPress: () => doImport('djvu') },
       { text: 'From URL', onPress: () => setUrlSheetVisible(true) },
       { text: 'Cancel', style: 'cancel' },
     ])
@@ -64,6 +66,10 @@ export default function LibraryScreen() {
     (book: Book) => {
       if (book.format === 'pdf') {
         router.push(`/reader/pdf/${book.id}`)
+      } else if (book.format === 'mobi') {
+        router.push(`/reader/mobi/${book.id}`)
+      } else if (book.format === 'djvu') {
+        router.push(`/reader/djvu/${book.id}`)
       } else {
         router.push(`/reader/${book.id}`)
       }

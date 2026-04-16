@@ -82,7 +82,7 @@ export default function SignInScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         className="flex-1 justify-center px-6"
       >
-        <Text className="text-3xl font-bold text-center mb-8 text-gray-900 dark:text-white">
+        <Text testID="sign-in-title" className="text-3xl font-bold text-center mb-8 text-gray-900 dark:text-white">
           Welcome to Rishi
         </Text>
 
@@ -91,6 +91,7 @@ export default function SignInScreen() {
         ) : null}
 
         <TextInput
+          testID="email-input"
           className="border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-3 mb-4 text-gray-900 dark:text-white bg-white dark:bg-gray-800"
           placeholder="Email"
           placeholderTextColor="#9CA3AF"
@@ -102,6 +103,7 @@ export default function SignInScreen() {
         />
 
         <TextInput
+          testID="password-input"
           className="border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-3 mb-6 text-gray-900 dark:text-white bg-white dark:bg-gray-800"
           placeholder="Password"
           placeholderTextColor="#9CA3AF"
@@ -112,6 +114,7 @@ export default function SignInScreen() {
         />
 
         <TouchableOpacity
+          testID="sign-in-button"
           className="bg-blue-600 rounded-lg py-3 mb-4"
           onPress={onSignIn}
           disabled={loading}
@@ -130,6 +133,7 @@ export default function SignInScreen() {
         </View>
 
         <TouchableOpacity
+          testID="google-sign-in-button"
           className="border border-gray-300 dark:border-gray-600 rounded-lg py-3"
           onPress={onGoogleSignIn}
         >

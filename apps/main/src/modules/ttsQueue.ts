@@ -4,7 +4,7 @@ import type { TTSRequest } from "@/types";
 import { ttsCache } from "./ttsCache";
 import { TTSQueueEvents } from "./ipc_handles";
 import { fetch } from "@tauri-apps/plugin-http";
-import { load } from "@tauri-apps/plugin-store";
+import { getAuthToken } from "./auth";
 import config from "@/config.json";
 
 export interface QueueItem extends TTSRequest {
@@ -42,15 +42,12 @@ export class TTSQueue extends EventEmitter {
     this.queue = new PriorityQueue(
       (a: QueueItem, b: QueueItem) => b.priority - a.priority
     );
-    this.on(TTSQueueEvents.REQUEST_AUDIO, this.maintainQueueSize);
   }
 
-  private maintainQueueSize(): void {
-    setInterval(() => {
-      while (this.queue.size() >= this.MAX_QUEUE_SIZE) {
-        this.queue.deq();
-      }
-    }, 10);
+  private trimQueueIfNeeded(): void {
+    while (this.queue.size() >= this.MAX_QUEUE_SIZE) {
+      this.queue.deq();
+    }
   }
 
   /**
@@ -68,6 +65,9 @@ export class TTSQueue extends EventEmitter {
       text,
       priority,
     });
+
+    // Trim queue inline to prevent unbounded growth
+    this.trimQueueIfNeeded();
 
     // Create unique request ID for deduplication
     const requestId = `${bookId}-${cfiRange}`;
@@ -260,14 +260,13 @@ export class TTSQueue extends EventEmitter {
         speed: 1.0,
       };
 
-      const store = await load("store.json");
-      const token = await store.get<string>("auth_token");
+      const token = await getAuthToken();
 
       const response = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify(requestBody),
       });

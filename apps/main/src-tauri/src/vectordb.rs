@@ -241,9 +241,12 @@ fn init_vector_store(
     let mut vectorstore = vector_store()
         .lock()
         .map_err(|e| anyhow::anyhow!("Failed to lock vector store: {}", e))?;
-    vectorstore
-        .init(app_data_dir, dim, name)
-        .map_err(|e| anyhow::anyhow!("Failed to initialize vector store: {}", e))?;
+    // Only re-initialize if the parameters have changed
+    if !vectorstore.is_initialized || vectorstore.basename != name || vectorstore.dim != dim || vectorstore.directory != app_data_dir {
+        vectorstore
+            .init(app_data_dir, dim, name)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize vector store: {}", e))?;
+    }
     Ok(vectorstore)
 }
 pub fn save_vectors(

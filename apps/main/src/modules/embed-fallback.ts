@@ -1,13 +1,11 @@
 import { embed } from '@/generated/commands';
 import type { EmbedParam, EmbedResult } from '@/generated/types';
-import { load } from '@tauri-apps/plugin-store';
+import { getAuthToken } from './auth';
 
 const WORKER_URL = 'https://rishi-worker.faridmato90.workers.dev';
 
 async function embedTextsOnServer(texts: string[]): Promise<number[][]> {
-  const store = await load('store.json');
-  const token = await store.get<string>('auth_token');
-  if (!token) throw new Error('No auth token for server embedding');
+  const token = await getAuthToken();
   const response = await fetch(`${WORKER_URL}/api/embed`, {
     method: 'POST',
     headers: {

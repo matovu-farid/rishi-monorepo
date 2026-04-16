@@ -38,9 +38,15 @@ export async function hashBookFile(filePath: string): Promise<string> {
 export async function uploadBookFile(
   filePath: string,
   fileHash: string,
-  format: 'epub' | 'pdf'
+  format: 'epub' | 'pdf' | 'mobi' | 'djvu'
 ): Promise<{ r2Key: string }> {
-  const contentType = format === 'epub' ? 'application/epub+zip' : 'application/pdf'
+  const contentTypes: Record<string, string> = {
+    epub: 'application/epub+zip',
+    pdf: 'application/pdf',
+    mobi: 'application/x-mobipocket-ebook',
+    djvu: 'image/vnd.djvu',
+  }
+  const contentType = contentTypes[format] ?? 'application/octet-stream'
 
   try {
     // Request presigned upload URL from Worker
@@ -88,7 +94,7 @@ export async function uploadBookFile(
 export async function downloadBookFile(
   bookId: string,
   r2Key: string,
-  format: 'epub' | 'pdf'
+  format: 'epub' | 'pdf' | 'mobi' | 'djvu'
 ): Promise<string> {
   try {
     // Request presigned download URL from Worker

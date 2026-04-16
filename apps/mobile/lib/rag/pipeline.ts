@@ -20,7 +20,7 @@ async function embedBatchWithFallback(texts: string[]): Promise<number[][]> {
 export async function embedBook(
   bookId: string,
   filePath: string,
-  format: 'epub' | 'pdf',
+  format: string,
   onProgress?: (progress: number) => void
 ): Promise<void> {
   // Skip if already embedded
@@ -69,7 +69,7 @@ export async function embedBook(
 export async function reembedBook(
   bookId: string,
   filePath: string,
-  format: 'epub' | 'pdf',
+  format: string,
   onProgress?: (progress: number) => void
 ): Promise<void> {
   deleteBookChunks(bookId)

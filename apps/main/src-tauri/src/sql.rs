@@ -300,7 +300,11 @@ pub fn update_book_cover(book_id: i32, new_cover: Vec<u8>) -> Result<(), String>
         .map_err(|e| format!("Failed to get connection: {}", e))?;
 
     diesel::update(books.filter(id.eq(&book_id)))
-        .set(cover.eq(&new_cover))
+        .set((
+            cover.eq(&new_cover),
+            cover_kind.eq("normal"),
+            version.eq(1),
+        ))
         .execute(&mut conn)
         .map_err(|e| format!("Failed to update book cover: {}", e))?;
 

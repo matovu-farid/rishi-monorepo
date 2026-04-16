@@ -73,7 +73,7 @@ export function UrlImportSheet({ visible, onDismiss, onImported }: UrlImportShee
             ref={inputRef}
             testID="url-input"
             className="border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-3 mb-4 text-gray-900 dark:text-white bg-white dark:bg-gray-800"
-            placeholder="https://example.com/book.epub"
+            placeholder="https://example.com/book.epub (or .pdf, .mobi, .djvu)"
             placeholderTextColor="#9CA3AF"
             defaultValue=""
             onChangeText={(text) => { urlRef.current = text }}

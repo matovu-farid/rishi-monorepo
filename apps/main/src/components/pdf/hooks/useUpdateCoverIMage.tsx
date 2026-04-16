@@ -23,5 +23,5 @@ export function useUpdateCoverIMage(book: Book) {
     if (isRendered(book.id.toString()) && hasNavigatedToPage) {
       void updateStoredCoverImage(book);
     }
-  }, [isRendered]);
+  }, [isRendered, book, hasNavigatedToPage]);
 }

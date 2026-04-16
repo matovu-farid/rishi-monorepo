@@ -8,6 +8,30 @@ use diesel::r2d2::ConnectionManager;
 use r2d2::Pool;
 use std::sync::OnceLock;
 
+/// Customizer that runs PRAGMA statements on every new SQLite connection
+/// acquired from the pool, ensuring all connections (not just the first)
+/// have the correct settings.
+#[derive(Debug)]
+struct SqlitePragmaCustomizer;
+
+impl r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error>
+    for SqlitePragmaCustomizer
+{
+    fn on_acquire(
+        &self,
+        conn: &mut SqliteConnection,
+    ) -> Result<(), diesel::r2d2::Error> {
+        use diesel::RunQueryDsl;
+        diesel::sql_query("PRAGMA busy_timeout=5000;")
+            .execute(conn)
+            .map_err(|e| diesel::r2d2::Error::QueryError(e))?;
+        diesel::sql_query("PRAGMA journal_mode=WAL;")
+            .execute(conn)
+            .map_err(|e| diesel::r2d2::Error::QueryError(e))?;
+        Ok(())
+    }
+}
+
 pub static DB_POOL: OnceLock<Pool<ConnectionManager<SqliteConnection>>> = OnceLock::new();
 
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
@@ -44,20 +68,15 @@ pub fn setup_database(app: &tauri::AppHandle) -> anyhow::Result<()> {
     let conn_url = init_database(app)?;
     let manager = diesel::r2d2::ConnectionManager::<SqliteConnection>::new(conn_url);
 
-    // Configure connection pool with reasonable defaults
+    // Configure connection pool with reasonable defaults.
+    // SqlitePragmaCustomizer ensures every connection gets PRAGMA settings
+    // (busy_timeout, journal_mode) via on_acquire, not just the first one.
     let pool = Pool::builder()
         .max_size(10) // Maximum number of connections in the pool
         .min_idle(Some(2)) // Minimum number of idle connections to maintain
         .connection_timeout(std::time::Duration::from_secs(30)) // Timeout for getting a connection
+        .connection_customizer(Box::new(SqlitePragmaCustomizer))
         .build(manager)?;
-
-    // Configure SQLite for concurrent access
-    {
-        use diesel::RunQueryDsl;
-        let mut conn = pool.get()?;
-        diesel::sql_query("PRAGMA journal_mode=WAL;").execute(&mut conn)?;
-        diesel::sql_query("PRAGMA busy_timeout=5000;").execute(&mut conn)?;
-    }
 
     // Backfill sync_ids for any books missing them (safety net for migration edge cases)
     {

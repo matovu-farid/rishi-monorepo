@@ -22,7 +22,7 @@ interface UseTTSPlayerReturn {
 export function useTTSPlayer(
   bookId: string,
   filePath: string,
-  format: 'epub' | 'pdf'
+  format: string
 ): UseTTSPlayerReturn {
   const queueRef = useRef<TTSQueue | null>(null)
   const playerRef = useRef<TTSPlayer | null>(null)

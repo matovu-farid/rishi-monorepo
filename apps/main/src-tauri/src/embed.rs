@@ -13,21 +13,27 @@ pub struct Metadata {
     pub book_id: u32,
 }
 
-impl From<HashMap<String, String>> for Metadata {
-    fn from(data: HashMap<String, String>) -> Self {
-        Self {
-            id: data.get("id").unwrap_or(&"".to_string()).parse().unwrap(),
+impl TryFrom<HashMap<String, String>> for Metadata {
+    type Error = String;
+
+    fn try_from(data: HashMap<String, String>) -> Result<Self, String> {
+        Ok(Self {
+            id: data
+                .get("id")
+                .ok_or("Missing 'id' in metadata")?
+                .parse()
+                .map_err(|e| format!("Failed to parse 'id': {}", e))?,
             page_number: data
                 .get("page_number")
-                .unwrap_or(&"".to_string())
+                .ok_or("Missing 'page_number' in metadata")?
                 .parse()
-                .unwrap(),
+                .map_err(|e| format!("Failed to parse 'page_number': {}", e))?,
             book_id: data
                 .get("book_id")
                 .unwrap_or(&"0".to_string())
                 .parse()
-                .unwrap(),
-        }
+                .map_err(|e| format!("Failed to parse 'book_id': {}", e))?,
+        })
     }
 }
 
@@ -49,16 +55,24 @@ pub struct EmbedResult {
     pub metadata: Metadata,
 }
 
-impl From<EmbedData> for EmbedResult {
-    fn from(data: EmbedData) -> Self {
-        // let embedding = data.embedding.to_dense().ok_or("Failed to get embedding")?;
-        let embedding = data.embedding.to_dense().unwrap();
-        Self {
+impl TryFrom<EmbedData> for EmbedResult {
+    type Error = String;
+
+    fn try_from(data: EmbedData) -> Result<Self, String> {
+        let embedding = data
+            .embedding
+            .to_dense()
+            .map_err(|e| format!("Failed to convert embedding to dense vector: {}", e))?;
+        let metadata: Metadata = data
+            .metadata
+            .ok_or("Missing metadata in embed data")?
+            .try_into()?;
+        Ok(Self {
             dim: embedding.len(),
             embedding,
             text: data.text,
-            metadata: data.metadata.unwrap().into(),
-        }
+            metadata,
+        })
     }
 }
 
@@ -94,7 +108,9 @@ pub async fn embed_text(embedparams: Vec<EmbedParam>) -> Result<Vec<EmbedResult>
         })?;
 
     let res = Arc::into_inner(embeddings).ok_or("Failed to get embeddings")?;
-    Ok(res.into_iter().map(EmbedResult::from).collect::<Vec<_>>())
+    res.into_iter()
+        .map(EmbedResult::try_from)
+        .collect::<Result<Vec<_>, _>>()
 }
 // Object = $2
 

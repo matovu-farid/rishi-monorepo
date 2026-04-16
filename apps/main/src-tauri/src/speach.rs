@@ -1,6 +1,6 @@
 use serde_json::json;
 
-pub async fn tts(text: &str) -> anyhow::Result<Vec<u8>> {
+pub async fn tts(text: &str, token: &str) -> anyhow::Result<Vec<u8>> {
     let client = reqwest::Client::new();
 
     let map = json!({
@@ -11,6 +11,7 @@ pub async fn tts(text: &str) -> anyhow::Result<Vec<u8>> {
     });
     let response = client
         .post("https://rishi-worker.faridmato90.workers.dev/api/audio/speech")
+        .header("Authorization", format!("Bearer {}", token))
         .json(&map)
         .send()
         .await
@@ -31,7 +32,7 @@ mod tests {
     #[tokio::test]
     async fn test_tts() {
         let text = "The quick brown fox jumps over the lazy dog.";
-        let audio_data = tts(text).await.unwrap();
+        let audio_data = tts(text, "test-token").await.unwrap();
         println!(
             "audio_data: {:x?}",
             audio_data.iter().take(12).collect::<Vec<&u8>>()

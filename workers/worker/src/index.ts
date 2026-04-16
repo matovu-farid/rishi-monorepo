@@ -71,6 +71,13 @@ export async function requireWorkerAuth(c: any, next: () => Promise<void>) {
     if (payload.exp && payload.exp < now) {
       return c.json({ error: "Token expired" }, 401);
     }
+    // Check if the token has been revoked
+    const redis = Redis.fromEnv(c.env);
+    const isRevoked = await redis.get(`auth:revoked:${token}`);
+    if (isRevoked) {
+      return c.json({ error: "Token revoked" }, 401);
+    }
+
     c.set("userId", payload.sub);
   } catch {
     return c.json({ error: "Unauthorized" }, 401);
@@ -153,7 +160,12 @@ app.post("/api/auth/complete", async (c) => {
       return c.json({ error: "Token exchange in progress" }, 409);
     }
 
-    // Verify PKCE code_challenge if one was stored
+    // PKCE is mandatory — reject if no code_challenge was stored
+    if (!authData.codeChallenge) {
+      return c.json({ error: "Invalid auth state: missing PKCE challenge" }, 400);
+    }
+
+    // Verify PKCE code_challenge
     if (authData.codeChallenge) {
       const encoded = new TextEncoder().encode(code_verifier);
       const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
@@ -223,6 +235,11 @@ app.get("/api/auth/status/:state", async (c) => {
       return c.json({ error: "Missing state parameter" }, 400);
     }
 
+    const codeChallenge = c.req.query("code_challenge");
+    if (!codeChallenge) {
+      return c.json({ error: "Missing code_challenge" }, 400);
+    }
+
     const redis = Redis.fromEnv(c.env);
     const rawData = await redis.get(`auth:state:${state}`);
 
@@ -235,7 +252,13 @@ app.get("/api/auth/status/:state", async (c) => {
       status?: string;
       retryCount?: number;
       createdAt?: number;
+      codeChallenge?: string;
     };
+
+    // Verify the code_challenge matches the stored one
+    if (authData.codeChallenge && authData.codeChallenge !== codeChallenge) {
+      return c.json({ error: "Invalid code_challenge" }, 403);
+    }
 
     return c.json({
       status: authData.status || "unknown",
@@ -260,6 +283,12 @@ app.post("/api/auth/revoke", async (c) => {
       return c.json({ error: "Unauthorized" }, 401);
     }
     const token = authHeader.slice(7);
+
+    // Verify the JWT signature before revoking
+    const isValid = await jwt.verify(token, c.env.JWT_SECRET);
+    if (!isValid) {
+      return c.json({ error: "Invalid token" }, 401);
+    }
 
     // Decode to get expiry so we can set an appropriate TTL on the revocation entry
     let exp = 0;
@@ -339,17 +368,21 @@ app.get("/health", (c) => {
 });
 
 app.get("/api/clerk/users", requireWorkerAuth, async (c) => {
-  const clerkClient = createClerkClient({ secretKey: c.env.CLERK_SECRET_KEY });
-  const users = await clerkClient.users.getUserList();
-  return c.json(users);
+  return c.json({ error: "Forbidden" }, 403);
 });
 
 app.get("/api/clerk/user/:userId", requireWorkerAuth, async (c) => {
   try {
+    const userId = c.req.param("userId");
+
+    // Only allow users to fetch their own data
+    if (c.get("userId") !== userId) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+
     const clerkClient = createClerkClient({
       secretKey: c.env.CLERK_SECRET_KEY,
     });
-    const userId = c.req.param("userId");
 
     const clerkUser = await clerkClient.users.getUser(userId);
 

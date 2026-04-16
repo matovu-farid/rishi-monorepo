@@ -46,6 +46,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
   private errors: string[] = [];
   public audioElement: HTMLAudioElement;
   private direction: Direction = Direction.Forward;
+  private eventBusSubscriptions: Array<{ event: string; handler: (...args: any[]) => void }> = [];
 
   constructor(audioElement: HTMLAudioElement) {
     super();
@@ -60,36 +61,43 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     this.errors = [];
 
-    eventBus.subscribe(
-      EventBusEvent.NEW_PARAGRAPHS_AVAILABLE,
-      async (paragraphs: ParagraphWithIndex[]) => {
-        if (this.playingState === PlayingState.WaitingForNewParagraphs) {
-          this.setPlayingState(PlayingState.Playing);
-        }
-        if (isEqual(this.currentViewParagraphs, paragraphs)) return;
-        this.currentViewParagraphs = paragraphs;
-        if (this.playingState === PlayingState.Playing) {
-          await this.handleLocationChanged();
-        }
+    // Clear any previous subscriptions to prevent leaks on re-initialize
+    this.removeEventBusSubscriptions();
+
+    const onNewParagraphs = async (paragraphs: ParagraphWithIndex[]) => {
+      if (this.playingState === PlayingState.WaitingForNewParagraphs) {
+        this.setPlayingState(PlayingState.Playing);
       }
-    );
-    eventBus.subscribe(
-      EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE,
-      (paragraphs: ParagraphWithIndex[]) => {
-        if (isEqual(this.nextPageParagraphs, paragraphs)) return;
-        this.nextPageParagraphs = paragraphs;
+      if (isEqual(this.currentViewParagraphs, paragraphs)) return;
+      this.currentViewParagraphs = paragraphs;
+      if (this.playingState === PlayingState.Playing) {
+        await this.handleLocationChanged();
       }
-    );
-    eventBus.subscribe(
-      EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE,
-      (paragraphs: ParagraphWithIndex[]) => {
-        if (isEqual(this.previousPageParagraphs, paragraphs)) return;
-        this.previousPageParagraphs = paragraphs.reverse();
-      }
-    );
-    eventBus.subscribe(EventBusEvent.PAGE_CHANGED, async () => {
+    };
+    const onNextViewParagraphs = (paragraphs: ParagraphWithIndex[]) => {
+      if (isEqual(this.nextPageParagraphs, paragraphs)) return;
+      this.nextPageParagraphs = paragraphs;
+    };
+    const onPreviousViewParagraphs = (paragraphs: ParagraphWithIndex[]) => {
+      if (isEqual(this.previousPageParagraphs, paragraphs)) return;
+      this.previousPageParagraphs = [...paragraphs].reverse();
+    };
+    const onPageChanged = async () => {
       await this.handleLocationChanged();
-    });
+    };
+
+    eventBus.subscribe(EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, onNewParagraphs);
+    eventBus.subscribe(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, onNextViewParagraphs);
+    eventBus.subscribe(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, onPreviousViewParagraphs);
+    eventBus.subscribe(EventBusEvent.PAGE_CHANGED, onPageChanged);
+
+    this.eventBusSubscriptions = [
+      { event: EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, handler: onNewParagraphs },
+      { event: EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, handler: onNextViewParagraphs },
+      { event: EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, handler: onPreviousViewParagraphs },
+      { event: EventBusEvent.PAGE_CHANGED, handler: onPageChanged },
+    ];
+
     this.audioElement.onplay = async () => {
       eventBus.publish(
         EventBusEvent.PLAYING_AUDIO,
@@ -120,7 +128,15 @@ export class Player extends EventEmitter<PlayerEventMap> {
     }
   };
 
+  private removeEventBusSubscriptions() {
+    for (const { event, handler } of this.eventBusSubscriptions) {
+      eventBus.off(event as any, handler as any);
+    }
+    this.eventBusSubscriptions = [];
+  }
+
   public cleanup() {
+    this.removeEventBusSubscriptions();
     this.audioElement.removeEventListener("ended", this.handleEnded);
     this.audioElement.removeEventListener("error", this.handleError);
     this.audioElement.pause();
@@ -484,7 +500,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
   };
   private moveToPreviousPage = async () => {
     this.setPlayingState(PlayingState.WaitingForNewParagraphs);
-    this.currentViewParagraphs = this.previousPageParagraphs.reverse();
+    this.currentViewParagraphs = [...this.previousPageParagraphs].reverse();
     this.previousPageParagraphs = [];
 
     eventBus.publish(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED);

@@ -82,10 +82,11 @@ export default function ConversationsScreen() {
     return (
       <SafeAreaView className="flex-1 bg-white dark:bg-[#151718]">
         <View className="px-6 pt-4 pb-2 flex-row items-center justify-between">
-          <Text className="text-2xl font-semibold text-gray-900 dark:text-white">
+          <Text testID="conversations-title" className="text-2xl font-semibold text-gray-900 dark:text-white">
             Conversations
           </Text>
           <TouchableOpacity
+            testID="new-conversation-button"
             onPress={handleNewConversation}
             className="w-11 h-11 items-center justify-center"
             accessibilityLabel="New conversation"
@@ -96,7 +97,7 @@ export default function ConversationsScreen() {
         </View>
         <View className="flex-1 items-center justify-center p-8">
           <IconSymbol name="message.fill" size={40} color="#9CA3AF" />
-          <Text className="text-base font-semibold text-gray-900 dark:text-white mt-4">
+          <Text testID="no-conversations-text" className="text-base font-semibold text-gray-900 dark:text-white mt-4">
             No conversations yet
           </Text>
           <Text className="text-sm text-gray-500 dark:text-gray-400 mt-1 text-center">

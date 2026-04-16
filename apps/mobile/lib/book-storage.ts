@@ -66,7 +66,7 @@ export async function getBookForReading(id: string): Promise<Book | null> {
     await downloadBookFile(
       id,
       row.fileR2Key,
-      row.format as 'epub' | 'pdf'
+      row.format as Book['format']
     )
     // Re-fetch the updated row
     const updated = db
@@ -111,7 +111,7 @@ function mapRowToBook(row: typeof books.$inferSelect): Book {
     author: row.author,
     coverPath: row.coverPath,
     filePath: row.filePath,
-    format: row.format as 'epub' | 'pdf',
+    format: row.format as Book['format'],
     currentCfi: row.currentCfi,
     currentPage: row.currentPage,
     createdAt: row.createdAt,

@@ -18,13 +18,13 @@ interface ChunkRow {
 export class TTSQueue {
   readonly bookId: string
   readonly filePath: string
-  readonly format: 'epub' | 'pdf'
+  readonly format: string
 
   private _chunks: ChunkRow[] = []
   private _currentIndex: number = 0
   private _audioCache = new Map<string, string>() // chunkId -> file URI
 
-  constructor(bookId: string, filePath: string, format: 'epub' | 'pdf') {
+  constructor(bookId: string, filePath: string, format: string) {
     this.bookId = bookId
     this.filePath = filePath
     this.format = format

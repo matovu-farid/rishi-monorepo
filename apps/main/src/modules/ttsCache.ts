@@ -17,13 +17,19 @@ export class TTSCache {
   private cacheDir: string = "";
   private readonly MAX_CACHE_SIZE_MB = 500; // 500MB limit
   private readonly CACHE_CLEANUP_THRESHOLD = 0.8; // Cleanup when 80% full
+  private initPromise: Promise<void>;
 
   constructor() {
-    void this.init();
+    this.initPromise = this.init();
   }
-  async init() {
+  private async init() {
     this.cacheDir = await path.join(await path.appDataDir(), PUBLIC, TTS_CACHE);
     await this.ensureCacheDirExists();
+  }
+
+  /** Ensure initialization is complete before proceeding */
+  private ready(): Promise<void> {
+    return this.initPromise;
   }
 
   /**
@@ -47,7 +53,8 @@ export class TTSCache {
   /**
    * Get the cache directory path for a specific book
    */
-  private getBookCacheDir(bookId: string): Promise<string> {
+  private async getBookCacheDir(bookId: string): Promise<string> {
+    await this.ready();
     return path.join(this.cacheDir, bookId.toString());
   }
 
@@ -243,6 +250,7 @@ export class TTSCache {
    */
   async getTotalCacheSize(): Promise<number> {
     try {
+      await this.ready();
       let totalSize = 0;
       const entries = await fs.readDir(this.cacheDir);
 
@@ -279,6 +287,7 @@ export class TTSCache {
    */
   private async cleanupOldestFiles(): Promise<void> {
     try {
+      await this.ready();
       const entries = await fs.readDir(this.cacheDir);
       const fileStats: Array<{ path: string; mtime: Date }> = [];
 

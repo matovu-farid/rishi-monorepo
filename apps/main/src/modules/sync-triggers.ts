@@ -1,6 +1,6 @@
 import { createSyncEngine, type SyncEngine } from '@rishi/shared/sync-engine';
 import { DesktopSyncAdapter } from './sync-adapter';
-import { load } from '@tauri-apps/plugin-store';
+import { getAuthToken } from './auth';
 
 const WORKER_URL = 'https://rishi-worker.faridmato90.workers.dev';
 const SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -33,12 +33,7 @@ export function getSyncStatus(): { status: SyncStatus; lastSyncAt: number | null
 }
 
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
-  const store = await load('store.json');
-  const token = await store.get<string>('auth_token');
-
-  if (!token) {
-    throw new Error('No auth token available');
-  }
+  const token = await getAuthToken();
 
   return fetch(`${WORKER_URL}${path}`, {
     ...init,

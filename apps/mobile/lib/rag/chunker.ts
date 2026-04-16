@@ -171,13 +171,14 @@ export function chunkText(
  */
 export async function getChunks(
   filePath: string,
-  format: 'epub' | 'pdf'
+  format: string
 ): Promise<TextChunk[]> {
-  if (format === 'pdf') {
-    console.warn('[chunker] PDF text extraction not yet supported')
-    return []
+  if (format === 'epub') {
+    const sections = await extractEpubText(filePath)
+    return chunkText(sections)
   }
 
-  const sections = await extractEpubText(filePath)
-  return chunkText(sections)
+  // PDF, MOBI, and DJVU text extraction not yet supported on mobile
+  console.warn(`[chunker] ${format.toUpperCase()} text extraction not yet supported`)
+  return []
 }

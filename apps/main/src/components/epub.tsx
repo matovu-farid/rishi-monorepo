@@ -45,6 +45,7 @@ import { SelectionPopover } from "@/components/highlights/SelectionPopover";
 import { HighlightsPanel } from "@/components/highlights/HighlightsPanel";
 import { ReaderSettings } from "@/components/reader/ReaderSettings";
 import { ChatPanel } from "@/components/chat/ChatPanel";
+import { useRequireAuth } from "@/hooks/useRequireAuth";
 
 function cn(...classes: string[]) {
   return classes.filter(Boolean).join(" ");
@@ -74,6 +75,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   } | null>(null);
   const [highlightsPanelOpen, setHighlightsPanelOpen] = useState(false);
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
+  const { requireAuth, AuthDialog } = useRequireAuth();
 
   // Look up the book's sync_id for highlight storage
   useEffect(() => {
@@ -273,7 +275,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
           <Highlighter size={20} />
         </button>
         <button
-          onClick={() => setChatPanelOpen(true)}
+          onClick={() => requireAuth(() => setChatPanelOpen(true))}
           className={cn("p-2 rounded-md", getTextColor())}
           aria-label="Open chat panel"
         >
@@ -433,6 +435,8 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
         open={highlightsPanelOpen}
         onOpenChange={setHighlightsPanelOpen}
       />
+
+      {AuthDialog}
 
       {/* Chat Panel */}
       <ChatPanel
