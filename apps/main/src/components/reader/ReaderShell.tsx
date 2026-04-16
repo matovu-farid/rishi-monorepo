@@ -31,6 +31,7 @@ import { ReaderSettings } from './ReaderSettings';
 import { HighlightsPanel } from '@/components/highlights/HighlightsPanel';
 import { ChatPanel } from '@/components/chat/ChatPanel';
 import { updateStoredCoverImage } from '@/components/pdf/utils/updateStoredCoverImage';
+import { hasSavedEpubData } from '@/generated';
 
 export function ReaderShell({ book }: { book: Book }) {
   const adapter = useBookAdapter(book);
@@ -124,6 +125,21 @@ export function ReaderShell({ book }: { book: Book }) {
     }, 1000);
     return () => clearTimeout(handle);
   }, [book.id, location]);
+
+  // RAG embedding job: check if embeddings exist; actual processing requires pageData
+  // from the content adapters which isn't available in the shell.
+  // TODO: pipe PageDataInsertable[] from each adapter so this can call processEpubJob directly.
+  useEffect(() => {
+    if (!adapter.content) return;
+    void hasSavedEpubData({ bookId: book.id }).then((has) => {
+      if (!has) {
+        console.warn(
+          '[ReaderShell] Book', book.id, 'has no saved embeddings. ' +
+          'Embedding job requires pageData from the adapter — trigger from the specific view instead.'
+        );
+      }
+    }).catch(() => {/* ignore — backend may not be ready */});
+  }, [adapter.content, book.id]);
 
   // Cover image generation for paged formats (runs once when content is ready)
   useEffect(() => {
