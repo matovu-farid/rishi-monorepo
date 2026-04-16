@@ -4,7 +4,7 @@ import {
   getTTSAudioPath,
   requestTTSAudio,
 } from "@/modules/ipc_handel_functions";
-import { ParagraphWithIndex } from "./player_control";
+import { ParagraphWithIndex } from "@/utils/bus";
 import { eventBus, EventBusEvent } from "@/utils/bus";
 import { PlayingState } from "@/utils/bus";
 import isEqual from "fast-deep-equal";

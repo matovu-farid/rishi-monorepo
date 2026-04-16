@@ -1,6 +1,6 @@
 // @ts-ignore
 
-import { ParagraphWithIndex } from "./player_control";
+import { ParagraphWithIndex } from "@/utils/bus";
 import { PlayingState } from "@/utils/bus";
 import { isHighlightingAtom } from "@components/pdf/atoms/paragraph-atoms";
 import { customStore } from "@/stores/jotai";
