@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/components/ui/dropdown-menu";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import { startSignInFlow } from "@/modules/auth";
 
 const MAX_AUTH_RETRIES = 3;
 const BASE_RETRY_DELAY_MS = 1500;
@@ -137,13 +138,7 @@ export function LoginButton() {
   }
 
   async function login() {
-    // Always generate fresh state+challenge on explicit login click
-    const result = await getState();
-    stateRef.current = result.state;
-    codeChallengeRef.current = result.codeChallenge;
-    await openUrl(
-      `https://rishi.fidexa.org?login=true&state=${encodeURIComponent(stateRef.current!)}&code_challenge=${encodeURIComponent(codeChallengeRef.current!)}`
-    );
+    await startSignInFlow();
   }
 
   async function logout() {
