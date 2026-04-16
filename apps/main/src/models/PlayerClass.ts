@@ -46,7 +46,6 @@ export class Player extends EventEmitter<PlayerEventMap> {
   private errors: string[] = [];
   public audioElement: HTMLAudioElement;
   private direction: Direction = Direction.Forward;
-  private eventBusSubscriptions: Array<{ event: string; handler: (...args: any[]) => void }> = [];
 
   public onRequestNextPage: (() => void) | null = null;
   public onRequestPrevPage: (() => void) | null = null;
@@ -85,25 +84,6 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     this.errors = [];
 
-    // Clear any previous subscriptions to prevent leaks on re-initialize
-    this.removeEventBusSubscriptions();
-
-    // Bridge: keep NEW_PARAGRAPHS_AVAILABLE subscription so that legacy callers
-    // (including existing unit tests) still work. This bridge delegates to the
-    // canonical setVisibleParagraphs() setter. The other three paragraph events
-    // (NEXT_VIEW_PARAGRAPHS_AVAILABLE, PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE,
-    // PAGE_CHANGED) are removed — callers should use the prop-based setters
-    // or callbacks instead. The bridge itself will be removed in Task 39.
-    const onNewParagraphs = (paragraphs: ParagraphWithIndex[]) => {
-      this.setVisibleParagraphs(paragraphs);
-    };
-
-    eventBus.subscribe(EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, onNewParagraphs);
-
-    this.eventBusSubscriptions = [
-      { event: EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, handler: onNewParagraphs },
-    ];
-
     this.audioElement.onplay = async () => {
       eventBus.publish(
         EventBusEvent.PLAYING_AUDIO,
@@ -134,15 +114,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     }
   };
 
-  private removeEventBusSubscriptions() {
-    for (const { event, handler } of this.eventBusSubscriptions) {
-      eventBus.off(event as any, handler as any);
-    }
-    this.eventBusSubscriptions = [];
-  }
-
   public cleanup() {
-    this.removeEventBusSubscriptions();
     this.audioElement.removeEventListener("ended", this.handleEnded);
     this.audioElement.removeEventListener("error", this.handleError);
     this.audioElement.pause();

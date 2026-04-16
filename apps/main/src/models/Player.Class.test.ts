@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
-import { eventBus, EventBusEvent, PlayingState } from "@/utils/bus";
+import { PlayingState } from "@/utils/bus";
 import { paragraphs } from "./fixtures";
 import eventEmitter from "eventemitter3";
 import { Player } from "./PlayerClass";
@@ -97,7 +97,7 @@ describe("Player", () => {
 
     await player.initialize("1");
 
-    eventBus.publish(EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, paragraphs);
+    player.setVisibleParagraphs(paragraphs);
 
     expect(player.getPlayingState()).toBe(PlayingState.Stopped);
     expect(await player.getCurrentParagraphs()).toEqual(paragraphs);

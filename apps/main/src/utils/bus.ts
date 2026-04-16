@@ -34,31 +34,15 @@ export type ParagraphWithIndex = {
   text: string;
   index: string;
 };
-/**
- * PlayerControlEvent is used to communicate between the PlayerControl and the Player
- */
-export enum PlayerControlEvent {
-  PARAGRAPH_HIGHLIGHTED = "paragraphHighlighted",
-  PARAGRAPH_UNHIGHLIGHTED = "paragraphUnhighlighted",
-  PAGE_CHANGED = "pageChanged",
-  NEW_PARAGRAPHS_AVAILABLE = "newParagraphsAvailable",
-  NEXT_VIEW_PARAGRAPHS_AVAILABLE = "nextViewParagraphsAvailable",
-  PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE = "previousViewParagraphsAvailable",
-  NEXT_PAGE_PARAGRAPHS_EMPTIED = "nextPageParagraphsEmptied",
-  PREVIOUS_PAGE_PARAGRAPHS_EMPTIED = "previousPageParagraphsEmptied",
-}
-export type PlayerControlEventMap = {
-  [PlayerControlEvent.PARAGRAPH_HIGHLIGHTED]: [ParagraphWithIndex];
-  [PlayerControlEvent.PARAGRAPH_UNHIGHLIGHTED]: [ParagraphWithIndex];
-  [PlayerControlEvent.PAGE_CHANGED]: [void];
-  [PlayerControlEvent.NEW_PARAGRAPHS_AVAILABLE]: [ParagraphWithIndex[]];
-  [PlayerControlEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE]: [ParagraphWithIndex[]];
-  [PlayerControlEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE]: [
-    ParagraphWithIndex[],
-  ];
-  [PlayerControlEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED]: [void];
-  [PlayerControlEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED]: [void];
-};
+// PlayerControlEvent previously held paragraph-lifecycle events
+// (NEW_PARAGRAPHS_AVAILABLE, NEXT/PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE,
+// NEXT/PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, PAGE_CHANGED,
+// PARAGRAPH_HIGHLIGHTED, PARAGRAPH_UNHIGHLIGHTED) that were removed in
+// Task 39 because the ReaderShell cutover made them all dead code.
+// The enum and its type map are kept as empty stubs so that the
+// EventBusEvent spread below still type-checks without changes to callers.
+export enum PlayerControlEvent {}
+export type PlayerControlEventMap = Record<never, never>;
 
 /**
  * PlayingState is used to communicate between the Player and the PlayerControl
