@@ -30,10 +30,16 @@ export default defineConfig({
   test: {
     globals: true,
     setupFiles: ["./src/mock-setup.ts"],
-    // Exclude browser test files from regular test runs
+    // Exclude browser test files and integration tests that require live
+    // credentials / running Tauri runtime from regular test runs.
     exclude: [
       "**/*.browser.test.{ts,tsx}",
       "**/epubwrapper.test.tsx",
+      // Integration tests — require OpenAI credentials and/or Tauri runtime:
+      "**/ttsService.test.ts",
+      "**/ttsQueue.test.ts",
+      "**/embed-fallback.test.ts",
+      "**/Player.Class.test.ts",
       "node_modules/**",
     ],
     browser: {
