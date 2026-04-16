@@ -1,0 +1,37 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`PREMIUM_FEATURES registry > matches snapshot of titles and descriptions 1`] = `
+{
+  "ai-generic": {
+    "bullets": [],
+    "description": "Sign in to unlock Rishi's AI-powered reading tools.",
+    "title": "AI features require an account",
+  },
+  "chat": {
+    "bullets": [
+      "Cites passages from the book you're reading",
+      "Works across your entire library",
+      "Remembers context within a conversation",
+    ],
+    "description": "Ask questions, get summaries, and explore ideas with an AI that knows your library.",
+    "title": "Chat with your books",
+  },
+  "tts": {
+    "bullets": [
+      "Natural, expressive voices",
+      "Reads EPUB, PDF, MOBI, and DjVu",
+      "Remembers your spot across devices",
+    ],
+    "description": "AI-powered text-to-speech turns any book into an audiobook.",
+    "title": "Listen to your books",
+  },
+  "voice-input": {
+    "bullets": [
+      "Natural speech recognition",
+      "Paired with AI book chat",
+    ],
+    "description": "Ask questions hands-free with realtime voice conversations.",
+    "title": "Talk to your books",
+  },
+}
+`;
