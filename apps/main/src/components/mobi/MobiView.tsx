@@ -275,7 +275,7 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
       {/* Top bar */}
       <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
         <button
-          onClick={() => requireAuth(() => setChatPanelOpen(true))}
+          onClick={() => requireAuth("chat", () => setChatPanelOpen(true))}
           className={`p-2 rounded-md ${getTextColor()}`}
           aria-label="Open chat panel"
         >

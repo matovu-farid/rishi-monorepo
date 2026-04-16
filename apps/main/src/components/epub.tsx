@@ -275,7 +275,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
           <Highlighter size={20} />
         </button>
         <button
-          onClick={() => requireAuth(() => setChatPanelOpen(true))}
+          onClick={() => requireAuth("chat", () => setChatPanelOpen(true))}
           className={cn("p-2 rounded-md", getTextColor())}
           aria-label="Open chat panel"
         >

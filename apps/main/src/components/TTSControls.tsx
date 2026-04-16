@@ -129,7 +129,7 @@ export default function TTSControls({
       player.resume();
       return;
     }
-    requireAuth(() => {
+    requireAuth("tts", () => {
       void player.play();
     });
   };
@@ -142,7 +142,7 @@ export default function TTSControls({
   };
 
   const handleChat = () => {
-    requireAuth(() => {
+    requireAuth("voice-input", () => {
       void toggleChat();
     });
   };

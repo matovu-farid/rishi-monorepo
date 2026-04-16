@@ -338,7 +338,7 @@ export function DjvuView({ book }: { book: Book }) {
       <div className="fixed top-0 left-0 right-0 z-50 bg-transparent">
         <div className="flex items-center justify-end gap-2 px-4 pt-5">
           <button
-            onClick={() => requireAuth(() => setChatPanelOpen(true))}
+            onClick={() => requireAuth("chat", () => setChatPanelOpen(true))}
             className="p-2 rounded-md text-white hover:bg-white/10"
             aria-label="Open chat panel"
           >
