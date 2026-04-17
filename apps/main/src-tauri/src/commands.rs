@@ -114,22 +114,29 @@ pub async fn log_auth_debug_fn(state: &str, source: &str, step: &str, data: Opti
     let _ = client.post(&url).json(&payload).send().await;
 }
 
+/// JSON-serializable debug data for the log command.
+/// Using a concrete struct avoids `serde_json::Value` which tauri-typegen
+/// cannot map to TypeScript.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct AuthDebugData(serde_json::Value);
+
 /// Tauri command: log auth debug events from the TS frontend.
 #[tauri::command]
-pub async fn log_auth_debug_cmd(state: String, step: String, data: Option<serde_json::Value>, error: Option<String>) -> Result<(), String> {
-    log_auth_debug_fn(&state, "tauri-ts", &step, data, error.as_deref()).await;
+pub async fn log_auth_debug_cmd(state: String, step: String, data: Option<String>, error: Option<String>) -> Result<(), String> {
+    let parsed: Option<serde_json::Value> = data.and_then(|d| serde_json::from_str(&d).ok());
+    log_auth_debug_fn(&state, "tauri-ts", &step, parsed, error.as_deref()).await;
     Ok(())
 }
 
 /// Tauri command: fetch auth debug log from the worker.
 #[tauri::command]
-pub async fn get_auth_debug(state: String) -> Result<serde_json::Value, String> {
+pub async fn get_auth_debug(state: String) -> Result<String, String> {
     let worker_url = crate::WORKER_URL;
     let url = format!("{}/api/auth/debug/{}", worker_url, &state);
     let client = reqwest::Client::new();
     let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
-    let value: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-    Ok(value)
+    let text = response.text().await.map_err(|e| e.to_string())?;
+    Ok(text)
 }
 
 /// Complete auth flow using the state parameter from the deep link.

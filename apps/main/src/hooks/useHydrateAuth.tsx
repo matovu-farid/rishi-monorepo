@@ -18,7 +18,7 @@ import { peekPendingOAuthState, clearPendingOAuthState } from "@/modules/auth";
 /** Best-effort debug log to Redis via the Rust command. Never throws. */
 async function debugLog(state: string, step: string, data?: unknown, error?: string) {
   try {
-    await logAuthDebugCmd({ state, step, data: data ?? undefined, error: error ?? undefined });
+    await logAuthDebugCmd({ state, step, data: data != null ? JSON.stringify(data) : undefined, error: error ?? undefined });
   } catch {
     // swallow — must never block auth flow
   }

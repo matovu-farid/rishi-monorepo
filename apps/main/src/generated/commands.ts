@@ -125,11 +125,11 @@ export async function getDjvuPageText(params: types.GetDjvuPageTextParams): Prom
   return invoke('get_djvu_page_text', params);
 }
 
-export async function logAuthDebugCmd(params: { state: string; step: string; data?: unknown; error?: string }): Promise<void> {
+export async function logAuthDebugCmd(params: { state: string; step: string; data?: string; error?: string }): Promise<void> {
   return invoke('log_auth_debug_cmd', params);
 }
 
-export async function getAuthDebug(params: { state: string }): Promise<unknown> {
+export async function getAuthDebug(params: { state: string }): Promise<string> {
   return invoke('get_auth_debug', params);
 }
 

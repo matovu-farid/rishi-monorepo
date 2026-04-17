@@ -71,7 +71,7 @@ export async function startSignInFlow(): Promise<void> {
     void logAuthDebugCmd({
       state: result.state,
       step: "sign_in_flow_started",
-      data: { challengeLen: result.codeChallenge.length, url: url.slice(0, 120) },
+      data: JSON.stringify({ challengeLen: result.codeChallenge.length, url: url.slice(0, 120) }),
     }).catch(() => {});
     await openUrl(url);
   } catch (err) {
