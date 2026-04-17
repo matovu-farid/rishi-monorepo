@@ -5,3 +5,10 @@
 .env
 .env.*
 .worktrees/
+
+# Reader test fixtures (real books, large binaries — not committed)
+apps/main/src/__fixtures__/books/*.epub
+apps/main/src/__fixtures__/books/*.mobi
+apps/main/src/__fixtures__/books/*.pdf
+apps/main/src/__fixtures__/books/*.djvu
+.vercel
