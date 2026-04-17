@@ -89,25 +89,13 @@ pub fn run() {
             }
             // Log deep-link arrivals at the Rust level so we can tell if
             // the URL reaches the process even when the JS listener misses it.
+            // NOTE: This callback runs on the macOS event loop thread, NOT inside
+            // a Tokio runtime — never call tokio::spawn or async code here.
             {
                 use tauri::Listener;
-                let _handle = app.handle().clone();
                 app.listen("deep-link://new-url", move |event| {
                     let payload = event.payload().to_string();
                     eprintln!("[deep-link] Rust listener received: {}", payload);
-                    // Best-effort: extract state UUID and log to Redis
-                    if let Some(idx) = payload.find("state=") {
-                        let rest = &payload[idx + 6..];
-                        let state_val: String = rest.chars().take_while(|c| *c != '&' && *c != '"' && *c != ' ').collect();
-                        if !state_val.is_empty() {
-                            let s = state_val.clone();
-                            let p = payload.clone();
-                            tokio::spawn(async move {
-                                crate::commands::log_auth_debug_fn(&s, "tauri-rust", "rust_deeplink_received",
-                                    Some(serde_json::json!({ "rawPayload": p })), None).await;
-                            });
-                        }
-                    }
                 });
             }
             // Auto-open devtools in debug builds so console output is visible
