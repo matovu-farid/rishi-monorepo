@@ -12,13 +12,27 @@ export async function saveUser(userId: string, state: string, codeChallenge: str
   }
 
   // Store auth flow data with status tracking (includes code_challenge for PKCE verification)
-  await redis.set(`auth:state:${state}`, JSON.stringify({
+  // NX prevents overwrites if the state was already claimed by another call
+  const wasSet = await redis.set(`auth:state:${state}`, JSON.stringify({
     userId,
     status: 'authenticated',
     retryCount: 0,
     createdAt: Date.now(),
     codeChallenge,
-  }), { ex: 600 }) // 10 minute TTL
+  }), { ex: 600, nx: true }) // 10 minute TTL, set-if-not-exists
+
+  if (!wasSet) {
+    // State already exists — verify it belongs to the same user
+    const existing = await redis.get(`auth:state:${state}`) as string | null
+    if (existing) {
+      const parsed = JSON.parse(existing)
+      if (parsed.userId !== userId) {
+        throw new Error('Auth state already claimed by another user')
+      }
+    }
+    // Same user retrying — allow silently
+    return
+  }
 
   // Best-effort logging — must not block the auth flow
   try {

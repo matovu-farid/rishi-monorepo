@@ -4,7 +4,7 @@ pub async fn get_llm_response(input: &str, token: &str) -> Result<String, reqwes
     let client = reqwest::Client::new();
     let map = json!({ "input": input });
     let response = client
-        .post("https://rishi-worker.faridmato90.workers.dev/api/text/completions")
+        .post(format!("{}/api/text/completions", crate::WORKER_URL))
         .header("Authorization", format!("Bearer {}", token))
         .json(&map)
         .send()

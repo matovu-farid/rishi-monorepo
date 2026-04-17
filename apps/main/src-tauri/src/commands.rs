@@ -110,7 +110,7 @@ pub async fn complete_auth(app: tauri::AppHandle, state: &str) -> Result<User, S
         .ok_or("Invalid code_verifier format")?
         .to_string();
 
-    let worker_url = "https://rishi-worker.faridmato90.workers.dev";
+    let worker_url = crate::WORKER_URL;
     let url = format!("{}/api/auth/complete", worker_url);
 
     let client = reqwest::Client::new();
@@ -184,7 +184,7 @@ pub async fn check_auth_status(app: tauri::AppHandle, state: &str) -> Result<Aut
     let hash = Sha256::digest(code_verifier.as_bytes());
     let code_challenge = hash.iter().map(|b| format!("{:02x}", b)).collect::<String>();
 
-    let worker_url = "https://rishi-worker.faridmato90.workers.dev";
+    let worker_url = crate::WORKER_URL;
     let url = format!("{}/api/auth/status/{}?code_challenge={}", worker_url, state, code_challenge);
     let client = reqwest::Client::new();
     let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
@@ -299,6 +299,11 @@ pub fn get_state(app: tauri::AppHandle) -> Result<OAuthStateResponse, String> {
     let store = app.store("store.json").map_err(|e| e.to_string())?;
     store.set("auth_state", json!(state));
     store.set("auth_code_verifier", json!(code_verifier));
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis() as u64;
+    store.set("auth_state_created_at", json!(now_ms));
     store.save().map_err(|e| e.to_string())?;
 
     // Compute code_challenge = hex(SHA-256(code_verifier)) so the verifier
@@ -314,7 +319,7 @@ pub fn get_state(app: tauri::AppHandle) -> Result<OAuthStateResponse, String> {
 pub async fn signout(app: tauri::AppHandle) -> Result<(), String> {
     // Best-effort: revoke the token on the server before deleting locally
     if let Some(token) = keyring_get("auth_token")? {
-        let worker_url = "https://rishi-worker.faridmato90.workers.dev";
+        let worker_url = crate::WORKER_URL;
         let url = format!("{}/api/auth/revoke", worker_url);
         let client = reqwest::Client::new();
         let _ = client
@@ -345,7 +350,7 @@ pub fn get_user_from_store(app: tauri::AppHandle) -> Result<User, String> {
 
 #[tauri::command]
 pub async fn get_user(app: tauri::AppHandle, user_id: &str) -> Result<User, String> {
-    let worker_url = "https://rishi-worker.faridmato90.workers.dev";
+    let worker_url = crate::WORKER_URL;
     let url = format!("{}/api/clerk/user/{}", worker_url, user_id);
     let response = authenticated_get(&app, &url).await?;
     let user = response.json::<User>().await.map_err(|e| e.to_string())?;

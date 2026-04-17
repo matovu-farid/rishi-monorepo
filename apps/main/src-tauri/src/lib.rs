@@ -18,6 +18,8 @@ pub mod sql;
 mod api;
 mod user;
 
+pub const WORKER_URL: &str = "https://rishi-worker.faridmato90.workers.dev";
+
 
 #[cfg(test)]
 pub mod test_fixtures;
@@ -64,6 +66,26 @@ pub fn run() {
             // Migrate auth secrets from plain-text store.json to OS keychain
             if let Err(e) = commands::migrate_auth_to_keychain(app.handle()) {
                 eprintln!("Keychain migration warning: {}", e);
+            }
+            // Clean up orphaned OAuth state older than Redis TTL (10 minutes)
+            use tauri_plugin_store::StoreExt;
+            if let Ok(store) = app.store("store.json") {
+                let stale = store.get("auth_state_created_at")
+                    .and_then(|v| v.as_u64())
+                    .map(|created| {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        now.saturating_sub(created) > 10 * 60 * 1000 // 10 minutes
+                    })
+                    .unwrap_or(false);
+                if stale {
+                    store.delete("auth_state");
+                    store.delete("auth_code_verifier");
+                    store.delete("auth_state_created_at");
+                    let _ = store.save();
+                }
             }
             // Auto-open devtools in debug builds so console output is visible
             // without remembering a shortcut. Compiled out of release builds.

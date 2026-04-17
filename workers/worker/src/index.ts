@@ -12,6 +12,16 @@ import jwt from "@tsndr/cloudflare-worker-jwt";
 import { syncRoutes } from "./routes/sync";
 import { uploadRoutes } from "./routes/upload";
 
+/** Constant-time string comparison to prevent timing attacks on PKCE challenges. */
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  const encoder = new TextEncoder();
+  const bufA = encoder.encode(a);
+  const bufB = encoder.encode(b);
+  // crypto.subtle.timingSafeEqual is available in Cloudflare Workers
+  return crypto.subtle.timingSafeEqual(bufA, bufB);
+}
+
 export interface CloudflareBindings {
   DEEPGRAM_KEY: string;
   OPENAI_API_KEY: string;
@@ -165,7 +175,7 @@ app.post("/api/auth/complete", async (c) => {
       return c.json({ error: "Invalid auth state: missing PKCE challenge" }, 400);
     }
 
-    // Verify PKCE code_challenge
+    // Verify PKCE code_challenge (timing-safe comparison)
     if (authData.codeChallenge) {
       const encoded = new TextEncoder().encode(code_verifier);
       const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
@@ -174,7 +184,7 @@ app.post("/api/auth/complete", async (c) => {
         .map((b) => b.toString(16).padStart(2, "0"))
         .join("");
 
-      if (computedChallenge !== authData.codeChallenge) {
+      if (!timingSafeEqual(computedChallenge, authData.codeChallenge)) {
         return c.json({ error: "PKCE verification failed" }, 403);
       }
     }
@@ -255,8 +265,8 @@ app.get("/api/auth/status/:state", async (c) => {
       codeChallenge?: string;
     };
 
-    // Verify the code_challenge matches the stored one
-    if (authData.codeChallenge && authData.codeChallenge !== codeChallenge) {
+    // Verify the code_challenge matches the stored one (timing-safe)
+    if (authData.codeChallenge && !timingSafeEqual(authData.codeChallenge, codeChallenge ?? "")) {
       return c.json({ error: "Invalid code_challenge" }, 403);
     }
 

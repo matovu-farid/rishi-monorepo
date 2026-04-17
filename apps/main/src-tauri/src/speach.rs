@@ -10,7 +10,7 @@ pub async fn tts(text: &str, token: &str) -> anyhow::Result<Vec<u8>> {
         "speed": 1.0
     });
     let response = client
-        .post("https://rishi-worker.faridmato90.workers.dev/api/audio/speech")
+        .post(format!("{}/api/audio/speech", crate::WORKER_URL))
         .header("Authorization", format!("Bearer {}", token))
         .json(&map)
         .send()
