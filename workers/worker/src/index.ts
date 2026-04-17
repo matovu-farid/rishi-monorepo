@@ -236,16 +236,17 @@ app.post("/api/auth/complete", async (c) => {
   }
 });
 
-// ─── GET /api/auth/status/:state ────────────────────────────────────────────
+// ─── POST /api/auth/status/:state ───────────────────────────────────────────
 // Check auth flow status from Redis for monitoring and retry decisions.
-app.get("/api/auth/status/:state", async (c) => {
+app.post("/api/auth/status/:state", async (c) => {
   try {
     const state = c.req.param("state");
     if (!state) {
       return c.json({ error: "Missing state parameter" }, 400);
     }
 
-    const codeChallenge = c.req.query("code_challenge");
+    const body = await c.req.json<{ code_challenge?: string }>();
+    const codeChallenge = body.code_challenge;
     if (!codeChallenge) {
       return c.json({ error: "Missing code_challenge" }, 400);
     }

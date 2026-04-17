@@ -185,9 +185,14 @@ pub async fn check_auth_status(app: tauri::AppHandle, state: &str) -> Result<Aut
     let code_challenge = hash.iter().map(|b| format!("{:02x}", b)).collect::<String>();
 
     let worker_url = crate::WORKER_URL;
-    let url = format!("{}/api/auth/status/{}?code_challenge={}", worker_url, state, code_challenge);
+    let url = format!("{}/api/auth/status/{}", worker_url, state);
     let client = reqwest::Client::new();
-    let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    let response = client
+        .post(&url)
+        .json(&json!({ "code_challenge": code_challenge }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     let value: AuthStatusResponse = response.json().await.map_err(|e| e.to_string())?;
     Ok(value)
 }
