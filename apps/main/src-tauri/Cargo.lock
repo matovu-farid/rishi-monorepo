@@ -7387,7 +7387,7 @@ dependencies = [
 
 [[package]]
 name = "rishi"
-version = "1.1.5"
+version = "1.1.6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

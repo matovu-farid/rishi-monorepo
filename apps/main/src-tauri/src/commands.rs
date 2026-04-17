@@ -94,37 +94,123 @@ pub async fn process_job(
     sql::process_job(page_number, book_id, page_data, &app_data_dir).await
 }
 
+/// Best-effort debug log to the worker's `/api/auth/debug` endpoint.
+/// Fires and forgets — errors are silently ignored so they never block auth.
+pub async fn log_auth_debug_fn(state: &str, source: &str, step: &str, data: Option<serde_json::Value>, error: Option<&str>) {
+    let worker_url = crate::WORKER_URL;
+    let url = format!("{}/api/auth/debug", worker_url);
+    let client = reqwest::Client::new();
+    let mut payload = json!({
+        "state": state,
+        "source": source,
+        "step": step,
+    });
+    if let Some(d) = data {
+        payload["data"] = d;
+    }
+    if let Some(e) = error {
+        payload["error"] = json!(e);
+    }
+    let _ = client.post(&url).json(&payload).send().await;
+}
+
+/// Tauri command: log auth debug events from the TS frontend.
+#[tauri::command]
+pub async fn log_auth_debug_cmd(state: String, step: String, data: Option<serde_json::Value>, error: Option<String>) -> Result<(), String> {
+    log_auth_debug_fn(&state, "tauri-ts", &step, data, error.as_deref()).await;
+    Ok(())
+}
+
+/// Tauri command: fetch auth debug log from the worker.
+#[tauri::command]
+pub async fn get_auth_debug(state: String) -> Result<serde_json::Value, String> {
+    let worker_url = crate::WORKER_URL;
+    let url = format!("{}/api/auth/debug/{}", worker_url, &state);
+    let client = reqwest::Client::new();
+    let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    let value: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    Ok(value)
+}
+
 /// Complete auth flow using the state parameter from the deep link.
 /// The worker looks up the userId from Redis (stored by the web app),
 /// verifies with Clerk, and issues a JWT — no tokens pass through the deep link.
 /// Sends the code_verifier for PKCE-like proof-of-possession.
 #[tauri::command]
 pub async fn complete_auth(app: tauri::AppHandle, state: &str) -> Result<User, String> {
+    log_auth_debug_fn(state, "tauri-rust", "complete_auth_called", None, None).await;
+
     // Read code_verifier from the persistent store
-    let store = app.store("store.json").map_err(|e| e.to_string())?;
+    let store = app.store("store.json").map_err(|e| {
+        let msg = format!("Failed to open store: {}", e);
+        // fire-and-forget — block on the log only in the error path
+        let s = state.to_string();
+        let m = msg.clone();
+        tokio::spawn(async move { log_auth_debug_fn(&s, "tauri-rust", "complete_auth_store_error", None, Some(&m)).await; });
+        msg
+    })?;
+
     let code_verifier = store
         .get("auth_code_verifier")
-        .ok_or("Missing code_verifier — please login again")?;
+        .ok_or_else(|| "Missing code_verifier — please login again".to_string());
+
+    let code_verifier = match code_verifier {
+        Ok(v) => v,
+        Err(e) => {
+            // Log what IS in the store for debugging
+            let has_state = store.get("auth_state").is_some();
+            let has_created = store.get("auth_state_created_at").is_some();
+            log_auth_debug_fn(state, "tauri-rust", "complete_auth_no_verifier",
+                Some(json!({ "hasAuthState": has_state, "hasCreatedAt": has_created })),
+                Some(&e)).await;
+            return Err(e);
+        }
+    };
+
     let code_verifier = code_verifier
         .as_str()
         .ok_or("Invalid code_verifier format")?
         .to_string();
 
+    log_auth_debug_fn(state, "tauri-rust", "complete_auth_verifier_read",
+        Some(json!({ "verifierLen": code_verifier.len() })), None).await;
+
     let worker_url = crate::WORKER_URL;
     let url = format!("{}/api/auth/complete", worker_url);
 
     let client = reqwest::Client::new();
+    log_auth_debug_fn(state, "tauri-rust", "complete_auth_calling_worker",
+        Some(json!({ "url": url })), None).await;
+
     let response = client
         .post(&url)
         .json(&json!({ "state": state, "code_verifier": code_verifier }))
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            let msg = format!("Network error calling worker: {}", e);
+            eprintln!("[complete_auth] {}", msg);
+            msg
+        });
 
-    if !response.status().is_success() {
-        let status = response.status();
+    let response = match response {
+        Ok(r) => r,
+        Err(e) => {
+            log_auth_debug_fn(state, "tauri-rust", "complete_auth_network_error", None, Some(&e)).await;
+            return Err(e);
+        }
+    };
+
+    let status = response.status();
+    log_auth_debug_fn(state, "tauri-rust", "complete_auth_worker_responded",
+        Some(json!({ "status": status.as_u16() })), None).await;
+
+    if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Auth completion failed ({}): {}", status, body));
+        let err_msg = format!("Auth completion failed ({}): {}", status, body);
+        log_auth_debug_fn(state, "tauri-rust", "complete_auth_worker_error",
+            Some(json!({ "status": status.as_u16(), "body": body })), Some(&err_msg)).await;
+        return Err(err_msg);
     }
 
     let exchange_response: serde_json::Value =
@@ -148,6 +234,9 @@ pub async fn complete_auth(app: tauri::AppHandle, state: &str) -> Result<User, S
     let store = app.store("store.json").map_err(|e| e.to_string())?;
     store.set("user", json!(user));
     store.save().map_err(|e| e.to_string())?;
+
+    log_auth_debug_fn(state, "tauri-rust", "complete_auth_success",
+        Some(json!({ "userId": user.id })), None).await;
 
     Ok(user)
 }

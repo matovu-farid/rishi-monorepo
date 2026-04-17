@@ -6,6 +6,7 @@ import {
   getUserFromStore,
   completeAuth,
   checkAuthStatus,
+  logAuthDebugCmd,
 } from "@/generated";
 import { userAtom } from "@/components/pdf/atoms/user";
 import {
@@ -13,6 +14,15 @@ import {
   hydrateWelcomeSeenAtom,
 } from "@/atoms/authPromo";
 import { peekPendingOAuthState, clearPendingOAuthState } from "@/modules/auth";
+
+/** Best-effort debug log to Redis via the Rust command. Never throws. */
+async function debugLog(state: string, step: string, data?: unknown, error?: string) {
+  try {
+    await logAuthDebugCmd({ state, step, data: data ?? undefined, error: error ?? undefined });
+  } catch {
+    // swallow — must never block auth flow
+  }
+}
 
 const MAX_AUTH_RETRIES = 3;
 const BASE_RETRY_DELAY_MS = 1500;
@@ -55,6 +65,8 @@ export function useHydrateAuth(): void {
   // 3: deep-link OAuth callback listener.
   useEffect(() => {
     const unlisten = onOpenUrl(async (urls) => {
+      void debugLog("global", "onOpenUrl_fired", { urlCount: urls.length, urls: urls.map(u => u.slice(0, 100)) });
+
       for (const url of urls) {
         if (!url.includes("auth/callback")) continue;
 
@@ -63,28 +75,38 @@ export function useHydrateAuth(): void {
           params = new URL(url).searchParams;
         } catch {
           console.error("[useHydrateAuth] malformed deep link URL:", url);
+          void debugLog("unknown", "deeplink_malformed_url", { url: url.slice(0, 200) });
           toast.error("Sign-in failed: malformed callback URL");
           continue;
         }
 
         const callbackState = params.get("state");
         if (!callbackState) {
+          void debugLog("unknown", "deeplink_missing_state", { url: url.slice(0, 200) });
           toast.error("Sign-in failed: missing state parameter");
           continue;
         }
+
+        void debugLog(callbackState, "deeplink_received", { url: url.slice(0, 200) });
 
         // Read-only peek: if a pending flow exists, validate the callback
         // matches it. If no pending flow exists (app restart between login
         // click and callback, or dev HMR wipe), skip client-side validation
         // — the server-side PKCE check in /api/auth/complete is authoritative.
-        // Do NOT regenerate state here; that would rotate the stored
-        // code_verifier and guarantee PKCE failure for the in-flight state.
         const expected = peekPendingOAuthState();
+        void debugLog(callbackState, "deeplink_state_check", {
+          hasPendingState: !!expected,
+          pendingStateMatch: expected ? callbackState === expected.state : "n/a",
+        });
+
         if (expected && callbackState !== expected.state) {
           console.error(
             "[useHydrateAuth] auth callback state mismatch — ignoring",
             { callbackState, expectedState: expected.state },
           );
+          void debugLog(callbackState, "deeplink_state_mismatch", {
+            expectedState: expected.state.slice(0, 8) + "...",
+          });
           toast.error("Sign-in failed: state mismatch. Please try signing in again.");
           continue;
         }
@@ -92,7 +114,9 @@ export function useHydrateAuth(): void {
         let lastError: unknown = null;
         for (let attempt = 1; attempt <= MAX_AUTH_RETRIES; attempt++) {
           try {
+            void debugLog(callbackState, "complete_auth_attempt", { attempt, maxRetries: MAX_AUTH_RETRIES });
             const user = await completeAuth({ state: callbackState });
+            void debugLog(callbackState, "complete_auth_success_ts", { userId: user.id, attempt });
             setUser(user);
             clearPendingOAuthState();
             const greeting = user.firstName
@@ -107,12 +131,14 @@ export function useHydrateAuth(): void {
               `[useHydrateAuth] auth attempt ${attempt}/${MAX_AUTH_RETRIES} failed:`,
               error,
             );
+            void debugLog(callbackState, "complete_auth_attempt_failed", { attempt }, errMsg);
 
             if (
               errMsg.includes("already used") ||
               errMsg.includes("permanently failed") ||
               errMsg.includes("Max retries")
             ) {
+              void debugLog(callbackState, "complete_auth_terminal_failure", { attempt }, errMsg);
               clearPendingOAuthState();
               break;
             }
@@ -126,6 +152,7 @@ export function useHydrateAuth(): void {
               try {
                 const status = await checkAuthStatus({ state: callbackState });
                 console.log("[useHydrateAuth] auth flow status:", status);
+                void debugLog(callbackState, "auth_status_check", status);
                 if (status.status === "not_found" || status.status === "completed") {
                   clearPendingOAuthState();
                   break;
@@ -139,6 +166,7 @@ export function useHydrateAuth(): void {
           }
         }
         console.error("[useHydrateAuth] all auth attempts failed");
+        void debugLog(callbackState, "all_auth_attempts_failed", null, describeAuthError(lastError));
         toast.error(`Sign-in failed: ${describeAuthError(lastError)}`);
       }
     });

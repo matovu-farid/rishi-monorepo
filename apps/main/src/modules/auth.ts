@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { getState } from "@/generated";
+import { getState, logAuthDebugCmd } from "@/generated";
 
 /**
  * Retrieve the auth token from the OS keychain via a Tauri command.
@@ -63,11 +63,17 @@ export async function startSignInFlow(): Promise<void> {
   try {
     const result = await getState();
     pendingOAuthState = result;
-    await openUrl(
+    const url =
       `https://rishi.fidexa.org?login=true` +
-        `&state=${encodeURIComponent(result.state)}` +
-        `&code_challenge=${encodeURIComponent(result.codeChallenge)}`,
-    );
+      `&state=${encodeURIComponent(result.state)}` +
+      `&code_challenge=${encodeURIComponent(result.codeChallenge)}`;
+    // Log the sign-in flow initiation with state for tracing
+    void logAuthDebugCmd({
+      state: result.state,
+      step: "sign_in_flow_started",
+      data: { challengeLen: result.codeChallenge.length, url: url.slice(0, 120) },
+    }).catch(() => {});
+    await openUrl(url);
   } catch (err) {
     console.error("[auth] failed to start sign-in flow:", err);
   }

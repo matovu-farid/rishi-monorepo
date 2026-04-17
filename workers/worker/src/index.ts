@@ -130,22 +130,45 @@ app.post("/api/auth/exchange", async (c) => {
 // Desktop PKCE auth completion: looks up userId from Redis using state,
 // verifies code_verifier against stored code_challenge, issues a JWT.
 app.post("/api/auth/complete", async (c) => {
+  const redis = Redis.fromEnv(c.env);
+
+  // Helper to log debug events for this auth flow
+  const debugLog = async (state: string, step: string, data?: unknown, error?: string) => {
+    try {
+      const now = Date.now();
+      await redis.rpush(
+        `auth:debug:${state}`,
+        JSON.stringify({ source: "worker", step, data: data ?? null, error: error ?? null, timestamp: now, ts: new Date().toISOString() })
+      );
+      await redis.expire(`auth:debug:${state}`, 7200);
+      await redis.zadd("auth:debug:_index", { score: now, member: state });
+      await redis.expire("auth:debug:_index", 7200);
+    } catch { /* best-effort */ }
+  };
+
+  let state = "unknown";
   try {
     const body = await c.req.json<{ state: string; code_verifier: string }>();
-    const { state, code_verifier } = body;
+    state = body.state || "unknown";
+    const { code_verifier } = body;
 
-    if (!state || !code_verifier) {
+    await debugLog(state, "complete_called", { hasState: !!body.state, hasVerifier: !!code_verifier, verifierLen: code_verifier?.length });
+
+    if (!state || state === "unknown" || !code_verifier) {
+      await debugLog(state, "complete_rejected_missing_params");
       return c.json({ error: "Missing state or code_verifier" }, 400);
     }
 
-    const redis = Redis.fromEnv(c.env);
     const redisKey = `auth:state:${state}`;
 
     // Look up auth flow data from Redis
     const rawData = await redis.get(redisKey);
     if (!rawData) {
+      await debugLog(state, "complete_state_not_found", { redisKey });
       return c.json({ error: "Auth state not found or expired" }, 404);
     }
+
+    await debugLog(state, "complete_state_found", { rawDataType: typeof rawData });
 
     // Parse the stored auth flow data
     const authData = typeof rawData === "string" ? JSON.parse(rawData) : rawData as {
@@ -156,37 +179,57 @@ app.post("/api/auth/complete", async (c) => {
       codeChallenge?: string;
     };
 
+    await debugLog(state, "complete_parsed_state", {
+      userId: authData.userId ? authData.userId.slice(0, 10) + "..." : null,
+      status: authData.status,
+      hasCodeChallenge: !!authData.codeChallenge,
+      challengeLen: authData.codeChallenge?.length,
+      createdAt: authData.createdAt,
+      ageMs: authData.createdAt ? Date.now() - authData.createdAt : null,
+    });
+
     if (!authData.userId) {
+      await debugLog(state, "complete_no_userId");
       return c.json({ error: "Invalid auth state data" }, 400);
     }
 
     // If already completed, prevent replay
     if (authData.status === "completed") {
+      await debugLog(state, "complete_already_used");
       return c.json({ error: "Auth state already used" }, 409);
     }
 
     // If another exchange is in progress, signal retry
     if (authData.status === "exchanging") {
+      await debugLog(state, "complete_already_exchanging");
       return c.json({ error: "Token exchange in progress" }, 409);
     }
 
     // PKCE is mandatory — reject if no code_challenge was stored
     if (!authData.codeChallenge) {
+      await debugLog(state, "complete_missing_pkce_challenge");
       return c.json({ error: "Invalid auth state: missing PKCE challenge" }, 400);
     }
 
     // Verify PKCE code_challenge (timing-safe comparison)
-    if (authData.codeChallenge) {
-      const encoded = new TextEncoder().encode(code_verifier);
-      const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      const computedChallenge = hashArray
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
+    const encoded = new TextEncoder().encode(code_verifier);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const computedChallenge = hashArray
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
 
-      if (!timingSafeEqual(computedChallenge, authData.codeChallenge)) {
-        return c.json({ error: "PKCE verification failed" }, 403);
-      }
+    const pkceMatch = timingSafeEqual(computedChallenge, authData.codeChallenge);
+    await debugLog(state, "complete_pkce_check", {
+      computedLen: computedChallenge.length,
+      storedLen: authData.codeChallenge.length,
+      match: pkceMatch,
+      computedPrefix: computedChallenge.slice(0, 8),
+      storedPrefix: authData.codeChallenge.slice(0, 8),
+    });
+
+    if (!pkceMatch) {
+      return c.json({ error: "PKCE verification failed" }, 403);
     }
 
     // Mark as exchanging to prevent concurrent attempts
@@ -194,6 +237,8 @@ app.post("/api/auth/complete", async (c) => {
       ...authData,
       status: "exchanging",
     }), { ex: 600 });
+
+    await debugLog(state, "complete_fetching_clerk_user", { userId: authData.userId.slice(0, 10) + "..." });
 
     // Fetch user from Clerk and issue JWT
     const clerkClient = createClerkClient({ secretKey: c.env.CLERK_SECRET_KEY });
@@ -227,8 +272,12 @@ app.post("/api/auth/complete", async (c) => {
       timestamp: Date.now(),
     }));
 
+    await debugLog(state, "complete_success", { userId: user.id.slice(0, 10) + "...", hasToken: !!token });
+
     return c.json({ token, expiresAt: exp, user });
   } catch (error) {
+    const errMsg = error instanceof Error ? error.message : "unknown";
+    await debugLog(state, "complete_error", null, errMsg);
     if (error instanceof Error) {
       return c.json({ error: "Auth completion failed: " + error.message }, 500);
     }
@@ -281,6 +330,162 @@ app.post("/api/auth/status/:state", async (c) => {
       return c.json({ error: "Status check failed: " + error.message }, 500);
     }
     return c.json({ error: "Status check failed" }, 500);
+  }
+});
+
+// ─── POST /api/auth/debug ───────────────────────────────────────────────────
+// Log a debug event to Redis for auth flow tracing.
+// Each event is stored in a list keyed by state UUID.
+// A global index tracks all known states for discovery.
+app.post("/api/auth/debug", async (c) => {
+  try {
+    const body = await c.req.json<{
+      state: string;
+      source: string;
+      step: string;
+      data?: unknown;
+      error?: string;
+    }>();
+
+    if (!body.state || !body.source || !body.step) {
+      return c.json({ error: "Missing state, source, or step" }, 400);
+    }
+
+    const redis = Redis.fromEnv(c.env);
+    const key = `auth:debug:${body.state}`;
+    const now = Date.now();
+
+    await redis.rpush(
+      key,
+      JSON.stringify({
+        source: body.source,
+        step: body.step,
+        data: body.data ?? null,
+        error: body.error ?? null,
+        timestamp: now,
+        ts: new Date().toISOString(),
+      })
+    );
+    await redis.expire(key, 7200); // 2 hour TTL
+
+    // Track this state in a global index so we can list all recent flows
+    // Use a sorted set with timestamp as score for easy chronological listing
+    await redis.zadd("auth:debug:_index", { score: now, member: body.state });
+    await redis.expire("auth:debug:_index", 7200);
+
+    return c.json({ ok: true });
+  } catch (error) {
+    return c.json({ error: "Debug log failed" }, 500);
+  }
+});
+
+// ─── GET /api/auth/debug — list all recent auth flows ───────────────────────
+// Returns the most recent auth flows from the global index with summary info.
+app.get("/api/auth/debug", async (c) => {
+  try {
+    const redis = Redis.fromEnv(c.env);
+
+    // Get the 20 most recent flows (highest score = most recent)
+    const entries = await redis.zrange("auth:debug:_index", 0, 19, { rev: true, withScores: true }) as (string | number)[];
+
+    // entries comes back as [member, score, member, score, ...]
+    const flows: { state: string; startedAt: string; eventCount: number; lastStep: string | null; authStatus: string | null; hasError: boolean }[] = [];
+
+    for (let i = 0; i < entries.length; i += 2) {
+      const state = String(entries[i]);
+      const score = Number(entries[i + 1]);
+
+      // Get summary info for each flow
+      const eventCount = await redis.llen(`auth:debug:${state}`);
+      const lastEventRaw = await redis.lindex(`auth:debug:${state}`, -1);
+      let lastStep: string | null = null;
+      let hasError = false;
+      if (lastEventRaw) {
+        try {
+          const parsed = typeof lastEventRaw === "string" ? JSON.parse(lastEventRaw) : lastEventRaw as { step?: string; error?: string | null };
+          lastStep = parsed.step ?? null;
+          hasError = !!parsed.error;
+        } catch { /* ignore */ }
+      }
+
+      // Check auth state status
+      const rawAuthState = await redis.get(`auth:state:${state}`);
+      let authStatus: string | null = null;
+      if (rawAuthState) {
+        try {
+          const parsed = typeof rawAuthState === "string" ? JSON.parse(rawAuthState) : rawAuthState as { status?: string };
+          authStatus = parsed.status ?? null;
+        } catch { /* ignore */ }
+      }
+
+      flows.push({
+        state,
+        startedAt: new Date(score).toISOString(),
+        eventCount,
+        lastStep,
+        authStatus,
+        hasError,
+      });
+    }
+
+    return c.json({ flows, count: flows.length });
+  } catch (error) {
+    if (error instanceof Error) {
+      return c.json({ error: "Debug list failed: " + error.message }, 500);
+    }
+    return c.json({ error: "Debug list failed" }, 500);
+  }
+});
+
+// ─── GET /api/auth/debug/:state ─────────────────────────────────────────────
+// Retrieve all debug events and auth state for a given state UUID.
+app.get("/api/auth/debug/:state", async (c) => {
+  try {
+    const state = c.req.param("state");
+    if (!state) {
+      return c.json({ error: "Missing state" }, 400);
+    }
+
+    const redis = Redis.fromEnv(c.env);
+    const events = await redis.lrange(`auth:debug:${state}`, 0, -1);
+    const rawAuthState = await redis.get(`auth:state:${state}`);
+    const authLog = await redis.lrange(`auth:log:${state}`, 0, -1);
+
+    // Parse events (they're stored as JSON strings)
+    const parsedEvents = events.map((e: unknown) => {
+      if (typeof e === "string") {
+        try { return JSON.parse(e); } catch { return e; }
+      }
+      return e;
+    });
+
+    const parsedLog = authLog.map((e: unknown) => {
+      if (typeof e === "string") {
+        try { return JSON.parse(e); } catch { return e; }
+      }
+      return e;
+    });
+
+    let authState = null;
+    if (rawAuthState) {
+      authState = typeof rawAuthState === "string" ? JSON.parse(rawAuthState) : rawAuthState;
+      // Redact sensitive fields
+      if (authState.codeChallenge) {
+        authState.codeChallenge = authState.codeChallenge.slice(0, 8) + "...";
+      }
+    }
+
+    return c.json({
+      state,
+      authState,
+      debugEvents: parsedEvents,
+      authLog: parsedLog,
+    });
+  } catch (error) {
+    if (error instanceof Error) {
+      return c.json({ error: "Debug fetch failed: " + error.message }, 500);
+    }
+    return c.json({ error: "Debug fetch failed" }, 500);
   }
 });
 

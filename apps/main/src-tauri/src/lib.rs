@@ -87,6 +87,29 @@ pub fn run() {
                     let _ = store.save();
                 }
             }
+            // Log deep-link arrivals at the Rust level so we can tell if
+            // the URL reaches the process even when the JS listener misses it.
+            {
+                use tauri::Listener;
+                let _handle = app.handle().clone();
+                app.listen("deep-link://new-url", move |event| {
+                    let payload = event.payload().to_string();
+                    eprintln!("[deep-link] Rust listener received: {}", payload);
+                    // Best-effort: extract state UUID and log to Redis
+                    if let Some(idx) = payload.find("state=") {
+                        let rest = &payload[idx + 6..];
+                        let state_val: String = rest.chars().take_while(|c| *c != '&' && *c != '"' && *c != ' ').collect();
+                        if !state_val.is_empty() {
+                            let s = state_val.clone();
+                            let p = payload.clone();
+                            tokio::spawn(async move {
+                                crate::commands::log_auth_debug_fn(&s, "tauri-rust", "rust_deeplink_received",
+                                    Some(serde_json::json!({ "rawPayload": p })), None).await;
+                            });
+                        }
+                    }
+                });
+            }
             // Auto-open devtools in debug builds so console output is visible
             // without remembering a shortcut. Compiled out of release builds.
             #[cfg(debug_assertions)]
@@ -123,6 +146,8 @@ pub fn run() {
             commands::complete_auth,
             commands::check_auth_status,
             commands::get_auth_token_cmd,
+            commands::log_auth_debug_cmd,
+            commands::get_auth_debug,
             api::get_realtime_client_secret,
             // SQL commands
             sql::save_page_data_many,
