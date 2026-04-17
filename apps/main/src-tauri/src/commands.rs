@@ -114,12 +114,6 @@ pub async fn log_auth_debug_fn(state: &str, source: &str, step: &str, data: Opti
     let _ = client.post(&url).json(&payload).send().await;
 }
 
-/// JSON-serializable debug data for the log command.
-/// Using a concrete struct avoids `serde_json::Value` which tauri-typegen
-/// cannot map to TypeScript.
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-pub struct AuthDebugData(serde_json::Value);
-
 /// Tauri command: log auth debug events from the TS frontend.
 #[tauri::command]
 pub async fn log_auth_debug_cmd(state: String, step: String, data: Option<String>, error: Option<String>) -> Result<(), String> {
