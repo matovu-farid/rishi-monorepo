@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useSetAtom } from "jotai";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
+import { toast } from "react-toastify";
 import {
   getUserFromStore,
   completeAuth,
@@ -11,7 +12,7 @@ import {
   authHydratedAtom,
   hydrateWelcomeSeenAtom,
 } from "@/atoms/authPromo";
-import { ensureOAuthState, clearPendingOAuthState } from "@/modules/auth";
+import { peekPendingOAuthState, clearPendingOAuthState } from "@/modules/auth";
 
 const MAX_AUTH_RETRIES = 3;
 const BASE_RETRY_DELAY_MS = 1500;
@@ -62,26 +63,45 @@ export function useHydrateAuth(): void {
           params = new URL(url).searchParams;
         } catch {
           console.error("[useHydrateAuth] malformed deep link URL:", url);
+          toast.error("Sign-in failed: malformed callback URL");
           continue;
         }
 
         const callbackState = params.get("state");
-        if (!callbackState) continue;
-
-        const expected = await ensureOAuthState();
-
-        if (callbackState !== expected.state) {
-          console.error("[useHydrateAuth] auth callback state mismatch — ignoring");
+        if (!callbackState) {
+          toast.error("Sign-in failed: missing state parameter");
           continue;
         }
 
+        // Read-only peek: if a pending flow exists, validate the callback
+        // matches it. If no pending flow exists (app restart between login
+        // click and callback, or dev HMR wipe), skip client-side validation
+        // — the server-side PKCE check in /api/auth/complete is authoritative.
+        // Do NOT regenerate state here; that would rotate the stored
+        // code_verifier and guarantee PKCE failure for the in-flight state.
+        const expected = peekPendingOAuthState();
+        if (expected && callbackState !== expected.state) {
+          console.error(
+            "[useHydrateAuth] auth callback state mismatch — ignoring",
+            { callbackState, expectedState: expected.state },
+          );
+          toast.error("Sign-in failed: state mismatch. Please try signing in again.");
+          continue;
+        }
+
+        let lastError: unknown = null;
         for (let attempt = 1; attempt <= MAX_AUTH_RETRIES; attempt++) {
           try {
             const user = await completeAuth({ state: callbackState });
             setUser(user);
             clearPendingOAuthState();
+            const greeting = user.firstName
+              ? `Signed in as ${user.firstName}`
+              : "Signed in successfully";
+            toast.success(greeting);
             return;
           } catch (error) {
+            lastError = error;
             const errMsg = String(error);
             console.error(
               `[useHydrateAuth] auth attempt ${attempt}/${MAX_AUTH_RETRIES} failed:`,
@@ -119,6 +139,7 @@ export function useHydrateAuth(): void {
           }
         }
         console.error("[useHydrateAuth] all auth attempts failed");
+        toast.error(`Sign-in failed: ${describeAuthError(lastError)}`);
       }
     });
 
@@ -127,4 +148,24 @@ export function useHydrateAuth(): void {
     };
     // run-once on mount
   }, []);
+}
+
+/**
+ * Extract a user-friendly message from the Tauri/worker error string.
+ * The Rust side returns errors as plain strings (e.g. "Auth completion
+ * failed (403): {\"error\":\"PKCE verification failed\"}"); surface the
+ * most actionable part without exposing stack traces.
+ */
+function describeAuthError(err: unknown): string {
+  if (!err) return "unknown error";
+  const raw = String(err);
+  // Try to pull a JSON {"error":"..."} body out of the Rust-formatted string.
+  const match = raw.match(/"error"\s*:\s*"([^"]+)"/);
+  if (match) return match[1];
+  if (raw.includes("PKCE")) return "PKCE verification failed. Please sign in again.";
+  if (raw.includes("state not found")) return "Sign-in session expired. Please try again.";
+  if (raw.includes("already used")) return "This sign-in link was already used.";
+  // Strip long prefixes like "Auth completion failed (500): "
+  const trimmed = raw.replace(/^.*?:\s*/, "").slice(0, 200);
+  return trimmed || raw.slice(0, 200);
 }

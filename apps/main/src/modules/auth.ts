@@ -28,7 +28,19 @@ let pendingOAuthState: { state: string; codeChallenge: string } | null = null;
  */
 export async function ensureOAuthState(): Promise<{ state: string; codeChallenge: string }> {
   if (pendingOAuthState) return pendingOAuthState;
-  pendingOAuthState = await getState();
+  const fresh = await getState();
+  pendingOAuthState = fresh;
+  return fresh;
+}
+
+/**
+ * Read-only accessor: returns the in-flight OAuth state if one exists, or
+ * `null` without side effects. Use this from the callback path so we never
+ * rotate the persisted `auth_code_verifier` while trying to validate an
+ * incoming callback — rotating would break PKCE for the state the server
+ * is actually expecting.
+ */
+export function peekPendingOAuthState(): { state: string; codeChallenge: string } | null {
   return pendingOAuthState;
 }
 

@@ -29,6 +29,7 @@ import {
   pdfsControllerAtom,
 } from "@components/pdf/atoms/paragraph-atoms";
 import { LoginButton } from "./LoginButton";
+import { UpdateMenu } from "./UpdateMenu";
 
 const newBook = atom<string | null>(null);
 
@@ -435,7 +436,7 @@ function FileDrop(): React.JSX.Element {
   return (
     <div className="w-full h-full">
       {/* Add Book Button - always visible at the top */}
-      <div className="p-4 flex justify-end">
+      <div className="p-4 flex justify-end items-center gap-2">
         <Button
           variant="ghost"
           className="cursor-pointer"
@@ -444,7 +445,8 @@ function FileDrop(): React.JSX.Element {
         >
           Add Book
         </Button>
-       <LoginButton />
+        <LoginButton />
+        <UpdateMenu />
       </div>
 
       <motion.div
