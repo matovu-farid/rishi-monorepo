@@ -65,6 +65,15 @@ pub fn run() {
             if let Err(e) = commands::migrate_auth_to_keychain(app.handle()) {
                 eprintln!("Keychain migration warning: {}", e);
             }
+            // Auto-open devtools in debug builds so console output is visible
+            // without remembering a shortcut. Compiled out of release builds.
+            #[cfg(debug_assertions)]
+            {
+                use tauri::Manager;
+                if let Some(window) = app.get_webview_window("main") {
+                    window.open_devtools();
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
