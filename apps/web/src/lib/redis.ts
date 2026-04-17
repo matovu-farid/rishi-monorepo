@@ -3,7 +3,7 @@
 import { Redis } from '@upstash/redis'
 import { auth } from '@clerk/nextjs/server'
 
-const redis = Redis.fromEnv()
+const redis = Redis.fromEnv({ enableAutoPipelining: false })
 
 export async function saveUser(userId: string, state: string, codeChallenge: string) {
   const { userId: authedUserId } = await auth()
@@ -20,10 +20,14 @@ export async function saveUser(userId: string, state: string, codeChallenge: str
     codeChallenge,
   }), { ex: 600 }) // 10 minute TTL
 
-  // Log the auth step for monitoring
-  await redis.lpush(`auth:log:${state}`, JSON.stringify({
-    step: 'web_authenticated',
-    timestamp: Date.now(),
-  }))
-  await redis.expire(`auth:log:${state}`, 3600) // 1 hour TTL for logs
+  // Best-effort logging — must not block the auth flow
+  try {
+    await redis.lpush(`auth:log:${state}`, JSON.stringify({
+      step: 'web_authenticated',
+      timestamp: Date.now(),
+    }))
+    await redis.expire(`auth:log:${state}`, 3600) // 1 hour TTL for logs
+  } catch (e) {
+    console.error('Auth logging failed (non-critical):', e)
+  }
 }
