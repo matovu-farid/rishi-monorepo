@@ -1,9 +1,10 @@
 import { useAtomValue, useSetAtom } from "jotai";
-import { Sparkles, X, LogIn } from "lucide-react";
+import { Sparkles, X, LogIn, Loader2 } from "lucide-react";
 import { Button } from "@components/components/ui/button";
 import {
   showSignInBannerAtom,
   dismissBannerAtom,
+  signingInAtom,
 } from "@/atoms/authPromo";
 import { startSignInFlow } from "@/modules/auth";
 
@@ -15,6 +16,7 @@ import { startSignInFlow } from "@/modules/auth";
 export function SignInBanner(): React.JSX.Element | null {
   const visible = useAtomValue(showSignInBannerAtom);
   const dismiss = useSetAtom(dismissBannerAtom);
+  const signingIn = useAtomValue(signingInAtom);
 
   if (!visible) return null;
 
@@ -35,12 +37,13 @@ export function SignInBanner(): React.JSX.Element | null {
       </div>
       <Button
         size="sm"
+        disabled={signingIn}
         onClick={() => {
           void startSignInFlow();
         }}
       >
-        <LogIn size={14} className="mr-1" />
-        Sign in
+        {signingIn ? <Loader2 size={14} className="mr-1 animate-spin" /> : <LogIn size={14} className="mr-1" />}
+        {signingIn ? "Signing in…" : "Sign in"}
       </Button>
       <button
         type="button"

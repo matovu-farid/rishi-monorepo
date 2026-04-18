@@ -12,6 +12,7 @@ import { userAtom } from "@/components/pdf/atoms/user";
 import {
   authHydratedAtom,
   hydrateWelcomeSeenAtom,
+  signingInAtom,
 } from "@/atoms/authPromo";
 import { peekPendingOAuthState, clearPendingOAuthState } from "@/modules/auth";
 
@@ -43,6 +44,7 @@ export function useHydrateAuth(): void {
   const setUser = useSetAtom(userAtom);
   const setAuthHydrated = useSetAtom(authHydratedAtom);
   const hydrateWelcomeSeen = useSetAtom(hydrateWelcomeSeenAtom);
+  const setSigningIn = useSetAtom(signingInAtom);
 
   // 1 + 2: hydrate localStorage + keychain user.
   useEffect(() => {
@@ -118,6 +120,7 @@ export function useHydrateAuth(): void {
             const user = await completeAuth({ state: callbackState });
             void debugLog(callbackState, "complete_auth_success_ts", { userId: user.id, attempt });
             setUser(user);
+            setSigningIn(false);
             clearPendingOAuthState();
             const greeting = user.firstName
               ? `Signed in as ${user.firstName}`
@@ -139,6 +142,7 @@ export function useHydrateAuth(): void {
               errMsg.includes("Max retries")
             ) {
               void debugLog(callbackState, "complete_auth_terminal_failure", { attempt }, errMsg);
+              setSigningIn(false);
               clearPendingOAuthState();
               break;
             }
@@ -166,6 +170,7 @@ export function useHydrateAuth(): void {
           }
         }
         console.error("[useHydrateAuth] all auth attempts failed");
+        setSigningIn(false);
         void debugLog(callbackState, "all_auth_attempts_failed", null, describeAuthError(lastError));
         toast.error(`Sign-in failed: ${describeAuthError(lastError)}`);
       }

@@ -1,4 +1,4 @@
-import { LogIn, LogOut } from "lucide-react";
+import { LogIn, LogOut, Loader2 } from "lucide-react";
 import { Button } from "./ui/Button";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { signout } from "@/generated";
@@ -16,11 +16,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/components/ui/dropdown-menu";
 import { startSignInFlow } from "@/modules/auth";
+import { signingInAtom } from "@/atoms/authPromo";
 
 export function LoginButton() {
   const user = useAtomValue(userAtom);
   const isLoggedIn = useAtomValue(isLoggedInAtom);
   const setUser = useSetAtom(userAtom);
+  const signingIn = useAtomValue(signingInAtom);
 
   async function onProfileClicked() {
     if (!user) return;
@@ -68,10 +70,11 @@ export function LoginButton() {
     <Button
       variant="ghost"
       className="cursor-pointer"
-      startIcon={<LogIn size={20} />}
+      startIcon={signingIn ? <Loader2 size={20} className="animate-spin" /> : <LogIn size={20} />}
       onClick={login}
+      disabled={signingIn}
     >
-      Login
+      {signingIn ? "Signing in…" : "Login"}
     </Button>
   );
 }

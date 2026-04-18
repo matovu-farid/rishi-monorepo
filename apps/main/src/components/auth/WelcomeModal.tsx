@@ -1,5 +1,5 @@
 import { useAtomValue, useSetAtom } from "jotai";
-import { Sparkles, LogIn } from "lucide-react";
+import { Sparkles, LogIn, Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -13,6 +13,7 @@ import {
   showWelcomeModalAtom,
   setWelcomeSeenAtom,
   dismissWelcomeAtom,
+  signingInAtom,
 } from "@/atoms/authPromo";
 import { startSignInFlow } from "@/modules/auth";
 
@@ -24,6 +25,7 @@ export function WelcomeModal(): React.JSX.Element {
   const open = useAtomValue(showWelcomeModalAtom);
   const setWelcomeSeen = useSetAtom(setWelcomeSeenAtom);
   const dismissWelcome = useSetAtom(dismissWelcomeAtom);
+  const signingIn = useAtomValue(signingInAtom);
 
   async function handleSignIn() {
     setWelcomeSeen();
@@ -58,9 +60,9 @@ export function WelcomeModal(): React.JSX.Element {
           <Button variant="outline" onClick={handleMaybeLater}>
             Maybe later
           </Button>
-          <Button onClick={handleSignIn}>
-            <LogIn size={16} className="mr-2" />
-            Sign in
+          <Button onClick={handleSignIn} disabled={signingIn}>
+            {signingIn ? <Loader2 size={16} className="mr-2 animate-spin" /> : <LogIn size={16} className="mr-2" />}
+            {signingIn ? "Signing in…" : "Sign in"}
           </Button>
         </DialogFooter>
       </DialogContent>

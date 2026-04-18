@@ -1,4 +1,6 @@
-import { LogIn, Check } from "lucide-react";
+import { LogIn, Check, Loader2 } from "lucide-react";
+import { useAtomValue } from "jotai";
+import { signingInAtom } from "@/atoms/authPromo";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +26,7 @@ export function PremiumFeatureDialog({
 }: PremiumFeatureDialogProps): React.JSX.Element {
   const config = PREMIUM_FEATURES[feature];
   const Icon = config.icon;
+  const signingIn = useAtomValue(signingInAtom);
 
   async function handleSignIn() {
     onOpenChange(false);
@@ -60,9 +63,9 @@ export function PremiumFeatureDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Maybe later
           </Button>
-          <Button onClick={handleSignIn}>
-            <LogIn size={16} className="mr-2" />
-            Sign in
+          <Button onClick={handleSignIn} disabled={signingIn}>
+            {signingIn ? <Loader2 size={16} className="mr-2 animate-spin" /> : <LogIn size={16} className="mr-2" />}
+            {signingIn ? "Signing in…" : "Sign in"}
           </Button>
         </DialogFooter>
       </DialogContent>

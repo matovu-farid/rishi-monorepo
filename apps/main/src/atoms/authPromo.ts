@@ -5,6 +5,9 @@ export const WELCOME_SEEN_KEY = "rishi:welcome-seen";
 
 // --- Primitive atoms ---
 
+/** True while the sign-in flow is in progress (browser opened → auth completes/fails). */
+export const signingInAtom = atom(false);
+
 /** True once the initial getUserFromStore() resolves (success or failure). */
 export const authHydratedAtom = atom(false);
 
