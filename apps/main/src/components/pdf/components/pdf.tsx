@@ -35,6 +35,8 @@ import { useVirualization } from "../hooks/useVirualization";
 import { TextExtractor } from "./text-extractor.tsx";
 import { updateBookLocation, Book } from "@/generated";
 import { BackButton } from "@components/BackButton.tsx";
+import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
+import { BookmarksList } from "@/components/bookmarks/BookmarksList";
 
 // Configure PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -51,12 +53,15 @@ export function PdfView({
 }): React.JSX.Element {
   const [theme] = useState<ThemeType>(ThemeType.White);
   const [tocOpen, setTocOpen] = useState(false);
+  const [bookSyncId, setBookSyncId] = useState<string>("");
+  const [tocTab, setTocTab] = useState<"contents" | "bookmarks">("contents");
   const thumbOpen = usePdfStore((s) => s.thumbnailSidebarOpen);
   const setThumbOpen = usePdfStore((s) => s.setThumbnailSidebarOpen);
   const setPdfDocProxy = usePdfStore((s) => s.setPdfDocumentProxy);
   const setBookNavState = usePdfStore((s) => s.setBookNavigationState);
 
   const setPageNumber = usePdfStore((s) => s.setPageNumber);
+  const currentPageNumber = usePdfStore((s) => s.pageNumber);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   useScrolling(scrollContainerRef);
 
@@ -73,6 +78,18 @@ export function PdfView({
       setPdfDocProxy(null);
     };
   }, []);
+
+  useEffect(() => {
+    void import("@/modules/kysley").then(({ db }) => {
+      void db.selectFrom("books")
+        .select(["sync_id"])
+        .where("id", "=", book.id)
+        .executeTakeFirst()
+        .then((row) => {
+          if (row?.sync_id) setBookSyncId(row.sync_id);
+        });
+    });
+  }, [book.id]);
 
   // Configure PDF.js options with CDN fallback for better font and image support
   const pdfOptions = useMemo<DocumentInitParameters>(
@@ -221,6 +238,16 @@ export function PdfView({
             <LayoutGrid size={20} />
           </IconButton>
 
+          <BookmarkButton
+            bookSyncId={bookSyncId}
+            location={String(currentPageNumber)}
+            label={`Page ${currentPageNumber}`}
+            className={cn(
+              "hover:bg-black/10 dark:hover:bg-white/10 border-none",
+              getTextColor()
+            )}
+          />
+
           <div className="flex items-center gap-2 bg-white">
             <BackButton />
           </div>
@@ -341,25 +368,63 @@ export function PdfView({
               Table of Contents
             </SheetTitle>
           </SheetHeader>
-          <div
-            className={cn(
-              "overflow-y-auto h-[calc(100vh-73px)]",
-              // Enhanced TOC styling with better padding and hover states
-              "[&_a]:block [&_a]:py-3 [&_a]:px-4 [&_a]:cursor-pointer",
-              "[&_a]:transition-all [&_a]:duration-200",
-              "[&_a]:border-b [&_a]:font-medium",
-              theme === ThemeType.Dark
-                ? "[&_a]:text-gray-300 [&_a:hover]:bg-gray-800 [&_a:hover]:text-white [&_a]:border-gray-800 [&_a:hover]:pl-6"
-                : "[&_a]:text-gray-700 [&_a:hover]:bg-gray-100 [&_a:hover]:text-black [&_a]:border-gray-100 [&_a:hover]:pl-6"
-            )}
-          >
-            <Document
-              file={filepath.toString()}
-              options={pdfOptions}
+          <div className="flex border-b border-gray-200 dark:border-gray-700">
+            <button
+              onClick={() => setTocTab("contents")}
+              className={cn(
+                "flex-1 px-4 py-2 text-sm font-medium transition-colors",
+                tocTab === "contents"
+                  ? "border-b-2 border-blue-500 text-blue-600"
+                  : "text-gray-500 hover:text-gray-700"
+              )}
             >
-              <Outline onItemClick={onItemClick} />
-            </Document>
+              Contents
+            </button>
+            <button
+              onClick={() => setTocTab("bookmarks")}
+              className={cn(
+                "flex-1 px-4 py-2 text-sm font-medium transition-colors",
+                tocTab === "bookmarks"
+                  ? "border-b-2 border-red-500 text-red-600"
+                  : "text-gray-500 hover:text-gray-700"
+              )}
+            >
+              Bookmarks
+            </button>
           </div>
+          {tocTab === "contents" ? (
+            <div
+              className={cn(
+                "overflow-y-auto h-[calc(100vh-73px)]",
+                // Enhanced TOC styling with better padding and hover states
+                "[&_a]:block [&_a]:py-3 [&_a]:px-4 [&_a]:cursor-pointer",
+                "[&_a]:transition-all [&_a]:duration-200",
+                "[&_a]:border-b [&_a]:font-medium",
+                theme === ThemeType.Dark
+                  ? "[&_a]:text-gray-300 [&_a:hover]:bg-gray-800 [&_a:hover]:text-white [&_a]:border-gray-800 [&_a:hover]:pl-6"
+                  : "[&_a]:text-gray-700 [&_a:hover]:bg-gray-100 [&_a:hover]:text-black [&_a]:border-gray-100 [&_a:hover]:pl-6"
+              )}
+            >
+              <Document
+                file={filepath.toString()}
+                options={pdfOptions}
+              >
+                <Outline onItemClick={onItemClick} />
+              </Document>
+            </div>
+          ) : (
+            <BookmarksList
+              bookSyncId={bookSyncId}
+              onNavigate={(location) => {
+                const pageNum = parseInt(location, 10);
+                if (pageNum > 0) {
+                  virtualizer.scrollToIndex(pageNum - 1, { align: "start", behavior: "smooth" });
+                  setPageNumber(pageNum);
+                  setTocOpen(false);
+                }
+              }}
+            />
+          )}
         </SheetContent>
       </Sheet>
       {/* Thumbnail Sidebar */}
