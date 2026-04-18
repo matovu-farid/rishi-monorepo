@@ -56,6 +56,19 @@ export interface DB {
     is_deleted: number;
   };
 
+  bookmarks: {
+    id: string;
+    book_id: string;
+    user_id: string | null;
+    location: string;
+    label: string | null;
+    created_at: number;
+    updated_at: number;
+    sync_version: number;
+    is_dirty: number;
+    is_deleted: number;
+  };
+
   conversations: {
     id: string;
     book_id: string; // sync_id of the book
@@ -109,3 +122,4 @@ export type HighlightRow = DB["highlights"];
 export type ConversationRow = DB["conversations"];
 export type MessageRow = DB["messages"];
 export type SyncMetaRow = DB["sync_meta"];
+export type BookmarkRow = DB["bookmarks"];
