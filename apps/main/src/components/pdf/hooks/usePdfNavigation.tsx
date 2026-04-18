@@ -1,16 +1,11 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-import {
-  isDualPageAtom,
-  nextPageAtom,
-  pageCountAtom,
-  previousPageAtom,
-} from "@components/pdf/atoms/paragraph-atoms";
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { usePdfStore } from "@/stores/pdfStore";
 
 export function usePdfNavigation() {
-  const [numPages, setNumPages] = useAtom(pageCountAtom);
+  const numPages = usePdfStore((s) => s.pageCount);
+  const setNumPages = usePdfStore((s) => s.setPageCount);
 
   const [windowSize, setWindowSize] = useState({
     width: typeof window !== "undefined" ? window.innerWidth : 1024,
@@ -19,7 +14,7 @@ export function usePdfNavigation() {
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Determine if we should show dual-page view
-  const isDualPage = useAtomValue(isDualPageAtom);
+  const isDualPage = usePdfStore((s) => s.isDualPage);
 
   const pdfHeight = windowSize.height - 10; // 60px top + 60px bottom
   const pdfWidth = windowSize.width - 10;
@@ -71,14 +66,8 @@ export function usePdfNavigation() {
     };
   }, []);
 
-  const previousPageSetter = useSetAtom(previousPageAtom);
-  const previousPage = () => {
-    void previousPageSetter();
-  };
-  const nextPageSetter = useSetAtom(nextPageAtom);
-  const nextPage = () => {
-    void nextPageSetter();
-  };
+  const previousPage = usePdfStore((s) => s.previousPage);
+  const nextPage = usePdfStore((s) => s.nextPage);
 
   return {
     previousPage,

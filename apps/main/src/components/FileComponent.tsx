@@ -21,33 +21,11 @@ import { hashBookFile, uploadBookFile } from "@/modules/file-sync";
 import { db } from "@/modules/kysley";
 import { useTauriDragDrop } from "./hooks/use-tauri-drag-drop";
 import { motion, AnimatePresence } from "framer-motion";
-import { atom, useSetAtom } from "jotai";
-import { customStore } from "@/stores/jotai";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 
-import {
-  pdfsControllerAtom,
-} from "@components/pdf/atoms/paragraph-atoms";
+import { usePdfStore } from "@/stores/pdfStore";
 import { LoginButton } from "./LoginButton";
 import { UpdateMenu } from "./UpdateMenu";
-
-const newBook = atom<string | null>(null);
-
-const useNavigateToNewBook = () => {
-  const navigate = useNavigate();
-  function navigateToNewBook(bookId: string) {
-    void navigate({
-      to: "/books/$id",
-      params: { id: bookId },
-    });
-  }
-  customStore.sub(newBook, () => {
-    const value = customStore.get(newBook);
-    if (value) {
-      navigateToNewBook(value);
-    }
-  });
-};
 
 // Add this helper function
 function bytesToBlobUrl(bytes: number[]): string {
@@ -125,8 +103,25 @@ function BookCoverImage({ book }: { book: Book }) {
 }
 
 function FileDrop(): React.JSX.Element {
-  const setPfsController = useSetAtom(pdfsControllerAtom);
+  const setAllBooks = usePdfStore((s) => s.setAllBooks);
+  const removeBook = usePdfStore((s) => s.removeBook);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [newBookId, setNewBookId] = useState<string | null>(null);
+
+  const navigateToNewBook = useCallback((bookId: string) => {
+    void navigate({
+      to: "/books/$id",
+      params: { id: bookId },
+    });
+  }, [navigate]);
+
+  useEffect(() => {
+    if (newBookId) {
+      navigateToNewBook(newBookId);
+    }
+  }, [newBookId, navigateToNewBook]);
+
   const {
     isPending,
     error,
@@ -139,7 +134,7 @@ function FileDrop(): React.JSX.Element {
       const pdfIds = books
         .filter((book) => book.kind === "pdf")
         .map((book) => book.id);
-      setPfsController({ type: "setAll", ids: pdfIds });
+      setAllBooks(pdfIds);
       // prefetch the book data based on ids
       books.forEach((book) => {
         void queryClient.prefetchQuery({
@@ -150,12 +145,12 @@ function FileDrop(): React.JSX.Element {
       return books;
     },
   });
-  useNavigateToNewBook();
+
   const deleteBookMutation = useMutation({
     mutationKey: ["deleteBook"],
     mutationFn: async ({ book }: { book: Book }) => {
       await deleteBook({ bookId: book.id });
-      setPfsController({ type: "remove", id: book.id });
+      removeBook(book.id);
     },
 
     onError(error) {
@@ -166,8 +161,6 @@ function FileDrop(): React.JSX.Element {
       void queryClient.invalidateQueries({ queryKey: ["books"] });
     },
   });
-
-  const setNewBookId = useSetAtom(newBook);
 
   const storeBookDataMutation = useMutation({
     mutationKey: ["getBookData"],
@@ -215,7 +208,7 @@ function FileDrop(): React.JSX.Element {
       // Invalidate the books list to refresh it
       await queryClient.invalidateQueries({ queryKey: ["books"] });
 
-      // Reset to null first to ensure the subscription fires even if it's the same ID
+      // Reset to null first to ensure the state change fires even if it's the same ID
       setNewBookId(null);
       // Use setTimeout to ensure the reset happens before setting the new value
       setTimeout(() => {
@@ -270,7 +263,7 @@ function FileDrop(): React.JSX.Element {
     onSuccess(bookData) {
       void queryClient.invalidateQueries({ queryKey: ["books"] });
 
-      // Reset to null first to ensure the subscription fires even if it's the same ID
+      // Reset to null first to ensure the state change fires even if it's the same ID
       setNewBookId(null);
       // Use setTimeout to ensure the reset happens before setting the new value
       setTimeout(() => {

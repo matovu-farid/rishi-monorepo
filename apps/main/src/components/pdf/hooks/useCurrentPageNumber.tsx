@@ -1,19 +1,7 @@
 // --------------------------------------------------------------------------------------
 // Hook utilities and helpers for tracking and synchronizing the active PDF page.
 // --------------------------------------------------------------------------------------
-import { useAtomValue, useSetAtom } from "jotai";
-import {
-  bookNavigationStateAtom,
-  BookNavigationState,
-  getCurrentViewParagraphsAtom,
-  getNextViewParagraphsAtom,
-  getPreviousViewParagraphsAtom,
-  isTextGotAtom,
-  pageNumberAtom,
-  pageNumberToPageDataAtom,
-  scrollPageNumberAtom,
-  setPageNumberAtom,
-} from "../atoms/paragraph-atoms";
+import { usePdfStore, BookNavigationState } from "@/stores/pdfStore";
 import { useEffect } from "react";
 import { getCurrrentPageNumber } from "../utils/getCurrentPageNumbers";
 import { debounce } from "throttle-debounce";
@@ -22,7 +10,6 @@ import type { Virtualizer } from "@tanstack/react-virtual";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-toastify";
 import { pageDataToParagraphs } from "../utils/getPageParagraphs";
-import { customStore } from "@/stores/jotai";
 import isEqual from "fast-deep-equal";
 import { eventBus, EventBusEvent } from "@/utils/bus";
 import { Book } from "@/generated";
@@ -31,7 +18,7 @@ import { updateBookLocation } from "@/generated";
 // --------------------------------------------------------------------------------------
 // Returns and maintains the current page number for the active PDF view. The hook:
 // - Seeds state from the persisted `book.location`.
-// - Watches scroll/resize events to keep the jotai atom in sync.
+// - Watches scroll/resize events to keep the store in sync.
 // - Debounces writes so the backend location is updated sparingly.
 // --------------------------------------------------------------------------------------
 export function useCurrentPageNumber(
@@ -39,9 +26,9 @@ export function useCurrentPageNumber(
   book: Book,
   virtualizer?: Virtualizer<HTMLDivElement, Element>
 ) {
-  const currentPageNumber = useAtomValue(pageNumberAtom);
-  const setScrollPageNumber = useSetAtom(scrollPageNumberAtom);
-  const setPageNumber = useSetAtom(setPageNumberAtom);
+  const currentPageNumber = usePdfStore((s) => s.pageNumber);
+  const setScrollPageNumber = usePdfStore((s) => s.setScrollPageNumber);
+  const setPageNumber = usePdfStore((s) => s.setPageNumber);
   const bookId = book.id;
 
   // ------------------------------------------------------------------------------------
@@ -49,27 +36,28 @@ export function useCurrentPageNumber(
   // ------------------------------------------------------------------------------------
   // const scrollDiv = scrollRef.current;
   // Set book data only when book prop changes, not on every render
-  const setCurrentViewParagraphs = useSetAtom(getCurrentViewParagraphsAtom);
-  const setIsTextGot = useSetAtom(isTextGotAtom);
-  const setNextViewParagraphs = useSetAtom(getNextViewParagraphsAtom);
-  const setPreviousViewParagraphs = useSetAtom(getPreviousViewParagraphsAtom);
+  const setCurrentViewParagraphs = usePdfStore((s) => s.setCurrentViewParagraphs);
+  const setIsTextGot = usePdfStore((s) => s.setIsTextGot);
+  const setNextViewParagraphs = usePdfStore((s) => s.setNextViewParagraphs);
+  const setPreviousViewParagraphs = usePdfStore((s) => s.setPreviousViewParagraphs);
   useEffect(() => {
     const interval = setInterval(() => {
       const visiblePageNumber = getCurrrentPageNumber(window);
-      // Read current page number from atom (always up-to-date, even during async scroll)
-      const atomPageNumber = customStore.get(pageNumberAtom);
-      const navigationState = customStore.get(bookNavigationStateAtom);
+      // Read current page number from store (always up-to-date, even during async scroll)
+      const state = usePdfStore.getState();
+      const atomPageNumber = state.pageNumber;
+      const navigationState = state.bookNavigationState;
 
-      // If navigation is in progress and scroll has completed (visible matches atom),
+      // If navigation is in progress and scroll has completed (visible matches store),
       // reset navigation state to allow future navigation
       if (
         navigationState === BookNavigationState.Navigating &&
         visiblePageNumber === atomPageNumber
       ) {
-        customStore.set(bookNavigationStateAtom, BookNavigationState.Navigated);
+        usePdfStore.getState().setBookNavigationState(BookNavigationState.Navigated);
       }
 
-      // Detect manual scrolling - update atom if user scrolled manually
+      // Detect manual scrolling - update store if user scrolled manually
       // BUT: Don't overwrite programmatic navigation that's in progress!
       if (
         visiblePageNumber !== atomPageNumber &&
@@ -80,7 +68,7 @@ export function useCurrentPageNumber(
 
       // Use atomPageNumber (updated immediately on programmatic navigation)
       // instead of visiblePageNumber (which lags during async scroll)
-      const pageNumberToPageData = customStore.get(pageNumberToPageDataAtom);
+      const pageNumberToPageData = usePdfStore.getState().pageNumberToPageData;
       const data = pageNumberToPageData[atomPageNumber];
       if (!data) return;
 
@@ -97,13 +85,9 @@ export function useCurrentPageNumber(
         ? pageDataToParagraphs(atomPageNumber - 1, previousPageData)
         : [];
 
-      const currentViewParagraphs = customStore.get(
-        getCurrentViewParagraphsAtom
-      );
-      const nextViewParagraphs = customStore.get(getNextViewParagraphsAtom);
-      const previousViewParagraphs = customStore.get(
-        getPreviousViewParagraphsAtom
-      );
+      const currentViewParagraphs = usePdfStore.getState().currentViewParagraphs;
+      const nextViewParagraphs = usePdfStore.getState().nextViewParagraphs;
+      const previousViewParagraphs = usePdfStore.getState().previousViewParagraphs;
 
       if (!isEqual(currentViewParagraphs, newCurrentViewParagraphs)) {
         setCurrentViewParagraphs(newCurrentViewParagraphs);

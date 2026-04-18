@@ -2,8 +2,7 @@
 
 import { ParagraphWithIndex } from "./player_control";
 import { PlayingState } from "@/utils/bus";
-import { isHighlightingAtom } from "@components/pdf/atoms/paragraph-atoms";
-import { customStore } from "@/stores/jotai";
+import { usePdfStore } from "@/stores/pdfStore";
 import audio from "@/models/audio";
 import { Player } from "./PlayerClass";
 
@@ -41,9 +40,9 @@ export interface ErrorsChangedEvent {
 export const player = new Player(audio);
 player.on(PlayerEvent.PLAYING_STATE_CHANGED, (state) => {
   if (state === PlayingState.Playing) {
-    customStore.set(isHighlightingAtom, true);
+    usePdfStore.getState().setIsHighlighting(true);
   } else {
-    customStore.set(isHighlightingAtom, false);
+    usePdfStore.getState().setIsHighlighting(false);
   }
 });
 export default player;

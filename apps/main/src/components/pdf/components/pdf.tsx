@@ -12,17 +12,7 @@ import { cn } from "@components/lib/utils";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
-import {
-  hasNavigatedToPageAtom,
-  pageCountAtom,
-  resetParaphStateAtom,
-  setPageNumberAtom,
-  thumbnailSidebarOpenAtom,
-  pdfDocumentProxyAtom,
-  bookNavigationStateAtom,
-  BookNavigationState,
-} from "@components/pdf/atoms/paragraph-atoms";
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { usePdfStore, BookNavigationState } from "@/stores/pdfStore";
 import { ThumbnailSidebar } from "./thumbnail-sidebar";
 import TTSControls from "@/components/TTSControls";
 import {
@@ -42,7 +32,6 @@ import { queryClient } from "@components/providers";
 import { useCurrentPageNumber } from "../hooks/useCurrentPageNumber";
 import { PDFDocumentProxy } from "pdfjs-dist";
 import { useVirualization } from "../hooks/useVirualization";
-import { eventBusLogsAtom } from "@/utils/bus";
 import { TextExtractor } from "./text-extractor.tsx";
 import { updateBookLocation, Book } from "@/generated";
 import { BackButton } from "@components/BackButton.tsx";
@@ -62,12 +51,12 @@ export function PdfView({
 }): React.JSX.Element {
   const [theme] = useState<ThemeType>(ThemeType.White);
   const [tocOpen, setTocOpen] = useState(false);
-  const [thumbOpen, setThumbOpen] = useAtom(thumbnailSidebarOpenAtom);
-  const setPdfDocProxy = useSetAtom(pdfDocumentProxyAtom);
-  const setBookNavState = useSetAtom(bookNavigationStateAtom);
-  useAtomValue(eventBusLogsAtom);
+  const thumbOpen = usePdfStore((s) => s.thumbnailSidebarOpen);
+  const setThumbOpen = usePdfStore((s) => s.setThumbnailSidebarOpen);
+  const setPdfDocProxy = usePdfStore((s) => s.setPdfDocumentProxy);
+  const setBookNavState = usePdfStore((s) => s.setBookNavigationState);
 
-  const setPageNumber = useSetAtom(setPageNumberAtom);
+  const setPageNumber = usePdfStore((s) => s.setPageNumber);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   useScrolling(scrollContainerRef);
 
@@ -75,7 +64,7 @@ export function PdfView({
   useSetupMenu();
   // Ref for the scrollable container
 
-  const resetParaphState = useSetAtom(resetParaphStateAtom);
+  const resetParaphState = usePdfStore((s) => s.resetParagraphState);
 
   useEffect(() => {
     return () => {
@@ -140,7 +129,7 @@ export function PdfView({
     }
   }
 
-  const setPageCount = useSetAtom(pageCountAtom);
+  const setPageCount = usePdfStore((s) => s.setPageCount);
 
   function onDocumentLoadSuccess(pdf: PDFDocumentProxy): void {
     setPageCount(pdf.numPages);
@@ -149,7 +138,7 @@ export function PdfView({
 
   const pageWidth = isDualPage ? dualPageWidth : pdfWidth;
 
-  const hasNavigatedToPage = useAtomValue(hasNavigatedToPageAtom);
+  const hasNavigatedToPage = usePdfStore((s) => s.hasNavigatedToPage);
   const { virtualizer, virtualItems, pageRefs, handlePageRendered } =
     useVirualization(scrollContainerRef, book);
 

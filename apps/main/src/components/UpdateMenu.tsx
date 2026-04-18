@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useAtomValue } from "jotai";
 import { Settings } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import {
@@ -10,11 +9,11 @@ import {
 import {
   checkForUpdates,
   renderStatus,
-  updateStatusAtom,
+  useUpdateStore,
 } from "@/modules/updater";
 
 export function UpdateMenu() {
-  const status = useAtomValue(updateStatusAtom);
+  const status = useUpdateStore((s) => s.status);
   const [version, setVersion] = useState<string>("");
 
   useEffect(() => {
@@ -49,7 +48,7 @@ export function UpdateMenu() {
           onClick={() => void checkForUpdates({ silent: false })}
           className="w-full rounded-md border px-3 py-1.5 text-sm hover:bg-black/5 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {busy ? "Checking…" : "Check for Updates"}
+          {busy ? "Checking\u2026" : "Check for Updates"}
         </button>
         {statusLine && (
           <div className="mt-2 text-xs text-muted-foreground">{statusLine}</div>

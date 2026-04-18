@@ -1,7 +1,6 @@
 import { eventBus, EventBusEvent } from "@/utils/bus";
 import { nextPage, previousPage } from "../utils/pageControls";
-import { customStore } from "@/stores/jotai";
-import { highlightedParagraphIndexAtom, isHighlightingAtom } from "../atoms/paragraph-atoms";
+import { usePdfStore } from "@/stores/pdfStore";
 
 eventBus.subscribe(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, async () => {
   nextPage();
@@ -14,8 +13,6 @@ eventBus.subscribe(
   }
 );
 eventBus.subscribe(EventBusEvent.PLAYING_AUDIO, async (paragraph) => {
-  customStore.set(isHighlightingAtom, true);
-  customStore.set(highlightedParagraphIndexAtom, paragraph.index);
+  usePdfStore.getState().setIsHighlighting(true);
+  usePdfStore.getState().setHighlightedParagraphIndex(paragraph.index);
 });
-
-

@@ -1,12 +1,8 @@
 import { Page } from "react-pdf";
 
-import {
-  backgroundPageAtom,
-  isTextItem,
-} from "@components/pdf/atoms/paragraph-atoms";
+import { usePdfStore, isTextItem } from "@/stores/pdfStore";
 import { Loader2 } from "lucide-react";
 import { wordsToFinalParagraphs } from "../utils/wordsToParaagraphs";
-import { useSetAtom } from "jotai";
 import { processJob } from "@/generated";
 
 export function BackgroundPageComponent({
@@ -24,7 +20,7 @@ export function BackgroundPageComponent({
   bookId: string;
   onRenderComplete?: () => void;
 }) {
-  const setBackgroundPage = useSetAtom(backgroundPageAtom);
+  const setBackgroundPage = usePdfStore((s) => s.setBackgroundPage);
   return (
     <Page
       pageNumber={pageNumber}

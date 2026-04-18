@@ -8,12 +8,7 @@ import "react-pdf/dist/Page/TextLayer.css";
 
 import { elementScroll } from "@tanstack/react-virtual";
 import type { VirtualizerOptions } from "@tanstack/react-virtual";
-import {
-  hasNavigatedToPageAtom,
-  pageCountAtom,
-  virtualizerAtom,
-} from "../atoms/paragraph-atoms";
-import { useAtomValue, useSetAtom } from "jotai";
+import { usePdfStore } from "@/stores/pdfStore";
 import { PAGE_HEIGHT } from "../utils/constants";
 import { Book } from "@/generated";
 function easeInOutQuint(t: number) {
@@ -26,14 +21,14 @@ export function useVirualization(
   const initialPageIndexRef = useRef(
     Math.max(0, Number.parseInt(book.location, 10) - 1)
   );
-  const numPages = useAtomValue(pageCountAtom);
-  const setHasNavigatedToPage = useSetAtom(hasNavigatedToPageAtom);
+  const numPages = usePdfStore((s) => s.pageCount);
+  const setHasNavigatedToPage = usePdfStore((s) => s.setHasNavigatedToPage);
   const estimatedPageHeight = PAGE_HEIGHT;
   const scrollingRef = useRef<number | null>(null);
   const initialOffsetRef = useRef(
     initialPageIndexRef.current * estimatedPageHeight
   );
-  const setVirtualizer = useSetAtom(virtualizerAtom);
+  const setVirtualizer = usePdfStore((s) => s.setVirtualizer);
   const pageRefs = useRef(new Map<number, HTMLElement>());
   const hasRequestedInitialScroll = useRef(false);
   const scrollToFn: VirtualizerOptions<any, any>["scrollToFn"] =

@@ -8,12 +8,7 @@ import { PdfView } from "@components/pdf/components/pdf";
 import { MobiView } from "@components/mobi/MobiView";
 import { DjvuView } from "@components/djvu/DjvuView";
 import { motion } from "framer-motion";
-import { useSetAtom } from "jotai";
-import {
-  bookAtom,
-  BookNavigationState,
-  bookNavigationStateAtom,
-} from "@components/pdf/atoms/paragraph-atoms";
+import { usePdfStore, BookNavigationState } from "@/stores/pdfStore";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getBook } from "@/generated";
 export const Route = createLazyFileRoute("/books/$id")({
@@ -22,7 +17,7 @@ export const Route = createLazyFileRoute("/books/$id")({
 
 function BookView(): React.JSX.Element {
   const { id } = Route.useParams() as { id: string };
-  const setBook = useSetAtom(bookAtom);
+  const setBook = usePdfStore((s) => s.setBook);
 
   const {
     isPending,
@@ -52,8 +47,8 @@ function BookView(): React.JSX.Element {
       return book;
     },
   });
-  // COntrols the lifecycle of the book navigation state
-  const setBookNavigationState = useSetAtom(bookNavigationStateAtom);
+  // Controls the lifecycle of the book navigation state
+  const setBookNavigationState = usePdfStore((s) => s.setBookNavigationState);
   useEffect(() => {
     setBookNavigationState(BookNavigationState.Navigated);
     return () => {
