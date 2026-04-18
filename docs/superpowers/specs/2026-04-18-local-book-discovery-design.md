@@ -5,15 +5,15 @@
 
 ## Overview
 
-Users can search for books already on their computer directly from the library search bar. The app indexes books in common filesystem locations, and search results show both imported library books and discoverable local files. Users can import any discovered book with one click.
+An "Import from Computer" button lets users scan their filesystem for book files and import them. The app scans platform-specific common book folders by default (fast), with an option to search the entire system (slower). No background indexing, no persistent index — every scan is fresh and on-demand.
 
 ## Goals
 
-- Works out of the box with zero config — sensible default folders per OS
-- User stays in control — can add/remove folders, re-scan on demand
-- Never scans without consent — first-time prompt before any filesystem access
-- No App Store / notarization issues — uses Tauri's scoped FS access with user-granted permissions
-- Instant search — background indexing keeps results ready
+- Works out of the box — scans sensible default folders per OS with no config
+- User-initiated only — never touches the filesystem until the user clicks the button
+- Simple — no persistent index, no background tasks, no staleness tracking
+- Full system search available — user can opt into a slower whole-system scan
+- No App Store / notarization issues — scoped FS access with user-granted permissions
 
 ## Default Folder Detection
 
@@ -25,200 +25,143 @@ Users can search for books already on their computer directly from the library s
 | Windows | `Documents`, `Downloads`, `%APPDATA%/Calibre`, `%USERPROFILE%/Kindle` |
 | Linux | `~/Documents`, `~/Downloads`, `~/.config/calibre`, `~/Kindle` |
 
-### Permission flow
+Only folders that actually exist on disk are scanned. Non-existent paths are silently skipped.
 
-1. Detect OS via `tauri-plugin-os`
-2. Resolve default folders for that platform
-3. Check which folders actually exist on disk
-4. Show a one-time setup prompt:
-   > "Rishi can search these folders for books on your computer. You can add or remove folders anytime in Settings."
-   
-   Lists detected folders with toggles.
-5. User confirms — app stores the approved folder list in `tauri-plugin-store`
-6. For each approved folder, call `FsScope::allow_directory()` to register Tauri-level FS access
+### Permission model
 
-### Safety
+- Default folders: Tauri's `FsScope::allow_directory()` grants access when the user initiates a scan. On macOS, the OS may show a system-level permission dialog — this is expected behavior.
+- Full system search: Uses the user's home directory as the root. The OS permission dialog covers this.
+- No pre-emptive access — filesystem is only touched when the user clicks "Import from Computer".
 
-- Only suggest folders, never scan without consent
-- macOS sandboxed apps get a system-level permission dialog per folder — expected and trusted behavior
-- Folders that don't exist are silently excluded
-- User can add/remove folders anytime from Settings
+## User Flow
 
-## Background Indexing
+### 1. Trigger
 
-### New SQLite table: `local_book_index`
+User clicks **"Import from Computer"** button in the library view (alongside existing import options like file picker and URL import).
 
-| Column | Type | Purpose |
-|--------|------|---------|
-| `id` | INTEGER PK | Auto-increment |
-| `filepath` | TEXT UNIQUE | Absolute path on disk |
-| `filename` | TEXT | File name for search matching |
-| `title` | TEXT (nullable) | Extracted from metadata if available |
-| `author` | TEXT (nullable) | Extracted from metadata if available |
-| `format` | TEXT | `epub`, `pdf`, `mobi`, `azw3`, `djvu` |
-| `file_size` | INTEGER | Bytes |
-| `folder` | TEXT | Which configured folder this came from |
-| `file_hash` | TEXT (nullable) | SHA-256 for duplicate detection against imported books |
-| `last_seen` | TIMESTAMP | Last time the file was confirmed on disk |
-| `is_stale` | BOOLEAN | True if file was missing on last scan |
+### 2. Scan & Results View
 
-### Indexing pipeline (Rust background thread)
-
-1. For each configured folder, walk recursively looking for files matching supported extensions (`.epub`, `.pdf`, `.mobi`, `.azw3`, `.djvu`)
-2. For each found file:
-   - Check if already in `local_book_index` by filepath
-   - If new: extract basic metadata (title, author) using existing `get_book_data` commands, compute `file_hash`, insert row
-   - If existing: update `last_seen`, un-mark `is_stale`
-3. After scan completes, mark any rows for this folder where `last_seen` < scan start time as `is_stale`
-4. Emit a Tauri event (`local-index-updated`) so the frontend knows to refresh results
-
-### Performance
-
-- Extract only title/author, not full content
-- If extraction fails for a file, index it with `filename` as the display title
-- Run on a Tokio background task, not the main thread
-- For large folders, process in batches and emit progress events
-
-### Duplicate detection
-
-- Compare `file_hash` against the `books` table's `file_hash` column
-- If a local file matches an already-imported book, don't show it in search results
-
-### Re-index triggers
-
-1. **On app launch** — Background scan runs automatically after startup (debounced, low priority)
-2. **Manual refresh** — Refresh button in the UI for on-demand re-scan
-3. **Folder config change** — When the user adds or removes a folder, re-index immediately
-4. **File watcher (stretch goal)** — Optionally use `notify` Rust crate to watch folders for file changes and update the index incrementally. Avoids full re-scans but adds complexity — can be added later.
-
-### Staleness handling
-
-- During re-index, if a previously indexed file no longer exists on disk, mark it as `is_stale = true` (don't show in results)
-- If a file reappears (e.g., external drive reconnected), un-mark it
-- Full re-index replaces the entire index for a folder
-
-## Search Integration
-
-### Behavior
-
-When the user types in the existing library search bar:
-
-1. Frontend queries the `books` table (imported library results) as it does today
-2. Simultaneously queries `local_book_index` where `is_stale = false` and `file_hash NOT IN (imported books' hashes)`, matching against `title`, `author`, and `filename`
-3. Results displayed in two sections:
-
-### Result layout
+A modal/panel opens showing:
 
 ```
-┌─────────────────────────────────────┐
-│  YOUR LIBRARY                       │
-│  ┌───────────┐                      │
-│  │ Atomic... │  (already imported)  │
-│  └───────────┘                      │
-├─────────────────────────────────────┤
-│  FOUND ON YOUR COMPUTER             │
-│  ┌───────────┐                      │
-│  │ Atomic... │  ~/Documents/Books   │
-│  │           │  EPUB · 2.4 MB       │
-│  │           │         [Import]     │
-│  └───────────┘                      │
-│  ┌───────────┐                      │
-│  │ Atomic... │  ~/Downloads         │
-│  │           │  PDF · 5.1 MB        │
-│  │           │         [Import]     │
-│  └───────────┘                      │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│  IMPORT FROM COMPUTER                  ✕ │
+│                                          │
+│  🔍 Filter results...                   │
+│                                          │
+│  ○ Common folders (fast)                 │
+│  ○ Search entire computer (slower)       │
+│                                          │
+│  Scanning... 3 of 4 folders              │
+│  ████████████░░░░░░░░  60%               │
+│                                          │
+│  ── ~/Documents ──────────────────────── │
+│  ┌──────────┐                            │
+│  │ Atomic   │  Atomic Habits.epub        │
+│  │ Habits   │  James Clear · 2.4 MB      │
+│  │          │              [Import]      │
+│  └──────────┘                            │
+│  ┌──────────┐                            │
+│  │ Deep     │  Deep Work.pdf             │
+│  │ Work     │  Cal Newport · 5.1 MB      │
+│  │          │              [Import]      │
+│  └──────────┘                            │
+│                                          │
+│  ── ~/Downloads ──────────────────────── │
+│  ┌──────────┐                            │
+│  │ Dune     │  Dune.epub                 │
+│  │          │  Frank Herbert · 1.8 MB    │
+│  │          │              [Import]      │
+│  └──────────┘                            │
+│                                          │
+│              [Import All]                │
+└──────────────────────────────────────────┘
 ```
 
-### Each local result shows
+### 3. Key behaviors
 
-- Book title (or filename if metadata extraction failed)
-- Author (if available)
-- Folder location
-- Format + file size
-- **Import button** — runs the existing import flow (copy to app data dir, parse metadata, insert into `books` table, sync)
+- **Results stream in** as folders are scanned — no waiting for full completion
+- **Filter field** filters the current results by title/author/filename (client-side, instant)
+- **Grouped by folder** so the user knows where each book lives
+- **Already-imported books are excluded** — compare `file_hash` against `books` table
+- **Import button** per book — runs existing `addBook` pipeline (copy to app data dir, parse metadata, insert into DB, sync)
+- **Import All** — bulk imports every discovered book
 
-### Import behavior
+### 4. Search mode toggle
 
-- Reuse the existing `addBook` pipeline from `books.ts`
-- After import, the book moves from "Found on your computer" to "Your library" section
-- The `local_book_index` entry stays but is hidden (hash matches an imported book)
+- **Common folders (default)** — Scans only the platform-specific default folders. Fast (seconds).
+- **Search entire computer** — Recursively scans from the user's home directory, skipping system directories (e.g., `/System`, `/Library/System`, `node_modules`, `.git`, `AppData/Local/Temp`). Slower but thorough. Progress bar shows folder count.
 
-### Empty states
+## Scan Implementation
 
-- No library matches + no local matches: "No books found"
-- No local matches only: section doesn't appear
-- Index still building: subtle "Scanning your folders..." indicator
-
-## Settings: Book Folders
-
-New section in the existing settings area:
-
-```
-┌─────────────────────────────────────┐
-│  BOOK FOLDERS                       │
-│                                     │
-│  Rishi searches these folders for   │
-│  books on your computer.            │
-│                                     │
-│  ✓ ~/Documents        [Remove]     │
-│  ✓ ~/Downloads        [Remove]     │
-│  ✓ ~/Calibre Library   [Remove]    │
-│                                     │
-│  [+ Add Folder]    [Re-scan Now]   │
-│                                     │
-│  Last scanned: 2 minutes ago        │
-│  Found: 47 books                    │
-└─────────────────────────────────────┘
-```
-
-### Behaviors
-
-- **Add Folder** — Opens Tauri's folder picker dialog (`@tauri-apps/plugin-dialog`). Selected folder gets added to the stored list and triggers `FsScope::allow_directory()` + immediate index.
-- **Remove** — Removes the folder from the list, deletes its entries from `local_book_index`, revokes scope access.
-- **Re-scan Now** — Triggers a full re-index of all configured folders.
-- **Folder list persistence** — Stored in `tauri-plugin-store`, survives app restarts.
-
-### First-time experience
-
-- On first use of the search feature (or first app launch after update), if no folders are configured, show the one-time setup prompt.
-- After setup, the settings page is always available for adjustments.
-
-## Rust Architecture
-
-### New Tauri commands
-
-| Command | Input | Output | Purpose |
-|---------|-------|--------|---------|
-| `get_default_book_folders` | none | `Vec<String>` | Returns platform-specific default folders that exist on disk |
-| `scan_book_folders` | `folders: Vec<String>` | `u32` (count found) | Walks folders, indexes books, returns count. Emits `local-index-updated` on completion and `scan-progress` during scan |
-| `search_local_books` | `query: String` | `Vec<LocalBook>` | Queries `local_book_index` using SQL `LIKE '%query%'` on title, author, and filename columns, excluding stale and already-imported entries. Case-insensitive. |
-| `remove_folder_index` | `folder: String` | none | Deletes all index entries for a folder |
-
-### New Rust struct
+### Rust Tauri command: `scan_for_books`
 
 ```rust
 #[derive(Serialize, Deserialize)]
-pub struct LocalBook {
-    pub id: i32,
+pub struct DiscoveredBook {
     pub filepath: String,
     pub filename: String,
     pub title: Option<String>,
     pub author: Option<String>,
-    pub format: String,
-    pub file_size: i64,
-    pub folder: String,
+    pub format: String,       // epub, pdf, mobi, azw3, djvu
+    pub file_size: u64,
+    pub folder: String,       // parent folder display path
+    pub file_hash: String,    // SHA-256 for dedup
 }
 ```
 
-### Module organization
+**Input:** `mode: "default" | "full"` 
+**Output:** Streams results via Tauri events, returns total count on completion.
 
-- New file `src-tauri/src/local_scanner.rs` — folder walking, metadata extraction, index CRUD
-- New Diesel migration for `local_book_index` table
+**Events emitted:**
+- `scan-progress` — `{ folder: String, scanned: u32, total: u32 }` 
+- `scan-result` — `DiscoveredBook` (emitted per-book as found, so UI streams results in)
+- `scan-complete` — `{ total: u32 }` 
+
+### Pipeline
+
+1. Determine folders to scan based on mode (`default` → platform defaults, `full` → home directory)
+2. For each folder, walk recursively matching extensions: `.epub`, `.pdf`, `.mobi`, `.azw3`, `.djvu`
+3. For each found file:
+   - Compute `file_hash` (SHA-256)
+   - Skip if hash matches an already-imported book in `books` table
+   - Extract basic metadata (title, author) using existing `get_book_data` / `get_pdf_data` / etc.
+   - If extraction fails, use filename as title
+   - Emit `scan-result` event with the `DiscoveredBook`
+4. Emit `scan-complete` when done
+
+### Performance
+
+- Runs on a Tokio background task, not the main thread
+- Metadata extraction limited to title/author only (no full content parsing)
+- Full system scan skips known non-book directories: `node_modules`, `.git`, `target`, `__pycache__`, `.Trash`, system directories
+- SHA-256 computation is fast for typical book file sizes (1-50 MB)
+- Scan is cancellable — user can close the modal to abort
+
+### Tauri commands summary
+
+| Command | Input | Output | Purpose |
+|---------|-------|--------|---------|
+| `get_default_book_folders` | none | `Vec<String>` | Returns platform-specific default folders that exist on disk |
+| `scan_for_books` | `mode: String` | `u32` (total count) | Scans folders, emits `scan-result` events per book found, `scan-complete` when done |
+| `cancel_scan` | none | none | Cancels an in-progress scan |
+
+## Module Organization
+
+- New file: `src-tauri/src/local_scanner.rs` — folder walking, metadata extraction, skip-list logic
+- No new database tables — all results are ephemeral, held in frontend state during the modal
+- No new Diesel migrations
 - Commands registered in `main.rs` alongside existing ones
 
-### Background scanning
+## UI Components
 
-- On app startup, spawn a `tokio::spawn` task that calls the scan logic
-- Scan checks `FsScope` before accessing each folder — if scope was revoked or folder doesn't exist, skip it
-- Metadata extraction reuses existing functions from `commands.rs` but catches errors gracefully (index with filename only if extraction fails)
+- **Import button** — Added to `FileComponent.tsx` alongside existing import options
+- **Discovery modal** — New component showing scan results with filter, mode toggle, and import actions
+- **Frontend state** — `useState` in the modal component. Results stored as `DiscoveredBook[]`, cleared when modal closes. No Zustand store needed since state is ephemeral.
+
+## Import Behavior
+
+- Clicking **Import** on a book calls the existing `addBook` pipeline from `books.ts`
+- After successful import, the book is removed from the discovery results list (optimistic update)
+- **Import All** iterates through all results sequentially, showing progress
+- Import errors are shown inline per-book (e.g., "Failed to import — file may be corrupted")
