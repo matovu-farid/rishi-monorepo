@@ -30,6 +30,7 @@ export interface CloudflareBindings {
   UPSTASH_REDIS_REST_URL: string;
   UPSTASH_REDIS_REST_TOKEN: string;
   JWT_SECRET: string;
+  DEV_BYPASS_SECRET?: string;
   DB: D1Database;
   BOOK_STORAGE: R2Bucket;
   R2_ACCESS_KEY_ID: string;
@@ -43,8 +44,8 @@ const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string
 app.use(
   "*",
   cors({
-    origin: ["https://rishi.fidexa.org", "tauri://localhost", "http://tauri.localhost"],
-    allowHeaders: ["Content-Type", "Authorization"],
+    origin: ["https://rishi.fidexa.org", "tauri://localhost", "http://tauri.localhost", "http://localhost:1420"],
+    allowHeaders: ["Content-Type", "Authorization", "X-Dev-Bypass"],
     allowMethods: ["GET", "POST", "OPTIONS"],
   })
 );
@@ -61,6 +62,17 @@ app.route("/api/sync", uploadRoutes);
 
 // ─── requireWorkerAuth middleware ────────────────────────────────────────────
 export async function requireWorkerAuth(c: any, next: () => Promise<void>) {
+  // Dev bypass: skip JWT validation when the client sends the dev secret.
+  // Set DEV_BYPASS_SECRET as a Cloudflare Worker secret to enable this.
+  const devSecret = c.env.DEV_BYPASS_SECRET;
+  if (devSecret) {
+    const devHeader = c.req.header("X-Dev-Bypass");
+    if (devHeader === devSecret) {
+      c.set("userId", "dev-user");
+      return next();
+    }
+  }
+
   const authHeader = c.req.header("Authorization");
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return c.json({ error: "Unauthorized" }, 401);
@@ -622,17 +634,45 @@ app.get("/api/clerk/user/:userId", requireWorkerAuth, async (c) => {
 });
 
 app.post("/api/audio/speech", requireWorkerAuth, async (c) => {
-  const { model, input, voice, ...otherParams } = await c.req.json();
-  const openai = new OpenAI({
-    apiKey: c.env.OPENAI_API_KEY,
-  });
-  const response = await openai.audio.speech.create({
-    model: "tts-1",
-    input,
-    voice,
-    ...otherParams,
-  });
-  return response;
+  try {
+    const { model, input, voice, ...otherParams } = await c.req.json();
+
+    if (!input || typeof input !== "string" || input.trim().length === 0) {
+      return c.json({ error: "Missing or empty input text" }, 400);
+    }
+
+    const openai = new OpenAI({
+      apiKey: c.env.OPENAI_API_KEY,
+    });
+
+    const response = await openai.audio.speech.create({
+      model: "tts-1",
+      input,
+      voice: voice || "alloy",
+      ...otherParams,
+    });
+
+    const arrayBuffer = await response.arrayBuffer();
+    return new Response(arrayBuffer, {
+      headers: {
+        "Content-Type": "audio/mpeg",
+        "Content-Length": arrayBuffer.byteLength.toString(),
+      },
+    });
+  } catch (error) {
+    if (error instanceof OpenAI.APIError) {
+      console.error("OpenAI API error:", error.status, error.message);
+      return c.json(
+        { error: `OpenAI TTS error: ${error.message}`, status: error.status },
+        error.status === 429 ? 429 : 502
+      );
+    }
+    if (error instanceof Error) {
+      console.error("TTS error:", error.message);
+      return c.json({ error: "TTS generation failed: " + error.message }, 500);
+    }
+    return c.json({ error: "TTS generation failed" }, 500);
+  }
 });
 
 app.get("/api/realtime/client_secrets", requireWorkerAuth, async (c) => {

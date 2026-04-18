@@ -27,3 +27,5 @@ testAudioData/*
 *test*
 src/__screenshots__/*
 .env
+error-dump.json
+state-dump.json

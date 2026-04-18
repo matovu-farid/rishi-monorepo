@@ -18,6 +18,8 @@ pub mod sql;
 mod api;
 mod user;
 
+pub mod error_dump;
+
 pub const WORKER_URL: &str = "https://rishi-worker.faridmato90.workers.dev";
 
 
@@ -62,6 +64,11 @@ pub fn run() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_mic_recorder::init())
         .setup(|app| {
+            // Clear the error dump on every launch so it only contains
+            // errors from the current session.
+            error_dump::clear_on_launch();
+            error_dump::clear_state_on_launch();
+
             db::setup_database(app.handle())?;
             // Migrate auth secrets from plain-text store.json to OS keychain
             if let Err(e) = commands::migrate_auth_to_keychain(app.handle()) {
@@ -148,6 +155,11 @@ pub fn run() {
             sql::has_saved_epub_data,
             sql::update_book_location,
             sql::get_text_from_vector_id,
+            // Error dump commands (writes only in dev builds)
+            error_dump::dump_error_cmd,
+            error_dump::read_error_dump,
+            error_dump::clear_error_dump,
+            error_dump::dump_state_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -296,11 +296,18 @@ pub fn get_auth_token(_app: &tauri::AppHandle) -> Result<String, String> {
             .map_err(|e| e.to_string())?
             .as_secs();
         if now > expires_at {
+            if tauri::is_dev() {
+                return Ok("dev-placeholder-token".to_string());
+            }
             return Err("Token expired — please log in again".to_string());
         }
     }
 
-    keyring_get("auth_token")?.ok_or_else(|| "Not authenticated".to_string())
+    match keyring_get("auth_token")? {
+        Some(token) => Ok(token),
+        None if tauri::is_dev() => Ok("dev-placeholder-token".to_string()),
+        None => Err("Not authenticated".to_string()),
+    }
 }
 
 /// Tauri command wrapper so the TS frontend can retrieve the auth token
@@ -314,12 +321,16 @@ pub fn get_auth_token_cmd(app: tauri::AppHandle) -> Result<String, String> {
 async fn authenticated_get(app: &tauri::AppHandle, url: &str) -> Result<reqwest::Response, String> {
     let token = get_auth_token(app)?;
     let client = reqwest::Client::new();
-    let response = client
-        .get(url)
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut req = client.get(url);
+
+    if token == "dev-placeholder-token" {
+        let secret = option_env!("DEV_BYPASS_SECRET").unwrap_or("");
+        req = req.header("X-Dev-Bypass", secret);
+    } else {
+        req = req.header("Authorization", format!("Bearer {}", token));
+    }
+
+    let response = req.send().await.map_err(|e| e.to_string())?;
 
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         return Err("Session expired — please log in again".to_string());
