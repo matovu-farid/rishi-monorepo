@@ -19,6 +19,7 @@ mod api;
 mod user;
 
 pub mod error_dump;
+pub mod local_scanner;
 
 pub const WORKER_URL: &str = "https://rishi-worker.faridmato90.workers.dev";
 
