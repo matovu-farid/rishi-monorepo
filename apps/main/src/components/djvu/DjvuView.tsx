@@ -11,7 +11,7 @@ import type { Book } from "@/generated";
 import { BackButton } from "@components/BackButton";
 import TTSControls from "@components/TTSControls";
 import { IconButton } from "@components/ui/IconButton";
-import { ChevronLeft, ChevronRight, MessageSquare, ZoomIn, ZoomOut } from "lucide-react";
+import { Bookmark, ChevronLeft, ChevronRight, Menu as MenuIcon, MessageSquare, ZoomIn, ZoomOut } from "lucide-react";
 import { eventBus, EventBusEvent } from "@/utils/bus";
 import type { ParagraphWithIndex } from "@/utils/bus";
 import { processEpubJob } from "@/modules/process_epub";
@@ -20,6 +20,9 @@ import { ChatPanel } from "@/components/chat/ChatPanel";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { db } from "@/modules/kysley";
 import { stringToNumberID } from "@components/lib/utils";
+import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
+import { BookmarksList } from "@/components/bookmarks/BookmarksList";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@components/components/ui/sheet";
 
 const PAGE_CACHE_SIZE = 5;
 const MIN_ZOOM = 0.5;
@@ -47,6 +50,8 @@ export function DjvuView({ book }: { book: Book }) {
   const mountedRef = useRef(true);
   const embeddingsProcessedRef = useRef(false);
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
+  const [tocOpen, setTocOpen] = useState(false);
+  const [tocTab, setTocTab] = useState<"contents" | "bookmarks">("contents");
   const { requireAuth, AuthDialog } = useRequireAuth();
   const bookSyncIdRef = useRef<string | null>(null);
 
@@ -336,6 +341,15 @@ export function DjvuView({ book }: { book: Book }) {
       {/* Top bar */}
       <div className="fixed top-0 left-0 right-0 z-50 bg-transparent">
         <div className="flex items-center justify-end gap-2 px-4 pt-5">
+          <IconButton onClick={() => setTocOpen(true)} className="hover:bg-transparent border-none">
+            <MenuIcon size={20} />
+          </IconButton>
+          <BookmarkButton
+            bookSyncId={bookSyncIdRef.current ?? ""}
+            location={String(currentPage)}
+            label={`Page ${currentPage}`}
+            className="hover:bg-transparent border-none"
+          />
           <button
             onClick={() => requireAuth("chat", () => setChatPanelOpen(true))}
             className="p-2 rounded-md text-white hover:bg-white/10"
@@ -445,6 +459,53 @@ export function DjvuView({ book }: { book: Book }) {
         open={chatPanelOpen}
         onOpenChange={setChatPanelOpen}
       />
+
+      {/* Navigation / Bookmarks Sidebar */}
+      <Sheet open={tocOpen} onOpenChange={setTocOpen}>
+        <SheetContent side="left" className="w-[300px] sm:w-[400px] p-0 bg-white border-gray-200">
+          <SheetHeader className="p-4 border-b sticky top-0 z-10 border-gray-200 bg-white">
+            <SheetTitle>Navigation</SheetTitle>
+          </SheetHeader>
+          <div className="flex border-b border-gray-200">
+            <button
+              onClick={() => setTocTab("contents")}
+              className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+                tocTab === "contents"
+                  ? "border-b-2 border-blue-500 text-blue-600"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              Contents
+            </button>
+            <button
+              onClick={() => setTocTab("bookmarks")}
+              className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+                tocTab === "bookmarks"
+                  ? "border-b-2 border-red-500 text-red-600"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              Bookmarks
+            </button>
+          </div>
+          {tocTab === "contents" ? (
+            <div className="p-4 text-gray-400 text-sm text-center">
+              Page {currentPage} of {pageCount}
+            </div>
+          ) : (
+            <BookmarksList
+              bookSyncId={bookSyncIdRef.current ?? ""}
+              onNavigate={(location) => {
+                const page = parseInt(location, 10);
+                if (page > 0) {
+                  setCurrentPage(page);
+                  setTocOpen(false);
+                }
+              }}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
