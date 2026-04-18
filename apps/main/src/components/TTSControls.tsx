@@ -196,6 +196,27 @@ export default function TTSControls({
   // --- Waveform bar heights ---
   const barHeights = [8, 14, 20, 12];
 
+  // Shared liquid glass styles
+  const glassContainer: React.CSSProperties = {
+    background:
+      "linear-gradient(135deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.12) 40%, rgba(200,210,230,0.16) 100%)",
+    backdropFilter: "blur(40px) saturate(180%)",
+    WebkitBackdropFilter: "blur(40px) saturate(180%)",
+    border: "1px solid rgba(255,255,255,0.45)",
+    boxShadow:
+      "0 4px 24px rgba(0,0,0,0.08), inset 0 0 0 0.5px rgba(255,255,255,0.3), inset 0 1px 0 rgba(255,255,255,0.5)",
+  };
+
+  const glassButton: React.CSSProperties = {
+    background:
+      "linear-gradient(135deg, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0.15) 100%)",
+    backdropFilter: "blur(20px)",
+    WebkitBackdropFilter: "blur(20px)",
+    border: "0.5px solid rgba(255,255,255,0.35)",
+    boxShadow:
+      "0 1px 4px rgba(0,0,0,0.06), inset 0 0.5px 0 rgba(255,255,255,0.4)",
+  };
+
   return (
     <>
       {AuthDialog}
@@ -208,37 +229,36 @@ export default function TTSControls({
         }
       `}</style>
 
-      {/* ---- Collapsed Orb ---- */}
-      {!expanded && (
-        <button
-          onClick={handleOrbClick}
-          aria-label="Open TTS controls"
-          className="fixed z-50 flex items-center justify-center cursor-pointer border-none outline-none"
-          style={{
-            bottom: 32,
-            right: 32,
-            width: 52,
-            height: 52,
-            borderRadius: "50%",
-            background:
-              "linear-gradient(135deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.12) 40%, rgba(200,210,230,0.16) 100%)",
-            backdropFilter: "blur(40px) saturate(180%)",
-            WebkitBackdropFilter: "blur(40px) saturate(180%)",
-            border: "1px solid rgba(255,255,255,0.45)",
-            boxShadow:
-              "0 4px 24px rgba(0,0,0,0.08), inset 0 0 0 0.5px rgba(255,255,255,0.3), inset 0 1px 0 rgba(255,255,255,0.5)",
-            transition: "transform 200ms ease-in-out",
-          }}
-          onMouseEnter={(e) =>
-            (e.currentTarget.style.transform = "scale(1.08)")
-          }
-          onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
-          onMouseDown={(e) =>
-            (e.currentTarget.style.transform = "scale(0.95)")
-          }
-          onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1.08)")}
-        >
-          {/* Waveform bars */}
+      {/* Single morphing container: orb ↔ pill */}
+      <div
+        onClick={!expanded ? handleOrbClick : undefined}
+        onMouseEnter={expanded ? handleMouseEnter : undefined}
+        onMouseLeave={expanded ? handleMouseLeave : undefined}
+        className="fixed z-50 flex items-center justify-center"
+        style={{
+          ...glassContainer,
+          // Position: bottom-right orb vs bottom-center pill
+          bottom: 32,
+          right: expanded ? "auto" : 32,
+          left: expanded ? "50%" : "auto",
+          transform: expanded ? "translateX(-50%)" : "none",
+          // Size: circle vs pill
+          width: expanded ? "auto" : 52,
+          height: expanded ? "auto" : 52,
+          borderRadius: expanded ? 40 : "50%",
+          padding: expanded ? "8px 14px" : 0,
+          gap: expanded ? 6 : 0,
+          cursor: expanded ? "default" : "pointer",
+          // Morph animation
+          transitionProperty: "width, height, border-radius, padding, gap, bottom, right, left, transform",
+          transitionDuration: expanded ? "250ms" : "200ms",
+          transitionTimingFunction: expanded
+            ? "cubic-bezier(0.34, 1.56, 0.64, 1)"
+            : "ease-in-out",
+        }}
+      >
+        {/* Collapsed: Waveform bars */}
+        {!expanded && (
           <div className="flex items-center gap-[3px]">
             {barHeights.map((h, i) => (
               <div
@@ -256,146 +276,69 @@ export default function TTSControls({
               />
             ))}
           </div>
-        </button>
-      )}
+        )}
 
-      {/* ---- Expanded Pill ---- */}
-      {expanded && (
-        <div
-          onMouseEnter={handleMouseEnter}
-          onMouseLeave={handleMouseLeave}
-          className="fixed z-50 flex items-center"
-          style={{
-            bottom: 32,
-            left: "50%",
-            transform: "translateX(-50%)",
-            borderRadius: 40,
-            padding: "8px 14px",
-            gap: 6,
-            background:
-              "linear-gradient(135deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.12) 40%, rgba(200,210,230,0.16) 100%)",
-            backdropFilter: "blur(40px) saturate(180%)",
-            WebkitBackdropFilter: "blur(40px) saturate(180%)",
-            border: "1px solid rgba(255,255,255,0.45)",
-            boxShadow:
-              "0 4px 24px rgba(0,0,0,0.08), inset 0 0 0 0.5px rgba(255,255,255,0.3), inset 0 1px 0 rgba(255,255,255,0.5)",
-            animation: "tts-pill-expand 250ms cubic-bezier(0.34,1.56,0.64,1)",
-          }}
-        >
-          <style>{`
-            @keyframes tts-pill-expand {
-              from { opacity: 0; transform: translateX(-50%) scale(0.7); }
-              to   { opacity: 1; transform: translateX(-50%) scale(1); }
-            }
-          `}</style>
-
-          {/* Previous */}
-          <button
-            onClick={handlePrev}
-            disabled={disabled || playingState === PlayingState.Loading}
-            aria-label="Previous"
-            className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
-            style={{
-              width: 42,
-              height: 42,
-              background:
-                "linear-gradient(135deg, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0.15) 100%)",
-              backdropFilter: "blur(20px)",
-              WebkitBackdropFilter: "blur(20px)",
-              border: "0.5px solid rgba(255,255,255,0.35)",
-              boxShadow:
-                "0 1px 4px rgba(0,0,0,0.06), inset 0 0.5px 0 rgba(255,255,255,0.4)",
-            }}
-          >
-            <SkipBack size={20} className="text-black/60" />
-          </button>
-
-          {/* Play / Pause */}
-          <button
-            onClick={handlePlay}
-            disabled={disabled}
-            aria-label={isPlaying ? "Pause" : "Play"}
-            className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
-            style={{
-              width: 50,
-              height: 50,
-              background:
-                "linear-gradient(135deg, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0.15) 100%)",
-              backdropFilter: "blur(20px)",
-              WebkitBackdropFilter: "blur(20px)",
-              border: "0.5px solid rgba(255,255,255,0.35)",
-              boxShadow:
-                "0 1px 4px rgba(0,0,0,0.06), inset 0 0.5px 0 rgba(255,255,255,0.4)",
-            }}
-          >
-            {getPlayIcon()}
-          </button>
-
-          {/* Next */}
-          <button
-            onClick={handleNext}
-            disabled={disabled || playingState === PlayingState.Loading}
-            aria-label="Next"
-            className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
-            style={{
-              width: 42,
-              height: 42,
-              background:
-                "linear-gradient(135deg, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0.15) 100%)",
-              backdropFilter: "blur(20px)",
-              WebkitBackdropFilter: "blur(20px)",
-              border: "0.5px solid rgba(255,255,255,0.35)",
-              boxShadow:
-                "0 1px 4px rgba(0,0,0,0.06), inset 0 0.5px 0 rgba(255,255,255,0.4)",
-            }}
-          >
-            <SkipForward size={20} className="text-black/60" />
-          </button>
-
-          {/* Stop */}
-          <button
-            onClick={() => void handleStop()}
-            disabled={disabled || playingState !== PlayingState.Playing}
-            aria-label="Stop"
-            className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
-            style={{
-              width: 42,
-              height: 42,
-              background:
-                "linear-gradient(135deg, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0.15) 100%)",
-              backdropFilter: "blur(20px)",
-              WebkitBackdropFilter: "blur(20px)",
-              border: "0.5px solid rgba(255,255,255,0.35)",
-              boxShadow:
-                "0 1px 4px rgba(0,0,0,0.06), inset 0 0.5px 0 rgba(255,255,255,0.4)",
-            }}
-          >
-            <Square size={20} className="text-black/55" />
-          </button>
-
-          {/* Error indicator */}
-          {errors.length > 0 && (
+        {/* Expanded: Control buttons */}
+        {expanded && (
+          <>
+            {/* Previous */}
             <button
-              onClick={() => void handleShowErrorDetails()}
-              aria-label="Show error details"
-              className="flex items-center justify-center rounded-full cursor-pointer transition-transform duration-150 hover:scale-105 active:scale-95"
-              style={{
-                width: 36,
-                height: 36,
-                background:
-                  "linear-gradient(135deg, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0.15) 100%)",
-                backdropFilter: "blur(20px)",
-                WebkitBackdropFilter: "blur(20px)",
-                border: "0.5px solid rgba(255,255,255,0.35)",
-                boxShadow:
-                  "0 1px 4px rgba(0,0,0,0.06), inset 0 0.5px 0 rgba(255,255,255,0.4)",
-              }}
+              onClick={handlePrev}
+              disabled={disabled || playingState === PlayingState.Loading}
+              aria-label="Previous"
+              className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
+              style={{ ...glassButton, width: 42, height: 42 }}
             >
-              <AlertTriangle size={16} className="text-red-500" />
+              <SkipBack size={20} className="text-black/60" />
             </button>
-          )}
-        </div>
-      )}
+
+            {/* Play / Pause */}
+            <button
+              onClick={handlePlay}
+              disabled={disabled}
+              aria-label={isPlaying ? "Pause" : "Play"}
+              className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
+              style={{ ...glassButton, width: 50, height: 50 }}
+            >
+              {getPlayIcon()}
+            </button>
+
+            {/* Next */}
+            <button
+              onClick={handleNext}
+              disabled={disabled || playingState === PlayingState.Loading}
+              aria-label="Next"
+              className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
+              style={{ ...glassButton, width: 42, height: 42 }}
+            >
+              <SkipForward size={20} className="text-black/60" />
+            </button>
+
+            {/* Stop */}
+            <button
+              onClick={() => void handleStop()}
+              disabled={disabled || playingState !== PlayingState.Playing}
+              aria-label="Stop"
+              className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
+              style={{ ...glassButton, width: 42, height: 42 }}
+            >
+              <Square size={20} className="text-black/55" />
+            </button>
+
+            {/* Error indicator */}
+            {errors.length > 0 && (
+              <button
+                onClick={() => void handleShowErrorDetails()}
+                aria-label="Show error details"
+                className="flex items-center justify-center rounded-full cursor-pointer transition-transform duration-150 hover:scale-105 active:scale-95"
+                style={{ ...glassButton, width: 36, height: 36 }}
+              >
+                <AlertTriangle size={16} className="text-red-500" />
+              </button>
+            )}
+          </>
+        )}
+      </div>
 
       {/* Error Toast */}
       {showError && !!error && (
