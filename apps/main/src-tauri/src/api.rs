@@ -23,8 +23,13 @@ pub async fn get_realtime_client_secret(app: tauri::AppHandle) -> Result<String,
         return Err(format!("Failed to get client secret ({}): {}", status, body));
     }
 
-    let client_secret = response.text().await.map_err(|e| e.to_string())?;
-    Ok(client_secret)
+    let body = response.text().await.map_err(|e| e.to_string())?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("Failed to parse client secret response: {}", e))?;
+    let value = parsed["client_secret"]["value"]
+        .as_str()
+        .ok_or_else(|| format!("Missing client_secret.value in response: {}", body))?;
+    Ok(value.to_string())
 }
 
 #[cfg(test)]

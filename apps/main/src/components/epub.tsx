@@ -625,6 +625,9 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
                   const cfi = (_rendition as any)?.location?.start?.cfi;
                   if (cfi) {
                     usePageTracker.getState().goToCfi(cfi, locFromCfi);
+                    // Ensure the epub store has the location even when
+                    // locationChanged is skipped (book opens at saved position).
+                    setCurrentEpubLocation(cfi);
                   }
                   settledRef.current = true;
                 };
@@ -650,6 +653,9 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
                   const startCfi = (_rendition as any)?.location?.start?.cfi;
                   if (startCfi) {
                     usePageTracker.getState().goToCfi(startCfi, locFromCfi);
+                    // Ensure the epub store has the location even when
+                    // locationChanged is skipped (book opens at saved position).
+                    setCurrentEpubLocation(startCfi);
                   }
                   settledRef.current = true;
                 };

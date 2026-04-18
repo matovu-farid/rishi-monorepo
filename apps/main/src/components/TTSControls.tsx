@@ -13,7 +13,9 @@ import player from "@/models/Player";
 import { EventBusEvent, PlayingState } from "@/utils/bus";
 import { eventBus } from "@/utils/bus";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
-import { publishCurrentEpubParagraphs } from "@/stores/epubStore";
+import { publishCurrentEpubParagraphs, useEpubStore } from "@/stores/epubStore";
+import { usePdfStore } from "@/stores/pdfStore";
+import { pageDataToParagraphs } from "@/components/pdf/utils/getPageParagraphs";
 
 interface TTSControlsProps {
   bookId: string;
@@ -106,10 +108,32 @@ export default function TTSControls({
       // Re-publish current paragraphs so the Player receives them
       // (the initial publish may have fired before the Player subscribed)
       publishCurrentEpubParagraphs();
+
+      // Also force-publish current PDF paragraphs (bypasses the interval's
+      // isEqual guard which may have already "seen" these paragraphs).
+      const pdfState = usePdfStore.getState();
+      const data = pdfState.pageNumberToPageData[pdfState.pageNumber];
+      if (data) {
+        const paragraphs = pageDataToParagraphs(pdfState.pageNumber, data);
+        eventBus.publish(EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, paragraphs);
+      }
     });
+
+    // The epub rendition may not be ready when the .then() above runs.
+    // Subscribe to the store so we re-publish once it arrives.
+    const unsubEpub = useEpubStore.subscribe(
+      (state) => ({ rendition: state.rendition, location: state.currentEpubLocation }),
+      ({ rendition, location }) => {
+        if (active && rendition && location) {
+          publishCurrentEpubParagraphs();
+        }
+      },
+    );
+
     eventBus.on(EventBusEvent.PLAYING_STATE_CHANGED, setPlayingState);
     return () => {
       active = false;
+      unsubEpub();
       eventBus.off(EventBusEvent.PLAYING_STATE_CHANGED, setPlayingState);
       player.cleanup();
     };
@@ -204,7 +228,7 @@ export default function TTSControls({
     WebkitBackdropFilter: "blur(40px) saturate(180%)",
     border: "1px solid rgba(255,255,255,0.45)",
     boxShadow:
-      "0 4px 24px rgba(0,0,0,0.08), inset 0 0 0 0.5px rgba(255,255,255,0.3), inset 0 1px 0 rgba(255,255,255,0.5)",
+      "0 4px 24px rgba(0,0,0,0.18), 0 1px 6px rgba(0,0,0,0.12), inset 0 0 0 0.5px rgba(255,255,255,0.3), inset 0 1px 0 rgba(255,255,255,0.5)",
   };
 
   const glassButton: React.CSSProperties = {
