@@ -1,6 +1,13 @@
 import "./App.css";
 import { StrictMode } from "react";
 import ReactDOM from "react-dom/client";
+import { installErrorDumpHandlers } from "./utils/errorDump";
+import { installStateDump } from "./utils/stateDump";
+
+// In dev, capture all errors to apps/main/error-dump.json
+installErrorDumpHandlers();
+// In dev, periodically snapshot app state to state-dump.json
+installStateDump();
 import {
   RouterProvider,
   createRouter,

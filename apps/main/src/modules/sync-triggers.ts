@@ -35,13 +35,29 @@ export function getSyncStatus(): { status: SyncStatus; lastSyncAt: number | null
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = await getAuthToken();
 
+  const headers: Record<string, string> = {
+    ...init?.headers as Record<string, string>,
+    'Content-Type': 'application/json',
+  };
+
+  if (token === "dev-placeholder-token") {
+    const secret = import.meta.env.VITE_DEV_BYPASS_SECRET;
+    if (secret) {
+      headers['X-Dev-Bypass'] = secret;
+    } else {
+      // No bypass secret configured — skip the request silently
+      return new Response(JSON.stringify({ error: "Not authenticated (dev)" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  } else {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
   return fetch(`${WORKER_URL}${path}`, {
     ...init,
-    headers: {
-      ...init?.headers,
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
+    headers,
   });
 }
 

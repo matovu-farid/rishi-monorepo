@@ -7387,10 +7387,11 @@ dependencies = [
 
 [[package]]
 name = "rishi"
-version = "1.1.6"
+version = "1.1.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "chrono",
  "cpal 0.16.0",
  "diesel",
  "diesel_migrations",

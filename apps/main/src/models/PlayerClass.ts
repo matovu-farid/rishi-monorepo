@@ -8,6 +8,7 @@ import { ParagraphWithIndex } from "./player_control";
 import { eventBus, EventBusEvent } from "@/utils/bus";
 import { PlayingState } from "@/utils/bus";
 import isEqual from "fast-deep-equal";
+import { logStateEvent } from "@/utils/stateDump";
 
 export enum Direction {
   Forward = "forward",
@@ -243,6 +244,11 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   public async play(maxRetries: number = 3): Promise<void> {
+    logStateEvent("player.play", {
+      paragraphCount: this.currentViewParagraphs.length,
+      currentIndex: this.currentParagraphIndex,
+      bookId: this.bookId,
+    });
     // Remove any existing listeners first to prevent accumulation
     this.audioElement.removeEventListener("ended", this.handleEnded);
     this.audioElement.removeEventListener("error", this.handleError);
@@ -567,7 +573,9 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
   public setPlayingState(playingState: PlayingState) {
     if (this.playingState === playingState) return;
+    const prev = this.playingState;
     this.playingState = playingState;
+    logStateEvent("player.stateChange", { from: prev, to: playingState });
     this.emit(PlayerEvent.PLAYING_STATE_CHANGED, playingState);
     eventBus.publish(EventBusEvent.PLAYING_STATE_CHANGED, playingState);
   }

@@ -6,6 +6,7 @@ import { TTSQueueEvents } from "./ipc_handles";
 import { fetch } from "@tauri-apps/plugin-http";
 import { getAuthToken } from "./auth";
 import config from "@/config.json";
+import { logStateEvent } from "@/utils/stateDump";
 
 export interface QueueItem extends TTSRequest {
   priority: number;
@@ -252,6 +253,13 @@ export class TTSQueue extends EventEmitter {
   async generateAudio(item: QueueItem): Promise<Uint8Array> {
     const url = config.production.audio_worker_url;
 
+    logStateEvent("ttsQueue.generateAudio", {
+      requestId: item.requestId,
+      url,
+      textLength: item.text.length,
+      retryCount: item.retryCount,
+    });
+
     try {
       const requestBody = {
         voice: "alloy",
@@ -261,14 +269,33 @@ export class TTSQueue extends EventEmitter {
       };
 
       const token = await getAuthToken();
+      logStateEvent("ttsQueue.gotToken", {
+        requestId: item.requestId,
+        tokenType: token === "dev-placeholder-token" ? "dev-placeholder" : "jwt",
+        hasBypassSecret: !!import.meta.env.VITE_DEV_BYPASS_SECRET,
+      });
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+
+      if (token === "dev-placeholder-token") {
+        // Dev mode: use the bypass secret instead of a JWT
+        headers["X-Dev-Bypass"] = import.meta.env.VITE_DEV_BYPASS_SECRET ?? "";
+      } else {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
 
       const response = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers,
         body: JSON.stringify(requestBody),
+      });
+
+      logStateEvent("ttsQueue.response", {
+        requestId: item.requestId,
+        status: response.status,
+        ok: response.ok,
       });
 
       if (!response.ok) {
