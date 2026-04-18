@@ -1,4 +1,5 @@
 use serde_json::json;
+use tauri::Runtime;
 use tauri_plugin_store::StoreExt;
 
 use crate::config::OAuthConfig;
@@ -35,7 +36,7 @@ pub struct AuthCompleteResponse {
 /// Generate a fresh OAuth state + PKCE code_challenge pair.
 /// Persists the code_verifier in the Tauri store (never exposed to JS).
 #[tauri::command]
-pub fn get_state(app: tauri::AppHandle, config: tauri::State<'_, OAuthConfig>) -> Result<OAuthStateResponse, String> {
+pub fn get_state<R: Runtime>(app: tauri::AppHandle<R>, config: tauri::State<'_, OAuthConfig>) -> Result<OAuthStateResponse, String> {
     let _ = &config.scheme; // ensure config is used
     let state = uuid::Uuid::new_v4().to_string();
     let code_verifier = pkce::generate_code_verifier();
@@ -58,7 +59,7 @@ pub fn get_state(app: tauri::AppHandle, config: tauri::State<'_, OAuthConfig>) -
 /// Complete the OAuth flow: sends state + code_verifier to the token endpoint,
 /// stores the returned token in the OS keychain and user in the Tauri store.
 #[tauri::command]
-pub async fn complete_auth(app: tauri::AppHandle, config: tauri::State<'_, OAuthConfig>, state: &str) -> Result<AuthCompleteResponse, String> {
+pub async fn complete_auth<R: Runtime>(app: tauri::AppHandle<R>, config: tauri::State<'_, OAuthConfig>, state: &str) -> Result<AuthCompleteResponse, String> {
     let store = app.store("oauth-pkce-store.json").map_err(|e| e.to_string())?;
 
     let code_verifier = store
@@ -105,7 +106,7 @@ pub async fn complete_auth(app: tauri::AppHandle, config: tauri::State<'_, OAuth
 
 /// Check auth flow status from the status endpoint.
 #[tauri::command]
-pub async fn check_auth_status(app: tauri::AppHandle, config: tauri::State<'_, OAuthConfig>, state: &str) -> Result<AuthStatusResponse, String> {
+pub async fn check_auth_status<R: Runtime>(app: tauri::AppHandle<R>, config: tauri::State<'_, OAuthConfig>, state: &str) -> Result<AuthStatusResponse, String> {
     let status_endpoint = config.status_endpoint.as_ref()
         .ok_or("No status_endpoint configured")?;
 
@@ -155,7 +156,7 @@ pub fn get_token(config: tauri::State<'_, OAuthConfig>) -> Result<String, String
 
 /// Sign out: clear keychain, optionally revoke token on the server.
 #[tauri::command]
-pub async fn sign_out(app: tauri::AppHandle, config: tauri::State<'_, OAuthConfig>) -> Result<(), String> {
+pub async fn sign_out<R: Runtime>(app: tauri::AppHandle<R>, config: tauri::State<'_, OAuthConfig>) -> Result<(), String> {
     // Best-effort server-side revocation
     if let Some(revoke_url) = &config.revoke_endpoint {
         if let Some(token) = keychain::get(&config.keyring_service, "auth_token")? {
@@ -180,7 +181,7 @@ pub async fn sign_out(app: tauri::AppHandle, config: tauri::State<'_, OAuthConfi
 
 /// Get the cached user from the Tauri store.
 #[tauri::command]
-pub fn get_user(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+pub fn get_user<R: Runtime>(app: tauri::AppHandle<R>) -> Result<serde_json::Value, String> {
     let store = app.store("oauth-pkce-store.json").map_err(|e| e.to_string())?;
     store.get("user").ok_or_else(|| "User not found".to_string())
 }
