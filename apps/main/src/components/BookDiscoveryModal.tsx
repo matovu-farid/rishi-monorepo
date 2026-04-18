@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
 import { X, BookOpen, Download, DownloadCloud, FolderOpen, Loader2 } from 'lucide-react'
@@ -46,8 +46,18 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
   const [importingPaths, setImportingPaths] = useState<Set<string>>(new Set())
 
   const unlistenRefs = useRef<UnlistenFn[]>([])
+  // Generation counter to discard events from previous scans
+  const scanGenRef = useRef(0)
 
-  const startScan = async (scanMode: ScanMode) => {
+  const cleanupListeners = useCallback(() => {
+    unlistenRefs.current.forEach((fn) => fn())
+    unlistenRefs.current = []
+  }, [])
+
+  const startScan = useCallback(async (scanMode: ScanMode) => {
+    // Increment generation so stale events from previous scan are ignored
+    const gen = ++scanGenRef.current
+
     setBooks([])
     setProgress(null)
     setScanComplete(false)
@@ -57,72 +67,66 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
       await invoke('scan_for_books', { mode: scanMode })
     } catch (err) {
       console.error('Failed to start scan:', err)
-      setScanning(false)
-      setScanComplete(true)
+    } finally {
+      // Only update state if this is still the active scan
+      if (scanGenRef.current === gen) {
+        setScanning(false)
+        setScanComplete(true)
+      }
     }
-  }
-
-  const cancelScan = async () => {
-    try {
-      await invoke('cancel_scan')
-    } catch {
-      // ignore — scan may have already finished
-    }
-  }
-
-  const cleanupListeners = () => {
-    unlistenRefs.current.forEach((fn) => fn())
-    unlistenRefs.current = []
-  }
+  }, [])
 
   useEffect(() => {
     if (!open) return
 
-    let cancelled = false
+    const currentGen = ++scanGenRef.current
 
     const setup = async () => {
-      const unlistenResult = await listen<DiscoveredBook>('scan-result', (event) => {
-        if (cancelled) return
-        setBooks((prev) => [...prev, event.payload])
-      })
-
-      const unlistenProgress = await listen<ScanProgress>('scan-progress', (event) => {
-        if (cancelled) return
-        setProgress(event.payload)
-      })
-
-      const unlistenComplete = await listen<void>('scan-complete', () => {
-        if (cancelled) return
-        setScanning(false)
-        setScanComplete(true)
-        setProgress(null)
-      })
+      const [unlistenResult, unlistenProgress, unlistenComplete] = await Promise.all([
+        listen<DiscoveredBook>('scan-result', (event) => {
+          if (scanGenRef.current !== currentGen) return
+          setBooks((prev) => [...prev, event.payload])
+        }),
+        listen<ScanProgress>('scan-progress', (event) => {
+          if (scanGenRef.current !== currentGen) return
+          setProgress(event.payload)
+        }),
+        listen<void>('scan-complete', () => {
+          if (scanGenRef.current !== currentGen) return
+          setScanning(false)
+          setScanComplete(true)
+          setProgress(null)
+        }),
+      ])
 
       unlistenRefs.current = [unlistenResult, unlistenProgress, unlistenComplete]
 
-      if (!cancelled) {
-        await startScan(mode)
-      }
+      // Auto-start scan with default folders
+      // Update gen ref so startScan uses this generation
+      scanGenRef.current = currentGen
+      startScan('default')
     }
 
     setup()
 
     return () => {
-      cancelled = true
+      // Invalidate current generation so any in-flight events are dropped
+      scanGenRef.current++
       cleanupListeners()
+      invoke('cancel_scan').catch(() => {})
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  }, [open, startScan, cleanupListeners])
 
   const handleModeChange = async (newMode: ScanMode) => {
     if (newMode === mode) return
     setMode(newMode)
-    await cancelScan()
-    await startScan(newMode)
+    await invoke('cancel_scan').catch(() => {})
+    startScan(newMode)
   }
 
   const handleClose = async () => {
-    await cancelScan()
+    scanGenRef.current++
+    await invoke('cancel_scan').catch(() => {})
     cleanupListeners()
     setBooks([])
     setFilter('')
@@ -180,7 +184,7 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700">
           <div className="flex items-center gap-2">
             <BookOpen size={20} className="text-blue-400" />
-            <h2 className="text-lg font-semibold text-white">Discover Books</h2>
+            <h2 className="text-lg font-semibold text-white">Import from Computer</h2>
             {scanning && (
               <span className="ml-1 flex items-center gap-1 text-xs text-gray-400">
                 <Loader2 size={12} className="animate-spin" />

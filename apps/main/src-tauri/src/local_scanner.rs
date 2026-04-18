@@ -19,19 +19,24 @@ pub struct DiscoveredBook {
 
 const SUPPORTED_EXTENSIONS: &[&str] = &["epub", "pdf", "mobi", "azw3", "djvu"];
 
-const SKIP_DIRS: &[&str] = &[
+/// Directory names to skip during filesystem traversal.
+const SKIP_DIR_NAMES: &[&str] = &[
     "node_modules",
     ".git",
     "target",
     "__pycache__",
     ".Trash",
     ".cache",
-    "Library/Caches",
-    "AppData/Local/Temp",
-    "AppData/Local/Microsoft",
     ".npm",
     ".cargo",
     ".rustup",
+];
+
+/// Multi-component directory paths to skip (matched as path suffixes).
+const SKIP_DIR_PATHS: &[&str] = &[
+    "Library/Caches",
+    "AppData/Local/Temp",
+    "AppData/Local/Microsoft",
 ];
 
 /// Returns platform-specific default book folders that exist on disk.
@@ -78,12 +83,17 @@ pub fn get_home_dir() -> Option<String> {
 }
 
 /// Checks if a directory entry should be skipped.
+/// Matches single-component names exactly, and multi-component paths as suffixes.
 fn should_skip(entry: &walkdir::DirEntry) -> bool {
     if !entry.file_type().is_dir() {
         return false;
     }
-    let path_str = entry.path().to_string_lossy();
-    SKIP_DIRS.iter().any(|skip| path_str.contains(skip))
+    let dir_name = entry.file_name().to_string_lossy();
+    if SKIP_DIR_NAMES.iter().any(|skip| *skip == dir_name) {
+        return true;
+    }
+    let path = entry.path();
+    SKIP_DIR_PATHS.iter().any(|skip| path.ends_with(skip))
 }
 
 /// Returns true if the file has a supported book extension.
@@ -114,15 +124,27 @@ pub fn format_from_path(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// Computes SHA-256 hash of a file.
+/// Computes SHA-256 hash of a file using streaming to avoid loading entire file into memory.
 pub fn hash_file(path: &Path) -> Result<String, String> {
     use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
-    let hash = Sha256::digest(&bytes);
-    Ok(format!("{:x}", hash))
+    use std::io::{BufReader, Read};
+
+    let file = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| format!("Read error: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
+static SCAN_RUNNING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -138,84 +160,101 @@ pub fn get_default_book_folders() -> Vec<String> {
 }
 
 #[tauri::command]
-pub async fn scan_for_books(
-    app: tauri::AppHandle,
-    mode: String,
-) -> Result<u32, String> {
+pub async fn scan_for_books(app: tauri::AppHandle, mode: String) -> Result<u32, String> {
+    // Prevent concurrent scans
+    if SCAN_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        // A previous scan is still running — cancel it and wait briefly
+        CANCEL_FLAG.store(true, Ordering::SeqCst);
+        // Give the previous scan a moment to observe the flag
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Now take ownership
+        SCAN_RUNNING.store(true, Ordering::SeqCst);
+    }
     CANCEL_FLAG.store(false, Ordering::SeqCst);
 
-    let folders: Vec<String> = if mode == "full" {
-        match get_home_dir() {
-            Some(home) => vec![home],
-            None => return Err("Could not determine home directory".to_string()),
-        }
-    } else {
-        get_default_folders()
-    };
+    let result = tokio::task::spawn_blocking(move || {
+        let folders: Vec<String> = if mode == "full" {
+            match get_home_dir() {
+                Some(home) => vec![home],
+                None => return Err("Could not determine home directory".to_string()),
+            }
+        } else {
+            get_default_folders()
+        };
 
-    let total_folders = folders.len() as u32;
-    let mut total_found: u32 = 0;
+        let total_folders = folders.len() as u32;
+        let mut total_found: u32 = 0;
 
-    let existing_hashes = get_existing_hashes()?;
+        let existing_hashes = get_existing_hashes()?;
 
-    for (idx, folder) in folders.iter().enumerate() {
-        if CANCEL_FLAG.load(Ordering::SeqCst) {
-            break;
-        }
-
-        let _ = app.emit("scan-progress", ScanProgress {
-            folder: folder.clone(),
-            scanned: idx as u32 + 1,
-            total: total_folders,
-        });
-
-        let book_paths = walk_folder(folder);
-
-        for path in book_paths {
+        for (idx, folder) in folders.iter().enumerate() {
             if CANCEL_FLAG.load(Ordering::SeqCst) {
                 break;
             }
 
-            let file_hash = match hash_file(&path) {
-                Ok(h) => h,
-                Err(_) => continue,
-            };
+            let _ = app.emit(
+                "scan-progress",
+                ScanProgress {
+                    folder: folder.clone(),
+                    scanned: idx as u32 + 1,
+                    total: total_folders,
+                },
+            );
 
-            if existing_hashes.contains(&file_hash) {
-                continue;
+            let book_paths = walk_folder(folder);
+
+            for path in book_paths {
+                if CANCEL_FLAG.load(Ordering::SeqCst) {
+                    break;
+                }
+
+                let file_hash = match hash_file(&path) {
+                    Ok(h) => h,
+                    Err(_) => continue,
+                };
+
+                if existing_hashes.contains(&file_hash) {
+                    continue;
+                }
+
+                let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+
+                let filename = path
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                let format = format_from_path(&path);
+
+                let (title, author) = extract_basic_metadata(&path, &format);
+
+                let book = DiscoveredBook {
+                    filepath: path.to_string_lossy().to_string(),
+                    filename,
+                    title,
+                    author,
+                    format,
+                    file_size,
+                    folder: folder.clone(),
+                    file_hash,
+                };
+
+                let _ = app.emit("scan-result", book);
+                total_found += 1;
             }
-
-            let file_size = std::fs::metadata(&path)
-                .map(|m| m.len())
-                .unwrap_or(0);
-
-            let filename = path
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            let format = format_from_path(&path);
-
-            let (title, author) = extract_basic_metadata(&app, &path, &format);
-
-            let book = DiscoveredBook {
-                filepath: path.to_string_lossy().to_string(),
-                filename,
-                title,
-                author,
-                format,
-                file_size,
-                folder: folder.clone(),
-                file_hash,
-            };
-
-            let _ = app.emit("scan-result", book);
-            total_found += 1;
         }
-    }
 
-    let _ = app.emit("scan-complete", total_found);
-    Ok(total_found)
+        let _ = app.emit("scan-complete", total_found);
+        Ok(total_found)
+    })
+    .await
+    .map_err(|e| format!("Scan task panicked: {}", e))?;
+
+    SCAN_RUNNING.store(false, Ordering::SeqCst);
+    result
 }
 
 #[tauri::command]
@@ -223,18 +262,16 @@ pub fn cancel_scan() {
     CANCEL_FLAG.store(true, Ordering::SeqCst);
 }
 
-fn extract_basic_metadata(
-    app: &tauri::AppHandle,
-    path: &Path,
-    format: &str,
-) -> (Option<String>, Option<String>) {
-    use crate::commands;
+/// Extracts title and author directly from a book file without side effects.
+/// Does NOT call store_book_data — only parses metadata.
+fn extract_basic_metadata(path: &Path, format: &str) -> (Option<String>, Option<String>) {
+    use crate::shared::books::Extractable;
 
     let result = match format {
-        "epub" => commands::get_book_data(app.clone(), path),
-        "pdf" => commands::get_pdf_data(app.clone(), path),
-        "mobi" | "azw3" => commands::get_mobi_data(app.clone(), path),
-        "djvu" => commands::get_djvu_data(app.clone(), path),
+        "epub" => crate::epub::Epub::new(path).extract(),
+        "pdf" => crate::pdf::Pdf::new(path).extract(),
+        "mobi" | "azw3" => crate::mobi::Mobi::new(path).extract(),
+        "djvu" => crate::djvu::Djvu::new(path).extract(),
         _ => return (None, None),
     };
 
@@ -244,14 +281,13 @@ fn extract_basic_metadata(
     }
 }
 
+/// Gets all file_hash values from the books table to exclude already-imported books.
 fn get_existing_hashes() -> Result<std::collections::HashSet<String>, String> {
     use crate::db::DB_POOL;
     use crate::schema::books::dsl::*;
     use diesel::prelude::*;
 
-    let pool = DB_POOL
-        .get()
-        .ok_or("Database pool not initialized")?;
+    let pool = DB_POOL.get().ok_or("Database pool not initialized")?;
     let mut conn = pool
         .get()
         .map_err(|e| format!("Failed to get connection: {}", e))?;
