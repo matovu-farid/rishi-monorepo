@@ -1,9 +1,7 @@
 import { useCallback, useState } from "react";
-import { useAtomValue } from "jotai";
-import { isLoggedInAtom } from "@/components/pdf/atoms/user";
+import { useAuthStore } from "@/stores/authStore";
 import { PremiumFeatureDialog } from "@/components/auth/PremiumFeatureDialog";
 import type { PremiumFeature } from "@/components/auth/features";
-import { devModeAtom } from "@/atoms/authPromo";
 
 /**
  * Gates premium (auth-required) features behind sign-in.
@@ -15,8 +13,8 @@ import { devModeAtom } from "@/atoms/authPromo";
  *   {AuthDialog}
  */
 export function useRequireAuth() {
-  const isLoggedIn = useAtomValue(isLoggedInAtom);
-  const isDevMode = useAtomValue(devModeAtom);
+  const isLoggedIn = useAuthStore((s) => s.user !== null);
+  const isDevMode = useAuthStore((s) => s.devMode);
   const [open, setOpen] = useState(false);
   const [feature, setFeature] = useState<PremiumFeature>("ai-generic");
 

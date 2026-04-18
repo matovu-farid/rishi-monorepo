@@ -1,5 +1,4 @@
 import { useEffect } from "react";
-import { useSetAtom } from "jotai";
 import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { toast } from "react-toastify";
 import {
@@ -9,13 +8,7 @@ import {
   logAuthDebugCmd,
   isDev,
 } from "@/generated";
-import { userAtom } from "@/components/pdf/atoms/user";
-import {
-  authHydratedAtom,
-  hydrateWelcomeSeenAtom,
-  signingInAtom,
-  devModeAtom,
-} from "@/atoms/authPromo";
+import { useAuthStore } from "@/stores/authStore";
 import { peekPendingOAuthState, clearPendingOAuthState } from "@/modules/auth";
 
 /** Best-effort debug log to Redis via the Rust command. Never throws. */
@@ -43,11 +36,11 @@ const BASE_RETRY_DELAY_MS = 1500;
  * via the module-level cache in `@/modules/auth`.
  */
 export function useHydrateAuth(): void {
-  const setUser = useSetAtom(userAtom);
-  const setAuthHydrated = useSetAtom(authHydratedAtom);
-  const hydrateWelcomeSeen = useSetAtom(hydrateWelcomeSeenAtom);
-  const setSigningIn = useSetAtom(signingInAtom);
-  const setDevMode = useSetAtom(devModeAtom);
+  const setUser = useAuthStore((s) => s.setUser);
+  const setAuthHydrated = useAuthStore((s) => s.setAuthHydrated);
+  const hydrateWelcomeSeen = useAuthStore((s) => s.hydrateAuth);
+  const setSigningIn = useAuthStore((s) => s.setSigningIn);
+  const setDevMode = useAuthStore((s) => s.setDevMode);
 
   // 1 + 2: hydrate localStorage + keychain user.
   useEffect(() => {

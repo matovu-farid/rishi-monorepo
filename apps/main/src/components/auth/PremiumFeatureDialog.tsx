@@ -1,6 +1,5 @@
 import { LogIn, Check, Loader2 } from "lucide-react";
-import { useAtomValue } from "jotai";
-import { signingInAtom } from "@/atoms/authPromo";
+import { useAuthStore } from "@/stores/authStore";
 import {
   Dialog,
   DialogContent,
@@ -26,7 +25,7 @@ export function PremiumFeatureDialog({
 }: PremiumFeatureDialogProps): React.JSX.Element {
   const config = PREMIUM_FEATURES[feature];
   const Icon = config.icon;
-  const signingIn = useAtomValue(signingInAtom);
+  const signingIn = useAuthStore((s) => s.signingIn);
 
   async function handleSignIn() {
     onOpenChange(false);

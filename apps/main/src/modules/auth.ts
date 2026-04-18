@@ -1,10 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getState, logAuthDebugCmd } from "@/generated";
-import { getDefaultStore } from "jotai";
-import { signingInAtom } from "@/atoms/authPromo";
-
-const store = getDefaultStore();
+import { useAuthStore } from "@/stores/authStore";
 
 /**
  * Retrieve the auth token from the OS keychain via a Tauri command.
@@ -65,7 +62,7 @@ export function clearPendingOAuthState(): void {
  */
 export async function startSignInFlow(): Promise<void> {
   try {
-    store.set(signingInAtom, true);
+    useAuthStore.getState().setSigningIn(true);
     const result = await getState();
     pendingOAuthState = result;
     const url =
@@ -80,7 +77,7 @@ export async function startSignInFlow(): Promise<void> {
     }).catch(() => {});
     await openUrl(url);
   } catch (err) {
-    store.set(signingInAtom, false);
+    useAuthStore.getState().setSigningIn(false);
     console.error("[auth] failed to start sign-in flow:", err);
   }
 }
