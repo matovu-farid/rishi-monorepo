@@ -68,29 +68,34 @@ export default function TTSControls({
   const error = errors.join("\n");
   const { requireAuth, AuthDialog } = useRequireAuth();
 
-  useEffect(() => {
-    void (async () => {
-      await player.initialize(bookId);
-      // Re-publish current paragraphs so the Player receives them
-      // (the initial publish may have fired before the Player subscribed)
-      publishCurrentEpubParagraphs();
-    })();
-  }, [bookId, player]);
-
   const [playingState, setPlayingState] = useState<PlayingState>(
     PlayingState.Stopped
   );
 
+  // Combined init + cleanup effect to prevent race conditions between
+  // separate effects when bookId changes. Cleanup always runs before
+  // the next init, and on unmount.
   useEffect(() => {
+    let active = true;
+    player.cleanup(); // Clean up any previous state before re-initializing
+    void player.initialize(bookId).then(() => {
+      // Guard against React Strict Mode double-mount: if cleanup ran before
+      // this .then() fires, don't publish stale paragraphs.
+      if (!active) return;
+      // Re-publish current paragraphs so the Player receives them
+      // (the initial publish may have fired before the Player subscribed)
+      publishCurrentEpubParagraphs();
+    });
     eventBus.on(EventBusEvent.PLAYING_STATE_CHANGED, setPlayingState);
     return () => {
+      active = false;
+      eventBus.off(EventBusEvent.PLAYING_STATE_CHANGED, setPlayingState);
       player.cleanup();
-      if (isChatting) {
-        stopConversation();
-        setIsChatting(false);
-      }
+      // Stop any active chat conversation
+      useChatStore.getState().stopConversation();
+      useChatStore.getState().setIsChatting(false);
     };
-  }, []);
+  }, [bookId]);
 
   // Check for errors using setTimeout to avoid cascading renders
   useEffect(() => {
@@ -108,15 +113,14 @@ export default function TTSControls({
     // Use setTimeout to defer the state update
     const timeoutId = setTimeout(checkForErrors, 0);
     return () => clearTimeout(timeoutId);
-  }, [player, hasShownError]);
+  }, [hasShownError]);
 
   // Show error snackbar when error occurs
   const handleErrorClose = () => {
     setShowError(false);
-    // Clear error from store
-    if (player) {
-      player.cleanup();
-    }
+    // Clear errors without destroying the player — cleanup() would
+    // permanently abort the player, preventing any further playback.
+    player.clearErrors();
   };
 
   const handlePlay = () => {

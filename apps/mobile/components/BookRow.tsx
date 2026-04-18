@@ -1,4 +1,4 @@
-import { View, Text, Pressable, TouchableOpacity } from 'react-native'
+import { View, Text, Pressable, TouchableOpacity, Image } from 'react-native'
 import { Book } from '@/types/book'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 
@@ -18,18 +18,26 @@ export function BookRow({ book, onPress, onDelete }: BookRowProps) {
       accessibilityRole="button"
       accessibilityLabel={`Open ${book.title} by ${book.author}`}
     >
-      {/* Cover placeholder -- 48px wide, format-colored background, rounded */}
-      <View
-        className={`w-12 h-16 rounded-md items-center justify-center mr-4 ${
-          isPdf
-            ? 'bg-red-100 dark:bg-red-900'
-            : 'bg-gray-200 dark:bg-gray-700'
-        }`}
-      >
-        <Text className="text-gray-400 dark:text-gray-500 text-xs">
-          {book.format.toUpperCase()}
-        </Text>
-      </View>
+      {/* Cover image or format-colored fallback */}
+      {book.coverPath ? (
+        <Image
+          source={{ uri: book.coverPath }}
+          className="w-12 h-16 rounded-md mr-4"
+          resizeMode="cover"
+        />
+      ) : (
+        <View
+          className={`w-12 h-16 rounded-md items-center justify-center mr-4 ${
+            isPdf
+              ? 'bg-red-100 dark:bg-red-900'
+              : 'bg-gray-200 dark:bg-gray-700'
+          }`}
+        >
+          <Text className="text-gray-400 dark:text-gray-500 text-xs">
+            {book.format.toUpperCase()}
+          </Text>
+        </View>
+      )}
       <View className="flex-1">
         <Text
           testID="book-row-title"

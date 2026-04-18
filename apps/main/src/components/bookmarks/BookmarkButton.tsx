@@ -1,7 +1,7 @@
 import { Bookmark } from "lucide-react";
 import { IconButton } from "@components/ui/IconButton";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getBookmarkAtLocation, toggleBookmark } from "@/modules/bookmark-storage";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { getBookmarksForBook, toggleBookmark, locationsMatch } from "@/modules/bookmark-storage";
 
 interface BookmarkButtonProps {
   bookSyncId: string;
@@ -13,24 +13,28 @@ interface BookmarkButtonProps {
 export function BookmarkButton({ bookSyncId, location, label, className }: BookmarkButtonProps) {
   const queryClient = useQueryClient();
 
-  const { data: existingBookmark } = useQuery({
-    queryKey: ["bookmark", bookSyncId, location],
-    queryFn: () => getBookmarkAtLocation(bookSyncId, location),
-    enabled: !!bookSyncId && !!location,
+  // Single query for ALL bookmarks of this book — shared with BookmarksList
+  const { data: bookmarks = [] } = useQuery({
+    queryKey: ["bookmarks", bookSyncId],
+    queryFn: () => getBookmarksForBook(bookSyncId),
+    enabled: !!bookSyncId,
   });
 
-  const isBookmarked = !!existingBookmark;
+  // Derive bookmarked state from the full list using fuzzy location matching
+  const isBookmarked = bookmarks.some(b => locationsMatch(b.location, location));
 
-  const handleToggle = async () => {
-    if (!bookSyncId || !location) return;
-    await toggleBookmark({ bookSyncId, location, label });
-    void queryClient.invalidateQueries({ queryKey: ["bookmark", bookSyncId, location] });
-    void queryClient.invalidateQueries({ queryKey: ["bookmarks", bookSyncId] });
-  };
+  const toggleMutation = useMutation({
+    mutationFn: () => toggleBookmark({ bookSyncId, location, label }),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["bookmarks", bookSyncId] });
+    },
+  });
 
   return (
     <IconButton
-      onClick={handleToggle}
+      color="inherit"
+      onClick={() => toggleMutation.mutate()}
+      disabled={toggleMutation.isPending}
       className={className}
       aria-label={isBookmarked ? "Remove bookmark" : "Add bookmark"}
     >

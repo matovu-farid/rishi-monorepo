@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { View, Text, AppState, AppStateStatus, ActivityIndicator, AccessibilityInfo } from 'react-native'
+import { View, Text, TextInput, FlatList, Pressable, AppState, AppStateStatus, ActivityIndicator, AccessibilityInfo } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Reader, ReaderProvider, useReader } from '@epubjs-react-native/core'
 import { useFileSystem } from '@epubjs-react-native/expo-file-system'
@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { getBookForReading, updateBookCfi } from '@/lib/book-storage'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
 import { insertHighlight, getHighlightsByBookId, updateHighlight, deleteHighlight } from '@/lib/highlight-storage'
+import { IconSymbol } from '@/components/ui/icon-symbol'
 import { ReaderToolbar } from '@/components/ReaderToolbar'
 import { TTSControls } from '@/components/TTSControls'
 import { useTTSPlayer } from '@/hooks/useTTSPlayer'
@@ -80,15 +81,21 @@ function ReaderContent({ book }: { book: Book }) {
     changeFontFamily,
     addAnnotation,
     removeAnnotationByCfi,
+    search,
+    searchResults,
+    clearSearchResults,
+    isSearching,
   } = useReader()
 
   const tocSheetRef = useRef<BottomSheet>(null)
   const appearanceSheetRef = useRef<BottomSheet>(null)
   const highlightsSheetRef = useRef<BottomSheet>(null)
   const noteEditorSheetRef = useRef<BottomSheet>(null)
+  const searchSheetRef = useRef<BottomSheet>(null)
 
   const [settings, setSettings] = useState<ReaderSettings>(loadReaderSettings())
   const [toolbarVisible, setToolbarVisible] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   const [currentHref, setCurrentHref] = useState<string | null>(null)
   const currentCfiRef = useRef<string | null>(book.currentCfi)
   const cfiSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -366,6 +373,27 @@ function ReaderContent({ book }: { book: Book }) {
     [goToLocation]
   )
 
+  // Search handlers
+  const handleSearch = useCallback(
+    (query: string) => {
+      setSearchQuery(query)
+      if (query.trim().length > 1) {
+        search(query.trim())
+      } else {
+        clearSearchResults()
+      }
+    },
+    [search, clearSearchResults]
+  )
+
+  const handleSearchResultPress = useCallback(
+    (cfi: string) => {
+      goToLocation(cfi)
+      searchSheetRef.current?.close()
+    },
+    [goToLocation]
+  )
+
   return (
     <View style={{ flex: 1, backgroundColor: theme.background }}>
       <Reader
@@ -393,6 +421,10 @@ function ReaderContent({ book }: { book: Book }) {
         title={book.title}
         theme={theme}
         onBack={handleBack}
+        onSearchPress={() => {
+          searchSheetRef.current?.snapToIndex(0)
+          setToolbarVisible(false)
+        }}
         onTocPress={() => {
           tocSheetRef.current?.snapToIndex(0)
           setToolbarVisible(false)
@@ -448,6 +480,57 @@ function ReaderContent({ book }: { book: Book }) {
         onSave={handleSaveNote}
         onDiscard={() => noteEditorSheetRef.current?.close()}
       />
+
+      <BottomSheet
+        ref={searchSheetRef}
+        index={-1}
+        snapPoints={['50%', '90%']}
+        enablePanDownToClose
+        backgroundStyle={{ backgroundColor: theme.background }}
+        handleIndicatorStyle={{ backgroundColor: theme.toolbarText }}
+      >
+        <View style={{ flex: 1, paddingHorizontal: 16 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.name === 'dark' ? '#374151' : '#F3F4F6', borderRadius: 8, paddingHorizontal: 12, marginBottom: 12 }}>
+            <IconSymbol name="magnifyingglass" size={18} color="#9CA3AF" />
+            <TextInput
+              style={{ flex: 1, marginLeft: 8, paddingVertical: 10, fontSize: 16, color: theme.color }}
+              placeholder="Search in book..."
+              placeholderTextColor="#9CA3AF"
+              value={searchQuery}
+              onChangeText={handleSearch}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+            />
+          </View>
+          {isSearching && (
+            <View style={{ alignItems: 'center', paddingVertical: 16 }}>
+              <ActivityIndicator size="small" />
+              <Text style={{ color: '#9CA3AF', marginTop: 8, fontSize: 14 }}>Searching...</Text>
+            </View>
+          )}
+          {!isSearching && searchResults.results.length > 0 && (
+            <FlatList
+              data={searchResults.results}
+              keyExtractor={(_, idx) => String(idx)}
+              renderItem={({ item }) => (
+                <Pressable
+                  onPress={() => handleSearchResultPress(item.cfi)}
+                  style={{ paddingVertical: 12, paddingHorizontal: 4, borderBottomWidth: 1, borderBottomColor: theme.name === 'dark' ? '#374151' : '#E5E7EB' }}
+                >
+                  <Text style={{ color: theme.color, fontSize: 14 }} numberOfLines={2}>{item.excerpt}</Text>
+                  {item.section?.label && (
+                    <Text style={{ color: '#9CA3AF', fontSize: 12, marginTop: 4 }}>{item.section.label}</Text>
+                  )}
+                </Pressable>
+              )}
+            />
+          )}
+          {!isSearching && searchQuery.length > 1 && searchResults.results.length === 0 && (
+            <Text style={{ color: '#9CA3AF', textAlign: 'center', paddingVertical: 24, fontSize: 14 }}>No results found</Text>
+          )}
+        </View>
+      </BottomSheet>
 
       {tts.isActive && (
         <TTSControls

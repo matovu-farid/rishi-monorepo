@@ -1,8 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const { mockExecute, mockExecuteTakeFirst, mockDb } = vi.hoisted(() => {
+const { mockExecute, mockDb } = vi.hoisted(() => {
   const mockExecute = vi.fn().mockResolvedValue([]);
-  const mockExecuteTakeFirst = vi.fn().mockResolvedValue(undefined);
 
   const mockDb = {
     insertInto: vi.fn().mockReturnThis(),
@@ -15,10 +14,9 @@ const { mockExecute, mockExecuteTakeFirst, mockDb } = vi.hoisted(() => {
     where: vi.fn().mockReturnThis(),
     orderBy: vi.fn().mockReturnThis(),
     execute: mockExecute,
-    executeTakeFirst: mockExecuteTakeFirst,
   };
 
-  return { mockExecute, mockExecuteTakeFirst, mockDb };
+  return { mockExecute, mockDb };
 });
 
 vi.mock("./kysley", () => ({ db: mockDb }));
@@ -27,8 +25,9 @@ import {
   saveBookmark,
   getBookmarksForBook,
   deleteBookmark,
-  getBookmarkAtLocation,
   toggleBookmark,
+  locationsMatch,
+  getSpinePrefix,
 } from "./bookmark-storage";
 
 describe("bookmark-storage", () => {
@@ -44,7 +43,6 @@ describe("bookmark-storage", () => {
     mockDb.where.mockReturnThis();
     mockDb.orderBy.mockReturnThis();
     mockExecute.mockResolvedValue([]);
-    mockExecuteTakeFirst.mockResolvedValue(undefined);
   });
 
   it("saveBookmark inserts a new bookmark", async () => {
@@ -92,25 +90,9 @@ describe("bookmark-storage", () => {
     expect(mockDb.where).toHaveBeenCalledWith("id", "=", "bookmark-id-1");
   });
 
-  it("getBookmarkAtLocation returns bookmark if exists", async () => {
-    mockExecuteTakeFirst.mockResolvedValue({ id: "b1", location: "42" });
-
-    const result = await getBookmarkAtLocation("sync-123", "42");
-
-    expect(result).toEqual({ id: "b1", location: "42" });
-    expect(mockDb.where).toHaveBeenCalledWith("location", "=", "42");
-  });
-
-  it("getBookmarkAtLocation returns undefined if not bookmarked", async () => {
-    mockExecuteTakeFirst.mockResolvedValue(undefined);
-
-    const result = await getBookmarkAtLocation("sync-123", "99");
-
-    expect(result).toBeUndefined();
-  });
-
-  it("toggleBookmark creates when not existing", async () => {
-    mockExecuteTakeFirst.mockResolvedValue(undefined);
+  it("toggleBookmark creates when no matching bookmark exists", async () => {
+    // getBookmarksForBook returns empty
+    mockExecute.mockResolvedValue([]);
 
     const result = await toggleBookmark({
       bookSyncId: "sync-123",
@@ -119,12 +101,12 @@ describe("bookmark-storage", () => {
     });
 
     expect(result.action).toBe("created");
-    expect(result.id).toBeDefined();
     expect(mockDb.insertInto).toHaveBeenCalledWith("bookmarks");
   });
 
-  it("toggleBookmark deletes when existing", async () => {
-    mockExecuteTakeFirst.mockResolvedValue({ id: "existing-id", location: "42" });
+  it("toggleBookmark deletes when matching bookmark exists", async () => {
+    // getBookmarksForBook returns a matching bookmark
+    mockExecute.mockResolvedValueOnce([{ id: "existing-id", location: "42" }]);
 
     const result = await toggleBookmark({
       bookSyncId: "sync-123",
@@ -132,7 +114,57 @@ describe("bookmark-storage", () => {
     });
 
     expect(result.action).toBe("deleted");
-    expect(result.id).toBe("existing-id");
     expect(mockDb.updateTable).toHaveBeenCalledWith("bookmarks");
+  });
+
+  it("toggleBookmark deletes all duplicates at same location", async () => {
+    mockExecute.mockResolvedValueOnce([
+      { id: "dup-1", location: "42" },
+      { id: "dup-2", location: "42" },
+    ]);
+
+    const result = await toggleBookmark({
+      bookSyncId: "sync-123",
+      location: "42",
+    });
+
+    expect(result.action).toBe("deleted");
+    // Should have called updateTable twice (once per duplicate)
+    expect(mockDb.updateTable).toHaveBeenCalledTimes(2);
+  });
+
+  describe("locationsMatch", () => {
+    it("matches exact PDF page numbers", () => {
+      expect(locationsMatch("42", "42")).toBe(true);
+      expect(locationsMatch("42", "43")).toBe(false);
+    });
+
+    it("matches EPUB CFIs with same spine prefix", () => {
+      expect(locationsMatch(
+        "epubcfi(/6/8!/4/2/2/2/2/2)",
+        "epubcfi(/6/8!/4/2/10/1)"
+      )).toBe(true);
+    });
+
+    it("does not match EPUB CFIs with different spine prefix", () => {
+      expect(locationsMatch(
+        "epubcfi(/6/8!/4/2/2)",
+        "epubcfi(/6/36!/4/2/2)"
+      )).toBe(false);
+    });
+  });
+
+  describe("getSpinePrefix", () => {
+    it("extracts spine prefix from EPUB CFI", () => {
+      expect(getSpinePrefix("epubcfi(/6/8!/4/2/2)")).toBe("epubcfi(/6/8!");
+    });
+
+    it("returns null for non-EPUB locations", () => {
+      expect(getSpinePrefix("42")).toBeNull();
+    });
+
+    it("returns null for CFI without bang", () => {
+      expect(getSpinePrefix("epubcfi(/6/8/4/2)")).toBeNull();
+    });
   });
 });

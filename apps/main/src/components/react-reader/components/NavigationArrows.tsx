@@ -5,6 +5,7 @@ export type NavigationArrowsProps = {
   onPrev: () => void;
   onNext: () => void;
   readerStyles: IReactReaderStyle;
+  hidePrev?: boolean;
 };
 
 /**
@@ -16,17 +17,20 @@ export const NavigationArrows = ({
   onPrev,
   onNext,
   readerStyles,
+  hidePrev = false,
 }: NavigationArrowsProps) => {
   return (
     <>
-      {/* Previous page arrow button */}
-      <button
-        style={Object.assign({}, readerStyles.arrow, readerStyles.prev)}
-        onClick={onPrev}
-        aria-label="Previous page"
-      >
-        ‹
-      </button>
+      {/* Previous page arrow button — hidden on cover page */}
+      {!hidePrev && (
+        <button
+          style={Object.assign({}, readerStyles.arrow, readerStyles.prev)}
+          onClick={onPrev}
+          aria-label="Previous page"
+        >
+          ‹
+        </button>
+      )}
 
       {/* Next page arrow button */}
       <button

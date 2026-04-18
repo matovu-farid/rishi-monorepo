@@ -3,7 +3,6 @@ import { Page } from "react-pdf";
 import { usePdfStore } from "@/stores/pdfStore";
 import { Loader2 } from "lucide-react";
 import { pageDataToParagraphs } from "../utils/getPageParagraphs";
-import { PAGE_HEIGHT } from "../utils/constants";
 
 type Transform = [number, number, number, number, number, number];
 
@@ -76,7 +75,7 @@ export function PageComponent({
       }}
       height={isDualPage ? pdfHeight : undefined}
       width={isDualPage ? undefined : pdfWidth}
-      className={` rounded shadow-lg  h-[1540px]`}
+      className="rounded shadow-lg"
       renderTextLayer={true}
       renderAnnotationLayer={true}
       canvasBackground="white"
