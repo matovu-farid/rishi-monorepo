@@ -13,7 +13,7 @@ interface DiscoveredBook {
   format: string
   fileSize: number
   folder: string
-  fileHash: string
+  fileHash: string | null
 }
 
 interface ScanProgress {
