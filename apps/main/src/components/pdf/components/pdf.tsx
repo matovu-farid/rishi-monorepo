@@ -4,7 +4,8 @@ import { ThemeType } from "@/themes/common";
 import { Loader2, Menu as MenuIcon, LayoutGrid } from "lucide-react";
 import { Document, Outline, pdfjs } from "react-pdf";
 import type { DocumentInitParameters } from "pdfjs-dist/types/src/display/api";
-import "../subscriptions/bus.ts";
+import { eventBus, EventBusEvent, PlayingState } from "@/utils/bus";
+import { nextPage, previousPage } from "../utils/pageControls";
 
 import { cn } from "@components/lib/utils";
 
@@ -36,7 +37,8 @@ import { TextExtractor } from "./text-extractor.tsx";
 import { updateBookLocation, Book } from "@/generated";
 import { BackButton } from "@components/BackButton.tsx";
 import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
-import { BookmarksList } from "@/components/bookmarks/BookmarksList";
+import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
+import { ReaderTOC } from "@/components/reader/ReaderTOC";
 
 // Configure PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -54,7 +56,6 @@ export function PdfView({
   const [theme] = useState<ThemeType>(ThemeType.White);
   const [tocOpen, setTocOpen] = useState(false);
   const [bookSyncId, setBookSyncId] = useState<string>("");
-  const [tocTab, setTocTab] = useState<"contents" | "bookmarks">("contents");
   const thumbOpen = usePdfStore((s) => s.thumbnailSidebarOpen);
   const setThumbOpen = usePdfStore((s) => s.setThumbnailSidebarOpen);
   const setPdfDocProxy = usePdfStore((s) => s.setPdfDocumentProxy);
@@ -76,6 +77,37 @@ export function PdfView({
       resetParaphState();
       setThumbOpen(false);
       setPdfDocProxy(null);
+    };
+  }, []);
+
+  // Scoped event bus subscriptions for PDF page navigation and highlighting.
+  // These must be inside the component lifecycle so they are cleaned up when
+  // navigating away from the PDF reader — otherwise they leak across formats.
+  useEffect(() => {
+    const handleNextEmptied = () => {
+      nextPage();
+    };
+    const handlePrevEmptied = () => {
+      previousPage();
+    };
+    const handlePlayingAudio = (paragraph: { index: string }) => {
+      usePdfStore.getState().setIsHighlighting(true);
+      usePdfStore.getState().setHighlightedParagraphIndex(paragraph.index);
+    };
+    const handlePlayingStateChanged = (state: PlayingState) => {
+      usePdfStore.getState().setIsHighlighting(state === PlayingState.Playing);
+    };
+
+    eventBus.on(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
+    eventBus.on(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
+    eventBus.on(EventBusEvent.PLAYING_AUDIO, handlePlayingAudio);
+    eventBus.on(EventBusEvent.PLAYING_STATE_CHANGED, handlePlayingStateChanged);
+
+    return () => {
+      eventBus.off(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
+      eventBus.off(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
+      eventBus.off(EventBusEvent.PLAYING_AUDIO, handlePlayingAudio);
+      eventBus.off(EventBusEvent.PLAYING_STATE_CHANGED, handlePlayingStateChanged);
     };
   }, []);
 
@@ -146,6 +178,7 @@ export function PdfView({
     }
   }
 
+  const pageCount = usePdfStore((s) => s.pageCount);
   const setPageCount = usePdfStore((s) => s.setPageCount);
 
   function onDocumentLoadSuccess(pdf: PDFDocumentProxy): void {
@@ -208,16 +241,12 @@ export function PdfView({
         </div>
       )}
 
-      {/* Fixed Top Bar */}
-      <div
-        className={cn(
-          "fixed top-0 left-0 right-0  z-50 bg-transparent"
-
-          //theme === ThemeType.Dark ? " border-gray-700" : " border-gray-200"
-        )}
-      >
-        <div className="flex items-center justify-between px-4 pt-5">
+      {/* Fixed Top Bar — auto-hides after 2s */}
+      <ReaderToolbar
+        panelsOpen={tocOpen || thumbOpen}
+        leftContent={
           <IconButton
+            color="inherit"
             onClick={() => setTocOpen(true)}
             className={cn(
               "hover:bg-black/10 dark:hover:bg-white/10 border-none",
@@ -227,32 +256,32 @@ export function PdfView({
           >
             <MenuIcon size={20} />
           </IconButton>
-          <IconButton
-            onClick={() => setThumbOpen(true)}
-            className={cn(
-              "hover:bg-black/10 dark:hover:bg-white/10 border-none",
-              getTextColor()
-            )}
-            aria-label="Open page thumbnails"
-          >
-            <LayoutGrid size={20} />
-          </IconButton>
+        }
+      >
+        <BackButton />
 
-          <BookmarkButton
-            bookSyncId={bookSyncId}
-            location={String(currentPageNumber)}
-            label={`Page ${currentPageNumber}`}
-            className={cn(
-              "hover:bg-black/10 dark:hover:bg-white/10 border-none",
-              getTextColor()
-            )}
-          />
+        <IconButton
+          color="inherit"
+          onClick={() => setThumbOpen(true)}
+          className={cn(
+            "hover:bg-black/10 dark:hover:bg-white/10 border-none",
+            getTextColor()
+          )}
+          aria-label="Open page thumbnails"
+        >
+          <LayoutGrid size={20} />
+        </IconButton>
 
-          <div className="flex items-center gap-2 bg-white">
-            <BackButton />
-          </div>
-        </div>
-      </div>
+        <BookmarkButton
+          bookSyncId={bookSyncId}
+          location={String(currentPageNumber)}
+          label={`Page ${currentPageNumber}`}
+          className={cn(
+            "hover:bg-black/10 dark:hover:bg-white/10 border-none",
+            getTextColor()
+          )}
+        />
+      </ReaderToolbar>
 
       {/* Main PDF Viewer Area */}
       <div className="flex items-center justify-center  px-2 py-1">
@@ -307,9 +336,9 @@ export function PdfView({
                   }}
                 >
                   <div
-                    className=" "
+                    className="bg-white shadow-lg overflow-hidden relative"
                     data-page-number={virtualItem.index + 1}
-                    style={{ width: pageWidth ?? "auto" }}
+                    style={{ width: pageWidth ?? "auto", height: virtualItem.size }}
                   >
                     <PageComponent
                       key={`page-${virtualItem.index + 1}`}
@@ -324,6 +353,14 @@ export function PdfView({
                         handlePageRendered(virtualItem.index);
                       }}
                     />
+                    <div className="group/page absolute bottom-1 left-0 right-0 text-center py-1">
+                      <span className="text-xs text-gray-400">
+                        <span>{virtualItem.index + 1}</span>
+                        {pageCount > 0 && (
+                          <span className="hidden group-hover/page:inline"> of {pageCount}</span>
+                        )}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -346,87 +383,36 @@ export function PdfView({
         {<TTSControls key={book.id.toString()} bookId={book.id.toString()} />}
       </div>
       {/* TOC Sidebar */}
-      <Sheet open={tocOpen} onOpenChange={setTocOpen}>
-        <SheetContent
-          side="left"
-          className={cn(
-            "w-[300px] sm:w-[400px] p-0",
-            theme === ThemeType.Dark
-              ? "bg-gray-900 border-gray-700"
-              : "bg-white border-gray-200"
-          )}
-        >
-          <SheetHeader
+      <ReaderTOC
+        open={tocOpen}
+        onOpenChange={setTocOpen}
+        bookSyncId={bookSyncId}
+        onBookmarkNavigate={(location) => {
+          const pageNum = parseInt(location, 10);
+          if (pageNum > 0) {
+            virtualizer.scrollToIndex(pageNum - 1, { align: "start", behavior: "smooth" });
+            setPageNumber(pageNum);
+            setTocOpen(false);
+          }
+        }}
+        tocContent={
+          <div
             className={cn(
-              "p-4 border-b sticky top-0 z-10",
-              theme === ThemeType.Dark
-                ? "border-gray-700 bg-gray-900"
-                : "border-gray-200 bg-white"
+              "[&_a]:block [&_a]:py-3 [&_a]:px-4 [&_a]:cursor-pointer",
+              "[&_a]:transition-all [&_a]:duration-200",
+              "[&_a]:border-b [&_a]:font-medium",
+              "[&_a]:text-gray-700 [&_a:hover]:bg-gray-100 [&_a:hover]:text-black [&_a]:border-gray-100 [&_a:hover]:pl-6"
             )}
           >
-            <SheetTitle className={getTextColor()}>
-              Table of Contents
-            </SheetTitle>
-          </SheetHeader>
-          <div className="flex border-b border-gray-200 dark:border-gray-700">
-            <button
-              onClick={() => setTocTab("contents")}
-              className={cn(
-                "flex-1 px-4 py-2 text-sm font-medium transition-colors",
-                tocTab === "contents"
-                  ? "border-b-2 border-blue-500 text-blue-600"
-                  : "text-gray-500 hover:text-gray-700"
-              )}
+            <Document
+              file={filepath.toString()}
+              options={pdfOptions}
             >
-              Contents
-            </button>
-            <button
-              onClick={() => setTocTab("bookmarks")}
-              className={cn(
-                "flex-1 px-4 py-2 text-sm font-medium transition-colors",
-                tocTab === "bookmarks"
-                  ? "border-b-2 border-red-500 text-red-600"
-                  : "text-gray-500 hover:text-gray-700"
-              )}
-            >
-              Bookmarks
-            </button>
+              <Outline onItemClick={onItemClick} />
+            </Document>
           </div>
-          {tocTab === "contents" ? (
-            <div
-              className={cn(
-                "overflow-y-auto h-[calc(100vh-73px)]",
-                // Enhanced TOC styling with better padding and hover states
-                "[&_a]:block [&_a]:py-3 [&_a]:px-4 [&_a]:cursor-pointer",
-                "[&_a]:transition-all [&_a]:duration-200",
-                "[&_a]:border-b [&_a]:font-medium",
-                theme === ThemeType.Dark
-                  ? "[&_a]:text-gray-300 [&_a:hover]:bg-gray-800 [&_a:hover]:text-white [&_a]:border-gray-800 [&_a:hover]:pl-6"
-                  : "[&_a]:text-gray-700 [&_a:hover]:bg-gray-100 [&_a:hover]:text-black [&_a]:border-gray-100 [&_a:hover]:pl-6"
-              )}
-            >
-              <Document
-                file={filepath.toString()}
-                options={pdfOptions}
-              >
-                <Outline onItemClick={onItemClick} />
-              </Document>
-            </div>
-          ) : (
-            <BookmarksList
-              bookSyncId={bookSyncId}
-              onNavigate={(location) => {
-                const pageNum = parseInt(location, 10);
-                if (pageNum > 0) {
-                  virtualizer.scrollToIndex(pageNum - 1, { align: "start", behavior: "smooth" });
-                  setPageNumber(pageNum);
-                  setTocOpen(false);
-                }
-              }}
-            />
-          )}
-        </SheetContent>
-      </Sheet>
+        }
+      />
       {/* Thumbnail Sidebar */}
       <Sheet open={thumbOpen} onOpenChange={setThumbOpen}>
         <SheetContent

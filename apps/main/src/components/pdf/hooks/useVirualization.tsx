@@ -9,7 +9,7 @@ import "react-pdf/dist/Page/TextLayer.css";
 import { elementScroll } from "@tanstack/react-virtual";
 import type { VirtualizerOptions } from "@tanstack/react-virtual";
 import { usePdfStore } from "@/stores/pdfStore";
-import { PAGE_HEIGHT } from "../utils/constants";
+import { PAGE_HEIGHT, PAGE_GAP } from "../utils/constants";
 import { Book } from "@/generated";
 function easeInOutQuint(t: number) {
   return t < 0.5 ? 16 * t * t * t * t * t : 1 + 16 * --t * t * t * t * t;
@@ -26,13 +26,19 @@ export function useVirualization(
   const estimatedPageHeight = PAGE_HEIGHT;
   const scrollingRef = useRef<number | null>(null);
   const initialOffsetRef = useRef(
-    initialPageIndexRef.current * estimatedPageHeight
+    initialPageIndexRef.current * (estimatedPageHeight + PAGE_GAP)
   );
   const setVirtualizer = usePdfStore((s) => s.setVirtualizer);
   const pageRefs = useRef(new Map<number, HTMLElement>());
   const hasRequestedInitialScroll = useRef(false);
   const scrollToFn: VirtualizerOptions<any, any>["scrollToFn"] =
     React.useCallback((offset, canSmooth, instance) => {
+      // Respect the behavior option: skip animation for "auto" (instant navigation)
+      if (canSmooth?.behavior === "auto") {
+        elementScroll(offset, canSmooth, instance);
+        return;
+      }
+
       const duration = 1000;
       const start = scrollContainerRef.current?.scrollTop || 0;
       const startTime = (scrollingRef.current = Date.now());
@@ -63,7 +69,7 @@ export function useVirualization(
     enabled: numPages > 0,
     initialOffset: initialOffsetRef.current,
     scrollToFn,
-    gap: 32,
+    gap: PAGE_GAP,
   });
   setVirtualizer(virtualizer);
   const handlePageRendered = useCallback(

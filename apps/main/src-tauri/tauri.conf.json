@@ -13,6 +13,8 @@
     "windows": [
       {
         "title": "rishi",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
         "width": 1024,
         "height": 770
       }

@@ -1,5 +1,3 @@
-import "../subscriptions/bus.ts";
-
 // Import required CSS for text and annotation layers
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";

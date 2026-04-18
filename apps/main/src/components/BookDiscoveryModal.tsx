@@ -163,17 +163,17 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/30 backdrop-blur-sm"
         onClick={handleClose}
       />
 
       {/* Modal */}
-      <div className="relative z-10 flex flex-col w-full max-w-2xl max-h-[85vh] bg-gray-900 rounded-xl shadow-2xl border border-gray-700 overflow-hidden">
+      <div className="relative z-10 flex flex-col w-full max-w-2xl max-h-[85vh] bg-white rounded-xl shadow-2xl border border-gray-200 overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
           <div className="flex items-center gap-2">
-            <BookOpen size={20} className="text-blue-400" />
-            <h2 className="text-lg font-semibold text-white">Import from Computer</h2>
+            <BookOpen size={20} className="text-gray-600" />
+            <h2 className="text-lg font-semibold text-gray-900">Import from Computer</h2>
             {scanning && (
               <span className="ml-1 flex items-center gap-1 text-xs text-gray-400">
                 <Loader2 size={12} className="animate-spin" />
@@ -183,7 +183,7 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
           </div>
           <button
             onClick={handleClose}
-            className="text-gray-400 hover:text-white transition-colors rounded-md p-1 hover:bg-gray-700"
+            className="text-gray-400 hover:text-gray-600 transition-colors rounded-md p-1 hover:bg-gray-100"
             aria-label="Close"
           >
             <X size={18} />
@@ -191,7 +191,7 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
         </div>
 
         {/* Controls */}
-        <div className="px-5 py-3 border-b border-gray-700 space-y-3">
+        <div className="px-5 py-3 border-b border-gray-200 space-y-3">
           {/* Mode toggle */}
           <div className="flex gap-4 text-sm">
             <label className="flex items-center gap-2 cursor-pointer">
@@ -201,9 +201,9 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
                 value="default"
                 checked={mode === 'default'}
                 onChange={() => handleModeChange('default')}
-                className="accent-blue-500"
+                className="accent-gray-600"
               />
-              <span className="text-gray-200">Common folders <span className="text-gray-500">(fast)</span></span>
+              <span className="text-gray-700">Common folders <span className="text-gray-400">(fast)</span></span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
               <input
@@ -212,9 +212,9 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
                 value="full"
                 checked={mode === 'full'}
                 onChange={() => handleModeChange('full')}
-                className="accent-blue-500"
+                className="accent-gray-600"
               />
-              <span className="text-gray-200">Search entire computer <span className="text-gray-500">(slower)</span></span>
+              <span className="text-gray-700">Search entire computer <span className="text-gray-400">(slower)</span></span>
             </label>
           </div>
 
@@ -224,16 +224,16 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
             placeholder="Filter by title, author, or filename…"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            className="w-full bg-gray-800 text-gray-100 placeholder-gray-500 text-sm rounded-lg px-3 py-2 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="w-full bg-gray-50 text-gray-900 placeholder-gray-400 text-sm rounded-lg px-3 py-2 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:border-transparent"
           />
 
           {/* Progress indicator */}
           {progress && (
-            <div className="text-xs text-gray-400 truncate">
-              <span className="text-gray-500">Scanning:</span>{' '}
-              <span className="text-gray-300">{progress.folder}</span>
+            <div className="text-xs text-gray-500 truncate">
+              <span className="text-gray-400">Scanning:</span>{' '}
+              <span className="text-gray-600">{progress.folder}</span>
               {progress.total > 0 && (
-                <span className="ml-2 text-gray-500">
+                <span className="ml-2 text-gray-400">
                   ({progress.scanned}/{progress.total})
                 </span>
               )}
@@ -244,12 +244,12 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
         {/* Results */}
         <div className="flex-1 overflow-y-auto px-5 py-3 min-h-0">
           {scanning && filteredBooks.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-40 gap-3 text-gray-500">
+            <div className="flex flex-col items-center justify-center h-40 gap-3 text-gray-400">
               <Spinner size="large" />
               <p className="text-sm">Scanning for books…</p>
             </div>
           ) : scanComplete && filteredBooks.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-40 gap-2 text-gray-500">
+            <div className="flex flex-col items-center justify-center h-40 gap-2 text-gray-400">
               <BookOpen size={36} className="opacity-30" />
               <p className="text-sm">No books found</p>
             </div>
@@ -257,25 +257,25 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
             Object.entries(grouped).map(([folder, folderBooks]) => (
               <div key={folder} className="mb-5">
                 <div className="flex items-center gap-1.5 mb-2">
-                  <FolderOpen size={14} className="text-gray-500 shrink-0" />
-                  <span className="text-xs text-gray-500 truncate">{folder}</span>
+                  <FolderOpen size={14} className="text-gray-400 shrink-0" />
+                  <span className="text-xs text-gray-400 truncate">{folder}</span>
                 </div>
                 <div className="space-y-1.5">
                   {folderBooks.map((book) => (
                     <div
                       key={book.filepath}
-                      className="flex items-center gap-3 bg-gray-800 hover:bg-gray-750 rounded-lg px-3 py-2.5 group transition-colors"
+                      className="flex items-center gap-3 bg-gray-50 hover:bg-gray-100 rounded-lg px-3 py-2.5 group transition-colors"
                     >
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-100 truncate">
+                        <p className="text-sm font-medium text-gray-900 truncate">
                           {book.title ?? book.filename}
                         </p>
                         <div className="flex items-center gap-2 mt-0.5">
                           {book.author && (
-                            <span className="text-xs text-gray-400 truncate">{book.author}</span>
+                            <span className="text-xs text-gray-500 truncate">{book.author}</span>
                           )}
-                          <span className="text-xs text-gray-600 uppercase">{book.format}</span>
-                          <span className="text-xs text-gray-600">{formatFileSize(book.fileSize)}</span>
+                          <span className="text-xs text-gray-400 uppercase">{book.format}</span>
+                          <span className="text-xs text-gray-400">{formatFileSize(book.fileSize)}</span>
                         </div>
                       </div>
                       <Button
@@ -283,7 +283,7 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
                         size="small"
                         onClick={() => handleImport(book.filepath)}
                         startIcon={<Download size={14} />}
-                        className="shrink-0 text-blue-400 hover:text-blue-300 hover:bg-blue-900/30 opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="shrink-0 text-gray-500 hover:text-gray-700 hover:bg-gray-200 opacity-0 group-hover:opacity-100 transition-opacity"
                       >
                         Import
                       </Button>
@@ -296,8 +296,8 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-5 py-3 border-t border-gray-700 bg-gray-900/80">
-          <span className="text-sm text-gray-500">
+        <div className="flex items-center justify-between px-5 py-3 border-t border-gray-200 bg-gray-50/80">
+          <span className="text-sm text-gray-400">
             {filteredBooks.length > 0
               ? `${filteredBooks.length} book${filteredBooks.length !== 1 ? 's' : ''} found`
               : scanComplete
@@ -307,7 +307,7 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
               : ''}
           </span>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="small" onClick={handleClose} className="text-gray-400">
+            <Button variant="ghost" size="small" onClick={handleClose} className="text-gray-500">
               Cancel
             </Button>
             {filteredBooks.length > 0 && (

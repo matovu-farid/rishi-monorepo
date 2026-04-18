@@ -1,16 +1,21 @@
 import Loader from "@components/Loader";
 import { ReactReader } from "@components/react-reader";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-toastify";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { IconButton } from "@components/ui/IconButton";
 import { Menu } from "@components/ui/Menu";
 import { Radio, RadioGroup } from "@components/ui/Radio";
 import { ThemeType } from "@/themes/common";
 import { themes } from "@/themes/themes";
 import createIReactReaderTheme from "@/themes/readerThemes";
-import { Palette, Highlighter, MessageSquare } from "lucide-react";
+import { Palette, Highlighter, MessageSquare, MoreVertical, Menu as MenuIcon } from "lucide-react";
+import { IconButton } from "@components/ui/IconButton";
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@components/components/ui/popover";
 import TTSControls from "@components/TTSControls";
 import { Rendition } from "epubjs/types";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -34,6 +39,7 @@ import type { Contents } from "epubjs";
 import { SelectionPopover } from "@/components/highlights/SelectionPopover";
 import { HighlightsPanel } from "@/components/highlights/HighlightsPanel";
 import { ReaderSettings } from "@/components/reader/ReaderSettings";
+import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
@@ -45,6 +51,8 @@ import {
   SheetTitle,
 } from "@components/components/ui/sheet";
 import { ScrollArea } from "@components/components/ui/scroll-area";
+import { usePageTracker } from "@/modules/epub-page-tracker";
+import { dumpError } from "@/utils/errorDump";
 
 function cn(...classes: string[]) {
   return classes.filter(Boolean).join(" ");
@@ -65,6 +73,21 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
     book.location || "0"
   );
   const [direction, setDirection] = useState<"left" | "right">("right");
+
+  // Sync with book.location when it changes from a refetch (e.g., returning from library).
+  // Only sync before the rendition has settled to avoid overriding user navigation.
+  const bookLocationRef = useRef(book.location);
+  useEffect(() => {
+    if (book.location && book.location !== bookLocationRef.current && !settledRef.current) {
+      bookLocationRef.current = book.location;
+      setCurrentLocation(book.location);
+      dumpError({
+        source: "epub:syncLocation",
+        location: "refetch",
+        error: JSON.stringify({ newLocation: book.location }),
+      });
+    }
+  }, [book.location]);
   const navigationDirectionRef = useRef<"left" | "right">("right");
   const [animationKey, setAnimationKey] = useState(0);
   const animationTriggerRef = useRef(0);
@@ -73,12 +96,24 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   const bookSyncIdRef = useRef<string | null>(null);
   const [bookSyncId, setBookSyncId] = useState<string>("");
   const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false);
+  const [tocOpen, setTocOpen] = useState(false);
+  const pageReady = usePageTracker((s) => s.ready);
+  const pageCurrent = usePageTracker((s) => s.current);
+  const pageTotal = usePageTracker((s) => s.total);
+  const [isFirstPage, setIsFirstPage] = useState(false);
+  const [isFrontMatter, setIsFrontMatter] = useState(false);
+  // Don't save location to DB until rendition has settled at the saved position.
+  // Without this, the transient initial position overwrites the correct saved CFI.
+  const settledRef = useRef(false);
   const [selectionInfo, setSelectionInfo] = useState<{
     cfiRange: string; text: string; position: { x: number; y: number };
   } | null>(null);
   const [highlightsPanelOpen, setHighlightsPanelOpen] = useState(false);
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
   const { requireAuth, AuthDialog } = useRequireAuth();
+
+  // Keep toolbar visible when any panel is open
+  const panelOpen = menuOpen || highlightsPanelOpen || chatPanelOpen || bookmarksPanelOpen || tocOpen || !!selectionInfo;
 
   // Look up the book's sync_id for highlight storage and bookmark functionality
   useEffect(() => {
@@ -153,51 +188,57 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   const setBookId = useEpubStore((s) => s.setBookId);
   useEffect(() => {
     setBookId(book.id.toString());
+    usePageTracker.getState().initBook(book.id.toString());
   }, [book.id]);
 
   useEffect(() => {
     if (!rendition) return;
-    eventBus.subscribe(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, async () => {
+
+    const onNextPageEmptied = async () => {
       await clearAllHighlights();
       await rendition.next();
       eventBus.publish(EventBusEvent.PAGE_CHANGED);
-    });
-
-    eventBus.subscribe(
-      EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED,
-      async () => {
-        await clearAllHighlights();
-        await rendition.prev();
-        eventBus.publish(EventBusEvent.PAGE_CHANGED);
-      }
-    );
-    eventBus.subscribe(EventBusEvent.PLAYING_AUDIO, async (paragraph) => {
-      console.log(">>> PLAYING_AUDIO", paragraph);
+    };
+    const onPrevPageEmptied = async () => {
+      await clearAllHighlights();
+      await rendition.prev();
+      eventBus.publish(EventBusEvent.PAGE_CHANGED);
+    };
+    const onPlayingAudio = async (paragraph: { index: string }) => {
       await highlightRange(rendition, paragraph.index);
-    });
-    eventBus.subscribe(EventBusEvent.AUDIO_ENDED, async (paragraph) => {
+    };
+    const onAudioEnded = async (paragraph: { index: string }) => {
       await removeHighlight(rendition, paragraph.index);
-    });
-    eventBus.subscribe(
-      EventBusEvent.MOVED_TO_NEXT_PARAGRAPH,
-      async ({ from: paragraph }) => {
-        await removeHighlight(rendition, paragraph.index);
+    };
+    const onMovedToNext = async ({ from: paragraph }: { from: { index: string } }) => {
+      await removeHighlight(rendition, paragraph.index);
+    };
+    const onMovedToPrev = async ({ from: paragraph }: { from: { index: string } }) => {
+      await removeHighlight(rendition, paragraph.index);
+    };
+    const onPlayingStateChanged = async (playingState: PlayingState) => {
+      if (playingState !== PlayingState.Playing) {
+        await clearAllHighlights();
       }
-    );
-    eventBus.subscribe(
-      EventBusEvent.MOVED_TO_PREV_PARAGRAPH,
-      async ({ from: paragraph }) => {
-        await removeHighlight(rendition, paragraph.index);
-      }
-    );
-    eventBus.subscribe(
-      EventBusEvent.PLAYING_STATE_CHANGED,
-      async (playingState) => {
-        if (playingState !== PlayingState.Playing) {
-          await clearAllHighlights();
-        }
-      }
-    );
+    };
+
+    eventBus.subscribe(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, onNextPageEmptied);
+    eventBus.subscribe(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, onPrevPageEmptied);
+    eventBus.subscribe(EventBusEvent.PLAYING_AUDIO, onPlayingAudio);
+    eventBus.subscribe(EventBusEvent.AUDIO_ENDED, onAudioEnded);
+    eventBus.subscribe(EventBusEvent.MOVED_TO_NEXT_PARAGRAPH, onMovedToNext);
+    eventBus.subscribe(EventBusEvent.MOVED_TO_PREV_PARAGRAPH, onMovedToPrev);
+    eventBus.subscribe(EventBusEvent.PLAYING_STATE_CHANGED, onPlayingStateChanged);
+
+    return () => {
+      eventBus.off(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, onNextPageEmptied);
+      eventBus.off(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, onPrevPageEmptied);
+      eventBus.off(EventBusEvent.PLAYING_AUDIO, onPlayingAudio);
+      eventBus.off(EventBusEvent.AUDIO_ENDED, onAudioEnded);
+      eventBus.off(EventBusEvent.MOVED_TO_NEXT_PARAGRAPH, onMovedToNext);
+      eventBus.off(EventBusEvent.MOVED_TO_PREV_PARAGRAPH, onMovedToPrev);
+      eventBus.off(EventBusEvent.PLAYING_STATE_CHANGED, onPlayingStateChanged);
+    };
   }, [rendition]);
 
   useEffect(() => {
@@ -206,25 +247,65 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
     }
   }, [theme]);
 
+  // Track cover page & recalculate avgLocsPerPage on resize/aspect ratio change
+  useEffect(() => {
+    if (!rendition) return;
+
+    const onRelocated = () => {
+      const loc = (rendition as any).location;
+      const spineIndex = loc?.start?.index ?? -1;
+      setIsFirstPage(spineIndex === 0);
+      setIsFrontMatter(spineIndex <= 1); // Hide page number on cover + title page
+    };
+
+    // Remeasure avgLocsPerPage when layout changes (resize, orientation)
+    const onResized = () => {
+      const pt = usePageTracker.getState();
+      if (!pt.ready || !pt.locationsReady) return;
+      const startCfi = (rendition as any)?.location?.start?.cfi;
+      const endCfi = (rendition as any)?.location?.end?.cfi;
+      if (startCfi && endCfi) {
+        const s = rendition.book.locations.locationFromCfi(startCfi) as unknown as number;
+        const e = rendition.book.locations.locationFromCfi(endCfi) as unknown as number;
+        if (typeof s === 'number' && typeof e === 'number' && e > s) {
+          const rawLocCount = ((rendition.book.locations as any)._locations ?? []).length;
+          pt.build(rawLocCount, e - s);
+        }
+      }
+    };
+
+    rendition.on('relocated', onRelocated);
+    rendition.on('resized', onResized);
+    return () => {
+      rendition.off('relocated', onRelocated);
+      rendition.off('resized', onResized);
+    };
+  }, [rendition]);
+
   const setCurrentEpubLocation = useEpubStore((s) => s.setCurrentEpubLocation);
 
   const setParagraphRendition = useEpubStore((s) => s.setParagraphRendition);
   // Track navigation direction by intercepting prev/next when rendition is available
   useEffect(() => {
-    if (rendition) {
-      const originalPrev = rendition.prev;
-      const originalNext = rendition.next;
+    if (!rendition) return;
 
-      rendition.prev = function () {
-        navigationDirectionRef.current = "left";
-        return originalPrev.call(this);
-      };
+    const originalPrev = rendition.prev;
+    const originalNext = rendition.next;
 
-      rendition.next = function () {
-        navigationDirectionRef.current = "right";
-        return originalNext.call(this);
-      };
-    }
+    rendition.prev = function () {
+      navigationDirectionRef.current = "left";
+      return originalPrev.call(this);
+    };
+
+    rendition.next = function () {
+      navigationDirectionRef.current = "right";
+      return originalNext.call(this);
+    };
+
+    return () => {
+      rendition.prev = originalPrev;
+      rendition.next = originalNext;
+    };
   }, [rendition]);
 
   const handleThemeChange = (newTheme: ThemeType) => {
@@ -232,6 +313,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
     setMenuOpen(false);
   };
 
+  const queryClient = useQueryClient();
   const updateBookLocationMutation = useMutation({
     mutationFn: async ({
       bookId,
@@ -245,7 +327,9 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
         newLocation: location,
       });
     },
-
+    onSuccess(_data, variables) {
+      void queryClient.invalidateQueries({ queryKey: ["book", variables.bookId] });
+    },
     onError(_error) {
       toast.error("Can not change book page");
     },
@@ -265,7 +349,19 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
 
   return (
     <div className="relative">
-      <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
+      {/* Unified top toolbar — matches PDF layout */}
+      <ReaderToolbar
+        panelsOpen={panelOpen}
+        leftContent={
+          <IconButton
+            color="inherit"
+            onClick={() => setTocOpen((v) => !v)}
+            className="hover:bg-transparent border-none"
+          >
+            <MenuIcon size={20} className={getTextColor()} />
+          </IconButton>
+        }
+      >
         <BackButton />
 
         <BookmarkButton
@@ -275,82 +371,103 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
           className="hover:bg-transparent border-none"
         />
 
-        <button
-          onClick={() => setBookmarksPanelOpen(true)}
-          className={cn("p-2 rounded-md", getTextColor())}
-          aria-label="Open bookmarks panel"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" />
-            <line x1="9" y1="10" x2="15" y2="10" />
-            <line x1="12" y1="7" x2="12" y2="13" />
-          </svg>
-        </button>
-
-        <button
-          onClick={() => setHighlightsPanelOpen(true)}
-          className={cn("p-2 rounded-md", getTextColor())}
-          aria-label="Open highlights panel"
-        >
-          <Highlighter size={20} />
-        </button>
-        <button
-          onClick={() => requireAuth("chat", () => setChatPanelOpen(true))}
-          className={cn("p-2 rounded-md", getTextColor())}
-          aria-label="Open chat panel"
-        >
-          <MessageSquare size={20} />
-        </button>
         <ReaderSettings rendition={rendition} />
 
-        <Menu
-          trigger={
-            <IconButton className={cn("hover:bg-transparent border-none")}>
-              <Palette size={20} className={getTextColor()} />
-            </IconButton>
-          }
-          open={menuOpen}
-          onOpen={() => setMenuOpen(true)}
-          onClose={() => setMenuOpen(false)}
-          anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-          theme={themes[theme]}
-        >
-          <div className="p-3">
-            <RadioGroup
-              value={theme}
-              onChange={(value) => handleThemeChange(value as ThemeType)}
-              name="theme-selector"
-              theme={themes[theme]}
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              className={cn("p-2 rounded-md", getTextColor())}
+              aria-label="More options"
             >
-              {(Object.keys(themes) as Array<keyof typeof themes>).map(
-                (themeKey) => (
-                  <Radio
-                    key={themeKey}
-                    value={themeKey}
-                    label={themeKey}
-                    theme={themes[theme]}
-                  />
-                )
-              )}
-            </RadioGroup>
-          </div>
-        </Menu>
-      </div>
+              <MoreVertical size={20} />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-48 p-1" align="end">
+            <button
+              onClick={() => setBookmarksPanelOpen(true)}
+              className="flex items-center gap-3 px-3 py-2 text-sm rounded hover:bg-accent w-full text-left"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" />
+                <line x1="9" y1="10" x2="15" y2="10" />
+                <line x1="12" y1="7" x2="12" y2="13" />
+              </svg>
+              Bookmarks
+            </button>
+            <button
+              onClick={() => setHighlightsPanelOpen(true)}
+              className="flex items-center gap-3 px-3 py-2 text-sm rounded hover:bg-accent w-full text-left"
+            >
+              <Highlighter size={16} />
+              Highlights
+            </button>
+            <button
+              onClick={() => requireAuth("chat", () => setChatPanelOpen(true))}
+              className="flex items-center gap-3 px-3 py-2 text-sm rounded hover:bg-accent w-full text-left"
+            >
+              <MessageSquare size={16} />
+              Chat
+            </button>
+            <button
+              onClick={() => setMenuOpen(true)}
+              className="flex items-center gap-3 px-3 py-2 text-sm rounded hover:bg-accent w-full text-left"
+            >
+              <Palette size={16} />
+              Theme
+            </button>
+          </PopoverContent>
+        </Popover>
+      </ReaderToolbar>
+
+      {/* Theme menu (triggered from more menu) */}
+      <Menu
+        trigger={<span />}
+        open={menuOpen}
+        onOpen={() => setMenuOpen(true)}
+        onClose={() => setMenuOpen(false)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        theme={themes[theme]}
+      >
+        <div className="p-3">
+          <RadioGroup
+            value={theme}
+            onChange={(value) => handleThemeChange(value as ThemeType)}
+            name="theme-selector"
+            theme={themes[theme]}
+          >
+            {(Object.keys(themes) as Array<keyof typeof themes>).map(
+              (themeKey) => (
+                <Radio
+                  key={themeKey}
+                  value={themeKey}
+                  label={themeKey}
+                  theme={themes[theme]}
+                />
+              )
+            )}
+          </RadioGroup>
+        </div>
+      </Menu>
       <div
         style={{ height: "100vh", position: "relative", overflow: "hidden" }}
       >
         <ReactReader
           key={`reader-${book.id}`}
+          showToc={true}
+          bookSyncId={bookSyncId}
+          tocExpanded={tocOpen}
+          onTocExpandedChange={setTocOpen}
+          hidePrev={isFirstPage}
           loadingView={
             <div className="w-full h-screen grid items-center">
               <Loader />
@@ -366,22 +483,135 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
             animationTriggerRef.current += 1;
             setAnimationKey(animationTriggerRef.current);
 
-            // Use debounced update to prevent race condition and excessive DB writes
-            updateBookLocationMutation.mutate({
-              bookId: book.id.toString(),
-              location: epubcfi,
+            // Dump every locationChanged for debugging
+            dumpError({
+              source: "epub:locationChanged",
+              location: "locationChanged",
+              error: JSON.stringify({
+                epubcfi,
+                settled: settledRef.current,
+                bookLocation: book.location,
+              }),
             });
-            triggerSyncOnWrite();
+
+            // Only save to DB after rendition has settled at the saved position.
+            // Transient positions during initial load must not overwrite the saved CFI.
+            if (settledRef.current) {
+              updateBookLocationMutation.mutate({
+                bookId: book.id.toString(),
+                location: epubcfi,
+              });
+              triggerSyncOnWrite();
+            }
 
             setCurrentEpubLocation(epubcfi);
+
+            // Track page from actual CFI position (only after locations are generated)
+            const pt = usePageTracker.getState();
+            if (pt.ready && pt.locationsReady) {
+              pt.goToCfi(
+                epubcfi,
+                (c: string) => rendition!.book.locations.locationFromCfi(c) as unknown as number,
+              );
+            }
           }}
           swipeable={true}
           readerStyles={createIReactReaderTheme(themes[theme].readerTheme)}
           handleTextSelected={handleTextSelected}
           getRendition={(_rendition) => {
             updateTheme(_rendition, theme);
-            _rendition.on("rendered", () => {
+
+            // Make the cover (first spine section) appear on the right side
+            // of the first two-page spread by injecting a blank column spacer.
+            _rendition.hooks.content.register((contents: any) => {
+              if (contents.sectionIndex === 0) {
+                const doc = contents.document as Document;
+                const spacer = doc.createElement('div');
+                spacer.setAttribute('data-cover-spacer', 'true');
+                spacer.style.breakAfter = 'column';
+                spacer.style.height = '100%';
+                doc.body.insertBefore(spacer, doc.body.firstChild);
+              }
+            });
+
+            _rendition.once("rendered", () => {
               setRendition(_rendition);
+              const pt = usePageTracker.getState();
+
+              const CHARS_PER_PAGE = 1600;
+              const locsCacheKey = `epub-locs-v5-${book.id}`;
+              // Clean up old cache versions
+              localStorage.removeItem(`epub-locations-${book.id}`);
+              localStorage.removeItem(`epub-locs-v2-${book.id}`);
+              localStorage.removeItem(`epub-pages-v3-${book.id}`);
+              localStorage.removeItem(`epub-pages-v4-${book.id}`);
+              localStorage.removeItem(`epub-pages-v5-${book.id}`);
+
+              const locFromCfi = (c: string) =>
+                _rendition.book.locations.locationFromCfi(c) as unknown as number;
+
+              // Measure how many location markers fit in one visible spread
+              const measureLocsPerView = (): number => {
+                const startCfi = (_rendition as any)?.location?.start?.cfi;
+                const endCfi = (_rendition as any)?.location?.end?.cfi;
+                if (startCfi && endCfi) {
+                  const s = locFromCfi(startCfi);
+                  const e = locFromCfi(endCfi);
+                  if (typeof s === 'number' && typeof e === 'number' && e > s) {
+                    return e - s;
+                  }
+                }
+                return 2; // sensible default for two-page spread
+              };
+
+              // Try restoring locations from localStorage cache (instant)
+              const cachedLocs = localStorage.getItem(locsCacheKey);
+              if (cachedLocs && pt.ready) {
+                // Restore epub.js locations instantly — no generate() needed
+                _rendition.book.locations.load(cachedLocs);
+                pt.setLocationsReady(true);
+
+                // Wait for epub.js to navigate to the saved location before
+                // reading position. "rendered" fires before display() completes,
+                // so location.start.cfi is stale until "relocated" fires.
+                const seedOnRelocated = () => {
+                  _rendition.off('relocated', seedOnRelocated);
+                  const cfi = (_rendition as any)?.location?.start?.cfi;
+                  if (cfi) {
+                    usePageTracker.getState().goToCfi(cfi, locFromCfi);
+                  }
+                  settledRef.current = true;
+                };
+                _rendition.on('relocated', seedOnRelocated);
+                return;
+              }
+
+              // No cache — generate locations (slow, first time only)
+              void _rendition.book.locations.generate(CHARS_PER_PAGE).then(() => {
+                usePageTracker.getState().setLocationsReady(true);
+
+                // Cache raw locations for instant restore next time
+                try { localStorage.setItem(locsCacheKey, _rendition.book.locations.save()); } catch {}
+
+                // Wait for relocated so we can measure locsPerView
+                const buildOnce = () => {
+                  _rendition.off('relocated', buildOnce);
+                  const rawLocCount = ((_rendition.book.locations as any)._locations ?? []).length;
+                  const avgLocsPerPage = measureLocsPerView();
+                  usePageTracker.getState().build(rawLocCount, avgLocsPerPage);
+
+                  // Seed current page
+                  const startCfi = (_rendition as any)?.location?.start?.cfi;
+                  if (startCfi) {
+                    usePageTracker.getState().goToCfi(startCfi, locFromCfi);
+                  }
+                  settledRef.current = true;
+                };
+
+                // Always wait for relocated — it fires after epub.js navigates
+                // to the saved location, ensuring location.start.cfi is correct
+                _rendition.on('relocated', buildOnce);
+              });
             });
           }}
         />
@@ -423,7 +653,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
           style={{ height: "100vh", position: "relative", overflow: "hidden" }}
         >
           <ReactReader
-            key={`reader-${book.id}`}
+            key={`reader-paragraph-${book.id}`}
             loadingView={
               <div className="w-full h-screen grid items-center">
                 <Loader />
@@ -436,7 +666,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
             swipeable={true}
             readerStyles={createIReactReaderTheme(themes[theme].readerTheme)}
             getRendition={(_rendition) => {
-              _rendition.on("rendered", () => {
+              _rendition.once("rendered", () => {
                 setParagraphRendition(_rendition);
               });
             }}
@@ -498,6 +728,33 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
         open={chatPanelOpen}
         onOpenChange={setChatPanelOpen}
       />
+
+      {/* Page number indicator — shows "X" normally, "X of Y" on hover; hidden on front matter */}
+      {pageReady && !isFrontMatter && (
+        <div
+          className="group/page"
+          style={{
+            position: 'fixed',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            textAlign: 'center',
+            zIndex: 5,
+            padding: '8px 0',
+          }}
+        >
+          <span
+            style={{
+              fontSize: 12,
+              color: themes[theme].color,
+              opacity: 0.4,
+            }}
+          >
+            <span>{pageCurrent}</span>
+            <span className="hidden group-hover/page:inline"> of {pageTotal}</span>
+          </span>
+        </div>
+      )}
     </div>
   );
 }

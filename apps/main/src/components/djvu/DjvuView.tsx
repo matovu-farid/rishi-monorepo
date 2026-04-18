@@ -21,8 +21,8 @@ import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { db } from "@/modules/kysley";
 import { stringToNumberID } from "@components/lib/utils";
 import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
-import { BookmarksList } from "@/components/bookmarks/BookmarksList";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@components/components/ui/sheet";
+import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
+import { ReaderTOC } from "@/components/reader/ReaderTOC";
 
 const PAGE_CACHE_SIZE = 5;
 const MIN_ZOOM = 0.5;
@@ -51,7 +51,6 @@ export function DjvuView({ book }: { book: Book }) {
   const embeddingsProcessedRef = useRef(false);
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
-  const [tocTab, setTocTab] = useState<"contents" | "bookmarks">("contents");
   const { requireAuth, AuthDialog } = useRequireAuth();
   const bookSyncIdRef = useRef<string | null>(null);
 
@@ -239,11 +238,14 @@ export function DjvuView({ book }: { book: Book }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [goPrev, goNext, zoomIn, zoomOut]);
 
-  // Publish paragraphs to event bus for TTS
+  // Publish paragraphs to event bus for TTS.
+  // Current page is published immediately; next/prev are debounced
+  // so rapid page flips don't trigger wasted fetches.
+  const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (pageCount === 0) return;
 
-    // Current page paragraphs
+    // Current page paragraphs — publish immediately
     getDjvuPageText({ path: book.filepath, pageNumber: currentPage })
       .then((texts) => {
         const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
@@ -254,43 +256,58 @@ export function DjvuView({ book }: { book: Book }) {
       })
       .catch((err) => console.warn("[DjvuView] failed to get text for TTS:", err));
 
-    // Prefetch next page paragraphs
-    if (currentPage < pageCount) {
-      getDjvuPageText({ path: book.filepath, pageNumber: currentPage + 1 })
-        .then((texts) => {
-          const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
-            text,
-            index: `djvu-${currentPage + 1}-${i}`,
-          }));
-          eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
-        })
-        .catch((err) => console.warn("[DjvuView] failed to prefetch next page:", err));
-    } else {
-      eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, []);
-    }
+    // Debounce next/prev page prefetch
+    if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current);
+    prefetchTimerRef.current = setTimeout(() => {
+      // Prefetch next page paragraphs
+      if (currentPage < pageCount) {
+        getDjvuPageText({ path: book.filepath, pageNumber: currentPage + 1 })
+          .then((texts) => {
+            const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
+              text,
+              index: `djvu-${currentPage + 1}-${i}`,
+            }));
+            eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
+          })
+          .catch((err) => console.warn("[DjvuView] failed to prefetch next page:", err));
+      } else {
+        eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, []);
+      }
 
-    // Prefetch previous page paragraphs
-    if (currentPage > 1) {
-      getDjvuPageText({ path: book.filepath, pageNumber: currentPage - 1 })
-        .then((texts) => {
-          const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
-            text,
-            index: `djvu-${currentPage - 1}-${i}`,
-          }));
-          eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
-        })
-        .catch((err) => console.warn("[DjvuView] failed to prefetch prev page:", err));
-    } else {
-      eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, []);
-    }
+      // Prefetch previous page paragraphs
+      if (currentPage > 1) {
+        getDjvuPageText({ path: book.filepath, pageNumber: currentPage - 1 })
+          .then((texts) => {
+            const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
+              text,
+              index: `djvu-${currentPage - 1}-${i}`,
+            }));
+            eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
+          })
+          .catch((err) => console.warn("[DjvuView] failed to prefetch prev page:", err));
+      } else {
+        eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, []);
+      }
+    }, 300);
+
+    return () => {
+      if (prefetchTimerRef.current) {
+        clearTimeout(prefetchTimerRef.current);
+        // Clear stale prefetch data so Player doesn't use wrong page's paragraphs
+        eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, []);
+        eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, []);
+      }
+    };
   }, [book.filepath, currentPage, pageCount]);
 
   // Handle page-turn events from Player (TTS exhausted current page)
   useEffect(() => {
     const handleNextEmptied = () => {
+      if (pageCount === 0) return;
       setCurrentPage((prev) => Math.min(prev + 1, pageCount));
     };
     const handlePrevEmptied = () => {
+      if (pageCount === 0) return;
       setCurrentPage((prev) => Math.max(prev - 1, 1));
     };
 
@@ -339,27 +356,29 @@ export function DjvuView({ book }: { book: Book }) {
   return (
     <div className="relative h-screen w-full flex flex-col bg-gray-900">
       {/* Top bar */}
-      <div className="fixed top-0 left-0 right-0 z-50 bg-transparent">
-        <div className="flex items-center justify-end gap-2 px-4 pt-5">
-          <IconButton onClick={() => setTocOpen(true)} className="hover:bg-transparent border-none">
+      <ReaderToolbar
+        panelsOpen={tocOpen || chatPanelOpen}
+        leftContent={
+          <IconButton color="inherit" onClick={() => setTocOpen(true)} className="hover:bg-transparent border-none">
             <MenuIcon size={20} />
           </IconButton>
-          <BookmarkButton
-            bookSyncId={bookSyncIdRef.current ?? ""}
-            location={String(currentPage)}
-            label={`Page ${currentPage}`}
-            className="hover:bg-transparent border-none"
-          />
-          <button
-            onClick={() => requireAuth("chat", () => setChatPanelOpen(true))}
-            className="p-2 rounded-md text-white hover:bg-white/10"
-            aria-label="Open chat panel"
-          >
-            <MessageSquare size={20} />
-          </button>
-          <BackButton />
-        </div>
-      </div>
+        }
+      >
+        <BackButton />
+        <BookmarkButton
+          bookSyncId={bookSyncIdRef.current ?? ""}
+          location={String(currentPage)}
+          label={`Page ${currentPage}`}
+          className="hover:bg-transparent border-none"
+        />
+        <button
+          onClick={() => requireAuth("chat", () => setChatPanelOpen(true))}
+          className="p-2 rounded-md text-black hover:bg-black/10"
+          aria-label="Open chat panel"
+        >
+          <MessageSquare size={20} />
+        </button>
+      </ReaderToolbar>
 
       {/* Main scrollable area */}
       <div className="flex-1 overflow-auto flex items-start justify-center pt-16 pb-24">
@@ -461,51 +480,24 @@ export function DjvuView({ book }: { book: Book }) {
       />
 
       {/* Navigation / Bookmarks Sidebar */}
-      <Sheet open={tocOpen} onOpenChange={setTocOpen}>
-        <SheetContent side="left" className="w-[300px] sm:w-[400px] p-0 bg-white border-gray-200">
-          <SheetHeader className="p-4 border-b sticky top-0 z-10 border-gray-200 bg-white">
-            <SheetTitle>Navigation</SheetTitle>
-          </SheetHeader>
-          <div className="flex border-b border-gray-200">
-            <button
-              onClick={() => setTocTab("contents")}
-              className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
-                tocTab === "contents"
-                  ? "border-b-2 border-blue-500 text-blue-600"
-                  : "text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              Contents
-            </button>
-            <button
-              onClick={() => setTocTab("bookmarks")}
-              className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
-                tocTab === "bookmarks"
-                  ? "border-b-2 border-red-500 text-red-600"
-                  : "text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              Bookmarks
-            </button>
+      <ReaderTOC
+        open={tocOpen}
+        onOpenChange={setTocOpen}
+        title="Navigation"
+        bookSyncId={bookSyncIdRef.current ?? ""}
+        onBookmarkNavigate={(location) => {
+          const page = parseInt(location, 10);
+          if (page > 0) {
+            setCurrentPage(page);
+            setTocOpen(false);
+          }
+        }}
+        tocContent={
+          <div className="p-4 text-gray-400 text-sm text-center">
+            Page {currentPage} of {pageCount}
           </div>
-          {tocTab === "contents" ? (
-            <div className="p-4 text-gray-400 text-sm text-center">
-              Page {currentPage} of {pageCount}
-            </div>
-          ) : (
-            <BookmarksList
-              bookSyncId={bookSyncIdRef.current ?? ""}
-              onNavigate={(location) => {
-                const page = parseInt(location, 10);
-                if (page > 0) {
-                  setCurrentPage(page);
-                  setTocOpen(false);
-                }
-              }}
-            />
-          )}
-        </SheetContent>
-      </Sheet>
+        }
+      />
     </div>
   );
 }

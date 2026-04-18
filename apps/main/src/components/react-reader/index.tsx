@@ -10,11 +10,31 @@ import {
 import { type NavItem } from "epubjs";
 import {
   SwipeWrapper,
-  TableOfContents,
-  TocToggleButton,
   NavigationArrows,
 } from "./components";
+import { ReaderTOC } from "@/components/reader/ReaderTOC";
 import type { ParagraphWithCFI } from "@/types";
+
+// Recursive TOC item for the ReaderTOC content
+function TocItem({ data, setLocation }: { data: NavItem; setLocation: (href: string) => void }) {
+  return (
+    <div>
+      <button
+        onClick={() => setLocation(data.href)}
+        className="block w-full text-left py-3 px-4 text-sm text-gray-700 hover:bg-gray-100 hover:pl-6 border-b border-gray-100 cursor-pointer transition-all duration-200"
+      >
+        {data.label}
+      </button>
+      {data.subitems && data.subitems.length > 0 && (
+        <div style={{ paddingLeft: 16 }}>
+          {data.subitems.map((item, i) => (
+            <TocItem key={i} data={item} setLocation={setLocation} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Search result object containing location and excerpt
 type SearchResult = { cfi: string; excerpt: string };
@@ -38,8 +58,12 @@ export type IReactReaderProps = IEpubViewProps & {
   onPageParagraphsExtracted?: (data: {
     paragraphs: ParagraphWithCFI[];
   }) => void; // Callback when page paragraphs are extracted
-  onNextPageParagraphs?: (data: { paragraphs: ParagraphWithCFI[] }) => void; // Callback when next page paragraphs are extracted
-  onPreviousPageParagraphs?: (data: { paragraphs: ParagraphWithCFI[] }) => void; // Callback when previous page paragraphs are extracted
+  onNextPageParagraphs?: (data: { paragraphs: ParagraphWithCFI[] }) => void;
+  onPreviousPageParagraphs?: (data: { paragraphs: ParagraphWithCFI[] }) => void;
+  bookSyncId?: string; // Book sync ID for bookmarks in TOC
+  tocExpanded?: boolean; // Controlled TOC expanded state
+  onTocExpandedChange?: (expanded: boolean) => void; // Callback when TOC is toggled
+  hidePrev?: boolean; // Hide the previous-page arrow (e.g. on cover page)
 };
 
 // Component state for ReactReader
@@ -81,9 +105,17 @@ export class ReactReader extends PureComponent<
    * Opens/closes the TOC sidebar
    */
   toggleToc = () => {
-    this.setState({
-      expandedToc: !this.state.expandedToc,
-    });
+    const { onTocExpandedChange } = this.props;
+    if (onTocExpandedChange !== undefined) {
+      onTocExpandedChange(!this.getExpandedToc());
+    } else {
+      this.setState({ expandedToc: !this.state.expandedToc });
+    }
+  };
+
+  /** Get effective expanded state — controlled prop takes precedence */
+  getExpandedToc = () => {
+    return this.props.tocExpanded ?? this.state.expandedToc;
   };
 
   /**
@@ -342,28 +374,16 @@ export class ReactReader extends PureComponent<
       swipeable,
       epubViewStyles,
       isRTL = false,
+      bookSyncId,
+      hidePrev = false,
       ...props // Remaining props passed through to EpubView
     } = this.props;
-    const { toc, expandedToc } = this.state;
+    const { toc } = this.state;
+    const expandedToc = this.getExpandedToc();
     return (
       <div style={readerStyles.container}>
         {/* Main reader area */}
-        <div
-          style={Object.assign(
-            {},
-            readerStyles.readerArea,
-            expandedToc ? readerStyles.containerExpanded : {} // Adjust layout when TOC open
-          )}
-        >
-          {/* TOC toggle button (hamburger icon) */}
-          {showToc && (
-            <TocToggleButton
-              expandedToc={expandedToc}
-              toggleToc={this.toggleToc}
-              readerStyles={readerStyles}
-            />
-          )}
-
+        <div style={readerStyles.readerArea}>
           {/* Title bar at top */}
           <div style={readerStyles.titleArea}>{title}</div>
 
@@ -372,7 +392,6 @@ export class ReactReader extends PureComponent<
             swipeProps={{
               onSwiped: (eventData: SwipeEventData) => {
                 const { dir } = eventData;
-                // RTL: reverse swipe directions
                 if (dir === "Left") {
                   isRTL ? this.prev() : this.next();
                 }
@@ -383,13 +402,12 @@ export class ReactReader extends PureComponent<
               onTouchStartOrOnMouseDown: ({ event }) => event.preventDefault(),
               touchEventOptions: { passive: false },
               preventScrollOnSwipe: true,
-              trackMouse: true, // Enable swipe with mouse drag
+              trackMouse: true,
             }}
             onSwipeLeft={() => (isRTL ? this.prev() : this.next())}
             onSwipeRight={() => (isRTL ? this.next() : this.prev())}
           >
             <div style={readerStyles.reader}>
-              {/* Core EPUB viewer component */}
               <EpubView
                 ref={this.readerRef}
                 loadingView={
@@ -415,7 +433,6 @@ export class ReactReader extends PureComponent<
                 onNextPageParagraphs={this.props.onNextPageParagraphs}
                 onPreviousPageParagraphs={this.props.onPreviousPageParagraphs}
               />
-              {/* Transparent overlay for swipe detection */}
               {swipeable && <div style={readerStyles.swipeWrapper} />}
             </div>
           </SwipeWrapper>
@@ -425,17 +442,31 @@ export class ReactReader extends PureComponent<
             onPrev={isRTL ? this.next : this.prev}
             onNext={isRTL ? this.prev : this.next}
             readerStyles={readerStyles}
+            hidePrev={hidePrev}
           />
         </div>
 
-        {/* Table of contents sidebar (conditionally rendered) */}
+        {/* Unified TOC sidebar using shared ReaderTOC */}
         {showToc && toc && (
-          <TableOfContents
-            toc={toc}
-            expandedToc={expandedToc}
-            setLocation={this.setLocation}
-            toggleToc={this.toggleToc}
-            readerStyles={readerStyles}
+          <ReaderTOC
+            open={expandedToc}
+            onOpenChange={(open) => {
+              if (!open && expandedToc) this.toggleToc();
+              if (open && !expandedToc) this.toggleToc();
+            }}
+            bookSyncId={bookSyncId ?? ""}
+            onBookmarkNavigate={(loc) => this.setLocation(loc)}
+            tocContent={
+              <div className="overflow-y-auto">
+                {toc.map((item, i) => (
+                  <TocItem
+                    key={i}
+                    data={item}
+                    setLocation={(href: string) => this.setLocation(href)}
+                  />
+                ))}
+              </div>
+            }
           />
         )}
       </div>

@@ -27,16 +27,14 @@ export default function createIReactReaderTheme(
     titleArea: {
       ...ReactReaderStyle.titleArea,
       color: theme.color,
-      // Reserve space on the right for the top-right action bar rendered above
-      // the reader in epub.tsx (BackButton, Highlighter, Chat, Settings, Palette).
-      // The button bar is ~260px wide; without this reservation the centered
-      // title overlaps them — especially when the TOC is expanded, because
-      // readerArea is shifted with translateX(256px) while the buttons are not.
-      right: 260,
-      // Truncate extremely long titles instead of wrapping into the button zone.
+      top: 14,
+      left: 120,
+      right: 220,
       whiteSpace: "nowrap",
       overflow: "hidden",
       textOverflow: "ellipsis",
+      fontSize: 14,
+      fontWeight: 500,
     },
     tocArea: {
       ...ReactReaderStyle.tocArea,

@@ -2,9 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Loader from "./Loader";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "react-toastify";
-import { IconButton } from "./ui/IconButton";
 import { Button } from "./ui/Button";
-import { Trash2, Plus, FolderOpen } from "lucide-react";
+import { Trash2, Plus, FolderOpen, Search } from "lucide-react";
 import { chooseFiles } from "@/modules/chooseFiles";
 import {
   Book,
@@ -110,6 +109,7 @@ function FileDrop(): React.JSX.Element {
   const navigate = useNavigate();
   const [newBookId, setNewBookId] = useState<string | null>(null);
   const [discoveryOpen, setDiscoveryOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; book: Book } | null>(null);
 
   const navigateToNewBook = useCallback((bookId: string) => {
     void navigate({
@@ -397,6 +397,13 @@ function FileDrop(): React.JSX.Element {
     }
   };
 
+  // Close context menu on outside click
+  useEffect(() => {
+    const handleClick = () => setContextMenu(null);
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, []);
+
   // Handle native file picker (recommended approach)
   const handleChooseFiles = async () => {
     try {
@@ -415,6 +422,41 @@ function FileDrop(): React.JSX.Element {
       processFilePaths(filePaths);
     },
   });
+  const [searchQuery, setSearchQuery] = useState("");
+  const [lastReadBookId, setLastReadBookId] = useState<string | null>(null);
+
+  // Load last-read book ID from localStorage
+  useEffect(() => {
+    const stored = localStorage.getItem("lastReadBookId");
+    if (stored) setLastReadBookId(stored);
+  }, []);
+
+  // Listen for storage changes (set by BackButton when navigating back)
+  useEffect(() => {
+    const handler = () => {
+      const stored = localStorage.getItem("lastReadBookId");
+      setLastReadBookId(stored);
+    };
+    window.addEventListener("lastReadBookChanged", handler);
+    return () => window.removeEventListener("lastReadBookChanged", handler);
+  }, []);
+
+  const filteredBooks = useMemo(() => {
+    if (!books) return [];
+    if (!searchQuery.trim()) return books;
+    const q = searchQuery.toLowerCase();
+    return books.filter(
+      (b) =>
+        b.title.toLowerCase().includes(q) ||
+        b.author.toLowerCase().includes(q)
+    );
+  }, [books, searchQuery]);
+
+  const lastReadBook = useMemo(() => {
+    if (!lastReadBookId || !books) return null;
+    return books.find((b) => b.id.toString() === lastReadBookId) ?? null;
+  }, [lastReadBookId, books]);
+
   if (isError)
     return (
       <div className="w-full h-full place-items-center grid">
@@ -429,9 +471,21 @@ function FileDrop(): React.JSX.Element {
       </div>
     );
   return (
-    <div className="w-full h-full">
-      {/* Add Book Button - always visible at the top */}
-      <div className="p-4 flex justify-end items-center gap-2">
+    <div className="w-full h-full overflow-hidden">
+      {/* Top bar with search + actions, drag region for overlay title bar */}
+      <div data-tauri-drag-region className="px-4 pt-10 pb-2 flex items-center gap-2">
+        {/* Search input — blends in before the action buttons */}
+        <div className="relative flex-1 max-w-xs">
+          <Search size={16} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Search library…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-gray-100 text-gray-900 placeholder-gray-400 text-sm rounded-lg pl-8 pr-3 py-1.5 border-none focus:outline-none focus:ring-1 focus:ring-gray-300"
+          />
+        </div>
+        <div className="flex-1" />
         <Button
           variant="ghost"
           className="cursor-pointer"
@@ -452,12 +506,28 @@ function FileDrop(): React.JSX.Element {
         <UpdateMenu />
       </div>
 
+      {/* Reading Now — only shown when user has read a book and pressed back */}
+      {lastReadBook && (
+        <div className="px-5 mb-4">
+          <p className="text-xs text-gray-400 uppercase tracking-wider mb-2">Reading Now</p>
+          <Link to="/books/$id" params={{ id: lastReadBook.id.toString() }} className="flex items-center gap-4 bg-gray-50 rounded-xl p-3 hover:bg-gray-100 transition-colors">
+            <div className="w-16 shrink-0">
+              <BookCoverImage book={lastReadBook} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-900 truncate">{lastReadBook.title}</p>
+              <p className="text-xs text-gray-500 truncate">{lastReadBook.author}</p>
+            </div>
+          </Link>
+        </div>
+      )}
+
       <motion.div
         layout
         initial="animate"
         animate="animate"
         style={
-          books && books.length > 0
+          filteredBooks.length > 0
             ? {
                 display: "grid",
                 gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
@@ -466,22 +536,26 @@ function FileDrop(): React.JSX.Element {
             : {}
         }
         className={
-          books && books.length > 0
-            ? "w-full h-screen p-5 gap-[30px] place-items-baseline cursor-pointer"
+          filteredBooks.length > 0
+            ? "w-full p-5 gap-[30px] place-items-baseline cursor-pointer"
             : "grid place-items-center gap-3 rounded-3xl w-[50vw] h-[50vh] p-5 mx-auto"
         }
       >
         {isDragging && (!books || books.length === 0) ? (
           <p>Drop the files here ...</p>
-        ) : books && books.length > 0 ? (
+        ) : filteredBooks.length > 0 ? (
           <AnimatePresence>
-            {books.map((book) => (
+            {filteredBooks.map((book) => (
               <motion.div
                 key={book.id}
                 initial={{ opacity: 0.5, scale: 0.7 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0.5, scale: 0.7 }}
-                className="p-2 grid relative"
+                className="p-2 grid relative transition-transform duration-200 ease-out hover:scale-[1.03]"
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setContextMenu({ x: e.clientX, y: e.clientY, book });
+                }}
               >
                 <div
                   onClick={(e) => {
@@ -490,18 +564,6 @@ function FileDrop(): React.JSX.Element {
                   }}
                   className="rounded-3xl bg-transparent"
                 >
-                  <div className="absolute top-0 right-0">
-                    <IconButton
-                      onClick={() => {
-                        deleteBookMutation.mutate({ book });
-                      }}
-                      color="error"
-                      className="bg-white p-0 z-10 drop-shadow cursor-pointer"
-                    >
-                      <Trash2 size={20} />
-                    </IconButton>
-                  </div>
-
                   <Link
                     to="/books/$id"
                     params={{ id: book.id.toString() }}
@@ -510,6 +572,8 @@ function FileDrop(): React.JSX.Element {
                     <BookCoverImage book={book} />
                   </Link>
                 </div>
+                <p className="text-xs font-medium text-gray-900 truncate mt-1 max-w-[200px]">{book.title}</p>
+                <p className="text-xs text-gray-500 truncate max-w-[200px]">{book.author}</p>
               </motion.div>
             ))}
           </AnimatePresence>
@@ -522,6 +586,23 @@ function FileDrop(): React.JSX.Element {
           </div>
         )}
       </motion.div>
+      {contextMenu && (
+        <div
+          className="fixed z-50 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[140px]"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+        >
+          <button
+            className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 w-full text-left rounded"
+            onClick={() => {
+              deleteBookMutation.mutate({ book: contextMenu.book });
+              setContextMenu(null);
+            }}
+          >
+            <Trash2 size={16} />
+            Delete
+          </button>
+        </div>
+      )}
       <BookDiscoveryModal
         open={discoveryOpen}
         onClose={() => setDiscoveryOpen(false)}

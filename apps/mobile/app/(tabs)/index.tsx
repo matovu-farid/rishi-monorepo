@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react'
-import { View, FlatList, TouchableOpacity, Alert, Text } from 'react-native'
+import { useCallback, useMemo, useState } from 'react'
+import { View, FlatList, TouchableOpacity, Alert, Text, TextInput, Image, Pressable } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { Directory, Paths } from 'expo-file-system'
@@ -8,19 +8,32 @@ import { SyncStatusIndicator } from '@/components/SyncStatusIndicator'
 import { BookRow } from '@/components/BookRow'
 import { LibraryEmptyState } from '@/components/LibraryEmptyState'
 import { UrlImportSheet } from '@/components/UrlImportSheet'
-import { getBooks, deleteBook } from '@/lib/book-storage'
+import { getBooks, deleteBook, getLastReadBook } from '@/lib/book-storage'
 import { importEpubFile, importPdfFile, importMobiFile, importDjvuFile } from '@/lib/file-import'
 import { Book } from '@/types/book'
 
 export default function LibraryScreen() {
   const router = useRouter()
   const [books, setBooks] = useState<Book[]>([])
+  const [lastReadBook, setLastReadBook] = useState<Book | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
   const [importing, setImporting] = useState(false)
   const [urlSheetVisible, setUrlSheetVisible] = useState(false)
+
+  const filteredBooks = useMemo(() => {
+    if (!searchQuery.trim()) return books
+    const query = searchQuery.toLowerCase()
+    return books.filter(
+      (book) =>
+        book.title.toLowerCase().includes(query) ||
+        (book.author && book.author.toLowerCase().includes(query))
+    )
+  }, [books, searchQuery])
 
   const loadBooks = useCallback(() => {
     const loaded = getBooks()
     setBooks(loaded)
+    setLastReadBook(getLastReadBook())
   }, [])
 
   useFocusEffect(
@@ -125,8 +138,44 @@ export default function LibraryScreen() {
           </Text>
           <SyncStatusIndicator />
         </View>
+        <View className="px-6 pb-3">
+          <View className="flex-row items-center bg-gray-100 dark:bg-gray-800 rounded-lg px-3">
+            <IconSymbol name="magnifyingglass" size={18} color="#9CA3AF" />
+            <TextInput
+              testID="library-search"
+              className="flex-1 ml-2 py-2.5 text-base text-gray-900 dark:text-white"
+              placeholder="Search library..."
+              placeholderTextColor="#9CA3AF"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCapitalize="none"
+              autoCorrect={false}
+              clearButtonMode="while-editing"
+            />
+          </View>
+        </View>
+        {lastReadBook && (
+          <Pressable
+            className="mx-6 mb-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-xl flex-row items-center"
+            onPress={() => handleBookPress(lastReadBook)}
+          >
+            {lastReadBook.coverPath ? (
+              <Image source={{ uri: lastReadBook.coverPath }} className="w-10 h-14 rounded mr-3" resizeMode="cover" />
+            ) : (
+              <View className="w-10 h-14 rounded mr-3 bg-gray-200 dark:bg-gray-700 items-center justify-center">
+                <Text className="text-gray-400 text-xs">{lastReadBook.format.toUpperCase()}</Text>
+              </View>
+            )}
+            <View className="flex-1">
+              <Text className="text-xs text-[#0a7ea4] font-semibold mb-0.5">Reading Now</Text>
+              <Text className="text-sm font-semibold text-gray-900 dark:text-white" numberOfLines={1}>{lastReadBook.title}</Text>
+              <Text className="text-xs text-gray-500 dark:text-gray-400" numberOfLines={1}>{lastReadBook.author}</Text>
+            </View>
+            <IconSymbol name="chevron.right" size={18} color="#9CA3AF" />
+          </Pressable>
+        )}
         <FlatList
-          data={books}
+          data={filteredBooks}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
             <BookRow

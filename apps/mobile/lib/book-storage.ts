@@ -2,7 +2,7 @@ import { File } from 'expo-file-system'
 import { Book } from '@/types/book'
 import { db } from '@/lib/db'
 import { books } from '@rishi/shared/schema'
-import { eq, and, desc } from 'drizzle-orm'
+import { eq, and, or, desc, isNotNull } from 'drizzle-orm'
 import { triggerSyncOnWrite } from '@/lib/sync/triggers'
 import { downloadBookFile } from '@/lib/sync/file-sync'
 
@@ -102,6 +102,22 @@ export function deleteBook(id: string): void {
     .where(eq(books.id, id))
     .run()
   triggerSyncOnWrite()
+}
+
+export function getLastReadBook(): Book | null {
+  const row = db
+    .select()
+    .from(books)
+    .where(
+      and(
+        eq(books.isDeleted, false),
+        or(isNotNull(books.currentCfi), isNotNull(books.currentPage))
+      )
+    )
+    .orderBy(desc(books.updatedAt))
+    .limit(1)
+    .get()
+  return row ? mapRowToBook(row) : null
 }
 
 function mapRowToBook(row: typeof books.$inferSelect): Book {

@@ -48,6 +48,12 @@ export class Player extends EventEmitter<PlayerEventMap> {
   public audioElement: HTMLAudioElement;
   private direction: Direction = Direction.Forward;
   private eventBusSubscriptions: Array<{ event: string; handler: (...args: any[]) => void }> = [];
+  private _aborted: boolean = false;
+  private _prefetchGeneration: number = 0;
+  private _prefetchTimer: ReturnType<typeof setTimeout> | null = null;
+  private _autoAdvancing: boolean = false;
+  private _waitingTimeout: ReturnType<typeof setTimeout> | null = null;
+  private _stoppedByTimeout: boolean = false;
 
   constructor(audioElement: HTMLAudioElement) {
     super();
@@ -55,27 +61,46 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   async initialize(bookId: string): Promise<void> {
+    this._aborted = false;
+    this._stoppedByTimeout = false;
     this.setPlayingState(PlayingState.Stopped);
     void this.setParagraphIndex(0);
 
     this.bookId = bookId;
 
     this.errors = [];
+    // Clear audio cache from previous book to prevent cross-book cache collisions
+    // (MOBI/DJVU use non-book-specific index keys like mobi-0-0)
+    this.audioCache.clear();
 
     // Clear any previous subscriptions to prevent leaks on re-initialize
     this.removeEventBusSubscriptions();
 
     const onNewParagraphs = async (paragraphs: ParagraphWithIndex[]) => {
       if (paragraphs.length === 0) return;
-      const wasWaiting = this.playingState === PlayingState.WaitingForNewParagraphs;
+      if (this._aborted) return;
+      // Also resume if the _waitingTimeout fired and transitioned to Stopped
+      // before paragraphs arrived (slow IPC fetch). Don't resume from a
+      // user-initiated stop — only from timeout-induced stops.
+      const wasWaiting =
+        this.playingState === PlayingState.WaitingForNewParagraphs ||
+        (this.playingState === PlayingState.Stopped && this._stoppedByTimeout);
       if (isEqual(this.currentViewParagraphs, paragraphs)) return;
       this.currentViewParagraphs = paragraphs;
       if (wasWaiting) {
         // Paragraphs arrived after we were waiting — start playing from the top
+        this._stoppedByTimeout = false;
         await this.resetParagraphs();
-        await this.play();
+        if (this._aborted) return;
+        this._autoAdvancing = true;
+        try {
+          await this.play();
+        } finally {
+          this._autoAdvancing = false;
+        }
         return;
       }
+      if (this._aborted) return;
       if (this.playingState === PlayingState.Playing) {
         await this.handleLocationChanged();
       }
@@ -119,6 +144,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   private handleLocationChanged = async () => {
+    if (this._aborted) return;
     if (this.playingState === PlayingState.WaitingForNewParagraphs) {
       await this.resetParagraphs();
       // Don't call stop() or play() - let NEW_PARAGRAPHS_AVAILABLE handle resuming
@@ -142,18 +168,38 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   public cleanup() {
+    this._aborted = true;
+    if (this._prefetchTimer) {
+      clearTimeout(this._prefetchTimer);
+      this._prefetchTimer = null;
+    }
+    this._prefetchGeneration++;
+    if (this._waitingTimeout) {
+      clearTimeout(this._waitingTimeout);
+      this._waitingTimeout = null;
+    }
     this.removeEventBusSubscriptions();
     this.audioElement.removeEventListener("ended", this.handleEnded);
     this.audioElement.removeEventListener("error", this.handleError);
+    this.audioElement.onplay = null;
     this.audioElement.pause();
     this.audioElement.src = "";
+    this.setPlayingState(PlayingState.Stopped);
   }
 
   private handleEnded = async () => {
-    // await this.clearHighlights();
+    if (this._aborted) return;
     const endedParagraph = await this.getCurrentParagraph();
-    await this.next();
+    if (this._aborted) return;
+    // Publish AUDIO_ENDED before next() so the highlight for the ended paragraph
+    // is removed before the new paragraph's highlight is added via PLAYING_AUDIO.
     eventBus.publish(EventBusEvent.AUDIO_ENDED, endedParagraph);
+    this._autoAdvancing = true;
+    try {
+      await this.next();
+    } finally {
+      this._autoAdvancing = false;
+    }
   };
   private handleError = async (e: Event) => {
     const audioElement = e.target as HTMLAudioElement;
@@ -193,6 +239,8 @@ export class Player extends EventEmitter<PlayerEventMap> {
       : "Audio playback failed (unknown error)";
 
     this.errors.push(errorMsg);
+    // Cap errors array to prevent unbounded growth during long sessions
+    if (this.errors.length > 50) this.errors.shift();
     console.error("🔴 Error message added:", errorMsg);
 
     this.setPlayingState(PlayingState.Stopped);
@@ -249,23 +297,23 @@ export class Player extends EventEmitter<PlayerEventMap> {
   }
 
   public async play(maxRetries: number = 3): Promise<void> {
+    if (this._aborted) return;
     logStateEvent("player.play", {
       paragraphCount: this.currentViewParagraphs.length,
       currentIndex: this.currentParagraphIndex,
       bookId: this.bookId,
     });
-    // Remove any existing listeners first to prevent accumulation
+    // Remove any existing listeners first to prevent accumulation.
+    // They will be re-added after setupEventListeners resolves (inside
+    // playWithoutRetry) to avoid double-firing with the once-off setup listeners.
     this.audioElement.removeEventListener("ended", this.handleEnded);
     this.audioElement.removeEventListener("error", this.handleError);
-
-    // Add listeners using the bound method references directly
-    this.audioElement.addEventListener("ended", this.handleEnded);
-    this.audioElement.addEventListener("error", this.handleError);
 
     let attempt = 0;
     let skipCache = false;
 
     while (attempt < maxRetries) {
+      if (this._aborted) return;
       try {
         // await this.clearHighlights();
 
@@ -273,6 +321,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
         return; // success
       } catch (err) {
+        if (this._aborted) return;
         console.error(">>> Player: Play attempt failed", {
           attempt: attempt + 1,
           skipCache,
@@ -288,11 +337,13 @@ export class Player extends EventEmitter<PlayerEventMap> {
         attempt += 1;
       }
     }
+    if (this._aborted) return;
     console.error(">>> Player: All retries failed — skipping paragraph");
     await this.next();
   }
 
   public async playWithoutRetry(skipCache: boolean = false) {
+    if (this._aborted) return;
     if (this.playingState === PlayingState.Playing) return;
 
     if (this.currentViewParagraphs.length === 0) {
@@ -311,6 +362,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
       );
       // Give user 2 seconds to view the image, then move to next page
       await new Promise((resolve) => setTimeout(resolve, 2000));
+      if (this._aborted) return;
       await this.moveToNextPage();
       return;
     }
@@ -327,6 +379,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
         "🎵 No text in paragraph (likely an image) - pausing briefly then moving to next paragraph"
       );
       await new Promise((resolve) => setTimeout(resolve, 2000));
+      if (this._aborted) return;
       await this.next();
       return;
     }
@@ -349,6 +402,9 @@ export class Player extends EventEmitter<PlayerEventMap> {
     );
     audioFetched = true;
 
+    // Check abort after async TTS fetch — cleanup may have been called while waiting
+    if (this._aborted) return;
+
     if (!audioPath) {
       console.error("🎵 Failed to get audio path");
       this.errors.push("Failed to request audio");
@@ -364,21 +420,56 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     await this.setupEventListeners(currentParagraph);
 
+    // Add persistent listeners only after setup resolves — avoids
+    // double-firing with the once-off error listener in setupEventListeners.
+    this.audioElement.addEventListener("ended", this.handleEnded);
+    this.audioElement.addEventListener("error", this.handleError);
+
     await this.audioElement.play();
 
     this.setPlayingState(PlayingState.Playing);
 
-    // Prefetch nearby paragraphs on the current page
-    void this.prefetchAudio(this.currentParagraphIndex + 1, 3);
-    void this.prefetchAudio(this.currentParagraphIndex - 3, 3);
+    // Debounce prefetch — if the user is rapidly skipping paragraphs,
+    // we only prefetch for the paragraph they settle on.
+    // During auto-advance (handleEnded → next → play), prefetch immediately.
+    this.schedulePrefetch(this._autoAdvancing);
+  }
 
-    // Prefetch across page boundaries for smooth prev/next page transitions
-    if (this.currentParagraphIndex === 0) {
-      void this.prefetchPrevPageAudio(3);
-    }
-    if (this.currentParagraphIndex >= this.currentViewParagraphs.length - 1) {
-      void this.prefetchNextPageAudio(3);
-    }
+  /**
+   * Schedule a debounced prefetch for nearby paragraphs and page boundaries.
+   * Each call cancels any pending prefetch so rapid navigation doesn't
+   * trigger wasted TTS requests for intermediate paragraphs.
+   *
+   * @param immediate — if true, prefetch fires synchronously (delay=0).
+   *   Used during continuous TTS playback (handleEnded → next → play).
+   *   Manual next/prev calls go through stop() → play() which always
+   *   passes through playWithoutRetry, so we use `immediate` to distinguish.
+   */
+  private schedulePrefetch(immediate: boolean = false) {
+    if (this._prefetchTimer) clearTimeout(this._prefetchTimer);
+    const generation = ++this._prefetchGeneration;
+
+    // During continuous playback (immediate=true), prefetch right away so
+    // the pipeline stays fed. During manual navigation, debounce to avoid
+    // wasted TTS requests for intermediate pages the user is flipping past.
+    const delay = immediate ? 0 : 200;
+
+    this._prefetchTimer = setTimeout(() => {
+      // Stale — user has navigated again since this was scheduled
+      if (generation !== this._prefetchGeneration || this._aborted) return;
+
+      // Prefetch nearby paragraphs on the current page
+      void this.prefetchAudio(this.currentParagraphIndex + 1, 3, generation);
+      void this.prefetchAudio(this.currentParagraphIndex - 3, 3, generation);
+
+      // Prefetch across page boundaries for smooth prev/next page transitions
+      if (this.currentParagraphIndex === 0) {
+        void this.prefetchPrevPageAudio(3, generation);
+      }
+      if (this.currentParagraphIndex >= this.currentViewParagraphs.length - 1) {
+        void this.prefetchNextPageAudio(3, generation);
+      }
+    }, delay);
   }
   async setupEventListeners(currentParagraph: ParagraphWithIndex) {
     await new Promise((resolve, reject) => {
@@ -469,25 +560,31 @@ export class Player extends EventEmitter<PlayerEventMap> {
     if (this.playingState === PlayingState.Stopped) return;
     this.audioElement.pause();
     this.audioElement.currentTime = 0;
+    // Transition out of Playing immediately, before any async work.
+    // This prevents play() from being a no-op if stop() is called
+    // but the async requestAudio below throws before reaching the
+    // old setPlayingState(Stopped) at the end.
+    this.setPlayingState(PlayingState.Stopped);
     await this.setParagraphIndex(0);
 
+    if (this._aborted) return;
     const currentParagraph = await this.getCurrentParagraph();
     if (!currentParagraph) return;
     const audioPath =
       (await this.requestAudio(currentParagraph, this.getNextPriority())) || "";
 
-    // set the souce to the first paragraph
+    // Check abort after async request — cleanup may have been called while waiting
+    if (this._aborted) return;
+
+    // set the source to the first paragraph
     this.audioElement.src = audioPath || "";
-
     this.audioElement.load();
-
-    // await this.clearHighlights();
-    this.setPlayingState(PlayingState.Stopped);
   }
-  private prefetchNextPageAudio = (count: number = 3) => {
+  private prefetchNextPageAudio = (count: number = 3, generation?: number) => {
     if (this.nextPageParagraphs.length === 0) return;
     const promises: Promise<unknown>[] = [];
     for (let i = 0; i < Math.min(count, this.nextPageParagraphs.length); i++) {
+      if (generation !== undefined && generation !== this._prefetchGeneration) return;
       const paragraph = this.nextPageParagraphs[i];
 
       const promise = this.requestAudio(
@@ -500,23 +597,29 @@ export class Player extends EventEmitter<PlayerEventMap> {
     }
     return Promise.all(promises);
   };
-  private prefetchPrevPageAudio = (count: number = 3) => {
+  private prefetchPrevPageAudio = (count: number = 3, generation?: number) => {
     if (this.previousPageParagraphs.length === 0) return;
-
+    if (generation !== undefined && generation !== this._prefetchGeneration) return;
+    const promises: Promise<unknown>[] = [];
     for (
       let i = 0;
       i < Math.min(count, this.previousPageParagraphs.length);
       i++
     ) {
+      if (generation !== undefined && generation !== this._prefetchGeneration) break;
       const paragraph = this.previousPageParagraphs[i];
-      this.requestAudio(paragraph, this.getPrefetchPriority()).catch(
-        (error) => {
-          console.warn(`Prefetch failed for next page paragraph ${i}:`, error);
-        }
+      promises.push(
+        this.requestAudio(paragraph, this.getPrefetchPriority()).catch(
+          (error) => {
+            console.warn(`Prefetch failed for prev page paragraph ${i}:`, error);
+          }
+        )
       );
     }
+    return Promise.all(promises);
   };
   private moveToNextPage = async () => {
+    if (this._aborted) return;
     this.setPlayingState(PlayingState.WaitingForNewParagraphs);
     this.currentViewParagraphs = this.nextPageParagraphs;
     this.nextPageParagraphs = [];
@@ -526,6 +629,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     // If we already have paragraphs from the prefetch, play immediately.
     // Otherwise, wait for NEW_PARAGRAPHS_AVAILABLE to arrive via the event bus
     // (the onNewParagraphs handler will resume playback).
+    if (this._aborted) return;
     if (this.currentViewParagraphs.length > 0) {
       await this.stop();
       await this.resetParagraphs();
@@ -533,12 +637,14 @@ export class Player extends EventEmitter<PlayerEventMap> {
     }
   };
   private moveToPreviousPage = async () => {
+    if (this._aborted) return;
     this.setPlayingState(PlayingState.WaitingForNewParagraphs);
     this.currentViewParagraphs = [...this.previousPageParagraphs].reverse();
     this.previousPageParagraphs = [];
 
     eventBus.publish(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED);
 
+    if (this._aborted) return;
     if (this.currentViewParagraphs.length > 0) {
       await this.stop();
       await this.resetParagraphs();
@@ -556,18 +662,6 @@ export class Player extends EventEmitter<PlayerEventMap> {
       await this.moveToNextPage();
       return;
     }
-    if (index == this.currentViewParagraphs.length - 1) {
-      // Request audio for the next paragraphs of the next page
-      if (this.playingState === PlayingState.Playing) {
-        void this.prefetchNextPageAudio(3);
-      }
-    }
-    if (index == 0) {
-      // Request audio for the previous paragraphs of the previous page
-      if (this.playingState === PlayingState.Playing) {
-        this.prefetchPrevPageAudio(3);
-      }
-    }
     // first remove the current paragraph highlight and pause audio
     await this.stop();
 
@@ -576,6 +670,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     await this.play();
   };
   public prev = async () => {
+    if (this._aborted) return;
     this.direction = Direction.Backward;
     const beforeMovedParagraph = await this.getCurrentParagraph();
     const prevIndex = this.currentParagraphIndex - 1;
@@ -587,6 +682,7 @@ export class Player extends EventEmitter<PlayerEventMap> {
     });
   };
   public next = async () => {
+    if (this._aborted) return;
     this.direction = Direction.Forward;
     const beforeMovedParagraph = await this.getCurrentParagraph();
     const nextIndex = this.currentParagraphIndex + 1;
@@ -609,6 +705,25 @@ export class Player extends EventEmitter<PlayerEventMap> {
     logStateEvent("player.stateChange", { from: prev, to: playingState });
     this.emit(PlayerEvent.PLAYING_STATE_CHANGED, playingState);
     eventBus.publish(EventBusEvent.PLAYING_STATE_CHANGED, playingState);
+
+    // When entering WaitingForNewParagraphs, set a timeout to stop if no
+    // paragraphs arrive (end of book). If paragraphs do arrive, the
+    // onNewParagraphs handler transitions out of WaitingForNewParagraphs
+    // which clears this timeout.
+    if (playingState === PlayingState.WaitingForNewParagraphs) {
+      if (this._waitingTimeout) clearTimeout(this._waitingTimeout);
+      this._waitingTimeout = setTimeout(() => {
+        if (this.playingState === PlayingState.WaitingForNewParagraphs) {
+          this._stoppedByTimeout = true;
+          this.setPlayingState(PlayingState.Stopped);
+        }
+      }, 10000); // 10s — MOBI/DJVU IPC fetches can take >3s on large chapters
+    } else {
+      if (this._waitingTimeout) {
+        clearTimeout(this._waitingTimeout);
+        this._waitingTimeout = null;
+      }
+    }
   }
 
   public getErrors() {
@@ -749,15 +864,20 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this.audioCache.set(cfiRange, audioPath);
   }
 
-  private async prefetchAudio(startIndex: number, count: number) {
+  private async prefetchAudio(startIndex: number, count: number, generation?: number) {
+    if (generation !== undefined && generation !== this._prefetchGeneration) return;
+    const fetches: Promise<unknown>[] = [];
     for (let i = 0; i < count; i++) {
       const index = startIndex + i;
-      if (index < this.currentViewParagraphs.length && index >= 0) {
+      if (index >= 0 && index < this.currentViewParagraphs.length) {
         const paragraph = this.currentViewParagraphs[index];
-        await this.requestAudio(paragraph, this.priority - 1).catch((error) => {
-          console.warn(`Prefetch failed for paragraph ${index}:`, error);
-        }); // Fix: Add error logging for prefetch failures
+        fetches.push(
+          this.requestAudio(paragraph, this.priority - 1).catch((error) => {
+            console.warn(`Prefetch failed for paragraph ${index}:`, error);
+          })
+        );
       }
     }
+    await Promise.all(fetches);
   }
 }

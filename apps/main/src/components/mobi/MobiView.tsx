@@ -13,12 +13,8 @@ import {
 import type { Book } from "@/generated";
 import { BackButton } from "@components/BackButton";
 import TTSControls from "@components/TTSControls";
-import { IconButton } from "@components/ui/IconButton";
-import { Menu } from "@components/ui/Menu";
-import { Radio, RadioGroup } from "@components/ui/Radio";
-import { ChevronLeft, ChevronRight, Menu as MenuIcon, MessageSquare, Palette } from "lucide-react";
+import { ChevronLeft, ChevronRight, MessageSquare, Menu as MenuIcon } from "lucide-react";
 import { themes } from "@/themes/themes";
-import { ThemeType } from "@/themes/common";
 import { eventBus, EventBusEvent } from "@/utils/bus";
 import type { ParagraphWithIndex } from "@/utils/bus";
 import { processEpubJob } from "@/modules/process_epub";
@@ -28,15 +24,13 @@ import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { db } from "@/modules/kysley";
 import { stringToNumberID } from "@components/lib/utils";
 import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
-import { BookmarksList } from "@/components/bookmarks/BookmarksList";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@components/components/ui/sheet";
+import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
+import { ReaderTOC } from "@/components/reader/ReaderTOC";
+import { IconButton } from "@components/ui/IconButton";
 
 export function MobiView({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme);
-  const setTheme = useEpubStore((s) => s.setTheme);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
-  const [tocTab, setTocTab] = useState<"contents" | "bookmarks">("contents");
   const [chapterIndex, setChapterIndex] = useState(() => {
     const parsed = Number(book.location);
     return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
@@ -132,11 +126,14 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [goNext, goPrev]);
 
-  // Publish paragraphs to event bus for TTS
+  // Publish paragraphs to event bus for TTS.
+  // Current chapter is published immediately; next/prev are debounced
+  // so rapid chapter flips don't trigger wasted fetches.
+  const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (chapterCount === 0) return;
 
-    // Current chapter paragraphs
+    // Current chapter paragraphs — publish immediately
     getMobiText({ path: book.filepath, chapterIndex })
       .then((texts) => {
         const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
@@ -147,43 +144,58 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
       })
       .catch((err) => console.warn("[MobiView] failed to get text for TTS:", err));
 
-    // Prefetch next chapter paragraphs
-    if (chapterIndex < chapterCount - 1) {
-      getMobiText({ path: book.filepath, chapterIndex: chapterIndex + 1 })
-        .then((texts) => {
-          const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
-            text,
-            index: `mobi-${chapterIndex + 1}-${i}`,
-          }));
-          eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
-        })
-        .catch((err) => console.warn("[MobiView] failed to prefetch next chapter:", err));
-    } else {
-      eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, []);
-    }
+    // Debounce next/prev chapter prefetch
+    if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current);
+    prefetchTimerRef.current = setTimeout(() => {
+      // Prefetch next chapter paragraphs
+      if (chapterIndex < chapterCount - 1) {
+        getMobiText({ path: book.filepath, chapterIndex: chapterIndex + 1 })
+          .then((texts) => {
+            const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
+              text,
+              index: `mobi-${chapterIndex + 1}-${i}`,
+            }));
+            eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
+          })
+          .catch((err) => console.warn("[MobiView] failed to prefetch next chapter:", err));
+      } else {
+        eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, []);
+      }
 
-    // Prefetch previous chapter paragraphs
-    if (chapterIndex > 0) {
-      getMobiText({ path: book.filepath, chapterIndex: chapterIndex - 1 })
-        .then((texts) => {
-          const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
-            text,
-            index: `mobi-${chapterIndex - 1}-${i}`,
-          }));
-          eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
-        })
-        .catch((err) => console.warn("[MobiView] failed to prefetch prev chapter:", err));
-    } else {
-      eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, []);
-    }
+      // Prefetch previous chapter paragraphs
+      if (chapterIndex > 0) {
+        getMobiText({ path: book.filepath, chapterIndex: chapterIndex - 1 })
+          .then((texts) => {
+            const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
+              text,
+              index: `mobi-${chapterIndex - 1}-${i}`,
+            }));
+            eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
+          })
+          .catch((err) => console.warn("[MobiView] failed to prefetch prev chapter:", err));
+      } else {
+        eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, []);
+      }
+    }, 300);
+
+    return () => {
+      if (prefetchTimerRef.current) {
+        clearTimeout(prefetchTimerRef.current);
+        // Clear stale prefetch data so Player doesn't use wrong chapter's paragraphs
+        eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, []);
+        eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, []);
+      }
+    };
   }, [book.filepath, chapterIndex, chapterCount]);
 
   // Handle page-turn events from Player (TTS exhausted current chapter)
   useEffect(() => {
     const handleNextEmptied = () => {
+      if (chapterCount === 0) return;
       setChapterIndex((prev) => Math.min(prev + 1, chapterCount - 1));
     };
     const handlePrevEmptied = () => {
+      if (chapterCount === 0) return;
       setChapterIndex((prev) => Math.max(prev - 1, 0));
     };
 
@@ -251,25 +263,12 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
   }
   img { max-width: 100%; height: auto; }
   a { color: inherit; }
+  .page-number { text-align: center; font-size: 0.75em; color: ${t.color}; opacity: 0.4; padding: 2rem 0 1rem; }
 </style>
 </head>
-<body>${chapterHtml}</body>
+<body>${chapterHtml}<div class="page-number">${chapterCount > 0 ? `${chapterIndex + 1} of ${chapterCount}` : ''}</div></body>
 </html>`;
-  }, [chapterHtml, theme]);
-
-  const handleThemeChange = (newTheme: ThemeType) => {
-    setTheme(newTheme);
-    setMenuOpen(false);
-  };
-
-  function getTextColor() {
-    switch (theme) {
-      case ThemeType.Dark:
-        return "text-white hover:bg-white/10 hover:text-white";
-      default:
-        return "text-black hover:bg-black/10 hover:text-black";
-    }
-  }
+  }, [chapterHtml, theme, chapterIndex, chapterCount]);
 
   return (
     <div
@@ -277,10 +276,15 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
       style={{ background: themes[theme].background }}
     >
       {/* Top bar */}
-      <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
-        <IconButton onClick={() => setTocOpen(true)} className="hover:bg-transparent border-none">
-          <MenuIcon size={20} className={getTextColor()} />
-        </IconButton>
+      <ReaderToolbar
+        panelsOpen={tocOpen || chatPanelOpen}
+        leftContent={
+          <IconButton color="inherit" onClick={() => setTocOpen(true)} className="hover:bg-transparent border-none">
+            <MenuIcon size={20} />
+          </IconButton>
+        }
+      >
+        <BackButton />
         <BookmarkButton
           bookSyncId={bookSyncIdRef.current ?? ""}
           location={String(chapterIndex)}
@@ -289,45 +293,12 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
         />
         <button
           onClick={() => requireAuth("chat", () => setChatPanelOpen(true))}
-          className={`p-2 rounded-md ${getTextColor()}`}
+          className="p-2 rounded-md text-black hover:bg-black/10"
           aria-label="Open chat panel"
         >
           <MessageSquare size={20} />
         </button>
-        <BackButton />
-        <Menu
-          trigger={
-            <IconButton className="hover:bg-transparent border-none">
-              <Palette size={20} className={getTextColor()} />
-            </IconButton>
-          }
-          open={menuOpen}
-          onOpen={() => setMenuOpen(true)}
-          onClose={() => setMenuOpen(false)}
-          anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-          theme={themes[theme]}
-        >
-          <div className="p-3">
-            <RadioGroup
-              value={theme}
-              onChange={(value) => handleThemeChange(value as ThemeType)}
-              name="theme-selector"
-              theme={themes[theme]}
-            >
-              {(Object.keys(themes) as Array<keyof typeof themes>).map(
-                (themeKey) => (
-                  <Radio
-                    key={themeKey}
-                    value={themeKey}
-                    label={themeKey}
-                    theme={themes[theme]}
-                  />
-                )
-              )}
-            </RadioGroup>
-          </div>
-        </Menu>
-      </div>
+      </ReaderToolbar>
 
       {/* Main content area */}
       <div className="flex-1 overflow-hidden">
@@ -380,51 +351,24 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
       <TTSControls bookId={book.id.toString()} />
 
       {/* TOC / Bookmarks Sidebar */}
-      <Sheet open={tocOpen} onOpenChange={setTocOpen}>
-        <SheetContent side="left" className="w-[300px] sm:w-[400px] p-0 bg-white border-gray-200">
-          <SheetHeader className="p-4 border-b sticky top-0 z-10 border-gray-200 bg-white">
-            <SheetTitle>Navigation</SheetTitle>
-          </SheetHeader>
-          <div className="flex border-b border-gray-200">
-            <button
-              onClick={() => setTocTab("contents")}
-              className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
-                tocTab === "contents"
-                  ? "border-b-2 border-blue-500 text-blue-600"
-                  : "text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              Contents
-            </button>
-            <button
-              onClick={() => setTocTab("bookmarks")}
-              className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
-                tocTab === "bookmarks"
-                  ? "border-b-2 border-red-500 text-red-600"
-                  : "text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              Bookmarks
-            </button>
+      <ReaderTOC
+        open={tocOpen}
+        onOpenChange={setTocOpen}
+        title="Navigation"
+        bookSyncId={bookSyncIdRef.current ?? ""}
+        onBookmarkNavigate={(location) => {
+          const idx = parseInt(location, 10);
+          if (Number.isFinite(idx) && idx >= 0) {
+            setChapterIndex(idx);
+            setTocOpen(false);
+          }
+        }}
+        tocContent={
+          <div className="p-4 text-gray-400 text-sm text-center">
+            Chapter {chapterIndex + 1} of {chapterCount}
           </div>
-          {tocTab === "contents" ? (
-            <div className="p-4 text-gray-400 text-sm text-center">
-              Chapter {chapterIndex + 1} of {chapterCount}
-            </div>
-          ) : (
-            <BookmarksList
-              bookSyncId={bookSyncIdRef.current ?? ""}
-              onNavigate={(location) => {
-                const idx = parseInt(location, 10);
-                if (Number.isFinite(idx) && idx >= 0) {
-                  setChapterIndex(idx);
-                  setTocOpen(false);
-                }
-              }}
-            />
-          )}
-        </SheetContent>
-      </Sheet>
+        }
+      />
 
       {AuthDialog}
 

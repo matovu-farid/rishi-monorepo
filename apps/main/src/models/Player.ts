@@ -2,7 +2,6 @@
 
 import { ParagraphWithIndex } from "./player_control";
 import { PlayingState } from "@/utils/bus";
-import { usePdfStore } from "@/stores/pdfStore";
 import audio from "@/models/audio";
 import { Player } from "./PlayerClass";
 
@@ -38,11 +37,6 @@ export interface ErrorsChangedEvent {
  * void player.initialize( bookId);
  */
 export const player = new Player(audio);
-player.on(PlayerEvent.PLAYING_STATE_CHANGED, (state) => {
-  if (state === PlayingState.Playing) {
-    usePdfStore.getState().setIsHighlighting(true);
-  } else {
-    usePdfStore.getState().setIsHighlighting(false);
-  }
-});
+// NOTE: PLAYING_STATE_CHANGED → isHighlighting is now managed inside PdfView's
+// scoped useEffect (pdf.tsx) so it only fires when a PDF is the active format.
 export default player;

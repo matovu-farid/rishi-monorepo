@@ -9,6 +9,8 @@ import { MobiView } from "@components/mobi/MobiView";
 import { DjvuView } from "@components/djvu/DjvuView";
 import { motion } from "framer-motion";
 import { usePdfStore, BookNavigationState } from "@/stores/pdfStore";
+import { useEpubStore } from "@/stores/epubStore";
+import { usePageTracker } from "@/modules/epub-page-tracker";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getBook } from "@/generated";
 export const Route = createLazyFileRoute("/books/$id")({
@@ -35,6 +37,10 @@ function BookView(): React.JSX.Element {
       setBook(book);
       return book;
     },
+    // Always fetch fresh from DB — the location field changes frequently
+    // and the cache might have a stale value from before the last mutation
+    staleTime: 0,
+    gcTime: 0,
   });
   // Controls the lifecycle of the book navigation state
   const setBookNavigationState = usePdfStore((s) => s.setBookNavigationState);
@@ -43,6 +49,8 @@ function BookView(): React.JSX.Element {
     return () => {
       setBookNavigationState(BookNavigationState.Idle);
       setBook(null);
+      useEpubStore.getState().reset();
+      usePageTracker.getState().reset();
     };
   }, []);
 
