@@ -13,13 +13,14 @@ import {
 import type { Book } from "@/generated";
 import { BackButton } from "@components/BackButton";
 import TTSControls from "@components/TTSControls";
-import { ChevronLeft, ChevronRight, MessageSquare, Menu as MenuIcon } from "lucide-react";
+import { ChevronLeft, ChevronRight, MessageSquare, Menu as MenuIcon, Mic, MicOff, CircleX } from "lucide-react";
 import { themes } from "@/themes/themes";
 import { eventBus, EventBusEvent } from "@/utils/bus";
 import type { ParagraphWithIndex } from "@/utils/bus";
 import { processEpubJob } from "@/modules/process_epub";
 import type { PageDataInsertable } from "@/modules/kysley";
 import { ChatPanel } from "@/components/chat/ChatPanel";
+import { useChatStore } from "@/stores/chatStore";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { db } from "@/modules/kysley";
 import { stringToNumberID } from "@components/lib/utils";
@@ -27,6 +28,7 @@ import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
 import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
 import { ReaderTOC } from "@/components/reader/ReaderTOC";
 import { IconButton } from "@components/ui/IconButton";
+import Draggable from "../ui/Draggable";
 
 export function MobiView({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme);
@@ -42,6 +44,33 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
   const embeddingsProcessedRef = useRef(false);
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
   const { requireAuth, AuthDialog } = useRequireAuth();
+  const isChatting = useChatStore((s) => s.isChatting);
+  const setIsChatting = useChatStore((s) => s.setIsChatting);
+  const stopConversation = useChatStore((s) => s.stopConversation);
+
+  const toggleChat = () => {
+    setIsChatting((prev) => !prev);
+  };
+
+  const handleMicClick = () => {
+    requireAuth("voice-input", () => {
+      toggleChat();
+    });
+  };
+
+  const handleStopChat = () => {
+    toggleChat();
+    stopConversation();
+  };
+
+  const getDefaultChatPosition = (): { x: number; y: number } => {
+    if (typeof window === "undefined") return { x: 0, y: 0 };
+    return {
+      x: window.innerWidth / 2 - 50,
+      y: window.innerHeight / 2 - 50,
+    };
+  };
+
   const bookSyncIdRef = useRef<string | null>(null);
 
   // Set bookId for voice chat
@@ -298,6 +327,23 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
         >
           <MessageSquare size={20} />
         </button>
+        {!isChatting ? (
+          <button
+            onClick={handleMicClick}
+            className="p-2 rounded-md text-black hover:bg-black/10"
+            aria-label="Start voice chat"
+          >
+            <Mic size={20} />
+          </button>
+        ) : (
+          <button
+            onClick={handleStopChat}
+            className="p-2 rounded-md text-black hover:bg-black/10"
+            aria-label="Stop voice chat"
+          >
+            <MicOff size={20} />
+          </button>
+        )}
       </ReaderToolbar>
 
       {/* Main content area */}
@@ -346,6 +392,35 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
           </button>
         </div>
       </div>
+
+      {/* Voice chat overlay */}
+      {isChatting && (
+        <Draggable
+          storePath="tts-controls-position.json"
+          storeKey="chatPosition"
+          defaultPosition={getDefaultChatPosition}
+          width={100}
+          height={100}
+          className="rounded-full"
+        >
+          <div className="absolute -top-2 -right-2" data-no-drag>
+            <CircleX
+              className="cursor-pointer"
+              onClick={handleStopChat}
+              color="red"
+              size={24}
+            />
+          </div>
+          <div>
+            <img
+              width={100}
+              height={100}
+              src="https://rishi-tauri.s3.us-east-1.amazonaws.com/ai.gif"
+              alt="AI"
+            />
+          </div>
+        </Draggable>
+      )}
 
       {/* TTS Controls */}
       <TTSControls bookId={book.id.toString()} />

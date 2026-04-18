@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { IconButton } from "@components/ui/IconButton";
 import { ThemeType } from "@/themes/common";
-import { Loader2, Menu as MenuIcon, LayoutGrid } from "lucide-react";
+import { Loader2, Menu as MenuIcon, LayoutGrid, Mic, MicOff, CircleX } from "lucide-react";
 import { Document, Outline, pdfjs } from "react-pdf";
 import type { DocumentInitParameters } from "pdfjs-dist/types/src/display/api";
 import { eventBus, EventBusEvent, PlayingState } from "@/utils/bus";
@@ -39,6 +39,9 @@ import { BackButton } from "@components/BackButton.tsx";
 import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
 import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
 import { ReaderTOC } from "@/components/reader/ReaderTOC";
+import { useChatStore } from "@/stores/chatStore";
+import { useRequireAuth } from "@/hooks/useRequireAuth";
+import Draggable from "../../ui/Draggable";
 
 // Configure PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -63,6 +66,34 @@ export function PdfView({
 
   const setPageNumber = usePdfStore((s) => s.setPageNumber);
   const currentPageNumber = usePdfStore((s) => s.pageNumber);
+
+  const { requireAuth, AuthDialog } = useRequireAuth();
+  const isChatting = useChatStore((s) => s.isChatting);
+  const setIsChatting = useChatStore((s) => s.setIsChatting);
+  const stopConversation = useChatStore((s) => s.stopConversation);
+
+  const toggleChat = () => {
+    setIsChatting((prev) => !prev);
+  };
+
+  const handleMicClick = () => {
+    requireAuth("voice-input", () => {
+      toggleChat();
+    });
+  };
+
+  const handleStopChat = () => {
+    toggleChat();
+    stopConversation();
+  };
+
+  const getDefaultChatPosition = (): { x: number; y: number } => {
+    if (typeof window === "undefined") return { x: 0, y: 0 };
+    return {
+      x: window.innerWidth / 2 - 50,
+      y: window.innerHeight / 2 - 50,
+    };
+  };
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   useScrolling(scrollContainerRef);
 
@@ -281,6 +312,29 @@ export function PdfView({
             getTextColor()
           )}
         />
+        {!isChatting ? (
+          <button
+            onClick={handleMicClick}
+            className={cn(
+              "p-2 rounded-md hover:bg-black/10 dark:hover:bg-white/10",
+              getTextColor()
+            )}
+            aria-label="Start voice chat"
+          >
+            <Mic size={20} />
+          </button>
+        ) : (
+          <button
+            onClick={handleStopChat}
+            className={cn(
+              "p-2 rounded-md hover:bg-black/10 dark:hover:bg-white/10",
+              getTextColor()
+            )}
+            aria-label="Stop voice chat"
+          >
+            <MicOff size={20} />
+          </button>
+        )}
       </ReaderToolbar>
 
       {/* Main PDF Viewer Area */}
@@ -379,7 +433,38 @@ export function PdfView({
             />
           </div>
         </Document>
-        {/* TTS Controls - Draggable */}
+        {AuthDialog}
+
+        {/* Voice chat overlay */}
+        {isChatting && (
+          <Draggable
+            storePath="tts-controls-position.json"
+            storeKey="chatPosition"
+            defaultPosition={getDefaultChatPosition}
+            width={100}
+            height={100}
+            className="rounded-full"
+          >
+            <div className="absolute -top-2 -right-2" data-no-drag>
+              <CircleX
+                className="cursor-pointer"
+                onClick={handleStopChat}
+                color="red"
+                size={24}
+              />
+            </div>
+            <div>
+              <img
+                width={100}
+                height={100}
+                src="https://rishi-tauri.s3.us-east-1.amazonaws.com/ai.gif"
+                alt="AI"
+              />
+            </div>
+          </Draggable>
+        )}
+
+        {/* TTS Controls */}
         {<TTSControls key={book.id.toString()} bookId={book.id.toString()} />}
       </div>
       {/* TOC Sidebar */}
