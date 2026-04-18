@@ -16,7 +16,7 @@ import TTSControls from "@components/TTSControls";
 import { IconButton } from "@components/ui/IconButton";
 import { Menu } from "@components/ui/Menu";
 import { Radio, RadioGroup } from "@components/ui/Radio";
-import { ChevronLeft, ChevronRight, MessageSquare, Palette } from "lucide-react";
+import { ChevronLeft, ChevronRight, Menu as MenuIcon, MessageSquare, Palette, Bookmark } from "lucide-react";
 import { themes } from "@/themes/themes";
 import { ThemeType } from "@/themes/common";
 import { eventBus, EventBusEvent } from "@/utils/bus";
@@ -27,11 +27,16 @@ import { ChatPanel } from "@/components/chat/ChatPanel";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { db } from "@/modules/kysley";
 import { stringToNumberID } from "@components/lib/utils";
+import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
+import { BookmarksList } from "@/components/bookmarks/BookmarksList";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@components/ui/sheet";
 
 export function MobiView({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme);
   const setTheme = useEpubStore((s) => s.setTheme);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [tocOpen, setTocOpen] = useState(false);
+  const [tocTab, setTocTab] = useState<"contents" | "bookmarks">("contents");
   const [chapterIndex, setChapterIndex] = useState(() => {
     const parsed = Number(book.location);
     return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
@@ -273,6 +278,15 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
     >
       {/* Top bar */}
       <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
+        <IconButton onClick={() => setTocOpen(true)} className="hover:bg-transparent border-none">
+          <MenuIcon size={20} className={getTextColor()} />
+        </IconButton>
+        <BookmarkButton
+          bookSyncId={bookSyncIdRef.current ?? ""}
+          location={String(chapterIndex)}
+          label={`Chapter ${chapterIndex + 1}`}
+          className="hover:bg-transparent border-none"
+        />
         <button
           onClick={() => requireAuth("chat", () => setChatPanelOpen(true))}
           className={`p-2 rounded-md ${getTextColor()}`}
@@ -364,6 +378,53 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
 
       {/* TTS Controls */}
       <TTSControls bookId={book.id.toString()} />
+
+      {/* TOC / Bookmarks Sidebar */}
+      <Sheet open={tocOpen} onOpenChange={setTocOpen}>
+        <SheetContent side="left" className="w-[300px] sm:w-[400px] p-0 bg-white border-gray-200">
+          <SheetHeader className="p-4 border-b sticky top-0 z-10 border-gray-200 bg-white">
+            <SheetTitle>Navigation</SheetTitle>
+          </SheetHeader>
+          <div className="flex border-b border-gray-200">
+            <button
+              onClick={() => setTocTab("contents")}
+              className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+                tocTab === "contents"
+                  ? "border-b-2 border-blue-500 text-blue-600"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              Contents
+            </button>
+            <button
+              onClick={() => setTocTab("bookmarks")}
+              className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+                tocTab === "bookmarks"
+                  ? "border-b-2 border-red-500 text-red-600"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              Bookmarks
+            </button>
+          </div>
+          {tocTab === "contents" ? (
+            <div className="p-4 text-gray-400 text-sm text-center">
+              Chapter {chapterIndex + 1} of {chapterCount}
+            </div>
+          ) : (
+            <BookmarksList
+              bookSyncId={bookSyncIdRef.current ?? ""}
+              onNavigate={(location) => {
+                const idx = parseInt(location, 10);
+                if (Number.isFinite(idx) && idx >= 0) {
+                  setChapterIndex(idx);
+                  setTocOpen(false);
+                }
+              }}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
 
       {AuthDialog}
 
