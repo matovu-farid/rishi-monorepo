@@ -46,8 +46,6 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
   const [importingPaths, setImportingPaths] = useState<Set<string>>(new Set())
 
   const unlistenRefs = useRef<UnlistenFn[]>([])
-  // Generation counter to discard events from previous scans
-  const scanGenRef = useRef(0)
 
   const cleanupListeners = useCallback(() => {
     unlistenRefs.current.forEach((fn) => fn())
@@ -55,9 +53,6 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
   }, [])
 
   const startScan = useCallback(async (scanMode: ScanMode) => {
-    // Increment generation so stale events from previous scan are ignored
-    const gen = ++scanGenRef.current
-
     setBooks([])
     setProgress(null)
     setScanComplete(false)
@@ -68,31 +63,28 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
     } catch (err) {
       console.error('Failed to start scan:', err)
     } finally {
-      // Only update state if this is still the active scan
-      if (scanGenRef.current === gen) {
-        setScanning(false)
-        setScanComplete(true)
-      }
+      setScanning(false)
+      setScanComplete(true)
     }
   }, [])
 
   useEffect(() => {
     if (!open) return
 
-    const currentGen = ++scanGenRef.current
+    let cancelled = false
 
     const setup = async () => {
       const [unlistenResult, unlistenProgress, unlistenComplete] = await Promise.all([
         listen<DiscoveredBook>('scan-result', (event) => {
-          if (scanGenRef.current !== currentGen) return
+          if (cancelled) return
           setBooks((prev) => [...prev, event.payload])
         }),
         listen<ScanProgress>('scan-progress', (event) => {
-          if (scanGenRef.current !== currentGen) return
+          if (cancelled) return
           setProgress(event.payload)
         }),
         listen<void>('scan-complete', () => {
-          if (scanGenRef.current !== currentGen) return
+          if (cancelled) return
           setScanning(false)
           setScanComplete(true)
           setProgress(null)
@@ -101,17 +93,15 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
 
       unlistenRefs.current = [unlistenResult, unlistenProgress, unlistenComplete]
 
-      // Auto-start scan with default folders
-      // Update gen ref so startScan uses this generation
-      scanGenRef.current = currentGen
-      startScan('default')
+      if (!cancelled) {
+        startScan('default')
+      }
     }
 
     setup()
 
     return () => {
-      // Invalidate current generation so any in-flight events are dropped
-      scanGenRef.current++
+      cancelled = true
       cleanupListeners()
       invoke('cancel_scan').catch(() => {})
     }
@@ -125,7 +115,6 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
   }
 
   const handleClose = async () => {
-    scanGenRef.current++
     await invoke('cancel_scan').catch(() => {})
     cleanupListeners()
     setBooks([])
