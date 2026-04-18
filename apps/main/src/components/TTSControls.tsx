@@ -227,14 +227,28 @@ export default function TTSControls({
           0%, 100% { transform: scaleY(0.4); }
           50% { transform: scaleY(1); }
         }
+        @media (prefers-reduced-motion: reduce) {
+          @keyframes tts-waveform {
+            0%, 50%, 100% { transform: scaleY(0.7); }
+          }
+        }
       `}</style>
 
       {/* Single morphing container: orb ↔ pill */}
       <div
         onClick={!expanded ? handleOrbClick : undefined}
+        onKeyDown={!expanded ? (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handleOrbClick();
+          }
+        } : undefined}
+        role={!expanded ? "button" : undefined}
+        tabIndex={!expanded ? 0 : undefined}
+        aria-label={!expanded ? "Expand TTS controls" : "TTS controls"}
         onMouseEnter={expanded ? handleMouseEnter : undefined}
         onMouseLeave={expanded ? handleMouseLeave : undefined}
-        className="fixed z-50 flex items-center justify-center"
+        className="fixed z-50 flex items-center justify-center motion-reduce:transition-none"
         style={{
           ...glassContainer,
           // Position: bottom-right orb vs bottom-center pill
@@ -242,9 +256,9 @@ export default function TTSControls({
           right: expanded ? "auto" : 32,
           left: expanded ? "50%" : "auto",
           transform: expanded ? "translateX(-50%)" : "none",
-          // Size: circle vs pill
-          width: expanded ? "auto" : 52,
-          height: expanded ? "auto" : 52,
+          // Size: explicit values so CSS can interpolate the transition
+          width: expanded ? 240 : 52,
+          height: expanded ? 66 : 52,
           borderRadius: expanded ? 40 : "50%",
           padding: expanded ? "8px 14px" : 0,
           gap: expanded ? 6 : 0,
