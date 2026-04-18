@@ -4,7 +4,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "react-toastify";
 import { IconButton } from "./ui/IconButton";
 import { Button } from "./ui/Button";
-import { Trash2, Plus } from "lucide-react";
+import { Trash2, Plus, FolderOpen } from "lucide-react";
 import { chooseFiles } from "@/modules/chooseFiles";
 import {
   Book,
@@ -26,6 +26,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { usePdfStore } from "@/stores/pdfStore";
 import { LoginButton } from "./LoginButton";
 import { UpdateMenu } from "./UpdateMenu";
+import { BookDiscoveryModal } from "./BookDiscoveryModal";
 
 // Add this helper function
 function bytesToBlobUrl(bytes: number[]): string {
@@ -108,6 +109,7 @@ function FileDrop(): React.JSX.Element {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [newBookId, setNewBookId] = useState<string | null>(null);
+  const [discoveryOpen, setDiscoveryOpen] = useState(false);
 
   const navigateToNewBook = useCallback((bookId: string) => {
     void navigate({
@@ -438,6 +440,14 @@ function FileDrop(): React.JSX.Element {
         >
           Add Book
         </Button>
+        <Button
+          variant="ghost"
+          className="cursor-pointer"
+          startIcon={<FolderOpen size={20} />}
+          onClick={() => setDiscoveryOpen(true)}
+        >
+          Import from Computer
+        </Button>
         <LoginButton />
         <UpdateMenu />
       </div>
@@ -512,6 +522,13 @@ function FileDrop(): React.JSX.Element {
           </div>
         )}
       </motion.div>
+      <BookDiscoveryModal
+        open={discoveryOpen}
+        onClose={() => setDiscoveryOpen(false)}
+        onImport={(filepath) => {
+          processFilePaths([filepath]);
+        }}
+      />
     </div>
   );
 }
