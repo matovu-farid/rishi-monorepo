@@ -94,7 +94,7 @@
     "uuid": "^13.0.0",
     "xml-js": "^1.6.11",
     "zod": "3",
-    "zustand": "^5.0.8"
+    "zustand": "^5.0.12"
   },
   "devDependencies": {
     "@intrnl/xxhash64": "^0.1.2",
