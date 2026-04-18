@@ -2,8 +2,7 @@ import { LogIn, LogOut, Loader2 } from "lucide-react";
 import { Button } from "./ui/Button";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { signout } from "@/generated";
-import { useAtomValue, useSetAtom } from "jotai";
-import { isLoggedInAtom, userAtom } from "./pdf/atoms/user";
+import { useAuthStore } from "@/stores/authStore";
 import {
   Avatar,
   AvatarFallback,
@@ -16,13 +15,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/components/ui/dropdown-menu";
 import { startSignInFlow } from "@/modules/auth";
-import { signingInAtom } from "@/atoms/authPromo";
 
 export function LoginButton() {
-  const user = useAtomValue(userAtom);
-  const isLoggedIn = useAtomValue(isLoggedInAtom);
-  const setUser = useSetAtom(userAtom);
-  const signingIn = useAtomValue(signingInAtom);
+  const user = useAuthStore((s) => s.user);
+  const isLoggedIn = useAuthStore((s) => s.user !== null);
+  const setUser = useAuthStore((s) => s.setUser);
+  const signingIn = useAuthStore((s) => s.signingIn);
 
   async function onProfileClicked() {
     if (!user) return;

@@ -1,4 +1,3 @@
-import { useAtomValue, useSetAtom } from "jotai";
 import { Sparkles, LogIn, Loader2 } from "lucide-react";
 import {
   Dialog,
@@ -9,12 +8,7 @@ import {
   DialogTitle,
 } from "@components/components/ui/dialog";
 import { Button } from "@components/components/ui/button";
-import {
-  showWelcomeModalAtom,
-  setWelcomeSeenAtom,
-  dismissWelcomeAtom,
-  signingInAtom,
-} from "@/atoms/authPromo";
+import { useAuthStore } from "@/stores/authStore";
 import { startSignInFlow } from "@/modules/auth";
 
 /**
@@ -22,10 +16,10 @@ import { startSignInFlow } from "@/modules/auth";
  * Mounted once at the root level.
  */
 export function WelcomeModal(): React.JSX.Element {
-  const open = useAtomValue(showWelcomeModalAtom);
-  const setWelcomeSeen = useSetAtom(setWelcomeSeenAtom);
-  const dismissWelcome = useSetAtom(dismissWelcomeAtom);
-  const signingIn = useAtomValue(signingInAtom);
+  const open = useAuthStore((s) => s.authHydrated && s.user === null && !s.welcomeSeen);
+  const setWelcomeSeen = useAuthStore((s) => s.setWelcomeSeen);
+  const dismissWelcome = useAuthStore((s) => s.dismissWelcome);
+  const signingIn = useAuthStore((s) => s.signingIn);
 
   async function handleSignIn() {
     setWelcomeSeen();

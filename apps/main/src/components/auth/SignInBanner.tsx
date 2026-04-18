@@ -1,11 +1,6 @@
-import { useAtomValue, useSetAtom } from "jotai";
 import { Sparkles, X, LogIn, Loader2 } from "lucide-react";
 import { Button } from "@components/components/ui/button";
-import {
-  showSignInBannerAtom,
-  dismissBannerAtom,
-  signingInAtom,
-} from "@/atoms/authPromo";
+import { useAuthStore } from "@/stores/authStore";
 import { startSignInFlow } from "@/modules/auth";
 
 /**
@@ -14,9 +9,9 @@ import { startSignInFlow } from "@/modules/auth";
  * SyncStatusIndicator.
  */
 export function SignInBanner(): React.JSX.Element | null {
-  const visible = useAtomValue(showSignInBannerAtom);
-  const dismiss = useSetAtom(dismissBannerAtom);
-  const signingIn = useAtomValue(signingInAtom);
+  const visible = useAuthStore((s) => s.authHydrated && s.user === null && s.welcomeSeen && !s.bannerDismissed);
+  const dismiss = useAuthStore((s) => s.dismissBanner);
+  const signingIn = useAuthStore((s) => s.signingIn);
 
   if (!visible) return null;
 
