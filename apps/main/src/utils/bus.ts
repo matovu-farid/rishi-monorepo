@@ -1,5 +1,4 @@
 import EventEmitter from "eventemitter3";
-import { atom } from "jotai";
 export class EventBus extends EventEmitter<EventBusEventMap> {
   private _logsBugger = [] as {
     timestamp: number;
@@ -111,8 +110,3 @@ export const EventBusEvent = {
   ...PlayerControlEvent,
   ...PlayerEvent,
 } as const;
-
-export const eventBusAtom = atom(eventBus);
-eventBusAtom.debugLabel = "eventBusAtom";
-export const eventBusLogsAtom = atom((get) => get(eventBusAtom).logsBugger);
-eventBusLogsAtom.debugLabel = "eventBusLogsAtom";

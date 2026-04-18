@@ -7,8 +7,7 @@ import {
 } from "@openai/agents/realtime";
 import { Agent, run } from "@openai/agents";
 import { z } from "zod";
-import { customStore } from "@/stores/jotai";
-import { isChattingAtom, realtimeSessionAtom } from "@/stores/chat_atoms";
+import { useChatStore } from "@/stores/chatStore";
 
 const guardrailAgent = new Agent({
   name: "Guardrail check",
@@ -66,12 +65,7 @@ export async function startRealtime(bookId: number) {
     }),
     execute: async ({ reason }) => {
       console.log("Ending conversation with reason: ", reason);
-      const chatSession = customStore.get(realtimeSessionAtom);
-      if (chatSession) {
-        chatSession.close();
-        customStore.set(realtimeSessionAtom, null);
-        customStore.set(isChattingAtom, false);
-      }
+      useChatStore.getState().stopConversation();
     },
   });
 
