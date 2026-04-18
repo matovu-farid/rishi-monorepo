@@ -1,6 +1,21 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    bookmarks (id) {
+        id -> Text,
+        book_id -> Text,
+        user_id -> Nullable<Text>,
+        location -> Text,
+        label -> Nullable<Text>,
+        created_at -> Integer,
+        updated_at -> Integer,
+        sync_version -> Integer,
+        is_dirty -> Integer,
+        is_deleted -> Integer,
+    }
+}
+
+diesel::table! {
     books (id) {
         id -> Integer,
         kind -> Text,
@@ -40,15 +55,11 @@ diesel::table! {
 }
 
 diesel::table! {
-    highlights (id) {
+    conversations (id) {
         id -> Text,
         book_id -> Text,
         user_id -> Nullable<Text>,
-        cfi_range -> Text,
-        text -> Text,
-        color -> Text,
-        note -> Nullable<Text>,
-        chapter -> Nullable<Text>,
+        title -> Text,
         created_at -> Integer,
         updated_at -> Integer,
         sync_version -> Integer,
@@ -58,11 +69,15 @@ diesel::table! {
 }
 
 diesel::table! {
-    conversations (id) {
+    highlights (id) {
         id -> Text,
         book_id -> Text,
         user_id -> Nullable<Text>,
-        title -> Text,
+        cfi_range -> Text,
+        text -> Text,
+        color -> Text,
+        note -> Nullable<Text>,
+        chapter -> Nullable<Text>,
         created_at -> Integer,
         updated_at -> Integer,
         sync_version -> Integer,
@@ -95,10 +110,11 @@ diesel::table! {
 }
 
 diesel::allow_tables_to_appear_in_same_query!(
+    bookmarks,
     books,
     chunk_data,
-    highlights,
     conversations,
+    highlights,
     messages,
     sync_meta,
 );
