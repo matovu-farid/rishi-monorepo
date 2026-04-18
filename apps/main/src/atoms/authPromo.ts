@@ -5,6 +5,9 @@ export const WELCOME_SEEN_KEY = "rishi:welcome-seen";
 
 // --- Primitive atoms ---
 
+/** True when running in dev mode (tauri::is_dev). Hydrated once on startup. */
+export const devModeAtom = atom(false);
+
 /** True while the sign-in flow is in progress (browser opened → auth completes/fails). */
 export const signingInAtom = atom(false);
 

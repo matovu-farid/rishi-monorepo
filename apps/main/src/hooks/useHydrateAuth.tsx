@@ -7,12 +7,14 @@ import {
   completeAuth,
   checkAuthStatus,
   logAuthDebugCmd,
+  isDev,
 } from "@/generated";
 import { userAtom } from "@/components/pdf/atoms/user";
 import {
   authHydratedAtom,
   hydrateWelcomeSeenAtom,
   signingInAtom,
+  devModeAtom,
 } from "@/atoms/authPromo";
 import { peekPendingOAuthState, clearPendingOAuthState } from "@/modules/auth";
 
@@ -45,12 +47,17 @@ export function useHydrateAuth(): void {
   const setAuthHydrated = useSetAtom(authHydratedAtom);
   const hydrateWelcomeSeen = useSetAtom(hydrateWelcomeSeenAtom);
   const setSigningIn = useSetAtom(signingInAtom);
+  const setDevMode = useSetAtom(devModeAtom);
 
   // 1 + 2: hydrate localStorage + keychain user.
   useEffect(() => {
     hydrateWelcomeSeen();
 
     void (async () => {
+      try {
+        const dev = await isDev();
+        setDevMode(dev);
+      } catch { /* ignore */ }
       try {
         const user = await getUserFromStore();
         setUser(user);
