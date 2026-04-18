@@ -14,7 +14,7 @@ pub struct DiscoveredBook {
     pub format: String,
     pub file_size: u64,
     pub folder: String,
-    pub file_hash: String,
+    pub file_hash: Option<String>,
 }
 
 const SUPPORTED_EXTENSIONS: &[&str] = &["epub", "pdf", "mobi", "azw3", "djvu"];
@@ -188,7 +188,8 @@ pub async fn scan_for_books(app: tauri::AppHandle, mode: String) -> Result<u32, 
         let total_folders = folders.len() as u32;
         let mut total_found: u32 = 0;
 
-        let existing_hashes = get_existing_hashes()?;
+        // Collect existing filepaths to skip already-imported books (fast string comparison).
+        let existing_paths = get_existing_filepaths()?;
 
         for (idx, folder) in folders.iter().enumerate() {
             if CANCEL_FLAG.load(Ordering::SeqCst) {
@@ -211,12 +212,10 @@ pub async fn scan_for_books(app: tauri::AppHandle, mode: String) -> Result<u32, 
                     break;
                 }
 
-                let file_hash = match hash_file(&path) {
-                    Ok(h) => h,
-                    Err(_) => continue,
-                };
+                let filepath_str = path.to_string_lossy().to_string();
 
-                if existing_hashes.contains(&file_hash) {
+                // Skip files already imported (by filepath match)
+                if existing_paths.contains(&filepath_str) {
                     continue;
                 }
 
@@ -229,17 +228,21 @@ pub async fn scan_for_books(app: tauri::AppHandle, mode: String) -> Result<u32, 
 
                 let format = format_from_path(&path);
 
-                let (title, author) = extract_basic_metadata(&path, &format);
+                // Use filename stem as title for fast discovery.
+                // Full metadata extraction is too slow for scanning (parses entire file).
+                let title = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string());
 
                 let book = DiscoveredBook {
-                    filepath: path.to_string_lossy().to_string(),
+                    filepath: filepath_str,
                     filename,
                     title,
-                    author,
+                    author: None,
                     format,
                     file_size,
                     folder: folder.clone(),
-                    file_hash,
+                    file_hash: None,
                 };
 
                 let _ = app.emit("scan-result", book);
@@ -262,27 +265,9 @@ pub fn cancel_scan() {
     CANCEL_FLAG.store(true, Ordering::SeqCst);
 }
 
-/// Extracts title and author directly from a book file without side effects.
-/// Does NOT call store_book_data — only parses metadata.
-fn extract_basic_metadata(path: &Path, format: &str) -> (Option<String>, Option<String>) {
-    use crate::shared::books::Extractable;
 
-    let result = match format {
-        "epub" => crate::epub::Epub::new(path).extract(),
-        "pdf" => crate::pdf::Pdf::new(path).extract(),
-        "mobi" | "azw3" => crate::mobi::Mobi::new(path).extract(),
-        "djvu" => crate::djvu::Djvu::new(path).extract(),
-        _ => return (None, None),
-    };
-
-    match result {
-        Ok(data) => (data.title, data.author),
-        Err(_) => (None, None),
-    }
-}
-
-/// Gets all file_hash values from the books table to exclude already-imported books.
-fn get_existing_hashes() -> Result<std::collections::HashSet<String>, String> {
+/// Gets all filepaths from the books table to exclude already-imported books.
+fn get_existing_filepaths() -> Result<std::collections::HashSet<String>, String> {
     use crate::db::DB_POOL;
     use crate::schema::books::dsl::*;
     use diesel::prelude::*;
@@ -292,11 +277,11 @@ fn get_existing_hashes() -> Result<std::collections::HashSet<String>, String> {
         .get()
         .map_err(|e| format!("Failed to get connection: {}", e))?;
 
-    let hashes: Vec<Option<String>> = books
-        .select(file_hash)
+    let paths: Vec<String> = books
+        .select(filepath)
         .filter(is_deleted.eq(0))
         .load(&mut conn)
-        .map_err(|e| format!("Failed to query hashes: {}", e))?;
+        .map_err(|e| format!("Failed to query filepaths: {}", e))?;
 
-    Ok(hashes.into_iter().flatten().collect())
+    Ok(paths.into_iter().collect())
 }
