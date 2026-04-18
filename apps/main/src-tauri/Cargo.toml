@@ -63,6 +63,8 @@ sentry = {version = "0.42",  features = ["logs"] }
 mobi = "0.8"
 tauri-plugin-sentry = "0.5"
 chrono = "0.4"
+walkdir = "2"
+dirs = "6"
 
 
 
