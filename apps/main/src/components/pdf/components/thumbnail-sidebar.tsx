@@ -1,12 +1,7 @@
 import { useRef, useEffect } from "react";
 import { Thumbnail } from "react-pdf";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useAtomValue } from "jotai";
-import {
-  pageCountAtom,
-  pageNumberAtom,
-  pdfDocumentProxyAtom,
-} from "../atoms/paragraph-atoms";
+import { usePdfStore } from "@/stores/pdfStore";
 import { cn } from "@components/lib/utils";
 
 const THUMBNAIL_WIDTH = 120;
@@ -20,9 +15,9 @@ export function ThumbnailSidebar({
   onClose: () => void;
   onNavigate: (pageNumber: number) => void;
 }) {
-  const numPages = useAtomValue(pageCountAtom);
-  const currentPage = useAtomValue(pageNumberAtom);
-  const pdfProxy = useAtomValue(pdfDocumentProxyAtom);
+  const numPages = usePdfStore((s) => s.pageCount);
+  const currentPage = usePdfStore((s) => s.pageNumber);
+  const pdfProxy = usePdfStore((s) => s.pdfDocumentProxy);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const thumbVirtualizer = useVirtualizer({

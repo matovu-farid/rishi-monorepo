@@ -8,9 +8,7 @@ import { ensureTray, setTrayMenu, clearTrayMenu } from "@components/lib/tray";
 
 // Import required CSS for text and annotation layers
 
-import { isDualPageAtom } from "@components/pdf/atoms/paragraph-atoms";
-import { customStore } from "@/stores/jotai";
-import { useAtomValue } from "jotai";
+import { usePdfStore } from "@/stores/pdfStore";
 
 export function useSetupMenu() {
   // Setup menu on mount/unmount
@@ -42,15 +40,15 @@ export function useSetupMenu() {
         }
 
         // Create CheckMenuItem for Two Pages
-        // The action will toggle the current state by reading from the atom store
+        // The action will toggle the current state by reading from the store
         twoPagesItem = await CheckMenuItem.new({
           id: "two_pages",
           text: "Two Pages",
-          checked: customStore.get(isDualPageAtom),
+          checked: usePdfStore.getState().isDualPage,
           action: () => {
-            // Read current value from atom store and toggle
-            const current = customStore.get(isDualPageAtom);
-            customStore.set(isDualPageAtom, !current);
+            // Read current value from store and toggle
+            const current = usePdfStore.getState().isDualPage;
+            usePdfStore.getState().setDualPage(!current);
           },
         });
 
@@ -92,7 +90,7 @@ export function useSetupMenu() {
     };
   }, []); // Only run on mount/unmount, not when isDualPage changes
     // Update checkbox state when isDualPage changes
-    const isDualPage = useAtomValue(isDualPageAtom);
+    const isDualPage = usePdfStore((s) => s.isDualPage);
     useEffect(() => {
       void (async () => {
         try {

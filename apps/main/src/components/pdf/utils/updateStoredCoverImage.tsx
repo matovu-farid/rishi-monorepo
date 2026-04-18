@@ -1,15 +1,14 @@
 import { Book } from "@/generated";
 import { getBook, updateBookCover } from "@/generated";
-import { customStore } from "@/stores/jotai";
-import { pageNumberAtom, setPageNumberAtom } from "../atoms/paragraph-atoms";
+import { usePdfStore } from "@/stores/pdfStore";
 
 // Import required CSS for text and annotation layers
 
 export async function updateStoredCoverImage(book: Book) {
   if (book.coverKind && book.coverKind != "fallback") return;
   // set page to 1
-  if (customStore.get(pageNumberAtom) !== 1) {
-    customStore.set(setPageNumberAtom, 1);
+  if (usePdfStore.getState().pageNumber !== 1) {
+    usePdfStore.getState().setPageNumber(1);
   }
   const canvas = document.querySelector<HTMLCanvasElement>(
     '[data-page-number="1"] canvas'

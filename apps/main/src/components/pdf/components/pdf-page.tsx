@@ -1,17 +1,6 @@
 import { Page } from "react-pdf";
 
-import {
-  highlightedParagraphAtom,
-  isHighlightingAtom,
-  pageNumberAtom,
-  isPdfRenderedAtom,
-  getCurrentViewParagraphsAtom,
-  getNextViewParagraphsAtom,
-  getPreviousViewParagraphsAtom,
-  isTextGotAtom,
-  setPageNumberToPageDataAtom,
-} from "@components/pdf/atoms/paragraph-atoms";
-import { useAtomValue, useSetAtom } from "jotai";
+import { usePdfStore } from "@/stores/pdfStore";
 import { Loader2 } from "lucide-react";
 import { pageDataToParagraphs } from "../utils/getPageParagraphs";
 import { PAGE_HEIGHT } from "../utils/constants";
@@ -35,7 +24,10 @@ export function PageComponent({
   onRenderComplete?: () => void;
 }) {
   // const [pageData, setPageData] = useState<TextContent | null>(null);
-  const isHighlighting = useAtomValue(isHighlightingAtom);
+  const isHighlighting = usePdfStore((s) => s.isHighlighting);
+  const highlightedParagraphIndex = usePdfStore((s) => s.highlightedParagraphIndex);
+  const currentViewParagraphs = usePdfStore((s) => s.currentViewParagraphs);
+  const highlightedParagraph = currentViewParagraphs.find((p) => p.index === highlightedParagraphIndex);
 
   function isInsideParagraph(wordTransform: Transform) {
     // Return false if no paragraph is highlighted
@@ -51,18 +43,17 @@ export function PageComponent({
       wordTransform[5] >= highlightedParagraph.dimensions.bottom;
     return isBelowOrEqualTop && isAboveOrEqualBottom;
   }
-  const currentPage = useAtomValue(pageNumberAtom);
+  const currentPage = usePdfStore((s) => s.pageNumber);
   const isCurrentlyViewedPage = currentPage === pageNumber;
   const isNextPage = currentPage === pageNumber + 1;
   const isPreviousPage = currentPage === pageNumber - 1;
-  const setCurrentViewParagraphs = useSetAtom(getCurrentViewParagraphsAtom);
-  const setNextViewParagraphs = useSetAtom(getNextViewParagraphsAtom);
-  const setPreviousViewParagraphs = useSetAtom(getPreviousViewParagraphsAtom);
-  const setIsCanvasRendered = useSetAtom(isPdfRenderedAtom);
-  const setPageNumberToPageData = useSetAtom(setPageNumberToPageDataAtom);
+  const setCurrentViewParagraphs = usePdfStore((s) => s.setCurrentViewParagraphs);
+  const setNextViewParagraphs = usePdfStore((s) => s.setNextViewParagraphs);
+  const setPreviousViewParagraphs = usePdfStore((s) => s.setPreviousViewParagraphs);
+  const setIsPdfRendered = usePdfStore((s) => s.setIsPdfRendered);
+  const setPageData = usePdfStore((s) => s.setPageData);
 
-  const highlightedParagraph = useAtomValue(highlightedParagraphAtom);
-  const setIsTextGot = useSetAtom(isTextGotAtom);
+  const setIsTextGot = usePdfStore((s) => s.setIsTextGot);
 
   return (
     <Page
@@ -90,10 +81,7 @@ export function PageComponent({
       renderAnnotationLayer={true}
       canvasBackground="white"
       onGetTextSuccess={(data) => {
-        setPageNumberToPageData({
-          pageNumber,
-          pageData: data,
-        });
+        setPageData(pageNumber, data);
       }}
       loading={
         <div className="w-screen bg-white  h-screen grid place-items-center">
@@ -102,7 +90,7 @@ export function PageComponent({
       }
       onRenderSuccess={() => {
         if (isCurrentlyViewedPage) {
-          setIsCanvasRendered(bookId, true);
+          setIsPdfRendered(bookId, true);
         }
         onRenderComplete?.();
       }}

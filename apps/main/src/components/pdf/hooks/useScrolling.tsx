@@ -1,18 +1,15 @@
 import { useEffect, useRef } from "react";
 import { animate } from "framer-motion";
 
-import {
-  highlightedParagraphAtom,
-  isLookingForNextParagraphAtom,
-  isTextGotAtom,
-} from "@components/pdf/atoms/paragraph-atoms";
-import { useAtomValue } from "jotai";
-import { customStore } from "@/stores/jotai";
+import { usePdfStore } from "@/stores/pdfStore";
+
 export function useScrolling(
   scrollContainerRef: React.RefObject<HTMLDivElement | null>
 ) {
-  const highlightedParagraph = useAtomValue(highlightedParagraphAtom);
-  const isRendered = useAtomValue(isTextGotAtom);
+  const highlightedParagraphIndex = usePdfStore((s) => s.highlightedParagraphIndex);
+  const currentViewParagraphs = usePdfStore((s) => s.currentViewParagraphs);
+  const highlightedParagraph = currentViewParagraphs.find((p) => p.index === highlightedParagraphIndex);
+  const isRendered = usePdfStore((s) => s.isTextGot);
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container || !highlightedParagraph?.index) return;
@@ -26,9 +23,7 @@ export function useScrolling(
       );
       if (!el) return;
       console.log({ el });
-      const isLookingForNextParagraph = customStore.get(
-        isLookingForNextParagraphAtom
-      );
+      const isLookingForNextParagraph = usePdfStore.getState().isLookingForNextParagraph;
       if (isLookingForNextParagraph) {
         return;
       }

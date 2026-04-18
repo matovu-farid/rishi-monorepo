@@ -1,30 +1,30 @@
-import { customStore } from "@/stores/jotai";
-import { isLookingForNextParagraphAtom, pageNumberAtom, virtualizerAtom } from "../atoms/paragraph-atoms";
+import { usePdfStore } from "@/stores/pdfStore";
 
 
 export function nextPage() {
-  const virtualizer = customStore.get(virtualizerAtom);
-  customStore.set(isLookingForNextParagraphAtom, true);
-  const pageIndex = customStore.get(pageNumberAtom) - 1;
+  const state = usePdfStore.getState();
+  const virtualizer = state.virtualizer;
+  usePdfStore.getState().setIsLookingForNextParagraph(true);
+  const pageIndex = state.pageNumber - 1;
   virtualizer.scrollToIndex(pageIndex + 1, {
     align: "start",
     behavior: "auto",
   });
 
-  customStore.set(isLookingForNextParagraphAtom, false);
+  usePdfStore.getState().setIsLookingForNextParagraph(false);
 
 
 }
 export function previousPage() {
-  const virtualizer = customStore.get(virtualizerAtom);
+  const state = usePdfStore.getState();
+  const virtualizer = state.virtualizer;
 
-  customStore.set(isLookingForNextParagraphAtom, true);
-  const pageIndex = customStore.get(pageNumberAtom) - 1;
+  usePdfStore.getState().setIsLookingForNextParagraph(true);
+  const pageIndex = state.pageNumber - 1;
   virtualizer.scrollToIndex(pageIndex - 1, {
     align: "end",
     behavior: "auto",
   });
 
-  customStore.set(isLookingForNextParagraphAtom, false);
+  usePdfStore.getState().setIsLookingForNextParagraph(false);
 }
-
