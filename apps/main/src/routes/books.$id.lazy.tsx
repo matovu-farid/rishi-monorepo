@@ -32,18 +32,7 @@ function BookView(): React.JSX.Element {
         throw new Error("Book not found");
       }
 
-      setBook({
-        id: book.id,
-        kind: book.kind,
-        cover: book.cover,
-        title: book.title,
-        author: book.author,
-        publisher: book.publisher,
-        filepath: book.filepath,
-        location: book.location,
-        version: book.version,
-        coverKind: book.coverKind,
-      });
+      setBook(book);
       return book;
     },
   });
