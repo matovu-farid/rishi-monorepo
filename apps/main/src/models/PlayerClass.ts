@@ -66,11 +66,16 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this.removeEventBusSubscriptions();
 
     const onNewParagraphs = async (paragraphs: ParagraphWithIndex[]) => {
-      if (this.playingState === PlayingState.WaitingForNewParagraphs) {
-        this.setPlayingState(PlayingState.Playing);
-      }
+      if (paragraphs.length === 0) return;
+      const wasWaiting = this.playingState === PlayingState.WaitingForNewParagraphs;
       if (isEqual(this.currentViewParagraphs, paragraphs)) return;
       this.currentViewParagraphs = paragraphs;
+      if (wasWaiting) {
+        // Paragraphs arrived after we were waiting — start playing from the top
+        await this.resetParagraphs();
+        await this.play();
+        return;
+      }
       if (this.playingState === PlayingState.Playing) {
         await this.handleLocationChanged();
       }
@@ -291,6 +296,16 @@ export class Player extends EventEmitter<PlayerEventMap> {
     if (this.playingState === PlayingState.Playing) return;
 
     if (this.currentViewParagraphs.length === 0) {
+      // If next page paragraphs are also empty, paragraphs likely haven't
+      // loaded yet — wait for the event bus to deliver them instead of
+      // entering an infinite moveToNextPage loop.
+      if (this.nextPageParagraphs.length === 0) {
+        console.warn(
+          "🎵 No paragraphs available yet - waiting for paragraphs to load"
+        );
+        this.setPlayingState(PlayingState.WaitingForNewParagraphs);
+        return;
+      }
       console.warn(
         "🎵 No paragraphs on page (likely an image page) - pausing briefly then moving to next page"
       );
@@ -353,10 +368,17 @@ export class Player extends EventEmitter<PlayerEventMap> {
 
     this.setPlayingState(PlayingState.Playing);
 
-    // Prefetch next paragraphs
-
+    // Prefetch nearby paragraphs on the current page
     void this.prefetchAudio(this.currentParagraphIndex + 1, 3);
     void this.prefetchAudio(this.currentParagraphIndex - 3, 3);
+
+    // Prefetch across page boundaries for smooth prev/next page transitions
+    if (this.currentParagraphIndex === 0) {
+      void this.prefetchPrevPageAudio(3);
+    }
+    if (this.currentParagraphIndex >= this.currentViewParagraphs.length - 1) {
+      void this.prefetchNextPageAudio(3);
+    }
   }
   async setupEventListeners(currentParagraph: ParagraphWithIndex) {
     await new Promise((resolve, reject) => {
@@ -500,9 +522,15 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this.nextPageParagraphs = [];
 
     eventBus.publish(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED);
-    await this.stop();
-    await this.resetParagraphs();
-    await this.play();
+
+    // If we already have paragraphs from the prefetch, play immediately.
+    // Otherwise, wait for NEW_PARAGRAPHS_AVAILABLE to arrive via the event bus
+    // (the onNewParagraphs handler will resume playback).
+    if (this.currentViewParagraphs.length > 0) {
+      await this.stop();
+      await this.resetParagraphs();
+      await this.play();
+    }
   };
   private moveToPreviousPage = async () => {
     this.setPlayingState(PlayingState.WaitingForNewParagraphs);
@@ -510,9 +538,12 @@ export class Player extends EventEmitter<PlayerEventMap> {
     this.previousPageParagraphs = [];
 
     eventBus.publish(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED);
-    await this.stop();
-    await this.resetParagraphs();
-    await this.play();
+
+    if (this.currentViewParagraphs.length > 0) {
+      await this.stop();
+      await this.resetParagraphs();
+      await this.play();
+    }
   };
   private updateParagaph = async (index: number) => {
     // bounds checks
