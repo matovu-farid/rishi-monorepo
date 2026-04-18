@@ -124,23 +124,25 @@ pub fn format_from_path(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// Computes SHA-256 hash of a file using streaming to avoid loading entire file into memory.
+/// Computes a partial SHA-256 hash from the first 64KB of a file.
+/// Fast and fixed-cost regardless of file size. Sufficient for dedup
+/// since book file headers are effectively unique.
 pub fn hash_file(path: &Path) -> Result<String, String> {
     use sha2::{Digest, Sha256};
-    use std::io::{BufReader, Read};
+    use std::io::Read;
 
-    let file = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
-    let mut reader = BufReader::new(file);
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 65536];
-    loop {
-        let n = reader.read(&mut buf).map_err(|e| format!("Read error: {}", e))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
+    const HASH_BYTES: usize = 65536; // 64KB
+
+    let mut file =
+        std::fs::File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
+    let mut buf = vec![0u8; HASH_BYTES];
+    let n = file
+        .read(&mut buf)
+        .map_err(|e| format!("Read error: {}", e))?;
+    buf.truncate(n);
+
+    let hash = Sha256::digest(&buf);
+    Ok(format!("{:x}", hash))
 }
 
 static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
@@ -188,9 +190,6 @@ pub async fn scan_for_books(app: tauri::AppHandle, mode: String) -> Result<u32, 
         let total_folders = folders.len() as u32;
         let mut total_found: u32 = 0;
 
-        // Collect existing filepaths to skip already-imported books (fast string comparison).
-        let existing_paths = get_existing_filepaths()?;
-
         for (idx, folder) in folders.iter().enumerate() {
             if CANCEL_FLAG.load(Ordering::SeqCst) {
                 break;
@@ -212,12 +211,11 @@ pub async fn scan_for_books(app: tauri::AppHandle, mode: String) -> Result<u32, 
                     break;
                 }
 
-                let filepath_str = path.to_string_lossy().to_string();
-
-                // Skip files already imported (by filepath match)
-                if existing_paths.contains(&filepath_str) {
-                    continue;
-                }
+                // Partial hash (first 64KB) — fast, fixed-cost regardless of file size
+                let file_hash = match hash_file(&path) {
+                    Ok(h) => h,
+                    Err(_) => continue,
+                };
 
                 let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
 
@@ -228,21 +226,20 @@ pub async fn scan_for_books(app: tauri::AppHandle, mode: String) -> Result<u32, 
 
                 let format = format_from_path(&path);
 
-                // Use filename stem as title for fast discovery.
-                // Full metadata extraction is too slow for scanning (parses entire file).
+                // Use filename stem as display title (fast, no file parsing needed)
                 let title = path
                     .file_stem()
                     .map(|s| s.to_string_lossy().to_string());
 
                 let book = DiscoveredBook {
-                    filepath: filepath_str,
+                    filepath: path.to_string_lossy().to_string(),
                     filename,
                     title,
                     author: None,
                     format,
                     file_size,
                     folder: folder.clone(),
-                    file_hash: None,
+                    file_hash: Some(file_hash),
                 };
 
                 let _ = app.emit("scan-result", book);
@@ -266,22 +263,3 @@ pub fn cancel_scan() {
 }
 
 
-/// Gets all filepaths from the books table to exclude already-imported books.
-fn get_existing_filepaths() -> Result<std::collections::HashSet<String>, String> {
-    use crate::db::DB_POOL;
-    use crate::schema::books::dsl::*;
-    use diesel::prelude::*;
-
-    let pool = DB_POOL.get().ok_or("Database pool not initialized")?;
-    let mut conn = pool
-        .get()
-        .map_err(|e| format!("Failed to get connection: {}", e))?;
-
-    let paths: Vec<String> = books
-        .select(filepath)
-        .filter(is_deleted.eq(0))
-        .load(&mut conn)
-        .map_err(|e| format!("Failed to query filepaths: {}", e))?;
-
-    Ok(paths.into_iter().collect())
-}
