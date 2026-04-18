@@ -17,10 +17,9 @@ import {
 import { toast } from "react-toastify";
 import { useEffect, useState } from "react";
 import player from "@/models/Player";
-import { atom, useAtom, useAtomValue, useSetAtom } from "jotai";
 import { EventBusEvent, PlayingState } from "@/utils/bus";
 import { eventBus } from "@/utils/bus";
-import { isChattingAtom, stopConversationAtom } from "@/stores/chat_atoms";
+import { useChatStore } from "@/stores/chatStore";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 
 interface TTSControlsProps {
@@ -55,9 +54,6 @@ const getDefaultChatPosition = (): { x: number; y: number } => {
   return { x: defaultX, y: defaultY };
 };
 
-const playerAtom = atom(player);
-playerAtom.debugLabel = "playerAtom";
-
 export default function TTSControls({
   bookId,
   disabled = false,
@@ -65,10 +61,10 @@ export default function TTSControls({
   const [showError, setShowError] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [hasShownError, setHasShownError] = useState(false);
-  const player = useAtomValue(playerAtom);
-  const stopConversation = useSetAtom(stopConversationAtom);
+  const stopConversation = useChatStore((s) => s.stopConversation);
+  const isChatting = useChatStore((s) => s.isChatting);
+  const setIsChatting = useChatStore((s) => s.setIsChatting);
   const error = errors.join("\n");
-  const [isChatting, setIsChatting] = useAtom(isChattingAtom);
   const { requireAuth, AuthDialog } = useRequireAuth();
 
   useEffect(() => {

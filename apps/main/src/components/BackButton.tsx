@@ -2,15 +2,15 @@ import { Link } from "@tanstack/react-router";
 import { Button } from "./ui/Button";
 import { themeAtom } from "@/stores/epub_atoms";
 import { ThemeType } from "@/themes/common";
-import { useAtomValue, useSetAtom } from "jotai";
-import { stopConversationAtom } from "@/stores/chat_atoms";
+import { useAtomValue } from "jotai";
+import { useChatStore } from "@/stores/chatStore";
 
 function cn(...classes: string[]) {
   return classes.filter(Boolean).join(" ");
 }
 export function BackButton() {
   const theme = useAtomValue(themeAtom);
-  const stopConversation = useSetAtom(stopConversationAtom);
+  const stopConversation = useChatStore((s) => s.stopConversation);
 
   function getTextColor() {
     switch (theme) {
