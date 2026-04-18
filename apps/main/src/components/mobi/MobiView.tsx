@@ -16,7 +16,7 @@ import TTSControls from "@components/TTSControls";
 import { IconButton } from "@components/ui/IconButton";
 import { Menu } from "@components/ui/Menu";
 import { Radio, RadioGroup } from "@components/ui/Radio";
-import { ChevronLeft, ChevronRight, Menu as MenuIcon, MessageSquare, Palette, Bookmark } from "lucide-react";
+import { ChevronLeft, ChevronRight, Menu as MenuIcon, MessageSquare, Palette } from "lucide-react";
 import { themes } from "@/themes/themes";
 import { ThemeType } from "@/themes/common";
 import { eventBus, EventBusEvent } from "@/utils/bus";
@@ -29,7 +29,7 @@ import { db } from "@/modules/kysley";
 import { stringToNumberID } from "@components/lib/utils";
 import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
 import { BookmarksList } from "@/components/bookmarks/BookmarksList";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@components/ui/sheet";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@components/components/ui/sheet";
 
 export function MobiView({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme);
