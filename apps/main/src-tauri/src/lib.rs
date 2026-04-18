@@ -161,6 +161,9 @@ pub fn run() {
             error_dump::read_error_dump,
             error_dump::clear_error_dump,
             error_dump::dump_state_cmd,
+            local_scanner::get_default_book_folders,
+            local_scanner::scan_for_books,
+            local_scanner::cancel_scan,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
