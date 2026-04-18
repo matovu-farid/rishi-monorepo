@@ -36,6 +36,15 @@ import { HighlightsPanel } from "@/components/highlights/HighlightsPanel";
 import { ReaderSettings } from "@/components/reader/ReaderSettings";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
+import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
+import { BookmarksList } from "@/components/bookmarks/BookmarksList";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@components/components/ui/sheet";
+import { ScrollArea } from "@components/components/ui/scroll-area";
 
 function cn(...classes: string[]) {
   return classes.filter(Boolean).join(" ");
@@ -62,6 +71,8 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   const rendition = useEpubStore((s) => s.rendition);
   const setRendition = useEpubStore((s) => s.setRendition);
   const bookSyncIdRef = useRef<string | null>(null);
+  const [bookSyncId, setBookSyncId] = useState<string>("");
+  const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false);
   const [selectionInfo, setSelectionInfo] = useState<{
     cfiRange: string; text: string; position: { x: number; y: number };
   } | null>(null);
@@ -69,7 +80,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
   const { requireAuth, AuthDialog } = useRequireAuth();
 
-  // Look up the book's sync_id for highlight storage
+  // Look up the book's sync_id for highlight storage and bookmark functionality
   useEffect(() => {
     void db.selectFrom('books')
       .select(['sync_id'])
@@ -77,6 +88,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
       .executeTakeFirst()
       .then((row) => {
         bookSyncIdRef.current = row?.sync_id ?? null;
+        if (row?.sync_id) setBookSyncId(row.sync_id);
       });
   }, [book.id]);
 
@@ -256,6 +268,35 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
       <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
         <BackButton />
 
+        <BookmarkButton
+          bookSyncId={bookSyncId}
+          location={currentLocation}
+          label={undefined}
+          className="hover:bg-transparent border-none"
+        />
+
+        <button
+          onClick={() => setBookmarksPanelOpen(true)}
+          className={cn("p-2 rounded-md", getTextColor())}
+          aria-label="Open bookmarks panel"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" />
+            <line x1="9" y1="10" x2="15" y2="10" />
+            <line x1="12" y1="7" x2="12" y2="13" />
+          </svg>
+        </button>
+
         <button
           onClick={() => setHighlightsPanelOpen(true)}
           className={cn("p-2 rounded-md", getTextColor())}
@@ -424,6 +465,27 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
         open={highlightsPanelOpen}
         onOpenChange={setHighlightsPanelOpen}
       />
+
+      {/* Bookmarks side panel */}
+      <Sheet open={bookmarksPanelOpen} onOpenChange={setBookmarksPanelOpen}>
+        <SheetContent side="right" className="w-[400px] flex flex-col">
+          <SheetHeader>
+            <SheetTitle className="text-lg font-semibold">Bookmarks</SheetTitle>
+          </SheetHeader>
+          <ScrollArea className="flex-1 px-4">
+            <BookmarksList
+              bookSyncId={bookSyncId}
+              onNavigate={(location) => {
+                const rendition = useEpubStore.getState().rendition;
+                if (rendition) {
+                  void rendition.display(location);
+                }
+                setBookmarksPanelOpen(false);
+              }}
+            />
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
 
       {AuthDialog}
 
