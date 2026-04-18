@@ -10,14 +10,7 @@ import type Rendition from "epubjs/types/rendition";
 
 import { highlightRange, removeHighlight } from "@/epubwrapper";
 import { EventEmitter } from "eventemitter3";
-import { customStore } from "@/stores/jotai";
-import {
-  currentEpubLocationAtom,
-  getEpubCurrentViewParagraphsAtom,
-  getEpubNextViewParagraphsAtom,
-  getEpubPreviousViewParagraphsAtom,
-  renditionAtom,
-} from "@/stores/epub_atoms";
+import { useEpubStore } from "@/stores/epubStore";
 
 export class EpubPlayerControl
   extends EventEmitter<PlayerControlEventMap>
@@ -34,29 +27,10 @@ export class EpubPlayerControl
   }
 
   async initialize(): Promise<void> {
-    customStore.sub(getEpubCurrentViewParagraphsAtom, async () => {
-      this.emit(
-        PlayerControlEvent.NEW_PARAGRAPHS_AVAILABLE,
-        await customStore.get(getEpubCurrentViewParagraphsAtom)
-      );
-    });
-
-    customStore.sub(getEpubNextViewParagraphsAtom, async () => {
-      this.emit(
-        PlayerControlEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE,
-        await customStore.get(getEpubNextViewParagraphsAtom)
-      );
-    });
-
-    customStore.sub(getEpubPreviousViewParagraphsAtom, async () => {
-      this.emit(
-        PlayerControlEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE,
-        await customStore.get(getEpubPreviousViewParagraphsAtom)
-      );
-    });
     // Store the unsubscribe function
-    this.unsubscribeRendition = customStore.sub(renditionAtom, () => {
-      const rendition = customStore.get(renditionAtom);
+    this.unsubscribeRendition = useEpubStore.subscribe(
+      (state) => state.rendition,
+      (rendition) => {
 
       if (rendition) {
         // Clean up old rendition listeners if we had a previous rendition
@@ -77,9 +51,9 @@ export class EpubPlayerControl
         this.on(PlayerControlEvent.MOVE_TO_NEXT_PAGE, async () => {
           await rendition.next();
 
-          customStore.set(
-            currentEpubLocationAtom,
-            customStore.get(currentEpubLocationAtom) + 1
+          const currentLocation = useEpubStore.getState().currentEpubLocation;
+          useEpubStore.getState().setCurrentEpubLocation(
+            String(Number(currentLocation) + 1)
           );
           // Wait for rendered event to fire before emitting PAGE_CHANGED
           // This ensures paragraphs are updated before Player handles the page change
