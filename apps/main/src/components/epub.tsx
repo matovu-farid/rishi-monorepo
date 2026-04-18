@@ -9,7 +9,7 @@ import { Radio, RadioGroup } from "@components/ui/Radio";
 import { ThemeType } from "@/themes/common";
 import { themes } from "@/themes/themes";
 import createIReactReaderTheme from "@/themes/readerThemes";
-import { Palette, Highlighter, MessageSquare, MoreVertical, Menu as MenuIcon } from "lucide-react";
+import { Palette, Highlighter, MessageSquare, MoreVertical, Menu as MenuIcon, Mic, MicOff, CircleX } from "lucide-react";
 import { IconButton } from "@components/ui/IconButton";
 import {
   Popover,
@@ -17,6 +17,8 @@ import {
   PopoverContent,
 } from "@components/components/ui/popover";
 import TTSControls from "@components/TTSControls";
+import { useChatStore } from "@/stores/chatStore";
+import Draggable from "./ui/Draggable";
 import { Rendition } from "epubjs/types";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { motion, AnimatePresence } from "framer-motion";
@@ -111,6 +113,33 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   const [highlightsPanelOpen, setHighlightsPanelOpen] = useState(false);
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
   const { requireAuth, AuthDialog } = useRequireAuth();
+
+  const isChatting = useChatStore((s) => s.isChatting);
+  const setIsChatting = useChatStore((s) => s.setIsChatting);
+  const stopConversation = useChatStore((s) => s.stopConversation);
+
+  const toggleChat = () => {
+    setIsChatting((prev) => !prev);
+  };
+
+  const handleMicClick = () => {
+    requireAuth("voice-input", () => {
+      toggleChat();
+    });
+  };
+
+  const handleStopChat = () => {
+    toggleChat();
+    stopConversation();
+  };
+
+  const getDefaultChatPosition = (): { x: number; y: number } => {
+    if (typeof window === "undefined") return { x: 0, y: 0 };
+    return {
+      x: window.innerWidth / 2 - 50,
+      y: window.innerHeight / 2 - 50,
+    };
+  };
 
   // Keep toolbar visible when any panel is open
   const panelOpen = menuOpen || highlightsPanelOpen || chatPanelOpen || bookmarksPanelOpen || tocOpen || !!selectionInfo;
@@ -427,6 +456,23 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
             </button>
           </PopoverContent>
         </Popover>
+        {!isChatting ? (
+          <button
+            onClick={handleMicClick}
+            className={cn("p-2 rounded-md", getTextColor())}
+            aria-label="Start voice chat"
+          >
+            <Mic size={20} />
+          </button>
+        ) : (
+          <button
+            onClick={handleStopChat}
+            className={cn("p-2 rounded-md", getTextColor())}
+            aria-label="Stop voice chat"
+          >
+            <MicOff size={20} />
+          </button>
+        )}
       </ReaderToolbar>
 
       {/* Theme menu (triggered from more menu) */}
@@ -673,6 +719,35 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
           />
         </div>
       </div>
+
+      {/* Voice chat overlay */}
+      {isChatting && (
+        <Draggable
+          storePath="tts-controls-position.json"
+          storeKey="chatPosition"
+          defaultPosition={getDefaultChatPosition}
+          width={100}
+          height={100}
+          className="rounded-full"
+        >
+          <div className="absolute -top-2 -right-2" data-no-drag>
+            <CircleX
+              className="cursor-pointer"
+              onClick={handleStopChat}
+              color="red"
+              size={24}
+            />
+          </div>
+          <div>
+            <img
+              width={100}
+              height={100}
+              src="https://rishi-tauri.s3.us-east-1.amazonaws.com/ai.gif"
+              alt="AI"
+            />
+          </div>
+        </Draggable>
+      )}
 
       {/* TTS Controls - Draggable */}
       {<TTSControls bookId={book.id.toString()} />}
