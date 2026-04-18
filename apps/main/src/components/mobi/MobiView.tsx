@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAtom } from "jotai";
-import { useSetAtom } from "jotai";
+import { useEpubStore } from "@/stores/epubStore";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "react-toastify";
 
@@ -18,7 +17,6 @@ import { IconButton } from "@components/ui/IconButton";
 import { Menu } from "@components/ui/Menu";
 import { Radio, RadioGroup } from "@components/ui/Radio";
 import { ChevronLeft, ChevronRight, MessageSquare, Palette } from "lucide-react";
-import { bookIdAtom, themeAtom } from "@/stores/epub_atoms";
 import { themes } from "@/themes/themes";
 import { ThemeType } from "@/themes/common";
 import { eventBus, EventBusEvent } from "@/utils/bus";
@@ -31,7 +29,8 @@ import { db } from "@/modules/kysley";
 import { stringToNumberID } from "@components/lib/utils";
 
 export function MobiView({ book }: { book: Book }): React.JSX.Element {
-  const [theme, setTheme] = useAtom(themeAtom);
+  const theme = useEpubStore((s) => s.theme);
+  const setTheme = useEpubStore((s) => s.setTheme);
   const [menuOpen, setMenuOpen] = useState(false);
   const [chapterIndex, setChapterIndex] = useState(() => {
     const parsed = Number(book.location);
@@ -46,8 +45,8 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
   const { requireAuth, AuthDialog } = useRequireAuth();
   const bookSyncIdRef = useRef<string | null>(null);
 
-  // Set bookIdAtom for voice chat
-  const setBookId = useSetAtom(bookIdAtom);
+  // Set bookId for voice chat
+  const setBookId = useEpubStore((s) => s.setBookId);
   useEffect(() => {
     setBookId(book.id.toString());
   }, [book.id, setBookId]);

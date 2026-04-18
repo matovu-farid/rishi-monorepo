@@ -15,23 +15,13 @@ import TTSControls from "@components/TTSControls";
 import { Rendition } from "epubjs/types";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { motion, AnimatePresence } from "framer-motion";
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import {
-  bookIdAtom,
-  currentEpubLocationAtom,
-  getEpubCurrentViewParagraphsAtom,
-  paragraphRenditionAtom,
-  renditionAtom,
-  themeAtom,
-} from "@/stores/epub_atoms";
+import { useEpubStore } from "@/stores/epubStore";
 import {
   eventBus,
   EventBusEvent,
-  eventBusLogsAtom,
   PlayingState,
 } from "@/utils/bus";
-import { highlightRange, removeHighlight } from "@/epubwrapper";
-import { customStore } from "@/stores/jotai";
+import { highlightRange, removeHighlight, getCurrentViewParagraphs } from "@/epubwrapper";
 import { Book } from "@/generated";
 import { updateBookLocation } from "@/generated";
 import { BackButton } from "./BackButton";
@@ -59,7 +49,8 @@ function updateTheme(rendition: Rendition, theme: ThemeType) {
 }
 
 export function EpubView({ book }: { book: Book }): React.JSX.Element {
-  const [theme, setTheme] = useAtom(themeAtom);
+  const theme = useEpubStore((s) => s.theme);
+  const setTheme = useEpubStore((s) => s.setTheme);
   const [menuOpen, setMenuOpen] = useState(false);
   const [currentLocation, setCurrentLocation] = useState<string>(
     book.location || "0"
@@ -68,7 +59,8 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   const navigationDirectionRef = useRef<"left" | "right">("right");
   const [animationKey, setAnimationKey] = useState(0);
   const animationTriggerRef = useRef(0);
-  const [rendition, setRendition] = useAtom(renditionAtom);
+  const rendition = useEpubStore((s) => s.rendition);
+  const setRendition = useEpubStore((s) => s.setRendition);
   const bookSyncIdRef = useRef<string | null>(null);
   const [selectionInfo, setSelectionInfo] = useState<{
     cfiRange: string; text: string; position: { x: number; y: number };
@@ -141,18 +133,15 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
 
   async function clearAllHighlights() {
     if (!rendition) return;
-    const paragraphs = await customStore.get(getEpubCurrentViewParagraphsAtom);
-
+    const paragraphs = getCurrentViewParagraphs(rendition);
     return Promise.all(
-      paragraphs.map((paragraph) => removeHighlight(rendition, paragraph.index))
+      paragraphs.map((paragraph) => removeHighlight(rendition, paragraph.cfiRange))
     );
   }
-  const setBookId = useSetAtom(bookIdAtom);
+  const setBookId = useEpubStore((s) => s.setBookId);
   useEffect(() => {
     setBookId(book.id.toString());
   }, [book.id]);
-
-  useAtomValue(eventBusLogsAtom);
 
   useEffect(() => {
     if (!rendition) return;
@@ -205,9 +194,9 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
     }
   }, [theme]);
 
-  const setCurrentEpubLocation = useSetAtom(currentEpubLocationAtom);
+  const setCurrentEpubLocation = useEpubStore((s) => s.setCurrentEpubLocation);
 
-  const setParagraphRendition = useSetAtom(paragraphRenditionAtom);
+  const setParagraphRendition = useEpubStore((s) => s.setParagraphRendition);
   // Track navigation direction by intercepting prev/next when rendition is available
   useEffect(() => {
     if (rendition) {

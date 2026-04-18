@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSetAtom } from "jotai";
+import { useEpubStore } from "@/stores/epubStore";
 import {
   getDjvuPage,
   getDjvuPageCount,
@@ -12,7 +12,6 @@ import { BackButton } from "@components/BackButton";
 import TTSControls from "@components/TTSControls";
 import { IconButton } from "@components/ui/IconButton";
 import { ChevronLeft, ChevronRight, MessageSquare, ZoomIn, ZoomOut } from "lucide-react";
-import { bookIdAtom } from "@/stores/epub_atoms";
 import { eventBus, EventBusEvent } from "@/utils/bus";
 import type { ParagraphWithIndex } from "@/utils/bus";
 import { processEpubJob } from "@/modules/process_epub";
@@ -51,8 +50,8 @@ export function DjvuView({ book }: { book: Book }) {
   const { requireAuth, AuthDialog } = useRequireAuth();
   const bookSyncIdRef = useRef<string | null>(null);
 
-  // Set bookIdAtom for voice chat
-  const setBookId = useSetAtom(bookIdAtom);
+  // Set bookId for voice chat
+  const setBookId = useEpubStore((s) => s.setBookId);
   useEffect(() => {
     setBookId(book.id.toString());
   }, [book.id, setBookId]);

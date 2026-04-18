@@ -1,15 +1,14 @@
 import { Link } from "@tanstack/react-router";
 import { Button } from "./ui/Button";
-import { themeAtom } from "@/stores/epub_atoms";
+import { useEpubStore } from "@/stores/epubStore";
 import { ThemeType } from "@/themes/common";
-import { useAtomValue } from "jotai";
 import { useChatStore } from "@/stores/chatStore";
 
 function cn(...classes: string[]) {
   return classes.filter(Boolean).join(" ");
 }
 export function BackButton() {
-  const theme = useAtomValue(themeAtom);
+  const theme = useEpubStore((s) => s.theme);
   const stopConversation = useChatStore((s) => s.stopConversation);
 
   function getTextColor() {
