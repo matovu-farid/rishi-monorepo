@@ -21,6 +21,7 @@ import { EventBusEvent, PlayingState } from "@/utils/bus";
 import { eventBus } from "@/utils/bus";
 import { useChatStore } from "@/stores/chatStore";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
+import { publishCurrentEpubParagraphs } from "@/stores/epubStore";
 
 interface TTSControlsProps {
   bookId: string;
@@ -70,6 +71,9 @@ export default function TTSControls({
   useEffect(() => {
     void (async () => {
       await player.initialize(bookId);
+      // Re-publish current paragraphs so the Player receives them
+      // (the initial publish may have fired before the Player subscribed)
+      publishCurrentEpubParagraphs();
     })();
   }, [bookId, player]);
 

@@ -116,6 +116,60 @@ useEpubStore.subscribe(
   { equalityFn: (a, b) => a.rendition === b.rendition && a.location === b.location }
 );
 
+// Side effect: handle page navigation events from the Player (TTS)
+eventBus.subscribe(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, async () => {
+  const { rendition } = useEpubStore.getState();
+  if (!rendition) return;
+  await rendition.next();
+  // Bump location to trigger the paragraph-publishing subscription above
+  const currentLocation = useEpubStore.getState().currentEpubLocation;
+  useEpubStore.getState().setCurrentEpubLocation(
+    String(Number(currentLocation) + 1)
+  );
+});
+
+eventBus.subscribe(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, async () => {
+  const { rendition } = useEpubStore.getState();
+  if (!rendition) return;
+  await rendition.prev();
+  const currentLocation = useEpubStore.getState().currentEpubLocation;
+  useEpubStore.getState().setCurrentEpubLocation(
+    String(Number(currentLocation) - 1)
+  );
+});
+
+/**
+ * Re-publish the current epub paragraphs to the event bus.
+ * Call this after Player.initialize() to seed the Player with
+ * paragraphs that were published before it subscribed.
+ */
+export function publishCurrentEpubParagraphs() {
+  const { rendition, currentEpubLocation } = useEpubStore.getState();
+  if (!rendition || !currentEpubLocation) return;
+
+  const paragraphs = getCurrentViewParagraphs(rendition).map((p) => ({
+    text: p.text,
+    index: p.cfiRange,
+  }));
+  eventBus.publish(EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, paragraphs);
+
+  void getNextViewParagraphs(rendition).then((nextParagraphs) => {
+    const mapped = nextParagraphs.map((p) => ({
+      text: p.text,
+      index: p.cfiRange,
+    }));
+    eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, mapped);
+  });
+
+  void getPreviousViewParagraphs(rendition).then((prevParagraphs) => {
+    const mapped = prevParagraphs.map((p) => ({
+      text: p.text,
+      index: p.cfiRange,
+    }));
+    eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, mapped);
+  });
+}
+
 // Side effect: when isChatting turns on and bookId exists, start realtime session
 useChatStore.subscribe(
   (state) => state.isChatting,

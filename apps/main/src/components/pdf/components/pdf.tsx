@@ -356,7 +356,6 @@ export function PdfView({
             <Document
               file={filepath.toString()}
               options={pdfOptions}
-              onLoadSuccess={onDocumentLoadSuccess}
             >
               <Outline onItemClick={onItemClick} />
             </Document>
