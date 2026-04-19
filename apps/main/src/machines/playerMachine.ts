@@ -54,6 +54,7 @@ export const playerMachine = setup({
     hasMoreParagraphs: ({ context }) =>
       context.paragraphIndex < context.currentParagraphs.length - 1,
     hasRetries: ({ context }) => context.retryCount + 1 < MAX_RETRIES,
+    isFirstParagraph: ({ context }) => context.paragraphIndex <= 0,
     wasTimedOut: ({ context }) => context.timedOut,
   },
   actions: {
@@ -107,6 +108,8 @@ export const playerMachine = setup({
         return errs;
       },
     }),
+    setDirectionForward: assign({ direction: "forward" as const }),
+    setDirectionBackward: assign({ direction: "backward" as const }),
     flagTimedOut: assign({ timedOut: true }),
     clearTimedOut: assign({ timedOut: false }),
     resetAll: assign(() => ({ ...initialContext })),
@@ -206,6 +209,7 @@ export const playerMachine = setup({
           },
           {
             target: "waitingForParagraphs",
+            actions: "setDirectionForward",
           },
         ],
         NEXT: [
@@ -216,12 +220,20 @@ export const playerMachine = setup({
           },
           {
             target: "waitingForParagraphs",
+            actions: "setDirectionForward",
           },
         ],
-        PREV: {
-          target: "loading",
-          actions: "retreatIndex",
-        },
+        PREV: [
+          {
+            guard: "isFirstParagraph",
+            target: "waitingForParagraphs",
+            actions: "setDirectionBackward",
+          },
+          {
+            target: "loading",
+            actions: "retreatIndex",
+          },
+        ],
         PARAGRAPHS_UPDATED: {
           target: "loading",
           actions: ["storeParagraphs", "resetIndex"],

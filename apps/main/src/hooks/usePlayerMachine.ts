@@ -147,8 +147,9 @@ export function usePlayerMachine(bookId: string) {
 
       if (state === "waitingForParagraphs") {
         audioService.stopAudio();
+        const direction = actor.getSnapshot().context.direction;
         usePlayerStore.setState({
-          pageRequest: "next",
+          pageRequest: direction === "backward" ? "prev" : "next",
         });
       }
 

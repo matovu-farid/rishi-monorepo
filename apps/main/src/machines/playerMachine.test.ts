@@ -248,4 +248,32 @@ describe("playerMachine", () => {
     expect(actor.getSnapshot().context.paragraphIndex).toBe(0);
     actor.stop();
   });
+
+  it("playing → PREV at first paragraph → waitingForParagraphs (direction backward)", () => {
+    const actor = createActor(playerMachine);
+    actor.start();
+    actor.send({ type: "INITIALIZE", bookId: "1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: fakeParagraphs });
+    actor.send({ type: "PLAY" });
+    actor.send({ type: "AUDIO_LOADED" });
+    // Already at index 0 — pressing PREV should go to previous page
+    actor.send({ type: "PREV" });
+    expect(actor.getSnapshot().value).toBe("waitingForParagraphs");
+    expect(actor.getSnapshot().context.direction).toBe("backward");
+    actor.stop();
+  });
+
+  it("playing → NEXT at last paragraph → waitingForParagraphs (direction forward)", () => {
+    const single = [{ index: "1", text: "Only paragraph." }];
+    const actor = createActor(playerMachine);
+    actor.start();
+    actor.send({ type: "INITIALIZE", bookId: "1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: single });
+    actor.send({ type: "PLAY" });
+    actor.send({ type: "AUDIO_LOADED" });
+    actor.send({ type: "NEXT" });
+    expect(actor.getSnapshot().value).toBe("waitingForParagraphs");
+    expect(actor.getSnapshot().context.direction).toBe("forward");
+    actor.stop();
+  });
 });
