@@ -12,6 +12,7 @@ import {
   initialize,
   removeHighlight,
 } from "@/epubwrapper";
+import { useNavStore } from "@/stores/navStore";
 
 export { EpubViewStyle } from "./style";
 
@@ -485,11 +486,13 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
    */
   handleKeyPress = (event: KeyboardEvent) => {
     if (!this.props.handleKeyPress) {
-      if (event.key === "ArrowRight" && this.nextPage) {
-        this.nextPage();
+      const send = useNavStore.getState().send;
+      if (!send) return;
+      if (event.key === "ArrowRight") {
+        send({ type: "NEXT" });
       }
-      if (event.key === "ArrowLeft" && this.prevPage) {
-        this.prevPage();
+      if (event.key === "ArrowLeft") {
+        send({ type: "PREV" });
       }
     }
   };

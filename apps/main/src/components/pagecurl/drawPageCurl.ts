@@ -14,10 +14,10 @@ export function drawPageCurl(
   ctx.clearRect(0, 0, W, H);
 
   const foldX = isForward ? W * (1 - t) : W * t;
-  const maxCurl = W * 0.25;
+  const maxCurl = W * 0.28;
   const curlW = Math.sin(t * Math.PI) * maxCurl;
 
-  // 1. Flat page
+  // 1. Flat page (gradient transparency near fold to reveal content underneath)
   ctx.save();
   ctx.beginPath();
   if (isForward) {
@@ -27,6 +27,16 @@ export function drawPageCurl(
   }
   ctx.clip();
   ctx.fillStyle = pageColor;
+  ctx.fillRect(0, 0, W, H);
+  // Erase near the fold so underlying content peeks through
+  ctx.globalCompositeOperation = "destination-out";
+  const eraseGrad = isForward
+    ? ctx.createLinearGradient(0, 0, foldX, 0)
+    : ctx.createLinearGradient(W, 0, foldX, 0);
+  eraseGrad.addColorStop(0, "rgba(0,0,0,0)");
+  eraseGrad.addColorStop(0.5, "rgba(0,0,0,0)");
+  eraseGrad.addColorStop(1, "rgba(0,0,0,0.45)");
+  ctx.fillStyle = eraseGrad;
   ctx.fillRect(0, 0, W, H);
   ctx.restore();
 
