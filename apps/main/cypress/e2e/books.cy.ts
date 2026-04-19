@@ -34,7 +34,7 @@ if (books[0].title !== 'Test Book') {
 
 // Verify IPC log
 const log = ipc.log;
-const getBooks = log.filter(e => e.command === 'get_books');
+const getBooks = log.filter((e: any) => e.command === 'get_books');
 if (getBooks.length !== 1) throw new Error(`Expected 1 get_books call, got ${getBooks.length}`);
 if (!getBooks[0].mocked) throw new Error('get_books call should be mocked');
 

@@ -30,7 +30,7 @@ if (status2.authenticated !== true) throw new Error('Should be authenticated');
 if (status2.user.email !== 'test@example.com') throw new Error('User email mismatch');
 
 // Verify IPC log
-const authCalls = ipc.log.filter(e => e.command === 'check_auth_status');
+const authCalls = ipc.log.filter((e: any) => e.command === 'check_auth_status');
 if (authCalls.length !== 2) throw new Error(`Expected 2 auth calls, got ${authCalls.length}`);
 if (!authCalls[0].mocked || !authCalls[1].mocked) throw new Error('Both calls should be mocked');
 
