@@ -1,27 +1,17 @@
 import { useEffect } from "react";
-// import {
-//   Sheet,
-//   SheetContent,
-//   SheetHeader,
-//   SheetTitle,
-// } from "@/components/ui/sheet";
 
 // Import required CSS for text and annotation layers
 
-import {
-  hasNavigatedToPageAtom,
-  isPdfRenderedAtom,
-} from "@components/pdf/atoms/paragraph-atoms";
-import { useAtomValue } from "jotai";
+import { usePdfStore } from "@/stores/pdfStore";
 import { updateStoredCoverImage } from "../utils/updateStoredCoverImage";
 import { Book } from "@/generated";
 
 export function useUpdateCoverIMage(book: Book) {
-  const isRendered = useAtomValue(isPdfRenderedAtom);
-  const hasNavigatedToPage = useAtomValue(hasNavigatedToPageAtom);
+  const isPdfRendered = usePdfStore((s) => s.isPdfRendered);
+  const hasNavigatedToPage = usePdfStore((s) => s.hasNavigatedToPage);
   useEffect(() => {
-    if (isRendered(book.id.toString()) && hasNavigatedToPage) {
+    if (isPdfRendered(book.id.toString()) && hasNavigatedToPage) {
       void updateStoredCoverImage(book);
     }
-  }, [isRendered, book, hasNavigatedToPage]);
+  }, [isPdfRendered, book, hasNavigatedToPage]);
 }

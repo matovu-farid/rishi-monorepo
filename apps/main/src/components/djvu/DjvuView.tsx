@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSetAtom } from "jotai";
+import { useEpubStore } from "@/stores/epubStore";
 import {
   getDjvuPage,
   getDjvuPageCount,
@@ -11,18 +11,20 @@ import type { Book } from "@/generated";
 import { BackButton } from "@components/BackButton";
 import TTSControls from "@components/TTSControls";
 import { IconButton } from "@components/ui/IconButton";
-import { ChevronLeft, ChevronRight, MessageSquare, ZoomIn, ZoomOut, Search } from "lucide-react";
-import { bookIdAtom } from "@/stores/epub_atoms";
-import { eventBus, EventBusEvent } from "@/utils/bus";
-import type { ParagraphWithIndex } from "@/utils/bus";
+import { ChevronLeft, ChevronRight, Menu as MenuIcon, MessageSquare, ZoomIn, ZoomOut, Mic, MicOff } from "lucide-react";
+import AIChatOrb from "../AIChatOrb";
+import { usePlayerStore } from "@/stores/playerStore";
+import type { ParagraphWithIndex } from "@/models/player_control";
 import { processEpubJob } from "@/modules/process_epub";
 import type { PageDataInsertable } from "@/modules/kysley";
 import { ChatPanel } from "@/components/chat/ChatPanel";
-import { SearchPanel } from "@/components/search/SearchPanel";
-import type { BookSearchResult } from "@/hooks/useBookSearch";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { db } from "@/modules/kysley";
 import { stringToNumberID } from "@components/lib/utils";
+import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
+import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
+import { ReaderTOC } from "@/components/reader/ReaderTOC";
+import { useChatStore } from "@/stores/chatStore";
 
 const PAGE_CACHE_SIZE = 5;
 const MIN_ZOOM = 0.5;
@@ -50,30 +52,32 @@ export function DjvuView({ book }: { book: Book }) {
   const mountedRef = useRef(true);
   const embeddingsProcessedRef = useRef(false);
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
-  const [searchPanelOpen, setSearchPanelOpen] = useState(false);
+  const [tocOpen, setTocOpen] = useState(false);
   const { requireAuth, AuthDialog } = useRequireAuth();
+  const isChatting = useChatStore((s) => s.isChatting);
+  const setIsChatting = useChatStore((s) => s.setIsChatting);
+  const stopConversation = useChatStore((s) => s.stopConversation);
 
-  const handleSearchNavigate = useCallback((result: BookSearchResult) => {
-    if (result.pageNumber !== undefined) {
-      setCurrentPage(result.pageNumber);
-    }
-  }, []);
+  const toggleChat = () => {
+    setIsChatting((prev) => !prev);
+  };
 
-  // Cmd+F / Ctrl+F keyboard shortcut
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
-        e.preventDefault();
-        setSearchPanelOpen((prev) => !prev);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  const handleMicClick = () => {
+    requireAuth("voice-input", () => {
+      toggleChat();
+    });
+  };
+
+  const handleStopChat = () => {
+    toggleChat();
+    stopConversation();
+  };
+
+
   const bookSyncIdRef = useRef<string | null>(null);
 
-  // Set bookIdAtom for voice chat
-  const setBookId = useSetAtom(bookIdAtom);
+  // Set bookId for voice chat
+  const setBookId = useEpubStore((s) => s.setBookId);
   useEffect(() => {
     setBookId(book.id.toString());
   }, [book.id, setBookId]);
@@ -256,67 +260,90 @@ export function DjvuView({ book }: { book: Book }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [goPrev, goNext, zoomIn, zoomOut]);
 
-  // Publish paragraphs to event bus for TTS
+  // Publish paragraphs to playerStore for TTS.
+  // Current page is published immediately; next/prev are debounced
+  // so rapid page flips don't trigger wasted fetches.
+  const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (pageCount === 0) return;
 
-    // Current page paragraphs
+    // Current page paragraphs — publish immediately
     getDjvuPageText({ path: book.filepath, pageNumber: currentPage })
       .then((texts) => {
         const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
           text,
           index: `djvu-${currentPage}-${i}`,
         }));
-        eventBus.publish(EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, paragraphs);
+        usePlayerStore.getState().setCurrentParagraphs(paragraphs);
       })
       .catch((err) => console.warn("[DjvuView] failed to get text for TTS:", err));
 
-    // Prefetch next page paragraphs
-    if (currentPage < pageCount) {
-      getDjvuPageText({ path: book.filepath, pageNumber: currentPage + 1 })
-        .then((texts) => {
-          const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
-            text,
-            index: `djvu-${currentPage + 1}-${i}`,
-          }));
-          eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
-        })
-        .catch((err) => console.warn("[DjvuView] failed to prefetch next page:", err));
-    } else {
-      eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, []);
-    }
+    // Debounce next/prev page prefetch
+    if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current);
+    prefetchTimerRef.current = setTimeout(() => {
+      // Prefetch next page paragraphs
+      if (currentPage < pageCount) {
+        getDjvuPageText({ path: book.filepath, pageNumber: currentPage + 1 })
+          .then((texts) => {
+            const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
+              text,
+              index: `djvu-${currentPage + 1}-${i}`,
+            }));
+            usePlayerStore.getState().setNextPageParagraphs(paragraphs);
+          })
+          .catch((err) => console.warn("[DjvuView] failed to prefetch next page:", err));
+      } else {
+        usePlayerStore.getState().setNextPageParagraphs([]);
+      }
 
-    // Prefetch previous page paragraphs
-    if (currentPage > 1) {
-      getDjvuPageText({ path: book.filepath, pageNumber: currentPage - 1 })
-        .then((texts) => {
-          const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
-            text,
-            index: `djvu-${currentPage - 1}-${i}`,
-          }));
-          eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
-        })
-        .catch((err) => console.warn("[DjvuView] failed to prefetch prev page:", err));
-    } else {
-      eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, []);
-    }
+      // Prefetch previous page paragraphs
+      if (currentPage > 1) {
+        getDjvuPageText({ path: book.filepath, pageNumber: currentPage - 1 })
+          .then((texts) => {
+            const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
+              text,
+              index: `djvu-${currentPage - 1}-${i}`,
+            }));
+            usePlayerStore.getState().setPrevPageParagraphs(paragraphs);
+          })
+          .catch((err) => console.warn("[DjvuView] failed to prefetch prev page:", err));
+      } else {
+        usePlayerStore.getState().setPrevPageParagraphs([]);
+      }
+    }, 300);
+
+    return () => {
+      if (prefetchTimerRef.current) {
+        clearTimeout(prefetchTimerRef.current);
+        // Clear stale prefetch data so Player doesn't use wrong page's paragraphs
+        usePlayerStore.getState().setNextPageParagraphs([]);
+        usePlayerStore.getState().setPrevPageParagraphs([]);
+      }
+    };
   }, [book.filepath, currentPage, pageCount]);
 
   // Handle page-turn events from Player (TTS exhausted current page)
   useEffect(() => {
     const handleNextEmptied = () => {
+      if (pageCount === 0) return;
       setCurrentPage((prev) => Math.min(prev + 1, pageCount));
     };
     const handlePrevEmptied = () => {
+      if (pageCount === 0) return;
       setCurrentPage((prev) => Math.max(prev - 1, 1));
     };
 
-    eventBus.on(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
-    eventBus.on(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
+    const unsubPage = usePlayerStore.subscribe(
+      (s) => s.pageRequest,
+      (request) => {
+        if (request === "next") handleNextEmptied();
+        if (request === "prev") handlePrevEmptied();
+        if (request) usePlayerStore.getState().clearPageRequest();
+      }
+    );
 
     return () => {
-      eventBus.off(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
-      eventBus.off(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
+      unsubPage();
     };
   }, [pageCount]);
 
@@ -356,25 +383,46 @@ export function DjvuView({ book }: { book: Book }) {
   return (
     <div className="relative h-screen w-full flex flex-col bg-gray-900">
       {/* Top bar */}
-      <div className="fixed top-0 left-0 right-0 z-50 bg-transparent">
-        <div className="flex items-center justify-end gap-2 px-4 pt-5">
-          <button
-            onClick={() => requireAuth("chat", () => setChatPanelOpen(true))}
-            className="p-2 rounded-md text-white hover:bg-white/10"
-            aria-label="Open chat panel"
-          >
-            <MessageSquare size={20} />
-          </button>
-          <IconButton
-            onClick={() => setSearchPanelOpen(true)}
-            className="hover:bg-black/10 dark:hover:bg-white/10 border-none"
-            aria-label="Search in book"
-          >
-            <Search size={20} />
+      <ReaderToolbar
+        panelsOpen={tocOpen || chatPanelOpen}
+        leftContent={
+          <IconButton color="inherit" onClick={() => setTocOpen(true)} className="hover:bg-transparent border-none">
+            <MenuIcon size={20} />
           </IconButton>
-          <BackButton />
-        </div>
-      </div>
+        }
+      >
+        <BackButton />
+        <BookmarkButton
+          bookSyncId={bookSyncIdRef.current ?? ""}
+          location={String(currentPage)}
+          label={`Page ${currentPage}`}
+          className="hover:bg-transparent border-none"
+        />
+        <button
+          onClick={() => requireAuth("chat", () => setChatPanelOpen(true))}
+          className="p-2 rounded-md text-black hover:bg-black/10"
+          aria-label="Open chat panel"
+        >
+          <MessageSquare size={20} />
+        </button>
+        {!isChatting ? (
+          <button
+            onClick={handleMicClick}
+            className="p-2 rounded-md text-black hover:bg-black/10"
+            aria-label="Start voice chat"
+          >
+            <Mic size={20} />
+          </button>
+        ) : (
+          <button
+            onClick={handleStopChat}
+            className="p-2 rounded-md text-black hover:bg-black/10"
+            aria-label="Stop voice chat"
+          >
+            <MicOff size={20} />
+          </button>
+        )}
+      </ReaderToolbar>
 
       {/* Main scrollable area */}
       <div className="flex-1 overflow-auto flex items-start justify-center pt-16 pb-24">
@@ -460,8 +508,18 @@ export function DjvuView({ book }: { book: Book }) {
         </div>
       </div>
 
-      {/* TTS Controls */}
-      <TTSControls key={book.id.toString()} bookId={book.id.toString()} />
+      {/* AI chat orb */}
+      {isChatting && (
+        <AIChatOrb
+          isProcessing={false}
+          onClick={() => setChatPanelOpen((prev) => !prev)}
+        />
+      )}
+
+      {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
+      <div style={{ display: isChatting ? "none" : "contents" }}>
+        <TTSControls key={book.id.toString()} bookId={book.id.toString()} />
+      </div>
 
       {AuthDialog}
 
@@ -475,13 +533,24 @@ export function DjvuView({ book }: { book: Book }) {
         onOpenChange={setChatPanelOpen}
       />
 
-      {/* Search Panel */}
-      <SearchPanel
-        bookId={book.id}
-        bookFormat="djvu"
-        open={searchPanelOpen}
-        onOpenChange={setSearchPanelOpen}
-        onNavigate={handleSearchNavigate}
+      {/* Navigation / Bookmarks Sidebar */}
+      <ReaderTOC
+        open={tocOpen}
+        onOpenChange={setTocOpen}
+        title="Navigation"
+        bookSyncId={bookSyncIdRef.current ?? ""}
+        onBookmarkNavigate={(location) => {
+          const page = parseInt(location, 10);
+          if (page > 0) {
+            setCurrentPage(page);
+            setTocOpen(false);
+          }
+        }}
+        tocContent={
+          <div className="p-4 text-gray-400 text-sm text-center">
+            Page {currentPage} of {pageCount}
+          </div>
+        }
       />
     </div>
   );

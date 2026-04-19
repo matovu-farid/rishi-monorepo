@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAtom } from "jotai";
-import { useSetAtom } from "jotai";
+import { useEpubStore } from "@/stores/epubStore";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "react-toastify";
 
@@ -14,27 +13,26 @@ import {
 import type { Book } from "@/generated";
 import { BackButton } from "@components/BackButton";
 import TTSControls from "@components/TTSControls";
-import { IconButton } from "@components/ui/IconButton";
-import { Menu } from "@components/ui/Menu";
-import { Radio, RadioGroup } from "@components/ui/Radio";
-import { ChevronLeft, ChevronRight, MessageSquare, Palette, Search } from "lucide-react";
-import { bookIdAtom, themeAtom } from "@/stores/epub_atoms";
+import { ChevronLeft, ChevronRight, MessageSquare, Menu as MenuIcon, Mic, MicOff } from "lucide-react";
+import AIChatOrb from "../AIChatOrb";
 import { themes } from "@/themes/themes";
-import { ThemeType } from "@/themes/common";
-import { eventBus, EventBusEvent } from "@/utils/bus";
-import type { ParagraphWithIndex } from "@/utils/bus";
+import { usePlayerStore } from "@/stores/playerStore";
+import type { ParagraphWithIndex } from "@/models/player_control";
 import { processEpubJob } from "@/modules/process_epub";
 import type { PageDataInsertable } from "@/modules/kysley";
 import { ChatPanel } from "@/components/chat/ChatPanel";
-import { SearchPanel } from "@/components/search/SearchPanel";
-import type { BookSearchResult } from "@/hooks/useBookSearch";
+import { useChatStore } from "@/stores/chatStore";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { db } from "@/modules/kysley";
 import { stringToNumberID } from "@components/lib/utils";
+import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
+import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
+import { ReaderTOC } from "@/components/reader/ReaderTOC";
+import { IconButton } from "@components/ui/IconButton";
 
 export function MobiView({ book }: { book: Book }): React.JSX.Element {
-  const [theme, setTheme] = useAtom(themeAtom);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const theme = useEpubStore((s) => s.theme);
+  const [tocOpen, setTocOpen] = useState(false);
   const [chapterIndex, setChapterIndex] = useState(() => {
     const parsed = Number(book.location);
     return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
@@ -45,12 +43,31 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const embeddingsProcessedRef = useRef(false);
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
-  const [searchPanelOpen, setSearchPanelOpen] = useState(false);
   const { requireAuth, AuthDialog } = useRequireAuth();
   const bookSyncIdRef = useRef<string | null>(null);
 
-  // Set bookIdAtom for voice chat
-  const setBookId = useSetAtom(bookIdAtom);
+  const isChatting = useChatStore((s) => s.isChatting);
+  const setIsChatting = useChatStore((s) => s.setIsChatting);
+  const stopConversation = useChatStore((s) => s.stopConversation);
+
+  const toggleChat = () => {
+    setIsChatting((prev) => !prev);
+  };
+
+  const handleMicClick = () => {
+    requireAuth("voice-input", () => {
+      toggleChat();
+    });
+  };
+
+  const handleStopChat = () => {
+    toggleChat();
+    stopConversation();
+  };
+
+
+  // Set bookId for voice chat
+  const setBookId = useEpubStore((s) => s.setBookId);
   useEffect(() => {
     setBookId(book.id.toString());
   }, [book.id, setBookId]);
@@ -131,86 +148,90 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [goNext, goPrev]);
 
-  const handleSearchNavigate = useCallback((result: BookSearchResult) => {
-    if (result.pageNumber !== undefined) {
-      // MOBI uses chapter index as page number
-      setChapterIndex(result.pageNumber);
-    }
-  }, []);
-
-  // Cmd+F / Ctrl+F keyboard shortcut
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
-        e.preventDefault();
-        setSearchPanelOpen((prev) => !prev);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
-  // Publish paragraphs to event bus for TTS
+  // Publish paragraphs to playerStore for TTS.
+  // Current chapter is published immediately; next/prev are debounced
+  // so rapid chapter flips don't trigger wasted fetches.
+  const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (chapterCount === 0) return;
 
-    // Current chapter paragraphs
+    // Current chapter paragraphs — publish immediately
     getMobiText({ path: book.filepath, chapterIndex })
       .then((texts) => {
         const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
           text,
           index: `mobi-${chapterIndex}-${i}`,
         }));
-        eventBus.publish(EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, paragraphs);
+        usePlayerStore.getState().setCurrentParagraphs(paragraphs);
       })
       .catch((err) => console.warn("[MobiView] failed to get text for TTS:", err));
 
-    // Prefetch next chapter paragraphs
-    if (chapterIndex < chapterCount - 1) {
-      getMobiText({ path: book.filepath, chapterIndex: chapterIndex + 1 })
-        .then((texts) => {
-          const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
-            text,
-            index: `mobi-${chapterIndex + 1}-${i}`,
-          }));
-          eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
-        })
-        .catch((err) => console.warn("[MobiView] failed to prefetch next chapter:", err));
-    } else {
-      eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, []);
-    }
+    // Debounce next/prev chapter prefetch
+    if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current);
+    prefetchTimerRef.current = setTimeout(() => {
+      // Prefetch next chapter paragraphs
+      if (chapterIndex < chapterCount - 1) {
+        getMobiText({ path: book.filepath, chapterIndex: chapterIndex + 1 })
+          .then((texts) => {
+            const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
+              text,
+              index: `mobi-${chapterIndex + 1}-${i}`,
+            }));
+            usePlayerStore.getState().setNextPageParagraphs(paragraphs);
+          })
+          .catch((err) => console.warn("[MobiView] failed to prefetch next chapter:", err));
+      } else {
+        usePlayerStore.getState().setNextPageParagraphs([]);
+      }
 
-    // Prefetch previous chapter paragraphs
-    if (chapterIndex > 0) {
-      getMobiText({ path: book.filepath, chapterIndex: chapterIndex - 1 })
-        .then((texts) => {
-          const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
-            text,
-            index: `mobi-${chapterIndex - 1}-${i}`,
-          }));
-          eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
-        })
-        .catch((err) => console.warn("[MobiView] failed to prefetch prev chapter:", err));
-    } else {
-      eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, []);
-    }
+      // Prefetch previous chapter paragraphs
+      if (chapterIndex > 0) {
+        getMobiText({ path: book.filepath, chapterIndex: chapterIndex - 1 })
+          .then((texts) => {
+            const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
+              text,
+              index: `mobi-${chapterIndex - 1}-${i}`,
+            }));
+            usePlayerStore.getState().setPrevPageParagraphs(paragraphs);
+          })
+          .catch((err) => console.warn("[MobiView] failed to prefetch prev chapter:", err));
+      } else {
+        usePlayerStore.getState().setPrevPageParagraphs([]);
+      }
+    }, 300);
+
+    return () => {
+      if (prefetchTimerRef.current) {
+        clearTimeout(prefetchTimerRef.current);
+        // Clear stale prefetch data so Player doesn't use wrong chapter's paragraphs
+        usePlayerStore.getState().setNextPageParagraphs([]);
+        usePlayerStore.getState().setPrevPageParagraphs([]);
+      }
+    };
   }, [book.filepath, chapterIndex, chapterCount]);
 
   // Handle page-turn events from Player (TTS exhausted current chapter)
   useEffect(() => {
     const handleNextEmptied = () => {
+      if (chapterCount === 0) return;
       setChapterIndex((prev) => Math.min(prev + 1, chapterCount - 1));
     };
     const handlePrevEmptied = () => {
+      if (chapterCount === 0) return;
       setChapterIndex((prev) => Math.max(prev - 1, 0));
     };
 
-    eventBus.on(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
-    eventBus.on(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
+    const unsubPage = usePlayerStore.subscribe(
+      (s) => s.pageRequest,
+      (request) => {
+        if (request === "next") handleNextEmptied();
+        if (request === "prev") handlePrevEmptied();
+        if (request) usePlayerStore.getState().clearPageRequest();
+      }
+    );
 
     return () => {
-      eventBus.off(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
-      eventBus.off(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
+      unsubPage();
     };
   }, [chapterCount]);
 
@@ -269,25 +290,12 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
   }
   img { max-width: 100%; height: auto; }
   a { color: inherit; }
+  .page-number { text-align: center; font-size: 0.75em; color: ${t.color}; opacity: 0.4; padding: 2rem 0 1rem; }
 </style>
 </head>
-<body>${chapterHtml}</body>
+<body>${chapterHtml}<div class="page-number">${chapterCount > 0 ? `${chapterIndex + 1} of ${chapterCount}` : ''}</div></body>
 </html>`;
-  }, [chapterHtml, theme]);
-
-  const handleThemeChange = (newTheme: ThemeType) => {
-    setTheme(newTheme);
-    setMenuOpen(false);
-  };
-
-  function getTextColor() {
-    switch (theme) {
-      case ThemeType.Dark:
-        return "text-white hover:bg-white/10 hover:text-white";
-      default:
-        return "text-black hover:bg-black/10 hover:text-black";
-    }
-  }
+  }, [chapterHtml, theme, chapterIndex, chapterCount]);
 
   return (
     <div
@@ -295,55 +303,46 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
       style={{ background: themes[theme].background }}
     >
       {/* Top bar */}
-      <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
-        <button
-          onClick={() => setSearchPanelOpen(true)}
-          className={`p-2 rounded-md ${getTextColor()}`}
-          aria-label="Search in book"
-        >
-          <Search size={20} />
-        </button>
+      <ReaderToolbar
+        panelsOpen={tocOpen || chatPanelOpen}
+        leftContent={
+          <IconButton color="inherit" onClick={() => setTocOpen(true)} className="hover:bg-transparent border-none">
+            <MenuIcon size={20} />
+          </IconButton>
+        }
+      >
+        <BackButton />
+        <BookmarkButton
+          bookSyncId={bookSyncIdRef.current ?? ""}
+          location={String(chapterIndex)}
+          label={`Chapter ${chapterIndex + 1}`}
+          className="hover:bg-transparent border-none"
+        />
         <button
           onClick={() => requireAuth("chat", () => setChatPanelOpen(true))}
-          className={`p-2 rounded-md ${getTextColor()}`}
+          className="p-2 rounded-md text-black hover:bg-black/10"
           aria-label="Open chat panel"
         >
           <MessageSquare size={20} />
         </button>
-        <BackButton />
-        <Menu
-          trigger={
-            <IconButton className="hover:bg-transparent border-none">
-              <Palette size={20} className={getTextColor()} />
-            </IconButton>
-          }
-          open={menuOpen}
-          onOpen={() => setMenuOpen(true)}
-          onClose={() => setMenuOpen(false)}
-          anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-          theme={themes[theme]}
-        >
-          <div className="p-3">
-            <RadioGroup
-              value={theme}
-              onChange={(value) => handleThemeChange(value as ThemeType)}
-              name="theme-selector"
-              theme={themes[theme]}
-            >
-              {(Object.keys(themes) as Array<keyof typeof themes>).map(
-                (themeKey) => (
-                  <Radio
-                    key={themeKey}
-                    value={themeKey}
-                    label={themeKey}
-                    theme={themes[theme]}
-                  />
-                )
-              )}
-            </RadioGroup>
-          </div>
-        </Menu>
-      </div>
+        {!isChatting ? (
+          <button
+            onClick={handleMicClick}
+            className="p-2 rounded-md text-black hover:bg-black/10"
+            aria-label="Start voice chat"
+          >
+            <Mic size={20} />
+          </button>
+        ) : (
+          <button
+            onClick={handleStopChat}
+            className="p-2 rounded-md text-black hover:bg-black/10"
+            aria-label="Stop voice chat"
+          >
+            <MicOff size={20} />
+          </button>
+        )}
+      </ReaderToolbar>
 
       {/* Main content area */}
       <div className="flex-1 overflow-hidden">
@@ -392,8 +391,38 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
         </div>
       </div>
 
-      {/* TTS Controls */}
-      <TTSControls bookId={book.id.toString()} />
+      {/* AI chat orb */}
+      {isChatting && (
+        <AIChatOrb
+          isProcessing={false}
+          onClick={() => setChatPanelOpen((prev) => !prev)}
+        />
+      )}
+
+      {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
+      <div style={{ display: isChatting ? "none" : "contents" }}>
+        <TTSControls bookId={book.id.toString()} />
+      </div>
+
+      {/* TOC / Bookmarks Sidebar */}
+      <ReaderTOC
+        open={tocOpen}
+        onOpenChange={setTocOpen}
+        title="Navigation"
+        bookSyncId={bookSyncIdRef.current ?? ""}
+        onBookmarkNavigate={(location) => {
+          const idx = parseInt(location, 10);
+          if (Number.isFinite(idx) && idx >= 0) {
+            setChapterIndex(idx);
+            setTocOpen(false);
+          }
+        }}
+        tocContent={
+          <div className="p-4 text-gray-400 text-sm text-center">
+            Chapter {chapterIndex + 1} of {chapterCount}
+          </div>
+        }
+      />
 
       {AuthDialog}
 
@@ -405,15 +434,6 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
         rendition={null}
         open={chatPanelOpen}
         onOpenChange={setChatPanelOpen}
-      />
-
-      {/* Search Panel */}
-      <SearchPanel
-        bookId={book.id}
-        bookFormat="mobi"
-        open={searchPanelOpen}
-        onOpenChange={setSearchPanelOpen}
-        onNavigate={handleSearchNavigate}
       />
     </div>
   );

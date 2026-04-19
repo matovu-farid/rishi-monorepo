@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-call-helper"
+description = "Enables the call_helper command without any pre-configured scope."
+commands.allow = ["call_helper"]
+
+[[permission]]
+identifier = "deny-call-helper"
+description = "Denies the call_helper command without any pre-configured scope."
+commands.deny = ["call_helper"]

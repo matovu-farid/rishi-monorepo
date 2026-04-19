@@ -8,12 +8,9 @@ import { PdfView } from "@components/pdf/components/pdf";
 import { MobiView } from "@components/mobi/MobiView";
 import { DjvuView } from "@components/djvu/DjvuView";
 import { motion } from "framer-motion";
-import { useSetAtom } from "jotai";
-import {
-  bookAtom,
-  BookNavigationState,
-  bookNavigationStateAtom,
-} from "@components/pdf/atoms/paragraph-atoms";
+import { usePdfStore, BookNavigationState } from "@/stores/pdfStore";
+import { useEpubStore } from "@/stores/epubStore";
+import { usePageTracker } from "@/modules/epub-page-tracker";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getBook } from "@/generated";
 export const Route = createLazyFileRoute("/books/$id")({
@@ -22,7 +19,7 @@ export const Route = createLazyFileRoute("/books/$id")({
 
 function BookView(): React.JSX.Element {
   const { id } = Route.useParams() as { id: string };
-  const setBook = useSetAtom(bookAtom);
+  const setBook = usePdfStore((s) => s.setBook);
 
   const {
     isPending,
@@ -37,28 +34,23 @@ function BookView(): React.JSX.Element {
         throw new Error("Book not found");
       }
 
-      setBook({
-        id: book.id,
-        kind: book.kind,
-        cover: book.cover,
-        title: book.title,
-        author: book.author,
-        publisher: book.publisher,
-        filepath: book.filepath,
-        location: book.location,
-        version: book.version,
-        coverKind: book.coverKind,
-      });
+      setBook(book);
       return book;
     },
+    // Always fetch fresh from DB — the location field changes frequently
+    // and the cache might have a stale value from before the last mutation
+    staleTime: 0,
+    gcTime: 0,
   });
-  // COntrols the lifecycle of the book navigation state
-  const setBookNavigationState = useSetAtom(bookNavigationStateAtom);
+  // Controls the lifecycle of the book navigation state
+  const setBookNavigationState = usePdfStore((s) => s.setBookNavigationState);
   useEffect(() => {
     setBookNavigationState(BookNavigationState.Navigated);
     return () => {
       setBookNavigationState(BookNavigationState.Idle);
       setBook(null);
+      useEpubStore.getState().reset();
+      usePageTracker.getState().reset();
     };
   }, []);
 

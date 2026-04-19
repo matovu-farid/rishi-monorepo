@@ -42,15 +42,16 @@ export function getCurrrentPageNumber(window: Window): number {
 
   if (canvasData.length === 0) return 1;
   if (canvasData.length === 1) return canvasData[0].pageNumber;
-  if (canvasData.length > 2) throw new Error("Multiple pages are visible");
 
-  const firstCanvas = canvasData[0];
-  const secondCanvas = canvasData[1];
-
-  // return the more visible page
-  const firstVisibleArea = getVisibleArea(firstCanvas.canvas, window);
-  const secondVisibleArea = getVisibleArea(secondCanvas.canvas, window);
-  return firstVisibleArea > secondVisibleArea
-    ? firstCanvas.pageNumber
-    : secondCanvas.pageNumber;
+  // Multiple pages visible – return the one with the largest visible area
+  let bestPage = canvasData[0];
+  let bestArea = getVisibleArea(bestPage.canvas, window);
+  for (let i = 1; i < canvasData.length; i++) {
+    const area = getVisibleArea(canvasData[i].canvas, window);
+    if (area > bestArea) {
+      bestArea = area;
+      bestPage = canvasData[i];
+    }
+  }
+  return bestPage.pageNumber;
 }

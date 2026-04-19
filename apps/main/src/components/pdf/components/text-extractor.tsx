@@ -1,11 +1,8 @@
-import "../subscriptions/bus.ts";
-
 // Import required CSS for text and annotation layers
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
-import { backgroundPageAtom } from "@components/pdf/atoms/paragraph-atoms";
-import { useAtomValue } from "jotai";
+import { usePdfStore } from "@/stores/pdfStore";
 import { BackgroundPageComponent } from "./background-page";
 
 export function TextExtractor({
@@ -19,7 +16,7 @@ export function TextExtractor({
   isDualPage: boolean;
   bookId: string;
 }) {
-  const pageNumber = useAtomValue(backgroundPageAtom);
+  const pageNumber = usePdfStore((s) => s.backgroundPage);
 
   return (
     <div

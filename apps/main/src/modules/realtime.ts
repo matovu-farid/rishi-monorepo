@@ -1,45 +1,14 @@
 import { getContextForQuery, getRealtimeClientSecret } from "@/generated";
 import {
   RealtimeAgent,
-  RealtimeOutputGuardrail,
   RealtimeSession,
   tool,
 } from "@openai/agents/realtime";
-import { Agent, run } from "@openai/agents";
 import { z } from "zod";
-import { customStore } from "@/stores/jotai";
-import { isChattingAtom, realtimeSessionAtom } from "@/stores/chat_atoms";
+import { useChatStore } from "@/stores/chatStore";
 
-const guardrailAgent = new Agent({
-  name: "Guardrail check",
-  instructions: `Analyze the agent's output and classify it into one of three categories:
-1. Relevant to the book: The output is answering questions, explaining concepts, or discussing content related to the book the user is reading.
-2. Small talk: The output is engaging in friendly conversation, greetings, acknowledgments, pleasantries, or casual responses that are part of natural conversation flow. Examples include: greetings, saying "you're welcome", "that's great", "I'm glad to help", casual acknowledgments, etc.
-3. Off-topic: The output is discussing something completely unrelated to the book AND is not small talk.
-
-Classify the output accordingly.`,
-  outputType: z.object({
-    isRelevantToBook: z.boolean(),
-    isSmallTalk: z.boolean(),
-  }),
-});
-
-const bookGuardrails: RealtimeOutputGuardrail[] = [
-  {
-    name: "Book Guardrail",
-    async execute({ agentOutput }) {
-      const result = await run(guardrailAgent, agentOutput);
-      const output = result.finalOutput;
-      // Trigger tripwire only if output is neither relevant to book NOR small talk
-      const tripwireTriggered =
-        !(output?.isRelevantToBook ?? false) && !(output?.isSmallTalk ?? false);
-      return {
-        outputInfo: output,
-        tripwireTriggered,
-      };
-    },
-  },
-];
+// TODO: Re-enable guardrails once audio quality impact is resolved.
+// See docs/superpowers/specs/2026-04-19-ai-chat-orb-design.md for context.
 export async function startRealtime(bookId: number) {
   const bookContextTool = tool({
     name: "bookContext",
@@ -66,17 +35,13 @@ export async function startRealtime(bookId: number) {
     }),
     execute: async ({ reason }) => {
       console.log("Ending conversation with reason: ", reason);
-      const chatSession = customStore.get(realtimeSessionAtom);
-      if (chatSession) {
-        chatSession.close();
-        customStore.set(realtimeSessionAtom, null);
-        customStore.set(isChattingAtom, false);
-      }
+      useChatStore.getState().stopConversation();
     },
   });
 
   const agent = new RealtimeAgent({
     name: "Assistant",
+    voice: "alloy",
     instructions: `## Role and Goal
 You are a teacher and educational assistant whose role is to help the user understand the book they are reading. Your goal is to make complex concepts accessible and answer questions in a way that enhances their comprehension of the material.
 
@@ -197,9 +162,7 @@ Ending conversations:
     tools: [bookContextTool, endConvesationTool],
   });
 
-  const session = new RealtimeSession(agent, {
-    outputGuardrails: bookGuardrails,
-  });
+  const session = new RealtimeSession(agent);
 
   const apiKey = await getRealtimeClientSecret();
 

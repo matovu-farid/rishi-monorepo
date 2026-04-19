@@ -1,0 +1,22 @@
+{
+  "name": "tauri-plugin-oauth-pkce",
+  "version": "0.1.0",
+  "description": "Provider-agnostic OAuth 2.0 PKCE plugin for Tauri v2 desktop apps",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-deep-link": "^2.0.0",
+    "@tauri-apps/plugin-opener": "^2.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

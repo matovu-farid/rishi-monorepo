@@ -1,7 +1,6 @@
-import {
+import type {
   Paragraph,
-} from "@components/pdf/atoms/paragraph-atoms";
-import { useAtomValue } from "jotai";
+} from "@/stores/pdfStore";
 import type { TextContent } from "react-pdf";
 import type { TextMarkedContent } from "pdfjs-dist/types/src/display/api";
 

@@ -11,6 +11,7 @@ interface ReaderToolbarProps {
   title: string
   theme: ReaderTheme
   onBack: () => void
+  onSearchPress?: () => void
   onTocPress: () => void
   onHighlightsPress: () => void
   onAppearancePress: () => void
@@ -26,6 +27,7 @@ export function ReaderToolbar({
   title,
   theme,
   onBack,
+  onSearchPress,
   onTocPress,
   onHighlightsPress,
   onAppearancePress,
@@ -72,6 +74,16 @@ export function ReaderToolbar({
         </Text>
 
         <View className="flex-row">
+          {onSearchPress && (
+            <TouchableOpacity
+              onPress={onSearchPress}
+              className="w-11 h-11 items-center justify-center"
+              accessibilityLabel="Search in book"
+              accessibilityRole="button"
+            >
+              <IconSymbol name="magnifyingglass" size={22} color={theme.toolbarText} />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             onPress={onTocPress}
             className="w-11 h-11 items-center justify-center"

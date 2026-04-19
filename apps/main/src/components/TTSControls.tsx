@@ -1,170 +1,129 @@
-import { IconButton } from "./ui/IconButton";
-import Draggable from "./ui/Draggable";
 import {
   Play,
   Pause,
   Square,
   SkipBack,
   SkipForward,
-  Volume2,
   AlertTriangle,
-  Info,
   Loader2,
-  Mic,
-  MicOff,
-  CircleX,
 } from "lucide-react";
 import { toast } from "react-toastify";
-import { useEffect, useState } from "react";
-import player from "@/models/Player";
-import { atom, useAtom, useAtomValue, useSetAtom } from "jotai";
-import { EventBusEvent, PlayingState } from "@/utils/bus";
-import { eventBus } from "@/utils/bus";
-import { isChattingAtom, stopConversationAtom } from "@/stores/chat_atoms";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
+import { usePlayerMachine } from "@/hooks/usePlayerMachine";
+import { usePlayerStore } from "@/stores/playerStore";
 
 interface TTSControlsProps {
   bookId: string;
   disabled?: boolean;
 }
 
-const STORE_PATH = "tts-controls-position.json";
-
-// Get default position (center-bottom of screen)
-const getDefaultPosition = (): { x: number; y: number } => {
-  if (typeof window === "undefined") {
-    return { x: 0, y: 0 };
-  }
-
-  const defaultX = window.innerWidth / 2 - 150; // Approximate center, adjusted for component width
-  const defaultY = window.innerHeight - 128; // 8rem (32px) from bottom + some offset
-
-  return { x: defaultX, y: defaultY };
-};
-
-// Get default chat overlay position (center of screen)
-const getDefaultChatPosition = (): { x: number; y: number } => {
-  if (typeof window === "undefined") {
-    return { x: 0, y: 0 };
-  }
-
-  const chatSize = 100; // Chat overlay is 100x100
-  const defaultX = window.innerWidth / 2 - chatSize / 2;
-  const defaultY = window.innerHeight / 2 - chatSize / 2;
-
-  return { x: defaultX, y: defaultY };
-};
-
-const playerAtom = atom(player);
-playerAtom.debugLabel = "playerAtom";
+/** Duration before the expanded pill auto-collapses (ms). */
+const AUTO_DISMISS_MS = 4_000;
 
 export default function TTSControls({
   bookId,
   disabled = false,
 }: TTSControlsProps) {
   const [showError, setShowError] = useState(false);
-  const [errors, setErrors] = useState<string[]>([]);
-  const [hasShownError, setHasShownError] = useState(false);
-  const player = useAtomValue(playerAtom);
-  const stopConversation = useSetAtom(stopConversationAtom);
-  const error = errors.join("\n");
-  const [isChatting, setIsChatting] = useAtom(isChattingAtom);
+  const error = usePlayerStore((s) => s.errors).join("\n");
+  const errors = usePlayerStore((s) => s.errors);
   const { requireAuth, AuthDialog } = useRequireAuth();
 
-  useEffect(() => {
-    void (async () => {
-      await player.initialize(bookId);
-    })();
-  }, [bookId, player]);
+  const playingState = usePlayerStore((s) => s.playingState);
+  const { send } = usePlayerMachine(bookId);
 
-  const [playingState, setPlayingState] = useState<PlayingState>(
-    PlayingState.Stopped
-  );
+  // --- Pill expand / collapse state ---
+  const [expanded, setExpanded] = useState(false);
+  const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isHoveringRef = useRef(false);
 
-  useEffect(() => {
-    eventBus.on(EventBusEvent.PLAYING_STATE_CHANGED, setPlayingState);
-    return () => {
-      player.cleanup();
-      if (isChatting) {
-        stopConversation();
-        setIsChatting(false);
-      }
-    };
+  // --- Dismiss-timer helpers ---
+  const clearDismissTimer = useCallback(() => {
+    if (dismissTimerRef.current !== null) {
+      clearTimeout(dismissTimerRef.current);
+      dismissTimerRef.current = null;
+    }
   }, []);
 
-  // Check for errors using setTimeout to avoid cascading renders
-  useEffect(() => {
-    const checkForErrors = () => {
-      const currentErrors = player.getErrors();
-      if (currentErrors.length !== 0 && !hasShownError) {
-        setShowError(true);
-        setErrors(currentErrors);
-        setHasShownError(true);
-      } else if (currentErrors.length === 0 && hasShownError) {
-        setHasShownError(false);
-      }
-    };
+  const startDismissTimer = useCallback(() => {
+    clearDismissTimer();
+    dismissTimerRef.current = setTimeout(() => {
+      setExpanded(false);
+    }, AUTO_DISMISS_MS);
+  }, [clearDismissTimer]);
 
-    // Use setTimeout to defer the state update
-    const timeoutId = setTimeout(checkForErrors, 0);
-    return () => clearTimeout(timeoutId);
-  }, [player, hasShownError]);
+  // When playingState changes, manage auto-dismiss timer
+  useEffect(() => {
+    if (!expanded) return;
+    if (playingState === "playing") {
+      // Suspend timer while playing
+      clearDismissTimer();
+    } else if (!isHoveringRef.current) {
+      // Paused / Stopped and not hovering → start countdown
+      startDismissTimer();
+    }
+  }, [playingState, expanded, clearDismissTimer, startDismissTimer]);
+
+  // Cleanup dismiss timer on unmount
+  useEffect(() => {
+    return () => clearDismissTimer();
+  }, [clearDismissTimer]);
+
+  // --- Mouse handlers for expanded pill ---
+  const handleMouseEnter = () => {
+    isHoveringRef.current = true;
+    clearDismissTimer();
+  };
+
+  const handleMouseLeave = () => {
+    isHoveringRef.current = false;
+    if (expanded && playingState !== "playing") {
+      startDismissTimer();
+    }
+  };
+
+  // --- Orb click → expand ---
+  const handleOrbClick = () => {
+    clearDismissTimer();
+    setExpanded(true);
+  };
 
   // Show error snackbar when error occurs
   const handleErrorClose = () => {
     setShowError(false);
-    // Clear error from store
-    if (player) {
-      player.cleanup();
-    }
   };
 
   const handlePlay = () => {
     // Allow pause/resume without auth since playback was already started
-    if (playingState === PlayingState.Playing) {
-      player.pause();
+    if (playingState === "playing") {
+      send({ type: "PAUSE" });
       return;
     }
-    if (playingState === PlayingState.Paused) {
-      player.resume();
+    if (playingState.startsWith("paused")) {
+      send({ type: "RESUME" });
       return;
     }
     requireAuth("tts", () => {
-      void player.play();
+      send({ type: "PLAY" });
     });
   };
 
-  const handleStop = async () => {
-    await player.stop();
-  };
-  const toggleChat = async () => {
-    setIsChatting((isChatting) => !isChatting);
+  const handleStop = () => {
+    send({ type: "STOP" });
   };
 
-  const handleChat = () => {
-    requireAuth("voice-input", () => {
-      void toggleChat();
-    });
-  };
-  const stopChat = async () => {
-    void toggleChat();
-    void stopConversation();
+  const handlePrev = () => {
+    send({ type: "PREV" });
   };
 
-  const handlePrev = async () => {
-    await player.prev();
+  const handleNext = () => {
+    send({ type: "NEXT" });
   };
 
-  const handleNext = async () => {
-    await player.next();
-  };
-
-  const handleShowErrorDetails = async () => {
-    const detailedInfo = await player.getDetailedErrorInfo();
-
-    // Show a toast with the basic info
+  const handleShowErrorDetails = () => {
     toast.info(
-      `Check console for detailed error information. Errors: ${detailedInfo.errors.length}`,
+      `Errors: ${errors.join(", ")}`,
       {
         position: "top-center",
         autoClose: 5000,
@@ -173,145 +132,177 @@ export default function TTSControls({
   };
 
   const getPlayIcon = () => {
-    if (playingState === PlayingState.Loading) {
-      return <Loader2 size={24} className="animate-spin" />;
+    if (playingState === "loading") {
+      return <Loader2 size={24} className="animate-spin text-black/60" />;
     }
-    if (playingState === PlayingState.Playing) {
-      return <Pause size={24} />;
+    if (playingState === "playing") {
+      return <Pause size={24} className="text-black/60" />;
     }
-    return <Play size={24} />;
+    return <Play size={24} className="text-black/60" />;
+  };
+
+  const isPlaying = playingState === "playing";
+
+  // --- Waveform bar heights ---
+  const barHeights = [8, 14, 20, 12];
+
+  // Shared liquid glass styles
+  const glassContainer: React.CSSProperties = {
+    background:
+      "linear-gradient(135deg, rgba(255,255,255,0.30) 0%, rgba(255,255,255,0.12) 40%, rgba(200,210,230,0.16) 100%)",
+    backdropFilter: "blur(40px) saturate(180%)",
+    WebkitBackdropFilter: "blur(40px) saturate(180%)",
+    border: "1px solid rgba(255,255,255,0.45)",
+    boxShadow:
+      "0 4px 24px rgba(0,0,0,0.18), 0 1px 6px rgba(0,0,0,0.12), inset 0 0 0 0.5px rgba(255,255,255,0.3), inset 0 1px 0 rgba(255,255,255,0.5)",
+  };
+
+  const glassButton: React.CSSProperties = {
+    background:
+      "linear-gradient(135deg, rgba(255,255,255,0.35) 0%, rgba(255,255,255,0.15) 100%)",
+    backdropFilter: "blur(20px)",
+    WebkitBackdropFilter: "blur(20px)",
+    border: "0.5px solid rgba(255,255,255,0.35)",
+    boxShadow:
+      "0 1px 4px rgba(0,0,0,0.06), inset 0 0.5px 0 rgba(255,255,255,0.4)",
   };
 
   return (
     <>
       {AuthDialog}
-      {isChatting && (
-        <Draggable
-          storePath={STORE_PATH}
-          storeKey="chatPosition"
-          defaultPosition={getDefaultChatPosition}
-          width={100}
-          height={100}
-          className="rounded-full"
-        >
-          <div className="absolute -top-2 -right-2" data-no-drag>
-            <CircleX
-              className="cursor-pointer"
-              onClick={stopChat}
-              color="red"
-              size={24}
-            />
-          </div>
-          <div>
-            <img
-              width={100}
-              height={100}
-              src="https://rishi-tauri.s3.us-east-1.amazonaws.com/ai.gif"
-              alt="AI"
-            />
-          </div>
-        </Draggable>
-      )}
-      <Draggable
-        storePath={STORE_PATH}
-        storeKey="position"
-        defaultPosition={getDefaultPosition}
-        width={300}
-        height={60}
-        className="tts-controls-drag-handle"
+
+      {/* Inject keyframes for waveform animation */}
+      <style>{`
+        @keyframes tts-waveform {
+          0%, 100% { transform: scaleY(0.4); }
+          50% { transform: scaleY(1); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          @keyframes tts-waveform {
+            0%, 50%, 100% { transform: scaleY(0.7); }
+          }
+        }
+      `}</style>
+
+      {/* Single morphing container: orb ↔ pill */}
+      <div
+        onClick={!expanded ? handleOrbClick : undefined}
+        onKeyDown={!expanded ? (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handleOrbClick();
+          }
+        } : undefined}
+        role={!expanded ? "button" : undefined}
+        tabIndex={!expanded ? 0 : undefined}
+        aria-label={!expanded ? "Expand TTS controls" : "TTS controls"}
+        onMouseEnter={expanded ? handleMouseEnter : undefined}
+        onMouseLeave={expanded ? handleMouseLeave : undefined}
+        className="fixed z-50 flex items-center justify-center motion-reduce:transition-none"
+        style={{
+          ...glassContainer,
+          // Position: bottom-right orb vs bottom-center pill
+          bottom: 32,
+          right: expanded ? "auto" : 32,
+          left: expanded ? "50%" : "auto",
+          transform: expanded ? "translateX(-50%)" : "none",
+          // Size: explicit values so CSS can interpolate the transition
+          width: expanded ? 240 : 52,
+          height: expanded ? 66 : 52,
+          borderRadius: expanded ? 40 : "50%",
+          padding: expanded ? "8px 14px" : 0,
+          gap: expanded ? 6 : 0,
+          cursor: expanded ? "default" : "pointer",
+          // Morph animation
+          transitionProperty: "width, height, border-radius, padding, gap, bottom, right, left, transform",
+          transitionDuration: expanded ? "250ms" : "200ms",
+          transitionTimingFunction: expanded
+            ? "cubic-bezier(0.34, 1.56, 0.64, 1)"
+            : "ease-in-out",
+        }}
       >
-        <div className="flex items-center gap-4 px-6 py-3 bg-black/80 rounded-3xl backdrop-blur-lg shadow-lg border border-white/10">
-          {/* Volume Icon */}
-          <Volume2
-            size={20}
-            className={
-              playingState === PlayingState.Playing
-                ? "text-white"
-                : "text-white/70"
-            }
-          />
+        {/* Collapsed: Waveform bars */}
+        {!expanded && (
+          <div className="flex items-center gap-[3px]">
+            {barHeights.map((h, i) => (
+              <div
+                key={i}
+                style={{
+                  width: 3,
+                  height: h,
+                  borderRadius: 1.5,
+                  backgroundColor: "rgba(0,0,0,0.50)",
+                  transformOrigin: "center",
+                  animation: isPlaying
+                    ? `tts-waveform 0.8s ease-in-out ${i * 0.15}s infinite`
+                    : "none",
+                }}
+              />
+            ))}
+          </div>
+        )}
 
-          {/* Previous Button */}
-          <IconButton
-            size="large"
-            onClick={handlePrev}
-            disabled={disabled || playingState === PlayingState.Loading}
-            className="text-white hover:bg-white/10 disabled:text-white/30"
-          >
-            <SkipBack size={24} />
-          </IconButton>
-
-          {/* Play/Pause Button */}
-          <IconButton
-            size="large"
-            onClick={handlePlay}
-            disabled={disabled}
-            className={`text-white hover:bg-white/10 disabled:text-white/30 ${
-              playingState === PlayingState.Playing
-                ? "text-white"
-                : "text-white/80"
-            }`}
-          >
-            {getPlayIcon()}
-          </IconButton>
-
-          {/* Next Button */}
-          <IconButton
-            size="large"
-            onClick={handleNext}
-            disabled={disabled || playingState === PlayingState.Loading}
-            className="text-white hover:bg-white/10 disabled:text-white/30"
-          >
-            <SkipForward size={24} />
-          </IconButton>
-
-          {/* Stop Button */}
-          <IconButton
-            size="large"
-            onClick={handleStop}
-            disabled={disabled || playingState !== PlayingState.Playing}
-            className="text-white hover:bg-white/10 disabled:text-white/30"
-          >
-            <Square size={24} />
-          </IconButton>
-          {/* Chat Button */}
-          {!isChatting && (
-            <IconButton
-              size="large"
-              onClick={handleChat}
-              disabled={false}
-              className="text-white hover:bg-white/10 disabled:text-white/30"
+        {/* Expanded: Control buttons */}
+        {expanded && (
+          <>
+            {/* Previous */}
+            <button
+              onClick={handlePrev}
+              disabled={disabled || playingState === "loading"}
+              aria-label="Previous"
+              className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
+              style={{ ...glassButton, width: 42, height: 42 }}
             >
-              <Mic size={24} />
-            </IconButton>
-          )}
-          {isChatting && (
-            <IconButton
-              size="large"
-              onClick={stopChat}
-              disabled={false}
-              className="text-white hover:bg-white/10 disabled:text-white/30"
-            >
-              <MicOff size={24} />
-            </IconButton>
-          )}
+              <SkipBack size={20} className="text-black/60" />
+            </button>
 
-          {/* Error Icon with detailed info button (if there's an error) */}
-          {errors.length > 0 && (
-            <>
-              <AlertTriangle size={20} className="text-red-500" />
-              <IconButton
-                size="small"
+            {/* Play / Pause */}
+            <button
+              onClick={handlePlay}
+              disabled={disabled}
+              aria-label={isPlaying ? "Pause" : "Play"}
+              className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
+              style={{ ...glassButton, width: 50, height: 50 }}
+            >
+              {getPlayIcon()}
+            </button>
+
+            {/* Next */}
+            <button
+              onClick={handleNext}
+              disabled={disabled || playingState === "loading"}
+              aria-label="Next"
+              className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
+              style={{ ...glassButton, width: 42, height: 42 }}
+            >
+              <SkipForward size={20} className="text-black/60" />
+            </button>
+
+            {/* Stop */}
+            <button
+              onClick={handleStop}
+              disabled={disabled || playingState !== "playing"}
+              aria-label="Stop"
+              className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
+              style={{ ...glassButton, width: 42, height: 42 }}
+            >
+              <Square size={20} className="text-black/55" />
+            </button>
+
+            {/* Error indicator (dev only) */}
+            {import.meta.env.DEV && errors.length > 0 && (
+              <button
                 onClick={handleShowErrorDetails}
-                className="text-red-500 hover:bg-red-500/10"
-                title="Show detailed error information"
+                aria-label="Show error details"
+                className="flex items-center justify-center rounded-full cursor-pointer transition-transform duration-150 hover:scale-105 active:scale-95"
+                style={{ ...glassButton, width: 36, height: 36 }}
               >
-                <Info size={16} />
-              </IconButton>
-            </>
-          )}
-        </div>
-      </Draggable>
+                <AlertTriangle size={16} className="text-red-500" />
+              </button>
+            )}
+          </>
+        )}
+      </div>
 
       {/* Error Toast */}
       {showError && !!error && (
