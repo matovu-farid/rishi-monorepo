@@ -276,4 +276,117 @@ describe("playerMachine", () => {
     expect(actor.getSnapshot().context.direction).toBe("forward");
     actor.stop();
   });
+
+  // --- Regression tests: NEXT/PREV in paused state ---
+
+  it("paused.clean → NEXT → loading", () => {
+    const actor = createActor(playerMachine);
+    actor.start();
+    actor.send({ type: "INITIALIZE", bookId: "1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: fakeParagraphs });
+    actor.send({ type: "PLAY" });
+    actor.send({ type: "AUDIO_LOADED" });
+    actor.send({ type: "PAUSE" });
+    expect(actor.getSnapshot().value).toEqual({ paused: "clean" });
+    actor.send({ type: "NEXT" });
+    expect(actor.getSnapshot().value).toBe("loading");
+    expect(actor.getSnapshot().context.paragraphIndex).toBe(1);
+    actor.stop();
+  });
+
+  it("paused.clean → PREV at first paragraph → waitingForParagraphs", () => {
+    const actor = createActor(playerMachine);
+    actor.start();
+    actor.send({ type: "INITIALIZE", bookId: "1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: fakeParagraphs });
+    actor.send({ type: "PLAY" });
+    actor.send({ type: "AUDIO_LOADED" });
+    actor.send({ type: "PAUSE" });
+    actor.send({ type: "PREV" });
+    expect(actor.getSnapshot().value).toBe("waitingForParagraphs");
+    expect(actor.getSnapshot().context.direction).toBe("backward");
+    actor.stop();
+  });
+
+  // --- Regression tests: NEXT/PREV in stopped state ---
+
+  it("stopped → NEXT → loading", () => {
+    const actor = createActor(playerMachine);
+    actor.start();
+    actor.send({ type: "INITIALIZE", bookId: "1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: fakeParagraphs });
+    actor.send({ type: "NEXT" });
+    expect(actor.getSnapshot().value).toBe("loading");
+    expect(actor.getSnapshot().context.paragraphIndex).toBe(1);
+    actor.stop();
+  });
+
+  it("stopped → PREV at first paragraph → waitingForParagraphs", () => {
+    const actor = createActor(playerMachine);
+    actor.start();
+    actor.send({ type: "INITIALIZE", bookId: "1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: fakeParagraphs });
+    actor.send({ type: "PREV" });
+    expect(actor.getSnapshot().value).toBe("waitingForParagraphs");
+    expect(actor.getSnapshot().context.direction).toBe("backward");
+    actor.stop();
+  });
+
+  // --- Regression tests: PREV in error state ---
+
+  it("error → PREV → loading", () => {
+    const actor = createActor(playerMachine);
+    actor.start();
+    actor.send({ type: "INITIALIZE", bookId: "1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: fakeParagraphs });
+    actor.send({ type: "PLAY" });
+    actor.send({ type: "AUDIO_ERROR", error: "fail1" });
+    actor.send({ type: "AUDIO_ERROR", error: "fail2" });
+    actor.send({ type: "AUDIO_ERROR", error: "fail3" });
+    expect(actor.getSnapshot().value).toBe("error");
+    // Advance to index 1 first
+    actor.send({ type: "NEXT" });
+    actor.send({ type: "AUDIO_ERROR", error: "fail4" });
+    actor.send({ type: "AUDIO_ERROR", error: "fail5" });
+    actor.send({ type: "AUDIO_ERROR", error: "fail6" });
+    expect(actor.getSnapshot().value).toBe("error");
+    expect(actor.getSnapshot().context.paragraphIndex).toBe(1);
+    // Now PREV should go back to index 0
+    actor.send({ type: "PREV" });
+    expect(actor.getSnapshot().value).toBe("loading");
+    expect(actor.getSnapshot().context.paragraphIndex).toBe(0);
+    expect(actor.getSnapshot().context.errors).toEqual([]);
+    actor.stop();
+  });
+
+  // --- Regression test: PAUSE during loading ---
+
+  it("loading → PAUSE → paused.clean", () => {
+    const actor = createActor(playerMachine);
+    actor.start();
+    actor.send({ type: "INITIALIZE", bookId: "1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: fakeParagraphs });
+    actor.send({ type: "PLAY" });
+    expect(actor.getSnapshot().value).toBe("loading");
+    actor.send({ type: "PAUSE" });
+    expect(actor.getSnapshot().value).toEqual({ paused: "clean" });
+    actor.stop();
+  });
+
+  // --- Regression test: PARAGRAPHS_UPDATED during loading ---
+
+  it("loading → PARAGRAPHS_UPDATED → loading (restarts with new paragraphs)", () => {
+    const newParagraphs = [{ index: "5", text: "New page." }];
+    const actor = createActor(playerMachine);
+    actor.start();
+    actor.send({ type: "INITIALIZE", bookId: "1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: fakeParagraphs });
+    actor.send({ type: "PLAY" });
+    expect(actor.getSnapshot().value).toBe("loading");
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: newParagraphs });
+    expect(actor.getSnapshot().value).toBe("loading");
+    expect(actor.getSnapshot().context.currentParagraphs).toEqual(newParagraphs);
+    expect(actor.getSnapshot().context.paragraphIndex).toBe(0);
+    actor.stop();
+  });
 });

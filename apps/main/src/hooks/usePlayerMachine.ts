@@ -93,7 +93,20 @@ export function usePlayerMachine(bookId: string) {
         // is ignored when it resolves.
         const gen = ++fetchGeneration;
         const wasPlaying = prevState === "playing";
-        if (paragraph) {
+        if (!paragraph || ctx.currentParagraphs.length === 0) {
+          // No paragraphs on this page (image-only page).
+          // Pause briefly then auto-advance to next page.
+          setTimeout(() => {
+            if (gen !== fetchGeneration) return;
+            actor.send({ type: "AUDIO_ENDED" });
+          }, 2000);
+        } else if (!paragraph.text.trim()) {
+          // Empty paragraph (e.g. image content). Skip after brief pause.
+          setTimeout(() => {
+            if (gen !== fetchGeneration) return;
+            actor.send({ type: "NEXT" });
+          }, 2000);
+        } else {
           audioService
             .fetchAudio(ctx.bookId, paragraph, ctx.retryCount > 0)
             .then((path) => {
