@@ -563,23 +563,25 @@ mod tests {
     #[test]
     fn test_search_book_text() -> Result<(), String> {
         let _setup = init_test_database_setup()?;
-        let book_id = 1;
+        // Use a unique book_id to avoid collisions with other tests
+        // (DB_POOL is shared via OnceLock across all tests)
+        let book_id = 999;
 
         let page_data = vec![
             ChunkDataInsertable {
-                id: Some(100),
+                id: Some(999100),
                 page_number: 1,
                 book_id,
                 data: "The philosophy of consciousness has been debated for centuries.".to_string(),
             },
             ChunkDataInsertable {
-                id: Some(101),
+                id: Some(999101),
                 page_number: 2,
                 book_id,
                 data: "Quantum mechanics describes the behavior of particles at atomic scales.".to_string(),
             },
             ChunkDataInsertable {
-                id: Some(102),
+                id: Some(999102),
                 page_number: 3,
                 book_id,
                 data: "Neural networks in the brain give rise to consciousness and awareness.".to_string(),
