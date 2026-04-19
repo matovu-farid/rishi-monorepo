@@ -7,6 +7,9 @@ import { AudioService } from "@/services/audioService";
 import audio from "@/models/audio";
 import type { PlayerStoreState } from "@/stores/playerStore";
 import { logStateEvent } from "@/utils/stateDump";
+import { publishCurrentEpubParagraphs } from "@/stores/epubStore";
+import { usePdfStore } from "@/stores/pdfStore";
+import { pageDataToParagraphs } from "@/components/pdf/utils/getPageParagraphs";
 
 // Singleton audio service — owns the HTMLAudioElement
 const audioService = new AudioService(audio);
@@ -71,20 +74,28 @@ export function usePlayerMachine(bookId: string) {
 
     // --- 4. Machine actions → audioService side effects ---
     let prevState = "";
+    // Generation counter to cancel stale fetches when a new loading entry fires
+    let fetchGeneration = 0;
     const audioUnsub = actor.subscribe((snapshot) => {
       const state = mapStateValue(snapshot.value);
       const ctx = snapshot.context;
       const paragraph = ctx.currentParagraphs[ctx.paragraphIndex];
 
-      if (state === "loading" && prevState !== "loading") {
-        // Entering loading: fetch audio then notify machine
+      if (state === "loading") {
+        // Entering or re-entering loading (includes retries via reenter: true).
+        // Increment generation so any in-flight fetch from a previous attempt
+        // is ignored when it resolves.
+        const gen = ++fetchGeneration;
+        const wasPlaying = prevState === "playing";
         if (paragraph) {
           audioService
             .fetchAudio(ctx.bookId, paragraph, ctx.retryCount > 0)
             .then((path) => {
+              if (gen !== fetchGeneration) return; // stale
               return audioService.loadAndPlay(path);
             })
             .then(() => {
+              if (gen !== fetchGeneration) return; // stale
               actor.send({ type: "AUDIO_LOADED" });
               // Update activeParagraph now that audio is playing
               usePlayerStore.setState({ activeParagraph: paragraph });
@@ -95,14 +106,20 @@ export function usePlayerMachine(bookId: string) {
                 ctx.nextPageParagraphs,
                 ctx.prevPageParagraphs,
                 ctx.bookId,
-                prevState === "playing" // immediate if auto-advancing
+                wasPlaying // immediate if auto-advancing
               );
             })
-            .catch(() => {
+            .catch((err) => {
+              if (gen !== fetchGeneration) return; // stale
+              console.error("Audio fetch/load failed:", err);
               audioService.deleteCacheEntry(paragraph.index);
-              actor.send({ type: "AUDIO_ERROR", error: `Failed to load audio for paragraph ${paragraph.index}` });
+              const msg = err instanceof Error ? err.message : String(err);
+              actor.send({ type: "AUDIO_ERROR", error: msg });
             });
         }
+      } else {
+        // Left loading state — invalidate any in-flight fetch
+        fetchGeneration++;
       }
 
       if (state === "playing" && prevState.startsWith("paused.clean")) {
@@ -185,7 +202,17 @@ export function usePlayerMachine(bookId: string) {
     actor.start();
     actor.send({ type: "INITIALIZE", bookId });
 
-    // Force-publish current paragraphs from store if available
+    // Seed paragraphs: re-publish from epub/PDF stores so the machine
+    // receives paragraphs that may have been published before it subscribed.
+    publishCurrentEpubParagraphs();
+    const pdfState = usePdfStore.getState();
+    const pdfPageData = pdfState.pageNumberToPageData[pdfState.pageNumber];
+    if (pdfPageData) {
+      const paragraphs = pageDataToParagraphs(pdfState.pageNumber, pdfPageData);
+      usePlayerStore.getState().setCurrentParagraphs(paragraphs);
+    }
+
+    // Also forward any paragraphs already in the store
     const currentParagraphs = usePlayerStore.getState().currentParagraphs;
     if (currentParagraphs.length > 0) {
       actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: currentParagraphs });
