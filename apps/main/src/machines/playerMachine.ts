@@ -62,7 +62,7 @@ export const playerMachine = setup({
       bookId: ({ event }) =>
         event.type === "INITIALIZE" ? event.bookId : "",
     }),
-    resetIndex: assign({ paragraphIndex: 0, retryCount: 0 }),
+    resetIndex: assign({ paragraphIndex: 0, retryCount: 0, timedOut: false }),
     resetIndexByDirection: assign({
       paragraphIndex: ({ context }) =>
         context.direction === "backward"
@@ -277,6 +277,10 @@ export const playerMachine = setup({
         },
         PREV_PARAGRAPHS_UPDATED: {
           actions: "storePrevParagraphs",
+        },
+        AUDIO_ERROR: {
+          target: "error",
+          actions: "logError",
         },
       },
     },
