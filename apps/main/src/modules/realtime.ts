@@ -220,11 +220,10 @@ Ending conversations:
   const session = new RealtimeSession(agent, {
     outputGuardrails: bookGuardrails,
     outputGuardrailSettings: {
-      // Default is 100 chars which fires the guardrail multiple times per
-      // response, each requiring two network hops (worker → OpenAI).
-      // The rapid fetch/promise churn can stutter the WebRTC audio stream.
-      // 500 chars means the guardrail runs ~once per full response instead.
-      debounceTextLength: 500,
+      // -1 = run guardrail only once after the full transcript is available.
+      // Running mid-stream requires network hops (worker → OpenAI) that
+      // cause main-thread contention and stutter the WebRTC audio.
+      debounceTextLength: -1,
     },
   });
 
