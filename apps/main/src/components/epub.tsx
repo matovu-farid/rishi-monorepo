@@ -700,8 +700,10 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
         />
       )}
 
-      {/* TTS Controls — hidden while AI chat is active */}
-      {!isChatting && <TTSControls bookId={book.id.toString()} />}
+      {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
+      <div style={{ display: isChatting ? "none" : "contents" }}>
+        <TTSControls bookId={book.id.toString()} />
+      </div>
 
       {/* Highlight color picker popover */}
       {selectionInfo && (

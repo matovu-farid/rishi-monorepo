@@ -516,8 +516,10 @@ export function DjvuView({ book }: { book: Book }) {
         />
       )}
 
-      {/* TTS Controls — hidden while AI chat is active */}
-      {!isChatting && <TTSControls key={book.id.toString()} bookId={book.id.toString()} />}
+      {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
+      <div style={{ display: isChatting ? "none" : "contents" }}>
+        <TTSControls key={book.id.toString()} bookId={book.id.toString()} />
+      </div>
 
       {AuthDialog}
 
