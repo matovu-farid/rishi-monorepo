@@ -8,10 +8,12 @@ use tokio_tungstenite::connect_async;
 
 use tauri_plugin_test_harness::injector::generate_init_script;
 use tauri_plugin_test_harness::mock_registry::MockRegistry;
+use tauri_plugin_test_harness::helper_registry::HelperRegistry;
 use tauri_plugin_test_harness::protocol::{
     AssertionResult, ControlMessage, DomSnapshot, IpcLogEntry, TestResult, TestStatus,
 };
 use tauri_plugin_test_harness::websocket::ControlChannel;
+use tauri_plugin_test_harness::{PluginBuilder, DEFAULT_PORT};
 
 // ---------------------------------------------------------------------------
 // (a) WebSocket relay test — two clients, exec relay
@@ -584,6 +586,384 @@ async fn test_mock_registry_and_websocket_combined() {
             || parsed["data"]["screenshot"].is_null(),
         "screenshot should be omitted or null"
     );
+
+    channel.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// (f) PluginBuilder API tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_default_port_constant() {
+    assert_eq!(DEFAULT_PORT, 9223, "DEFAULT_PORT should be 9223");
+}
+
+#[test]
+fn test_plugin_builder_new_does_not_panic() {
+    // Simply constructing the builder should succeed without panic.
+    let _builder = PluginBuilder::new();
+}
+
+#[test]
+fn test_plugin_builder_default_does_not_panic() {
+    // Default trait impl should also succeed.
+    let _builder = PluginBuilder::default();
+}
+
+#[test]
+fn test_plugin_builder_with_custom_port() {
+    // Setting a custom port should not panic; the port value is
+    // consumed later by build(), which we cannot call without a
+    // Tauri runtime, but the builder chain itself must be valid.
+    let _builder = PluginBuilder::new().port(4444);
+}
+
+#[test]
+fn test_plugin_builder_with_single_helper() {
+    let _builder = PluginBuilder::new().helper("double", |args| {
+        let n = args.as_i64().unwrap_or(0);
+        Ok(json!(n * 2))
+    });
+}
+
+#[test]
+fn test_plugin_builder_with_multiple_helpers() {
+    let _builder = PluginBuilder::new()
+        .helper("add", |args| {
+            let a = args["a"].as_i64().unwrap_or(0);
+            let b = args["b"].as_i64().unwrap_or(0);
+            Ok(json!(a + b))
+        })
+        .helper("greet", |args| {
+            let name = args["name"].as_str().unwrap_or("world");
+            Ok(json!(format!("hello, {}", name)))
+        })
+        .helper("noop", |_| Ok(json!(null)));
+}
+
+#[test]
+fn test_plugin_builder_chaining_port_and_helpers() {
+    // Full chain: custom port + several helpers + port override.
+    let _builder = PluginBuilder::new()
+        .port(5555)
+        .helper("h1", |_| Ok(json!(1)))
+        .helper("h2", |_| Ok(json!(2)))
+        .port(6666); // port can be overridden
+}
+
+// ---------------------------------------------------------------------------
+// (g) Injector port customization (port 9999)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_injector_port_9999() {
+    let script = generate_init_script(9999);
+    assert!(
+        script.contains("ws://127.0.0.1:9999"),
+        "init script must use port 9999 in WS URL"
+    );
+    assert!(
+        !script.contains("ws://127.0.0.1:9223"),
+        "init script must not contain default port when 9999 is used"
+    );
+}
+
+#[test]
+fn test_injector_default_port_contains_9223() {
+    let script = generate_init_script(DEFAULT_PORT);
+    assert!(
+        script.contains("ws://127.0.0.1:9223"),
+        "init script with DEFAULT_PORT must use 9223"
+    );
+}
+
+#[test]
+fn test_injector_boundary_port_values() {
+    // Port 1 (minimum non-zero)
+    let script = generate_init_script(1);
+    assert!(script.contains("ws://127.0.0.1:1"));
+
+    // Port 65535 (maximum)
+    let script = generate_init_script(65535);
+    assert!(script.contains("ws://127.0.0.1:65535"));
+}
+
+// ---------------------------------------------------------------------------
+// (h) Helper registry end-to-end — arithmetic and error propagation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_helper_doubles_a_number() {
+    let registry = HelperRegistry::new();
+    registry.register("double", |args| {
+        let n = args.as_i64().ok_or("expected integer")?;
+        Ok(json!(n * 2))
+    });
+
+    let result = registry.call("double", json!(7)).unwrap();
+    assert_eq!(result, json!(14));
+}
+
+#[test]
+fn test_helper_adds_two_numbers_from_json_args() {
+    let registry = HelperRegistry::new();
+    registry.register("add", |args| {
+        let a = args["a"].as_i64().ok_or("missing a")?;
+        let b = args["b"].as_i64().ok_or("missing b")?;
+        Ok(json!(a + b))
+    });
+
+    let result = registry.call("add", json!({"a": 10, "b": 32})).unwrap();
+    assert_eq!(result, json!(42));
+}
+
+#[test]
+fn test_helper_handles_nested_json_args() {
+    let registry = HelperRegistry::new();
+    registry.register("extract_name", |args| {
+        let name = args["user"]["name"]
+            .as_str()
+            .ok_or("missing user.name")?;
+        Ok(json!({"greeting": format!("hi, {}", name)}))
+    });
+
+    let result = registry
+        .call("extract_name", json!({"user": {"name": "Alice"}}))
+        .unwrap();
+    assert_eq!(result, json!({"greeting": "hi, Alice"}));
+}
+
+#[test]
+fn test_helper_error_propagates_with_message() {
+    let registry = HelperRegistry::new();
+    registry.register("fail_with_reason", |_| {
+        Err("division by zero".to_string())
+    });
+
+    let err = registry.call("fail_with_reason", json!(null)).unwrap_err();
+    let err_msg = err.to_string();
+    assert!(
+        err_msg.contains("division by zero"),
+        "error message should contain the original reason, got: {}",
+        err_msg
+    );
+}
+
+#[test]
+fn test_helper_not_found_error() {
+    let registry = HelperRegistry::new();
+    let err = registry.call("nonexistent", json!(null)).unwrap_err();
+    let err_msg = err.to_string();
+    assert!(
+        err_msg.contains("not found") || err_msg.contains("nonexistent"),
+        "error should indicate helper was not found, got: {}",
+        err_msg
+    );
+}
+
+#[test]
+fn test_helper_overwrite_replaces_previous() {
+    let registry = HelperRegistry::new();
+    registry.register("compute", |_| Ok(json!("first")));
+    registry.register("compute", |_| Ok(json!("second")));
+
+    let result = registry.call("compute", json!(null)).unwrap();
+    assert_eq!(result, json!("second"));
+}
+
+// ---------------------------------------------------------------------------
+// (i) Mock + Helper interaction — cross-registry isolation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_mock_and_helper_registries_are_independent() {
+    let mocks = MockRegistry::new();
+    let helpers = HelperRegistry::new();
+
+    mocks.register("foo", json!({"mocked": true}));
+    helpers.register("bar", |_| Ok(json!({"helped": true})));
+
+    // Verify mock registry has "foo" but not "bar"
+    assert!(mocks.has("foo"));
+    assert!(!mocks.has("bar"));
+
+    // Verify helper registry has "bar" but not "foo"
+    assert!(helpers.has("bar"));
+    assert!(!helpers.has("foo"));
+}
+
+#[test]
+fn test_clear_mocks_does_not_affect_helpers() {
+    let mocks = MockRegistry::new();
+    let helpers = HelperRegistry::new();
+
+    mocks.register("foo", json!({"data": 1}));
+    mocks.register("baz", json!({"data": 2}));
+    helpers.register("bar", |args| {
+        let x = args.as_i64().unwrap_or(0);
+        Ok(json!(x + 1))
+    });
+
+    // Both registries populated
+    assert_eq!(mocks.list().len(), 2);
+    assert!(helpers.has("bar"));
+
+    // Clear mocks
+    mocks.clear();
+
+    // Mocks are gone
+    assert_eq!(mocks.list().len(), 0);
+    assert!(!mocks.has("foo"));
+    assert!(!mocks.has("baz"));
+
+    // Helper still works
+    assert!(helpers.has("bar"));
+    let result = helpers.call("bar", json!(10)).unwrap();
+    assert_eq!(result, json!(11));
+}
+
+#[test]
+fn test_same_name_in_mock_and_helper_registries() {
+    // Having the same key name in both registries should be fine;
+    // they are completely separate data structures.
+    let mocks = MockRegistry::new();
+    let helpers = HelperRegistry::new();
+
+    mocks.register("overlap", json!("mock_value"));
+    helpers.register("overlap", |_| Ok(json!("helper_value")));
+
+    assert_eq!(mocks.get("overlap").unwrap(), json!("mock_value"));
+    assert_eq!(
+        helpers.call("overlap", json!(null)).unwrap(),
+        json!("helper_value")
+    );
+
+    // Clearing mocks should not affect the helper
+    mocks.clear();
+    assert!(!mocks.has("overlap"));
+    assert!(helpers.has("overlap"));
+    assert_eq!(
+        helpers.call("overlap", json!(null)).unwrap(),
+        json!("helper_value")
+    );
+}
+
+#[test]
+fn test_mock_remove_single_does_not_affect_helper() {
+    let mocks = MockRegistry::new();
+    let helpers = HelperRegistry::new();
+
+    mocks.register("shared_name", json!(42));
+    helpers.register("shared_name", |_| Ok(json!(99)));
+
+    mocks.remove("shared_name");
+    assert!(!mocks.has("shared_name"));
+    assert!(helpers.has("shared_name"));
+    assert_eq!(
+        helpers.call("shared_name", json!(null)).unwrap(),
+        json!(99)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// (j) WebSocket server with custom port — connect and verify
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_websocket_server_on_random_port_accepts_client() {
+    let channel = ControlChannel::new();
+    let port = channel.start("127.0.0.1:0").await.unwrap();
+    assert!(port > 0, "assigned port must be non-zero");
+
+    let url = format!("ws://127.0.0.1:{}", port);
+    let connect_result = timeout(Duration::from_secs(3), connect_async(&url)).await;
+    assert!(connect_result.is_ok(), "connection should complete within 3s");
+    assert!(
+        connect_result.unwrap().is_ok(),
+        "WebSocket handshake should succeed"
+    );
+
+    channel.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_websocket_multiple_clients_on_random_port() {
+    let channel = ControlChannel::new();
+    let port = channel.start("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://127.0.0.1:{}", port);
+
+    // Connect three clients in quick succession
+    let (ws1, _) = connect_async(&url).await.unwrap();
+    let (ws2, _) = connect_async(&url).await.unwrap();
+    let (ws3, _) = connect_async(&url).await.unwrap();
+
+    // All three should be able to split without panic
+    let (_w1, _r1) = ws1.split();
+    let (_w2, _r2) = ws2.split();
+    let (_w3, _r3) = ws3.split();
+
+    channel.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_websocket_client_receives_broadcast_on_random_port() {
+    let channel = ControlChannel::new();
+    let port = channel.start("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://127.0.0.1:{}", port);
+
+    let (ws, _) = connect_async(&url).await.unwrap();
+    let (_write, mut read) = ws.split();
+
+    // Give the server time to register the connection
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Broadcast a message from the server side
+    let msg = ControlMessage::Exec {
+        script: "console.log('ping')".to_string(),
+        test_id: "port-test-1".to_string(),
+    };
+    channel.broadcast(msg).await;
+
+    let received = timeout(Duration::from_secs(3), read.next()).await;
+    assert!(received.is_ok(), "client should receive broadcast within 3s");
+    let text = received.unwrap().unwrap().unwrap().into_text().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(parsed["type"], "exec");
+    assert_eq!(parsed["test_id"], "port-test-1");
+
+    channel.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_websocket_server_recv_from_client_on_random_port() {
+    let channel = ControlChannel::new();
+    let port = channel.start("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://127.0.0.1:{}", port);
+
+    let (ws, _) = connect_async(&url).await.unwrap();
+    let (mut write, _read) = ws.split();
+
+    let exec_msg = json!({
+        "type": "exec",
+        "script": "return 1 + 1",
+        "test_id": "custom-port-recv"
+    });
+    write
+        .send(Message::Text(exec_msg.to_string()))
+        .await
+        .unwrap();
+
+    let received = timeout(Duration::from_secs(3), channel.recv()).await;
+    assert!(received.is_ok(), "server should receive message within 3s");
+    let msg = received.unwrap().unwrap();
+    match msg {
+        ControlMessage::Exec { script, test_id } => {
+            assert_eq!(script, "return 1 + 1");
+            assert_eq!(test_id, "custom-port-recv");
+        }
+        _ => panic!("expected Exec message from client"),
+    }
 
     channel.shutdown().await;
 }
