@@ -85,9 +85,8 @@ export function usePlayerMachine(bookId: string) {
       if (state === "loading") {
         // Clear old highlight immediately — the new paragraph's highlight
         // will be set once audio loads and state becomes "playing".
-        if (prevState === "playing") {
-          usePlayerStore.setState({ activeParagraph: null });
-        }
+        // Always clear, not just from "playing", to handle paused.stale → loading too.
+        usePlayerStore.setState({ activeParagraph: null });
         // Entering or re-entering loading (includes retries via reenter: true).
         // Increment generation so any in-flight fetch from a previous attempt
         // is ignored when it resolves.
