@@ -148,6 +148,7 @@ pub fn run() {
             sql::has_saved_epub_data,
             sql::update_book_location,
             sql::get_text_from_vector_id,
+            sql::search_book_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

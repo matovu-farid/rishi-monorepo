@@ -61,6 +61,16 @@ pub struct PageData {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct TextSearchResult {
+    pub id: i64,
+    pub page_number: i32,
+    pub book_id: i32,
+    pub data: String,
+    pub snippet: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Book {
     pub id: i32,
     pub kind: String,
@@ -458,6 +468,54 @@ pub fn get_text_from_vector_id(vector_id: i64) -> Result<String, String> {
     Ok(result.unwrap_or_default())
 }
 
+#[tauri::command]
+pub fn search_book_text(query: String, book_id: i32) -> Result<Vec<TextSearchResult>, String> {
+    let pool = DB_POOL.get().ok_or("Database pool not initialized")?;
+    let mut conn = pool
+        .get()
+        .map_err(|e| format!("Failed to get connection: {}", e))?;
+
+    // FTS5 MATCH query with snippet generation, filtered by bookId
+    #[derive(diesel::QueryableByName)]
+    struct RawSearchResult {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        id: i64,
+        #[diesel(sql_type = diesel::sql_types::Integer, column_name = "pageNumber")]
+        page_number: i32,
+        #[diesel(sql_type = diesel::sql_types::Integer, column_name = "bookId")]
+        book_id: i32,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        data: String,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        snippet: String,
+    }
+
+    let results: Vec<RawSearchResult> = diesel::sql_query(
+        "SELECT chunk_data.id, chunk_data.pageNumber, chunk_data.bookId, chunk_data.data, \
+         snippet(chunk_data_fts, 0, '<mark>', '</mark>', '...', 40) as snippet \
+         FROM chunk_data_fts \
+         JOIN chunk_data ON chunk_data.id = chunk_data_fts.rowid \
+         WHERE chunk_data.bookId = ?1 AND chunk_data_fts MATCH ?2 \
+         ORDER BY rank \
+         LIMIT 50"
+    )
+    .bind::<diesel::sql_types::Integer, _>(&book_id)
+    .bind::<diesel::sql_types::Text, _>(&query)
+    .load(&mut conn)
+    .map_err(|e| format!("FTS search failed: {}", e))?;
+
+    Ok(results
+        .into_iter()
+        .map(|r| TextSearchResult {
+            id: r.id,
+            page_number: r.page_number,
+            book_id: r.book_id,
+            data: r.data,
+            snippet: r.snippet,
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::test_fixtures;
@@ -467,7 +525,7 @@ mod tests {
 
     use super::{
         delete_book, get_all_page_data_by_book_id, get_book, save_book, save_page_data_many,
-        update_book_cover, BookInsertable, ChunkDataInsertable,
+        search_book_text, update_book_cover, BookInsertable, ChunkDataInsertable,
     };
 
     #[test]
@@ -501,6 +559,58 @@ mod tests {
         expect!(result[1].data.as_str()).to(be_equal_to("test2"));
         Ok(())
     }
+
+    #[test]
+    fn test_search_book_text() -> Result<(), String> {
+        let _setup = init_test_database_setup()?;
+        let book_id = 1;
+
+        let page_data = vec![
+            ChunkDataInsertable {
+                id: Some(100),
+                page_number: 1,
+                book_id,
+                data: "The philosophy of consciousness has been debated for centuries.".to_string(),
+            },
+            ChunkDataInsertable {
+                id: Some(101),
+                page_number: 2,
+                book_id,
+                data: "Quantum mechanics describes the behavior of particles at atomic scales.".to_string(),
+            },
+            ChunkDataInsertable {
+                id: Some(102),
+                page_number: 3,
+                book_id,
+                data: "Neural networks in the brain give rise to consciousness and awareness.".to_string(),
+            },
+        ];
+        save_page_data_many(page_data)?;
+
+        // Search for "consciousness" — should find chunks on pages 1 and 3
+        let results = search_book_text("consciousness".to_string(), book_id)?;
+        expect!(results.len()).to(be_equal_to(2));
+        // Results should be from pages 1 and 3 (order by FTS rank)
+        let page_numbers: Vec<i32> = results.iter().map(|r| r.page_number).collect();
+        expect!(page_numbers.contains(&1)).to(be_equal_to(true));
+        expect!(page_numbers.contains(&3)).to(be_equal_to(true));
+        // Snippets should contain <mark> tags
+        for result in &results {
+            expect!(result.snippet.contains("<mark>")).to(be_equal_to(true));
+        }
+
+        // Search for "quantum" — should find only page 2
+        let results2 = search_book_text("quantum".to_string(), book_id)?;
+        expect!(results2.len()).to(be_equal_to(1));
+        expect!(results2[0].page_number).to(be_equal_to(2));
+
+        // Search for a term that doesn't exist
+        let results3 = search_book_text("nonexistentterm".to_string(), book_id)?;
+        expect!(results3.is_empty()).to(be_equal_to(true));
+
+        Ok(())
+    }
+
     // embed data , save vectors and query the text from the vector id and fetch the text from the vector id to confirm
     #[tokio::test]
     async fn test_embed_data_and_save_vectors() -> Result<(), String> {
