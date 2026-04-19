@@ -21,7 +21,7 @@ import { useChatStore } from "@/stores/chatStore";
 import Draggable from "./ui/Draggable";
 import { Rendition } from "epubjs/types";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { motion, AnimatePresence } from "framer-motion";
+import { PageCurlOverlay, usePageCurl } from "./pagecurl";
 import { useEpubStore } from "@/stores/epubStore";
 import { usePlayerStore } from "@/stores/playerStore";
 import { highlightRange, removeHighlight, getCurrentViewParagraphs } from "@/epubwrapper";
@@ -70,8 +70,6 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   const [currentLocation, setCurrentLocation] = useState<string>(
     book.location || "0"
   );
-  const [direction, setDirection] = useState<"left" | "right">("right");
-
   // Sync with book.location when it changes from a refetch (e.g., returning from library).
   // Only sync before the rendition has settled to avoid overriding user navigation.
   const bookLocationRef = useRef(book.location);
@@ -86,11 +84,30 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
       });
     }
   }, [book.location]);
-  const navigationDirectionRef = useRef<"left" | "right">("right");
-  const [animationKey, setAnimationKey] = useState(0);
-  const animationTriggerRef = useRef(0);
   const rendition = useEpubStore((s) => s.rendition);
   const setRendition = useEpubStore((s) => s.setRendition);
+  const renditionRef = useRef(rendition);
+  renditionRef.current = rendition;
+  const pageCurl = usePageCurl({
+    onNavigate: (dir) => {
+      const r = renditionRef.current;
+      if (!r) return;
+      if (dir === "right") {
+        void r.next();
+      } else {
+        void r.prev();
+      }
+    },
+    onUndoNavigate: (dir) => {
+      const r = renditionRef.current;
+      if (!r) return;
+      if (dir === "right") {
+        void r.prev();
+      } else {
+        void r.next();
+      }
+    },
+  });
   const bookSyncIdRef = useRef<string | null>(null);
   const [bookSyncId, setBookSyncId] = useState<string>("");
   const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false);
@@ -316,28 +333,6 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   const setCurrentEpubLocation = useEpubStore((s) => s.setCurrentEpubLocation);
 
   const setParagraphRendition = useEpubStore((s) => s.setParagraphRendition);
-  // Track navigation direction by intercepting prev/next when rendition is available
-  useEffect(() => {
-    if (!rendition) return;
-
-    const originalPrev = rendition.prev;
-    const originalNext = rendition.next;
-
-    rendition.prev = function () {
-      navigationDirectionRef.current = "left";
-      return originalPrev.call(this);
-    };
-
-    rendition.next = function () {
-      navigationDirectionRef.current = "right";
-      return originalNext.call(this);
-    };
-
-    return () => {
-      rendition.prev = originalPrev;
-      rendition.next = originalNext;
-    };
-  }, [rendition]);
 
   const handleThemeChange = (newTheme: ThemeType) => {
     setTheme(newTheme);
@@ -507,7 +502,8 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
         </div>
       </Menu>
       <div
-        style={{ height: "100vh", position: "relative", overflow: "hidden" }}
+        style={{ height: "100vh", position: "relative", overflow: "hidden", touchAction: "pan-y" }}
+        {...pageCurl.pointerHandlers}
       >
         <ReactReader
           key={`reader-${book.id}`}
@@ -515,6 +511,8 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
           bookSyncId={bookSyncId}
           tocExpanded={tocOpen}
           onTocExpandedChange={setTocOpen}
+          onNext={() => pageCurl.autoTurn("right")}
+          onPrev={() => pageCurl.autoTurn("left")}
           hidePrev={isFirstPage}
           loadingView={
             <div className="w-full h-screen grid items-center">
@@ -525,11 +523,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
           title={book.title}
           location={currentLocation || book.location || 0}
           locationChanged={(epubcfi: string) => {
-            // Use tracked navigation direction from intercepted prev/next calls
-            setDirection(navigationDirectionRef.current);
             setCurrentLocation(epubcfi);
-            animationTriggerRef.current += 1;
-            setAnimationKey(animationTriggerRef.current);
 
             // Dump every locationChanged for debugging
             dumpError({
@@ -669,38 +663,13 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
             });
           }}
         />
-        <AnimatePresence>
-          {animationKey > 0 && (
-            <motion.div
-              key={animationKey}
-              initial={{
-                opacity: 0.3,
-                x: direction === "right" ? 100 : -100,
-              }}
-              animate={{
-                opacity: 0,
-                x: 0,
-              }}
-              exit={{
-                opacity: 0,
-              }}
-              transition={{
-                duration: 0.3,
-                ease: [0.4, 0, 0.2, 1],
-              }}
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                width: "100%",
-                height: "100%",
-                pointerEvents: "none",
-                backgroundColor: themes[theme].background,
-                zIndex: 10,
-              }}
-            />
-          )}
-        </AnimatePresence>
+        {pageCurl.active && (
+          <PageCurlOverlay
+            progress={pageCurl.progress}
+            direction={pageCurl.direction}
+            pageColor={themes[theme].background}
+          />
+        )}
       </div>
       <div className="fixed top-0 left-9999 right-9999 bottom-0 -z-30 pointer-events-none opacity-0">
         <div
