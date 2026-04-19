@@ -37,7 +37,8 @@ export class AudioService {
       const handleError = (e: Event) => {
         this.audioElement.removeEventListener("canplaythrough", handleCanPlay);
         this.audioElement.removeEventListener("error", handleError);
-        reject(e);
+        const mediaError = (e.target as HTMLAudioElement)?.error;
+        reject(new Error(mediaError?.message || `Audio load error (code ${mediaError?.code ?? "unknown"})`));
       };
       this.audioElement.addEventListener("canplaythrough", handleCanPlay, {
         once: true,
