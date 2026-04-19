@@ -23,11 +23,7 @@ import { Rendition } from "epubjs/types";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { motion, AnimatePresence } from "framer-motion";
 import { useEpubStore } from "@/stores/epubStore";
-import {
-  eventBus,
-  EventBusEvent,
-  PlayingState,
-} from "@/utils/bus";
+import { usePlayerStore } from "@/stores/playerStore";
 import { highlightRange, removeHighlight, getCurrentViewParagraphs } from "@/epubwrapper";
 import { Book } from "@/generated";
 import { updateBookLocation } from "@/generated";
@@ -223,50 +219,56 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     if (!rendition) return;
 
-    const onNextPageEmptied = async () => {
-      await clearAllHighlights();
-      await rendition.next();
-      eventBus.publish(EventBusEvent.PAGE_CHANGED);
-    };
-    const onPrevPageEmptied = async () => {
-      await clearAllHighlights();
-      await rendition.prev();
-      eventBus.publish(EventBusEvent.PAGE_CHANGED);
-    };
-    const onPlayingAudio = async (paragraph: { index: string }) => {
-      await highlightRange(rendition, paragraph.index);
-    };
-    const onAudioEnded = async (paragraph: { index: string }) => {
-      await removeHighlight(rendition, paragraph.index);
-    };
-    const onMovedToNext = async ({ from: paragraph }: { from: { index: string } }) => {
-      await removeHighlight(rendition, paragraph.index);
-    };
-    const onMovedToPrev = async ({ from: paragraph }: { from: { index: string } }) => {
-      await removeHighlight(rendition, paragraph.index);
-    };
-    const onPlayingStateChanged = async (playingState: PlayingState) => {
-      if (playingState !== PlayingState.Playing) {
+    const unsubPage = usePlayerStore.subscribe(
+      (s) => s.pageRequest,
+      async (request) => {
+        if (!request) return;
         await clearAllHighlights();
+        if (request === "next") await rendition.next();
+        if (request === "prev") await rendition.prev();
+        usePlayerStore.getState().clearPageRequest();
       }
-    };
+    );
 
-    eventBus.subscribe(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, onNextPageEmptied);
-    eventBus.subscribe(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, onPrevPageEmptied);
-    eventBus.subscribe(EventBusEvent.PLAYING_AUDIO, onPlayingAudio);
-    eventBus.subscribe(EventBusEvent.AUDIO_ENDED, onAudioEnded);
-    eventBus.subscribe(EventBusEvent.MOVED_TO_NEXT_PARAGRAPH, onMovedToNext);
-    eventBus.subscribe(EventBusEvent.MOVED_TO_PREV_PARAGRAPH, onMovedToPrev);
-    eventBus.subscribe(EventBusEvent.PLAYING_STATE_CHANGED, onPlayingStateChanged);
+    const unsubActive = usePlayerStore.subscribe(
+      (s) => s.activeParagraph,
+      async (paragraph) => {
+        if (!paragraph) return;
+        await highlightRange(rendition, paragraph.index);
+      }
+    );
+
+    const unsubEnded = usePlayerStore.subscribe(
+      (s) => s.endedParagraph,
+      async (paragraph) => {
+        if (!paragraph) return;
+        await removeHighlight(rendition, paragraph.index);
+      }
+    );
+
+    const unsubMove = usePlayerStore.subscribe(
+      (s) => s.lastMove,
+      async (move) => {
+        if (!move) return;
+        await removeHighlight(rendition, move.from.index);
+      }
+    );
+
+    const unsubState = usePlayerStore.subscribe(
+      (s) => s.playingState,
+      async (state) => {
+        if (state === "stopped" || state === "idle") {
+          await clearAllHighlights();
+        }
+      }
+    );
 
     return () => {
-      eventBus.off(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, onNextPageEmptied);
-      eventBus.off(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, onPrevPageEmptied);
-      eventBus.off(EventBusEvent.PLAYING_AUDIO, onPlayingAudio);
-      eventBus.off(EventBusEvent.AUDIO_ENDED, onAudioEnded);
-      eventBus.off(EventBusEvent.MOVED_TO_NEXT_PARAGRAPH, onMovedToNext);
-      eventBus.off(EventBusEvent.MOVED_TO_PREV_PARAGRAPH, onMovedToPrev);
-      eventBus.off(EventBusEvent.PLAYING_STATE_CHANGED, onPlayingStateChanged);
+      unsubPage();
+      unsubActive();
+      unsubEnded();
+      unsubMove();
+      unsubState();
     };
   }, [rendition]);
 
