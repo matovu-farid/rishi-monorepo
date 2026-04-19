@@ -16,7 +16,7 @@ import TTSControls from "@components/TTSControls";
 import { ChevronLeft, ChevronRight, MessageSquare, Menu as MenuIcon, Mic, MicOff, CircleX } from "lucide-react";
 import { themes } from "@/themes/themes";
 import { usePlayerStore } from "@/stores/playerStore";
-import type { ParagraphWithIndex } from "@/utils/bus";
+import type { ParagraphWithIndex } from "@/models/player_control";
 import { processEpubJob } from "@/modules/process_epub";
 import type { PageDataInsertable } from "@/modules/kysley";
 import { ChatPanel } from "@/components/chat/ChatPanel";

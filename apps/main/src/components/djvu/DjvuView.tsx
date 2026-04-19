@@ -13,7 +13,7 @@ import TTSControls from "@components/TTSControls";
 import { IconButton } from "@components/ui/IconButton";
 import { ChevronLeft, ChevronRight, Menu as MenuIcon, MessageSquare, ZoomIn, ZoomOut, Mic, MicOff, CircleX } from "lucide-react";
 import { usePlayerStore } from "@/stores/playerStore";
-import type { ParagraphWithIndex } from "@/utils/bus";
+import type { ParagraphWithIndex } from "@/models/player_control";
 import { processEpubJob } from "@/modules/process_epub";
 import type { PageDataInsertable } from "@/modules/kysley";
 import { ChatPanel } from "@/components/chat/ChatPanel";

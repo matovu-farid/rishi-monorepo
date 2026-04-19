@@ -5,7 +5,7 @@
  * to state-dump.json for debugging. No-op in production.
  */
 import { invoke } from "@tauri-apps/api/core";
-import player from "@/models/Player";
+import { usePlayerStore } from "@/stores/playerStore";
 import { ttsQueue } from "@/modules/ttsQueue";
 import { ttsService } from "@/modules/ttsService";
 const IS_DEV = import.meta.env.DEV;
@@ -35,7 +35,7 @@ export function logStateEvent(event: string, data: Record<string, unknown> = {})
 }
 
 async function buildStateDump(): Promise<Record<string, unknown>> {
-  const currentParagraph = await player.getCurrentParagraph();
+  const playerState = usePlayerStore.getState();
   const queueStatus = ttsQueue.getQueueStatus();
 
   let devMode: boolean | null = null;
@@ -53,16 +53,9 @@ async function buildStateDump(): Promise<Record<string, unknown>> {
   return {
     timestamp: new Date().toISOString(),
     player: {
-      playingState: player.getPlayingState(),
-      totalParagraphs: (await player.getCurrentParagraphs()).length,
-      currentParagraphPreview: currentParagraph
-        ? currentParagraph.text.substring(0, 80) + "..."
-        : null,
-      audioElementSrc: player.audioElement.src,
-      audioElementPaused: player.audioElement.paused,
-      audioElementReadyState: player.audioElement.readyState,
-      audioElementNetworkState: player.audioElement.networkState,
-      errors: player.getErrors(),
+      playingState: playerState.playingState,
+      activeParagraph: playerState.activeParagraph?.text?.substring(0, 80) ?? null,
+      errors: playerState.errors,
     },
     ttsQueue: queueStatus,
     ttsService: {
