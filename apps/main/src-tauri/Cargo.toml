@@ -65,10 +65,14 @@ tauri-plugin-sentry = "0.5"
 chrono = "0.4"
 walkdir = "2"
 dirs = "6"
+tauri-plugin-test-harness = { path = "../../../crates/tauri-plugin-test-harness", optional = true }
 
 
 
 # sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros"] }
+
+[features]
+test-harness = ["tauri-plugin-test-harness"]
 
 [dev-dependencies]
 tempfile = "3.8"

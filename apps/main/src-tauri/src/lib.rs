@@ -16,6 +16,7 @@ pub mod speach;
 pub mod sql;
 
 mod api;
+mod local_scanner;
 mod user;
 
 pub const WORKER_URL: &str = "https://rishi-worker.faridmato90.workers.dev";
@@ -48,7 +49,7 @@ pub fn run() {
     #[cfg(not(target_os = "ios"))]
     let _guard = tauri_plugin_sentry::minidump::init(&client);
     // Everything after here runs in only the app process
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_sentry::init(&client))
@@ -60,8 +61,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
-        .plugin(tauri_plugin_mic_recorder::init())
-        .setup(|app| {
+        .plugin(tauri_plugin_mic_recorder::init());
+
+    #[cfg(feature = "test-harness")]
+    {
+        builder = builder.plugin(tauri_plugin_test_harness::init());
+    }
+
+    builder.setup(|app| {
             db::setup_database(app.handle())?;
             // Migrate auth secrets from plain-text store.json to OS keychain
             if let Err(e) = commands::migrate_auth_to_keychain(app.handle()) {
@@ -149,6 +156,10 @@ pub fn run() {
             sql::update_book_location,
             sql::get_text_from_vector_id,
             sql::search_book_text,
+            // Local book scanner
+            local_scanner::scan_for_books,
+            local_scanner::cancel_scan,
+            local_scanner::get_default_book_folders,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
