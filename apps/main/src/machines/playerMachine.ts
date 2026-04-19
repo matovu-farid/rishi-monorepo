@@ -212,7 +212,7 @@ export const playerMachine = setup({
         },
         PARAGRAPHS_UPDATED: {
           target: "loading",
-          actions: ["storeParagraphs", "resetIndex"],
+          actions: ["storeParagraphs", "resetIndexByDirection"],
           reenter: true,
         },
         STOP: {
@@ -270,7 +270,7 @@ export const playerMachine = setup({
         ],
         PARAGRAPHS_UPDATED: {
           target: "loading",
-          actions: ["storeParagraphs", "resetIndex"],
+          actions: ["storeParagraphs", "resetIndexByDirection"],
         },
         NEXT_PARAGRAPHS_UPDATED: {
           actions: "storeNextParagraphs",
