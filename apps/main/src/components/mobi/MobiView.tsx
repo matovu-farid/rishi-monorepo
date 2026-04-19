@@ -17,7 +17,7 @@ import TTSControls from "@components/TTSControls";
 import { IconButton } from "@components/ui/IconButton";
 import { Menu } from "@components/ui/Menu";
 import { Radio, RadioGroup } from "@components/ui/Radio";
-import { ChevronLeft, ChevronRight, MessageSquare, Palette } from "lucide-react";
+import { ChevronLeft, ChevronRight, MessageSquare, Palette, Search } from "lucide-react";
 import { bookIdAtom, themeAtom } from "@/stores/epub_atoms";
 import { themes } from "@/themes/themes";
 import { ThemeType } from "@/themes/common";
@@ -26,6 +26,8 @@ import type { ParagraphWithIndex } from "@/utils/bus";
 import { processEpubJob } from "@/modules/process_epub";
 import type { PageDataInsertable } from "@/modules/kysley";
 import { ChatPanel } from "@/components/chat/ChatPanel";
+import { SearchPanel } from "@/components/search/SearchPanel";
+import type { BookSearchResult } from "@/hooks/useBookSearch";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { db } from "@/modules/kysley";
 import { stringToNumberID } from "@components/lib/utils";
@@ -43,6 +45,7 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const embeddingsProcessedRef = useRef(false);
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
+  const [searchPanelOpen, setSearchPanelOpen] = useState(false);
   const { requireAuth, AuthDialog } = useRequireAuth();
   const bookSyncIdRef = useRef<string | null>(null);
 
@@ -127,6 +130,25 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [goNext, goPrev]);
+
+  const handleSearchNavigate = useCallback((result: BookSearchResult) => {
+    if (result.pageNumber !== undefined) {
+      // MOBI uses chapter index as page number
+      setChapterIndex(result.pageNumber);
+    }
+  }, []);
+
+  // Cmd+F / Ctrl+F keyboard shortcut
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        setSearchPanelOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Publish paragraphs to event bus for TTS
   useEffect(() => {
@@ -275,6 +297,13 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
       {/* Top bar */}
       <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
         <button
+          onClick={() => setSearchPanelOpen(true)}
+          className={`p-2 rounded-md ${getTextColor()}`}
+          aria-label="Search in book"
+        >
+          <Search size={20} />
+        </button>
+        <button
           onClick={() => requireAuth("chat", () => setChatPanelOpen(true))}
           className={`p-2 rounded-md ${getTextColor()}`}
           aria-label="Open chat panel"
@@ -376,6 +405,15 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
         rendition={null}
         open={chatPanelOpen}
         onOpenChange={setChatPanelOpen}
+      />
+
+      {/* Search Panel */}
+      <SearchPanel
+        bookId={book.id}
+        bookFormat="mobi"
+        open={searchPanelOpen}
+        onOpenChange={setSearchPanelOpen}
+        onNavigate={handleSearchNavigate}
       />
     </div>
   );

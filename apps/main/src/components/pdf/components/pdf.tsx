@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useState, useMemo, useRef } from "react";
 import { IconButton } from "@components/ui/IconButton";
 import { ThemeType } from "@/themes/common";
-import { Loader2, Menu as MenuIcon, LayoutGrid } from "lucide-react";
+import { Loader2, Menu as MenuIcon, LayoutGrid, Search } from "lucide-react";
 import { Document, Outline, pdfjs } from "react-pdf";
 import type { DocumentInitParameters } from "pdfjs-dist/types/src/display/api";
 import "../subscriptions/bus.ts";
@@ -46,6 +46,8 @@ import { eventBusLogsAtom } from "@/utils/bus";
 import { TextExtractor } from "./text-extractor.tsx";
 import { updateBookLocation, Book } from "@/generated";
 import { BackButton } from "@components/BackButton.tsx";
+import { SearchPanel } from "@/components/search/SearchPanel";
+import type { BookSearchResult } from "@/hooks/useBookSearch";
 
 // Configure PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -66,6 +68,7 @@ export function PdfView({
   const setPdfDocProxy = useSetAtom(pdfDocumentProxyAtom);
   const setBookNavState = useSetAtom(bookNavigationStateAtom);
   useAtomValue(eventBusLogsAtom);
+  const [searchPanelOpen, setSearchPanelOpen] = useState(false);
 
   const setPageNumber = useSetAtom(setPageNumberAtom);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -171,6 +174,29 @@ export function PdfView({
     });
   }
 
+  const handleSearchNavigate = useCallback((result: BookSearchResult) => {
+    if (result.pageNumber) {
+      setBookNavState(BookNavigationState.Idle);
+      virtualizer.scrollToIndex(result.pageNumber - 1, {
+        align: "start",
+        behavior: "smooth",
+      });
+      setPageNumber(result.pageNumber);
+    }
+  }, [virtualizer, setBookNavState, setPageNumber]);
+
+  // Cmd+F / Ctrl+F keyboard shortcut
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        setSearchPanelOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   function onThumbnailNavigate(pageNumber: number) {
     // Reset navigation state to Idle so setPageNumber is not a no-op
     // (setPageNumberAtom skips if BookNavigationState is Navigating)
@@ -230,6 +256,16 @@ export function PdfView({
             aria-label="Open page thumbnails"
           >
             <LayoutGrid size={20} />
+          </IconButton>
+          <IconButton
+            onClick={() => setSearchPanelOpen(true)}
+            className={cn(
+              "hover:bg-black/10 dark:hover:bg-white/10 border-none",
+              getTextColor()
+            )}
+            aria-label="Search in book"
+          >
+            <Search size={20} />
           </IconButton>
 
           <div className="flex items-center gap-2 bg-white">
@@ -405,6 +441,14 @@ export function PdfView({
           </div>
         </SheetContent>
       </Sheet>
+      {/* Search Panel */}
+      <SearchPanel
+        bookId={book.id}
+        bookFormat="pdf"
+        open={searchPanelOpen}
+        onOpenChange={setSearchPanelOpen}
+        onNavigate={handleSearchNavigate}
+      />
     </div>
   );
 }

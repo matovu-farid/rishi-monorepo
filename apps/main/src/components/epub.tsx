@@ -10,7 +10,7 @@ import { Radio, RadioGroup } from "@components/ui/Radio";
 import { ThemeType } from "@/themes/common";
 import { themes } from "@/themes/themes";
 import createIReactReaderTheme from "@/themes/readerThemes";
-import { Palette, Highlighter, MessageSquare } from "lucide-react";
+import { Palette, Highlighter, MessageSquare, Search } from "lucide-react";
 import TTSControls from "@components/TTSControls";
 import { Rendition } from "epubjs/types";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -45,6 +45,8 @@ import { SelectionPopover } from "@/components/highlights/SelectionPopover";
 import { HighlightsPanel } from "@/components/highlights/HighlightsPanel";
 import { ReaderSettings } from "@/components/reader/ReaderSettings";
 import { ChatPanel } from "@/components/chat/ChatPanel";
+import { SearchPanel } from "@/components/search/SearchPanel";
+import type { BookSearchResult } from "@/hooks/useBookSearch";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 
 function cn(...classes: string[]) {
@@ -75,7 +77,28 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   } | null>(null);
   const [highlightsPanelOpen, setHighlightsPanelOpen] = useState(false);
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
+  const [searchPanelOpen, setSearchPanelOpen] = useState(false);
   const { requireAuth, AuthDialog } = useRequireAuth();
+
+  const handleSearchNavigate = useCallback((result: BookSearchResult) => {
+    if (result.cfi && rendition) {
+      void rendition.display(result.cfi);
+    } else if (result.pageNumber && rendition) {
+      void rendition.display(result.pageNumber);
+    }
+  }, [rendition]);
+
+  // Cmd+F / Ctrl+F keyboard shortcut
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        setSearchPanelOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Look up the book's sync_id for highlight storage
   useEffect(() => {
@@ -268,6 +291,13 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
         <BackButton />
 
         <button
+          onClick={() => setSearchPanelOpen(true)}
+          className={cn("p-2 rounded-md", getTextColor())}
+          aria-label="Search in book"
+        >
+          <Search size={20} />
+        </button>
+        <button
           onClick={() => setHighlightsPanelOpen(true)}
           className={cn("p-2 rounded-md", getTextColor())}
           aria-label="Open highlights panel"
@@ -437,6 +467,15 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
       />
 
       {AuthDialog}
+
+      {/* Search Panel */}
+      <SearchPanel
+        bookId={book.id}
+        bookFormat="epub"
+        open={searchPanelOpen}
+        onOpenChange={setSearchPanelOpen}
+        onNavigate={handleSearchNavigate}
+      />
 
       {/* Chat Panel */}
       <ChatPanel

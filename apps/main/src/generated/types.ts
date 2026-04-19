@@ -289,3 +289,17 @@ export interface ChunkDataInsertable {
   data: string;
 }
 
+export interface TextSearchResult {
+  id: number;
+  pageNumber: number;
+  bookId: number;
+  data: string;
+  snippet: string;
+}
+
+export interface SearchBookTextParams {
+  query: string;
+  bookId: number;
+  [key: string]: unknown;
+}
+

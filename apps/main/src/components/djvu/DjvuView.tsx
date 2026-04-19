@@ -11,13 +11,15 @@ import type { Book } from "@/generated";
 import { BackButton } from "@components/BackButton";
 import TTSControls from "@components/TTSControls";
 import { IconButton } from "@components/ui/IconButton";
-import { ChevronLeft, ChevronRight, MessageSquare, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronLeft, ChevronRight, MessageSquare, ZoomIn, ZoomOut, Search } from "lucide-react";
 import { bookIdAtom } from "@/stores/epub_atoms";
 import { eventBus, EventBusEvent } from "@/utils/bus";
 import type { ParagraphWithIndex } from "@/utils/bus";
 import { processEpubJob } from "@/modules/process_epub";
 import type { PageDataInsertable } from "@/modules/kysley";
 import { ChatPanel } from "@/components/chat/ChatPanel";
+import { SearchPanel } from "@/components/search/SearchPanel";
+import type { BookSearchResult } from "@/hooks/useBookSearch";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { db } from "@/modules/kysley";
 import { stringToNumberID } from "@components/lib/utils";
@@ -48,7 +50,26 @@ export function DjvuView({ book }: { book: Book }) {
   const mountedRef = useRef(true);
   const embeddingsProcessedRef = useRef(false);
   const [chatPanelOpen, setChatPanelOpen] = useState(false);
+  const [searchPanelOpen, setSearchPanelOpen] = useState(false);
   const { requireAuth, AuthDialog } = useRequireAuth();
+
+  const handleSearchNavigate = useCallback((result: BookSearchResult) => {
+    if (result.pageNumber !== undefined) {
+      setCurrentPage(result.pageNumber);
+    }
+  }, []);
+
+  // Cmd+F / Ctrl+F keyboard shortcut
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        setSearchPanelOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
   const bookSyncIdRef = useRef<string | null>(null);
 
   // Set bookIdAtom for voice chat
@@ -344,6 +365,13 @@ export function DjvuView({ book }: { book: Book }) {
           >
             <MessageSquare size={20} />
           </button>
+          <IconButton
+            onClick={() => setSearchPanelOpen(true)}
+            className="hover:bg-black/10 dark:hover:bg-white/10 border-none"
+            aria-label="Search in book"
+          >
+            <Search size={20} />
+          </IconButton>
           <BackButton />
         </div>
       </div>
@@ -445,6 +473,15 @@ export function DjvuView({ book }: { book: Book }) {
         rendition={null}
         open={chatPanelOpen}
         onOpenChange={setChatPanelOpen}
+      />
+
+      {/* Search Panel */}
+      <SearchPanel
+        bookId={book.id}
+        bookFormat="djvu"
+        open={searchPanelOpen}
+        onOpenChange={setSearchPanelOpen}
+        onNavigate={handleSearchNavigate}
       />
     </div>
   );
