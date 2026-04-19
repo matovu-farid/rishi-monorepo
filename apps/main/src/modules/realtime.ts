@@ -163,7 +163,7 @@ Ending conversations:
   });
 
   const session = new RealtimeSession(agent, {
-    model: "gpt-4o-mini-realtime",
+    model: "gpt-realtime-1.5",
     config: {
       outputModalities: ["audio"],
       audio: {
