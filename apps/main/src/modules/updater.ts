@@ -1,6 +1,6 @@
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { ask, message } from "@tauri-apps/plugin-dialog";
+import { message } from "@tauri-apps/plugin-dialog";
 import { platform } from "@tauri-apps/plugin-os";
 import { getVersion } from "@tauri-apps/api/app";
 import { create } from "zustand";
@@ -73,20 +73,6 @@ export async function checkForUpdates(opts: { silent: boolean }): Promise<void> 
       return;
     }
 
-    const accepted = await ask(
-      `Rishi v${update.version} is available. Install and restart now?`,
-      {
-        title: "Update available",
-        kind: "info",
-        okLabel: "Install",
-        cancelLabel: "Later",
-      }
-    );
-    if (!accepted) {
-      useUpdateStore.getState().setStatus({ kind: "idle" });
-      return;
-    }
-
     let downloaded = 0;
     let total = 0;
     await update.downloadAndInstall((event) => {
@@ -117,16 +103,7 @@ export async function checkForUpdates(opts: { silent: boolean }): Promise<void> 
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[updater] failed:", msg);
-    if (opts.silent) {
-      useUpdateStore.getState().setStatus({ kind: "idle" });
-    } else {
-      useUpdateStore.getState().setStatus({ kind: "error", message: msg });
-      checkInFlight = false;
-      await message(
-        "Unable to check for updates. Please check your connection.",
-        { title: "Update check failed", kind: "error" }
-      );
-    }
+    useUpdateStore.getState().setStatus({ kind: "idle" });
   } finally {
     checkInFlight = false;
   }
