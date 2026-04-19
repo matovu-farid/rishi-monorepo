@@ -9,13 +9,9 @@ import {
 } from "lucide-react";
 import { toast } from "react-toastify";
 import { useEffect, useRef, useState, useCallback } from "react";
-import player from "@/models/Player";
-import { EventBusEvent, PlayingState } from "@/utils/bus";
-import { eventBus } from "@/utils/bus";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
-import { publishCurrentEpubParagraphs, useEpubStore } from "@/stores/epubStore";
-import { usePdfStore } from "@/stores/pdfStore";
-import { pageDataToParagraphs } from "@/components/pdf/utils/getPageParagraphs";
+import { usePlayerMachine } from "@/hooks/usePlayerMachine";
+import { usePlayerStore } from "@/stores/playerStore";
 
 interface TTSControlsProps {
   bookId: string;
@@ -30,14 +26,12 @@ export default function TTSControls({
   disabled = false,
 }: TTSControlsProps) {
   const [showError, setShowError] = useState(false);
-  const [errors, setErrors] = useState<string[]>([]);
-  const [hasShownError, setHasShownError] = useState(false);
-  const error = errors.join("\n");
+  const error = usePlayerStore((s) => s.errors).join("\n");
+  const errors = usePlayerStore((s) => s.errors);
   const { requireAuth, AuthDialog } = useRequireAuth();
 
-  const [playingState, setPlayingState] = useState<PlayingState>(
-    PlayingState.Stopped
-  );
+  const playingState = usePlayerStore((s) => s.playingState);
+  const { send } = usePlayerMachine(bookId);
 
   // --- Pill expand / collapse state ---
   const [expanded, setExpanded] = useState(false);
@@ -62,7 +56,7 @@ export default function TTSControls({
   // When playingState changes, manage auto-dismiss timer
   useEffect(() => {
     if (!expanded) return;
-    if (playingState === PlayingState.Playing) {
+    if (playingState === "playing") {
       // Suspend timer while playing
       clearDismissTimer();
     } else if (!isHoveringRef.current) {
@@ -84,7 +78,7 @@ export default function TTSControls({
 
   const handleMouseLeave = () => {
     isHoveringRef.current = false;
-    if (expanded && playingState !== PlayingState.Playing) {
+    if (expanded && playingState !== "playing") {
       startDismissTimer();
     }
   };
@@ -95,109 +89,41 @@ export default function TTSControls({
     setExpanded(true);
   };
 
-  // Combined init + cleanup effect to prevent race conditions between
-  // separate effects when bookId changes. Cleanup always runs before
-  // the next init, and on unmount.
-  useEffect(() => {
-    let active = true;
-    player.cleanup(); // Clean up any previous state before re-initializing
-    void player.initialize(bookId).then(() => {
-      // Guard against React Strict Mode double-mount: if cleanup ran before
-      // this .then() fires, don't publish stale paragraphs.
-      if (!active) return;
-      // Re-publish current paragraphs so the Player receives them
-      // (the initial publish may have fired before the Player subscribed)
-      publishCurrentEpubParagraphs();
-
-      // Also force-publish current PDF paragraphs (bypasses the interval's
-      // isEqual guard which may have already "seen" these paragraphs).
-      const pdfState = usePdfStore.getState();
-      const data = pdfState.pageNumberToPageData[pdfState.pageNumber];
-      if (data) {
-        const paragraphs = pageDataToParagraphs(pdfState.pageNumber, data);
-        eventBus.publish(EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, paragraphs);
-      }
-    });
-
-    // The epub rendition may not be ready when the .then() above runs.
-    // Subscribe to the store so we re-publish once it arrives.
-    const unsubEpub = useEpubStore.subscribe(
-      (state) => ({ rendition: state.rendition, location: state.currentEpubLocation }),
-      ({ rendition, location }) => {
-        if (active && rendition && location) {
-          publishCurrentEpubParagraphs();
-        }
-      },
-    );
-
-    eventBus.on(EventBusEvent.PLAYING_STATE_CHANGED, setPlayingState);
-    return () => {
-      active = false;
-      unsubEpub();
-      eventBus.off(EventBusEvent.PLAYING_STATE_CHANGED, setPlayingState);
-      player.cleanup();
-    };
-  }, [bookId]);
-
-  // Check for errors using setTimeout to avoid cascading renders
-  useEffect(() => {
-    const checkForErrors = () => {
-      const currentErrors = player.getErrors();
-      if (currentErrors.length !== 0 && !hasShownError) {
-        setShowError(true);
-        setErrors(currentErrors);
-        setHasShownError(true);
-      } else if (currentErrors.length === 0 && hasShownError) {
-        setHasShownError(false);
-      }
-    };
-
-    // Use setTimeout to defer the state update
-    const timeoutId = setTimeout(checkForErrors, 0);
-    return () => clearTimeout(timeoutId);
-  }, [hasShownError]);
-
   // Show error snackbar when error occurs
   const handleErrorClose = () => {
     setShowError(false);
-    // Clear errors without destroying the player — cleanup() would
-    // permanently abort the player, preventing any further playback.
-    player.clearErrors();
   };
 
   const handlePlay = () => {
     // Allow pause/resume without auth since playback was already started
-    if (playingState === PlayingState.Playing) {
-      player.pause();
+    if (playingState === "playing") {
+      send({ type: "PAUSE" });
       return;
     }
-    if (playingState === PlayingState.Paused) {
-      player.resume();
+    if (playingState.startsWith("paused")) {
+      send({ type: "RESUME" });
       return;
     }
     requireAuth("tts", () => {
-      void player.play();
+      send({ type: "PLAY" });
     });
   };
 
-  const handleStop = async () => {
-    await player.stop();
+  const handleStop = () => {
+    send({ type: "STOP" });
   };
 
-  const handlePrev = async () => {
-    await player.prev();
+  const handlePrev = () => {
+    send({ type: "PREV" });
   };
 
-  const handleNext = async () => {
-    await player.next();
+  const handleNext = () => {
+    send({ type: "NEXT" });
   };
 
-  const handleShowErrorDetails = async () => {
-    const detailedInfo = await player.getDetailedErrorInfo();
-
-    // Show a toast with the basic info
+  const handleShowErrorDetails = () => {
     toast.info(
-      `Check console for detailed error information. Errors: ${detailedInfo.errors.length}`,
+      `Errors: ${errors.join(", ")}`,
       {
         position: "top-center",
         autoClose: 5000,
@@ -206,16 +132,16 @@ export default function TTSControls({
   };
 
   const getPlayIcon = () => {
-    if (playingState === PlayingState.Loading) {
+    if (playingState === "loading") {
       return <Loader2 size={24} className="animate-spin text-black/60" />;
     }
-    if (playingState === PlayingState.Playing) {
+    if (playingState === "playing") {
       return <Pause size={24} className="text-black/60" />;
     }
     return <Play size={24} className="text-black/60" />;
   };
 
-  const isPlaying = playingState === PlayingState.Playing;
+  const isPlaying = playingState === "playing";
 
   // --- Waveform bar heights ---
   const barHeights = [8, 14, 20, 12];
@@ -322,7 +248,7 @@ export default function TTSControls({
             {/* Previous */}
             <button
               onClick={handlePrev}
-              disabled={disabled || playingState === PlayingState.Loading}
+              disabled={disabled || playingState === "loading"}
               aria-label="Previous"
               className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
               style={{ ...glassButton, width: 42, height: 42 }}
@@ -344,7 +270,7 @@ export default function TTSControls({
             {/* Next */}
             <button
               onClick={handleNext}
-              disabled={disabled || playingState === PlayingState.Loading}
+              disabled={disabled || playingState === "loading"}
               aria-label="Next"
               className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
               style={{ ...glassButton, width: 42, height: 42 }}
@@ -354,8 +280,8 @@ export default function TTSControls({
 
             {/* Stop */}
             <button
-              onClick={() => void handleStop()}
-              disabled={disabled || playingState !== PlayingState.Playing}
+              onClick={handleStop}
+              disabled={disabled || playingState !== "playing"}
               aria-label="Stop"
               className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
               style={{ ...glassButton, width: 42, height: 42 }}
@@ -366,7 +292,7 @@ export default function TTSControls({
             {/* Error indicator */}
             {errors.length > 0 && (
               <button
-                onClick={() => void handleShowErrorDetails()}
+                onClick={handleShowErrorDetails}
                 aria-label="Show error details"
                 className="flex items-center justify-center rounded-full cursor-pointer transition-transform duration-150 hover:scale-105 active:scale-95"
                 style={{ ...glassButton, width: 36, height: 36 }}
