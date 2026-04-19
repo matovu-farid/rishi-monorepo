@@ -12,7 +12,7 @@ import { BackButton } from "@components/BackButton";
 import TTSControls from "@components/TTSControls";
 import { IconButton } from "@components/ui/IconButton";
 import { ChevronLeft, ChevronRight, Menu as MenuIcon, MessageSquare, ZoomIn, ZoomOut, Mic, MicOff, CircleX } from "lucide-react";
-import { eventBus, EventBusEvent } from "@/utils/bus";
+import { usePlayerStore } from "@/stores/playerStore";
 import type { ParagraphWithIndex } from "@/utils/bus";
 import { processEpubJob } from "@/modules/process_epub";
 import type { PageDataInsertable } from "@/modules/kysley";
@@ -281,7 +281,7 @@ export function DjvuView({ book }: { book: Book }) {
           text,
           index: `djvu-${currentPage}-${i}`,
         }));
-        eventBus.publish(EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, paragraphs);
+        usePlayerStore.getState().setCurrentParagraphs(paragraphs);
       })
       .catch((err) => console.warn("[DjvuView] failed to get text for TTS:", err));
 
@@ -296,11 +296,11 @@ export function DjvuView({ book }: { book: Book }) {
               text,
               index: `djvu-${currentPage + 1}-${i}`,
             }));
-            eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
+            usePlayerStore.getState().setNextPageParagraphs(paragraphs);
           })
           .catch((err) => console.warn("[DjvuView] failed to prefetch next page:", err));
       } else {
-        eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, []);
+        usePlayerStore.getState().setNextPageParagraphs([]);
       }
 
       // Prefetch previous page paragraphs
@@ -311,11 +311,11 @@ export function DjvuView({ book }: { book: Book }) {
               text,
               index: `djvu-${currentPage - 1}-${i}`,
             }));
-            eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
+            usePlayerStore.getState().setPrevPageParagraphs(paragraphs);
           })
           .catch((err) => console.warn("[DjvuView] failed to prefetch prev page:", err));
       } else {
-        eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, []);
+        usePlayerStore.getState().setPrevPageParagraphs([]);
       }
     }, 300);
 
@@ -323,8 +323,8 @@ export function DjvuView({ book }: { book: Book }) {
       if (prefetchTimerRef.current) {
         clearTimeout(prefetchTimerRef.current);
         // Clear stale prefetch data so Player doesn't use wrong page's paragraphs
-        eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, []);
-        eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, []);
+        usePlayerStore.getState().setNextPageParagraphs([]);
+        usePlayerStore.getState().setPrevPageParagraphs([]);
       }
     };
   }, [book.filepath, currentPage, pageCount]);
@@ -340,12 +340,17 @@ export function DjvuView({ book }: { book: Book }) {
       setCurrentPage((prev) => Math.max(prev - 1, 1));
     };
 
-    eventBus.on(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
-    eventBus.on(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
+    const unsubPage = usePlayerStore.subscribe(
+      (s) => s.pageRequest,
+      (request) => {
+        if (request === "next") handleNextEmptied();
+        if (request === "prev") handlePrevEmptied();
+        if (request) usePlayerStore.getState().clearPageRequest();
+      }
+    );
 
     return () => {
-      eventBus.off(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
-      eventBus.off(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
+      unsubPage();
     };
   }, [pageCount]);
 

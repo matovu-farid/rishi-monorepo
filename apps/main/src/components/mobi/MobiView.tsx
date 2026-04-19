@@ -15,7 +15,7 @@ import { BackButton } from "@components/BackButton";
 import TTSControls from "@components/TTSControls";
 import { ChevronLeft, ChevronRight, MessageSquare, Menu as MenuIcon, Mic, MicOff, CircleX } from "lucide-react";
 import { themes } from "@/themes/themes";
-import { eventBus, EventBusEvent } from "@/utils/bus";
+import { usePlayerStore } from "@/stores/playerStore";
 import type { ParagraphWithIndex } from "@/utils/bus";
 import { processEpubJob } from "@/modules/process_epub";
 import type { PageDataInsertable } from "@/modules/kysley";
@@ -169,7 +169,7 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
           text,
           index: `mobi-${chapterIndex}-${i}`,
         }));
-        eventBus.publish(EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, paragraphs);
+        usePlayerStore.getState().setCurrentParagraphs(paragraphs);
       })
       .catch((err) => console.warn("[MobiView] failed to get text for TTS:", err));
 
@@ -184,11 +184,11 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
               text,
               index: `mobi-${chapterIndex + 1}-${i}`,
             }));
-            eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
+            usePlayerStore.getState().setNextPageParagraphs(paragraphs);
           })
           .catch((err) => console.warn("[MobiView] failed to prefetch next chapter:", err));
       } else {
-        eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, []);
+        usePlayerStore.getState().setNextPageParagraphs([]);
       }
 
       // Prefetch previous chapter paragraphs
@@ -199,11 +199,11 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
               text,
               index: `mobi-${chapterIndex - 1}-${i}`,
             }));
-            eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, paragraphs);
+            usePlayerStore.getState().setPrevPageParagraphs(paragraphs);
           })
           .catch((err) => console.warn("[MobiView] failed to prefetch prev chapter:", err));
       } else {
-        eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, []);
+        usePlayerStore.getState().setPrevPageParagraphs([]);
       }
     }, 300);
 
@@ -211,8 +211,8 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
       if (prefetchTimerRef.current) {
         clearTimeout(prefetchTimerRef.current);
         // Clear stale prefetch data so Player doesn't use wrong chapter's paragraphs
-        eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, []);
-        eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, []);
+        usePlayerStore.getState().setNextPageParagraphs([]);
+        usePlayerStore.getState().setPrevPageParagraphs([]);
       }
     };
   }, [book.filepath, chapterIndex, chapterCount]);
@@ -228,12 +228,17 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
       setChapterIndex((prev) => Math.max(prev - 1, 0));
     };
 
-    eventBus.on(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
-    eventBus.on(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
+    const unsubPage = usePlayerStore.subscribe(
+      (s) => s.pageRequest,
+      (request) => {
+        if (request === "next") handleNextEmptied();
+        if (request === "prev") handlePrevEmptied();
+        if (request) usePlayerStore.getState().clearPageRequest();
+      }
+    );
 
     return () => {
-      eventBus.off(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
-      eventBus.off(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
+      unsubPage();
     };
   }, [chapterCount]);
 
