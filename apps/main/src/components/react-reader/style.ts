@@ -53,6 +53,8 @@ export const ReactReaderStyle: IReactReaderStyle = {
     whiteSpace: "nowrap" as const,
     overflow: "hidden",
     textOverflow: "ellipsis",
+    userSelect: "none",
+    zIndex: 1,
   },
   reader: {
     position: "absolute",

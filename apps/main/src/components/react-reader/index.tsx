@@ -385,7 +385,21 @@ export class ReactReader extends PureComponent<
         {/* Main reader area */}
         <div style={readerStyles.readerArea}>
           {/* Title bar at top */}
-          <div style={readerStyles.titleArea}>{title}</div>
+          {/* Full-width drag region for window dragging */}
+          <div
+            data-tauri-drag-region
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 50,
+              zIndex: 0,
+            }}
+          />
+          <div data-tauri-drag-region style={readerStyles.titleArea}>
+            {title}
+          </div>
 
           {/* Swipe gesture wrapper for touch navigation */}
           <SwipeWrapper

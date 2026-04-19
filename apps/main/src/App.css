@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+*[data-tauri-drag-region] {
+  app-region: drag;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
