@@ -76,11 +76,11 @@ const testChunks = [
 // Test 1: Embed text into vectors
 // ============================
 let embedCallCount = 0;
-let lastEmbedArgs: unknown = null;
+let _lastEmbedArgs: unknown = null;
 
 bridge.interceptCommand('embed', (args: unknown) => {
   embedCallCount++;
-  lastEmbedArgs = args;
+  _lastEmbedArgs = args;
 
   const typedArgs = args as { embedparams?: Array<{ text: string; metadata: { id: number; pageNumber: number; bookId: number } }> };
 
@@ -90,7 +90,7 @@ bridge.interceptCommand('embed', (args: unknown) => {
   );
 
   // Generate mock embeddings for each input
-  return typedArgs.embedparams!.map((param, idx) => ({
+  return (typedArgs.embedparams ?? []).map((param, idx) => ({
     dim: EMBED_DIM,
     embedding: fakeEmbedding(param.metadata.id + idx),
     text: param.text,
@@ -163,7 +163,7 @@ bridge.interceptCommand('save_vectors', (args: unknown) => {
   );
 
   // Verify each vector has correct dimension
-  for (const vec of typedArgs.vectors!) {
+  for (const vec of (typedArgs.vectors ?? [])) {
     assert(
       vec.vector.length === EMBED_DIM,
       'Vector ' + vec.id + ' should have ' + EMBED_DIM + ' dimensions, got ' + vec.vector.length

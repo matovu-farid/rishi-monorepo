@@ -181,7 +181,7 @@ assert(
   'New cover should be 29 bytes, got ' + newCover.length
 );
 assert(
-  newCover[0] === 0x89 && newCover[1] === 0x50,
+  newCover[0]! === 0x89 && newCover[1]! === 0x50,
   'Cover should start with PNG magic bytes'
 );
 

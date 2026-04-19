@@ -409,7 +409,7 @@ bridge.interceptCommand('delete_book', (args: unknown) => {
 
 await invoke('delete_book', { bookId: BOOK_ID });
 
-assert(deleteBookCalled, 'delete_book should have been called');
+assert((deleteBookCalled as boolean) === true, 'delete_book should have been called');
 assert(deletedBookId === BOOK_ID, 'Should delete book with id ' + BOOK_ID);
 
 // Verify the book is gone from the list
