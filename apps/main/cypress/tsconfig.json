@@ -10,5 +10,5 @@
     "esModuleInterop": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"]
   },
-  "include": ["e2e/**/*.ts"]
+  "include": ["global.d.ts", "e2e/**/*.ts"]
 }

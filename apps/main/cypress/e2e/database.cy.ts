@@ -179,15 +179,15 @@ assert(saveBookLog[0].mocked === true, 'save_book should be marked as mocked (in
 // ============================
 // Test 4: Mock delete_book and verify call
 // ============================
-let deleteBookCalled = false;
+let deleteBookCalled: boolean = false;
 
-bridge.interceptCommand('delete_book', (args: unknown) => {
+bridge.interceptCommand('delete_book', (_args: unknown) => {
   deleteBookCalled = true;
   return null; // delete returns void/null
 });
 
 await invoke('delete_book', { bookId: 1 });
-assert(deleteBookCalled === true, 'delete_book interceptor should have been called');
+assert((deleteBookCalled as boolean) === true, 'delete_book interceptor should have been called');
 
 // ============================
 // Test 5: Verify total IPC log state

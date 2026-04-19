@@ -141,7 +141,7 @@ assert(invalidModeError, 'Invalid scan mode should throw an error');
 // ============================
 // Test 5: Mock cancel_scan
 // ============================
-let cancelScanCalled = false;
+let cancelScanCalled: boolean = false;
 
 bridge.interceptCommand('cancel_scan', (_args: unknown) => {
   cancelScanCalled = true;
@@ -149,7 +149,7 @@ bridge.interceptCommand('cancel_scan', (_args: unknown) => {
 });
 
 await invoke('cancel_scan');
-assert(cancelScanCalled === true, 'cancel_scan should have been called');
+assert((cancelScanCalled as boolean) === true, 'cancel_scan should have been called');
 
 snapshot.take('after-cancel-scan');
 

@@ -4,6 +4,7 @@ export type {
   DomSnapshot,
   CyConfig,
   MatcherFn,
+  TauriCypressGlobal,
 } from "./types.js";
 
 export { cy } from "./cy.js";

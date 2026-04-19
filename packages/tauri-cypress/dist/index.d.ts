@@ -190,4 +190,4 @@ declare function addCustomMatcher(name: string, fn: (subject: unknown, ...args: 
     expected: unknown;
 }): void;
 
-export { type AssertionResult, type CyConfig, type DomSnapshot, type IpcLogEntry, type MatcherFn, addCustomMatcher, afterEach, beforeEach, createTestRunner, cy, describe, it, matcherRegistry };
+export { type AssertionResult, type CyConfig, type DomSnapshot, type IpcLogEntry, type MatcherFn, type TauriCypressGlobal, addCustomMatcher, afterEach, beforeEach, createTestRunner, cy, describe, it, matcherRegistry };
