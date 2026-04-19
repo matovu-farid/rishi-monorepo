@@ -6,58 +6,9 @@ import {
 } from "@openai/agents/realtime";
 import { z } from "zod";
 import { useChatStore } from "@/stores/chatStore";
-import { getAuthToken } from "@/modules/auth";
 
-const WORKER_URL = "https://rishi-worker.faridmato90.workers.dev";
-
-const GUARDRAIL_SYSTEM_PROMPT = `Analyze the agent's output and classify it into one of three categories:
-1. Relevant to the book: The output is answering questions, explaining concepts, or discussing content related to the book the user is reading.
-2. Small talk: The output is engaging in friendly conversation, greetings, acknowledgments, pleasantries, or casual responses that are part of natural conversation flow.
-3. Off-topic: The output is discussing something completely unrelated to the book AND is not small talk.
-
-Respond with JSON: { "isRelevantToBook": boolean, "isSmallTalk": boolean }`;
-
-/**
- * Classify AI output via Worker LLM completions endpoint.
- * Fails open on any error to avoid blocking realtime audio.
- */
-async function checkGuardrail(agentOutput: string): Promise<boolean> {
-  try {
-    const token = await getAuthToken();
-    const response = await fetch(`${WORKER_URL}/api/text/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        input: [
-          { role: "system", content: GUARDRAIL_SYSTEM_PROMPT },
-          { role: "user", content: agentOutput },
-        ],
-      }),
-    });
-
-    if (!response.ok) return false;
-
-    const text = (await response.json()) as string;
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return false;
-
-    const result = JSON.parse(jsonMatch[0]);
-    return !(result.isRelevantToBook ?? false) && !(result.isSmallTalk ?? false);
-  } catch (err) {
-    console.warn("[Book Guardrail] classification failed, failing open:", err);
-    return false;
-  }
-}
-
-// Guardrails are evaluated out-of-band after each response completes.
-// Running them inside RealtimeSession (even with debounceTextLength: -1)
-// causes the SDK to call interrupt() on a potentially disconnected
-// WebRTC channel, producing unhandled rejections that stutter audio.
-// Instead we listen to the session's 'response' event and classify
-// asynchronously — see postResponseGuardrail() below.
+// TODO: Re-enable guardrails once audio quality impact is resolved.
+// See docs/superpowers/specs/2026-04-19-ai-chat-orb-design.md for context.
 export async function startRealtime(bookId: number) {
   const bookContextTool = tool({
     name: "bookContext",
@@ -218,18 +169,6 @@ Ending conversations:
   await session.connect({
     apiKey,
   });
-  // Out-of-band guardrail: classify each completed response asynchronously.
-  // This never touches the WebRTC channel so it can't stutter audio.
-  session.on("audio_done", (ev: { transcript?: string }) => {
-    const transcript = ev.transcript;
-    if (!transcript) return;
-    void checkGuardrail(transcript).then((tripped) => {
-      if (tripped) {
-        console.warn("[Book Guardrail] off-topic response detected:", transcript.slice(0, 100));
-      }
-    });
-  });
-
   // Trigger an initial greeting so the assistant speaks first
   session.sendMessage({
     type: "message",
