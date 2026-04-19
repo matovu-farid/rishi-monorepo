@@ -10,6 +10,7 @@ import { logStateEvent } from "@/utils/stateDump";
 import { publishCurrentEpubParagraphs } from "@/stores/epubStore";
 import { usePdfStore } from "@/stores/pdfStore";
 import { pageDataToParagraphs } from "@/components/pdf/utils/getPageParagraphs";
+import isEqual from "fast-deep-equal";
 
 // Singleton audio service — owns the HTMLAudioElement
 const audioService = new AudioService(audio);
@@ -54,23 +55,29 @@ export function usePlayerMachine(bookId: string) {
     // --- 2. Store send reference (updated below with wrappedSend) ---
 
     // --- 3. Store → machine sync (paragraphs) ---
+    // Use deep equality so reference-different but content-identical arrays
+    // don't trigger spurious PARAGRAPHS_UPDATED events (which would interrupt
+    // playback by transitioning playing → loading).
     const unsubCurrent = usePlayerStore.subscribe(
       (s) => s.currentParagraphs,
       (paragraphs) => {
         actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs });
-      }
+      },
+      { equalityFn: isEqual }
     );
     const unsubNext = usePlayerStore.subscribe(
       (s) => s.nextPageParagraphs,
       (paragraphs) => {
         actor.send({ type: "NEXT_PARAGRAPHS_UPDATED", paragraphs });
-      }
+      },
+      { equalityFn: isEqual }
     );
     const unsubPrev = usePlayerStore.subscribe(
       (s) => s.prevPageParagraphs,
       (paragraphs) => {
         actor.send({ type: "PREV_PARAGRAPHS_UPDATED", paragraphs });
-      }
+      },
+      { equalityFn: isEqual }
     );
 
     // --- 4. Machine actions → audioService side effects ---
