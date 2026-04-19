@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { IconButton } from "@components/ui/IconButton";
 import { ThemeType } from "@/themes/common";
-import { Loader2, Menu as MenuIcon, LayoutGrid, Mic, MicOff, CircleX } from "lucide-react";
+import { Loader2, Menu as MenuIcon, LayoutGrid, Mic, MicOff } from "lucide-react";
+import AIChatOrb from "../../AIChatOrb";
+import { ChatPanel } from "@/components/chat/ChatPanel";
 import { Document, Outline, pdfjs } from "react-pdf";
 import type { DocumentInitParameters } from "pdfjs-dist/types/src/display/api";
 import { usePlayerStore } from "@/stores/playerStore";
@@ -41,7 +43,6 @@ import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
 import { ReaderTOC } from "@/components/reader/ReaderTOC";
 import { useChatStore } from "@/stores/chatStore";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
-import Draggable from "../../ui/Draggable";
 
 // Configure PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -59,6 +60,7 @@ export function PdfView({
   const [theme] = useState<ThemeType>(ThemeType.White);
   const [tocOpen, setTocOpen] = useState(false);
   const [bookSyncId, setBookSyncId] = useState<string>("");
+  const [chatPanelOpen, setChatPanelOpen] = useState(false);
   const thumbOpen = usePdfStore((s) => s.thumbnailSidebarOpen);
   const setThumbOpen = usePdfStore((s) => s.setThumbnailSidebarOpen);
   const setPdfDocProxy = usePdfStore((s) => s.setPdfDocumentProxy);
@@ -87,13 +89,6 @@ export function PdfView({
     stopConversation();
   };
 
-  const getDefaultChatPosition = (): { x: number; y: number } => {
-    if (typeof window === "undefined") return { x: 0, y: 0 };
-    return {
-      x: window.innerWidth / 2 - 50,
-      y: window.innerHeight / 2 - 50,
-    };
-  };
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   useScrolling(scrollContainerRef);
 
@@ -441,37 +436,26 @@ export function PdfView({
         </Document>
         {AuthDialog}
 
-        {/* Voice chat overlay */}
+        {/* AI chat orb */}
         {isChatting && (
-          <Draggable
-            storePath="tts-controls-position.json"
-            storeKey="chatPosition"
-            defaultPosition={getDefaultChatPosition}
-            width={100}
-            height={100}
-            className="rounded-full"
-          >
-            <div className="absolute -top-2 -right-2" data-no-drag>
-              <CircleX
-                className="cursor-pointer"
-                onClick={handleStopChat}
-                color="red"
-                size={24}
-              />
-            </div>
-            <div>
-              <img
-                width={100}
-                height={100}
-                src="https://rishi-tauri.s3.us-east-1.amazonaws.com/ai.gif"
-                alt="AI"
-              />
-            </div>
-          </Draggable>
+          <AIChatOrb
+            isProcessing={false}
+            onClick={() => setChatPanelOpen((prev) => !prev)}
+          />
         )}
 
         {/* TTS Controls */}
         {<TTSControls key={book.id.toString()} bookId={book.id.toString()} />}
+
+        {/* Chat Panel */}
+        <ChatPanel
+          bookId={book.id}
+          bookSyncId={bookSyncId}
+          bookTitle={book.title}
+          rendition={null}
+          open={chatPanelOpen}
+          onOpenChange={setChatPanelOpen}
+        />
       </div>
       {/* TOC Sidebar */}
       <ReaderTOC

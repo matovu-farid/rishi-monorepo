@@ -9,7 +9,8 @@ import { Radio, RadioGroup } from "@components/ui/Radio";
 import { ThemeType } from "@/themes/common";
 import { themes } from "@/themes/themes";
 import createIReactReaderTheme from "@/themes/readerThemes";
-import { Palette, Highlighter, MessageSquare, MoreVertical, Menu as MenuIcon, Mic, MicOff, CircleX } from "lucide-react";
+import { Palette, Highlighter, MessageSquare, MoreVertical, Menu as MenuIcon, Mic, MicOff } from "lucide-react";
+import AIChatOrb from "./AIChatOrb";
 import { IconButton } from "@components/ui/IconButton";
 import {
   Popover,
@@ -18,7 +19,6 @@ import {
 } from "@components/components/ui/popover";
 import TTSControls from "@components/TTSControls";
 import { useChatStore } from "@/stores/chatStore";
-import Draggable from "./ui/Draggable";
 import { Rendition } from "epubjs/types";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { PageCurlOverlay, usePageCurl } from "./pagecurl";
@@ -88,14 +88,21 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   const setRendition = useEpubStore((s) => s.setRendition);
   const renditionRef = useRef(rendition);
   renditionRef.current = rendition;
+  // Navigation lock — prevents concurrent rendition.next()/prev() calls
+  // from the page curl gesture and the player's pageRequest signal.
+  const navLockRef = useRef(false);
   const pageCurl = usePageCurl({
     onNavigate: (dir) => {
       const r = renditionRef.current;
       if (!r) return;
+      // Clear any pending player page request to avoid double navigation
+      usePlayerStore.getState().clearPageRequest();
+      navLockRef.current = true;
+      const done = () => { navLockRef.current = false; };
       if (dir === "right") {
-        void r.next();
+        void r.next().then(done, done);
       } else {
-        void r.prev();
+        void r.prev().then(done, done);
       }
     },
     onUndoNavigate: (dir) => {
@@ -146,13 +153,6 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
     stopConversation();
   };
 
-  const getDefaultChatPosition = (): { x: number; y: number } => {
-    if (typeof window === "undefined") return { x: 0, y: 0 };
-    return {
-      x: window.innerWidth / 2 - 50,
-      y: window.innerHeight / 2 - 50,
-    };
-  };
 
   // Keep toolbar visible when any panel is open
   const panelOpen = menuOpen || highlightsPanelOpen || chatPanelOpen || bookmarksPanelOpen || tocOpen || !!selectionInfo;
@@ -240,6 +240,11 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
       (s) => s.pageRequest,
       async (request) => {
         if (!request) return;
+        // Skip if a user-initiated navigation is already in flight
+        if (navLockRef.current) {
+          usePlayerStore.getState().clearPageRequest();
+          return;
+        }
         await clearAllHighlights();
         if (request === "next") await rendition.next();
         if (request === "prev") await rendition.prev();
@@ -697,33 +702,12 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
         </div>
       </div>
 
-      {/* Voice chat overlay */}
+      {/* AI chat orb */}
       {isChatting && (
-        <Draggable
-          storePath="tts-controls-position.json"
-          storeKey="chatPosition"
-          defaultPosition={getDefaultChatPosition}
-          width={100}
-          height={100}
-          className="rounded-full"
-        >
-          <div className="absolute -top-2 -right-2" data-no-drag>
-            <CircleX
-              className="cursor-pointer"
-              onClick={handleStopChat}
-              color="red"
-              size={24}
-            />
-          </div>
-          <div>
-            <img
-              width={100}
-              height={100}
-              src="https://rishi-tauri.s3.us-east-1.amazonaws.com/ai.gif"
-              alt="AI"
-            />
-          </div>
-        </Draggable>
+        <AIChatOrb
+          isProcessing={false}
+          onClick={() => setChatPanelOpen((prev) => !prev)}
+        />
       )}
 
       {/* TTS Controls - Draggable */}

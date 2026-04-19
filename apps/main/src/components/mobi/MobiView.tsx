@@ -13,7 +13,8 @@ import {
 import type { Book } from "@/generated";
 import { BackButton } from "@components/BackButton";
 import TTSControls from "@components/TTSControls";
-import { ChevronLeft, ChevronRight, MessageSquare, Menu as MenuIcon, Mic, MicOff, CircleX } from "lucide-react";
+import { ChevronLeft, ChevronRight, MessageSquare, Menu as MenuIcon, Mic, MicOff } from "lucide-react";
+import AIChatOrb from "../AIChatOrb";
 import { themes } from "@/themes/themes";
 import { usePlayerStore } from "@/stores/playerStore";
 import type { ParagraphWithIndex } from "@/models/player_control";
@@ -28,7 +29,6 @@ import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
 import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
 import { ReaderTOC } from "@/components/reader/ReaderTOC";
 import { IconButton } from "@components/ui/IconButton";
-import Draggable from "../ui/Draggable";
 
 export function MobiView({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme);
@@ -63,13 +63,6 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
     stopConversation();
   };
 
-  const getDefaultChatPosition = (): { x: number; y: number } => {
-    if (typeof window === "undefined") return { x: 0, y: 0 };
-    return {
-      x: window.innerWidth / 2 - 50,
-      y: window.innerHeight / 2 - 50,
-    };
-  };
 
   const bookSyncIdRef = useRef<string | null>(null);
 
@@ -398,33 +391,12 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
         </div>
       </div>
 
-      {/* Voice chat overlay */}
+      {/* AI chat orb */}
       {isChatting && (
-        <Draggable
-          storePath="tts-controls-position.json"
-          storeKey="chatPosition"
-          defaultPosition={getDefaultChatPosition}
-          width={100}
-          height={100}
-          className="rounded-full"
-        >
-          <div className="absolute -top-2 -right-2" data-no-drag>
-            <CircleX
-              className="cursor-pointer"
-              onClick={handleStopChat}
-              color="red"
-              size={24}
-            />
-          </div>
-          <div>
-            <img
-              width={100}
-              height={100}
-              src="https://rishi-tauri.s3.us-east-1.amazonaws.com/ai.gif"
-              alt="AI"
-            />
-          </div>
-        </Draggable>
+        <AIChatOrb
+          isProcessing={false}
+          onClick={() => setChatPanelOpen((prev) => !prev)}
+        />
       )}
 
       {/* TTS Controls */}

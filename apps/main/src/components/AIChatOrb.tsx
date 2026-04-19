@@ -1,4 +1,4 @@
-// apps/main/src/components/AIChatOrb.tsx
+import React from "react";
 
 interface AIChatOrbProps {
   isProcessing: boolean;

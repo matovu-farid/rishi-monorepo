@@ -11,7 +11,8 @@ import type { Book } from "@/generated";
 import { BackButton } from "@components/BackButton";
 import TTSControls from "@components/TTSControls";
 import { IconButton } from "@components/ui/IconButton";
-import { ChevronLeft, ChevronRight, Menu as MenuIcon, MessageSquare, ZoomIn, ZoomOut, Mic, MicOff, CircleX } from "lucide-react";
+import { ChevronLeft, ChevronRight, Menu as MenuIcon, MessageSquare, ZoomIn, ZoomOut, Mic, MicOff } from "lucide-react";
+import AIChatOrb from "../AIChatOrb";
 import { usePlayerStore } from "@/stores/playerStore";
 import type { ParagraphWithIndex } from "@/models/player_control";
 import { processEpubJob } from "@/modules/process_epub";
@@ -24,7 +25,6 @@ import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
 import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
 import { ReaderTOC } from "@/components/reader/ReaderTOC";
 import { useChatStore } from "@/stores/chatStore";
-import Draggable from "../ui/Draggable";
 
 const PAGE_CACHE_SIZE = 5;
 const MIN_ZOOM = 0.5;
@@ -73,13 +73,6 @@ export function DjvuView({ book }: { book: Book }) {
     stopConversation();
   };
 
-  const getDefaultChatPosition = (): { x: number; y: number } => {
-    if (typeof window === "undefined") return { x: 0, y: 0 };
-    return {
-      x: window.innerWidth / 2 - 50,
-      y: window.innerHeight / 2 - 50,
-    };
-  };
 
   const bookSyncIdRef = useRef<string | null>(null);
 
@@ -515,33 +508,12 @@ export function DjvuView({ book }: { book: Book }) {
         </div>
       </div>
 
-      {/* Voice chat overlay */}
+      {/* AI chat orb */}
       {isChatting && (
-        <Draggable
-          storePath="tts-controls-position.json"
-          storeKey="chatPosition"
-          defaultPosition={getDefaultChatPosition}
-          width={100}
-          height={100}
-          className="rounded-full"
-        >
-          <div className="absolute -top-2 -right-2" data-no-drag>
-            <CircleX
-              className="cursor-pointer"
-              onClick={handleStopChat}
-              color="red"
-              size={24}
-            />
-          </div>
-          <div>
-            <img
-              width={100}
-              height={100}
-              src="https://rishi-tauri.s3.us-east-1.amazonaws.com/ai.gif"
-              alt="AI"
-            />
-          </div>
-        </Draggable>
+        <AIChatOrb
+          isProcessing={false}
+          onClick={() => setChatPanelOpen((prev) => !prev)}
+        />
       )}
 
       {/* TTS Controls */}
