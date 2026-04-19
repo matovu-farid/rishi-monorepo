@@ -43,11 +43,12 @@ export default function AIChatOrb({ isProcessing, onClick }: AIChatOrbProps) {
         role="button"
         tabIndex={0}
         aria-label="Toggle AI chat"
-        className="fixed z-50 flex items-center justify-center cursor-pointer transition-transform duration-150 hover:scale-105 active:scale-95"
+        className="fixed z-50 flex items-center justify-center cursor-pointer"
         style={{
           ...glassContainer,
-          bottom: 32,
-          left: 32,
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
           width: 52,
           height: 52,
           borderRadius: "50%",

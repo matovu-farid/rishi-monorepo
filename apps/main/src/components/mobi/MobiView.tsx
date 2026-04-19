@@ -399,8 +399,8 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
         />
       )}
 
-      {/* TTS Controls */}
-      <TTSControls bookId={book.id.toString()} />
+      {/* TTS Controls — hidden while AI chat is active */}
+      {!isChatting && <TTSControls bookId={book.id.toString()} />}
 
       {/* TOC / Bookmarks Sidebar */}
       <ReaderTOC

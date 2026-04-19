@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { devtools, subscribeWithSelector } from "zustand/middleware";
 import type { RealtimeSession } from "@openai/agents/realtime";
 import { startRealtime } from "@/modules/realtime";
+import { usePlayerStore } from "./playerStore";
 
 interface ChatState {
   isChatting: boolean;
@@ -19,10 +20,16 @@ export const useChatStore = create<ChatState>()(
         isChatting: false,
         realtimeSession: null,
 
-        setIsChatting: (value) =>
-          set((state) => ({
-            isChatting: typeof value === "function" ? value(state.isChatting) : value,
-          })),
+        setIsChatting: (value) => {
+          const newValue =
+            typeof value === "function" ? value(get().isChatting) : value;
+          if (newValue) {
+            // Stop TTS playback — chat and TTS are mutually exclusive
+            const send = usePlayerStore.getState().send;
+            if (send) send({ type: "CHAT_STARTED" });
+          }
+          set({ isChatting: newValue });
+        },
 
         startChat: (bookId: number) => {
           void startRealtime(bookId).then((session) => {

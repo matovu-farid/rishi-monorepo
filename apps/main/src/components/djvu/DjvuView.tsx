@@ -516,8 +516,8 @@ export function DjvuView({ book }: { book: Book }) {
         />
       )}
 
-      {/* TTS Controls */}
-      <TTSControls key={book.id.toString()} bookId={book.id.toString()} />
+      {/* TTS Controls — hidden while AI chat is active */}
+      {!isChatting && <TTSControls key={book.id.toString()} bookId={book.id.toString()} />}
 
       {AuthDialog}
 

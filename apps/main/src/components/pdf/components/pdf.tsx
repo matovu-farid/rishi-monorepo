@@ -444,8 +444,8 @@ export function PdfView({
           />
         )}
 
-        {/* TTS Controls */}
-        {<TTSControls key={book.id.toString()} bookId={book.id.toString()} />}
+        {/* TTS Controls — hidden while AI chat is active */}
+        {!isChatting && <TTSControls key={book.id.toString()} bookId={book.id.toString()} />}
 
         {/* Chat Panel */}
         <ChatPanel

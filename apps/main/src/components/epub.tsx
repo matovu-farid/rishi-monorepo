@@ -24,6 +24,8 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { PageCurlOverlay, usePageCurl } from "./pagecurl";
 import { useEpubStore } from "@/stores/epubStore";
 import { usePlayerStore } from "@/stores/playerStore";
+import { useNavMachine } from "@/hooks/useNavMachine";
+import { useNavStore } from "@/stores/navStore";
 import { highlightRange, removeHighlight, getCurrentViewParagraphs } from "@/epubwrapper";
 import { Book } from "@/generated";
 import { updateBookLocation } from "@/generated";
@@ -88,31 +90,22 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   const setRendition = useEpubStore((s) => s.setRendition);
   const renditionRef = useRef(rendition);
   renditionRef.current = rendition;
-  // Navigation lock — prevents concurrent rendition.next()/prev() calls
-  // from the page curl gesture and the player's pageRequest signal.
-  const navLockRef = useRef(false);
+
+  // Boot the centralised navigation state machine
+  useNavMachine(rendition);
+  const navSend = useNavStore((s) => s.send);
+
   const pageCurl = usePageCurl({
     onNavigate: (dir) => {
-      const r = renditionRef.current;
-      if (!r) return;
       // Clear any pending player page request to avoid double navigation
       usePlayerStore.getState().clearPageRequest();
-      navLockRef.current = true;
-      const done = () => { navLockRef.current = false; };
-      if (dir === "right") {
-        void r.next().then(done, done);
-      } else {
-        void r.prev().then(done, done);
-      }
+      navSend?.({ type: dir === "right" ? "CURL_NEXT" : "CURL_PREV" });
     },
-    onUndoNavigate: (dir) => {
-      const r = renditionRef.current;
-      if (!r) return;
-      if (dir === "right") {
-        void r.prev();
-      } else {
-        void r.next();
-      }
+    onCommit: () => {
+      navSend?.({ type: "CURL_COMMIT" });
+    },
+    onUndoNavigate: () => {
+      navSend?.({ type: "CURL_CANCEL" });
     },
   });
   const bookSyncIdRef = useRef<string | null>(null);
@@ -240,14 +233,11 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
       (s) => s.pageRequest,
       async (request) => {
         if (!request) return;
-        // Skip if a user-initiated navigation is already in flight
-        if (navLockRef.current) {
-          usePlayerStore.getState().clearPageRequest();
-          return;
-        }
         await clearAllHighlights();
-        if (request === "next") await rendition.next();
-        if (request === "prev") await rendition.prev();
+        // Route through the centralised nav machine — it will drop the
+        // event if a user-initiated navigation is already in-flight.
+        const send = useNavStore.getState().send;
+        if (send) send({ type: request === "next" ? "NEXT" : "PREV" });
         usePlayerStore.getState().clearPageRequest();
       }
     );
@@ -710,8 +700,8 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
         />
       )}
 
-      {/* TTS Controls - Draggable */}
-      {<TTSControls bookId={book.id.toString()} />}
+      {/* TTS Controls — hidden while AI chat is active */}
+      {!isChatting && <TTSControls bookId={book.id.toString()} />}
 
       {/* Highlight color picker popover */}
       {selectionInfo && (
@@ -742,10 +732,8 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
             <BookmarksList
               bookSyncId={bookSyncId}
               onNavigate={(location) => {
-                const rendition = useEpubStore.getState().rendition;
-                if (rendition) {
-                  void rendition.display(location);
-                }
+                const send = useNavStore.getState().send;
+                if (send) send({ type: "DISPLAY", location });
                 setBookmarksPanelOpen(false);
               }}
             />
