@@ -50,6 +50,7 @@ impl ControlChannel {
         let inbound_tx = self.inbound_tx.clone();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
+        let outbound_tx_relay = outbound_tx.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -59,10 +60,12 @@ impl ControlChannel {
                                 debug!("New connection from {}", peer_addr);
                                 let outbound_rx = outbound_tx.subscribe();
                                 let inbound_tx = inbound_tx.clone();
+                                let relay_tx = outbound_tx_relay.clone();
                                 tokio::spawn(handle_connection(
                                     stream,
                                     outbound_rx,
                                     inbound_tx,
+                                    relay_tx,
                                 ));
                             }
                             Err(e) => {
@@ -105,6 +108,7 @@ async fn handle_connection(
     stream: tokio::net::TcpStream,
     mut outbound_rx: broadcast::Receiver<String>,
     inbound_tx: mpsc::Sender<ControlMessage>,
+    relay_tx: broadcast::Sender<String>,
 ) {
     let ws_stream = match accept_async(stream).await {
         Ok(ws) => ws,
@@ -136,6 +140,13 @@ async fn handle_connection(
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<ControlMessage>(&text) {
                             Ok(msg) => {
+                                // Relay Exec messages to all connected clients (including the
+                                // webview) via the broadcast channel. Without this, exec
+                                // messages from the runner stay in the inbound mpsc and
+                                // never reach the webview's injected JS.
+                                if matches!(&msg, ControlMessage::Exec { .. }) {
+                                    let _ = relay_tx.send(text.clone());
+                                }
                                 if inbound_tx.send(msg).await.is_err() {
                                     break;
                                 }

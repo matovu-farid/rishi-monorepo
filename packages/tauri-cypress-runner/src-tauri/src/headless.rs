@@ -4,6 +4,11 @@ use serde::Deserialize;
 use std::time::Instant;
 use tokio::sync::mpsc;
 
+/// Maximum number of WebSocket connection attempts before giving up.
+const WS_MAX_RETRIES: u32 = 10;
+/// Delay between WebSocket connection retry attempts (ms).
+const WS_RETRY_DELAY_MS: u64 = 1000;
+
 #[derive(Debug)]
 struct TestOutcome {
     test_id: String,
@@ -54,21 +59,17 @@ pub async fn run_headless(project_dir: &str, config_path: Option<&str>) -> Resul
     let binary = resolve_binary(&config, project_dir);
     app_process.spawn(&binary, &config.env)?;
 
-    // Wait for app to start (give it a moment)
-    tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
-
-    // Connect WebSocket
+    // Connect WebSocket with retry — the plugin's WS server starts asynchronously
+    // during Tauri setup, so a fixed sleep is unreliable (especially on cold starts).
     println!(
         "  Connecting to WebSocket on port {}...",
         config.control_port
     );
-    let (result_tx, mut result_rx) = mpsc::channel::<TestOutcome>(256);
 
-    // Create a simple WebSocket connection (not using Tauri emit)
     let url = format!("ws://127.0.0.1:{}", config.control_port);
-    let (ws_stream, _) = tokio_tungstenite::connect_async(&url)
-        .await
-        .map_err(|e| format!("WebSocket connect failed: {}", e))?;
+    let ws_stream = connect_with_retry(&url, WS_MAX_RETRIES, WS_RETRY_DELAY_MS, &mut app_process).await?;
+
+    let (result_tx, mut result_rx) = mpsc::channel::<TestOutcome>(256);
 
     use futures_util::{SinkExt, StreamExt};
     use tungstenite::protocol::Message;
@@ -105,11 +106,23 @@ pub async fn run_headless(project_dir: &str, config_path: Option<&str>) -> Resul
     let mut outcomes: Vec<TestOutcome> = Vec::new();
     let run_start = Instant::now();
 
-    // Run each test
+    // Run each test file.
+    //
+    // NOTE: Each file is sent as a single script and produces one result message.
+    // If a file contains multiple `it()` blocks, the injector's `executeTestScript`
+    // wraps the entire script in one try/catch — so the first failure aborts the
+    // file and only one result is returned. Individual `it()` results would require
+    // the test framework runtime to report them separately.
     for file in &files {
         let full_path = format!("{}/{}", project_dir, file.path);
         let script = std::fs::read_to_string(&full_path)
             .map_err(|e| format!("Failed to read {}: {}", full_path, e))?;
+
+        // Strip TypeScript import lines that would cause SyntaxError in the
+        // injector's dynamic evaluation. Test scripts use
+        // `import { ... } from 'tauri-cypress'` but the injected runtime
+        // already provides `__tauriCypress` as a function parameter.
+        let script = strip_imports(&script);
 
         let msg = serde_json::json!({ "type": "exec", "script": script, "test_id": file.path });
         ws_write
@@ -192,6 +205,43 @@ pub async fn run_headless(project_dir: &str, config_path: Option<&str>) -> Resul
     Ok(if failed > 0 { 1 } else { 0 })
 }
 
+/// Connect to the WebSocket server with retry.
+/// Checks that the app process is still alive between attempts.
+async fn connect_with_retry(
+    url: &str,
+    max_retries: u32,
+    retry_delay_ms: u64,
+    app_process: &mut AppProcess,
+) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, String> {
+    let mut last_err = String::new();
+    for attempt in 0..max_retries {
+        // Check that the app hasn't crashed before retrying
+        if !app_process.is_running() {
+            return Err("App process exited before WebSocket connection could be established".to_string());
+        }
+
+        match tokio_tungstenite::connect_async(url).await {
+            Ok((stream, _)) => return Ok(stream),
+            Err(e) => {
+                last_err = e.to_string();
+                if attempt + 1 < max_retries {
+                    println!(
+                        "  WebSocket not ready (attempt {}/{}), retrying in {}ms...",
+                        attempt + 1,
+                        max_retries,
+                        retry_delay_ms
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_millis(retry_delay_ms)).await;
+                }
+            }
+        }
+    }
+    Err(format!(
+        "WebSocket connect failed after {} attempts: {}",
+        max_retries, last_err
+    ))
+}
+
 fn run_build_sync(build_command: &str, working_dir: &str) -> Result<(), String> {
     let parts: Vec<&str> = build_command.split_whitespace().collect();
     if parts.is_empty() {
@@ -217,13 +267,81 @@ fn run_build_sync(build_command: &str, working_dir: &str) -> Result<(), String> 
 }
 
 fn resolve_binary(config: &RunnerConfig, project_dir: &str) -> String {
-    if config.binary_path.is_empty() {
-        format!("{}/target/debug/rishi", project_dir)
-    } else if config.binary_path.starts_with("./") {
-        format!("{}/{}", project_dir, &config.binary_path[2..])
+    if !config.binary_path.is_empty() {
+        if config.binary_path.starts_with("./") {
+            format!("{}/{}", project_dir, &config.binary_path[2..])
+        } else {
+            config.binary_path.clone()
+        }
     } else {
-        config.binary_path.clone()
+        // Infer the binary name from the Cargo.toml package name in tauri_dir.
+        // Falls back to the directory name if Cargo.toml can't be read.
+        let tauri_dir = if config.tauri_dir.starts_with("./") {
+            format!("{}/{}", project_dir, &config.tauri_dir[2..])
+        } else if config.tauri_dir.starts_with('/') {
+            config.tauri_dir.clone()
+        } else {
+            format!("{}/{}", project_dir, config.tauri_dir)
+        };
+
+        let cargo_path = format!("{}/Cargo.toml", tauri_dir);
+        let binary_name = std::fs::read_to_string(&cargo_path)
+            .ok()
+            .and_then(|content| {
+                // Simple parse: find `name = "..."` under [package]
+                let mut in_package = false;
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with('[') {
+                        in_package = trimmed == "[package]";
+                        continue;
+                    }
+                    if in_package && trimmed.starts_with("name") {
+                        if let Some(val) = trimmed.split('=').nth(1) {
+                            let name = val.trim().trim_matches('"').trim_matches('\'');
+                            if !name.is_empty() {
+                                return Some(name.to_string());
+                            }
+                        }
+                    }
+                }
+                None
+            })
+            .unwrap_or_else(|| {
+                // Fall back to the project directory name
+                std::path::Path::new(project_dir)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+            });
+
+        format!("{}/target/debug/{}", project_dir, binary_name)
     }
+}
+
+/// Strip `import` and `export` statements from TypeScript test files.
+///
+/// Test scripts contain lines like `import { describe, it, cy } from 'tauri-cypress'`
+/// which use ES module syntax. These cannot be evaluated inside the injector's
+/// dynamic script evaluation because it is not a module context. The injected
+/// runtime already provides `__tauriCypress` as a parameter, so the imports are
+/// unnecessary at runtime.
+///
+/// This is a pragmatic pre-processor -- a full TypeScript compilation pipeline
+/// would be more robust but is out of scope for v0.1.
+fn strip_imports(script: &str) -> String {
+    script
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            // Remove ES import/export statements
+            !trimmed.starts_with("import ")
+                && !trimmed.starts_with("export ")
+                && !trimmed.starts_with("import{")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn generate_junit_xml(
