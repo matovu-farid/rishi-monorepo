@@ -64,6 +64,8 @@ export type IReactReaderProps = IEpubViewProps & {
   tocExpanded?: boolean; // Controlled TOC expanded state
   onTocExpandedChange?: (expanded: boolean) => void; // Callback when TOC is toggled
   hidePrev?: boolean; // Hide the previous-page arrow (e.g. on cover page)
+  onNext?: () => void; // Override next-page navigation (for page curl animation)
+  onPrev?: () => void; // Override prev-page navigation (for page curl animation)
 };
 
 // Component state for ReactReader
@@ -123,9 +125,13 @@ export class ReactReader extends PureComponent<
    * Delegates to the EpubView component's nextPage method
    */
   next = () => {
-    const node = this.readerRef.current;
-    if (node && node.nextPage) {
-      node.nextPage();
+    if (this.props.onNext) {
+      this.props.onNext();
+    } else {
+      const node = this.readerRef.current;
+      if (node && node.nextPage) {
+        node.nextPage();
+      }
     }
   };
 
@@ -134,9 +140,13 @@ export class ReactReader extends PureComponent<
    * Delegates to the EpubView component's prevPage method
    */
   prev = () => {
-    const node = this.readerRef.current;
-    if (node && node.prevPage) {
-      node.prevPage();
+    if (this.props.onPrev) {
+      this.props.onPrev();
+    } else {
+      const node = this.readerRef.current;
+      if (node && node.prevPage) {
+        node.prevPage();
+      }
     }
   };
 
@@ -184,13 +194,10 @@ export class ReactReader extends PureComponent<
   handleWheel = (event: WheelEvent) => {
     event.preventDefault();
 
-    const node = this.readerRef.current;
-    if (!node) return;
-
     if (event.deltaY > 0) {
-      node.nextPage?.();
+      this.next();
     } else if (event.deltaY < 0) {
-      node.prevPage?.();
+      this.prev();
     }
   };
 
