@@ -162,23 +162,7 @@ Ending conversations:
     tools: [bookContextTool, endConvesationTool],
   });
 
-  const session = new RealtimeSession(agent, {
-    model: "gpt-realtime-1.5",
-    config: {
-      outputModalities: ["audio"],
-      audio: {
-        input: {
-          format: "pcm16",
-          transcription: {
-            model: "gpt-4o-mini-transcribe",
-          },
-        },
-        output: {
-          format: "pcm16",
-        },
-      },
-    },
-  });
+  const session = new RealtimeSession(agent);
 
   const apiKey = await getRealtimeClientSecret();
 
