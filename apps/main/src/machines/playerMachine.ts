@@ -397,7 +397,7 @@ export const playerMachine = setup({
         },
         PLAY: {
           target: "loading",
-          actions: assign({ retryCount: 0, errors: [] as string[] }),
+          actions: ["clearErrors", "resetIndex"],
         },
       },
     },
