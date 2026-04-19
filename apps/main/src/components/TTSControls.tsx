@@ -289,8 +289,8 @@ export default function TTSControls({
               <Square size={20} className="text-black/55" />
             </button>
 
-            {/* Error indicator */}
-            {errors.length > 0 && (
+            {/* Error indicator (dev only) */}
+            {import.meta.env.DEV && errors.length > 0 && (
               <button
                 onClick={handleShowErrorDetails}
                 aria-label="Show error details"
