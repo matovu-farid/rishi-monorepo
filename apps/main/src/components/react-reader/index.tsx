@@ -14,6 +14,7 @@ import {
 } from "./components";
 import { ReaderTOC } from "@/components/reader/ReaderTOC";
 import type { ParagraphWithCFI } from "@/types";
+import { useNavStore } from "@/stores/navStore";
 
 // Recursive TOC item for the ReaderTOC content
 function TocItem({ data, setLocation }: { data: NavItem; setLocation: (href: string) => void }) {
@@ -171,18 +172,17 @@ export class ReactReader extends PureComponent<
    * Closes the TOC and notifies parent component
    */
   setLocation = (loc: string) => {
-    const { locationChanged } = this.props;
-    // Actually navigate to the location in the book
-    const node = this.readerRef.current;
-    if (node && node.rendition) {
-      void node.rendition.display(loc);
+    // Route through the centralised navigation state machine
+    const send = useNavStore.getState().send;
+    if (send) {
+      send({ type: "DISPLAY", location: loc });
     }
-    this.setState(
-      {
-        expandedToc: false,
-      },
-      () => locationChanged && locationChanged(loc)
-    );
+    const { onTocExpandedChange } = this.props;
+    if (onTocExpandedChange) {
+      onTocExpandedChange(false);
+    } else {
+      this.setState({ expandedToc: false });
+    }
   };
 
   /**

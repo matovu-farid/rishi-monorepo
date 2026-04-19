@@ -97,9 +97,12 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
 
   const pageCurl = usePageCurl({
     onNavigate: (dir) => {
+      // Reject if the nav machine is busy — prevents double rendition calls
+      if (useNavStore.getState().navState !== "idle" || !navSend) return false;
       // Clear any pending player page request to avoid double navigation
       usePlayerStore.getState().clearPageRequest();
-      navSend?.({ type: dir === "right" ? "CURL_NEXT" : "CURL_PREV" });
+      navSend({ type: dir === "right" ? "CURL_NEXT" : "CURL_PREV" });
+      return true;
     },
     onCommit: () => {
       navSend?.({ type: "CURL_COMMIT" });
@@ -214,10 +217,11 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   }, [selectionInfo, rendition]);
 
   async function clearAllHighlights() {
-    if (!rendition) return;
-    const paragraphs = getCurrentViewParagraphs(rendition);
+    const r = renditionRef.current;
+    if (!r) return;
+    const paragraphs = getCurrentViewParagraphs(r);
     return Promise.all(
-      paragraphs.map((paragraph) => removeHighlight(rendition, paragraph.cfiRange))
+      paragraphs.map((paragraph) => removeHighlight(r, paragraph.cfiRange))
     );
   }
   const setBookId = useEpubStore((s) => s.setBookId);
@@ -229,17 +233,37 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     if (!rendition) return;
 
-    const unsubPage = usePlayerStore.subscribe(
-      (s) => s.pageRequest,
-      async (request) => {
-        if (!request) return;
-        await clearAllHighlights();
-        // Route through the centralised nav machine — it will drop the
-        // event if a user-initiated navigation is already in-flight.
-        const send = useNavStore.getState().send;
-        if (send) send({ type: request === "next" ? "NEXT" : "PREV" });
+    // Try to consume a pending pageRequest through the nav machine.
+    // Only succeeds when the machine is idle; otherwise leaves the
+    // request in place so the navState retry subscription (below) can
+    // pick it up when the machine returns to idle.
+    const tryConsumePageRequest = async () => {
+      const request = usePlayerStore.getState().pageRequest;
+      if (!request) return;
+      const { navState, send } = useNavStore.getState();
+      if (navState !== "idle" || !send) return;
+      await clearAllHighlights();
+      // Re-check after async highlight removal — machine may have
+      // become busy in the meantime.
+      if (useNavStore.getState().navState !== "idle") return;
+      send({ type: request === "next" ? "NEXT" : "PREV" });
+      // Only clear if the request hasn't been replaced by a new one
+      // during the await window (the player could set a fresh request
+      // while clearAllHighlights was in-flight).
+      if (usePlayerStore.getState().pageRequest === request) {
         usePlayerStore.getState().clearPageRequest();
       }
+    };
+
+    const unsubPage = usePlayerStore.subscribe(
+      (s) => s.pageRequest,
+      () => { void tryConsumePageRequest(); },
+    );
+
+    // Retry pending pageRequest when the nav machine returns to idle
+    const unsubNavRetry = useNavStore.subscribe(
+      (s) => s.navState,
+      (state) => { if (state === "idle") void tryConsumePageRequest(); },
     );
 
     const unsubActive = usePlayerStore.subscribe(
@@ -277,6 +301,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
 
     return () => {
       unsubPage();
+      unsubNavRetry();
       unsubActive();
       unsubEnded();
       unsubMove();
@@ -672,6 +697,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
         >
           <ReactReader
             key={`reader-paragraph-${book.id}`}
+            handleKeyPress={() => {}}
             loadingView={
               <div className="w-full h-screen grid items-center">
                 <Loader />

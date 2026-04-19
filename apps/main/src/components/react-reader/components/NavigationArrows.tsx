@@ -26,6 +26,7 @@ export const NavigationArrows = ({
         <button
           style={Object.assign({}, readerStyles.arrow, readerStyles.prev)}
           onClick={onPrev}
+          onPointerDown={(e) => e.stopPropagation()}
           aria-label="Previous page"
         >
           ‹
@@ -36,6 +37,7 @@ export const NavigationArrows = ({
       <button
         style={Object.assign({}, readerStyles.arrow, readerStyles.next)}
         onClick={onNext}
+        onPointerDown={(e) => e.stopPropagation()}
         aria-label="Next page"
       >
         ›

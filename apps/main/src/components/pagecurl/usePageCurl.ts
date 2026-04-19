@@ -19,16 +19,19 @@ export interface PageCurlResult {
 }
 
 const EDGE_ZONE = 60;
-const COMMIT_THRESHOLD = 0.35;
-const AUTO_DURATION = 350;
-const SNAP_DURATION = 200;
+const COMMIT_THRESHOLD = 0.3;
+const AUTO_DURATION = 200;
+const SNAP_DURATION = 120;
+const VELOCITY_COMMIT = 1.2; // progress/sec — flick to commit
 
-function easeOutCubic(t: number): number {
-  return 1 - Math.pow(1 - t, 3);
+function easeOutQuart(t: number): number {
+  return 1 - Math.pow(1 - t, 4);
 }
 
 export function usePageCurl(callbacks: {
-  onNavigate: (dir: CurlDirection) => void;
+  /** Return false to reject the navigation (e.g. nav machine busy). */
+  onNavigate: (dir: CurlDirection) => boolean;
+  onCommit: (dir: CurlDirection) => void;
   onUndoNavigate: (dir: CurlDirection) => void;
 }): PageCurlResult {
   const [active, setActive] = useState(false);
@@ -36,9 +39,12 @@ export function usePageCurl(callbacks: {
   const directionRef = useRef<CurlDirection>("right");
   const stateRef = useRef<CurlState>("idle");
   const rafRef = useRef<number | null>(null);
-  const containerWidthRef = useRef(0);
-  const dragStartXRef = useRef(0);
+  const containerRectRef = useRef<DOMRect | null>(null);
   const navigatedRef = useRef(false);
+  // Velocity tracking
+  const lastMoveTimeRef = useRef(0);
+  const lastProgressRef = useRef(0);
+  const velocityRef = useRef(0);
   const [, forceRender] = useState(0);
   const kick = useCallback(() => forceRender((n) => n + 1), []);
 
@@ -62,7 +68,7 @@ export function usePageCurl(callbacks: {
       function tick(now: number) {
         const elapsed = now - startTime;
         const rawT = Math.min(elapsed / duration, 1);
-        const t = easeOutCubic(rawT);
+        const t = easeOutQuart(rawT);
         progressRef.current = start + (target - start) * t;
         kick();
 
@@ -83,7 +89,9 @@ export function usePageCurl(callbacks: {
   const finish = useCallback(
     (completed: boolean) => {
       const dir = directionRef.current;
-      if (!completed && navigatedRef.current) {
+      if (completed && navigatedRef.current) {
+        callbacksRef.current.onCommit(dir);
+      } else if (!completed && navigatedRef.current) {
         callbacksRef.current.onUndoNavigate(dir);
       }
       stateRef.current = "idle";
@@ -96,7 +104,10 @@ export function usePageCurl(callbacks: {
   );
 
   const commitOrCancel = useCallback(() => {
-    if (progressRef.current >= COMMIT_THRESHOLD) {
+    const p = progressRef.current;
+    const v = velocityRef.current;
+    // Commit if past threshold or if user flicked forward
+    if (p >= COMMIT_THRESHOLD || v > VELOCITY_COMMIT) {
       animateTo(1, SNAP_DURATION, () => finish(true));
     } else {
       animateTo(0, SNAP_DURATION, () => finish(false));
@@ -108,23 +119,32 @@ export function usePageCurl(callbacks: {
       if (stateRef.current !== "idle") return;
       const rect = e.currentTarget.getBoundingClientRect();
       const x = e.clientX - rect.left;
-      containerWidthRef.current = rect.width;
 
       const nearRight = x > rect.width - EDGE_ZONE;
       const nearLeft = x < EDGE_ZONE;
       if (!nearRight && !nearLeft) return;
 
-      e.currentTarget.setPointerCapture(e.pointerId);
-
       const dir: CurlDirection = nearRight ? "right" : "left";
+
+      // Ask the navigation system before starting the gesture
+      if (!callbacksRef.current.onNavigate(dir)) return;
+
+      e.currentTarget.setPointerCapture(e.pointerId);
       directionRef.current = dir;
-      dragStartXRef.current = e.clientX;
+      containerRectRef.current = rect;
       stateRef.current = "dragging";
-      progressRef.current = 0;
 
-      callbacksRef.current.onNavigate(dir);
+      // Position-based: fold starts right at finger position
+      const W = rect.width;
+      const raw = dir === "right" ? 1 - x / W : x / W;
+      progressRef.current = Math.max(0, Math.min(1, raw));
+
+      // Reset velocity tracking
+      velocityRef.current = 0;
+      lastMoveTimeRef.current = performance.now();
+      lastProgressRef.current = progressRef.current;
+
       navigatedRef.current = true;
-
       setActive(true);
       kick();
     },
@@ -134,13 +154,27 @@ export function usePageCurl(callbacks: {
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (stateRef.current !== "dragging") return;
-      const dx = e.clientX - dragStartXRef.current;
-      const W = containerWidthRef.current;
-      if (W === 0) return;
+      const rect = containerRectRef.current;
+      if (!rect) return;
+
+      const x = e.clientX - rect.left;
+      const W = rect.width;
 
       const isForward = directionRef.current === "right";
-      const raw = isForward ? -dx / W : dx / W;
-      progressRef.current = Math.max(0, Math.min(1, raw));
+      const raw = isForward ? 1 - x / W : x / W;
+      const newProgress = Math.max(0, Math.min(1, raw));
+
+      // Velocity tracking (exponential smoothing)
+      const now = performance.now();
+      const dt = now - lastMoveTimeRef.current;
+      if (dt > 0 && dt < 100) {
+        const instant = ((newProgress - lastProgressRef.current) / dt) * 1000;
+        velocityRef.current = 0.7 * instant + 0.3 * velocityRef.current;
+      }
+      lastMoveTimeRef.current = now;
+      lastProgressRef.current = newProgress;
+
+      progressRef.current = newProgress;
       kick();
     },
     [kick],
@@ -165,6 +199,10 @@ export function usePageCurl(callbacks: {
   const autoTurn = useCallback(
     (dir: CurlDirection) => {
       if (stateRef.current !== "idle") return;
+
+      // Ask the navigation system before starting the animation
+      if (!callbacksRef.current.onNavigate(dir)) return;
+
       cancelRaf();
       directionRef.current = dir;
       progressRef.current = 0;
@@ -172,8 +210,6 @@ export function usePageCurl(callbacks: {
       navigatedRef.current = true;
       setActive(true);
       kick();
-
-      callbacksRef.current.onNavigate(dir);
 
       animateTo(1, AUTO_DURATION, () => finish(true));
     },
