@@ -10,11 +10,11 @@ const WS_MAX_RETRIES: u32 = 10;
 const WS_RETRY_DELAY_MS: u64 = 1000;
 
 #[derive(Debug)]
-struct TestOutcome {
-    test_id: String,
-    status: String,
-    duration_ms: u64,
-    error: Option<String>,
+pub struct TestOutcome {
+    pub test_id: String,
+    pub status: String,
+    pub duration_ms: u64,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -266,7 +266,7 @@ fn run_build_sync(build_command: &str, working_dir: &str) -> Result<(), String> 
     Ok(())
 }
 
-fn resolve_binary(config: &RunnerConfig, project_dir: &str) -> String {
+pub fn resolve_binary(config: &RunnerConfig, project_dir: &str) -> String {
     if !config.binary_path.is_empty() {
         if config.binary_path.starts_with("./") {
             format!("{}/{}", project_dir, &config.binary_path[2..])
@@ -330,7 +330,7 @@ fn resolve_binary(config: &RunnerConfig, project_dir: &str) -> String {
 ///
 /// This is a pragmatic pre-processor -- a full TypeScript compilation pipeline
 /// would be more robust but is out of scope for v0.1.
-fn strip_imports(script: &str) -> String {
+pub fn strip_imports(script: &str) -> String {
     script
         .lines()
         .filter(|line| {
@@ -344,7 +344,7 @@ fn strip_imports(script: &str) -> String {
         .join("\n")
 }
 
-fn generate_junit_xml(
+pub fn generate_junit_xml(
     outcomes: &[TestOutcome],
     total_time: f64,
     path: &str,
@@ -398,7 +398,7 @@ fn generate_junit_xml(
     Ok(())
 }
 
-fn escape_xml(s: &str) -> String {
+pub fn escape_xml(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
