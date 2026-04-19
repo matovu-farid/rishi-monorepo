@@ -4,7 +4,7 @@ import { ThemeType } from "@/themes/common";
 import { Loader2, Menu as MenuIcon, LayoutGrid, Mic, MicOff, CircleX } from "lucide-react";
 import { Document, Outline, pdfjs } from "react-pdf";
 import type { DocumentInitParameters } from "pdfjs-dist/types/src/display/api";
-import { eventBus, EventBusEvent, PlayingState } from "@/utils/bus";
+import { usePlayerStore } from "@/stores/playerStore";
 import { nextPage, previousPage } from "../utils/pageControls";
 
 import { cn } from "@components/lib/utils";
@@ -111,34 +111,40 @@ export function PdfView({
     };
   }, []);
 
-  // Scoped event bus subscriptions for PDF page navigation and highlighting.
+  // Scoped playerStore subscriptions for PDF page navigation and highlighting.
   // These must be inside the component lifecycle so they are cleaned up when
   // navigating away from the PDF reader — otherwise they leak across formats.
   useEffect(() => {
-    const handleNextEmptied = () => {
-      nextPage();
-    };
-    const handlePrevEmptied = () => {
-      previousPage();
-    };
-    const handlePlayingAudio = (paragraph: { index: string }) => {
-      usePdfStore.getState().setIsHighlighting(true);
-      usePdfStore.getState().setHighlightedParagraphIndex(paragraph.index);
-    };
-    const handlePlayingStateChanged = (state: PlayingState) => {
-      usePdfStore.getState().setIsHighlighting(state === PlayingState.Playing);
-    };
+    const unsubPage = usePlayerStore.subscribe(
+      (s) => s.pageRequest,
+      (request) => {
+        if (request === "next") nextPage();
+        if (request === "prev") previousPage();
+        if (request) usePlayerStore.getState().clearPageRequest();
+      }
+    );
 
-    eventBus.on(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
-    eventBus.on(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
-    eventBus.on(EventBusEvent.PLAYING_AUDIO, handlePlayingAudio);
-    eventBus.on(EventBusEvent.PLAYING_STATE_CHANGED, handlePlayingStateChanged);
+    const unsubActive = usePlayerStore.subscribe(
+      (s) => s.activeParagraph,
+      (paragraph) => {
+        if (paragraph) {
+          usePdfStore.getState().setIsHighlighting(true);
+          usePdfStore.getState().setHighlightedParagraphIndex(paragraph.index);
+        }
+      }
+    );
+
+    const unsubState = usePlayerStore.subscribe(
+      (s) => s.playingState,
+      (state) => {
+        usePdfStore.getState().setIsHighlighting(state === "playing");
+      }
+    );
 
     return () => {
-      eventBus.off(EventBusEvent.NEXT_PAGE_PARAGRAPHS_EMPTIED, handleNextEmptied);
-      eventBus.off(EventBusEvent.PREVIOUS_PAGE_PARAGRAPHS_EMPTIED, handlePrevEmptied);
-      eventBus.off(EventBusEvent.PLAYING_AUDIO, handlePlayingAudio);
-      eventBus.off(EventBusEvent.PLAYING_STATE_CHANGED, handlePlayingStateChanged);
+      unsubPage();
+      unsubActive();
+      unsubState();
     };
   }, []);
 
