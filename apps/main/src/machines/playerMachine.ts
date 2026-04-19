@@ -30,7 +30,6 @@ export type PlayerMachineEvent =
   | { type: "PARAGRAPHS_UPDATED"; paragraphs: ParagraphWithIndex[] }
   | { type: "NEXT_PARAGRAPHS_UPDATED"; paragraphs: ParagraphWithIndex[] }
   | { type: "PREV_PARAGRAPHS_UPDATED"; paragraphs: ParagraphWithIndex[] }
-  | { type: "CHAT_STARTED" }
   | { type: "CLEANUP" };
 
 const initialContext: PlayerMachineContext = {
@@ -121,10 +120,6 @@ export const playerMachine = setup({
   initial: "idle",
   context: { ...initialContext },
   on: {
-    CHAT_STARTED: {
-      target: ".stopped",
-      actions: "resetIndex",
-    },
     CLEANUP: {
       target: ".idle",
       actions: "resetAll",
