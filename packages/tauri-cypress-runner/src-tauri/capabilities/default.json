@@ -1,0 +1,9 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for the runner",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "process:default"
+  ]
+}

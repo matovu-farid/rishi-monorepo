@@ -1,0 +1,22 @@
+{
+  "productName": "tauri-cypress",
+  "identifier": "com.tauri-cypress.runner",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1421"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "tauri-cypress",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}
