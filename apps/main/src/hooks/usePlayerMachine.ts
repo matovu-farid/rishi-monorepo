@@ -24,6 +24,7 @@ function mapStateValue(value: string | Record<string, string>): PlayerStoreState
 
 export function usePlayerMachine(bookId: string) {
   const actorRef = useRef<ReturnType<typeof createActor<typeof playerMachine>> | null>(null);
+  const sendRef = useRef<(event: any) => void>(() => {});
 
   useEffect(() => {
     // Create and start the machine actor
@@ -82,6 +83,11 @@ export function usePlayerMachine(bookId: string) {
       const paragraph = ctx.currentParagraphs[ctx.paragraphIndex];
 
       if (state === "loading") {
+        // Clear old highlight immediately — the new paragraph's highlight
+        // will be set once audio loads and state becomes "playing".
+        if (prevState === "playing") {
+          usePlayerStore.setState({ activeParagraph: null });
+        }
         // Entering or re-entering loading (includes retries via reenter: true).
         // Increment generation so any in-flight fetch from a previous attempt
         // is ignored when it resolves.
@@ -182,6 +188,7 @@ export function usePlayerMachine(bookId: string) {
       }
       originalSend(event);
     };
+    sendRef.current = wrappedSend;
     usePlayerStore.getState().setSend(wrappedSend);
 
     // --- 6. AudioService → machine callbacks ---
@@ -233,6 +240,6 @@ export function usePlayerMachine(bookId: string) {
   }, [bookId]);
 
   return {
-    send: actorRef.current?.send.bind(actorRef.current) ?? (() => {}),
+    send: sendRef.current,
   };
 }
