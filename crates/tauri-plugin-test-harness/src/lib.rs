@@ -76,8 +76,11 @@ impl PluginBuilder {
                 app.manage(helper_registry);
 
                 let channel = ControlChannel::new();
+                let channel_for_task = channel.clone();
+                app.manage(channel);
+
                 tauri::async_runtime::spawn(async move {
-                    match channel
+                    match channel_for_task
                         .start(&format!("127.0.0.1:{}", port))
                         .await
                     {

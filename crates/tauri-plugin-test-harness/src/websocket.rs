@@ -10,6 +10,7 @@ use crate::protocol::ControlMessage;
 
 /// WebSocket-based control channel for communication between
 /// the test runner and the app-under-test.
+#[derive(Clone)]
 pub struct ControlChannel {
     outbound_tx: broadcast::Sender<String>,
     inbound_rx: Arc<Mutex<mpsc::Receiver<ControlMessage>>>,

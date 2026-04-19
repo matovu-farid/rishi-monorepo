@@ -413,6 +413,12 @@
           "type": "string",
           "const": "deny-resize-window",
           "markdownDescription": "Denies the resize_window command without any pre-configured scope."
+        },
+        {
+          "description": "Default permissions for the test-harness plugin — allows all commands.\n#### This default permission set includes:\n\n- `allow-register-mock`\n- `allow-clear-mocks`\n- `allow-call-helper`\n- `allow-get-app-state`\n- `allow-resize-window`\n- `allow-minimize-window`\n- `allow-maximize-window`\n- `allow-fullscreen-window`\n- `allow-get-window-position`\n- `allow-get-window-size`",
+          "type": "string",
+          "const": "default",
+          "markdownDescription": "Default permissions for the test-harness plugin — allows all commands.\n#### This default permission set includes:\n\n- `allow-register-mock`\n- `allow-clear-mocks`\n- `allow-call-helper`\n- `allow-get-app-state`\n- `allow-resize-window`\n- `allow-minimize-window`\n- `allow-maximize-window`\n- `allow-fullscreen-window`\n- `allow-get-window-position`\n- `allow-get-window-size`"
         }
       ]
     }

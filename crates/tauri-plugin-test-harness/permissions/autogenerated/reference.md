@@ -1,3 +1,20 @@
+## Default Permission
+
+Default permissions for the test-harness plugin — allows all commands.
+
+#### This default permission set includes the following:
+
+- `allow-register-mock`
+- `allow-clear-mocks`
+- `allow-call-helper`
+- `allow-get-app-state`
+- `allow-resize-window`
+- `allow-minimize-window`
+- `allow-maximize-window`
+- `allow-fullscreen-window`
+- `allow-get-window-position`
+- `allow-get-window-size`
+
 ## Permission Table
 
 <table>

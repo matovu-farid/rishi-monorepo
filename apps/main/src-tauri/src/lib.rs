@@ -49,6 +49,7 @@ pub fn run() {
     #[cfg(not(target_os = "ios"))]
     let _guard = tauri_plugin_sentry::minidump::init(&client);
     // Everything after here runs in only the app process
+    #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -69,6 +70,20 @@ pub fn run() {
     }
 
     builder.setup(|app| {
+            // When the test-harness feature is active, programmatically grant
+            // its default permissions so commands are not silently denied by
+            // the Tauri 2 ACL. This avoids putting a static capability in
+            // capabilities/ which would break non-test builds.
+            #[cfg(feature = "test-harness")]
+            {
+                use tauri::Manager as _;
+                use tauri::ipc::CapabilityBuilder;
+                app.add_capability(
+                    CapabilityBuilder::new("test-harness")
+                        .permission("test-harness:default")
+                        .window("main"),
+                )?;
+            }
             db::setup_database(app.handle())?;
             // Migrate auth secrets from plain-text store.json to OS keychain
             if let Err(e) = commands::migrate_auth_to_keychain(app.handle()) {
