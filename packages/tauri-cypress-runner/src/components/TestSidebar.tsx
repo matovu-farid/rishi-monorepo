@@ -8,7 +8,11 @@ function StatusIcon({ result }: { result?: TestRunnerResult }) {
   return <span className="text-warning text-xs">&#8722;</span>;
 }
 
-export function TestSidebar() {
+interface TestSidebarProps {
+  onRunSingleTest: (filePath: string) => void;
+}
+
+export function TestSidebar({ onRunSingleTest }: TestSidebarProps) {
   const { files, results, selectedFile, selectFile } = useTestStore();
 
   if (files.length === 0) {
@@ -30,11 +34,13 @@ export function TestSidebar() {
           <li key={file.path}>
             <button
               onClick={() => selectFile(file.path)}
+              onDoubleClick={() => onRunSingleTest(file.path)}
               className={`w-full text-left flex items-center gap-1.5 px-1.5 py-1 rounded text-xs transition-colors ${
                 selectedFile === file.path
                   ? "bg-accent/20 text-accent"
                   : "text-text hover:bg-white/5"
               }`}
+              title="Click to select, double-click to run"
             >
               <StatusIcon result={results[file.path]} />
               <span className="truncate">{file.name}</span>

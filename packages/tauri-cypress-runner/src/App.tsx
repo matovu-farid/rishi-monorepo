@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useMachine } from "@xstate/react";
 import { invoke } from "@tauri-apps/api/core";
 import { PanelLayout } from "./components/PanelLayout";
@@ -12,11 +12,13 @@ import { connectionMachine } from "./machines/connectionMachine";
 import { executionMachine } from "./machines/executionMachine";
 import { timeTravelMachine } from "./machines/timeTravelMachine";
 import { useTauriEvent } from "./hooks/useTauriEvents";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useTestStore } from "./stores/testStore";
 import { useIpcStore } from "./stores/ipcStore";
 import { useSnapshotStore } from "./stores/snapshotStore";
 import { useCommandStore } from "./stores/commandStore";
 import type {
+  TestFile,
   TestRunnerResult,
   IpcLogEntry,
   DomSnapshot,
@@ -33,10 +35,12 @@ export function App() {
   const [buildFailed, setBuildFailed] = useState(false);
 
   const addResult = useTestStore((s) => s.addResult);
+  const setFiles = useTestStore((s) => s.setFiles);
   const addIpc = useIpcStore((s) => s.addEntry);
   const addSnapshot = useSnapshotStore((s) => s.addSnapshot);
   const addCommand = useCommandStore((s) => s.addEntry);
 
+  // Subscribe to Tauri backend events
   useTauriEvent<TestRunnerResult>("test-harness://result", useCallback((data) => {
     addResult(data.test_id, data);
     addCommand({
@@ -63,7 +67,6 @@ export function App() {
         snapshotIndex: newIndex,
       });
     }
-    // Keep time-travel max in sync
     if (ttState.value === "active") {
       ttSend({ type: "UPDATE_MAX", maxIndex: newIndex });
     }
@@ -91,6 +94,18 @@ export function App() {
       setBuildFailed(true);
     }
   }, [execSend]));
+
+  // Hot reload: update test file list when files change
+  useTauriEvent<TestFile[]>("test-harness://files-changed", useCallback((files) => {
+    setFiles(files);
+  }, [setFiles]));
+
+  // Start file watcher on mount
+  useEffect(() => {
+    invoke("watch_tests").catch(() => {
+      // File watcher is optional — ignore errors
+    });
+  }, []);
 
   const handleRun = useCallback(async () => {
     try {
@@ -138,12 +153,36 @@ export function App() {
     connSend({ type: "DISCONNECTED" });
   }, [execSend, connSend]);
 
+  const handleRunSingleTest = useCallback(async (filePath: string) => {
+    try {
+      useCommandStore.getState().clear();
+      useSnapshotStore.getState().clear();
+      ttSend({ type: "DEACTIVATE" });
+      await invoke("run_test", { filePath });
+    } catch {
+      // ignore — error will come via event
+    }
+  }, [ttSend]);
+
   const handleActivateTimeTravel = useCallback((snapshotIndex: number) => {
     const maxIndex = useSnapshotStore.getState().snapshots.length - 1;
     if (maxIndex >= 0) {
       ttSend({ type: "ACTIVATE", index: snapshotIndex, maxIndex });
     }
   }, [ttSend]);
+
+  const isRunning = ["building", "launching", "connecting", "running"].includes(String(execState.value));
+
+  // Keyboard shortcuts
+  useKeyboardShortcuts({
+    onRunAll: handleRun,
+    onStop: handleStop,
+    onTimeTravelPrev: () => ttSend({ type: "PREV" }),
+    onTimeTravelNext: () => ttSend({ type: "NEXT" }),
+    onTimeTravelExit: () => ttSend({ type: "DEACTIVATE" }),
+    isTimeTravelActive: ttState.value === "active",
+    isRunning,
+  });
 
   const connectionState = String(connState.value) as "disconnected" | "connecting" | "connected" | "error";
   const executionStateValue = String(execState.value);
@@ -157,9 +196,12 @@ export function App() {
         {timeTravelActive && (
           <span className="text-accent text-xs ml-2">Time Travel</span>
         )}
+        <span className="text-text-muted text-[9px] ml-auto">
+          R run &middot; Esc stop &middot; &#8592;&#8594; navigate
+        </span>
       </div>
       <PanelLayout
-        sidebar={<TestSidebar />}
+        sidebar={<TestSidebar onRunSingleTest={handleRunSingleTest} />}
         preview={
           <AppPreview
             timeTravelActive={timeTravelActive}

@@ -1,5 +1,9 @@
 use crate::types::TestFile;
+use log::info;
+use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
+use std::sync::mpsc;
+use tauri::{AppHandle, Emitter, Runtime};
 use walkdir::WalkDir;
 
 pub fn discover_tests(spec_pattern: &str, base_dir: &str) -> Result<Vec<TestFile>, String> {
@@ -54,6 +58,58 @@ pub fn discover_tests(spec_pattern: &str, base_dir: &str) -> Result<Vec<TestFile
 
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
+}
+
+pub fn watch_tests<R: Runtime>(
+    spec_pattern: &str,
+    base_dir: &str,
+    app: AppHandle<R>,
+) -> Result<(), String> {
+    let base = Path::new(base_dir);
+    let (dir_prefix, _extensions) = parse_pattern(spec_pattern);
+    let watch_dir = base.join(&dir_prefix);
+
+    if !watch_dir.exists() {
+        return Ok(());
+    }
+
+    let (tx, rx) = mpsc::channel();
+    let mut watcher = RecommendedWatcher::new(
+        move |res: Result<notify::Event, notify::Error>| {
+            if let Ok(event) = res {
+                if matches!(
+                    event.kind,
+                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                ) {
+                    let _ = tx.send(());
+                }
+            }
+        },
+        Config::default(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    watcher
+        .watch(&watch_dir, RecursiveMode::Recursive)
+        .map_err(|e| e.to_string())?;
+
+    let pattern = spec_pattern.to_string();
+    let dir = base_dir.to_string();
+    std::thread::spawn(move || {
+        let _watcher = watcher; // keep alive
+        while rx.recv().is_ok() {
+            // Debounce: drain any queued events within 200ms
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            while rx.try_recv().is_ok() {}
+
+            if let Ok(files) = discover_tests(&pattern, &dir) {
+                info!("Test files changed, found {} files", files.len());
+                let _ = app.emit("test-harness://files-changed", files);
+            }
+        }
+    });
+
+    Ok(())
 }
 
 fn parse_pattern(pattern: &str) -> (String, Vec<String>) {

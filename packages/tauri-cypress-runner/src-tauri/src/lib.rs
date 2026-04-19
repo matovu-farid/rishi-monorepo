@@ -31,6 +31,7 @@ pub fn run() {
             commands::connect_ws,
             commands::disconnect_ws,
             commands::run_test,
+            commands::watch_tests,
             commands::run_all_tests,
         ])
         .run(tauri::generate_context!())

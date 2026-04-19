@@ -96,6 +96,14 @@ pub async fn run_test<R: Runtime>(app: AppHandle<R>, file_path: String) -> Resul
 }
 
 #[command]
+pub async fn watch_tests<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let state = app.state::<RunnerState>();
+    let config = state.config.lock().await.clone();
+    let project_dir = state.project_dir.lock().await.clone();
+    test_discovery::watch_tests(&config.spec_pattern, &project_dir, app.clone())
+}
+
+#[command]
 pub async fn run_all_tests<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let state = app.state::<RunnerState>();
     let config = state.config.lock().await.clone();
