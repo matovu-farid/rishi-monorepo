@@ -1,7 +1,10 @@
+pub mod build_runner;
 pub mod commands;
 pub mod config;
+pub mod process;
 pub mod test_discovery;
 pub mod types;
+pub mod websocket_client;
 
 pub fn run() {
     tauri::Builder::default()
