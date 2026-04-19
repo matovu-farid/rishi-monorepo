@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod config;
+pub mod test_discovery;
 pub mod types;
 
 pub fn run() {
