@@ -16,6 +16,8 @@ notify = "7"
 log = "0.4"
 thiserror = "2"
 tungstenite = "0.24"
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3"

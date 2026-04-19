@@ -1,6 +1,6 @@
 use tauri::{command, AppHandle, Manager, Runtime};
 use tokio::sync::Mutex;
-use crate::{build_runner, config, process::AppProcess, test_discovery, types::{RunnerConfig, TestFile}, websocket_client::WsClient};
+use crate::{build_runner, config, process::AppProcess, screenshot, test_discovery, types::{RunnerConfig, TestFile}, websocket_client::WsClient};
 
 pub struct RunnerState {
     pub config: Mutex<RunnerConfig>,
@@ -115,4 +115,68 @@ pub async fn run_all_tests<R: Runtime>(app: AppHandle<R>) -> Result<(), String> 
         state.ws_client.lock().await.send_exec(&script, &file.path).await?;
     }
     Ok(())
+}
+
+#[command]
+pub async fn save_baseline<R: Runtime>(
+    app: AppHandle<R>,
+    base64_data: String,
+    name: String,
+) -> Result<String, String> {
+    let state = app.state::<RunnerState>();
+    let config = state.config.lock().await;
+    let project_dir = state.project_dir.lock().await;
+    let folder = format!("{}/{}/baselines", project_dir, config.screenshots_folder);
+    screenshot::save_screenshot(&base64_data, &folder, &name)
+}
+
+#[command]
+pub async fn compare_screenshot<R: Runtime>(
+    app: AppHandle<R>,
+    base64_data: String,
+    name: String,
+    threshold: Option<f64>,
+) -> Result<screenshot::DiffResult, String> {
+    let state = app.state::<RunnerState>();
+    let config = state.config.lock().await;
+    let project_dir = state.project_dir.lock().await;
+    let baseline_folder = format!("{}/{}/baselines", project_dir, config.screenshots_folder);
+    let diff_folder = format!("{}/{}/diffs", project_dir, config.screenshots_folder);
+    let baseline = screenshot::baseline_path(&baseline_folder, &name);
+
+    if !baseline.exists() {
+        // No baseline -- save as new baseline automatically
+        let path = screenshot::save_screenshot(&base64_data, &baseline_folder, &name)?;
+        return Ok(screenshot::DiffResult {
+            baseline_path: path,
+            actual_path: String::new(),
+            diff_path: None,
+            match_percentage: 1.0,
+            dimensions: (0, 0),
+            diff_pixel_count: 0,
+            passed: true,
+            threshold: threshold.unwrap_or(0.99),
+        });
+    }
+
+    screenshot::diff_screenshots(
+        baseline.to_str().unwrap(),
+        &base64_data,
+        &diff_folder,
+        &name,
+        threshold.unwrap_or(0.99),
+    )
+}
+
+#[command]
+pub async fn update_baseline<R: Runtime>(
+    app: AppHandle<R>,
+    base64_data: String,
+    name: String,
+) -> Result<String, String> {
+    let state = app.state::<RunnerState>();
+    let config = state.config.lock().await;
+    let project_dir = state.project_dir.lock().await;
+    let folder = format!("{}/{}/baselines", project_dir, config.screenshots_folder);
+    screenshot::save_screenshot(&base64_data, &folder, &name)
 }

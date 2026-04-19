@@ -7,3 +7,13 @@ export interface DomSnapshot { label: string; html: string; screenshot?: string;
 export interface CommandEntry { name: string; status: "pending" | "running" | "passed" | "failed"; snapshotIndex: number; duration?: number; error?: string; }
 export interface BuildOutput { line: string; stream: "stdout" | "stderr"; }
 export interface BuildComplete { success: boolean; exit_code: number | null; }
+export interface DiffResult {
+  baseline_path: string;
+  actual_path: string;
+  diff_path: string | null;
+  match_percentage: number;
+  dimensions: [number, number];
+  diff_pixel_count: number;
+  passed: boolean;
+  threshold: number;
+}

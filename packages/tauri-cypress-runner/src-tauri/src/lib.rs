@@ -1,7 +1,9 @@
 pub mod build_runner;
 pub mod commands;
 pub mod config;
+pub mod headless;
 pub mod process;
+pub mod screenshot;
 pub mod test_discovery;
 pub mod types;
 pub mod websocket_client;
@@ -33,6 +35,9 @@ pub fn run() {
             commands::run_test,
             commands::watch_tests,
             commands::run_all_tests,
+            commands::save_baseline,
+            commands::compare_screenshot,
+            commands::update_baseline,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri-cypress-runner");
