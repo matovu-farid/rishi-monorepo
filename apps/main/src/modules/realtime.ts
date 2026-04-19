@@ -41,6 +41,7 @@ export async function startRealtime(bookId: number) {
 
   const agent = new RealtimeAgent({
     name: "Assistant",
+    voice: "alloy",
     instructions: `## Role and Goal
 You are a teacher and educational assistant whose role is to help the user understand the book they are reading. Your goal is to make complex concepts accessible and answer questions in a way that enhances their comprehension of the material.
 
@@ -161,7 +162,23 @@ Ending conversations:
     tools: [bookContextTool, endConvesationTool],
   });
 
-  const session = new RealtimeSession(agent);
+  const session = new RealtimeSession(agent, {
+    model: "gpt-4o-mini-realtime",
+    config: {
+      outputModalities: ["audio"],
+      audio: {
+        input: {
+          format: "pcm16",
+          transcription: {
+            model: "gpt-4o-mini-transcribe",
+          },
+        },
+        output: {
+          format: "pcm16",
+        },
+      },
+    },
+  });
 
   const apiKey = await getRealtimeClientSecret();
 
