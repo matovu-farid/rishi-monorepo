@@ -6,7 +6,26 @@ on:
       - 'v*'
 
 jobs:
+  verify-main:
+    name: Verify tag is on main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Ensure tag points to a commit on main
+        env:
+          TAG_REF: ${{ github.ref }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          TAG_COMMIT=$(git rev-list -n 1 "$TAG_REF")
+          if ! git merge-base --is-ancestor "$TAG_COMMIT" origin/main; then
+            echo "::error::Tag $TAG_NAME does not point to a commit on main. Releases must be created from main."
+            exit 1
+          fi
+
   release:
+    needs: verify-main
     permissions:
       contents: write
     name: Build & Release (${{ matrix.platform }})
