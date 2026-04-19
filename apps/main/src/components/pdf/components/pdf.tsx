@@ -1,10 +1,13 @@
-import React, { useCallback, useEffect, useState, useMemo, useRef } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import { IconButton } from "@components/ui/IconButton";
 import { ThemeType } from "@/themes/common";
-import { Loader2, Menu as MenuIcon, LayoutGrid, Search } from "lucide-react";
+import { Loader2, Menu as MenuIcon, LayoutGrid, Mic, MicOff } from "lucide-react";
+import AIChatOrb from "../../AIChatOrb";
+import { ChatPanel } from "@/components/chat/ChatPanel";
 import { Document, Outline, pdfjs } from "react-pdf";
 import type { DocumentInitParameters } from "pdfjs-dist/types/src/display/api";
-import "../subscriptions/bus.ts";
+import { usePlayerStore } from "@/stores/playerStore";
+import { nextPage, previousPage } from "../utils/pageControls";
 
 import { cn } from "@components/lib/utils";
 
@@ -12,17 +15,7 @@ import { cn } from "@components/lib/utils";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 
-import {
-  hasNavigatedToPageAtom,
-  pageCountAtom,
-  resetParaphStateAtom,
-  setPageNumberAtom,
-  thumbnailSidebarOpenAtom,
-  pdfDocumentProxyAtom,
-  bookNavigationStateAtom,
-  BookNavigationState,
-} from "@components/pdf/atoms/paragraph-atoms";
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { usePdfStore, BookNavigationState } from "@/stores/pdfStore";
 import { ThumbnailSidebar } from "./thumbnail-sidebar";
 import TTSControls from "@/components/TTSControls";
 import {
@@ -42,12 +35,14 @@ import { queryClient } from "@components/providers";
 import { useCurrentPageNumber } from "../hooks/useCurrentPageNumber";
 import { PDFDocumentProxy } from "pdfjs-dist";
 import { useVirualization } from "../hooks/useVirualization";
-import { eventBusLogsAtom } from "@/utils/bus";
 import { TextExtractor } from "./text-extractor.tsx";
 import { updateBookLocation, Book } from "@/generated";
 import { BackButton } from "@components/BackButton.tsx";
-import { SearchPanel } from "@/components/search/SearchPanel";
-import type { BookSearchResult } from "@/hooks/useBookSearch";
+import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
+import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
+import { ReaderTOC } from "@/components/reader/ReaderTOC";
+import { useChatStore } from "@/stores/chatStore";
+import { useRequireAuth } from "@/hooks/useRequireAuth";
 
 // Configure PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -64,13 +59,36 @@ export function PdfView({
 }): React.JSX.Element {
   const [theme] = useState<ThemeType>(ThemeType.White);
   const [tocOpen, setTocOpen] = useState(false);
-  const [thumbOpen, setThumbOpen] = useAtom(thumbnailSidebarOpenAtom);
-  const setPdfDocProxy = useSetAtom(pdfDocumentProxyAtom);
-  const setBookNavState = useSetAtom(bookNavigationStateAtom);
-  useAtomValue(eventBusLogsAtom);
-  const [searchPanelOpen, setSearchPanelOpen] = useState(false);
+  const [bookSyncId, setBookSyncId] = useState<string>("");
+  const [chatPanelOpen, setChatPanelOpen] = useState(false);
+  const thumbOpen = usePdfStore((s) => s.thumbnailSidebarOpen);
+  const setThumbOpen = usePdfStore((s) => s.setThumbnailSidebarOpen);
+  const setPdfDocProxy = usePdfStore((s) => s.setPdfDocumentProxy);
+  const setBookNavState = usePdfStore((s) => s.setBookNavigationState);
 
-  const setPageNumber = useSetAtom(setPageNumberAtom);
+  const setPageNumber = usePdfStore((s) => s.setPageNumber);
+  const currentPageNumber = usePdfStore((s) => s.pageNumber);
+
+  const { requireAuth, AuthDialog } = useRequireAuth();
+  const isChatting = useChatStore((s) => s.isChatting);
+  const setIsChatting = useChatStore((s) => s.setIsChatting);
+  const stopConversation = useChatStore((s) => s.stopConversation);
+
+  const toggleChat = () => {
+    setIsChatting((prev) => !prev);
+  };
+
+  const handleMicClick = () => {
+    requireAuth("voice-input", () => {
+      toggleChat();
+    });
+  };
+
+  const handleStopChat = () => {
+    toggleChat();
+    stopConversation();
+  };
+
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   useScrolling(scrollContainerRef);
 
@@ -78,7 +96,7 @@ export function PdfView({
   useSetupMenu();
   // Ref for the scrollable container
 
-  const resetParaphState = useSetAtom(resetParaphStateAtom);
+  const resetParaphState = usePdfStore((s) => s.resetParagraphState);
 
   useEffect(() => {
     return () => {
@@ -87,6 +105,55 @@ export function PdfView({
       setPdfDocProxy(null);
     };
   }, []);
+
+  // Scoped playerStore subscriptions for PDF page navigation and highlighting.
+  // These must be inside the component lifecycle so they are cleaned up when
+  // navigating away from the PDF reader — otherwise they leak across formats.
+  useEffect(() => {
+    const unsubPage = usePlayerStore.subscribe(
+      (s) => s.pageRequest,
+      (request) => {
+        if (request === "next") nextPage();
+        if (request === "prev") previousPage();
+        if (request) usePlayerStore.getState().clearPageRequest();
+      }
+    );
+
+    const unsubActive = usePlayerStore.subscribe(
+      (s) => s.activeParagraph,
+      (paragraph) => {
+        if (paragraph) {
+          usePdfStore.getState().setIsHighlighting(true);
+          usePdfStore.getState().setHighlightedParagraphIndex(paragraph.index);
+        }
+      }
+    );
+
+    const unsubState = usePlayerStore.subscribe(
+      (s) => s.playingState,
+      (state) => {
+        usePdfStore.getState().setIsHighlighting(state === "playing");
+      }
+    );
+
+    return () => {
+      unsubPage();
+      unsubActive();
+      unsubState();
+    };
+  }, []);
+
+  useEffect(() => {
+    void import("@/modules/kysley").then(({ db }) => {
+      void db.selectFrom("books")
+        .select(["sync_id"])
+        .where("id", "=", book.id)
+        .executeTakeFirst()
+        .then((row) => {
+          if (row?.sync_id) setBookSyncId(row.sync_id);
+        });
+    });
+  }, [book.id]);
 
   // Configure PDF.js options with CDN fallback for better font and image support
   const pdfOptions = useMemo<DocumentInitParameters>(
@@ -143,7 +210,8 @@ export function PdfView({
     }
   }
 
-  const setPageCount = useSetAtom(pageCountAtom);
+  const pageCount = usePdfStore((s) => s.pageCount);
+  const setPageCount = usePdfStore((s) => s.setPageCount);
 
   function onDocumentLoadSuccess(pdf: PDFDocumentProxy): void {
     setPageCount(pdf.numPages);
@@ -152,7 +220,7 @@ export function PdfView({
 
   const pageWidth = isDualPage ? dualPageWidth : pdfWidth;
 
-  const hasNavigatedToPage = useAtomValue(hasNavigatedToPageAtom);
+  const hasNavigatedToPage = usePdfStore((s) => s.hasNavigatedToPage);
   const { virtualizer, virtualItems, pageRefs, handlePageRendered } =
     useVirualization(scrollContainerRef, book);
 
@@ -173,29 +241,6 @@ export function PdfView({
       location: itemPageNumber.toString(),
     });
   }
-
-  const handleSearchNavigate = useCallback((result: BookSearchResult) => {
-    if (result.pageNumber) {
-      setBookNavState(BookNavigationState.Idle);
-      virtualizer.scrollToIndex(result.pageNumber - 1, {
-        align: "start",
-        behavior: "smooth",
-      });
-      setPageNumber(result.pageNumber);
-    }
-  }, [virtualizer, setBookNavState, setPageNumber]);
-
-  // Cmd+F / Ctrl+F keyboard shortcut
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
-        e.preventDefault();
-        setSearchPanelOpen((prev) => !prev);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
   function onThumbnailNavigate(pageNumber: number) {
     // Reset navigation state to Idle so setPageNumber is not a no-op
@@ -228,16 +273,12 @@ export function PdfView({
         </div>
       )}
 
-      {/* Fixed Top Bar */}
-      <div
-        className={cn(
-          "fixed top-0 left-0 right-0  z-50 bg-transparent"
-
-          //theme === ThemeType.Dark ? " border-gray-700" : " border-gray-200"
-        )}
-      >
-        <div className="flex items-center justify-between px-4 pt-5">
+      {/* Fixed Top Bar — auto-hides after 2s */}
+      <ReaderToolbar
+        panelsOpen={tocOpen || thumbOpen}
+        leftContent={
           <IconButton
+            color="inherit"
             onClick={() => setTocOpen(true)}
             className={cn(
               "hover:bg-black/10 dark:hover:bg-white/10 border-none",
@@ -247,32 +288,55 @@ export function PdfView({
           >
             <MenuIcon size={20} />
           </IconButton>
-          <IconButton
-            onClick={() => setThumbOpen(true)}
-            className={cn(
-              "hover:bg-black/10 dark:hover:bg-white/10 border-none",
-              getTextColor()
-            )}
-            aria-label="Open page thumbnails"
-          >
-            <LayoutGrid size={20} />
-          </IconButton>
-          <IconButton
-            onClick={() => setSearchPanelOpen(true)}
-            className={cn(
-              "hover:bg-black/10 dark:hover:bg-white/10 border-none",
-              getTextColor()
-            )}
-            aria-label="Search in book"
-          >
-            <Search size={20} />
-          </IconButton>
+        }
+      >
+        <BackButton />
 
-          <div className="flex items-center gap-2 bg-white">
-            <BackButton />
-          </div>
-        </div>
-      </div>
+        <IconButton
+          color="inherit"
+          onClick={() => setThumbOpen(true)}
+          className={cn(
+            "hover:bg-black/10 dark:hover:bg-white/10 border-none",
+            getTextColor()
+          )}
+          aria-label="Open page thumbnails"
+        >
+          <LayoutGrid size={20} />
+        </IconButton>
+
+        <BookmarkButton
+          bookSyncId={bookSyncId}
+          location={String(currentPageNumber)}
+          label={`Page ${currentPageNumber}`}
+          className={cn(
+            "hover:bg-black/10 dark:hover:bg-white/10 border-none",
+            getTextColor()
+          )}
+        />
+        {!isChatting ? (
+          <button
+            onClick={handleMicClick}
+            className={cn(
+              "p-2 rounded-md hover:bg-black/10 dark:hover:bg-white/10",
+              getTextColor()
+            )}
+            aria-label="Start voice chat"
+          >
+            <Mic size={20} />
+          </button>
+        ) : (
+          <button
+            onClick={handleStopChat}
+            className={cn(
+              "p-2 rounded-md hover:bg-black/10 dark:hover:bg-white/10",
+              getTextColor()
+            )}
+            aria-label="Stop voice chat"
+          >
+            <MicOff size={20} />
+          </button>
+        )}
+      </ReaderToolbar>
 
       {/* Main PDF Viewer Area */}
       <div className="flex items-center justify-center  px-2 py-1">
@@ -327,9 +391,9 @@ export function PdfView({
                   }}
                 >
                   <div
-                    className=" "
+                    className="bg-white shadow-lg overflow-hidden relative"
                     data-page-number={virtualItem.index + 1}
-                    style={{ width: pageWidth ?? "auto" }}
+                    style={{ width: pageWidth ?? "auto", height: virtualItem.size }}
                   >
                     <PageComponent
                       key={`page-${virtualItem.index + 1}`}
@@ -344,6 +408,14 @@ export function PdfView({
                         handlePageRendered(virtualItem.index);
                       }}
                     />
+                    <div className="group/page absolute bottom-1 left-0 right-0 text-center py-1">
+                      <span className="text-xs text-gray-400">
+                        <span>{virtualItem.index + 1}</span>
+                        {pageCount > 0 && (
+                          <span className="hidden group-hover/page:inline"> of {pageCount}</span>
+                        )}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -362,42 +434,51 @@ export function PdfView({
             />
           </div>
         </Document>
-        {/* TTS Controls - Draggable */}
-        {<TTSControls key={book.id.toString()} bookId={book.id.toString()} />}
+        {AuthDialog}
+
+        {/* AI chat orb */}
+        {isChatting && (
+          <AIChatOrb
+            isProcessing={false}
+            onClick={() => setChatPanelOpen((prev) => !prev)}
+          />
+        )}
+
+        {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
+        <div style={{ display: isChatting ? "none" : "contents" }}>
+          <TTSControls key={book.id.toString()} bookId={book.id.toString()} />
+        </div>
+
+        {/* Chat Panel */}
+        <ChatPanel
+          bookId={book.id}
+          bookSyncId={bookSyncId}
+          bookTitle={book.title}
+          rendition={null}
+          open={chatPanelOpen}
+          onOpenChange={setChatPanelOpen}
+        />
       </div>
       {/* TOC Sidebar */}
-      <Sheet open={tocOpen} onOpenChange={setTocOpen}>
-        <SheetContent
-          side="left"
-          className={cn(
-            "w-[300px] sm:w-[400px] p-0",
-            theme === ThemeType.Dark
-              ? "bg-gray-900 border-gray-700"
-              : "bg-white border-gray-200"
-          )}
-        >
-          <SheetHeader
-            className={cn(
-              "p-4 border-b sticky top-0 z-10",
-              theme === ThemeType.Dark
-                ? "border-gray-700 bg-gray-900"
-                : "border-gray-200 bg-white"
-            )}
-          >
-            <SheetTitle className={getTextColor()}>
-              Table of Contents
-            </SheetTitle>
-          </SheetHeader>
+      <ReaderTOC
+        open={tocOpen}
+        onOpenChange={setTocOpen}
+        bookSyncId={bookSyncId}
+        onBookmarkNavigate={(location) => {
+          const pageNum = parseInt(location, 10);
+          if (pageNum > 0) {
+            virtualizer.scrollToIndex(pageNum - 1, { align: "start", behavior: "smooth" });
+            setPageNumber(pageNum);
+            setTocOpen(false);
+          }
+        }}
+        tocContent={
           <div
             className={cn(
-              "overflow-y-auto h-[calc(100vh-73px)]",
-              // Enhanced TOC styling with better padding and hover states
               "[&_a]:block [&_a]:py-3 [&_a]:px-4 [&_a]:cursor-pointer",
               "[&_a]:transition-all [&_a]:duration-200",
               "[&_a]:border-b [&_a]:font-medium",
-              theme === ThemeType.Dark
-                ? "[&_a]:text-gray-300 [&_a:hover]:bg-gray-800 [&_a:hover]:text-white [&_a]:border-gray-800 [&_a:hover]:pl-6"
-                : "[&_a]:text-gray-700 [&_a:hover]:bg-gray-100 [&_a:hover]:text-black [&_a]:border-gray-100 [&_a:hover]:pl-6"
+              "[&_a]:text-gray-700 [&_a:hover]:bg-gray-100 [&_a:hover]:text-black [&_a]:border-gray-100 [&_a:hover]:pl-6"
             )}
           >
             <Document
@@ -407,8 +488,8 @@ export function PdfView({
               <Outline onItemClick={onItemClick} />
             </Document>
           </div>
-        </SheetContent>
-      </Sheet>
+        }
+      />
       {/* Thumbnail Sidebar */}
       <Sheet open={thumbOpen} onOpenChange={setThumbOpen}>
         <SheetContent
@@ -440,14 +521,6 @@ export function PdfView({
           </div>
         </SheetContent>
       </Sheet>
-      {/* Search Panel */}
-      <SearchPanel
-        bookId={book.id}
-        bookFormat="pdf"
-        open={searchPanelOpen}
-        onOpenChange={setSearchPanelOpen}
-        onNavigate={handleSearchNavigate}
-      />
     </div>
   );
 }
