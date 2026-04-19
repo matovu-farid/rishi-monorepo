@@ -11,7 +11,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-toastify";
 import { pageDataToParagraphs } from "../utils/getPageParagraphs";
 import isEqual from "fast-deep-equal";
-import { eventBus, EventBusEvent } from "@/utils/bus";
+import { usePlayerStore } from "@/stores/playerStore";
 import { Book } from "@/generated";
 import { updateBookLocation } from "@/generated";
 
@@ -93,24 +93,15 @@ export function useCurrentPageNumber(
         setCurrentViewParagraphs(newCurrentViewParagraphs);
         setIsTextGot(true);
         // Publish immediately when paragraphs are updated
-        eventBus.publish(
-          EventBusEvent.NEW_PARAGRAPHS_AVAILABLE,
-          newCurrentViewParagraphs
-        );
+        usePlayerStore.getState().setCurrentParagraphs(newCurrentViewParagraphs);
       }
       if (!isEqual(nextViewParagraphs, newNextViewParagraphs)) {
         setNextViewParagraphs(newNextViewParagraphs);
-        eventBus.publish(
-          EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE,
-          newNextViewParagraphs
-        );
+        usePlayerStore.getState().setNextPageParagraphs(newNextViewParagraphs);
       }
       if (!isEqual(previousViewParagraphs, newPreviousViewParagraphs)) {
         setPreviousViewParagraphs(newPreviousViewParagraphs);
-        eventBus.publish(
-          EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE,
-          newPreviousViewParagraphs
-        );
+        usePlayerStore.getState().setPrevPageParagraphs(newPreviousViewParagraphs);
       }
     }, 500);
     return () => clearInterval(interval);
