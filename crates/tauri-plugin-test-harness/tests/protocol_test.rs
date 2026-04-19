@@ -43,6 +43,8 @@ fn test_snapshot_message_serializes() {
             html: "<div>hello</div>".to_string(),
             url: "http://localhost/books/1".to_string(),
             timestamp_ms: 1000,
+            screenshot: None,
+            command_name: None,
         },
     };
     let json = serde_json::to_string(&msg).unwrap();

@@ -50,6 +50,10 @@ pub struct DomSnapshot {
     pub html: String,
     pub url: String,
     pub timestamp_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screenshot: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

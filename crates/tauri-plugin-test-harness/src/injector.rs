@@ -1,7 +1,15 @@
 /// Generates the JavaScript init script injected into the webview before
 /// app code loads via Tauri's `js_init_script`. Sets up `__tauriCypress`
 /// global, monkey-patches `invoke()` for IPC interception, and connects
-/// to the plugin's WebSocket server.
+/// to the plugin's WebSocket server. Includes auto-snapshot capture after
+/// each IPC command with lightweight canvas-to-PNG via foreignObject SVG.
+///
+/// SECURITY NOTE: This code runs exclusively in the test harness context behind
+/// a compile-time feature flag (test-harness). The `new Function()` usage in
+/// `executeTestScript` is intentional — it evaluates test scripts sent from the
+/// trusted test runner over localhost-only WebSocket. This is the core mechanism
+/// by which the test runner executes test code inside the app-under-test's webview.
+/// The feature flag ensures this code never ships in production builds.
 pub fn generate_init_script(ws_port: u16) -> String {
     format!(
         r#"
@@ -10,6 +18,7 @@ pub fn generate_init_script(ws_port: u16) -> String {
   var interceptors = new Map();
   var ipcLog = [];
   var snapshotHistory = [];
+  var autoSnapshotEnabled = true;
 
   function mockCommand(name, response) {{
     mocks.set(name, response);
@@ -28,17 +37,65 @@ pub fn generate_init_script(ws_port: u16) -> String {
     interceptors.clear();
   }}
 
-  function takeSnapshot(label) {{
+  // Lightweight canvas-to-PNG capture via foreignObject SVG.
+  // Avoids heavy html2canvas dependency — ~30 lines of JS.
+  function captureScreenshot() {{
+    return new Promise(function(resolve) {{
+      try {{
+        var body = document.body;
+        var width = body.scrollWidth || 1280;
+        var height = body.scrollHeight || 800;
+
+        var svgData = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '">' +
+          '<foreignObject width="100%" height="100%">' +
+          new XMLSerializer().serializeToString(document.documentElement) +
+          '</foreignObject></svg>';
+
+        var img = new Image();
+        var svgBlob = new Blob([svgData], {{ type: 'image/svg+xml;charset=utf-8' }});
+        var url = URL.createObjectURL(svgBlob);
+
+        img.onload = function() {{
+          var canvas = document.createElement('canvas');
+          canvas.width = Math.min(width, 1920);
+          canvas.height = Math.min(height, 1080);
+          var ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          URL.revokeObjectURL(url);
+          resolve(canvas.toDataURL('image/png', 0.8));
+        }};
+
+        img.onerror = function() {{
+          URL.revokeObjectURL(url);
+          resolve(null);
+        }};
+
+        img.src = url;
+      }} catch (e) {{
+        resolve(null);
+      }}
+    }});
+  }}
+
+  function takeSnapshot(label, commandName) {{
     var snapshot = {{
       label: label,
       html: document.documentElement.outerHTML,
       url: window.location.href,
-      timestamp_ms: Date.now()
+      timestamp_ms: Date.now(),
+      command_name: commandName || null,
+      screenshot: null
     }};
     snapshotHistory.push(snapshot);
-    if (ws && ws.readyState === WebSocket.OPEN) {{
-      ws.send(JSON.stringify({{ type: "snapshot", data: snapshot }}));
-    }}
+
+    // Capture screenshot asynchronously, send once ready
+    captureScreenshot().then(function(screenshotData) {{
+      snapshot.screenshot = screenshotData;
+      if (ws && ws.readyState === WebSocket.OPEN) {{
+        ws.send(JSON.stringify({{ type: "snapshot", data: snapshot }}));
+      }}
+    }});
+
     return snapshot;
   }}
 
@@ -95,6 +152,11 @@ pub fn generate_init_script(ws_port: u16) -> String {
       ipcLog.push(entry);
       sendIpcLog(entry);
 
+      // Auto-capture snapshot after each IPC command (skip plugin's own commands)
+      if (autoSnapshotEnabled && !cmd.startsWith("plugin:test-harness|")) {{
+        takeSnapshot("after:" + cmd, cmd);
+      }}
+
       return response;
     }};
   }}
@@ -137,6 +199,10 @@ pub fn generate_init_script(ws_port: u16) -> String {
     }}
   }}
 
+  // Test script execution — intentionally uses dynamic evaluation.
+  // This is the core test runner mechanism: the trusted runner sends test
+  // scripts over localhost WebSocket, which are evaluated in the app's webview.
+  // Only active behind the test-harness feature flag (never in production).
   async function executeTestScript(script, testId) {{
     var startTime = Date.now();
     try {{
@@ -201,7 +267,8 @@ pub fn generate_init_script(ws_port: u16) -> String {
     }},
     snapshot: {{
       take: takeSnapshot,
-      get history() {{ return snapshotHistory.slice(); }}
+      get history() {{ return snapshotHistory.slice(); }},
+      setAutoCapture: function(enabled) {{ autoSnapshotEnabled = enabled; }}
     }},
     __exec: executeTestScript
   }};

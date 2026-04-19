@@ -16,7 +16,11 @@ function formatDuration(ms?: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function CommandLog() {
+interface CommandLogProps {
+  onActivateTimeTravel: (snapshotIndex: number) => void;
+}
+
+export function CommandLog({ onActivateTimeTravel }: CommandLogProps) {
   const { entries, selectedIndex, selectEntry } = useCommandStore();
 
   if (entries.length === 0) {
@@ -37,7 +41,12 @@ export function CommandLog() {
         {entries.map((entry, i) => (
           <li key={i}>
             <button
-              onClick={() => selectEntry(i)}
+              onClick={() => {
+                selectEntry(i);
+                if (entry.snapshotIndex >= 0) {
+                  onActivateTimeTravel(entry.snapshotIndex);
+                }
+              }}
               className={`w-full text-left flex items-center gap-1.5 px-1.5 py-1 rounded text-xs transition-colors ${
                 selectedIndex === i
                   ? "bg-accent/20 text-accent"
@@ -46,6 +55,9 @@ export function CommandLog() {
             >
               <CmdStatusIcon status={entry.status} />
               <span className="truncate flex-1 font-mono">{entry.name}</span>
+              {entry.snapshotIndex >= 0 && (
+                <span className="text-text-muted text-[9px] shrink-0" title="Has snapshot">&#128247;</span>
+              )}
               {entry.duration != null && (
                 <span className="text-text-muted text-[10px] shrink-0">{formatDuration(entry.duration)}</span>
               )}

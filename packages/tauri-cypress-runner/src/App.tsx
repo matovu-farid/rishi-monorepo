@@ -10,6 +10,7 @@ import { StatusBar } from "./components/StatusBar";
 import { BuildOutput } from "./components/BuildOutput";
 import { connectionMachine } from "./machines/connectionMachine";
 import { executionMachine } from "./machines/executionMachine";
+import { timeTravelMachine } from "./machines/timeTravelMachine";
 import { useTauriEvent } from "./hooks/useTauriEvents";
 import { useTestStore } from "./stores/testStore";
 import { useIpcStore } from "./stores/ipcStore";
@@ -26,6 +27,7 @@ import type {
 export function App() {
   const [connState, connSend] = useMachine(connectionMachine);
   const [execState, execSend] = useMachine(executionMachine);
+  const [ttState, ttSend] = useMachine(timeTravelMachine);
   const [buildLines, setBuildLines] = useState<BuildOutputLine[]>([]);
   const [buildVisible, setBuildVisible] = useState(false);
   const [buildFailed, setBuildFailed] = useState(false);
@@ -53,14 +55,19 @@ export function App() {
 
   useTauriEvent<DomSnapshot>("test-harness://snapshot", useCallback((data) => {
     addSnapshot(data);
+    const newIndex = useSnapshotStore.getState().snapshots.length - 1;
     if (data.command_name) {
       addCommand({
         name: data.command_name,
         status: "passed",
-        snapshotIndex: useSnapshotStore.getState().snapshots.length - 1,
+        snapshotIndex: newIndex,
       });
     }
-  }, [addSnapshot, addCommand]));
+    // Keep time-travel max in sync
+    if (ttState.value === "active") {
+      ttSend({ type: "UPDATE_MAX", maxIndex: newIndex });
+    }
+  }, [addSnapshot, addCommand, ttState.value, ttSend]));
 
   useTauriEvent("test-harness://connected", useCallback(() => {
     connSend({ type: "CONNECTED" });
@@ -91,6 +98,7 @@ export function App() {
       useSnapshotStore.getState().clear();
       useCommandStore.getState().clear();
       useTestStore.getState().clearResults();
+      ttSend({ type: "DEACTIVATE" });
 
       execSend({ type: "START" });
       setBuildLines([]);
@@ -117,7 +125,7 @@ export function App() {
         execSend({ type: "CONNECT_FAILED", error: msg });
       }
     }
-  }, [execSend, connSend, execState.value]);
+  }, [execSend, connSend, ttSend, execState.value]);
 
   const handleStop = useCallback(async () => {
     try {
@@ -130,20 +138,40 @@ export function App() {
     connSend({ type: "DISCONNECTED" });
   }, [execSend, connSend]);
 
+  const handleActivateTimeTravel = useCallback((snapshotIndex: number) => {
+    const maxIndex = useSnapshotStore.getState().snapshots.length - 1;
+    if (maxIndex >= 0) {
+      ttSend({ type: "ACTIVATE", index: snapshotIndex, maxIndex });
+    }
+  }, [ttSend]);
+
   const connectionState = String(connState.value) as "disconnected" | "connecting" | "connected" | "error";
   const executionStateValue = String(execState.value);
+  const timeTravelActive = ttState.value === "active";
 
   return (
     <div className="flex flex-col h-screen relative">
       <div className="h-9 bg-surface border-b border-border flex items-center px-3 gap-2">
         <span className="text-success">&#9654;</span>
         <span className="text-text text-sm font-medium">tauri-cypress</span>
+        {timeTravelActive && (
+          <span className="text-accent text-xs ml-2">Time Travel</span>
+        )}
       </div>
       <PanelLayout
         sidebar={<TestSidebar />}
-        preview={<AppPreview />}
+        preview={
+          <AppPreview
+            timeTravelActive={timeTravelActive}
+            timeTravelIndex={ttState.context.snapshotIndex}
+            timeTravelMax={ttState.context.maxIndex}
+            onPrev={() => ttSend({ type: "PREV" })}
+            onNext={() => ttSend({ type: "NEXT" })}
+            onDeactivate={() => ttSend({ type: "DEACTIVATE" })}
+          />
+        }
         inspector={<IpcInspector />}
-        commandLog={<CommandLog />}
+        commandLog={<CommandLog onActivateTimeTravel={handleActivateTimeTravel} />}
       />
       <StatusBar
         connectionState={connectionState}

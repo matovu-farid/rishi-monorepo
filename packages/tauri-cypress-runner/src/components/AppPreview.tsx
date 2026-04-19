@@ -1,10 +1,31 @@
 import { useSnapshotStore } from "../stores/snapshotStore";
 
-export function AppPreview() {
-  const { snapshots, viewMode } = useSnapshotStore();
-  const latest = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
+interface AppPreviewProps {
+  timeTravelActive: boolean;
+  timeTravelIndex: number;
+  timeTravelMax: number;
+  onPrev: () => void;
+  onNext: () => void;
+  onDeactivate: () => void;
+}
 
-  if (!latest) {
+export function AppPreview({
+  timeTravelActive,
+  timeTravelIndex,
+  timeTravelMax,
+  onPrev,
+  onNext,
+  onDeactivate,
+}: AppPreviewProps) {
+  const { snapshots, viewMode, setViewMode } = useSnapshotStore();
+
+  const snapshot = timeTravelActive
+    ? snapshots[timeTravelIndex] ?? null
+    : snapshots.length > 0
+      ? snapshots[snapshots.length - 1]
+      : null;
+
+  if (!snapshot) {
     return (
       <div className="h-full flex items-center justify-center">
         <div className="text-center">
@@ -15,42 +36,61 @@ export function AppPreview() {
     );
   }
 
-  if (viewMode === "screenshot" && latest.screenshot) {
-    return (
-      <div className="h-full flex flex-col">
-        <div className="flex items-center justify-between px-2 py-1 border-b border-border">
+  return (
+    <div className="h-full flex flex-col">
+      <div className="flex items-center justify-between px-2 py-1 border-b border-border">
+        <div className="flex items-center gap-2">
           <span className="text-[9px] uppercase text-text-muted tracking-wider">
-            {latest.label || "App Preview"}
+            {snapshot.label || "App Preview"}
           </span>
-          <span className="text-[9px] text-text-muted">{latest.url}</span>
+          {timeTravelActive && (
+            <span className="text-[9px] text-accent">
+              {timeTravelIndex + 1}/{timeTravelMax + 1}
+            </span>
+          )}
         </div>
+        <div className="flex items-center gap-2">
+          {timeTravelActive && (
+            <>
+              <button onClick={onPrev} disabled={timeTravelIndex <= 0} className="text-[10px] text-text-muted hover:text-text disabled:opacity-30">
+                &#9664;
+              </button>
+              <button onClick={onNext} disabled={timeTravelIndex >= timeTravelMax} className="text-[10px] text-text-muted hover:text-text disabled:opacity-30">
+                &#9654;
+              </button>
+              <button onClick={onDeactivate} className="text-[9px] text-text-muted hover:text-text">
+                &#10005; Exit
+              </button>
+            </>
+          )}
+          <button
+            onClick={() => setViewMode(viewMode === "screenshot" ? "html" : "screenshot")}
+            className="text-[9px] text-text-muted hover:text-accent"
+          >
+            {viewMode === "screenshot" ? "HTML" : "Screenshot"}
+          </button>
+          <span className="text-[9px] text-text-muted">{snapshot.url}</span>
+        </div>
+      </div>
+
+      {viewMode === "screenshot" && snapshot.screenshot ? (
         <div className="flex-1 overflow-auto flex items-center justify-center bg-black/20 p-2">
           <img
-            src={latest.screenshot}
+            src={snapshot.screenshot}
             alt="App screenshot"
             className="max-w-full max-h-full object-contain rounded shadow-lg"
           />
         </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between px-2 py-1 border-b border-border">
-        <span className="text-[9px] uppercase text-text-muted tracking-wider">
-          {latest.label || "App Preview"} (HTML)
-        </span>
-        <span className="text-[9px] text-text-muted">{latest.url}</span>
-      </div>
-      <div className="flex-1 overflow-auto">
-        <iframe
-          srcDoc={latest.html}
-          title="App snapshot"
-          className="w-full h-full border-none bg-white"
-          sandbox="allow-same-origin"
-        />
-      </div>
+      ) : (
+        <div className="flex-1 overflow-auto">
+          <iframe
+            srcDoc={snapshot.html}
+            title="App snapshot"
+            className="w-full h-full border-none bg-white"
+            sandbox="allow-same-origin"
+          />
+        </div>
+      )}
     </div>
   );
 }
