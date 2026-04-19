@@ -8,7 +8,7 @@ import {
   getNextViewParagraphs,
   getPreviousViewParagraphs,
 } from "@/epubwrapper";
-import { eventBus, EventBusEvent } from "@/utils/bus";
+import { usePlayerStore } from "@/stores/playerStore";
 import { processEpubJob } from "@/modules/process_epub";
 import { hasSavedEpubData } from "@/generated";
 import { useChatStore } from "./chatStore";
@@ -114,7 +114,7 @@ useEpubStore.subscribe(
       text: p.text,
       index: p.cfiRange,
     }));
-    eventBus.publish(EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, paragraphs);
+    usePlayerStore.getState().setCurrentParagraphs(paragraphs);
 
     // Next/prev pages — debounce so rapid page flips don't trigger wasted fetches
     if (_prefetchTimer) clearTimeout(_prefetchTimer);
@@ -128,7 +128,7 @@ useEpubStore.subscribe(
           text: p.text,
           index: p.cfiRange,
         }));
-        eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, mapped);
+        usePlayerStore.getState().setNextPageParagraphs(mapped);
       });
 
       void getPreviousViewParagraphs(r).then((prevParagraphs) => {
@@ -136,7 +136,7 @@ useEpubStore.subscribe(
           text: p.text,
           index: p.cfiRange,
         }));
-        eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, mapped);
+        usePlayerStore.getState().setPrevPageParagraphs(mapped);
       });
     }, 300);
   },
@@ -161,7 +161,7 @@ export function publishCurrentEpubParagraphs() {
     text: p.text,
     index: p.cfiRange,
   }));
-  eventBus.publish(EventBusEvent.NEW_PARAGRAPHS_AVAILABLE, paragraphs);
+  usePlayerStore.getState().setCurrentParagraphs(paragraphs);
 
   // Use a separate timer so re-publish doesn't cancel the subscription's debounce
   if (_publishPrefetchTimer) clearTimeout(_publishPrefetchTimer);
@@ -174,7 +174,7 @@ export function publishCurrentEpubParagraphs() {
         text: p.text,
         index: p.cfiRange,
       }));
-      eventBus.publish(EventBusEvent.NEXT_VIEW_PARAGRAPHS_AVAILABLE, mapped);
+      usePlayerStore.getState().setNextPageParagraphs(mapped);
     });
 
     void getPreviousViewParagraphs(r).then((prevParagraphs) => {
@@ -182,7 +182,7 @@ export function publishCurrentEpubParagraphs() {
         text: p.text,
         index: p.cfiRange,
       }));
-      eventBus.publish(EventBusEvent.PREVIOUS_VIEW_PARAGRAPHS_AVAILABLE, mapped);
+      usePlayerStore.getState().setPrevPageParagraphs(mapped);
     });
   }, 300);
 }
