@@ -200,10 +200,15 @@ export function usePlayerMachine(bookId: string) {
       actor.send({ type: "AUDIO_ENDED" });
     };
     audioService.onAudioError = (error) => {
-      actor.send({
-        type: "AUDIO_ERROR",
-        error: error?.message ?? "Audio playback error",
-      });
+      const code = error?.code;
+      const codeNames: Record<number, string> = {
+        1: "MEDIA_ERR_ABORTED",
+        2: "MEDIA_ERR_NETWORK",
+        3: "MEDIA_ERR_DECODE",
+        4: "MEDIA_ERR_SRC_NOT_SUPPORTED",
+      };
+      const msg = error?.message || (code ? codeNames[code] : null) || "Audio playback error";
+      actor.send({ type: "AUDIO_ERROR", error: msg });
     };
 
     // --- Start actor and initialize ---
