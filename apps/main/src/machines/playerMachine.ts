@@ -146,6 +146,30 @@ export const playerMachine = setup({
             target: "waitingForParagraphs",
           },
         ],
+        NEXT: [
+          {
+            guard: "hasMoreParagraphs",
+            target: "loading",
+            actions: "advanceIndex",
+          },
+          {
+            guard: "hasParagraphs",
+            target: "waitingForParagraphs",
+            actions: "setDirectionForward",
+          },
+        ],
+        PREV: [
+          {
+            guard: "isFirstParagraph",
+            target: "waitingForParagraphs",
+            actions: "setDirectionBackward",
+          },
+          {
+            guard: "hasParagraphs",
+            target: "loading",
+            actions: "retreatIndex",
+          },
+        ],
         PARAGRAPHS_UPDATED: [
           {
             guard: "wasTimedOut",
@@ -183,6 +207,14 @@ export const playerMachine = setup({
             actions: "logError",
           },
         ],
+        PAUSE: {
+          target: "paused",
+        },
+        PARAGRAPHS_UPDATED: {
+          target: "loading",
+          actions: ["storeParagraphs", "resetIndex"],
+          reenter: true,
+        },
         STOP: {
           target: "stopped",
           actions: "resetIndex",
@@ -256,6 +288,28 @@ export const playerMachine = setup({
           target: "stopped",
           actions: "resetIndex",
         },
+        NEXT: [
+          {
+            guard: "hasMoreParagraphs",
+            target: "loading",
+            actions: "advanceIndex",
+          },
+          {
+            target: "waitingForParagraphs",
+            actions: "setDirectionForward",
+          },
+        ],
+        PREV: [
+          {
+            guard: "isFirstParagraph",
+            target: "waitingForParagraphs",
+            actions: "setDirectionBackward",
+          },
+          {
+            target: "loading",
+            actions: "retreatIndex",
+          },
+        ],
         NEXT_PARAGRAPHS_UPDATED: {
           actions: "storeNextParagraphs",
         },
@@ -311,17 +365,35 @@ export const playerMachine = setup({
 
     error: {
       on: {
-        NEXT: {
-          target: "loading",
-          actions: "advanceIndex",
-        },
+        NEXT: [
+          {
+            guard: "hasMoreParagraphs",
+            target: "loading",
+            actions: ["advanceIndex", "clearErrors"],
+          },
+          {
+            target: "waitingForParagraphs",
+            actions: ["setDirectionForward", "clearErrors"],
+          },
+        ],
+        PREV: [
+          {
+            guard: "isFirstParagraph",
+            target: "waitingForParagraphs",
+            actions: ["setDirectionBackward", "clearErrors"],
+          },
+          {
+            target: "loading",
+            actions: ["retreatIndex", "clearErrors"],
+          },
+        ],
         STOP: {
           target: "stopped",
-          actions: "resetIndex",
+          actions: ["resetIndex", "clearErrors"],
         },
         PLAY: {
           target: "loading",
-          actions: assign({ retryCount: 0 }),
+          actions: assign({ retryCount: 0, errors: [] as string[] }),
         },
       },
     },
