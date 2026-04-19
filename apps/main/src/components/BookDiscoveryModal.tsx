@@ -94,11 +94,11 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
       unlistenRefs.current = [unlistenResult, unlistenProgress, unlistenComplete]
 
       if (!cancelled) {
-        startScan('default')
+        void startScan('default')
       }
     }
 
-    setup()
+    void setup()
 
     return () => {
       cancelled = true
@@ -111,7 +111,7 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
     if (newMode === mode) return
     setMode(newMode)
     await invoke('cancel_scan').catch(() => {})
-    startScan(newMode)
+    void startScan(newMode)
   }
 
   const handleClose = async () => {
