@@ -27,15 +27,24 @@ const bookGuardrails: RealtimeOutputGuardrail[] = [
   {
     name: "Book Guardrail",
     async execute({ agentOutput }) {
-      const result = await run(guardrailAgent, agentOutput);
-      const output = result.finalOutput;
-      // Trigger tripwire only if output is neither relevant to book NOR small talk
-      const tripwireTriggered =
-        !(output?.isRelevantToBook ?? false) && !(output?.isSmallTalk ?? false);
-      return {
-        outputInfo: output,
-        tripwireTriggered,
-      };
+      try {
+        const result = await run(guardrailAgent, agentOutput);
+        const output = result.finalOutput;
+        // Trigger tripwire only if output is neither relevant to book NOR small talk
+        const tripwireTriggered =
+          !(output?.isRelevantToBook ?? false) && !(output?.isSmallTalk ?? false);
+        return {
+          outputInfo: output,
+          tripwireTriggered,
+        };
+      } catch (err) {
+        // Fail open — a broken guardrail should not block or disrupt the voice session
+        console.warn("[Book Guardrail] failed, allowing output:", err);
+        return {
+          outputInfo: null,
+          tripwireTriggered: false,
+        };
+      }
     },
   },
 ];
