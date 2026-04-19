@@ -1,7 +1,6 @@
 import { getContextForQuery, getRealtimeClientSecret } from "@/generated";
 import {
   RealtimeAgent,
-  RealtimeOutputGuardrail,
   RealtimeSession,
   tool,
 } from "@openai/agents/realtime";
@@ -53,18 +52,12 @@ async function checkGuardrail(agentOutput: string): Promise<boolean> {
   }
 }
 
-const bookGuardrails: RealtimeOutputGuardrail[] = [
-  {
-    name: "Book Guardrail",
-    async execute({ agentOutput }) {
-      const tripwireTriggered = await checkGuardrail(agentOutput);
-      return {
-        outputInfo: { tripwireTriggered },
-        tripwireTriggered,
-      };
-    },
-  },
-];
+// Guardrails are evaluated out-of-band after each response completes.
+// Running them inside RealtimeSession (even with debounceTextLength: -1)
+// causes the SDK to call interrupt() on a potentially disconnected
+// WebRTC channel, producing unhandled rejections that stutter audio.
+// Instead we listen to the session's 'response' event and classify
+// asynchronously — see postResponseGuardrail() below.
 export async function startRealtime(bookId: number) {
   const bookContextTool = tool({
     name: "bookContext",
@@ -217,15 +210,7 @@ Ending conversations:
     tools: [bookContextTool, endConvesationTool],
   });
 
-  const session = new RealtimeSession(agent, {
-    outputGuardrails: bookGuardrails,
-    outputGuardrailSettings: {
-      // -1 = run guardrail only once after the full transcript is available.
-      // Running mid-stream requires network hops (worker → OpenAI) that
-      // cause main-thread contention and stutter the WebRTC audio.
-      debounceTextLength: -1,
-    },
-  });
+  const session = new RealtimeSession(agent);
 
   const apiKey = await getRealtimeClientSecret();
 
@@ -233,6 +218,18 @@ Ending conversations:
   await session.connect({
     apiKey,
   });
+  // Out-of-band guardrail: classify each completed response asynchronously.
+  // This never touches the WebRTC channel so it can't stutter audio.
+  session.on("audio_done", (ev: { transcript?: string }) => {
+    const transcript = ev.transcript;
+    if (!transcript) return;
+    void checkGuardrail(transcript).then((tripped) => {
+      if (tripped) {
+        console.warn("[Book Guardrail] off-topic response detected:", transcript.slice(0, 100));
+      }
+    });
+  });
+
   // Trigger an initial greeting so the assistant speaks first
   session.sendMessage({
     type: "message",
