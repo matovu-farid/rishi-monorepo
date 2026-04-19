@@ -157,3 +157,6 @@ export async function unzip(params: types.UnzipParams): Promise<types.PathBuf> {
   return invoke('unzip', params);
 }
 
+export async function searchBookText(params: types.SearchBookTextParams): Promise<types.TextSearchResult[]> {
+  return invoke('search_book_text', params);
+}
