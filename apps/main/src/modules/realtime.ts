@@ -5,46 +5,63 @@ import {
   RealtimeSession,
   tool,
 } from "@openai/agents/realtime";
-import { Agent, run } from "@openai/agents";
 import { z } from "zod";
 import { useChatStore } from "@/stores/chatStore";
+import { getAuthToken } from "@/modules/auth";
 
-const guardrailAgent = new Agent({
-  name: "Guardrail check",
-  instructions: `Analyze the agent's output and classify it into one of three categories:
+const WORKER_URL = "https://rishi-worker.faridmato90.workers.dev";
+
+const GUARDRAIL_SYSTEM_PROMPT = `Analyze the agent's output and classify it into one of three categories:
 1. Relevant to the book: The output is answering questions, explaining concepts, or discussing content related to the book the user is reading.
-2. Small talk: The output is engaging in friendly conversation, greetings, acknowledgments, pleasantries, or casual responses that are part of natural conversation flow. Examples include: greetings, saying "you're welcome", "that's great", "I'm glad to help", casual acknowledgments, etc.
+2. Small talk: The output is engaging in friendly conversation, greetings, acknowledgments, pleasantries, or casual responses that are part of natural conversation flow.
 3. Off-topic: The output is discussing something completely unrelated to the book AND is not small talk.
 
-Classify the output accordingly.`,
-  outputType: z.object({
-    isRelevantToBook: z.boolean(),
-    isSmallTalk: z.boolean(),
-  }),
-});
+Respond with JSON: { "isRelevantToBook": boolean, "isSmallTalk": boolean }`;
+
+/**
+ * Classify AI output via Worker LLM completions endpoint.
+ * Fails open on any error to avoid blocking realtime audio.
+ */
+async function checkGuardrail(agentOutput: string): Promise<boolean> {
+  try {
+    const token = await getAuthToken();
+    const response = await fetch(`${WORKER_URL}/api/text/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        input: [
+          { role: "system", content: GUARDRAIL_SYSTEM_PROMPT },
+          { role: "user", content: agentOutput },
+        ],
+      }),
+    });
+
+    if (!response.ok) return false;
+
+    const text = (await response.json()) as string;
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return false;
+
+    const result = JSON.parse(jsonMatch[0]);
+    return !(result.isRelevantToBook ?? false) && !(result.isSmallTalk ?? false);
+  } catch (err) {
+    console.warn("[Book Guardrail] classification failed, failing open:", err);
+    return false;
+  }
+}
 
 const bookGuardrails: RealtimeOutputGuardrail[] = [
   {
     name: "Book Guardrail",
     async execute({ agentOutput }) {
-      try {
-        const result = await run(guardrailAgent, agentOutput);
-        const output = result.finalOutput;
-        // Trigger tripwire only if output is neither relevant to book NOR small talk
-        const tripwireTriggered =
-          !(output?.isRelevantToBook ?? false) && !(output?.isSmallTalk ?? false);
-        return {
-          outputInfo: output,
-          tripwireTriggered,
-        };
-      } catch (err) {
-        // Fail open — a broken guardrail should not block or disrupt the voice session
-        console.warn("[Book Guardrail] failed, allowing output:", err);
-        return {
-          outputInfo: null,
-          tripwireTriggered: false,
-        };
-      }
+      const tripwireTriggered = await checkGuardrail(agentOutput);
+      return {
+        outputInfo: { tripwireTriggered },
+        tripwireTriggered,
+      };
     },
   },
 ];
