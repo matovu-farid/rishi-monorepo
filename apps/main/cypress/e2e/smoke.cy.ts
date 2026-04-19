@@ -1,18 +1,18 @@
-import { describe, it, cy, beforeEach, afterEach } from 'tauri-cypress'
+// Smoke test: verify app loads
+//
+// NOTE: import is stripped by the headless runner; __tauriCypress is injected
+// as the function parameter by the webview's executeTestScript.
+export {}
 
-describe('Rishi App Smoke Test', () => {
-  beforeEach(() => {
-    cy.visit('/')
-  })
+const { bridge, snapshot } = __tauriCypress;
 
-  it('app loads and shows the main UI', () => {
-    cy.get('#root').should('exist')
-    cy.get('#root').should('be.visible')
-  })
+// Wait for DOM to be ready
+await new Promise(r => setTimeout(r, 1000));
 
-  it('can navigate the app shell', () => {
-    cy.get('#root').should('exist')
-    cy.wait(500)
-    cy.screenshot('app-loaded')
-  })
-})
+// Verify root element exists
+const root = document.getElementById('root');
+if (!root) throw new Error('Root element not found');
+if (root.offsetHeight === 0) throw new Error('Root element not visible');
+
+// Take a snapshot of the loaded app
+snapshot.take('app-loaded');
