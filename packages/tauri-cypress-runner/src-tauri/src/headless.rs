@@ -54,34 +54,32 @@ pub async fn run_headless(project_dir: &str, config_path: Option<&str>) -> Resul
         build_start.elapsed().as_secs_f64()
     );
 
-    // Start dev server if configured (debug builds expect devUrl)
-    let mut dev_server: Option<std::process::Child> = None;
-    if !config.frontend_build_command.is_empty() {
-        println!("  Starting dev server...");
-        let child = std::process::Command::new("sh")
-            .arg("-c")
-            .arg("pnpm dev")
-            .current_dir(project_dir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| format!("Failed to start dev server: {}", e))?;
-        dev_server = Some(child);
-        // Wait for dev server to be ready
-        println!("  Waiting for dev server...");
-        for i in 0..30 {
-            if std::net::TcpStream::connect("127.0.0.1:1420").is_ok() {
-                println!("  Dev server ready ({}s)", i + 1);
-                break;
-            }
-            if i == 29 {
-                if let Some(ref mut child) = dev_server {
-                    let _ = child.kill();
-                }
-                return Err("Dev server failed to start within 30s".to_string());
-            }
-            std::thread::sleep(std::time::Duration::from_secs(1));
+    // Build frontend to dist/ then serve it on :1420 (debug builds expect devUrl)
+    println!("  Building frontend...");
+    run_build_sync(&config.frontend_build_command, project_dir)?;
+
+    println!("  Starting static server on :1420...");
+    let dev_child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("npx serve dist -l 1420 -s --no-clipboard")
+        .current_dir(project_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Failed to start static server: {}", e))?;
+    let mut dev_server = Some(dev_child);
+    for i in 0..30 {
+        if std::net::TcpStream::connect("127.0.0.1:1420").is_ok() {
+            println!("  Static server ready ({}s)", i + 1);
+            break;
         }
+        if i == 29 {
+            if let Some(ref mut child) = dev_server {
+                let _ = child.kill();
+            }
+            return Err("Static server failed to start within 30s".to_string());
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
 
     // Launch app
@@ -110,7 +108,13 @@ pub async fn run_headless(project_dir: &str, config_path: Option<&str>) -> Resul
     // Spawn receiver task
     let tx = result_tx.clone();
     tokio::spawn(async move {
-        while let Some(Ok(Message::Text(text))) = ws_read.next().await {
+        while let Some(msg_result) = ws_read.next().await {
+            let text = match msg_result {
+                Ok(Message::Text(t)) => t,
+                Ok(other) => { eprintln!("  [debug] non-text WS message: {:?}", other); continue; }
+                Err(e) => { eprintln!("  [debug] WS read error: {}", e); break; }
+            };
+            eprintln!("  [debug] Received WS message: {}...", &text[..text.len().min(120)]);
             if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
                 if msg.get("type").and_then(|t| t.as_str()) == Some("result") {
                     if let Some(data) = msg.get("data") {

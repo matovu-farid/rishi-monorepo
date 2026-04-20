@@ -170,17 +170,24 @@ pub fn generate_init_script(ws_port: u16) -> String {
 
     ws.onopen = function() {{
       wsReconnectAttempts = 0;
+      console.log("[tauri-cypress] WebSocket connected to port {port}");
     }};
 
     ws.onmessage = function(event) {{
       try {{
         var msg = JSON.parse(event.data);
+        console.log("[tauri-cypress] Received message type:", msg.type);
         if (msg.type === "exec") {{
+          console.log("[tauri-cypress] Executing test:", msg.test_id);
           executeTestScript(msg.script, msg.test_id);
         }}
       }} catch (e) {{
         console.error("[tauri-cypress] Failed to parse message:", e);
       }}
+    }};
+
+    ws.onerror = function(e) {{
+      console.error("[tauri-cypress] WebSocket error:", e);
     }};
 
     ws.onclose = function() {{
@@ -190,7 +197,6 @@ pub fn generate_init_script(ws_port: u16) -> String {
       }}
     }};
 
-    ws.onerror = function() {{}};
   }}
 
   function sendIpcLog(entry) {{

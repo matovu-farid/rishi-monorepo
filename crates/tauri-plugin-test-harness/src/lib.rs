@@ -67,6 +67,7 @@ impl PluginBuilder {
         tauri::plugin::Builder::<R>::new("test-harness")
             .js_init_script(init_script)
             .setup(move |app, _api| {
+                eprintln!("[test-harness] Plugin setup starting...");
                 app.manage(MockRegistry::new());
 
                 let helper_registry = HelperRegistry::new();
