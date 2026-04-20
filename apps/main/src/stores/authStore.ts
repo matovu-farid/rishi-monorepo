@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { devtools } from "zustand/middleware";
 import type { User } from "@/generated";
+import { useTutorialStore } from "./tutorialStore";
 
 const WELCOME_SEEN_KEY = "rishi:welcome-seen";
 
@@ -57,6 +58,11 @@ export const useAuthStore = create<AuthState>()(
         } catch (err) {
           console.warn("[authStore] failed to persist welcome-seen flag:", err);
         }
+        // Start onboarding tour if not completed
+        const { tourCompleted, startTour } = useTutorialStore.getState();
+        if (!tourCompleted) {
+          setTimeout(startTour, 400);
+        }
       },
 
       setWelcomeSeen: () => {
@@ -65,6 +71,11 @@ export const useAuthStore = create<AuthState>()(
           localStorage.setItem(WELCOME_SEEN_KEY, "1");
         } catch (err) {
           console.warn("[authStore] failed to persist welcome-seen flag:", err);
+        }
+        // Start onboarding tour if not completed
+        const { tourCompleted, startTour } = useTutorialStore.getState();
+        if (!tourCompleted) {
+          setTimeout(startTour, 400);
         }
       },
     }),

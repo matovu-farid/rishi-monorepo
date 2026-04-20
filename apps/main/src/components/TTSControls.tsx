@@ -12,6 +12,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { usePlayerMachine } from "@/hooks/usePlayerMachine";
 import { usePlayerStore } from "@/stores/playerStore";
+import { ContextualHint } from "./tutorial/ContextualHint";
 
 interface TTSControlsProps {
   bookId: string;
@@ -168,7 +169,12 @@ export default function TTSControls({
   };
 
   return (
-    <>
+    <ContextualHint
+      id="tts-controls"
+      title="Listen to Your Book"
+      description="Tap to have your book read aloud with AI-powered text-to-speech."
+      dotPosition="top-left"
+    >
       {AuthDialog}
 
       {/* Inject keyframes for waveform animation */}
@@ -318,6 +324,6 @@ export default function TTSControls({
           })}
         </div>
       )}
-    </>
+    </ContextualHint>
   );
 }

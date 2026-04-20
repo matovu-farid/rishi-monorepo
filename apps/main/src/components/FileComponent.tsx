@@ -26,6 +26,7 @@ import { usePdfStore } from "@/stores/pdfStore";
 import { LoginButton } from "./LoginButton";
 import { UpdateMenu } from "./UpdateMenu";
 import { BookDiscoveryModal } from "./BookDiscoveryModal";
+import { HelpMenu } from "./HelpMenu";
 
 // Add this helper function
 function bytesToBlobUrl(bytes: number[]): string {
@@ -486,24 +487,27 @@ function FileDrop(): React.JSX.Element {
           />
         </div>
         <div className="flex-1" />
-        <Button
-          variant="ghost"
-          className="cursor-pointer"
-          startIcon={<Plus size={20} />}
-          onClick={handleChooseFiles}
-        >
-          Add Book
-        </Button>
-        <Button
-          variant="ghost"
-          className="cursor-pointer"
-          startIcon={<FolderOpen size={20} />}
-          onClick={() => setDiscoveryOpen(true)}
-        >
-          Import from Computer
-        </Button>
+        <div data-tour="import-books" className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            className="cursor-pointer"
+            startIcon={<Plus size={20} />}
+            onClick={handleChooseFiles}
+          >
+            Add Book
+          </Button>
+          <Button
+            variant="ghost"
+            className="cursor-pointer"
+            startIcon={<FolderOpen size={20} />}
+            onClick={() => setDiscoveryOpen(true)}
+          >
+            Import from Computer
+          </Button>
+        </div>
         <LoginButton />
         <UpdateMenu />
+        <HelpMenu />
       </div>
 
       {/* Reading Now — only shown when user has read a book and pressed back */}
@@ -523,6 +527,7 @@ function FileDrop(): React.JSX.Element {
       )}
 
       <motion.div
+        data-tour="book-grid"
         layout
         initial="animate"
         animate="animate"

@@ -1,4 +1,5 @@
 import React from "react";
+import { ContextualHint } from "./tutorial/ContextualHint";
 
 interface AIChatOrbProps {
   isProcessing: boolean;
@@ -19,7 +20,12 @@ const glassContainer: React.CSSProperties = {
 
 export default function AIChatOrb({ isProcessing, onClick }: AIChatOrbProps) {
   return (
-    <>
+    <ContextualHint
+      id="ai-chat-orb"
+      title="AI Chat"
+      description="Tap to ask questions about this book. AI answers using the book's content."
+      dotPosition="top-left"
+    >
       <style>{`
         @keyframes ai-waveform {
           0%, 100% { transform: scaleY(0.4); }
@@ -33,6 +39,7 @@ export default function AIChatOrb({ isProcessing, onClick }: AIChatOrbProps) {
       `}</style>
 
       <div
+        data-tour="ai-chat"
         onClick={onClick}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -72,6 +79,6 @@ export default function AIChatOrb({ isProcessing, onClick }: AIChatOrbProps) {
           ))}
         </div>
       </div>
-    </>
+    </ContextualHint>
   );
 }

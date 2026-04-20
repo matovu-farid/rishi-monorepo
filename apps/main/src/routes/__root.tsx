@@ -10,6 +10,7 @@ import { useStartupUpdateCheck } from "@/hooks/useStartupUpdateCheck";
 import { useHydrateAuth } from "@/hooks/useHydrateAuth";
 import { WelcomeModal } from "@/components/auth/WelcomeModal";
 import { SignInBanner } from "@/components/auth/SignInBanner";
+import { TourProvider } from "@/components/tutorial/TourProvider";
 
 export const Route = createRootRoute({
   component: () => <RootComponent />,
@@ -73,6 +74,7 @@ function RootComponent(): JSX.Element {
       <Outlet />
       <WelcomeModal />
       <SignInBanner />
+      <TourProvider />
       <div className="fixed bottom-4 left-4 z-50 w-40">
         <SyncStatusIndicator />
       </div>

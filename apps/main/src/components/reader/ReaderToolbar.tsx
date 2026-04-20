@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { useTutorialStore } from "@/stores/tutorialStore";
 
 interface ReaderToolbarProps {
   children: React.ReactNode;
@@ -15,6 +16,7 @@ export function ReaderToolbar({
 }: ReaderToolbarProps) {
   const [toolbarVisible, setToolbarVisible] = useState(true);
   const toolbarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tourActive = useTutorialStore((s) => s.tourActive);
 
   // Show toolbar when mouse is near the top 60px of the window (Apple Books style)
   useEffect(() => {
@@ -38,7 +40,7 @@ export function ReaderToolbar({
     };
   }, []);
 
-  const effectiveVisible = toolbarVisible || panelsOpen;
+  const effectiveVisible = toolbarVisible || panelsOpen || tourActive;
 
   const style: React.CSSProperties = {
     opacity: effectiveVisible ? 1 : 0,
@@ -54,6 +56,7 @@ export function ReaderToolbar({
   if (!leftContent) {
     return (
       <div
+        data-tour="reader-toolbar"
         className="fixed top-0 right-0 z-50 flex items-center px-4 pt-2"
         style={style}
       >
@@ -64,6 +67,7 @@ export function ReaderToolbar({
 
   return (
     <div
+      data-tour="reader-toolbar"
       className="fixed top-0 left-0 right-0 z-50 flex items-center px-4 pt-2"
       style={{ ...style, pointerEvents: "none" }}
     >

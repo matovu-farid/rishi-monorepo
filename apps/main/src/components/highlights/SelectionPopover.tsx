@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { ContextualHint } from "../tutorial/ContextualHint";
 import {
   Tooltip,
   TooltipTrigger,
@@ -52,33 +53,40 @@ export function SelectionPopover({
   }, [onClose]);
 
   return (
-    <div
-      ref={containerRef}
-      className="fixed z-50 bg-popover border rounded-lg shadow-md p-2"
-      style={{ left: position.x, top: position.y }}
+    <ContextualHint
+      id="text-selection"
+      title="Highlight & Annotate"
+      description="Select text to highlight, add notes, or ask AI about a passage."
+      dotPosition="top-right"
     >
-      <div className="flex items-center gap-2">
-        {HIGHLIGHT_COLORS.map((c) => (
-          <Tooltip key={c.name}>
-            <TooltipTrigger asChild>
-              <button
-                className="rounded-full border border-border/50 transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-ring"
-                style={{
-                  width: 28,
-                  height: 28,
-                  backgroundColor: c.hex,
-                }}
-                aria-label={`Highlight ${c.name}`}
-                onClick={() => {
-                  onHighlight(c.name as HighlightColor);
-                  onClose();
-                }}
-              />
-            </TooltipTrigger>
-            <TooltipContent>Highlight</TooltipContent>
-          </Tooltip>
-        ))}
+      <div
+        ref={containerRef}
+        className="fixed z-50 bg-popover border rounded-lg shadow-md p-2"
+        style={{ left: position.x, top: position.y }}
+      >
+        <div className="flex items-center gap-2">
+          {HIGHLIGHT_COLORS.map((c) => (
+            <Tooltip key={c.name}>
+              <TooltipTrigger asChild>
+                <button
+                  className="rounded-full border border-border/50 transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-ring"
+                  style={{
+                    width: 28,
+                    height: 28,
+                    backgroundColor: c.hex,
+                  }}
+                  aria-label={`Highlight ${c.name}`}
+                  onClick={() => {
+                    onHighlight(c.name as HighlightColor);
+                    onClose();
+                  }}
+                />
+              </TooltipTrigger>
+              <TooltipContent>Highlight</TooltipContent>
+            </Tooltip>
+          ))}
+        </div>
       </div>
-    </div>
+    </ContextualHint>
   );
 }
