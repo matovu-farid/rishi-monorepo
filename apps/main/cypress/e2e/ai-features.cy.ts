@@ -8,6 +8,8 @@
 // as the function parameter by the webview's executeTestScript.
 export {}
 
+await __tauriCypress.waitForReady();
+
 const tc = __tauriCypress;
 const { bridge, ipc, snapshot } = tc;
 

@@ -9,6 +9,8 @@
 
 export {}
 
+await __tauriCypress.waitForReady();
+
 const tc = __tauriCypress;
 const { bridge, snapshot } = tc;
 

@@ -4,6 +4,8 @@
 // as the function parameter by the webview's executeTestScript.
 export {}
 
+// Wait for invoke patching to complete
+await __tauriCypress.waitForReady();
 const { bridge, snapshot } = __tauriCypress;
 
 // Wait for DOM to be ready

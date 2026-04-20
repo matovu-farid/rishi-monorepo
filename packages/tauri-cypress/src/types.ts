@@ -77,6 +77,7 @@ export interface TauriCypressGlobal {
     readonly history: DomSnapshot[];
   };
   __exec: (script: string, testId: string) => Promise<void>;
+  waitForReady(): Promise<void>;
 }
 
 declare global {

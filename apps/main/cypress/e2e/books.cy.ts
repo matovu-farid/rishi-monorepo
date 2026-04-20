@@ -5,6 +5,8 @@
 // as the function parameter by the webview's executeTestScript.
 export {}
 
+await __tauriCypress.waitForReady();
+
 const { bridge, ipc } = __tauriCypress;
 
 // Mock book commands
