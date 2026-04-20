@@ -10,6 +10,8 @@ pub struct TestFile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunnerConfig {
     pub tauri_dir: String,
+    #[serde(default)]
+    pub frontend_build_command: String,
     pub build_command: String,
     pub binary_path: String,
     pub spec_pattern: String,
@@ -26,6 +28,7 @@ impl Default for RunnerConfig {
     fn default() -> Self {
         Self {
             tauri_dir: "./src-tauri".to_string(),
+            frontend_build_command: "pnpm build".to_string(),
             build_command: "cargo build --features test-harness".to_string(),
             binary_path: String::new(),
             spec_pattern: "cypress/**/*.cy.{ts,js}".to_string(),

@@ -141,13 +141,10 @@ async fn handle_connection(
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<ControlMessage>(&text) {
                             Ok(msg) => {
-                                // Relay Exec messages to all connected clients (including the
-                                // webview) via the broadcast channel. Without this, exec
-                                // messages from the runner stay in the inbound mpsc and
-                                // never reach the webview's injected JS.
-                                if matches!(&msg, ControlMessage::Exec { .. }) {
-                                    let _ = relay_tx.send(text.clone());
-                                }
+                                // Relay all messages to connected clients via broadcast.
+                                // Exec: runner → webview (so injected JS can execute tests)
+                                // Result/Snapshot/Ipc: webview → runner (so runner gets results)
+                                let _ = relay_tx.send(text.clone());
                                 if inbound_tx.send(msg).await.is_err() {
                                     break;
                                 }

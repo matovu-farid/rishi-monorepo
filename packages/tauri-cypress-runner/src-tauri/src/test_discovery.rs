@@ -123,7 +123,7 @@ fn parse_pattern(pattern: &str) -> (String, Vec<String>) {
 
     let extensions = if let Some(start) = file_glob.find('{') {
         let end = file_glob.find('}').unwrap_or(file_glob.len());
-        let prefix = &file_glob[..start];
+        let prefix = file_glob[..start].trim_start_matches('*');
         let variants = &file_glob[start + 1..end];
         variants
             .split(',')

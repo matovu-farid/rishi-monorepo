@@ -44,14 +44,45 @@ pub async fn run_headless(project_dir: &str, config_path: Option<&str>) -> Resul
     }
     println!("  Found {} test file(s)\n", files.len());
 
-    // Build
-    println!("  Building...");
+    // Build Rust backend (frontend is served by dev server in debug mode)
+    println!("  Building backend...");
     let build_start = Instant::now();
-    run_build_sync(&config.build_command, project_dir)?;
+    let tauri_dir = format!("{}/{}", project_dir, config.tauri_dir);
+    run_build_sync(&config.build_command, &tauri_dir)?;
     println!(
         "  Build complete ({:.1}s)\n",
         build_start.elapsed().as_secs_f64()
     );
+
+    // Start dev server if configured (debug builds expect devUrl)
+    let mut dev_server: Option<std::process::Child> = None;
+    if !config.frontend_build_command.is_empty() {
+        println!("  Starting dev server...");
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("pnpm dev")
+            .current_dir(project_dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("Failed to start dev server: {}", e))?;
+        dev_server = Some(child);
+        // Wait for dev server to be ready
+        println!("  Waiting for dev server...");
+        for i in 0..30 {
+            if std::net::TcpStream::connect("127.0.0.1:1420").is_ok() {
+                println!("  Dev server ready ({}s)", i + 1);
+                break;
+            }
+            if i == 29 {
+                if let Some(ref mut child) = dev_server {
+                    let _ = child.kill();
+                }
+                return Err("Dev server failed to start within 30s".to_string());
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
 
     // Launch app
     println!("  Launching app...");
@@ -178,8 +209,12 @@ pub async fn run_headless(project_dir: &str, config_path: Option<&str>) -> Resul
 
     let total_duration = run_start.elapsed();
 
-    // Kill app
+    // Kill app and dev server
     let _ = app_process.kill();
+    if let Some(ref mut child) = dev_server {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 
     // Summary
     let passed = outcomes.iter().filter(|o| o.status == "passed").count();
@@ -242,16 +277,13 @@ async fn connect_with_retry(
     ))
 }
 
-fn run_build_sync(build_command: &str, working_dir: &str) -> Result<(), String> {
-    let parts: Vec<&str> = build_command.split_whitespace().collect();
-    if parts.is_empty() {
+pub fn run_build_sync(build_command: &str, working_dir: &str) -> Result<(), String> {
+    if build_command.is_empty() {
         return Err("Empty build command".to_string());
     }
 
-    let mut cmd = std::process::Command::new(parts[0]);
-    if parts.len() > 1 {
-        cmd.args(&parts[1..]);
-    }
+    let mut cmd = std::process::Command::new("sh");
+    cmd.arg("-c").arg(build_command);
     cmd.current_dir(working_dir);
 
     let status = cmd

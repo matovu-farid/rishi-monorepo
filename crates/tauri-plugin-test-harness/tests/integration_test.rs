@@ -62,7 +62,7 @@ async fn test_exec_message_relayed_to_second_client() {
 }
 
 #[tokio::test]
-async fn test_non_exec_messages_not_relayed_to_other_clients() {
+async fn test_result_messages_relayed_to_other_clients() {
     let channel = ControlChannel::new();
     let port = channel.start("127.0.0.1:0").await.unwrap();
     let url = format!("ws://127.0.0.1:{}", port);
@@ -93,12 +93,17 @@ async fn test_non_exec_messages_not_relayed_to_other_clients() {
         .await
         .unwrap();
 
-    // Client 2 should NOT receive anything (timeout is expected)
-    let received = timeout(Duration::from_millis(500), read2.next()).await;
+    // Client 2 SHOULD receive the result (all messages are now relayed
+    // so the runner can receive results from the webview)
+    let received = timeout(Duration::from_secs(3), read2.next()).await;
     assert!(
-        received.is_err(),
-        "non-exec messages should not be relayed to other clients"
+        received.is_ok(),
+        "result messages should be relayed to other clients"
     );
+    let msg = received.unwrap().unwrap().unwrap();
+    let text = msg.into_text().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(parsed["type"], "result");
 
     channel.shutdown().await;
 }
@@ -559,6 +564,13 @@ async fn test_mock_registry_and_websocket_combined() {
         }
         _ => panic!("expected Ipc message"),
     }
+
+    // The IPC message is also relayed back to the sender — consume it
+    let relayed = timeout(Duration::from_secs(3), read.next()).await;
+    assert!(relayed.is_ok(), "client should receive the relayed IPC message");
+    let relayed_text = relayed.unwrap().unwrap().unwrap().into_text().unwrap();
+    let relayed_parsed: serde_json::Value = serde_json::from_str(&relayed_text).unwrap();
+    assert_eq!(relayed_parsed["type"], "ipc");
 
     // Now broadcast a snapshot back to the client
     let snapshot_msg = ControlMessage::Snapshot {

@@ -206,7 +206,8 @@ pub fn generate_init_script(ws_port: u16) -> String {
   async function executeTestScript(script, testId) {{
     var startTime = Date.now();
     try {{
-      var fn = new Function("__tauriCypress", script);
+      var AsyncFunction = Object.getPrototypeOf(async function(){{}}).constructor;
+      var fn = new AsyncFunction("__tauriCypress", script);
       await fn(window.__tauriCypress);
       if (ws && ws.readyState === WebSocket.OPEN) {{
         ws.send(JSON.stringify({{

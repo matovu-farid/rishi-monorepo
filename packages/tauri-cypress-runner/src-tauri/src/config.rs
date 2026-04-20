@@ -6,6 +6,8 @@ use serde::Deserialize;
 struct ConfigFile {
     #[serde(default = "default_tauri_dir")]
     tauri_dir: String,
+    #[serde(default = "default_frontend_build_command")]
+    frontend_build_command: String,
     #[serde(default = "default_build_command")]
     build_command: String,
     #[serde(default)]
@@ -27,6 +29,7 @@ struct ConfigFile {
 }
 
 fn default_tauri_dir() -> String { "./src-tauri".to_string() }
+fn default_frontend_build_command() -> String { "pnpm build".to_string() }
 fn default_build_command() -> String { "cargo build --features test-harness".to_string() }
 fn default_spec_pattern() -> String { "cypress/**/*.cy.{ts,js}".to_string() }
 fn default_control_port() -> u16 { 9223 }
@@ -40,6 +43,7 @@ pub fn load_config(path: &str) -> Result<RunnerConfig, String> {
     let file: ConfigFile = serde_json::from_str(&content).map_err(|e| e.to_string())?;
     Ok(RunnerConfig {
         tauri_dir: file.tauri_dir,
+        frontend_build_command: file.frontend_build_command,
         build_command: file.build_command,
         binary_path: file.binary_path,
         spec_pattern: file.spec_pattern,
