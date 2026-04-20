@@ -24,6 +24,7 @@ pub fn run() {
             project_dir: Mutex::new(String::new()),
         })
         .invoke_handler(tauri::generate_handler![
+            commands::get_initial_project_dir,
             commands::start_session,
             commands::get_config,
             commands::get_test_files,

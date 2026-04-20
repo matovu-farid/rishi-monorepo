@@ -100,12 +100,23 @@ export function App() {
     setFiles(files);
   }, [setFiles]));
 
-  // Start file watcher on mount
+  // Auto-initialize: load project from CLI args, discover tests, start file watcher
   useEffect(() => {
-    invoke("watch_tests").catch(() => {
-      // File watcher is optional — ignore errors
-    });
-  }, []);
+    async function init() {
+      try {
+        const dir = await invoke("get_initial_project_dir") as string | null;
+        if (dir) {
+          const config = await invoke("start_session", { projectDir: dir }) as { spec_pattern: string };
+          const files = await invoke("get_test_files") as TestFile[];
+          setFiles(files);
+          invoke("watch_tests").catch(() => {});
+        }
+      } catch (e) {
+        console.error("Failed to initialize:", e);
+      }
+    }
+    init();
+  }, [setFiles]);
 
   const handleRun = useCallback(async () => {
     try {

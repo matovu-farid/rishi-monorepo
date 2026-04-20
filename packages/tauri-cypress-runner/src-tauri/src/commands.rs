@@ -9,6 +9,12 @@ pub struct RunnerState {
     pub project_dir: Mutex<String>,
 }
 
+/// Get the project dir passed via CLI (env var set by main.rs)
+#[command]
+pub async fn get_initial_project_dir() -> Result<Option<String>, String> {
+    Ok(std::env::var("TAURI_CYPRESS_PROJECT_DIR").ok())
+}
+
 #[command]
 pub async fn start_session<R: Runtime>(app: AppHandle<R>, config_path: Option<String>, project_dir: String) -> Result<RunnerConfig, String> {
     let cfg = if let Some(path) = config_path {
