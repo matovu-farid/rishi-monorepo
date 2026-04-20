@@ -82,11 +82,13 @@ pub async fn run_headless(project_dir: &str, config_path: Option<&str>) -> Resul
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
 
-    // Launch app
+    // Launch app with hidden window (headless mode)
     println!("  Launching app...");
     let mut app_process = AppProcess::new();
     let binary = resolve_binary(&config, project_dir);
-    app_process.spawn(&binary, &config.env)?;
+    let mut env = config.env.clone();
+    env.insert("TAURI_CYPRESS_HEADLESS".to_string(), "1".to_string());
+    app_process.spawn(&binary, &env)?;
 
     // Connect WebSocket with retry — the plugin's WS server starts asynchronously
     // during Tauri setup, so a fixed sleep is unreliable (especially on cold starts).
@@ -137,6 +139,9 @@ pub async fn run_headless(project_dir: &str, config_path: Option<&str>) -> Resul
     });
 
     println!("  Connected. Running tests...\n");
+
+    // Brief pause to let the webview's injected JS connect to the WS server
+    tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
 
     let mut outcomes: Vec<TestOutcome> = Vec::new();
     let run_start = Instant::now();
