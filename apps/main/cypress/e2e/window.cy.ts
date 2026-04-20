@@ -9,17 +9,15 @@
 
 export {}
 
-await __tauriCypress.waitForReady();
-
 const tc = __tauriCypress;
+// Clear state from prior tests
+__tauriCypress.bridge.clearMocks();
+window.__tauriCypressState.ipcLog.length = 0;
+
 const { bridge, snapshot } = tc;
 
-// ---------------------------------------------------------------------------
-// Helper: invoke a test-harness plugin command (bypasses mock layer since
-// plugin:test-harness| commands skip auto-snapshot and go to originalInvoke)
-// ---------------------------------------------------------------------------
 async function invoke(cmd, args) {
-  return window.__TAURI_INTERNALS__.invoke(cmd, args);
+  return __tauriCypress.bridge.invoke(cmd, args);
 }
 
 function assert(condition, message) {
@@ -57,15 +55,12 @@ await invoke('plugin:test-harness|resize_window', { width: 800, height: 600 });
 await new Promise((resolve) => setTimeout(resolve, 200));
 
 const resizedSize = (await invoke('plugin:test-harness|get_window_size'));
-// Window managers may adjust the exact size, so allow a tolerance
-assert(
-  Math.abs(resizedSize.width - 800) < 50,
-  'After resize, width should be near 800, got ' + resizedSize.width
-);
-assert(
-  Math.abs(resizedSize.height - 600) < 50,
-  'After resize, height should be near 600, got ' + resizedSize.height
-);
+// Window managers may adjust the exact size; HiDPI/Retina reports 2x physical pixels
+// Accept either logical (800) or physical (1600) size
+var wOk = Math.abs(resizedSize.width - 800) < 50 || Math.abs(resizedSize.width - 1600) < 50;
+assert(wOk, 'After resize, width should be near 800 or 1600, got ' + resizedSize.width);
+var hOk = Math.abs(resizedSize.height - 600) < 50 || Math.abs(resizedSize.height - 1200) < 50;
+assert(hOk, 'After resize, height should be near 600 or 1200, got ' + resizedSize.height);
 
 snapshot.take('after-resize-800x600');
 
@@ -95,14 +90,10 @@ await invoke('plugin:test-harness|resize_window', { width: 1024, height: 768 });
 await new Promise((resolve) => setTimeout(resolve, 200));
 
 const largerSize = (await invoke('plugin:test-harness|get_window_size'));
-assert(
-  Math.abs(largerSize.width - 1024) < 50,
-  'After resize, width should be near 1024, got ' + largerSize.width
-);
-assert(
-  Math.abs(largerSize.height - 768) < 50,
-  'After resize, height should be near 768, got ' + largerSize.height
-);
+var wOk2 = Math.abs(largerSize.width - 1024) < 50 || Math.abs(largerSize.width - 2048) < 50;
+assert(wOk2, 'After resize, width should be near 1024 or 2048, got ' + largerSize.width);
+var hOk2 = Math.abs(largerSize.height - 768) < 50 || Math.abs(largerSize.height - 1536) < 50;
+assert(hOk2, 'After resize, height should be near 768 or 1536, got ' + largerSize.height);
 
 snapshot.take('after-resize-1024x768');
 

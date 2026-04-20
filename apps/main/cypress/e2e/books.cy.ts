@@ -5,7 +5,9 @@
 // as the function parameter by the webview's executeTestScript.
 export {}
 
-await __tauriCypress.waitForReady();
+// Clear state from prior tests
+__tauriCypress.bridge.clearMocks();
+window.__tauriCypressState.ipcLog.length = 0;
 
 const { bridge, ipc } = __tauriCypress;
 
@@ -19,11 +21,8 @@ bridge.mockCommand('get_book_data', {
   chapters: [{ title: 'Chapter 1', content: '<p>Hello</p>' }]
 });
 
-// ---------------------------------------------------------------------------
-// Helper: invoke a Tauri command through the monkey-patched invoke pathway
-// ---------------------------------------------------------------------------
 async function invoke(cmd, args) {
-  return window.__TAURI_INTERNALS__.invoke(cmd, args);
+  return __tauriCypress.bridge.invoke(cmd, args);
 }
 
 // Call the mocked commands via the original invoke

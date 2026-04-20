@@ -8,16 +8,15 @@
 
 export {}
 
-await __tauriCypress.waitForReady();
-
 const tc = __tauriCypress;
+// Clear state from prior tests
+__tauriCypress.bridge.clearMocks();
+window.__tauriCypressState.ipcLog.length = 0;
+
 const { bridge, ipc, snapshot } = tc;
 
-// ---------------------------------------------------------------------------
-// Helper: invoke a Tauri command through the monkey-patched invoke pathway
-// ---------------------------------------------------------------------------
 async function invoke(cmd, args) {
-  return window.__TAURI_INTERNALS__.invoke(cmd, args);
+  return __tauriCypress.bridge.invoke(cmd, args);
 }
 
 function assert(condition, message) {

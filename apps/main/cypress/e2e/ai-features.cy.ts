@@ -8,13 +8,15 @@
 // as the function parameter by the webview's executeTestScript.
 export {}
 
-await __tauriCypress.waitForReady();
+// Clear state from prior tests
+__tauriCypress.bridge.clearMocks();
+window.__tauriCypressState.ipcLog.length = 0;
 
 const tc = __tauriCypress;
 const { bridge, ipc, snapshot } = tc;
 
 async function invoke(cmd, args) {
-  return window.__TAURI_INTERNALS__.invoke(cmd, args);
+  return __tauriCypress.bridge.invoke(cmd, args);
 }
 
 function assert(condition, message) {

@@ -1,24 +1,31 @@
 /// Generates the JavaScript init script injected into the webview before
 /// app code loads via Tauri's `js_init_script`. Sets up `__tauriCypress`
-/// global, monkey-patches `invoke()` for IPC interception, and connects
-/// to the plugin's WebSocket server. Includes auto-snapshot capture after
-/// each IPC command with lightweight canvas-to-PNG via foreignObject SVG.
+/// global, provides mock-aware invoke, and connects to the plugin's
+/// WebSocket server.
 ///
 /// SECURITY NOTE: This code runs exclusively in the test harness context behind
-/// a compile-time feature flag (test-harness). The `new Function()` usage in
-/// `executeTestScript` is intentional — it evaluates test scripts sent from the
-/// trusted test runner over localhost-only WebSocket. This is the core mechanism
-/// by which the test runner executes test code inside the app-under-test's webview.
-/// The feature flag ensures this code never ships in production builds.
+/// a compile-time feature flag (test-harness). The dynamic evaluation in
+/// `executeTestScript` is intentional — the trusted runner sends test scripts
+/// over localhost-only WebSocket. Only active behind the feature flag.
 pub fn generate_init_script(ws_port: u16) -> String {
     format!(
         r#"
 (function() {{
-  var mocks = new Map();
-  var interceptors = new Map();
-  var ipcLog = [];
-  var snapshotHistory = [];
-  var autoSnapshotEnabled = true;
+  // Use window-level storage so state persists across re-injections
+  if (!window.__tauriCypressState) {{
+    window.__tauriCypressState = {{
+      mocks: new Map(),
+      interceptors: new Map(),
+      ipcLog: [],
+      snapshotHistory: [],
+      autoSnapshotEnabled: true,
+    }};
+  }}
+  var mocks = window.__tauriCypressState.mocks;
+  var interceptors = window.__tauriCypressState.interceptors;
+  var ipcLog = window.__tauriCypressState.ipcLog;
+  var snapshotHistory = window.__tauriCypressState.snapshotHistory;
+  var autoSnapshotEnabled = window.__tauriCypressState.autoSnapshotEnabled;
 
   function mockCommand(name, response) {{
     mocks.set(name, response);
@@ -37,8 +44,7 @@ pub fn generate_init_script(ws_port: u16) -> String {
     interceptors.clear();
   }}
 
-  // Lightweight canvas-to-PNG capture via foreignObject SVG.
-  // Avoids heavy html2canvas dependency — ~30 lines of JS.
+  // Lightweight canvas-to-PNG capture via foreignObject SVG
   function captureScreenshot() {{
     return new Promise(function(resolve) {{
       try {{
@@ -88,7 +94,6 @@ pub fn generate_init_script(ws_port: u16) -> String {
     }};
     snapshotHistory.push(snapshot);
 
-    // Capture screenshot asynchronously, send once ready
     captureScreenshot().then(function(screenshotData) {{
       snapshot.screenshot = screenshotData;
       if (ws && ws.readyState === WebSocket.OPEN) {{
@@ -99,66 +104,55 @@ pub fn generate_init_script(ws_port: u16) -> String {
     return snapshot;
   }}
 
-  var originalInvoke = null;
+  // Mock-aware invoke: checks mocks/interceptors first, falls back to real Tauri invoke.
+  // This is called by test scripts instead of window.__TAURI_INTERNALS__.invoke
+  // to avoid the problem of Tauri overwriting our monkey-patch.
+  async function invokeWithMocks(cmd, args, options) {{
+    var startTime = Date.now();
+    var response;
+    var mocked = false;
 
-  function patchInvoke() {{
-    if (!window.__TAURI_INTERNALS__ || !window.__TAURI_INTERNALS__.invoke) {{
-      setTimeout(patchInvoke, 1);
-      return;
-    }}
-    if (originalInvoke) return;
-
-    originalInvoke = window.__TAURI_INTERNALS__.invoke.bind(
-      window.__TAURI_INTERNALS__
-    );
-
-    window.__TAURI_INTERNALS__.invoke = async function(cmd, args, options) {{
-      var startTime = Date.now();
-      var response;
-      var mocked = false;
-
-      if (mocks.has(cmd)) {{
-        response = mocks.get(cmd);
+    if (mocks.has(cmd)) {{
+      response = mocks.get(cmd);
+      mocked = true;
+    }} else if (interceptors.has(cmd)) {{
+      try {{
+        response = await interceptors.get(cmd)(args);
         mocked = true;
-      }} else if (interceptors.has(cmd)) {{
-        try {{
-          response = await interceptors.get(cmd)(args);
-          mocked = true;
-        }} catch (e) {{
-          var entry = {{
-            command: cmd,
-            args: args || null,
-            response: null,
-            mocked: true,
-            duration_ms: Date.now() - startTime,
-            timestamp_ms: startTime
-          }};
-          ipcLog.push(entry);
-          sendIpcLog(entry);
-          throw e;
-        }}
-      }} else {{
-        response = await originalInvoke(cmd, args, options);
+      }} catch (e) {{
+        var entry = {{
+          command: cmd,
+          args: args || null,
+          response: null,
+          mocked: true,
+          duration_ms: Date.now() - startTime,
+          timestamp_ms: startTime
+        }};
+        ipcLog.push(entry);
+        sendIpcLog(entry);
+        throw e;
       }}
+    }} else {{
+      // Call the real Tauri invoke
+      response = await window.__TAURI_INTERNALS__.invoke(cmd, args, options);
+    }}
 
-      var entry = {{
-        command: cmd,
-        args: args || null,
-        response: response,
-        mocked: mocked,
-        duration_ms: Date.now() - startTime,
-        timestamp_ms: startTime
-      }};
-      ipcLog.push(entry);
-      sendIpcLog(entry);
-
-      // Auto-capture snapshot after each IPC command (skip plugin's own commands)
-      if (autoSnapshotEnabled && !cmd.startsWith("plugin:test-harness|")) {{
-        takeSnapshot("after:" + cmd, cmd);
-      }}
-
-      return response;
+    var entry = {{
+      command: cmd,
+      args: args || null,
+      response: response,
+      mocked: mocked,
+      duration_ms: Date.now() - startTime,
+      timestamp_ms: startTime
     }};
+    ipcLog.push(entry);
+    sendIpcLog(entry);
+
+    if (autoSnapshotEnabled && !cmd.startsWith("plugin:test-harness|")) {{
+      takeSnapshot("after:" + cmd, cmd);
+    }}
+
+    return response;
   }}
 
   var ws = null;
@@ -186,10 +180,6 @@ pub fn generate_init_script(ws_port: u16) -> String {
       }}
     }};
 
-    ws.onerror = function(e) {{
-      console.error("[tauri-cypress] WebSocket error:", e);
-    }};
-
     ws.onclose = function() {{
       if (wsReconnectAttempts < WS_MAX_RECONNECT) {{
         wsReconnectAttempts++;
@@ -197,6 +187,9 @@ pub fn generate_init_script(ws_port: u16) -> String {
       }}
     }};
 
+    ws.onerror = function(e) {{
+      console.error("[tauri-cypress] WebSocket error:", e);
+    }};
   }}
 
   function sendIpcLog(entry) {{
@@ -206,9 +199,6 @@ pub fn generate_init_script(ws_port: u16) -> String {
   }}
 
   // Test script execution — intentionally uses dynamic evaluation.
-  // This is the core test runner mechanism: the trusted runner sends test
-  // scripts over localhost WebSocket, which are evaluated in the app's webview.
-  // Only active behind the test-harness feature flag (never in production).
   async function executeTestScript(script, testId) {{
     var startTime = Date.now();
     try {{
@@ -235,7 +225,7 @@ pub fn generate_init_script(ws_port: u16) -> String {
             test_id: testId,
             status: "failed",
             assertions: [],
-            error: e.message || String(e),
+            error: (e && e.message) ? e.message : String(e),
             duration_ms: Date.now() - startTime
           }}
         }}));
@@ -249,16 +239,17 @@ pub fn generate_init_script(ws_port: u16) -> String {
       interceptCommand: interceptCommand,
       removeMock: removeMock,
       clearMocks: clearMocks,
+      // Mock-aware invoke — test scripts should use this instead of
+      // window.__TAURI_INTERNALS__.invoke to ensure mocks are checked
+      invoke: invokeWithMocks,
       getState: async function(key) {{
-        if (!originalInvoke) return null;
-        return originalInvoke(
+        return invokeWithMocks(
           "plugin:test-harness|get_app_state",
           {{ key: key }}
         );
       }},
       callHelper: async function(name, args) {{
-        if (!originalInvoke) return null;
-        return originalInvoke(
+        return invokeWithMocks(
           "plugin:test-harness|call_helper",
           {{ name: name, args: args || null }}
         );
@@ -280,7 +271,6 @@ pub fn generate_init_script(ws_port: u16) -> String {
     __exec: executeTestScript
   }};
 
-  patchInvoke();
   connectWebSocket();
 }})();
 "#,
