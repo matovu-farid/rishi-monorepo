@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Local book scanner E2E test
 // Tests mocking of scan_for_books, get_default_book_folders, and cancel_scan
 // commands. Verifies that interceptors can implement custom logic to simulate
@@ -5,16 +6,17 @@
 //
 // NOTE: import is stripped by the headless runner; __tauriCypress is injected
 // as the function parameter by the webview's executeTestScript.
-import type { TauriCypressGlobal, IpcLogEntry } from 'tauri-cypress'
 
-const tc: TauriCypressGlobal = __tauriCypress;
+export {}
+
+const tc = __tauriCypress;
 const { bridge, ipc, snapshot } = tc;
 
-async function invoke(cmd: string, args?: unknown): Promise<unknown> {
+async function invoke(cmd, args) {
   return window.__TAURI_INTERNALS__.invoke(cmd, args);
 }
 
-function assert(condition: boolean, message: string): void {
+function assert(condition, message) {
   if (!condition) throw new Error('Assertion failed: ' + message);
 }
 
@@ -34,15 +36,15 @@ bridge.mockCommand('get_default_book_folders', mockFolders);
 const folders = await invoke('get_default_book_folders');
 assert(Array.isArray(folders), 'get_default_book_folders should return an array');
 assert(
-  (folders as string[]).length === 3,
-  'Should return 3 default folders, got ' + (folders as string[]).length
+  (folders).length === 3,
+  'Should return 3 default folders, got ' + (folders).length
 );
 assert(
-  (folders as string[])[0] === '/Users/testuser/Documents',
+  (folders)[0] === '/Users/testuser/Documents',
   'First folder should be Documents'
 );
 assert(
-  (folders as string[])[2].includes('calibre'),
+  (folders)[2].includes('calibre'),
   'Third folder should include calibre path'
 );
 
@@ -51,7 +53,7 @@ snapshot.take('after-get-default-folders');
 // ============================
 // Test 2: Mock scan_for_books with custom interceptor
 // ============================
-let scanMode: string | null = null;
+let scanMode = null;
 let scanCallCount = 0;
 
 const mockDiscoveredBooks = [
@@ -87,9 +89,9 @@ const mockDiscoveredBooks = [
   },
 ];
 
-bridge.interceptCommand('scan_for_books', (args: unknown) => {
+bridge.interceptCommand('scan_for_books', (args) => {
   scanCallCount++;
-  const typedArgs = args as { mode?: string };
+  const typedArgs = args;
   scanMode = typedArgs?.mode ?? null;
 
   // Validate mode argument
@@ -132,7 +134,7 @@ try {
 } catch (e) {
   invalidModeError = true;
   assert(
-    (e as Error).message.includes('must be "default" or "full"'),
+    (e).message.includes('must be "default" or "full"'),
     'Error should explain valid modes'
   );
 }
@@ -141,15 +143,15 @@ assert(invalidModeError, 'Invalid scan mode should throw an error');
 // ============================
 // Test 5: Mock cancel_scan
 // ============================
-let cancelScanCalled: boolean = false;
+let cancelScanCalled = false;
 
-bridge.interceptCommand('cancel_scan', (_args: unknown) => {
+bridge.interceptCommand('cancel_scan', (_args) => {
   cancelScanCalled = true;
   return null;
 });
 
 await invoke('cancel_scan');
-assert((cancelScanCalled as boolean) === true, 'cancel_scan should have been called');
+assert((cancelScanCalled) === true, 'cancel_scan should have been called');
 
 snapshot.take('after-cancel-scan');
 
@@ -158,10 +160,10 @@ snapshot.take('after-cancel-scan');
 // ============================
 
 // Mock the full pipeline: scan -> discovered books -> save_book
-let savedBooks: unknown[] = [];
+let savedBooks = [];
 
-bridge.interceptCommand('save_book', (args: unknown) => {
-  const typedArgs = args as { book?: Record<string, unknown> };
+bridge.interceptCommand('save_book', (args) => {
+  const typedArgs = args;
   savedBooks.push(typedArgs?.book);
   return {
     id: savedBooks.length,
@@ -197,15 +199,15 @@ assert(
   'Should have saved 3 books, got ' + savedBooks.length
 );
 assert(
-  (savedBooks[0] as Record<string, unknown>).title === 'The Great Gatsby',
+  (savedBooks[0]).title === 'The Great Gatsby',
   'First saved book should be The Great Gatsby'
 );
 assert(
-  (savedBooks[1] as Record<string, unknown>).format === 'pdf',
+  (savedBooks[1]).format === 'pdf',
   'Second saved book should be a pdf'
 );
 assert(
-  (savedBooks[2] as Record<string, unknown>).filepath ===
+  (savedBooks[2]).filepath ===
     '/Users/testuser/Documents/moby-dick.mobi',
   'Third saved book filepath should match'
 );
@@ -213,16 +215,16 @@ assert(
 // ============================
 // Test 7: Verify complete IPC log
 // ============================
-const allLog: IpcLogEntry[] = ipc.log;
+const allLog = ipc.log;
 
 const folderLog = allLog.filter(
-  (e: IpcLogEntry) => e.command === 'get_default_book_folders'
+  (e) => e.command === 'get_default_book_folders'
 );
 assert(folderLog.length === 1, 'get_default_book_folders should appear once');
 assert(folderLog[0].mocked === true, 'get_default_book_folders should be mocked');
 
 const scanLog = allLog.filter(
-  (e: IpcLogEntry) => e.command === 'scan_for_books'
+  (e) => e.command === 'scan_for_books'
 );
 assert(
   scanLog.length === 3,
@@ -231,12 +233,12 @@ assert(
 );
 
 const cancelLog = allLog.filter(
-  (e: IpcLogEntry) => e.command === 'cancel_scan'
+  (e) => e.command === 'cancel_scan'
 );
 assert(cancelLog.length === 1, 'cancel_scan should appear once');
 
 const saveLog = allLog.filter(
-  (e: IpcLogEntry) => e.command === 'save_book'
+  (e) => e.command === 'save_book'
 );
 assert(
   saveLog.length === 3,
@@ -245,7 +247,7 @@ assert(
 );
 
 // All commands in this test should be mocked/intercepted
-const allMocked = allLog.every((e: IpcLogEntry) => e.mocked === true);
+const allMocked = allLog.every((e) => e.mocked === true);
 assert(allMocked, 'All IPC entries should be marked as mocked');
 
 snapshot.take('local-scanner-tests-complete');

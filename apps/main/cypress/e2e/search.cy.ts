@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Search and vector operations E2E test
 // Tests IPC interception with custom validation logic for search_vectors,
 // embed, get_context_for_query, and search_book_text commands.
@@ -6,16 +7,17 @@
 //
 // NOTE: import is stripped by the headless runner; __tauriCypress is injected
 // as the function parameter by the webview's executeTestScript.
-import type { TauriCypressGlobal, IpcLogEntry } from 'tauri-cypress'
 
-const tc: TauriCypressGlobal = __tauriCypress;
+export {}
+
+const tc = __tauriCypress;
 const { bridge, ipc, snapshot } = tc;
 
-async function invoke(cmd: string, args?: unknown): Promise<unknown> {
+async function invoke(cmd, args) {
   return window.__TAURI_INTERNALS__.invoke(cmd, args);
 }
 
-function assert(condition: boolean, message: string): void {
+function assert(condition, message) {
   if (!condition) throw new Error('Assertion failed: ' + message);
 }
 
@@ -25,18 +27,13 @@ bridge.clearMocks();
 // Test 1: Intercept search_vectors with argument validation
 // ============================
 let searchVectorsCallCount = 0;
-let lastSearchArgs: unknown = null;
+let lastSearchArgs = null;
 
-bridge.interceptCommand('search_vectors', (args: unknown) => {
+bridge.interceptCommand('search_vectors', (args) => {
   searchVectorsCallCount++;
   lastSearchArgs = args;
 
-  const typedArgs = args as {
-    name?: string;
-    query?: number[];
-    dim?: number;
-    k?: number;
-  };
+  const typedArgs = args;
 
   // Validate required args
   if (!typedArgs || !typedArgs.name) {
@@ -68,11 +65,11 @@ const searchResults = await invoke('search_vectors', {
 assert(searchVectorsCallCount === 1, 'search_vectors should be called once');
 assert(Array.isArray(searchResults), 'search_vectors should return an array');
 assert(
-  (searchResults as unknown[]).length === 3,
+  (searchResults).length === 3,
   'search_vectors should return 3 results'
 );
 assert(
-  (searchResults as { id: number; score: number }[])[0].score === 0.95,
+  (searchResults)[0].score === 0.95,
   'First result should have score 0.95'
 );
 
@@ -83,9 +80,9 @@ snapshot.take('after-search-vectors');
 // ============================
 let embedCallCount = 0;
 
-bridge.interceptCommand('embed', (args: unknown) => {
+bridge.interceptCommand('embed', (args) => {
   embedCallCount++;
-  const typedArgs = args as { embedparams?: { text: string; metadata: unknown }[] };
+  const typedArgs = args;
 
   if (!typedArgs || !typedArgs.embedparams || typedArgs.embedparams.length === 0) {
     throw new Error('embed requires non-empty embedparams');
@@ -93,10 +90,10 @@ bridge.interceptCommand('embed', (args: unknown) => {
 
   // Return mock embeddings: one per input text
   return typedArgs.embedparams.map(
-    (param: { text: string; metadata: unknown }, idx: number) => ({
+    (param, idx) => ({
       embedding: Array(384)
         .fill(0)
-        .map((_: number, i: number) => Math.sin(idx + i) * 0.1),
+        .map((_, i) => Math.sin(idx + i) * 0.1),
       metadata: param.metadata,
     })
   );
@@ -112,11 +109,11 @@ const embedResult = await invoke('embed', {
 assert(embedCallCount === 1, 'embed should be called once');
 assert(Array.isArray(embedResult), 'embed should return an array');
 assert(
-  (embedResult as unknown[]).length === 2,
+  (embedResult).length === 2,
   'embed should return 2 embeddings'
 );
 
-const firstEmbedding = (embedResult as { embedding: number[] }[])[0];
+const firstEmbedding = (embedResult)[0];
 assert(
   firstEmbedding.embedding.length === 384,
   'Each embedding should have 384 dimensions'
@@ -138,7 +135,7 @@ try {
 } catch (e) {
   errorCaught = true;
   assert(
-    (e as Error).message.includes('"name"'),
+    (e).message.includes('"name"'),
     'Error should mention missing "name" argument'
   );
 }
@@ -151,15 +148,15 @@ assert(searchVectorsCallCount === 2, 'search_vectors should have been called twi
 
 // Step 4a: Mock save_vectors (used when indexing)
 let saveVectorsCallCount = 0;
-bridge.interceptCommand('save_vectors', (args: unknown) => {
+bridge.interceptCommand('save_vectors', (args) => {
   saveVectorsCallCount++;
   return null; // save_vectors returns ()
 });
 
 // Step 4b: Mock get_text_from_vector_id
-bridge.interceptCommand('get_text_from_vector_id', (args: unknown) => {
-  const typedArgs = args as { vectorId?: number };
-  const textMap: Record<number, string> = {
+bridge.interceptCommand('get_text_from_vector_id', (args) => {
+  const typedArgs = args;
+  const textMap = {
     101: 'The philosophy of consciousness has been debated for centuries.',
     102: 'Quantum mechanics describes the behavior of particles at atomic scales.',
     103: 'Neural networks in the brain give rise to consciousness and awareness.',
@@ -168,8 +165,8 @@ bridge.interceptCommand('get_text_from_vector_id', (args: unknown) => {
 });
 
 // Step 4c: Mock get_context_for_query (the full search pipeline)
-bridge.interceptCommand('get_context_for_query', (args: unknown) => {
-  const typedArgs = args as { queryText?: string; bookId?: number; k?: number };
+bridge.interceptCommand('get_context_for_query', (args) => {
+  const typedArgs = args;
   assert(
     typeof typedArgs?.queryText === 'string',
     'get_context_for_query needs queryText'
@@ -191,17 +188,17 @@ const contextResults = await invoke('get_context_for_query', {
 });
 assert(Array.isArray(contextResults), 'get_context_for_query should return an array');
 assert(
-  (contextResults as string[]).length === 2,
+  (contextResults).length === 2,
   'Should return 2 context passages'
 );
 assert(
-  (contextResults as string[])[0].includes('consciousness'),
+  (contextResults)[0].includes('consciousness'),
   'First context passage should mention consciousness'
 );
 
 // Step 4d: Mock search_book_text (FTS)
-bridge.interceptCommand('search_book_text', (args: unknown) => {
-  const typedArgs = args as { query?: string; bookId?: number };
+bridge.interceptCommand('search_book_text', (args) => {
+  const typedArgs = args;
   return [
     {
       id: 1,
@@ -226,10 +223,10 @@ const ftsResults = await invoke('search_book_text', {
 });
 assert(Array.isArray(ftsResults), 'search_book_text should return an array');
 assert(
-  (ftsResults as unknown[]).length === 2,
+  (ftsResults).length === 2,
   'FTS should return 2 results'
 );
-const ftsFirst = (ftsResults as { snippet: string }[])[0];
+const ftsFirst = (ftsResults)[0];
 assert(
   ftsFirst.snippet.includes('<mark>'),
   'FTS snippet should contain <mark> highlight tags'
@@ -240,30 +237,30 @@ snapshot.take('after-full-search-flow');
 // ============================
 // Test 5: Verify IPC log captures the full command chain
 // ============================
-const allLog: IpcLogEntry[] = ipc.log;
+const allLog = ipc.log;
 
-const searchLog = allLog.filter((e: IpcLogEntry) => e.command === 'search_vectors');
+const searchLog = allLog.filter((e) => e.command === 'search_vectors');
 assert(
   searchLog.length === 2,
   'search_vectors should appear twice in IPC log (1 success + 1 error), got ' +
     searchLog.length
 );
 
-const embedLog = allLog.filter((e: IpcLogEntry) => e.command === 'embed');
+const embedLog = allLog.filter((e) => e.command === 'embed');
 assert(embedLog.length === 1, 'embed should appear once in IPC log');
 
 const contextLog = allLog.filter(
-  (e: IpcLogEntry) => e.command === 'get_context_for_query'
+  (e) => e.command === 'get_context_for_query'
 );
 assert(contextLog.length === 1, 'get_context_for_query should appear once in IPC log');
 
 const ftsLog = allLog.filter(
-  (e: IpcLogEntry) => e.command === 'search_book_text'
+  (e) => e.command === 'search_book_text'
 );
 assert(ftsLog.length === 1, 'search_book_text should appear once in IPC log');
 
 // All intercepted commands should be marked as mocked
-const mockedCommands = allLog.filter((e: IpcLogEntry) => e.mocked === true);
+const mockedCommands = allLog.filter((e) => e.mocked === true);
 assert(
   mockedCommands.length >= 5,
   'At least 5 commands should be marked as mocked, got ' + mockedCommands.length

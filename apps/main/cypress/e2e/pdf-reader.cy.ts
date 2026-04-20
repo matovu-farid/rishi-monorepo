@@ -1,21 +1,21 @@
+// @ts-nocheck
 // PDF reader E2E test
 // Tests the PDF reading flow: loading PDF metadata, saving/retrieving books,
 // updating cover images, and verifying IPC traffic.
 //
 // NOTE: import is stripped by the headless runner; __tauriCypress is injected
 // as the function parameter by the webview's executeTestScript.
-import type { TauriCypressGlobal, IpcLogEntry } from 'tauri-cypress'
 
 export {}
 
-const tc: TauriCypressGlobal = __tauriCypress;
+const tc = __tauriCypress;
 const { bridge, ipc, snapshot } = tc;
 
-async function invoke(cmd: string, args?: unknown): Promise<unknown> {
+async function invoke(cmd, args) {
   return window.__TAURI_INTERNALS__.invoke(cmd, args);
 }
 
-function assert(condition: boolean, message: string): void {
+function assert(condition, message) {
   if (!condition) throw new Error('Assertion failed: ' + message);
 }
 
@@ -44,7 +44,7 @@ const pdfData = await invoke('get_pdf_data', {
 });
 
 assert(pdfData !== null, 'get_pdf_data should return book data');
-const typedPdfData = pdfData as Record<string, unknown>;
+const typedPdfData = pdfData;
 assert(
   typedPdfData.title === 'Clean Code: A Handbook of Agile Software Craftsmanship',
   'PDF title should match, got "' + typedPdfData.title + '"'
@@ -56,7 +56,7 @@ assert(
   'Filepath should match'
 );
 assert(
-  Array.isArray(typedPdfData.cover) && (typedPdfData.cover as number[]).length === 8,
+  Array.isArray(typedPdfData.cover) && (typedPdfData.cover).length === 8,
   'Cover should be a byte array with PDF magic bytes'
 );
 assert(typedPdfData.coverKind === 'image/jpeg', 'Cover kind should be image/jpeg');
@@ -66,9 +66,9 @@ snapshot.take('after-get-pdf-data');
 // ============================
 // Test 2: Save PDF book to database via save_book
 // ============================
-let saveBookArgs: unknown = null;
+let saveBookArgs = null;
 
-bridge.interceptCommand('save_book', (args: unknown) => {
+bridge.interceptCommand('save_book', (args) => {
   saveBookArgs = args;
   return {
     id: 10,
@@ -104,7 +104,7 @@ const savedBook = await invoke('save_book', {
 });
 
 assert(saveBookArgs !== null, 'save_book interceptor should have been called');
-const typedSavedBook = savedBook as Record<string, unknown>;
+const typedSavedBook = savedBook;
 assert(typedSavedBook.id === 10, 'Saved book should have id 10');
 assert(typedSavedBook.format === 'pdf', 'Format should be pdf');
 assert(
@@ -140,7 +140,7 @@ bridge.mockCommand('get_book', mockRetrievedBook);
 
 const retrievedBook = await invoke('get_book', { bookId: 10 });
 assert(retrievedBook !== null, 'get_book should return the PDF book');
-const typedRetrievedBook = retrievedBook as Record<string, unknown>;
+const typedRetrievedBook = retrievedBook;
 assert(typedRetrievedBook.id === 10, 'Book id should be 10');
 assert(typedRetrievedBook.currentPage === 42, 'Current page should be 42');
 assert(typedRetrievedBook.location === 'page:42', 'Location should be "page:42"');
@@ -150,10 +150,10 @@ snapshot.take('after-get-pdf-book');
 // ============================
 // Test 4: Update PDF cover image
 // ============================
-let updateCoverArgs: unknown = null;
+let updateCoverArgs = null;
 let updateCoverCallCount = 0;
 
-bridge.interceptCommand('update_book_cover', (args: unknown) => {
+bridge.interceptCommand('update_book_cover', (args) => {
   updateCoverCallCount++;
   updateCoverArgs = args;
   return null; // returns void
@@ -173,15 +173,15 @@ await invoke('update_book_cover', {
 });
 
 assert(updateCoverCallCount === 1, 'update_book_cover should be called once');
-const coverArgs = updateCoverArgs as { bookId?: number; newCover?: number[] };
+const coverArgs = updateCoverArgs;
 assert(coverArgs.bookId === 10, 'Cover update should target book 10');
-const newCover = coverArgs.newCover!;
+const newCover = coverArgs.newCover;
 assert(
   Array.isArray(newCover) && newCover.length === 29,
   'New cover should be 29 bytes, got ' + newCover.length
 );
 assert(
-  newCover[0]! === 0x89 && newCover[1]! === 0x50,
+  newCover[0] === 0x89 && newCover[1] === 0x50,
   'Cover should start with PNG magic bytes'
 );
 
@@ -190,9 +190,9 @@ snapshot.take('after-update-cover');
 // ============================
 // Test 5: Update reading location for PDF
 // ============================
-let pdfLocationArgs: unknown = null;
+let pdfLocationArgs = null;
 
-bridge.interceptCommand('update_book_location', (args: unknown) => {
+bridge.interceptCommand('update_book_location', (args) => {
   pdfLocationArgs = args;
   return null;
 });
@@ -203,7 +203,7 @@ await invoke('update_book_location', {
 });
 
 assert(pdfLocationArgs !== null, 'update_book_location should have been called');
-const typedLocationArgs = pdfLocationArgs as { bookId?: number; newLocation?: string };
+const typedLocationArgs = pdfLocationArgs;
 assert(typedLocationArgs.bookId === 10, 'Should update book 10 location');
 assert(typedLocationArgs.newLocation === 'page:87', 'New location should be "page:87"');
 
@@ -231,7 +231,7 @@ const secondPdf = await invoke('get_pdf_data', {
 });
 
 assert(secondPdf !== null, 'Second PDF should load');
-const typedSecondPdf = secondPdf as Record<string, unknown>;
+const typedSecondPdf = secondPdf;
 assert(
   typedSecondPdf.title === 'Design Patterns: Elements of Reusable Object-Oriented Software',
   'Second PDF title should match'
@@ -246,10 +246,10 @@ snapshot.take('after-second-pdf');
 // ============================
 // Test 7: Verify complete IPC log
 // ============================
-const allLog: IpcLogEntry[] = ipc.log;
+const allLog = ipc.log;
 
 // Verify get_pdf_data calls
-const getPdfLog = allLog.filter((e: IpcLogEntry) => e.command === 'get_pdf_data');
+const getPdfLog = allLog.filter((e) => e.command === 'get_pdf_data');
 assert(
   getPdfLog.length === 2,
   'get_pdf_data should appear twice in IPC log (two PDFs), got ' + getPdfLog.length
@@ -258,28 +258,28 @@ assert(getPdfLog[0].mocked === true, 'First get_pdf_data should be mocked');
 assert(getPdfLog[1].mocked === true, 'Second get_pdf_data should be mocked');
 
 // Verify save_book was called
-const saveBookLog = allLog.filter((e: IpcLogEntry) => e.command === 'save_book');
+const saveBookLog = allLog.filter((e) => e.command === 'save_book');
 assert(saveBookLog.length === 1, 'save_book should appear once');
 assert(saveBookLog[0].mocked === true, 'save_book should be mocked');
 
 // Verify get_book was called
-const getBookLog = allLog.filter((e: IpcLogEntry) => e.command === 'get_book');
+const getBookLog = allLog.filter((e) => e.command === 'get_book');
 assert(getBookLog.length === 1, 'get_book should appear once');
 
 // Verify update_book_cover was called
-const coverLog = allLog.filter((e: IpcLogEntry) => e.command === 'update_book_cover');
+const coverLog = allLog.filter((e) => e.command === 'update_book_cover');
 assert(coverLog.length === 1, 'update_book_cover should appear once');
 
 // Verify update_book_location was called
-const locationLog = allLog.filter((e: IpcLogEntry) => e.command === 'update_book_location');
+const locationLog = allLog.filter((e) => e.command === 'update_book_location');
 assert(locationLog.length === 1, 'update_book_location should appear once');
 
 // Verify all entries are mocked
-const allMocked = allLog.every((e: IpcLogEntry) => e.mocked === true);
+const allMocked = allLog.every((e) => e.mocked === true);
 assert(allMocked, 'All IPC entries should be marked as mocked');
 
 // Verify correct command order
-const commandOrder = allLog.map((e: IpcLogEntry) => e.command);
+const commandOrder = allLog.map((e) => e.command);
 const expectedFirst = 'get_pdf_data';
 assert(
   commandOrder[0] === expectedFirst,

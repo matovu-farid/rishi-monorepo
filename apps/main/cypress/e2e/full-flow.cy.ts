@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Full user flow E2E test
 // Tests the complete lifecycle of using the Rishi book reader:
 // Import -> List -> Open -> Embed -> Search -> Read -> Delete
@@ -5,18 +6,17 @@
 //
 // NOTE: import is stripped by the headless runner; __tauriCypress is injected
 // as the function parameter by the webview's executeTestScript.
-import type { TauriCypressGlobal, IpcLogEntry } from 'tauri-cypress'
 
 export {}
 
-const tc: TauriCypressGlobal = __tauriCypress;
+const tc = __tauriCypress;
 const { bridge, ipc, snapshot } = tc;
 
-async function invoke(cmd: string, args?: unknown): Promise<unknown> {
+async function invoke(cmd, args) {
   return window.__TAURI_INTERNALS__.invoke(cmd, args);
 }
 
-function assert(condition: boolean, message: string): void {
+function assert(condition, message) {
   if (!condition) throw new Error('Assertion failed: ' + message);
 }
 
@@ -35,10 +35,10 @@ const EXTRACT_DIR = '/Users/testuser/.rishi/extracted/gatsby';
 // ============================
 
 // Step 1a: Unzip the EPUB file
-let unzipArgs: unknown = null;
-bridge.interceptCommand('unzip', (args: unknown) => {
+let unzipArgs = null;
+bridge.interceptCommand('unzip', (args) => {
   unzipArgs = args;
-  const typedArgs = args as { filePath?: string; outDir?: string };
+  const typedArgs = args;
   assert(
     typeof typedArgs?.filePath === 'string',
     'unzip requires filePath'
@@ -78,13 +78,13 @@ bridge.mockCommand('get_book_data', {
 });
 
 const bookData = await invoke('get_book_data', { path: EPUB_PATH });
-const typedBookData = bookData as Record<string, unknown>;
+const typedBookData = bookData;
 assert(typedBookData.title === 'The Great Gatsby', 'Extracted title should match');
 assert(typedBookData.kind === 'epub', 'Extracted kind should be epub');
 
 // Step 1c: Save the book to the database
-let savedBookData: unknown = null;
-bridge.interceptCommand('save_book', (args: unknown) => {
+let savedBookData = null;
+bridge.interceptCommand('save_book', (args) => {
   savedBookData = args;
   return {
     id: BOOK_ID,
@@ -122,7 +122,7 @@ const savedBook = await invoke('save_book', {
 });
 
 assert(savedBookData !== null, 'save_book should have been called');
-const typedSavedBook = savedBook as Record<string, unknown>;
+const typedSavedBook = savedBook;
 assert(typedSavedBook.id === BOOK_ID, 'Saved book should have id ' + BOOK_ID);
 
 snapshot.take('phase1-import-complete');
@@ -171,11 +171,11 @@ bridge.mockCommand('get_books', mockBookList);
 const books = await invoke('get_books');
 assert(Array.isArray(books), 'get_books should return an array');
 assert(
-  (books as unknown[]).length === 2,
+  (books).length === 2,
   'Should have 2 books in library'
 );
 
-const gatsby = (books as Record<string, unknown>[])[0];
+const gatsby = (books)[0];
 assert(gatsby.title === 'The Great Gatsby', 'First book should be The Great Gatsby');
 
 snapshot.take('phase2-book-list');
@@ -207,7 +207,7 @@ bridge.mockCommand('get_book', {
 const openedBook = await invoke('get_book', { bookId: BOOK_ID });
 assert(openedBook !== null, 'get_book should return the book');
 assert(
-  (openedBook as Record<string, unknown>).title === 'The Great Gatsby',
+  (openedBook).title === 'The Great Gatsby',
   'Opened book title should match'
 );
 
@@ -225,7 +225,7 @@ const pageChunks = [
   { id: 1005, pageNumber: 5, bookId: BOOK_ID, data: 'The abnormal mind is quick to detect and attach itself to this quality when it appears in a normal person.' },
 ];
 
-bridge.interceptCommand('save_page_data_many', (_args: unknown) => {
+bridge.interceptCommand('save_page_data_many', (_args) => {
   return null;
 });
 
@@ -236,19 +236,19 @@ snapshot.take('phase3-book-opened');
 // ============================
 // Phase 4: Generate embeddings for the book
 // ============================
-bridge.interceptCommand('embed', (args: unknown) => {
-  const typedArgs = args as { embedparams?: Array<{ text: string; metadata: { id: number; pageNumber: number; bookId: number } }> };
+bridge.interceptCommand('embed', (args) => {
+  const typedArgs = args;
   if (!typedArgs?.embedparams) return [];
 
   return typedArgs.embedparams.map((param, idx) => ({
     dim: EMBED_DIM,
-    embedding: Array(EMBED_DIM).fill(0).map((_: number, i: number) => Math.sin(param.metadata.id + i + idx) * 0.1),
+    embedding: Array(EMBED_DIM).fill(0).map((_, i) => Math.sin(param.metadata.id + i + idx) * 0.1),
     text: param.text,
     metadata: param.metadata,
   }));
 });
 
-bridge.interceptCommand('save_vectors', (_args: unknown) => {
+bridge.interceptCommand('save_vectors', (_args) => {
   return null;
 });
 
@@ -261,12 +261,12 @@ const embedParams = pageChunks.map(chunk => ({
 const embedResults = await invoke('embed', { embedparams: embedParams });
 assert(Array.isArray(embedResults), 'embed should return results');
 assert(
-  (embedResults as unknown[]).length === 5,
+  (embedResults).length === 5,
   'Should have 5 embeddings'
 );
 
 // Save the vectors
-const vectors = (embedResults as Array<{ metadata: { id: number }; embedding: number[] }>).map(r => ({
+const vectors = (embedResults).map(r => ({
   id: r.metadata.id,
   vector: r.embedding,
 }));
@@ -284,7 +284,7 @@ snapshot.take('phase4-embeddings-generated');
 // ============================
 
 // Step 5a: Vector search
-bridge.interceptCommand('search_vectors', (_args: unknown) => {
+bridge.interceptCommand('search_vectors', (_args) => {
   return [
     { id: 1001, distance: 0.15 },
     { id: 1003, distance: 0.22 },
@@ -299,30 +299,30 @@ const searchResults = await invoke('search_vectors', {
 });
 
 assert(
-  (searchResults as unknown[]).length === 2,
+  (searchResults).length === 2,
   'Search should return 2 results'
 );
 
 // Step 5b: Retrieve text for search results
-bridge.interceptCommand('get_text_from_vector_id', (args: unknown) => {
-  const typedArgs = args as { vectorId?: number };
-  const textMap: Record<number, string> = {
+bridge.interceptCommand('get_text_from_vector_id', (args) => {
+  const typedArgs = args;
+  const textMap = {
     1001: pageChunks[0].data,
     1003: pageChunks[2].data,
   };
   return textMap[typedArgs?.vectorId ?? 0] || '';
 });
 
-const topResults = searchResults as Array<{ id: number; distance: number }>;
+const topResults = searchResults;
 for (const result of topResults) {
   const text = await invoke('get_text_from_vector_id', { vectorId: result.id });
   assert(typeof text === 'string', 'Retrieved text should be a string');
-  assert((text as string).length > 0, 'Retrieved text should not be empty');
+  assert((text).length > 0, 'Retrieved text should not be empty');
 }
 
 // Step 5c: Full-text search
-bridge.interceptCommand('search_book_text', (args: unknown) => {
-  const typedArgs = args as { query?: string; bookId?: number };
+bridge.interceptCommand('search_book_text', (args) => {
+  const typedArgs = args;
   return [
     {
       id: 1001,
@@ -341,10 +341,10 @@ const ftsResults = await invoke('search_book_text', {
 
 assert(Array.isArray(ftsResults), 'FTS should return an array');
 assert(
-  (ftsResults as unknown[]).length === 1,
+  (ftsResults).length === 1,
   'FTS should find 1 result'
 );
-const ftsFirst = (ftsResults as Array<{ snippet: string }>)[0];
+const ftsFirst = (ftsResults)[0];
 assert(
   ftsFirst.snippet.includes('<mark>'),
   'FTS snippet should contain highlight markup'
@@ -355,10 +355,10 @@ snapshot.take('phase5-search-complete');
 // ============================
 // Phase 6: Update reading progress
 // ============================
-let locationHistory: string[] = [];
+let locationHistory = [];
 
-bridge.interceptCommand('update_book_location', (args: unknown) => {
-  const typedArgs = args as { bookId?: number; newLocation?: string };
+bridge.interceptCommand('update_book_location', (args) => {
+  const typedArgs = args;
   if (typedArgs?.newLocation) {
     locationHistory.push(typedArgs.newLocation);
   }
@@ -398,18 +398,18 @@ snapshot.take('phase6-reading-progress');
 // Phase 7: Delete the book
 // ============================
 let deleteBookCalled = false;
-let deletedBookId: number | null = null;
+let deletedBookId = null;
 
-bridge.interceptCommand('delete_book', (args: unknown) => {
+bridge.interceptCommand('delete_book', (args) => {
   deleteBookCalled = true;
-  const typedArgs = args as { bookId?: number };
+  const typedArgs = args;
   deletedBookId = typedArgs?.bookId ?? null;
   return null; // returns void
 });
 
 await invoke('delete_book', { bookId: BOOK_ID });
 
-assert((deleteBookCalled as boolean) === true, 'delete_book should have been called');
+assert((deleteBookCalled) === true, 'delete_book should have been called');
 assert(deletedBookId === BOOK_ID, 'Should delete book with id ' + BOOK_ID);
 
 // Verify the book is gone from the list
@@ -418,11 +418,11 @@ bridge.mockCommand('get_books', [mockBookList[1]]); // Only Clean Code remains
 
 const remainingBooks = await invoke('get_books');
 assert(
-  (remainingBooks as unknown[]).length === 1,
+  (remainingBooks).length === 1,
   'Only 1 book should remain after deletion'
 );
 assert(
-  (remainingBooks as Record<string, unknown>[])[0].title === 'Clean Code',
+  (remainingBooks)[0].title === 'Clean Code',
   'Remaining book should be Clean Code'
 );
 
@@ -431,10 +431,10 @@ snapshot.take('phase7-book-deleted');
 // ============================
 // Final: Verify the complete IPC log shows the full lifecycle
 // ============================
-const allLog: IpcLogEntry[] = ipc.log;
+const allLog = ipc.log;
 
 // Count all unique command types that should appear in the lifecycle
-const commandCounts: Record<string, number> = {};
+const commandCounts = {};
 for (const entry of allLog) {
   commandCounts[entry.command] = (commandCounts[entry.command] || 0) + 1;
 }
@@ -468,7 +468,7 @@ assert(commandCounts['update_book_location'] === 3, 'update_book_location should
 assert(commandCounts['delete_book'] === 1, 'delete_book should appear once');
 
 // Verify all entries are mocked
-const allMocked = allLog.every((e: IpcLogEntry) => e.mocked === true);
+const allMocked = allLog.every((e) => e.mocked === true);
 assert(allMocked, 'All IPC entries should be marked as mocked');
 
 // Verify chronological ordering
@@ -480,7 +480,7 @@ for (let i = 1; i < allLog.length; i++) {
 }
 
 // Verify lifecycle ordering by checking phase boundaries
-const commands = allLog.map((e: IpcLogEntry) => e.command);
+const commands = allLog.map((e) => e.command);
 const unzipIdx = commands.indexOf('unzip');
 const getBookDataIdx = commands.indexOf('get_book_data');
 const saveBookIdx = commands.indexOf('save_book');

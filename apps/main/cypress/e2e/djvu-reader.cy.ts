@@ -1,3 +1,4 @@
+// @ts-nocheck
 // DjVu reader E2E test
 // Tests the DjVu reading flow: loading metadata, page-by-page navigation,
 // page rendering (PNG bytes), text extraction, and verifying the page
@@ -5,18 +6,17 @@
 //
 // NOTE: import is stripped by the headless runner; __tauriCypress is injected
 // as the function parameter by the webview's executeTestScript.
-import type { TauriCypressGlobal, IpcLogEntry } from 'tauri-cypress'
 
 export {}
 
-const tc: TauriCypressGlobal = __tauriCypress;
+const tc = __tauriCypress;
 const { bridge, ipc, snapshot } = tc;
 
-async function invoke(cmd: string, args?: unknown): Promise<unknown> {
+async function invoke(cmd, args) {
   return window.__TAURI_INTERNALS__.invoke(cmd, args);
 }
 
-function assert(condition: boolean, message: string): void {
+function assert(condition, message) {
   if (!condition) throw new Error('Assertion failed: ' + message);
 }
 
@@ -41,7 +41,7 @@ const mockDjvuData = {
 };
 
 // Fake PNG bytes for rendered pages (realistic header + varying body size)
-function makeFakePagePng(pageNum: number): number[] {
+function makeFakePagePng(pageNum) {
   const header = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   // Add IHDR chunk with page-specific data so pages have different sizes
   const ihdr = [0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52];
@@ -49,7 +49,7 @@ function makeFakePagePng(pageNum: number): number[] {
   return [...header, ...ihdr, ...pageData];
 }
 
-const mockPageText: Record<number, string[]> = {
+const mockPageText = {
   1: [
     'The study of mathematics is apt to commence in disappointment.',
     'The important applications of ideas, of which the first vague beginnings are so simple.',
@@ -79,7 +79,7 @@ bridge.mockCommand('get_djvu_data', mockDjvuData);
 
 const djvuData = await invoke('get_djvu_data', { path: djvuFilePath });
 assert(djvuData !== null, 'get_djvu_data should return book data');
-const typedDjvuData = djvuData as Record<string, unknown>;
+const typedDjvuData = djvuData;
 assert(
   typedDjvuData.title === 'Introduction to Mathematics',
   'Title should be "Introduction to Mathematics", got "' + typedDjvuData.title + '"'
@@ -107,10 +107,10 @@ snapshot.take('after-get-page-count');
 // ============================
 // Test 3: Render pages as PNG (simulate page-by-page navigation)
 // ============================
-let pageRenderLog: Array<{ page: number; dpi: number }> = [];
+let pageRenderLog = [];
 
-bridge.interceptCommand('get_djvu_page', (args: unknown) => {
-  const typedArgs = args as { path?: string; pageNumber?: number; dpi?: number };
+bridge.interceptCommand('get_djvu_page', (args) => {
+  const typedArgs = args;
   const pageNum = typedArgs?.pageNumber ?? 1;
   const dpi = typedArgs?.dpi ?? 300;
   pageRenderLog.push({ page: pageNum, dpi });
@@ -140,7 +140,7 @@ for (let page = 1; page <= 3; page++) {
   });
 
   assert(Array.isArray(pngBytes), 'Page ' + page + ' should return byte array');
-  const bytes = pngBytes as number[];
+  const bytes = pngBytes;
   assert(bytes.length > 0, 'Page ' + page + ' PNG should not be empty');
   // Verify PNG magic bytes
   assert(
@@ -193,10 +193,10 @@ snapshot.take('after-page-jump-and-zoom');
 // ============================
 // Test 5: Extract text from pages
 // ============================
-let textRequestLog: number[] = [];
+let textRequestLog = [];
 
-bridge.interceptCommand('get_djvu_page_text', (args: unknown) => {
-  const typedArgs = args as { path?: string; pageNumber?: number };
+bridge.interceptCommand('get_djvu_page_text', (args) => {
+  const typedArgs = args;
   const pageNum = typedArgs?.pageNumber ?? 1;
   textRequestLog.push(pageNum);
 
@@ -223,7 +223,7 @@ for (let page = 1; page <= 3; page++) {
     Array.isArray(textSegments),
     'get_djvu_page_text should return string array for page ' + page
   );
-  const segments = textSegments as string[];
+  const segments = textSegments;
   assert(segments.length === 2, 'Page ' + page + ' should have 2 text segments');
 }
 
@@ -241,7 +241,7 @@ const page1Text = await invoke('get_djvu_page_text', {
   path: djvuFilePath,
   pageNumber: 1,
 });
-const p1Segments = page1Text as string[];
+const p1Segments = page1Text;
 assert(
   p1Segments[0].includes('mathematics'),
   'Page 1 first segment should mention mathematics'
@@ -252,10 +252,10 @@ snapshot.take('after-text-extraction');
 // ============================
 // Test 6: Save reading progress
 // ============================
-let progressUpdates: Array<{ bookId: number; location: string }> = [];
+let progressUpdates = [];
 
-bridge.interceptCommand('update_book_location', (args: unknown) => {
-  const typedArgs = args as { bookId?: number; newLocation?: string };
+bridge.interceptCommand('update_book_location', (args) => {
+  const typedArgs = args;
   progressUpdates.push({
     bookId: typedArgs?.bookId ?? 0,
     location: typedArgs?.newLocation ?? '',
@@ -281,27 +281,27 @@ snapshot.take('after-progress-saves');
 // ============================
 // Test 7: Verify complete IPC log and page loading sequence
 // ============================
-const allLog: IpcLogEntry[] = ipc.log;
+const allLog = ipc.log;
 
 // Verify get_djvu_data
-const getDjvuDataLog = allLog.filter((e: IpcLogEntry) => e.command === 'get_djvu_data');
+const getDjvuDataLog = allLog.filter((e) => e.command === 'get_djvu_data');
 assert(getDjvuDataLog.length === 1, 'get_djvu_data should appear once');
 
 // Verify get_djvu_page_count
 const pageCountLog = allLog.filter(
-  (e: IpcLogEntry) => e.command === 'get_djvu_page_count'
+  (e) => e.command === 'get_djvu_page_count'
 );
 assert(pageCountLog.length === 1, 'get_djvu_page_count should appear once');
 
 // Verify get_djvu_page calls (3 sequential + 1 jump + 1 zoom = 5)
-const pageLog = allLog.filter((e: IpcLogEntry) => e.command === 'get_djvu_page');
+const pageLog = allLog.filter((e) => e.command === 'get_djvu_page');
 assert(
   pageLog.length === 5,
   'get_djvu_page should appear 5 times, got ' + pageLog.length
 );
 
 // Verify get_djvu_page_text calls (3 in loop + 1 extra = 4)
-const textLog = allLog.filter((e: IpcLogEntry) => e.command === 'get_djvu_page_text');
+const textLog = allLog.filter((e) => e.command === 'get_djvu_page_text');
 assert(
   textLog.length === 4,
   'get_djvu_page_text should appear 4 times, got ' + textLog.length
@@ -309,7 +309,7 @@ assert(
 
 // Verify update_book_location calls
 const locationLog = allLog.filter(
-  (e: IpcLogEntry) => e.command === 'update_book_location'
+  (e) => e.command === 'update_book_location'
 );
 assert(
   locationLog.length === 3,
@@ -317,11 +317,11 @@ assert(
 );
 
 // Verify all entries are mocked
-const allMocked = allLog.every((e: IpcLogEntry) => e.mocked === true);
+const allMocked = allLog.every((e) => e.mocked === true);
 assert(allMocked, 'All IPC entries should be marked as mocked');
 
 // Verify ordering: metadata -> page count -> page renders -> text -> progress
-const commandSequence = allLog.map((e: IpcLogEntry) => e.command);
+const commandSequence = allLog.map((e) => e.command);
 const dataIdx = commandSequence.indexOf('get_djvu_data');
 const countIdx = commandSequence.indexOf('get_djvu_page_count');
 const firstPageIdx = commandSequence.indexOf('get_djvu_page');

@@ -1,21 +1,21 @@
+// @ts-nocheck
 // EPUB reader E2E test
 // Tests the full EPUB reading flow: loading book data, page data persistence,
 // reading progress tracking, and verifying all IPC interactions.
 //
 // NOTE: import is stripped by the headless runner; __tauriCypress is injected
 // as the function parameter by the webview's executeTestScript.
-import type { TauriCypressGlobal, IpcLogEntry } from 'tauri-cypress'
 
 export {}
 
-const tc: TauriCypressGlobal = __tauriCypress;
+const tc = __tauriCypress;
 const { bridge, ipc, snapshot } = tc;
 
-async function invoke(cmd: string, args?: unknown): Promise<unknown> {
+async function invoke(cmd, args) {
   return window.__TAURI_INTERNALS__.invoke(cmd, args);
 }
 
-function assert(condition: boolean, message: string): void {
+function assert(condition, message) {
   if (!condition) throw new Error('Assertion failed: ' + message);
 }
 
@@ -86,7 +86,7 @@ const bookData = await invoke('get_book_data', {
 });
 
 assert(bookData !== null, 'get_book_data should return book data');
-const typedBookData = bookData as Record<string, unknown>;
+const typedBookData = bookData;
 assert(
   typedBookData.title === 'The Great Gatsby',
   'Book title should be "The Great Gatsby", got "' + typedBookData.title + '"'
@@ -104,7 +104,7 @@ assert(
   'Filepath should match'
 );
 assert(
-  Array.isArray(typedBookData.cover) && (typedBookData.cover as number[]).length === 8,
+  Array.isArray(typedBookData.cover) && (typedBookData.cover).length === 8,
   'Cover should be a byte array with 8 PNG header bytes'
 );
 
@@ -118,15 +118,15 @@ bridge.mockCommand('get_books', mockBookList);
 const books = await invoke('get_books');
 assert(Array.isArray(books), 'get_books should return an array');
 assert(
-  (books as unknown[]).length === 2,
-  'Should return 2 books, got ' + (books as unknown[]).length
+  (books).length === 2,
+  'Should return 2 books, got ' + (books).length
 );
 
-const firstBook = (books as Record<string, unknown>[])[0];
+const firstBook = (books)[0];
 assert(firstBook.id === 1, 'First book id should be 1');
 assert(firstBook.title === 'The Great Gatsby', 'First book should be The Great Gatsby');
 
-const secondBook = (books as Record<string, unknown>[])[1];
+const secondBook = (books)[1];
 assert(secondBook.currentPage === 15, 'Second book should have currentPage = 15');
 assert(
   secondBook.currentCfi === 'epubcfi(/6/8!/4/2)',
@@ -155,9 +155,9 @@ snapshot.take('after-has-saved-epub-data');
 // ============================
 // Test 4: Save page data via save_page_data_many
 // ============================
-let savedPageDataArgs: unknown = null;
+let savedPageDataArgs = null;
 
-bridge.interceptCommand('save_page_data_many', (args: unknown) => {
+bridge.interceptCommand('save_page_data_many', (args) => {
   savedPageDataArgs = args;
   return null; // returns void
 });
@@ -172,7 +172,7 @@ const pageDataToSave = [
 
 await invoke('save_page_data_many', { pageData: pageDataToSave });
 assert(savedPageDataArgs !== null, 'save_page_data_many interceptor should have been called');
-const savedArgs = savedPageDataArgs as { pageData?: unknown[] };
+const savedArgs = savedPageDataArgs;
 assert(
   Array.isArray(savedArgs.pageData) && savedArgs.pageData.length === 5,
   'Should have saved 5 page data entries'
@@ -196,21 +196,21 @@ bridge.mockCommand('get_all_page_data_by_book_id', mockPageData);
 const retrievedPageData = await invoke('get_all_page_data_by_book_id', { bookId: 1 });
 assert(Array.isArray(retrievedPageData), 'get_all_page_data_by_book_id should return an array');
 assert(
-  (retrievedPageData as unknown[]).length === 5,
-  'Should return 5 page data entries, got ' + (retrievedPageData as unknown[]).length
+  (retrievedPageData).length === 5,
+  'Should return 5 page data entries, got ' + (retrievedPageData).length
 );
 
-const firstPage = (retrievedPageData as Record<string, unknown>[])[0];
+const firstPage = (retrievedPageData)[0];
 assert(firstPage.pageNumber === 1, 'First page number should be 1');
 assert(
-  (firstPage.data as string).includes('younger and more vulnerable'),
+  (firstPage.data).includes('younger and more vulnerable'),
   'First page data should contain chapter 1 text'
 );
 
-const lastPage = (retrievedPageData as Record<string, unknown>[])[4];
+const lastPage = (retrievedPageData)[4];
 assert(lastPage.pageNumber === 5, 'Last page number should be 5');
 assert(
-  (lastPage.data as string).includes('Jay Gatsby'),
+  (lastPage.data).includes('Jay Gatsby'),
   'Last page data should contain Gatsby reference'
 );
 
@@ -219,10 +219,10 @@ snapshot.take('after-get-page-data');
 // ============================
 // Test 6: Update reading progress (location)
 // ============================
-let updateLocationArgs: unknown = null;
+let updateLocationArgs = null;
 let updateLocationCallCount = 0;
 
-bridge.interceptCommand('update_book_location', (args: unknown) => {
+bridge.interceptCommand('update_book_location', (args) => {
   updateLocationCallCount++;
   updateLocationArgs = args;
   return null; // returns void
@@ -235,7 +235,7 @@ await invoke('update_book_location', {
 });
 
 assert(updateLocationCallCount === 1, 'update_book_location should be called once');
-const locationArgs = updateLocationArgs as { bookId?: number; newLocation?: string };
+const locationArgs = updateLocationArgs;
 assert(locationArgs.bookId === 1, 'Book ID should be 1');
 assert(
   locationArgs.newLocation === 'epubcfi(/6/12[chap03ref]!/4/2/6)',
@@ -249,7 +249,7 @@ await invoke('update_book_location', {
 });
 
 assert(updateLocationCallCount === 2, 'update_book_location should be called twice now');
-const secondLocationArgs = updateLocationArgs as { bookId?: number; newLocation?: string };
+const secondLocationArgs = updateLocationArgs;
 assert(
   secondLocationArgs.newLocation === 'epubcfi(/6/20[chap05ref]!/4/2/2)',
   'Second update should have chapter 5 CFI'
@@ -260,39 +260,39 @@ snapshot.take('after-update-location');
 // ============================
 // Test 7: Verify complete IPC log
 // ============================
-const allLog: IpcLogEntry[] = ipc.log;
+const allLog = ipc.log;
 
 // Verify get_book_data was called
-const getBookDataLog = allLog.filter((e: IpcLogEntry) => e.command === 'get_book_data');
+const getBookDataLog = allLog.filter((e) => e.command === 'get_book_data');
 assert(getBookDataLog.length === 1, 'get_book_data should appear once in IPC log');
 assert(getBookDataLog[0].mocked === true, 'get_book_data should be mocked');
 
 // Verify get_books was called
-const getBooksLog = allLog.filter((e: IpcLogEntry) => e.command === 'get_books');
+const getBooksLog = allLog.filter((e) => e.command === 'get_books');
 assert(getBooksLog.length === 1, 'get_books should appear once in IPC log');
 assert(getBooksLog[0].mocked === true, 'get_books should be mocked');
 
 // Verify has_saved_epub_data was called twice
-const hasSavedLog = allLog.filter((e: IpcLogEntry) => e.command === 'has_saved_epub_data');
+const hasSavedLog = allLog.filter((e) => e.command === 'has_saved_epub_data');
 assert(
   hasSavedLog.length === 2,
   'has_saved_epub_data should appear twice in IPC log, got ' + hasSavedLog.length
 );
 
 // Verify save_page_data_many was called
-const savePageLog = allLog.filter((e: IpcLogEntry) => e.command === 'save_page_data_many');
+const savePageLog = allLog.filter((e) => e.command === 'save_page_data_many');
 assert(savePageLog.length === 1, 'save_page_data_many should appear once');
 assert(savePageLog[0].mocked === true, 'save_page_data_many should be mocked (intercepted)');
 
 // Verify get_all_page_data_by_book_id was called
 const getPageDataLog = allLog.filter(
-  (e: IpcLogEntry) => e.command === 'get_all_page_data_by_book_id'
+  (e) => e.command === 'get_all_page_data_by_book_id'
 );
 assert(getPageDataLog.length === 1, 'get_all_page_data_by_book_id should appear once');
 
 // Verify update_book_location was called twice
 const updateLocationLog = allLog.filter(
-  (e: IpcLogEntry) => e.command === 'update_book_location'
+  (e) => e.command === 'update_book_location'
 );
 assert(
   updateLocationLog.length === 2,
@@ -300,7 +300,7 @@ assert(
 );
 
 // Verify all entries are mocked
-const allMocked = allLog.every((e: IpcLogEntry) => e.mocked === true);
+const allMocked = allLog.every((e) => e.mocked === true);
 assert(allMocked, 'All IPC entries should be marked as mocked');
 
 // Verify chronological ordering via timestamps

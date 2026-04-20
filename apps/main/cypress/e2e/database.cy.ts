@@ -1,22 +1,24 @@
+// @ts-nocheck
 // Database operations E2E test
 // Tests SQL command mocking: get_books, get_book, save_book, delete_book
 // Verifies IPC log entries reflect correct mock status and call counts
 //
 // NOTE: import is stripped by the headless runner; __tauriCypress is injected
 // as the function parameter by the webview's executeTestScript.
-import type { TauriCypressGlobal, IpcLogEntry } from 'tauri-cypress'
 
-const tc: TauriCypressGlobal = __tauriCypress;
+export {}
+
+const tc = __tauriCypress;
 const { bridge, ipc, snapshot } = tc;
 
 // ---------------------------------------------------------------------------
 // Helper: invoke a Tauri command through the monkey-patched invoke pathway
 // ---------------------------------------------------------------------------
-async function invoke(cmd: string, args?: unknown): Promise<unknown> {
+async function invoke(cmd, args) {
   return window.__TAURI_INTERNALS__.invoke(cmd, args);
 }
 
-function assert(condition: boolean, message: string): void {
+function assert(condition, message) {
   if (!condition) throw new Error('Assertion failed: ' + message);
 }
 
@@ -68,19 +70,19 @@ bridge.mockCommand('get_books', mockBooks);
 const booksResult = await invoke('get_books');
 assert(Array.isArray(booksResult), 'get_books should return an array');
 assert(
-  (booksResult as unknown[]).length === 2,
-  'get_books should return 2 books, got ' + (booksResult as unknown[]).length
+  (booksResult).length === 2,
+  'get_books should return 2 books, got ' + (booksResult).length
 );
 
-const firstBook = (booksResult as Record<string, unknown>[])[0];
+const firstBook = (booksResult)[0];
 assert(
   firstBook.title === 'The Great Gatsby',
   'First book title should be "The Great Gatsby", got "' + firstBook.title + '"'
 );
 
 // Verify IPC log for get_books
-const getBooksLog: IpcLogEntry[] = ipc.log.filter(
-  (e: IpcLogEntry) => e.command === 'get_books'
+const getBooksLog = ipc.log.filter(
+  (e) => e.command === 'get_books'
 );
 assert(getBooksLog.length === 1, 'get_books should have 1 IPC log entry');
 assert(getBooksLog[0].mocked === true, 'get_books log entry should be marked as mocked');
@@ -115,20 +117,20 @@ bridge.mockCommand('get_book', mockSingleBook);
 const bookResult = await invoke('get_book', { bookId: 1 });
 assert(bookResult !== null, 'get_book should return a book');
 assert(
-  (bookResult as Record<string, unknown>).title === 'The Great Gatsby',
+  (bookResult).title === 'The Great Gatsby',
   'get_book should return correct title'
 );
 assert(
-  (bookResult as Record<string, unknown>).currentPage === 42,
+  (bookResult).currentPage === 42,
   'get_book should return currentPage = 42'
 );
 
 // ============================
 // Test 3: Mock save_book and verify it is called with correct args
 // ============================
-let saveBookCalledWith: unknown = null;
+let saveBookCalledWith = null;
 
-bridge.interceptCommand('save_book', (args: unknown) => {
+bridge.interceptCommand('save_book', (args) => {
   saveBookCalledWith = args;
   return {
     id: 3,
@@ -165,13 +167,13 @@ const saveArgs = {
 const savedBook = await invoke('save_book', saveArgs);
 assert(saveBookCalledWith !== null, 'save_book interceptor should have been called');
 assert(
-  (savedBook as Record<string, unknown>).id === 3,
+  (savedBook).id === 3,
   'save_book should return book with id 3'
 );
 
 // Verify save_book appears in IPC log as mocked (intercepted)
-const saveBookLog: IpcLogEntry[] = ipc.log.filter(
-  (e: IpcLogEntry) => e.command === 'save_book'
+const saveBookLog = ipc.log.filter(
+  (e) => e.command === 'save_book'
 );
 assert(saveBookLog.length === 1, 'save_book should have 1 IPC log entry');
 assert(saveBookLog[0].mocked === true, 'save_book should be marked as mocked (intercepted)');
@@ -179,21 +181,21 @@ assert(saveBookLog[0].mocked === true, 'save_book should be marked as mocked (in
 // ============================
 // Test 4: Mock delete_book and verify call
 // ============================
-let deleteBookCalled: boolean = false;
+let deleteBookCalled = false;
 
-bridge.interceptCommand('delete_book', (_args: unknown) => {
+bridge.interceptCommand('delete_book', (_args) => {
   deleteBookCalled = true;
   return null; // delete returns void/null
 });
 
 await invoke('delete_book', { bookId: 1 });
-assert((deleteBookCalled as boolean) === true, 'delete_book interceptor should have been called');
+assert((deleteBookCalled) === true, 'delete_book interceptor should have been called');
 
 // ============================
 // Test 5: Verify total IPC log state
 // ============================
-const allLog: IpcLogEntry[] = ipc.log;
-const mockedEntries = allLog.filter((e: IpcLogEntry) => e.mocked === true);
+const allLog = ipc.log;
+const mockedEntries = allLog.filter((e) => e.mocked === true);
 assert(
   mockedEntries.length >= 4,
   'Should have at least 4 mocked IPC entries (get_books, get_book, save_book, delete_book), got ' +
@@ -214,7 +216,7 @@ bridge.mockCommand('get_all_page_data_by_book_id', [
 const pageData = await invoke('get_all_page_data_by_book_id', { bookId: 1 });
 assert(Array.isArray(pageData), 'get_all_page_data_by_book_id should return an array');
 assert(
-  (pageData as unknown[]).length === 2,
+  (pageData).length === 2,
   'Should return 2 page data entries'
 );
 

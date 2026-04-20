@@ -1,3 +1,4 @@
+// @ts-nocheck
 // MOBI reader E2E test
 // Tests the MOBI reading flow: loading book metadata, chapter-by-chapter
 // navigation, text extraction, and verifying the chapter loading sequence
@@ -5,18 +6,17 @@
 //
 // NOTE: import is stripped by the headless runner; __tauriCypress is injected
 // as the function parameter by the webview's executeTestScript.
-import type { TauriCypressGlobal, IpcLogEntry } from 'tauri-cypress'
 
 export {}
 
-const tc: TauriCypressGlobal = __tauriCypress;
+const tc = __tauriCypress;
 const { bridge, ipc, snapshot } = tc;
 
-async function invoke(cmd: string, args?: unknown): Promise<unknown> {
+async function invoke(cmd, args) {
   return window.__TAURI_INTERNALS__.invoke(cmd, args);
 }
 
-function assert(condition: boolean, message: string): void {
+function assert(condition, message) {
   if (!condition) throw new Error('Assertion failed: ' + message);
 }
 
@@ -40,7 +40,7 @@ const mockMobiData = {
   version: 0,
 };
 
-const mockChapters: Record<number, string> = {
+const mockChapters = {
   0: '<h1>Loomings</h1><p>Call me Ishmael. Some years ago - never mind how long precisely - having little or no money in my purse, and nothing particular to interest me on shore, I thought I would sail about a little and see the watery part of the world.</p>',
   1: '<h1>The Carpet-Bag</h1><p>I stuffed a shirt or two into my old carpet-bag, tucked it under my arm, and started for Cape Horn and the Pacific.</p>',
   2: '<h1>The Spouter-Inn</h1><p>Entering that gable-ended Spouter-Inn, you found yourself in a wide, low, straggling entry with old-fashioned wainscots.</p>',
@@ -48,7 +48,7 @@ const mockChapters: Record<number, string> = {
   4: '<h1>Breakfast</h1><p>I quickly followed suit, and descending into the bar-room accosted the grinning landlord very pleasantly.</p>',
 };
 
-const mockChapterText: Record<number, string[]> = {
+const mockChapterText = {
   0: [
     'Call me Ishmael.',
     'Some years ago - never mind how long precisely - having little or no money in my purse.',
@@ -79,7 +79,7 @@ bridge.mockCommand('get_mobi_data', mockMobiData);
 
 const mobiData = await invoke('get_mobi_data', { path: mobiFilePath });
 assert(mobiData !== null, 'get_mobi_data should return book data');
-const typedMobiData = mobiData as Record<string, unknown>;
+const typedMobiData = mobiData;
 assert(typedMobiData.title === 'Moby Dick', 'Title should be "Moby Dick"');
 assert(typedMobiData.kind === 'mobi', 'Kind should be "mobi"');
 assert(typedMobiData.author === 'Herman Melville', 'Author should be Herman Melville');
@@ -101,10 +101,10 @@ snapshot.take('after-get-chapter-count');
 // ============================
 // Test 3: Load chapters sequentially (simulate reader navigating)
 // ============================
-let chapterRequestLog: number[] = [];
+let chapterRequestLog = [];
 
-bridge.interceptCommand('get_mobi_chapter', (args: unknown) => {
-  const typedArgs = args as { path?: string; chapterIndex?: number };
+bridge.interceptCommand('get_mobi_chapter', (args) => {
+  const typedArgs = args;
   const idx = typedArgs?.chapterIndex ?? 0;
   chapterRequestLog.push(idx);
 
@@ -128,7 +128,7 @@ for (let i = 0; i < 3; i++) {
   });
 
   assert(typeof chapterHtml === 'string', 'Chapter ' + i + ' should return HTML string');
-  const html = chapterHtml as string;
+  const html = chapterHtml;
   assert(html.includes('<h1>'), 'Chapter ' + i + ' HTML should contain an h1 heading');
   assert(html.includes('<p>'), 'Chapter ' + i + ' HTML should contain paragraph content');
 }
@@ -154,7 +154,7 @@ const jumpChapterHtml = await invoke('get_mobi_chapter', {
 
 assert(typeof jumpChapterHtml === 'string', 'Jump-to chapter should return HTML');
 assert(
-  (jumpChapterHtml as string).includes('Breakfast'),
+  (jumpChapterHtml).includes('Breakfast'),
   'Chapter 4 should be the Breakfast chapter'
 );
 assert(chapterRequestLog[3] === 4, 'Fourth request should be for chapter 4 (jump)');
@@ -164,10 +164,10 @@ snapshot.take('after-chapter-jump');
 // ============================
 // Test 5: Extract text from chapters via get_mobi_text
 // ============================
-let textRequestLog: number[] = [];
+let textRequestLog = [];
 
-bridge.interceptCommand('get_mobi_text', (args: unknown) => {
-  const typedArgs = args as { path?: string; chapterIndex?: number };
+bridge.interceptCommand('get_mobi_text', (args) => {
+  const typedArgs = args;
   const idx = typedArgs?.chapterIndex ?? 0;
   textRequestLog.push(idx);
 
@@ -186,7 +186,7 @@ for (let i = 0; i < 3; i++) {
   });
 
   assert(Array.isArray(textSegments), 'get_mobi_text should return string array for chapter ' + i);
-  const segments = textSegments as string[];
+  const segments = textSegments;
   assert(segments.length > 0, 'Chapter ' + i + ' should have at least one text segment');
 }
 
@@ -204,7 +204,7 @@ const ch0Text = await invoke('get_mobi_text', {
   path: mobiFilePath,
   chapterIndex: 0,
 });
-const ch0Segments = ch0Text as string[];
+const ch0Segments = ch0Text;
 assert(
   ch0Segments[0] === 'Call me Ishmael.',
   'First segment of chapter 0 should be the famous opening line'
@@ -215,10 +215,10 @@ snapshot.take('after-text-extraction');
 // ============================
 // Test 6: Simulate full read-through and save progress
 // ============================
-let locationUpdates: string[] = [];
+let locationUpdates = [];
 
-bridge.interceptCommand('update_book_location', (args: unknown) => {
-  const typedArgs = args as { bookId?: number; newLocation?: string };
+bridge.interceptCommand('update_book_location', (args) => {
+  const typedArgs = args;
   if (typedArgs?.newLocation) {
     locationUpdates.push(typedArgs.newLocation);
   }
@@ -245,28 +245,28 @@ snapshot.take('after-progress-tracking');
 // ============================
 // Test 7: Verify complete IPC log and chapter loading sequence
 // ============================
-const allLog: IpcLogEntry[] = ipc.log;
+const allLog = ipc.log;
 
 // Verify get_mobi_data
-const getMobiDataLog = allLog.filter((e: IpcLogEntry) => e.command === 'get_mobi_data');
+const getMobiDataLog = allLog.filter((e) => e.command === 'get_mobi_data');
 assert(getMobiDataLog.length === 1, 'get_mobi_data should appear once');
 assert(getMobiDataLog[0].mocked === true, 'get_mobi_data should be mocked');
 
 // Verify get_mobi_chapter_count
 const chapterCountLog = allLog.filter(
-  (e: IpcLogEntry) => e.command === 'get_mobi_chapter_count'
+  (e) => e.command === 'get_mobi_chapter_count'
 );
 assert(chapterCountLog.length === 1, 'get_mobi_chapter_count should appear once');
 
 // Verify get_mobi_chapter calls (3 sequential + 1 jump = 4)
-const chapterLog = allLog.filter((e: IpcLogEntry) => e.command === 'get_mobi_chapter');
+const chapterLog = allLog.filter((e) => e.command === 'get_mobi_chapter');
 assert(
   chapterLog.length === 4,
   'get_mobi_chapter should appear 4 times, got ' + chapterLog.length
 );
 
 // Verify get_mobi_text calls (3 in loop + 1 extra = 4)
-const textLog = allLog.filter((e: IpcLogEntry) => e.command === 'get_mobi_text');
+const textLog = allLog.filter((e) => e.command === 'get_mobi_text');
 assert(
   textLog.length === 4,
   'get_mobi_text should appear 4 times, got ' + textLog.length
@@ -274,7 +274,7 @@ assert(
 
 // Verify update_book_location calls (5 total for full read-through)
 const locationLog = allLog.filter(
-  (e: IpcLogEntry) => e.command === 'update_book_location'
+  (e) => e.command === 'update_book_location'
 );
 assert(
   locationLog.length === 5,
@@ -282,11 +282,11 @@ assert(
 );
 
 // Verify all entries are mocked
-const allMocked = allLog.every((e: IpcLogEntry) => e.mocked === true);
+const allMocked = allLog.every((e) => e.mocked === true);
 assert(allMocked, 'All IPC entries should be marked as mocked');
 
 // Verify the loading sequence: data -> count -> chapters -> text -> progress
-const commandSequence = allLog.map((e: IpcLogEntry) => e.command);
+const commandSequence = allLog.map((e) => e.command);
 const dataIdx = commandSequence.indexOf('get_mobi_data');
 const countIdx = commandSequence.indexOf('get_mobi_chapter_count');
 const firstChapterIdx = commandSequence.indexOf('get_mobi_chapter');

@@ -1,3 +1,4 @@
+// @ts-nocheck
 // AI features E2E test
 // Tests the full AI/embedding pipeline: embedding text, saving vectors,
 // searching vectors, retrieving context, and processing jobs.
@@ -5,18 +6,16 @@
 //
 // NOTE: import is stripped by the headless runner; __tauriCypress is injected
 // as the function parameter by the webview's executeTestScript.
-import type { TauriCypressGlobal, IpcLogEntry } from 'tauri-cypress'
-
 export {}
 
-const tc: TauriCypressGlobal = __tauriCypress;
+const tc = __tauriCypress;
 const { bridge, ipc, snapshot } = tc;
 
-async function invoke(cmd: string, args?: unknown): Promise<unknown> {
+async function invoke(cmd, args) {
   return window.__TAURI_INTERNALS__.invoke(cmd, args);
 }
 
-function assert(condition: boolean, message: string): void {
+function assert(condition, message) {
   if (!condition) throw new Error('Assertion failed: ' + message);
 }
 
@@ -30,8 +29,8 @@ const BOOK_ID = 1;
 const VECTOR_DB_NAME = BOOK_ID + '-vectordb';
 
 // Generate a deterministic fake embedding from a seed
-function fakeEmbedding(seed: number): number[] {
-  const vec: number[] = [];
+function fakeEmbedding(seed) {
+  const vec = [];
   for (let i = 0; i < EMBED_DIM; i++) {
     vec.push(Math.sin(seed * 1000 + i) * 0.1);
   }
@@ -76,13 +75,13 @@ const testChunks = [
 // Test 1: Embed text into vectors
 // ============================
 let embedCallCount = 0;
-let _lastEmbedArgs: unknown = null;
+let _lastEmbedArgs = null;
 
-bridge.interceptCommand('embed', (args: unknown) => {
+bridge.interceptCommand('embed', (args) => {
   embedCallCount++;
   _lastEmbedArgs = args;
 
-  const typedArgs = args as { embedparams?: Array<{ text: string; metadata: { id: number; pageNumber: number; bookId: number } }> };
+  const typedArgs = args;
 
   assert(
     typedArgs?.embedparams !== undefined && typedArgs.embedparams.length > 0,
@@ -107,12 +106,7 @@ const embedResults = await invoke('embed', { embedparams: embedParams });
 assert(embedCallCount === 1, 'embed should be called once');
 assert(Array.isArray(embedResults), 'embed should return an array');
 
-const typedEmbedResults = embedResults as Array<{
-  dim: number;
-  embedding: number[];
-  text: string | null;
-  metadata: { id: number; pageNumber: number; bookId: number };
-}>;
+const typedEmbedResults = embedResults;
 
 assert(
   typedEmbedResults.length === 5,
@@ -141,13 +135,13 @@ snapshot.take('after-embed');
 // Test 2: Save vectors to vector database
 // ============================
 let saveVectorsCallCount = 0;
-let saveVectorsArgs: unknown = null;
+let saveVectorsArgs = null;
 
-bridge.interceptCommand('save_vectors', (args: unknown) => {
+bridge.interceptCommand('save_vectors', (args) => {
   saveVectorsCallCount++;
   saveVectorsArgs = args;
 
-  const typedArgs = args as { name?: string; dim?: number; vectors?: Array<{ id: number; vector: number[] }> };
+  const typedArgs = args;
 
   assert(
     typedArgs?.name === VECTOR_DB_NAME,
@@ -187,7 +181,7 @@ await invoke('save_vectors', {
 
 assert(saveVectorsCallCount === 1, 'save_vectors should be called once');
 
-const savedVecArgs = saveVectorsArgs as { vectors?: Array<{ id: number; vector: number[] }> };
+const savedVecArgs = saveVectorsArgs;
 assert(
   savedVecArgs.vectors?.length === 5,
   'Should have saved 5 vectors'
@@ -200,9 +194,9 @@ snapshot.take('after-save-vectors');
 // ============================
 let searchVectorsCallCount = 0;
 
-bridge.interceptCommand('search_vectors', (args: unknown) => {
+bridge.interceptCommand('search_vectors', (args) => {
   searchVectorsCallCount++;
-  const typedArgs = args as { name?: string; query?: number[]; dim?: number; k?: number };
+  const typedArgs = args;
 
   assert(
     typedArgs?.name === VECTOR_DB_NAME,
@@ -240,7 +234,7 @@ const searchResults = await invoke('search_vectors', {
 assert(searchVectorsCallCount === 1, 'search_vectors should be called once');
 assert(Array.isArray(searchResults), 'search_vectors should return an array');
 
-const typedSearchResults = searchResults as Array<{ id: number; distance: number }>;
+const typedSearchResults = searchResults;
 assert(typedSearchResults.length === 3, 'Should return 3 search results');
 assert(typedSearchResults[0].id === 1001, 'Closest result should be id 1001');
 assert(typedSearchResults[0].distance === 0.12, 'Closest distance should be 0.12');
@@ -260,9 +254,9 @@ snapshot.take('after-search-vectors');
 // ============================
 let contextCallCount = 0;
 
-bridge.interceptCommand('get_context_for_query', (args: unknown) => {
+bridge.interceptCommand('get_context_for_query', (args) => {
   contextCallCount++;
-  const typedArgs = args as { queryText?: string; bookId?: number; k?: number };
+  const typedArgs = args;
 
   assert(
     typeof typedArgs?.queryText === 'string' && typedArgs.queryText.length > 0,
@@ -293,7 +287,7 @@ const contextResults = await invoke('get_context_for_query', {
 assert(contextCallCount === 1, 'get_context_for_query should be called once');
 assert(Array.isArray(contextResults), 'get_context_for_query should return an array');
 
-const typedContext = contextResults as string[];
+const typedContext = contextResults;
 assert(typedContext.length === 2, 'Should return 2 context passages');
 assert(
   typedContext[0].includes('consciousness'),
@@ -310,17 +304,13 @@ snapshot.take('after-get-context');
 // Test 5: Process job (embed + save combined workflow)
 // ============================
 let processJobCallCount = 0;
-let processJobArgs: unknown = null;
+let processJobArgs = null;
 
-bridge.interceptCommand('process_job', (args: unknown) => {
+bridge.interceptCommand('process_job', (args) => {
   processJobCallCount++;
   processJobArgs = args;
 
-  const typedArgs = args as {
-    pageNumber?: number;
-    bookId?: number;
-    pageData?: Array<{ id?: number | null; pageNumber: number; bookId: number; data: string }>;
-  };
+  const typedArgs = args;
 
   assert(
     typeof typedArgs?.pageNumber === 'number',
@@ -351,7 +341,7 @@ await invoke('process_job', {
 
 assert(processJobCallCount === 1, 'process_job should be called once');
 
-const jobArgs = processJobArgs as { pageNumber?: number; bookId?: number; pageData?: unknown[] };
+const jobArgs = processJobArgs;
 assert(jobArgs.pageNumber === 10, 'Job page number should be 10');
 assert(jobArgs.bookId === BOOK_ID, 'Job book ID should match');
 assert(jobArgs.pageData?.length === 2, 'Job should have 2 page data entries');
@@ -370,7 +360,7 @@ const newEmbedResults = await invoke('embed', {
 });
 
 assert(embedCallCount === 2, 'embed should now be called twice');
-const newEmbed = (newEmbedResults as Array<{ embedding: number[] }>)[0];
+const newEmbed = (newEmbedResults)[0];
 assert(newEmbed.embedding.length === EMBED_DIM, 'New embedding should have correct dimension');
 
 // Step 2: Search using the new embedding
@@ -383,14 +373,14 @@ const pipelineSearch = await invoke('search_vectors', {
 
 assert(searchVectorsCallCount === 2, 'search_vectors should now be called twice');
 assert(
-  (pipelineSearch as unknown[]).length === 3,
+  (pipelineSearch).length === 3,
   'Pipeline search should return results'
 );
 
 // Step 3: Get text for the vector IDs
-bridge.interceptCommand('get_text_from_vector_id', (args: unknown) => {
-  const typedArgs = args as { vectorId?: number };
-  const textMap: Record<number, string> = {
+bridge.interceptCommand('get_text_from_vector_id', (args) => {
+  const typedArgs = args;
+  const textMap = {
     1001: testChunks[0].text,
     1002: testChunks[1].text,
     1003: testChunks[2].text,
@@ -400,11 +390,11 @@ bridge.interceptCommand('get_text_from_vector_id', (args: unknown) => {
   return textMap[typedArgs?.vectorId ?? 0] || '';
 });
 
-const topResultIds = (pipelineSearch as Array<{ id: number }>).slice(0, 2);
+const topResultIds = (pipelineSearch).slice(0, 2);
 for (const result of topResultIds) {
   const text = await invoke('get_text_from_vector_id', { vectorId: result.id });
   assert(typeof text === 'string', 'get_text_from_vector_id should return a string');
-  assert((text as string).length > 0, 'Retrieved text should not be empty');
+  assert((text).length > 0, 'Retrieved text should not be empty');
 }
 
 snapshot.take('after-full-ai-pipeline');
@@ -412,10 +402,10 @@ snapshot.take('after-full-ai-pipeline');
 // ============================
 // Test 7: Verify complete IPC log
 // ============================
-const allLog: IpcLogEntry[] = ipc.log;
+const allLog = ipc.log;
 
 // Verify embed calls (initial batch + pipeline query = 2)
-const embedLog = allLog.filter((e: IpcLogEntry) => e.command === 'embed');
+const embedLog = allLog.filter((e) => e.command === 'embed');
 assert(
   embedLog.length === 2,
   'embed should appear twice in IPC log, got ' + embedLog.length
@@ -423,11 +413,11 @@ assert(
 assert(embedLog[0].mocked === true, 'embed calls should be mocked');
 
 // Verify save_vectors
-const saveVecLog = allLog.filter((e: IpcLogEntry) => e.command === 'save_vectors');
+const saveVecLog = allLog.filter((e) => e.command === 'save_vectors');
 assert(saveVecLog.length === 1, 'save_vectors should appear once');
 
 // Verify search_vectors (initial + pipeline = 2)
-const searchLog = allLog.filter((e: IpcLogEntry) => e.command === 'search_vectors');
+const searchLog = allLog.filter((e) => e.command === 'search_vectors');
 assert(
   searchLog.length === 2,
   'search_vectors should appear twice, got ' + searchLog.length
@@ -435,17 +425,17 @@ assert(
 
 // Verify get_context_for_query
 const contextLog = allLog.filter(
-  (e: IpcLogEntry) => e.command === 'get_context_for_query'
+  (e) => e.command === 'get_context_for_query'
 );
 assert(contextLog.length === 1, 'get_context_for_query should appear once');
 
 // Verify process_job
-const jobLog = allLog.filter((e: IpcLogEntry) => e.command === 'process_job');
+const jobLog = allLog.filter((e) => e.command === 'process_job');
 assert(jobLog.length === 1, 'process_job should appear once');
 
 // Verify get_text_from_vector_id (2 calls for top 2 results)
 const textLog = allLog.filter(
-  (e: IpcLogEntry) => e.command === 'get_text_from_vector_id'
+  (e) => e.command === 'get_text_from_vector_id'
 );
 assert(
   textLog.length === 2,
@@ -453,11 +443,11 @@ assert(
 );
 
 // Verify all entries are mocked
-const allMocked = allLog.every((e: IpcLogEntry) => e.mocked === true);
+const allMocked = allLog.every((e) => e.mocked === true);
 assert(allMocked, 'All IPC entries should be marked as mocked');
 
 // Verify the pipeline ordering: embed -> save -> search -> context -> job
-const commandOrder = allLog.map((e: IpcLogEntry) => e.command);
+const commandOrder = allLog.map((e) => e.command);
 const firstEmbedIdx = commandOrder.indexOf('embed');
 const saveVecIdx = commandOrder.indexOf('save_vectors');
 const firstSearchIdx = commandOrder.indexOf('search_vectors');
