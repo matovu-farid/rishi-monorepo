@@ -69,14 +69,6 @@ impl PluginBuilder {
             .setup(move |app, _api| {
                 eprintln!("[test-harness] Plugin setup starting...");
 
-                // In headless mode, minimize the window to avoid stealing focus
-                if std::env::var("TAURI_CYPRESS_HEADLESS").is_ok() {
-                    use tauri::Manager;
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.minimize();
-                    }
-                }
-
                 app.manage(MockRegistry::new());
 
                 let helper_registry = HelperRegistry::new();

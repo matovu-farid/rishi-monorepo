@@ -15,6 +15,7 @@
         "title": "rishi",
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
+        "focus": false,
         "width": 1024,
         "height": 770
       }
