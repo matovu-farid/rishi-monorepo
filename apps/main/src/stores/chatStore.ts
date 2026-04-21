@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { devtools, subscribeWithSelector } from "zustand/middleware";
 import type { RealtimeSession } from "@openai/agents/realtime";
 import { startRealtime } from "@/modules/realtime";
+import { stopThinkingSound } from "@/modules/thinkingSound";
 import { usePlayerStore } from "./playerStore";
 
 export type ChatStatus = "idle" | "thinking" | "speaking";
@@ -67,6 +68,7 @@ export const useChatStore = create<ChatState>()(
             chatStatus: "idle",
             _chatGeneration: _chatGeneration + 1,
           });
+          stopThinkingSound();
           if (realtimeSession) {
             realtimeSession.close();
           }

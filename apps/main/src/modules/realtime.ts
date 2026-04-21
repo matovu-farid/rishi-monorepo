@@ -6,6 +6,8 @@ import {
 } from "@openai/agents/realtime";
 import { z } from "zod";
 import { useChatStore } from "@/stores/chatStore";
+import { usePlayerStore } from "@/stores/playerStore";
+import { startThinkingSound, stopThinkingSound } from "@/modules/thinkingSound";
 
 // --- Cached API key to avoid fetching on every chat start ---
 // The key has a 10-minute TTL server-side; we treat it as stale after 9 minutes.
@@ -39,10 +41,16 @@ export function prefetchRealtimeKey() {
 // TODO: Re-enable guardrails once audio quality impact is resolved.
 // See docs/superpowers/specs/2026-04-19-ai-chat-orb-design.md for context.
 export async function startRealtime(bookId: number) {
+  // Gather the text currently visible on the user's screen
+  const currentPageText = usePlayerStore
+    .getState()
+    .currentParagraphs.map((p) => p.text)
+    .join("\n");
+
   const bookContextTool = tool({
     name: "bookContext",
     description:
-      "Retrieve relevant information from the book the user is currently reading based on their question. Use this tool when the user asks a question about the book to get the specific context needed to provide an accurate and helpful answer.",
+      "Retrieve information from OTHER parts of the book beyond the current page. Only use this when the user asks about content NOT visible on their current page. Do NOT call this tool if the answer is already in the current page content provided in your instructions.",
     parameters: z.object({
       queryText: z.string(),
     }),
@@ -74,6 +82,13 @@ export async function startRealtime(bookId: number) {
     instructions: `## Role and Goal
 You are a teacher and educational assistant whose role is to help the user understand the book they are reading. Your goal is to make complex concepts accessible and answer questions in a way that enhances their comprehension of the material.
 
+## Current Page Content
+The user is currently looking at this page:
+"""
+${currentPageText || "(No page text available)"}
+"""
+If the user's question can be answered from the page content above, answer directly WITHOUT using the bookContext tool. Only use bookContext when the user asks about content from other parts of the book that isn't shown above.
+
 ## Rules (CRITICAL - FOLLOW THESE)
 - DO NOT repeat the same sentence verbatim within a single response or immediately after using it. Vary your phrasing across responses to avoid sounding robotic.
 - Keep responses natural and conversational—avoid sounding scripted or mechanical.
@@ -84,28 +99,22 @@ You are a teacher and educational assistant whose role is to help the user under
 
 Note: These phases represent different conversation states. The agent transitions between them based on user input and conversation context.
 
-### Phase 1: Greeting
-Goal: Set a welcoming tone and invite questions about the book.
+### Phase 1: First Interaction
+Goal: Respond quickly and helpfully to whatever the user says first.
 
 How to respond:
-- Greet the user warmly and introduce yourself as their reading assistant.
-- Ask what you can help them with regarding the book.
-- Keep it brief and inviting.
-
-Sample phrases (vary these, don't always reuse):
-- "Hi there! I'm here to help you understand the book you're reading. What would you like to know?"
-- "Hello! I'm your reading assistant. What questions do you have about the book?"
-- "Hey! Ready to dive into your book? What can I help explain today?"
-
-Exit Phase 1 when: The user responds with any question, comment, or statement (not just silence or acknowledgment).
+- If the user starts with a question, answer it directly — do not greet first.
+- If the user starts with a greeting or casual remark, respond warmly and briefly, then ask what you can help with.
+- Keep it concise. Do not introduce yourself with a long preamble.
 
 ### Phase 2: Question Handling
-Goal: Understand the user's question and retrieve relevant book context.
+Goal: Understand the user's question and answer it.
 
 How to respond:
 - Listen carefully to understand what they're asking.
-- If the question is about the book (relates to content, characters, plot, themes, or concepts in the book), use the bookContext tool to find relevant information.
-- If it's small talk (greetings, pleasantries, casual acknowledgments that don't require book context) or a casual comment, respond naturally and warmly without using the tool.
+- If the answer is in the current page content provided above, answer directly from it. Do NOT use the bookContext tool.
+- If the question is about other parts of the book not on the current page, use the bookContext tool.
+- If it's small talk or a casual comment, respond naturally without using any tool.
 
 ### Phase 3: Tool Usage
 Goal: Retrieve book context when needed.
@@ -215,22 +224,20 @@ Ending conversations:
     }
   });
 
+  // Play a subtle audio cue while a tool (e.g. bookContext) is fetching
+  session.on("agent_tool_start", () => {
+    startThinkingSound();
+  });
+
+  session.on("agent_tool_end", () => {
+    stopThinkingSound();
+  });
+
   const apiKey = await getOrFetchKey();
 
   // Automatically connects your microphone and audio output
   await session.connect({
     apiKey,
-  });
-  // Trigger an initial greeting so the assistant speaks first
-  session.sendMessage({
-    type: "message",
-    role: "user",
-    content: [
-      {
-        type: "input_text",
-        text: "Please greet the user and ask what you can help with regarding the book they are reading.",
-      },
-    ],
   });
   return session;
 }
