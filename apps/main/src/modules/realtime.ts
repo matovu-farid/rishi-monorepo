@@ -164,6 +164,28 @@ Ending conversations:
 
   const session = new RealtimeSession(agent);
 
+  // Track thinking/speaking status for visual indicators
+  const setChatStatus = useChatStore.getState().setChatStatus;
+
+  session.on("agent_start", () => {
+    setChatStatus("thinking");
+  });
+
+  session.on("audio_start", () => {
+    setChatStatus("speaking");
+  });
+
+  session.on("audio_stopped", () => {
+    setChatStatus("idle");
+  });
+
+  session.on("agent_end", () => {
+    // Only reset to idle if not currently speaking (audio_start may follow agent_end)
+    if (useChatStore.getState().chatStatus === "thinking") {
+      setChatStatus("idle");
+    }
+  });
+
   const apiKey = await getRealtimeClientSecret();
 
   // Automatically connects your microphone and audio output

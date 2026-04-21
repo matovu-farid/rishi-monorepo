@@ -1,8 +1,9 @@
 import React from "react";
 import { ContextualHint } from "./tutorial/ContextualHint";
+import type { ChatStatus } from "@/stores/chatStore";
 
 interface AIChatOrbProps {
-  isProcessing: boolean;
+  chatStatus: ChatStatus;
   onClick: () => void;
 }
 
@@ -18,7 +19,21 @@ const glassContainer: React.CSSProperties = {
     "0 4px 24px rgba(0,0,0,0.18), 0 1px 6px rgba(0,0,0,0.12), inset 0 0 0 0.5px rgba(255,255,255,0.3), inset 0 1px 0 rgba(255,255,255,0.5)",
 };
 
-export default function AIChatOrb({ isProcessing, onClick }: AIChatOrbProps) {
+function getBarColor(status: ChatStatus): string {
+  switch (status) {
+    case "thinking":
+      return "rgba(251, 191, 36, 0.80)"; // amber
+    case "speaking":
+      return "rgba(34, 197, 94, 0.80)"; // green
+    default:
+      return "rgba(88, 86, 214, 0.70)"; // purple (idle)
+  }
+}
+
+export default function AIChatOrb({ chatStatus, onClick }: AIChatOrbProps) {
+  const isAnimating = chatStatus !== "idle";
+  const barColor = getBarColor(chatStatus);
+
   return (
     <ContextualHint
       id="ai-chat-orb"
@@ -31,9 +46,16 @@ export default function AIChatOrb({ isProcessing, onClick }: AIChatOrbProps) {
           0%, 100% { transform: scaleY(0.4); }
           50% { transform: scaleY(1); }
         }
+        @keyframes ai-pulse {
+          0%, 100% { opacity: 0.5; transform: scaleY(0.6); }
+          50% { opacity: 1; transform: scaleY(1); }
+        }
         @media (prefers-reduced-motion: reduce) {
           @keyframes ai-waveform {
             0%, 50%, 100% { transform: scaleY(0.7); }
+          }
+          @keyframes ai-pulse {
+            0%, 50%, 100% { opacity: 0.75; transform: scaleY(0.8); }
           }
         }
       `}</style>
@@ -69,10 +91,12 @@ export default function AIChatOrb({ isProcessing, onClick }: AIChatOrbProps) {
                 width: 3,
                 height: h,
                 borderRadius: 1.5,
-                backgroundColor: "rgba(88, 86, 214, 0.70)",
+                backgroundColor: barColor,
                 transformOrigin: "center",
-                animation: isProcessing
-                  ? `ai-waveform 1.2s ease-in-out ${i * 0.15}s infinite`
+                animation: isAnimating
+                  ? chatStatus === "thinking"
+                    ? `ai-pulse 1.6s ease-in-out ${i * 0.2}s infinite`
+                    : `ai-waveform 1.2s ease-in-out ${i * 0.15}s infinite`
                   : "none",
               }}
             />

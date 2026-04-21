@@ -72,21 +72,16 @@ export function PdfView({
   const { requireAuth, AuthDialog } = useRequireAuth();
   const isChatting = useChatStore((s) => s.isChatting);
   const setIsChatting = useChatStore((s) => s.setIsChatting);
-  const stopConversation = useChatStore((s) => s.stopConversation);
-
-  const toggleChat = () => {
-    setIsChatting((prev) => !prev);
-  };
+  const chatStatus = useChatStore((s) => s.chatStatus);
 
   const handleMicClick = () => {
     requireAuth("voice-input", () => {
-      toggleChat();
+      setIsChatting((prev) => !prev);
     });
   };
 
   const handleStopChat = () => {
-    toggleChat();
-    stopConversation();
+    setIsChatting(false);
   };
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -439,7 +434,7 @@ export function PdfView({
         {/* AI chat orb */}
         {isChatting && (
           <AIChatOrb
-            isProcessing={false}
+            chatStatus={chatStatus}
             onClick={() => setChatPanelOpen((prev) => !prev)}
           />
         )}

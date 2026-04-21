@@ -56,21 +56,16 @@ export function DjvuView({ book }: { book: Book }) {
   const { requireAuth, AuthDialog } = useRequireAuth();
   const isChatting = useChatStore((s) => s.isChatting);
   const setIsChatting = useChatStore((s) => s.setIsChatting);
-  const stopConversation = useChatStore((s) => s.stopConversation);
-
-  const toggleChat = () => {
-    setIsChatting((prev) => !prev);
-  };
+  const chatStatus = useChatStore((s) => s.chatStatus);
 
   const handleMicClick = () => {
     requireAuth("voice-input", () => {
-      toggleChat();
+      setIsChatting((prev) => !prev);
     });
   };
 
   const handleStopChat = () => {
-    toggleChat();
-    stopConversation();
+    setIsChatting(false);
   };
 
 
@@ -511,7 +506,7 @@ export function DjvuView({ book }: { book: Book }) {
       {/* AI chat orb */}
       {isChatting && (
         <AIChatOrb
-          isProcessing={false}
+          chatStatus={chatStatus}
           onClick={() => setChatPanelOpen((prev) => !prev)}
         />
       )}
