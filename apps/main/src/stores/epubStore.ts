@@ -12,6 +12,7 @@ import { usePlayerStore } from "@/stores/playerStore";
 import { processEpubJob } from "@/modules/process_epub";
 import { hasSavedEpubData } from "@/generated";
 import { useChatStore } from "./chatStore";
+import { prefetchRealtimeKey } from "@/modules/realtime";
 
 // Module-level timers for debouncing next/prev paragraph prefetch.
 // Separate timers so the subscription and publishCurrentEpubParagraphs()
@@ -186,6 +187,14 @@ export function publishCurrentEpubParagraphs() {
     });
   }, 300);
 }
+
+// Side effect: pre-fetch the realtime API key when a book is opened so voice chat starts faster
+useEpubStore.subscribe(
+  (state) => state.bookId,
+  (bookId) => {
+    if (bookId) prefetchRealtimeKey();
+  }
+);
 
 // Side effect: when isChatting turns on and bookId exists, start realtime session
 useChatStore.subscribe(

@@ -16,6 +16,7 @@ import {
   saveBook,
 } from "@/generated";
 import { copyBookToAppData } from "@/modules/books";
+import { prefetchRealtimeKey } from "@/modules/realtime";
 import { hashBookFile, uploadBookFile } from "@/modules/file-sync";
 import { db } from "@/modules/kysley";
 import { useTauriDragDrop } from "./hooks/use-tauri-drag-drop";
@@ -133,6 +134,7 @@ function FileDrop(): React.JSX.Element {
   } = useQuery({
     queryKey: ["books"],
     queryFn: async () => {
+      prefetchRealtimeKey();
       const books = await getBooks();
       const pdfIds = books
         .filter((book) => book.kind === "pdf")

@@ -7,6 +7,35 @@ import {
 import { z } from "zod";
 import { useChatStore } from "@/stores/chatStore";
 
+// --- Cached API key to avoid fetching on every chat start ---
+// The key has a 10-minute TTL server-side; we treat it as stale after 9 minutes.
+const KEY_TTL_MS = 9 * 60 * 1000;
+let _cachedKey: string | null = null;
+let _cachedKeyTime = 0;
+let _prefetchPromise: Promise<string> | null = null;
+
+async function getOrFetchKey(): Promise<string> {
+  if (_cachedKey && Date.now() - _cachedKeyTime < KEY_TTL_MS) {
+    return _cachedKey;
+  }
+  // If a prefetch is already in flight, await it instead of firing a second request
+  if (_prefetchPromise) {
+    return _prefetchPromise;
+  }
+  _prefetchPromise = getRealtimeClientSecret().then((key) => {
+    _cachedKey = key;
+    _cachedKeyTime = Date.now();
+    _prefetchPromise = null;
+    return key;
+  });
+  return _prefetchPromise;
+}
+
+/** Pre-fetch the realtime API key so it's ready when the user starts chatting. */
+export function prefetchRealtimeKey() {
+  void getOrFetchKey();
+}
+
 // TODO: Re-enable guardrails once audio quality impact is resolved.
 // See docs/superpowers/specs/2026-04-19-ai-chat-orb-design.md for context.
 export async function startRealtime(bookId: number) {
@@ -186,7 +215,7 @@ Ending conversations:
     }
   });
 
-  const apiKey = await getRealtimeClientSecret();
+  const apiKey = await getOrFetchKey();
 
   // Automatically connects your microphone and audio output
   await session.connect({
