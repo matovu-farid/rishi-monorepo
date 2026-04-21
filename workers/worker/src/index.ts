@@ -290,6 +290,25 @@ app.post("/api/auth/complete", async (c) => {
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : "unknown";
     await debugLog(state, "complete_error", null, errMsg);
+
+    // Reset status back to "authenticated" so retries aren't blocked by "exchanging"
+    if (state !== "unknown") {
+      try {
+        const rawData = await redis.get(`auth:state:${state}`);
+        if (rawData) {
+          const authData = typeof rawData === "string" ? JSON.parse(rawData) : rawData as Record<string, unknown>;
+          if (authData.status === "exchanging") {
+            await redis.set(`auth:state:${state}`, JSON.stringify({
+              ...authData,
+              status: "authenticated",
+              retryCount: ((authData.retryCount as number) || 0) + 1,
+            }), { ex: 600 });
+            await debugLog(state, "complete_status_reset_to_authenticated");
+          }
+        }
+      } catch { /* best-effort */ }
+    }
+
     if (error instanceof Error) {
       return c.json({ error: "Auth completion failed: " + error.message }, 500);
     }

@@ -95,11 +95,10 @@ pub async fn process_job(
 }
 
 /// Best-effort debug log to the worker's `/api/auth/debug` endpoint.
-/// Fires and forgets — errors are silently ignored so they never block auth.
-pub async fn log_auth_debug_fn(state: &str, source: &str, step: &str, data: Option<serde_json::Value>, error: Option<&str>) {
+/// Fires and forgets via tokio::spawn — never blocks the auth flow.
+pub fn log_auth_debug_fn(state: &str, source: &str, step: &str, data: Option<serde_json::Value>, error: Option<&str>) {
     let worker_url = crate::WORKER_URL;
     let url = format!("{}/api/auth/debug", worker_url);
-    let client = reqwest::Client::new();
     let mut payload = json!({
         "state": state,
         "source": source,
@@ -111,14 +110,17 @@ pub async fn log_auth_debug_fn(state: &str, source: &str, step: &str, data: Opti
     if let Some(e) = error {
         payload["error"] = json!(e);
     }
-    let _ = client.post(&url).json(&payload).send().await;
+    tokio::spawn(async move {
+        let client = reqwest::Client::new();
+        let _ = client.post(&url).json(&payload).send().await;
+    });
 }
 
 /// Tauri command: log auth debug events from the TS frontend.
 #[tauri::command]
 pub async fn log_auth_debug_cmd(state: String, step: String, data: Option<String>, error: Option<String>) -> Result<(), String> {
     let parsed: Option<serde_json::Value> = data.and_then(|d| serde_json::from_str(&d).ok());
-    log_auth_debug_fn(&state, "tauri-ts", &step, parsed, error.as_deref()).await;
+    log_auth_debug_fn(&state, "tauri-ts", &step, parsed, error.as_deref());
     Ok(())
 }
 
@@ -139,15 +141,12 @@ pub async fn get_auth_debug(state: String) -> Result<String, String> {
 /// Sends the code_verifier for PKCE-like proof-of-possession.
 #[tauri::command]
 pub async fn complete_auth(app: tauri::AppHandle, state: &str) -> Result<User, String> {
-    log_auth_debug_fn(state, "tauri-rust", "complete_auth_called", None, None).await;
+    log_auth_debug_fn(state, "tauri-rust", "complete_auth_called", None, None);
 
     // Read code_verifier from the persistent store
     let store = app.store("store.json").map_err(|e| {
         let msg = format!("Failed to open store: {}", e);
-        // fire-and-forget — block on the log only in the error path
-        let s = state.to_string();
-        let m = msg.clone();
-        tokio::spawn(async move { log_auth_debug_fn(&s, "tauri-rust", "complete_auth_store_error", None, Some(&m)).await; });
+        log_auth_debug_fn("unknown", "tauri-rust", "complete_auth_store_error", None, Some(&msg));
         msg
     })?;
 
@@ -158,12 +157,11 @@ pub async fn complete_auth(app: tauri::AppHandle, state: &str) -> Result<User, S
     let code_verifier = match code_verifier {
         Ok(v) => v,
         Err(e) => {
-            // Log what IS in the store for debugging
             let has_state = store.get("auth_state").is_some();
             let has_created = store.get("auth_state_created_at").is_some();
             log_auth_debug_fn(state, "tauri-rust", "complete_auth_no_verifier",
                 Some(json!({ "hasAuthState": has_state, "hasCreatedAt": has_created })),
-                Some(&e)).await;
+                Some(&e));
             return Err(e);
         }
     };
@@ -174,14 +172,14 @@ pub async fn complete_auth(app: tauri::AppHandle, state: &str) -> Result<User, S
         .to_string();
 
     log_auth_debug_fn(state, "tauri-rust", "complete_auth_verifier_read",
-        Some(json!({ "verifierLen": code_verifier.len() })), None).await;
+        Some(json!({ "verifierLen": code_verifier.len() })), None);
 
     let worker_url = crate::WORKER_URL;
     let url = format!("{}/api/auth/complete", worker_url);
 
     let client = reqwest::Client::new();
     log_auth_debug_fn(state, "tauri-rust", "complete_auth_calling_worker",
-        Some(json!({ "url": url })), None).await;
+        Some(json!({ "url": url })), None);
 
     let response = client
         .post(&url)
@@ -197,20 +195,20 @@ pub async fn complete_auth(app: tauri::AppHandle, state: &str) -> Result<User, S
     let response = match response {
         Ok(r) => r,
         Err(e) => {
-            log_auth_debug_fn(state, "tauri-rust", "complete_auth_network_error", None, Some(&e)).await;
+            log_auth_debug_fn(state, "tauri-rust", "complete_auth_network_error", None, Some(&e));
             return Err(e);
         }
     };
 
     let status = response.status();
     log_auth_debug_fn(state, "tauri-rust", "complete_auth_worker_responded",
-        Some(json!({ "status": status.as_u16() })), None).await;
+        Some(json!({ "status": status.as_u16() })), None);
 
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
         let err_msg = format!("Auth completion failed ({}): {}", status, body);
         log_auth_debug_fn(state, "tauri-rust", "complete_auth_worker_error",
-            Some(json!({ "status": status.as_u16(), "body": body })), Some(&err_msg)).await;
+            Some(json!({ "status": status.as_u16(), "body": body })), Some(&err_msg));
         return Err(err_msg);
     }
 
@@ -237,7 +235,7 @@ pub async fn complete_auth(app: tauri::AppHandle, state: &str) -> Result<User, S
     store.save().map_err(|e| e.to_string())?;
 
     log_auth_debug_fn(state, "tauri-rust", "complete_auth_success",
-        Some(json!({ "userId": user.id })), None).await;
+        Some(json!({ "userId": user.id })), None);
 
     Ok(user)
 }
