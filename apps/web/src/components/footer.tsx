@@ -31,7 +31,7 @@ export function Footer() {
                 { label: 'Documentation', href: '#' },
                 { label: 'Blog', href: '#' },
                 { label: 'FAQ', href: '#' },
-                { label: 'Support', href: '#' },
+                { label: 'Support', href: '/support' },
               ]
             },
             {

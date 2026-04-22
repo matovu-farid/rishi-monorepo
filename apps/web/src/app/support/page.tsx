@@ -3,118 +3,204 @@ import { type Metadata } from "next";
 export const metadata: Metadata = {
   title: "Support - Rishi Reader",
   description:
-    "Get help with Rishi Reader. Find answers to common questions or contact our support team.",
+    "Get help with Rishi Reader. Contact Fidexa, LLC support for assistance with installation, account issues, premium features, and troubleshooting.",
 };
 
-const faqs = [
-  {
-    question: "How do I import books?",
-    answer:
-      "Rishi Reader supports both PDF and EPUB formats. Open the app, tap the \"+\" button or use the \"Import\" option in the menu, then select a file from your device. Your book will appear in your library right away.",
-  },
-  {
-    question: "How do I use text-to-speech?",
-    answer:
-      "Open any book, then tap the speaker icon in the toolbar to start text-to-speech. You can adjust the reading speed and choose from multiple voices in Settings > Text-to-Speech. The reader will highlight each sentence as it is spoken aloud.",
-  },
-  {
-    question: "How do I sync my library across devices?",
-    answer:
-      "Sign in with your Rishi account on each device. Your library, bookmarks, and reading progress will sync automatically. Make sure you are connected to the internet for the initial sync. Subsequent changes sync in the background.",
-  },
-  {
-    question: "How do I highlight text?",
-    answer:
-      "While reading, press and hold on a word to start a selection, then drag to extend it. A toolbar will appear with options to highlight in different colors, add a note, or copy the text. All highlights are saved and can be reviewed from the Highlights tab.",
-  },
-];
-
-export default function SupportPage() {
+export default function Support() {
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <div className="max-w-3xl mx-auto px-6 py-16 sm:py-24">
-        {/* Header */}
-        <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">
-          Support
-        </h1>
-        <p className="mt-4 text-lg text-muted-foreground">
-          Need help with Rishi Reader? We are here for you. Browse the common
-          questions below or reach out directly.
+      <div className="max-w-3xl mx-auto px-6 py-16">
+        <h1 className="text-4xl font-bold mb-2">Support</h1>
+        <p className="text-muted-foreground mb-12">
+          We're here to help you get the most out of Rishi Reader.
         </p>
 
-        {/* Contact */}
-        <section className="mt-12">
-          <h2 className="text-2xl font-semibold">Contact Us</h2>
-          <p className="mt-3 text-muted-foreground">
-            For any questions, feedback, or issues, email us at{" "}
-            <a
-              href="mailto:support@fidexa.org"
-              className="text-primary underline underline-offset-4 hover:opacity-80 transition"
-            >
-              support@fidexa.org
-            </a>
-            . We typically respond within one business day.
-          </p>
-        </section>
-
-        {/* FAQ */}
-        <section className="mt-16">
-          <h2 className="text-2xl font-semibold">Frequently Asked Questions</h2>
-          <div className="mt-8 space-y-8">
-            {faqs.map((faq, index) => (
-              <div
-                key={index}
-                className="border border-border rounded-lg p-6"
-              >
-                <h3 className="text-lg font-medium">{faq.question}</h3>
-                <p className="mt-2 text-muted-foreground leading-relaxed">
-                  {faq.answer}
+        <div className="space-y-10 text-base leading-relaxed">
+          <section>
+            <h2 className="text-2xl font-semibold mb-3">Contact Us</h2>
+            <p className="mb-4">
+              If you need assistance or have any questions, you can reach us
+              through the following channels:
+            </p>
+            <div className="space-y-4">
+              <div className="p-4 rounded-lg bg-muted">
+                <p className="font-medium mb-1">Email</p>
+                <p>
+                  <a
+                    href="mailto:support@fidexa.org"
+                    className="text-primary underline underline-offset-4 hover:text-primary/80 transition"
+                  >
+                    support@fidexa.org
+                  </a>
                 </p>
               </div>
-            ))}
-          </div>
-        </section>
+              <div className="p-4 rounded-lg bg-muted">
+                <p className="font-medium mb-1">Phone</p>
+                <p>
+                  <a
+                    href="tel:+13024966237"
+                    className="text-primary underline underline-offset-4 hover:text-primary/80 transition"
+                  >
+                    +1 (302) 496-6237
+                  </a>
+                </p>
+              </div>
+            </div>
+          </section>
 
-        {/* GitHub */}
-        <section className="mt-16 border border-border rounded-lg p-6 bg-muted/40">
-          <h2 className="text-xl font-semibold">Report an Issue</h2>
-          <p className="mt-3 text-muted-foreground leading-relaxed">
-            Found a bug or have a feature request? You can also open an issue on
-            our GitHub repository:
-          </p>
-          <a
-            href="https://github.com/matovu-farid/rishi-monorepo/issues"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-4 inline-flex items-center gap-2 text-primary underline underline-offset-4 hover:opacity-80 transition"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="currentColor"
-              aria-hidden="true"
-            >
-              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z" />
-            </svg>
-            github.com/matovu-farid/rishi-monorepo/issues
-          </a>
-        </section>
+          <section>
+            <h2 className="text-2xl font-semibold mb-3">Common Topics</h2>
+            <p className="mb-4">
+              Below are answers to some of the most frequently asked questions.
+              If your question isn't covered here, don't hesitate to contact us
+              directly.
+            </p>
 
-        {/* Footer note */}
-        <p className="mt-16 text-sm text-muted-foreground text-center">
-          Rishi Reader is built by{" "}
-          <a
-            href="https://fidexa.org"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline underline-offset-4 hover:text-foreground transition"
-          >
-            Fidexa
-          </a>
-          .
-        </p>
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-lg font-semibold mb-2">
+                  Getting Started / Installation
+                </h3>
+                <p>
+                  Rishi Reader is available for macOS, Windows, and Linux. Visit{" "}
+                  <a
+                    href="https://rishi.fidexa.org"
+                    className="text-primary underline underline-offset-4 hover:text-primary/80 transition"
+                  >
+                    rishi.fidexa.org
+                  </a>{" "}
+                  to download the latest version. Once downloaded, follow the
+                  on-screen installer instructions for your platform. If you
+                  encounter any issues during installation, please contact us
+                  with your operating system version and a description of the
+                  problem.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="text-lg font-semibold mb-2">Account Issues</h3>
+                <p>
+                  If you're having trouble signing in, resetting your password,
+                  or managing your account, try the following: make sure you're
+                  using the email address you registered with, check your spam
+                  folder for verification emails, and ensure you have an active
+                  internet connection. If the issue persists, reach out to us at{" "}
+                  <a
+                    href="mailto:support@fidexa.org"
+                    className="text-primary underline underline-offset-4 hover:text-primary/80 transition"
+                  >
+                    support@fidexa.org
+                  </a>{" "}
+                  with your account email and a description of the problem.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="text-lg font-semibold mb-2">
+                  Premium Features
+                </h3>
+                <p>
+                  Rishi Reader offers premium features including text-to-speech,
+                  cloud synchronization, and AI-assisted reading tools. If you
+                  have questions about your subscription, billing, or accessing
+                  premium features, please contact us and we'll be happy to
+                  assist.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="text-lg font-semibold mb-2">
+                  Technical Issues / Troubleshooting
+                </h3>
+                <p>
+                  If you're experiencing crashes, performance issues, or
+                  unexpected behavior, try restarting the app and ensuring you're
+                  running the latest version. If the problem continues, please
+                  email us at{" "}
+                  <a
+                    href="mailto:support@fidexa.org"
+                    className="text-primary underline underline-offset-4 hover:text-primary/80 transition"
+                  >
+                    support@fidexa.org
+                  </a>{" "}
+                  with the following details: your operating system and version,
+                  the Rishi Reader version number (found in the app settings),
+                  and a description of the issue including any error messages you
+                  see.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h2 className="text-2xl font-semibold mb-3">Response Times</h2>
+            <p>
+              We typically respond to all inquiries within{" "}
+              <span className="font-medium">24-48 hours</span> during business
+              days. For urgent issues, please indicate the urgency in your
+              subject line and we'll do our best to prioritize your request.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-2xl font-semibold mb-3">Policies</h2>
+            <p>
+              For more information about how we handle your data and the terms
+              governing your use of Rishi Reader, please review our policies:
+            </p>
+            <ul className="list-disc pl-6 space-y-2 mt-4">
+              <li>
+                <a
+                  href="/privacy"
+                  className="text-primary underline underline-offset-4 hover:text-primary/80 transition"
+                >
+                  Privacy Policy
+                </a>
+              </li>
+              <li>
+                <a
+                  href="/terms"
+                  className="text-primary underline underline-offset-4 hover:text-primary/80 transition"
+                >
+                  Terms and Conditions
+                </a>
+              </li>
+            </ul>
+          </section>
+
+          <section>
+            <div className="p-4 rounded-lg bg-muted">
+              <p className="font-medium">Fidexa, LLC</p>
+              <p>
+                Email:{" "}
+                <a
+                  href="mailto:support@fidexa.org"
+                  className="text-primary underline underline-offset-4 hover:text-primary/80 transition"
+                >
+                  support@fidexa.org
+                </a>
+              </p>
+              <p>
+                Phone:{" "}
+                <a
+                  href="tel:+13024966237"
+                  className="text-primary underline underline-offset-4 hover:text-primary/80 transition"
+                >
+                  +1 (302) 496-6237
+                </a>
+              </p>
+              <p>
+                Website:{" "}
+                <a
+                  href="https://rishi.fidexa.org"
+                  className="text-primary underline underline-offset-4 hover:text-primary/80 transition"
+                >
+                  rishi.fidexa.org
+                </a>
+              </p>
+            </div>
+          </section>
+        </div>
       </div>
     </main>
   );
