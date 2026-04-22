@@ -55,7 +55,7 @@ jobs:
           cd ../../apps/main && bun install
 
       - name: Build Tauri app
-        run: cd apps/main && bun run generate-types && npx tauri build --target universal-apple-darwin
+        run: cd apps/main && bun run generate-types && npx tauri build --target universal-apple-darwin --config '{"bundle":{"createUpdaterArtifacts":false}}'
         env:
           APPLE_SIGNING_IDENTITY: "Apple Distribution: Farid Matovu (9VL7VRY6QZ)"
           APPLE_CERTIFICATE: ${{ secrets.APPLE_DISTRIBUTION_CERT_P12 }}
