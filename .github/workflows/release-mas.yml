@@ -57,7 +57,9 @@ jobs:
       - name: Build Tauri app
         run: cd apps/main && bun run generate-types && npx tauri build --target universal-apple-darwin
         env:
-          APPLE_SIGNING_IDENTITY: ""
+          APPLE_SIGNING_IDENTITY: "Apple Distribution: Farid Matovu (9VL7VRY6QZ)"
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_DISTRIBUTION_CERT_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERT_PASSWORD }}
 
       - name: Sign and package for Mac App Store
         env:
