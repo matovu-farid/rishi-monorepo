@@ -40,7 +40,7 @@ export function Footer() {
                 { label: 'About', href: '#' },
                 { label: 'Contact', href: '#' },
                 { label: 'Privacy', href: '/privacy' },
-                { label: 'Terms', href: '#' },
+                { label: 'Terms', href: '/terms' },
               ]
             }
           ].map((col, i) => (
