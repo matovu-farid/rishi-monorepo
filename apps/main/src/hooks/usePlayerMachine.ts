@@ -62,6 +62,13 @@ export function usePlayerMachine(bookId: string) {
       (s) => s.currentParagraphs,
       (paragraphs) => {
         actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs });
+        // Eagerly prefetch TTS for ALL paragraphs on the new page so audio is
+        // cached before the user presses play.
+        for (const p of paragraphs) {
+          if (p.text.trim()) {
+            void audioService.fetchAudio(bookId, p).catch(() => {});
+          }
+        }
       },
       { equalityFn: isEqual }
     );
@@ -69,6 +76,12 @@ export function usePlayerMachine(bookId: string) {
       (s) => s.nextPageParagraphs,
       (paragraphs) => {
         actor.send({ type: "NEXT_PARAGRAPHS_UPDATED", paragraphs });
+        // Prefetch TTS for the next page so page transitions are instant
+        for (const p of paragraphs) {
+          if (p.text.trim()) {
+            void audioService.fetchAudio(bookId, p).catch(() => {});
+          }
+        }
       },
       { equalityFn: isEqual }
     );

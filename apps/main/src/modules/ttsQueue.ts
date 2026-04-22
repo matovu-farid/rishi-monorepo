@@ -136,7 +136,7 @@ export class TTSQueue extends EventEmitter {
 
   private async processBatch(): Promise<void> {
     this.isProcessing = true;
-    const batchSize = 5;
+    const batchSize = 8;
     while (this.queue.size() > 0) {
       const batch: QueueItem[] = [];
       for (let i = 0; i < Math.min(batchSize, this.queue.size()); i++) {

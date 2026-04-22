@@ -117,7 +117,8 @@ useEpubStore.subscribe(
     }));
     usePlayerStore.getState().setCurrentParagraphs(paragraphs);
 
-    // Next/prev pages — debounce so rapid page flips don't trigger wasted fetches
+    // Next/prev pages — short debounce to skip rapid page flips while keeping
+    // TTS prefetch responsive (was 300ms, reduced for faster audio pre-caching)
     if (_prefetchTimer) clearTimeout(_prefetchTimer);
     _prefetchTimer = setTimeout(() => {
       // Re-read state in case rendition changed during the debounce window
@@ -139,7 +140,7 @@ useEpubStore.subscribe(
         }));
         usePlayerStore.getState().setPrevPageParagraphs(mapped);
       });
-    }, 300);
+    }, 50);
   },
   { equalityFn: (a, b) => a.rendition === b.rendition && a.location === b.location }
 );

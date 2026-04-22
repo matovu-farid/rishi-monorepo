@@ -4,6 +4,7 @@ import {
   requestTTSAudio,
 } from "@/modules/ipc_handel_functions";
 import type { ParagraphWithIndex } from "@/models/player_control";
+import md5 from "md5";
 
 export class AudioService {
   public audioElement: HTMLAudioElement;
@@ -86,7 +87,7 @@ export class AudioService {
       const cached = this.audioCache.get(paragraph.index);
       if (cached) return cached;
 
-      // Disk cache
+      // Disk cache (CFI-based key)
       try {
         const diskCached = await getTTSAudioPath(bookId, paragraph.index);
         if (diskCached) {
@@ -94,7 +95,19 @@ export class AudioService {
           return diskCached;
         }
       } catch {
-        // Disk cache miss — fall through to request
+        // Disk cache miss — fall through
+      }
+
+      // Disk cache fallback (text-hash key — catches library prefetch hits)
+      const textHashKey = `texthash:${md5(paragraph.text)}`;
+      try {
+        const textCached = await getTTSAudioPath(bookId, textHashKey);
+        if (textCached) {
+          this.addToCache(paragraph.index, textCached);
+          return textCached;
+        }
+      } catch {
+        // Text-hash cache miss — fall through to request
       }
     }
 
@@ -132,7 +145,7 @@ export class AudioService {
     currentIndex: number,
     currentParagraphs: ParagraphWithIndex[],
     nextPageParagraphs: ParagraphWithIndex[],
-    prevPageParagraphs: ParagraphWithIndex[],
+    _prevPageParagraphs: ParagraphWithIndex[],
     bookId: string,
     immediate: boolean
   ): void {
@@ -143,30 +156,18 @@ export class AudioService {
     this._prefetchTimer = setTimeout(() => {
       if (generation !== this._prefetchGeneration) return;
 
-      // Prefetch nearby paragraphs on current page
-      for (let i = 1; i <= 3; i++) {
+      // Prefetch remaining paragraphs on current page (eager prefetch
+      // in usePlayerMachine covers all of them, but this is a safety net)
+      for (let i = 1; i <= 5; i++) {
         const idx = currentIndex + i;
         if (idx < currentParagraphs.length) {
           void this.fetchAudio(bookId, currentParagraphs[idx]).catch(() => {});
         }
       }
-      for (let i = 1; i <= 3; i++) {
-        const idx = currentIndex - i;
-        if (idx >= 0) {
-          void this.fetchAudio(bookId, currentParagraphs[idx]).catch(() => {});
-        }
-      }
 
-      // Prefetch across page boundaries
-      if (currentIndex === 0) {
-        for (let i = 0; i < Math.min(3, prevPageParagraphs.length); i++) {
-          void this.fetchAudio(bookId, prevPageParagraphs[i]).catch(() => {});
-        }
-      }
-      if (currentIndex >= currentParagraphs.length - 1) {
-        for (let i = 0; i < Math.min(3, nextPageParagraphs.length); i++) {
-          void this.fetchAudio(bookId, nextPageParagraphs[i]).catch(() => {});
-        }
+      // Always prefetch next page paragraphs so page transitions are seamless
+      for (let i = 0; i < nextPageParagraphs.length; i++) {
+        void this.fetchAudio(bookId, nextPageParagraphs[i]).catch(() => {});
       }
     }, delay);
   }

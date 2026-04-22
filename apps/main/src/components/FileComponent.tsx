@@ -17,6 +17,7 @@ import {
 } from "@/generated";
 import { copyBookToAppData } from "@/modules/books";
 import { prefetchRealtimeKey } from "@/modules/realtime";
+import { prefetchTTSForBooks } from "@/modules/ttsPrefetch";
 import { hashBookFile, uploadBookFile } from "@/modules/file-sync";
 import { db } from "@/modules/kysley";
 import { useTauriDragDrop } from "./hooks/use-tauri-drag-drop";
@@ -147,6 +148,8 @@ function FileDrop(): React.JSX.Element {
           queryFn: () => book,
         });
       });
+      // Pre-generate TTS audio for each book's landing page in the background
+      void prefetchTTSForBooks(books);
       return books;
     },
   });
