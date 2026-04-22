@@ -18,15 +18,30 @@ export function Footer() {
           {[
             {
               title: 'Product',
-              links: ['Features', 'Pricing', 'Download', 'Changelog']
+              links: [
+                { label: 'Features', href: '#' },
+                { label: 'Pricing', href: '#' },
+                { label: 'Download', href: '#' },
+                { label: 'Changelog', href: '#' },
+              ]
             },
             {
               title: 'Resources',
-              links: ['Documentation', 'Blog', 'FAQ', 'Support']
+              links: [
+                { label: 'Documentation', href: '#' },
+                { label: 'Blog', href: '#' },
+                { label: 'FAQ', href: '#' },
+                { label: 'Support', href: '#' },
+              ]
             },
             {
               title: 'Company',
-              links: ['About', 'Contact', 'Privacy', 'Terms']
+              links: [
+                { label: 'About', href: '#' },
+                { label: 'Contact', href: '#' },
+                { label: 'Privacy', href: '/privacy' },
+                { label: 'Terms', href: '#' },
+              ]
             }
           ].map((col, i) => (
             <div key={i}>
@@ -34,8 +49,8 @@ export function Footer() {
               <ul className="space-y-2">
                 {col.links.map((link, j) => (
                   <li key={j}>
-                    <a href="#" className="text-sm text-muted-foreground hover:text-foreground transition">
-                      {link}
+                    <a href={link.href} className="text-sm text-muted-foreground hover:text-foreground transition">
+                      {link.label}
                     </a>
                   </li>
                 ))}
