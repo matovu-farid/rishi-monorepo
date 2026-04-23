@@ -68,6 +68,7 @@ interface TutorialState {
 
 function readHintsShown(): Record<string, boolean> {
   try {
+    if (typeof localStorage === "undefined") return {};
     const raw = localStorage.getItem(HINTS_SEEN_KEY);
     return raw ? JSON.parse(raw) : {};
   } catch {
@@ -77,6 +78,7 @@ function readHintsShown(): Record<string, boolean> {
 
 function persistHintsShown(hints: Record<string, boolean>) {
   try {
+    if (typeof localStorage === "undefined") return;
     localStorage.setItem(HINTS_SEEN_KEY, JSON.stringify(hints));
   } catch (err) {
     console.warn("[tutorialStore] failed to persist hints-seen:", err);
@@ -85,6 +87,7 @@ function persistHintsShown(hints: Record<string, boolean>) {
 
 function persistTourCompleted(completed: boolean) {
   try {
+    if (typeof localStorage === "undefined") return;
     if (completed) {
       localStorage.setItem(TOUR_COMPLETED_KEY, "1");
     } else {
@@ -100,7 +103,7 @@ export const useTutorialStore = create<TutorialState>()(
     (set, get) => ({
       tourActive: false,
       tourStep: 0,
-      tourCompleted: localStorage.getItem(TOUR_COMPLETED_KEY) === "1",
+      tourCompleted: typeof localStorage !== "undefined" ? localStorage.getItem(TOUR_COMPLETED_KEY) === "1" : false,
       tourPaused: false,
       hintsShown: readHintsShown(),
 
@@ -149,7 +152,7 @@ export const useTutorialStore = create<TutorialState>()(
         });
         persistTourCompleted(false);
         try {
-          localStorage.removeItem(HINTS_SEEN_KEY);
+          if (typeof localStorage !== "undefined") localStorage.removeItem(HINTS_SEEN_KEY);
         } catch {}
       },
 

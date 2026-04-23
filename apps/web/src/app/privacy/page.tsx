@@ -18,8 +18,8 @@ export default function PrivacyPolicy() {
         <div className="space-y-10 text-base leading-relaxed">
           <section>
             <p>
-              Rishi Reader ("Rishi", "the App") is developed and operated by
-              Fidexa ("we", "us", "our"). We are committed to protecting your
+              Rishi Reader (&quot;Rishi&quot;, &quot;the App&quot;) is developed and operated by
+              Fidexa (&quot;we&quot;, &quot;us&quot;, &quot;our&quot;). We are committed to protecting your
               privacy and being transparent about how we handle your
               information. This Privacy Policy explains what data the App
               collects, how it is used, and your rights regarding that data.
@@ -63,7 +63,7 @@ export default function PrivacyPolicy() {
               2. How We Use Your Data
             </h2>
             <p className="mb-4">
-              We use the data we collect solely to provide and improve the App's
+              We use the data we collect solely to provide and improve the App&apos;s
               features:
             </p>
             <ul className="list-disc pl-6 space-y-2">
@@ -87,7 +87,7 @@ export default function PrivacyPolicy() {
               3. Microphone Access
             </h2>
             <p>
-              Rishi Reader may request access to your device's microphone to
+              Rishi Reader may request access to your device&apos;s microphone to
               enable voice input features, such as voice-based search or
               voice-driven interactions within the App. Microphone access is used{" "}
               <span className="font-medium">
@@ -97,7 +97,7 @@ export default function PrivacyPolicy() {
               Voice input is processed on-device or streamed transiently for
               real-time processing and is not retained after the interaction is
               complete. You can revoke microphone permissions at any time through
-              your device's system settings.
+              your device&apos;s system settings.
             </p>
           </section>
 
@@ -153,8 +153,8 @@ export default function PrivacyPolicy() {
             </h2>
             <p>
               We retain your data for as long as your account is active or as
-              needed to provide the App's services. If you wish to delete your
-              account and all associated data, you may do so through the App's
+              needed to provide the App&apos;s services. If you wish to delete your
+              account and all associated data, you may do so through the App&apos;s
               settings or by contacting us at the email address below. Upon
               receiving a deletion request, we will remove your data from our
               servers within a reasonable timeframe, subject to any legal
@@ -164,7 +164,7 @@ export default function PrivacyPolicy() {
 
           <section>
             <h2 className="text-2xl font-semibold mb-3">
-              8. Children's Privacy
+              8. Children&apos;s Privacy
             </h2>
             <p>
               Rishi Reader is not directed at children under the age of 13. We
@@ -217,7 +217,7 @@ export default function PrivacyPolicy() {
             <p>
               We may update this Privacy Policy from time to time. If we make
               material changes, we will notify you through the App or by other
-              appropriate means. The "Effective Date" at the top of this policy
+              appropriate means. The &quot;Effective Date&quot; at the top of this policy
               indicates when it was last revised. Continued use of the App after
               changes are posted constitutes acceptance of the revised policy.
             </p>

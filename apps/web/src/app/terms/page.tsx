@@ -21,10 +21,10 @@ export default function TermsAndConditions() {
               1. Acceptance of Terms
             </h2>
             <p>
-              By accessing or using Rishi Reader ("Rishi", "the App"), you agree
-              to be bound by these Terms and Conditions ("Terms"). Rishi Reader
-              is developed and operated by Fidexa, LLC ("Fidexa", "we", "us",
-              "our"), a limited liability company organized under the laws of the
+              By accessing or using Rishi Reader (&quot;Rishi&quot;, &quot;the App&quot;), you agree
+              to be bound by these Terms and Conditions (&quot;Terms&quot;). Rishi Reader
+              is developed and operated by Fidexa, LLC (&quot;Fidexa&quot;, &quot;we&quot;, &quot;us&quot;,
+              &quot;our&quot;), a limited liability company organized under the laws of the
               State of Delaware. If you do not agree to these Terms, you may not
               access or use the App. Your continued use of the App following the
               posting of any changes to these Terms constitutes acceptance of
@@ -146,7 +146,7 @@ export default function TermsAndConditions() {
               your ebooks, highlights, annotations, and notes, remains your
               property. By using the App, you grant Fidexa, LLC a limited
               license to store and process your content solely for the purpose of
-              providing and improving the App's services, such as cloud
+              providing and improving the App&apos;s services, such as cloud
               synchronization. We do not claim ownership of your content and will
               not use it for any purpose unrelated to the operation of the App.
             </p>
@@ -225,7 +225,7 @@ export default function TermsAndConditions() {
             </h2>
             <p>
               The App is provided on an{" "}
-              <span className="font-medium">"as is" and "as available"</span>{" "}
+              <span className="font-medium">&quot;as is&quot; and &quot;as available&quot;</span>{" "}
               basis, without warranties of any kind, either express or implied.
               To the fullest extent permitted by applicable law, Fidexa, LLC
               disclaims all warranties, including but not limited to implied
@@ -267,7 +267,7 @@ export default function TermsAndConditions() {
               You agree to indemnify, defend, and hold harmless Fidexa, LLC and
               its officers, directors, members, employees, agents, and affiliates
               from and against any and all claims, damages, losses, liabilities,
-              costs, and expenses (including reasonable attorneys' fees) arising
+              costs, and expenses (including reasonable attorneys&apos; fees) arising
               out of or in connection with your use of the App, your violation of
               these Terms, or your violation of any rights of a third party.
             </p>
@@ -280,7 +280,7 @@ export default function TermsAndConditions() {
               with or without cause, and with or without notice. Upon
               termination, your right to use the App will immediately cease. You
               may terminate your account at any time by discontinuing use of the
-              App and requesting account deletion through the App's settings or
+              App and requesting account deletion through the App&apos;s settings or
               by contacting us at{" "}
               <a
                 href="mailto:faridmatovu@fidexa.org"
@@ -309,7 +309,7 @@ export default function TermsAndConditions() {
               >
                 rishi.fidexa.org
               </a>
-              . The "Effective Date" at the top of these Terms indicates when
+              . The &quot;Effective Date&quot; at the top of these Terms indicates when
               they were last revised. Your continued use of the App after the
               revised Terms are posted constitutes your acceptance of the
               changes. If you do not agree to the revised Terms, you must stop

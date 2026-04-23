@@ -12,7 +12,7 @@ export default function Support() {
       <div className="max-w-3xl mx-auto px-6 py-16">
         <h1 className="text-4xl font-bold mb-2">Support</h1>
         <p className="text-muted-foreground mb-12">
-          We're here to help you get the most out of Rishi Reader.
+          We&apos;re here to help you get the most out of Rishi Reader.
         </p>
 
         <div className="space-y-10 text-base leading-relaxed">
@@ -52,7 +52,7 @@ export default function Support() {
             <h2 className="text-2xl font-semibold mb-3">Common Topics</h2>
             <p className="mb-4">
               Below are answers to some of the most frequently asked questions.
-              If your question isn't covered here, don't hesitate to contact us
+              If your question isn&apos;t covered here, don&apos;t hesitate to contact us
               directly.
             </p>
 
@@ -80,8 +80,8 @@ export default function Support() {
               <div>
                 <h3 className="text-lg font-semibold mb-2">Account Issues</h3>
                 <p>
-                  If you're having trouble signing in, resetting your password,
-                  or managing your account, try the following: make sure you're
+                  If you&apos;re having trouble signing in, resetting your password,
+                  or managing your account, try the following: make sure you&apos;re
                   using the email address you registered with, check your spam
                   folder for verification emails, and ensure you have an active
                   internet connection. If the issue persists, reach out to us at{" "}
@@ -103,7 +103,7 @@ export default function Support() {
                   Rishi Reader offers premium features including text-to-speech,
                   cloud synchronization, and AI-assisted reading tools. If you
                   have questions about your subscription, billing, or accessing
-                  premium features, please contact us and we'll be happy to
+                  premium features, please contact us and we&apos;ll be happy to
                   assist.
                 </p>
               </div>
@@ -113,8 +113,8 @@ export default function Support() {
                   Technical Issues / Troubleshooting
                 </h3>
                 <p>
-                  If you're experiencing crashes, performance issues, or
-                  unexpected behavior, try restarting the app and ensuring you're
+                  If you&apos;re experiencing crashes, performance issues, or
+                  unexpected behavior, try restarting the app and ensuring you&apos;re
                   running the latest version. If the problem continues, please
                   email us at{" "}
                   <a
@@ -138,7 +138,7 @@ export default function Support() {
               We typically respond to all inquiries within{" "}
               <span className="font-medium">24-48 hours</span> during business
               days. For urgent issues, please indicate the urgency in your
-              subject line and we'll do our best to prioritize your request.
+              subject line and we&apos;ll do our best to prioritize your request.
             </p>
           </section>
 

@@ -228,12 +228,12 @@ export default function Docs() {
               <li>
                 <span className="font-medium">Ask questions</span> - Select a
                 passage or type a question to get context-aware answers grounded
-                in the book's content.
+                in the book&apos;s content.
               </li>
               <li>
                 <span className="font-medium">Get explanations</span> -
                 Highlight unfamiliar words, phrases, or concepts and choose
-                "Explain" to receive a clear breakdown.
+                &quot;Explain&quot; to receive a clear breakdown.
               </li>
               <li>
                 <span className="font-medium">Have conversations</span> - Start
