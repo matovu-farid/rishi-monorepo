@@ -29,6 +29,25 @@ import { LoginButton } from "./LoginButton";
 import { UpdateMenu } from "./UpdateMenu";
 import { BookDiscoveryModal } from "./BookDiscoveryModal";
 import { HelpMenu } from "./HelpMenu";
+import { captureError } from "@/utils/sentry";
+
+/** Race a promise against a timeout. Rejects with a descriptive error if the timeout fires. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)),
+      ms
+    );
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); }
+    );
+  });
+}
+
+const COPY_TIMEOUT = 2 * 60 * 1000;     // 2 min — large files on slow disks
+const EXTRACT_TIMEOUT = 60 * 1000;       // 1 min — metadata extraction
+const SAVE_TIMEOUT = 30 * 1000;          // 30s  — DB insert
 
 // Add this helper function
 function bytesToBlobUrl(bytes: number[]): string {
@@ -173,21 +192,28 @@ function FileDrop(): React.JSX.Element {
   const storeBookDataMutation = useMutation({
     mutationKey: ["getBookData"],
     mutationFn: async ({ filePath }: { filePath: string }) => {
-      const epubPath = await copyBookToAppData(filePath);
-      const bookData = await getBookData({ path: epubPath });
-      const book = await saveBook({
-        book: {
-          coverKind: bookData.coverKind || "",
-          title: bookData.title || "",
-          author: bookData.author || "",
-          publisher: bookData.publisher || "",
-          filepath: epubPath,
-          location: "1",
-          version: 0,
-          kind: bookData.kind,
-          cover: bookData.cover,
-        },
-      });
+      const epubPath = await withTimeout(
+        copyBookToAppData(filePath), COPY_TIMEOUT, "Copying EPUB file"
+      );
+      const bookData = await withTimeout(
+        getBookData({ path: epubPath }), EXTRACT_TIMEOUT, "Extracting EPUB metadata"
+      );
+      const book = await withTimeout(
+        saveBook({
+          book: {
+            coverKind: bookData.coverKind || "",
+            title: bookData.title || "",
+            author: bookData.author || "",
+            publisher: bookData.publisher || "",
+            filepath: epubPath,
+            location: "1",
+            version: 0,
+            kind: bookData.kind,
+            cover: bookData.cover,
+          },
+        }),
+        SAVE_TIMEOUT, "Saving EPUB to library"
+      );
 
       // Hash + R2 upload (non-blocking for UX failures, but awaited for data integrity)
       try {
@@ -209,8 +235,9 @@ function FileDrop(): React.JSX.Element {
     },
 
     onError(error) {
-      console.error("Error storing book:", error);
-      toast.error("Can't upload book");
+      console.error("Error importing EPUB:", error);
+      captureError(error, { operation: "import", format: "epub", step: "mutation" });
+      toast.error(error instanceof Error ? error.message : "Failed to import EPUB");
     },
     onSuccess: async (bookData) => {
       // Invalidate the books list to refresh it
@@ -228,22 +255,28 @@ function FileDrop(): React.JSX.Element {
   const storePdfMutation = useMutation({
     mutationKey: ["getPdfData"],
     mutationFn: async ({ filePath }: { filePath: string }) => {
-      const pdfPath = await copyBookToAppData(filePath);
-
-      const bookData = await getPdfData({ path: pdfPath });
-      const book = await saveBook({
-        book: {
-          coverKind: bookData.coverKind || "",
-          title: bookData.title || "",
-          author: bookData.author || "",
-          publisher: bookData.publisher || "",
-          filepath: pdfPath,
-          location: "1",
-          version: 0,
-          kind: bookData.kind,
-          cover: bookData.cover,
-        },
-      });
+      const pdfPath = await withTimeout(
+        copyBookToAppData(filePath), COPY_TIMEOUT, "Copying PDF file"
+      );
+      const bookData = await withTimeout(
+        getPdfData({ path: pdfPath }), EXTRACT_TIMEOUT, "Extracting PDF metadata"
+      );
+      const book = await withTimeout(
+        saveBook({
+          book: {
+            coverKind: bookData.coverKind || "",
+            title: bookData.title || "",
+            author: bookData.author || "",
+            publisher: bookData.publisher || "",
+            filepath: pdfPath,
+            location: "1",
+            version: 0,
+            kind: bookData.kind,
+            cover: bookData.cover,
+          },
+        }),
+        SAVE_TIMEOUT, "Saving PDF to library"
+      );
 
       // Hash + R2 upload (non-blocking for UX failures, but awaited for data integrity)
       try {
@@ -265,8 +298,9 @@ function FileDrop(): React.JSX.Element {
     },
 
     onError(error) {
-      console.error("Error storing PDF:", error);
-      toast.error("Can't upload book");
+      console.error("Error importing PDF:", error);
+      captureError(error, { operation: "import", format: "pdf", step: "mutation" });
+      toast.error(error instanceof Error ? error.message : "Failed to import PDF");
     },
     onSuccess(bookData) {
       void queryClient.invalidateQueries({ queryKey: ["books"] });
@@ -283,22 +317,28 @@ function FileDrop(): React.JSX.Element {
   const storeMobiMutation = useMutation({
     mutationKey: ["getMobiData"],
     mutationFn: async ({ filePath }: { filePath: string }) => {
-      const mobiPath = await copyBookToAppData(filePath);
-
-      const bookData = await getMobiData({ path: mobiPath });
-      const book = await saveBook({
-        book: {
-          coverKind: bookData.coverKind || "",
-          title: bookData.title || "",
-          author: bookData.author || "",
-          publisher: bookData.publisher || "",
-          filepath: mobiPath,
-          location: "0",
-          version: 0,
-          kind: bookData.kind,
-          cover: bookData.cover,
-        },
-      });
+      const mobiPath = await withTimeout(
+        copyBookToAppData(filePath), COPY_TIMEOUT, "Copying MOBI file"
+      );
+      const bookData = await withTimeout(
+        getMobiData({ path: mobiPath }), EXTRACT_TIMEOUT, "Extracting MOBI metadata"
+      );
+      const book = await withTimeout(
+        saveBook({
+          book: {
+            coverKind: bookData.coverKind || "",
+            title: bookData.title || "",
+            author: bookData.author || "",
+            publisher: bookData.publisher || "",
+            filepath: mobiPath,
+            location: "0",
+            version: 0,
+            kind: bookData.kind,
+            cover: bookData.cover,
+          },
+        }),
+        SAVE_TIMEOUT, "Saving MOBI to library"
+      );
 
       // Hash + R2 upload (non-blocking for UX failures, but awaited for data integrity)
       try {
@@ -320,8 +360,9 @@ function FileDrop(): React.JSX.Element {
     },
 
     onError(error) {
-      console.error("Error storing MOBI:", error);
-      toast.error("Can't upload book");
+      console.error("Error importing MOBI:", error);
+      captureError(error, { operation: "import", format: "mobi", step: "mutation" });
+      toast.error(error instanceof Error ? error.message : "Failed to import MOBI");
     },
     onSuccess(bookData) {
       void queryClient.invalidateQueries({ queryKey: ["books"] });
@@ -336,22 +377,28 @@ function FileDrop(): React.JSX.Element {
   const storeDjvuMutation = useMutation({
     mutationKey: ["getDjvuData"],
     mutationFn: async ({ filePath }: { filePath: string }) => {
-      const djvuPath = await copyBookToAppData(filePath);
-
-      const bookData = await getDjvuData({ path: djvuPath });
-      const book = await saveBook({
-        book: {
-          coverKind: bookData.coverKind || "",
-          title: bookData.title || "",
-          author: bookData.author || "",
-          publisher: bookData.publisher || "",
-          filepath: djvuPath,
-          location: "1",
-          version: 0,
-          kind: bookData.kind,
-          cover: bookData.cover,
-        },
-      });
+      const djvuPath = await withTimeout(
+        copyBookToAppData(filePath), COPY_TIMEOUT, "Copying DJVU file"
+      );
+      const bookData = await withTimeout(
+        getDjvuData({ path: djvuPath }), EXTRACT_TIMEOUT, "Extracting DJVU metadata"
+      );
+      const book = await withTimeout(
+        saveBook({
+          book: {
+            coverKind: bookData.coverKind || "",
+            title: bookData.title || "",
+            author: bookData.author || "",
+            publisher: bookData.publisher || "",
+            filepath: djvuPath,
+            location: "1",
+            version: 0,
+            kind: bookData.kind,
+            cover: bookData.cover,
+          },
+        }),
+        SAVE_TIMEOUT, "Saving DJVU to library"
+      );
 
       // Hash + R2 upload (non-blocking for UX failures, but awaited for data integrity)
       try {
@@ -373,8 +420,9 @@ function FileDrop(): React.JSX.Element {
     },
 
     onError(error) {
-      console.error("Error storing DJVU:", error);
-      toast.error("Can't upload book");
+      console.error("Error importing DJVU:", error);
+      captureError(error, { operation: "import", format: "djvu", step: "mutation" });
+      toast.error(error instanceof Error ? error.message : "Failed to import DJVU");
     },
     onSuccess(bookData) {
       void queryClient.invalidateQueries({ queryKey: ["books"] });

@@ -5,6 +5,8 @@ import { load, Store } from "@tauri-apps/plugin-store";
 
 export async function copyBookToAppData(filePath: string) {
   const appdataPath = await path.appDataDir();
+  // Ensure the app data directory exists (may not on first launch)
+  await fs.mkdir(appdataPath, { recursive: true }).catch(() => {});
   const fileName = await path.basename(filePath);
   const bookPath = await path.join(appdataPath, fileName);
   await fs.copyFile(filePath, bookPath);

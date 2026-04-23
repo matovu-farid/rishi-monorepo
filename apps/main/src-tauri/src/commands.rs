@@ -73,11 +73,31 @@ pub fn migrate_auth_to_keychain(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Capture a book import error to Sentry with structured context, then return the
+/// error string for IPC. This ensures import failures are always visible in the
+/// Sentry dashboard even when the frontend swallows them.
+fn capture_import_error(error: &str, format: &str, path: &Path) -> String {
+    sentry::with_scope(
+        |scope| {
+            scope.set_tag("operation", "import");
+            scope.set_tag("book.format", format);
+            scope.set_extra("file_path", serde_json::Value::String(path.display().to_string()).into());
+        },
+        || {
+            sentry::capture_message(
+                &format!("Book import failed ({}): {}", format, error),
+                sentry::Level::Error,
+            );
+        },
+    );
+    error.to_string()
+}
+
 #[tauri::command]
 pub fn get_book_data(app: tauri::AppHandle, path: &Path) -> Result<BookData, String> {
     let data = Epub::new(path);
-    store_book_data(app, &data).map_err(|e| e.to_string())?;
-    data.extract().map_err(|e| e.to_string())
+    store_book_data(app, &data).map_err(|e| capture_import_error(&e, "epub", path))?;
+    data.extract().map_err(|e| capture_import_error(&e.to_string(), "epub", path))
 }
 
 #[tauri::command]
@@ -483,22 +503,22 @@ pub fn search_vectors(
 #[tauri::command]
 pub fn get_pdf_data(app: tauri::AppHandle, path: &Path) -> Result<BookData, String> {
     let data = Pdf::new(path);
-    store_book_data(app, &data).map_err(|e| e.to_string())?;
-    data.extract().map_err(|e| e.to_string())
+    store_book_data(app, &data).map_err(|e| capture_import_error(&e, "pdf", path))?;
+    data.extract().map_err(|e| capture_import_error(&e.to_string(), "pdf", path))
 }
 
 #[tauri::command]
 pub fn get_mobi_data(app: tauri::AppHandle, path: &Path) -> Result<BookData, String> {
     let data = Mobi::new(path);
-    store_book_data(app, &data).map_err(|e| e.to_string())?;
-    data.extract().map_err(|e| e.to_string())
+    store_book_data(app, &data).map_err(|e| capture_import_error(&e, "mobi", path))?;
+    data.extract().map_err(|e| capture_import_error(&e.to_string(), "mobi", path))
 }
 
 #[tauri::command]
 pub fn get_djvu_data(app: tauri::AppHandle, path: &Path) -> Result<BookData, String> {
     let data = Djvu::new(path);
-    store_book_data(app, &data).map_err(|e| e.to_string())?;
-    data.extract().map_err(|e| e.to_string())
+    store_book_data(app, &data).map_err(|e| capture_import_error(&e, "djvu", path))?;
+    data.extract().map_err(|e| capture_import_error(&e.to_string(), "djvu", path))
 }
 
 #[tauri::command]

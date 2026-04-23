@@ -1,8 +1,12 @@
 import "./App.css";
 import { StrictMode } from "react";
 import ReactDOM from "react-dom/client";
+import { initSentry } from "./utils/sentry";
 import { installErrorDumpHandlers } from "./utils/errorDump";
 import { installStateDump } from "./utils/stateDump";
+
+// Initialize Sentry early so all errors are captured
+initSentry();
 
 // In dev, capture all errors to apps/main/error-dump.json
 installErrorDumpHandlers();
