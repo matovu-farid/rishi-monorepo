@@ -19,26 +19,26 @@ export function Footer() {
             {
               title: 'Product',
               links: [
-                { label: 'Features', href: '#' },
-                { label: 'Pricing', href: '#' },
-                { label: 'Download', href: '#' },
-                { label: 'Changelog', href: '#' },
+                { label: 'Features', href: '/#features' },
+                { label: 'Pricing', href: '/pricing' },
+                { label: 'Download', href: '/#' },
+                { label: 'Changelog', href: '/changelog' },
               ]
             },
             {
               title: 'Resources',
               links: [
-                { label: 'Documentation', href: '#' },
-                { label: 'Blog', href: '#' },
-                { label: 'FAQ', href: '#' },
+                { label: 'Documentation', href: '/docs' },
+                { label: 'Blog', href: '/blog' },
+                { label: 'FAQ', href: '/support' },
                 { label: 'Support', href: '/support' },
               ]
             },
             {
               title: 'Company',
               links: [
-                { label: 'About', href: '#' },
-                { label: 'Contact', href: '#' },
+                { label: 'About', href: 'https://fidexa.org', external: true },
+                { label: 'Contact', href: '/support' },
                 { label: 'Privacy', href: '/privacy' },
                 { label: 'Terms', href: '/terms' },
               ]
@@ -49,7 +49,7 @@ export function Footer() {
               <ul className="space-y-2">
                 {col.links.map((link, j) => (
                   <li key={j}>
-                    <a href={link.href} className="text-sm text-muted-foreground hover:text-foreground transition">
+                    <a href={link.href} {...('external' in link ? { target: '_blank', rel: 'noopener noreferrer' } : {})} className="text-sm text-muted-foreground hover:text-foreground transition">
                       {link.label}
                     </a>
                   </li>
@@ -61,12 +61,12 @@ export function Footer() {
 
         <div className="border-t border-border pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
           <p className="text-sm text-muted-foreground">
-            © 2025 Rishi. All rights reserved.
+            © 2026 Rishi. All rights reserved.
           </p>
           <div className="flex gap-6">
-            <a href="#" className="text-sm text-muted-foreground hover:text-foreground transition">Twitter</a>
-            <a href="#" className="text-sm text-muted-foreground hover:text-foreground transition">Discord</a>
-            <a href="#" className="text-sm text-muted-foreground hover:text-foreground transition">GitHub</a>
+            <a href="https://twitter.com/matovu100" target="_blank" rel="noopener noreferrer" className="text-sm text-muted-foreground hover:text-foreground transition">Twitter</a>
+            <a href="https://discord.gg" target="_blank" rel="noopener noreferrer" className="text-sm text-muted-foreground hover:text-foreground transition">Discord</a>
+            <a href="https://github.com/matovu-farid" target="_blank" rel="noopener noreferrer" className="text-sm text-muted-foreground hover:text-foreground transition">GitHub</a>
           </div>
         </div>
       </div>

@@ -16,10 +16,10 @@ export async function CTA() {
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
           <DownloadButtonServer variant="primary" />
-          <button className="px-8 py-3 rounded-full border border-border text-foreground hover:bg-muted transition flex items-center gap-2 w-full sm:w-auto justify-center">
+          <a href="/#features" className="px-8 py-3 rounded-full border border-border text-foreground hover:bg-muted transition flex items-center gap-2 w-full sm:w-auto justify-center">
             Learn More
             <ArrowRight size={20} />
-          </button>
+          </a>
         </div>
 
         <p className="text-sm text-muted-foreground pt-8">
