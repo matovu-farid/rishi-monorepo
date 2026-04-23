@@ -13,6 +13,7 @@ import { processEpubJob } from "@/modules/process_epub";
 import { hasSavedEpubData } from "@/generated";
 import { useChatStore } from "./chatStore";
 import { prefetchRealtimeKey } from "@/modules/realtime";
+import { captureError } from "@/utils/sentry";
 
 // Module-level timers for debouncing next/prev paragraph prefetch.
 // Separate timers so the subscription and publishCurrentEpubParagraphs()
@@ -89,13 +90,11 @@ useEpubStore.subscribe(
     )) {
       void hasSavedEpubData({ bookId: Number(bookId) }).then((hasSaved) => {
         if (!hasSaved) {
-          console.log(">>> GETTING PARAGRAPHS");
           void getAllParagraphsForBook(paragraphRendition, bookId).then((paragraphs) => {
-            console.log(">>> PARAGRAPHS", paragraphs);
             void processEpubJob(Number(bookId), paragraphs);
-          });
+          }).catch((err) => captureError(err, { operation: "epub", step: "get_paragraphs" }));
         }
-      });
+      }).catch((err) => captureError(err, { operation: "epub", step: "check_saved_data" }));
     }
   },
   { equalityFn: (a, b) => a.paragraphRendition === b.paragraphRendition && a.bookId === b.bookId }
@@ -131,7 +130,7 @@ useEpubStore.subscribe(
           index: p.cfiRange,
         }));
         usePlayerStore.getState().setNextPageParagraphs(mapped);
-      });
+      }).catch(() => {});
 
       void getPreviousViewParagraphs(r).then((prevParagraphs) => {
         const mapped = prevParagraphs.map((p) => ({
@@ -139,7 +138,7 @@ useEpubStore.subscribe(
           index: p.cfiRange,
         }));
         usePlayerStore.getState().setPrevPageParagraphs(mapped);
-      });
+      }).catch(() => {});
     }, 50);
   },
   { equalityFn: (a, b) => a.rendition === b.rendition && a.location === b.location }
@@ -177,7 +176,7 @@ export function publishCurrentEpubParagraphs() {
         index: p.cfiRange,
       }));
       usePlayerStore.getState().setNextPageParagraphs(mapped);
-    });
+    }).catch(() => {});
 
     void getPreviousViewParagraphs(r).then((prevParagraphs) => {
       const mapped = prevParagraphs.map((p) => ({
@@ -185,7 +184,7 @@ export function publishCurrentEpubParagraphs() {
         index: p.cfiRange,
       }));
       usePlayerStore.getState().setPrevPageParagraphs(mapped);
-    });
+    }).catch(() => {});
   }, 300);
 }
 

@@ -33,7 +33,11 @@ export function LoginButton() {
 
   async function logout() {
     setUser(null);
-    await signout();
+    try {
+      await signout();
+    } catch (err) {
+      console.error("[logout] signout failed:", err);
+    }
   }
 
   if (user && isLoggedIn) {

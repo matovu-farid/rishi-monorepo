@@ -8,6 +8,7 @@ import { z } from "zod";
 import { useChatStore } from "@/stores/chatStore";
 import { usePlayerStore } from "@/stores/playerStore";
 import { startThinkingSound, stopThinkingSound } from "@/modules/thinkingSound";
+import { captureError } from "@/utils/sentry";
 
 // --- Cached API key to avoid fetching on every chat start ---
 // The key has a 10-minute TTL server-side; we treat it as stale after 9 minutes.
@@ -55,12 +56,17 @@ export async function startRealtime(bookId: number) {
       queryText: z.string(),
     }),
     execute: async ({ queryText }) => {
-      const context = await getContextForQuery({
-        bookId,
-        queryText,
-        k: 3,
-      });
-      return context;
+      try {
+        const context = await getContextForQuery({
+          bookId,
+          queryText,
+          k: 3,
+        });
+        return context;
+      } catch (err) {
+        captureError(err, { operation: "realtime", step: "bookContext_tool" });
+        return ["Unable to retrieve book context at this time."];
+      }
     },
   });
 
@@ -231,6 +237,13 @@ Ending conversations:
 
   session.on("agent_tool_end", () => {
     stopThinkingSound();
+  });
+
+  // Handle errors and disconnects so the UI doesn't show a zombie session
+  session.on("error", (err) => {
+    captureError(err, { operation: "realtime", step: "session_error" });
+    stopThinkingSound();
+    useChatStore.getState().stopConversation();
   });
 
   const apiKey = await getOrFetchKey();

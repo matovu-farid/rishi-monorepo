@@ -481,15 +481,19 @@ function FileDrop(): React.JSX.Element {
 
   // Load last-read book ID from localStorage
   useEffect(() => {
-    const stored = localStorage.getItem("lastReadBookId");
-    if (stored) setLastReadBookId(stored);
+    try {
+      const stored = localStorage.getItem("lastReadBookId");
+      if (stored) setLastReadBookId(stored);
+    } catch {}
   }, []);
 
   // Listen for storage changes (set by BackButton when navigating back)
   useEffect(() => {
     const handler = () => {
-      const stored = localStorage.getItem("lastReadBookId");
-      setLastReadBookId(stored);
+      try {
+        const stored = localStorage.getItem("lastReadBookId");
+        setLastReadBookId(stored);
+      } catch {}
     };
     window.addEventListener("lastReadBookChanged", handler);
     return () => window.removeEventListener("lastReadBookChanged", handler);

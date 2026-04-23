@@ -27,7 +27,7 @@ export function BackButton() {
     // Save current book as last-read so the library shows "Reading Now"
     const bookId = window.location.pathname.match(/\/books\/(\d+)/)?.[1];
     if (bookId) {
-      localStorage.setItem("lastReadBookId", bookId);
+      try { localStorage.setItem("lastReadBookId", bookId); } catch {}
       window.dispatchEvent(new Event("lastReadBookChanged"));
     }
   }
