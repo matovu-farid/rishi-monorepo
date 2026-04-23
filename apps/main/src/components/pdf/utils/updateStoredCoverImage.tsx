@@ -33,8 +33,7 @@ export async function updateCoverImage(blob: Blob, id: number) {
   if (book.version && book.version > 0) return;
   // if (book.cover_kind && book.cover_kind != "fallback") return
   if (book.kind != "pdf") return;
-  const bytes = await blob.bytes();
-  const cover = Array.from(bytes);
+  const cover = Array.from(new Uint8Array(await blob.arrayBuffer()));
 
   await updateBookCover({ bookId: id, newCover: cover });
 }
