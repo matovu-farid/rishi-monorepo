@@ -26,8 +26,11 @@ impl Extractable for Djvu {
         }
 
         // Validate DJVU magic bytes: file must start with "AT&T"
-        let file_bytes = std::fs::read(path)?;
-        if file_bytes.len() < 4 || &file_bytes[..4] != b"AT&T" {
+        // Uses mmap to read only the first 4 bytes instead of loading the entire file.
+        let magic = crate::mmap::read_magic(path, 4).map_err(|e| {
+            format!("Not a valid DJVU file ({}): {}", e, path.display())
+        })?;
+        if &magic != b"AT&T" {
             return Err(format!(
                 "Not a valid DJVU file (missing AT&T magic bytes): {}",
                 path.display()
