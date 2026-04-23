@@ -545,6 +545,11 @@ pub fn get_djvu_page_text(path: &Path, page_number: u32) -> Result<Vec<String>, 
 }
 
 #[tauri::command]
+pub fn check_file_size(path: &Path, format: &str) -> Result<crate::file_limits::FileSizeCheck, String> {
+    crate::file_limits::check_file_size(path, format)
+}
+
+#[tauri::command]
 pub async fn embed(embedparams: Vec<EmbedParam>) -> Result<Vec<EmbedResult>, String> {
     let res = embed_text(embedparams).await.map_err(|e| e.to_string())?;
     Ok(res)

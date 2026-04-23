@@ -137,6 +137,7 @@ pub fn run() {
             commands::get_djvu_page,
             commands::get_djvu_page_count,
             commands::get_djvu_page_text,
+            commands::check_file_size,
             commands::embed,
             commands::save_vectors,
             commands::search_vectors,
