@@ -4,6 +4,7 @@ mod epub;
 mod pdf;
 mod mobi;
 pub(crate) mod djvu;
+pub(crate) mod mmap;
 mod shared;
 pub mod vectordb;
 
@@ -119,15 +120,6 @@ pub fn run() {
                     let payload = event.payload().to_string();
                     eprintln!("[deep-link] Rust listener received: {}", payload);
                 });
-            }
-            // Auto-open devtools in debug builds so console output is visible
-            // without remembering a shortcut. Compiled out of release builds.
-            #[cfg(debug_assertions)]
-            {
-                use tauri::Manager;
-                if let Some(window) = app.get_webview_window("main") {
-                    window.open_devtools();
-                }
             }
             Ok(())
         })
