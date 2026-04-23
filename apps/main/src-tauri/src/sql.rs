@@ -282,20 +282,20 @@ pub fn delete_book(book_id: i32) -> Result<(), String> {
         .get()
         .map_err(|e| format!("Failed to get connection: {}", e))?;
 
-    // Delete associated chunk_data rows first to avoid orphaned records
-    {
-        use crate::schema::chunk_data::dsl::*;
-        diesel::delete(chunk_data.filter(bookId.eq(&book_id)))
-            .execute(&mut conn)
-            .map_err(|e| format!("Failed to delete chunk data for book: {}", e))?;
-    }
-
-    {
-        use crate::schema::books::dsl::*;
-        diesel::delete(books.filter(id.eq(&book_id)))
-            .execute(&mut conn)
-            .map_err(|e| format!("Failed to delete book: {}", e))?;
-    }
+    // Use a transaction so chunk_data + book deletion is atomic
+    conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        {
+            use crate::schema::chunk_data::dsl::*;
+            diesel::delete(chunk_data.filter(bookId.eq(&book_id)))
+                .execute(conn)?;
+        }
+        {
+            use crate::schema::books::dsl::*;
+            diesel::delete(books.filter(id.eq(&book_id)))
+                .execute(conn)?;
+        }
+        Ok(())
+    }).map_err(|e| format!("Failed to delete book: {}", e))?;
 
     Ok(())
 }

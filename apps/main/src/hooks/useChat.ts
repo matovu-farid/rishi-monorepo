@@ -73,7 +73,7 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
           conversationId: row.conversation_id,
           role: row.role as 'user' | 'assistant',
           content: row.content,
-          sourceChunks: row.source_chunks ? JSON.parse(row.source_chunks) as SourceChunk[] : null,
+          sourceChunks: row.source_chunks ? (() => { try { return JSON.parse(row.source_chunks) as SourceChunk[]; } catch { return null; } })() : null,
           createdAt: row.created_at,
         }));
 

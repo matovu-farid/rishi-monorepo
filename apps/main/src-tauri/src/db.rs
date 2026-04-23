@@ -41,7 +41,7 @@ pub fn init_database(app: &tauri::AppHandle) -> anyhow::Result<String> {
     let mut db_path: PathBuf = app
         .path()
         .app_data_dir()
-        .expect("failed to get app data dir");
+        .map_err(|e| anyhow::anyhow!("Failed to get app data dir: {}", e))?;
 
     // 2. Ensure directory exists
     std::fs::create_dir_all(&db_path)?;
@@ -53,11 +53,12 @@ pub fn init_database(app: &tauri::AppHandle) -> anyhow::Result<String> {
     let conn_url = db_path.to_string_lossy().to_string();
 
     // 5. Connect to SQLite (this creates file if missing)
-    let mut conn = SqliteConnection::establish(&conn_url).expect("Failed to connect to SQLite DB");
+    let mut conn = SqliteConnection::establish(&conn_url)
+        .map_err(|e| anyhow::anyhow!("Failed to connect to SQLite DB: {}", e))?;
 
     // 6. Run pending Diesel migrations (creates schema on first run)
     conn.run_pending_migrations(MIGRATIONS)
-        .expect("Failed to run migrations");
+        .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
 
     println!("Database initialized at {}", conn_url);
 

@@ -23,6 +23,14 @@ use tauri_plugin_store::StoreExt;
 
 const KEYRING_SERVICE: &str = "com.fidexa.rishi";
 
+/// HTTP client with a 30-second timeout to prevent requests from hanging forever.
+pub fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_default()
+}
+
 /// Store a value in the OS keychain.
 fn keyring_set(key: &str, value: &str) -> Result<(), String> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, key).map_err(|e| e.to_string())?;
@@ -131,7 +139,7 @@ pub fn log_auth_debug_fn(state: &str, source: &str, step: &str, data: Option<ser
         payload["error"] = json!(e);
     }
     tokio::spawn(async move {
-        let client = reqwest::Client::new();
+        let client = http_client();
         let _ = client.post(&url).json(&payload).send().await;
     });
 }
@@ -149,7 +157,7 @@ pub async fn log_auth_debug_cmd(state: String, step: String, data: Option<String
 pub async fn get_auth_debug(state: String) -> Result<String, String> {
     let worker_url = crate::WORKER_URL;
     let url = format!("{}/api/auth/debug/{}", worker_url, &state);
-    let client = reqwest::Client::new();
+    let client = http_client();
     let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
     let text = response.text().await.map_err(|e| e.to_string())?;
     Ok(text)
@@ -197,7 +205,7 @@ pub async fn complete_auth(app: tauri::AppHandle, state: &str) -> Result<User, S
     let worker_url = crate::WORKER_URL;
     let url = format!("{}/api/auth/complete", worker_url);
 
-    let client = reqwest::Client::new();
+    let client = http_client();
     log_auth_debug_fn(state, "tauri-rust", "complete_auth_calling_worker",
         Some(json!({ "url": url })), None);
 
@@ -294,7 +302,7 @@ pub async fn check_auth_status(app: tauri::AppHandle, state: &str) -> Result<Aut
 
     let worker_url = crate::WORKER_URL;
     let url = format!("{}/api/auth/status/{}", worker_url, state);
-    let client = reqwest::Client::new();
+    let client = http_client();
     let response = client
         .post(&url)
         .json(&json!({ "code_challenge": code_challenge }))
@@ -338,7 +346,7 @@ pub fn get_auth_token_cmd(app: tauri::AppHandle) -> Result<String, String> {
 
 async fn authenticated_get(app: &tauri::AppHandle, url: &str) -> Result<reqwest::Response, String> {
     let token = get_auth_token(app)?;
-    let client = reqwest::Client::new();
+    let client = http_client();
     let mut req = client.get(url);
 
     if token == "dev-placeholder-token" {
@@ -445,7 +453,7 @@ pub async fn signout(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(token) = keyring_get("auth_token")? {
         let worker_url = crate::WORKER_URL;
         let url = format!("{}/api/auth/revoke", worker_url);
-        let client = reqwest::Client::new();
+        let client = http_client();
         let _ = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", token))

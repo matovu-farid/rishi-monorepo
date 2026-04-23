@@ -2,7 +2,7 @@
 pub async fn get_realtime_client_secret(app: tauri::AppHandle) -> Result<String, String> {
     let url = format!("{}/api/realtime/client_secrets", crate::WORKER_URL);
     let token = crate::commands::get_auth_token(&app)?;
-    let client = reqwest::Client::new();
+    let client = crate::commands::http_client();
     let mut req = client.get(&url);
 
     if token == "dev-placeholder-token" {
