@@ -1,3 +1,4 @@
+import "./polyfills";
 import "./App.css";
 import { StrictMode } from "react";
 import ReactDOM from "react-dom/client";
