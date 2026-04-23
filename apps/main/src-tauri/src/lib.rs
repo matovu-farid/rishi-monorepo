@@ -5,6 +5,7 @@ mod pdf;
 mod mobi;
 pub(crate) mod djvu;
 pub(crate) mod mmap;
+pub(crate) mod file_limits;
 mod shared;
 pub mod vectordb;
 
