@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::commands::embed;
 use crate::db::DB_POOL;
-use crate::embed::{EmbedParam, EmbedResult, Metadata};
+use crate::embed::{EmbedParam, Metadata};
 use crate::models::{Books, ChunkData};
 use crate::schema::{books, chunk_data};
 use crate::vectordb::{self, Vector};
@@ -355,29 +355,32 @@ pub async fn process_job(
     // Save page data first (ensures data is in DB even if embedding fails)
     save_page_data_many(page_data.clone())?;
 
-    // Embed the text using the command
-    let embed_results: Vec<EmbedResult> = embed(embed_params).await?;
+    // Embed the text — non-fatal if it fails (model download may fail on first
+    // launch, network issues, etc.). Page data is already saved above so the
+    // book is still readable; embeddings can be retried later.
+    match embed(embed_params).await {
+        Ok(embed_results) if !embed_results.is_empty() => {
+            let vectors: Vec<Vector> = embed_results
+                .iter()
+                .map(|result| Vector {
+                    id: result.metadata.id,
+                    vector: result.embedding.clone(),
+                })
+                .collect();
 
-    if embed_results.is_empty() {
-        return Err("No embedding results returned".to_string());
+            let dim = embed_results[0].embedding.len();
+            let name = format!("{}-vectordb", book_id);
+            if let Err(e) = vectordb::save_vectors(vectors, app_data_dir.to_path_buf(), dim, &name) {
+                eprintln!("[process_job] Failed to save vectors for book {}: {}", book_id, e);
+            }
+        }
+        Ok(_) => {
+            eprintln!("[process_job] Embedding returned no results for book {} page {}", book_id, page_number);
+        }
+        Err(e) => {
+            eprintln!("[process_job] Embedding failed for book {} page {} (non-fatal): {}", book_id, page_number, e);
+        }
     }
-
-    // Prepare vectors
-    let vectors: Vec<Vector> = embed_results
-        .iter()
-        .map(|result| Vector {
-            id: result.metadata.id,
-            vector: result.embedding.clone(),
-        })
-        .collect();
-
-    let dim = embed_results[0].embedding.len();
-
-    // Save vectors using the existing command
-
-    // save_vectors(app, &format!("{}-vectordb", book_id), dim, vectors)?;
-    let name = format!("{}-vectordb", book_id);
-    vectordb::save_vectors(vectors, app_data_dir.to_path_buf(), dim, &name).map_err(|e| e.to_string())?;
 
     Ok(())
 }

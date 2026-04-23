@@ -1,9 +1,30 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use embed_anything::embeddings::embed::{EmbedData, EmbedderBuilder};
+use embed_anything::embeddings::embed::{EmbedData, Embedder, EmbedderBuilder};
 use embed_anything::process_chunks;
 use serde::{Deserialize, Serialize};
+use tokio::sync::OnceCell;
+
+/// Lazy singleton for the embedding model.
+/// Downloaded from HuggingFace on first use and cached in ~/.cache/huggingface/.
+/// Using a singleton avoids re-downloading on every call and prevents lock
+/// contention when multiple embed requests fire concurrently.
+static EMBEDDER: OnceCell<Arc<Embedder>> = OnceCell::const_new();
+
+async fn get_or_init_embedder() -> Result<Arc<Embedder>, String> {
+    EMBEDDER
+        .get_or_try_init(|| async {
+            let embedder = EmbedderBuilder::new()
+                .model_architecture("bert")
+                .model_id(Some("sentence-transformers/all-MiniLM-L6-v2"))
+                .from_pretrained_hf()
+                .map_err(|e| format!("Failed to load embedding model: {}", e))?;
+            Ok(Arc::new(embedder))
+        })
+        .await
+        .cloned()
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -83,13 +104,8 @@ pub struct EmbedParam {
 }
 
 pub async fn embed_text(embedparams: Vec<EmbedParam>) -> Result<Vec<EmbedResult>, String> {
-    let embedding_model = Arc::new(
-        EmbedderBuilder::new()
-            .model_architecture("bert")
-            .model_id(Some("sentence-transformers/all-MiniLM-L6-v2"))
-            .from_pretrained_hf()
-            .map_err(|e| e.to_string())?,
-    );
+    let embedding_model = get_or_init_embedder().await?;
+
     let chunks = embedparams
         .iter()
         .map(|p| p.text.clone())
@@ -98,12 +114,14 @@ pub async fn embed_text(embedparams: Vec<EmbedParam>) -> Result<Vec<EmbedResult>
         .iter()
         .map(|p| Some(p.metadata.clone().into()))
         .collect::<Vec<_>>();
-    println!(">>> Processing chunks");
 
     let embeddings = process_chunks(&chunks, &metadata, &embedding_model, Some(1), None)
         .await
         .map_err(|e| {
-            println!("error: {:#?}", e.to_string());
+            sentry::capture_message(
+                &format!("Embedding failed: {}", e),
+                sentry::Level::Error,
+            );
             e.to_string()
         })?;
 
@@ -112,11 +130,6 @@ pub async fn embed_text(embedparams: Vec<EmbedParam>) -> Result<Vec<EmbedResult>
         .map(EmbedResult::try_from)
         .collect::<Result<Vec<_>, _>>()
 }
-// Object = $2
-
-// metadata: {id: 7271375624100750, pageNumber: 11, bookId: 1}
-
-// text: "Chapter 4. Logical Components: The Building Blocks↵Ready to start creating an architecture? It’s not as easy as it sounds—and if you don’…"
 
 #[cfg(test)]
 mod tests {
@@ -127,7 +140,7 @@ mod tests {
         let mut embedparams = vec![];
         for _ in 0..10 {
             embedparams.push(EmbedParam {
-                text: "Chapter 4. Logical Components: The Building Blocks↵Ready to start creating an architecture? It’s not as easy as it sounds—and if you don’…".to_string(),
+                text: "Chapter 4. Logical Components: The Building Blocks↵Ready to start creating an architecture? It's not as easy as it sounds—and if you don'…".to_string(),
                 metadata: Metadata {
                     id: 7271375624100750,
                     page_number: 11,
