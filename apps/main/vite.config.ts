@@ -55,6 +55,14 @@ export default defineConfig(async () => ({
     },
   },
 
+  // Target older WebKit/Chromium so Vite transpiles modern syntax.
+  // Safari 14.1 = macOS 11 Big Sur (2020) — our minimum supported version.
+  // This handles SYNTAX (optional chaining, class fields, etc.) but NOT
+  // runtime APIs (URL.parse, Promise.withResolvers) — those need polyfills.ts.
+  build: {
+    target: ["safari14", "chrome90"] as const,
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
