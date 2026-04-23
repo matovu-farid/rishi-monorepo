@@ -61,6 +61,7 @@ sha2 = "0.10"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 sentry = {version = "0.42",  features = ["logs"] }
 mobi = "0.8"
+memmap2 = "0.9"
 tauri-plugin-sentry = "0.5"
 chrono = "0.4"
 walkdir = "2"
