@@ -313,8 +313,8 @@ export class TTSQueue extends EventEmitter {
         );
       }
 
-      // Convert response to buffer
-      const audioData = await response.bytes();
+      // Convert response to buffer (.bytes() requires Safari 17.5+, use .arrayBuffer() for compat)
+      const audioData = new Uint8Array(await response.arrayBuffer());
 
       if (audioData.length === 0) {
         throw new Error("OpenAI TTS API returned empty audio buffer");
