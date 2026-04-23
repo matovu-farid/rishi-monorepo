@@ -25,7 +25,8 @@ impl Extractable for Mobi {
             return Err(format!("File not found: {}", path.display()).into());
         }
 
-        let m = mobi::Mobi::from_path(path)?;
+        let mmap = crate::mmap::mmap_file(path)?;
+        let m = mobi::Mobi::from_read(std::io::Cursor::new(&mmap[..]))?;
 
         let title = {
             let t = m.title();
@@ -85,7 +86,8 @@ fn strip_html_tags(html: &str) -> String {
 
 /// Parse a MOBI file and split its HTML content into chapters by `<mbp:pagebreak/>` markers.
 pub fn get_chapters(path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let m = mobi::Mobi::from_path(path)?;
+    let mmap = crate::mmap::mmap_file(path)?;
+    let m = mobi::Mobi::from_read(std::io::Cursor::new(&mmap[..]))?;
     let content = m.content_as_string_lossy();
 
     let chapters: Vec<String> = content
