@@ -4,9 +4,28 @@ import type { TTSRequest } from "@/types";
 import { ttsCache } from "./ttsCache";
 import { TTSQueueEvents } from "./ipc_handles";
 import { fetch } from "@tauri-apps/plugin-http";
+import { invoke } from "@tauri-apps/api/core";
 import { getAuthToken } from "./auth";
 import config from "@/config.json";
 import { logStateEvent } from "@/utils/stateDump";
+import { captureError } from "@/utils/sentry";
+
+/** Safely extract a human-readable message from any thrown value. */
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+/** Wrap any thrown value in a proper Error instance. */
+function toError(error: unknown): Error {
+  if (error instanceof Error) return error;
+  return new Error(toErrorMessage(error));
+}
 
 export interface QueueItem extends TTSRequest {
   priority: number;
@@ -187,16 +206,10 @@ export class TTSQueue extends EventEmitter {
           requestId: item.requestId,
         });
       } catch (error) {
+        const errorMsg = toErrorMessage(error);
         console.error(">>> Queue: Error in processQueue", {
           requestId: item.requestId,
-          error:
-            error instanceof Error
-              ? {
-                  name: error.name,
-                  message: error.message,
-                  stack: error.stack,
-                }
-              : String(error),
+          error: errorMsg,
         });
         // Clean up tracking
         this.pendingRequests.delete(item.requestId);
@@ -227,17 +240,27 @@ export class TTSQueue extends EventEmitter {
 
           this.pendingTimeouts.add(timeout);
         } else {
-          item.reject(error as Error);
+          const wrappedError = toError(error);
+          item.reject(wrappedError);
 
           // Emit audio-error event with requestId for duplicate listeners
           this.emit(TTSQueueEvents.AUDIO_ERROR, {
             bookId: item.bookId,
             cfiRange: item.cfiRange,
-            error: error as Error,
+            error: errorMsg,
             requestId: item.requestId,
           });
 
-          console.error("TTS generation failed:", error);
+          captureError(wrappedError, {
+            operation: "tts-generation",
+            step: "processQueue",
+            requestId: item.requestId,
+            bookId: item.bookId,
+            retryCount: item.retryCount,
+            textLength: item.text.length,
+          });
+
+          console.error(`TTS generation failed for ${item.requestId}: ${errorMsg}`);
         }
       }
     });
@@ -269,28 +292,44 @@ export class TTSQueue extends EventEmitter {
       };
 
       const token = await getAuthToken();
+      const devBypassSecret = token === "dev-placeholder-token"
+        ? await invoke<string | null>("get_dev_bypass_secret")
+        : null;
       logStateEvent("ttsQueue.gotToken", {
         requestId: item.requestId,
         tokenType: token === "dev-placeholder-token" ? "dev-placeholder" : "jwt",
-        hasBypassSecret: !!import.meta.env.VITE_DEV_BYPASS_SECRET,
+        hasBypassSecret: !!devBypassSecret,
       });
 
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
 
-      if (token === "dev-placeholder-token") {
-        // Dev mode: use the bypass secret instead of a JWT
-        headers["X-Dev-Bypass"] = import.meta.env.VITE_DEV_BYPASS_SECRET ?? "";
-      } else {
+      if (token === "dev-placeholder-token" && devBypassSecret) {
+        // Dev mode: use the bypass secret from the Rust backend
+        headers["X-Dev-Bypass"] = devBypassSecret;
+      } else if (token !== "dev-placeholder-token") {
         headers["Authorization"] = `Bearer ${token}`;
       }
 
-      const response = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(requestBody),
-      });
+      const ttsController = new AbortController();
+      const ttsTimeout = setTimeout(() => ttsController.abort(), 30_000);
+      let response: Awaited<ReturnType<typeof fetch>>;
+      try {
+        response = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(requestBody),
+          signal: ttsController.signal,
+        });
+      } catch (err) {
+        if (ttsController.signal.aborted) {
+          throw new Error("TTS request timed out after 30 seconds");
+        }
+        throw err;
+      } finally {
+        clearTimeout(ttsTimeout);
+      }
 
       logStateEvent("ttsQueue.response", {
         requestId: item.requestId,
@@ -322,27 +361,16 @@ export class TTSQueue extends EventEmitter {
 
       return audioData;
     } catch (error) {
-      const errorDetails = {
+      const errorMsg = toErrorMessage(error);
+      console.error(">>> Queue: Audio generation failed", {
         requestId: item.requestId,
         url,
         textLength: item.text.length,
-        textPreview: item.text.substring(0, 100) + "...",
         retryCount: item.retryCount,
-        error:
-          error instanceof Error
-            ? {
-                name: error.name,
-                message: error.message,
-                stack: error.stack,
-              }
-            : String(error),
-      };
+        error: errorMsg,
+      });
 
-      console.error(">>> Queue: Audio generation failed", errorDetails);
-
-      throw new Error(
-        `OpenAI TTS API error: ${error instanceof Error ? error.message : String(error)}`
-      );
+      throw new Error(`TTS API error: ${errorMsg}`);
     }
   }
 
@@ -396,7 +424,7 @@ export class TTSQueue extends EventEmitter {
       this.emit(TTSQueueEvents.AUDIO_ERROR, {
         bookId: item.bookId,
         cfiRange: item.cfiRange,
-        error: new Error("Request cancelled"),
+        error: "Request cancelled",
         requestId: requestId,
       });
       return true;

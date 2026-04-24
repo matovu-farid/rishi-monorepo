@@ -149,9 +149,9 @@ export function usePlayerMachine(bookId: string) {
             })
             .catch((err) => {
               if (gen !== fetchGeneration) return; // stale
-              console.error("Audio fetch/load failed:", err);
-              audioService.deleteCacheEntry(paragraph.index);
               const msg = err instanceof Error ? err.message : String(err);
+              console.error(`Audio fetch/load failed [p${ctx.paragraphIndex}]: ${msg}`);
+              audioService.deleteCacheEntry(paragraph.index);
               actor.send({ type: "AUDIO_ERROR", error: msg });
             });
         }

@@ -1,5 +1,6 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ttsService } from "./ttsService";
+import { captureError } from "@/utils/sentry";
 
 export const getTTSAudioPath = async (bookId: string, cfiRange: string) => {
   try {
@@ -51,7 +52,16 @@ export const requestTTSAudio = async (
     );
     return convertFileSrc(audioFile);
   } catch (error) {
-    console.error("TTS request failed:", error);
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`TTS request failed [${bookId}]: ${msg}`);
+    captureError(error, {
+      operation: "tts-request",
+      step: "requestTTSAudio",
+      bookId,
+      cfiRange,
+      textLength: text.length,
+      priority,
+    });
     throw error;
   }
 };

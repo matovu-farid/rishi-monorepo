@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import { ttsCache } from "./ttsCache";
 import { ttsQueue } from "./ttsQueue";
 import { TTS_EVENTS, TTSQueueEvents } from "./ipc_handles";
+import { captureError } from "@/utils/sentry";
 
 export interface AudioReadyEvent {
   bookId: string;
@@ -134,29 +135,23 @@ export class TTSService extends EventEmitter<TTSServiceEventMap> {
     } catch (error) {
       this.activeRequests.delete(requestId);
 
-      const errorDetails = {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error(`>>> Service: TTS request failed [${requestId}]: ${errorMsg}`);
+
+      captureError(error, {
+        operation: "tts-request",
+        step: "requestAudio",
         requestId,
         bookId,
-        cfiRange,
         textLength: text.length,
-        textPreview: text.substring(0, 50) + "...",
-        error:
-          error instanceof Error
-            ? {
-                name: error.name,
-                message: error.message,
-                stack: error.stack,
-              }
-            : String(error),
-      };
-
-      console.error(">>> Service: TTS request failed", errorDetails);
+        priority,
+      });
 
       // Emit error event
       this.emit(TTS_EVENTS.ERROR, {
         bookId,
         cfiRange,
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: errorMsg,
       });
 
       throw error;
