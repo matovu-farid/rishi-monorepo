@@ -37,51 +37,64 @@ export function getSyncStatus(): { status: SyncStatus; lastSyncAt: number | null
 }
 
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
-  const token = await getAuthToken();
+  const makeRequest = async (token: string | null): Promise<Response> => {
+    const headers: Record<string, string> = {
+      ...init?.headers as Record<string, string>,
+      'Content-Type': 'application/json',
+    };
 
-  const headers: Record<string, string> = {
-    ...init?.headers as Record<string, string>,
-    'Content-Type': 'application/json',
+    if (token === "dev-placeholder-token") {
+      const secret = await invoke<string | null>("get_dev_bypass_secret");
+      if (secret) {
+        headers['X-Dev-Bypass'] = secret;
+      } else {
+        // No bypass secret configured — skip the request silently
+        return new Response(JSON.stringify({ error: "Not authenticated (dev)" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    } else if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const syncController = new AbortController();
+    const syncTimeout = setTimeout(() => syncController.abort(), 30_000);
+
+    // If caller provided a signal, forward its abort to our controller
+    if (init?.signal) {
+      init.signal.addEventListener('abort', () => syncController.abort(), { once: true });
+    }
+
+    try {
+      const response = await fetch(`${WORKER_URL}${path}`, {
+        ...init,
+        headers,
+        signal: syncController.signal,
+      });
+      return response;
+    } catch (err) {
+      if (syncController.signal.aborted && !(init?.signal?.aborted)) {
+        throw new Error(`Sync request to ${path} timed out after 30 seconds`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(syncTimeout);
+    }
   };
 
-  if (token === "dev-placeholder-token") {
-    const secret = await invoke<string | null>("get_dev_bypass_secret");
-    if (secret) {
-      headers['X-Dev-Bypass'] = secret;
-    } else {
-      // No bypass secret configured — skip the request silently
-      return new Response(JSON.stringify({ error: "Not authenticated (dev)" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+  const token = await getAuthToken();
+  const response = await makeRequest(token);
+
+  // Retry once on 401 with a fresh token (may have expired during the request)
+  if (response.status === 401 && token !== "dev-placeholder-token") {
+    const freshToken = await getAuthToken();
+    if (freshToken && freshToken !== token) {
+      return makeRequest(freshToken);
     }
-  } else {
-    headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const syncController = new AbortController();
-  const syncTimeout = setTimeout(() => syncController.abort(), 30_000);
-
-  // If caller provided a signal, forward its abort to our controller
-  if (init?.signal) {
-    init.signal.addEventListener('abort', () => syncController.abort(), { once: true });
-  }
-
-  try {
-    const response = await fetch(`${WORKER_URL}${path}`, {
-      ...init,
-      headers,
-      signal: syncController.signal,
-    });
-    return response;
-  } catch (err) {
-    if (syncController.signal.aborted && !(init?.signal?.aborted)) {
-      throw new Error(`Sync request to ${path} timed out after 30 seconds`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(syncTimeout);
-  }
+  return response;
 }
 
 export async function triggerSync(): Promise<void> {

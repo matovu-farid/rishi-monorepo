@@ -59,6 +59,9 @@ export function createSyncEngine(config: SyncEngineConfig): SyncEngine {
 
       if ("cfiRange" in c) {
         await config.adapter.applyHighlightConflict(c, data.syncVersion);
+      } else if ("conversationId" in c && "role" in c) {
+        // Messages are append-only — server version wins on conflict.
+        // No action needed since we never update messages after creation.
       } else if ("title" in c && "bookId" in c && !("filePath" in c)) {
         await config.adapter.applyConversationConflict(c, data.syncVersion);
       } else {

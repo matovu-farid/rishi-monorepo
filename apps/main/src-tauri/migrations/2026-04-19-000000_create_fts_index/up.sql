@@ -1,3 +1,11 @@
+-- NOTE: Diesel normally wraps each migration in a transaction, but SQLite does
+-- not support CREATE VIRTUAL TABLE inside a transaction. Diesel's SQLite backend
+-- detects this and runs the migration without an implicit transaction.
+-- As a consequence the backfill INSERT at the bottom is also non-transactional.
+-- If it fails mid-way, re-running the migration will attempt to re-insert rows
+-- that already exist in the FTS index (harmless — FTS5 content-sync tables
+-- tolerate duplicate inserts as long as the content table is the source of truth).
+
 -- FTS5 content-sync table mirroring chunk_data.data
 CREATE VIRTUAL TABLE chunk_data_fts USING fts5(
   data,

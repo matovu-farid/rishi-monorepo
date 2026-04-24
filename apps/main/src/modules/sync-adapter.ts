@@ -7,6 +7,14 @@ import type {
   SyncMessage,
 } from "@rishi/shared/sync-adapter";
 
+/** Safely coerce a DB timestamp value (Date, number, or string) to epoch ms. */
+function toTimestamp(val: unknown): number {
+  if (val instanceof Date) return val.getTime();
+  if (typeof val === "number") return val;
+  if (typeof val === "string") return new Date(val).getTime();
+  return Date.now();
+}
+
 export class DesktopSyncAdapter implements SyncDbAdapter {
   async getDirtyBooks(): Promise<SyncBook[]> {
     const rows = await db
@@ -26,8 +34,8 @@ export class DesktopSyncAdapter implements SyncDbAdapter {
       fileHash: row.file_hash,
       fileR2Key: row.file_r2_key,
       coverR2Key: row.cover_r2_key,
-      createdAt: new Date(row.created_at as unknown as string).getTime(),
-      updatedAt: new Date(row.updated_at as unknown as string).getTime(),
+      createdAt: toTimestamp(row.created_at),
+      updatedAt: toTimestamp(row.updated_at),
       syncVersion: row.sync_version,
       isDirty: true,
       isDeleted: row.is_deleted === 1,

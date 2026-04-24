@@ -1,3 +1,16 @@
+/**
+ * Frontend database client using Kysely + Tauri SQL plugin.
+ *
+ * IMPORTANT: This connects to the same rishi.db file that the Rust backend
+ * accesses via Diesel (see src-tauri/src/db.rs). Both use WAL mode for
+ * concurrent read/write safety. Writes from either side are immediately
+ * visible to the other after the transaction commits.
+ *
+ * If you add write operations here, ensure they don't conflict with
+ * Rust-side writes to the same tables. Current split:
+ * - Rust: books, chunk_data, vector operations (import pipeline)
+ * - TS: highlights, conversations, messages, sync metadata (user actions)
+ */
 import { appDataDir } from "@tauri-apps/api/path";
 import Database from "@tauri-apps/plugin-sql";
 import { ColumnType, Generated, Insertable, Kysely, Selectable } from "kysely";
