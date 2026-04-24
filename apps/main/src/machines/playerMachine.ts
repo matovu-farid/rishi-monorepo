@@ -113,6 +113,13 @@ export const playerMachine = setup({
     setDirectionBackward: assign({ direction: "backward" as const }),
     clearErrors: assign({ errors: [] as string[] }),
     flagTimedOut: assign({ timedOut: true }),
+    logLoadingTimeout: assign({
+      errors: ({ context }) => {
+        const errs = [...context.errors, "Audio loading timed out"];
+        if (errs.length > 50) errs.shift();
+        return errs;
+      },
+    }),
     clearTimedOut: assign({ timedOut: false }),
     resetAll: assign(() => ({ ...initialContext })),
   },
@@ -195,6 +202,15 @@ export const playerMachine = setup({
     },
 
     loading: {
+      after: {
+        60000: {
+          target: "error",
+          actions: [
+            "logLoadingTimeout",
+            "flagTimedOut",
+          ],
+        },
+      },
       on: {
         AUDIO_LOADED: {
           target: "playing",

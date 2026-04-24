@@ -28,11 +28,14 @@ export function useBookSearch({ bookId, bookFormat, epubSearchFn }: UseBookSearc
   const [activeMode, setActiveMode] = useState<SearchMode>('exact');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const queryRef = useRef('');
+  const bookIdRef = useRef(bookId);
 
-  // Keep ref in sync
+  // Keep refs in sync
   useEffect(() => {
     queryRef.current = query;
   }, [query]);
+
+  bookIdRef.current = bookId;
 
   // Detect if query is quoted
   const isQuotedQuery = useCallback((q: string) => {
@@ -64,7 +67,7 @@ export function useBookSearch({ bookId, bookFormat, epubSearchFn }: UseBookSearc
       if (bookFormat === 'epub' && epubSearchFn) {
         // Use epub.js spine-based search for EPUBs
         const epubResults = await epubSearchFn(cleanQuery);
-        if (queryRef.current !== searchQuery) return; // stale
+        if (queryRef.current !== searchQuery || bookIdRef.current !== bookId) return; // stale
         setResults(
           epubResults.map((r, i) => ({
             id: `epub-${i}`,
@@ -77,7 +80,7 @@ export function useBookSearch({ bookId, bookFormat, epubSearchFn }: UseBookSearc
       } else {
         // Use FTS5 for PDF/MOBI/DjVu (and EPUB without epubSearchFn)
         const ftsResults = await searchBookText({ query: cleanQuery, bookId });
-        if (queryRef.current !== searchQuery) return; // stale
+        if (queryRef.current !== searchQuery || bookIdRef.current !== bookId) return; // stale
         setResults(
           ftsResults.map((r) => ({
             id: `fts-${r.id}`,

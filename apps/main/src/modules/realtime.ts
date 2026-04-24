@@ -211,40 +211,59 @@ Ending conversations:
   // Track thinking/speaking status for visual indicators
   const setChatStatus = useChatStore.getState().setChatStatus;
 
-  session.on("agent_start", () => {
+  const onAgentStart = () => {
     setChatStatus("thinking");
-  });
+  };
 
-  session.on("audio_start", () => {
+  const onAudioStart = () => {
     setChatStatus("speaking");
-  });
+  };
 
-  session.on("audio_stopped", () => {
+  const onAudioStopped = () => {
     setChatStatus("idle");
-  });
+  };
 
-  session.on("agent_end", () => {
+  const onAgentEnd = () => {
     // Only reset to idle if not currently speaking (audio_start may follow agent_end)
     if (useChatStore.getState().chatStatus === "thinking") {
       setChatStatus("idle");
     }
-  });
+  };
 
   // Play a subtle audio cue while a tool (e.g. bookContext) is fetching
-  session.on("agent_tool_start", () => {
+  const onToolStart = () => {
     startThinkingSound();
-  });
+  };
 
-  session.on("agent_tool_end", () => {
+  const onToolEnd = () => {
     stopThinkingSound();
-  });
+  };
 
   // Handle errors and disconnects so the UI doesn't show a zombie session
-  session.on("error", (err) => {
+  const onError = (err: unknown) => {
     captureError(err, { operation: "realtime", step: "session_error" });
     stopThinkingSound();
     useChatStore.getState().stopConversation();
-  });
+  };
+
+  session.on("agent_start", onAgentStart);
+  session.on("audio_start", onAudioStart);
+  session.on("audio_stopped", onAudioStopped);
+  session.on("agent_end", onAgentEnd);
+  session.on("agent_tool_start", onToolStart);
+  session.on("agent_tool_end", onToolEnd);
+  session.on("error", onError);
+
+  // Store cleanup function on the session so stopConversation can remove handlers
+  (session as any)._cleanupHandlers = () => {
+    session.off("agent_start", onAgentStart);
+    session.off("audio_start", onAudioStart);
+    session.off("audio_stopped", onAudioStopped);
+    session.off("agent_end", onAgentEnd);
+    session.off("agent_tool_start", onToolStart);
+    session.off("agent_tool_end", onToolEnd);
+    session.off("error", onError);
+  };
 
   const apiKey = await getOrFetchKey();
 

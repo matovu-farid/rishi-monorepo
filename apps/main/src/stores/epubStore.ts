@@ -80,70 +80,6 @@ export const useEpubStore = create<EpubState>()(
   )
 );
 
-// Side effect: when paragraphRendition + bookId are set, process all paragraphs
-useEpubStore.subscribe(
-  (state) => ({ paragraphRendition: state.paragraphRendition, bookId: state.bookId }),
-  (current, previous) => {
-    const { paragraphRendition, bookId } = current;
-    if (paragraphRendition && bookId && (
-      paragraphRendition !== previous.paragraphRendition || bookId !== previous.bookId
-    )) {
-      void hasSavedEpubData({ bookId: Number(bookId) }).then((hasSaved) => {
-        if (!hasSaved) {
-          void getAllParagraphsForBook(paragraphRendition, bookId).then((paragraphs) => {
-            void processEpubJob(Number(bookId), paragraphs);
-          }).catch((err) => captureError(err, { operation: "epub", step: "get_paragraphs" }));
-        }
-      }).catch((err) => captureError(err, { operation: "epub", step: "check_saved_data" }));
-    }
-  },
-  { equalityFn: (a, b) => a.paragraphRendition === b.paragraphRendition && a.bookId === b.bookId }
-);
-
-// Side effect: when rendition + location change, publish current/next/prev paragraphs.
-// Current-page paragraphs are published immediately (needed for TTS playback).
-// Next/prev page paragraphs are debounced to avoid wasted work during rapid page flips.
-useEpubStore.subscribe(
-  (state) => ({ rendition: state.rendition, location: state.currentEpubLocation }),
-  (current) => {
-    const { rendition, location } = current;
-    if (!rendition || !location) return;
-
-    // Current page — publish immediately (Player needs these to play)
-    const paragraphs = getCurrentViewParagraphs(rendition).map((p) => ({
-      text: p.text,
-      index: p.cfiRange,
-    }));
-    usePlayerStore.getState().setCurrentParagraphs(paragraphs);
-
-    // Next/prev pages — short debounce to skip rapid page flips while keeping
-    // TTS prefetch responsive (was 300ms, reduced for faster audio pre-caching)
-    if (_prefetchTimer) clearTimeout(_prefetchTimer);
-    _prefetchTimer = setTimeout(() => {
-      // Re-read state in case rendition changed during the debounce window
-      const { rendition: r } = useEpubStore.getState();
-      if (!r) return;
-
-      void getNextViewParagraphs(r).then((nextParagraphs) => {
-        const mapped = nextParagraphs.map((p) => ({
-          text: p.text,
-          index: p.cfiRange,
-        }));
-        usePlayerStore.getState().setNextPageParagraphs(mapped);
-      }).catch((err) => console.warn('[epub] next paragraph fetch failed:', err));
-
-      void getPreviousViewParagraphs(r).then((prevParagraphs) => {
-        const mapped = prevParagraphs.map((p) => ({
-          text: p.text,
-          index: p.cfiRange,
-        }));
-        usePlayerStore.getState().setPrevPageParagraphs(mapped);
-      }).catch((err) => console.warn('[epub] prev paragraph fetch failed:', err));
-    }, 50);
-  },
-  { equalityFn: (a, b) => a.rendition === b.rendition && a.location === b.location }
-);
-
 // NOTE: NEXT_PAGE_PARAGRAPHS_EMPTIED and PREVIOUS_PAGE_PARAGRAPHS_EMPTIED
 // are handled in epub.tsx (which also manages highlights and publishes PAGE_CHANGED).
 // The location update happens via the ReactReader locationChanged callback.
@@ -188,21 +124,111 @@ export function publishCurrentEpubParagraphs() {
   }, 300);
 }
 
-// Side effect: pre-fetch the realtime API key when a book is opened so voice chat starts faster
-useEpubStore.subscribe(
-  (state) => state.bookId,
-  (bookId) => {
-    if (bookId) prefetchRealtimeKey();
-  }
-);
+/**
+ * Subscription lifecycle management.
+ * These subscriptions drive side effects (paragraph processing, TTS paragraph
+ * publishing, realtime key prefetch, and chat session start). They must be
+ * initialised when the epub view mounts and torn down when it unmounts so
+ * they don't fire for previously-opened books after navigation.
+ */
+let _unsubscribers: (() => void)[] = [];
 
-// Side effect: when isChatting turns on and bookId exists, start realtime session
-useChatStore.subscribe(
-  (state) => state.isChatting,
-  (isChatting) => {
-    const bookId = useEpubStore.getState().bookId;
-    if (isChatting && bookId) {
-      useChatStore.getState().startChat(Number(bookId));
-    }
-  }
-);
+export function initEpubSubscriptions() {
+  cleanupEpubSubscriptions(); // Clean up any existing subscriptions
+
+  // Side effect: when paragraphRendition + bookId are set, process all paragraphs
+  _unsubscribers.push(
+    useEpubStore.subscribe(
+      (state) => ({ paragraphRendition: state.paragraphRendition, bookId: state.bookId }),
+      (current, previous) => {
+        const { paragraphRendition, bookId } = current;
+        if (paragraphRendition && bookId && (
+          paragraphRendition !== previous.paragraphRendition || bookId !== previous.bookId
+        )) {
+          void hasSavedEpubData({ bookId: Number(bookId) }).then((hasSaved) => {
+            if (!hasSaved) {
+              void getAllParagraphsForBook(paragraphRendition, bookId).then((paragraphs) => {
+                void processEpubJob(Number(bookId), paragraphs);
+              }).catch((err) => captureError(err, { operation: "epub", step: "get_paragraphs" }));
+            }
+          }).catch((err) => captureError(err, { operation: "epub", step: "check_saved_data" }));
+        }
+      },
+      { equalityFn: (a, b) => a.paragraphRendition === b.paragraphRendition && a.bookId === b.bookId }
+    )
+  );
+
+  // Side effect: when rendition + location change, publish current/next/prev paragraphs.
+  // Current-page paragraphs are published immediately (needed for TTS playback).
+  // Next/prev page paragraphs are debounced to avoid wasted work during rapid page flips.
+  _unsubscribers.push(
+    useEpubStore.subscribe(
+      (state) => ({ rendition: state.rendition, location: state.currentEpubLocation }),
+      (current) => {
+        const { rendition, location } = current;
+        if (!rendition || !location) return;
+
+        // Current page — publish immediately (Player needs these to play)
+        const paragraphs = getCurrentViewParagraphs(rendition).map((p) => ({
+          text: p.text,
+          index: p.cfiRange,
+        }));
+        usePlayerStore.getState().setCurrentParagraphs(paragraphs);
+
+        // Next/prev pages — short debounce to skip rapid page flips while keeping
+        // TTS prefetch responsive (was 300ms, reduced for faster audio pre-caching)
+        if (_prefetchTimer) clearTimeout(_prefetchTimer);
+        _prefetchTimer = setTimeout(() => {
+          // Re-read state in case rendition changed during the debounce window
+          const { rendition: r } = useEpubStore.getState();
+          if (!r) return;
+
+          void getNextViewParagraphs(r).then((nextParagraphs) => {
+            const mapped = nextParagraphs.map((p) => ({
+              text: p.text,
+              index: p.cfiRange,
+            }));
+            usePlayerStore.getState().setNextPageParagraphs(mapped);
+          }).catch((err) => console.warn('[epub] next paragraph fetch failed:', err));
+
+          void getPreviousViewParagraphs(r).then((prevParagraphs) => {
+            const mapped = prevParagraphs.map((p) => ({
+              text: p.text,
+              index: p.cfiRange,
+            }));
+            usePlayerStore.getState().setPrevPageParagraphs(mapped);
+          }).catch((err) => console.warn('[epub] prev paragraph fetch failed:', err));
+        }, 50);
+      },
+      { equalityFn: (a, b) => a.rendition === b.rendition && a.location === b.location }
+    )
+  );
+
+  // Side effect: pre-fetch the realtime API key when a book is opened so voice chat starts faster
+  _unsubscribers.push(
+    useEpubStore.subscribe(
+      (state) => state.bookId,
+      (bookId) => {
+        if (bookId) prefetchRealtimeKey();
+      }
+    )
+  );
+
+  // Side effect: when isChatting turns on and bookId exists, start realtime session
+  _unsubscribers.push(
+    useChatStore.subscribe(
+      (state) => state.isChatting,
+      (isChatting) => {
+        const bookId = useEpubStore.getState().bookId;
+        if (isChatting && bookId) {
+          useChatStore.getState().startChat(Number(bookId));
+        }
+      }
+    )
+  );
+}
+
+export function cleanupEpubSubscriptions() {
+  _unsubscribers.forEach(unsub => unsub());
+  _unsubscribers = [];
+}

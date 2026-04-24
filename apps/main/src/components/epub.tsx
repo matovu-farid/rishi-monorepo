@@ -22,7 +22,7 @@ import { useChatStore } from "@/stores/chatStore";
 import { Rendition } from "epubjs/types";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { PageCurlOverlay, usePageCurl } from "./pagecurl";
-import { useEpubStore } from "@/stores/epubStore";
+import { useEpubStore, initEpubSubscriptions, cleanupEpubSubscriptions } from "@/stores/epubStore";
 import { usePlayerStore } from "@/stores/playerStore";
 import { useNavMachine } from "@/hooks/useNavMachine";
 import { useNavStore } from "@/stores/navStore";
@@ -224,6 +224,14 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
     setBookId(book.id.toString());
     usePageTracker.getState().initBook(book.id.toString());
   }, [book.id]);
+
+  // Manage epubStore subscription lifecycle — init on mount, cleanup on unmount
+  useEffect(() => {
+    initEpubSubscriptions();
+    return () => {
+      cleanupEpubSubscriptions();
+    };
+  }, []);
 
   useEffect(() => {
     if (!rendition) return;

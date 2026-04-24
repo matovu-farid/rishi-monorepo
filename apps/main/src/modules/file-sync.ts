@@ -182,11 +182,18 @@ export async function downloadBookFile(
     throw new Error(`Failed to rename temp file to final path: ${renameErr}`);
   }
 
-  // Step 3: Update DB filepath only after the file is safely in place
-  await db.updateTable('books')
-    .set({ filepath: destPath })
-    .where('id', '=', bookIntegerId)
-    .execute();
+  // Step 3: Update DB filepath only after the file is safely in place.
+  // If the DB update fails, revert the rename to avoid orphaning the file.
+  try {
+    await db.updateTable('books')
+      .set({ filepath: destPath })
+      .where('id', '=', bookIntegerId)
+      .execute();
+  } catch (dbError) {
+    console.error('[file-sync] DB update failed, reverting rename:', dbError);
+    try { await rename(destPath, tmpPath); } catch { /* best effort */ }
+    throw dbError;
+  }
 
   return destPath;
 }

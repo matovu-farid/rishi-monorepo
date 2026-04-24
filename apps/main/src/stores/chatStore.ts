@@ -74,6 +74,10 @@ export const useChatStore = create<ChatState>()(
           });
           stopThinkingSound();
           if (realtimeSession) {
+            // Remove event handlers before closing to prevent zombie callbacks
+            if (typeof (realtimeSession as any)._cleanupHandlers === 'function') {
+              (realtimeSession as any)._cleanupHandlers();
+            }
             realtimeSession.close();
           }
         },

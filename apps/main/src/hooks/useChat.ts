@@ -22,6 +22,11 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
   const [conversationId, setConversationId] = useState<string | null>(null);
   const initialized = useRef(false);
 
+  // Reset initialization when book changes so messages reload for the new book
+  useEffect(() => {
+    initialized.current = false;
+  }, [bookId, bookSyncId]);
+
   // Load or create conversation on mount
   useEffect(() => {
     if (initialized.current || !bookSyncId) return;
