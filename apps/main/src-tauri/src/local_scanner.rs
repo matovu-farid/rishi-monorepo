@@ -168,11 +168,19 @@ pub async fn scan_for_books(app: tauri::AppHandle, mode: String) -> Result<u32, 
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
-        // A previous scan is still running — cancel it and wait briefly
+        // A previous scan is still running — cancel it and wait for it to finish
         CANCEL_FLAG.store(true, Ordering::SeqCst);
-        // Give the previous scan a moment to observe the flag
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        // Now take ownership
+        // Wait for previous scan to finish (up to 5 seconds)
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            if SCAN_RUNNING
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                break;
+            }
+        }
+        // If still running after 5s, the previous scan is stuck — proceed anyway
         SCAN_RUNNING.store(true, Ordering::SeqCst);
     }
     CANCEL_FLAG.store(false, Ordering::SeqCst);

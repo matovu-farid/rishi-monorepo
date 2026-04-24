@@ -4,26 +4,29 @@ use std::sync::Arc;
 use embed_anything::embeddings::embed::{EmbedData, Embedder, EmbedderBuilder};
 use embed_anything::process_chunks;
 use serde::{Deserialize, Serialize};
-use tokio::sync::OnceCell;
+use std::sync::LazyLock;
+use tokio::sync::Mutex as TokioMutex;
 
 /// Lazy singleton for the embedding model.
 /// Downloaded from HuggingFace on first use and cached in ~/.cache/huggingface/.
-/// Using a singleton avoids re-downloading on every call and prevents lock
-/// contention when multiple embed requests fire concurrently.
-static EMBEDDER: OnceCell<Arc<Embedder>> = OnceCell::const_new();
+/// Using a Mutex<Option<...>> instead of OnceCell so that failed initialization
+/// can be retried (e.g. network issues on first launch).
+static EMBEDDER: LazyLock<TokioMutex<Option<Arc<Embedder>>>> =
+    LazyLock::new(|| TokioMutex::new(None));
 
 async fn get_or_init_embedder() -> Result<Arc<Embedder>, String> {
-    EMBEDDER
-        .get_or_try_init(|| async {
-            let embedder = EmbedderBuilder::new()
-                .model_architecture("bert")
-                .model_id(Some("sentence-transformers/all-MiniLM-L6-v2"))
-                .from_pretrained_hf()
-                .map_err(|e| format!("Failed to load embedding model: {}", e))?;
-            Ok(Arc::new(embedder))
-        })
-        .await
-        .cloned()
+    let mut guard = EMBEDDER.lock().await;
+    if let Some(ref embedder) = *guard {
+        return Ok(embedder.clone());
+    }
+    let embedder = EmbedderBuilder::new()
+        .model_architecture("bert")
+        .model_id(Some("sentence-transformers/all-MiniLM-L6-v2"))
+        .from_pretrained_hf()
+        .map_err(|e| format!("Failed to load embedding model: {}", e))?;
+    let arc = Arc::new(embedder);
+    *guard = Some(arc.clone());
+    Ok(arc)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

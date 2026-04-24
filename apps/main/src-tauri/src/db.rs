@@ -34,6 +34,16 @@ impl r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error>
 
 pub static DB_POOL: OnceLock<Pool<ConnectionManager<SqliteConnection>>> = OnceLock::new();
 
+/// Get a connection from the pool with exhaustion logging.
+/// Logs a warning if the pool cannot provide a connection.
+pub fn get_conn() -> Result<r2d2::PooledConnection<ConnectionManager<SqliteConnection>>, String> {
+    let pool = DB_POOL.get().ok_or("Database pool not initialized")?;
+    pool.get().map_err(|e| {
+        eprintln!("[db] Connection pool exhausted: {}", e);
+        format!("Database connection unavailable: {}", e)
+    })
+}
+
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!();
 
 pub fn init_database(app: &tauri::AppHandle) -> anyhow::Result<String> {
@@ -81,7 +91,10 @@ pub fn setup_database(app: &tauri::AppHandle) -> anyhow::Result<()> {
 
     // Backfill sync_ids for any books missing them (safety net for migration edge cases)
     {
-        let mut conn = pool.get()?;
+        let mut conn = pool.get().map_err(|e| {
+            eprintln!("[db] Connection pool exhausted during setup: {}", e);
+            anyhow::anyhow!("Database connection unavailable: {}", e)
+        })?;
         backfill_sync_ids(&mut conn)?;
     }
 

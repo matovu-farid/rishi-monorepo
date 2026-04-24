@@ -134,26 +134,6 @@ impl From<ChunkData> for PageData {
     }
 }
 
-// Internal helper functions
-fn has_saved_data(page_number: i32, book_id: i32) -> Result<bool, String> {
-    use crate::schema::chunk_data::dsl::*;
-
-    let pool = DB_POOL.get().ok_or("Database pool not initialized")?;
-    let mut conn = pool
-        .get()
-        .map_err(|e| format!("Failed to get connection: {}", e))?;
-
-    let result = chunk_data
-        .filter(pageNumber.eq(&page_number))
-        .filter(bookId.eq(&book_id))
-        .select(id)
-        .first::<i64>(&mut conn)
-        .optional()
-        .map_err(|e| format!("Database query error: {}", e))?;
-
-    Ok(result.is_some())
-}
-
 // Public functions that will be exposed as Tauri commands
 #[tauri::command]
 pub fn save_page_data_many(page_data: Vec<ChunkDataInsertable>) -> Result<(), String> {
@@ -504,6 +484,31 @@ pub fn get_text_from_vector_id(vector_id: i64) -> Result<String, String> {
         .map_err(|e| format!("Database query error: {}", e))?;
 
     Ok(result.unwrap_or_default())
+}
+
+/// Batch-fetch texts for multiple vector IDs in a single query.
+/// Preserves the order of the input `ids` slice.
+fn get_texts_from_vector_ids(ids: &[i64]) -> Result<Vec<String>, String> {
+    use crate::schema::chunk_data::dsl::*;
+
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let pool = DB_POOL.get().ok_or("Database pool not initialized")?;
+    let mut conn = pool
+        .get()
+        .map_err(|e| format!("Failed to get connection: {}", e))?;
+
+    let results: Vec<(i64, String)> = chunk_data
+        .filter(id.eq_any(ids))
+        .select((id, data))
+        .load::<(i64, String)>(&mut conn)
+        .map_err(|e| format!("Database query error: {}", e))?;
+
+    // Build a map for O(1) lookup, then reconstruct in input order
+    let map: std::collections::HashMap<i64, String> = results.into_iter().collect();
+    Ok(ids.iter().map(|vid| map.get(vid).cloned().unwrap_or_default()).collect())
 }
 
 /// Escape special characters for SQLite FTS5 MATCH queries.

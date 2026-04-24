@@ -30,6 +30,8 @@ impl SearchResult {
         Self { id, distance }
     }
 }
+const MAX_QUEUE_SIZE: usize = 100;
+
 pub struct VectorStore {
     pub dim: usize,
     pub directory: PathBuf,
@@ -112,45 +114,49 @@ impl VectorStore {
         }
     }
     pub fn add_vectors(&mut self, vectors: Vec<Vector>) -> anyhow::Result<()> {
+        // Validate dimensions upfront before queueing
+        if vectors.iter().any(|v| v.vector.len() != self.dim) {
+            anyhow::bail!("Vector dimension mismatch: expected {}, got varied", self.dim);
+        }
+
+        // If queue is at max capacity, process existing vectors first
+        if self.add_vector_queue.len() >= MAX_QUEUE_SIZE {
+            self.process_vectors()?;
+        }
+
         self.add_vector_queue.push(vectors);
         self.process_vectors()?;
         Ok(())
     }
-    /// Add a new vector to the store.
+    /// Drain and process all queued vector batches iteratively (no recursion).
     /// id must be unique — you manage this externally.
     pub fn process_vectors(&mut self) -> anyhow::Result<()> {
-        // remove the first 5 vectors from the queue and process them
-        if self.add_vector_queue.is_empty() {
-            return Ok(());
-        }
-        let vectors = self
-            .add_vector_queue
-            .drain(..std::cmp::min(5, self.add_vector_queue.len()))
-            .flatten()
-            .collect::<Vec<_>>();
-
-        if vectors.iter().any(|v| v.vector.len() != self.dim) {
-            anyhow::bail!("Vector has wrong dimension: expected {}", self.dim,);
-        }
         self.check_is_initialized()?;
-        // Extract directory and basename to avoid borrow checker issues
-        let directory = self.directory.clone();
-        let basename = self.basename.clone();
 
-        let dump_name = Self::with_hnsw_mut(&directory, &basename, true, |hnsw| {
-            // Insert the vectors
-            for vector in &vectors {
-                hnsw.insert((&vector.vector, vector.id as usize));
-            }
+        while !self.add_vector_queue.is_empty() {
+            let vectors = self
+                .add_vector_queue
+                .drain(..std::cmp::min(5, self.add_vector_queue.len()))
+                .flatten()
+                .collect::<Vec<_>>();
 
-            hnsw.file_dump(&directory, &basename)
-                .map_err(|e| anyhow::anyhow!("Failed to save HNSW index: {}", e))
-        })?;
-        let old_basename = self.basename.clone();
+            // Extract directory and basename to avoid borrow checker issues
+            let directory = self.directory.clone();
+            let basename = self.basename.clone();
 
-        self.overwrite_old_dump(&old_basename, &dump_name)?;
+            let dump_name = Self::with_hnsw_mut(&directory, &basename, true, |hnsw| {
+                // Insert the vectors
+                for vector in &vectors {
+                    hnsw.insert((&vector.vector, vector.id as usize));
+                }
 
-        self.process_vectors()?;
+                hnsw.file_dump(&directory, &basename)
+                    .map_err(|e| anyhow::anyhow!("Failed to save HNSW index: {}", e))
+            })?;
+            let old_basename = self.basename.clone();
+
+            self.overwrite_old_dump(&old_basename, &dump_name)?;
+        }
 
         Ok(())
     }
