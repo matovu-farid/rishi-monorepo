@@ -297,9 +297,11 @@ pub async fn check_auth_status(app: tauri::AppHandle, state: &str) -> Result<Aut
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .ok_or_else(|| "No code_verifier in store".to_string())?;
 
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
     use sha2::{Sha256, Digest};
     let hash = Sha256::digest(code_verifier.as_bytes());
-    let code_challenge = hash.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+    let code_challenge = URL_SAFE_NO_PAD.encode(hash);
 
     let worker_url = crate::WORKER_URL;
     let url = format!("{}/api/auth/status/{}", worker_url, state);
@@ -439,11 +441,11 @@ pub fn get_state(app: tauri::AppHandle) -> Result<OAuthStateResponse, String> {
     store.set("auth_state_created_at", json!(now_ms));
     store.save().map_err(|e| e.to_string())?;
 
-    // Compute code_challenge = hex(SHA-256(code_verifier)) so the verifier
-    // never leaves the Rust process.
+    // Compute code_challenge = base64url(SHA-256(code_verifier)) per RFC 7636
+    // so the verifier never leaves the Rust process.
     use sha2::{Sha256, Digest};
     let hash = Sha256::digest(code_verifier.as_bytes());
-    let code_challenge = hash.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+    let code_challenge = URL_SAFE_NO_PAD.encode(hash);
 
     Ok(OAuthStateResponse { state, code_challenge })
 }

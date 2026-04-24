@@ -1,10 +1,20 @@
 import { Hono } from "hono";
 import { eq, gt, and, max } from "drizzle-orm";
+import { z } from "zod";
 import type { CloudflareBindings } from "../index";
 import { requireWorkerAuth } from "../index";
 import { createDb } from "../db/drizzle";
 import { books, highlights, conversations, messages } from "@rishi/shared/schema";
 import type { PushRequest, PushResponse, PullResponse } from "@rishi/shared/sync-types";
+
+const pushRequestSchema = z.object({
+  changes: z.object({
+    books: z.array(z.record(z.string(), z.unknown())).max(10000).default([]),
+    highlights: z.array(z.record(z.string(), z.unknown())).max(50000).default([]),
+    conversations: z.array(z.record(z.string(), z.unknown())).max(10000).default([]),
+    messages: z.array(z.record(z.string(), z.unknown())).max(50000).default([]),
+  }),
+});
 
 export const syncRoutes = new Hono<{
   Bindings: CloudflareBindings;
@@ -15,7 +25,7 @@ export const syncRoutes = new Hono<{
 // Accepts dirty book and highlight records from client, upserts into D1 with LWW resolution.
 // filePath and coverPath are stripped before writing -- they are local-only paths.
 syncRoutes.post("/push", requireWorkerAuth, async (c) => {
-  const body = await c.req.json<PushRequest>();
+  const body = pushRequestSchema.parse(await c.req.json());
   const userId = c.get("userId");
   const db = createDb(c.env.DB);
 

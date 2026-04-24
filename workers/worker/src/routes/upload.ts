@@ -55,7 +55,7 @@ function isR2KeySafe(r2Key: string, expectedPrefix: string): boolean {
 uploadRoutes.post("/upload-url", requireWorkerAuth, async (c) => {
   const body = await c.req.json<UploadUrlRequest>();
 
-  if (!body.fileHash || !/^[a-fA-F0-9]+$/.test(body.fileHash)) {
+  if (!body.fileHash || !/^[a-fA-F0-9]{64}$/.test(body.fileHash)) {
     return c.json({ error: "Invalid fileHash format" }, 400);
   }
 

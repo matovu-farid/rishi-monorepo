@@ -31,11 +31,23 @@ export interface CloudflareBindings {
   UPSTASH_REDIS_REST_TOKEN: string;
   JWT_SECRET: string;
   DEV_BYPASS_SECRET?: string;
+  SENTRY_DSN?: string;
   DB: D1Database;
   BOOK_STORAGE: R2Bucket;
   R2_ACCESS_KEY_ID: string;
   R2_SECRET_ACCESS_KEY: string;
   CLOUDFLARE_ACCOUNT_ID: string;
+}
+
+/** Wrap an async function with a timeout using AbortController. */
+async function withTimeout<T>(fn: () => Promise<T>, ms: number = 10000): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fn();
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string } }>();
@@ -67,7 +79,7 @@ export async function requireWorkerAuth(c: any, next: () => Promise<void>) {
   const devSecret = c.env.DEV_BYPASS_SECRET;
   if (devSecret) {
     const devHeader = c.req.header("X-Dev-Bypass");
-    if (devHeader === devSecret) {
+    if (devHeader && timingSafeEqual(devHeader, devSecret)) {
       c.set("userId", "dev-user");
       return next();
     }
@@ -116,7 +128,7 @@ app.post("/api/auth/exchange", async (c) => {
   const userId = auth.userId;
 
   const clerkClient = createClerkClient({ secretKey: c.env.CLERK_SECRET_KEY });
-  const clerkUser = await clerkClient.users.getUser(userId);
+  const clerkUser = await withTimeout(() => clerkClient.users.getUser(userId));
 
   const iat = Math.floor(Date.now() / 1000);
   const exp = iat + 60 * 60 * 24 * 7; // 7 days
@@ -168,7 +180,7 @@ app.post("/api/auth/complete", async (c) => {
 
     if (!state || state === "unknown" || !code_verifier) {
       await debugLog(state, "complete_rejected_missing_params");
-      return c.json({ error: "Missing state or code_verifier" }, 400);
+      return c.json({ error: "Authentication failed" }, 400);
     }
 
     const redisKey = `auth:state:${state}`;
@@ -177,7 +189,7 @@ app.post("/api/auth/complete", async (c) => {
     const rawData = await redis.get(redisKey);
     if (!rawData) {
       await debugLog(state, "complete_state_not_found", { redisKey });
-      return c.json({ error: "Auth state not found or expired" }, 404);
+      return c.json({ error: "Authentication failed" }, 400);
     }
 
     await debugLog(state, "complete_state_found", { rawDataType: typeof rawData });
@@ -202,34 +214,34 @@ app.post("/api/auth/complete", async (c) => {
 
     if (!authData.userId) {
       await debugLog(state, "complete_no_userId");
-      return c.json({ error: "Invalid auth state data" }, 400);
+      return c.json({ error: "Authentication failed" }, 400);
     }
 
     // If already completed, prevent replay
     if (authData.status === "completed") {
       await debugLog(state, "complete_already_used");
-      return c.json({ error: "Auth state already used" }, 409);
+      return c.json({ error: "Authentication failed" }, 400);
     }
 
     // If another exchange is in progress, signal retry
     if (authData.status === "exchanging") {
       await debugLog(state, "complete_already_exchanging");
-      return c.json({ error: "Token exchange in progress" }, 409);
+      return c.json({ error: "Authentication failed" }, 409);
     }
 
     // PKCE is mandatory — reject if no code_challenge was stored
     if (!authData.codeChallenge) {
       await debugLog(state, "complete_missing_pkce_challenge");
-      return c.json({ error: "Invalid auth state: missing PKCE challenge" }, 400);
+      return c.json({ error: "Authentication failed" }, 400);
     }
 
     // Verify PKCE code_challenge (timing-safe comparison)
     const encoded = new TextEncoder().encode(code_verifier);
     const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const computedChallenge = hashArray
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+    const computedChallenge = btoa(String.fromCharCode(...new Uint8Array(hashBuffer)))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=/g, "");
 
     const pkceMatch = timingSafeEqual(computedChallenge, authData.codeChallenge);
     await debugLog(state, "complete_pkce_check", {
@@ -254,7 +266,7 @@ app.post("/api/auth/complete", async (c) => {
 
     // Fetch user from Clerk and issue JWT
     const clerkClient = createClerkClient({ secretKey: c.env.CLERK_SECRET_KEY });
-    const clerkUser = await clerkClient.users.getUser(authData.userId);
+    const clerkUser = await withTimeout(() => clerkClient.users.getUser(authData.userId));
 
     const iat = Math.floor(Date.now() / 1000);
     const exp = iat + 60 * 60 * 24 * 7; // 7 days
@@ -309,10 +321,7 @@ app.post("/api/auth/complete", async (c) => {
       } catch { /* best-effort */ }
     }
 
-    if (error instanceof Error) {
-      return c.json({ error: "Auth completion failed: " + error.message }, 500);
-    }
-    return c.json({ error: "Auth completion failed" }, 500);
+    return c.json({ error: "Authentication failed" }, 500);
   }
 });
 
@@ -357,9 +366,7 @@ app.post("/api/auth/status/:state", async (c) => {
       createdAt: authData.createdAt || null,
     });
   } catch (error) {
-    if (error instanceof Error) {
-      return c.json({ error: "Status check failed: " + error.message }, 500);
-    }
+    console.error("Status check failed:", error instanceof Error ? error.message : "unknown");
     return c.json({ error: "Status check failed" }, 500);
   }
 });
@@ -461,9 +468,7 @@ app.get("/api/auth/debug", requireWorkerAuth, async (c) => {
 
     return c.json({ flows, count: flows.length });
   } catch (error) {
-    if (error instanceof Error) {
-      return c.json({ error: "Debug list failed: " + error.message }, 500);
-    }
+    console.error("Debug list failed:", error instanceof Error ? error.message : "unknown");
     return c.json({ error: "Debug list failed" }, 500);
   }
 });
@@ -513,9 +518,7 @@ app.get("/api/auth/debug/:state", requireWorkerAuth, async (c) => {
       authLog: parsedLog,
     });
   } catch (error) {
-    if (error instanceof Error) {
-      return c.json({ error: "Debug fetch failed: " + error.message }, 500);
-    }
+    console.error("Debug fetch failed:", error instanceof Error ? error.message : "unknown");
     return c.json({ error: "Debug fetch failed" }, 500);
   }
 });
@@ -556,9 +559,7 @@ app.post("/api/auth/revoke", async (c) => {
 
     return c.json({ success: true });
   } catch (error) {
-    if (error instanceof Error) {
-      return c.json({ error: "Revocation failed: " + error.message }, 500);
-    }
+    console.error("Revocation failed:", error instanceof Error ? error.message : "unknown");
     return c.json({ error: "Revocation failed" }, 500);
   }
 });
@@ -584,7 +585,7 @@ app.get("api/user/:state", requireWorkerAuth, async (c) => {
       secretKey: c.env.CLERK_SECRET_KEY,
     });
 
-    const clerkUser = await clerkClient.users.getUser(userId);
+    const clerkUser = await withTimeout(() => clerkClient.users.getUser(userId));
 
     return c.json({
       id: clerkUser.id,
@@ -598,10 +599,8 @@ app.get("api/user/:state", requireWorkerAuth, async (c) => {
       externalId: clerkUser.externalId,
     });
   } catch (error) {
-    if (error instanceof Error) {
-      return c.json({ error: "Failed to get user, " + error.message }, 500);
-    }
-    return c.json({ error: "Failed to get user, " }, 500);
+    console.error("Failed to get user:", error instanceof Error ? error.message : "unknown");
+    return c.json({ error: "Failed to get user" }, 500);
   }
 });
 
@@ -631,7 +630,7 @@ app.get("/api/clerk/user/:userId", requireWorkerAuth, async (c) => {
       secretKey: c.env.CLERK_SECRET_KEY,
     });
 
-    const clerkUser = await clerkClient.users.getUser(userId);
+    const clerkUser = await withTimeout(() => clerkClient.users.getUser(userId));
 
     return c.json({
       id: clerkUser.id,
@@ -645,10 +644,8 @@ app.get("/api/clerk/user/:userId", requireWorkerAuth, async (c) => {
       externalId: clerkUser.externalId,
     });
   } catch (error) {
-    if (error instanceof Error) {
-      return c.json({ error: "Failed to get user, " + error.message }, 500);
-    }
-    return c.json({ error: "Failed to get user, " }, 500);
+    console.error("Failed to get user:", error instanceof Error ? error.message : "unknown");
+    return c.json({ error: "Failed to get user" }, 500);
   }
 });
 
@@ -682,14 +679,11 @@ app.post("/api/audio/speech", requireWorkerAuth, async (c) => {
     if (error instanceof OpenAI.APIError) {
       console.error("OpenAI API error:", error.status, error.message);
       return c.json(
-        { error: `OpenAI TTS error: ${error.message}`, status: error.status },
+        { error: "TTS generation failed" },
         error.status === 429 ? 429 : 502
       );
     }
-    if (error instanceof Error) {
-      console.error("TTS error:", error.message);
-      return c.json({ error: "TTS generation failed: " + error.message }, 500);
-    }
+    console.error("TTS error:", error instanceof Error ? error.message : "unknown");
     return c.json({ error: "TTS generation failed" }, 500);
   }
 });
@@ -724,29 +718,8 @@ app.get("/api/realtime/client_secrets", requireWorkerAuth, async (c) => {
     const parsedResponse = responseSchema.parse(response.data);
     return c.json({ client_secret: { value: parsedResponse.value } });
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return c.json(
-        { error: "Failed to get client secrets, " + error.message },
-        500
-      );
-    }
-    if (error instanceof AxiosError) {
-      return c.json(
-        {
-          error:
-            "Failed to get client secrets, " +
-            error.response?.data.error.message,
-        },
-        500
-      );
-    }
-    if (error instanceof Error) {
-      return c.json(
-        { error: "Failed to get client secrets, " + error.message },
-        500
-      );
-    }
-    return c.json({ error: "Failed to get client secrets, " }, 500);
+    console.error("Failed to get client secrets:", error instanceof Error ? error.message : "unknown");
+    return c.json({ error: "Failed to get client secrets" }, 500);
   }
 });
 
@@ -834,7 +807,7 @@ app.post("/api/audio/transcribe", requireWorkerAuth, async (c) => {
 export default Sentry.withSentry((env: any) => {
   const { id: versionId } = env.CF_VERSION_METADATA;
   return {
-    dsn: "https://94fe4a61653475c40e733e93a9479596@o4510586781958144.ingest.de.sentry.io/4510588453584976",
+    dsn: env.SENTRY_DSN || "https://94fe4a61653475c40e733e93a9479596@o4510586781958144.ingest.de.sentry.io/4510588453584976",
     release: versionId,
     // Adds request headers and IP for users, for more info visit:
     // https://docs.sentry.io/platforms/javascript/guides/cloudflare/configuration/options/#sendDefaultPii
