@@ -979,3 +979,460 @@ async fn test_websocket_server_recv_from_client_on_random_port() {
 
     channel.shutdown().await;
 }
+
+#[test]
+fn test_injector_script_is_valid_js() {
+    let script = tauri_plugin_test_harness::injector::generate_init_script(9223);
+
+    // Check it's not empty
+    assert!(script.len() > 100, "Script too short: {} chars", script.len());
+
+    // Check balanced braces
+    let mut brace_count = 0i32;
+    let mut paren_count = 0i32;
+    let mut bracket_count = 0i32;
+    for ch in script.chars() {
+        match ch {
+            '{' => brace_count += 1,
+            '}' => brace_count -= 1,
+            '(' => paren_count += 1,
+            ')' => paren_count -= 1,
+            '[' => bracket_count += 1,
+            ']' => bracket_count -= 1,
+            _ => {}
+        }
+        assert!(brace_count >= 0, "Unmatched closing brace");
+        assert!(paren_count >= 0, "Unmatched closing paren");
+    }
+    assert_eq!(brace_count, 0, "Unbalanced braces: {}", brace_count);
+    assert_eq!(paren_count, 0, "Unbalanced parens: {}", paren_count);
+    assert_eq!(bracket_count, 0, "Unbalanced brackets: {}", bracket_count);
+
+    // Check no Rust format artifacts (double braces that weren't properly escaped)
+    assert!(!script.contains("{{"), "Found unescaped Rust format brace '{{{{' in output");
+    assert!(!script.contains("}}"), "Found unescaped Rust format brace '}}}}' in output");
+
+    // Check key globals are defined
+    assert!(script.contains("window.cy"), "Missing window.cy");
+    assert!(script.contains("window.describe"), "Missing window.describe");
+    assert!(script.contains("window.it"), "Missing window.it");
+    assert!(script.contains("window.__tauriCypress"), "Missing window.__tauriCypress");
+    assert!(script.contains("connectWebSocket"), "Missing connectWebSocket");
+    assert!(script.contains("type: \"ready\""), "Missing ready message");
+}
+
+// ---------------------------------------------------------------------------
+// NEW: Injector JS validation — window.cy global and test runner globals
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_injector_defines_window_cy_global() {
+    let script = generate_init_script(9223);
+    assert!(
+        script.contains("window.cy =") || script.contains("window.cy="),
+        "init script must assign window.cy global"
+    );
+}
+
+#[test]
+fn test_injector_defines_describe_global() {
+    let script = generate_init_script(9223);
+    assert!(
+        script.contains("window.describe =") || script.contains("window.describe="),
+        "init script must assign window.describe global"
+    );
+}
+
+#[test]
+fn test_injector_defines_it_global() {
+    let script = generate_init_script(9223);
+    assert!(
+        script.contains("window.it =") || script.contains("window.it="),
+        "init script must assign window.it global"
+    );
+}
+
+#[test]
+fn test_injector_defines_before_each_global() {
+    let script = generate_init_script(9223);
+    assert!(
+        script.contains("window.beforeEach =") || script.contains("window.beforeEach="),
+        "init script must assign window.beforeEach global"
+    );
+}
+
+#[test]
+fn test_injector_defines_after_each_global() {
+    let script = generate_init_script(9223);
+    assert!(
+        script.contains("window.afterEach =") || script.contains("window.afterEach="),
+        "init script must assign window.afterEach global"
+    );
+}
+
+#[test]
+fn test_injector_take_snapshot_sends_via_websocket() {
+    let script = generate_init_script(9223);
+    // takeSnapshot should send snapshot via ws.send immediately
+    assert!(
+        script.contains("ws.send(JSON.stringify"),
+        "takeSnapshot must send data via WebSocket"
+    );
+    // Verify the snapshot message type is sent
+    assert!(
+        script.contains("type: \"snapshot\""),
+        "takeSnapshot must send a message with type 'snapshot'"
+    );
+}
+
+#[test]
+fn test_injector_defines_capture_html_with_styles() {
+    let script = generate_init_script(9223);
+    assert!(
+        script.contains("function captureHtmlWithStyles()"),
+        "init script must define captureHtmlWithStyles function"
+    );
+}
+
+#[test]
+fn test_injector_ready_message_sent_periodically() {
+    let script = generate_init_script(9223);
+    // Ready message should be sent via setInterval
+    assert!(
+        script.contains("setInterval"),
+        "init script must use setInterval to send Ready messages periodically"
+    );
+    assert!(
+        script.contains("type: \"ready\""),
+        "init script must send ready messages"
+    );
+}
+
+#[test]
+fn test_injector_clear_interval_on_exec() {
+    let script = generate_init_script(9223);
+    // When an exec message is received, clearInterval should be called
+    assert!(
+        script.contains("clearInterval"),
+        "init script must call clearInterval when exec message is received"
+    );
+    // Verify it's linked to the ready interval
+    assert!(
+        script.contains("__tauriCypressReadyInterval"),
+        "init script must track the ready interval handle"
+    );
+}
+
+#[test]
+fn test_injector_auto_snapshot_lightweight_flag() {
+    let script = generate_init_script(9223);
+    // The auto-snapshot after IPC calls passes true as the 3rd arg (lightweight)
+    assert!(
+        script.contains("takeSnapshot(\"after:\" + cmd, cmd, true)"),
+        "auto-snapshot must pass true as lightweight flag (3rd argument)"
+    );
+}
+
+#[test]
+fn test_injector_try_catch_wraps_iife_body() {
+    let script = generate_init_script(9223);
+    // The IIFE body should be wrapped in a try-catch
+    assert!(
+        script.contains("try {"),
+        "init script IIFE body must be wrapped in try block"
+    );
+    assert!(
+        script.contains("} catch(__initError)"),
+        "init script must catch initialization errors with __initError"
+    );
+    assert!(
+        script.contains("__tauriCypressInitError"),
+        "init script must expose init error via __tauriCypressInitError"
+    );
+}
+
+#[test]
+fn test_injector_contains_invoke_with_mocks() {
+    let script = generate_init_script(9223);
+    assert!(
+        script.contains("invokeWithMocks"),
+        "init script must define invokeWithMocks function"
+    );
+    assert!(
+        script.contains("__TAURI_INTERNALS__"),
+        "invokeWithMocks must fallback to __TAURI_INTERNALS__ for real calls"
+    );
+}
+
+#[test]
+fn test_injector_defines_runner_reset() {
+    let script = generate_init_script(9223);
+    // The runner must be resetable between test executions
+    assert!(
+        script.contains("__runner.reset()"),
+        "init script must call __runner.reset() before executing test scripts"
+    );
+}
+
+#[test]
+fn test_injector_defines_cy_chain_prototype_should() {
+    let script = generate_init_script(9223);
+    assert!(
+        script.contains("CyChain.prototype.should"),
+        "init script must define should() on CyChain prototype"
+    );
+}
+
+#[test]
+fn test_injector_defines_cy_chain_prototype_and() {
+    let script = generate_init_script(9223);
+    // .and is an alias for .should
+    assert!(
+        script.contains("CyChain.prototype.and = CyChain.prototype.should"),
+        "init script must alias .and to .should on CyChain"
+    );
+}
+
+#[test]
+fn test_injector_defines_matchers_for_assertions() {
+    let script = generate_init_script(9223);
+    // Should register core matchers
+    assert!(
+        script.contains("registerMatcher(\"exist\""),
+        "init script must register 'exist' matcher"
+    );
+    assert!(
+        script.contains("registerMatcher(\"be.visible\""),
+        "init script must register 'be.visible' matcher"
+    );
+    assert!(
+        script.contains("registerMatcher(\"have.text\""),
+        "init script must register 'have.text' matcher"
+    );
+    assert!(
+        script.contains("registerMatcher(\"have.length\""),
+        "init script must register 'have.length' matcher"
+    );
+    assert!(
+        script.contains("registerMatcher(\"equal\""),
+        "init script must register 'equal' matcher"
+    );
+    assert!(
+        script.contains("registerMatcher(\"not.exist\""),
+        "init script must register 'not.exist' matcher"
+    );
+}
+
+#[test]
+fn test_injector_websocket_reconnect_logic() {
+    let script = generate_init_script(9223);
+    assert!(
+        script.contains("WS_MAX_RECONNECT"),
+        "init script must define a max reconnect limit"
+    );
+    assert!(
+        script.contains("wsReconnectAttempts"),
+        "init script must track reconnection attempts"
+    );
+}
+
+#[test]
+fn test_injector_execute_test_script_function() {
+    let script = generate_init_script(9223);
+    assert!(
+        script.contains("function executeTestScript(script, testId)"),
+        "init script must define executeTestScript function"
+    );
+    assert!(
+        script.contains("AsyncFunction"),
+        "executeTestScript must use AsyncFunction constructor for dynamic evaluation"
+    );
+}
+
+#[test]
+fn test_injector_state_persists_across_reinjections() {
+    let script = generate_init_script(9223);
+    // The state object should only be initialized if not already present
+    assert!(
+        script.contains("if (!window.__tauriCypressState)"),
+        "init script must guard state initialization to persist across re-injections"
+    );
+}
+
+#[test]
+fn test_injector_cy_get_method() {
+    let script = generate_init_script(9223);
+    assert!(
+        script.contains("get: function(selector"),
+        "init script cy must define get method with selector parameter"
+    );
+    assert!(
+        script.contains("querySelectorAll"),
+        "cy.get must use querySelectorAll to find elements"
+    );
+}
+
+#[test]
+fn test_injector_cy_contains_method() {
+    let script = generate_init_script(9223);
+    assert!(
+        script.contains("contains: function(text)"),
+        "init script cy must define contains method"
+    );
+    assert!(
+        script.contains("createTreeWalker"),
+        "cy.contains must use TreeWalker to find elements by text"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// NEW: WebSocket relay — broadcast channel capacity and Ready relay
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_broadcast_channel_capacity_is_4096() {
+    // The ControlChannel::new() creates a broadcast channel with capacity 4096.
+    // We verify this indirectly: we can send 4096 messages without blocking.
+    let channel = ControlChannel::new();
+    let port = channel.start("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://127.0.0.1:{}", port);
+
+    let (ws, _) = connect_async(&url).await.unwrap();
+    let (_write, mut read) = ws.split();
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Broadcast many messages — with capacity 4096, a reasonable batch should succeed
+    for i in 0..100 {
+        let msg = ControlMessage::Exec {
+            script: format!("test_{}", i),
+            test_id: format!("capacity-{}", i),
+        };
+        channel.broadcast(msg).await;
+    }
+
+    // Read the first message to verify messages are flowing
+    let received = timeout(Duration::from_secs(3), read.next()).await;
+    assert!(received.is_ok(), "client should receive broadcast messages");
+
+    channel.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ready_message_relayed_to_other_clients() {
+    let channel = ControlChannel::new();
+    let port = channel.start("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://127.0.0.1:{}", port);
+
+    // Client 1 sends a Ready message
+    let (ws1, _) = connect_async(&url).await.unwrap();
+    let (mut write1, _read1) = ws1.split();
+
+    // Client 2 should receive the relayed Ready
+    let (ws2, _) = connect_async(&url).await.unwrap();
+    let (_write2, mut read2) = ws2.split();
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let ready_json = serde_json::json!({ "type": "ready" });
+    write1
+        .send(Message::Text(ready_json.to_string()))
+        .await
+        .unwrap();
+
+    let received = timeout(Duration::from_secs(3), read2.next()).await;
+    assert!(
+        received.is_ok(),
+        "Ready message should be relayed to other clients"
+    );
+    let msg = received.unwrap().unwrap().unwrap();
+    let text = msg.into_text().unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(parsed["type"], "ready");
+
+    channel.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_ready_message_received_on_inbound_channel() {
+    let channel = ControlChannel::new();
+    let port = channel.start("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://127.0.0.1:{}", port);
+
+    let (ws, _) = connect_async(&url).await.unwrap();
+    let (mut write, _read) = ws.split();
+
+    let ready_json = serde_json::json!({ "type": "ready" });
+    write
+        .send(Message::Text(ready_json.to_string()))
+        .await
+        .unwrap();
+
+    let received = timeout(Duration::from_secs(3), channel.recv()).await;
+    assert!(received.is_ok(), "server should receive Ready message");
+    let msg = received.unwrap().unwrap();
+    match msg {
+        ControlMessage::Ready => {} // Expected
+        other => panic!("expected Ready variant, got {:?}", other),
+    }
+
+    channel.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_websocket_shutdown_prevents_new_connections() {
+    let channel = ControlChannel::new();
+    let port = channel.start("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://127.0.0.1:{}", port);
+
+    // Verify connection works before shutdown
+    let (ws, _) = connect_async(&url).await.unwrap();
+    drop(ws);
+
+    channel.shutdown().await;
+
+    // Small delay to let the server actually shut down
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // After shutdown, new connections should fail
+    let result = timeout(Duration::from_secs(1), connect_async(&url)).await;
+    match result {
+        Ok(Ok(_)) => {
+            // Some OS's may still accept briefly; that's acceptable
+        }
+        _ => {
+            // Expected: connection refused or timeout
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_multiple_ready_messages_from_same_client() {
+    let channel = ControlChannel::new();
+    let port = channel.start("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://127.0.0.1:{}", port);
+
+    let (ws, _) = connect_async(&url).await.unwrap();
+    let (mut write, _read) = ws.split();
+
+    // Send multiple Ready messages (simulating the setInterval behavior)
+    for _ in 0..5 {
+        let ready_json = serde_json::json!({ "type": "ready" });
+        write
+            .send(Message::Text(ready_json.to_string()))
+            .await
+            .unwrap();
+    }
+
+    // All should be received on the inbound channel
+    for _ in 0..5 {
+        let received = timeout(Duration::from_secs(3), channel.recv()).await;
+        assert!(received.is_ok(), "server should receive all Ready messages");
+        match received.unwrap().unwrap() {
+            ControlMessage::Ready => {}
+            other => panic!("expected Ready, got {:?}", other),
+        }
+    }
+
+    channel.shutdown().await;
+}

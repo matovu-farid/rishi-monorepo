@@ -16,14 +16,14 @@ impl MockRegistry {
     pub fn register(&self, command: &str, response: serde_json::Value) {
         self.mocks
             .write()
-            .expect("MockRegistry lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .insert(command.to_string(), response);
     }
 
     pub fn get(&self, command: &str) -> Option<serde_json::Value> {
         self.mocks
             .read()
-            .expect("MockRegistry lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .get(command)
             .cloned()
     }
@@ -31,28 +31,28 @@ impl MockRegistry {
     pub fn has(&self, command: &str) -> bool {
         self.mocks
             .read()
-            .expect("MockRegistry lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .contains_key(command)
     }
 
     pub fn remove(&self, command: &str) {
         self.mocks
             .write()
-            .expect("MockRegistry lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .remove(command);
     }
 
     pub fn clear(&self) {
         self.mocks
             .write()
-            .expect("MockRegistry lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .clear();
     }
 
     pub fn list(&self) -> Vec<String> {
         self.mocks
             .read()
-            .expect("MockRegistry lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .keys()
             .cloned()
             .collect()

@@ -17,6 +17,8 @@ pub enum ControlMessage {
     Ipc {
         data: IpcLogEntry,
     },
+    /// Sent by the webview when the injected JS connects to the WebSocket server.
+    Ready,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

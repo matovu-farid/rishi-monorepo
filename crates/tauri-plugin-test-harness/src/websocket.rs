@@ -20,7 +20,7 @@ pub struct ControlChannel {
 
 impl ControlChannel {
     pub fn new() -> Self {
-        let (outbound_tx, _) = broadcast::channel(256);
+        let (outbound_tx, _) = broadcast::channel(4096);
         let (inbound_tx, inbound_rx) = mpsc::channel(256);
         let (shutdown_tx, _) = broadcast::channel(1);
 

@@ -29,7 +29,7 @@ impl HelperRegistry {
     {
         self.helpers
             .write()
-            .expect("HelperRegistry lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .insert(name.to_string(), Box::new(f));
     }
 
@@ -38,7 +38,7 @@ impl HelperRegistry {
         name: &str,
         args: serde_json::Value,
     ) -> crate::Result<serde_json::Value> {
-        let helpers = self.helpers.read().expect("HelperRegistry lock poisoned");
+        let helpers = self.helpers.read().unwrap_or_else(|e| e.into_inner());
         let helper = helpers
             .get(name)
             .ok_or_else(|| Error::HelperNotFound(name.to_string()))?;
@@ -48,14 +48,14 @@ impl HelperRegistry {
     pub fn has(&self, name: &str) -> bool {
         self.helpers
             .read()
-            .expect("HelperRegistry lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .contains_key(name)
     }
 
     pub fn list(&self) -> Vec<String> {
         self.helpers
             .read()
-            .expect("HelperRegistry lock poisoned")
+            .unwrap_or_else(|e| e.into_inner())
             .keys()
             .cloned()
             .collect()
