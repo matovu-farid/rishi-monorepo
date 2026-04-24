@@ -31,6 +31,7 @@ function pdfWorkerPolyfills(): Plugin {
     apply: "build",
     closeBundle() {
       const distDir = path.resolve(__dirname, "dist");
+      if (!fs.existsSync(distDir)) return;
       const files = fs.readdirSync(distDir, { recursive: true }) as string[];
       const workerFile = files.find((f) =>
         typeof f === "string" && f.includes("pdf.worker") && f.endsWith(".mjs")
