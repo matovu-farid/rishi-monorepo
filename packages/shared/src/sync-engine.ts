@@ -118,6 +118,26 @@ export function createSyncEngine(config: SyncEngineConfig): SyncEngine {
     await config.adapter.updateLastSyncVersion(data.syncVersion);
   }
 
+  async function guardedPush(): Promise<void> {
+    if (isSyncing) return;
+    isSyncing = true;
+    try {
+      await push();
+    } finally {
+      isSyncing = false;
+    }
+  }
+
+  async function guardedPull(): Promise<void> {
+    if (isSyncing) return;
+    isSyncing = true;
+    try {
+      await pull();
+    } finally {
+      isSyncing = false;
+    }
+  }
+
   return {
     async sync() {
       if (isSyncing) return;
@@ -131,7 +151,7 @@ export function createSyncEngine(config: SyncEngineConfig): SyncEngine {
         isSyncing = false;
       }
     },
-    push,
-    pull,
+    push: guardedPush,
+    pull: guardedPull,
   };
 }

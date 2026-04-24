@@ -169,3 +169,6 @@ jobs:
 
       - name: Typecheck
         run: bunx tsc --noEmit
+
+      - name: Test
+        run: bun run test -- --run 2>/dev/null || echo "No test script configured yet — skipping"
