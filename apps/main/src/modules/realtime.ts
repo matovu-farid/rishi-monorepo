@@ -10,6 +10,12 @@ import { usePlayerStore } from "@/stores/playerStore";
 import { startThinkingSound, stopThinkingSound } from "@/modules/thinkingSound";
 import { captureError } from "@/utils/sentry";
 
+/**
+ * External cleanup registry for realtime sessions.
+ * Avoids monkey-patching the SDK session object with `as any`.
+ */
+export const sessionCleanupMap = new WeakMap<object, () => void>();
+
 // --- Cached API key to avoid fetching on every chat start ---
 // The key has a 10-minute TTL server-side; we treat it as stale after 9 minutes.
 const KEY_TTL_MS = 9 * 60 * 1000;
@@ -254,8 +260,8 @@ Ending conversations:
   session.on("agent_tool_end", onToolEnd);
   session.on("error", onError);
 
-  // Store cleanup function on the session so stopConversation can remove handlers
-  (session as any)._cleanupHandlers = () => {
+  // Store cleanup function externally so stopConversation can remove handlers
+  sessionCleanupMap.set(session, () => {
     session.off("agent_start", onAgentStart);
     session.off("audio_start", onAudioStart);
     session.off("audio_stopped", onAudioStopped);
@@ -263,7 +269,7 @@ Ending conversations:
     session.off("agent_tool_start", onToolStart);
     session.off("agent_tool_end", onToolEnd);
     session.off("error", onError);
-  };
+  });
 
   const apiKey = await getOrFetchKey();
 

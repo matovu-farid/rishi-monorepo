@@ -23,10 +23,11 @@ while true:
   4. REGRESSION CHECK — Run tsc/cargo check to verify no new errors
      - Fix any diagnostics introduced by the implementation
   
-  5. CONTINUE or STOP
+  5. CONTINUE or STOP (autonomous — do not ask the user)
      - If issues were found and fixed: go to step 1 (another pass)
      - If review finds zero new issues: do ONE MORE confirmation pass
      - If confirmation pass also finds nothing: stop
+     - Run all passes autonomously without pausing for user input
 ```
 
 ## Pass Depth Progression

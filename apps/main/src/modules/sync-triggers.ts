@@ -110,8 +110,11 @@ export async function triggerSync(): Promise<void> {
     lastSyncAt = Date.now();
   } catch (error) {
     console.warn('[desktop-sync] sync failed:', error);
-    // Check if offline
-    if (!navigator.onLine) {
+    if (error instanceof Error && error.message === 'AUTH_EXPIRED') {
+      syncStatus = 'error';
+      console.warn('[desktop-sync] auth expired — user must re-authenticate');
+      window.dispatchEvent(new CustomEvent('sync-auth-expired'));
+    } else if (!navigator.onLine) {
       syncStatus = 'offline';
     } else {
       syncStatus = 'error';

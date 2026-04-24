@@ -95,6 +95,12 @@ export class TTSQueue extends EventEmitter {
     // Check for duplicate request
     if (this.pendingRequests.has(requestId)) {
       return new Promise((resolve, reject) => {
+        const cleanup = () => {
+          clearTimeout(timeout);
+          this.off(TTSQueueEvents.AUDIO_READY, handleAudioReady);
+          this.off(TTSQueueEvents.AUDIO_ERROR, handleAudioError);
+        };
+
         // Listen for audio-ready events and filter by requestId
         const handleAudioReady = (data: {
           bookId: string;
@@ -103,8 +109,7 @@ export class TTSQueue extends EventEmitter {
           requestId: string;
         }) => {
           if (data.requestId === requestId) {
-            this.off(TTSQueueEvents.AUDIO_READY, handleAudioReady);
-            this.off(TTSQueueEvents.AUDIO_ERROR, handleAudioError);
+            cleanup();
             resolve(data.audioPath);
           }
         };
@@ -116,11 +121,16 @@ export class TTSQueue extends EventEmitter {
           requestId: string;
         }) => {
           if (data.requestId === requestId) {
-            this.off(TTSQueueEvents.AUDIO_READY, handleAudioReady);
-            this.off(TTSQueueEvents.AUDIO_ERROR, handleAudioError);
+            cleanup();
             reject(data.error);
           }
         };
+
+        // Timeout to prevent listener leak if the event is never emitted
+        const timeout = setTimeout(() => {
+          cleanup();
+          reject(new Error("TTS duplicate request timed out"));
+        }, this.REQUEST_TIMEOUT_MS);
 
         this.on(TTSQueueEvents.AUDIO_READY, handleAudioReady);
         this.on(TTSQueueEvents.AUDIO_ERROR, handleAudioError);

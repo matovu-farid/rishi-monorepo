@@ -146,18 +146,21 @@ pub fn save_page_data_many(page_data: Vec<ChunkDataInsertable>) -> Result<(), St
         .get()
         .map_err(|e| format!("Failed to get connection: {}", e))?;
 
-    // For SQLite, insert items one by one with on_conflict handling
-    // SQLite doesn't support batch inserts with on_conflict in the same way
+    // For SQLite, insert items one by one with on_conflict handling.
+    // Wrap in a transaction so partial failure doesn't leave inconsistent state.
     use crate::schema::chunk_data::dsl::*;
-    for item in &page_data {
-        diesel::insert_into(chunk_data)
-            .values(item)
-            .on_conflict(id)
-            .do_update()
-            .set(data.eq(diesel::dsl::sql::<diesel::sql_types::Text>("excluded.data")))
-            .execute(&mut conn)
-            .map_err(|e| format!("Failed to insert page data: {}", e))?;
-    }
+    conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        for item in &page_data {
+            diesel::insert_into(chunk_data)
+                .values(item)
+                .on_conflict(id)
+                .do_update()
+                .set(data.eq(diesel::dsl::sql::<diesel::sql_types::Text>("excluded.data")))
+                .execute(conn)?;
+        }
+        Ok(())
+    })
+    .map_err(|e| format!("Failed to insert page data: {}", e))?;
 
     Ok(())
 }

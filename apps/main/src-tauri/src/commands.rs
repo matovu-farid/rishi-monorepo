@@ -519,11 +519,20 @@ pub async fn signout(app: tauri::AppHandle) -> Result<(), String> {
         let worker_url = crate::WORKER_URL;
         let url = format!("{}/api/auth/revoke", worker_url);
         let client = http_client();
-        let _ = client
+        match client
             .post(&url)
             .header("Authorization", format!("Bearer {}", token))
             .send()
-            .await;
+            .await
+        {
+            Ok(resp) if !resp.status().is_success() => {
+                eprintln!("[signout] Token revocation returned {}", resp.status());
+            }
+            Err(e) => {
+                eprintln!("[signout] Token revocation failed: {}", e);
+            }
+            _ => {}
+        }
     }
 
     // Delete secrets from keychain

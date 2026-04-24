@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, gt, and, max, asc } from "drizzle-orm";
+import { eq, gt, and, max, asc, inArray } from "drizzle-orm";
 import { z } from "zod";
 import type { CloudflareBindings } from "../index";
 import { requireWorkerAuth } from "../index";
@@ -9,10 +9,10 @@ import type { PushResponse, PullResponse } from "@rishi/shared/sync-types";
 
 const pushRequestSchema = z.object({
   changes: z.object({
-    books: z.array(z.record(z.string(), z.unknown())).max(10000).default([]),
-    highlights: z.array(z.record(z.string(), z.unknown())).max(50000).default([]),
-    conversations: z.array(z.record(z.string(), z.unknown())).max(10000).default([]),
-    messages: z.array(z.record(z.string(), z.unknown())).max(50000).default([]),
+    books: z.array(z.record(z.string(), z.unknown())).max(500).default([]),
+    highlights: z.array(z.record(z.string(), z.unknown())).max(5000).default([]),
+    conversations: z.array(z.record(z.string(), z.unknown())).max(500).default([]),
+    messages: z.array(z.record(z.string(), z.unknown())).max(5000).default([]),
   }),
 });
 
@@ -299,6 +299,8 @@ syncRoutes.get("/pull", requireWorkerAuth, async (c) => {
   // NOTE: Deleted records (isDeleted = true) are intentionally NOT filtered out.
   // They must be included in pull results so other devices learn about deletions
   // and can apply the soft-delete locally.
+  const PULL_LIMIT = 5000;
+
   const changedBooks = await db
     .select()
     .from(books)
@@ -308,6 +310,7 @@ syncRoutes.get("/pull", requireWorkerAuth, async (c) => {
         gt(books.syncVersion, sinceVersion)
       )
     )
+    .limit(PULL_LIMIT)
     .all();
 
   // Strip local-only paths from response -- client must never overwrite its local paths
@@ -326,6 +329,7 @@ syncRoutes.get("/pull", requireWorkerAuth, async (c) => {
         gt(highlights.syncVersion, sinceVersion)
       )
     )
+    .limit(PULL_LIMIT)
     .all();
 
   // ── Pull conversations ─────���───────────────────────────���──────────────────
@@ -338,6 +342,7 @@ syncRoutes.get("/pull", requireWorkerAuth, async (c) => {
         gt(conversations.syncVersion, sinceVersion)
       )
     )
+    .limit(PULL_LIMIT)
     .all();
 
   // ── Pull messages (via user's conversations) ─────────────────────────────
@@ -353,13 +358,18 @@ syncRoutes.get("/pull", requireWorkerAuth, async (c) => {
   let changedMessages: Array<typeof messages.$inferSelect> = [];
   if (userConvIds.length > 0) {
     // Fetch messages for user's conversations that changed since sinceVersion
-    const allMessages = await db
+    changedMessages = await db
       .select()
       .from(messages)
-      .where(gt(messages.syncVersion, sinceVersion))
+      .where(
+        and(
+          gt(messages.syncVersion, sinceVersion),
+          inArray(messages.conversationId, userConvIds)
+        )
+      )
       .orderBy(asc(messages.createdAt))
+      .limit(PULL_LIMIT)
       .all();
-    changedMessages = allMessages.filter((m) => userConvIds.includes(m.conversationId));
   }
 
   // Get current max syncVersion across all tables for this user
@@ -372,6 +382,12 @@ syncRoutes.get("/pull", requireWorkerAuth, async (c) => {
     : 0;
   const currentSyncVersion = Math.max(maxBookVer, maxHighVer, maxConvVer, maxMsgVer);
 
+  const hasMore =
+    changedBooks.length >= PULL_LIMIT ||
+    changedHighlights.length >= PULL_LIMIT ||
+    changedConversations.length >= PULL_LIMIT ||
+    changedMessages.length >= PULL_LIMIT;
+
   const response: PullResponse = {
     changes: {
       books: sanitizedBooks as unknown as Array<Record<string, unknown>>,
@@ -380,6 +396,7 @@ syncRoutes.get("/pull", requireWorkerAuth, async (c) => {
       messages: changedMessages as unknown as Array<Record<string, unknown>>,
     },
     syncVersion: currentSyncVersion,
+    hasMore,
   };
 
   return c.json(response);

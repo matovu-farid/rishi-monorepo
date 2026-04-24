@@ -66,6 +66,14 @@ impl Extractable for Djvu {
     }
 }
 
+/// Guard that deletes a temp file when dropped, ensuring cleanup on all exit paths.
+struct TempFileGuard(PathBuf);
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Render a single DJVU page to PNG bytes using the `ddjvu` CLI tool.
 pub fn render_page_to_png(
     path: &Path,
@@ -84,6 +92,7 @@ pub fn render_page_to_png(
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let tmp_file = tmp_dir.join(format!("rishi_djvu_{}_{}_{}.ppm", std::process::id(), page, random_suffix));
+    let _guard = TempFileGuard(tmp_file.clone());
 
     let output = std::process::Command::new("ddjvu")
         .arg("-format=ppm")
@@ -95,12 +104,10 @@ pub fn render_page_to_png(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let _ = std::fs::remove_file(&tmp_file);
         return Err(format!("ddjvu failed: {}", stderr).into());
     }
 
     let ppm_data = std::fs::read(&tmp_file)?;
-    let _ = std::fs::remove_file(&tmp_file);
 
     let img = image::load_from_memory_with_format(&ppm_data, ImageFormat::Pnm)?;
     let mut png_buf = Vec::new();

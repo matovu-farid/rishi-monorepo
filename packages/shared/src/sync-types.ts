@@ -20,6 +20,7 @@ export interface PullResponse {
     messages?: Array<Record<string, unknown>>;
   };
   syncVersion: number;
+  hasMore?: boolean;
 }
 
 export interface UploadUrlRequest {

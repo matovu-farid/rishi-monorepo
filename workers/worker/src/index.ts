@@ -12,6 +12,9 @@ import jwt from "@tsndr/cloudflare-worker-jwt";
 import { syncRoutes } from "./routes/sync";
 import { uploadRoutes } from "./routes/upload";
 
+/** UUID v4 format validation for state parameters used as Redis keys. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Constant-time string comparison to prevent timing attacks on PKCE challenges. */
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -180,6 +183,10 @@ app.post("/api/auth/complete", async (c) => {
     if (!state || state === "unknown" || !code_verifier) {
       await debugLog(state, "complete_rejected_missing_params");
       return c.json({ error: "Authentication failed" }, 400);
+    }
+
+    if (!UUID_RE.test(state)) {
+      return c.json({ error: "Invalid state parameter" }, 400);
     }
 
     const redisKey = `auth:state:${state}`;
@@ -386,6 +393,10 @@ app.post("/api/auth/debug", async (c) => {
       return c.json({ error: "Missing state, source, or step" }, 400);
     }
 
+    if (!UUID_RE.test(body.state)) {
+      return c.json({ error: "Invalid state parameter" }, 400);
+    }
+
     const redis = Redis.fromEnv(c.env);
     const key = `auth:debug:${body.state}`;
     const now = Date.now();
@@ -477,6 +488,10 @@ app.get("/api/auth/debug/:state", requireWorkerAuth, async (c) => {
     const state = c.req.param("state");
     if (!state) {
       return c.json({ error: "Missing state" }, 400);
+    }
+
+    if (!UUID_RE.test(state)) {
+      return c.json({ error: "Invalid state parameter" }, 400);
     }
 
     const redis = Redis.fromEnv(c.env);
@@ -616,7 +631,7 @@ app.get("/api/clerk/user/:userId", requireWorkerAuth, async (c) => {
 
 app.post("/api/audio/speech", requireWorkerAuth, async (c) => {
   try {
-    const { model, input, voice, ...otherParams } = await c.req.json();
+    const { input, voice } = await c.req.json();
 
     if (!input || typeof input !== "string" || input.trim().length === 0) {
       return c.json({ error: "Missing or empty input text" }, 400);
@@ -630,7 +645,6 @@ app.post("/api/audio/speech", requireWorkerAuth, async (c) => {
       model: "tts-1",
       input,
       voice: voice || "alloy",
-      ...otherParams,
     });
 
     const arrayBuffer = await response.arrayBuffer();
@@ -689,14 +703,13 @@ app.get("/api/realtime/client_secrets", requireWorkerAuth, async (c) => {
 });
 
 app.post("/api/text/completions", requireWorkerAuth, async (c) => {
-  const { input, ...otherParams } = await c.req.json();
+  const { input } = await c.req.json();
   const openai = new OpenAI({
     apiKey: c.env.OPENAI_API_KEY,
   });
   const response = await openai.responses.create({
     model: "gpt-5-nano",
     input,
-    ...otherParams,
   });
 
   return c.json(response.output_text);
@@ -752,17 +765,20 @@ app.post("/api/audio/transcribe", requireWorkerAuth, async (c) => {
         signal: dgAbort.signal,
       }
     );
-  } finally {
+  } catch (e) {
     clearTimeout(dgTimeout);
+    throw e;
   }
 
   if (!dgResponse.ok) {
     const errorText = await dgResponse.text();
+    clearTimeout(dgTimeout);
     console.error("Deepgram error:", dgResponse.status, errorText);
     return c.json({ error: "Transcription failed" }, 502);
   }
 
   const result = await dgResponse.json() as any;
+  clearTimeout(dgTimeout);
   const transcript =
     result?.results?.channels?.[0]?.alternatives?.[0]?.transcript || "";
 

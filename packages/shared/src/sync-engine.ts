@@ -47,6 +47,9 @@ export function createSyncEngine(config: SyncEngineConfig): SyncEngine {
 
     if (!response.ok) {
       console.warn("[sync:push] server responded", response.status);
+      if (response.status === 401) {
+        throw new Error("AUTH_EXPIRED");
+      }
       return;
     }
 
@@ -100,6 +103,9 @@ export function createSyncEngine(config: SyncEngineConfig): SyncEngine {
 
     if (!response.ok) {
       console.warn("[sync:pull] server responded", response.status);
+      if (response.status === 401) {
+        throw new Error("AUTH_EXPIRED");
+      }
       return;
     }
 

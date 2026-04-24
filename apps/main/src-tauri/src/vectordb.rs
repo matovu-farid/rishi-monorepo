@@ -238,7 +238,7 @@ pub fn vector_store() -> &'static Arc<Mutex<VectorStore>> {
     VECTOR_STORE.get_or_init(|| {
         Arc::new(Mutex::new(
             VectorStore::new()
-                .unwrap_or_else(|e| panic!("Failed to create VectorStore: {}", e)),
+                .expect("VectorStore::new() is infallible — this is a bug if it fails"),
         ))
     })
 }

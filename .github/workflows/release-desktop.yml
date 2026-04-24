@@ -87,7 +87,7 @@ jobs:
 
       - name: Install Azure Trusted Signing CLI (Windows)
         if: matrix.platform == 'windows-latest'
-        run: cargo install trusted-signing-cli
+        run: cargo install trusted-signing-cli --version 0.9.0
 
       - name: Install tauri-typegen
         run: cargo install tauri-typegen --version 0.3.2
