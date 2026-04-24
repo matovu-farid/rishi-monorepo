@@ -17,6 +17,38 @@ export const uploadRoutes = new Hono<{
   Variables: { userId: string };
 }>();
 
+/**
+ * Validates that an R2 key is safely scoped under the given prefix
+ * with no path traversal tricks.
+ *
+ * Rejects:
+ *  - keys containing ".." (parent-directory traversal)
+ *  - keys containing "%" (URL-encoded traversal like %2e%2e)
+ *  - keys containing null bytes
+ *  - keys that, after normalization, escape the expected prefix
+ */
+function isR2KeySafe(r2Key: string, expectedPrefix: string): boolean {
+  // Reject obvious traversal / encoding tricks
+  if (r2Key.includes("..") || r2Key.includes("%") || r2Key.includes("\0")) {
+    return false;
+  }
+
+  // Must start with the expected prefix
+  if (!r2Key.startsWith(expectedPrefix)) {
+    return false;
+  }
+
+  // Normalize by collapsing consecutive slashes and resolving "." segments,
+  // then re-check the prefix to catch anything creative.
+  const segments = r2Key.split("/").filter((s) => s !== "" && s !== ".");
+  const normalized = segments.join("/") + (r2Key.endsWith("/") ? "/" : "");
+  if (!normalized.startsWith(expectedPrefix)) {
+    return false;
+  }
+
+  return true;
+}
+
 // ─── POST /upload-url ──────────────────────────────────────────────────────────
 // Returns a presigned PUT URL for direct R2 upload, or {exists: true} for dedup.
 // Does NOT sign Content-Type in headers (per research pitfall -- signQuery only).
@@ -79,7 +111,7 @@ uploadRoutes.post("/download-url", requireWorkerAuth, async (c) => {
 
   // Validate that the r2Key is scoped to this user's prefix to prevent path traversal
   const expectedPrefix = `books/${userId}/`;
-  if (!body.r2Key || !body.r2Key.startsWith(expectedPrefix)) {
+  if (!body.r2Key || !isR2KeySafe(body.r2Key, expectedPrefix)) {
     return c.json({ error: "Forbidden: invalid r2Key" }, 403);
   }
 

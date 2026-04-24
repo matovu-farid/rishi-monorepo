@@ -44,8 +44,8 @@ const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string
 app.use(
   "*",
   cors({
-    origin: ["https://rishi.fidexa.org", "tauri://localhost", "http://tauri.localhost", "http://localhost:1420"],
-    allowHeaders: ["Content-Type", "Authorization", "X-Dev-Bypass"],
+    origin: ["https://rishi.fidexa.org", "tauri://localhost", "http://tauri.localhost"],
+    allowHeaders: ["Content-Type", "Authorization"],
     allowMethods: ["GET", "POST", "OPTIONS"],
   })
 );
@@ -412,7 +412,7 @@ app.post("/api/auth/debug", async (c) => {
 
 // ─── GET /api/auth/debug — list all recent auth flows ───────────────────────
 // Returns the most recent auth flows from the global index with summary info.
-app.get("/api/auth/debug", async (c) => {
+app.get("/api/auth/debug", requireWorkerAuth, async (c) => {
   try {
     const redis = Redis.fromEnv(c.env);
 
@@ -470,7 +470,7 @@ app.get("/api/auth/debug", async (c) => {
 
 // ─── GET /api/auth/debug/:state ─────────────────────────────────────────────
 // Retrieve all debug events and auth state for a given state UUID.
-app.get("/api/auth/debug/:state", async (c) => {
+app.get("/api/auth/debug/:state", requireWorkerAuth, async (c) => {
   try {
     const state = c.req.param("state");
     if (!state) {
@@ -714,6 +714,7 @@ app.get("/api/realtime/client_secrets", requireWorkerAuth, async (c) => {
           Authorization: `Bearer ${c.env.OPENAI_API_KEY}`,
           "Content-Type": "application/json",
         },
+        timeout: 30_000,
       }
     );
     const responseSchema = z.object({
@@ -797,17 +798,25 @@ app.post("/api/audio/transcribe", requireWorkerAuth, async (c) => {
     return c.json({ error: "Empty audio data" }, 400);
   }
 
-  const dgResponse = await fetch(
-    "https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true&language=en",
-    {
-      method: "POST",
-      headers: {
-        "Authorization": `Token ${c.env.DEEPGRAM_KEY}`,
-        "Content-Type": contentType,
-      },
-      body: audioData,
-    }
-  );
+  const dgAbort = new AbortController();
+  const dgTimeout = setTimeout(() => dgAbort.abort(), 30_000);
+  let dgResponse: Response;
+  try {
+    dgResponse = await fetch(
+      "https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&punctuate=true&language=en",
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Token ${c.env.DEEPGRAM_KEY}`,
+          "Content-Type": contentType,
+        },
+        body: audioData,
+        signal: dgAbort.signal,
+      }
+    );
+  } finally {
+    clearTimeout(dgTimeout);
+  }
 
   if (!dgResponse.ok) {
     const errorText = await dgResponse.text();
