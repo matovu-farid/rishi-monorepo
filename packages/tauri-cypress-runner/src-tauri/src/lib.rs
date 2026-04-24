@@ -22,6 +22,7 @@ pub fn run() {
             process: Mutex::new(AppProcess::new()),
             ws_client: Mutex::new(WsClient::new()),
             project_dir: Mutex::new(String::new()),
+            frontend_server_pid: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_initial_project_dir,
@@ -29,6 +30,8 @@ pub fn run() {
             commands::get_config,
             commands::get_test_files,
             commands::run_build,
+            commands::build_frontend,
+            commands::start_frontend_server,
             commands::launch_app,
             commands::stop_app,
             commands::connect_ws,
@@ -39,6 +42,7 @@ pub fn run() {
             commands::save_baseline,
             commands::compare_screenshot,
             commands::update_baseline,
+            commands::save_debug_html,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri-cypress-runner");

@@ -1,12 +1,13 @@
 use tauri::{command, AppHandle, Manager, Runtime};
 use tokio::sync::Mutex;
-use crate::{build_runner, config, process::AppProcess, screenshot, test_discovery, types::{RunnerConfig, TestFile}, websocket_client::WsClient};
+use crate::{build_runner, config, headless, process::AppProcess, screenshot, test_discovery, types::{RunnerConfig, TestFile}, websocket_client::WsClient};
 
 pub struct RunnerState {
     pub config: Mutex<RunnerConfig>,
     pub process: Mutex<AppProcess>,
     pub ws_client: Mutex<WsClient>,
     pub project_dir: Mutex<String>,
+    pub frontend_server_pid: Mutex<Option<u32>>,
 }
 
 /// Get the project dir passed via CLI (env var set by main.rs)
@@ -47,9 +48,66 @@ pub async fn run_build<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let state = app.state::<RunnerState>();
     let config = state.config.lock().await.clone();
     let project_dir = state.project_dir.lock().await.clone();
+    let tauri_dir = format!("{}/{}", project_dir, config.tauri_dir);
     let app_clone = app.clone();
-    tokio::task::spawn_blocking(move || build_runner::run_build(&config.build_command, &project_dir, app_clone))
+    tokio::task::spawn_blocking(move || build_runner::run_build(&config.build_command, &tauri_dir, app_clone))
         .await.map_err(|e| e.to_string())?
+}
+
+/// Build the frontend (runs the frontend build command from config, e.g. `pnpm build`)
+#[command]
+pub async fn build_frontend<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let state = app.state::<RunnerState>();
+    let config = state.config.lock().await.clone();
+    let project_dir = state.project_dir.lock().await.clone();
+    let app_clone = app.clone();
+    tokio::task::spawn_blocking(move || build_runner::run_build(&config.frontend_build_command, &project_dir, app_clone))
+        .await.map_err(|e| e.to_string())?
+}
+
+/// Kill any process listening on the given port
+fn kill_port(port: u16) {
+    let _ = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("lsof -ti:{} | xargs kill -9 2>/dev/null", port))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+/// Start a static file server for the built frontend on port 1420
+#[command]
+pub async fn start_frontend_server<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let state = app.state::<RunnerState>();
+    let project_dir = state.project_dir.lock().await.clone();
+
+    // Kill any stale process on port 1420
+    kill_port(1420);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    let child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("npx serve dist -l 1420 -s --no-clipboard")
+        .current_dir(&project_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Failed to start frontend server: {}", e))?;
+
+    // Track the PID for cleanup
+    *state.frontend_server_pid.lock().await = Some(child.id());
+
+    // Wait for server to be ready
+    for i in 0..30 {
+        if std::net::TcpStream::connect("127.0.0.1:1420").is_ok() {
+            return Ok(());
+        }
+        if i == 29 {
+            return Err("Frontend server on :1420 not ready after 15s".to_string());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    Ok(())
 }
 
 #[command]
@@ -73,15 +131,40 @@ pub async fn launch_app<R: Runtime>(app: AppHandle<R>) -> Result<u32, String> {
 
 #[command]
 pub async fn stop_app<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    app.state::<RunnerState>().process.lock().await.kill()
+    let state = app.state::<RunnerState>();
+    // Kill the app process
+    state.process.lock().await.kill().ok();
+    // Kill the frontend server
+    if let Some(pid) = state.frontend_server_pid.lock().await.take() {
+        let _ = std::process::Command::new("kill")
+            .arg("-9")
+            .arg(pid.to_string())
+            .status();
+    }
+    // Also clean up the port in case it's stale
+    kill_port(1420);
+    Ok(())
 }
 
 #[command]
 pub async fn connect_ws<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
     let state = app.state::<RunnerState>();
     let port = state.config.lock().await.control_port;
-    let result = state.ws_client.lock().await.connect(port, app.clone()).await;
-    result
+
+    // Retry connection up to 10 times (the WS server starts asynchronously)
+    let mut last_err = String::new();
+    for attempt in 0..10 {
+        match state.ws_client.lock().await.connect(port, app.clone()).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = e;
+                if attempt < 9 {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                }
+            }
+        }
+    }
+    Err(format!("WebSocket connect failed after 10 attempts: {}", last_err))
 }
 
 #[command]
@@ -96,6 +179,7 @@ pub async fn run_test<R: Runtime>(app: AppHandle<R>, file_path: String) -> Resul
     let project_dir = state.project_dir.lock().await;
     let full_path = format!("{}/{}", project_dir, file_path);
     let script = std::fs::read_to_string(&full_path).map_err(|e| format!("Failed to read {}: {}", full_path, e))?;
+    let script = headless::strip_imports(&script);
     drop(project_dir);
     let result = state.ws_client.lock().await.send_exec(&script, &file_path).await;
     result
@@ -118,6 +202,7 @@ pub async fn run_all_tests<R: Runtime>(app: AppHandle<R>) -> Result<(), String> 
     for file in files {
         let full_path = format!("{}/{}", project_dir, file.path);
         let script = std::fs::read_to_string(&full_path).map_err(|e| format!("Failed to read {}: {}", full_path, e))?;
+        let script = headless::strip_imports(&script);
         state.ws_client.lock().await.send_exec(&script, &file.path).await?;
     }
     Ok(())
@@ -185,4 +270,14 @@ pub async fn update_baseline<R: Runtime>(
     let project_dir = state.project_dir.lock().await;
     let folder = format!("{}/{}/baselines", project_dir, config.screenshots_folder);
     screenshot::save_screenshot(&base64_data, &folder, &name)
+}
+
+/// Save a debug HTML snapshot of the runner UI to disk for external screenshotting.
+#[command]
+pub async fn save_debug_html(filename: String, html: String) -> Result<String, String> {
+    let dir = std::env::temp_dir().join("tauri-cypress-debug");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(&filename);
+    std::fs::write(&path, &html).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
 }

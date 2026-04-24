@@ -52,6 +52,34 @@ fn main() {
                 if let Some(ref cfg) = config_path {
                     std::env::set_var("TAURI_CYPRESS_CONFIG_PATH", cfg);
                 }
+
+                // Serve the runner's own frontend on port 1421.
+                // The Tauri webview loads from devUrl (http://localhost:1421)
+                // so we need a static server for the built dist/ assets.
+                let runner_dist = concat!(env!("CARGO_MANIFEST_DIR"), "/../dist");
+                let runner_dist = std::fs::canonicalize(runner_dist)
+                    .unwrap_or_else(|_| std::path::PathBuf::from(runner_dist));
+
+                let _frontend_server = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg("npx serve . -l 1421 -s --no-clipboard")
+                    .current_dir(&runner_dist)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .expect("Failed to start frontend server on port 1421");
+
+                // Wait for the server to be ready
+                for i in 0..20 {
+                    if std::net::TcpStream::connect("127.0.0.1:1421").is_ok() {
+                        break;
+                    }
+                    if i == 19 {
+                        eprintln!("Warning: frontend server on :1421 not ready after 10s");
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+
                 tauri_cypress_runner::run();
             }
             _ => {

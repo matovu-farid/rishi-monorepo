@@ -3,7 +3,12 @@
   "identifier": "com.tauri-cypress.runner",
   "build": {
     "frontendDist": "../dist",
+    "beforeDevCommand": "pnpm dev --port 1421",
+    "beforeBuildCommand": "pnpm build",
     "devUrl": "http://localhost:1421"
+  },
+  "bundle": {
+    "active": false
   },
   "app": {
     "windows": [

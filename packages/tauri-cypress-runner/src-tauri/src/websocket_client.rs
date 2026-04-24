@@ -13,6 +13,7 @@ pub enum ControlMessage {
     Result { data: serde_json::Value },
     Snapshot { data: serde_json::Value },
     Ipc { data: serde_json::Value },
+    Ready,
 }
 
 pub struct WsClient {
@@ -55,6 +56,10 @@ impl WsClient {
                                         ControlMessage::Ipc { data } => { let _ = app_clone.emit("test-harness://ipc", data.clone()); }
                                         ControlMessage::Snapshot { data } => { let _ = app_clone.emit("test-harness://snapshot", data.clone()); }
                                         ControlMessage::Exec { .. } => { debug!("Received exec (unexpected)"); }
+                                        ControlMessage::Ready => {
+                                            debug!("Webview ready");
+                                            let _ = app_clone.emit("test-harness://webview-ready", ());
+                                        }
                                     }
                                 }
                             }

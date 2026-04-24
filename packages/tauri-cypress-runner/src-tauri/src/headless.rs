@@ -101,6 +101,7 @@ pub async fn run_headless(project_dir: &str, config_path: Option<&str>) -> Resul
     let ws_stream = connect_with_retry(&url, WS_MAX_RETRIES, WS_RETRY_DELAY_MS, &mut app_process).await?;
 
     let (result_tx, mut result_rx) = mpsc::channel::<TestOutcome>(256);
+    let (ready_tx, mut ready_rx) = mpsc::channel::<()>(1);
 
     use futures_util::{SinkExt, StreamExt};
     use tungstenite::protocol::Message;
@@ -110,49 +111,73 @@ pub async fn run_headless(project_dir: &str, config_path: Option<&str>) -> Resul
     // Spawn receiver task
     let tx = result_tx.clone();
     tokio::spawn(async move {
+        let mut ready_sent = false;
         while let Some(msg_result) = ws_read.next().await {
             let text = match msg_result {
                 Ok(Message::Text(t)) => t,
                 Ok(other) => { eprintln!("  [debug] non-text WS message: {:?}", other); continue; }
                 Err(e) => { eprintln!("  [debug] WS read error: {}", e); break; }
             };
-            eprintln!("  [debug] Received WS message: {}...", &text[..text.len().min(120)]);
             if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
-                if msg.get("type").and_then(|t| t.as_str()) == Some("result") {
-                    if let Some(data) = msg.get("data") {
-                        if let Ok(result) =
-                            serde_json::from_value::<TestResultData>(data.clone())
-                        {
-                            let _ = tx
-                                .send(TestOutcome {
-                                    test_id: result.test_id,
-                                    status: result.status,
-                                    duration_ms: result.duration_ms,
-                                    error: result.error,
-                                })
-                                .await;
+                match msg.get("type").and_then(|t| t.as_str()) {
+                    Some("ready") => {
+                        if !ready_sent {
+                            ready_sent = true;
+                            let _ = ready_tx.send(()).await;
                         }
                     }
+                    Some("result") => {
+                        if let Some(data) = msg.get("data") {
+                            if let Ok(result) =
+                                serde_json::from_value::<TestResultData>(data.clone())
+                            {
+                                let _ = tx
+                                    .send(TestOutcome {
+                                        test_id: result.test_id,
+                                        status: result.status,
+                                        duration_ms: result.duration_ms,
+                                        error: result.error,
+                                    })
+                                    .await;
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
     });
 
-    println!("  Connected. Running tests...\n");
+    println!("  Connected. Waiting for webview...");
 
-    // Brief pause to let the webview's injected JS connect to the WS server
-    tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+    // Wait for the webview's injected JS to connect and send "ready"
+    match tokio::time::timeout(
+        tokio::time::Duration::from_secs(30),
+        ready_rx.recv(),
+    )
+    .await
+    {
+        Ok(Some(())) => {
+            println!("  Webview ready. Running tests...\n");
+        }
+        _ => {
+            let _ = app_process.kill();
+            if let Some(ref mut child) = dev_server {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            return Err("Webview did not connect within 30s".to_string());
+        }
+    }
 
     let mut outcomes: Vec<TestOutcome> = Vec::new();
     let run_start = Instant::now();
 
     // Run each test file.
     //
-    // NOTE: Each file is sent as a single script and produces one result message.
-    // If a file contains multiple `it()` blocks, the injector's `executeTestScript`
-    // wraps the entire script in one try/catch — so the first failure aborts the
-    // file and only one result is returned. Individual `it()` results would require
-    // the test framework runtime to report them separately.
+    // Files using describe/it produce multiple result messages:
+    // one per it() block, plus a summary result whose test_id matches the file path.
+    // Legacy files (no describe/it) produce a single result.
     for file in &files {
         let full_path = format!("{}/{}", project_dir, file.path);
         let script = std::fs::read_to_string(&full_path)
@@ -170,48 +195,70 @@ pub async fn run_headless(project_dir: &str, config_path: Option<&str>) -> Resul
             .await
             .map_err(|e| format!("Send failed: {}", e))?;
 
-        // Wait for result
-        match tokio::time::timeout(
-            tokio::time::Duration::from_millis(config.exec_timeout),
-            result_rx.recv(),
-        )
-        .await
-        {
-            Ok(Some(outcome)) => {
-                let icon = match outcome.status.as_str() {
-                    "passed" => "\x1b[32m✓\x1b[0m",
-                    "failed" => "\x1b[31m✗\x1b[0m",
-                    _ => "\x1b[33m-\x1b[0m",
-                };
-                println!(
-                    "  {} {} ({:.0}ms)",
-                    icon, outcome.test_id, outcome.duration_ms
-                );
-                if let Some(ref err) = outcome.error {
-                    println!("    \x1b[31m{}\x1b[0m", err);
+        // Collect results until we get the file-level summary (test_id == file.path)
+        let deadline = tokio::time::Instant::now()
+            + tokio::time::Duration::from_millis(config.exec_timeout);
+
+        loop {
+            match tokio::time::timeout_at(deadline, result_rx.recv()).await {
+                Ok(Some(outcome)) => {
+                    let is_summary = outcome.test_id == file.path;
+                    let icon = match outcome.status.as_str() {
+                        "passed" => "\x1b[32m✓\x1b[0m",
+                        "failed" => "\x1b[31m✗\x1b[0m",
+                        _ => "\x1b[33m-\x1b[0m",
+                    };
+
+                    if is_summary {
+                        // File-level summary — print if it's a legacy test (no sub-results),
+                        // or skip printing if sub-results were already printed
+                        let has_sub_results = outcomes.iter().any(|o| o.test_id.starts_with(&file.path) && o.test_id != file.path);
+                        if !has_sub_results {
+                            println!(
+                                "  {} {} ({:.0}ms)",
+                                icon, outcome.test_id, outcome.duration_ms
+                            );
+                            if let Some(ref err) = outcome.error {
+                                println!("    \x1b[31m{}\x1b[0m", err);
+                            }
+                        }
+                        outcomes.push(outcome);
+                        break;
+                    } else {
+                        // Individual it() result
+                        println!(
+                            "    {} {} ({:.0}ms)",
+                            icon, outcome.test_id, outcome.duration_ms
+                        );
+                        if let Some(ref err) = outcome.error {
+                            println!("      \x1b[31m{}\x1b[0m", err);
+                        }
+                        outcomes.push(outcome);
+                    }
                 }
-                outcomes.push(outcome);
-            }
-            Ok(None) => {
-                println!("  \x1b[31m✗\x1b[0m {} (channel closed)", file.path);
-                outcomes.push(TestOutcome {
-                    test_id: file.path.clone(),
-                    status: "failed".to_string(),
-                    duration_ms: 0,
-                    error: Some("Result channel closed".to_string()),
-                });
-            }
-            Err(_) => {
-                println!(
-                    "  \x1b[31m✗\x1b[0m {} (timeout after {}ms)",
-                    file.path, config.exec_timeout
-                );
-                outcomes.push(TestOutcome {
-                    test_id: file.path.clone(),
-                    status: "failed".to_string(),
-                    duration_ms: config.exec_timeout,
-                    error: Some(format!("Timeout after {}ms", config.exec_timeout)),
-                });
+                Ok(None) => {
+                    println!("  \x1b[31m✗\x1b[0m {} (channel closed)", file.path);
+                    outcomes.push(TestOutcome {
+                        test_id: file.path.clone(),
+                        status: "failed".to_string(),
+                        duration_ms: 0,
+                        error: Some("Result channel closed".to_string()),
+                    });
+                    break;
+                }
+                Err(_) => {
+                    println!(
+                        "  \x1b[31m✗\x1b[0m {} (timeout after {}ms)",
+                        file.path, config.exec_timeout
+                    );
+                    outcomes.push(TestOutcome {
+                        test_id: file.path.clone(),
+                        status: "failed".to_string(),
+                        duration_ms: config.exec_timeout,
+                        error: Some(format!("Timeout after {}ms", config.exec_timeout)),
+                    });
+                    break;
+                }
             }
         }
     }
