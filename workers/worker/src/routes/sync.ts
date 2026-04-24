@@ -5,7 +5,7 @@ import type { CloudflareBindings } from "../index";
 import { requireWorkerAuth } from "../index";
 import { createDb } from "../db/drizzle";
 import { books, highlights, conversations, messages } from "@rishi/shared/schema";
-import type { PushRequest, PushResponse, PullResponse } from "@rishi/shared/sync-types";
+import type { PushResponse, PullResponse } from "@rishi/shared/sync-types";
 
 const pushRequestSchema = z.object({
   changes: z.object({
