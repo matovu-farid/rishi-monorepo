@@ -26,7 +26,11 @@
         "enable": true,
         "scope": [
           "$APPLOCALDATA/**",
-          "$APPLOCALDATA/public/**"
+          "$APPLOCALDATA/public/**",
+          "$HOME/**",
+          "$DOCUMENT/**",
+          "$DOWNLOAD/**",
+          "$DESKTOP/**"
         ]
       }
     }
