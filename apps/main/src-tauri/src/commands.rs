@@ -89,7 +89,7 @@ fn capture_import_error(error: &str, format: &str, path: &Path) -> String {
         |scope| {
             scope.set_tag("operation", "import");
             scope.set_tag("book.format", format);
-            scope.set_extra("file_path", serde_json::Value::String(path.display().to_string()).into());
+            scope.set_extra("file_path", serde_json::Value::String(path.display().to_string()));
         },
         || {
             sentry::capture_message(
@@ -558,6 +558,17 @@ pub async fn embed(embedparams: Vec<EmbedParam>) -> Result<Vec<EmbedResult>, Str
 #[tauri::command]
 pub fn is_dev() -> bool {
     tauri::is_dev()
+}
+
+/// Returns the dev bypass secret, but ONLY in dev builds.
+/// This keeps the secret out of the frontend bundle — the frontend
+/// fetches it at runtime via IPC instead of baking it in via env vars.
+#[tauri::command]
+pub fn get_dev_bypass_secret() -> Option<String> {
+    if !tauri::is_dev() {
+        return None;
+    }
+    option_env!("DEV_BYPASS_SECRET").map(|s| s.to_string())
 }
 
 #[tauri::command]
