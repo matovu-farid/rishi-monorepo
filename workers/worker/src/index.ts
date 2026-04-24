@@ -1,4 +1,4 @@
-import axios, { AxiosError } from "axios";
+import axios from "axios";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
@@ -39,15 +39,14 @@ export interface CloudflareBindings {
   CLOUDFLARE_ACCOUNT_ID: string;
 }
 
-/** Wrap an async function with a timeout using AbortController. */
+/** Wrap an async function with a timeout via Promise.race. */
 async function withTimeout<T>(fn: () => Promise<T>, ms: number = 10000): Promise<T> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), ms);
-  try {
-    return await fn();
-  } finally {
-    clearTimeout(timeout);
-  }
+  return Promise.race([
+    fn(),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Operation timed out after ${ms}ms`)), ms)
+    ),
+  ]);
 }
 
 const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string } }>();

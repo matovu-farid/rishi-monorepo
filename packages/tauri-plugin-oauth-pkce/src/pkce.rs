@@ -10,11 +10,10 @@ pub fn generate_code_verifier() -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
-/// Compute code_challenge = hex(SHA-256(code_verifier)).
-/// The hex encoding matches what the existing Rishi implementation uses.
+/// Compute code_challenge = base64url(SHA-256(code_verifier)) per RFC 7636.
 pub fn compute_code_challenge(code_verifier: &str) -> String {
     let hash = Sha256::digest(code_verifier.as_bytes());
-    hash.iter().map(|b| format!("{:02x}", b)).collect::<String>()
+    URL_SAFE_NO_PAD.encode(hash)
 }
 
 #[cfg(test)]
@@ -37,12 +36,12 @@ mod tests {
     }
 
     #[test]
-    fn challenge_is_hex_sha256() {
+    fn challenge_is_base64url_sha256() {
         let verifier = "test_verifier_value";
         let challenge = compute_code_challenge(verifier);
-        // SHA-256 hex is always 64 chars
-        assert_eq!(challenge.len(), 64);
-        assert!(challenge.chars().all(|c| c.is_ascii_hexdigit()));
+        // SHA-256 base64url is always 43 chars (no padding)
+        assert_eq!(challenge.len(), 43);
+        assert!(challenge.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]

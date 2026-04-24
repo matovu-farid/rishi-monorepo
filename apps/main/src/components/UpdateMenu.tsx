@@ -19,9 +19,7 @@ export function UpdateMenu() {
   useEffect(() => {
     getVersion()
       .then(setVersion)
-      .catch(() => {
-        // getVersion only fails outside a Tauri context; safe to ignore.
-      });
+      .catch((err) => console.warn('[UpdateMenu] getVersion failed:', err));
   }, []);
 
   const busy =

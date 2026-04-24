@@ -7,6 +7,9 @@
  * This should be fixed in the tauri-typegen generator to avoid re-introducing them.
  */
 
+/** Rust's std::path::Path maps to a string in TypeScript */
+type Path = string;
+
 export interface ScanForBooksParams {
   mode: string;
 }
