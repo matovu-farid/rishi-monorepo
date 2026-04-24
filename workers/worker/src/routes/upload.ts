@@ -91,7 +91,8 @@ uploadRoutes.post("/upload-url", requireWorkerAuth, async (c) => {
   // Sign with signQuery: true and bare Request (no Content-Type header)
   // to avoid signature mismatch when client sends different Content-Type
   const signed = await aws.sign(new Request(bucketUrl, { method: "PUT" }), {
-    aws: { signQuery: true },
+    aws: { signQuery: true, datetime: new Date().toISOString().replace(/[:-]|\.\d{3}/g, '') },
+    headers: { "X-Amz-Expires": "300" },
   });
 
   const response: UploadUrlResponse = {
@@ -125,7 +126,8 @@ uploadRoutes.post("/download-url", requireWorkerAuth, async (c) => {
   });
 
   const signed = await aws.sign(new Request(bucketUrl, { method: "GET" }), {
-    aws: { signQuery: true },
+    aws: { signQuery: true, datetime: new Date().toISOString().replace(/[:-]|\.\d{3}/g, '') },
+    headers: { "X-Amz-Expires": "600" },
   });
 
   const response: DownloadUrlResponse = {

@@ -109,7 +109,7 @@ export function useBookSearch({ bookId, bookFormat, epubSearchFn }: UseBookSearc
 
     try {
       const contextTexts = await getContextForQuery({ queryText: cleanQuery, bookId, k: 10 });
-      if (queryRef.current !== searchQuery) return; // stale
+      if (queryRef.current !== searchQuery || bookIdRef.current !== bookId) return; // stale
 
       // Resolve page numbers from chunk_data
       const resultsWithPages: BookSearchResult[] = await Promise.all(

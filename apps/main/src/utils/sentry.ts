@@ -15,8 +15,8 @@ export function initSentry() {
 
   Sentry.init({
     ...defaultOptions,
-    // Enable performance tracing at a low rate
-    tracesSampleRate: 0.2,
+    tracesSampleRate: 0.1,
+    sendDefaultPii: false,
   });
 }
 
