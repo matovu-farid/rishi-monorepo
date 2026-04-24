@@ -326,7 +326,7 @@ app.post("/api/auth/complete", async (c) => {
 
 // ─── POST /api/auth/status/:state ───────────────────────────────────────────
 // Check auth flow status from Redis for monitoring and retry decisions.
-app.post("/api/auth/status/:state", async (c) => {
+app.post("/api/auth/status/:state", requireWorkerAuth, async (c) => {
   try {
     const state = c.req.param("state");
     if (!state) {
@@ -361,8 +361,6 @@ app.post("/api/auth/status/:state", async (c) => {
 
     return c.json({
       status: authData.status || "unknown",
-      retryCount: authData.retryCount || 0,
-      createdAt: authData.createdAt || null,
     });
   } catch (error) {
     console.error("Status check failed:", error instanceof Error ? error.message : "unknown");
@@ -569,38 +567,6 @@ app.get("/api/redis-test", requireWorkerAuth, async (c) => {
   await redis.set("foo", "bar");
   const value = await redis.get("foo");
   return c.json({ value });
-});
-
-// Backwards-compatible state route (deprecated)
-app.get("api/user/:state", requireWorkerAuth, async (c) => {
-  try {
-    const redis = Redis.fromEnv(c.env);
-    const state = c.req.param("state");
-    const userId = (await redis.get(`auth:state:${state}`)) as string | null;
-    if (!userId) {
-      return c.json({ error: "User not found" }, 404);
-    }
-    const clerkClient = createClerkClient({
-      secretKey: c.env.CLERK_SECRET_KEY,
-    });
-
-    const clerkUser = await withTimeout(() => clerkClient.users.getUser(userId));
-
-    return c.json({
-      id: clerkUser.id,
-      firstName: clerkUser.firstName,
-      lastName: clerkUser.lastName,
-      fullName: clerkUser.fullName,
-      username: clerkUser.username,
-      imageUrl: clerkUser.imageUrl,
-      hasImage: clerkUser.hasImage,
-      lastSignInAt: clerkUser.lastSignInAt,
-      externalId: clerkUser.externalId,
-    });
-  } catch (error) {
-    console.error("Failed to get user:", error instanceof Error ? error.message : "unknown");
-    return c.json({ error: "Failed to get user" }, 500);
-  }
 });
 
 // // Health check endpoint

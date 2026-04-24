@@ -98,7 +98,7 @@ uploadRoutes.post("/upload-url", requireWorkerAuth, async (c) => {
     exists: false,
     uploadUrl: signed.url.toString(),
     r2Key,
-    expiresIn: 3600,
+    expiresIn: 300,
   };
   return c.json(response);
 });
@@ -130,7 +130,7 @@ uploadRoutes.post("/download-url", requireWorkerAuth, async (c) => {
 
   const response: DownloadUrlResponse = {
     downloadUrl: signed.url.toString(),
-    expiresIn: 3600,
+    expiresIn: 600,
   };
   return c.json(response);
 });

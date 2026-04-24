@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, gt, and, max } from "drizzle-orm";
+import { eq, gt, and, max, asc } from "drizzle-orm";
 import { z } from "zod";
 import type { CloudflareBindings } from "../index";
 import { requireWorkerAuth } from "../index";
@@ -216,46 +216,49 @@ syncRoutes.post("/push", requireWorkerAuth, async (c) => {
   let newSyncVersion = 0;
 
   if (totalUpserted > 0) {
-    // Use D1 batch to atomically compute MAX+1 and update all records.
-    // D1 batch executes all statements in a single transaction, preventing
-    // concurrent pushes from reading the same max version.
+    // Compute the next version ONCE before the batch to guarantee all records
+    // in this push get the same monotonically increasing version number.
+    // This prevents concurrent pushes from assigning duplicate versions via
+    // per-record subqueries that could read the same MAX.
     const d1 = c.env.DB;
 
-    // Build a subquery that computes MAX(sync_version)+1 across all tables
-    const maxVersionSubquery = `(SELECT COALESCE(MAX(v), 0) + 1 FROM (
-      SELECT MAX(sync_version) AS v FROM books
-      UNION ALL SELECT MAX(sync_version) AS v FROM highlights
-      UNION ALL SELECT MAX(sync_version) AS v FROM conversations
-      UNION ALL SELECT MAX(sync_version) AS v FROM messages
-    ))`;
+    const nextVersionResult = await d1.prepare(
+      `SELECT COALESCE(MAX(v), 0) + 1 AS next_version FROM (
+        SELECT MAX(sync_version) AS v FROM books
+        UNION ALL SELECT MAX(sync_version) AS v FROM highlights
+        UNION ALL SELECT MAX(sync_version) AS v FROM conversations
+        UNION ALL SELECT MAX(sync_version) AS v FROM messages
+      )`
+    ).first<{ next_version: number }>();
+    const nextVersion = nextVersionResult?.next_version ?? 1;
 
     const batchStatements: D1PreparedStatement[] = [];
 
     // Update all upserted books
     for (const id of upsertedBookIds) {
       batchStatements.push(
-        d1.prepare(`UPDATE books SET sync_version = ${maxVersionSubquery}, is_dirty = 0 WHERE id = ?`).bind(id)
+        d1.prepare(`UPDATE books SET sync_version = ?, is_dirty = 0 WHERE id = ?`).bind(nextVersion, id)
       );
     }
 
     // Update all upserted highlights
     for (const id of upsertedHighlightIds) {
       batchStatements.push(
-        d1.prepare(`UPDATE highlights SET sync_version = ${maxVersionSubquery}, is_dirty = 0 WHERE id = ?`).bind(id)
+        d1.prepare(`UPDATE highlights SET sync_version = ?, is_dirty = 0 WHERE id = ?`).bind(nextVersion, id)
       );
     }
 
     // Update all upserted conversations
     for (const id of upsertedConversationIds) {
       batchStatements.push(
-        d1.prepare(`UPDATE conversations SET sync_version = ${maxVersionSubquery}, is_dirty = 0 WHERE id = ?`).bind(id)
+        d1.prepare(`UPDATE conversations SET sync_version = ?, is_dirty = 0 WHERE id = ?`).bind(nextVersion, id)
       );
     }
 
     // Update all upserted messages
     for (const id of upsertedMessageIds) {
       batchStatements.push(
-        d1.prepare(`UPDATE messages SET sync_version = ${maxVersionSubquery}, is_dirty = 0 WHERE id = ?`).bind(id)
+        d1.prepare(`UPDATE messages SET sync_version = ?, is_dirty = 0 WHERE id = ?`).bind(nextVersion, id)
       );
     }
 
@@ -263,16 +266,7 @@ syncRoutes.post("/push", requireWorkerAuth, async (c) => {
       await d1.batch(batchStatements);
     }
 
-    // Read back the assigned syncVersion (all records got the same value)
-    const result = await d1.prepare(
-      `SELECT COALESCE(MAX(v), 0) AS v FROM (
-        SELECT MAX(sync_version) AS v FROM books
-        UNION ALL SELECT MAX(sync_version) AS v FROM highlights
-        UNION ALL SELECT MAX(sync_version) AS v FROM conversations
-        UNION ALL SELECT MAX(sync_version) AS v FROM messages
-      )`
-    ).first<{ v: number }>();
-    newSyncVersion = result?.v ?? 0;
+    newSyncVersion = nextVersion;
   } else {
     // No upserts -- return current max version across all tables
     const result = await c.env.DB.prepare(
@@ -302,6 +296,9 @@ syncRoutes.get("/pull", requireWorkerAuth, async (c) => {
   const userId = c.get("userId");
   const db = createDb(c.env.DB);
 
+  // NOTE: Deleted records (isDeleted = true) are intentionally NOT filtered out.
+  // They must be included in pull results so other devices learn about deletions
+  // and can apply the soft-delete locally.
   const changedBooks = await db
     .select()
     .from(books)
@@ -360,6 +357,7 @@ syncRoutes.get("/pull", requireWorkerAuth, async (c) => {
       .select()
       .from(messages)
       .where(gt(messages.syncVersion, sinceVersion))
+      .orderBy(asc(messages.createdAt))
       .all();
     changedMessages = allMessages.filter((m) => userConvIds.includes(m.conversationId));
   }
