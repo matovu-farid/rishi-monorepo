@@ -87,6 +87,8 @@ pub fn run() {
                 )?;
             }
             db::setup_database(app.handle())?;
+            // Check if the keyring backend is secure (Linux only)
+            commands::check_keyring_security();
             // Migrate auth secrets from plain-text store.json to OS keychain
             if let Err(e) = commands::migrate_auth_to_keychain(app.handle()) {
                 eprintln!("Keychain migration warning: {}", e);

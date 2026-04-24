@@ -58,6 +58,34 @@ fn keyring_delete(key: &str) -> Result<(), String> {
     }
 }
 
+/// Log a warning on startup if the keyring backend may store credentials in plaintext.
+/// Called once during app setup.
+pub fn check_keyring_security() {
+    #[cfg(target_os = "linux")]
+    {
+        match keyring::Entry::new(KEYRING_SERVICE, "__keyring_test__") {
+            Ok(entry) => {
+                // Try to detect the backend by checking if secret service is available
+                match entry.set_password("test") {
+                    Ok(_) => {
+                        let _ = entry.delete_credential();
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[security] WARNING: Keyring may use insecure storage on this system. \
+                             Auth tokens could be stored in plaintext. Error: {}",
+                            e
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[security] WARNING: Keyring unavailable: {}", e);
+            }
+        }
+    }
+}
+
 /// Migrate auth secrets from store.json to OS keychain (one-time, on app startup).
 pub fn migrate_auth_to_keychain(app: &tauri::AppHandle) -> Result<(), String> {
     let store = app.store("store.json").map_err(|e| e.to_string())?;
