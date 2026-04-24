@@ -54,6 +54,7 @@ export interface QueuedCommand {
 /** The __tauriCypress global injected by the Rust plugin */
 export interface TauriCypressGlobal {
   bridge: {
+    invoke: (cmd: string, args?: unknown, options?: unknown) => Promise<unknown>;
     mockCommand: (name: string, response: unknown) => void;
     interceptCommand: (
       name: string,
@@ -77,7 +78,6 @@ export interface TauriCypressGlobal {
     readonly history: DomSnapshot[];
   };
   __exec: (script: string, testId: string) => Promise<void>;
-  waitForReady(): Promise<void>;
 }
 
 declare global {

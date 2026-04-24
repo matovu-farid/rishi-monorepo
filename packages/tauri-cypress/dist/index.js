@@ -121,7 +121,7 @@ var bridge = {
     return getTauriCypress().snapshot.history;
   },
   invoke(cmd, args) {
-    return window.__TAURI_INTERNALS__.invoke(cmd, args);
+    return getTauriCypress().bridge.invoke(cmd, args);
   }
 };
 

@@ -51,6 +51,6 @@ export const bridge = {
   },
 
   invoke(cmd: string, args?: unknown): Promise<unknown> {
-    return window.__TAURI_INTERNALS__.invoke(cmd, args);
+    return getTauriCypress().bridge.invoke(cmd, args);
   },
 };
