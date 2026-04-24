@@ -165,7 +165,7 @@ export async function downloadBookFile(
   const tmpPath = `${destPath}.tmp`;
 
   // Ensure directory exists
-  await mkdir(`${dataDir}/books/${bookIntegerId}`, { recursive: true }).catch(() => {});
+  await mkdir(`${dataDir}/books/${bookIntegerId}`, { recursive: true }).catch((err) => console.warn('[file-sync] mkdir failed:', err));
 
   // Step 1: Write to a temporary file
   const bytes = new Uint8Array(await downloadRes.arrayBuffer());
@@ -178,7 +178,7 @@ export async function downloadBookFile(
     await rename(tmpPath, destPath);
   } catch (renameErr) {
     // Clean up the temp file on failure
-    await remove(tmpPath).catch(() => {});
+    await remove(tmpPath).catch((err) => console.warn('[file-sync] temp file cleanup failed:', err));
     throw new Error(`Failed to rename temp file to final path: ${renameErr}`);
   }
 

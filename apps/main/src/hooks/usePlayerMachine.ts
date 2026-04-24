@@ -68,7 +68,7 @@ export function usePlayerMachine(bookId: string) {
         if (machineState === "playing" || machineState === "loading") {
           for (const p of paragraphs) {
             if (p.text.trim()) {
-              void audioService.fetchAudio(bookId, p).catch(() => {});
+              void audioService.fetchAudio(bookId, p).catch((err) => console.warn('[player] audio prefetch failed:', err));
             }
           }
         }
@@ -84,7 +84,7 @@ export function usePlayerMachine(bookId: string) {
         if (machineState === "playing" || machineState === "loading") {
           for (const p of paragraphs) {
             if (p.text.trim()) {
-              void audioService.fetchAudio(bookId, p).catch(() => {});
+              void audioService.fetchAudio(bookId, p).catch((err) => console.warn('[player] next page prefetch failed:', err));
             }
           }
         }

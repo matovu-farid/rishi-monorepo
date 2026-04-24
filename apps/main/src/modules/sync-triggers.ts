@@ -14,6 +14,9 @@ let engine: SyncEngine | null = null;
 let syncStatus: SyncStatus = 'not-synced';
 let lastSyncAt: number | null = null;
 let intervalId: ReturnType<typeof setInterval> | null = null;
+let focusHandler: (() => void) | null = null;
+let onlineHandler: (() => void) | null = null;
+let offlineHandler: (() => void) | null = null;
 const listeners: Set<SyncStatusListener> = new Set();
 
 function notifyListeners() {
@@ -112,20 +115,15 @@ export function initDesktopSync(): void {
   engine = createSyncEngine({ adapter, apiFetch });
 
   // Sync on app focus
-  window.addEventListener('focus', () => {
-    void triggerSync();
-  });
+  focusHandler = () => { void triggerSync(); };
+  window.addEventListener('focus', focusHandler);
 
   // Online/offline detection
-  window.addEventListener('online', () => {
-    if (syncStatus === 'offline') {
-      void triggerSync();
-    }
-  });
-  window.addEventListener('offline', () => {
-    syncStatus = 'offline';
-    notifyListeners();
-  });
+  onlineHandler = () => { if (syncStatus === 'offline') void triggerSync(); };
+  window.addEventListener('online', onlineHandler);
+
+  offlineHandler = () => { syncStatus = 'offline'; notifyListeners(); };
+  window.addEventListener('offline', offlineHandler);
 
   // Periodic sync every 5 minutes
   intervalId = setInterval(() => {
@@ -143,6 +141,9 @@ export function destroyDesktopSync(): void {
     clearInterval(intervalId);
     intervalId = null;
   }
+  if (focusHandler) { window.removeEventListener('focus', focusHandler); focusHandler = null; }
+  if (onlineHandler) { window.removeEventListener('online', onlineHandler); onlineHandler = null; }
+  if (offlineHandler) { window.removeEventListener('offline', offlineHandler); offlineHandler = null; }
   engine = null;
 }
 

@@ -161,13 +161,13 @@ export class AudioService {
       for (let i = 1; i <= 5; i++) {
         const idx = currentIndex + i;
         if (idx < currentParagraphs.length) {
-          void this.fetchAudio(bookId, currentParagraphs[idx]).catch(() => {});
+          void this.fetchAudio(bookId, currentParagraphs[idx]).catch((err) => console.warn('[audio] prefetch current page failed:', err));
         }
       }
 
       // Always prefetch next page paragraphs so page transitions are seamless
       for (let i = 0; i < nextPageParagraphs.length; i++) {
-        void this.fetchAudio(bookId, nextPageParagraphs[i]).catch(() => {});
+        void this.fetchAudio(bookId, nextPageParagraphs[i]).catch((err) => console.warn('[audio] prefetch next page failed:', err));
       }
     }, delay);
   }

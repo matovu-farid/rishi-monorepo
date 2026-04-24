@@ -103,19 +103,19 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
     return () => {
       cancelled = true
       cleanupListeners()
-      invoke('cancel_scan').catch(() => {})
+      invoke('cancel_scan').catch((err) => console.warn('[scan] cancel on cleanup failed:', err))
     }
   }, [open, startScan, cleanupListeners])
 
   const handleModeChange = async (newMode: ScanMode) => {
     if (newMode === mode) return
     setMode(newMode)
-    await invoke('cancel_scan').catch(() => {})
+    await invoke('cancel_scan').catch((err) => console.warn('[scan] cancel on mode change failed:', err))
     void startScan(newMode)
   }
 
   const handleClose = async () => {
-    await invoke('cancel_scan').catch(() => {})
+    await invoke('cancel_scan').catch((err) => console.warn('[scan] cancel on close failed:', err))
     cleanupListeners()
     setBooks([])
     setFilter('')

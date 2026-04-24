@@ -130,7 +130,7 @@ useEpubStore.subscribe(
           index: p.cfiRange,
         }));
         usePlayerStore.getState().setNextPageParagraphs(mapped);
-      }).catch(() => {});
+      }).catch((err) => console.warn('[epub] next paragraph fetch failed:', err));
 
       void getPreviousViewParagraphs(r).then((prevParagraphs) => {
         const mapped = prevParagraphs.map((p) => ({
@@ -138,7 +138,7 @@ useEpubStore.subscribe(
           index: p.cfiRange,
         }));
         usePlayerStore.getState().setPrevPageParagraphs(mapped);
-      }).catch(() => {});
+      }).catch((err) => console.warn('[epub] prev paragraph fetch failed:', err));
     }, 50);
   },
   { equalityFn: (a, b) => a.rendition === b.rendition && a.location === b.location }
@@ -176,7 +176,7 @@ export function publishCurrentEpubParagraphs() {
         index: p.cfiRange,
       }));
       usePlayerStore.getState().setNextPageParagraphs(mapped);
-    }).catch(() => {});
+    }).catch((err) => console.warn('[epub] republish next paragraph fetch failed:', err));
 
     void getPreviousViewParagraphs(r).then((prevParagraphs) => {
       const mapped = prevParagraphs.map((p) => ({
@@ -184,7 +184,7 @@ export function publishCurrentEpubParagraphs() {
         index: p.cfiRange,
       }));
       usePlayerStore.getState().setPrevPageParagraphs(mapped);
-    }).catch(() => {});
+    }).catch((err) => console.warn('[epub] republish prev paragraph fetch failed:', err));
   }, 300);
 }
 

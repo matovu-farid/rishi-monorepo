@@ -74,7 +74,7 @@ export async function startSignInFlow(): Promise<void> {
       state: result.state,
       step: "sign_in_flow_started",
       data: JSON.stringify({ challengeLen: result.codeChallenge.length, url: url.slice(0, 120) }),
-    }).catch(() => {});
+    }).catch((err) => console.warn('[auth] debug log failed:', err));
     await openUrl(url);
   } catch (err) {
     useAuthStore.getState().setSigningIn(false);

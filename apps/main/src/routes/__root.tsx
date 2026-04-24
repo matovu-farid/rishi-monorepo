@@ -11,6 +11,7 @@ import { useHydrateAuth } from "@/hooks/useHydrateAuth";
 import { WelcomeModal } from "@/components/auth/WelcomeModal";
 import { SignInBanner } from "@/components/auth/SignInBanner";
 import { TourProvider } from "@/components/tutorial/TourProvider";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 
 export const Route = createRootRoute({
   component: () => <RootComponent />,
@@ -71,7 +72,9 @@ function RootComponent(): JSX.Element {
               <link key={cssObj.id} rel="stylesheet" href={cssObj.href} />
             )
         )} */}
-      <Outlet />
+      <ErrorBoundary>
+        <Outlet />
+      </ErrorBoundary>
       <WelcomeModal />
       <SignInBanner />
       <TourProvider />

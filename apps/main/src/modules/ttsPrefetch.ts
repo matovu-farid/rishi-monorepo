@@ -21,7 +21,7 @@ const PREFETCH_PRIORITY = 0;
 export async function prefetchTTSForBooks(books: Book[]) {
   for (const book of books) {
     // Don't block the loop — fire-and-forget per book
-    void prefetchSingleBook(book).catch(() => {});
+    void prefetchSingleBook(book).catch((err) => console.warn('[tts-prefetch] prefetch failed:', err));
   }
 }
 
