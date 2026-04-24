@@ -1,4 +1,5 @@
 import { createSyncEngine, type SyncEngine } from '@rishi/shared/sync-engine';
+import { invoke } from '@tauri-apps/api/core';
 import { DesktopSyncAdapter } from './sync-adapter';
 import { getAuthToken } from './auth';
 
@@ -41,7 +42,7 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   };
 
   if (token === "dev-placeholder-token") {
-    const secret = import.meta.env.VITE_DEV_BYPASS_SECRET;
+    const secret = await invoke<string | null>("get_dev_bypass_secret");
     if (secret) {
       headers['X-Dev-Bypass'] = secret;
     } else {
@@ -55,10 +56,29 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  return fetch(`${WORKER_URL}${path}`, {
-    ...init,
-    headers,
-  });
+  const syncController = new AbortController();
+  const syncTimeout = setTimeout(() => syncController.abort(), 30_000);
+
+  // If caller provided a signal, forward its abort to our controller
+  if (init?.signal) {
+    init.signal.addEventListener('abort', () => syncController.abort(), { once: true });
+  }
+
+  try {
+    const response = await fetch(`${WORKER_URL}${path}`, {
+      ...init,
+      headers,
+      signal: syncController.signal,
+    });
+    return response;
+  } catch (err) {
+    if (syncController.signal.aborted && !(init?.signal?.aborted)) {
+      throw new Error(`Sync request to ${path} timed out after 30 seconds`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(syncTimeout);
+  }
 }
 
 export async function triggerSync(): Promise<void> {

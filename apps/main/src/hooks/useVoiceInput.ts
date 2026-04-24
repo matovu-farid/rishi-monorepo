@@ -106,14 +106,27 @@ export function useVoiceInput(): UseVoiceInputReturn {
         try {
           // POST to Worker STT endpoint
           const token = await getAuthToken();
-          const response = await fetch(`${WORKER_URL}/api/audio/transcribe`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': mimeTypeRef.current,
-            },
-            body: blob,
-          });
+          const transcribeController = new AbortController();
+          const transcribeTimeout = setTimeout(() => transcribeController.abort(), 30_000);
+          let response: Response;
+          try {
+            response = await fetch(`${WORKER_URL}/api/audio/transcribe`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': mimeTypeRef.current,
+              },
+              body: blob,
+              signal: transcribeController.signal,
+            });
+          } catch (fetchErr) {
+            if (transcribeController.signal.aborted) {
+              throw new Error('Transcription request timed out after 30 seconds');
+            }
+            throw fetchErr;
+          } finally {
+            clearTimeout(transcribeTimeout);
+          }
 
           if (!response.ok) {
             throw new Error(`Transcription failed: ${response.status}`);

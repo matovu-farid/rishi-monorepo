@@ -135,6 +135,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::is_dev,
+            commands::get_dev_bypass_secret,
             commands::unzip,
             commands::get_book_data,
             commands::get_pdf_data,

@@ -123,11 +123,23 @@ export async function downloadBookFile(
     const arrayBuffer = await downloadRes.arrayBuffer()
     const bytes = new Uint8Array(arrayBuffer)
 
-    // Write to local file
-    const destFile = new File(bookDir, `book.${format}`)
-    destFile.write(bytes)
+    // Step 1: Write to a temporary file
+    const tmpFile = new File(bookDir, `book.${format}.tmp`)
+    tmpFile.write(bytes)
 
-    // Update the book record with the local filePath
+    // Step 2: Atomically move temp file to final path.
+    // File.move() uses OS-level rename which is atomic on most filesystems,
+    // so the destination either has the complete file or doesn't exist.
+    const destFile = new File(bookDir, `book.${format}`)
+    try {
+      tmpFile.move(destFile)
+    } catch (moveErr) {
+      // Clean up the temp file on failure
+      try { tmpFile.delete() } catch { /* ignore cleanup errors */ }
+      throw new Error(`Failed to move temp file to final path: ${moveErr}`)
+    }
+
+    // Step 3: Update DB only after the file is safely in place
     db.update(books)
       .set({ filePath: destFile.uri })
       .where(eq(books.id, bookId))

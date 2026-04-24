@@ -151,20 +151,33 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
 
       // 7. Call Worker LLM endpoint
       const token = await getAuthToken();
-      const response = await fetch(`${WORKER_URL}/api/text/completions`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          input: [
-            { role: 'system', content: systemPrompt },
-            ...recentMessages.map((m) => ({ role: m.role, content: m.content })),
-            { role: 'user', content: text },
-          ],
-        }),
-      });
+      const completionController = new AbortController();
+      const completionTimeout = setTimeout(() => completionController.abort(), 60_000);
+      let response: Response;
+      try {
+        response = await fetch(`${WORKER_URL}/api/text/completions`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            input: [
+              { role: 'system', content: systemPrompt },
+              ...recentMessages.map((m) => ({ role: m.role, content: m.content })),
+              { role: 'user', content: text },
+            ],
+          }),
+          signal: completionController.signal,
+        });
+      } catch (err) {
+        if (completionController.signal.aborted) {
+          throw new Error('LLM request timed out after 60 seconds');
+        }
+        throw err;
+      } finally {
+        clearTimeout(completionTimeout);
+      }
 
       if (!response.ok) {
         throw new Error(`LLM request failed: ${response.status}`);

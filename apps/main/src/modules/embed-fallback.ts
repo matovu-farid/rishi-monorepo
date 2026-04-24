@@ -6,14 +6,27 @@ const WORKER_URL = 'https://rishi-worker.faridmato90.workers.dev';
 
 async function embedTextsOnServer(texts: string[]): Promise<number[][]> {
   const token = await getAuthToken();
-  const response = await fetch(`${WORKER_URL}/api/embed`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ texts }),
-  });
+  const embedController = new AbortController();
+  const embedTimeout = setTimeout(() => embedController.abort(), 30_000);
+  let response: Response;
+  try {
+    response = await fetch(`${WORKER_URL}/api/embed`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ texts }),
+      signal: embedController.signal,
+    });
+  } catch (err) {
+    if (embedController.signal.aborted) {
+      throw new Error('Embed request timed out after 30 seconds');
+    }
+    throw err;
+  } finally {
+    clearTimeout(embedTimeout);
+  }
   if (!response.ok) throw new Error(`Server embed failed: ${response.status}`);
   const data = (await response.json()) as { embeddings: number[][] };
   return data.embeddings;
