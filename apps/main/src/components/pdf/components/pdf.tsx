@@ -379,6 +379,7 @@ export function PdfView({
                     } else {
                       pageRefs.current.delete(virtualItem.index);
                     }
+                    virtualizer.measureElement(node);
                   }}
                   className="absolute left-0 top-0 flex w-full justify-center"
                   style={{
@@ -386,9 +387,9 @@ export function PdfView({
                   }}
                 >
                   <div
-                    className="bg-white shadow-lg overflow-hidden relative"
+                    className="bg-white shadow-lg relative"
                     data-page-number={virtualItem.index + 1}
-                    style={{ width: pageWidth ?? "auto", height: virtualItem.size }}
+                    style={{ width: pageWidth ?? "auto" }}
                   >
                     <PageComponent
                       key={`page-${virtualItem.index + 1}`}
