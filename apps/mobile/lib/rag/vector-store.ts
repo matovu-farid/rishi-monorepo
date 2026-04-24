@@ -100,8 +100,9 @@ export function isBookEmbedded(bookId: string): boolean {
  * Delete all chunks and vectors for a book (e.g., before re-embedding).
  */
 export function deleteBookChunks(bookId: string): void {
-  rawDb.execSync(
-    `DELETE FROM chunk_vectors WHERE rowid IN (SELECT rowid FROM chunks WHERE book_id = '${bookId}')`
+  rawDb.runSync(
+    'DELETE FROM chunk_vectors WHERE rowid IN (SELECT rowid FROM chunks WHERE book_id = ?)',
+    [bookId]
   )
-  rawDb.execSync(`DELETE FROM chunks WHERE book_id = '${bookId}'`)
+  rawDb.runSync('DELETE FROM chunks WHERE book_id = ?', [bookId])
 }
