@@ -1,7 +1,7 @@
 use serde_json::json;
 
 pub async fn get_llm_response(input: &str, token: &str) -> Result<String, reqwest::Error> {
-    let client = reqwest::Client::new();
+    let client = crate::commands::http_client();
     let map = json!({ "input": input });
     let response = client
         .post(format!("{}/api/text/completions", crate::WORKER_URL))

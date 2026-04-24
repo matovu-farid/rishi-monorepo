@@ -28,6 +28,24 @@ impl r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error>
         diesel::sql_query("PRAGMA journal_mode=WAL;")
             .execute(conn)
             .map_err(diesel::r2d2::Error::QueryError)?;
+
+        // Verify WAL mode actually took effect
+        #[derive(diesel::QueryableByName)]
+        struct PragmaResult {
+            #[diesel(sql_type = diesel::sql_types::Text)]
+            journal_mode: String,
+        }
+        let mode = diesel::sql_query("PRAGMA journal_mode;")
+            .get_result::<PragmaResult>(conn)
+            .map(|r| r.journal_mode)
+            .unwrap_or_default();
+        if mode != "wal" {
+            eprintln!(
+                "[db] WARNING: WAL mode not enabled (got: {}). Concurrent writes may fail.",
+                mode
+            );
+        }
+
         Ok(())
     }
 }

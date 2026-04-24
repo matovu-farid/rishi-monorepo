@@ -53,6 +53,9 @@ impl VectorStore {
         })
     }
     pub fn init(&mut self, directory: PathBuf, dim: usize, basename: &str) -> anyhow::Result<()> {
+        // Flush any queued vectors from previous book to prevent cross-book writes
+        self.add_vector_queue.clear();
+
         fs::create_dir_all(&directory)?;
         self.directory = directory;
 

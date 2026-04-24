@@ -1,7 +1,7 @@
 use serde_json::json;
 
 pub async fn tts(text: &str, token: &str) -> anyhow::Result<Vec<u8>> {
-    let client = reqwest::Client::new();
+    let client = crate::commands::http_client();
 
     let map = json!({
         "voice": "alloy",

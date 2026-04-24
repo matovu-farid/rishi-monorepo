@@ -151,8 +151,13 @@ pub async fn process_job(
     sql::process_job(page_number, book_id, page_data, &app_data_dir).await
 }
 
+/// Limits the number of concurrent in-flight auth debug requests so that
+/// a flood of auth events cannot spawn unbounded background tasks.
+static AUTH_DEBUG_SEMAPHORE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(10);
+
 /// Best-effort debug log to the worker's `/api/auth/debug` endpoint.
 /// Fires and forgets via tokio::spawn — never blocks the auth flow.
+/// Bounded by AUTH_DEBUG_SEMAPHORE to prevent unbounded task spawning.
 pub fn log_auth_debug_fn(state: &str, source: &str, step: &str, data: Option<serde_json::Value>, error: Option<&str>) {
     let worker_url = crate::WORKER_URL;
     let url = format!("{}/api/auth/debug", worker_url);
@@ -168,6 +173,10 @@ pub fn log_auth_debug_fn(state: &str, source: &str, step: &str, data: Option<ser
         payload["error"] = json!(e);
     }
     tokio::spawn(async move {
+        let _permit = match AUTH_DEBUG_SEMAPHORE.try_acquire() {
+            Ok(permit) => permit,
+            Err(_) => return, // Too many concurrent debug requests, drop this one
+        };
         let client = http_client();
         let _ = client.post(&url).json(&payload).send().await;
     });
@@ -450,6 +459,31 @@ pub fn get_state(app: tauri::AppHandle) -> Result<OAuthStateResponse, String> {
     use rand::RngCore;
     use uuid::Uuid;
 
+    let store = app.store("store.json").map_err(|e| e.to_string())?;
+
+    // Check if an auth flow is already in progress (< 5 minutes old)
+    if let Some(created_at) = store.get("auth_state_created_at") {
+        if let Some(ts) = created_at.as_u64() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            if now.saturating_sub(ts) < 5 * 60 * 1000 {
+                // Return existing state instead of generating new one
+                if let (Some(state), Some(challenge)) =
+                    (store.get("auth_state"), store.get("auth_code_challenge"))
+                {
+                    if let (Some(s), Some(c)) = (state.as_str(), challenge.as_str()) {
+                        return Ok(OAuthStateResponse {
+                            state: s.to_string(),
+                            code_challenge: c.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     // Generate a random state UUID
     let state = Uuid::new_v4().to_string();
 
@@ -458,22 +492,22 @@ pub fn get_state(app: tauri::AppHandle) -> Result<OAuthStateResponse, String> {
     rand::thread_rng().fill_bytes(&mut verifier_bytes);
     let code_verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);
 
-    // Persist both in the Tauri store so they survive restarts
-    let store = app.store("store.json").map_err(|e| e.to_string())?;
+    // Compute code_challenge = base64url(SHA-256(code_verifier)) per RFC 7636
+    // so the verifier never leaves the Rust process.
+    use sha2::{Sha256, Digest};
+    let hash = Sha256::digest(code_verifier.as_bytes());
+    let code_challenge = URL_SAFE_NO_PAD.encode(&hash);
+
+    // Persist state, verifier, challenge, and timestamp in the Tauri store
     store.set("auth_state", json!(state));
     store.set("auth_code_verifier", json!(code_verifier));
+    store.set("auth_code_challenge", json!(code_challenge));
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_millis() as u64;
     store.set("auth_state_created_at", json!(now_ms));
     store.save().map_err(|e| e.to_string())?;
-
-    // Compute code_challenge = base64url(SHA-256(code_verifier)) per RFC 7636
-    // so the verifier never leaves the Rust process.
-    use sha2::{Sha256, Digest};
-    let hash = Sha256::digest(code_verifier.as_bytes());
-    let code_challenge = URL_SAFE_NO_PAD.encode(hash);
 
     Ok(OAuthStateResponse { state, code_challenge })
 }
