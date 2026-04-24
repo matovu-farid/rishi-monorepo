@@ -53,7 +53,14 @@ impl VectorStore {
         })
     }
     pub fn init(&mut self, directory: PathBuf, dim: usize, basename: &str) -> anyhow::Result<()> {
-        // Flush any queued vectors from previous book to prevent cross-book writes
+        // Flush any queued vectors for the CURRENT book before switching
+        if self.is_initialized && !self.add_vector_queue.is_empty() {
+            if let Err(e) = self.process_vectors() {
+                eprintln!("[vectordb] Failed to flush pending vectors before reinit: {}", e);
+            }
+        }
+
+        // Clear any remaining items (if flush failed) to prevent cross-book writes
         self.add_vector_queue.clear();
 
         fs::create_dir_all(&directory)?;

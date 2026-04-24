@@ -546,6 +546,66 @@ pub async fn signout(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Proactively refresh the auth token if it is within 1 day of expiry.
+/// Called before sync to avoid hitting AUTH_EXPIRED mid-sync.
+/// No-ops if the token is still fresh or if running in dev mode.
+#[tauri::command]
+pub async fn refresh_auth_token(_app: tauri::AppHandle) -> Result<(), String> {
+    // Skip in dev mode
+    let token = match keyring_get("auth_token")? {
+        Some(t) if t == "dev-placeholder-token" => return Ok(()),
+        Some(t) => t,
+        None if tauri::is_dev() => return Ok(()),
+        None => return Err("Not authenticated".to_string()),
+    };
+
+    // Check if token expires within 1 day — if not, skip refresh
+    if let Some(exp_str) = keyring_get("auth_expires_at")? {
+        if let Ok(expires_at) = exp_str.parse::<u64>() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_secs();
+            let one_day = 60 * 60 * 24;
+            if expires_at > now + one_day {
+                // Token is still fresh (more than 1 day until expiry)
+                return Ok(());
+            }
+            if now > expires_at {
+                // Token already expired — refresh endpoint requires a valid token
+                return Err("Token already expired".to_string());
+            }
+        }
+    }
+
+    let worker_url = crate::WORKER_URL;
+    let url = format!("{}/api/auth/refresh", worker_url);
+    let client = http_client();
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Token refresh request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Token refresh failed ({}): {}", status, body));
+    }
+
+    let data: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    let new_token = data["token"]
+        .as_str()
+        .ok_or("Missing token in refresh response")?;
+    let new_exp = data["expiresAt"].as_i64().unwrap_or(0);
+
+    keyring_set("auth_token", new_token)?;
+    keyring_set("auth_expires_at", &new_exp.to_string())?;
+
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_user_from_store(app: tauri::AppHandle) -> Result<User, String> {
     let store = app.store("store.json").map_err(|e| e.to_string())?;

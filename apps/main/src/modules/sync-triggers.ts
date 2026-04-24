@@ -104,6 +104,15 @@ export async function triggerSync(): Promise<void> {
   syncStatus = 'syncing';
   notifyListeners();
 
+  // Proactively refresh the auth token if it's within 1 day of expiry.
+  // This runs before sync so we avoid AUTH_EXPIRED errors mid-sync.
+  // Failures are non-fatal — we proceed with the existing token.
+  try {
+    await invoke('refresh_auth_token');
+  } catch {
+    // Refresh is best-effort; token may still be valid
+  }
+
   try {
     await engine.sync();
     syncStatus = 'synced';

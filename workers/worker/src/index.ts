@@ -576,6 +576,34 @@ app.post("/api/auth/revoke", async (c) => {
   }
 });
 
+// ─── POST /api/auth/refresh ─────────────────────────────────────────────────
+// Refresh a valid (but possibly near-expiry) JWT with a fresh one.
+// The old token is revoked to prevent reuse.
+app.post("/api/auth/refresh", requireWorkerAuth, async (c) => {
+  try {
+    const userId = c.get("userId");
+    const oldToken = c.req.header("Authorization")!.slice(7);
+
+    // Issue new token
+    const iat = Math.floor(Date.now() / 1000);
+    const exp = iat + 60 * 60 * 24 * 7; // 7 days
+    const token = await jwt.sign({ sub: userId, iat, exp }, c.env.JWT_SECRET);
+
+    // Revoke old token to prevent reuse
+    const redis = Redis.fromEnv(c.env);
+    const decoded = jwt.decode(oldToken);
+    const oldExp = (decoded?.payload as { exp?: number })?.exp || 0;
+    const now = Math.floor(Date.now() / 1000);
+    const ttl = oldExp > now ? oldExp - now : 60 * 60 * 24 * 7;
+    await redis.set(`auth:revoked:${oldToken}`, "1", { ex: ttl });
+
+    return c.json({ token, expiresAt: exp });
+  } catch (error) {
+    console.error("Token refresh failed:", error instanceof Error ? error.message : "unknown");
+    return c.json({ error: "Token refresh failed" }, 500);
+  }
+});
+
 // ─── Protected routes ─────────────────────────────────────────────────────────
 app.get("/api/redis-test", requireWorkerAuth, async (c) => {
   const redis = Redis.fromEnv(c.env);

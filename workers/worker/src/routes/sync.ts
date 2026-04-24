@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, gt, and, max, asc, inArray } from "drizzle-orm";
+import { eq, gt, and, max, asc, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { CloudflareBindings } from "../index";
 import { requireWorkerAuth } from "../index";
@@ -29,260 +29,248 @@ syncRoutes.post("/push", requireWorkerAuth, async (c) => {
   const userId = c.get("userId");
   const db = createDb(c.env.DB);
 
-  const conflicts: Array<Record<string, unknown>> = [];
-  const upsertedBookIds: string[] = [];
-  const upsertedHighlightIds: string[] = [];
+  const result = await db.transaction(async (tx) => {
+    const conflicts: Array<Record<string, unknown>> = [];
+    const upsertedBookIds: string[] = [];
+    const upsertedHighlightIds: string[] = [];
 
-  // ── Books upsert loop ──────────────────────────────────────────────────────
-  for (const book of body.changes.books) {
-    // Strip local-only fields -- these MUST NOT be written to D1
-    const {
-      filePath,
-      coverPath,
-      isDirty,
-      ...serverFields
-    } = book as Record<string, unknown>;
+    // ── Books upsert loop ──────────────────────────────────────────────────────
+    for (const book of body.changes.books) {
+      // Strip local-only fields -- these MUST NOT be written to D1
+      const {
+        filePath,
+        coverPath,
+        isDirty,
+        ...serverFields
+      } = book as Record<string, unknown>;
 
-    const bookId = serverFields.id as string;
-    if (!bookId) continue;
+      const bookId = serverFields.id as string;
+      if (!bookId) continue;
 
-    // Look up existing record scoped to this user
-    const existing = await db
-      .select()
-      .from(books)
-      .where(and(eq(books.id, bookId), eq(books.userId, userId)))
-      .get();
+      // Look up existing record scoped to this user
+      const existing = await tx
+        .select()
+        .from(books)
+        .where(and(eq(books.id, bookId), eq(books.userId, userId)))
+        .get();
 
-    const pushedUpdatedAt = (serverFields.updatedAt as number) ?? 0;
+      const pushedUpdatedAt = (serverFields.updatedAt as number) ?? 0;
 
-    if (!existing) {
-      // INSERT new record
-      await db.insert(books).values({
+      if (!existing) {
+        // INSERT new record
+        await tx.insert(books).values({
+          ...serverFields,
+          id: bookId,
+          userId,
+          // Ensure filePath has a default for the NOT NULL constraint in schema
+          filePath: "",
+          updatedAt: pushedUpdatedAt || Date.now(),
+          createdAt: (serverFields.createdAt as number) || Date.now(),
+        } as typeof books.$inferInsert);
+        upsertedBookIds.push(bookId);
+      } else if (pushedUpdatedAt > (existing.updatedAt ?? 0)) {
+        // Client is newer -- UPDATE (excluding filePath/coverPath)
+        const { id, createdAt, ...updateFields } = serverFields;
+        await tx
+          .update(books)
+          .set({
+            ...updateFields,
+            filePath: existing.filePath, // Preserve server's existing value
+            coverPath: existing.coverPath, // Preserve server's existing value
+            updatedAt: pushedUpdatedAt,
+          } as Partial<typeof books.$inferInsert>)
+          .where(and(eq(books.id, bookId), eq(books.userId, userId)));
+        upsertedBookIds.push(bookId);
+      } else {
+        // Server is newer -- conflict
+        conflicts.push(existing as unknown as Record<string, unknown>);
+      }
+    }
+
+    // ── Highlights upsert loop ─────────────────────────────────────────────────
+    for (const highlight of body.changes.highlights ?? []) {
+      const { isDirty, ...serverFields } = highlight as Record<string, unknown>;
+      const highlightId = serverFields.id as string;
+      if (!highlightId) continue;
+
+      const existing = await tx
+        .select()
+        .from(highlights)
+        .where(and(eq(highlights.id, highlightId), eq(highlights.userId, userId)))
+        .get();
+
+      const pushedUpdatedAt = (serverFields.updatedAt as number) ?? 0;
+
+      if (!existing) {
+        // INSERT new highlight (union merge: always accept new highlights)
+        await tx.insert(highlights).values({
+          ...serverFields,
+          id: highlightId,
+          userId,
+          updatedAt: pushedUpdatedAt || Date.now(),
+          createdAt: (serverFields.createdAt as number) || Date.now(),
+        } as typeof highlights.$inferInsert);
+        upsertedHighlightIds.push(highlightId);
+      } else if (pushedUpdatedAt > (existing.updatedAt ?? 0)) {
+        // Client is newer -- UPDATE (LWW by updatedAt)
+        const { id, createdAt, ...updateFields } = serverFields;
+        await tx
+          .update(highlights)
+          .set({
+            ...updateFields,
+            updatedAt: pushedUpdatedAt,
+          } as Partial<typeof highlights.$inferInsert>)
+          .where(and(eq(highlights.id, highlightId), eq(highlights.userId, userId)));
+        upsertedHighlightIds.push(highlightId);
+      } else {
+        // Server is newer -- return server version as conflict (union merge: never delete)
+        conflicts.push(existing as unknown as Record<string, unknown>);
+      }
+    }
+
+    // ── Conversations upsert loop (LWW) ──────────────────────────────────────
+    const upsertedConversationIds: string[] = [];
+
+    for (const conv of body.changes.conversations ?? []) {
+      const { isDirty, ...serverFields } = conv as Record<string, unknown>;
+      const convId = serverFields.id as string;
+      if (!convId) continue;
+
+      const existing = await tx
+        .select()
+        .from(conversations)
+        .where(and(eq(conversations.id, convId), eq(conversations.userId, userId)))
+        .get();
+
+      const pushedUpdatedAt = (serverFields.updatedAt as number) ?? 0;
+
+      if (!existing) {
+        await tx.insert(conversations).values({
+          ...serverFields,
+          id: convId,
+          userId,
+          updatedAt: pushedUpdatedAt || Date.now(),
+          createdAt: (serverFields.createdAt as number) || Date.now(),
+        } as typeof conversations.$inferInsert);
+        upsertedConversationIds.push(convId);
+      } else if (pushedUpdatedAt > (existing.updatedAt ?? 0)) {
+        const { id, createdAt, ...updateFields } = serverFields;
+        await tx
+          .update(conversations)
+          .set({
+            ...updateFields,
+            updatedAt: pushedUpdatedAt,
+          } as Partial<typeof conversations.$inferInsert>)
+          .where(and(eq(conversations.id, convId), eq(conversations.userId, userId)));
+        upsertedConversationIds.push(convId);
+      } else {
+        conflicts.push(existing as unknown as Record<string, unknown>);
+      }
+    }
+
+    // ── Messages upsert loop (append-only) ─────────────────────────────────
+    const upsertedMessageIds: string[] = [];
+
+    for (const msg of body.changes.messages ?? []) {
+      const { isDirty, ...serverFields } = msg as Record<string, unknown>;
+      const msgId = serverFields.id as string;
+      if (!msgId) continue;
+
+      const existing = await tx
+        .select()
+        .from(messages)
+        .where(eq(messages.id, msgId))
+        .get();
+
+      if (existing) {
+        // Append-only: never update existing messages, skip entirely
+        continue;
+      }
+
+      // Verify the parent conversation belongs to this user before inserting
+      const convId = serverFields.conversationId as string;
+      if (!convId) continue;
+
+      const parentConv = await tx
+        .select({ userId: conversations.userId })
+        .from(conversations)
+        .where(and(eq(conversations.id, convId), eq(conversations.userId, userId)))
+        .get();
+
+      if (!parentConv) {
+        // Conversation doesn't exist or doesn't belong to this user -- skip
+        continue;
+      }
+
+      // New message -- insert (userId verified via conversation ownership)
+      await tx.insert(messages).values({
         ...serverFields,
-        id: bookId,
-        userId,
-        // Ensure filePath has a default for the NOT NULL constraint in schema
-        filePath: "",
-        updatedAt: pushedUpdatedAt || Date.now(),
+        id: msgId,
+        updatedAt: (serverFields.updatedAt as number) || Date.now(),
         createdAt: (serverFields.createdAt as number) || Date.now(),
-      } as typeof books.$inferInsert);
-      upsertedBookIds.push(bookId);
-    } else if (pushedUpdatedAt > (existing.updatedAt ?? 0)) {
-      // Client is newer -- UPDATE (excluding filePath/coverPath)
-      const { id, createdAt, ...updateFields } = serverFields;
-      await db
-        .update(books)
-        .set({
-          ...updateFields,
-          filePath: existing.filePath, // Preserve server's existing value
-          coverPath: existing.coverPath, // Preserve server's existing value
-          updatedAt: pushedUpdatedAt,
-        } as Partial<typeof books.$inferInsert>)
-        .where(and(eq(books.id, bookId), eq(books.userId, userId)));
-      upsertedBookIds.push(bookId);
+      } as typeof messages.$inferInsert);
+      upsertedMessageIds.push(msgId);
+    }
+
+    // ── Assign syncVersion to all upserted records (inside transaction) ────
+    const totalUpserted = upsertedBookIds.length + upsertedHighlightIds.length + upsertedConversationIds.length + upsertedMessageIds.length;
+    let newSyncVersion = 0;
+
+    if (totalUpserted > 0) {
+      // Compute the next version ONCE inside the transaction to guarantee all
+      // records in this push get the same monotonically increasing version
+      // number. The transaction isolation prevents concurrent pushes from
+      // reading the same MAX and assigning duplicate versions.
+      const nextVersionResult = await tx.get<{ next_version: number }>(
+        sql`SELECT COALESCE(MAX(v), 0) + 1 AS next_version FROM (
+          SELECT MAX(sync_version) AS v FROM books
+          UNION ALL SELECT MAX(sync_version) AS v FROM highlights
+          UNION ALL SELECT MAX(sync_version) AS v FROM conversations
+          UNION ALL SELECT MAX(sync_version) AS v FROM messages
+        )`
+      );
+      const nextVersion = nextVersionResult?.next_version ?? 1;
+
+      // Update all upserted books
+      for (const id of upsertedBookIds) {
+        await tx.run(sql`UPDATE books SET sync_version = ${nextVersion}, is_dirty = 0 WHERE id = ${id}`);
+      }
+
+      // Update all upserted highlights
+      for (const id of upsertedHighlightIds) {
+        await tx.run(sql`UPDATE highlights SET sync_version = ${nextVersion}, is_dirty = 0 WHERE id = ${id}`);
+      }
+
+      // Update all upserted conversations
+      for (const id of upsertedConversationIds) {
+        await tx.run(sql`UPDATE conversations SET sync_version = ${nextVersion}, is_dirty = 0 WHERE id = ${id}`);
+      }
+
+      // Update all upserted messages
+      for (const id of upsertedMessageIds) {
+        await tx.run(sql`UPDATE messages SET sync_version = ${nextVersion}, is_dirty = 0 WHERE id = ${id}`);
+      }
+
+      newSyncVersion = nextVersion;
     } else {
-      // Server is newer -- conflict
-      conflicts.push(existing as unknown as Record<string, unknown>);
-    }
-  }
-
-  // ── Highlights upsert loop ─────────────────────────────────────────────────
-  for (const highlight of body.changes.highlights ?? []) {
-    const { isDirty, ...serverFields } = highlight as Record<string, unknown>;
-    const highlightId = serverFields.id as string;
-    if (!highlightId) continue;
-
-    const existing = await db
-      .select()
-      .from(highlights)
-      .where(and(eq(highlights.id, highlightId), eq(highlights.userId, userId)))
-      .get();
-
-    const pushedUpdatedAt = (serverFields.updatedAt as number) ?? 0;
-
-    if (!existing) {
-      // INSERT new highlight (union merge: always accept new highlights)
-      await db.insert(highlights).values({
-        ...serverFields,
-        id: highlightId,
-        userId,
-        updatedAt: pushedUpdatedAt || Date.now(),
-        createdAt: (serverFields.createdAt as number) || Date.now(),
-      } as typeof highlights.$inferInsert);
-      upsertedHighlightIds.push(highlightId);
-    } else if (pushedUpdatedAt > (existing.updatedAt ?? 0)) {
-      // Client is newer -- UPDATE (LWW by updatedAt)
-      const { id, createdAt, ...updateFields } = serverFields;
-      await db
-        .update(highlights)
-        .set({
-          ...updateFields,
-          updatedAt: pushedUpdatedAt,
-        } as Partial<typeof highlights.$inferInsert>)
-        .where(and(eq(highlights.id, highlightId), eq(highlights.userId, userId)));
-      upsertedHighlightIds.push(highlightId);
-    } else {
-      // Server is newer -- return server version as conflict (union merge: never delete)
-      conflicts.push(existing as unknown as Record<string, unknown>);
-    }
-  }
-
-  // ── Conversations upsert loop (LWW) ──────────────────────────────────────
-  const upsertedConversationIds: string[] = [];
-
-  for (const conv of body.changes.conversations ?? []) {
-    const { isDirty, ...serverFields } = conv as Record<string, unknown>;
-    const convId = serverFields.id as string;
-    if (!convId) continue;
-
-    const existing = await db
-      .select()
-      .from(conversations)
-      .where(and(eq(conversations.id, convId), eq(conversations.userId, userId)))
-      .get();
-
-    const pushedUpdatedAt = (serverFields.updatedAt as number) ?? 0;
-
-    if (!existing) {
-      await db.insert(conversations).values({
-        ...serverFields,
-        id: convId,
-        userId,
-        updatedAt: pushedUpdatedAt || Date.now(),
-        createdAt: (serverFields.createdAt as number) || Date.now(),
-      } as typeof conversations.$inferInsert);
-      upsertedConversationIds.push(convId);
-    } else if (pushedUpdatedAt > (existing.updatedAt ?? 0)) {
-      const { id, createdAt, ...updateFields } = serverFields;
-      await db
-        .update(conversations)
-        .set({
-          ...updateFields,
-          updatedAt: pushedUpdatedAt,
-        } as Partial<typeof conversations.$inferInsert>)
-        .where(and(eq(conversations.id, convId), eq(conversations.userId, userId)));
-      upsertedConversationIds.push(convId);
-    } else {
-      conflicts.push(existing as unknown as Record<string, unknown>);
-    }
-  }
-
-  // ── Messages upsert loop (append-only) ─────────────────────────────────
-  const upsertedMessageIds: string[] = [];
-
-  for (const msg of body.changes.messages ?? []) {
-    const { isDirty, ...serverFields } = msg as Record<string, unknown>;
-    const msgId = serverFields.id as string;
-    if (!msgId) continue;
-
-    const existing = await db
-      .select()
-      .from(messages)
-      .where(eq(messages.id, msgId))
-      .get();
-
-    if (existing) {
-      // Append-only: never update existing messages, skip entirely
-      continue;
-    }
-
-    // Verify the parent conversation belongs to this user before inserting
-    const convId = serverFields.conversationId as string;
-    if (!convId) continue;
-
-    const parentConv = await db
-      .select({ userId: conversations.userId })
-      .from(conversations)
-      .where(and(eq(conversations.id, convId), eq(conversations.userId, userId)))
-      .get();
-
-    if (!parentConv) {
-      // Conversation doesn't exist or doesn't belong to this user -- skip
-      continue;
-    }
-
-    // New message -- insert (userId verified via conversation ownership)
-    await db.insert(messages).values({
-      ...serverFields,
-      id: msgId,
-      updatedAt: (serverFields.updatedAt as number) || Date.now(),
-      createdAt: (serverFields.createdAt as number) || Date.now(),
-    } as typeof messages.$inferInsert);
-    upsertedMessageIds.push(msgId);
-  }
-
-  // ── Assign syncVersion to all upserted records (atomic via D1 batch) ────
-  const totalUpserted = upsertedBookIds.length + upsertedHighlightIds.length + upsertedConversationIds.length + upsertedMessageIds.length;
-  let newSyncVersion = 0;
-
-  if (totalUpserted > 0) {
-    // Compute the next version ONCE before the batch to guarantee all records
-    // in this push get the same monotonically increasing version number.
-    // This prevents concurrent pushes from assigning duplicate versions via
-    // per-record subqueries that could read the same MAX.
-    const d1 = c.env.DB;
-
-    const nextVersionResult = await d1.prepare(
-      `SELECT COALESCE(MAX(v), 0) + 1 AS next_version FROM (
-        SELECT MAX(sync_version) AS v FROM books
-        UNION ALL SELECT MAX(sync_version) AS v FROM highlights
-        UNION ALL SELECT MAX(sync_version) AS v FROM conversations
-        UNION ALL SELECT MAX(sync_version) AS v FROM messages
-      )`
-    ).first<{ next_version: number }>();
-    const nextVersion = nextVersionResult?.next_version ?? 1;
-
-    const batchStatements: D1PreparedStatement[] = [];
-
-    // Update all upserted books
-    for (const id of upsertedBookIds) {
-      batchStatements.push(
-        d1.prepare(`UPDATE books SET sync_version = ?, is_dirty = 0 WHERE id = ?`).bind(nextVersion, id)
+      // No upserts -- return current max version across all tables
+      const versionResult = await tx.get<{ v: number }>(
+        sql`SELECT COALESCE(MAX(v), 0) AS v FROM (
+          SELECT MAX(sync_version) AS v FROM books
+          UNION ALL SELECT MAX(sync_version) AS v FROM highlights
+          UNION ALL SELECT MAX(sync_version) AS v FROM conversations
+          UNION ALL SELECT MAX(sync_version) AS v FROM messages
+        )`
       );
+      newSyncVersion = versionResult?.v ?? 0;
     }
 
-    // Update all upserted highlights
-    for (const id of upsertedHighlightIds) {
-      batchStatements.push(
-        d1.prepare(`UPDATE highlights SET sync_version = ?, is_dirty = 0 WHERE id = ?`).bind(nextVersion, id)
-      );
-    }
-
-    // Update all upserted conversations
-    for (const id of upsertedConversationIds) {
-      batchStatements.push(
-        d1.prepare(`UPDATE conversations SET sync_version = ?, is_dirty = 0 WHERE id = ?`).bind(nextVersion, id)
-      );
-    }
-
-    // Update all upserted messages
-    for (const id of upsertedMessageIds) {
-      batchStatements.push(
-        d1.prepare(`UPDATE messages SET sync_version = ?, is_dirty = 0 WHERE id = ?`).bind(nextVersion, id)
-      );
-    }
-
-    if (batchStatements.length > 0) {
-      await d1.batch(batchStatements);
-    }
-
-    newSyncVersion = nextVersion;
-  } else {
-    // No upserts -- return current max version across all tables
-    const result = await c.env.DB.prepare(
-      `SELECT COALESCE(MAX(v), 0) AS v FROM (
-        SELECT MAX(sync_version) AS v FROM books
-        UNION ALL SELECT MAX(sync_version) AS v FROM highlights
-        UNION ALL SELECT MAX(sync_version) AS v FROM conversations
-        UNION ALL SELECT MAX(sync_version) AS v FROM messages
-      )`
-    ).first<{ v: number }>();
-    newSyncVersion = result?.v ?? 0;
-  }
+    return { conflicts, syncVersion: newSyncVersion };
+  });
 
   const response: PushResponse = {
-    conflicts,
-    syncVersion: newSyncVersion,
+    conflicts: result.conflicts,
+    syncVersion: result.syncVersion,
   };
 
   return c.json(response);

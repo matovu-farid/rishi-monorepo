@@ -57,3 +57,16 @@ Group fixes by file ownership to enable parallel execution:
 - **Shared/Mobile** (packages/, apps/mobile/) — one agent
 
 Never dispatch two agents that touch the same file.
+
+## Design-Then-Fix Protocol
+
+When a bug requires architectural changes (not a targeted fix), follow this flow:
+
+1. **DESIGN** — Write a design doc for each issue covering:
+   - Root cause analysis (why the current approach is broken)
+   - Proposed solution with concrete code snippets
+   - Migration plan (if data or schema changes needed)
+   - Rollback plan (if the fix fails)
+   - Files that need to change
+2. **IMPLEMENT** — Dispatch agents per the design, one workstream per independent file set
+3. **VERIFY** — Regression checks + targeted tests for the new behavior

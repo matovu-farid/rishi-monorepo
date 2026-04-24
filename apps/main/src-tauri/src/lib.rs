@@ -162,6 +162,7 @@ pub fn run() {
             commands::complete_auth,
             commands::check_auth_status,
             commands::get_auth_token_cmd,
+            commands::refresh_auth_token,
             commands::log_auth_debug_cmd,
             commands::get_auth_debug,
             api::get_realtime_client_secret,
