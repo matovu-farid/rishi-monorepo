@@ -228,7 +228,8 @@ static VECTOR_STORE: OnceLock<Arc<Mutex<VectorStore>>> = OnceLock::new();
 pub fn vector_store() -> &'static Arc<Mutex<VectorStore>> {
     VECTOR_STORE.get_or_init(|| {
         Arc::new(Mutex::new(
-            VectorStore::new().expect("Failed to create VectorStore"),
+            VectorStore::new()
+                .unwrap_or_else(|e| panic!("Failed to create VectorStore: {}", e)),
         ))
     })
 }

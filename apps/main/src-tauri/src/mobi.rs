@@ -200,9 +200,12 @@ fn create_placeholder_cover() -> Vec<u8> {
 
     let mut buffer = Vec::new();
     let mut cursor = Cursor::new(&mut buffer);
-    image::DynamicImage::ImageRgba8(img)
+    if let Err(e) = image::DynamicImage::ImageRgba8(img)
         .write_to(&mut cursor, ImageFormat::Png)
-        .expect("Failed to encode placeholder cover");
+    {
+        eprintln!("[mobi] Failed to encode placeholder cover: {}", e);
+        return Vec::new();
+    }
 
     buffer
 }

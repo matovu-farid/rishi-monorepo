@@ -33,16 +33,17 @@ pub fn clear_on_launch() {
 
 /// Resolve the dump file path once and cache it.
 fn dump_file() -> PathBuf {
-    let mut cached = DUMP_PATH.lock().unwrap();
+    let mut cached = DUMP_PATH.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(ref p) = *cached {
         return p.clone();
     }
     // CARGO_MANIFEST_DIR = apps/main/src-tauri at compile time
     let manifest = env!("CARGO_MANIFEST_DIR");
     // Go up to apps/main/, the desktop app root
-    let path = PathBuf::from(manifest)
+    let manifest_path = PathBuf::from(manifest);
+    let path = manifest_path
         .parent()
-        .unwrap()
+        .unwrap_or(&manifest_path)
         .join("error-dump.json");
     *cached = Some(path.clone());
     path
@@ -136,14 +137,15 @@ pub fn clear_error_dump() -> Result<(), String> {
 static STATE_DUMP_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 fn state_dump_file() -> PathBuf {
-    let mut cached = STATE_DUMP_PATH.lock().unwrap();
+    let mut cached = STATE_DUMP_PATH.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(ref p) = *cached {
         return p.clone();
     }
     let manifest = env!("CARGO_MANIFEST_DIR");
-    let path = PathBuf::from(manifest)
+    let manifest_path = PathBuf::from(manifest);
+    let path = manifest_path
         .parent()
-        .unwrap()
+        .unwrap_or(&manifest_path)
         .join("state-dump.json");
     *cached = Some(path.clone());
     path

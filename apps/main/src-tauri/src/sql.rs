@@ -194,6 +194,7 @@ pub fn get_all_page_data_by_book_id(book_id: i32) -> Result<Vec<PageData>, Strin
     let results = chunk_data
         .filter(bookId.eq(&book_id))
         .order_by(pageNumber.asc())
+        .limit(50000)
         .select(ChunkData::as_select())
         .load::<ChunkData>(&mut conn)
         .map_err(|e| format!("Failed to query page data: {}", e))?;
@@ -269,6 +270,7 @@ pub fn get_books() -> Result<Vec<Book>, String> {
 
     let results = books
         .select(Books::as_select())
+        .limit(10000)
         .load::<Books>(&mut conn)
         .map_err(|e| format!("Failed to query books: {}", e))?;
 
@@ -471,8 +473,28 @@ pub fn get_text_from_vector_id(vector_id: i64) -> Result<String, String> {
     Ok(result.unwrap_or_default())
 }
 
+/// Escape special characters for SQLite FTS5 MATCH queries.
+/// Wraps each term in double quotes to treat them as literal strings.
+fn escape_fts5_query(query: &str) -> String {
+    query
+        .split_whitespace()
+        .filter(|term| !term.is_empty())
+        .map(|term| {
+            // Wrap each term in double quotes, escaping any internal quotes
+            let escaped = term.replace('"', "\"\"");
+            format!("\"{}\"", escaped)
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[tauri::command]
 pub fn search_book_text(query: String, book_id: i32) -> Result<Vec<TextSearchResult>, String> {
+    let safe_query = escape_fts5_query(&query);
+    if safe_query.is_empty() {
+        return Ok(vec![]);
+    }
+
     let pool = DB_POOL.get().ok_or("Database pool not initialized")?;
     let mut conn = pool
         .get()
@@ -503,7 +525,7 @@ pub fn search_book_text(query: String, book_id: i32) -> Result<Vec<TextSearchRes
          LIMIT 50"
     )
     .bind::<diesel::sql_types::Integer, _>(&book_id)
-    .bind::<diesel::sql_types::Text, _>(&query)
+    .bind::<diesel::sql_types::Text, _>(&safe_query)
     .load(&mut conn)
     .map_err(|e| format!("FTS search failed: {}", e))?;
 

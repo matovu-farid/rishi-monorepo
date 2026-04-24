@@ -79,7 +79,11 @@ pub fn render_page_to_png(
     let height = dpi * 11;
 
     let tmp_dir = std::env::temp_dir();
-    let tmp_file = tmp_dir.join(format!("rishi_djvu_{}_{}.ppm", std::process::id(), page));
+    let random_suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp_file = tmp_dir.join(format!("rishi_djvu_{}_{}_{}.ppm", std::process::id(), page, random_suffix));
 
     let output = std::process::Command::new("ddjvu")
         .arg("-format=ppm")
@@ -209,9 +213,12 @@ fn create_placeholder_cover() -> Vec<u8> {
 
     let mut buffer = Vec::new();
     let mut cursor = Cursor::new(&mut buffer);
-    image::DynamicImage::ImageRgba8(img)
+    if let Err(e) = image::DynamicImage::ImageRgba8(img)
         .write_to(&mut cursor, ImageFormat::Png)
-        .expect("Failed to encode placeholder cover");
+    {
+        eprintln!("[djvu] Failed to encode placeholder cover: {}", e);
+        return Vec::new();
+    }
 
     buffer
 }

@@ -561,15 +561,19 @@ pub fn is_dev() -> bool {
     tauri::is_dev()
 }
 
-/// Returns the dev bypass secret, but ONLY in dev builds.
+/// Returns the dev bypass secret, but ONLY in debug builds.
 /// This keeps the secret out of the frontend bundle — the frontend
 /// fetches it at runtime via IPC instead of baking it in via env vars.
+#[cfg(debug_assertions)]
 #[tauri::command]
 pub fn get_dev_bypass_secret() -> Option<String> {
-    if !tauri::is_dev() {
-        return None;
-    }
     option_env!("DEV_BYPASS_SECRET").map(|s| s.to_string())
+}
+
+#[cfg(not(debug_assertions))]
+#[tauri::command]
+pub fn get_dev_bypass_secret() -> Option<String> {
+    None
 }
 
 #[tauri::command]
@@ -612,13 +616,13 @@ pub fn unzip(file_path: &str, out_dir: &str) -> Result<PathBuf, String> {
                 continue;
             }
         };
-        let outpath = output_dir.join(&entry_name);
-
-        // Double-check the resolved path stays within output_dir
-        if let Ok(canonical) = fs::canonicalize(outpath.parent().unwrap_or(output_dir)) {
-            if !canonical.starts_with(&canonical_output_dir) {
-                continue;
-            }
+        // Verify no path component escapes the output directory
+        // by checking that the joined path, normalized without following symlinks,
+        // stays under output_dir
+        let outpath = canonical_output_dir.join(&entry_name);
+        // Reject if any component is ".." (enclosed_name should catch this, but belt-and-suspenders)
+        if entry_name.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            continue;
         }
 
         if file.name().ends_with('/') {
