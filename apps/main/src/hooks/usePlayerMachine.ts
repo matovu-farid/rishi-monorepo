@@ -62,11 +62,14 @@ export function usePlayerMachine(bookId: string) {
       (s) => s.currentParagraphs,
       (paragraphs) => {
         actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs });
-        // Eagerly prefetch TTS for ALL paragraphs on the new page so audio is
-        // cached before the user presses play.
-        for (const p of paragraphs) {
-          if (p.text.trim()) {
-            void audioService.fetchAudio(bookId, p).catch(() => {});
+        // Only prefetch when player is actively playing/loading — avoids
+        // hitting the TTS API for unauthenticated users or when idle.
+        const machineState = mapStateValue(actor.getSnapshot().value);
+        if (machineState === "playing" || machineState === "loading") {
+          for (const p of paragraphs) {
+            if (p.text.trim()) {
+              void audioService.fetchAudio(bookId, p).catch(() => {});
+            }
           }
         }
       },
@@ -76,10 +79,13 @@ export function usePlayerMachine(bookId: string) {
       (s) => s.nextPageParagraphs,
       (paragraphs) => {
         actor.send({ type: "NEXT_PARAGRAPHS_UPDATED", paragraphs });
-        // Prefetch TTS for the next page so page transitions are instant
-        for (const p of paragraphs) {
-          if (p.text.trim()) {
-            void audioService.fetchAudio(bookId, p).catch(() => {});
+        // Only prefetch when player is actively playing/loading
+        const machineState = mapStateValue(actor.getSnapshot().value);
+        if (machineState === "playing" || machineState === "loading") {
+          for (const p of paragraphs) {
+            if (p.text.trim()) {
+              void audioService.fetchAudio(bookId, p).catch(() => {});
+            }
           }
         }
       },

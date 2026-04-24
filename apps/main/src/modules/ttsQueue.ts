@@ -182,14 +182,22 @@ export class TTSQueue extends EventEmitter {
       this.activeRequests.set(item.requestId, item);
 
       try {
-        // TODO: Check if this can be optimized as a stream
         const audioData = await this.generateAudio(item);
 
-        const audioPath = await ttsCache.saveCachedAudio(
-          item.bookId,
-          item.cfiRange,
-          audioData
-        );
+        let audioPath: string;
+        try {
+          audioPath = await ttsCache.saveCachedAudio(
+            item.bookId,
+            item.cfiRange,
+            audioData
+          );
+        } catch (cacheErr) {
+          // Cache write failed (disk full, permissions, etc.) — log but don't
+          // fail the request. Create a blob URL so the audio can still play.
+          console.warn(`Cache write failed, using blob URL: ${toErrorMessage(cacheErr)}`);
+          const blob = new Blob([audioData], { type: "audio/mpeg" });
+          audioPath = URL.createObjectURL(blob);
+        }
 
         // Clean up tracking
         this.pendingRequests.delete(item.requestId);
@@ -291,24 +299,26 @@ export class TTSQueue extends EventEmitter {
         speed: 1.0,
       };
 
-      const token = await getAuthToken();
-      const devBypassSecret = token === "dev-placeholder-token"
-        ? await invoke<string | null>("get_dev_bypass_secret")
-        : null;
-      logStateEvent("ttsQueue.gotToken", {
-        requestId: item.requestId,
-        tokenType: token === "dev-placeholder-token" ? "dev-placeholder" : "jwt",
-        hasBypassSecret: !!devBypassSecret,
-      });
+      let token: string;
+      try {
+        token = await getAuthToken();
+      } catch (authErr) {
+        throw new Error(`Authentication failed: ${toErrorMessage(authErr)}`);
+      }
 
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
 
-      if (token === "dev-placeholder-token" && devBypassSecret) {
-        // Dev mode: use the bypass secret from the Rust backend
-        headers["X-Dev-Bypass"] = devBypassSecret;
-      } else if (token !== "dev-placeholder-token") {
+      if (token === "dev-placeholder-token") {
+        // Dev mode: try the bypass secret from the Rust backend
+        const devBypassSecret = await invoke<string | null>("get_dev_bypass_secret");
+        if (devBypassSecret) {
+          headers["X-Dev-Bypass"] = devBypassSecret;
+        } else {
+          throw new Error("Not authenticated — sign in to use text-to-speech");
+        }
+      } else {
         headers["Authorization"] = `Bearer ${token}`;
       }
 
