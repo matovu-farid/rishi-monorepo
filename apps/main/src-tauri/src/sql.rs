@@ -329,12 +329,48 @@ pub async fn process_job(
     page_data: Vec<ChunkDataInsertable>,
     app_data_dir: &Path,
 ) -> Result<(), String> {
-    // Check if data already exists
-    if has_saved_data(page_number, book_id)? {
+    if page_data.is_empty() {
         return Ok(());
     }
 
-    if page_data.is_empty() {
+    // Atomically check-and-insert page data in a transaction to avoid race conditions
+    let pool = DB_POOL.get().ok_or("Database pool not initialized")?;
+    let mut conn = pool
+        .get()
+        .map_err(|e| format!("Failed to get connection: {}", e))?;
+
+    let already_exists = conn
+        .transaction::<_, diesel::result::Error, _>(|conn| {
+            use crate::schema::chunk_data::dsl::*;
+
+            // Check if data already exists
+            let exists = chunk_data
+                .filter(pageNumber.eq(&page_number))
+                .filter(bookId.eq(&book_id))
+                .select(id)
+                .first::<i64>(conn)
+                .optional()?
+                .is_some();
+
+            if exists {
+                return Ok(true);
+            }
+
+            // Insert all page data within the same transaction
+            for item in &page_data {
+                diesel::insert_into(chunk_data)
+                    .values(item)
+                    .on_conflict(id)
+                    .do_update()
+                    .set(data.eq(diesel::dsl::sql::<diesel::sql_types::Text>("excluded.data")))
+                    .execute(conn)?;
+            }
+
+            Ok(false)
+        })
+        .map_err(|e| format!("Transaction failed: {}", e))?;
+
+    if already_exists {
         return Ok(());
     }
 
@@ -353,9 +389,6 @@ pub async fn process_job(
             }
         })
         .collect();
-
-    // Save page data first (ensures data is in DB even if embedding fails)
-    save_page_data_many(page_data.clone())?;
 
     // Embed the text — non-fatal if it fails (model download may fail on first
     // launch, network issues, etc.). Page data is already saved above so the
@@ -380,7 +413,9 @@ pub async fn process_job(
             eprintln!("[process_job] Embedding returned no results for book {} page {}", book_id, page_number);
         }
         Err(e) => {
-            eprintln!("[process_job] Embedding failed for book {} page {} (non-fatal): {}", book_id, page_number, e);
+            let msg = format!("[process_job] Embedding failed for book {} page {}: {}", book_id, page_number, e);
+            eprintln!("{}", msg);
+            sentry::capture_message(&msg, sentry::Level::Warning);
         }
     }
 
@@ -429,11 +464,9 @@ pub async fn get_context_for_query(
     let name = format!("{}-vectordb", book_id);
     let search_embeddings = vectordb::search_vectors(app_data_dir.to_path_buf(), dim, &name, query, k)
         .map_err(|e| e.to_string())?;
-    // use the result to query the db for the actual text using the ids
-    let text = search_embeddings
-        .iter()
-        .map(|result| get_text_from_vector_id(result.id as i64))
-        .collect::<Result<Vec<String>, String>>()?;
+    // Batch query: fetch all matching texts in a single query instead of N+1
+    let ids: Vec<i64> = search_embeddings.iter().map(|r| r.id as i64).collect();
+    let text = get_texts_from_vector_ids(&ids)?;
     Ok(text)
 }
 

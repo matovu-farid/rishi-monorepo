@@ -1,4 +1,4 @@
-import { db } from '@/lib/db'
+import { db, markSyncInProgress } from '@/lib/db'
 import { books, highlights, conversations, messages, syncMeta } from '@rishi/shared/schema'
 import { eq } from 'drizzle-orm'
 import { apiClient } from '@/lib/api'
@@ -9,6 +9,8 @@ let isSyncing = false
 
 /**
  * Run a full push-then-pull sync cycle.
+ * A persistent marker is written before the cycle starts so that an
+ * interrupted sync (e.g. app killed mid-cycle) is detected on next launch.
  * All errors are caught internally -- this function never throws.
  */
 export async function sync(): Promise<void> {
@@ -16,10 +18,13 @@ export async function sync(): Promise<void> {
   isSyncing = true
   setSyncStatus('syncing')
   let syncError = false
+  markSyncInProgress(true)
   try {
     await push()
     await pull()
+    markSyncInProgress(false)
   } catch (error) {
+    markSyncInProgress(false)
     syncError = true
     setSyncStatus('error')
     console.warn('[sync] cycle failed:', error)

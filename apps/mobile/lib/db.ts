@@ -109,6 +109,29 @@ expo.execSync(`
   );
 `)
 
+// ─── Sync-in-progress marker ─────────────────────────────────────────────────
+expo.execSync(`
+  CREATE TABLE IF NOT EXISTS sync_state (
+    id TEXT PRIMARY KEY NOT NULL,
+    in_progress INTEGER NOT NULL DEFAULT 0
+  );
+`)
+expo.execSync("INSERT OR IGNORE INTO sync_state (id, in_progress) VALUES ('default', 0)")
+
 // ─── Drizzle instance ─────────────────────────────────────────────────────────
 export const db = drizzle(expo, { schema })
 export type AppDb = typeof db
+
+// ─── Sync marker helpers ─────────────────────────────────────────────────────
+export function markSyncInProgress(inProgress: boolean): void {
+  expo.execSync(
+    `UPDATE sync_state SET in_progress = ${inProgress ? 1 : 0} WHERE id = 'default'`
+  )
+}
+
+export function wasSyncInterrupted(): boolean {
+  const row = expo.getFirstSync<{ in_progress: number }>(
+    "SELECT in_progress FROM sync_state WHERE id = 'default'"
+  )
+  return row?.in_progress === 1
+}

@@ -1,6 +1,7 @@
 import { AppState, type AppStateStatus } from 'react-native'
 import type { NativeEventSubscription } from 'react-native'
 import { sync } from './engine'
+import { wasSyncInterrupted } from '@/lib/db'
 
 let syncInterval: ReturnType<typeof setInterval> | null = null
 let writeDebounce: ReturnType<typeof setTimeout> | null = null
@@ -31,7 +32,12 @@ export function startSyncTriggers(): void {
     sync()
   }, 5 * 60 * 1000)
 
-  // Initial sync on start
+  // If a previous sync was interrupted (app killed mid-cycle), re-sync immediately
+  if (wasSyncInterrupted()) {
+    console.warn('[sync] Previous sync was interrupted, re-syncing')
+  }
+
+  // Initial sync on start (also covers interrupted-sync recovery)
   sync()
 }
 
