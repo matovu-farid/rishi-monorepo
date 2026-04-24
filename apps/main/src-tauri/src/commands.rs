@@ -13,6 +13,7 @@ use crate::pdf::Pdf;
 use crate::shared::books::store_book_data;
 use crate::shared::books::Extractable;
 use crate::shared::types::BookData;
+use crate::file_limits::FileSizeCheck;
 use crate::sql;
 use crate::sql::ChunkDataInsertable;
 use crate::user::User;
@@ -545,7 +546,7 @@ pub fn get_djvu_page_text(path: &Path, page_number: u32) -> Result<Vec<String>, 
 }
 
 #[tauri::command]
-pub fn check_file_size(path: &Path, format: &str) -> Result<crate::file_limits::FileSizeCheck, String> {
+pub fn check_file_size(path: &Path, format: &str) -> Result<FileSizeCheck, String> {
     crate::file_limits::check_file_size(path, format)
 }
 
