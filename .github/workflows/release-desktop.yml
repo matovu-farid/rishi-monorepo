@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write  # Needed for creating releases
+
 jobs:
   verify-main:
     name: Verify tag is on main
@@ -48,14 +51,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2  # 0c5077e51419868618aeaa5fe8019c62421857d6
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@stable  # 29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           targets: ${{ matrix.rust_targets }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2  # 42dc69e1aa15d09112580998cf2ef0119e2e91ae
         with:
           workspaces: apps/main/src-tauri
 
@@ -96,7 +99,7 @@ jobs:
         run: cd apps/main && bun install
 
       - name: Build and release
-        uses: tauri-apps/tauri-action@v0.6
+        uses: tauri-apps/tauri-action@v0.6  # 4d285e1880165511a32eafd8616624dd75d05513
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -147,7 +150,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Configure Store credentials
-        uses: microsoft/store-submission@v1
+        uses: microsoft/store-submission@v1  # 1dbdf522fd5e751104cf3b325073b47f6f2fc09c
         with:
           command: configure
           type: win32
@@ -162,13 +165,13 @@ jobs:
         run: echo "clean=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
       - name: Update package
-        uses: microsoft/store-submission@v1
+        uses: microsoft/store-submission@v1  # 1dbdf522fd5e751104cf3b325073b47f6f2fc09c
         with:
           command: update
           product-update: '{"packages":[{"packageUrl":"https://rishi-tauri.s3.us-east-1.amazonaws.com/releases/${{ github.ref_name }}/rishi_${{ steps.version.outputs.clean }}_x64-setup.exe","languages":["en"],"architectures":["X64"],"installerParameters":"/S","isSilentInstall":true}]}'
 
       - name: Publish submission
-        uses: microsoft/store-submission@v1
+        uses: microsoft/store-submission@v1  # 1dbdf522fd5e751104cf3b325073b47f6f2fc09c
         with:
           command: publish
 
@@ -177,7 +180,7 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     steps:
-      - uses: vedantmgoyal9/winget-releaser@main
+      - uses: vedantmgoyal9/winget-releaser@7bd472be23763def6e16bd06cc8b1cdfab0e2fd5  # main
         with:
           identifier: Fidexa.RishiReader
           token: ${{ secrets.WINGET_TOKEN }}
