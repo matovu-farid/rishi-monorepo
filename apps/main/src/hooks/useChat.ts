@@ -22,8 +22,14 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
   const [conversationId, setConversationId] = useState<string | null>(null);
   const initialized = useRef(false);
 
-  // Reset initialization when book changes so messages reload for the new book
+  // Reset initialization and clear stale state when book/bookSyncId changes.
+  // This guards against rendering messages from a previous book while the new
+  // bookSyncId is still hydrating (null/empty on first render).
   useEffect(() => {
+    if (!bookSyncId) {
+      setMessages([]);
+      setConversationId(null);
+    }
     initialized.current = false;
   }, [bookId, bookSyncId]);
 

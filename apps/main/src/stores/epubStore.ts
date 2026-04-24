@@ -133,11 +133,13 @@ export function publishCurrentEpubParagraphs() {
  */
 let _unsubscribers: (() => void)[] = [];
 
-export function initEpubSubscriptions() {
+export function initEpubSubscriptions(): (() => void)[] {
   cleanupEpubSubscriptions(); // Clean up any existing subscriptions
 
+  const unsubs: (() => void)[] = [];
+
   // Side effect: when paragraphRendition + bookId are set, process all paragraphs
-  _unsubscribers.push(
+  unsubs.push(
     useEpubStore.subscribe(
       (state) => ({ paragraphRendition: state.paragraphRendition, bookId: state.bookId }),
       (current, previous) => {
@@ -161,7 +163,7 @@ export function initEpubSubscriptions() {
   // Side effect: when rendition + location change, publish current/next/prev paragraphs.
   // Current-page paragraphs are published immediately (needed for TTS playback).
   // Next/prev page paragraphs are debounced to avoid wasted work during rapid page flips.
-  _unsubscribers.push(
+  unsubs.push(
     useEpubStore.subscribe(
       (state) => ({ rendition: state.rendition, location: state.currentEpubLocation }),
       (current) => {
@@ -205,7 +207,7 @@ export function initEpubSubscriptions() {
   );
 
   // Side effect: pre-fetch the realtime API key when a book is opened so voice chat starts faster
-  _unsubscribers.push(
+  unsubs.push(
     useEpubStore.subscribe(
       (state) => state.bookId,
       (bookId) => {
@@ -215,7 +217,7 @@ export function initEpubSubscriptions() {
   );
 
   // Side effect: when isChatting turns on and bookId exists, start realtime session
-  _unsubscribers.push(
+  unsubs.push(
     useChatStore.subscribe(
       (state) => state.isChatting,
       (isChatting) => {
@@ -226,6 +228,10 @@ export function initEpubSubscriptions() {
       }
     )
   );
+
+  // Track in module-level array for cleanupEpubSubscriptions()
+  _unsubscribers = unsubs;
+  return unsubs;
 }
 
 export function cleanupEpubSubscriptions() {

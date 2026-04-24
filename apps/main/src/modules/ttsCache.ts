@@ -141,12 +141,16 @@ export class TTSCache {
   }
 
   /**
-   * Save generated audio to cache
+   * Save generated audio to cache.
+   * When `text` is provided, also saves under a text-hash key so lookups by
+   * either CFI or text content both hit the cache (fixes prefetch/playback
+   * key mismatch).
    */
   async saveCachedAudio(
     bookId: string,
     cfiRange: string,
-    audioData: Uint8Array
+    audioData: Uint8Array,
+    text?: string
   ): Promise<string> {
     try {
       const filePath = await this.getAudioFilePath(bookId, cfiRange);
@@ -169,6 +173,21 @@ export class TTSCache {
 
       if (stats.size === 0) {
         throw new Error("File was created but is empty (0 bytes)");
+      }
+
+      // If text is provided and the cfiRange is NOT already a text-hash key,
+      // save a copy under the text-hash key so lookups work both ways.
+      if (text && !cfiRange.startsWith("texthash:")) {
+        const textHashKey = `texthash:${md5(text)}`;
+        try {
+          const textHashPath = await this.getAudioFilePath(bookId, textHashKey);
+          const textHashExists = await fs.exists(textHashPath);
+          if (!textHashExists) {
+            await fs.copyFile(filePath, textHashPath);
+          }
+        } catch {
+          // Non-critical — text-hash copy failed, CFI-based lookup still works
+        }
       }
 
       return filePath;

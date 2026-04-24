@@ -45,33 +45,18 @@ function RootComponent(): JSX.Element {
     retryDelay: 1000,
   });
 
-  if (isError)
-    return (
-      <div className="w-full h-screen place-items-center grid">
-        {error.message}
-      </div>
-    );
-
-  if (isPending)
-    return (
-      <div className="w-full h-screen place-items-center grid">
-        <Loader />
-      </div>
-    );
-
   return (
     <>
-      {/* <GlobalFonts /> */}
-      {/* {books
-        .flatMap((book) => book.assets)
-        .flatMap((asset) => asset.css)
-        .filter((cssObj) => cssObj !== undefined)
-        .map(
-          (cssObj) =>
-            cssObj && (
-              <link key={cssObj.id} rel="stylesheet" href={cssObj.href} />
-            )
-        )} */}
+      {isPending && (
+        <div className="fixed inset-0 z-50 w-full h-screen place-items-center grid bg-background">
+          <Loader />
+        </div>
+      )}
+      {isError && (
+        <div className="fixed inset-0 z-50 w-full h-screen place-items-center grid bg-background">
+          {error.message}
+        </div>
+      )}
       <ErrorBoundary>
         <Outlet />
       </ErrorBoundary>

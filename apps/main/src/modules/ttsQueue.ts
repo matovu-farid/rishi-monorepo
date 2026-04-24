@@ -189,7 +189,8 @@ export class TTSQueue extends EventEmitter {
           audioPath = await ttsCache.saveCachedAudio(
             item.bookId,
             item.cfiRange,
-            audioData
+            audioData,
+            item.text
           );
         } catch (cacheErr) {
           // Cache write failed (disk full, permissions, etc.) — log but don't

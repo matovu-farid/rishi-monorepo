@@ -22,7 +22,7 @@ import { useChatStore } from "@/stores/chatStore";
 import { Rendition } from "epubjs/types";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { PageCurlOverlay, usePageCurl } from "./pagecurl";
-import { useEpubStore, initEpubSubscriptions, cleanupEpubSubscriptions } from "@/stores/epubStore";
+import { useEpubStore, initEpubSubscriptions } from "@/stores/epubStore";
 import { usePlayerStore } from "@/stores/playerStore";
 import { useNavMachine } from "@/hooks/useNavMachine";
 import { useNavStore } from "@/stores/navStore";
@@ -225,11 +225,16 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
     usePageTracker.getState().initBook(book.id.toString());
   }, [book.id]);
 
-  // Manage epubStore subscription lifecycle — init on mount, cleanup on unmount
+  // Manage epubStore subscription lifecycle — init on mount, cleanup on unmount.
+  // Use a component-local ref so rapid navigation doesn't cause cleanup to wipe
+  // new subscriptions (the module-level array is shared across mounts).
+  const unsubsRef = useRef<(() => void)[]>([]);
+
   useEffect(() => {
-    initEpubSubscriptions();
+    unsubsRef.current = initEpubSubscriptions();
     return () => {
-      cleanupEpubSubscriptions();
+      unsubsRef.current.forEach(fn => fn());
+      unsubsRef.current = [];
     };
   }, []);
 
