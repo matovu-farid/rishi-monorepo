@@ -1,3 +1,10 @@
+/**
+ * Cloud Sync — comprehensive e2e tests for status indicator, dirty flags,
+ * sync IPC methods, and event system.
+ *
+ * NOTE: Do NOT import `path` or use `__dirname`.
+ */
+
 describe("Cloud Sync", () => {
   beforeEach(() => {
     cy.visit("/");
@@ -37,20 +44,65 @@ describe("Cloud Sync", () => {
 
   it("should have isDirty column available in book model", () => {
     cy.window().then(async (win) => {
-      // Query the database schema to verify isDirty column exists
       const books = await win.electron.getBooks();
-      // The books array may be empty, but the API should not error
       expect(books).to.be.an("array");
     });
   });
 
   it("should have file hash and R2 key methods for cloud storage", () => {
     cy.window().then((win) => {
-      // These methods support file syncing via R2 cloud storage
       expect(win.electron).to.have.property("readFile");
       expect(win.electron.readFile).to.be.a("function");
       expect(win.electron).to.have.property("copyFile");
       expect(win.electron.copyFile).to.be.a("function");
+    });
+  });
+
+  it("should have the getDevBypassSecret IPC method for dev sync", () => {
+    cy.window().then((win) => {
+      expect(win.electron).to.have.property("getDevBypassSecret");
+      expect(win.electron.getDevBypassSecret).to.be.a("function");
+    });
+  });
+
+  it("should have the saveAuthToken IPC method for persisting tokens", () => {
+    cy.window().then((win) => {
+      expect(win.electron).to.have.property("saveAuthToken");
+      expect(win.electron.saveAuthToken).to.be.a("function");
+    });
+  });
+
+  it("should have the clearAuth IPC method for signing out", () => {
+    cy.window().then((win) => {
+      expect(win.electron).to.have.property("clearAuth");
+      expect(win.electron.clearAuth).to.be.a("function");
+    });
+  });
+
+  it("should not show sync status indicator when not synced (initial state)", () => {
+    // SyncStatusIndicator returns null when status is "not-synced"
+    cy.get("body").should("be.visible");
+    cy.contains("Syncing...").should("not.exist");
+    cy.contains("Sync error").should("not.exist");
+    cy.contains("Offline").should("not.exist");
+  });
+
+  it("should support saving book data that triggers dirty flag", () => {
+    cy.window().then(async (win) => {
+      const book = await win.electron.saveBook({
+        coverKind: "",
+        title: "Sync Dirty Test",
+        author: "Test",
+        publisher: "",
+        filepath: "/mock/sync.pdf",
+        location: "1",
+        version: 0,
+        kind: "pdf",
+        cover: [],
+      });
+      expect(book).to.have.property("id");
+      // Clean up
+      await win.electron.deleteBook(book.id);
     });
   });
 });

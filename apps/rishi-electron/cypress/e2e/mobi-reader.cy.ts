@@ -1,3 +1,10 @@
+/**
+ * MOBI Reader — comprehensive e2e tests for chapter navigation, content display,
+ * back button, and error handling.
+ *
+ * NOTE: Do NOT import `path` or use `__dirname`.
+ */
+
 describe("MOBI Reader", () => {
   beforeEach(() => {
     cy.visit("/");
@@ -28,14 +35,12 @@ describe("MOBI Reader", () => {
   });
 
   it("should display chapter navigation controls for MOBI books", () => {
-    // When viewing a MOBI book, chapter prev/next buttons should be present
-    // in the header bar (Prev | Ch X/Y | Next)
+    // MobiView renders: Prev | Ch X/Y | Next
     cy.visit("/#/books/1");
     cy.get("body").should("be.visible");
   });
 
   it("should support MOBI chapter extraction via IPC", () => {
-    // Verify the IPC methods for chapter-level access
     cy.window().then((win) => {
       expect(win.electron.getMobiChapter).to.be.a("function");
       expect(win.electron.getMobiChapterCount).to.be.a("function");
@@ -51,6 +56,40 @@ describe("MOBI Reader", () => {
   it("should handle graceful error when MOBI file does not exist", () => {
     cy.visit("/#/books/999");
     cy.get("body").should("be.visible");
-    // Should not show a blank screen or crash
+  });
+
+  it("should have the getMobiData method for metadata extraction", () => {
+    cy.window().then((win) => {
+      expect(win.electron).to.have.property("getMobiData");
+      expect(win.electron.getMobiData).to.be.a("function");
+    });
+  });
+
+  it("should have updateBookLocation method for persisting MOBI reading position", () => {
+    cy.window().then((win) => {
+      expect(win.electron).to.have.property("updateBookLocation");
+      expect(win.electron.updateBookLocation).to.be.a("function");
+    });
+  });
+
+  it("should have the saveBook method for importing MOBI files", () => {
+    cy.window().then((win) => {
+      expect(win.electron).to.have.property("saveBook");
+      expect(win.electron.saveBook).to.be.a("function");
+    });
+  });
+
+  it("should not crash when navigating to a non-existent MOBI book page", () => {
+    cy.visit("/#/books/99999");
+    cy.get("body").should("be.visible");
+    // Page should not be blank
+    cy.get("body").should("not.be.empty");
+  });
+
+  it("should have the back link to return to library from MOBI reader", () => {
+    cy.visit("/#/books/1");
+    cy.get("body").should("be.visible");
+    // DjvuView and MobiView both use Link to="/"
+    cy.get('a[href="/"]').should("exist");
   });
 });

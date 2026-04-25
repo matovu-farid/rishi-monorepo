@@ -1,7 +1,8 @@
-import path from "path";
-
-const FIXTURES_DIR = path.resolve(__dirname, "../fixtures");
-const PDF_PATH = path.join(FIXTURES_DIR, "test-book.pdf");
+/**
+ * PDF Reader — comprehensive e2e tests for navigation, dual page, thumbnails, keyboard.
+ *
+ * NOTE: Do NOT import `path` or use `__dirname`.
+ */
 
 describe("PDF Reader", () => {
   let bookId: number;
@@ -11,13 +12,15 @@ describe("PDF Reader", () => {
     cy.contains("Add Book", { timeout: 15000 }).should("be.visible");
 
     cy.window().then(async (win) => {
-      const pdfData = await win.electron.getPdfData(PDF_PATH);
+      const pdfData = await win.electron.getPdfData(
+        "cypress/fixtures/test-book.pdf"
+      );
       const book = await win.electron.saveBook({
         coverKind: pdfData.coverKind || "",
         title: pdfData.title || "PDF Reader Test",
         author: pdfData.author || "Test Author",
         publisher: pdfData.publisher || "",
-        filepath: PDF_PATH,
+        filepath: "cypress/fixtures/test-book.pdf",
         location: "1",
         version: 0,
         kind: "pdf",
@@ -44,14 +47,12 @@ describe("PDF Reader", () => {
   it("should show the back arrow to return to library", () => {
     cy.visit("/");
     cy.contains("PDF Reader Test", { timeout: 10000 }).click();
-    // Back link should exist
     cy.get('a[href="/"]', { timeout: 15000 }).should("exist");
   });
 
   it("should display the book title in the reader header", () => {
     cy.visit("/");
     cy.contains("PDF Reader Test", { timeout: 10000 }).click();
-    // Wait for reader to load
     cy.get("body").should("be.visible");
   });
 
@@ -59,18 +60,24 @@ describe("PDF Reader", () => {
     cy.visit("/");
     cy.contains("PDF Reader Test", { timeout: 10000 }).click();
 
-    // Wait for the PDF to render
     cy.get("canvas, .react-pdf__Page", { timeout: 15000 }).should("exist");
   });
 
-  it("should handle keyboard navigation without crashing", () => {
+  it("should handle keyboard right-arrow navigation without crashing", () => {
     cy.visit("/");
     cy.contains("PDF Reader Test", { timeout: 10000 }).click();
     cy.get("body").should("be.visible");
 
-    // Press arrow keys for navigation
     cy.get("body").type("{rightarrow}");
     cy.get("body").should("be.visible");
+  });
+
+  it("should handle keyboard left-arrow navigation without crashing", () => {
+    cy.visit("/");
+    cy.contains("PDF Reader Test", { timeout: 10000 }).click();
+    cy.get("body").should("be.visible");
+
+    cy.get("body").type("{rightarrow}");
     cy.get("body").type("{leftarrow}");
     cy.get("body").should("be.visible");
   });
@@ -91,7 +98,6 @@ describe("PDF Reader", () => {
 
   it("should extract text from PDF for search and TTS", () => {
     cy.window().then(async (win) => {
-      // getAllPageDataByBookId returns extracted text chunks
       const pageData = await win.electron.getAllPageDataByBookId(bookId);
       expect(pageData).to.be.an("array");
     });
@@ -100,7 +106,6 @@ describe("PDF Reader", () => {
   it("should gracefully handle invalid book IDs", () => {
     cy.visit("/#/books/999999");
     cy.get("body").should("be.visible");
-    // Should show error message or redirect, not crash
   });
 
   it("should update book location when navigating pages", () => {
@@ -108,5 +113,52 @@ describe("PDF Reader", () => {
       expect(win.electron).to.have.property("updateBookLocation");
       expect(win.electron.updateBookLocation).to.be.a("function");
     });
+  });
+
+  it("should render a canvas element for PDF page display", () => {
+    cy.visit("/");
+    cy.contains("PDF Reader Test", { timeout: 10000 }).click();
+    cy.get("canvas", { timeout: 15000 }).should("exist");
+  });
+
+  it("should show the TTS orb in the PDF reader", () => {
+    cy.visit("/");
+    cy.contains("PDF Reader Test", { timeout: 10000 }).click();
+    cy.get('[aria-label="Expand TTS controls"]', { timeout: 15000 }).should(
+      "be.visible"
+    );
+  });
+
+  it("should show the reader toolbar on mouse move near top", () => {
+    cy.visit("/");
+    cy.contains("PDF Reader Test", { timeout: 10000 }).click();
+    cy.get("body").should("be.visible");
+
+    cy.get("body").trigger("mousemove", { clientX: 500, clientY: 10 });
+    cy.get('[data-tour="reader-toolbar"]', { timeout: 5000 }).should("exist");
+  });
+
+  it("should handle rapid page navigation without crashing", () => {
+    cy.visit("/");
+    cy.contains("PDF Reader Test", { timeout: 10000 }).click();
+    cy.get("body").should("be.visible");
+
+    for (let i = 0; i < 5; i++) {
+      cy.get("body").type("{rightarrow}");
+    }
+    cy.get("body").should("be.visible");
+  });
+
+  it("should navigate back to library using the back link", () => {
+    cy.visit("/");
+    cy.contains("PDF Reader Test", { timeout: 10000 }).click();
+    cy.get('a[href="/"]', { timeout: 15000 }).first().click({ force: true });
+    cy.url().should("not.include", "/books/");
+  });
+
+  it("should show the AI chat orb in the PDF reader", () => {
+    cy.visit("/");
+    cy.contains("PDF Reader Test", { timeout: 10000 }).click();
+    cy.get('[data-tour="ai-chat"]', { timeout: 15000 }).should("exist");
   });
 });

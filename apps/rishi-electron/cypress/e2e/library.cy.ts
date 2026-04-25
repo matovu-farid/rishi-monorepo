@@ -1,8 +1,79 @@
-import path from "path";
+/**
+ * Library (Home Page) — comprehensive e2e tests.
+ *
+ * NOTE: Do NOT import `path` or use `__dirname` — they are Node.js APIs
+ * unavailable in the Cypress browser context.
+ */
 
-const FIXTURES_DIR = path.resolve(__dirname, "../fixtures");
-const PDF_PATH = path.join(FIXTURES_DIR, "test-book.pdf");
-const EPUB_PATH = path.join(FIXTURES_DIR, "test-book.epub");
+const seedElectron = (overrides = {}) => {
+  cy.window().then((win) => {
+    const defaults = {
+      getBooks: cy.stub().resolves([]),
+      getBook: cy.stub().resolves(null),
+      saveBook: cy.stub().resolves({ id: 1 }),
+      deleteBook: cy.stub().resolves(undefined),
+      getPdfData: cy.stub().resolves({
+        kind: "pdf",
+        filepath: "/mock/test.pdf",
+        cover: [],
+        coverKind: "",
+        title: "Mock PDF",
+        author: "Mock Author",
+        publisher: "",
+      }),
+      getBookData: cy.stub().resolves({
+        kind: "epub",
+        filepath: "/mock/test.epub",
+        cover: [],
+        coverKind: "",
+        title: "Mock EPUB",
+        author: "Mock Author",
+        publisher: "",
+      }),
+      updateBookLocation: cy.stub().resolves(undefined),
+      getAppDataPath: cy.stub().resolves("/tmp/test-app-data"),
+      showOpenDialog: cy.stub().resolves({ filePaths: [] }),
+      getDefaultBookFolders: cy.stub().resolves([]),
+      scanForBooks: cy.stub().resolves(0),
+      cancelScan: cy.stub().resolves(undefined),
+      getAuthToken: cy.stub().resolves(null),
+      getStoreValue: cy.stub().resolves(null),
+      setStoreValue: cy.stub().resolves(undefined),
+      on: cy.stub().returns(() => {}),
+      once: cy.stub(),
+      send: cy.stub(),
+      dbQuery: cy.stub().resolves([]),
+      dbRun: cy.stub().resolves({ changes: 0, lastInsertRowid: 0 }),
+      isDev: cy.stub().resolves(true),
+      getDevBypassSecret: cy.stub().resolves("test-secret"),
+      checkFileSize: cy.stub().resolves("ok"),
+      readFile: cy.stub().resolves(new ArrayBuffer(0)),
+      writeFile: cy.stub().resolves(undefined),
+      exists: cy.stub().resolves(false),
+      mkdir: cy.stub().resolves(undefined),
+      readDir: cy.stub().resolves([]),
+      removeFile: cy.stub().resolves(undefined),
+      getDirSize: cy.stub().resolves(0),
+      getCacheFileStats: cy.stub().resolves([]),
+      processJob: cy.stub().resolves(undefined),
+      copyFile: cy.stub().resolves(undefined),
+      getAllPageDataByBookId: cy.stub().resolves([]),
+      getContextForQuery: cy.stub().resolves([]),
+      embed: cy.stub().resolves([]),
+      searchVectors: cy.stub().resolves([]),
+      getRealtimeClientSecret: cy.stub().resolves("test-key"),
+      openExternal: cy.stub().resolves(undefined),
+      getOAuthState: cy.stub().resolves({ state: "s", codeChallenge: "c" }),
+      getUserFromStore: cy.stub().resolves(null),
+      saveUserToStore: cy.stub().resolves(undefined),
+      saveAuthToken: cy.stub().resolves(undefined),
+      clearAuth: cy.stub().resolves(undefined),
+      dumpError: cy.stub().resolves(undefined),
+      getOsInfo: cy.stub().resolves({ platform: "darwin", arch: "arm64", version: "25.0" }),
+    };
+    (win as any).electron = { ...defaults, ...overrides };
+  });
+};
 
 describe("Library (Home Page)", () => {
   beforeEach(() => {
@@ -12,14 +83,18 @@ describe("Library (Home Page)", () => {
 
   afterEach(() => {
     cy.window().then(async (win) => {
-      const books = await win.electron.getBooks();
-      for (const book of books) {
-        if (
-          book.title?.includes("Test") ||
-          book.title?.includes("Library")
-        ) {
-          await win.electron.deleteBook(book.id);
+      try {
+        const books = await win.electron.getBooks();
+        for (const book of books) {
+          if (
+            book.title?.includes("Test") ||
+            book.title?.includes("Library")
+          ) {
+            await win.electron.deleteBook(book.id);
+          }
         }
+      } catch {
+        // Cleanup best-effort
       }
     });
   });
@@ -46,17 +121,16 @@ describe("Library (Home Page)", () => {
 
   it("should display book cards with title and author after import", () => {
     cy.window().then(async (win) => {
-      const pdfData = await win.electron.getPdfData(PDF_PATH);
       await win.electron.saveBook({
-        coverKind: pdfData.coverKind || "",
+        coverKind: "",
         title: "Library Test Book",
         author: "Test Author",
         publisher: "",
-        filepath: PDF_PATH,
+        filepath: "/mock/test.pdf",
         location: "1",
         version: 0,
         kind: "pdf",
-        cover: pdfData.cover || [],
+        cover: [],
       });
     });
 
@@ -67,17 +141,16 @@ describe("Library (Home Page)", () => {
 
   it("should navigate to the reader when clicking a book card", () => {
     cy.window().then(async (win) => {
-      const pdfData = await win.electron.getPdfData(PDF_PATH);
       await win.electron.saveBook({
-        coverKind: pdfData.coverKind || "",
+        coverKind: "",
         title: "Library Navigate Test",
         author: "Test Author",
         publisher: "",
-        filepath: PDF_PATH,
+        filepath: "/mock/test.pdf",
         location: "1",
         version: 0,
         kind: "pdf",
-        cover: pdfData.cover || [],
+        cover: [],
       });
     });
 
@@ -88,17 +161,16 @@ describe("Library (Home Page)", () => {
 
   it("should delete a book via right-click context menu", () => {
     cy.window().then(async (win) => {
-      const pdfData = await win.electron.getPdfData(PDF_PATH);
       await win.electron.saveBook({
-        coverKind: pdfData.coverKind || "",
+        coverKind: "",
         title: "Library Delete Test",
         author: "Test Author",
         publisher: "",
-        filepath: PDF_PATH,
+        filepath: "/mock/test.pdf",
         location: "1",
         version: 0,
         kind: "pdf",
-        cover: pdfData.cover || [],
+        cover: [],
       });
     });
 
@@ -110,19 +182,18 @@ describe("Library (Home Page)", () => {
     cy.contains("Library Delete Test").should("not.exist");
   });
 
-  it("should show the context menu with Delete option on right-click", () => {
+  it("should show the context menu with Delete option on right-click and dismiss it", () => {
     cy.window().then(async (win) => {
-      const pdfData = await win.electron.getPdfData(PDF_PATH);
       await win.electron.saveBook({
-        coverKind: pdfData.coverKind || "",
+        coverKind: "",
         title: "Library Context Menu Test",
         author: "Test Author",
         publisher: "",
-        filepath: PDF_PATH,
+        filepath: "/mock/test.pdf",
         location: "1",
         version: 0,
         kind: "pdf",
-        cover: pdfData.cover || [],
+        cover: [],
       });
     });
 
@@ -136,29 +207,27 @@ describe("Library (Home Page)", () => {
 
   it("should filter books by title using the search field", () => {
     cy.window().then(async (win) => {
-      const pdfData = await win.electron.getPdfData(PDF_PATH);
       await win.electron.saveBook({
-        coverKind: pdfData.coverKind || "",
+        coverKind: "",
         title: "Library Alpha Book",
         author: "Author A",
         publisher: "",
-        filepath: PDF_PATH,
+        filepath: "/mock/alpha.pdf",
         location: "1",
         version: 0,
         kind: "pdf",
-        cover: pdfData.cover || [],
+        cover: [],
       });
-      const epubData = await win.electron.getBookData(EPUB_PATH);
       await win.electron.saveBook({
-        coverKind: epubData.coverKind || "",
+        coverKind: "",
         title: "Library Beta Book",
         author: "Author B",
         publisher: "",
-        filepath: EPUB_PATH,
+        filepath: "/mock/beta.epub",
         location: "1",
         version: 0,
         kind: "epub",
-        cover: epubData.cover || [],
+        cover: [],
       });
     });
 
@@ -177,22 +246,52 @@ describe("Library (Home Page)", () => {
 
   it("should show the book grid with data-tour attribute", () => {
     cy.window().then(async (win) => {
-      const pdfData = await win.electron.getPdfData(PDF_PATH);
       await win.electron.saveBook({
-        coverKind: pdfData.coverKind || "",
+        coverKind: "",
         title: "Library Grid Test",
         author: "Test",
         publisher: "",
-        filepath: PDF_PATH,
+        filepath: "/mock/grid.pdf",
         location: "1",
         version: 0,
         kind: "pdf",
-        cover: pdfData.cover || [],
+        cover: [],
       });
     });
 
     cy.visit("/");
     cy.get('[data-tour="book-grid"]', { timeout: 10000 }).should("be.visible");
     cy.get('[data-tour="book-grid"] > div').should("have.length.at.least", 1);
+  });
+
+  it("should clear the search field and show all books again", () => {
+    cy.window().then(async (win) => {
+      await win.electron.saveBook({
+        coverKind: "",
+        title: "Library ClearSearch Test",
+        author: "Test",
+        publisher: "",
+        filepath: "/mock/clear.pdf",
+        location: "1",
+        version: 0,
+        kind: "pdf",
+        cover: [],
+      });
+    });
+
+    cy.visit("/");
+    cy.contains("Library ClearSearch Test", { timeout: 10000 }).should("be.visible");
+    cy.get('input[placeholder*="Search"]').type("ZZZ_NO_MATCH");
+    cy.contains("Library ClearSearch Test").should("not.exist");
+    cy.get('input[placeholder*="Search"]').clear();
+    cy.contains("Library ClearSearch Test").should("be.visible");
+  });
+
+  it("should show the Add Book button as enabled", () => {
+    cy.contains("Add Book").should("be.visible").and("be.enabled");
+  });
+
+  it("should show the Import from Computer button as enabled", () => {
+    cy.contains("Import from Computer").should("be.visible").and("be.enabled");
   });
 });

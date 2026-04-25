@@ -60,4 +60,44 @@ describe("Premium Features Config", () => {
       expect(config.description).toBeTruthy();
     }
   });
+
+  it("should have specific bullet text for TTS feature", () => {
+    const tts = PREMIUM_FEATURES.tts;
+    expect(tts.bullets).toContain("Natural, expressive voices");
+    expect(tts.bullets).toContain("Reads EPUB, PDF, MOBI, and DjVu");
+    expect(tts.bullets).toContain("Remembers your spot across devices");
+  });
+
+  it("should have specific bullet text for chat feature", () => {
+    const chat = PREMIUM_FEATURES.chat;
+    expect(chat.bullets).toContain("Cites passages from the book you're reading");
+    expect(chat.bullets).toContain("Works across your entire library");
+    expect(chat.bullets).toContain("Remembers context within a conversation");
+  });
+
+  it("should have specific bullet text for voice-input feature", () => {
+    const voice = PREMIUM_FEATURES["voice-input"];
+    expect(voice.bullets).toContain("Natural speech recognition");
+    expect(voice.bullets).toContain("Paired with AI book chat");
+  });
+
+  it("should have empty bullets for ai-generic feature", () => {
+    expect(PREMIUM_FEATURES["ai-generic"].bullets).toHaveLength(0);
+  });
+
+  it("should have correct descriptions", () => {
+    expect(PREMIUM_FEATURES.tts.description).toContain("text-to-speech");
+    expect(PREMIUM_FEATURES.chat.description).toContain("Ask questions");
+    expect(PREMIUM_FEATURES["voice-input"].description).toContain("hands-free");
+    expect(PREMIUM_FEATURES["ai-generic"].description).toContain("Sign in");
+  });
+
+  it("each feature config should match PremiumFeatureConfig shape", () => {
+    for (const [, config] of Object.entries(PREMIUM_FEATURES)) {
+      expect(typeof config.title).toBe("string");
+      expect(typeof config.description).toBe("string");
+      expect(Array.isArray(config.bullets)).toBe(true);
+      expect(config.icon).toBeDefined();
+    }
+  });
 });

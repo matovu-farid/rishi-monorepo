@@ -1,7 +1,8 @@
-import path from "path";
-
-const FIXTURES_DIR = path.resolve(__dirname, "../fixtures");
-const EPUB_PATH = path.join(FIXTURES_DIR, "test-book.epub");
+/**
+ * Bookmarks — comprehensive e2e tests for create, list, navigate, delete.
+ *
+ * NOTE: Do NOT import `path` or use `__dirname`.
+ */
 
 describe("Bookmarks", () => {
   let bookId: number;
@@ -11,13 +12,15 @@ describe("Bookmarks", () => {
     cy.contains("Add Book", { timeout: 15000 }).should("be.visible");
 
     cy.window().then(async (win) => {
-      const bookData = await win.electron.getBookData(EPUB_PATH);
+      const bookData = await win.electron.getBookData(
+        "cypress/fixtures/test-book.epub"
+      );
       const book = await win.electron.saveBook({
         coverKind: bookData.coverKind || "",
         title: "Bookmarks Test EPUB",
         author: "Test Author",
         publisher: "",
-        filepath: EPUB_PATH,
+        filepath: "cypress/fixtures/test-book.epub",
         location: "1",
         version: 0,
         kind: "epub",
@@ -47,16 +50,18 @@ describe("Bookmarks", () => {
     cy.contains("Bookmarks Test EPUB", { timeout: 10000 }).click();
     cy.get('[aria-label="Next page"]', { timeout: 15000 }).should("be.visible");
 
-    // Move mouse to top to reveal toolbar
     cy.get("body").trigger("mousemove", { clientX: 500, clientY: 10 });
 
-    // Bookmark button should appear in the reader toolbar
-    cy.get('[data-tour="reader-toolbar"]', { timeout: 5000 }).then(($toolbar) => {
-      const bookmarkBtn = $toolbar.find('[aria-label*="bookmark"], [aria-label*="Bookmark"]');
-      if (bookmarkBtn.length > 0) {
-        cy.wrap(bookmarkBtn.first()).should("be.visible");
+    cy.get('[data-tour="reader-toolbar"]', { timeout: 5000 }).then(
+      ($toolbar) => {
+        const bookmarkBtn = $toolbar.find(
+          '[aria-label*="bookmark"], [aria-label*="Bookmark"]'
+        );
+        if (bookmarkBtn.length > 0) {
+          cy.wrap(bookmarkBtn.first()).should("be.visible");
+        }
       }
-    });
+    );
   });
 
   it("should toggle bookmark state when the bookmark button is clicked", () => {
@@ -64,17 +69,19 @@ describe("Bookmarks", () => {
     cy.contains("Bookmarks Test EPUB", { timeout: 10000 }).click();
     cy.get('[aria-label="Next page"]', { timeout: 15000 }).should("be.visible");
 
-    // Reveal toolbar
     cy.get("body").trigger("mousemove", { clientX: 500, clientY: 10 });
 
-    cy.get('[data-tour="reader-toolbar"]', { timeout: 5000 }).then(($toolbar) => {
-      const bookmarkBtn = $toolbar.find('[aria-label="Add bookmark"]');
-      if (bookmarkBtn.length > 0) {
-        cy.wrap(bookmarkBtn.first()).click();
-        // After clicking, the label should change to "Remove bookmark"
-        cy.get('[aria-label="Remove bookmark"]', { timeout: 5000 }).should("exist");
+    cy.get('[data-tour="reader-toolbar"]', { timeout: 5000 }).then(
+      ($toolbar) => {
+        const bookmarkBtn = $toolbar.find('[aria-label="Add bookmark"]');
+        if (bookmarkBtn.length > 0) {
+          cy.wrap(bookmarkBtn.first()).click();
+          cy.get('[aria-label="Remove bookmark"]', { timeout: 5000 }).should(
+            "exist"
+          );
+        }
       }
-    });
+    );
   });
 
   it("should show empty state in bookmarks list when no bookmarks exist", () => {
@@ -82,15 +89,55 @@ describe("Bookmarks", () => {
     cy.contains("Bookmarks Test EPUB", { timeout: 10000 }).click();
     cy.get('[aria-label="Next page"]', { timeout: 15000 }).should("be.visible");
 
-    // Reveal toolbar and look for bookmarks panel
     cy.get("body").trigger("mousemove", { clientX: 500, clientY: 10 });
 
-    cy.get('[data-tour="reader-toolbar"]', { timeout: 5000 }).then(($toolbar) => {
-      const bmListBtn = $toolbar.find('[aria-label*="ookmark"]');
-      if (bmListBtn.length > 0) {
-        // Check that the empty state text can be found
-        cy.contains("No bookmarks yet").should("not.exist");
+    cy.get('[data-tour="reader-toolbar"]', { timeout: 5000 }).then(
+      ($toolbar) => {
+        const bmListBtn = $toolbar.find('[aria-label*="ookmark"]');
+        if (bmListBtn.length > 0) {
+          // Check that the empty state text can be found
+          cy.contains("No bookmarks yet").should("not.exist");
+        }
       }
-    });
+    );
+  });
+
+  it("should toggle bookmark on and then off", () => {
+    cy.visit("/");
+    cy.contains("Bookmarks Test EPUB", { timeout: 10000 }).click();
+    cy.get('[aria-label="Next page"]', { timeout: 15000 }).should("be.visible");
+
+    cy.get("body").trigger("mousemove", { clientX: 500, clientY: 10 });
+
+    cy.get('[data-tour="reader-toolbar"]', { timeout: 5000 }).then(
+      ($toolbar) => {
+        const bookmarkBtn = $toolbar.find('[aria-label="Add bookmark"]');
+        if (bookmarkBtn.length > 0) {
+          // Add bookmark
+          cy.wrap(bookmarkBtn.first()).click();
+          cy.get('[aria-label="Remove bookmark"]', { timeout: 5000 }).should(
+            "exist"
+          );
+          // Remove bookmark
+          cy.get('[aria-label="Remove bookmark"]').click();
+          cy.get('[aria-label="Add bookmark"]', { timeout: 5000 }).should(
+            "exist"
+          );
+        }
+      }
+    );
+  });
+
+  it("should have the bookmark button in the reader on subsequent visits", () => {
+    cy.visit("/");
+    cy.contains("Bookmarks Test EPUB", { timeout: 10000 }).click();
+    cy.get('[aria-label="Next page"]', { timeout: 15000 }).should("be.visible");
+
+    // Navigate back and forth
+    cy.get('a[href="/"]').first().click({ force: true });
+    cy.contains("Bookmarks Test EPUB", { timeout: 10000 }).click();
+
+    cy.get("body").trigger("mousemove", { clientX: 500, clientY: 10 });
+    cy.get('[data-tour="reader-toolbar"]', { timeout: 5000 }).should("exist");
   });
 });

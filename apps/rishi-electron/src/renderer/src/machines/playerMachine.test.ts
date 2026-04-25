@@ -340,4 +340,119 @@ describe("playerMachine", () => {
     expect(actor.getSnapshot().value).toBe("waitingForParagraphs");
     expect(actor.getSnapshot().context.direction).toBe("backward");
   });
+
+  // --- Additional comprehensive tests ---
+
+  it("should clamp paragraph index at the end when advancing past last", () => {
+    actor.send({ type: "INITIALIZE", bookId: "book1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: makeParagraphs(2) });
+    actor.send({ type: "PLAY" });
+    actor.send({ type: "AUDIO_LOADED" });
+    // At index 0, advance to 1
+    actor.send({ type: "NEXT" });
+    actor.send({ type: "AUDIO_LOADED" });
+    // At last index (1), NEXT should go to waitingForParagraphs
+    actor.send({ type: "NEXT" });
+    expect(actor.getSnapshot().value).toBe("waitingForParagraphs");
+  });
+
+  it("should clamp paragraph index at 0 when retreating past first", () => {
+    actor.send({ type: "INITIALIZE", bookId: "book1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: makeParagraphs(3) });
+    actor.send({ type: "PLAY" });
+    actor.send({ type: "AUDIO_LOADED" });
+    // At index 0, PREV should go to waitingForParagraphs
+    actor.send({ type: "PREV" });
+    expect(actor.getSnapshot().value).toBe("waitingForParagraphs");
+    expect(actor.getSnapshot().context.direction).toBe("backward");
+  });
+
+  it("INITIALIZE from idle transitions to stopped with the given bookId", () => {
+    // INITIALIZE is only handled in idle state
+    expect(actor.getSnapshot().value).toBe("idle");
+    actor.send({ type: "INITIALIZE", bookId: "book-new" });
+    expect(actor.getSnapshot().value).toBe("stopped");
+    expect(actor.getSnapshot().context.bookId).toBe("book-new");
+  });
+
+  it("paused.stale -> STOP -> stopped", () => {
+    actor.send({ type: "INITIALIZE", bookId: "book1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: makeParagraphs(3) });
+    actor.send({ type: "PLAY" });
+    actor.send({ type: "AUDIO_LOADED" });
+    actor.send({ type: "PAUSE" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: makeParagraphs(5) });
+    expect(actor.getSnapshot().value).toEqual({ paused: "stale" });
+    actor.send({ type: "STOP" });
+    expect(actor.getSnapshot().value).toBe("stopped");
+  });
+
+  it("paused.stale -> NEXT -> loading", () => {
+    actor.send({ type: "INITIALIZE", bookId: "book1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: makeParagraphs(5) });
+    actor.send({ type: "PLAY" });
+    actor.send({ type: "AUDIO_LOADED" });
+    actor.send({ type: "PAUSE" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: makeParagraphs(5) });
+    expect(actor.getSnapshot().value).toEqual({ paused: "stale" });
+    actor.send({ type: "NEXT" });
+    expect(actor.getSnapshot().value).toBe("loading");
+  });
+
+  it("should preserve next/prev page paragraphs across state transitions", () => {
+    actor.send({ type: "INITIALIZE", bookId: "book1" });
+    const nextP = makeParagraphs(2);
+    const prevP = makeParagraphs(3);
+    actor.send({ type: "NEXT_PARAGRAPHS_UPDATED", paragraphs: nextP });
+    actor.send({ type: "PREV_PARAGRAPHS_UPDATED", paragraphs: prevP });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: makeParagraphs(4) });
+    actor.send({ type: "PLAY" });
+    // Even after transitioning to loading, next/prev should persist
+    expect(actor.getSnapshot().context.nextPageParagraphs).toEqual(nextP);
+    expect(actor.getSnapshot().context.prevPageParagraphs).toEqual(prevP);
+  });
+
+  it("AUDIO_ENDED at last paragraph -> waitingForParagraphs with forward direction", () => {
+    actor.send({ type: "INITIALIZE", bookId: "book1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: makeParagraphs(1) });
+    actor.send({ type: "PLAY" });
+    actor.send({ type: "AUDIO_LOADED" });
+    actor.send({ type: "AUDIO_ENDED" });
+    expect(actor.getSnapshot().value).toBe("waitingForParagraphs");
+    expect(actor.getSnapshot().context.direction).toBe("forward");
+  });
+
+  it("CLEANUP from playing -> idle with reset context", () => {
+    actor.send({ type: "INITIALIZE", bookId: "book1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: makeParagraphs(3) });
+    actor.send({ type: "PLAY" });
+    actor.send({ type: "AUDIO_LOADED" });
+    expect(actor.getSnapshot().value).toBe("playing");
+    actor.send({ type: "CLEANUP" });
+    expect(actor.getSnapshot().value).toBe("idle");
+    expect(actor.getSnapshot().context.currentParagraphs).toEqual([]);
+    expect(actor.getSnapshot().context.nextPageParagraphs).toEqual([]);
+    expect(actor.getSnapshot().context.prevPageParagraphs).toEqual([]);
+  });
+
+  it("error -> STOP -> stopped with cleared errors", () => {
+    actor.send({ type: "INITIALIZE", bookId: "book1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: makeParagraphs(3) });
+    actor.send({ type: "PLAY" });
+    actor.send({ type: "AUDIO_ERROR", error: "fail1" });
+    actor.send({ type: "AUDIO_ERROR", error: "fail2" });
+    actor.send({ type: "AUDIO_ERROR", error: "fail3" });
+    expect(actor.getSnapshot().value).toBe("error");
+    actor.send({ type: "STOP" });
+    expect(actor.getSnapshot().value).toBe("stopped");
+    expect(actor.getSnapshot().context.errors).toEqual([]);
+  });
+
+  it("should handle empty paragraphs array gracefully", () => {
+    actor.send({ type: "INITIALIZE", bookId: "book1" });
+    actor.send({ type: "PARAGRAPHS_UPDATED", paragraphs: [] });
+    actor.send({ type: "PLAY" });
+    // No paragraphs -> waitingForParagraphs
+    expect(actor.getSnapshot().value).toBe("waitingForParagraphs");
+  });
 });

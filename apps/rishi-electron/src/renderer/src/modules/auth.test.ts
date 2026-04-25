@@ -147,5 +147,69 @@ describe("auth module", () => {
 
       expect(useAuthStore.getState().signingIn).toBe(false);
     });
+
+    it("constructs the correct base URL with login=true", async () => {
+      vi.mocked(window.electron.getOAuthState).mockResolvedValueOnce({
+        state: "url-state",
+        codeChallenge: "url-challenge",
+      });
+
+      await startSignInFlow();
+
+      const url = vi.mocked(window.electron.openExternal).mock.calls[0][0];
+      expect(url).toContain("https://rishi.fidexa.org");
+      expect(url).toContain("login=true");
+    });
+
+    it("caches state after successful flow start", async () => {
+      vi.mocked(window.electron.getOAuthState).mockResolvedValueOnce({
+        state: "cached-flow",
+        codeChallenge: "cached-flow-challenge",
+      });
+
+      await startSignInFlow();
+
+      // peekPendingOAuthState should now have the state
+      expect(peekPendingOAuthState()).toEqual({
+        state: "cached-flow",
+        codeChallenge: "cached-flow-challenge",
+      });
+    });
+  });
+
+  describe("edge cases", () => {
+    it("ensureOAuthState generates fresh state after clearPendingOAuthState", async () => {
+      vi.mocked(window.electron.getOAuthState)
+        .mockResolvedValueOnce({ state: "first", codeChallenge: "first-c" })
+        .mockResolvedValueOnce({ state: "second", codeChallenge: "second-c" });
+
+      await ensureOAuthState();
+      expect(peekPendingOAuthState()?.state).toBe("first");
+
+      clearPendingOAuthState();
+      expect(peekPendingOAuthState()).toBeNull();
+
+      const fresh = await ensureOAuthState();
+      expect(fresh.state).toBe("second");
+      expect(window.electron.getOAuthState).toHaveBeenCalledTimes(2);
+    });
+
+    it("getAuthToken returns null when no token is stored", async () => {
+      vi.mocked(window.electron.getAuthToken).mockResolvedValueOnce(null);
+      const result = await getAuthToken();
+      expect(result).toBeNull();
+    });
+
+    it("clearAuth can be called multiple times safely", async () => {
+      await clearAuth();
+      await clearAuth();
+      expect(window.electron.clearAuth).toHaveBeenCalledTimes(2);
+    });
+
+    it("getUserFromStore returns null when no user exists", async () => {
+      vi.mocked(window.electron.getUserFromStore).mockResolvedValueOnce(null);
+      const result = await getUserFromStore();
+      expect(result).toBeNull();
+    });
   });
 });
