@@ -3,8 +3,8 @@ import Loader from "./Loader";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "react-toastify";
 import { Button } from "./ui/Button";
-import { Trash2, Plus, FolderOpen, Search } from "lucide-react";
-import { chooseFiles } from "@/modules/chooseFiles";
+import { Trash2, Plus, Search } from "lucide-react";
+// chooseFiles moved into BookDiscoveryModal
 import {
   Book,
   deleteBook,
@@ -191,16 +191,6 @@ export default function FileComponent(): React.JSX.Element {
     return () => document.removeEventListener("click", handleClick);
   }, []);
 
-  const handleChooseFiles = async () => {
-    try {
-      const filePaths = await chooseFiles();
-      processFilePaths(filePaths);
-    } catch (err) {
-      toast.error("Can't open file picker");
-      console.error(err);
-    }
-  };
-
   useEffect(() => {
     try { const stored = localStorage.getItem("lastReadBookId"); if (stored) setLastReadBookId(stored); } catch {}
   }, []);
@@ -239,8 +229,7 @@ export default function FileComponent(): React.JSX.Element {
         </div>
         <div className="flex-1" />
         <div data-tour="import-books" className="flex items-center gap-1">
-          <Button variant="ghost" className="cursor-pointer" startIcon={<Plus size={20} />} onClick={handleChooseFiles}>Add Book</Button>
-          <Button variant="ghost" className="cursor-pointer" startIcon={<FolderOpen size={20} />} onClick={() => setDiscoveryOpen(true)}>Import from Computer</Button>
+          <Button variant="ghost" className="cursor-pointer" startIcon={<Plus size={20} />} onClick={() => setDiscoveryOpen(true)}>Add Book</Button>
         </div>
         <LoginButton />
         <UpdateMenu />
@@ -296,7 +285,7 @@ export default function FileComponent(): React.JSX.Element {
           </button>
         </div>
       )}
-      <BookDiscoveryModal open={discoveryOpen} onClose={() => setDiscoveryOpen(false)} onImport={(fp) => processFilePaths([fp])} />
+      <BookDiscoveryModal open={discoveryOpen} onClose={() => setDiscoveryOpen(false)} onImport={(fp) => processFilePaths([fp])} onImportFiles={processFilePaths} />
     </div>
   );
 }

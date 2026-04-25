@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { X, BookOpen, Download, DownloadCloud, FolderOpen, Loader2 } from "lucide-react";
+import { X, BookOpen, Download, DownloadCloud, FolderOpen, Loader2, FilePlus } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { ClipLoader } from "react-spinners";
 import { cancelScan } from "@/lib/api";
+import { chooseFiles } from "@/modules/chooseFiles";
 
 interface DiscoveredBook {
   filepath: string;
@@ -25,6 +26,7 @@ interface BookDiscoveryModalProps {
   open: boolean;
   onClose: () => void;
   onImport: (filepath: string) => void;
+  onImportFiles?: (filePaths: string[]) => void;
 }
 
 type ScanMode = "default" | "full";
@@ -35,7 +37,7 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryModalProps) {
+export function BookDiscoveryModal({ open, onClose, onImport, onImportFiles }: BookDiscoveryModalProps) {
   const [books, setBooks] = useState<DiscoveredBook[]>([]);
   const [filter, setFilter] = useState("");
   const [scanning, setScanning] = useState(false);
@@ -45,6 +47,22 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
   const [importingPaths, setImportingPaths] = useState<Set<string>>(new Set());
 
   const unsubRefs = useRef<Array<() => void>>([]);
+
+  const handleBrowseFiles = async () => {
+    try {
+      const filePaths = await chooseFiles();
+      if (filePaths.length > 0) {
+        if (onImportFiles) {
+          onImportFiles(filePaths);
+        } else {
+          filePaths.forEach((fp) => onImport(fp));
+        }
+        handleClose();
+      }
+    } catch (err) {
+      console.error("Failed to open file picker:", err);
+    }
+  };
 
   const cleanupListeners = useCallback(() => {
     unsubRefs.current.forEach((fn) => fn());
@@ -167,7 +185,7 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
           <div className="flex items-center gap-2">
             <BookOpen size={20} className="text-gray-600" />
-            <h2 className="text-lg font-semibold text-gray-900">Import from Computer</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Add Book</h2>
             {scanning && (
               <span className="ml-1 flex items-center gap-1 text-xs text-gray-400">
                 <Loader2 size={12} className="animate-spin" />
@@ -175,12 +193,23 @@ export function BookDiscoveryModal({ open, onClose, onImport }: BookDiscoveryMod
               </span>
             )}
           </div>
-          <button
-            onClick={handleClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors rounded-md p-1 hover:bg-gray-100"
-          >
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              startIcon={<FilePlus size={16} />}
+              onClick={handleBrowseFiles}
+              className="text-gray-600 hover:text-gray-900"
+            >
+              Browse Files
+            </Button>
+            <button
+              onClick={handleClose}
+              className="text-gray-400 hover:text-gray-600 transition-colors rounded-md p-1 hover:bg-gray-100"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         {/* Controls */}
