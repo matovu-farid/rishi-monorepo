@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use crate::state::auth::AuthState;
 use crate::views::library::Library;
 use crate::views::reader::Reader;
 
@@ -22,6 +23,8 @@ pub fn App() -> Element {
 
 #[component]
 fn RootLayout() -> Element {
+    use_context_provider(AuthState::new);
+
     rsx! {
         div { class: "app-root",
             Outlet::<Route> {}
