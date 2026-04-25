@@ -25,59 +25,96 @@ interface BookDataResult {
 
 // ---------- EPUB ----------
 
-interface EpubMetadata {
-  title?: string
-  creator?: string
-  publisher?: string
-  identifier?: string
-}
-
 async function extractEpubData(filePath: string): Promise<BookDataResult> {
-  // Dynamic import for epubjs — CJS module has double-wrapped default when
-  // loaded via ESM dynamic import in Electron's main process.
-  const epubjs = await import('epubjs')
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mod = epubjs.default as any
-  const ePub: typeof epubjs.default = typeof mod === 'function' ? mod : mod.default
+  // Parse EPUB using jszip directly — epubjs is a browser-only library that
+  // hangs in Node.js because it relies on DOM APIs (DOMParser, XMLHttpRequest).
+  // EPUBs are ZIP files with a standard OPF metadata structure.
+  const JSZip = (await import('jszip')).default
   const data = await fs.readFile(filePath)
-  const book = ePub(data.buffer)
-  await book.ready
+  const zip = await JSZip.loadAsync(data)
 
-  const metadata: EpubMetadata = book.packaging?.metadata ?? {}
-
-  // Try to extract cover image
+  let title: string | null = null
+  let author: string | null = null
+  let publisher: string | null = null
+  let identifier: string | null = null
   let cover: number[] = []
   let coverKind: string | null = null
-  try {
-    // book.coverUrl() creates blob URLs requiring browser APIs and can hang
-    // in Node.js. Use a timeout to prevent the handler from never resolving.
-    const coverPromise = (async () => {
-      const coverUrl = await book.coverUrl()
-      if (coverUrl) {
-        const response = await fetch(coverUrl)
-        if (!response.ok) return
-        const blob = await response.arrayBuffer()
-        cover = Array.from(new Uint8Array(blob))
-        coverKind = 'image/png'
-      }
-    })()
-    const timeout = new Promise<void>((_, reject) =>
-      setTimeout(() => reject(new Error('Cover extraction timed out')), 5000)
-    )
-    await Promise.race([coverPromise, timeout])
-  } catch {
-    // No cover available or extraction timed out
+  let coverHref: string | null = null
+
+  // 1. Find the OPF file path from META-INF/container.xml
+  let opfPath = 'OEBPS/content.opf' // fallback
+  const containerXml = await zip.file('META-INF/container.xml')?.async('text')
+  if (containerXml) {
+    const rootfileMatch = containerXml.match(/full-path="([^"]+)"/)
+    if (rootfileMatch) opfPath = rootfileMatch[1]
   }
 
-  book.destroy()
+  // 2. Parse OPF for metadata
+  const opfContent = await zip.file(opfPath)?.async('text')
+  if (opfContent) {
+    // Extract metadata using regex (no DOM parser needed in Node.js)
+    const titleMatch = opfContent.match(/<dc:title[^>]*>([^<]+)<\/dc:title>/i)
+    if (titleMatch) title = titleMatch[1].trim()
+
+    const creatorMatch = opfContent.match(/<dc:creator[^>]*>([^<]+)<\/dc:creator>/i)
+    if (creatorMatch) author = creatorMatch[1].trim()
+
+    const publisherMatch = opfContent.match(/<dc:publisher[^>]*>([^<]+)<\/dc:publisher>/i)
+    if (publisherMatch) publisher = publisherMatch[1].trim()
+
+    const identifierMatch = opfContent.match(/<dc:identifier[^>]*>([^<]+)<\/dc:identifier>/i)
+    if (identifierMatch) identifier = identifierMatch[1].trim()
+
+    // 3. Find cover image
+    // Look for meta cover reference: <meta name="cover" content="cover-image"/>
+    const coverMetaMatch = opfContent.match(/<meta\s+name="cover"\s+content="([^"]+)"/i)
+    const coverId = coverMetaMatch?.[1]
+
+    if (coverId) {
+      // Find the manifest item with that id
+      const itemRegex = new RegExp(`<item[^>]+id="${coverId}"[^>]+href="([^"]+)"`, 'i')
+      const itemMatch = opfContent.match(itemRegex)
+      if (itemMatch) coverHref = itemMatch[1]
+    }
+
+    // Fallback: look for item with properties="cover-image"
+    if (!coverHref) {
+      const coverPropMatch = opfContent.match(/<item[^>]+properties="cover-image"[^>]+href="([^"]+)"/i)
+      if (coverPropMatch) coverHref = coverPropMatch[1]
+    }
+
+    // Fallback: look for item with id containing "cover" and image media-type
+    if (!coverHref) {
+      const coverIdMatch = opfContent.match(/<item[^>]+id="[^"]*cover[^"]*"[^>]+href="([^"]+)"[^>]+media-type="image\/[^"]+"/i)
+      if (coverIdMatch) coverHref = coverIdMatch[1]
+    }
+  }
+
+  // 4. Extract cover image bytes
+  if (coverHref) {
+    // Resolve cover path relative to OPF directory
+    const opfDir = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1) : ''
+    const coverPath = coverHref.startsWith('/') ? coverHref.slice(1) : opfDir + coverHref
+    const coverFile = zip.file(coverPath) ?? zip.file(coverHref)
+    if (coverFile) {
+      const coverData = await coverFile.async('uint8array')
+      cover = Array.from(coverData)
+      // Detect image type from extension
+      const ext = coverHref.toLowerCase()
+      if (ext.endsWith('.png')) coverKind = 'image/png'
+      else if (ext.endsWith('.jpg') || ext.endsWith('.jpeg')) coverKind = 'image/jpeg'
+      else if (ext.endsWith('.gif')) coverKind = 'image/gif'
+      else coverKind = 'image/jpeg' // default
+    }
+  }
 
   return {
-    id: metadata.identifier ?? path.basename(filePath, '.epub'),
+    id: identifier ?? path.basename(filePath, '.epub'),
     kind: 'epub',
     cover,
-    title: metadata.title ?? null,
-    author: metadata.creator ?? null,
-    publisher: metadata.publisher ?? null,
+    title: title ?? null,
+    author: author ?? null,
+    publisher: publisher ?? null,
     filepath: filePath,
     location: '',
     coverKind,
