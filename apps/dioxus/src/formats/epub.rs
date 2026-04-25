@@ -11,6 +11,7 @@ use std::sync::Mutex;
 /// EPUB text extractor using the `epub` crate.
 /// The EpubDoc is stateful (tracks current chapter), so we wrap in Mutex.
 pub struct EpubExtractor {
+    #[allow(dead_code)]
     path: PathBuf,
     doc: Mutex<EpubDoc<BufReader<File>>>,
     num_chapters: usize,

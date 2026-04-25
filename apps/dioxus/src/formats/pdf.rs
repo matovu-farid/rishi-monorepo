@@ -23,6 +23,9 @@ impl PdfExtractor {
         // Try to load PDFium library from default locations.
         // This will panic if PDFium is not installed -- that is acceptable
         // for now since PDFium is a runtime dependency.
+        // Note: Pdfium is a unit struct with thread_safe, but Default::default()
+        // has the side effect of loading the shared library.
+        #[allow(clippy::default_constructed_unit_structs)]
         let pdfium = Pdfium::default();
 
         // Open document to get page count, then drop it before moving pdfium.

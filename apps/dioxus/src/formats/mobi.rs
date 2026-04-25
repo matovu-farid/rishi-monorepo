@@ -7,6 +7,7 @@ use std::path::PathBuf;
 /// MOBI text extractor using the `mobi` crate.
 /// Splits the single HTML content into chapters at `<mbp:pagebreak>` markers.
 pub struct MobiExtractor {
+    #[allow(dead_code)]
     path: PathBuf,
     chapters: Vec<String>,
     title: String,
