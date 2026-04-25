@@ -8,6 +8,7 @@ import { z } from "zod";
 import { useChatStore } from "@/stores/chatStore";
 import { usePlayerStore } from "@/stores/playerStore";
 import { startThinkingSound, stopThinkingSound } from "@/modules/thinkingSound";
+import { playReadyChime } from "@/modules/readyChime";
 import { captureError } from "@/utils/sentry";
 
 /**
@@ -221,6 +222,10 @@ Ending conversations:
   const setChatStatus = useChatStore.getState().setChatStatus;
 
   const onAgentStart = () => {
+    // The first agent_start after connecting means the session is ready
+    if (useChatStore.getState().chatStatus === "connecting") {
+      playReadyChime();
+    }
     setChatStatus("thinking");
   };
 

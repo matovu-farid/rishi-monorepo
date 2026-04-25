@@ -6,7 +6,7 @@ import { stopThinkingSound } from "@/modules/thinkingSound";
 import { usePlayerStore } from "./playerStore";
 import { captureError } from "@/utils/sentry";
 
-export type ChatStatus = "idle" | "thinking" | "speaking";
+export type ChatStatus = "idle" | "connecting" | "thinking" | "speaking";
 
 interface ChatState {
   isChatting: boolean;
@@ -52,7 +52,7 @@ export const useChatStore = create<ChatState>()(
         startChat: (bookId: number) => {
           if (get()._isStarting) return; // Prevent concurrent starts
           const gen = get()._chatGeneration + 1;
-          set({ _chatGeneration: gen, _isStarting: true });
+          set({ _chatGeneration: gen, _isStarting: true, chatStatus: "connecting" });
 
           void startRealtime(bookId).then((session) => {
             // If chat was stopped before the session connected, close it immediately
