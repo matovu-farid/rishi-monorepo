@@ -59,7 +59,7 @@ app.use(
   "*",
   cors({
     origin: ["https://rishi.fidexa.org", "tauri://localhost", "http://tauri.localhost", "http://localhost:5173", "http://localhost:5174"],
-    allowHeaders: ["Content-Type", "Authorization"],
+    allowHeaders: ["Content-Type", "Authorization", "X-Dev-Bypass"],
     allowMethods: ["GET", "POST", "OPTIONS"],
   })
 );
