@@ -6,7 +6,6 @@ import type { NavItem, Rendition } from "epubjs";
 import { useEpubStore } from "@/stores/epubStore";
 import { updateBookLocation, type Book } from "@/lib/api";
 import Loader from "../Loader";
-import { SwipeWrapper } from "../react-reader/SwipeWrapper";
 import { TableOfContents, type TocItem } from "../react-reader/TableOfContents";
 
 interface Props {
@@ -76,15 +75,6 @@ export default function EpubView({ book }: Props) {
     [book.id, setRendition, setBookId],
   );
 
-  // Navigation helpers
-  const goNext = useCallback(() => {
-    renditionRef.current?.next();
-  }, []);
-
-  const goPrev = useCallback(() => {
-    renditionRef.current?.prev();
-  }, []);
-
   // TOC navigation
   const handleTocNavigate = useCallback(
     (href: string) => {
@@ -141,31 +131,14 @@ export default function EpubView({ book }: Props) {
         <span className="text-sm font-medium truncate flex-1">{book.title}</span>
       </div>
 
-      <div className="flex-1 relative">
-        <SwipeWrapper
-          swipeProps={{
-            onSwiped: (eventData) => {
-              const { dir } = eventData;
-              if (dir === "Left") goNext();
-              if (dir === "Right") goPrev();
-            },
-            onTouchStartOrOnMouseDown: ({ event }) => event.preventDefault(),
-            touchEventOptions: { passive: false },
-            preventScrollOnSwipe: true,
-            trackMouse: true,
-          }}
-          onSwipeLeft={goNext}
-          onSwipeRight={goPrev}
-        >
-          <ReactReader
-            url={epubData}
-            location={location}
-            locationChanged={locationChanged}
-            getRendition={getRendition}
-            tocChanged={(newToc) => setToc(newToc)}
-          />
-        </SwipeWrapper>
-
+      <div style={{ position: "relative", flex: 1, overflow: "hidden" }}>
+        <ReactReader
+          url={epubData}
+          location={location}
+          locationChanged={locationChanged}
+          getRendition={getRendition}
+          tocChanged={(newToc) => setToc(newToc)}
+        />
       </div>
 
       {/* Table of Contents sidebar */}
