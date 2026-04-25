@@ -187,6 +187,7 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
           width: "100%",
           height: "100%",
           manager: "continuous",
+          allowScriptedContent: true,
           ...epubOptions,
         });
         this.rendition = rendition;
