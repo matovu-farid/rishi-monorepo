@@ -71,7 +71,8 @@ export async function startSignInFlow(): Promise<void> {
     const url =
       `https://rishi.fidexa.org?login=true` +
       `&state=${encodeURIComponent(result.state)}` +
-      `&code_challenge=${encodeURIComponent(result.codeChallenge)}`;
+      `&code_challenge=${encodeURIComponent(result.codeChallenge)}` +
+      `&redirect_scheme=rishi-electron`;
     await window.electron.openExternal(url);
   } catch (err) {
     useAuthStore.getState().setSigningIn(false);

@@ -11,6 +11,10 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   - '!{vitest.config.ts,cypress.config.ts}'
   - '!{cypress,test}/*'
+protocols:
+  - name: Rishi Electron
+    schemes:
+      - rishi-electron
 asarUnpack:
   - resources/**
   - node_modules/better-sqlite3/**
