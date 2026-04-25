@@ -311,9 +311,11 @@ export class TTSQueue extends EventEmitter {
     });
 
     try {
+      // OpenAI TTS API has a 4096 character limit per request
+      const truncatedText = item.text.length > 4000 ? item.text.slice(0, 4000) + "…" : item.text;
       const requestBody = {
         voice: "alloy",
-        input: item.text,
+        input: truncatedText,
         response_format: "mp3",
         speed: 1.0,
       };
