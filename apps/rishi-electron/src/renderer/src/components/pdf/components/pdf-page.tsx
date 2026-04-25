@@ -2,7 +2,6 @@ import { Page } from "react-pdf";
 
 import { usePdfStore } from "@/stores/pdfStore";
 import { Loader2 } from "lucide-react";
-
 type Transform = [number, number, number, number, number, number];
 
 const PARAGRAPH_INDEX_PER_PAGE = 10000;
@@ -21,6 +20,7 @@ export function PageComponent({
   bookId: string;
   onRenderComplete?: () => void;
 }) {
+  // const [pageData, setPageData] = useState<TextContent | null>(null);
   const isHighlighting = usePdfStore((s) => s.isHighlighting);
   const highlightedParagraphIndex = usePdfStore((s) => s.highlightedParagraphIndex);
   const currentViewParagraphs = usePdfStore((s) => s.currentViewParagraphs);
@@ -56,6 +56,7 @@ export function PageComponent({
       }) => {
         if (
           isHighlighting &&
+          // isHighlighedPage() &&
           isInsideParagraph(transform as Transform)
         ) {
           return `<mark style="background-color: rgb(255,255,204);">${str}</mark>`;

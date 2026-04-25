@@ -22,7 +22,7 @@ export interface HighlightRow {
  * Save or update a highlight in the SQLite highlights table.
  */
 export async function saveHighlight(params: {
-  bookId: string;
+  bookSyncId: string;
   cfiRange: string;
   text: string;
   color?: string;
@@ -34,7 +34,7 @@ export async function saveHighlight(params: {
   // Check if a highlight already exists for this cfiRange + book
   const existing = (await window.electron.dbQuery(
     `SELECT id FROM highlights WHERE book_id = ? AND cfi_range = ? AND is_deleted = 0 LIMIT 1`,
-    [params.bookId, params.cfiRange]
+    [params.bookSyncId, params.cfiRange]
   )) as HighlightRow[];
 
   if (existing.length > 0) {
@@ -60,7 +60,7 @@ export async function saveHighlight(params: {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 0)`,
     [
       id,
-      params.bookId,
+      params.bookSyncId,
       params.cfiRange,
       params.text,
       params.color ?? 'yellow',

@@ -36,8 +36,8 @@ describe("epubStore", () => {
     useEpubStore.getState().setTheme(ThemeType.Yellow);
     expect(useEpubStore.getState().theme).toBe(ThemeType.Yellow);
 
-    useEpubStore.getState().setTheme(ThemeType.Gray);
-    expect(useEpubStore.getState().theme).toBe(ThemeType.Gray);
+    useEpubStore.getState().setTheme(ThemeType.Dark);
+    expect(useEpubStore.getState().theme).toBe(ThemeType.Dark);
   });
 
   it("should increment rendition count", () => {
@@ -91,8 +91,8 @@ describe("epubStore", () => {
     useEpubStore.getState().setTheme(ThemeType.Yellow);
     expect(useEpubStore.getState().theme).toBe(ThemeType.Yellow);
 
-    useEpubStore.getState().setTheme(ThemeType.Gray);
-    expect(useEpubStore.getState().theme).toBe(ThemeType.Gray);
+    useEpubStore.getState().setTheme(ThemeType.Dark);
+    expect(useEpubStore.getState().theme).toBe(ThemeType.Dark);
 
     useEpubStore.getState().setTheme(ThemeType.White);
     expect(useEpubStore.getState().theme).toBe(ThemeType.White);

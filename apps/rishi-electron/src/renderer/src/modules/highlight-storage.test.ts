@@ -13,7 +13,7 @@ describe("highlight-storage", () => {
     vi.mocked(window.electron.dbRun).mockResolvedValueOnce({ changes: 1, lastInsertRowid: 1 });
 
     await saveHighlight({
-      bookId: "book-123",
+      bookSyncId: "book-123",
       cfiRange: "epubcfi(/6/4!/4/2/1:0)",
       text: "highlighted text",
       color: "yellow",

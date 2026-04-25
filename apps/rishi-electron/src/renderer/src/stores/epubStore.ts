@@ -4,12 +4,9 @@ import type Rendition from "epubjs/types/rendition";
 import { useChatStore } from "./chatStore";
 import { hasSavedEpubData } from "@/lib/api";
 import { prefetchRealtimeKey } from "@/modules/realtime";
+import { ThemeType } from "@/themes/common";
 
-export enum ThemeType {
-  White = "white",
-  Yellow = "yellow",
-  Gray = "gray",
-}
+export { ThemeType };
 
 let _prefetchTimer: ReturnType<typeof setTimeout> | null = null;
 let _publishPrefetchTimer: ReturnType<typeof setTimeout> | null = null;

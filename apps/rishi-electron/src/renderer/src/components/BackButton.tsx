@@ -15,7 +15,7 @@ export function BackButton() {
     switch (theme) {
       case ThemeType.White:
         return "text-black hover:bg-black/10 hover:text-black";
-      case ThemeType.Gray:
+      case ThemeType.Dark:
         return "text-white hover:bg-white/10 hover:text-white";
       default:
         return "text-black hover:bg-black/10 hover:text-black";
