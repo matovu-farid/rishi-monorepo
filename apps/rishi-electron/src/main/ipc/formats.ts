@@ -867,9 +867,13 @@ async function getDjvuPageTextImpl(filePath: string, pageNumber: number): Promis
 export function registerFormatHandlers(): void {
   // --- EPUB ---
   ipcMain.handle('formats:getBookData', async (_event, filePath: string) => {
+    console.log('[formats:getBookData] Called with:', filePath)
     try {
-      return await extractEpubData(filePath)
+      const result = await extractEpubData(filePath)
+      console.log('[formats:getBookData] Success:', result.title, '- cover bytes:', result.cover.length)
+      return result
     } catch (error) {
+      console.error('[formats:getBookData] Error:', error)
       throw new Error(
         `Failed to extract EPUB data from "${filePath}": ${error instanceof Error ? error.message : String(error)}`
       )

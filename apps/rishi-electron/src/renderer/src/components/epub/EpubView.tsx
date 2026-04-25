@@ -6,7 +6,6 @@ import type { NavItem, Rendition } from "epubjs";
 import { useEpubStore } from "@/stores/epubStore";
 import { updateBookLocation, type Book } from "@/lib/api";
 import Loader from "../Loader";
-import { NavigationArrows } from "../react-reader/NavigationArrows";
 import { SwipeWrapper } from "../react-reader/SwipeWrapper";
 import { TableOfContents, type TocItem } from "../react-reader/TableOfContents";
 import { PageCurlOverlay } from "../pagecurl/PageCurlOverlay";
@@ -183,9 +182,6 @@ export default function EpubView({ book }: Props) {
             tocChanged={(newToc) => setToc(newToc)}
           />
         </SwipeWrapper>
-
-        {/* Navigation arrow buttons */}
-        <NavigationArrows onPrev={goPrev} onNext={goNext} />
 
         {/* Page curl canvas overlay */}
         {pageCurl.active && (
