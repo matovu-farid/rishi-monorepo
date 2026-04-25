@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 describe("TTSCache", () => {
   beforeEach(() => {
+    vi.resetModules();
     vi.clearAllMocks();
     // Set up default mock returns for file operations
     vi.mocked(window.electron.getAppDataPath).mockResolvedValue(
@@ -69,7 +70,7 @@ describe("TTSCache", () => {
     expect(writeCall[0]).toContain(".mp3");
   });
 
-  it("should return cached blob URL when file exists", async () => {
+  it("should return cached audio data when file exists", async () => {
     vi.mocked(window.electron.exists)
       .mockResolvedValueOnce(true) // book dir exists
       .mockResolvedValueOnce(true); // file exists
@@ -79,34 +80,33 @@ describe("TTSCache", () => {
 
     const { ttsCache } = await import("./ttsCache");
 
-    const url = await ttsCache.getCachedAudioUrl("book1", "cfi1");
-    expect(url).toMatch(/^blob:/);
+    const data = await ttsCache.getCachedAudioData("book1", "cfi1");
+    expect(data).toBeInstanceOf(ArrayBuffer);
+    expect(data!.byteLength).toBe(100);
     expect(window.electron.readFile).toHaveBeenCalled();
   });
 
-  it("should return null URL when file does not exist", async () => {
+  it("should return null data when file does not exist", async () => {
     vi.mocked(window.electron.exists).mockResolvedValue(false);
 
     const { ttsCache } = await import("./ttsCache");
 
-    const url = await ttsCache.getCachedAudioUrl("book1", "cfi1");
-    expect(url).toBeNull();
+    const data = await ttsCache.getCachedAudioData("book1", "cfi1");
+    expect(data).toBeNull();
   });
 
-  it("should clear book cache by removing directory files", async () => {
+  it("should clear book cache by removing directory recursively", async () => {
     vi.mocked(window.electron.exists).mockResolvedValue(true);
-    vi.mocked(window.electron.readDir).mockResolvedValue([
-      "abc123.mp3",
-      "def456.mp3",
-    ]);
 
     const { ttsCache } = await import("./ttsCache");
 
     await ttsCache.clearBookCache("book1");
 
-    expect(window.electron.readDir).toHaveBeenCalled();
-    // Should have tried to remove each file plus the directory
-    expect(window.electron.removeFile).toHaveBeenCalledTimes(3);
+    // Should remove the entire book directory in one recursive call
+    expect(window.electron.removeFile).toHaveBeenCalledTimes(1);
+    expect(window.electron.removeFile).toHaveBeenCalledWith(
+      expect.stringContaining("tts-cache/book1"),
+    );
   });
 
   it("should check total cache size via getDirSize", async () => {

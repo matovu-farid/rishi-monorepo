@@ -3,6 +3,18 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import JSZip from "jszip";
 
+/**
+ * Assert that the given file/directory path is inside the app's userData directory.
+ * Prevents IPC callers from accessing arbitrary filesystem paths.
+ */
+function assertSafePath(filePath: string): void {
+  const safeBase = app.getPath("userData");
+  const resolved = path.resolve(filePath);
+  if (!resolved.startsWith(safeBase + path.sep) && resolved !== safeBase) {
+    throw new Error("Access denied: path outside app data directory");
+  }
+}
+
 /** Size thresholds in bytes per format */
 const SIZE_LIMITS: Record<string, { warn: number; block: number }> = {
   epub: { warn: 100 * 1024 * 1024, block: 500 * 1024 * 1024 },
@@ -151,6 +163,7 @@ export function registerFsHandlers(): void {
 
   ipcMain.handle("fs:readDir", async (_event, dirPath: string) => {
     try {
+      assertSafePath(dirPath);
       const entries = await fs.readdir(dirPath);
       return entries;
     } catch (error) {
@@ -162,6 +175,7 @@ export function registerFsHandlers(): void {
 
   ipcMain.handle("fs:removeFile", async (_event, filePath: string) => {
     try {
+      assertSafePath(filePath);
       await fs.rm(filePath, { recursive: true, force: true });
     } catch (error) {
       throw new Error(
@@ -172,6 +186,7 @@ export function registerFsHandlers(): void {
 
   ipcMain.handle("fs:getDirSize", async (_event, dirPath: string) => {
     try {
+      assertSafePath(dirPath);
       return await getDirectorySize(dirPath);
     } catch {
       return 0;
@@ -180,6 +195,7 @@ export function registerFsHandlers(): void {
 
   ipcMain.handle("fs:getCacheFileStats", async (_event, dirPath: string) => {
     try {
+      assertSafePath(dirPath);
       return await collectFileStats(dirPath);
     } catch {
       return [];

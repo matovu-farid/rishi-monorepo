@@ -31,6 +31,8 @@ async function embedTextsOnServer(texts: string[]): Promise<number[][]> {
       const devBypass = await window.electron.getDevBypassSecret();
       if (devBypass) {
         headers["X-Dev-Bypass"] = devBypass;
+      } else {
+        throw new Error("Not authenticated: no auth token or dev bypass available");
       }
     }
 

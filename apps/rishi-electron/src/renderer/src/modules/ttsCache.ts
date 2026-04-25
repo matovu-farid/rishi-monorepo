@@ -141,10 +141,17 @@ class TTSCache {
 
       await window.electron.writeFile(filePath, uint8Array);
 
-      // Verify file was created
+      // Verify file was created and is non-empty
       const exists = await window.electron.exists(filePath);
       if (!exists) {
         throw new Error("File was not created successfully");
+      }
+
+      // Check for zero-byte file (corrupt or failed write)
+      const fileData = await window.electron.readFile(filePath);
+      if (fileData.byteLength === 0) {
+        await window.electron.removeFile(filePath);
+        throw new Error("Written file is zero bytes, deleted corrupt cache entry");
       }
 
       // If text is provided, save a copy under the text-hash key
@@ -182,22 +189,21 @@ class TTSCache {
   }
 
   /**
-   * Read cached audio from disk and return a blob URL.
+   * Read cached audio from disk and return the raw ArrayBuffer.
+   * The caller is responsible for creating (and revoking) any blob URLs.
    */
-  async getCachedAudioUrl(
+  async getCachedAudioData(
     bookId: string,
     cfiRange: string,
     textHash?: string,
-  ): Promise<string | null> {
+  ): Promise<ArrayBuffer | null> {
     try {
       const info = await this.getCachedAudio(bookId, cfiRange, textHash);
       if (!info.exists) return null;
 
-      const arrayBuffer = await window.electron.readFile(info.filePath);
-      const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
-      return URL.createObjectURL(blob);
+      return await window.electron.readFile(info.filePath);
     } catch (error) {
-      console.error(">>> Cache: Error reading cached audio URL", error);
+      console.error(">>> Cache: Error reading cached audio data", error);
       return null;
     }
   }
@@ -210,24 +216,25 @@ class TTSCache {
       const bookCacheDir = await this.getBookCacheDir(bookId);
       const exists = await window.electron.exists(bookCacheDir);
       if (exists) {
-        // Read the directory and remove each file
-        const files = await window.electron.readDir(bookCacheDir);
-        for (const file of files) {
-          try {
-            await window.electron.removeFile(`${bookCacheDir}/${file}`);
-          } catch {
-            // Ignore individual file deletion errors
-          }
-        }
-        // Try to remove the now-empty directory
-        try {
-          await window.electron.removeFile(bookCacheDir);
-        } catch {
-          // Directory may not be empty or other error - ignore
-        }
+        // removeFile uses fs.rm with recursive: true, so one call handles everything
+        await window.electron.removeFile(bookCacheDir);
       }
     } catch (error) {
       console.warn(`Could not clear book cache: ${error}`);
+    }
+  }
+
+  /**
+   * Get cache size for a specific book (in bytes).
+   */
+  async getBookCacheSize(bookId: string): Promise<number> {
+    try {
+      const bookCacheDir = await this.getBookCacheDir(bookId);
+      const exists = await window.electron.exists(bookCacheDir);
+      if (!exists) return 0;
+      return await window.electron.getDirSize(bookCacheDir);
+    } catch {
+      return 0;
     }
   }
 

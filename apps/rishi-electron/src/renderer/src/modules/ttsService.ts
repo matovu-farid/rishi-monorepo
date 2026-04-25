@@ -41,8 +41,8 @@ class TTSService extends EventEmitter {
     await ttsCache.clearBookCache(bookId);
   }
 
-  async getBookCacheSize(_bookId: string): Promise<number> {
-    return ttsCache.getTotalCacheSize();
+  async getBookCacheSize(bookId: string): Promise<number> {
+    return ttsCache.getBookCacheSize(bookId);
   }
 }
 

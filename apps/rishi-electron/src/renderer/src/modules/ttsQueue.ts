@@ -41,13 +41,14 @@ class TTSQueue extends EventEmitter {
   private async _enqueue(req: TTSRequest): Promise<string> {
     // Check disk cache before enqueueing a network request
     try {
-      const cachedUrl = await ttsCache.getCachedAudioUrl(
+      const cachedData = await ttsCache.getCachedAudioData(
         req.bookId,
         req.cfiRange,
         req.text,
       );
-      if (cachedUrl) {
-        return cachedUrl;
+      if (cachedData) {
+        const blob = new Blob([cachedData], { type: "audio/mpeg" });
+        return URL.createObjectURL(blob);
       }
     } catch {
       // Cache lookup failed -- fall through to network request
@@ -136,7 +137,7 @@ class TTSQueue extends EventEmitter {
       const blob = await response.blob();
 
       // Save to disk cache (fire-and-forget -- do not block playback)
-      ttsCache
+      void ttsCache
         .saveCachedAudio(req.bookId, req.cfiRange, blob, req.text)
         .catch((err) =>
           console.warn("[ttsQueue] failed to save audio to cache:", err),
