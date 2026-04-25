@@ -11,6 +11,10 @@ import { getParagraphThreshold } from "../utils/getParagraphThreshold";
 const MIN_PARAGRAPH_LENGTH = 50;
 
 const PARAGRAPH_INDEX_PER_PAGE = 10000;
+// export function getPageParagraphs(pageNumber: number): Paragraph[] {
+//   const pageData = useAtomValue(pageNumberToPageDataAtom);
+//   return pageDataToParagraphs(pageNumber, pageData[pageNumber]);
+// }
 
 export function pageDataToParagraphs(
   pageNumber: number,
@@ -84,6 +88,7 @@ export function pageDataToParagraphs(
       dimensions: {
         top: Math.max(item.transform[5], paragraghSoFar.dimensions.top),
         bottom: Math.min(
+          // item.transform[5] - item.height,
           item.transform[5],
           paragraghSoFar.dimensions.bottom
         ),
