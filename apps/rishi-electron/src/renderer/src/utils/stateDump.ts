@@ -36,7 +36,7 @@ export function logStateEvent(event: string, data: Record<string, unknown> = {})
 
 async function buildStateDump(): Promise<Record<string, unknown>> {
   const playerState = usePlayerStore.getState();
-  const queueStatus = ttsQueue.getStatus();
+  const queueStatus = ttsQueue.getQueueStatus();
 
   let devMode: boolean | null = null;
   let tokenType: string | null = null;

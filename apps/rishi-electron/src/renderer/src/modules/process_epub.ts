@@ -1,10 +1,9 @@
 /**
  * Process EPUB paragraphs into page data chunks, save to DB, embed, and save vectors.
- * Adapted from the Tauri version to use Electron's @/lib/api functions.
+ * Ported from the Tauri version to use Electron's @/lib/api functions.
  */
 
 import {
-  embed,
   saveVectors,
   hasSavedEpubData,
   savePageDataMany,
@@ -14,6 +13,7 @@ import type {
   Vector,
   ChunkDataInsertable,
 } from "@/lib/api";
+import { embedWithFallback } from "./embed-fallback";
 
 export interface PageDataInsertable {
   id: number;
@@ -69,7 +69,7 @@ export async function processEpubJob(
     try {
       const batches = batchEmbed(embedParams);
       for (const batch of batches) {
-        const embedResults = await embed({ embedparams: batch });
+        const embedResults = await embedWithFallback(batch);
 
         const vectorObjects = embedResults.map((result) => ({
           id: result.metadata.id,

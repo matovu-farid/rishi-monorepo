@@ -20,6 +20,11 @@ export interface TTSErrorEvent {
   error: string;
 }
 
+export type TTSServiceEventMap = {
+  [TTS_EVENTS.AUDIO_READY]: [AudioReadyEvent];
+  [TTS_EVENTS.ERROR]: [TTSErrorEvent];
+};
+
 export class TTSService extends EventEmitter {
   private readonly activeRequests = new Set<string>();
   private readonly pendingListeners = new Map<
@@ -38,30 +43,15 @@ export class TTSService extends EventEmitter {
     super();
 
     // Forward audio-ready events from queue
-    ttsQueue.on(TTSQueueEvents.AUDIO_READY, (event: { key: string; url: string }) => {
-      // Parse the key back to bookId/cfiRange
-      const idx = event.key.indexOf("-");
-      const bookId = event.key.slice(0, idx);
-      const cfiRange = event.key.slice(idx + 1);
-      this.activeRequests.delete(event.key);
-      this.emit(TTS_EVENTS.AUDIO_READY, {
-        bookId,
-        cfiRange,
-        audioPath: event.url,
-      } as AudioReadyEvent);
+    ttsQueue.on(TTSQueueEvents.AUDIO_READY, (event: AudioReadyEvent) => {
+      this.activeRequests.delete(`${event.bookId}-${event.cfiRange}`);
+      this.emit(TTS_EVENTS.AUDIO_READY, event);
     });
 
     // Forward error events from queue
-    ttsQueue.on(TTSQueueEvents.AUDIO_ERROR, (event: { key: string; error: string }) => {
-      const idx = event.key.indexOf("-");
-      const bookId = event.key.slice(0, idx);
-      const cfiRange = event.key.slice(idx + 1);
-      this.activeRequests.delete(event.key);
-      this.emit(TTS_EVENTS.ERROR, {
-        bookId,
-        cfiRange,
-        error: event.error,
-      } as TTSErrorEvent);
+    ttsQueue.on(TTSQueueEvents.AUDIO_ERROR, (event: TTSErrorEvent) => {
+      this.activeRequests.delete(`${event.bookId}-${event.cfiRange}`);
+      this.emit(TTS_EVENTS.ERROR, event);
     });
   }
 
@@ -91,6 +81,10 @@ export class TTSService extends EventEmitter {
 
           const onError = (event: TTSErrorEvent) => {
             if (event.bookId === bookId && event.cfiRange === cfiRange) {
+              console.error(">>> Service: Active request failed", {
+                requestId,
+                error: event.error,
+              });
               this.cleanupPendingListener(requestId);
               reject(new Error(event.error));
             }
@@ -98,6 +92,10 @@ export class TTSService extends EventEmitter {
 
           // Setup timeout to prevent memory leaks
           const timeout = setTimeout(() => {
+            console.error(">>> Service: Request timeout", {
+              requestId,
+              timeoutMs: this.LISTENER_TIMEOUT_MS,
+            });
             this.cleanupPendingListener(requestId);
             reject(new Error("Request timeout"));
           }, this.LISTENER_TIMEOUT_MS);
@@ -135,7 +133,12 @@ export class TTSService extends EventEmitter {
       this.activeRequests.add(requestId);
 
       // Queue for generation
-      const audioPath = await ttsQueue.requestAudio(bookId, cfiRange, text, priority);
+      const audioPath = await ttsQueue.requestAudio(
+        bookId,
+        cfiRange,
+        text,
+        priority
+      );
 
       return audioPath;
     } catch (error) {
@@ -168,10 +171,18 @@ export class TTSService extends EventEmitter {
    * Get audio path if cached
    */
   async getAudioPath(bookId: string, cfiRange: string): Promise<string | null> {
-    const requestId = `${bookId}-${cfiRange}`;
-    // Check active requests first
-    if (this.activeRequests.has(requestId)) {
-      return null; // Still in-flight
+    try {
+      const cached = await ttsCache.getCachedAudio(bookId, cfiRange);
+      if (cached.exists) {
+        // Read the data and return a blob URL
+        const data = await ttsCache.getCachedAudioData(bookId, cfiRange);
+        if (data) {
+          const blob = new Blob([data], { type: "audio/mpeg" });
+          return URL.createObjectURL(blob);
+        }
+      }
+    } catch {
+      // Cache lookup failed
     }
     return null;
   }
@@ -180,7 +191,7 @@ export class TTSService extends EventEmitter {
    * Get queue status
    */
   getQueueStatus(): { pending: number; isProcessing: boolean; active: number } {
-    return ttsQueue.getStatus();
+    return ttsQueue.getQueueStatus();
   }
 
   /**
@@ -189,8 +200,7 @@ export class TTSService extends EventEmitter {
   cancelRequest(bookId: string, cfiRange: string): boolean {
     const requestId = `${bookId}-${cfiRange}`;
     this.activeRequests.delete(requestId);
-    // ttsQueue doesn't expose cancelRequest -- just remove from tracking
-    return true;
+    return ttsQueue.cancelRequest(requestId);
   }
 
   /**
@@ -202,6 +212,7 @@ export class TTSService extends EventEmitter {
     );
     for (const requestId of requestsToCancel) {
       this.activeRequests.delete(requestId);
+      ttsQueue.cancelRequest(requestId);
     }
   }
 

@@ -13,14 +13,14 @@ describe("TTSQueue", () => {
   });
 
   it("should start with empty queue", () => {
-    const status = ttsQueue.getStatus();
+    const status = ttsQueue.getQueueStatus();
     expect(status.pending).toBe(0);
     expect(status.isProcessing).toBe(false);
   });
 
   it("should clear queue", () => {
     ttsQueue.clearQueue();
-    expect(ttsQueue.getStatus().pending).toBe(0);
+    expect(ttsQueue.getQueueStatus().pending).toBe(0);
   });
 
   it("should request audio and return blob URL", async () => {

@@ -5,7 +5,8 @@ vi.mock("./ttsQueue", () => ({
   ttsQueue: {
     requestAudio: vi.fn().mockResolvedValue("blob:mock-audio-url"),
     clearQueue: vi.fn(),
-    getStatus: vi.fn().mockReturnValue({ pending: 0, isProcessing: false, active: 0 }),
+    getQueueStatus: vi.fn().mockReturnValue({ pending: 0, isProcessing: false, active: 0 }),
+    cancelRequest: vi.fn().mockReturnValue(true),
     on: vi.fn(),
     off: vi.fn(),
     emit: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("./ttsCache", () => ({
   ttsCache: {
     clearBookCache: vi.fn().mockResolvedValue(undefined),
     getBookCacheSize: vi.fn().mockResolvedValue(0),
+    getCachedAudio: vi.fn().mockResolvedValue({ filePath: "", exists: false }),
     getCachedAudioData: vi.fn().mockResolvedValue(null),
   },
 }));
@@ -62,7 +64,7 @@ describe("TTSService", () => {
   it("should return queue status from ttsQueue", () => {
     const status = ttsService.getQueueStatus();
     expect(status).toEqual({ pending: 0, isProcessing: false, active: 0 });
-    expect(ttsQueue.getStatus).toHaveBeenCalled();
+    expect(ttsQueue.getQueueStatus).toHaveBeenCalled();
   });
 
   it("should clear book cache via ttsCache", async () => {
