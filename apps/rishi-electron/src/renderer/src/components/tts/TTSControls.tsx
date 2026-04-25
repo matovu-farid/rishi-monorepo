@@ -12,6 +12,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { usePlayerMachine } from "@/hooks/usePlayerMachine";
 import { usePlayerStore } from "@/stores/playerStore";
+import { ContextualHint } from "@/components/tutorial/ContextualHint";
 
 interface TTSControlsProps {
   bookId: string;
@@ -57,8 +58,10 @@ export default function TTSControls({
   useEffect(() => {
     if (!expanded) return;
     if (playingState === "playing") {
+      // Suspend timer while playing
       clearDismissTimer();
     } else if (!isHoveringRef.current) {
+      // Paused / Stopped and not hovering → start countdown
       startDismissTimer();
     }
   }, [playingState, expanded, clearDismissTimer, startDismissTimer]);
@@ -81,17 +84,19 @@ export default function TTSControls({
     }
   };
 
-  // --- Orb click -> expand ---
+  // --- Orb click → expand ---
   const handleOrbClick = () => {
     clearDismissTimer();
     setExpanded(true);
   };
 
+  // Show error snackbar when error occurs
   const handleErrorClose = () => {
     setShowError(false);
   };
 
   const handlePlay = () => {
+    // Allow pause/resume without auth since playback was already started
     if (playingState === "playing") {
       send({ type: "PAUSE" });
       return;
@@ -118,10 +123,13 @@ export default function TTSControls({
   };
 
   const handleShowErrorDetails = () => {
-    toast.info(`Errors: ${errors.join(", ")}`, {
-      position: "top-center",
-      autoClose: 5000,
-    });
+    toast.info(
+      `Errors: ${errors.join(", ")}`,
+      {
+        position: "top-center",
+        autoClose: 5000,
+      }
+    );
   };
 
   const getPlayIcon = () => {
@@ -161,7 +169,14 @@ export default function TTSControls({
   };
 
   return (
-    <>
+    <ContextualHint
+      id="tts-controls"
+      title="Listen to Your Book"
+      description="Tap to have your book read aloud with AI-powered text-to-speech."
+      dotPosition="top-left"
+    >
+      {AuthDialog}
+
       {/* Inject keyframes for waveform animation */}
       <style>{`
         @keyframes tts-waveform {
@@ -175,19 +190,15 @@ export default function TTSControls({
         }
       `}</style>
 
-      {/* Single morphing container: orb <-> pill */}
+      {/* Single morphing container: orb ↔ pill */}
       <div
         onClick={!expanded ? handleOrbClick : undefined}
-        onKeyDown={
-          !expanded
-            ? (e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  handleOrbClick();
-                }
-              }
-            : undefined
-        }
+        onKeyDown={!expanded ? (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handleOrbClick();
+          }
+        } : undefined}
         role={!expanded ? "button" : undefined}
         tabIndex={!expanded ? 0 : undefined}
         aria-label={!expanded ? "Expand TTS controls" : "TTS controls"}
@@ -196,18 +207,20 @@ export default function TTSControls({
         className="fixed z-50 flex items-center justify-center motion-reduce:transition-none"
         style={{
           ...glassContainer,
+          // Position: bottom-right orb vs bottom-center pill
           bottom: 32,
           right: expanded ? "auto" : 32,
           left: expanded ? "50%" : "auto",
           transform: expanded ? "translateX(-50%)" : "none",
+          // Size: explicit values so CSS can interpolate the transition
           width: expanded ? 240 : 52,
           height: expanded ? 66 : 52,
           borderRadius: expanded ? 40 : "50%",
           padding: expanded ? "8px 14px" : 0,
           gap: expanded ? 6 : 0,
           cursor: expanded ? "default" : "pointer",
-          transitionProperty:
-            "width, height, border-radius, padding, gap, bottom, right, left, transform",
+          // Morph animation
+          transitionProperty: "width, height, border-radius, padding, gap, bottom, right, left, transform",
           transitionDuration: expanded ? "250ms" : "200ms",
           transitionTimingFunction: expanded
             ? "cubic-bezier(0.34, 1.56, 0.64, 1)"
@@ -311,7 +324,6 @@ export default function TTSControls({
           })}
         </div>
       )}
-      {AuthDialog}
-    </>
+    </ContextualHint>
   );
 }

@@ -1,4 +1,5 @@
 import React from "react";
+import { ContextualHint } from "@/components/tutorial/ContextualHint";
 import type { ChatStatus } from "@/stores/chatStore";
 
 interface AIChatOrbProps {
@@ -34,7 +35,12 @@ export default function AIChatOrb({ chatStatus, onClick }: AIChatOrbProps) {
   const barColor = getBarColor(chatStatus);
 
   return (
-    <>
+    <ContextualHint
+      id="ai-chat-orb"
+      title="AI Chat"
+      description="Tap to ask questions about this book. AI answers using the book's content."
+      dotPosition="top-left"
+    >
       <style>{`
         @keyframes ai-waveform {
           0%, 100% { transform: scaleY(0.4); }
@@ -97,6 +103,6 @@ export default function AIChatOrb({ chatStatus, onClick }: AIChatOrbProps) {
           ))}
         </div>
       </div>
-    </>
+    </ContextualHint>
   );
 }

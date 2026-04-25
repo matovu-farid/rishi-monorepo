@@ -1,82 +1,284 @@
+import { getContextForQuery, getRealtimeClientSecret } from "@/lib/api";
+import {
+  RealtimeAgent,
+  RealtimeSession,
+  tool,
+} from "@openai/agents/realtime";
+import { z } from "zod";
+import { useChatStore } from "@/stores/chatStore";
+import { usePlayerStore } from "@/stores/playerStore";
+import { startThinkingSound, stopThinkingSound } from "@/modules/thinkingSound";
+import { captureError } from "@/utils/sentry";
+
 /**
- * OpenAI Realtime voice chat integration.
- * Same as Tauri version - no Tauri dependencies (uses fetch directly).
+ * External cleanup registry for realtime sessions.
+ * Avoids monkey-patching the SDK session object with `as any`.
  */
-import type { RealtimeSession } from "@openai/agents/realtime";
-import { getRealtimeClientSecret, getContextForQuery } from "@/lib/api";
+export const sessionCleanupMap = new WeakMap<object, () => void>();
 
-// Session cleanup registry
-export const sessionCleanupMap = new WeakMap<RealtimeSession, () => void>();
+// --- Cached API key to avoid fetching on every chat start ---
+// The key has a 10-minute TTL server-side; we treat it as stale after 9 minutes.
+const KEY_TTL_MS = 9 * 60 * 1000;
+let _cachedKey: string | null = null;
+let _cachedKeyTime = 0;
+let _prefetchPromise: Promise<string> | null = null;
 
-let cachedKey: { key: string; timestamp: number } | null = null;
-const KEY_TTL = 9 * 60 * 1000; // 9 minutes
-
-async function getApiKey(): Promise<string> {
-  if (cachedKey && Date.now() - cachedKey.timestamp < KEY_TTL) {
-    return cachedKey.key;
+async function getOrFetchKey(): Promise<string> {
+  if (_cachedKey && Date.now() - _cachedKeyTime < KEY_TTL_MS) {
+    return _cachedKey;
   }
-  const key = await getRealtimeClientSecret();
-  cachedKey = { key, timestamp: Date.now() };
-  return key;
-}
-
-export function prefetchRealtimeKey(): void {
-  void getApiKey().catch(() => {
-    // Silent fail for prefetch - key will be fetched on demand
+  // If a prefetch is already in flight, await it instead of firing a second request
+  if (_prefetchPromise) {
+    return _prefetchPromise;
+  }
+  _prefetchPromise = getRealtimeClientSecret().then((key) => {
+    _cachedKey = key;
+    _cachedKeyTime = Date.now();
+    _prefetchPromise = null;
+    return key;
+  }).catch((err) => {
+    _prefetchPromise = null;
+    throw err;
   });
+  return _prefetchPromise;
 }
 
-export async function startRealtime(bookId: number): Promise<RealtimeSession> {
-  const { RealtimeAgent, RealtimeSession: RTSession } = await import("@openai/agents/realtime");
-  const { tool } = await import("@openai/agents");
+/** Pre-fetch the realtime API key so it's ready when the user starts chatting. */
+export function prefetchRealtimeKey() {
+  void getOrFetchKey();
+}
 
-  const apiKey = await getApiKey();
+// TODO: Re-enable guardrails once audio quality impact is resolved.
+// See docs/superpowers/specs/2026-04-19-ai-chat-orb-design.md for context.
+export async function startRealtime(bookId: number) {
+  // Gather the text currently visible on the user's screen
+  const currentPageText = usePlayerStore
+    .getState()
+    .currentParagraphs.map((p) => p.text)
+    .join("\n");
 
   const bookContextTool = tool({
     name: "bookContext",
-    description: "Retrieve relevant passages from the current book to answer the user's question",
-    parameters: {
-      type: "object" as const,
-      properties: {
-        query: { type: "string", description: "The search query to find relevant book passages" },
-      },
-      required: ["query"] as const,
-      additionalProperties: true as const,
-    },
-    strict: false,
-    execute: async (input: unknown) => {
-      const parsed = input as { query: string };
-      const contexts = await getContextForQuery({ queryText: parsed.query, bookId, k: 5 });
-      return contexts.join("\n\n---\n\n");
+    description:
+      "Retrieve information from OTHER parts of the book beyond the current page. Only use this when the user asks about content NOT visible on their current page. Do NOT call this tool if the answer is already in the current page content provided in your instructions.",
+    parameters: z.object({
+      queryText: z.string(),
+    }),
+    execute: async ({ queryText }) => {
+      try {
+        const context = await getContextForQuery({
+          bookId,
+          queryText,
+          k: 3,
+        });
+        return context;
+      } catch (err) {
+        captureError(err, { operation: "realtime", step: "bookContext_tool" });
+        return ["Unable to retrieve book context at this time."];
+      }
     },
   });
 
-  const endConversationTool = tool({
+  const endConvesationTool = tool({
     name: "endConversation",
-    description: "End the current conversation when the user is done",
-    parameters: {
-      type: "object" as const,
-      properties: {},
-      required: [] as const,
-      additionalProperties: true as const,
-    },
-    strict: false,
-    execute: async () => {
-      return "Conversation ended.";
+    description: "End the conversation with the user.",
+    parameters: z.object({
+      reason: z.string(),
+    }),
+    execute: async ({ reason }) => {
+      console.log("Ending conversation with reason: ", reason);
+      useChatStore.getState().stopConversation();
     },
   });
 
   const agent = new RealtimeAgent({
-    name: "Rishi Book Assistant",
-    instructions: `You are a helpful educational assistant for the book the user is reading.
-    Use the bookContext tool to retrieve relevant passages when answering questions.
-    Be concise and accurate. If you can't find relevant information in the book, say so honestly.
-    When citing, reference page numbers or sections.`,
-    tools: [bookContextTool, endConversationTool],
+    name: "Assistant",
+    voice: "alloy",
+    instructions: `## Role and Goal
+You are a teacher and educational assistant whose role is to help the user understand the book they are reading. Your goal is to make complex concepts accessible and answer questions in a way that enhances their comprehension of the material.
+
+## Current Page Content
+The user is currently looking at this page:
+"""
+${currentPageText || "(No page text available)"}
+"""
+If the user's question can be answered from the page content above, answer directly WITHOUT using the bookContext tool. Only use bookContext when the user asks about content from other parts of the book that isn't shown above.
+
+## Rules (CRITICAL - FOLLOW THESE)
+- DO NOT repeat the same sentence verbatim within a single response or immediately after using it. Vary your phrasing across responses to avoid sounding robotic.
+- Keep responses natural and conversational—avoid sounding scripted or mechanical.
+- When using tools, always provide a brief preamble before calling the tool.
+- Stay focused on helping with the book content, but be friendly and allow for natural conversation flow.
+
+## Conversation Flow
+
+Note: These phases represent different conversation states. The agent transitions between them based on user input and conversation context.
+
+### Phase 1: First Interaction
+Goal: Respond quickly and helpfully to whatever the user says first.
+
+How to respond:
+- If the user starts with a question, answer it directly — do not greet first.
+- If the user starts with a greeting or casual remark, respond warmly and briefly, then ask what you can help with.
+- Keep it concise. Do not introduce yourself with a long preamble.
+
+### Phase 2: Question Handling
+Goal: Understand the user's question and answer it.
+
+How to respond:
+- Listen carefully to understand what they're asking.
+- If the answer is in the current page content provided above, answer directly from it. Do NOT use the bookContext tool.
+- If the question is about other parts of the book not on the current page, use the bookContext tool.
+- If it's small talk or a casual comment, respond naturally without using any tool.
+
+### Phase 3: Tool Usage
+Goal: Retrieve book context when needed.
+
+Before calling bookContext tool, say one short line (5-12 words; vary these):
+- "Let me check the book for that."
+- "I'll look that up in the book for you."
+- "Let me find the relevant section."
+- "Checking the book now."
+- "Looking that up for you."
+
+Then call the tool immediately. While the tool runs, keep responses concise and natural—no obvious stalling.
+
+### Phase 4: Explanation
+Goal: Provide clear, simplified explanations that enhance comprehension.
+
+How to respond:
+- Break down complex concepts into simpler terms.
+- Use examples and analogies when helpful.
+- Check for understanding by asking a brief follow-up question like "Does that make sense?" or "Would you like me to clarify anything?" and offer to explain further.
+- Keep explanations focused and relevant to what was asked.
+
+### Phase 5: Conversation Ending
+Goal: Gracefully end the conversation when the user indicates they're done.
+
+When to detect natural conversation endings:
+- User says goodbye, thanks you, and indicates they're done (e.g., "thanks, that's all", "I'm good now", "that's everything")
+- User explicitly asks to end the conversation (e.g., "we can stop now", "end the conversation")
+- User indicates they're finished with their questions and don't need further help
+
+How to respond:
+- If the user's signal is clear and unambiguous, respond warmly with a closing phrase, then use the endConversation tool.
+- If the signal is ambiguous or unclear, briefly confirm with the user before ending (e.g., "Sounds good! Are you all set, or do you have any other questions?").
+- After confirmation (or if the signal was clear), use the endConversation tool with an appropriate reason describing why the conversation is ending.
+
+Sample closing phrases (vary these):
+- "You're welcome! Happy reading!"
+- "Glad I could help! Enjoy the rest of your book!"
+- "Anytime! Feel free to ask if you have more questions later."
+- "Great! I'm here whenever you need help with your book."
+
+## Sample Phrases for Common Interactions
+
+Greetings:
+- "Hi! I'm here to help with your book. What's on your mind?"
+- "Hello! What would you like to explore in your book today?"
+
+Acknowledging questions:
+- "That's a great question. Let me find that for you."
+- "I can help with that. Let me check the book."
+- "Sure thing! Looking that up now."
+
+Providing explanations:
+- "Based on what I found in the book..."
+- "The book explains this as..."
+- "Here's what the author is saying..."
+
+Small talk responses:
+- "That's nice to hear!"
+- "I'm glad to help!"
+- "Absolutely! What else would you like to know?"
+
+Ending conversations:
+- "You're welcome! Happy reading!"
+- "Glad I could help! Enjoy the rest of your book!"
+- "Anytime! Feel free to ask if you have more questions later."
+- "Great! I'm here whenever you need help with your book."
+- "Perfect! Happy to help anytime."
+
+## Tool Usage Guidelines
+
+### bookContext Tool
+- ALWAYS provide a brief preamble (one sentence) before calling bookContext. Use the sample phrases above as inspiration, but vary the wording to keep responses natural.
+- Call the tool immediately after the preamble—don't delay.
+- While waiting for tool results, keep any interim responses very brief and natural.
+
+### endConversation Tool
+- Use endConversation when the user indicates the conversation is over (goodbye, thanks, "that's all", explicit request to end, etc.).
+- If the user's signal is ambiguous, briefly confirm before ending (e.g., "Are you all set, or do you have more questions?").
+- After confirmation or when the signal is clear, respond with a warm closing phrase, then call endConversation.
+- Provide a clear reason in the tool call describing why the conversation is ending (e.g., "User thanked me and indicated they're done", "User explicitly requested to end the conversation", "User confirmed they have no more questions").
+- DO NOT end conversations abruptly without user indication—only use this tool when the user has clearly signaled they're done.`,
+    tools: [bookContextTool, endConvesationTool],
   });
 
-  const session = new RTSession(agent, { apiKey, transport: "websocket", model: "gpt-4o-realtime-preview" });
-  await session.connect({ apiKey });
+  const session = new RealtimeSession(agent);
 
+  // Track thinking/speaking status for visual indicators
+  const setChatStatus = useChatStore.getState().setChatStatus;
+
+  const onAgentStart = () => {
+    setChatStatus("thinking");
+  };
+
+  const onAudioStart = () => {
+    setChatStatus("speaking");
+  };
+
+  const onAudioStopped = () => {
+    setChatStatus("idle");
+  };
+
+  const onAgentEnd = () => {
+    // Only reset to idle if not currently speaking (audio_start may follow agent_end)
+    if (useChatStore.getState().chatStatus === "thinking") {
+      setChatStatus("idle");
+    }
+  };
+
+  // Play a subtle audio cue while a tool (e.g. bookContext) is fetching
+  const onToolStart = () => {
+    startThinkingSound();
+  };
+
+  const onToolEnd = () => {
+    stopThinkingSound();
+  };
+
+  // Handle errors and disconnects so the UI doesn't show a zombie session
+  const onError = (err: unknown) => {
+    captureError(err, { operation: "realtime", step: "session_error" });
+    stopThinkingSound();
+    useChatStore.getState().stopConversation();
+  };
+
+  session.on("agent_start", onAgentStart);
+  session.on("audio_start", onAudioStart);
+  session.on("audio_stopped", onAudioStopped);
+  session.on("agent_end", onAgentEnd);
+  session.on("agent_tool_start", onToolStart);
+  session.on("agent_tool_end", onToolEnd);
+  session.on("error", onError);
+
+  // Store cleanup function externally so stopConversation can remove handlers
+  sessionCleanupMap.set(session, () => {
+    session.off("agent_start", onAgentStart);
+    session.off("audio_start", onAudioStart);
+    session.off("audio_stopped", onAudioStopped);
+    session.off("agent_end", onAgentEnd);
+    session.off("agent_tool_start", onToolStart);
+    session.off("agent_tool_end", onToolEnd);
+    session.off("error", onError);
+  });
+
+  const apiKey = await getOrFetchKey();
+
+  // Automatically connects your microphone and audio output
+  await session.connect({
+    apiKey,
+  });
   return session;
 }
