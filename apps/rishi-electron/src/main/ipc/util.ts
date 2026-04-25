@@ -29,7 +29,15 @@ export function registerUtilHandlers(): void {
       }
 
       const headers: Record<string, string> = {};
-      if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+      if (authToken && authToken !== "dev-placeholder-token") {
+        headers["Authorization"] = `Bearer ${authToken}`;
+      } else {
+        // Dev mode: use the bypass secret (mirrors Tauri behaviour)
+        const devBypassSecret = process.env.DEV_BYPASS_SECRET ?? "";
+        if (devBypassSecret) {
+          headers["X-Dev-Bypass"] = devBypassSecret;
+        }
+      }
 
       const response = await fetch(url, {
         method: "GET",
