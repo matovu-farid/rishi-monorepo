@@ -1,10 +1,7 @@
 import { LogIn, LogOut } from "lucide-react";
-import { SignedIn, UserButton } from "@clerk/clerk-react";
 import { Button } from "./ui/Button";
 import { useAuthStore } from "@/stores/authStore";
 import { startSignInFlow } from "@/modules/auth";
-
-const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || "";
 
 export function LoginButton() {
   const user = useAuthStore((s) => s.user);
@@ -13,19 +10,17 @@ export function LoginButton() {
   if (user) {
     return (
       <div className="flex gap-2 items-center">
-        {/* If Clerk has a session, show its UserButton for profile/sign-out */}
-        {CLERK_KEY && (
-          <SignedIn>
-            <UserButton />
-          </SignedIn>
-        )}
-        {/* User avatar fallback for deep-link-authenticated users */}
-        {user.imageUrl && !CLERK_KEY && (
+        {/* User avatar — always show for authenticated users */}
+        {user.imageUrl ? (
           <img
             src={user.imageUrl}
-            alt=""
+            alt={user.fullName || ""}
             className="w-8 h-8 rounded-full object-cover"
           />
+        ) : (
+          <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-sm font-medium text-gray-600">
+            {(user.firstName?.[0] || user.fullName?.[0] || "U").toUpperCase()}
+          </div>
         )}
         <Button
           variant="ghost"
