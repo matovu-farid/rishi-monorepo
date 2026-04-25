@@ -678,7 +678,9 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               }
 
               // No cache — generate locations (slow, first time only)
+              console.log("[epub] Generating locations with CHARS_PER_PAGE:", CHARS_PER_PAGE);
               void _rendition.book.locations.generate(CHARS_PER_PAGE).then(() => {
+                console.log("[epub] Locations generated, count:", ((_rendition.book.locations as any)._locations ?? []).length);
                 usePageTracker.getState().setLocationsReady(true);
 
                 // Cache raw locations for instant restore next time
@@ -689,7 +691,9 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
                   _rendition.off('relocated', buildOnce);
                   const rawLocCount = ((_rendition.book.locations as any)._locations ?? []).length;
                   const avgLocsPerPage = measureLocsPerView();
+                  console.log("[epub] Building page tracker:", { rawLocCount, avgLocsPerPage });
                   usePageTracker.getState().build(rawLocCount, avgLocsPerPage);
+                  console.log("[epub] Page tracker state:", usePageTracker.getState());
 
                   // Seed current page
                   const startCfi = (_rendition as any)?.location?.start?.cfi;
