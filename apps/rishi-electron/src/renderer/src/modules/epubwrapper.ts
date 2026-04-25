@@ -516,8 +516,8 @@ function _getParagraphsFromRange(
     for (const [blockElement, textNodes] of blockElementToTextNodes) {
       try {
         let elementText = "";
-        let firstTextNode = null;
-        let lastTextNode = null;
+        let firstTextNode: Node | null = null;
+        let lastTextNode: Node | null = null;
         let firstTextOffset = 0;
         let lastTextOffset = 0;
 

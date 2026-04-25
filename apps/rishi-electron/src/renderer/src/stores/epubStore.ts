@@ -1,7 +1,6 @@
 import { create } from "zustand";
 import { devtools, subscribeWithSelector } from "zustand/middleware";
 import type Rendition from "epubjs/types/rendition";
-import { usePlayerStore } from "./playerStore";
 import { useChatStore } from "./chatStore";
 import { hasSavedEpubData } from "@/lib/api";
 import { prefetchRealtimeKey } from "@/modules/realtime";

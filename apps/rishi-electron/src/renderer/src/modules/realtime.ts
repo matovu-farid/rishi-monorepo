@@ -28,8 +28,43 @@ export function prefetchRealtimeKey(): void {
 
 export async function startRealtime(bookId: number): Promise<RealtimeSession> {
   const { RealtimeAgent, RealtimeSession: RTSession } = await import("@openai/agents/realtime");
+  const { tool } = await import("@openai/agents");
 
   const apiKey = await getApiKey();
+
+  const bookContextTool = tool({
+    name: "bookContext",
+    description: "Retrieve relevant passages from the current book to answer the user's question",
+    parameters: {
+      type: "object" as const,
+      properties: {
+        query: { type: "string", description: "The search query to find relevant book passages" },
+      },
+      required: ["query"] as const,
+      additionalProperties: true as const,
+    },
+    strict: false,
+    execute: async (input: unknown) => {
+      const parsed = input as { query: string };
+      const contexts = await getContextForQuery({ queryText: parsed.query, bookId, k: 5 });
+      return contexts.join("\n\n---\n\n");
+    },
+  });
+
+  const endConversationTool = tool({
+    name: "endConversation",
+    description: "End the current conversation when the user is done",
+    parameters: {
+      type: "object" as const,
+      properties: {},
+      required: [] as const,
+      additionalProperties: true as const,
+    },
+    strict: false,
+    execute: async () => {
+      return "Conversation ended.";
+    },
+  });
 
   const agent = new RealtimeAgent({
     name: "Rishi Book Assistant",
@@ -37,36 +72,11 @@ export async function startRealtime(bookId: number): Promise<RealtimeSession> {
     Use the bookContext tool to retrieve relevant passages when answering questions.
     Be concise and accurate. If you can't find relevant information in the book, say so honestly.
     When citing, reference page numbers or sections.`,
-    model: "gpt-4o-realtime-preview",
-    tools: [
-      {
-        name: "bookContext",
-        description: "Retrieve relevant passages from the current book to answer the user's question",
-        parameters: {
-          type: "object",
-          properties: {
-            query: { type: "string", description: "The search query to find relevant book passages" },
-          },
-          required: ["query"],
-        },
-        execute: async ({ query }: { query: string }) => {
-          const contexts = await getContextForQuery({ queryText: query, bookId, k: 5 });
-          return contexts.join("\n\n---\n\n");
-        },
-      },
-      {
-        name: "endConversation",
-        description: "End the current conversation when the user is done",
-        parameters: { type: "object", properties: {} },
-        execute: async () => {
-          return "Conversation ended.";
-        },
-      },
-    ],
+    tools: [bookContextTool, endConversationTool],
   });
 
-  const session = new RTSession(agent, { apiKey });
-  await session.connect();
+  const session = new RTSession(agent, { apiKey, transport: "websocket", model: "gpt-4o-realtime-preview" });
+  await session.connect({ apiKey });
 
   return session;
 }

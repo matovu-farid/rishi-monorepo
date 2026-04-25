@@ -1,6 +1,6 @@
 import { ArrowLeft } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { getMobiChapter, getMobiChapterCount, type Book } from "@/lib/api";
 import DOMPurify from "dompurify";
 

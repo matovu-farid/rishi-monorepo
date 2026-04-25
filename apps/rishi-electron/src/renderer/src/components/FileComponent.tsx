@@ -146,7 +146,8 @@ export default function FileComponent(): React.JSX.Element {
       // Hash + upload (non-blocking)
       try {
         const fileHash = await hashBookFile(bookPath);
-        const { r2Key } = await uploadBookFile(bookPath, fileHash, ext || "epub");
+        const formatForUpload = (ext === "azw3" ? "mobi" : ext) as "epub" | "pdf" | "mobi" | "djvu";
+        const { r2Key } = await uploadBookFile(bookPath, fileHash, formatForUpload || "epub");
         await window.electron.dbRun(
           "UPDATE books SET file_hash = ?, file_r2_key = ?, is_dirty = 1 WHERE id = ?",
           [fileHash, r2Key, book.id]
