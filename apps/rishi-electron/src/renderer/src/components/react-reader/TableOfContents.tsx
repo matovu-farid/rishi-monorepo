@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
 /** Minimal TOC item shape matching epub.js NavItem */
@@ -57,6 +58,18 @@ export function TableOfContents({
   isOpen,
   onClose,
 }: TableOfContentsProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Auto-focus the panel when opened
+  useEffect(() => {
+    if (isOpen) {
+      // Defer focus to after the animation frame so the element is mounted
+      requestAnimationFrame(() => {
+        panelRef.current?.focus();
+      });
+    }
+  }, [isOpen]);
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -64,6 +77,7 @@ export function TableOfContents({
           {/* Dark backdrop overlay */}
           <motion.div
             key="toc-backdrop"
+            data-testid="toc-backdrop"
             className="fixed inset-0 z-40 bg-black/40"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -74,7 +88,15 @@ export function TableOfContents({
 
           {/* TOC sidebar panel */}
           <motion.div
+            ref={panelRef}
             key="toc-panel"
+            role="dialog"
+            aria-label="Table of Contents"
+            aria-modal="true"
+            tabIndex={-1}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") onClose();
+            }}
             className="fixed top-0 left-0 bottom-0 z-50 w-64 bg-white shadow-lg overflow-y-auto"
             initial={{ x: -256 }}
             animate={{ x: 0 }}

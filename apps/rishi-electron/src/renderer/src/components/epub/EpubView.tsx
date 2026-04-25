@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { ReactReader } from "react-reader";
 import { ArrowLeft, List } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import type { NavItem } from "epubjs";
+import type { NavItem, Rendition } from "epubjs";
 import { useEpubStore } from "@/stores/epubStore";
 import { updateBookLocation, type Book } from "@/lib/api";
 import Loader from "../Loader";
@@ -31,7 +31,7 @@ export default function EpubView({ book }: Props) {
   const [tocOpen, setTocOpen] = useState(false);
 
   // Rendition ref for imperative navigation
-  const renditionRef = useRef<any>(null);
+  const renditionRef = useRef<Rendition | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,7 +71,7 @@ export default function EpubView({ book }: Props) {
   );
 
   const getRendition = useCallback(
-    (rendition: any) => {
+    (rendition: Rendition) => {
       renditionRef.current = rendition;
       setRendition(rendition);
       setBookId(book.id.toString());
@@ -90,26 +90,16 @@ export default function EpubView({ book }: Props) {
 
   // Page curl gesture hook
   const pageCurl = usePageCurl({
-    onNavigate: (dir) => {
-      if (!renditionRef.current) return false;
-      if (dir === "right") {
-        renditionRef.current.next();
-      } else {
-        renditionRef.current.prev();
-      }
-      return true;
+    onNavigate: (_dir) => {
+      return !!renditionRef.current; // Just validate, don't navigate
     },
-    onCommit: () => {
-      // Navigation already happened in onNavigate
-    },
-    onUndoNavigate: (dir) => {
-      // Reverse the navigation when user cancels the curl gesture
+    onCommit: (dir) => {
       if (!renditionRef.current) return;
-      if (dir === "right") {
-        renditionRef.current.prev();
-      } else {
-        renditionRef.current.next();
-      }
+      if (dir === "right") renditionRef.current.next();
+      else renditionRef.current.prev();
+    },
+    onUndoNavigate: () => {
+      // Nothing to reverse since navigation didn't happen yet
     },
   });
 

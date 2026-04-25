@@ -88,9 +88,7 @@ export function SwipeWrapper({
       if (touchHandlers.ref && typeof touchHandlers.ref === "function") {
         touchHandlers.ref(node);
       } else if (touchHandlers.ref && "current" in touchHandlers.ref) {
-        (
-          touchHandlers.ref as unknown as React.MutableRefObject<HTMLDivElement | null>
-        ).current = node;
+        (touchHandlers.ref as React.RefObject<HTMLDivElement | null>).current = node;
       }
     },
     [touchHandlers.ref],

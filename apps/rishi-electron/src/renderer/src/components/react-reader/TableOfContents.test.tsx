@@ -86,7 +86,7 @@ describe("TableOfContents", () => {
 
   it("calls onClose when backdrop is clicked", () => {
     const onClose = vi.fn();
-    const { container } = render(
+    render(
       <TableOfContents
         toc={sampleToc}
         onNavigate={vi.fn()}
@@ -94,12 +94,9 @@ describe("TableOfContents", () => {
         onClose={onClose}
       />,
     );
-    // The backdrop is the first motion.div (bg-black/40)
-    const backdrop = container.querySelector(".bg-black\\/40, [class*='bg-black']");
-    if (backdrop) {
-      fireEvent.click(backdrop);
-      expect(onClose).toHaveBeenCalledOnce();
-    }
+    const backdrop = screen.getByTestId("toc-backdrop");
+    fireEvent.click(backdrop);
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it("renders empty TOC without errors", () => {

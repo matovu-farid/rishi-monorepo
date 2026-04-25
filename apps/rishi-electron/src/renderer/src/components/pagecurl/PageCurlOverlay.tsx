@@ -21,17 +21,33 @@ export function PageCurlOverlay({ progress, direction, pageColor }: Props) {
     const parent = canvas.parentElement;
     if (!parent) return;
 
-    const { width: W, height: H } = parent.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
+    function draw() {
+      const cvs = canvasRef.current;
+      if (!cvs) return;
+      const p = cvs.parentElement;
+      if (!p) return;
 
-    const rawCtx = canvas.getContext("2d");
-    if (!rawCtx) return;
-    const ctx: CanvasRenderingContext2D = rawCtx;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const { width: W, height: H } = p.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      cvs.width = W * dpr;
+      cvs.height = H * dpr;
 
-    drawPageCurl(ctx, W, H, progress, direction, pageColor);
+      const rawCtx = cvs.getContext("2d");
+      if (!rawCtx) return;
+      const ctx: CanvasRenderingContext2D = rawCtx;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      drawPageCurl(ctx, W, H, progress, direction, pageColor);
+    }
+
+    draw();
+
+    const observer = new ResizeObserver(() => {
+      draw();
+    });
+    observer.observe(parent);
+
+    return () => observer.disconnect();
   }, [progress, direction, pageColor]);
 
   return (

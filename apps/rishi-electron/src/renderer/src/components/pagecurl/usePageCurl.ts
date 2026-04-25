@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CurlDirection } from "./drawPageCurl";
 
 export type CurlState = "idle" | "dragging" | "animating";
@@ -212,6 +212,11 @@ export function usePageCurl(callbacks: {
     },
     [cancelRaf, kick, animateTo, finish],
   );
+
+  // Cancel any in-flight RAF on unmount
+  useEffect(() => {
+    return () => cancelRaf();
+  }, [cancelRaf]);
 
   return {
     progress: progressRef.current,
