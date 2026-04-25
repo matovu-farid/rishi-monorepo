@@ -4,6 +4,7 @@ import type { RealtimeSession } from "@openai/agents/realtime";
 import { startRealtime, sessionCleanupMap } from "@/modules/realtime";
 import { stopThinkingSound } from "@/modules/thinkingSound";
 import { usePlayerStore } from "./playerStore";
+import { captureError } from "@/utils/sentry";
 
 export type ChatStatus = "idle" | "thinking" | "speaking";
 
@@ -55,7 +56,7 @@ export const useChatStore = create<ChatState>()(
             }
             set({ realtimeSession: session, _isStarting: false });
           }).catch((err) => {
-            console.error("[chat] Failed to start realtime:", err);
+            captureError(err, { operation: "realtime", step: "connect" });
             set({ isChatting: false, chatStatus: "idle", _isStarting: false });
           });
         },
