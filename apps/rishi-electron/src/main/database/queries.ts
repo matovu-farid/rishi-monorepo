@@ -220,14 +220,17 @@ export function updateBookLocation(
     throw new Error(`Book with id ${id} not found`);
   }
 
+  // Always update the `location` column — this is what all reader components
+  // read from via `book.location` when restoring position on re-open.
+  // Also update the format-specific column for completeness.
   if (book.format === "epub") {
     db.prepare(
-      "UPDATE books SET current_cfi = ?, is_dirty = 1 WHERE id = ?",
-    ).run(String(location), id);
+      "UPDATE books SET location = ?, current_cfi = ?, is_dirty = 1 WHERE id = ?",
+    ).run(String(location), String(location), id);
   } else {
     db.prepare(
-      "UPDATE books SET current_page = ?, is_dirty = 1 WHERE id = ?",
-    ).run(Number(location), id);
+      "UPDATE books SET location = ?, current_page = ?, is_dirty = 1 WHERE id = ?",
+    ).run(String(location), Number(location), id);
   }
 }
 
