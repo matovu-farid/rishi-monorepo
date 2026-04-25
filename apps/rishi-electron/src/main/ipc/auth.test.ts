@@ -255,11 +255,11 @@ describe("auth IPC handlers", () => {
   // ── auth:logDebug ───────────────────────────────────────────────
 
   describe("auth:logDebug", () => {
-    it("sends debug log to worker", async () => {
+    it("sends debug log to worker with state", async () => {
       mockFetch.mockResolvedValueOnce(jsonResponse({ ok: true }));
 
       const handler = getHandler("auth:logDebug");
-      await handler({}, "test-step", '{"key":"value"}', "some error");
+      await handler({}, "test-state", "test-step", '{"key":"value"}', "some error");
 
       expect(mockFetch).toHaveBeenCalledWith(
         expect.stringContaining("/api/auth/debug"),
@@ -275,7 +275,7 @@ describe("auth IPC handlers", () => {
 
       const handler = getHandler("auth:logDebug");
       // Should not throw
-      await expect(handler({}, "test-step")).resolves.not.toThrow();
+      await expect(handler({}, "test-state", "test-step")).resolves.not.toThrow();
     });
   });
 

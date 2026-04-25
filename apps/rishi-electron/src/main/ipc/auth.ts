@@ -294,6 +294,12 @@ export function registerAuthHandlers(): void {
 
   // ── Token refresh ─────────────────────────────────────────────────
 
+  /**
+   * Refresh auth token if close to expiry.
+   * Returns the expiry timestamp (existing or new) on success, null on failure.
+   * - number: token is valid (may or may not have been refreshed)
+   * - null: no token, refresh failed, or encryption unavailable
+   */
   ipcMain.handle("auth:refreshToken", async () => {
     try {
       // 1. Read current token from safeStorage
@@ -386,6 +392,18 @@ export function registerAuthHandlers(): void {
         throw new Error("Encryption is not available");
       }
 
+      // Check expiry first
+      try {
+        const expiryData = await fs.readFile(getTokenExpiryPath(), "utf-8");
+        const { expiresAt } = JSON.parse(expiryData);
+        if (Date.now() > expiresAt) {
+          throw new Error("Session expired — please log in again");
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.includes("Session expired")) throw e;
+        // No expiry file — proceed with token
+      }
+
       let token: string;
       try {
         const encrypted = await fs.readFile(getTokenPath());
@@ -418,9 +436,8 @@ export function registerAuthHandlers(): void {
 
       return user;
     } catch (error) {
-      throw new Error(
-        `Failed to get user: ${error instanceof Error ? error.message : String(error)}`
-      );
+      if (error instanceof Error) throw error;
+      throw new Error(`Failed to get user: ${String(error)}`);
     }
   });
 
@@ -428,9 +445,9 @@ export function registerAuthHandlers(): void {
 
   ipcMain.handle(
     "auth:logDebug",
-    async (_event, step: string, data?: string, error?: string) => {
+    async (_event, state: string, step: string, data?: string, error?: string) => {
       try {
-        const payload: Record<string, unknown> = { step, source: "electron-ts" };
+        const payload: Record<string, unknown> = { state, step, source: "electron-ts" };
         if (data) {
           try {
             payload.data = JSON.parse(data);
@@ -443,7 +460,7 @@ export function registerAuthHandlers(): void {
         }
 
         // Fire and forget — don't block the caller
-        fetch(`${WORKER_URL}/api/auth/debug`, {
+        void fetch(`${WORKER_URL}/api/auth/debug`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),

@@ -98,15 +98,13 @@ export interface ElectronAPI {
   getUser: (userId: string) => Promise<User | null>;
 
   // Auth debug
-  logAuthDebug: (step: string, data?: string, error?: string) => Promise<void>;
+  logAuthDebug: (state: string, step: string, data?: string, error?: string) => Promise<void>;
   getAuthDebug: (state: string) => Promise<unknown[]>;
 
   // Debug
   dumpError: (error: ErrorDump) => Promise<void>;
   readErrorDump: () => Promise<string>;
   clearErrorDump: () => Promise<void>;
-  dumpState: (json: string) => Promise<void>;
-  readStateDump: () => Promise<string>;
 
   // Settings store
   getStoreValue: (key: string) => Promise<unknown>;

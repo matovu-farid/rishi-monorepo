@@ -102,8 +102,8 @@ const electronAPI: ElectronAPI = {
   signout: () => ipcRenderer.invoke("auth:signout"),
   refreshAuthToken: () => ipcRenderer.invoke("auth:refreshToken"),
   getUser: (userId: string) => ipcRenderer.invoke("auth:getUser", userId),
-  logAuthDebug: (step: string, data?: string, error?: string) =>
-    ipcRenderer.invoke("auth:logDebug", step, data, error),
+  logAuthDebug: (state: string, step: string, data?: string, error?: string) =>
+    ipcRenderer.invoke("auth:logDebug", state, step, data, error),
   getAuthDebug: (state: string) => ipcRenderer.invoke("auth:getDebug", state),
   onDeepLink: (callback: (url: string) => void) => {
     const handler = (_event: unknown, url: string) => callback(url);
@@ -117,8 +117,6 @@ const electronAPI: ElectronAPI = {
   dumpError: (error: unknown) => ipcRenderer.invoke("debug:dumpError", error),
   readErrorDump: () => ipcRenderer.invoke("debug:readErrorDump"),
   clearErrorDump: () => ipcRenderer.invoke("debug:clearErrorDump"),
-  dumpState: (json: string) => ipcRenderer.invoke("debug:dumpState", json),
-  readStateDump: () => ipcRenderer.invoke("debug:readStateDump"),
 
   // Settings store
   getStoreValue: (key: string) => ipcRenderer.invoke("store:get", key),
