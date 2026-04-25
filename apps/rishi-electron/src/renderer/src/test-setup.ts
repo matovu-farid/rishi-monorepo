@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import "@testing-library/jest-dom";
 
 // Mock window.electron for tests
@@ -51,6 +52,10 @@ const mockElectronAPI = {
   dumpError: vi.fn().mockResolvedValue(undefined),
   readErrorDump: vi.fn().mockResolvedValue(""),
   clearErrorDump: vi.fn().mockResolvedValue(undefined),
+  dumpState: vi.fn().mockResolvedValue(undefined),
+  readStateDump: vi.fn().mockResolvedValue("{}"),
+  logAuthDebug: vi.fn().mockResolvedValue(undefined),
+  getAuthDebug: vi.fn().mockResolvedValue([]),
   getStoreValue: vi.fn().mockResolvedValue(null),
   setStoreValue: vi.fn().mockResolvedValue(undefined),
   isDev: vi.fn().mockResolvedValue(true),
@@ -61,6 +66,13 @@ const mockElectronAPI = {
   getOsInfo: vi.fn().mockResolvedValue({ platform: "darwin", arch: "arm64", version: "25.0" }),
   dbQuery: vi.fn().mockResolvedValue([]),
   dbRun: vi.fn().mockResolvedValue({ changes: 0, lastInsertRowid: 0 }),
+  getOAuthState: vi.fn().mockResolvedValue({ state: "test-state", codeChallenge: "test-challenge" }),
+  completeAuth: vi.fn().mockResolvedValue({ id: "test-user" }),
+  checkAuthStatus: vi.fn().mockResolvedValue({ status: "pending" }),
+  signout: vi.fn().mockResolvedValue(undefined),
+  refreshAuthToken: vi.fn().mockResolvedValue(null),
+  getUser: vi.fn().mockResolvedValue(null),
+  onDeepLink: vi.fn().mockReturnValue(() => {}),
   on: vi.fn().mockReturnValue(() => {}),
   once: vi.fn(),
   send: vi.fn(),

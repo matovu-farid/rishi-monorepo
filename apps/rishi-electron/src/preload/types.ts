@@ -105,6 +105,8 @@ export interface ElectronAPI {
   dumpError: (error: ErrorDump) => Promise<void>;
   readErrorDump: () => Promise<string>;
   clearErrorDump: () => Promise<void>;
+  dumpState: (json: string) => Promise<void>;
+  readStateDump: () => Promise<string>;
 
   // Settings store
   getStoreValue: (key: string) => Promise<unknown>;

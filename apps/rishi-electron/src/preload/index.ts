@@ -117,6 +117,8 @@ const electronAPI: ElectronAPI = {
   dumpError: (error: unknown) => ipcRenderer.invoke("debug:dumpError", error),
   readErrorDump: () => ipcRenderer.invoke("debug:readErrorDump"),
   clearErrorDump: () => ipcRenderer.invoke("debug:clearErrorDump"),
+  dumpState: (json: string) => ipcRenderer.invoke("debug:dumpState", json),
+  readStateDump: () => ipcRenderer.invoke("debug:readStateDump"),
 
   // Settings store
   getStoreValue: (key: string) => ipcRenderer.invoke("store:get", key),
