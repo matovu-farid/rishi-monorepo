@@ -301,18 +301,6 @@ export class ReactReader extends PureComponent<
       <div style={readerStyles.container}>
         {/* Main reader area */}
         <div style={readerStyles.readerArea}>
-          {/* Full-width drag region for window dragging */}
-          <div
-            style={{
-              position: "absolute",
-              top: 0,
-              left: 0,
-              right: 0,
-              height: 50,
-              zIndex: 0,
-              WebkitAppRegion: "drag",
-            } as React.CSSProperties}
-          />
           <div style={{ ...readerStyles.titleArea, WebkitAppRegion: "drag" } as React.CSSProperties}>
             {title}
           </div>

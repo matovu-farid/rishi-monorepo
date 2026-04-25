@@ -73,13 +73,13 @@ export function ReaderToolbar({
     >
       <div
         className="flex items-center"
-        style={{ pointerEvents: effectiveVisible ? "auto" : "none", marginLeft: 64 }}
+        style={{ pointerEvents: effectiveVisible ? "auto" : "none", marginLeft: 64, WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
         {leftContent}
       </div>
       <div
         className="ml-auto flex items-center gap-1"
-        style={{ pointerEvents: effectiveVisible ? "auto" : "none" }}
+        style={{ pointerEvents: effectiveVisible ? "auto" : "none", WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
         {children}
       </div>
