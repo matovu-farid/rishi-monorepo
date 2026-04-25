@@ -5,8 +5,8 @@ import { peekPendingOAuthState, clearPendingOAuthState } from "@/modules/auth";
 
 const MAX_AUTH_RETRIES = 3;
 const BASE_RETRY_DELAY_MS = 1500;
-const POLL_INTERVAL_MS = 2000;
-const POLL_TIMEOUT_MS = 5 * 60 * 1000; // stop polling after 5 minutes
+const POLL_INTERVAL_MS = 1000; // poll every 1 second for faster detection
+const POLL_TIMEOUT_MS = 10 * 60 * 1000; // stop polling after 10 minutes (matches Redis TTL)
 
 /**
  * Root-level hook: runs exactly once on app mount.
@@ -92,16 +92,44 @@ export function useHydrateAuth(): void {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── 4: polling fallback ───────────────────────────────────────────
-  // When signingIn becomes true, poll the worker every 3s to detect when
-  // the user has authenticated in the browser. This works even when deep
-  // links fail (Linux, dev mode, unregistered protocol).
+  // ── 4: polling — ALWAYS on when there's a pending OAuth state ─────
+  // Polls the Worker every 1 second to detect when the user has
+  // authenticated in the browser. This is the primary mechanism —
+  // deep links are unreliable (wrong scheme, Linux, dev mode).
+  // Also resumes polling on app restart if a pending state exists.
   const signingIn = useAuthStore((s) => s.signingIn);
 
   useEffect(() => {
-    if (!signingIn || authCompleted.current) return;
+    if (authCompleted.current) return;
 
-    const pending = peekPendingOAuthState();
+    // Check for a pending state — either from the current sign-in flow
+    // (in-memory) or from a previous flow that was interrupted (persisted file)
+    let pending = peekPendingOAuthState();
+
+    if (!pending && signingIn) {
+      // signingIn was set but pending state not yet available — wait a tick
+      return;
+    }
+
+    // Also try to restore from persisted file on startup
+    if (!pending && !signingIn) {
+      // Try reading persisted state via IPC to resume interrupted flows
+      void (async () => {
+        try {
+          const oauthState = await window.electron.getOAuthState();
+          // getOAuthState returns existing state if < 5 min old
+          // Check if it looks like a valid pending flow
+          if (oauthState?.state) {
+            console.log("[useHydrateAuth] found persisted OAuth state, resuming poll");
+            setSigningIn(true); // triggers re-render → re-runs this effect
+          }
+        } catch {
+          // No persisted state — nothing to poll for
+        }
+      })();
+      return;
+    }
+
     if (!pending) return;
 
     const startedAt = Date.now();
@@ -109,37 +137,50 @@ export function useHydrateAuth(): void {
 
     const poll = async () => {
       while (!stopped && !authCompleted.current) {
-        // Timeout after 5 minutes
+        // Timeout after 10 minutes (matches Redis TTL)
         if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
-          console.log("[useHydrateAuth] polling timed out");
+          console.log("[useHydrateAuth] polling timed out after 10 minutes");
           setSigningIn(false);
+          clearPendingOAuthState();
           return;
         }
 
         try {
-          const status = await window.electron.checkAuthStatus(pending.state);
-          console.log("[useHydrateAuth] poll status:", status.status);
+          const status = await window.electron.checkAuthStatus(pending!.state);
+          console.log("[useHydrateAuth] poll:", status.status);
 
           if (status.status === "authenticated") {
-            // User authenticated in browser — complete the exchange
-            await attemptCompleteAuth(pending.state);
+            console.log("[useHydrateAuth] detected authenticated — completing auth");
+            await attemptCompleteAuth(pending!.state);
             return;
           }
 
-          if (status.status === "completed" || status.status === "failed") {
-            // Already completed or permanently failed
+          if (status.status === "completed") {
+            console.log("[useHydrateAuth] auth already completed");
             clearPendingOAuthState();
             setSigningIn(false);
             return;
           }
-        } catch {
+
+          if (status.status === "failed") {
+            console.log("[useHydrateAuth] auth permanently failed");
+            clearPendingOAuthState();
+            setSigningIn(false);
+            toast.error("Sign-in failed. Please try again.");
+            return;
+          }
+
+          // "pending" or "not_found" — keep polling
+        } catch (err) {
           // Status check failed (network, no state yet) — keep polling
+          console.log("[useHydrateAuth] poll error (will retry):", String(err).slice(0, 100));
         }
 
         await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       }
     };
 
+    console.log("[useHydrateAuth] starting auth poll for state:", pending.state.slice(0, 8) + "...");
     void poll();
 
     return () => {
