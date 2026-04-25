@@ -702,16 +702,13 @@ pub fn is_dev() -> bool {
 /// Returns the dev bypass secret, but ONLY in debug builds.
 /// This keeps the secret out of the frontend bundle — the frontend
 /// fetches it at runtime via IPC instead of baking it in via env vars.
-#[cfg(debug_assertions)]
 #[tauri::command]
 pub fn get_dev_bypass_secret() -> Option<String> {
-    option_env!("DEV_BYPASS_SECRET").map(|s| s.to_string())
-}
-
-#[cfg(not(debug_assertions))]
-#[tauri::command]
-pub fn get_dev_bypass_secret() -> Option<String> {
-    None
+    if cfg!(debug_assertions) {
+        option_env!("DEV_BYPASS_SECRET").map(|s| s.to_string())
+    } else {
+        None
+    }
 }
 
 #[tauri::command]
