@@ -8,8 +8,6 @@ import { updateBookLocation, type Book } from "@/lib/api";
 import Loader from "../Loader";
 import { SwipeWrapper } from "../react-reader/SwipeWrapper";
 import { TableOfContents, type TocItem } from "../react-reader/TableOfContents";
-import { PageCurlOverlay } from "../pagecurl/PageCurlOverlay";
-import { usePageCurl } from "../pagecurl/usePageCurl";
 
 interface Props {
   book: Book;
@@ -87,21 +85,6 @@ export default function EpubView({ book }: Props) {
     renditionRef.current?.prev();
   }, []);
 
-  // Page curl gesture hook
-  const pageCurl = usePageCurl({
-    onNavigate: (_dir) => {
-      return !!renditionRef.current; // Just validate, don't navigate
-    },
-    onCommit: (dir) => {
-      if (!renditionRef.current) return;
-      if (dir === "right") renditionRef.current.next();
-      else renditionRef.current.prev();
-    },
-    onUndoNavigate: () => {
-      // Nothing to reverse since navigation didn't happen yet
-    },
-  });
-
   // TOC navigation
   const handleTocNavigate = useCallback(
     (href: string) => {
@@ -158,7 +141,7 @@ export default function EpubView({ book }: Props) {
         <span className="text-sm font-medium truncate flex-1">{book.title}</span>
       </div>
 
-      <div className="flex-1 relative" {...pageCurl.pointerHandlers}>
+      <div className="flex-1 relative">
         <SwipeWrapper
           swipeProps={{
             onSwiped: (eventData) => {
@@ -183,14 +166,6 @@ export default function EpubView({ book }: Props) {
           />
         </SwipeWrapper>
 
-        {/* Page curl canvas overlay */}
-        {pageCurl.active && (
-          <PageCurlOverlay
-            progress={pageCurl.progress}
-            direction={pageCurl.direction}
-            pageColor="#ffffff"
-          />
-        )}
       </div>
 
       {/* Table of Contents sidebar */}
