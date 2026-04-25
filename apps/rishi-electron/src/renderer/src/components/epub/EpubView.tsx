@@ -131,13 +131,14 @@ export default function EpubView({ book }: Props) {
         <span className="text-sm font-medium truncate flex-1">{book.title}</span>
       </div>
 
-      <div style={{ position: "relative", flex: 1, overflow: "hidden" }}>
+      <div style={{ position: "relative", height: "calc(100vh - 50px)", overflow: "hidden" }}>
         <ReactReader
           url={epubData}
           location={location}
           locationChanged={locationChanged}
           getRendition={getRendition}
           tocChanged={(newToc) => setToc(newToc)}
+          epubOptions={{ flow: "paginated", spread: "none" }}
         />
       </div>
 

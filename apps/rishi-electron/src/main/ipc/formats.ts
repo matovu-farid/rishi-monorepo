@@ -71,21 +71,30 @@ async function extractEpubData(filePath: string): Promise<BookDataResult> {
     const coverId = coverMetaMatch?.[1]
 
     if (coverId) {
-      // Find the manifest item with that id
-      const itemRegex = new RegExp(`<item[^>]+id="${coverId}"[^>]+href="([^"]+)"`, 'i')
-      const itemMatch = opfContent.match(itemRegex)
-      if (itemMatch) coverHref = itemMatch[1]
+      // Find the manifest item with that id — attributes can be in any order
+      const escapedId = coverId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      // Try id before href
+      const r1 = new RegExp(`<item[^>]+id="${escapedId}"[^>]+href="([^"]+)"`, 'i')
+      // Try href before id
+      const r2 = new RegExp(`<item[^>]+href="([^"]+)"[^>]+id="${escapedId}"`, 'i')
+      const m1 = opfContent.match(r1)
+      const m2 = opfContent.match(r2)
+      if (m1) coverHref = m1[1]
+      else if (m2) coverHref = m2[1]
     }
 
-    // Fallback: look for item with properties="cover-image"
+    // Fallback: look for item with properties="cover-image" (either attribute order)
     if (!coverHref) {
-      const coverPropMatch = opfContent.match(/<item[^>]+properties="cover-image"[^>]+href="([^"]+)"/i)
-      if (coverPropMatch) coverHref = coverPropMatch[1]
+      const p1 = opfContent.match(/<item[^>]+properties="cover-image"[^>]+href="([^"]+)"/i)
+      const p2 = opfContent.match(/<item[^>]+href="([^"]+)"[^>]+properties="cover-image"/i)
+      if (p1) coverHref = p1[1]
+      else if (p2) coverHref = p2[1]
     }
 
-    // Fallback: look for item with id containing "cover" and image media-type
+    // Fallback: look for item with id containing "cover" and image media-type (either order)
     if (!coverHref) {
       const coverIdMatch = opfContent.match(/<item[^>]+id="[^"]*cover[^"]*"[^>]+href="([^"]+)"[^>]+media-type="image\/[^"]+"/i)
+        ?? opfContent.match(/<item[^>]+href="([^"]+)"[^>]+id="[^"]*cover[^"]*"[^>]+media-type="image\/[^"]+"/i)
       if (coverIdMatch) coverHref = coverIdMatch[1]
     }
   }
