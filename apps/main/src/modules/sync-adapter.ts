@@ -57,8 +57,8 @@ export class DesktopSyncAdapter implements SyncDbAdapter {
       color: row.color,
       note: row.note,
       chapter: row.chapter,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      createdAt: toTimestamp(row.created_at),
+      updatedAt: toTimestamp(row.updated_at),
       syncVersion: row.sync_version,
       isDirty: true,
       isDeleted: row.is_deleted === 1,
@@ -76,8 +76,8 @@ export class DesktopSyncAdapter implements SyncDbAdapter {
       id: row.id,
       bookId: row.book_id,
       title: row.title,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      createdAt: toTimestamp(row.created_at),
+      updatedAt: toTimestamp(row.updated_at),
       syncVersion: row.sync_version,
       isDirty: true,
       isDeleted: row.is_deleted === 1,
@@ -97,8 +97,8 @@ export class DesktopSyncAdapter implements SyncDbAdapter {
       role: row.role,
       content: row.content,
       sourceChunks: row.source_chunks,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      createdAt: toTimestamp(row.created_at),
+      updatedAt: toTimestamp(row.updated_at),
       syncVersion: row.sync_version,
       isDirty: true,
       isDeleted: row.is_deleted === 1,
@@ -247,12 +247,16 @@ export class DesktopSyncAdapter implements SyncDbAdapter {
     if (local) {
       if (local.is_dirty === 1) return; // locally dirty takes precedence
 
+      const title = typeof remote.title === 'string' ? remote.title : (local.title ?? '');
+      const author = typeof remote.author === 'string' ? remote.author : (local.author ?? '');
+      const format = typeof remote.format === 'string' ? remote.format : (local.format ?? local.kind ?? 'epub');
+
       await db
         .updateTable("books")
         .set({
-          title: remote.title as string,
-          author: remote.author as string,
-          format: remote.format as string,
+          title,
+          author,
+          format,
           current_cfi: (remote.currentCfi as string) ?? null,
           current_page: (remote.currentPage as number) ?? null,
           file_hash: (remote.fileHash as string) ?? null,
@@ -266,20 +270,24 @@ export class DesktopSyncAdapter implements SyncDbAdapter {
         .execute();
     } else {
       // New remote book -- insert with empty local file (needs download)
+      const newTitle = typeof remote.title === 'string' ? remote.title : 'Unknown';
+      const newAuthor = typeof remote.author === 'string' ? remote.author : 'Unknown';
+      const newFormat = typeof remote.format === 'string' ? remote.format : 'epub';
+
       await db
         .insertInto("books")
         .values({
-          kind: (remote.format as string) ?? "epub",
+          kind: newFormat,
           cover: new Uint8Array(0) as unknown as number[],
-          title: (remote.title as string) ?? "Unknown",
-          author: (remote.author as string) ?? "Unknown",
+          title: newTitle,
+          author: newAuthor,
           publisher: "",
           filepath: "", // no local file yet
           location: (remote.currentCfi as string) ?? "",
           cover_kind: "",
           version: 0,
           sync_id: syncId,
-          format: (remote.format as string) ?? "epub",
+          format: newFormat,
           current_cfi: (remote.currentCfi as string) ?? null,
           current_page: (remote.currentPage as number) ?? null,
           file_hash: (remote.fileHash as string) ?? null,
@@ -310,11 +318,14 @@ export class DesktopSyncAdapter implements SyncDbAdapter {
       const remoteUpdatedAt = (remote.updatedAt as number) ?? 0;
       if (remoteUpdatedAt < local.updated_at) return; // LWW guard
 
+      const hlText = typeof remote.text === 'string' ? remote.text : (local.text ?? '');
+      const hlColor = typeof remote.color === 'string' ? remote.color : (local.color ?? 'yellow');
+
       await db
         .updateTable("highlights")
         .set({
-          text: remote.text as string,
-          color: remote.color as string,
+          text: hlText,
+          color: hlColor,
           note: (remote.note as string) ?? null,
           chapter: (remote.chapter as string) ?? null,
           cfi_range: remote.cfiRange as string,
@@ -365,11 +376,14 @@ export class DesktopSyncAdapter implements SyncDbAdapter {
       const remoteUpdatedAt = (remote.updatedAt as number) ?? 0;
       if (remoteUpdatedAt < local.updated_at) return;
 
+      const convTitle = typeof remote.title === 'string' ? remote.title : (local.title ?? 'New conversation');
+      const convBookId = typeof remote.bookId === 'string' ? remote.bookId : (local.book_id ?? '');
+
       await db
         .updateTable("conversations")
         .set({
-          title: remote.title as string,
-          book_id: remote.bookId as string,
+          title: convTitle,
+          book_id: convBookId,
           created_at: remote.createdAt as number,
           updated_at: remote.updatedAt as number,
           sync_version: (remote.syncVersion as number) ?? 0,
@@ -409,13 +423,17 @@ export class DesktopSyncAdapter implements SyncDbAdapter {
 
     if (local) return; // append-only: never update existing messages
 
+    const msgConvId = typeof remote.conversationId === 'string' ? remote.conversationId : '';
+    const msgRole = typeof remote.role === 'string' ? remote.role : 'user';
+    const msgContent = typeof remote.content === 'string' ? remote.content : '';
+
     await db
       .insertInto("messages")
       .values({
         id: remoteId,
-        conversation_id: (remote.conversationId as string) ?? "",
-        role: (remote.role as string) ?? "user",
-        content: (remote.content as string) ?? "",
+        conversation_id: msgConvId,
+        role: msgRole,
+        content: msgContent,
         source_chunks: (remote.sourceChunks as string) ?? null,
         created_at: (remote.createdAt as number) ?? Date.now(),
         updated_at: (remote.updatedAt as number) ?? Date.now(),

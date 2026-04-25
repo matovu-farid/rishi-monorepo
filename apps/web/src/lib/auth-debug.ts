@@ -6,7 +6,8 @@ export async function logAuthDebug(
   error?: string,
 ) {
   try {
-    const workerUrl = process.env.NEXT_PUBLIC_WORKER_URL ?? "https://rishi-worker.faridmato90.workers.dev";
+    const workerUrl = process.env.NEXT_PUBLIC_WORKER_URL;
+    if (!workerUrl) throw new Error("NEXT_PUBLIC_WORKER_URL is not configured");
     await fetch(`${workerUrl}/api/auth/debug`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

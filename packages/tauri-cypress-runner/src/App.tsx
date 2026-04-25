@@ -277,8 +277,11 @@ export function App() {
     log("connect_ws", "connected");
 
     log("wait_webview_ready");
-    await webviewReady;
-    unlistenRef.current?.();
+    try {
+      await webviewReady;
+    } finally {
+      unlistenRef.current?.();
+    }
     log("webview_ready", "received");
 
     setBuildVisible(false);

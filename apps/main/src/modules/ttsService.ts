@@ -30,10 +30,10 @@ export class TTSService extends EventEmitter<TTSServiceEventMap> {
     string,
     {
       timeout: NodeJS.Timeout;
-      listeners: {
+      listeners: Array<{
         onAudioReady: (event: AudioReadyEvent) => void;
         onError: (event: TTSErrorEvent) => void;
-      };
+      }>;
     }
   >();
   private readonly LISTENER_TIMEOUT_MS = 30000; // 30 seconds timeout for listeners
@@ -101,11 +101,18 @@ export class TTSService extends EventEmitter<TTSServiceEventMap> {
             reject(new Error("Request timeout"));
           }, this.LISTENER_TIMEOUT_MS);
 
-          // Store listener info for cleanup
-          this.pendingListeners.set(requestId, {
-            timeout,
-            listeners: { onAudioReady, onError },
-          });
+          // Store listener info for cleanup — accumulate if already waiting
+          const existing = this.pendingListeners.get(requestId);
+          if (existing) {
+            clearTimeout(existing.timeout);
+            existing.timeout = timeout;
+            existing.listeners.push({ onAudioReady, onError });
+          } else {
+            this.pendingListeners.set(requestId, {
+              timeout,
+              listeners: [{ onAudioReady, onError }],
+            });
+          }
 
           this.on(TTS_EVENTS.AUDIO_READY, onAudioReady);
           this.on(TTS_EVENTS.ERROR, onError);
@@ -230,11 +237,13 @@ export class TTSService extends EventEmitter<TTSServiceEventMap> {
     const pendingListener = this.pendingListeners.get(requestId);
     if (pendingListener) {
       clearTimeout(pendingListener.timeout);
-      this.removeListener(
-        TTS_EVENTS.AUDIO_READY,
-        pendingListener.listeners.onAudioReady
-      );
-      this.removeListener(TTS_EVENTS.ERROR, pendingListener.listeners.onError);
+      for (const listener of pendingListener.listeners) {
+        this.removeListener(
+          TTS_EVENTS.AUDIO_READY,
+          listener.onAudioReady
+        );
+        this.removeListener(TTS_EVENTS.ERROR, listener.onError);
+      }
       this.pendingListeners.delete(requestId);
     }
   }

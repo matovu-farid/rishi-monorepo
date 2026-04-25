@@ -101,19 +101,20 @@ export async function triggerSync(): Promise<void> {
   if (!engine) return;
   if (syncStatus === 'syncing') return;
 
+  // Set immediately before any async work to prevent concurrent calls
   syncStatus = 'syncing';
   notifyListeners();
 
-  // Proactively refresh the auth token if it's within 1 day of expiry.
-  // This runs before sync so we avoid AUTH_EXPIRED errors mid-sync.
-  // Failures are non-fatal — we proceed with the existing token.
   try {
-    await invoke('refresh_auth_token');
-  } catch {
-    // Refresh is best-effort; token may still be valid
-  }
+    // Proactively refresh the auth token if it's within 1 day of expiry.
+    // This runs before sync so we avoid AUTH_EXPIRED errors mid-sync.
+    // Failures are non-fatal — we proceed with the existing token.
+    try {
+      await invoke('refresh_auth_token');
+    } catch {
+      // Refresh is best-effort; token may still be valid
+    }
 
-  try {
     await engine.sync();
     syncStatus = 'synced';
     lastSyncAt = Date.now();
@@ -128,9 +129,13 @@ export async function triggerSync(): Promise<void> {
     } else {
       syncStatus = 'error';
     }
+  } finally {
+    if (syncStatus === 'syncing') {
+      // Should not happen, but guard against forgotten status update
+      syncStatus = 'error';
+    }
+    notifyListeners();
   }
-
-  notifyListeners();
 }
 
 export function initDesktopSync(): void {

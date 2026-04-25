@@ -62,4 +62,9 @@ export function stopThinkingSound() {
     clearInterval(intervalId);
     intervalId = null;
   }
+  if (ctx && ctx.state !== "closed") {
+    ctx.close().catch(() => {});
+    ctx = null;
+    gainNode = null;
+  }
 }

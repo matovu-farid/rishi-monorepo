@@ -266,6 +266,10 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
   // Build themed srcdoc
   const srcdoc = useMemo(() => {
     const t = themes[theme];
+    // Sanitize MOBI HTML: strip script tags and event handler attributes
+    const sanitizedHtml = chapterHtml
+      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+      .replace(/\bon\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
     return `<!DOCTYPE html>
 <html>
 <head>
@@ -288,7 +292,7 @@ export function MobiView({ book }: { book: Book }): React.JSX.Element {
   .page-number { text-align: center; font-size: 0.75em; color: ${t.color}; opacity: 0.4; padding: 2rem 0 1rem; }
 </style>
 </head>
-<body>${chapterHtml}<div class="page-number">${chapterCount > 0 ? `${chapterIndex + 1} of ${chapterCount}` : ''}</div></body>
+<body>${sanitizedHtml}<div class="page-number">${chapterCount > 0 ? `${chapterIndex + 1} of ${chapterCount}` : ''}</div></body>
 </html>`;
   }, [chapterHtml, theme, chapterIndex, chapterCount]);
 

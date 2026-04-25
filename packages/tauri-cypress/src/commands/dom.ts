@@ -59,7 +59,7 @@ export function domClear(el: Element): Element {
 
 export function domCheck(el: Element): Element {
   const input = el as HTMLInputElement;
-  input.checked = !input.checked;
+  input.checked = true;
   input.dispatchEvent(new Event("change", { bubbles: true }));
   return el;
 }

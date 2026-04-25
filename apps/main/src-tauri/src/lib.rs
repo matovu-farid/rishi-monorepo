@@ -34,9 +34,7 @@ pub mod test_helpers;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let sentry_dsn = option_env!("SENTRY_DSN").unwrap_or(
-        "https://e67d34cb7b6a7fa22a04e39ab2100227@o4510586781958144.ingest.de.sentry.io/4510588300361808",
-    );
+    let sentry_dsn = option_env!("SENTRY_DSN").unwrap_or("");
     let client = sentry::init((
         sentry_dsn,
         sentry::ClientOptions {

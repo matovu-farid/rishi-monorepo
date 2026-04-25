@@ -185,7 +185,7 @@ pub async fn scan_for_books(app: tauri::AppHandle, mode: String) -> Result<u32, 
     }
     CANCEL_FLAG.store(false, Ordering::SeqCst);
 
-    let result = tokio::task::spawn_blocking(move || {
+    let join_result = tokio::task::spawn_blocking(move || {
         let folders: Vec<String> = if mode == "full" {
             match get_home_dir() {
                 Some(home) => vec![home],
@@ -251,17 +251,17 @@ pub async fn scan_for_books(app: tauri::AppHandle, mode: String) -> Result<u32, 
                 };
 
                 let _ = app.emit("scan-result", book);
-                total_found += 1;
+                total_found = total_found.saturating_add(1);
             }
         }
 
         let _ = app.emit("scan-complete", total_found);
         Ok(total_found)
     })
-    .await
-    .map_err(|e| format!("Scan task panicked: {}", e))?;
+    .await;
 
     SCAN_RUNNING.store(false, Ordering::SeqCst);
+    let result = join_result.map_err(|e| format!("Scan task panicked: {}", e))?;
     result
 }
 

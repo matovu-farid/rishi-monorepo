@@ -42,30 +42,36 @@ export async function processEpubJob(
     // Save page data first, then embed
     // This ensures data is in the database even if embedding fails
     await savePageDataMany({ pageData: pageData });
-    const batches = batchEmbed(embedParams);
-    for (const batch of batches) {
-      const embedResults = await embedWithFallback(batch);
 
-      // const embedResults = await embed({ embedparams: embedParams });
+    // Embedding/vector save is best-effort — page data is already persisted.
+    // If this fails, the book's page data is intact and vectors can be retried.
+    try {
+      const batches = batchEmbed(embedParams);
+      for (const batch of batches) {
+        const embedResults = await embedWithFallback(batch);
 
-      const vectorObjects = embedResults.map((result) => {
-        return {
-          id: result.metadata.id,
-          vector: result.embedding,
-          text: result.text,
-          metadata: result.metadata,
-        };
-      });
-      const vectors: Vector[] = vectorObjects.map((vector) => ({
-        id: vector.id,
-        vector: vector.vector,
-      }));
+        const vectorObjects = embedResults.map((result) => {
+          return {
+            id: result.metadata.id,
+            vector: result.embedding,
+            text: result.text,
+            metadata: result.metadata,
+          };
+        });
+        const vectors: Vector[] = vectorObjects.map((vector) => ({
+          id: vector.id,
+          vector: vector.vector,
+        }));
 
-      await saveVectors({
-        name: `${bookId}-vectordb`,
-        dim: vectorObjects[0].vector.length,
-        vectors,
-      });
+        await saveVectors({
+          name: `${bookId}-vectordb`,
+          dim: vectorObjects[0].vector.length,
+          vectors,
+        });
+      }
+    } catch (embedError) {
+      console.error('[epub] embedding/vector save failed, will retry on next open:', embedError);
+      // Don't re-throw — page data is saved, vectors can be retried
     }
   } catch (error) {
     console.error(">>> Error in processEpubJob:", error);

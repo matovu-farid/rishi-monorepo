@@ -29,7 +29,7 @@ pub fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
-        .unwrap_or_default()
+        .expect("Failed to build HTTP client")
 }
 
 /// Store a value in the OS keychain.
@@ -289,7 +289,7 @@ pub async fn complete_auth(app: tauri::AppHandle, state: &str) -> Result<User, S
 
     let expires_at = exchange_response["expiresAt"]
         .as_i64()
-        .unwrap_or(0);
+        .ok_or_else(|| "Server response missing expiresAt field".to_string())?;
 
     // Store token and expiry in OS keychain (not plain JSON)
     keyring_set("auth_token", token)?;
@@ -598,7 +598,8 @@ pub async fn refresh_auth_token(_app: tauri::AppHandle) -> Result<(), String> {
     let new_token = data["token"]
         .as_str()
         .ok_or("Missing token in refresh response")?;
-    let new_exp = data["expiresAt"].as_i64().unwrap_or(0);
+    let new_exp = data["expiresAt"].as_i64()
+        .ok_or_else(|| "Server response missing expiresAt field".to_string())?;
 
     keyring_set("auth_token", new_token)?;
     keyring_set("auth_expires_at", &new_exp.to_string())?;
@@ -616,6 +617,10 @@ pub fn get_user_from_store(app: tauri::AppHandle) -> Result<User, String> {
 
 #[tauri::command]
 pub async fn get_user(app: tauri::AppHandle, user_id: &str) -> Result<User, String> {
+    // Validate user_id contains only alphanumeric chars and underscores
+    if !user_id.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return Err("Invalid user_id format".to_string());
+    }
     let worker_url = crate::WORKER_URL;
     let url = format!("{}/api/clerk/user/{}", worker_url, user_id);
     let response = authenticated_get(&app, &url).await?;
@@ -760,9 +765,23 @@ pub fn unzip(file_path: &str, out_dir: &str) -> Result<PathBuf, String> {
 
         if file.name().ends_with('/') {
             fs::create_dir_all(&outpath).map_err(|e| e.to_string())?;
+            // Verify the created directory stays within the canonical output directory
+            let canonical_outpath = fs::canonicalize(&outpath).map_err(|e| e.to_string())?;
+            if !canonical_outpath.starts_with(&canonical_output_dir) {
+                fs::remove_dir_all(&outpath).ok();
+                continue;
+            }
         } else {
+            // Verify the output path stays within the canonical output directory
+            // Use the parent directory for the check since the file itself doesn't exist yet
             if let Some(parent) = outpath.parent() {
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                let canonical_outpath = fs::canonicalize(parent)
+                    .map_err(|e| e.to_string())?
+                    .join(outpath.file_name().unwrap_or_default());
+                if !canonical_outpath.starts_with(&canonical_output_dir) {
+                    continue; // skip entries that escape the output directory
+                }
             }
             let mut outfile = File::create(&outpath).map_err(|e| e.to_string())?;
             io::copy(&mut file, &mut outfile).map_err(|e| e.to_string())?;

@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { AwsClient } from "aws4fetch";
 import type { CloudflareBindings } from "../index";
 import { requireWorkerAuth } from "../index";
@@ -62,11 +62,11 @@ uploadRoutes.post("/upload-url", requireWorkerAuth, async (c) => {
   const userId = c.get("userId");
   const db = createDb(c.env.DB);
 
-  // Check for existing file with same hash (global dedup across all users)
+  // Check for existing file with same hash scoped to this user
   const existing = await db
     .select({ fileR2Key: books.fileR2Key })
     .from(books)
-    .where(eq(books.fileHash, body.fileHash))
+    .where(and(eq(books.fileHash, body.fileHash), eq(books.userId, userId)))
     .get();
 
   if (existing?.fileR2Key) {

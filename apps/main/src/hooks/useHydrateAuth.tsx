@@ -66,10 +66,13 @@ export function useHydrateAuth(): void {
 
   // 3: deep-link OAuth callback listener.
   useEffect(() => {
+    let cancelled = false;
     const unlisten = onOpenUrl(async (urls) => {
+      if (cancelled) return;
       void debugLog("global", "onOpenUrl_fired", { urlCount: urls.length, urls: urls.map(u => u.slice(0, 100)) });
 
       for (const url of urls) {
+        if (cancelled) return;
         if (!url.includes("auth/callback")) continue;
 
         let params: URLSearchParams;
@@ -177,6 +180,7 @@ export function useHydrateAuth(): void {
     });
 
     return () => {
+      cancelled = true;
       void unlisten.then((fn) => fn());
     };
     // run-once on mount

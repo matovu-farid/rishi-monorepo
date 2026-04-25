@@ -29,6 +29,7 @@ interface SearchPanelProps {
 function sanitizeSnippet(html: string): string {
   return html
     .replace(/<(?!\/?mark\b)[^>]+>/gi, '') // strip all tags except <mark> and </mark>
+    .replace(/<mark\s[^>]*>/gi, '<mark>') // strip attributes from mark tags
     .replace(/&(?!amp;|lt;|gt;|quot;|#\d+;|#x[\da-f]+;)/gi, '&amp;'); // encode stray ampersands
 }
 

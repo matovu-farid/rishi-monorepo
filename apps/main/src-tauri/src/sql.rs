@@ -399,6 +399,17 @@ pub async fn process_job(
             let msg = format!("[process_job] Embedding failed for book {} page {}: {}", book_id, page_number, e);
             eprintln!("{}", msg);
             sentry::capture_message(&msg, sentry::Level::Warning);
+            // Remove chunk_data so embedding will be retried on next process_job call
+            {
+                use crate::schema::chunk_data::dsl::*;
+                diesel::delete(
+                    chunk_data
+                        .filter(bookId.eq(&book_id))
+                        .filter(pageNumber.eq(&page_number)),
+                )
+                .execute(&mut conn)
+                .ok(); // best effort cleanup
+            }
         }
     }
 

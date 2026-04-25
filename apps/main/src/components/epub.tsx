@@ -581,7 +581,7 @@ export function EpubView({ book }: { book: Book }): React.JSX.Element {
             if (pt.ready && pt.locationsReady) {
               pt.goToCfi(
                 epubcfi,
-                (c: string) => rendition!.book.locations.locationFromCfi(c) as unknown as number,
+                (c: string) => rendition?.book.locations.locationFromCfi(c) as unknown as number ?? 0,
               );
             }
           }}

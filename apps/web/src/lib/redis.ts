@@ -59,10 +59,15 @@ export async function saveUser(userId: string, state: string, codeChallenge: str
     // State already exists — verify it belongs to the same user
     const existing = await redis.get(`auth:state:${state}`) as string | null
     if (existing) {
-      const parsed = JSON.parse(existing)
-      if (parsed.userId !== userId) {
-        await debugLog(state, 'saveUser_state_claimed_by_other', null, 'different user')
-        throw new Error('Auth state already claimed by another user')
+      try {
+        const parsed = JSON.parse(existing)
+        if (parsed.userId !== userId) {
+          await debugLog(state, 'saveUser_state_claimed_by_other', null, 'different user')
+          throw new Error('Auth state already claimed by another user')
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message === 'Auth state already claimed by another user') throw e;
+        console.warn('[redis] corrupt auth state data, overwriting');
       }
     }
     await debugLog(state, 'saveUser_same_user_retry')

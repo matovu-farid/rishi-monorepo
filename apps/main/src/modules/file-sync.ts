@@ -81,7 +81,10 @@ export async function uploadBookFile(
   const uploadTimeout = setTimeout(() => uploadController.abort(), 60_000);
   let uploadRes: Response;
   try {
-    uploadRes = await fetch(data.uploadUrl!, {
+    if (!data.uploadUrl) {
+      throw new Error('Server response missing uploadUrl');
+    }
+    uploadRes = await fetch(data.uploadUrl, {
       method: 'PUT',
       body: fileBytes,
       headers: { 'Content-Type': contentType },

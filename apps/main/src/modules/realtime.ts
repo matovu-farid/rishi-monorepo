@@ -36,6 +36,9 @@ async function getOrFetchKey(): Promise<string> {
     _cachedKeyTime = Date.now();
     _prefetchPromise = null;
     return key;
+  }).catch((err) => {
+    _prefetchPromise = null;
+    throw err;
   });
   return _prefetchPromise;
 }

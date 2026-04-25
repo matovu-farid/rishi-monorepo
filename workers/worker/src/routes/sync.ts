@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, gt, and, max, asc, inArray, sql } from "drizzle-orm";
+import { eq, gt, and, max, asc, sql, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
 import type { CloudflareBindings } from "../index";
 import { requireWorkerAuth } from "../index";
@@ -56,10 +56,17 @@ syncRoutes.post("/push", requireWorkerAuth, async (c) => {
 
       const pushedUpdatedAt = (serverFields.updatedAt as number) ?? 0;
 
+      // Whitelist of allowed book fields (excludes id, userId, filePath, coverPath, isDirty, syncVersion)
+      const allowedBookKeys = ['title', 'author', 'format', 'fileHash', 'fileR2Key', 'coverR2Key', 'currentCfi', 'currentPage', 'isDeleted'] as const;
+      const safeBookFields: Record<string, unknown> = {};
+      for (const key of allowedBookKeys) {
+        if (key in serverFields) safeBookFields[key] = serverFields[key];
+      }
+
       if (!existing) {
         // INSERT new record
         await tx.insert(books).values({
-          ...serverFields,
+          ...safeBookFields,
           id: bookId,
           userId,
           // Ensure filePath has a default for the NOT NULL constraint in schema
@@ -70,11 +77,10 @@ syncRoutes.post("/push", requireWorkerAuth, async (c) => {
         upsertedBookIds.push(bookId);
       } else if (pushedUpdatedAt > (existing.updatedAt ?? 0)) {
         // Client is newer -- UPDATE (excluding filePath/coverPath)
-        const { id, createdAt, ...updateFields } = serverFields;
         await tx
           .update(books)
           .set({
-            ...updateFields,
+            ...safeBookFields,
             filePath: existing.filePath, // Preserve server's existing value
             coverPath: existing.coverPath, // Preserve server's existing value
             updatedAt: pushedUpdatedAt,
@@ -101,10 +107,17 @@ syncRoutes.post("/push", requireWorkerAuth, async (c) => {
 
       const pushedUpdatedAt = (serverFields.updatedAt as number) ?? 0;
 
+      // Whitelist of allowed highlight fields
+      const allowedHighlightKeys = ['bookId', 'cfiRange', 'text', 'color', 'note', 'chapter', 'isDeleted'] as const;
+      const safeHighlightFields: Record<string, unknown> = {};
+      for (const key of allowedHighlightKeys) {
+        if (key in serverFields) safeHighlightFields[key] = serverFields[key];
+      }
+
       if (!existing) {
         // INSERT new highlight (union merge: always accept new highlights)
         await tx.insert(highlights).values({
-          ...serverFields,
+          ...safeHighlightFields,
           id: highlightId,
           userId,
           updatedAt: pushedUpdatedAt || Date.now(),
@@ -113,11 +126,10 @@ syncRoutes.post("/push", requireWorkerAuth, async (c) => {
         upsertedHighlightIds.push(highlightId);
       } else if (pushedUpdatedAt > (existing.updatedAt ?? 0)) {
         // Client is newer -- UPDATE (LWW by updatedAt)
-        const { id, createdAt, ...updateFields } = serverFields;
         await tx
           .update(highlights)
           .set({
-            ...updateFields,
+            ...safeHighlightFields,
             updatedAt: pushedUpdatedAt,
           } as Partial<typeof highlights.$inferInsert>)
           .where(and(eq(highlights.id, highlightId), eq(highlights.userId, userId)));
@@ -144,9 +156,16 @@ syncRoutes.post("/push", requireWorkerAuth, async (c) => {
 
       const pushedUpdatedAt = (serverFields.updatedAt as number) ?? 0;
 
+      // Whitelist of allowed conversation fields
+      const allowedConvKeys = ['bookId', 'title', 'isDeleted'] as const;
+      const safeConvFields: Record<string, unknown> = {};
+      for (const key of allowedConvKeys) {
+        if (key in serverFields) safeConvFields[key] = serverFields[key];
+      }
+
       if (!existing) {
         await tx.insert(conversations).values({
-          ...serverFields,
+          ...safeConvFields,
           id: convId,
           userId,
           updatedAt: pushedUpdatedAt || Date.now(),
@@ -154,11 +173,10 @@ syncRoutes.post("/push", requireWorkerAuth, async (c) => {
         } as typeof conversations.$inferInsert);
         upsertedConversationIds.push(convId);
       } else if (pushedUpdatedAt > (existing.updatedAt ?? 0)) {
-        const { id, createdAt, ...updateFields } = serverFields;
         await tx
           .update(conversations)
           .set({
-            ...updateFields,
+            ...safeConvFields,
             updatedAt: pushedUpdatedAt,
           } as Partial<typeof conversations.$inferInsert>)
           .where(and(eq(conversations.id, convId), eq(conversations.userId, userId)));
@@ -202,9 +220,16 @@ syncRoutes.post("/push", requireWorkerAuth, async (c) => {
         continue;
       }
 
+      // Whitelist of allowed message fields
+      const allowedMsgKeys = ['conversationId', 'role', 'content', 'sourceChunks', 'isDeleted'] as const;
+      const safeMsgFields: Record<string, unknown> = {};
+      for (const key of allowedMsgKeys) {
+        if (key in serverFields) safeMsgFields[key] = serverFields[key];
+      }
+
       // New message -- insert (userId verified via conversation ownership)
       await tx.insert(messages).values({
-        ...serverFields,
+        ...safeMsgFields,
         id: msgId,
         updatedAt: (serverFields.updatedAt as number) || Date.now(),
         createdAt: (serverFields.createdAt as number) || Date.now(),
@@ -281,6 +306,9 @@ syncRoutes.post("/push", requireWorkerAuth, async (c) => {
 // filePath is set to '' and coverPath to null to prevent path contamination.
 syncRoutes.get("/pull", requireWorkerAuth, async (c) => {
   const sinceVersion = Number(c.req.query("since_version") ?? "0");
+  if (!Number.isFinite(sinceVersion) || sinceVersion < 0) {
+    return c.json({ error: "since_version must be a non-negative number" }, 400);
+  }
   const userId = c.get("userId");
   const db = createDb(c.env.DB);
 
@@ -289,101 +317,102 @@ syncRoutes.get("/pull", requireWorkerAuth, async (c) => {
   // and can apply the soft-delete locally.
   const PULL_LIMIT = 5000;
 
-  const changedBooks = await db
-    .select()
-    .from(books)
-    .where(
-      and(
-        eq(books.userId, userId),
-        gt(books.syncVersion, sinceVersion)
-      )
-    )
-    .limit(PULL_LIMIT)
-    .all();
-
-  // Strip local-only paths from response -- client must never overwrite its local paths
-  const sanitizedBooks = changedBooks.map((book) => ({
-    ...book,
-    filePath: "",
-    coverPath: null,
-  }));
-
-  const changedHighlights = await db
-    .select()
-    .from(highlights)
-    .where(
-      and(
-        eq(highlights.userId, userId),
-        gt(highlights.syncVersion, sinceVersion)
-      )
-    )
-    .limit(PULL_LIMIT)
-    .all();
-
-  // ── Pull conversations ─────���───────────────────────────���──────────────────
-  const changedConversations = await db
-    .select()
-    .from(conversations)
-    .where(
-      and(
-        eq(conversations.userId, userId),
-        gt(conversations.syncVersion, sinceVersion)
-      )
-    )
-    .limit(PULL_LIMIT)
-    .all();
-
-  // ── Pull messages (via user's conversations) ─────────────────────────────
-  // Get all conversation IDs belonging to this user
-  const userConvIds = (
-    await db
-      .select({ id: conversations.id })
-      .from(conversations)
-      .where(eq(conversations.userId, userId))
-      .all()
-  ).map((c) => c.id);
-
-  let changedMessages: Array<typeof messages.$inferSelect> = [];
-  if (userConvIds.length > 0) {
-    // Fetch messages for user's conversations that changed since sinceVersion
-    changedMessages = await db
+  // Wrap all pull queries in a transaction to prevent phantom reads from
+  // concurrent pushes interleaving between individual queries.
+  const result = await db.transaction(async (tx) => {
+    const changedBooks = await tx
       .select()
+      .from(books)
+      .where(
+        and(
+          eq(books.userId, userId),
+          gt(books.syncVersion, sinceVersion)
+        )
+      )
+      .limit(PULL_LIMIT)
+      .all();
+
+    const changedHighlights = await tx
+      .select()
+      .from(highlights)
+      .where(
+        and(
+          eq(highlights.userId, userId),
+          gt(highlights.syncVersion, sinceVersion)
+        )
+      )
+      .limit(PULL_LIMIT)
+      .all();
+
+    // ── Pull conversations ─────────────────────────────────────────────────
+    const changedConversations = await tx
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.userId, userId),
+          gt(conversations.syncVersion, sinceVersion)
+        )
+      )
+      .limit(PULL_LIMIT)
+      .all();
+
+    // ── Pull messages (via JOIN to avoid unbounded IN list) ─────────────────
+    // Uses an inner join on conversations instead of fetching all conversation
+    // IDs first, which would crash SQLite with >999 params in the IN clause.
+    const changedMessages = await tx
+      .select({ ...getTableColumns(messages) })
       .from(messages)
+      .innerJoin(conversations, eq(messages.conversationId, conversations.id))
       .where(
         and(
           gt(messages.syncVersion, sinceVersion),
-          inArray(messages.conversationId, userConvIds)
+          eq(conversations.userId, userId)
         )
       )
       .orderBy(asc(messages.createdAt))
       .limit(PULL_LIMIT)
       .all();
-  }
 
-  // Get current max syncVersion across all tables for this user
-  const maxBookVer = (await db.select({ v: max(books.syncVersion) }).from(books).where(eq(books.userId, userId)).get())?.v ?? 0;
-  const maxHighVer = (await db.select({ v: max(highlights.syncVersion) }).from(highlights).where(eq(highlights.userId, userId)).get())?.v ?? 0;
-  const maxConvVer = (await db.select({ v: max(conversations.syncVersion) }).from(conversations).where(eq(conversations.userId, userId)).get())?.v ?? 0;
-  // Messages don't have userId directly, but we already filtered above
-  const maxMsgVer = changedMessages.length > 0
-    ? Math.max(...changedMessages.map((m) => m.syncVersion ?? 0))
-    : 0;
-  const currentSyncVersion = Math.max(maxBookVer, maxHighVer, maxConvVer, maxMsgVer);
+    // Get current max syncVersion across all tables for this user
+    const maxBookVer = (await tx.select({ v: max(books.syncVersion) }).from(books).where(eq(books.userId, userId)).get())?.v ?? 0;
+    const maxHighVer = (await tx.select({ v: max(highlights.syncVersion) }).from(highlights).where(eq(highlights.userId, userId)).get())?.v ?? 0;
+    const maxConvVer = (await tx.select({ v: max(conversations.syncVersion) }).from(conversations).where(eq(conversations.userId, userId)).get())?.v ?? 0;
+    // Query max message syncVersion from DB via JOIN (not from truncated result set)
+    const maxMsgVerResult = await tx
+      .select({ v: max(messages.syncVersion) })
+      .from(messages)
+      .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+      .where(eq(conversations.userId, userId))
+      .get();
+    const maxMsgVer = maxMsgVerResult?.v ?? 0;
+
+    const currentSyncVersion = Math.max(maxBookVer, maxHighVer, maxConvVer, maxMsgVer);
+
+    return { changedBooks, changedHighlights, changedConversations, changedMessages, currentSyncVersion };
+  });
+
+  // Strip local-only paths from response -- client must never overwrite its local paths
+  const sanitizedBooks = result.changedBooks.map((book) => ({
+    ...book,
+    filePath: "",
+    coverPath: null,
+  }));
 
   const hasMore =
-    changedBooks.length >= PULL_LIMIT ||
-    changedHighlights.length >= PULL_LIMIT ||
-    changedConversations.length >= PULL_LIMIT ||
-    changedMessages.length >= PULL_LIMIT;
+    result.changedBooks.length >= PULL_LIMIT ||
+    result.changedHighlights.length >= PULL_LIMIT ||
+    result.changedConversations.length >= PULL_LIMIT ||
+    result.changedMessages.length >= PULL_LIMIT;
 
   const response: PullResponse = {
     changes: {
       books: sanitizedBooks as unknown as Array<Record<string, unknown>>,
-      highlights: changedHighlights as unknown as Array<Record<string, unknown>>,
-      conversations: changedConversations as unknown as Array<Record<string, unknown>>,
-      messages: changedMessages as unknown as Array<Record<string, unknown>>,
+      highlights: result.changedHighlights as unknown as Array<Record<string, unknown>>,
+      conversations: result.changedConversations as unknown as Array<Record<string, unknown>>,
+      messages: result.changedMessages as unknown as Array<Record<string, unknown>>,
     },
-    syncVersion: currentSyncVersion,
+    syncVersion: result.currentSyncVersion,
     hasMore,
   };
 

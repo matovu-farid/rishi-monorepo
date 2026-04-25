@@ -38,6 +38,8 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
     if (initialized.current || !bookSyncId) return;
     initialized.current = true;
 
+    let cancelled = false;
+
     void (async () => {
       try {
         // Find existing conversation for this book
@@ -47,6 +49,8 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
           .where('is_deleted', '=', 0)
           .orderBy('updated_at', 'desc')
           .executeTakeFirst();
+
+        if (cancelled) return;
 
         let convId: string;
 
@@ -69,6 +73,8 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
           }).execute();
         }
 
+        if (cancelled) return;
+
         setConversationId(convId);
 
         // Load existing messages
@@ -78,6 +84,8 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
           .where('is_deleted', '=', 0)
           .orderBy('created_at', 'asc')
           .execute();
+
+        if (cancelled) return;
 
         const loadedMessages: Message[] = rows.map((row) => ({
           id: row.id,
@@ -90,10 +98,13 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
 
         setMessages(loadedMessages);
       } catch (err) {
+        if (cancelled) return;
         console.error('[useChat] Failed to initialize conversation:', err);
         setError('Failed to load conversation');
       }
     })();
+
+    return () => { cancelled = true; };
   }, [bookSyncId, bookTitle]);
 
   const sendMessage = useCallback(async (text: string) => {

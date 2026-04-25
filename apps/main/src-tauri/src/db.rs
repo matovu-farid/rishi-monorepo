@@ -136,18 +136,22 @@ fn backfill_sync_ids(conn: &mut SqliteConnection) -> anyhow::Result<()> {
         id: i32,
     }
 
-    let rows: Vec<BookIdRow> =
-        diesel::sql_query("SELECT id FROM books WHERE sync_id IS NULL")
-            .load(conn)?;
+    let count = conn.transaction::<_, anyhow::Error, _>(|conn| {
+        let rows: Vec<BookIdRow> =
+            diesel::sql_query("SELECT id FROM books WHERE sync_id IS NULL")
+                .load(conn)?;
 
-    let count = rows.len();
-    for row in rows {
-        let new_uuid = uuid::Uuid::new_v4().to_string();
-        diesel::sql_query("UPDATE books SET sync_id = ?1, is_dirty = 1 WHERE id = ?2")
-            .bind::<diesel::sql_types::Text, _>(&new_uuid)
-            .bind::<diesel::sql_types::Integer, _>(&row.id)
-            .execute(conn)?;
-    }
+        let count = rows.len();
+        for row in rows {
+            let new_uuid = uuid::Uuid::new_v4().to_string();
+            diesel::sql_query("UPDATE books SET sync_id = ?1, is_dirty = 1 WHERE id = ?2")
+                .bind::<diesel::sql_types::Text, _>(&new_uuid)
+                .bind::<diesel::sql_types::Integer, _>(&row.id)
+                .execute(conn)?;
+        }
+
+        Ok(count)
+    })?;
 
     if count > 0 {
         println!("Backfilled sync_id for {} books", count);

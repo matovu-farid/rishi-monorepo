@@ -55,9 +55,13 @@ export function HighlightsPanel({
   }, [open, bookSyncId, refreshHighlights]);
 
   const handleDelete = async (highlightId: string) => {
-    await deleteHighlightById(highlightId);
-    triggerSyncOnWrite();
-    await refreshHighlights();
+    try {
+      await deleteHighlightById(highlightId);
+      triggerSyncOnWrite();
+      await refreshHighlights();
+    } catch (err) {
+      console.error('[highlights] delete failed:', err);
+    }
   };
 
   const handleNavigate = (cfiRange: string) => {

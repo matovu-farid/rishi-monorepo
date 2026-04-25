@@ -83,6 +83,10 @@ pub fn render_page_to_png(
     use image::ImageFormat;
     use std::io::Cursor;
 
+    if dpi == 0 || dpi > 10000 {
+        return Err(format!("DPI must be between 1 and 10000, got {}", dpi).into());
+    }
+
     let width = dpi * 8;
     let height = dpi * 11;
 

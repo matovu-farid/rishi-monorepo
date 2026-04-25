@@ -90,7 +90,7 @@ pub async fn complete_auth<R: Runtime>(app: tauri::AppHandle<R>, config: tauri::
     let expires_at = exchange["expiresAt"]
         .as_i64()
         .or_else(|| exchange["expires_at"].as_i64())
-        .unwrap_or(0);
+        .ok_or_else(|| "Server response missing expiresAt field".to_string())?;
     let user = exchange["user"].clone();
 
     // Store token in OS keychain

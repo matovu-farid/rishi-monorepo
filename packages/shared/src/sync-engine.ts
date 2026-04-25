@@ -50,7 +50,7 @@ export function createSyncEngine(config: SyncEngineConfig): SyncEngine {
       if (response.status === 401) {
         throw new Error("AUTH_EXPIRED");
       }
-      return;
+      throw new Error(`Push failed with status ${response.status}`);
     }
 
     const data: PushResponse = await response.json();

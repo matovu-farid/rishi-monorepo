@@ -235,6 +235,9 @@ app.post("/api/auth/complete", async (c) => {
       return c.json({ error: "Authentication failed" }, 409);
     }
 
+    // Atomically mark as "exchanging" before PKCE verification to close TOCTOU window
+    await redis.set(redisKey, JSON.stringify({ ...authData, status: "exchanging" }), { ex: 600 });
+
     // PKCE is mandatory — reject if no code_challenge was stored
     if (!authData.codeChallenge) {
       await debugLog(state, "complete_missing_pkce_challenge");
@@ -259,14 +262,15 @@ app.post("/api/auth/complete", async (c) => {
     });
 
     if (!pkceMatch) {
+      // Increment retry counter and reject after max retries to prevent brute-force
+      const retryCount = (authData.retryCount || 0) + 1;
+      if (retryCount > 5) {
+        await redis.set(redisKey, JSON.stringify({ ...authData, status: "failed" }), { ex: 600 });
+        return c.json({ error: "Too many PKCE verification attempts" }, 429);
+      }
+      await redis.set(redisKey, JSON.stringify({ ...authData, status: "authenticated", retryCount }), { ex: 600 });
       return c.json({ error: "PKCE verification failed" }, 403);
     }
-
-    // Mark as exchanging to prevent concurrent attempts
-    await redis.set(redisKey, JSON.stringify({
-      ...authData,
-      status: "exchanging",
-    }), { ex: 600 });
 
     await debugLog(state, "complete_fetching_clerk_user", { userId: authData.userId.slice(0, 10) + "..." });
 
@@ -318,10 +322,10 @@ app.post("/api/auth/complete", async (c) => {
           if (authData.status === "exchanging") {
             await redis.set(`auth:state:${state}`, JSON.stringify({
               ...authData,
-              status: "authenticated",
+              status: "failed",
               retryCount: ((authData.retryCount as number) || 0) + 1,
             }), { ex: 600 });
-            await debugLog(state, "complete_status_reset_to_authenticated");
+            await debugLog(state, "complete_status_reset_to_failed");
           }
         }
       } catch { /* best-effort */ }
@@ -338,6 +342,10 @@ app.post("/api/auth/status/:state", requireWorkerAuth, async (c) => {
     const state = c.req.param("state");
     if (!state) {
       return c.json({ error: "Missing state parameter" }, 400);
+    }
+
+    if (!UUID_RE.test(state)) {
+      return c.json({ error: "Invalid state parameter" }, 400);
     }
 
     const body = await c.req.json<{ code_challenge?: string }>();
@@ -379,7 +387,7 @@ app.post("/api/auth/status/:state", requireWorkerAuth, async (c) => {
 // Log a debug event to Redis for auth flow tracing.
 // Each event is stored in a list keyed by state UUID.
 // A global index tracks all known states for discovery.
-app.post("/api/auth/debug", async (c) => {
+app.post("/api/auth/debug", requireWorkerAuth, async (c) => {
   try {
     const body = await c.req.json<{
       state: string;
@@ -584,18 +592,19 @@ app.post("/api/auth/refresh", requireWorkerAuth, async (c) => {
     const userId = c.get("userId");
     const oldToken = c.req.header("Authorization")!.slice(7);
 
-    // Issue new token
-    const iat = Math.floor(Date.now() / 1000);
-    const exp = iat + 60 * 60 * 24 * 7; // 7 days
-    const token = await jwt.sign({ sub: userId, iat, exp }, c.env.JWT_SECRET);
-
-    // Revoke old token to prevent reuse
+    // Revoke old token FIRST to prevent reuse — if this fails, we never
+    // issue a new token, avoiding a window where both tokens are valid.
     const redis = Redis.fromEnv(c.env);
     const decoded = jwt.decode(oldToken);
     const oldExp = (decoded?.payload as { exp?: number })?.exp || 0;
     const now = Math.floor(Date.now() / 1000);
     const ttl = oldExp > now ? oldExp - now : 60 * 60 * 24 * 7;
     await redis.set(`auth:revoked:${oldToken}`, "1", { ex: ttl });
+
+    // Issue new token only after old one is revoked
+    const iat = Math.floor(Date.now() / 1000);
+    const exp = iat + 60 * 60 * 24 * 7; // 7 days
+    const token = await jwt.sign({ sub: userId, iat, exp }, c.env.JWT_SECRET);
 
     return c.json({ token, expiresAt: exp });
   } catch (error) {
@@ -665,6 +674,13 @@ app.post("/api/audio/speech", requireWorkerAuth, async (c) => {
       return c.json({ error: "Missing or empty input text" }, 400);
     }
 
+    if (input.length > 4096) {
+      return c.json({ error: "Input text must be 4096 characters or fewer" }, 400);
+    }
+
+    const allowedVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+    const validVoice = allowedVoices.includes(voice) ? voice : "alloy";
+
     const openai = new OpenAI({
       apiKey: c.env.OPENAI_API_KEY,
     });
@@ -672,7 +688,7 @@ app.post("/api/audio/speech", requireWorkerAuth, async (c) => {
     const response = await openai.audio.speech.create({
       model: "tts-1",
       input,
-      voice: voice || "alloy",
+      voice: validVoice,
     });
 
     const arrayBuffer = await response.arrayBuffer();
@@ -731,16 +747,27 @@ app.get("/api/realtime/client_secrets", requireWorkerAuth, async (c) => {
 });
 
 app.post("/api/text/completions", requireWorkerAuth, async (c) => {
-  const { input } = await c.req.json();
-  const openai = new OpenAI({
-    apiKey: c.env.OPENAI_API_KEY,
-  });
-  const response = await openai.responses.create({
-    model: "gpt-5-nano",
-    input,
-  });
+  try {
+    const body = await c.req.json();
+    const input = body?.input;
+    if (!input || typeof input !== "string" || input.length > 50000) {
+      return c.json({ error: "input must be a string under 50000 characters" }, 400);
+    }
+    const openai = new OpenAI({
+      apiKey: c.env.OPENAI_API_KEY,
+    });
+    const response = await openai.responses.create({
+      model: "gpt-5-nano",
+      input,
+    });
 
-  return c.json(response.output_text);
+    return c.json(response.output_text);
+  } catch (error) {
+    if (error instanceof OpenAI.APIError) {
+      return c.json({ error: error.message }, (error.status as 400) || 500);
+    }
+    return c.json({ error: "Internal server error" }, 500);
+  }
 });
 
 // ─── POST /api/embed — Server-side embedding fallback ────────────────────────
@@ -749,6 +776,20 @@ app.post("/api/embed", requireWorkerAuth, async (c) => {
 
   if (!body.texts || body.texts.length === 0) {
     return c.json({ error: "texts array is required and must not be empty" }, 400);
+  }
+
+  if (!Array.isArray(body.texts)) {
+    return c.json({ error: "texts must be an array" }, 400);
+  }
+
+  if (body.texts.length > 100) {
+    return c.json({ error: "texts array must not exceed 100 items" }, 400);
+  }
+
+  for (const text of body.texts) {
+    if (typeof text !== "string" || text.length > 50000) {
+      return c.json({ error: "Each text must be a string under 50000 characters" }, 400);
+    }
   }
 
   const openai = new OpenAI({
@@ -816,11 +857,11 @@ app.post("/api/audio/transcribe", requireWorkerAuth, async (c) => {
 export default Sentry.withSentry((env: any) => {
   const { id: versionId } = env.CF_VERSION_METADATA;
   return {
-    dsn: env.SENTRY_DSN || "https://94fe4a61653475c40e733e93a9479596@o4510586781958144.ingest.de.sentry.io/4510588453584976",
+    dsn: env.SENTRY_DSN || "",
     release: versionId,
     // Adds request headers and IP for users, for more info visit:
     // https://docs.sentry.io/platforms/javascript/guides/cloudflare/configuration/options/#sendDefaultPii
-    sendDefaultPii: true,
+    sendDefaultPii: false,
     enableLogs: true,
   };
 }, app);
