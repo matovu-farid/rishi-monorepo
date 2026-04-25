@@ -1,0 +1,49 @@
+appId: org.fidexa.rishi
+productName: Rishi
+directories:
+  buildResources: build
+  output: dist
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.*'
+  - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!{vitest.config.ts,cypress.config.ts}'
+  - '!{cypress,test}/*'
+asarUnpack:
+  - resources/**
+  - node_modules/better-sqlite3/**
+  - node_modules/hnswlib-node/**
+mac:
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    - NSMicrophoneUsageDescription: "Rishi needs microphone access for voice chat features."
+  notarize: false
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+npmRebuild: true
+publish:
+  provider: github
+  owner: matovu-farid
+  repo: rishi-monorepo
