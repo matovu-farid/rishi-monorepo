@@ -7,6 +7,7 @@ import { PREMIUM_FEATURES } from "./features";
 // Mock auth module
 vi.mock("@/modules/auth", () => ({
   startSignInFlow: vi.fn().mockResolvedValue(undefined),
+  clearPendingOAuthState: vi.fn(),
 }));
 
 describe("PremiumFeatureDialog", () => {
@@ -99,6 +100,38 @@ describe("PremiumFeatureDialog", () => {
     );
 
     expect(screen.getByText(/Signing in/)).toBeInTheDocument();
+  });
+
+  it("shows Cancel button instead of Maybe later when signing in", () => {
+    useAuthStore.setState({ signingIn: true });
+
+    render(
+      <PremiumFeatureDialog
+        open={true}
+        onOpenChange={() => {}}
+        feature="tts"
+      />
+    );
+
+    expect(screen.getByText("Cancel")).toBeInTheDocument();
+    expect(screen.queryByText("Maybe later")).not.toBeInTheDocument();
+  });
+
+  it("resets signingIn state and closes dialog when Cancel is clicked", () => {
+    useAuthStore.setState({ signingIn: true });
+    const onOpenChange = vi.fn();
+
+    render(
+      <PremiumFeatureDialog
+        open={true}
+        onOpenChange={onOpenChange}
+        feature="tts"
+      />
+    );
+
+    fireEvent.click(screen.getByText("Cancel"));
+    expect(useAuthStore.getState().signingIn).toBe(false);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("does not show bullets for ai-generic feature", () => {

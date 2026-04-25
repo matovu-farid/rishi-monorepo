@@ -111,18 +111,34 @@ export function useHydrateAuth(): void {
       return;
     }
 
-    // Also try to restore from persisted file on startup
+    // Also try to restore from persisted file on startup.
+    // NOTE: getOAuthState() reuses an existing state if < 5 min old, but on
+    // app restart after a failed flow we should NOT blindly resume polling.
+    // Instead, do a single status check: if the server says "not_found" or
+    // "failed", clear the stale state immediately.
     if (!pending && !signingIn) {
-      // Try reading persisted state via IPC to resume interrupted flows
       void (async () => {
         try {
           const oauthState = await window.electron.getOAuthState();
-          // getOAuthState returns existing state if < 5 min old
-          // Check if it looks like a valid pending flow
-          if (oauthState?.state) {
-            console.log("[useHydrateAuth] found persisted OAuth state, resuming poll");
-            setSigningIn(true); // triggers re-render → re-runs this effect
+          if (!oauthState?.state) return;
+
+          // Verify the state is still viable on the server before resuming
+          try {
+            const status = await window.electron.checkAuthStatus(oauthState.state);
+            if (status.status === "not_found" || status.status === "failed" || status.status === "completed") {
+              console.log("[useHydrateAuth] persisted OAuth state is stale/terminal:", status.status);
+              clearPendingOAuthState();
+              return;
+            }
+          } catch {
+            // Network error checking status — don't resume polling on uncertainty
+            console.log("[useHydrateAuth] could not verify persisted OAuth state, clearing");
+            clearPendingOAuthState();
+            return;
           }
+
+          console.log("[useHydrateAuth] found viable persisted OAuth state, resuming poll");
+          setSigningIn(true); // triggers re-render → re-runs this effect
         } catch {
           // No persisted state — nothing to poll for
         }

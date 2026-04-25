@@ -5,7 +5,10 @@ import type { PremiumFeature } from "@/components/auth/features";
 
 /**
  * Gates premium (auth-required) features behind sign-in.
- * In dev mode, the auth gate is bypassed -- all features are accessible.
+ *
+ * The dialog always shows when the user is not authenticated, even in dev mode.
+ * Dev-mode bypass for premium API calls is handled separately at the network
+ * layer via the X-Dev-Bypass header + DEV_BYPASS_SECRET env var.
  *
  * Usage:
  *   const { requireAuth, AuthDialog } = useRequireAuth();
@@ -14,20 +17,19 @@ import type { PremiumFeature } from "@/components/auth/features";
  */
 export function useRequireAuth() {
   const isLoggedIn = useAuthStore((s) => s.user !== null);
-  const isDevMode = useAuthStore((s) => s.devMode);
   const [open, setOpen] = useState(false);
   const [feature, setFeature] = useState<PremiumFeature>("ai-generic");
 
   const requireAuth = useCallback(
     (f: PremiumFeature, action: () => void) => {
-      if (isLoggedIn || isDevMode) {
+      if (isLoggedIn) {
         action();
       } else {
         setFeature(f);
         setOpen(true);
       }
     },
-    [isLoggedIn, isDevMode],
+    [isLoggedIn],
   );
 
   const AuthDialog = (
