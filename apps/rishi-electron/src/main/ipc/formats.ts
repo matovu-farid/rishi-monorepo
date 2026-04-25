@@ -388,10 +388,15 @@ function extractMobiContent(buf: Buffer, pdbRecords: PdbRecord[], header: MobiHe
 
 /**
  * Extract the first image record as a cover image.
+ * Returns both the image bytes and the detected MIME type.
  */
-function extractMobiCover(buf: Buffer, pdbRecords: PdbRecord[], header: MobiHeader): number[] {
+function extractMobiCover(
+  buf: Buffer,
+  pdbRecords: PdbRecord[],
+  header: MobiHeader
+): { data: number[]; mimeType: string | null } {
   if (header.firstImageIndex <= 0 || header.firstImageIndex >= pdbRecords.length) {
-    return []
+    return { data: [], mimeType: null }
   }
 
   const start = pdbRecords[header.firstImageIndex].offset
@@ -402,15 +407,16 @@ function extractMobiCover(buf: Buffer, pdbRecords: PdbRecord[], header: MobiHead
 
   const imageData = buf.subarray(start, end)
 
-  // Verify it looks like an image (JPEG or PNG magic bytes)
-  if (imageData.length < 4) return []
+  // Verify it looks like an image (JPEG, PNG, or GIF magic bytes)
+  if (imageData.length < 4) return { data: [], mimeType: null }
   const isJpeg = imageData[0] === 0xff && imageData[1] === 0xd8
   const isPng = imageData[0] === 0x89 && imageData[1] === 0x50
   const isGif = imageData[0] === 0x47 && imageData[1] === 0x49
 
-  if (!isJpeg && !isPng && !isGif) return []
+  if (!isJpeg && !isPng && !isGif) return { data: [], mimeType: null }
 
-  return Array.from(imageData)
+  const mimeType = isJpeg ? 'image/jpeg' : isPng ? 'image/png' : 'image/gif'
+  return { data: Array.from(imageData), mimeType }
 }
 
 /**
@@ -461,10 +467,11 @@ export function parseMobiMetadata(buf: Buffer): {
   author: string | null
   publisher: string | null
   cover: number[]
+  coverMimeType: string | null
 } {
   const { records } = parsePdbRecords(buf)
   if (records.length < 2) {
-    return { title: null, author: null, publisher: null, cover: [] }
+    return { title: null, author: null, publisher: null, cover: [], coverMimeType: null }
   }
 
   const record0 = buf.subarray(records[0].offset, records[1].offset)
@@ -502,16 +509,16 @@ export function parseMobiMetadata(buf: Buffer): {
   }
 
   // Extract cover image
-  const cover = extractMobiCover(buf, records, header)
+  const { data: cover, mimeType: coverMimeType } = extractMobiCover(buf, records, header)
 
-  return { title, author, publisher, cover }
+  return { title, author, publisher, cover, coverMimeType }
 }
 
 async function extractMobiData(filePath: string): Promise<BookDataResult> {
   const data = await fs.readFile(filePath)
   const buf = Buffer.from(data)
 
-  const { title, author, publisher, cover } = parseMobiMetadata(buf)
+  const { title, author, publisher, cover, coverMimeType } = parseMobiMetadata(buf)
   const ext = path.extname(filePath)
   const basename = path.basename(filePath, ext)
   const md5Hash = crypto.createHash('md5').update(filePath).digest('hex')
@@ -525,7 +532,7 @@ async function extractMobiData(filePath: string): Promise<BookDataResult> {
     publisher,
     filepath: filePath,
     location: '0',
-    coverKind: cover.length > 0 ? 'image' : 'fallback',
+    coverKind: coverMimeType ?? 'fallback',
     version: 1
   }
 }
@@ -678,8 +685,8 @@ async function renderDjvuPage(
   pageNumber: number,
   dpi: number
 ): Promise<number[]> {
-  if (dpi <= 0 || dpi > 10000) {
-    throw new Error(`DPI must be between 1 and 10000, got ${dpi}`)
+  if (dpi <= 0 || dpi > 600) {
+    throw new Error(`DPI must be between 1 and 600, got ${dpi}`)
   }
 
   const width = dpi * 8
