@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Mock electron modules
@@ -59,15 +59,24 @@ function getHandler(channel: string): HandlerFn {
   return call[1] as HandlerFn;
 }
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
+function jsonResponse(body: unknown, status = 200) {
+  const bodyStr = JSON.stringify(body);
+  return {
+    ok: status >= 200 && status < 300,
     status,
-    headers: { "Content-Type": "application/json" },
-  });
+    json: () => Promise.resolve(body),
+    text: () => Promise.resolve(bodyStr),
+    headers: new Headers({ "Content-Type": "application/json" }),
+  };
 }
 
-function textResponse(body: string, status = 200): Response {
-  return new Response(body, { status });
+function textResponse(body: string, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => { try { return Promise.resolve(JSON.parse(body)); } catch { return Promise.reject(new Error("Invalid JSON")); } },
+    text: () => Promise.resolve(body),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -76,15 +85,15 @@ function textResponse(body: string, status = 200): Response {
 
 describe("auth IPC handlers", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    mockIsEncryptionAvailable.mockReturnValue(true);
+    mockEncryptString.mockImplementation((s: string) => Buffer.from(`enc:${s}`));
+    mockDecryptString.mockImplementation((buf: Buffer) => buf.toString().replace("enc:", ""));
+    mockGetPath.mockReturnValue("/tmp/test-userdata");
     mockWriteFile.mockResolvedValue(undefined);
     mockUnlink.mockResolvedValue(undefined);
     // Register all handlers
     registerAuthHandlers();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
   });
 
   // ── auth:refreshToken ───────────────────────────────────────────
@@ -194,6 +203,8 @@ describe("auth IPC handlers", () => {
     };
 
     it("fetches user from API and caches locally", async () => {
+      // First read: expiry file (far future), second read: encrypted token
+      mockReadFile.mockResolvedValueOnce(JSON.stringify({ expiresAt: Date.now() + 86400000 }));
       mockReadFile.mockResolvedValueOnce(Buffer.from("enc:test-token"));
       mockFetch.mockResolvedValueOnce(jsonResponse(mockUser));
 
@@ -234,6 +245,7 @@ describe("auth IPC handlers", () => {
     });
 
     it("throws on 401 response", async () => {
+      mockReadFile.mockResolvedValueOnce(JSON.stringify({ expiresAt: Date.now() + 86400000 }));
       mockReadFile.mockResolvedValueOnce(Buffer.from("enc:test-token"));
       mockFetch.mockResolvedValueOnce(textResponse("Unauthorized", 401));
 
@@ -244,6 +256,7 @@ describe("auth IPC handlers", () => {
     });
 
     it("throws on other API errors", async () => {
+      mockReadFile.mockResolvedValueOnce(JSON.stringify({ expiresAt: Date.now() + 86400000 }));
       mockReadFile.mockResolvedValueOnce(Buffer.from("enc:test-token"));
       mockFetch.mockResolvedValueOnce(textResponse("Not Found", 404));
 
