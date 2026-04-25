@@ -12,6 +12,8 @@ interface AuthState {
   welcomeSeen: boolean;
   bannerDismissed: boolean;
   devMode: boolean;
+
+  // Actions
   setUser: (user: User | null) => void;
   setSigningIn: (value: boolean) => void;
   setDevMode: (value: boolean) => void;
@@ -31,39 +33,50 @@ export const useAuthStore = create<AuthState>()(
       welcomeSeen: false,
       bannerDismissed: false,
       devMode: false,
+
       setUser: (user) => set({ user }),
       setSigningIn: (value) => set({ signingIn: value }),
       setDevMode: (value) => set({ devMode: value }),
       setAuthHydrated: (value) => set({ authHydrated: value }),
+
       hydrateAuth: () => {
         try {
           const value = localStorage.getItem(WELCOME_SEEN_KEY);
           set({ welcomeSeen: value === "1" });
         } catch (err) {
-          console.warn("[authStore] failed to read welcome-seen flag:", err);
+          console.warn("[authStore] failed to read welcome-seen flag, fail-closing:", err);
           set({ welcomeSeen: true });
         }
       },
+
       dismissBanner: () => set({ bannerDismissed: true }),
+
       dismissWelcome: () => {
         set({ welcomeSeen: true, bannerDismissed: true });
         try {
           localStorage.setItem(WELCOME_SEEN_KEY, "1");
         } catch (err) {
-          console.warn("[authStore] failed to persist welcome-seen:", err);
+          console.warn("[authStore] failed to persist welcome-seen flag:", err);
         }
+        // Start onboarding tour if not completed
         const { tourCompleted, startTour } = useTutorialStore.getState();
-        if (!tourCompleted) setTimeout(startTour, 400);
+        if (!tourCompleted) {
+          setTimeout(startTour, 400);
+        }
       },
+
       setWelcomeSeen: () => {
         set({ welcomeSeen: true });
         try {
           localStorage.setItem(WELCOME_SEEN_KEY, "1");
         } catch (err) {
-          console.warn("[authStore] failed to persist welcome-seen:", err);
+          console.warn("[authStore] failed to persist welcome-seen flag:", err);
         }
+        // Start onboarding tour if not completed
         const { tourCompleted, startTour } = useTutorialStore.getState();
-        if (!tourCompleted) setTimeout(startTour, 400);
+        if (!tourCompleted) {
+          setTimeout(startTour, 400);
+        }
       },
     }),
     { name: "auth-store" }

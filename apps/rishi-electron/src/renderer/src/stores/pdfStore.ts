@@ -2,15 +2,14 @@ import { create } from "zustand";
 import { devtools, subscribeWithSelector } from "zustand/middleware";
 import type { TextContent } from "react-pdf";
 import type { PDFDocumentProxy } from "pdfjs-dist";
+import type { ParagraphWithIndex } from "@/models/player_control";
 import type { Book } from "@/lib/api";
 
-export interface ParagraphWithIndex {
-  index: string;
-  text: string;
-}
-
 export type Paragraph = ParagraphWithIndex & {
-  dimensions: { top: number; bottom: number };
+  dimensions: {
+    top: number;
+    bottom: number;
+  };
 };
 
 export enum BookNavigationState {
@@ -118,13 +117,23 @@ export const usePdfStore = create<PdfState>()(
           set({ pageNumber: n });
         },
         setScrollPageNumber: (n) => set({ scrollPageNumber: n }),
-        nextPage: () => { const s = get(); s.changePage(s.isDualPage ? 2 : 1); },
-        previousPage: () => { const s = get(); s.changePage(s.isDualPage ? -2 : -1); },
+        nextPage: () => {
+          const s = get();
+          const inc = s.isDualPage ? 2 : 1;
+          s.changePage(inc);
+        },
+        previousPage: () => {
+          const s = get();
+          const inc = s.isDualPage ? 2 : 1;
+          s.changePage(-inc);
+        },
         changePage: (offset) => {
           const s = get();
           set({ isRenderedPageState: {} });
           const newPage = s.pageNumber + offset;
-          if (newPage >= 1 && newPage <= s.pageCount) get().setPageNumber(newPage);
+          if (newPage >= 1 && newPage <= s.pageCount) {
+            get().setPageNumber(newPage);
+          }
         },
         setDualPage: (value) => set({ isDualPage: value }),
         setThumbnailSidebarOpen: (value) =>
@@ -133,7 +142,9 @@ export const usePdfStore = create<PdfState>()(
           })),
         setPdfDocumentProxy: (proxy) => set({ pdfDocumentProxy: proxy }),
         setPageData: (pageNumber, data) =>
-          set((state) => ({ pageNumberToPageData: { ...state.pageNumberToPageData, [pageNumber]: data } })),
+          set((state) => ({
+            pageNumberToPageData: { ...state.pageNumberToPageData, [pageNumber]: data },
+          })),
         setBook: (book) => set({ book }),
         setPageCount: (n) => set({ pageCount: n }),
         setCurrentParagraph: (p) => set({ currentParagraph: p }),
@@ -146,7 +157,9 @@ export const usePdfStore = create<PdfState>()(
         setVirtualizer: (v) => set({ virtualizer: v }),
         setBookNavigationState: (state) => set({ bookNavigationState: state }),
         setBackgroundPage: (value) =>
-          set((state) => ({ backgroundPage: typeof value === "function" ? value(state.backgroundPage) : value })),
+          set((state) => ({
+            backgroundPage: typeof value === "function" ? value(state.backgroundPage) : value,
+          })),
         setHasNavigatedToPage: (value) => set({ hasNavigatedToPage: value }),
         setIsLookingForNextParagraph: (value) => set({ isLookingForNextParagraph: value }),
         setIsPdfRendered: (bookId, isRendered) =>
@@ -156,7 +169,9 @@ export const usePdfStore = create<PdfState>()(
           set({ isDualPage: false, pageCount: 0, highlightedParagraphIndex: "", isHighlighting: false, isRenderedPageState: {} }),
         addBook: (id) => {
           const s = get();
-          if (!s.books.includes(id)) set({ books: [...s.books, id], pdfsRendered: { ...s.pdfsRendered, [id]: false } });
+          if (!s.books.includes(id)) {
+            set({ books: [...s.books, id], pdfsRendered: { ...s.pdfsRendered, [id]: false } });
+          }
         },
         removeBook: (id) => {
           const s = get();
@@ -166,7 +181,7 @@ export const usePdfStore = create<PdfState>()(
         setAllBooks: (ids) => {
           const s = get();
           const newRendered: Record<string, boolean> = {};
-          for (const id of ids) newRendered[id] = s.pdfsRendered[id] ?? false;
+          for (const id of ids) { newRendered[id] = s.pdfsRendered[id] ?? false; }
           set({ books: ids, pdfsRendered: newRendered });
         },
       })
@@ -175,6 +190,7 @@ export const usePdfStore = create<PdfState>()(
   )
 );
 
+// Side effect: sync scroll page number -> page number
 usePdfStore.subscribe(
   (state) => state.scrollPageNumber,
   (scrollPageNumber) => {

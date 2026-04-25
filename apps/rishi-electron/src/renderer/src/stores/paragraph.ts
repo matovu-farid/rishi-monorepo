@@ -1,4 +1,4 @@
-import { ParagraphWithIndex } from "../models/player_control";
+import { ParagraphWithIndex } from "@/models/player_control";
 import { create } from "zustand";
 import { devtools } from "zustand/middleware";
 
@@ -30,14 +30,13 @@ export const usePdfParagraphStore = create<PdfParagraphStore>()(
     (set, get) => ({
       // Initial state
       currentParagraphIndex: 0,
-      currentParagraph: "" as unknown as ParagraphWithIndex,
+      currentParagraph: "",
       pageNumber: 1,
       isDualPage: true,
       currentViewPages: [],
       previousViewPages: [],
       nextViewPages: [],
       pageCount: 0,
-      paragraphs: {},
       // Actions
       setPageCount: (pageCount: number) => set({ pageCount: pageCount }),
 
@@ -73,7 +72,7 @@ export const usePdfParagraphStore = create<PdfParagraphStore>()(
       },
     }),
     {
-      name: "pdf-paragraph-store",
+      name: "pdf-paragraph-store", // Name for the store in devtools
     }
   )
 );

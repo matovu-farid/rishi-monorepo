@@ -12,8 +12,11 @@ interface ChatState {
   isChatting: boolean;
   realtimeSession: RealtimeSession | null;
   chatStatus: ChatStatus;
+  /** Incremented on each startChat, checked on resolve to discard stale sessions */
   _chatGeneration: number;
+  /** True while a startRealtime() call is in flight — prevents concurrent starts */
   _isStarting: boolean;
+
   setIsChatting: (value: boolean | ((prev: boolean) => boolean)) => void;
   setChatStatus: (status: ChatStatus) => void;
   startChat: (bookId: number) => void;
@@ -31,11 +34,14 @@ export const useChatStore = create<ChatState>()(
         _isStarting: false,
 
         setIsChatting: (value) => {
-          const newValue = typeof value === "function" ? value(get().isChatting) : value;
+          const newValue =
+            typeof value === "function" ? value(get().isChatting) : value;
           if (newValue) {
+            // Stop TTS playback — chat and TTS are mutually exclusive
             const send = usePlayerStore.getState().send;
             if (send) send({ type: "CHAT_STARTED" });
           } else {
+            // Turning off chat — stop the realtime session
             get().stopConversation();
           }
           set({ isChatting: newValue });
@@ -44,11 +50,12 @@ export const useChatStore = create<ChatState>()(
         setChatStatus: (status) => set({ chatStatus: status }),
 
         startChat: (bookId: number) => {
-          if (get()._isStarting) return;
+          if (get()._isStarting) return; // Prevent concurrent starts
           const gen = get()._chatGeneration + 1;
           set({ _chatGeneration: gen, _isStarting: true });
 
           void startRealtime(bookId).then((session) => {
+            // If chat was stopped before the session connected, close it immediately
             if (get()._chatGeneration !== gen || !get().isChatting) {
               session.close();
               set({ _isStarting: false });
@@ -63,6 +70,7 @@ export const useChatStore = create<ChatState>()(
 
         stopConversation: () => {
           const { realtimeSession, _chatGeneration } = get();
+          // Bump generation so any in-flight startRealtime promise is discarded
           set({
             realtimeSession: null,
             isChatting: false,
@@ -71,6 +79,7 @@ export const useChatStore = create<ChatState>()(
           });
           stopThinkingSound();
           if (realtimeSession) {
+            // Remove event handlers before closing to prevent zombie callbacks
             sessionCleanupMap.get(realtimeSession)?.();
             sessionCleanupMap.delete(realtimeSession);
             realtimeSession.close();

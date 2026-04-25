@@ -14,10 +14,38 @@ export interface TourStep {
 }
 
 export const TOUR_STEPS: TourStep[] = [
-  { target: "import-books", title: "Add Your Books", description: "Drag & drop files here, or use these buttons to add books from your device.", position: "below" },
-  { target: "book-grid", title: "Your Library", description: "Click any book to start reading. Right-click for more options.", descriptionEmpty: "Your books will appear here once imported.", position: "above" },
-  { target: "reader-toolbar", title: "Reader Controls", description: "Access settings, bookmarks, table of contents, and more from the toolbar.", position: "below", routePrefix: "/books" },
-  { target: "ai-chat", title: "Chat With Your Book", description: "Ask questions about what you're reading. AI will answer using the book's content.", position: "left", routePrefix: "/books" },
+  {
+    target: "import-books",
+    title: "Add Your Books",
+    description:
+      "Drag & drop files here, or use these buttons to add books from your device.",
+    position: "below",
+  },
+  {
+    target: "book-grid",
+    title: "Your Library",
+    description:
+      "Click any book to start reading. Right-click for more options.",
+    descriptionEmpty:
+      "Your books will appear here once imported.",
+    position: "above",
+  },
+  {
+    target: "reader-toolbar",
+    title: "Reader Controls",
+    description:
+      "Access settings, bookmarks, table of contents, and more from the toolbar.",
+    position: "below",
+    routePrefix: "/books",
+  },
+  {
+    target: "ai-chat",
+    title: "Chat With Your Book",
+    description:
+      "Ask questions about what you're reading. AI will answer using the book's content.",
+    position: "left",
+    routePrefix: "/books",
+  },
 ];
 
 interface TutorialState {
@@ -26,6 +54,7 @@ interface TutorialState {
   tourCompleted: boolean;
   tourPaused: boolean;
   hintsShown: Record<string, boolean>;
+
   startTour: () => void;
   nextStep: () => void;
   skipTour: () => void;
@@ -38,7 +67,35 @@ interface TutorialState {
 }
 
 function readHintsShown(): Record<string, boolean> {
-  try { const raw = localStorage.getItem(HINTS_SEEN_KEY); return raw ? JSON.parse(raw) : {}; } catch { return {}; }
+  try {
+    if (typeof localStorage === "undefined") return {};
+    const raw = localStorage.getItem(HINTS_SEEN_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistHintsShown(hints: Record<string, boolean>) {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(HINTS_SEEN_KEY, JSON.stringify(hints));
+  } catch (err) {
+    console.warn("[tutorialStore] failed to persist hints-seen:", err);
+  }
+}
+
+function persistTourCompleted(completed: boolean) {
+  try {
+    if (typeof localStorage === "undefined") return;
+    if (completed) {
+      localStorage.setItem(TOUR_COMPLETED_KEY, "1");
+    } else {
+      localStorage.removeItem(TOUR_COMPLETED_KEY);
+    }
+  } catch (err) {
+    console.warn("[tutorialStore] failed to persist tour-completed:", err);
+  }
 }
 
 export const useTutorialStore = create<TutorialState>()(
@@ -46,27 +103,66 @@ export const useTutorialStore = create<TutorialState>()(
     (set, get) => ({
       tourActive: false,
       tourStep: 0,
-      tourCompleted: localStorage.getItem(TOUR_COMPLETED_KEY) === "1",
+      tourCompleted: typeof localStorage !== "undefined" ? localStorage.getItem(TOUR_COMPLETED_KEY) === "1" : false,
       tourPaused: false,
       hintsShown: readHintsShown(),
-      startTour: () => { if (get().tourCompleted) return; set({ tourActive: true, tourStep: 0, tourPaused: false }); },
+
+      startTour: () => {
+        if (get().tourCompleted) return;
+        set({ tourActive: true, tourStep: 0, tourPaused: false });
+      },
+
       nextStep: () => {
         const { tourStep } = get();
-        const next = tourStep + 1;
-        if (next >= TOUR_STEPS.length) { get().completeTour(); }
-        else {
-          const nextDef = TOUR_STEPS[next];
-          const currDef = TOUR_STEPS[tourStep];
-          set(nextDef.routePrefix && !currDef.routePrefix ? { tourStep: next, tourPaused: true } : { tourStep: next });
+        const nextIndex = tourStep + 1;
+        if (nextIndex >= TOUR_STEPS.length) {
+          get().completeTour();
+        } else {
+          const nextStepDef = TOUR_STEPS[nextIndex];
+          const currentStep = TOUR_STEPS[tourStep];
+          if (nextStepDef.routePrefix && !currentStep.routePrefix) {
+            set({ tourStep: nextIndex, tourPaused: true });
+          } else {
+            set({ tourStep: nextIndex });
+          }
         }
       },
-      skipTour: () => { set({ tourActive: false, tourStep: 0, tourPaused: false, tourCompleted: true }); localStorage.setItem(TOUR_COMPLETED_KEY, "1"); },
-      completeTour: () => { set({ tourActive: false, tourStep: 0, tourPaused: false, tourCompleted: true }); localStorage.setItem(TOUR_COMPLETED_KEY, "1"); },
+
+      skipTour: () => {
+        set({ tourActive: false, tourStep: 0, tourPaused: false, tourCompleted: true });
+        persistTourCompleted(true);
+      },
+
+      completeTour: () => {
+        set({ tourActive: false, tourStep: 0, tourPaused: false, tourCompleted: true });
+        persistTourCompleted(true);
+      },
+
       pauseTour: () => set({ tourPaused: true }),
+
       resumeTour: () => set({ tourPaused: false }),
-      resetTour: () => { set({ tourCompleted: false, tourStep: 0, tourPaused: false, tourActive: false, hintsShown: {} }); localStorage.removeItem(TOUR_COMPLETED_KEY); localStorage.removeItem(HINTS_SEEN_KEY); },
-      dismissHint: (id) => { const updated = { ...get().hintsShown, [id]: true }; set({ hintsShown: updated }); localStorage.setItem(HINTS_SEEN_KEY, JSON.stringify(updated)); },
-      isHintSeen: (id) => !!get().hintsShown[id],
+
+      resetTour: () => {
+        set({
+          tourCompleted: false,
+          tourStep: 0,
+          tourPaused: false,
+          tourActive: false,
+          hintsShown: {},
+        });
+        persistTourCompleted(false);
+        try {
+          if (typeof localStorage !== "undefined") localStorage.removeItem(HINTS_SEEN_KEY);
+        } catch {}
+      },
+
+      dismissHint: (hintId: string) => {
+        const updated = { ...get().hintsShown, [hintId]: true };
+        set({ hintsShown: updated });
+        persistHintsShown(updated);
+      },
+
+      isHintSeen: (hintId: string) => !!get().hintsShown[hintId],
     }),
     { name: "tutorial-store" }
   )
