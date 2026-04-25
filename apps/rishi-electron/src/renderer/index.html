@@ -14,7 +14,8 @@
         worker-src 'self' blob: https://cdnjs.cloudflare.com;
         media-src 'self' blob: data: local-file:;
         font-src 'self' data:;
-        frame-src 'self' local-file: https://clerk.fidexa.org https://*.clerk.accounts.dev;"
+        frame-src 'self' local-file: blob: about: https://clerk.fidexa.org https://*.clerk.accounts.dev;
+        child-src 'self' blob: about:;"
     />
   </head>
   <body>

@@ -58,8 +58,10 @@ function createWindow(): void {
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
-      // Allow loading local files via custom protocol
-      webSecurity: true,
+      // epub.js creates about:srcdoc iframes that need script execution.
+      // webSecurity must be false so Chromium doesn't sandbox those frames.
+      // Security is maintained via contextIsolation + preload + CSP.
+      webSecurity: false,
     },
   });
 
