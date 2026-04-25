@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import * as os from 'node:os'
 import * as crypto from 'node:crypto'
+import JSZip from 'jszip'
 
 const execFileAsync = promisify(execFile)
 
@@ -29,7 +30,6 @@ async function extractEpubData(filePath: string): Promise<BookDataResult> {
   // Parse EPUB using jszip directly — epubjs is a browser-only library that
   // hangs in Node.js because it relies on DOM APIs (DOMParser, XMLHttpRequest).
   // EPUBs are ZIP files with a standard OPF metadata structure.
-  const JSZip = (await import('jszip')).default
   const data = await fs.readFile(filePath)
   const zip = await JSZip.loadAsync(data)
 
