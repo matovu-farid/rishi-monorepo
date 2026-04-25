@@ -4,4 +4,5 @@ export interface ParagraphWithCFI {
 }
 
 export type { Conversation } from "./conversation";
-export type { Highlight } from "./highlight";
+export type { HighlightColor } from "./highlight";
+export { HIGHLIGHT_COLORS, getHighlightHex } from "./highlight";
