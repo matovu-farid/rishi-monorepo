@@ -245,18 +245,32 @@ app.post("/api/auth/complete", async (c) => {
     }
 
     // Verify PKCE code_challenge (timing-safe comparison)
+    // Support both base64url (RFC 7636, current) and hex (legacy pre-v1.3.7 clients)
     const encoded = new TextEncoder().encode(code_verifier);
     const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
-    const computedChallenge = btoa(String.fromCharCode(...new Uint8Array(hashBuffer)))
+    const hashBytes = new Uint8Array(hashBuffer);
+
+    // RFC 7636 base64url encoding (43 chars)
+    const base64urlChallenge = btoa(String.fromCharCode(...hashBytes))
       .replace(/\+/g, "-")
       .replace(/\//g, "_")
       .replace(/=/g, "");
 
+    // Legacy hex encoding (64 chars, used by desktop app <= v1.3.6)
+    const hexChallenge = Array.from(hashBytes)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    // Match against whichever encoding the stored challenge uses
+    const storedLen = authData.codeChallenge.length;
+    const computedChallenge = storedLen === 64 ? hexChallenge : base64urlChallenge;
+
     const pkceMatch = timingSafeEqual(computedChallenge, authData.codeChallenge);
     await debugLog(state, "complete_pkce_check", {
       computedLen: computedChallenge.length,
-      storedLen: authData.codeChallenge.length,
+      storedLen,
       match: pkceMatch,
+      encoding: storedLen === 64 ? "hex-legacy" : "base64url",
       computedPrefix: computedChallenge.slice(0, 8),
       storedPrefix: authData.codeChallenge.slice(0, 8),
     });
