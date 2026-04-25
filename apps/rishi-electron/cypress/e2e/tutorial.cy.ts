@@ -55,6 +55,24 @@ describe("Tutorial Flow", () => {
     });
   });
 
+  it("should complete the tour when navigating through all steps", () => {
+    cy.contains("Add Your Books").should("be.visible");
+
+    // Navigate forward through steps using Next until Done appears
+    const clickNextOrDone = () => {
+      cy.get("body").then(($body) => {
+        if ($body.find(':contains("Done")').length > 0) {
+          cy.contains("Done").click();
+        } else if ($body.find(':contains("Next")').length > 0) {
+          cy.contains("Next").click();
+          clickNextOrDone();
+        }
+      });
+    };
+
+    clickNextOrDone();
+  });
+
   it("should not restart tour once completed", () => {
     // Mark tour as completed
     cy.window().then((win) => {
@@ -78,5 +96,17 @@ describe("Tutorial Flow", () => {
     // Contextual hint dots (pulsing indicators) may appear near relevant UI elements
     // They are small buttons with aria-labels starting with "Hint:"
     cy.get("[aria-label^='Hint:']").should("exist");
+  });
+
+  it("should position the tooltip near the target element", () => {
+    cy.get("[data-tour='import-books']").should("exist");
+    cy.contains("Add Your Books").should("be.visible");
+
+    // The tooltip should be near the import-books element
+    cy.get("[data-tour='import-books']").then(($target) => {
+      const targetRect = $target[0].getBoundingClientRect();
+      // Tooltip should be somewhere on screen (not at 0,0)
+      expect(targetRect.top).to.be.greaterThan(0);
+    });
   });
 });

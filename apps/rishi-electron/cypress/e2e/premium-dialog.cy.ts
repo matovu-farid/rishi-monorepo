@@ -1,14 +1,15 @@
 describe("Premium Feature Dialog", () => {
   beforeEach(() => {
     cy.visit("/");
+    cy.contains("Add Book", { timeout: 15000 }).should("be.visible");
+  });
+
+  it("should not show the premium dialog initially", () => {
+    cy.get("[data-testid='premium-dialog']").should("not.exist");
   });
 
   it("should show premium dialog when triggering a premium feature without auth", () => {
-    // Attempt to use a premium feature (TTS or AI Chat)
-    // The dialog should appear prompting sign-in
-    cy.get("[data-testid='premium-dialog']").should("not.exist");
-
-    // Trigger TTS which requires auth
+    // Trigger AI chat which requires auth
     cy.get("[data-tour='ai-chat']").click({ force: true });
 
     // Verify dialog appears with expected content
@@ -16,7 +17,6 @@ describe("Premium Feature Dialog", () => {
   });
 
   it("should show feature-specific content in the dialog", () => {
-    // When the premium dialog is shown for TTS, it should display TTS-specific content
     cy.get("[data-tour='ai-chat']").click({ force: true });
 
     cy.get("[data-slot='dialog-content']").within(() => {
@@ -34,5 +34,20 @@ describe("Premium Feature Dialog", () => {
     cy.get("[data-slot='dialog-content']").should("be.visible");
     cy.contains("Maybe later").click();
     cy.get("[data-slot='dialog-content']").should("not.exist");
+  });
+
+  it("should show sign-in button that triggers auth flow", () => {
+    cy.get("[data-tour='ai-chat']").click({ force: true });
+
+    cy.get("[data-slot='dialog-content']").should("be.visible");
+    cy.contains("Sign in").should("be.visible").and("be.enabled");
+  });
+
+  it("should show bullet points describing the premium feature", () => {
+    cy.get("[data-tour='ai-chat']").click({ force: true });
+
+    cy.get("[data-slot='dialog-content']").should("be.visible");
+    // The dialog should contain description bullets
+    cy.get("[data-slot='dialog-content'] li, [data-slot='dialog-content'] ul").should("exist");
   });
 });
