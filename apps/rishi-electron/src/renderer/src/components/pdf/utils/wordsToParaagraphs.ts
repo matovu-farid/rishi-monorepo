@@ -3,7 +3,7 @@ interface Options {
   minParagraphLength?: number; // minimum number of words required
 }
 
-/** STEP 1 -- Convert list of words to sentences */
+/** STEP 1 — Convert list of words → sentences */
 export function wordsToSentences(words: string[]): string[] {
   const sentences: string[] = [];
   let buffer: string[] = [];
@@ -30,7 +30,7 @@ export function wordsToSentences(words: string[]): string[] {
   return sentences;
 }
 
-/** STEP 2 -- Group sentences into paragraphs */
+/** STEP 2 — Group sentences into paragraphs */
 export function sentencesToParagraphs(
   sentences: string[],
   sentencesPerParagraph: number
@@ -45,7 +45,7 @@ export function sentencesToParagraphs(
   return paragraphs;
 }
 
-/** STEP 3 -- Merge short paragraphs */
+/** STEP 3 — Merge short paragraphs */
 export function mergeShortParagraphs(
   paragraphs: string[],
   minLength: number

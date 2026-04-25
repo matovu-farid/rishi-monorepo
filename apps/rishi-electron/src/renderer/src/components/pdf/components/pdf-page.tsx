@@ -2,10 +2,6 @@ import { Page } from "react-pdf";
 
 import { usePdfStore } from "@/stores/pdfStore";
 import { Loader2 } from "lucide-react";
-// pageDataToParagraphs is used by useCurrentPageNumber hook for paragraph extraction
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { pageDataToParagraphs } from "../utils/getPageParagraphs";
-
 type Transform = [number, number, number, number, number, number];
 
 const PARAGRAPH_INDEX_PER_PAGE = 10000;
@@ -46,15 +42,8 @@ export function PageComponent({
   }
   const currentPage = usePdfStore((s) => s.pageNumber);
   const isCurrentlyViewedPage = currentPage === pageNumber;
-  const _isNextPage = currentPage === pageNumber + 1;
-  const _isPreviousPage = currentPage === pageNumber - 1;
-  const _setCurrentViewParagraphs = usePdfStore((s) => s.setCurrentViewParagraphs);
-  const _setNextViewParagraphs = usePdfStore((s) => s.setNextViewParagraphs);
-  const _setPreviousViewParagraphs = usePdfStore((s) => s.setPreviousViewParagraphs);
   const setIsPdfRendered = usePdfStore((s) => s.setIsPdfRendered);
   const setPageData = usePdfStore((s) => s.setPageData);
-
-  const _setIsTextGot = usePdfStore((s) => s.setIsTextGot);
 
   return (
     <Page
