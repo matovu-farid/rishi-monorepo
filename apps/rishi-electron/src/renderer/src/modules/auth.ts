@@ -65,9 +65,13 @@ export function clearPendingOAuthState(): void {
  */
 export async function startSignInFlow(): Promise<void> {
   try {
-    useAuthStore.getState().setSigningIn(true);
+    // IMPORTANT: set pendingOAuthState BEFORE setSigningIn, because
+    // setSigningIn triggers a React re-render that fires the polling
+    // effect. If pendingOAuthState is null when the effect runs, polling
+    // won't start and sign-in gets stuck in a loading state forever.
     const result = await window.electron.getOAuthState();
     pendingOAuthState = result;
+    useAuthStore.getState().setSigningIn(true);
     const url =
       `https://rishi.fidexa.org?login=true` +
       `&state=${encodeURIComponent(result.state)}` +

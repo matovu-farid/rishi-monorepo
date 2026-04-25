@@ -107,8 +107,18 @@ export function useHydrateAuth(): void {
     let pending = peekPendingOAuthState();
 
     if (!pending && signingIn) {
-      // signingIn was set but pending state not yet available — wait a tick
-      return;
+      // signingIn was set but pending state not yet available — retry shortly
+      const retryTimer = setTimeout(() => {
+        // Force re-check by toggling signingIn off/on
+        const current = peekPendingOAuthState();
+        if (current) {
+          // State is now available — the effect will re-run naturally
+          // since signingIn is already true, we need to force re-trigger
+          setSigningIn(false);
+          setTimeout(() => setSigningIn(true), 0);
+        }
+      }, 200);
+      return () => clearTimeout(retryTimer);
     }
 
     // Also try to restore from persisted file on startup.
