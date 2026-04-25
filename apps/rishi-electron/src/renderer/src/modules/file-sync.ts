@@ -163,12 +163,37 @@ export async function downloadBookFile(
     throw new Error(`R2 download failed: ${downloadRes.status} ${downloadRes.statusText}`);
   }
 
-  // Save to app data dir via Electron IPC (atomic write-then-rename)
+  // Save to app data dir via Electron IPC (atomic write-then-rename pattern)
   const dataDir = await window.electron.getAppDataPath();
   const destPath = `${dataDir}/books/${bookIntegerId}/book.${format}`;
+  const tmpPath = `${destPath}.tmp`;
 
   const bytes = new Uint8Array(await downloadRes.arrayBuffer());
-  await window.electron.writeFile(destPath, bytes);
+
+  // Write to temp file first, then rename for atomicity
+  await window.electron.mkdir(`${dataDir}/books/${bookIntegerId}`);
+  await window.electron.writeFile(tmpPath, bytes);
+
+  // Verify temp file was written
+  const tmpExists = await window.electron.exists(tmpPath);
+  if (!tmpExists) {
+    throw new Error("Download failed: temp file was not written");
+  }
+
+  // Atomic rename: tmp → final path (if process crashes mid-write, no corrupt file at destPath)
+  try {
+    // Remove existing file if present, then rename tmp to dest
+    if (await window.electron.exists(destPath)) {
+      await window.electron.removeFile(destPath);
+    }
+    // copyFile + removeFile simulates rename (Electron IPC doesn't expose rename directly)
+    await window.electron.copyFile(tmpPath, destPath);
+    await window.electron.removeFile(tmpPath);
+  } catch (renameErr) {
+    // Clean up tmp file on failure
+    try { await window.electron.removeFile(tmpPath); } catch { /* ignore */ }
+    throw renameErr;
+  }
 
   // Update DB filepath
   await window.electron.dbRun(

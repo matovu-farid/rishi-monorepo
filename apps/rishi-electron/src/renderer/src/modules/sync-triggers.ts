@@ -109,6 +109,8 @@ export async function triggerSync(): Promise<void> {
   notifyListeners();
 
   try {
+    // Proactive token refresh before sync — matches Tauri behavior
+    try { await window.electron.refreshAuthToken(); } catch { /* best-effort */ }
     await engine.sync();
     syncStatus = "synced";
     lastSyncAt = Date.now();

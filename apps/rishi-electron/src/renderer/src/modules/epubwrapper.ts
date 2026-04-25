@@ -414,21 +414,14 @@ export async function getAllParagraphsForBook(
 
   rendition.manager.updateLayout();
 
-  // Simple string hash function (replaces stringToNumberID from Tauri)
-  function simpleHash(str: string): number {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash + char) | 0;
-    }
-    return Math.abs(hash);
-  }
+  // Use the shared stringToNumberID for consistent paragraph IDs across Tauri/Electron
+  const { stringToNumberID } = await import("@/lib/utils");
 
   const chunkData = paragraphs.map((paragraph) => ({
     data: paragraph.text,
     bookId: Number(bookId),
     pageNumber: paragraph.sectionId,
-    id: simpleHash(
+    id: stringToNumberID(
       bookId +
         "-" +
         paragraph.sectionId +

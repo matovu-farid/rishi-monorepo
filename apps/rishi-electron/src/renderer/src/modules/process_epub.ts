@@ -84,7 +84,7 @@ export async function processEpubJob(
 
         if (vectorObjects.length > 0) {
           await saveVectors({
-            name: `book_${bookId}`,
+            name: `${bookId}-vectordb`,
             dim: vectorObjects[0].vector.length,
             vectors,
           });
