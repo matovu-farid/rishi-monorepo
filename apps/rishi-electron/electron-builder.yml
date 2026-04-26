@@ -79,7 +79,9 @@ mac:
         - x64
         - arm64
 win:
-  sign: build/sign-windows.cjs
+  azureSignOptions:
+    endpoint: https://eus.codesigning.azure.net
+    certificateProfileName: RishiPublicTrust
   target:
     - target: nsis
       arch:
