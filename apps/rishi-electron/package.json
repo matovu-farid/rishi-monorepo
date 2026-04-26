@@ -3,7 +3,10 @@
   "version": "1.3.20",
   "description": "Rishi - AI-Powered Book Reader (Electron)",
   "main": "./out/main/index.js",
-  "author": "fidexa.org",
+  "author": {
+    "name": "Fidexa",
+    "email": "support@fidexa.org"
+  },
   "homepage": "https://rishi.fidexa.org",
   "scripts": {
     "format": "prettier --write .",
