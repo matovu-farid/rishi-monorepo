@@ -81,7 +81,9 @@ mac:
 win:
   azureSignOptions:
     endpoint: https://eus.codesigning.azure.net
+    codeSigningAccountName: RishiSigning
     certificateProfileName: RishiPublicTrust
+    publisherName: Fidexa
   target:
     - target: nsis
       arch:
