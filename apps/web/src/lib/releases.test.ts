@@ -21,20 +21,17 @@ const FIXTURE: GithubApiRelease = {
   published_at: "2026-04-16T18:03:16Z",
   html_url: "https://github.com/matovu-farid/rishi-monorepo/releases/tag/v1.1.1",
   assets: [
-    makeAsset("rishi_1.1.1_universal.dmg", 98_000_000),
-    makeAsset("rishi_1.1.1_x64-setup.exe", 80_000_000),
-    makeAsset("rishi_1.1.1_x64-setup.exe.sig", 200),
-    makeAsset("rishi_1.1.1_x64_en-US.msi", 82_000_000),
-    makeAsset("rishi_1.1.1_x64_en-US.msi.sig", 200),
-    makeAsset("rishi_1.1.1_amd64.AppImage", 90_000_000),
-    makeAsset("rishi_1.1.1_amd64.AppImage.sig", 200),
-    makeAsset("rishi_1.1.1_amd64.deb", 60_000_000),
-    makeAsset("rishi_1.1.1_amd64.deb.sig", 200),
-    makeAsset("rishi-1.1.1-1.x86_64.rpm", 60_000_000),
-    makeAsset("rishi-1.1.1-1.x86_64.rpm.sig", 200),
-    makeAsset("rishi_universal.app.tar.gz", 95_000_000),
-    makeAsset("rishi_universal.app.tar.gz.sig", 200),
-    makeAsset("latest.json", 512),
+    makeAsset("Rishi-1.1.1.dmg", 130_000_000),
+    makeAsset("Rishi-1.1.1.dmg.blockmap", 230_000),
+    makeAsset("Rishi-1.1.1-setup.exe", 100_000_000),
+    makeAsset("Rishi-1.1.1-setup.exe.blockmap", 200_000),
+    makeAsset("Rishi-1.1.1.AppImage", 110_000_000),
+    makeAsset("rishi_1.1.1_amd64.deb", 80_000_000),
+    makeAsset("Rishi-1.1.1-mac.zip", 125_000_000),
+    makeAsset("Rishi-1.1.1-mac.zip.blockmap", 220_000),
+    makeAsset("latest-mac.yml", 512),
+    makeAsset("latest.yml", 512),
+    makeAsset("latest-linux.yml", 512),
   ],
 };
 
@@ -60,23 +57,21 @@ describe("parseGithubRelease", () => {
     const filenames = release.assets.map((a) => a.filename).sort();
     expect(filenames).toEqual(
       [
-        "rishi-1.1.1-1.x86_64.rpm",
-        "rishi_1.1.1_amd64.AppImage",
+        "Rishi-1.1.1.AppImage",
+        "Rishi-1.1.1.dmg",
+        "Rishi-1.1.1-setup.exe",
         "rishi_1.1.1_amd64.deb",
-        "rishi_1.1.1_universal.dmg",
-        "rishi_1.1.1_x64-setup.exe",
-        "rishi_1.1.1_x64_en-US.msi",
       ].sort(),
     );
   });
 
-  it("filters out .sig, latest.json, and .app.tar.gz assets", () => {
+  it("filters out .blockmap, .zip, and .yml assets", () => {
     const release = parseGithubRelease(FIXTURE);
     const filenames = release.assets.map((a) => a.filename);
-    expect(filenames).not.toContain("latest.json");
-    expect(filenames).not.toContain("rishi_universal.app.tar.gz");
+    expect(filenames).not.toContain("latest-mac.yml");
+    expect(filenames).not.toContain("Rishi-1.1.1-mac.zip");
     for (const f of filenames) {
-      expect(f.endsWith(".sig")).toBe(false);
+      expect(f.endsWith(".blockmap")).toBe(false);
     }
   });
 
@@ -94,9 +89,9 @@ describe("parseGithubRelease", () => {
   it("populates url, sizeBytes, and filename on each asset", () => {
     const release = parseGithubRelease(FIXTURE);
     const dmg = release.assets.find((a) => a.format === "dmg")!;
-    expect(dmg.url).toBe("https://example.com/rishi_1.1.1_universal.dmg");
-    expect(dmg.sizeBytes).toBe(98_000_000);
-    expect(dmg.filename).toBe("rishi_1.1.1_universal.dmg");
+    expect(dmg.url).toBe("https://example.com/Rishi-1.1.1.dmg");
+    expect(dmg.sizeBytes).toBe(130_000_000);
+    expect(dmg.filename).toBe("Rishi-1.1.1.dmg");
   });
 });
 
@@ -110,14 +105,14 @@ describe("findAsset", () => {
   });
 
   it("returns the requested format when specified", () => {
-    expect(findAsset(release, "windows", "msi")?.format).toBe("msi");
     expect(findAsset(release, "linux", "deb")?.format).toBe("deb");
-    expect(findAsset(release, "linux", "rpm")?.format).toBe("rpm");
   });
 
   it("returns null for a format that does not exist on that OS", () => {
     expect(findAsset(release, "mac", "exe")).toBeNull();
     expect(findAsset(release, "windows", "dmg")).toBeNull();
+    expect(findAsset(release, "windows", "msi")).toBeNull();
+    expect(findAsset(release, "linux", "rpm")).toBeNull();
   });
 });
 
