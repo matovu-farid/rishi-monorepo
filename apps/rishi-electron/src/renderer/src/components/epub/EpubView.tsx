@@ -622,12 +622,8 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               }
             });
 
-            // Set rendition immediately — don't wait for "rendered" event
-            // which doesn't fire reliably with the continuous manager.
-            setRendition(_rendition);
-
-            // Initialize page tracking after first relocation (display complete)
-            _rendition.once("relocated", () => {
+            _rendition.once("rendered", () => {
+              setRendition(_rendition);
               const pt = usePageTracker.getState();
 
               const CHARS_PER_PAGE = 1600;
