@@ -26,5 +26,13 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 tracing = "0.1"
 
+# File Formats
+pdfium-render = "0.9"
+epub = "2.1"
+mobi = "0.8"
+scraper = "0.26"
+image = "0.25"
+async-trait = "0.1"
+
 [dev-dependencies]
 tempfile = "3"

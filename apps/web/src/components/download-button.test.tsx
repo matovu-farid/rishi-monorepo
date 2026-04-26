@@ -27,14 +27,6 @@ const RELEASE: LatestRelease = {
       filename: "rishi_1.1.1_x64-setup.exe",
     },
     {
-      os: "windows",
-      format: "msi",
-      recommended: false,
-      url: "https://example.com/rishi_1.1.1_x64_en-US.msi",
-      sizeBytes: 1,
-      filename: "rishi_1.1.1_x64_en-US.msi",
-    },
-    {
       os: "linux",
       format: "appimage",
       recommended: true,
@@ -49,14 +41,6 @@ const RELEASE: LatestRelease = {
       url: "https://example.com/rishi_1.1.1_amd64.deb",
       sizeBytes: 1,
       filename: "rishi_1.1.1_amd64.deb",
-    },
-    {
-      os: "linux",
-      format: "rpm",
-      recommended: false,
-      url: "https://example.com/rishi-1.1.1-1.x86_64.rpm",
-      sizeBytes: 1,
-      filename: "rishi-1.1.1-1.x86_64.rpm",
     },
   ],
 };
@@ -119,18 +103,15 @@ describe("<DownloadButton>", () => {
     expect(screen.getByRole("menuitem", { name: /linux/i })).toBeInTheDocument();
   });
 
-  it("expands Windows alternate formats when the Windows expand caret is clicked", async () => {
+  it("does not show an expand caret for Windows (no alternates)", async () => {
     const user = userEvent.setup();
     render(<DownloadButton variant="primary" detectedOs="mac" release={RELEASE} />);
 
     await user.click(screen.getByRole("button", { name: /other platforms/i }));
-    await user.click(
-      await screen.findByRole("button", { name: /more windows formats/i }),
-    );
 
     expect(
-      await screen.findByRole("menuitem", { name: /msi installer/i }),
-    ).toHaveAttribute("href", "/api/download/windows?format=msi");
+      screen.queryByRole("button", { name: /more windows formats/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("expands Linux alternate formats when the Linux expand caret is clicked", async () => {
@@ -145,9 +126,6 @@ describe("<DownloadButton>", () => {
     expect(
       await screen.findByRole("menuitem", { name: /debian package/i }),
     ).toHaveAttribute("href", "/api/download/linux?format=deb");
-    expect(
-      screen.getByRole("menuitem", { name: /fedora \/ rhel/i }),
-    ).toHaveAttribute("href", "/api/download/linux?format=rpm");
   });
 
   it("exposes a 'See all releases on GitHub' link in the dropdown", async () => {

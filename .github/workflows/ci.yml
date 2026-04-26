@@ -14,71 +14,37 @@ permissions:
   contents: read
 
 jobs:
-  lint-and-test-desktop:
-    name: Desktop (lint + test)
+  lint-and-test-electron:
+    name: Electron (lint + test + build)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: apps/main
+        working-directory: apps/rishi-electron
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2  # 0c5077e51419868618aeaa5fe8019c62421857d6
-
-      - uses: actions/cache@v4
+      - uses: pnpm/action-setup@v4
         with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lockb') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
+          version: 10
 
-      - name: Install shared package dependencies
-        run: cd ../../packages/shared && bun install
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/rishi-electron/pnpm-lock.yaml
 
-      - name: Install frontend dependencies
-        run: bun install
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: bun run lint
+        run: pnpm run lint
 
       - name: Test
-        run: bun run test -- --run
+        run: pnpm run test
 
-      - name: Build frontend
-        run: npx vite build
-
-      - name: Check browser API compatibility
-        run: bash scripts/check-compat.sh dist/assets
-
-  check-rust:
-    name: Rust (check + clippy)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: apps/main/src-tauri
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable  # 29eef336d9b2848a0b548edc03f92a220660cdb8
-        with:
-          components: clippy
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libclang-dev clang libsqlite3-dev
-
-      - uses: Swatinem/rust-cache@v2  # 42dc69e1aa15d09112580998cf2ef0119e2e91ae
-        with:
-          workspaces: apps/main/src-tauri
-
-      - name: Cargo check
-        run: cargo check
-
-      - name: Cargo clippy
-        run: cargo clippy -- -D warnings
+      - name: Build
+        run: pnpm run build
 
   lint-web:
     name: Web (lint + build)

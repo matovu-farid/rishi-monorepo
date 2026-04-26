@@ -1,0 +1,101 @@
+appId: org.fidexa.rishi
+productName: Rishi
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**
+  - package.json
+  # Exclude ALL auto-detected node_modules first, then whitelist only what we need.
+  # electron-builder auto-includes production deps; this negation overrides that.
+  - '!node_modules'
+  # Native modules that Vite cannot bundle (marked external in electron.vite.config.ts)
+  - node_modules/better-sqlite3/**
+  - node_modules/hnswlib-node/**
+  - node_modules/epubjs/**
+  # ML pipeline — dynamically imported by src/main/vectordb/embeddings.ts
+  - node_modules/@xenova/transformers/**
+  - node_modules/onnxruntime-node/**
+  - node_modules/onnxruntime-web/**
+  # Transitive native deps required by the above
+  - node_modules/node-addon-api/**
+  - node_modules/prebuild-install/**
+  - node_modules/node-abi/**
+  - node_modules/napi-build-utils/**
+  - node_modules/detect-libc/**
+  - node_modules/tar-fs/**
+  - node_modules/tar-stream/**
+  - node_modules/pump/**
+  - node_modules/rc/**
+  - node_modules/ini/**
+  - node_modules/minimist/**
+  - node_modules/strip-json-comments/**
+  - node_modules/github-from-package/**
+  - node_modules/mkdirp-classic/**
+  - node_modules/bl/**
+  - node_modules/readable-stream/**
+  - node_modules/inherits/**
+  - node_modules/string_decoder/**
+  - node_modules/safe-buffer/**
+  - node_modules/end-of-stream/**
+  - node_modules/once/**
+  - node_modules/wrappy/**
+  - node_modules/simple-concat/**
+  - node_modules/simple-get/**
+  - node_modules/decompress-response/**
+  - node_modules/mimic-response/**
+  - node_modules/tunnel-agent/**
+  - node_modules/expand-template/**
+  - node_modules/bindings/**
+  - node_modules/file-uri-to-path/**
+  - node_modules/long/**
+  - node_modules/flatbuffers/**
+  - node_modules/protobufjs/**
+  - node_modules/@protobufjs/**
+  # OpenAI Agents SDK — used in renderer for realtime voice
+  - node_modules/@openai/**
+  - node_modules/openai/**
+protocols:
+  - name: Rishi Electron
+    schemes:
+      - rishi-electron
+asarUnpack:
+  - resources/**
+  - node_modules/better-sqlite3/**
+  - node_modules/hnswlib-node/**
+  - node_modules/onnxruntime-node/**
+mac:
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    - NSMicrophoneUsageDescription: "Rishi needs microphone access for voice chat features."
+  notarize: true
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+win:
+  sign: build/sign-windows.cjs
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  artifactName: "Rishi-${version}-setup.${ext}"
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+npmRebuild: true
+publish:
+  provider: github
+  owner: matovu-farid
+  repo: rishi-monorepo

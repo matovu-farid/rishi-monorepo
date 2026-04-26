@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TAURI_CONF="apps/main/src-tauri/tauri.conf.json"
-PACKAGE_JSON="apps/main/package.json"
+PACKAGE_JSON="apps/rishi-electron/package.json"
 
 usage() {
   cat <<EOF
@@ -53,27 +52,24 @@ fi
 echo "Pulling latest main..."
 git pull origin main --ff-only
 
-# Read current versions
-OLD_TAURI=$(grep '"version"' "$TAURI_CONF" | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
+# Read current version
 OLD_PKG=$(grep '"version"' "$PACKAGE_JSON" | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
-echo "Current versions: tauri.conf.json=$OLD_TAURI, package.json=$OLD_PKG"
+echo "Current version: package.json=$OLD_PKG"
 echo "Bumping to: $VERSION"
 
-# Bump versions
-sed -i '' "s/\"version\": \"$OLD_TAURI\"/\"version\": \"$VERSION\"/" "$TAURI_CONF"
+# Bump version
 sed -i '' "s/\"version\": \"$OLD_PKG\"/\"version\": \"$VERSION\"/" "$PACKAGE_JSON"
 
 # Verify bump worked
-NEW_TAURI=$(grep '"version"' "$TAURI_CONF" | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
 NEW_PKG=$(grep '"version"' "$PACKAGE_JSON" | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
-if [[ "$NEW_TAURI" != "$VERSION" || "$NEW_PKG" != "$VERSION" ]]; then
-  echo "Error: Version bump failed (tauri=$NEW_TAURI, package=$NEW_PKG)"
-  git checkout -- "$TAURI_CONF" "$PACKAGE_JSON"
+if [[ "$NEW_PKG" != "$VERSION" ]]; then
+  echo "Error: Version bump failed (package=$NEW_PKG)"
+  git checkout -- "$PACKAGE_JSON"
   exit 1
 fi
 
 # Commit and push
-git add "$TAURI_CONF" "$PACKAGE_JSON"
+git add "$PACKAGE_JSON"
 git commit -m "chore(release): bump version to $VERSION"
 echo "Pushing to main..."
 git push origin main

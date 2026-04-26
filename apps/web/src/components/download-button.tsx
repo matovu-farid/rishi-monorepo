@@ -115,13 +115,7 @@ export function DownloadButton({ variant, detectedOs, release }: Props) {
                 detectedOs={detectedOs}
                 label="Windows (.exe)"
                 href="/api/download/windows"
-                hasAlternates
-                alternates={[
-                  {
-                    href: "/api/download/windows?format=msi",
-                    label: "MSI installer (.msi)",
-                  },
-                ]}
+                hasAlternates={false}
               />
               <PlatformRow
                 os="linux"
@@ -133,10 +127,6 @@ export function DownloadButton({ variant, detectedOs, release }: Props) {
                   {
                     href: "/api/download/linux?format=deb",
                     label: "Debian package (.deb)",
-                  },
-                  {
-                    href: "/api/download/linux?format=rpm",
-                    label: "Fedora / RHEL (.rpm)",
                   },
                 ]}
               />

@@ -18,6 +18,7 @@ export function ClerkListener() {
   );
   const [queryState] = useQueryState("state");
   const [queryCodeChallenge] = useQueryState("code_challenge");
+  const [queryRedirectScheme] = useQueryState("redirect_scheme");
   const [queryProfileState] = useQueryState("profile", parseAsBoolean.withDefault(false));
   const { isSignedIn } = useSession();
   const { user } = useUser();
@@ -70,7 +71,8 @@ export function ClerkListener() {
         try {
           await saveUser(userId, state, codeChallenge);
           void logAuthDebug(state, "clerk_listener_saveUser_done");
-          const deepLink = `rishi://auth/callback?state=${encodeURIComponent(state)}`;
+          const scheme = queryRedirectScheme || "rishi";
+          const deepLink = `${scheme}://auth/callback?state=${encodeURIComponent(state)}`;
           void logAuthDebug(state, "clerk_listener_redirecting", { deepLink });
           window.location.href = deepLink;
         } catch (err) {

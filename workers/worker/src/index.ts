@@ -58,8 +58,8 @@ const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string
 app.use(
   "*",
   cors({
-    origin: ["https://rishi.fidexa.org", "tauri://localhost", "http://tauri.localhost"],
-    allowHeaders: ["Content-Type", "Authorization"],
+    origin: ["https://rishi.fidexa.org", "tauri://localhost", "http://tauri.localhost", "http://localhost:5173", "http://localhost:5174"],
+    allowHeaders: ["Content-Type", "Authorization", "X-Dev-Bypass"],
     allowMethods: ["GET", "POST", "OPTIONS"],
   })
 );
@@ -351,7 +351,10 @@ app.post("/api/auth/complete", async (c) => {
 
 // ─── POST /api/auth/status/:state ───────────────────────────────────────────
 // Check auth flow status from Redis for monitoring and retry decisions.
-app.post("/api/auth/status/:state", requireWorkerAuth, async (c) => {
+// No requireWorkerAuth — the code_challenge in the body is the auth mechanism
+// (only the flow initiator knows it). This allows unauthenticated polling
+// from desktop apps before the user has a JWT.
+app.post("/api/auth/status/:state", async (c) => {
   try {
     const state = c.req.param("state");
     if (!state) {
