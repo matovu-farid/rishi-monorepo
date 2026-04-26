@@ -84,6 +84,8 @@ win:
     - target: nsis
       arch:
         - x64
+nsis:
+  artifactName: "Rishi-${version}-setup.${ext}"
 linux:
   target:
     - target: AppImage
