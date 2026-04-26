@@ -136,43 +136,45 @@ jobs:
           security default-keychain -s login.keychain-db
           security delete-keychain build.keychain || true
 
-  update-ms-store:
-    name: Update Microsoft Store
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Configure Store credentials
-        uses: microsoft/store-submission@v1
-        with:
-          command: configure
-          type: win32
-          seller-id: ${{ secrets.MS_STORE_SELLER_ID }}
-          product-id: ${{ secrets.MS_STORE_PRODUCT_ID }}
-          tenant-id: ${{ secrets.MS_STORE_TENANT_ID }}
-          client-id: ${{ secrets.MS_STORE_CLIENT_ID }}
-          client-secret: ${{ secrets.MS_STORE_CLIENT_SECRET }}
+  # TODO: Re-enable after first MS Store submission is approved
+  # update-ms-store:
+  #   name: Update Microsoft Store
+  #   needs: release
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Configure Store credentials
+  #       uses: microsoft/store-submission@v1
+  #       with:
+  #         command: configure
+  #         type: win32
+  #         seller-id: ${{ secrets.MS_STORE_SELLER_ID }}
+  #         product-id: ${{ secrets.MS_STORE_PRODUCT_ID }}
+  #         tenant-id: ${{ secrets.MS_STORE_TENANT_ID }}
+  #         client-id: ${{ secrets.MS_STORE_CLIENT_ID }}
+  #         client-secret: ${{ secrets.MS_STORE_CLIENT_SECRET }}
+  #
+  #     - name: Compute version
+  #       id: version
+  #       run: echo "clean=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+  #
+  #     - name: Update package
+  #       uses: microsoft/store-submission@v1
+  #       with:
+  #         command: update
+  #         product-update: '{"packages":[{"packageUrl":"https://rishi-tauri.s3.us-east-1.amazonaws.com/releases/${{ github.ref_name }}/Rishi-${{ steps.version.outputs.clean }}-setup.exe","languages":["en"],"architectures":["X64"],"installerParameters":"/S","isSilentInstall":true}]}'
+  #
+  #     - name: Publish submission
+  #       uses: microsoft/store-submission@v1
+  #       with:
+  #         command: publish
 
-      - name: Compute version
-        id: version
-        run: echo "clean=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-
-      - name: Update package
-        uses: microsoft/store-submission@v1
-        with:
-          command: update
-          product-update: '{"packages":[{"packageUrl":"https://rishi-tauri.s3.us-east-1.amazonaws.com/releases/${{ github.ref_name }}/Rishi-${{ steps.version.outputs.clean }}-setup.exe","languages":["en"],"architectures":["X64"],"installerParameters":"/S","isSilentInstall":true}]}'
-
-      - name: Publish submission
-        uses: microsoft/store-submission@v1
-        with:
-          command: publish
-
-  publish-winget:
-    name: Publish to Winget
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: vedantmgoyal9/winget-releaser@7bd472be23763def6e16bd06cc8b1cdfab0e2fd5
-        with:
-          identifier: Fidexa.RishiReader
-          token: ${{ secrets.WINGET_TOKEN }}
+  # TODO: Re-enable after first Winget submission is approved
+  # publish-winget:
+  #   name: Publish to Winget
+  #   needs: release
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: vedantmgoyal9/winget-releaser@7bd472be23763def6e16bd06cc8b1cdfab0e2fd5
+  #       with:
+  #         identifier: Fidexa.RishiReader
+  #         token: ${{ secrets.WINGET_TOKEN }}
