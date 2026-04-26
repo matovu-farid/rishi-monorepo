@@ -1,0 +1,178 @@
+name: Release Electron
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  verify-main:
+    name: Verify tag is on main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Ensure tag points to a commit on main
+        env:
+          TAG_REF: ${{ github.ref }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          TAG_COMMIT=$(git rev-list -n 1 "$TAG_REF")
+          if ! git merge-base --is-ancestor "$TAG_COMMIT" origin/main; then
+            echo "::error::Tag $TAG_NAME does not point to a commit on main. Releases must be created from main."
+            exit 1
+          fi
+
+  release:
+    needs: verify-main
+    permissions:
+      contents: write
+    name: Build & Release (${{ matrix.os }})
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            build_cmd: pnpm run build && pnpm exec electron-builder --mac --x64 --arm64
+          - os: ubuntu-22.04
+            build_cmd: pnpm run build && pnpm exec electron-builder --linux
+          - os: windows-latest
+            build_cmd: pnpm run build && pnpm exec electron-builder --win
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: apps/rishi-electron
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/rishi-electron/pnpm-lock.yaml
+
+      - name: Import Apple Developer Certificate
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          security find-identity -v -p codesigning build.keychain
+          rm certificate.p12
+
+      - name: Install Azure Trusted Signing CLI (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          dotnet tool install --global AzureSignTool --version 6.0.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: ${{ matrix.build_cmd }}
+
+      - name: Upload artifacts to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            apps/rishi-electron/dist/*.dmg
+            apps/rishi-electron/dist/*.zip
+            apps/rishi-electron/dist/*.exe
+            apps/rishi-electron/dist/*.AppImage
+            apps/rishi-electron/dist/*.deb
+            apps/rishi-electron/dist/*.yml
+            apps/rishi-electron/dist/*.blockmap
+          tag_name: ${{ github.ref_name }}
+          name: Rishi ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Windows installer to S3
+        if: runner.os == 'Windows'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          $exe = "dist/Rishi-${version}-setup.exe"
+          $tag = "${{ github.ref_name }}"
+          aws s3 cp $exe "s3://rishi-tauri/releases/${tag}/Rishi-${version}-setup.exe" --content-type "application/octet-stream" --acl public-read
+        shell: pwsh
+
+      - name: Cleanup keychain
+        if: always() && runner.os == 'macOS'
+        run: |
+          security default-keychain -s login.keychain-db
+          security delete-keychain build.keychain || true
+
+  update-ms-store:
+    name: Update Microsoft Store
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure Store credentials
+        uses: microsoft/store-submission@v1
+        with:
+          command: configure
+          type: win32
+          seller-id: ${{ secrets.MS_STORE_SELLER_ID }}
+          product-id: ${{ secrets.MS_STORE_PRODUCT_ID }}
+          tenant-id: ${{ secrets.MS_STORE_TENANT_ID }}
+          client-id: ${{ secrets.MS_STORE_CLIENT_ID }}
+          client-secret: ${{ secrets.MS_STORE_CLIENT_SECRET }}
+
+      - name: Compute version
+        id: version
+        run: echo "clean=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Update package
+        uses: microsoft/store-submission@v1
+        with:
+          command: update
+          product-update: '{"packages":[{"packageUrl":"https://rishi-tauri.s3.us-east-1.amazonaws.com/releases/${{ github.ref_name }}/Rishi-${{ steps.version.outputs.clean }}-setup.exe","languages":["en"],"architectures":["X64"],"installerParameters":"/S","isSilentInstall":true}]}'
+
+      - name: Publish submission
+        uses: microsoft/store-submission@v1
+        with:
+          command: publish
+
+  publish-winget:
+    name: Publish to Winget
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: vedantmgoyal9/winget-releaser@7bd472be23763def6e16bd06cc8b1cdfab0e2fd5
+        with:
+          identifier: Fidexa.RishiReader
+          token: ${{ secrets.WINGET_TOKEN }}
