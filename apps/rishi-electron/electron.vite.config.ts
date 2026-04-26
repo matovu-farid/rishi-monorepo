@@ -19,7 +19,7 @@ export default defineConfig({
   main: {
     build: {
       rollupOptions: {
-        external: ["better-sqlite3", "hnswlib-node", "epubjs"],
+        external: ["better-sqlite3", "hnswlib-node", "epubjs", "@xenova/transformers"],
       },
     },
   },
