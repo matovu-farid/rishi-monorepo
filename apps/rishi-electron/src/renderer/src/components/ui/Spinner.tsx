@@ -1,29 +1,20 @@
-import React from "react";
+import React from 'react'
 
 interface SpinnerProps {
-  size?: "small" | "medium" | "large";
-  color?: string;
+  size?: 'small' | 'medium' | 'large'
+  color?: string
 }
 
 const sizeMap = {
   small: 16,
   medium: 24,
-  large: 36,
-};
+  large: 36
+}
 
-export const Spinner: React.FC<SpinnerProps> = ({
-  size = "medium",
-  color = "currentColor",
-}) => {
-  const px = sizeMap[size];
+export const Spinner: React.FC<SpinnerProps> = ({ size = 'medium', color = 'currentColor' }) => {
+  const px = sizeMap[size]
   return (
-    <svg
-      width={px}
-      height={px}
-      viewBox="0 0 24 24"
-      fill="none"
-      className="animate-spin"
-    >
+    <svg width={px} height={px} viewBox="0 0 24 24" fill="none" className="animate-spin">
       <circle
         cx="12"
         cy="12"
@@ -46,5 +37,5 @@ export const Spinner: React.FC<SpinnerProps> = ({
         opacity="0.75"
       />
     </svg>
-  );
-};
+  )
+}

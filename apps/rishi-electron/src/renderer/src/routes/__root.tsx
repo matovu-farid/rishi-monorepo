@@ -1,43 +1,43 @@
-import Loader from "../components/Loader";
-import { useQuery } from "@tanstack/react-query";
-import { createRootRoute, Outlet } from "@tanstack/react-router";
-import { useEffect, type JSX } from "react";
-import { getBooks } from "@/lib/api";
-import { initDesktopSync, destroyDesktopSync } from "@/modules/sync-triggers";
-import { SyncStatusIndicator } from "../components/SyncStatusIndicator";
-import { WelcomeModal } from "@/components/auth/WelcomeModal";
-import { SignInBanner } from "@/components/auth/SignInBanner";
-import { ClerkAuthSync } from "@/components/auth/ClerkAuth";
-import { TourProvider } from "@/components/tutorial/TourProvider";
-import { ErrorBoundary } from "../components/ErrorBoundary";
-import { useHydrateAuth } from "@/hooks/useHydrateAuth";
-import { useStartupUpdateCheck } from "@/hooks/useStartupUpdateCheck";
+import Loader from '../components/Loader'
+import { useQuery } from '@tanstack/react-query'
+import { createRootRoute, Outlet } from '@tanstack/react-router'
+import { useEffect, type JSX } from 'react'
+import { getBooks } from '@/lib/api'
+import { initDesktopSync, destroyDesktopSync } from '@/modules/sync-triggers'
+import { SyncStatusIndicator } from '../components/SyncStatusIndicator'
+import { WelcomeModal } from '@/components/auth/WelcomeModal'
+import { SignInBanner } from '@/components/auth/SignInBanner'
+import { ClerkAuthSync } from '@/components/auth/ClerkAuth'
+import { TourProvider } from '@/components/tutorial/TourProvider'
+import { ErrorBoundary } from '../components/ErrorBoundary'
+import { useHydrateAuth } from '@/hooks/useHydrateAuth'
+import { useStartupUpdateCheck } from '@/hooks/useStartupUpdateCheck'
 
 export const Route = createRootRoute({
-  component: () => <RootComponent />,
-});
+  component: () => <RootComponent />
+})
 
 function RootComponent(): JSX.Element {
   // Hydrate auth from secure storage + register deep-link listener
-  useHydrateAuth();
-  useStartupUpdateCheck();
+  useHydrateAuth()
+  useStartupUpdateCheck()
 
   // Initialize desktop sync on app mount
   useEffect(() => {
-    initDesktopSync();
+    initDesktopSync()
     return () => {
-      destroyDesktopSync();
-    };
-  }, []);
+      destroyDesktopSync()
+    }
+  }, [])
 
   const { isPending, error, isError } = useQuery({
-    queryKey: ["books"],
+    queryKey: ['books'],
     queryFn: async () => {
-      return await getBooks();
+      return await getBooks()
     },
     retry: 3,
-    retryDelay: 1000,
-  });
+    retryDelay: 1000
+  })
 
   return (
     <>
@@ -64,5 +64,5 @@ function RootComponent(): JSX.Element {
         <SyncStatusIndicator />
       </div>
     </>
-  );
+  )
 }

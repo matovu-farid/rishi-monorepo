@@ -1,50 +1,79 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// These tests validate the highlight-storage module's SQL interactions.
-// The module uses window.electron.dbQuery/dbRun which are mocked in test-setup.ts.
+// These tests validate the highlight-storage module's typed IPC interactions.
+// The module uses window.electron.highlights* which are mocked in test-setup.ts.
 
-describe("highlight-storage", () => {
+describe('highlight-storage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-  });
+    vi.clearAllMocks()
+  })
 
-  it("saveHighlight calls dbRun with INSERT", async () => {
-    const { saveHighlight } = await import("./highlight-storage");
-    vi.mocked(window.electron.dbRun).mockResolvedValueOnce({ changes: 1, lastInsertRowid: 1 });
+  it('saveHighlight calls highlightsSave with correct params', async () => {
+    const { saveHighlight } = await import('./highlight-storage')
+    vi.mocked(window.electron.highlightsSave).mockResolvedValueOnce('new-id')
 
-    await saveHighlight({
-      bookSyncId: "book-123",
-      cfiRange: "epubcfi(/6/4!/4/2/1:0)",
-      text: "highlighted text",
-      color: "yellow",
-    });
+    const id = await saveHighlight({
+      bookSyncId: 'book-123',
+      cfiRange: 'epubcfi(/6/4!/4/2/1:0)',
+      text: 'highlighted text',
+      color: 'yellow'
+    })
 
-    expect(window.electron.dbRun).toHaveBeenCalled();
-    const [sql] = vi.mocked(window.electron.dbRun).mock.calls[0];
-    expect(sql).toContain("INSERT INTO highlights");
-  });
+    expect(window.electron.highlightsSave).toHaveBeenCalledWith({
+      bookSyncId: 'book-123',
+      cfiRange: 'epubcfi(/6/4!/4/2/1:0)',
+      text: 'highlighted text',
+      color: 'yellow'
+    })
+    expect(id).toBe('new-id')
+  })
 
-  it("getHighlightsForBook calls dbQuery with correct book_id", async () => {
-    const { getHighlightsForBook } = await import("./highlight-storage");
-    vi.mocked(window.electron.dbQuery).mockResolvedValueOnce([]);
+  it('getHighlightsForBook calls highlightsList with correct bookId', async () => {
+    const { getHighlightsForBook } = await import('./highlight-storage')
+    vi.mocked(window.electron.highlightsList).mockResolvedValueOnce([])
 
-    await getHighlightsForBook("book-123");
+    const result = await getHighlightsForBook('book-123')
 
-    expect(window.electron.dbQuery).toHaveBeenCalled();
-    const [sql, params] = vi.mocked(window.electron.dbQuery).mock.calls[0];
-    expect(sql).toContain("SELECT");
-    expect(sql).toContain("highlights");
-    expect(params).toContain("book-123");
-  });
+    expect(window.electron.highlightsList).toHaveBeenCalledWith('book-123')
+    expect(result).toEqual([])
+  })
 
-  it("deleteHighlightById performs soft delete", async () => {
-    const { deleteHighlightById } = await import("./highlight-storage");
-    vi.mocked(window.electron.dbRun).mockResolvedValueOnce({ changes: 1, lastInsertRowid: 0 });
+  it('deleteHighlightById calls highlightsDeleteById', async () => {
+    const { deleteHighlightById } = await import('./highlight-storage')
+    vi.mocked(window.electron.highlightsDeleteById).mockResolvedValueOnce(undefined)
 
-    await deleteHighlightById("highlight-1");
+    await deleteHighlightById('highlight-1')
 
-    const [sql] = vi.mocked(window.electron.dbRun).mock.calls[0];
-    expect(sql).toContain("is_deleted = 1");
-    expect(sql).toContain("is_dirty = 1");
-  });
-});
+    expect(window.electron.highlightsDeleteById).toHaveBeenCalledWith('highlight-1')
+  })
+
+  it('deleteHighlight calls highlightsDelete with bookSyncId and cfiRange', async () => {
+    const { deleteHighlight } = await import('./highlight-storage')
+    vi.mocked(window.electron.highlightsDelete).mockResolvedValueOnce(undefined)
+
+    await deleteHighlight('book-123', 'epubcfi(/6/4!/4/2/1:0)')
+
+    expect(window.electron.highlightsDelete).toHaveBeenCalledWith(
+      'book-123',
+      'epubcfi(/6/4!/4/2/1:0)'
+    )
+  })
+
+  it('updateHighlightNote calls highlightsUpdateNote', async () => {
+    const { updateHighlightNote } = await import('./highlight-storage')
+    vi.mocked(window.electron.highlightsUpdateNote).mockResolvedValueOnce(undefined)
+
+    await updateHighlightNote('highlight-1', 'my note')
+
+    expect(window.electron.highlightsUpdateNote).toHaveBeenCalledWith('highlight-1', 'my note')
+  })
+
+  it('updateHighlightColor calls highlightsUpdateColor', async () => {
+    const { updateHighlightColor } = await import('./highlight-storage')
+    vi.mocked(window.electron.highlightsUpdateColor).mockResolvedValueOnce(undefined)
+
+    await updateHighlightColor('highlight-1', 'blue')
+
+    expect(window.electron.highlightsUpdateColor).toHaveBeenCalledWith('highlight-1', 'blue')
+  })
+})

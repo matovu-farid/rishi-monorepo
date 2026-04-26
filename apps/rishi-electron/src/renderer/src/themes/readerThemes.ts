@@ -1,28 +1,23 @@
-import {
-  IReactReaderStyle,
-  ReactReaderStyle,
-} from "@/components/react-reader/style";
-import { ReaderTheme } from "./commonReader";
+import { IReactReaderStyle, ReactReaderStyle } from '@/components/react-reader/style'
+import { ReaderTheme } from './commonReader'
 
-export default function createIReactReaderTheme(
-  theme: ReaderTheme
-): IReactReaderStyle {
+export default function createIReactReaderTheme(theme: ReaderTheme): IReactReaderStyle {
   return {
     ...ReactReaderStyle,
     arrow: {
       ...ReactReaderStyle.arrow,
       color: theme.arrowColor,
-      padding: "0px 5px",
-      borderRadius: "10px",
-      opacity: "0.3",
+      padding: '0px 5px',
+      borderRadius: '10px',
+      opacity: '0.3'
     },
     arrowHover: {
       ...ReactReaderStyle.arrowHover,
-      color: theme.arrowColor,
+      color: theme.arrowColor
     },
     readerArea: {
       ...ReactReaderStyle.readerArea,
-      backgroundColor: theme.background,
+      backgroundColor: theme.background
     },
     titleArea: {
       ...ReactReaderStyle.titleArea,
@@ -30,31 +25,31 @@ export default function createIReactReaderTheme(
       top: 14,
       left: 120,
       right: 220,
-      whiteSpace: "nowrap",
-      overflow: "hidden",
-      textOverflow: "ellipsis",
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
       fontSize: 14,
-      fontWeight: 500,
+      fontWeight: 500
     },
     tocArea: {
       ...ReactReaderStyle.tocArea,
-      background: theme.background,
+      background: theme.background
     },
     tocButtonExpanded: {
       ...ReactReaderStyle.tocButtonExpanded,
-      background: theme.background,
+      background: theme.background
     },
     tocButtonBar: {
       ...ReactReaderStyle.tocButtonBar,
-      background: theme.color,
+      background: theme.color
     },
     tocButton: {
       ...ReactReaderStyle.tocButton,
-      color: theme.color,
+      color: theme.color
     },
     toc: {
       ...ReactReaderStyle.toc,
-      color: theme.color,
-    },
-  };
+      color: theme.color
+    }
+  }
 }

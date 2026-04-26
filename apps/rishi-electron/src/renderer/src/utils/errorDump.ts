@@ -5,88 +5,83 @@
  * forwarding them to the Electron main process which writes to error-dump.json.
  */
 
-const IS_DEV = import.meta.env.DEV;
+const IS_DEV = import.meta.env.DEV
 
 interface DumpErrorParams {
-  source: string;
-  location: string;
-  error: string;
-  context?: string;
-  stack?: string;
+  source: string
+  location: string
+  error: string
+  context?: string
+  stack?: string
 }
 
 /** Send an error to the dump file (no-op in production). */
 export function dumpError(params: DumpErrorParams): void {
-  if (!IS_DEV) return;
-  window.electron?.dumpError({
-    source: params.source,
-    location: params.location,
-    error: params.error,
-    context: params.context ?? null,
-    stack: params.stack ?? null,
-  }).catch(
-    () => {
+  if (!IS_DEV) return
+  window.electron
+    ?.dumpError({
+      source: params.source,
+      location: params.location,
+      error: params.error,
+      context: params.context ?? null,
+      stack: params.stack ?? null
+    })
+    .catch(() => {
       // Last resort: if the IPC call itself fails, log to console
-      console.warn("[error-dump] Failed to write error to dump file", params);
-    },
-  );
+      console.warn('[error-dump] Failed to write error to dump file', params)
+    })
 }
 
 /** Install global error handlers that forward to the dump. */
 export function installErrorDumpHandlers(): void {
-  if (!IS_DEV) return;
+  if (!IS_DEV) return
 
   // Unhandled JS errors
-  window.addEventListener("error", (event) => {
+  window.addEventListener('error', (event) => {
     dumpError({
-      source: "frontend",
-      location: event.filename
-        ? `${event.filename}:${event.lineno}:${event.colno}`
-        : "unknown",
+      source: 'frontend',
+      location: event.filename ? `${event.filename}:${event.lineno}:${event.colno}` : 'unknown',
       error: event.message,
-      stack: event.error?.stack,
-    });
-  });
+      stack: event.error?.stack
+    })
+  })
 
   // Unhandled promise rejections
-  window.addEventListener("unhandledrejection", (event) => {
-    const reason = event.reason;
-    const error =
-      reason instanceof Error ? reason.message : String(reason ?? "Unknown");
-    const stack = reason instanceof Error ? reason.stack : undefined;
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event.reason
+    const error = reason instanceof Error ? reason.message : String(reason ?? 'Unknown')
+    const stack = reason instanceof Error ? reason.stack : undefined
     dumpError({
-      source: "frontend",
-      location: "unhandledrejection",
+      source: 'frontend',
+      location: 'unhandledrejection',
       error,
-      stack,
-    });
-  });
+      stack
+    })
+  })
 
   // Intercept console.error to also dump
-  const originalConsoleError = console.error;
+  const originalConsoleError = console.error
   console.error = (...args: unknown[]) => {
-    originalConsoleError.apply(console, args);
+    originalConsoleError.apply(console, args)
     const message = args
       .map((a) => {
-        if (a instanceof Error) return a.message;
-        if (typeof a === "string") return a;
+        if (a instanceof Error) return a.message
+        if (typeof a === 'string') return a
         try {
-          return JSON.stringify(a);
+          return JSON.stringify(a)
         } catch {
-          return String(a);
+          return String(a)
         }
       })
-      .join(" ");
+      .join(' ')
 
-    const firstError = args.find((a) => a instanceof Error) as
-      | Error
-      | undefined;
+    const firstError = args.find((a) => a instanceof Error) as Error | undefined
 
     dumpError({
-      source: "frontend",
-      location: "console.error",
+      source: 'frontend',
+      location: 'console.error',
       error: message,
-      stack: firstError?.stack,
-    });
-  };
+      stack: firstError?.stack
+    })
+  }
 }

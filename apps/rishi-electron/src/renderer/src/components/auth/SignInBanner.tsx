@@ -1,6 +1,6 @@
-import { Sparkles, X, LogIn, Loader2 } from "lucide-react";
-import { useAuthStore } from "@/stores/authStore";
-import { startSignInFlow } from "@/modules/auth";
+import { Sparkles, X, LogIn, Loader2 } from 'lucide-react'
+import { useAuthStore } from '@/stores/authStore'
+import { startSignInFlow } from '@/modules/auth'
 
 /**
  * Persistent bottom-left card prompting unauthenticated returning users to
@@ -9,11 +9,11 @@ import { startSignInFlow } from "@/modules/auth";
 export function SignInBanner(): React.JSX.Element | null {
   const visible = useAuthStore(
     (s) => s.authHydrated && s.user === null && s.welcomeSeen && !s.bannerDismissed
-  );
-  const dismiss = useAuthStore((s) => s.dismissBanner);
-  const signingIn = useAuthStore((s) => s.signingIn);
+  )
+  const dismiss = useAuthStore((s) => s.dismissBanner)
+  const signingIn = useAuthStore((s) => s.signingIn)
 
-  if (!visible) return null;
+  if (!visible) return null
 
   return (
     <div
@@ -26,20 +26,14 @@ export function SignInBanner(): React.JSX.Element | null {
       </div>
       <div className="min-w-0 flex-1 text-sm">
         <p className="font-medium leading-tight">Unlock AI features</p>
-        <p className="text-xs text-gray-500 leading-tight">
-          Sign in for TTS, chat, and sync.
-        </p>
+        <p className="text-xs text-gray-500 leading-tight">Sign in for TTS, chat, and sync.</p>
       </div>
       <button
         className="inline-flex items-center gap-1 rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
         disabled={signingIn}
         onClick={() => startSignInFlow()}
       >
-        {signingIn ? (
-          <Loader2 size={14} className="animate-spin" />
-        ) : (
-          <LogIn size={14} />
-        )}
+        {signingIn ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}
         Sign in
       </button>
       <button
@@ -51,5 +45,5 @@ export function SignInBanner(): React.JSX.Element | null {
         <X size={12} />
       </button>
     </div>
-  );
+  )
 }

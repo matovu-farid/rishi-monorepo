@@ -1,4 +1,4 @@
-import { ClipLoader } from "react-spinners";
+import { ClipLoader } from 'react-spinners'
 
 export default function Loader() {
   return (
@@ -6,5 +6,5 @@ export default function Loader() {
       <ClipLoader color="#6366f1" size={40} />
       <p className="text-sm text-gray-500">Loading...</p>
     </div>
-  );
+  )
 }

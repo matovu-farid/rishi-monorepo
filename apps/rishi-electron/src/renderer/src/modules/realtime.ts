@@ -1,52 +1,50 @@
-import { getContextForQuery, getRealtimeClientSecret } from "@/lib/api";
-import {
-  RealtimeAgent,
-  RealtimeSession,
-  tool,
-} from "@openai/agents/realtime";
-import { z } from "zod";
-import { useChatStore } from "@/stores/chatStore";
-import { usePlayerStore } from "@/stores/playerStore";
-import { startThinkingSound, stopThinkingSound } from "@/modules/thinkingSound";
-import { playReadyChime } from "@/modules/readyChime";
-import { captureError } from "@/utils/sentry";
+import { getContextForQuery, getRealtimeClientSecret } from '@/lib/api'
+import { RealtimeAgent, RealtimeSession, tool } from '@openai/agents/realtime'
+import { z } from 'zod'
+import { useChatStore } from '@/stores/chatStore'
+import { usePlayerStore } from '@/stores/playerStore'
+import { startThinkingSound, stopThinkingSound } from '@/modules/thinkingSound'
+import { playReadyChime } from '@/modules/readyChime'
+import { captureError } from '@/utils/sentry'
 
 /**
  * External cleanup registry for realtime sessions.
  * Avoids monkey-patching the SDK session object with `as any`.
  */
-export const sessionCleanupMap = new WeakMap<object, () => void>();
+export const sessionCleanupMap = new WeakMap<object, () => void>()
 
 // --- Cached API key to avoid fetching on every chat start ---
 // The key has a 10-minute TTL server-side; we treat it as stale after 9 minutes.
-const KEY_TTL_MS = 9 * 60 * 1000;
-let _cachedKey: string | null = null;
-let _cachedKeyTime = 0;
-let _prefetchPromise: Promise<string> | null = null;
+const KEY_TTL_MS = 9 * 60 * 1000
+let _cachedKey: string | null = null
+let _cachedKeyTime = 0
+let _prefetchPromise: Promise<string> | null = null
 
 async function getOrFetchKey(): Promise<string> {
   if (_cachedKey && Date.now() - _cachedKeyTime < KEY_TTL_MS) {
-    return _cachedKey;
+    return _cachedKey
   }
   // If a prefetch is already in flight, await it instead of firing a second request
   if (_prefetchPromise) {
-    return _prefetchPromise;
+    return _prefetchPromise
   }
-  _prefetchPromise = getRealtimeClientSecret().then((key) => {
-    _cachedKey = key;
-    _cachedKeyTime = Date.now();
-    _prefetchPromise = null;
-    return key;
-  }).catch((err) => {
-    _prefetchPromise = null;
-    throw err;
-  });
-  return _prefetchPromise;
+  _prefetchPromise = getRealtimeClientSecret()
+    .then((key) => {
+      _cachedKey = key
+      _cachedKeyTime = Date.now()
+      _prefetchPromise = null
+      return key
+    })
+    .catch((err) => {
+      _prefetchPromise = null
+      throw err
+    })
+  return _prefetchPromise
 }
 
 /** Pre-fetch the realtime API key so it's ready when the user starts chatting. */
 export function prefetchRealtimeKey() {
-  void getOrFetchKey();
+  void getOrFetchKey()
 }
 
 // TODO: Re-enable guardrails once audio quality impact is resolved.
@@ -56,52 +54,52 @@ export async function startRealtime(bookId: number) {
   const currentPageText = usePlayerStore
     .getState()
     .currentParagraphs.map((p) => p.text)
-    .join("\n");
+    .join('\n')
 
   const bookContextTool = tool({
-    name: "bookContext",
+    name: 'bookContext',
     description:
-      "Retrieve information from OTHER parts of the book beyond the current page. Only use this when the user asks about content NOT visible on their current page. Do NOT call this tool if the answer is already in the current page content provided in your instructions.",
+      'Retrieve information from OTHER parts of the book beyond the current page. Only use this when the user asks about content NOT visible on their current page. Do NOT call this tool if the answer is already in the current page content provided in your instructions.',
     parameters: z.object({
-      queryText: z.string(),
+      queryText: z.string()
     }),
     execute: async ({ queryText }) => {
       try {
         const context = await getContextForQuery({
           bookId,
           queryText,
-          k: 3,
-        });
-        return context;
+          k: 3
+        })
+        return context
       } catch (err) {
-        captureError(err, { operation: "realtime", step: "bookContext_tool" });
-        return ["Unable to retrieve book context at this time."];
+        captureError(err, { operation: 'realtime', step: 'bookContext_tool' })
+        return ['Unable to retrieve book context at this time.']
       }
-    },
-  });
+    }
+  })
 
   const endConvesationTool = tool({
-    name: "endConversation",
-    description: "End the conversation with the user.",
+    name: 'endConversation',
+    description: 'End the conversation with the user.',
     parameters: z.object({
-      reason: z.string(),
+      reason: z.string()
     }),
     execute: async ({ reason }) => {
-      console.log("Ending conversation with reason: ", reason);
-      useChatStore.getState().stopConversation();
-    },
-  });
+      console.log('Ending conversation with reason: ', reason)
+      useChatStore.getState().stopConversation()
+    }
+  })
 
   const agent = new RealtimeAgent({
-    name: "Assistant",
-    voice: "alloy",
+    name: 'Assistant',
+    voice: 'alloy',
     instructions: `## Role and Goal
 You are a teacher and educational assistant whose role is to help the user understand the book they are reading. Your goal is to make complex concepts accessible and answer questions in a way that enhances their comprehension of the material.
 
 ## Current Page Content
 The user is currently looking at this page:
 """
-${currentPageText || "(No page text available)"}
+${currentPageText || '(No page text available)'}
 """
 If the user's question can be answered from the page content above, answer directly WITHOUT using the bookContext tool. Only use bookContext when the user asks about content from other parts of the book that isn't shown above.
 
@@ -213,77 +211,77 @@ Ending conversations:
 - After confirmation or when the signal is clear, respond with a warm closing phrase, then call endConversation.
 - Provide a clear reason in the tool call describing why the conversation is ending (e.g., "User thanked me and indicated they're done", "User explicitly requested to end the conversation", "User confirmed they have no more questions").
 - DO NOT end conversations abruptly without user indication—only use this tool when the user has clearly signaled they're done.`,
-    tools: [bookContextTool, endConvesationTool],
-  });
+    tools: [bookContextTool, endConvesationTool]
+  })
 
-  const session = new RealtimeSession(agent);
+  const session = new RealtimeSession(agent)
 
   // Track thinking/speaking status for visual indicators
-  const setChatStatus = useChatStore.getState().setChatStatus;
+  const setChatStatus = useChatStore.getState().setChatStatus
 
   const onAgentStart = () => {
     // The first agent_start after connecting means the session is ready
-    if (useChatStore.getState().chatStatus === "connecting") {
-      playReadyChime();
+    if (useChatStore.getState().chatStatus === 'connecting') {
+      playReadyChime()
     }
-    setChatStatus("thinking");
-  };
+    setChatStatus('thinking')
+  }
 
   const onAudioStart = () => {
-    setChatStatus("speaking");
-  };
+    setChatStatus('speaking')
+  }
 
   const onAudioStopped = () => {
-    setChatStatus("idle");
-  };
+    setChatStatus('idle')
+  }
 
   const onAgentEnd = () => {
     // Only reset to idle if not currently speaking (audio_start may follow agent_end)
-    if (useChatStore.getState().chatStatus === "thinking") {
-      setChatStatus("idle");
+    if (useChatStore.getState().chatStatus === 'thinking') {
+      setChatStatus('idle')
     }
-  };
+  }
 
   // Play a subtle audio cue while a tool (e.g. bookContext) is fetching
   const onToolStart = () => {
-    startThinkingSound();
-  };
+    startThinkingSound()
+  }
 
   const onToolEnd = () => {
-    stopThinkingSound();
-  };
+    stopThinkingSound()
+  }
 
   // Handle errors and disconnects so the UI doesn't show a zombie session
   const onError = (err: unknown) => {
-    captureError(err, { operation: "realtime", step: "session_error" });
-    stopThinkingSound();
-    useChatStore.getState().stopConversation();
-  };
+    captureError(err, { operation: 'realtime', step: 'session_error' })
+    stopThinkingSound()
+    useChatStore.getState().stopConversation()
+  }
 
-  session.on("agent_start", onAgentStart);
-  session.on("audio_start", onAudioStart);
-  session.on("audio_stopped", onAudioStopped);
-  session.on("agent_end", onAgentEnd);
-  session.on("agent_tool_start", onToolStart);
-  session.on("agent_tool_end", onToolEnd);
-  session.on("error", onError);
+  session.on('agent_start', onAgentStart)
+  session.on('audio_start', onAudioStart)
+  session.on('audio_stopped', onAudioStopped)
+  session.on('agent_end', onAgentEnd)
+  session.on('agent_tool_start', onToolStart)
+  session.on('agent_tool_end', onToolEnd)
+  session.on('error', onError)
 
   // Store cleanup function externally so stopConversation can remove handlers
   sessionCleanupMap.set(session, () => {
-    session.off("agent_start", onAgentStart);
-    session.off("audio_start", onAudioStart);
-    session.off("audio_stopped", onAudioStopped);
-    session.off("agent_end", onAgentEnd);
-    session.off("agent_tool_start", onToolStart);
-    session.off("agent_tool_end", onToolEnd);
-    session.off("error", onError);
-  });
+    session.off('agent_start', onAgentStart)
+    session.off('audio_start', onAudioStart)
+    session.off('audio_stopped', onAudioStopped)
+    session.off('agent_end', onAgentEnd)
+    session.off('agent_tool_start', onToolStart)
+    session.off('agent_tool_end', onToolEnd)
+    session.off('error', onError)
+  })
 
-  const apiKey = await getOrFetchKey();
+  const apiKey = await getOrFetchKey()
 
   // Automatically connects your microphone and audio output
   await session.connect({
-    apiKey,
-  });
-  return session;
+    apiKey
+  })
+  return session
 }

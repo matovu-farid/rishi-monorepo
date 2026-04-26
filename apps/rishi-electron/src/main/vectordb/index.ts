@@ -1,50 +1,50 @@
-import { app } from "electron";
-import { join } from "path";
-import { mkdirSync, existsSync, unlinkSync } from "fs";
+import { app } from 'electron'
+import { join } from 'path'
+import { mkdirSync, existsSync, unlinkSync } from 'fs'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 interface IndexEntry {
-  index: InstanceType<HierarchicalNSWType>;
-  dim: number;
-  count: number;
-  maxElements: number;
+  index: InstanceType<HierarchicalNSWType>
+  dim: number
+  count: number
+  maxElements: number
 }
 
 // hnswlib-node is a native module — resolve its constructor type lazily so
 // the rest of the app can still boot when the binary is unavailable.
-type HierarchicalNSWType = typeof import("hnswlib-node").HierarchicalNSW;
+type HierarchicalNSWType = typeof import('hnswlib-node').HierarchicalNSW
 
-let HierarchicalNSW: HierarchicalNSWType | null = null;
+let HierarchicalNSW: HierarchicalNSWType | null = null
 
 // ---------------------------------------------------------------------------
 // Module state
 // ---------------------------------------------------------------------------
 
 /** Directory where `.hnsw` index files are persisted. */
-let storageDir = "";
+let storageDir = ''
 
 /** In-memory cache of loaded HNSW indices, keyed by name. */
-const indices = new Map<string, IndexEntry>();
+const indices = new Map<string, IndexEntry>()
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const DEFAULT_DIM = 384;
-const DEFAULT_MAX_ELEMENTS = 10_000;
-const EF_CONSTRUCTION = 200;
-const M = 16;
-const DEFAULT_EF_SEARCH = 50;
+const DEFAULT_DIM = 384
+const DEFAULT_MAX_ELEMENTS = 10_000
+const EF_CONSTRUCTION = 200
+const M = 16
+const DEFAULT_EF_SEARCH = 50
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function indexPath(name: string): string {
-  return join(storageDir, `${name}.hnsw`);
+  return join(storageDir, `${name}.hnsw`)
 }
 
 /**
@@ -53,19 +53,19 @@ function indexPath(name: string): string {
  * platform).
  */
 function requireHnsw(): HierarchicalNSWType {
-  if (HierarchicalNSW) return HierarchicalNSW;
+  if (HierarchicalNSW) return HierarchicalNSW
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const mod = require("hnswlib-node") as typeof import("hnswlib-node");
-    HierarchicalNSW = mod.HierarchicalNSW;
-    return HierarchicalNSW;
+    const mod = require('hnswlib-node') as typeof import('hnswlib-node')
+    HierarchicalNSW = mod.HierarchicalNSW
+    return HierarchicalNSW
   } catch (err) {
     throw new Error(
       `hnswlib-node is not available on this platform. ` +
         `Vector search will be unavailable. ` +
-        `Original error: ${err instanceof Error ? err.message : String(err)}`,
-    );
+        `Original error: ${err instanceof Error ? err.message : String(err)}`
+    )
   }
 }
 
@@ -73,11 +73,11 @@ function requireHnsw(): HierarchicalNSWType {
  * Create a brand-new HNSW index with the given dimensions and capacity.
  */
 function createIndex(dim: number, maxElements: number): InstanceType<HierarchicalNSWType> {
-  const HNSW = requireHnsw();
-  const index = new HNSW("cosine", dim);
-  index.initIndex(maxElements, M, EF_CONSTRUCTION);
-  index.setEf(DEFAULT_EF_SEARCH);
-  return index;
+  const HNSW = requireHnsw()
+  const index = new HNSW('cosine', dim)
+  index.initIndex(maxElements, M, EF_CONSTRUCTION)
+  index.setEf(DEFAULT_EF_SEARCH)
+  return index
 }
 
 /**
@@ -85,18 +85,18 @@ function createIndex(dim: number, maxElements: number): InstanceType<Hierarchica
  * not exist.
  */
 function loadIndexFromDisk(name: string, dim: number): IndexEntry | undefined {
-  const filePath = indexPath(name);
-  if (!existsSync(filePath)) return undefined;
+  const filePath = indexPath(name)
+  if (!existsSync(filePath)) return undefined
 
-  const HNSW = requireHnsw();
-  const index = new HNSW("cosine", dim);
-  index.readIndexSync(filePath);
-  index.setEf(DEFAULT_EF_SEARCH);
+  const HNSW = requireHnsw()
+  const index = new HNSW('cosine', dim)
+  index.readIndexSync(filePath)
+  index.setEf(DEFAULT_EF_SEARCH)
 
-  const count = index.getCurrentCount();
-  const maxElements = index.getMaxElements();
+  const count = index.getCurrentCount()
+  const maxElements = index.getMaxElements()
 
-  return { index, dim, count, maxElements };
+  return { index, dim, count, maxElements }
 }
 
 /**
@@ -104,14 +104,14 @@ function loadIndexFromDisk(name: string, dim: number): IndexEntry | undefined {
  * necessary. Returns `undefined` when no persisted index exists.
  */
 function getOrLoadIndex(name: string, dim: number): IndexEntry | undefined {
-  const cached = indices.get(name);
-  if (cached) return cached;
+  const cached = indices.get(name)
+  if (cached) return cached
 
-  const loaded = loadIndexFromDisk(name, dim);
+  const loaded = loadIndexFromDisk(name, dim)
   if (loaded) {
-    indices.set(name, loaded);
+    indices.set(name, loaded)
   }
-  return loaded;
+  return loaded
 }
 
 // ---------------------------------------------------------------------------
@@ -123,8 +123,8 @@ function getOrLoadIndex(name: string, dim: number): IndexEntry | undefined {
  * at startup (after `app.whenReady()`).
  */
 export function initVectorDb(): void {
-  storageDir = join(app.getPath("userData"), "vectordb");
-  mkdirSync(storageDir, { recursive: true });
+  storageDir = join(app.getPath('userData'), 'vectordb')
+  mkdirSync(storageDir, { recursive: true })
 }
 
 /**
@@ -141,41 +141,41 @@ export function initVectorDb(): void {
 export async function saveVectors(
   name: string,
   dim: number = DEFAULT_DIM,
-  vectors: Array<{ id: number; vector: number[] }>,
+  vectors: Array<{ id: number; vector: number[] }>
 ): Promise<void> {
-  if (vectors.length === 0) return;
+  if (vectors.length === 0) return
 
-  let entry = getOrLoadIndex(name, dim);
+  let entry = getOrLoadIndex(name, dim)
 
   if (!entry) {
-    const maxElements = Math.max(DEFAULT_MAX_ELEMENTS, vectors.length);
-    const index = createIndex(dim, maxElements);
-    entry = { index, dim, count: 0, maxElements };
-    indices.set(name, entry);
+    const maxElements = Math.max(DEFAULT_MAX_ELEMENTS, vectors.length)
+    const index = createIndex(dim, maxElements)
+    entry = { index, dim, count: 0, maxElements }
+    indices.set(name, entry)
   }
 
   // Resize if necessary
-  const requiredCapacity = entry.count + vectors.length;
+  const requiredCapacity = entry.count + vectors.length
   if (requiredCapacity > entry.maxElements) {
-    const newMax = Math.max(requiredCapacity, entry.maxElements * 2);
-    entry.index.resizeIndex(newMax);
-    entry.maxElements = newMax;
+    const newMax = Math.max(requiredCapacity, entry.maxElements * 2)
+    entry.index.resizeIndex(newMax)
+    entry.maxElements = newMax
   }
 
   // Add vectors
   for (const { id, vector } of vectors) {
     if (vector.length !== dim) {
       throw new Error(
-        `Vector dimension mismatch for id ${id}: expected ${dim}, got ${vector.length}`,
-      );
+        `Vector dimension mismatch for id ${id}: expected ${dim}, got ${vector.length}`
+      )
     }
-    entry.index.addPoint(vector, id, true /* replace_deleted */);
+    entry.index.addPoint(vector, id, true /* replace_deleted */)
   }
 
-  entry.count = entry.index.getCurrentCount();
+  entry.count = entry.index.getCurrentCount()
 
   // Persist to disk
-  entry.index.writeIndexSync(indexPath(name));
+  entry.index.writeIndexSync(indexPath(name))
 }
 
 /**
@@ -190,36 +190,34 @@ export async function searchVectors(
   name: string,
   query: number[],
   dim: number = DEFAULT_DIM,
-  k: number = 5,
+  k: number = 5
 ): Promise<Array<{ id: number; distance: number }>> {
-  const entry = getOrLoadIndex(name, dim);
-  if (!entry || entry.count === 0) return [];
+  const entry = getOrLoadIndex(name, dim)
+  if (!entry || entry.count === 0) return []
 
   if (query.length !== dim) {
-    throw new Error(
-      `Query dimension mismatch: expected ${dim}, got ${query.length}`,
-    );
+    throw new Error(`Query dimension mismatch: expected ${dim}, got ${query.length}`)
   }
 
   // Clamp k to the number of available vectors
-  const effectiveK = Math.min(k, entry.count);
-  if (effectiveK === 0) return [];
+  const effectiveK = Math.min(k, entry.count)
+  if (effectiveK === 0) return []
 
-  const result = entry.index.searchKnn(query, effectiveK);
+  const result = entry.index.searchKnn(query, effectiveK)
 
   // Combine neighbours and distances into a sorted array
-  const results: Array<{ id: number; distance: number }> = [];
+  const results: Array<{ id: number; distance: number }> = []
   for (let i = 0; i < result.neighbors.length; i++) {
     results.push({
       id: result.neighbors[i],
-      distance: result.distances[i],
-    });
+      distance: result.distances[i]
+    })
   }
 
   // Sort ascending by distance (closest first)
-  results.sort((a, b) => a.distance - b.distance);
+  results.sort((a, b) => a.distance - b.distance)
 
-  return results;
+  return results
 }
 
 /**
@@ -230,22 +228,22 @@ export async function searchVectors(
  * Generate embeddings for text inputs using the local sentence-transformers model.
  * Re-exported from the embeddings module for convenience.
  */
-export { generateEmbeddings } from "./embeddings.js";
+export { generateEmbeddings } from './embeddings.js'
 
 /**
  * Embed a single text string and return the embedding vector.
  */
 export async function embedText(text: string): Promise<number[]> {
-  const { generateEmbeddings: embed } = await import("./embeddings.js");
-  const results = await embed([{ text, metadata: { id: 0, pageNumber: 0, bookId: 0 } }]);
-  return results[0]?.embedding ?? [];
+  const { generateEmbeddings: embed } = await import('./embeddings.js')
+  const results = await embed([{ text, metadata: { id: 0, pageNumber: 0, bookId: 0 } }])
+  return results[0]?.embedding ?? []
 }
 
 export async function deleteIndex(name: string): Promise<void> {
-  indices.delete(name);
+  indices.delete(name)
 
-  const filePath = indexPath(name);
+  const filePath = indexPath(name)
   if (existsSync(filePath)) {
-    unlinkSync(filePath);
+    unlinkSync(filePath)
   }
 }

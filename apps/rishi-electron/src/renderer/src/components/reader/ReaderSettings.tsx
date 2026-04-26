@@ -1,66 +1,66 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Settings, RotateCcw } from 'lucide-react';
-import type { Rendition } from 'epubjs/types';
+import { useCallback, useEffect, useState } from 'react'
+import { Settings, RotateCcw } from 'lucide-react'
+import type { Rendition } from 'epubjs/types'
 
-const DEFAULT_FONT_SIZE = 1.2;
-const SERIF_FAMILY = 'Georgia, serif';
-const SANS_FAMILY = 'system-ui, -apple-system, sans-serif';
+const DEFAULT_FONT_SIZE = 1.2
+const SERIF_FAMILY = 'Georgia, serif'
+const SANS_FAMILY = 'system-ui, -apple-system, sans-serif'
 
-const SETTINGS_KEY = 'rishi:reader-settings';
+const SETTINGS_KEY = 'rishi:reader-settings'
 
 interface ReaderSettingsProps {
-  rendition: Rendition | null;
+  rendition: Rendition | null
 }
 
 export function ReaderSettings({ rendition }: ReaderSettingsProps) {
-  const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
-  const [fontFamily, setFontFamily] = useState(SANS_FAMILY);
-  const [isOpen, setIsOpen] = useState(false);
+  const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE)
+  const [fontFamily, setFontFamily] = useState(SANS_FAMILY)
+  const [isOpen, setIsOpen] = useState(false)
 
   // Load persisted settings on mount
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(SETTINGS_KEY);
+      const raw = localStorage.getItem(SETTINGS_KEY)
       if (raw) {
-        const saved = JSON.parse(raw) as { fontSize?: number; fontFamily?: string };
-        if (saved.fontSize != null) setFontSize(saved.fontSize);
-        if (saved.fontFamily != null) setFontFamily(saved.fontFamily);
+        const saved = JSON.parse(raw) as { fontSize?: number; fontFamily?: string }
+        if (saved.fontSize != null) setFontSize(saved.fontSize)
+        if (saved.fontFamily != null) setFontFamily(saved.fontFamily)
       }
     } catch {
       // Use defaults
     }
-  }, []);
+  }, [])
 
   // Apply settings to rendition whenever they or rendition change
   useEffect(() => {
-    if (!rendition) return;
-    rendition.themes.override('font-size', `${fontSize}em`);
-    rendition.themes.override('font-family', fontFamily);
-  }, [rendition, fontSize, fontFamily]);
+    if (!rendition) return
+    rendition.themes.override('font-size', `${fontSize}em`)
+    rendition.themes.override('font-family', fontFamily)
+  }, [rendition, fontSize, fontFamily])
 
   const persist = useCallback((size: number, family: string) => {
     try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ fontSize: size, fontFamily: family }));
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ fontSize: size, fontFamily: family }))
     } catch {
       // Silent fail
     }
-  }, []);
+  }, [])
 
   const handleFontSizeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newSize = Math.round(parseFloat(e.target.value) * 10) / 10;
-    setFontSize(newSize);
-    void persist(newSize, fontFamily);
-  };
+    const newSize = Math.round(parseFloat(e.target.value) * 10) / 10
+    setFontSize(newSize)
+    void persist(newSize, fontFamily)
+  }
 
   const handleResetFontSize = () => {
-    setFontSize(DEFAULT_FONT_SIZE);
-    void persist(DEFAULT_FONT_SIZE, fontFamily);
-  };
+    setFontSize(DEFAULT_FONT_SIZE)
+    void persist(DEFAULT_FONT_SIZE, fontFamily)
+  }
 
   const handleFontFamilyChange = (family: string) => {
-    setFontFamily(family);
-    void persist(fontSize, family);
-  };
+    setFontFamily(family)
+    void persist(fontSize, family)
+  }
 
   return (
     <div className="relative">
@@ -141,5 +141,5 @@ export function ReaderSettings({ rendition }: ReaderSettingsProps) {
         </>
       )}
     </div>
-  );
+  )
 }

@@ -1,14 +1,14 @@
-import { useEffect, useRef } from 'react';
-import { Search, Loader2 } from 'lucide-react';
-import { useBookSearch, type BookSearchResult } from '@/hooks/useBookSearch';
+import { useEffect, useRef } from 'react'
+import { Search, Loader2 } from 'lucide-react'
+import { useBookSearch, type BookSearchResult } from '@/hooks/useBookSearch'
 
 interface SearchPanelProps {
-  bookId: number;
-  bookFormat: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onNavigate: (result: BookSearchResult) => void;
-  epubSearchFn?: (query: string) => Promise<{ cfi: string; excerpt: string }[]>;
+  bookId: number
+  bookFormat: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onNavigate: (result: BookSearchResult) => void
+  epubSearchFn?: (query: string) => Promise<{ cfi: string; excerpt: string }[]>
 }
 
 /**
@@ -22,7 +22,7 @@ function sanitizeSnippet(html: string): string {
   return html
     .replace(/<(?!\/?mark\b)[^>]+>/gi, '') // strip all tags except <mark> and </mark>
     .replace(/<mark\s[^>]*>/gi, '<mark>') // strip attributes from mark tags
-    .replace(/&(?!amp;|lt;|gt;|quot;|#\d+;|#x[\da-f]+;)/gi, '&amp;'); // encode stray ampersands
+    .replace(/&(?!amp;|lt;|gt;|quot;|#\d+;|#x[\da-f]+;)/gi, '&amp;') // encode stray ampersands
 }
 
 export function SearchPanel({
@@ -31,34 +31,28 @@ export function SearchPanel({
   open,
   onOpenChange,
   onNavigate,
-  epubSearchFn,
+  epubSearchFn
 }: SearchPanelProps) {
-  const {
-    query,
-    results,
-    isSearching,
-    activeMode,
-    handleQueryChange,
-    handleSubmit,
-  } = useBookSearch({ bookId, bookFormat, epubSearchFn });
+  const { query, results, isSearching, activeMode, handleQueryChange, handleSubmit } =
+    useBookSearch({ bookId, bookFormat, epubSearchFn })
 
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null)
 
   // Auto-focus input when panel opens
   useEffect(() => {
     if (open) {
-      setTimeout(() => inputRef.current?.focus(), 100);
+      setTimeout(() => inputRef.current?.focus(), 100)
     }
-  }, [open]);
+  }, [open])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
-      e.preventDefault();
-      handleSubmit();
+      e.preventDefault()
+      handleSubmit()
     }
-  };
+  }
 
-  if (!open) return null;
+  if (!open) return null
 
   return (
     <div className="fixed inset-y-0 right-0 z-50 w-[400px] bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 shadow-xl flex flex-col">
@@ -119,11 +113,7 @@ export function SearchPanel({
         ) : (
           <div className="flex flex-col gap-2">
             {results.map((result) => (
-              <SearchResultItem
-                key={result.id}
-                result={result}
-                onNavigate={onNavigate}
-              />
+              <SearchResultItem key={result.id} result={result} onNavigate={onNavigate} />
             ))}
           </div>
         )}
@@ -138,21 +128,21 @@ export function SearchPanel({
         </p>
       </div>
     </div>
-  );
+  )
 }
 
 function SearchResultItem({
   result,
-  onNavigate,
+  onNavigate
 }: {
-  result: BookSearchResult;
-  onNavigate: (result: BookSearchResult) => void;
+  result: BookSearchResult
+  onNavigate: (result: BookSearchResult) => void
 }) {
   // sanitizeSnippet strips all HTML except <mark> tags which come from
   // FTS5 snippet() or highlightText() (both regex-escape user input).
   const sanitizedHtml = result.highlightedSnippet
     ? sanitizeSnippet(result.highlightedSnippet)
-    : null;
+    : null
 
   return (
     <button
@@ -176,5 +166,5 @@ function SearchResultItem({
         </p>
       )}
     </button>
-  );
+  )
 }

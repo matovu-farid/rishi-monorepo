@@ -1,64 +1,64 @@
-import { useEffect, useState, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useEffect, useState, useCallback } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 
 interface TargetRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
+  x: number
+  y: number
+  width: number
+  height: number
 }
 
 interface SpotlightOverlayProps {
-  targetSelector: string;
-  padding?: number;
-  borderRadius?: number;
+  targetSelector: string
+  padding?: number
+  borderRadius?: number
 }
 
 export function SpotlightOverlay({
   targetSelector,
   padding = 8,
-  borderRadius = 8,
+  borderRadius = 8
 }: SpotlightOverlayProps) {
-  const [rect, setRect] = useState<TargetRect | null>(null);
+  const [rect, setRect] = useState<TargetRect | null>(null)
 
   const measure = useCallback(() => {
-    const el = document.querySelector(`[data-tour="${targetSelector}"]`);
+    const el = document.querySelector(`[data-tour="${targetSelector}"]`)
     if (!el) {
-      setRect(null);
-      return;
+      setRect(null)
+      return
     }
-    const r = el.getBoundingClientRect();
+    const r = el.getBoundingClientRect()
     setRect({
       x: r.x - padding,
       y: r.y - padding,
       width: r.width + padding * 2,
-      height: r.height + padding * 2,
-    });
-  }, [targetSelector, padding]);
+      height: r.height + padding * 2
+    })
+  }, [targetSelector, padding])
 
   useEffect(() => {
-    measure();
+    measure()
 
-    let resizeTimer: ReturnType<typeof setTimeout>;
+    let resizeTimer: ReturnType<typeof setTimeout>
     const handleResize = () => {
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(measure, 100);
-    };
-    window.addEventListener("resize", handleResize);
+      clearTimeout(resizeTimer)
+      resizeTimer = setTimeout(measure, 100)
+    }
+    window.addEventListener('resize', handleResize)
 
-    const el = document.querySelector(`[data-tour="${targetSelector}"]`);
-    let observer: ResizeObserver | null = null;
+    const el = document.querySelector(`[data-tour="${targetSelector}"]`)
+    let observer: ResizeObserver | null = null
     if (el) {
-      observer = new ResizeObserver(() => measure());
-      observer.observe(el);
+      observer = new ResizeObserver(() => measure())
+      observer.observe(el)
     }
 
     return () => {
-      window.removeEventListener("resize", handleResize);
-      clearTimeout(resizeTimer);
-      observer?.disconnect();
-    };
-  }, [targetSelector, measure]);
+      window.removeEventListener('resize', handleResize)
+      clearTimeout(resizeTimer)
+      observer?.disconnect()
+    }
+  }, [targetSelector, measure])
 
   return (
     <AnimatePresence>
@@ -66,7 +66,7 @@ export function SpotlightOverlay({
         <motion.svg
           key="spotlight"
           className="fixed inset-0 z-[55] pointer-events-auto"
-          style={{ width: "100vw", height: "100vh" }}
+          style={{ width: '100vw', height: '100vh' }}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -85,9 +85,9 @@ export function SpotlightOverlay({
                   x: rect.x,
                   y: rect.y,
                   width: rect.width,
-                  height: rect.height,
+                  height: rect.height
                 }}
-                transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                transition={{ type: 'spring', stiffness: 300, damping: 30 }}
               />
             </mask>
           </defs>
@@ -102,5 +102,5 @@ export function SpotlightOverlay({
         </motion.svg>
       )}
     </AnimatePresence>
-  );
+  )
 }

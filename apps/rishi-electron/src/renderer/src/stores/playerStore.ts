@@ -1,62 +1,62 @@
 // apps/main/src/stores/playerStore.ts
-import { create } from "zustand";
-import { subscribeWithSelector } from "zustand/middleware";
-import type { ParagraphWithIndex } from "@/models/player_control";
+import { create } from 'zustand'
+import { subscribeWithSelector } from 'zustand/middleware'
+import type { ParagraphWithIndex } from '@/models/player_control'
 
-export type { ParagraphWithIndex };
+export type { ParagraphWithIndex }
 
-export type Direction = "forward" | "backward";
+export type Direction = 'forward' | 'backward'
 
 export type PlayerStoreState =
-  | "idle"
-  | "stopped"
-  | "loading"
-  | "playing"
-  | "paused.clean"
-  | "paused.stale"
-  | "waitingForParagraphs"
-  | "error";
+  | 'idle'
+  | 'stopped'
+  | 'loading'
+  | 'playing'
+  | 'paused.clean'
+  | 'paused.stale'
+  | 'waitingForParagraphs'
+  | 'error'
 
 interface PlayerStoreMove {
-  from: ParagraphWithIndex;
-  to: ParagraphWithIndex;
-  direction: Direction;
+  from: ParagraphWithIndex
+  to: ParagraphWithIndex
+  direction: Direction
 }
 
 interface PlayerStore {
   // --- Player-side state (written by machine, read by React) ---
-  playingState: PlayerStoreState;
-  activeParagraph: ParagraphWithIndex | null;
-  endedParagraph: ParagraphWithIndex | null;
-  lastMove: PlayerStoreMove | null;
-  errors: string[];
+  playingState: PlayerStoreState
+  activeParagraph: ParagraphWithIndex | null
+  endedParagraph: ParagraphWithIndex | null
+  lastMove: PlayerStoreMove | null
+  errors: string[]
 
   // --- Format-reader-side state (written by readers, read by machine) ---
-  currentParagraphs: ParagraphWithIndex[];
-  nextPageParagraphs: ParagraphWithIndex[];
-  prevPageParagraphs: ParagraphWithIndex[];
+  currentParagraphs: ParagraphWithIndex[]
+  nextPageParagraphs: ParagraphWithIndex[]
+  prevPageParagraphs: ParagraphWithIndex[]
 
   // --- Signals ---
-  pageRequest: "next" | "prev" | null;
+  pageRequest: 'next' | 'prev' | null
 
   // --- Machine send reference for non-React code ---
-  send: ((event: any) => void) | null;
+  send: ((event: any) => void) | null
 
   // --- Actions: format readers call these ---
-  setCurrentParagraphs: (p: ParagraphWithIndex[]) => void;
-  setNextPageParagraphs: (p: ParagraphWithIndex[]) => void;
-  setPrevPageParagraphs: (p: ParagraphWithIndex[]) => void;
+  setCurrentParagraphs: (p: ParagraphWithIndex[]) => void
+  setNextPageParagraphs: (p: ParagraphWithIndex[]) => void
+  setPrevPageParagraphs: (p: ParagraphWithIndex[]) => void
 
   // --- Actions: machine calls these ---
-  requestNextPage: () => void;
-  requestPrevPage: () => void;
-  clearPageRequest: () => void;
-  setSend: (send: (event: any) => void) => void;
+  requestNextPage: () => void
+  requestPrevPage: () => void
+  clearPageRequest: () => void
+  setSend: (send: (event: any) => void) => void
 }
 
 export const usePlayerStore = create<PlayerStore>()(
   subscribeWithSelector((set) => ({
-    playingState: "idle",
+    playingState: 'idle',
     activeParagraph: null,
     endedParagraph: null,
     lastMove: null,
@@ -73,9 +73,9 @@ export const usePlayerStore = create<PlayerStore>()(
     setNextPageParagraphs: (p) => set({ nextPageParagraphs: p }),
     setPrevPageParagraphs: (p) => set({ prevPageParagraphs: p }),
 
-    requestNextPage: () => set({ pageRequest: "next" }),
-    requestPrevPage: () => set({ pageRequest: "prev" }),
+    requestNextPage: () => set({ pageRequest: 'next' }),
+    requestPrevPage: () => set({ pageRequest: 'prev' }),
     clearPageRequest: () => set({ pageRequest: null }),
-    setSend: (send) => set({ send }),
+    setSend: (send) => set({ send })
   }))
-);
+)

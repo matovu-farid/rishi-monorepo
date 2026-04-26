@@ -1,27 +1,23 @@
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 
 // Props for NavigationArrows component
 export type NavigationArrowsProps = {
-  onPrev: () => void;
-  onNext: () => void;
-  hidePrev?: boolean;
-};
+  onPrev: () => void
+  onNext: () => void
+  hidePrev?: boolean
+}
 
 /**
  * NavigationArrows Component
  * Renders semi-transparent left/right arrow buttons overlaid on the reader edges.
  * Becomes more visible on hover.
  */
-export const NavigationArrows = ({
-  onPrev,
-  onNext,
-  hidePrev = false,
-}: NavigationArrowsProps) => {
+export const NavigationArrows = ({ onPrev, onNext, hidePrev = false }: NavigationArrowsProps) => {
   const buttonClass =
-    "absolute top-1/2 -translate-y-1/2 z-10 flex items-center justify-center " +
-    "w-12 h-24 text-gray-300 hover:text-gray-600 " +
-    "opacity-40 hover:opacity-100 transition-opacity duration-200 " +
-    "cursor-pointer select-none bg-transparent border-none outline-none";
+    'absolute top-1/2 -translate-y-1/2 z-10 flex items-center justify-center ' +
+    'w-12 h-24 text-gray-300 hover:text-gray-600 ' +
+    'opacity-40 hover:opacity-100 transition-opacity duration-200 ' +
+    'cursor-pointer select-none bg-transparent border-none outline-none'
 
   return (
     <>
@@ -47,5 +43,5 @@ export const NavigationArrows = ({
         <ChevronRight size={40} />
       </button>
     </>
-  );
-};
+  )
+}

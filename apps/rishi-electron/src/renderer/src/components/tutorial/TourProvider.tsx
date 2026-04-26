@@ -1,15 +1,14 @@
-import { useTutorialStore, TOUR_STEPS } from "@/stores/tutorialStore";
-import { SpotlightOverlay } from "./SpotlightOverlay";
-import { TourTooltip } from "./TourTooltip";
+import { useTutorialStore, TOUR_STEPS } from '@/stores/tutorialStore'
+import { SpotlightOverlay } from './SpotlightOverlay'
+import { TourTooltip } from './TourTooltip'
 
 export function TourProvider() {
-  const { tourActive, tourStep, tourPaused, nextStep, skipTour } =
-    useTutorialStore();
+  const { tourActive, tourStep, tourPaused, nextStep, skipTour } = useTutorialStore()
 
-  if (!tourActive || tourPaused) return null;
+  if (!tourActive || tourPaused) return null
 
-  const step = TOUR_STEPS[tourStep];
-  if (!step) return null;
+  const step = TOUR_STEPS[tourStep]
+  if (!step) return null
 
   return (
     <>
@@ -22,5 +21,5 @@ export function TourProvider() {
         onSkip={skipTour}
       />
     </>
-  );
+  )
 }

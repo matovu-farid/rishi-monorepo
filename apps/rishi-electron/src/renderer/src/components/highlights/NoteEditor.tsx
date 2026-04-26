@@ -1,53 +1,45 @@
-import React, { useEffect, useState } from 'react';
-import { updateHighlightNote } from '@/modules/highlight-storage';
-import { triggerSyncOnWrite } from '@/modules/sync-triggers';
-import type { HighlightRow } from '@/modules/highlight-storage';
+import React, { useEffect, useState } from 'react'
+import { updateHighlightNote } from '@/modules/highlight-storage'
+import { triggerSyncOnWrite } from '@/modules/sync-triggers'
+import type { HighlightRow } from '@/modules/highlight-storage'
 
 interface NoteEditorProps {
-  highlight: HighlightRow | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSaved: () => void;
+  highlight: HighlightRow | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onSaved: () => void
 }
 
-export function NoteEditor({
-  highlight,
-  open,
-  onOpenChange,
-  onSaved,
-}: NoteEditorProps) {
-  const [noteValue, setNoteValue] = useState('');
+export function NoteEditor({ highlight, open, onOpenChange, onSaved }: NoteEditorProps) {
+  const [noteValue, setNoteValue] = useState('')
 
   useEffect(() => {
     if (highlight) {
-      setNoteValue(highlight.note ?? '');
+      setNoteValue(highlight.note ?? '')
     }
-  }, [highlight]);
+  }, [highlight])
 
   const handleSave = async () => {
-    if (!highlight) return;
-    await updateHighlightNote(highlight.id, noteValue);
-    triggerSyncOnWrite();
-    onSaved();
-    onOpenChange(false);
-  };
+    if (!highlight) return
+    await updateHighlightNote(highlight.id, noteValue)
+    triggerSyncOnWrite()
+    onSaved()
+    onOpenChange(false)
+  }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-      e.preventDefault();
-      void handleSave();
+      e.preventDefault()
+      void handleSave()
     }
-  };
+  }
 
-  if (!open) return null;
+  if (!open) return null
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center">
       {/* Overlay */}
-      <div
-        className="absolute inset-0 bg-black/40"
-        onClick={() => onOpenChange(false)}
-      />
+      <div className="absolute inset-0 bg-black/40" onClick={() => onOpenChange(false)} />
       {/* Dialog */}
       <div className="relative bg-white dark:bg-gray-900 rounded-xl shadow-2xl p-6 w-full max-w-md z-10">
         <h3 className="text-lg font-semibold mb-4">Edit Note</h3>
@@ -77,5 +69,5 @@ export function NoteEditor({
         </div>
       </div>
     </div>
-  );
+  )
 }

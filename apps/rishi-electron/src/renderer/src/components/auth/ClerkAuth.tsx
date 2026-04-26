@@ -1,9 +1,9 @@
-import { useUser, SignedIn, UserButton } from "@clerk/clerk-react";
-import { useEffect } from "react";
-import { useAuthStore } from "@/stores/authStore";
-import { saveUserToStore } from "@/modules/auth";
+import { useUser, SignedIn, UserButton } from '@clerk/clerk-react'
+import { useEffect } from 'react'
+import { useAuthStore } from '@/stores/authStore'
+import { saveUserToStore } from '@/modules/auth'
 
-const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || "";
+const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || ''
 
 // ── Clerk → Zustand sync ────────────────────────────────────────────
 
@@ -14,17 +14,17 @@ const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY || "";
  * configured, it no-ops (deep-link auth handles hydration via useHydrateAuth).
  */
 export function ClerkAuthSync() {
-  if (!CLERK_KEY) return null;
-  return <ClerkAuthSyncInner />;
+  if (!CLERK_KEY) return null
+  return <ClerkAuthSyncInner />
 }
 
 function ClerkAuthSyncInner() {
-  const { user, isLoaded } = useUser();
-  const setUser = useAuthStore((s) => s.setUser);
-  const existingUser = useAuthStore((s) => s.user);
+  const { user, isLoaded } = useUser()
+  const setUser = useAuthStore((s) => s.setUser)
+  const existingUser = useAuthStore((s) => s.user)
 
   useEffect(() => {
-    if (!isLoaded) return;
+    if (!isLoaded) return
 
     if (user) {
       const mapped = {
@@ -36,26 +36,26 @@ function ClerkAuthSyncInner() {
         imageUrl: user.imageUrl,
         hasImage: user.hasImage,
         lastSignInAt: user.lastSignInAt?.getTime() ?? null,
-        externalId: user.externalId,
-      };
-      setUser(mapped);
-      void saveUserToStore(mapped);
+        externalId: user.externalId
+      }
+      setUser(mapped)
+      void saveUserToStore(mapped)
     } else if (!existingUser) {
       // Only clear if we don't already have a deep-link-authenticated user
-      setUser(null);
+      setUser(null)
     }
-  }, [user, isLoaded, setUser, existingUser]);
+  }, [user, isLoaded, setUser, existingUser])
 
-  return null;
+  return null
 }
 
 // ── Clerk user button (used when Clerk session exists) ───────────────
 
 export function ClerkUserButton() {
-  if (!CLERK_KEY) return null;
+  if (!CLERK_KEY) return null
   return (
     <SignedIn>
       <UserButton />
     </SignedIn>
-  );
+  )
 }

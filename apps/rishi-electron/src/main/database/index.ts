@@ -1,10 +1,10 @@
-import { app } from "electron";
-import { join } from "path";
-import BetterSqlite3 from "better-sqlite3";
-import type Database from "better-sqlite3";
-import { runMigrations } from "./migrations.js";
+import { app } from 'electron'
+import { join } from 'path'
+import BetterSqlite3 from 'better-sqlite3'
+import type Database from 'better-sqlite3'
+import { runMigrations } from './migrations.js'
 
-let db: Database.Database | null = null;
+let db: Database.Database | null = null
 
 /**
  * Returns the singleton database instance.
@@ -12,11 +12,9 @@ let db: Database.Database | null = null;
  */
 export function getDb(): Database.Database {
   if (!db) {
-    throw new Error(
-      "Database not initialized. Call initDatabase() before accessing the database.",
-    );
+    throw new Error('Database not initialized. Call initDatabase() before accessing the database.')
   }
-  return db;
+  return db
 }
 
 /**
@@ -30,24 +28,24 @@ export function getDb(): Database.Database {
  */
 export async function initDatabase(): Promise<void> {
   if (db) {
-    return;
+    return
   }
 
-  const dbPath = join(app.getPath("userData"), "rishi.db");
+  const dbPath = join(app.getPath('userData'), 'rishi.db')
 
-  db = new BetterSqlite3(dbPath);
+  db = new BetterSqlite3(dbPath)
 
   // Performance & safety pragmas
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  db.pragma("busy_timeout = 5000");
+  db.pragma('journal_mode = WAL')
+  db.pragma('foreign_keys = ON')
+  db.pragma('busy_timeout = 5000')
 
-  const applied = runMigrations(db);
+  const applied = runMigrations(db)
   if (applied > 0) {
-    console.log(`[database] Applied ${applied} migration(s)`);
+    console.log(`[database] Applied ${applied} migration(s)`)
   }
 
-  console.log(`[database] Ready — ${dbPath}`);
+  console.log(`[database] Ready — ${dbPath}`)
 }
 
 /**
@@ -56,12 +54,12 @@ export async function initDatabase(): Promise<void> {
  */
 export function closeDatabase(): void {
   if (db) {
-    db.close();
-    db = null;
+    db.close()
+    db = null
   }
 }
 
 // Ensure the database is closed when the app quits
-app.on("will-quit", () => {
-  closeDatabase();
-});
+app.on('will-quit', () => {
+  closeDatabase()
+})

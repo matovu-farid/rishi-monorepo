@@ -1,7 +1,7 @@
-import { useCallback, useState } from "react";
-import { useAuthStore } from "@/stores/authStore";
-import { PremiumFeatureDialog } from "@/components/auth/PremiumFeatureDialog";
-import type { PremiumFeature } from "@/components/auth/features";
+import { useCallback, useState } from 'react'
+import { useAuthStore } from '@/stores/authStore'
+import { PremiumFeatureDialog } from '@/components/auth/PremiumFeatureDialog'
+import type { PremiumFeature } from '@/components/auth/features'
 
 /**
  * Gates premium (auth-required) features behind sign-in.
@@ -16,29 +16,23 @@ import type { PremiumFeature } from "@/components/auth/features";
  *   {AuthDialog}
  */
 export function useRequireAuth() {
-  const isLoggedIn = useAuthStore((s) => s.user !== null);
-  const [open, setOpen] = useState(false);
-  const [feature, setFeature] = useState<PremiumFeature>("ai-generic");
+  const isLoggedIn = useAuthStore((s) => s.user !== null)
+  const [open, setOpen] = useState(false)
+  const [feature, setFeature] = useState<PremiumFeature>('ai-generic')
 
   const requireAuth = useCallback(
     (f: PremiumFeature, action: () => void) => {
       if (isLoggedIn) {
-        action();
+        action()
       } else {
-        setFeature(f);
-        setOpen(true);
+        setFeature(f)
+        setOpen(true)
       }
     },
-    [isLoggedIn],
-  );
+    [isLoggedIn]
+  )
 
-  const AuthDialog = (
-    <PremiumFeatureDialog
-      open={open}
-      onOpenChange={setOpen}
-      feature={feature}
-    />
-  );
+  const AuthDialog = <PremiumFeatureDialog open={open} onOpenChange={setOpen} feature={feature} />
 
-  return { requireAuth, AuthDialog };
+  return { requireAuth, AuthDialog }
 }

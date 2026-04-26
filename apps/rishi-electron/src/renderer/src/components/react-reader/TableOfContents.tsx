@@ -1,17 +1,17 @@
-import { useEffect, useRef } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useRef } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 
 /** Minimal TOC item shape matching epub.js NavItem */
 export interface TocItem {
-  label: string;
-  href: string;
-  subitems?: TocItem[];
+  label: string
+  href: string
+  subitems?: TocItem[]
 }
 
 interface TocEntryProps {
-  data: TocItem;
-  onNavigate: (href: string) => void;
-  depth: number;
+  data: TocItem
+  onNavigate: (href: string) => void
+  depth: number
 }
 
 /** Recursive TOC entry with indentation */
@@ -28,22 +28,17 @@ function TocEntry({ data, onNavigate, depth }: TocEntryProps) {
       {data.subitems &&
         data.subitems.length > 0 &&
         data.subitems.map((item, i) => (
-          <TocEntry
-            key={i}
-            data={item}
-            onNavigate={onNavigate}
-            depth={depth + 1}
-          />
+          <TocEntry key={i} data={item} onNavigate={onNavigate} depth={depth + 1} />
         ))}
     </div>
-  );
+  )
 }
 
 export interface TableOfContentsProps {
-  toc: TocItem[];
-  onNavigate: (href: string) => void;
-  isOpen: boolean;
-  onClose: () => void;
+  toc: TocItem[]
+  onNavigate: (href: string) => void
+  isOpen: boolean
+  onClose: () => void
 }
 
 /**
@@ -52,23 +47,18 @@ export interface TableOfContentsProps {
  * Renders a hierarchical list of chapters/sections.
  * Uses Framer Motion for smooth slide animation.
  */
-export function TableOfContents({
-  toc,
-  onNavigate,
-  isOpen,
-  onClose,
-}: TableOfContentsProps) {
-  const panelRef = useRef<HTMLDivElement>(null);
+export function TableOfContents({ toc, onNavigate, isOpen, onClose }: TableOfContentsProps) {
+  const panelRef = useRef<HTMLDivElement>(null)
 
   // Auto-focus the panel when opened
   useEffect(() => {
     if (isOpen) {
       // Defer focus to after the animation frame so the element is mounted
       requestAnimationFrame(() => {
-        panelRef.current?.focus();
-      });
+        panelRef.current?.focus()
+      })
     }
-  }, [isOpen]);
+  }, [isOpen])
 
   return (
     <AnimatePresence>
@@ -95,13 +85,13 @@ export function TableOfContents({
             aria-modal="true"
             tabIndex={-1}
             onKeyDown={(e) => {
-              if (e.key === "Escape") onClose();
+              if (e.key === 'Escape') onClose()
             }}
             className="fixed top-0 left-0 bottom-0 z-50 w-64 bg-white shadow-lg overflow-y-auto"
             initial={{ x: -256 }}
             animate={{ x: 0 }}
             exit={{ x: -256 }}
-            transition={{ type: "spring", stiffness: 400, damping: 35 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 35 }}
           >
             <div className="p-4 border-b border-gray-200 font-semibold text-gray-800">
               Table of Contents
@@ -112,8 +102,8 @@ export function TableOfContents({
                   key={i}
                   data={item}
                   onNavigate={(href) => {
-                    onNavigate(href);
-                    onClose();
+                    onNavigate(href)
+                    onClose()
                   }}
                   depth={0}
                 />
@@ -123,5 +113,5 @@ export function TableOfContents({
         </>
       )}
     </AnimatePresence>
-  );
+  )
 }

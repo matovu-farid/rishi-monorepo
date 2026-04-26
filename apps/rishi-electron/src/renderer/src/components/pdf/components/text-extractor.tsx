@@ -1,29 +1,29 @@
 // Import required CSS for text and annotation layers
-import "react-pdf/dist/Page/AnnotationLayer.css";
-import "react-pdf/dist/Page/TextLayer.css";
+import 'react-pdf/dist/Page/AnnotationLayer.css'
+import 'react-pdf/dist/Page/TextLayer.css'
 
-import { usePdfStore } from "@/stores/pdfStore";
-import { BackgroundPageComponent } from "./background-page";
+import { usePdfStore } from '@/stores/pdfStore'
+import { BackgroundPageComponent } from './background-page'
 
 export function TextExtractor({
   pageWidth,
   pdfHeight,
   isDualPage,
-  bookId,
+  bookId
 }: {
-  pageWidth: number;
-  pdfHeight: number;
-  isDualPage: boolean;
-  bookId: string;
+  pageWidth: number
+  pdfHeight: number
+  isDualPage: boolean
+  bookId: string
 }) {
-  const pageNumber = usePdfStore((s) => s.backgroundPage);
+  const pageNumber = usePdfStore((s) => s.backgroundPage)
 
   return (
     <div
       style={{
-        position: "absolute",
-        top: "-9999px",
-        left: "-9999px",
+        position: 'absolute',
+        top: '-9999px',
+        left: '-9999px'
       }}
     >
       <BackgroundPageComponent
@@ -38,5 +38,5 @@ export function TextExtractor({
         }}
       />
     </div>
-  );
+  )
 }

@@ -1,56 +1,56 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Pencil, Trash2 } from 'lucide-react';
-import { getHighlightsForBook, deleteHighlightById } from '@/modules/highlight-storage';
-import { triggerSyncOnWrite } from '@/modules/sync-triggers';
-import { getHighlightHex, type HighlightColor } from '@/types/highlight';
-import { NoteEditor } from './NoteEditor';
-import type { HighlightRow } from '@/modules/highlight-storage';
-import type { Rendition } from 'epubjs/types';
+import { useCallback, useEffect, useState } from 'react'
+import { Pencil, Trash2 } from 'lucide-react'
+import { getHighlightsForBook, deleteHighlightById } from '@/modules/highlight-storage'
+import { triggerSyncOnWrite } from '@/modules/sync-triggers'
+import { getHighlightHex, type HighlightColor } from '@/types/highlight'
+import { NoteEditor } from './NoteEditor'
+import type { HighlightRow } from '@/modules/highlight-storage'
+import type { Rendition } from 'epubjs/types'
 
 interface HighlightsPanelProps {
-  bookSyncId: string;
-  rendition: Rendition | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+  bookSyncId: string
+  rendition: Rendition | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
 }
 
 export function HighlightsPanel({
   bookSyncId,
   rendition,
   open,
-  onOpenChange,
+  onOpenChange
 }: HighlightsPanelProps) {
-  const [highlights, setHighlights] = useState<HighlightRow[]>([]);
-  const [editingHighlight, setEditingHighlight] = useState<HighlightRow | null>(null);
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [highlights, setHighlights] = useState<HighlightRow[]>([])
+  const [editingHighlight, setEditingHighlight] = useState<HighlightRow | null>(null)
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
 
   const refreshHighlights = useCallback(async () => {
-    if (!bookSyncId) return;
-    const rows = await getHighlightsForBook(bookSyncId);
-    setHighlights(rows);
-  }, [bookSyncId]);
+    if (!bookSyncId) return
+    const rows = await getHighlightsForBook(bookSyncId)
+    setHighlights(rows)
+  }, [bookSyncId])
 
   useEffect(() => {
     if (open && bookSyncId) {
-      void refreshHighlights();
+      void refreshHighlights()
     }
-  }, [open, bookSyncId, refreshHighlights]);
+  }, [open, bookSyncId, refreshHighlights])
 
   const handleDelete = async (highlightId: string) => {
     try {
-      await deleteHighlightById(highlightId);
-      triggerSyncOnWrite();
-      await refreshHighlights();
+      await deleteHighlightById(highlightId)
+      triggerSyncOnWrite()
+      await refreshHighlights()
     } catch (err) {
-      console.error('[highlights] delete failed:', err);
+      console.error('[highlights] delete failed:', err)
     }
-  };
+  }
 
   const handleNavigate = (cfiRange: string) => {
-    void rendition?.display(cfiRange);
-  };
+    void rendition?.display(cfiRange)
+  }
 
-  if (!open) return null;
+  if (!open) return null
 
   return (
     <>
@@ -84,20 +84,16 @@ export function HighlightsPanel({
                   key={hl.id}
                   className="relative cursor-pointer rounded-md p-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
                   style={{
-                    borderLeft: `3px solid ${getHighlightHex(hl.color as HighlightColor)}`,
+                    borderLeft: `3px solid ${getHighlightHex(hl.color as HighlightColor)}`
                   }}
-                  onClick={() => handleNavigate(hl.cfi_range)}
+                  onClick={() => handleNavigate(hl.cfiRange)}
                   onMouseEnter={() => setHoveredId(hl.id)}
                   onMouseLeave={() => setHoveredId(null)}
                 >
                   <p className="text-sm line-clamp-2">{hl.text}</p>
-                  {hl.chapter && (
-                    <p className="text-xs text-gray-500 mt-1">{hl.chapter}</p>
-                  )}
+                  {hl.chapter && <p className="text-xs text-gray-500 mt-1">{hl.chapter}</p>}
                   {hl.note && (
-                    <p className="text-xs italic text-gray-500 mt-1 line-clamp-1">
-                      {hl.note}
-                    </p>
+                    <p className="text-xs italic text-gray-500 mt-1 line-clamp-1">{hl.note}</p>
                   )}
 
                   {hoveredId === hl.id && (
@@ -107,8 +103,8 @@ export function HighlightsPanel({
                         aria-label="Edit note"
                         title="Edit note"
                         onClick={(e) => {
-                          e.stopPropagation();
-                          setEditingHighlight(hl);
+                          e.stopPropagation()
+                          setEditingHighlight(hl)
                         }}
                       >
                         <Pencil size={16} />
@@ -118,8 +114,8 @@ export function HighlightsPanel({
                         aria-label="Delete highlight"
                         title="Delete highlight"
                         onClick={(e) => {
-                          e.stopPropagation();
-                          void handleDelete(hl.id);
+                          e.stopPropagation()
+                          void handleDelete(hl.id)
                         }}
                       >
                         <Trash2 size={16} />
@@ -144,10 +140,10 @@ export function HighlightsPanel({
         highlight={editingHighlight}
         open={editingHighlight !== null}
         onOpenChange={(isOpen) => {
-          if (!isOpen) setEditingHighlight(null);
+          if (!isOpen) setEditingHighlight(null)
         }}
         onSaved={refreshHighlights}
       />
     </>
-  );
+  )
 }

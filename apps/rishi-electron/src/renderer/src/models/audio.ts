@@ -1,3 +1,3 @@
-const audio = new Audio();
+const audio = new Audio()
 
-export default audio;
+export default audio

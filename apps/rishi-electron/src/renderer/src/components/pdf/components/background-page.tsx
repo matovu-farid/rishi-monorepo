@@ -1,9 +1,9 @@
-import { Page } from "react-pdf";
+import { Page } from 'react-pdf'
 
-import { usePdfStore, isTextItem } from "@/stores/pdfStore";
-import { Loader2 } from "lucide-react";
-import { wordsToFinalParagraphs } from "../utils/wordsToParaagraphs";
-import { processJob } from "@/lib/api";
+import { usePdfStore, isTextItem } from '@/stores/pdfStore'
+import { Loader2 } from 'lucide-react'
+import { wordsToFinalParagraphs } from '../utils/wordsToParaagraphs'
+import { processJob } from '@/lib/api'
 
 export function BackgroundPageComponent({
   thispageNumber: pageNumber,
@@ -11,20 +11,20 @@ export function BackgroundPageComponent({
   pdfWidth,
   isDualPage = false,
   onRenderComplete,
-  bookId,
+  bookId
 }: {
-  thispageNumber: number;
-  pdfHeight?: number;
-  pdfWidth?: number;
-  isDualPage?: boolean;
-  bookId: string;
-  onRenderComplete?: () => void;
+  thispageNumber: number
+  pdfHeight?: number
+  pdfWidth?: number
+  isDualPage?: boolean
+  bookId: string
+  onRenderComplete?: () => void
 }) {
-  const setBackgroundPage = usePdfStore((s) => s.setBackgroundPage);
+  const setBackgroundPage = usePdfStore((s) => s.setBackgroundPage)
   return (
     <Page
       pageNumber={pageNumber}
-      key={"background-" + pageNumber.toString()}
+      key={'background-' + pageNumber.toString()}
       height={isDualPage ? pdfHeight : undefined}
       width={isDualPage ? undefined : pdfWidth}
       className={` rounded shadow-lg  h-[1540px]`}
@@ -33,28 +33,28 @@ export function BackgroundPageComponent({
       canvasBackground="white"
       onGetTextSuccess={async (data) => {
         try {
-          let pageData = data.items
+          const pageData = data.items
             .filter(isTextItem)
             .filter((item) => item.str.length > 0)
-            .map((item) => item.str);
-          const paragraphs = wordsToFinalParagraphs(pageData);
+            .map((item) => item.str)
+          const paragraphs = wordsToFinalParagraphs(pageData)
           const page = paragraphs.map((item, index) => {
             // Generate unique ID: pageNumber * 1000000 + bookId * 10000 + index
             // This allows up to 9999 paragraphs per page and 9999 books
             // Format ensures no collisions between pages/books
-            const id = pageNumber * 1000000 + parseInt(bookId) * 10000 + index;
+            const id = pageNumber * 1000000 + parseInt(bookId) * 10000 + index
 
-            return { id, bookId: Number(bookId), data: item, pageNumber };
-          });
+            return { id, bookId: Number(bookId), data: item, pageNumber }
+          })
           void processJob({
             pageNumber,
             pageData: page,
-            bookId: Number(bookId),
-          });
+            bookId: Number(bookId)
+          })
 
-          setBackgroundPage((pageNumber) => pageNumber + 1);
+          setBackgroundPage((pageNumber) => pageNumber + 1)
         } catch (error) {
-          console.error(error);
+          console.error(error)
         }
       }}
       loading={
@@ -63,8 +63,8 @@ export function BackgroundPageComponent({
         </div>
       }
       onRenderSuccess={() => {
-        onRenderComplete?.();
+        onRenderComplete?.()
       }}
     />
-  );
+  )
 }

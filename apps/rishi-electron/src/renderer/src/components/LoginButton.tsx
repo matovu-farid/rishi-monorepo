@@ -1,11 +1,11 @@
-import { LogIn, LogOut } from "lucide-react";
-import { Button } from "./ui/Button";
-import { useAuthStore } from "@/stores/authStore";
-import { startSignInFlow } from "@/modules/auth";
+import { LogIn, LogOut } from 'lucide-react'
+import { Button } from './ui/Button'
+import { useAuthStore } from '@/stores/authStore'
+import { startSignInFlow } from '@/modules/auth'
 
 export function LoginButton() {
-  const user = useAuthStore((s) => s.user);
-  const setUser = useAuthStore((s) => s.setUser);
+  const user = useAuthStore((s) => s.user)
+  const setUser = useAuthStore((s) => s.setUser)
 
   if (user) {
     return (
@@ -14,12 +14,12 @@ export function LoginButton() {
         {user.imageUrl ? (
           <img
             src={user.imageUrl}
-            alt={user.fullName || ""}
+            alt={user.fullName || ''}
             className="w-8 h-8 rounded-full object-cover"
           />
         ) : (
           <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-sm font-medium text-gray-600">
-            {(user.firstName?.[0] || user.fullName?.[0] || "U").toUpperCase()}
+            {(user.firstName?.[0] || user.fullName?.[0] || 'U').toUpperCase()}
           </div>
         )}
         <Button
@@ -27,14 +27,14 @@ export function LoginButton() {
           className="cursor-pointer"
           startIcon={<LogOut size={20} />}
           onClick={async () => {
-            setUser(null);
-            await window.electron.signout();
+            setUser(null)
+            await window.electron.signout()
           }}
         >
           Logout
         </Button>
       </div>
-    );
+    )
   }
 
   return (
@@ -46,5 +46,5 @@ export function LoginButton() {
     >
       Login
     </Button>
-  );
+  )
 }

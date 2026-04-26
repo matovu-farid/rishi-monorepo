@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { checkForUpdates } from "../modules/updater";
+import { useEffect } from 'react'
+import { checkForUpdates } from '../modules/updater'
 
 /**
  * Runs a silent update check on app launch.
@@ -8,6 +8,6 @@ import { checkForUpdates } from "../modules/updater";
  */
 export function useStartupUpdateCheck(): void {
   useEffect(() => {
-    void checkForUpdates({ silent: true });
-  }, []);
+    void checkForUpdates({ silent: true })
+  }, [])
 }

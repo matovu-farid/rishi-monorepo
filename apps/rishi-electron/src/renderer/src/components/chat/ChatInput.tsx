@@ -1,53 +1,57 @@
-import { useState, useCallback } from 'react';
-import { Mic, SendHorizontal } from 'lucide-react';
-import { useVoiceInput } from '@/hooks/useVoiceInput';
+import { useState, useCallback } from 'react'
+import { Mic, SendHorizontal } from 'lucide-react'
+import { useVoiceInput } from '@/hooks/useVoiceInput'
 
 interface ChatInputProps {
-  onSend: (text: string) => void;
-  disabled: boolean;
+  onSend: (text: string) => void
+  disabled: boolean
 }
 
 export function ChatInput({ onSend, disabled }: ChatInputProps) {
-  const [value, setValue] = useState('');
-  const { isRecording, duration, error: voiceError, startRecording, stopRecording } = useVoiceInput();
+  const [value, setValue] = useState('')
+  const {
+    isRecording,
+    duration,
+    error: voiceError,
+    startRecording,
+    stopRecording
+  } = useVoiceInput()
 
   const handleSend = useCallback(() => {
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    onSend(trimmed);
-    setValue('');
-  }, [value, onSend]);
+    const trimmed = value.trim()
+    if (!trimmed) return
+    onSend(trimmed)
+    setValue('')
+  }, [value, onSend])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
+      e.preventDefault()
+      handleSend()
     }
     if (e.key === 'Escape') {
-      setValue('');
+      setValue('')
     }
-  };
+  }
 
   const handleVoiceClick = async () => {
     if (isRecording) {
       try {
-        const transcript = await stopRecording();
+        const transcript = await stopRecording()
         if (transcript) {
-          setValue(transcript);
+          setValue(transcript)
         }
       } catch {
         // Error handled in hook
       }
     } else {
-      await startRecording();
+      await startRecording()
     }
-  };
+  }
 
   return (
     <div className="flex flex-col gap-1">
-      {voiceError && (
-        <p className="text-xs text-red-500 px-1">{voiceError}</p>
-      )}
+      {voiceError && <p className="text-xs text-red-500 px-1">{voiceError}</p>}
       <div className="flex items-center gap-1">
         <input
           type="text"
@@ -82,5 +86,5 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
         </button>
       </div>
     </div>
-  );
+  )
 }

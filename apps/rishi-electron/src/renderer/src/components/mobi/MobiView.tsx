@@ -1,173 +1,178 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useEpubStore } from "@/stores/epubStore";
-import { useMutation } from "@tanstack/react-query";
-import { toast } from "react-toastify";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEpubStore } from '@/stores/epubStore'
+import { useMutation } from '@tanstack/react-query'
+import { toast } from 'react-toastify'
 
 import {
   getMobiChapter,
   getMobiChapterCount,
   getMobiText,
   hasSavedEpubData,
-  updateBookLocation,
-} from "@/lib/api";
-import type { Book } from "@/lib/api";
-import { BackButton } from "@/components/BackButton";
-import TTSControls from "@/components/tts/TTSControls";
-import { ChevronLeft, ChevronRight, MessageSquare, Menu as MenuIcon, Mic, MicOff } from "lucide-react";
-import AIChatOrb from "@/components/chat/AIChatOrb";
-import { themes } from "@/themes/themes";
-import { usePlayerStore } from "@/stores/playerStore";
-import type { ParagraphWithIndex } from "@/models/player_control";
-import { processEpubJob } from "@/modules/process_epub";
-import type { PageDataInsertable } from "@/modules/process_epub";
-import { ChatPanel } from "@/components/chat/ChatPanel";
-import { useChatStore } from "@/stores/chatStore";
-import { useRequireAuth } from "@/hooks/useRequireAuth";
-import { BookmarkButton } from "@/components/bookmarks/BookmarkButton";
-import { ReaderToolbar } from "@/components/reader/ReaderToolbar";
-import { ReaderTOC } from "@/components/reader/ReaderTOC";
-import { IconButton } from "@/components/ui/IconButton";
+  updateBookLocation
+} from '@/lib/api'
+import type { Book } from '@/lib/api'
+import { BackButton } from '@/components/BackButton'
+import TTSControls from '@/components/tts/TTSControls'
+import {
+  ChevronLeft,
+  ChevronRight,
+  MessageSquare,
+  Menu as MenuIcon,
+  Mic,
+  MicOff
+} from 'lucide-react'
+import AIChatOrb from '@/components/chat/AIChatOrb'
+import { themes } from '@/themes/themes'
+import { usePlayerStore } from '@/stores/playerStore'
+import type { ParagraphWithIndex } from '@/models/player_control'
+import { processEpubJob } from '@/modules/process_epub'
+import type { PageDataInsertable } from '@/modules/process_epub'
+import { ChatPanel } from '@/components/chat/ChatPanel'
+import { useChatStore } from '@/stores/chatStore'
+import { useRequireAuth } from '@/hooks/useRequireAuth'
+import { BookmarkButton } from '@/components/bookmarks/BookmarkButton'
+import { ReaderToolbar } from '@/components/reader/ReaderToolbar'
+import { ReaderTOC } from '@/components/reader/ReaderTOC'
+import { IconButton } from '@/components/ui/IconButton'
 
 // Simple string hash function (replaces stringToNumberID from Tauri's xxhash64)
 function stringToNumberID(str: string): number {
-  let hash = 0;
+  let hash = 0
   for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash + char) | 0;
+    const char = str.charCodeAt(i)
+    hash = ((hash << 5) - hash + char) | 0
   }
-  return Math.abs(hash);
+  return Math.abs(hash)
 }
 
 export default function MobiView({ book }: { book: Book }): React.JSX.Element {
-  const theme = useEpubStore((s) => s.theme);
-  const [tocOpen, setTocOpen] = useState(false);
+  const theme = useEpubStore((s) => s.theme)
+  const [tocOpen, setTocOpen] = useState(false)
   const [chapterIndex, setChapterIndex] = useState(() => {
-    const parsed = Number(book.location);
-    return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
-  });
-  const [chapterCount, setChapterCount] = useState(0);
-  const [chapterHtml, setChapterHtml] = useState("");
-  const [loading, setLoading] = useState(true);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const embeddingsProcessedRef = useRef(false);
-  const [chatPanelOpen, setChatPanelOpen] = useState(false);
-  const { requireAuth, AuthDialog } = useRequireAuth();
-  const bookSyncIdRef = useRef<string | null>(null);
+    const parsed = Number(book.location)
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0
+  })
+  const [chapterCount, setChapterCount] = useState(0)
+  const [chapterHtml, setChapterHtml] = useState('')
+  const [loading, setLoading] = useState(true)
+  const iframeRef = useRef<HTMLIFrameElement>(null)
+  const embeddingsProcessedRef = useRef(false)
+  const [chatPanelOpen, setChatPanelOpen] = useState(false)
+  const { requireAuth, AuthDialog } = useRequireAuth()
+  const bookSyncIdRef = useRef<string | null>(null)
 
-  const isChatting = useChatStore((s) => s.isChatting);
-  const setIsChatting = useChatStore((s) => s.setIsChatting);
-  const chatStatus = useChatStore((s) => s.chatStatus);
+  const isChatting = useChatStore((s) => s.isChatting)
+  const setIsChatting = useChatStore((s) => s.setIsChatting)
+  const chatStatus = useChatStore((s) => s.chatStatus)
 
   const handleMicClick = () => {
-    requireAuth("voice-input", () => {
-      setIsChatting((prev) => !prev);
-    });
-  };
+    requireAuth('voice-input', () => {
+      setIsChatting((prev) => !prev)
+    })
+  }
 
   const handleStopChat = () => {
-    setIsChatting(false);
-  };
-
+    setIsChatting(false)
+  }
 
   // Set bookId for voice chat
-  const setBookId = useEpubStore((s) => s.setBookId);
+  const setBookId = useEpubStore((s) => s.setBookId)
   useEffect(() => {
-    setBookId(book.id.toString());
-  }, [book.id, setBookId]);
+    setBookId(book.id.toString())
+  }, [book.id, setBookId])
 
   // Look up the book's sync_id for chat
   useEffect(() => {
-    void window.electron.dbQuery("SELECT sync_id FROM books WHERE id = ?", [book.id]).then((rows: any[]) => {
-      const row = rows[0];
-      bookSyncIdRef.current = row?.sync_id ?? null;
-    });
-  }, [book.id]);
+    void window.electron.booksGetSyncId(book.id).then((syncId) => {
+      bookSyncIdRef.current = syncId
+    })
+  }, [book.id])
 
   // Fetch total chapter count on mount
   useEffect(() => {
     getMobiChapterCount({ path: book.filepath })
       .then((count) => setChapterCount(count))
       .catch((err) => {
-        console.error("[MobiView] failed to get chapter count:", err);
-        toast.error("Failed to load MOBI chapter count");
-      });
-  }, [book.filepath]);
+        console.error('[MobiView] failed to get chapter count:', err)
+        toast.error('Failed to load MOBI chapter count')
+      })
+  }, [book.filepath])
 
   // Fetch chapter HTML when index changes
   useEffect(() => {
-    if (chapterCount === 0) return;
-    setLoading(true);
+    if (chapterCount === 0) return
+    setLoading(true)
     getMobiChapter({ path: book.filepath, chapterIndex })
       .then((html) => {
-        setChapterHtml(html);
-        setLoading(false);
+        setChapterHtml(html)
+        setLoading(false)
       })
       .catch((err) => {
-        console.error("[MobiView] failed to get chapter:", err);
-        toast.error("Failed to load chapter");
-        setLoading(false);
-      });
-  }, [book.filepath, chapterIndex, chapterCount]);
+        console.error('[MobiView] failed to get chapter:', err)
+        toast.error('Failed to load chapter')
+        setLoading(false)
+      })
+  }, [book.filepath, chapterIndex, chapterCount])
 
   // Persist reading position
   const updateLocationMutation = useMutation({
     mutationFn: async (index: number) => {
       await updateBookLocation({
         bookId: book.id,
-        newLocation: String(index),
-      });
+        newLocation: String(index)
+      })
     },
     onError() {
-      toast.error("Failed to save reading position");
-    },
-  });
+      toast.error('Failed to save reading position')
+    }
+  })
 
   useEffect(() => {
-    updateLocationMutation.mutate(chapterIndex);
-  }, [chapterIndex]);
+    updateLocationMutation.mutate(chapterIndex)
+  }, [chapterIndex])
 
   // Navigation helpers
   const goNext = useCallback(() => {
-    setChapterIndex((prev) => Math.min(prev + 1, chapterCount - 1));
-  }, [chapterCount]);
+    setChapterIndex((prev) => Math.min(prev + 1, chapterCount - 1))
+  }, [chapterCount])
 
   const goPrev = useCallback(() => {
-    setChapterIndex((prev) => Math.max(prev - 1, 0));
-  }, []);
+    setChapterIndex((prev) => Math.max(prev - 1, 0))
+  }, [])
 
   // Keyboard navigation
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "ArrowRight") {
-        goNext();
-      } else if (e.key === "ArrowLeft") {
-        goPrev();
+      if (e.key === 'ArrowRight') {
+        goNext()
+      } else if (e.key === 'ArrowLeft') {
+        goPrev()
       }
     }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [goNext, goPrev]);
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [goNext, goPrev])
 
   // Publish paragraphs to playerStore for TTS.
   // Current chapter is published immediately; next/prev are debounced
   // so rapid chapter flips don't trigger wasted fetches.
-  const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    if (chapterCount === 0) return;
+    if (chapterCount === 0) return
 
     // Current chapter paragraphs — publish immediately
     getMobiText({ path: book.filepath, chapterIndex })
       .then((texts) => {
         const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
           text,
-          index: `mobi-${chapterIndex}-${i}`,
-        }));
-        usePlayerStore.getState().setCurrentParagraphs(paragraphs);
+          index: `mobi-${chapterIndex}-${i}`
+        }))
+        usePlayerStore.getState().setCurrentParagraphs(paragraphs)
       })
-      .catch((err) => console.warn("[MobiView] failed to get text for TTS:", err));
+      .catch((err) => console.warn('[MobiView] failed to get text for TTS:', err))
 
     // Debounce next/prev chapter prefetch
-    if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current);
+    if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current)
     prefetchTimerRef.current = setTimeout(() => {
       // Prefetch next chapter paragraphs
       if (chapterIndex < chapterCount - 1) {
@@ -175,13 +180,13 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
           .then((texts) => {
             const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
               text,
-              index: `mobi-${chapterIndex + 1}-${i}`,
-            }));
-            usePlayerStore.getState().setNextPageParagraphs(paragraphs);
+              index: `mobi-${chapterIndex + 1}-${i}`
+            }))
+            usePlayerStore.getState().setNextPageParagraphs(paragraphs)
           })
-          .catch((err) => console.warn("[MobiView] failed to prefetch next chapter:", err));
+          .catch((err) => console.warn('[MobiView] failed to prefetch next chapter:', err))
       } else {
-        usePlayerStore.getState().setNextPageParagraphs([]);
+        usePlayerStore.getState().setNextPageParagraphs([])
       }
 
       // Prefetch previous chapter paragraphs
@@ -190,91 +195,91 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
           .then((texts) => {
             const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
               text,
-              index: `mobi-${chapterIndex - 1}-${i}`,
-            }));
-            usePlayerStore.getState().setPrevPageParagraphs(paragraphs);
+              index: `mobi-${chapterIndex - 1}-${i}`
+            }))
+            usePlayerStore.getState().setPrevPageParagraphs(paragraphs)
           })
-          .catch((err) => console.warn("[MobiView] failed to prefetch prev chapter:", err));
+          .catch((err) => console.warn('[MobiView] failed to prefetch prev chapter:', err))
       } else {
-        usePlayerStore.getState().setPrevPageParagraphs([]);
+        usePlayerStore.getState().setPrevPageParagraphs([])
       }
-    }, 300);
+    }, 300)
 
     return () => {
       if (prefetchTimerRef.current) {
-        clearTimeout(prefetchTimerRef.current);
+        clearTimeout(prefetchTimerRef.current)
         // Clear stale prefetch data so Player doesn't use wrong chapter's paragraphs
-        usePlayerStore.getState().setNextPageParagraphs([]);
-        usePlayerStore.getState().setPrevPageParagraphs([]);
+        usePlayerStore.getState().setNextPageParagraphs([])
+        usePlayerStore.getState().setPrevPageParagraphs([])
       }
-    };
-  }, [book.filepath, chapterIndex, chapterCount]);
+    }
+  }, [book.filepath, chapterIndex, chapterCount])
 
   // Handle page-turn events from Player (TTS exhausted current chapter)
   useEffect(() => {
     const handleNextEmptied = () => {
-      if (chapterCount === 0) return;
-      setChapterIndex((prev) => Math.min(prev + 1, chapterCount - 1));
-    };
+      if (chapterCount === 0) return
+      setChapterIndex((prev) => Math.min(prev + 1, chapterCount - 1))
+    }
     const handlePrevEmptied = () => {
-      if (chapterCount === 0) return;
-      setChapterIndex((prev) => Math.max(prev - 1, 0));
-    };
+      if (chapterCount === 0) return
+      setChapterIndex((prev) => Math.max(prev - 1, 0))
+    }
 
     const unsubPage = usePlayerStore.subscribe(
       (s) => s.pageRequest,
       (request) => {
-        if (request === "next") handleNextEmptied();
-        if (request === "prev") handlePrevEmptied();
-        if (request) usePlayerStore.getState().clearPageRequest();
+        if (request === 'next') handleNextEmptied()
+        if (request === 'prev') handlePrevEmptied()
+        if (request) usePlayerStore.getState().clearPageRequest()
       }
-    );
+    )
 
     return () => {
-      unsubPage();
-    };
-  }, [chapterCount]);
+      unsubPage()
+    }
+  }, [chapterCount])
 
   // Generate embeddings on first open (for AI chat)
   useEffect(() => {
-    if (chapterCount === 0 || embeddingsProcessedRef.current) return;
-    embeddingsProcessedRef.current = true;
+    if (chapterCount === 0 || embeddingsProcessedRef.current) return
+    embeddingsProcessedRef.current = true
 
     void (async () => {
       try {
-        const alreadySaved = await hasSavedEpubData({ bookId: book.id });
-        if (alreadySaved) return;
+        const alreadySaved = await hasSavedEpubData({ bookId: book.id })
+        if (alreadySaved) return
 
-        const allPageData: PageDataInsertable[] = [];
+        const allPageData: PageDataInsertable[] = []
         for (let i = 0; i < chapterCount; i++) {
-          const texts = await getMobiText({ path: book.filepath, chapterIndex: i });
-          const combined = texts.join("\n").trim();
+          const texts = await getMobiText({ path: book.filepath, chapterIndex: i })
+          const combined = texts.join('\n').trim()
           if (combined.length > 0) {
             allPageData.push({
               id: stringToNumberID(`${book.id}-mobi-${i}`),
               pageNumber: i + 1,
               bookId: book.id,
-              data: combined,
-            });
+              data: combined
+            })
           }
         }
 
         if (allPageData.length > 0) {
-          await processEpubJob(book.id, allPageData);
+          await processEpubJob(book.id, allPageData)
         }
       } catch (err) {
-        console.warn("[MobiView] failed to generate embeddings:", err);
+        console.warn('[MobiView] failed to generate embeddings:', err)
       }
-    })();
-  }, [book.id, book.filepath, chapterCount]);
+    })()
+  }, [book.id, book.filepath, chapterCount])
 
   // Build themed srcdoc
   const srcdoc = useMemo(() => {
-    const t = themes[theme];
+    const t = themes[theme]
     // Sanitize MOBI HTML: strip script tags and event handler attributes
     const sanitizedHtml = chapterHtml
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-      .replace(/\bon\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+      .replace(/\bon\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
     return `<!DOCTYPE html>
 <html>
 <head>
@@ -298,8 +303,8 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
 </style>
 </head>
 <body>${sanitizedHtml}<div class="page-number">${chapterCount > 0 ? `${chapterIndex + 1} of ${chapterCount}` : ''}</div></body>
-</html>`;
-  }, [chapterHtml, theme, chapterIndex, chapterCount]);
+</html>`
+  }, [chapterHtml, theme, chapterIndex, chapterCount])
 
   return (
     <div
@@ -310,20 +315,24 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
       <ReaderToolbar
         panelsOpen={tocOpen || chatPanelOpen}
         leftContent={
-          <IconButton color="inherit" onClick={() => setTocOpen(true)} className="hover:bg-transparent border-none">
+          <IconButton
+            color="inherit"
+            onClick={() => setTocOpen(true)}
+            className="hover:bg-transparent border-none"
+          >
             <MenuIcon size={20} />
           </IconButton>
         }
       >
         <BackButton />
         <BookmarkButton
-          bookSyncId={bookSyncIdRef.current ?? ""}
+          bookSyncId={bookSyncIdRef.current ?? ''}
           location={String(chapterIndex)}
           label={`Chapter ${chapterIndex + 1}`}
           className="hover:bg-transparent border-none"
         />
         <button
-          onClick={() => requireAuth("chat", () => setChatPanelOpen(true))}
+          onClick={() => requireAuth('chat', () => setChatPanelOpen(true))}
           className="p-2 rounded-md text-black hover:bg-black/10"
           aria-label="Open chat panel"
         >
@@ -380,9 +389,7 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
             <ChevronLeft size={20} />
           </button>
           <span className="text-white text-sm font-medium min-w-[4rem] text-center">
-            {chapterCount > 0
-              ? `${chapterIndex + 1} / ${chapterCount}`
-              : "..."}
+            {chapterCount > 0 ? `${chapterIndex + 1} / ${chapterCount}` : '...'}
           </span>
           <button
             onClick={goNext}
@@ -397,14 +404,11 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
 
       {/* AI chat orb */}
       {isChatting && (
-        <AIChatOrb
-          chatStatus={chatStatus}
-          onClick={() => setChatPanelOpen((prev) => !prev)}
-        />
+        <AIChatOrb chatStatus={chatStatus} onClick={() => setChatPanelOpen((prev) => !prev)} />
       )}
 
       {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
-      <div style={{ display: isChatting ? "none" : "contents" }}>
+      <div style={{ display: isChatting ? 'none' : 'contents' }}>
         <TTSControls bookId={book.id.toString()} />
       </div>
 
@@ -413,12 +417,12 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
         open={tocOpen}
         onOpenChange={setTocOpen}
         title="Navigation"
-        bookSyncId={bookSyncIdRef.current ?? ""}
+        bookSyncId={bookSyncIdRef.current ?? ''}
         onBookmarkNavigate={(location) => {
-          const idx = parseInt(location, 10);
+          const idx = parseInt(location, 10)
           if (Number.isFinite(idx) && idx >= 0) {
-            setChapterIndex(idx);
-            setTocOpen(false);
+            setChapterIndex(idx)
+            setTocOpen(false)
           }
         }}
         tocContent={
@@ -433,12 +437,12 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
       {/* Chat Panel */}
       <ChatPanel
         bookId={book.id}
-        bookSyncId={bookSyncIdRef.current ?? ""}
+        bookSyncId={bookSyncIdRef.current ?? ''}
         bookTitle={book.title}
         rendition={null}
         open={chatPanelOpen}
         onOpenChange={setChatPanelOpen}
       />
     </div>
-  );
+  )
 }

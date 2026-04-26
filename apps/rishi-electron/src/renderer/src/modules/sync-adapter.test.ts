@@ -1,92 +1,118 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { DesktopSyncAdapter } from "./sync-adapter";
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { DesktopSyncAdapter } from './sync-adapter'
 
-describe("DesktopSyncAdapter", () => {
-  let adapter: DesktopSyncAdapter;
+describe('DesktopSyncAdapter', () => {
+  let adapter: DesktopSyncAdapter
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    adapter = new DesktopSyncAdapter();
-  });
+    vi.clearAllMocks()
+    adapter = new DesktopSyncAdapter()
+  })
 
-  it("getDirtyBooks queries with is_dirty = 1", async () => {
-    vi.mocked(window.electron.dbQuery).mockResolvedValueOnce([
-      { id: 1, sync_id: "s1", title: "Test", is_dirty: 1, is_deleted: 0, kind: "epub" },
-    ]);
+  it('getDirtyBooks returns mapped rows from IPC', async () => {
+    vi.mocked(window.electron.syncGetDirtyBooks).mockResolvedValueOnce([
+      {
+        id: 1,
+        syncId: 's1',
+        title: 'Test',
+        author: 'Author',
+        format: 'epub',
+        isDirty: 1,
+        isDeleted: 0,
+        kind: 'epub',
+        syncVersion: 0
+      }
+    ])
 
-    const result = await adapter.getDirtyBooks();
+    const result = await adapter.getDirtyBooks()
 
-    expect(window.electron.dbQuery).toHaveBeenCalledWith(
-      expect.stringContaining("is_dirty = 1")
-    );
-    expect(result).toHaveLength(1);
-  });
+    expect(window.electron.syncGetDirtyBooks).toHaveBeenCalled()
+    expect(result).toHaveLength(1)
+    expect(result[0].id).toBe('s1')
+    expect(result[0].isDirty).toBe(true)
+  })
 
-  it("markBooksClean updates is_dirty to 0 for each sync_id", async () => {
-    vi.mocked(window.electron.dbRun).mockResolvedValue({ changes: 1, lastInsertRowid: 0 });
+  it('markBooksClean calls syncMarkBooksClean with ids and syncVersion', async () => {
+    vi.mocked(window.electron.syncMarkBooksClean).mockResolvedValue(undefined)
 
-    await adapter.markBooksClean(["sync-id-1"], 5);
+    await adapter.markBooksClean(['sync-id-1'], 5)
 
-    const [sql, params] = vi.mocked(window.electron.dbRun).mock.calls[0];
-    expect(sql).toContain("UPDATE books SET is_dirty = 0");
-    expect(params).toContain("sync-id-1");
-    expect(params).toContain(5);
-  });
+    expect(window.electron.syncMarkBooksClean).toHaveBeenCalledWith(['sync-id-1'], 5)
+  })
 
-  it("markBooksClean is a no-op for empty ids", async () => {
-    await adapter.markBooksClean([], 1);
-    expect(window.electron.dbRun).not.toHaveBeenCalled();
-  });
+  it('markBooksClean passes empty array for empty ids', async () => {
+    vi.mocked(window.electron.syncMarkBooksClean).mockResolvedValue(undefined)
 
-  it("markHighlightsClean updates is_dirty to 0 for each id", async () => {
-    vi.mocked(window.electron.dbRun).mockResolvedValue({ changes: 1, lastInsertRowid: 0 });
+    await adapter.markBooksClean([], 1)
 
-    await adapter.markHighlightsClean(["hl-1"], 5);
+    expect(window.electron.syncMarkBooksClean).toHaveBeenCalledWith([], 1)
+  })
 
-    const [sql] = vi.mocked(window.electron.dbRun).mock.calls[0];
-    expect(sql).toContain("UPDATE highlights SET is_dirty = 0");
-  });
+  it('markHighlightsClean calls syncMarkHighlightsClean', async () => {
+    vi.mocked(window.electron.syncMarkHighlightsClean).mockResolvedValue(undefined)
 
-  it("getDirtyHighlights queries highlights table", async () => {
-    vi.mocked(window.electron.dbQuery).mockResolvedValueOnce([]);
-    await adapter.getDirtyHighlights();
-    const [sql] = vi.mocked(window.electron.dbQuery).mock.calls[0];
-    expect(sql).toContain("highlights");
-  });
+    await adapter.markHighlightsClean(['hl-1'], 5)
 
-  it("getDirtyConversations queries conversations table", async () => {
-    vi.mocked(window.electron.dbQuery).mockResolvedValueOnce([]);
-    await adapter.getDirtyConversations();
-    const [sql] = vi.mocked(window.electron.dbQuery).mock.calls[0];
-    expect(sql).toContain("conversations");
-  });
+    expect(window.electron.syncMarkHighlightsClean).toHaveBeenCalledWith(['hl-1'], 5)
+  })
 
-  it("getDirtyMessages queries messages table", async () => {
-    vi.mocked(window.electron.dbQuery).mockResolvedValueOnce([]);
-    await adapter.getDirtyMessages();
-    const [sql] = vi.mocked(window.electron.dbQuery).mock.calls[0];
-    expect(sql).toContain("messages");
-  });
+  it('getDirtyHighlights calls syncGetDirtyHighlights', async () => {
+    vi.mocked(window.electron.syncGetDirtyHighlights).mockResolvedValueOnce([])
+    const result = await adapter.getDirtyHighlights()
+    expect(window.electron.syncGetDirtyHighlights).toHaveBeenCalled()
+    expect(result).toEqual([])
+  })
 
-  it("getLastSyncVersion returns 0 when no rows exist", async () => {
-    vi.mocked(window.electron.dbQuery).mockResolvedValueOnce([]);
-    const version = await adapter.getLastSyncVersion();
-    expect(version).toBe(0);
-  });
+  it('getDirtyConversations calls syncGetDirtyConversations', async () => {
+    vi.mocked(window.electron.syncGetDirtyConversations).mockResolvedValueOnce([])
+    const result = await adapter.getDirtyConversations()
+    expect(window.electron.syncGetDirtyConversations).toHaveBeenCalled()
+    expect(result).toEqual([])
+  })
 
-  it("getLastSyncVersion returns stored version", async () => {
-    vi.mocked(window.electron.dbQuery).mockResolvedValueOnce([
-      { last_sync_version: 42 },
-    ]);
-    const version = await adapter.getLastSyncVersion();
-    expect(version).toBe(42);
-  });
+  it('getDirtyMessages calls syncGetDirtyMessages', async () => {
+    vi.mocked(window.electron.syncGetDirtyMessages).mockResolvedValueOnce([])
+    const result = await adapter.getDirtyMessages()
+    expect(window.electron.syncGetDirtyMessages).toHaveBeenCalled()
+    expect(result).toEqual([])
+  })
 
-  it("updateLastSyncVersion calls dbRun with sync_meta update", async () => {
-    vi.mocked(window.electron.dbRun).mockResolvedValueOnce({ changes: 1, lastInsertRowid: 0 });
-    await adapter.updateLastSyncVersion(10);
-    const [sql, params] = vi.mocked(window.electron.dbRun).mock.calls[0];
-    expect(sql).toContain("UPDATE sync_meta");
-    expect(params![0]).toBe(10);
-  });
-});
+  it('getLastSyncVersion returns 0 when no rows exist', async () => {
+    vi.mocked(window.electron.syncGetLastVersion).mockResolvedValueOnce(0)
+    const version = await adapter.getLastSyncVersion()
+    expect(version).toBe(0)
+  })
+
+  it('getLastSyncVersion returns stored version', async () => {
+    vi.mocked(window.electron.syncGetLastVersion).mockResolvedValueOnce(42)
+    const version = await adapter.getLastSyncVersion()
+    expect(version).toBe(42)
+  })
+
+  it('updateLastSyncVersion calls syncUpdateLastVersion', async () => {
+    vi.mocked(window.electron.syncUpdateLastVersion).mockResolvedValueOnce(undefined)
+    await adapter.updateLastSyncVersion(10)
+    expect(window.electron.syncUpdateLastVersion).toHaveBeenCalledWith(10)
+  })
+
+  it('applyBookConflict delegates to syncApplyBookConflict', async () => {
+    vi.mocked(window.electron.syncApplyBookConflict).mockResolvedValueOnce(undefined)
+    const conflict = { id: 's1', title: 'New Title' }
+    await adapter.applyBookConflict(conflict, 5)
+    expect(window.electron.syncApplyBookConflict).toHaveBeenCalledWith(conflict, 5)
+  })
+
+  it('upsertRemoteBook delegates to syncUpsertBook', async () => {
+    vi.mocked(window.electron.syncUpsertBook).mockResolvedValueOnce(undefined)
+    const remote = { id: 'r1', title: 'Remote Book' }
+    await adapter.upsertRemoteBook(remote)
+    expect(window.electron.syncUpsertBook).toHaveBeenCalledWith(remote)
+  })
+
+  it('insertRemoteMessage delegates to syncInsertMessage', async () => {
+    vi.mocked(window.electron.syncInsertMessage).mockResolvedValueOnce(undefined)
+    const remote = { id: 'm1', content: 'Hello' }
+    await adapter.insertRemoteMessage(remote)
+    expect(window.electron.syncInsertMessage).toHaveBeenCalledWith(remote)
+  })
+})

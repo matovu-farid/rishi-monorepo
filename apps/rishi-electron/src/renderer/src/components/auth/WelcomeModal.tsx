@@ -1,15 +1,15 @@
-import { Loader2, Sparkles } from "lucide-react";
-import { useAuthStore } from "@/stores/authStore";
-import { startSignInFlow } from "@/modules/auth";
+import { Loader2, Sparkles } from 'lucide-react'
+import { useAuthStore } from '@/stores/authStore'
+import { startSignInFlow } from '@/modules/auth'
 
 export function WelcomeModal() {
-  const welcomeSeen = useAuthStore((s) => s.welcomeSeen);
-  const authHydrated = useAuthStore((s) => s.authHydrated);
-  const user = useAuthStore((s) => s.user);
-  const signingIn = useAuthStore((s) => s.signingIn);
-  const dismissWelcome = useAuthStore((s) => s.dismissWelcome);
+  const welcomeSeen = useAuthStore((s) => s.welcomeSeen)
+  const authHydrated = useAuthStore((s) => s.authHydrated)
+  const user = useAuthStore((s) => s.user)
+  const signingIn = useAuthStore((s) => s.signingIn)
+  const dismissWelcome = useAuthStore((s) => s.dismissWelcome)
 
-  if (welcomeSeen || !authHydrated || user) return null;
+  if (welcomeSeen || !authHydrated || user) return null
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/50">
@@ -19,8 +19,8 @@ export function WelcomeModal() {
           <h2 className="text-2xl font-bold">Welcome to Rishi</h2>
         </div>
         <p className="text-gray-600 mb-6">
-          Your AI-powered reading companion. Import books, get summaries, chat
-          about what you're reading, and listen with text-to-speech.
+          Your AI-powered reading companion. Import books, get summaries, chat about what you're
+          reading, and listen with text-to-speech.
         </p>
         <div className="flex flex-col gap-3">
           <button
@@ -28,9 +28,7 @@ export function WelcomeModal() {
             disabled={signingIn}
             onClick={() => startSignInFlow()}
           >
-            {signingIn ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : null}
+            {signingIn ? <Loader2 size={16} className="animate-spin" /> : null}
             Sign in
           </button>
           <button
@@ -42,5 +40,5 @@ export function WelcomeModal() {
         </div>
       </div>
     </div>
-  );
+  )
 }

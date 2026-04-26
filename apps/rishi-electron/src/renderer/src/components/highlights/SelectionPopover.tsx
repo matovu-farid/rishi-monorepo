@@ -1,50 +1,43 @@
-import { useEffect, useRef } from 'react';
-import { HIGHLIGHT_COLORS, type HighlightColor } from '@/types/highlight';
+import { useEffect, useRef } from 'react'
+import { HIGHLIGHT_COLORS, type HighlightColor } from '@/types/highlight'
 
 interface SelectionPopoverProps {
-  cfiRange: string;
-  selectedText: string;
-  position: { x: number; y: number };
-  onHighlight: (color: HighlightColor) => void;
-  onClose: () => void;
+  cfiRange: string
+  selectedText: string
+  position: { x: number; y: number }
+  onHighlight: (color: HighlightColor) => void
+  onClose: () => void
 }
 
-export function SelectionPopover({
-  position,
-  onHighlight,
-  onClose,
-}: SelectionPopoverProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
+export function SelectionPopover({ position, onHighlight, onClose }: SelectionPopoverProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
-        onClose();
+        onClose()
       }
     }
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
 
   // Close if clicking outside the popover
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
-      ) {
-        onClose();
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        onClose()
       }
     }
     // Delay to avoid catching the selection click itself
     const timer = setTimeout(() => {
-      document.addEventListener('mousedown', handleClickOutside);
-    }, 100);
+      document.addEventListener('mousedown', handleClickOutside)
+    }, 100)
     return () => {
-      clearTimeout(timer);
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [onClose]);
+      clearTimeout(timer)
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [onClose])
 
   return (
     <div
@@ -60,17 +53,17 @@ export function SelectionPopover({
             style={{
               width: 28,
               height: 28,
-              backgroundColor: c.hex,
+              backgroundColor: c.hex
             }}
             aria-label={`Highlight ${c.name}`}
             title={`Highlight ${c.name}`}
             onClick={() => {
-              onHighlight(c.name as HighlightColor);
-              onClose();
+              onHighlight(c.name as HighlightColor)
+              onClose()
             }}
           />
         ))}
       </div>
     </div>
-  );
+  )
 }

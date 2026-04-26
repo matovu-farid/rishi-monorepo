@@ -6,57 +6,57 @@
  * Mirrors the Tauri embed-fallback implementation.
  */
 
-import type { EmbedParam, EmbedResult } from "@/lib/api";
-import { getAuthToken } from "./auth";
+import type { EmbedParam, EmbedResult } from '@/lib/api'
+import { getAuthToken } from './auth'
 
-const WORKER_URL = "https://rishi-worker.faridmato90.workers.dev";
+const WORKER_URL = 'https://rishi-worker.faridmato90.workers.dev'
 
 /**
  * Send texts to the server for embedding when on-device fails.
  */
 async function embedTextsOnServer(texts: string[]): Promise<number[][]> {
-  const token = await getAuthToken();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
+  const token = await getAuthToken()
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30_000)
 
-  let response: Response;
+  let response: Response
   try {
     const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
+      'Content-Type': 'application/json'
+    }
     if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
+      headers['Authorization'] = `Bearer ${token}`
     } else {
       // Try dev bypass secret when no auth token available
-      const devBypass = await window.electron.getDevBypassSecret();
+      const devBypass = await window.electron.getDevBypassSecret()
       if (devBypass) {
-        headers["X-Dev-Bypass"] = devBypass;
+        headers['X-Dev-Bypass'] = devBypass
       } else {
-        throw new Error("Not authenticated: no auth token or dev bypass available");
+        throw new Error('Not authenticated: no auth token or dev bypass available')
       }
     }
 
     response = await fetch(`${WORKER_URL}/api/embed`, {
-      method: "POST",
+      method: 'POST',
       headers,
       body: JSON.stringify({ texts }),
-      signal: controller.signal,
-    });
+      signal: controller.signal
+    })
   } catch (err) {
     if (controller.signal.aborted) {
-      throw new Error("Embed request timed out after 30 seconds");
+      throw new Error('Embed request timed out after 30 seconds')
     }
-    throw err;
+    throw err
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(timeout)
   }
 
   if (!response.ok) {
-    throw new Error(`Server embed failed: ${response.status}`);
+    throw new Error(`Server embed failed: ${response.status}`)
   }
 
-  const data = (await response.json()) as { embeddings: number[][] };
-  return data.embeddings;
+  const data = (await response.json()) as { embeddings: number[][] }
+  return data.embeddings
 }
 
 /**
@@ -64,26 +64,21 @@ async function embedTextsOnServer(texts: string[]): Promise<number[][]> {
  * 1. Try on-device embedding via Electron main process (Transformers.js)
  * 2. If that fails, fall back to the Worker server endpoint
  */
-export async function embedWithFallback(
-  embedParams: EmbedParam[],
-): Promise<EmbedResult[]> {
+export async function embedWithFallback(embedParams: EmbedParam[]): Promise<EmbedResult[]> {
   try {
     // Try on-device embedding first via the main process IPC
-    return await window.electron.embed(embedParams);
+    return await window.electron.embed(embedParams)
   } catch (err) {
-    console.warn(
-      "[embed-fallback] On-device failed, using server fallback:",
-      err,
-    );
+    console.warn('[embed-fallback] On-device failed, using server fallback:', err)
 
-    const texts = embedParams.map((p) => p.text);
-    const serverEmbeddings = await embedTextsOnServer(texts);
+    const texts = embedParams.map((p) => p.text)
+    const serverEmbeddings = await embedTextsOnServer(texts)
 
     return serverEmbeddings.map((vec, i) => ({
       dim: vec.length,
       embedding: vec,
       text: embedParams[i].text,
-      metadata: embedParams[i].metadata,
-    }));
+      metadata: embedParams[i].metadata
+    }))
   }
 }

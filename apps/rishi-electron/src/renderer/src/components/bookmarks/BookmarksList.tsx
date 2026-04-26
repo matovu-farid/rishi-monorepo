@@ -1,25 +1,25 @@
-import { Bookmark, Trash2 } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getBookmarksForBook, deleteBookmark } from "@/modules/bookmark-storage";
+import { Bookmark, Trash2 } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { getBookmarksForBook, deleteBookmark } from '@/modules/bookmark-storage'
 
 interface BookmarksListProps {
-  bookSyncId: string;
-  onNavigate: (location: string) => void;
+  bookSyncId: string
+  onNavigate: (location: string) => void
 }
 
 export function BookmarksList({ bookSyncId, onNavigate }: BookmarksListProps) {
-  const queryClient = useQueryClient();
+  const queryClient = useQueryClient()
 
   const { data: bookmarks = [] } = useQuery({
-    queryKey: ["bookmarks", bookSyncId],
+    queryKey: ['bookmarks', bookSyncId],
     queryFn: () => getBookmarksForBook(bookSyncId),
-    enabled: !!bookSyncId,
-  });
+    enabled: !!bookSyncId
+  })
 
   const handleDelete = async (id: string) => {
-    await deleteBookmark(id);
-    void queryClient.invalidateQueries({ queryKey: ["bookmarks", bookSyncId] });
-  };
+    await deleteBookmark(id)
+    void queryClient.invalidateQueries({ queryKey: ['bookmarks', bookSyncId] })
+  }
 
   if (bookmarks.length === 0) {
     return (
@@ -27,7 +27,7 @@ export function BookmarksList({ bookSyncId, onNavigate }: BookmarksListProps) {
         <Bookmark size={32} className="mb-2 opacity-50" />
         <p className="text-sm">No bookmarks yet</p>
       </div>
-    );
+    )
   }
 
   return (
@@ -40,17 +40,15 @@ export function BookmarksList({ bookSyncId, onNavigate }: BookmarksListProps) {
         >
           <Bookmark size={16} fill="#ef4444" stroke="#ef4444" className="shrink-0" />
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium truncate">
-              {bm.label || bm.location}
-            </div>
+            <div className="text-sm font-medium truncate">{bm.label || bm.location}</div>
             <div className="text-xs text-gray-400">
-              {new Date(bm.created_at).toLocaleDateString()}
+              {new Date(bm.createdAt).toLocaleDateString()}
             </div>
           </div>
           <button
             onClick={(e) => {
-              e.stopPropagation();
-              void handleDelete(bm.id);
+              e.stopPropagation()
+              void handleDelete(bm.id)
             }}
             className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-500 transition-opacity"
             aria-label="Delete bookmark"
@@ -60,5 +58,5 @@ export function BookmarksList({ bookSyncId, onNavigate }: BookmarksListProps) {
         </div>
       ))}
     </div>
-  );
+  )
 }

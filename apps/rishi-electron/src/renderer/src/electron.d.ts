@@ -1,10 +1,10 @@
 // Global type declaration for the Electron API exposed via contextBridge
-import type { ElectronAPI } from "../../preload/types";
+import type { ElectronAPI } from '../../preload/types'
 
 declare global {
   interface Window {
-    electron: ElectronAPI;
+    electron: ElectronAPI
   }
 }
 
-export {};
+export {}

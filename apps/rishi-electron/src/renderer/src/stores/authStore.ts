@@ -1,27 +1,27 @@
-import { create } from "zustand";
-import { devtools } from "zustand/middleware";
-import type { User } from "@/lib/api";
-import { useTutorialStore } from "./tutorialStore";
+import { create } from 'zustand'
+import { devtools } from 'zustand/middleware'
+import type { User } from '@/lib/api'
+import { useTutorialStore } from './tutorialStore'
 
-const WELCOME_SEEN_KEY = "rishi:welcome-seen";
+const WELCOME_SEEN_KEY = 'rishi:welcome-seen'
 
 interface AuthState {
-  user: User | null;
-  signingIn: boolean;
-  authHydrated: boolean;
-  welcomeSeen: boolean;
-  bannerDismissed: boolean;
-  devMode: boolean;
+  user: User | null
+  signingIn: boolean
+  authHydrated: boolean
+  welcomeSeen: boolean
+  bannerDismissed: boolean
+  devMode: boolean
 
   // Actions
-  setUser: (user: User | null) => void;
-  setSigningIn: (value: boolean) => void;
-  setDevMode: (value: boolean) => void;
-  hydrateAuth: () => void;
-  dismissBanner: () => void;
-  dismissWelcome: () => void;
-  setWelcomeSeen: () => void;
-  setAuthHydrated: (value: boolean) => void;
+  setUser: (user: User | null) => void
+  setSigningIn: (value: boolean) => void
+  setDevMode: (value: boolean) => void
+  hydrateAuth: () => void
+  dismissBanner: () => void
+  dismissWelcome: () => void
+  setWelcomeSeen: () => void
+  setAuthHydrated: (value: boolean) => void
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -41,44 +41,44 @@ export const useAuthStore = create<AuthState>()(
 
       hydrateAuth: () => {
         try {
-          const value = localStorage.getItem(WELCOME_SEEN_KEY);
-          set({ welcomeSeen: value === "1" });
+          const value = localStorage.getItem(WELCOME_SEEN_KEY)
+          set({ welcomeSeen: value === '1' })
         } catch (err) {
-          console.warn("[authStore] failed to read welcome-seen flag, fail-closing:", err);
-          set({ welcomeSeen: true });
+          console.warn('[authStore] failed to read welcome-seen flag, fail-closing:', err)
+          set({ welcomeSeen: true })
         }
       },
 
       dismissBanner: () => set({ bannerDismissed: true }),
 
       dismissWelcome: () => {
-        set({ welcomeSeen: true, bannerDismissed: true });
+        set({ welcomeSeen: true, bannerDismissed: true })
         try {
-          localStorage.setItem(WELCOME_SEEN_KEY, "1");
+          localStorage.setItem(WELCOME_SEEN_KEY, '1')
         } catch (err) {
-          console.warn("[authStore] failed to persist welcome-seen flag:", err);
+          console.warn('[authStore] failed to persist welcome-seen flag:', err)
         }
         // Start onboarding tour if not completed
-        const { tourCompleted, startTour } = useTutorialStore.getState();
+        const { tourCompleted, startTour } = useTutorialStore.getState()
         if (!tourCompleted) {
-          setTimeout(startTour, 400);
+          setTimeout(startTour, 400)
         }
       },
 
       setWelcomeSeen: () => {
-        set({ welcomeSeen: true });
+        set({ welcomeSeen: true })
         try {
-          localStorage.setItem(WELCOME_SEEN_KEY, "1");
+          localStorage.setItem(WELCOME_SEEN_KEY, '1')
         } catch (err) {
-          console.warn("[authStore] failed to persist welcome-seen flag:", err);
+          console.warn('[authStore] failed to persist welcome-seen flag:', err)
         }
         // Start onboarding tour if not completed
-        const { tourCompleted, startTour } = useTutorialStore.getState();
+        const { tourCompleted, startTour } = useTutorialStore.getState()
         if (!tourCompleted) {
-          setTimeout(startTour, 400);
+          setTimeout(startTour, 400)
         }
-      },
+      }
     }),
-    { name: "auth-store" }
+    { name: 'auth-store' }
   )
-);
+)

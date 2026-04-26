@@ -1,4 +1,4 @@
 export type ParagraphWithIndex = {
-  text: string;
-  index: string;
-};
+  text: string
+  index: string
+}

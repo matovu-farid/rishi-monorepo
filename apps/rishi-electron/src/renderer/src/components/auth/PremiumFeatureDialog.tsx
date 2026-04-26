@@ -1,41 +1,41 @@
-import { LogIn, Check, Loader2 } from "lucide-react";
-import { useAuthStore } from "@/stores/authStore";
+import { LogIn, Check, Loader2 } from 'lucide-react'
+import { useAuthStore } from '@/stores/authStore'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { startSignInFlow, clearPendingOAuthState } from "@/modules/auth";
-import { PREMIUM_FEATURES, type PremiumFeature } from "./features";
+  DialogTitle
+} from '@/components/ui/dialog'
+import { startSignInFlow, clearPendingOAuthState } from '@/modules/auth'
+import { PREMIUM_FEATURES, type PremiumFeature } from './features'
 
 export interface PremiumFeatureDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  feature: PremiumFeature;
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  feature: PremiumFeature
 }
 
 export function PremiumFeatureDialog({
   open,
   onOpenChange,
-  feature,
+  feature
 }: PremiumFeatureDialogProps): React.JSX.Element {
-  const config = PREMIUM_FEATURES[feature];
-  const Icon = config.icon;
-  const signingIn = useAuthStore((s) => s.signingIn);
-  const setSigningIn = useAuthStore((s) => s.setSigningIn);
+  const config = PREMIUM_FEATURES[feature]
+  const Icon = config.icon
+  const signingIn = useAuthStore((s) => s.signingIn)
+  const setSigningIn = useAuthStore((s) => s.setSigningIn)
 
   async function handleSignIn() {
-    onOpenChange(false);
-    await startSignInFlow();
+    onOpenChange(false)
+    await startSignInFlow()
   }
 
   function handleCancelSignIn() {
-    setSigningIn(false);
-    clearPendingOAuthState();
-    onOpenChange(false);
+    setSigningIn(false)
+    clearPendingOAuthState()
+    onOpenChange(false)
   }
 
   return (
@@ -48,9 +48,7 @@ export function PremiumFeatureDialog({
             </div>
             <DialogTitle>{config.title}</DialogTitle>
           </div>
-          <DialogDescription className="pt-2">
-            {config.description}
-          </DialogDescription>
+          <DialogDescription className="pt-2">{config.description}</DialogDescription>
         </DialogHeader>
 
         {config.bullets.length > 0 && (
@@ -105,5 +103,5 @@ export function PremiumFeatureDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
+  )
 }

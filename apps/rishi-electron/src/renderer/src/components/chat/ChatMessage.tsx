@@ -1,14 +1,14 @@
-import { SourceChip } from './SourceChip';
-import type { Message } from '@/types/conversation';
+import { SourceChip } from './SourceChip'
+import type { Message } from '@/types/conversation'
 
 interface ChatMessageProps {
-  message: Message;
-  onSourceNavigate: (pageNumber: number) => void;
+  message: Message
+  onSourceNavigate: (pageNumber: number) => void
 }
 
 export function ChatMessage({ message, onSourceNavigate }: ChatMessageProps) {
-  const isUser = message.role === 'user';
-  const isLoading = message.role === 'assistant' && message.content === '';
+  const isUser = message.role === 'user'
+  const isLoading = message.role === 'assistant' && message.content === ''
 
   if (isLoading) {
     return (
@@ -21,7 +21,7 @@ export function ChatMessage({ message, onSourceNavigate }: ChatMessageProps) {
           </div>
         </div>
       </div>
-    );
+    )
   }
 
   return (
@@ -38,15 +38,11 @@ export function ChatMessage({ message, onSourceNavigate }: ChatMessageProps) {
         {!isUser && message.sourceChunks && message.sourceChunks.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-2">
             {message.sourceChunks.map((chunk) => (
-              <SourceChip
-                key={chunk.id}
-                chunk={chunk}
-                onNavigate={onSourceNavigate}
-              />
+              <SourceChip key={chunk.id} chunk={chunk} onNavigate={onSourceNavigate} />
             ))}
           </div>
         )}
       </div>
     </div>
-  );
+  )
 }

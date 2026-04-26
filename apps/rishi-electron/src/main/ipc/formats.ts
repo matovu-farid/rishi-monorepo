@@ -93,8 +93,13 @@ async function extractEpubData(filePath: string): Promise<BookDataResult> {
 
     // Fallback: look for item with id containing "cover" and image media-type (either order)
     if (!coverHref) {
-      const coverIdMatch = opfContent.match(/<item[^>]+id="[^"]*cover[^"]*"[^>]+href="([^"]+)"[^>]+media-type="image\/[^"]+"/i)
-        ?? opfContent.match(/<item[^>]+href="([^"]+)"[^>]+id="[^"]*cover[^"]*"[^>]+media-type="image\/[^"]+"/i)
+      const coverIdMatch =
+        opfContent.match(
+          /<item[^>]+id="[^"]*cover[^"]*"[^>]+href="([^"]+)"[^>]+media-type="image\/[^"]+"/i
+        ) ??
+        opfContent.match(
+          /<item[^>]+href="([^"]+)"[^>]+id="[^"]*cover[^"]*"[^>]+media-type="image\/[^"]+"/i
+        )
       if (coverIdMatch) coverHref = coverIdMatch[1]
     }
   }
@@ -879,7 +884,12 @@ export function registerFormatHandlers(): void {
     console.log('[formats:getBookData] Called with:', filePath)
     try {
       const result = await extractEpubData(filePath)
-      console.log('[formats:getBookData] Success:', result.title, '- cover bytes:', result.cover.length)
+      console.log(
+        '[formats:getBookData] Success:',
+        result.title,
+        '- cover bytes:',
+        result.cover.length
+      )
       return result
     } catch (error) {
       console.error('[formats:getBookData] Error:', error)

@@ -6,10 +6,10 @@
  */
 export function ptsToPx(pts: number): number {
   // On most platforms, logical DPI is 96 (1 logical px = 1/96 inch)
-  const logicalDPI = 96;
+  const logicalDPI = 96
 
   // Convert PDF points (1/72 inch per point) to pixels
-  const px = pts * (logicalDPI / 72);
+  const px = pts * (logicalDPI / 72)
 
-  return px;
+  return px
 }

@@ -10,36 +10,36 @@
  * IPC bridge. In Cypress-only (non-Electron) mode these tests use stubs.
  */
 
-describe("TTS Disk Cache", () => {
+describe('TTS Disk Cache', () => {
   beforeEach(() => {
-    cy.visit("/");
-  });
+    cy.visit('/')
+  })
 
-  it("should have the TTS cache IPC methods available", () => {
+  it('should have the TTS cache IPC methods available', () => {
     cy.window().then((win) => {
-      expect(win.electron).to.have.property("readDir");
-      expect(win.electron).to.have.property("removeFile");
-      expect(win.electron).to.have.property("getDirSize");
-      expect(win.electron).to.have.property("getCacheFileStats");
-      expect(win.electron).to.have.property("writeFile");
-      expect(win.electron).to.have.property("readFile");
-      expect(win.electron).to.have.property("exists");
-      expect(win.electron).to.have.property("mkdir");
-      expect(win.electron).to.have.property("getAppDataPath");
-    });
-  });
+      expect(win.electron).to.have.property('readDir')
+      expect(win.electron).to.have.property('removeFile')
+      expect(win.electron).to.have.property('getDirSize')
+      expect(win.electron).to.have.property('getCacheFileStats')
+      expect(win.electron).to.have.property('writeFile')
+      expect(win.electron).to.have.property('readFile')
+      expect(win.electron).to.have.property('exists')
+      expect(win.electron).to.have.property('mkdir')
+      expect(win.electron).to.have.property('getAppDataPath')
+    })
+  })
 
-  it("should have the processJob IPC method available", () => {
+  it('should have the processJob IPC method available', () => {
     cy.window().then((win) => {
-      expect(win.electron).to.have.property("processJob");
-      expect(win.electron.processJob).to.be.a("function");
-    });
-  });
+      expect(win.electron).to.have.property('processJob')
+      expect(win.electron.processJob).to.be.a('function')
+    })
+  })
 
-  it("should expose embed for embedding fallback", () => {
+  it('should expose embed for embedding fallback', () => {
     cy.window().then((win) => {
-      expect(win.electron).to.have.property("embed");
-      expect(win.electron.embed).to.be.a("function");
-    });
-  });
-});
+      expect(win.electron).to.have.property('embed')
+      expect(win.electron.embed).to.be.a('function')
+    })
+  })
+})

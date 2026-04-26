@@ -1,178 +1,183 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { X, BookOpen, Download, DownloadCloud, FolderOpen, Loader2, FilePlus } from "lucide-react";
-import { Button } from "@/components/ui/Button";
-import { ClipLoader } from "react-spinners";
-import { cancelScan } from "@/lib/api";
-import { chooseFiles } from "@/modules/chooseFiles";
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { X, BookOpen, Download, DownloadCloud, FolderOpen, Loader2, FilePlus } from 'lucide-react'
+import { Button } from '@/components/ui/Button'
+import { ClipLoader } from 'react-spinners'
+import { cancelScan } from '@/lib/api'
+import { chooseFiles } from '@/modules/chooseFiles'
 
 interface DiscoveredBook {
-  filepath: string;
-  filename: string;
-  title: string | null;
-  author: string | null;
-  format: string;
-  fileSize: number;
-  folder: string;
-  fileHash: string | null;
+  filepath: string
+  filename: string
+  title: string | null
+  author: string | null
+  format: string
+  fileSize: number
+  folder: string
+  fileHash: string | null
 }
 
 interface ScanProgress {
-  folder: string;
-  scanned: number;
-  total: number;
+  folder: string
+  scanned: number
+  total: number
 }
 
 interface BookDiscoveryModalProps {
-  open: boolean;
-  onClose: () => void;
-  onImport: (filepath: string) => void;
-  onImportFiles?: (filePaths: string[]) => void;
+  open: boolean
+  onClose: () => void
+  onImport: (filepath: string) => void
+  onImportFiles?: (filePaths: string[]) => void
 }
 
-type ScanMode = "default" | "full";
+type ScanMode = 'default' | 'full'
 
 function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function BookDiscoveryModal({ open, onClose, onImport, onImportFiles }: BookDiscoveryModalProps) {
-  const [books, setBooks] = useState<DiscoveredBook[]>([]);
-  const [filter, setFilter] = useState("");
-  const [scanning, setScanning] = useState(false);
-  const [scanComplete, setScanComplete] = useState(false);
-  const [progress, setProgress] = useState<ScanProgress | null>(null);
-  const [mode, setMode] = useState<ScanMode>("default");
-  const [importingPaths, setImportingPaths] = useState<Set<string>>(new Set());
+export function BookDiscoveryModal({
+  open,
+  onClose,
+  onImport,
+  onImportFiles
+}: BookDiscoveryModalProps) {
+  const [books, setBooks] = useState<DiscoveredBook[]>([])
+  const [filter, setFilter] = useState('')
+  const [scanning, setScanning] = useState(false)
+  const [scanComplete, setScanComplete] = useState(false)
+  const [progress, setProgress] = useState<ScanProgress | null>(null)
+  const [mode, setMode] = useState<ScanMode>('default')
+  const [importingPaths, setImportingPaths] = useState<Set<string>>(new Set())
 
-  const unsubRefs = useRef<Array<() => void>>([]);
+  const unsubRefs = useRef<Array<() => void>>([])
 
   const handleBrowseFiles = async () => {
     try {
-      const filePaths = await chooseFiles();
+      const filePaths = await chooseFiles()
       if (filePaths.length > 0) {
         if (onImportFiles) {
-          onImportFiles(filePaths);
+          onImportFiles(filePaths)
         } else {
-          filePaths.forEach((fp) => onImport(fp));
+          filePaths.forEach((fp) => onImport(fp))
         }
-        handleClose();
+        handleClose()
       }
     } catch (err) {
-      console.error("Failed to open file picker:", err);
+      console.error('Failed to open file picker:', err)
     }
-  };
+  }
 
   const cleanupListeners = useCallback(() => {
-    unsubRefs.current.forEach((fn) => fn());
-    unsubRefs.current = [];
-  }, []);
+    unsubRefs.current.forEach((fn) => fn())
+    unsubRefs.current = []
+  }, [])
 
   const startScan = useCallback(async (scanMode: ScanMode) => {
-    setBooks([]);
-    setProgress(null);
-    setScanComplete(false);
-    setScanning(true);
+    setBooks([])
+    setProgress(null)
+    setScanComplete(false)
+    setScanning(true)
 
     try {
-      await window.electron.scanForBooks(scanMode);
+      await window.electron.scanForBooks(scanMode)
     } catch (err) {
-      console.error("Failed to start scan:", err);
+      console.error('Failed to start scan:', err)
     } finally {
-      setScanning(false);
-      setScanComplete(true);
+      setScanning(false)
+      setScanComplete(true)
     }
-  }, []);
+  }, [])
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) return
 
-    let cancelled = false;
+    let cancelled = false
 
     // Listen for scan events from main process
-    const unsub1 = window.electron.on("scan-result", (...args: unknown[]) => {
-      if (cancelled) return;
-      const book = args[0] as DiscoveredBook;
+    const unsub1 = window.electron.on('scan-result', (...args: unknown[]) => {
+      if (cancelled) return
+      const book = args[0] as DiscoveredBook
       if (book?.filepath) {
-        setBooks((prev) => [...prev, book]);
+        setBooks((prev) => [...prev, book])
       }
-    });
-    const unsub2 = window.electron.on("scan-progress", (...args: unknown[]) => {
-      if (cancelled) return;
-      setProgress(args[0] as ScanProgress);
-    });
-    const unsub3 = window.electron.on("scan-complete", () => {
-      if (cancelled) return;
-      setScanning(false);
-      setScanComplete(true);
-      setProgress(null);
-    });
+    })
+    const unsub2 = window.electron.on('scan-progress', (...args: unknown[]) => {
+      if (cancelled) return
+      setProgress(args[0] as ScanProgress)
+    })
+    const unsub3 = window.electron.on('scan-complete', () => {
+      if (cancelled) return
+      setScanning(false)
+      setScanComplete(true)
+      setProgress(null)
+    })
 
-    unsubRefs.current = [unsub1, unsub2, unsub3];
+    unsubRefs.current = [unsub1, unsub2, unsub3]
 
     if (!cancelled) {
-      void startScan("default");
+      void startScan('default')
     }
 
     return () => {
-      cancelled = true;
-      cleanupListeners();
-      void cancelScan();
-    };
-  }, [open, startScan, cleanupListeners]);
+      cancelled = true
+      cleanupListeners()
+      void cancelScan()
+    }
+  }, [open, startScan, cleanupListeners])
 
   const handleModeChange = async (newMode: ScanMode) => {
-    if (newMode === mode) return;
-    setMode(newMode);
-    await cancelScan();
-    void startScan(newMode);
-  };
+    if (newMode === mode) return
+    setMode(newMode)
+    await cancelScan()
+    void startScan(newMode)
+  }
 
   const handleClose = async () => {
-    await cancelScan();
-    cleanupListeners();
-    setBooks([]);
-    setFilter("");
-    setScanning(false);
-    setScanComplete(false);
-    setProgress(null);
-    setImportingPaths(new Set());
-    onClose();
-  };
+    await cancelScan()
+    cleanupListeners()
+    setBooks([])
+    setFilter('')
+    setScanning(false)
+    setScanComplete(false)
+    setProgress(null)
+    setImportingPaths(new Set())
+    onClose()
+  }
 
   const handleImport = (filepath: string) => {
-    setImportingPaths((prev) => new Set(prev).add(filepath));
-    setBooks((prev) => prev.filter((b) => b.filepath !== filepath));
-    onImport(filepath);
-  };
+    setImportingPaths((prev) => new Set(prev).add(filepath))
+    setBooks((prev) => prev.filter((b) => b.filepath !== filepath))
+    onImport(filepath)
+  }
 
   const handleImportAll = () => {
-    const toImport = filteredBooks;
-    const newPaths = new Set(importingPaths);
-    toImport.forEach((b) => newPaths.add(b.filepath));
-    setImportingPaths(newPaths);
-    setBooks((prev) => prev.filter((b) => !newPaths.has(b.filepath)));
-    toImport.forEach((b) => onImport(b.filepath));
-  };
+    const toImport = filteredBooks
+    const newPaths = new Set(importingPaths)
+    toImport.forEach((b) => newPaths.add(b.filepath))
+    setImportingPaths(newPaths)
+    setBooks((prev) => prev.filter((b) => !newPaths.has(b.filepath)))
+    toImport.forEach((b) => onImport(b.filepath))
+  }
 
   const filteredBooks = books.filter((b) => {
-    if (!filter.trim()) return true;
-    const q = filter.toLowerCase();
+    if (!filter.trim()) return true
+    const q = filter.toLowerCase()
     return (
       b.filename.toLowerCase().includes(q) ||
-      (b.title ?? "").toLowerCase().includes(q) ||
-      (b.author ?? "").toLowerCase().includes(q)
-    );
-  });
+      (b.title ?? '').toLowerCase().includes(q) ||
+      (b.author ?? '').toLowerCase().includes(q)
+    )
+  })
 
   const grouped = filteredBooks.reduce<Record<string, DiscoveredBook[]>>((acc, book) => {
-    if (!acc[book.folder]) acc[book.folder] = [];
-    acc[book.folder].push(book);
-    return acc;
-  }, {});
+    if (!acc[book.folder]) acc[book.folder] = []
+    acc[book.folder].push(book)
+    return acc
+  }, {})
 
-  if (!open) return null;
+  if (!open) return null
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -221,8 +226,8 @@ export function BookDiscoveryModal({ open, onClose, onImport, onImportFiles }: B
                 type="radio"
                 name="scan-mode"
                 value="default"
-                checked={mode === "default"}
-                onChange={() => handleModeChange("default")}
+                checked={mode === 'default'}
+                onChange={() => handleModeChange('default')}
                 className="accent-gray-600"
               />
               <span className="text-gray-700">
@@ -234,8 +239,8 @@ export function BookDiscoveryModal({ open, onClose, onImport, onImportFiles }: B
                 type="radio"
                 name="scan-mode"
                 value="full"
-                checked={mode === "full"}
-                onChange={() => handleModeChange("full")}
+                checked={mode === 'full'}
+                onChange={() => handleModeChange('full')}
                 className="accent-gray-600"
               />
               <span className="text-gray-700">
@@ -256,7 +261,7 @@ export function BookDiscoveryModal({ open, onClose, onImport, onImportFiles }: B
           {/* Progress indicator */}
           {progress && (
             <div className="text-xs text-gray-500 truncate">
-              <span className="text-gray-400">Scanning:</span>{" "}
+              <span className="text-gray-400">Scanning:</span>{' '}
               <span className="text-gray-600">{progress.folder}</span>
               {progress.total > 0 && (
                 <span className="ml-2 text-gray-400">
@@ -301,7 +306,9 @@ export function BookDiscoveryModal({ open, onClose, onImport, onImportFiles }: B
                             <span className="text-xs text-gray-500 truncate">{book.author}</span>
                           )}
                           <span className="text-xs text-gray-400 uppercase">{book.format}</span>
-                          <span className="text-xs text-gray-400">{formatFileSize(book.fileSize)}</span>
+                          <span className="text-xs text-gray-400">
+                            {formatFileSize(book.fileSize)}
+                          </span>
                         </div>
                       </div>
                       <Button
@@ -325,12 +332,12 @@ export function BookDiscoveryModal({ open, onClose, onImport, onImportFiles }: B
         <div className="flex items-center justify-between px-5 py-3 border-t border-gray-200 bg-gray-50/80">
           <span className="text-sm text-gray-400">
             {filteredBooks.length > 0
-              ? `${filteredBooks.length} book${filteredBooks.length !== 1 ? "s" : ""} found`
+              ? `${filteredBooks.length} book${filteredBooks.length !== 1 ? 's' : ''} found`
               : scanComplete
-                ? "Scan complete"
+                ? 'Scan complete'
                 : scanning
-                  ? "Scanning..."
-                  : ""}
+                  ? 'Scanning...'
+                  : ''}
           </span>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={handleClose} className="text-gray-500">
@@ -350,5 +357,5 @@ export function BookDiscoveryModal({ open, onClose, onImport, onImportFiles }: B
         </div>
       </div>
     </div>
-  );
+  )
 }

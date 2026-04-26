@@ -1,21 +1,21 @@
-import type { SourceChunk } from '@/types/conversation';
+import type { SourceChunk } from '@/types/conversation'
 
 interface SourceChipProps {
-  chunk: SourceChunk;
-  onNavigate: (pageNumber: number) => void;
+  chunk: SourceChunk
+  onNavigate: (pageNumber: number) => void
 }
 
 export function SourceChip({ chunk, onNavigate }: SourceChipProps) {
   const label = chunk.chapter
     ? `Ch. ${chunk.chapter.length > 17 ? chunk.chapter.substring(0, 17) + '...' : chunk.chapter}`
-    : `p. ${chunk.pageNumber}`;
+    : `p. ${chunk.pageNumber}`
 
   const tooltipText = [
     chunk.chapter ? `Chapter: ${chunk.chapter}` : null,
-    chunk.text.substring(0, 100) + (chunk.text.length > 100 ? '...' : ''),
+    chunk.text.substring(0, 100) + (chunk.text.length > 100 ? '...' : '')
   ]
     .filter(Boolean)
-    .join('\n');
+    .join('\n')
 
   return (
     <button
@@ -26,5 +26,5 @@ export function SourceChip({ chunk, onNavigate }: SourceChipProps) {
     >
       {label}
     </button>
-  );
+  )
 }

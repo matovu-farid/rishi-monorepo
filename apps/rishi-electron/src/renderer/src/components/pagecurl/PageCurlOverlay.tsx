@@ -1,10 +1,10 @@
-import { useEffect, useRef } from "react";
-import { drawPageCurl, type CurlDirection } from "./drawPageCurl";
+import { useEffect, useRef } from 'react'
+import { drawPageCurl, type CurlDirection } from './drawPageCurl'
 
 interface Props {
-  progress: number;
-  direction: CurlDirection;
-  pageColor: string;
+  progress: number
+  direction: CurlDirection
+  pageColor: string
 }
 
 /**
@@ -13,55 +13,55 @@ interface Props {
  * The canvas is pointer-events: none so it doesn't intercept clicks.
  */
 export function PageCurlOverlay({ progress, direction, pageColor }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const parent = canvas.parentElement;
-    if (!parent) return;
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const parent = canvas.parentElement
+    if (!parent) return
 
     function draw() {
-      const cvs = canvasRef.current;
-      if (!cvs) return;
-      const p = cvs.parentElement;
-      if (!p) return;
+      const cvs = canvasRef.current
+      if (!cvs) return
+      const p = cvs.parentElement
+      if (!p) return
 
-      const { width: W, height: H } = p.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      cvs.width = W * dpr;
-      cvs.height = H * dpr;
+      const { width: W, height: H } = p.getBoundingClientRect()
+      const dpr = window.devicePixelRatio || 1
+      cvs.width = W * dpr
+      cvs.height = H * dpr
 
-      const rawCtx = cvs.getContext("2d");
-      if (!rawCtx) return;
-      const ctx: CanvasRenderingContext2D = rawCtx;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const rawCtx = cvs.getContext('2d')
+      if (!rawCtx) return
+      const ctx: CanvasRenderingContext2D = rawCtx
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-      drawPageCurl(ctx, W, H, progress, direction, pageColor);
+      drawPageCurl(ctx, W, H, progress, direction, pageColor)
     }
 
-    draw();
+    draw()
 
     const observer = new ResizeObserver(() => {
-      draw();
-    });
-    observer.observe(parent);
+      draw()
+    })
+    observer.observe(parent)
 
-    return () => observer.disconnect();
-  }, [progress, direction, pageColor]);
+    return () => observer.disconnect()
+  }, [progress, direction, pageColor])
 
   return (
     <canvas
       ref={canvasRef}
       style={{
-        position: "absolute",
+        position: 'absolute',
         top: 0,
         left: 0,
-        width: "100%",
-        height: "100%",
-        pointerEvents: "none",
-        zIndex: 10,
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'none',
+        zIndex: 10
       }}
     />
-  );
+  )
 }
