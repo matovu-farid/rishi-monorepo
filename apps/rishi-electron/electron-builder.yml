@@ -79,6 +79,7 @@ mac:
         - x64
         - arm64
 win:
+  sign: build/sign-windows.cjs
   target:
     - target: nsis
       arch:
