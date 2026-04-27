@@ -2,9 +2,13 @@ import { app, BrowserWindow, shell, protocol, net } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { initMainSentry } from './utils/sentry.js'
 import { registerAllIpcHandlers } from './ipc/index.js'
 import { initDatabase } from './database/index.js'
 import { initVectorDb } from './vectordb/index.js'
+
+// Initialize Sentry as early as possible so startup crashes are captured.
+initMainSentry()
 
 let mainWindow: BrowserWindow | null = null
 

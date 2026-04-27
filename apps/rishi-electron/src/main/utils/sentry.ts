@@ -1,23 +1,29 @@
-import * as Sentry from '@sentry/electron/renderer'
+import { app } from 'electron'
+import * as Sentry from '@sentry/electron/main'
 
 const DSN =
+  process.env.SENTRY_DSN ||
   'https://79d31f9f084402224dc303f699941691@o4510586781958144.ingest.de.sentry.io/4510586797555792'
 
 let initialized = false
 
-export function initSentry(): void {
+export function initMainSentry(): void {
   if (initialized) return
   initialized = true
 
   Sentry.init({
     dsn: DSN,
-    environment: import.meta.env.PROD ? 'production' : 'development',
+    release: `rishi-electron@${app.getVersion()}`,
+    environment: app.isPackaged ? 'production' : 'development',
     tracesSampleRate: 0.1,
     sendDefaultPii: false
   })
 }
 
-export function captureError(error: unknown, context?: Record<string, unknown>): void {
+export function captureError(
+  error: unknown,
+  context?: Record<string, unknown>
+): void {
   const err = error instanceof Error ? error : new Error(String(error))
   Sentry.withScope((scope) => {
     if (context) {

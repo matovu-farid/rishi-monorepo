@@ -383,15 +383,30 @@ export class TTSQueue extends EventEmitter {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Could not read error text')
+        const bodyExcerpt = errorText.slice(0, 500)
         console.error('>>> Queue: API returned error', {
           requestId: item.requestId,
           status: response.status,
           statusText: response.statusText,
           errorText
         })
-        throw new Error(
+        const httpErr = new Error(
           `OpenAI TTS API error: ${response.status} ${response.statusText} - ${errorText}`
         )
+        captureError(httpErr, {
+          operation: 'tts-generation',
+          step: 'http_response',
+          requestId: item.requestId,
+          httpStatus: response.status,
+          httpStatusText: response.statusText,
+          bodyExcerpt,
+          authMode: headers['Authorization'] ? 'bearer' : 'dev-bypass',
+          hasToken: Boolean(token),
+          tokenIsPlaceholder: token === 'dev-placeholder-token',
+          isPackaged: import.meta.env.PROD,
+          workerUrl: url
+        })
+        throw httpErr
       }
 
       // Convert response to buffer
