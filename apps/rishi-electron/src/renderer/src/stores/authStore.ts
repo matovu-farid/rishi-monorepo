@@ -1,28 +1,24 @@
 import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
-import type { User } from '@/lib/api'
+import type { AuthUser } from '../../../preload/types'
 import { useTutorialStore } from './tutorialStore'
 
 const WELCOME_SEEN_KEY = 'rishi:welcome-seen'
 
 interface AuthState {
-  user: User | null
-  signingIn: boolean
+  user: AuthUser | null
   authHydrated: boolean
   welcomeSeen: boolean
   bannerDismissed: boolean
-  devMode: boolean
   signInOpen: boolean
 
   // Actions
-  setUser: (user: User | null) => void
-  setSigningIn: (value: boolean) => void
-  setDevMode: (value: boolean) => void
+  setUser: (user: AuthUser | null) => void
+  setAuthHydrated: (value: boolean) => void
   hydrateAuth: () => void
   dismissBanner: () => void
   dismissWelcome: () => void
   setWelcomeSeen: () => void
-  setAuthHydrated: (value: boolean) => void
   openSignIn: () => void
   closeSignIn: () => void
 }
@@ -31,16 +27,12 @@ export const useAuthStore = create<AuthState>()(
   devtools(
     (set) => ({
       user: null,
-      signingIn: false,
       authHydrated: false,
       welcomeSeen: false,
       bannerDismissed: false,
-      devMode: false,
       signInOpen: false,
 
       setUser: (user) => set({ user }),
-      setSigningIn: (value) => set({ signingIn: value }),
-      setDevMode: (value) => set({ devMode: value }),
       setAuthHydrated: (value) => set({ authHydrated: value }),
       openSignIn: () => set({ signInOpen: true }),
       closeSignIn: () => set({ signInOpen: false }),

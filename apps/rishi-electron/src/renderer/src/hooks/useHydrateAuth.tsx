@@ -4,39 +4,40 @@ import { useAuthStore } from '@/stores/authStore'
 /**
  * Root-level hook: runs exactly once on app mount.
  *
- * Hydrates `welcomeSeen` from localStorage, dev-mode flag from the main
- * process, and the cached user profile from the JSON store. Sets
- * `authHydrated = true` so promo UI can decide what to show.
+ * Hydrates the welcome-seen flag from localStorage, then asks the main
+ * process for the current Better Auth session via IPC. After the initial
+ * fetch, subscribes to `session-changed` so the renderer reflects future
+ * sign-in / sign-out / delete-account events without a manual refresh.
  *
- * Sign-in itself is handled by Clerk's <SignIn /> component rendered in
- * <SignInModal> (see ClerkAuthSync for Clerk → Zustand sync).
+ * Sign-in itself is initiated by `<SignInModal>` (magic-link form) or
+ * `<LoginButton>` and completed by the deep-link handler in the main
+ * process; once the main process broadcasts the new session, this hook
+ * stores the user and closes any open sign-in modal.
  */
 export function useHydrateAuth(): void {
   const setUser = useAuthStore((s) => s.setUser)
   const setAuthHydrated = useAuthStore((s) => s.setAuthHydrated)
-  const hydrateWelcomeSeen = useAuthStore((s) => s.hydrateAuth)
-  const setDevMode = useAuthStore((s) => s.setDevMode)
+  const hydrateAuth = useAuthStore((s) => s.hydrateAuth)
+  const closeSignIn = useAuthStore((s) => s.closeSignIn)
 
   useEffect(() => {
-    hydrateWelcomeSeen()
-
-    void (async () => {
-      try {
-        const dev = await window.electron.isDev()
-        setDevMode(dev)
-      } catch {
-        /* ignore */
-      }
-      try {
-        const user = await window.electron.getUserFromStore()
+    hydrateAuth()
+    void window.api.auth
+      .getSession()
+      .then((user) => {
         setUser(user)
-      } catch (err) {
+      })
+      .catch((err: unknown) => {
+        console.error('[useHydrateAuth] failed to load session:', err)
         setUser(null)
-        console.error('[useHydrateAuth] failed to load user from store:', err)
-      } finally {
+      })
+      .finally(() => {
         setAuthHydrated(true)
-      }
-    })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+      })
+    const off = window.api.auth.onSessionChange((user) => {
+      setUser(user)
+      if (user) closeSignIn()
+    })
+    return off
+  }, [setUser, setAuthHydrated, hydrateAuth, closeSignIn])
 }

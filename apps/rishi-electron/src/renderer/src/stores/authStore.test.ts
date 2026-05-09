@@ -5,11 +5,10 @@ describe('authStore', () => {
   beforeEach(() => {
     useAuthStore.setState({
       user: null,
-      signingIn: false,
       authHydrated: false,
       welcomeSeen: false,
       bannerDismissed: false,
-      devMode: false
+      signInOpen: false
     })
     localStorage.clear()
   })
@@ -19,14 +18,9 @@ describe('authStore', () => {
   })
 
   it('should set user', () => {
-    const user = { id: '123', hasImage: false }
-    useAuthStore.getState().setUser(user as any)
+    useAuthStore.getState().setUser({ id: '123', email: 'a@b.com' })
     expect(useAuthStore.getState().user?.id).toBe('123')
-  })
-
-  it('should set signing in state', () => {
-    useAuthStore.getState().setSigningIn(true)
-    expect(useAuthStore.getState().signingIn).toBe(true)
+    expect(useAuthStore.getState().user?.email).toBe('a@b.com')
   })
 
   it('should hydrate welcome seen from localStorage', () => {
@@ -51,13 +45,15 @@ describe('authStore', () => {
     expect(useAuthStore.getState().bannerDismissed).toBe(true)
   })
 
-  it('should set dev mode', () => {
-    useAuthStore.getState().setDevMode(true)
-    expect(useAuthStore.getState().devMode).toBe(true)
-  })
-
   it('should set auth hydrated', () => {
     useAuthStore.getState().setAuthHydrated(true)
     expect(useAuthStore.getState().authHydrated).toBe(true)
+  })
+
+  it('should open and close sign-in modal', () => {
+    useAuthStore.getState().openSignIn()
+    expect(useAuthStore.getState().signInOpen).toBe(true)
+    useAuthStore.getState().closeSignIn()
+    expect(useAuthStore.getState().signInOpen).toBe(false)
   })
 })
