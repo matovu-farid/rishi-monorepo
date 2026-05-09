@@ -1,51 +1,21 @@
 /**
- * Auth module — Clerk session JWT helpers.
+ * Auth module — thin renderer-side wrappers over the auth IPC surface.
  *
- * Sign-in is rendered in-app via Clerk's <SignIn /> component. The Clerk
- * SDK exposes the active session globally on `window.Clerk`, so renderer-side
- * helpers can fetch a fresh JWT outside of React without going through a hook.
- *
- * The worker verifies the Clerk session token directly (via @hono/clerk-auth),
- * so there is no longer a separate worker-issued JWT or PKCE deep-link flow.
+ * The main process owns the Better Auth session token (encrypted at rest
+ * via Electron `safeStorage`). The renderer never sees raw cookies; it
+ * just asks the preload bridge for whatever it needs at the moment.
  */
-
-interface ClerkSession {
-  getToken: () => Promise<string | null>
-}
-
-interface ClerkGlobal {
-  session?: ClerkSession | null
-  loaded?: boolean
-}
-
-declare global {
-  interface Window {
-    Clerk?: ClerkGlobal
-  }
-}
 
 /**
- * Fetch a fresh Clerk session JWT, suitable for `Authorization: Bearer <token>`.
- * Returns `null` when no user is signed in or Clerk hasn't finished loading.
+ * Returns the current Better Auth session token, or `null` if not signed in.
+ * Token is fetched via IPC from the main process where it's stored encrypted.
+ *
+ * Suitable for forwarding to backends that accept the same token (we send
+ * it as a `Cookie: rishi.session_token=…` header to the worker).
  */
 export async function getAuthToken(): Promise<string | null> {
-  const session = window.Clerk?.session
-  if (!session) return null
-  try {
-    return await session.getToken()
-  } catch {
-    return null
-  }
+  return await window.api.auth.getToken()
 }
 
-export async function clearAuth(): Promise<void> {
-  return window.electron.clearAuth()
-}
-
-export async function getUserFromStore() {
-  return window.electron.getUserFromStore()
-}
-
-export async function saveUserToStore(user: any) {
-  return window.electron.saveUserToStore(user)
-}
+/** Whether this build is destined for the Mac App Store. */
+export const isMacAppStore = window.api?.auth?.isMacAppStore ?? false
