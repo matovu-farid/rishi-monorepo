@@ -31,7 +31,7 @@ export function createAuth(env: CloudflareBindings) {
             from: "Rishi <auth@fidexa.org>",
             to: email,
             subject: "Sign in to Rishi",
-            html: magicLinkEmail({ url }),
+            html: await magicLinkEmail({ url }),
           })
         },
         expiresIn: 60 * 10,
