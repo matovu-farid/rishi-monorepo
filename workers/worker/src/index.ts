@@ -4,10 +4,8 @@ import { cors } from "hono/cors";
 
 import { OpenAI } from "openai";
 import { z } from "zod";
-import { createClerkClient } from "@clerk/backend";
 import * as Sentry from "@sentry/cloudflare";
 import { Redis } from "@upstash/redis/cloudflare";
-import { clerkMiddleware, getAuth } from "@hono/clerk-auth";
 import { syncRoutes } from "./routes/sync";
 import { uploadRoutes } from "./routes/upload";
 import { createAuth } from "./auth";
@@ -42,19 +40,9 @@ export interface CloudflareBindings {
   CLOUDFLARE_ACCOUNT_ID: string;
 }
 
-/** Wrap an async function with a timeout via Promise.race. */
-async function withTimeout<T>(fn: () => Promise<T>, ms: number = 10000): Promise<T> {
-  return Promise.race([
-    fn(),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Operation timed out after ${ms}ms`)), ms)
-    ),
-  ]);
-}
-
 const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string } }>();
 
-// CORS must come before clerkMiddleware
+// CORS must be registered before any auth middleware
 app.use(
   "*",
   cors({
@@ -79,16 +67,15 @@ app.on(["GET", "POST"], "/api/auth/*", async (c) => {
   return auth.handler(c.req.raw);
 });
 
-app.use("*", clerkMiddleware());
-
 app.get("/", (c) => {
   return c.text("Hello Hono!");
 });
 
-// ─── requireClerkAuth middleware ─────────────────────────────────────────────
-// Verifies the Clerk session token populated by clerkMiddleware() and exposes
-// the Clerk userId via c.get("userId"). Preserves the dev bypass header.
-export async function requireClerkAuth(c: any, next: () => Promise<void>) {
+// ─── requireAuth middleware ─────────────────────────────────────────────────
+// Validates the caller's Better Auth session token (cookie or Authorization
+// header) and exposes the user id via c.get("userId"). Preserves the dev
+// bypass header for local development.
+export async function requireAuth(c: any, next: () => Promise<void>) {
   const devSecret = c.env.DEV_BYPASS_SECRET;
   if (devSecret) {
     const devHeader = c.req.header("X-Dev-Bypass");
@@ -98,11 +85,12 @@ export async function requireClerkAuth(c: any, next: () => Promise<void>) {
     }
   }
 
-  const auth = getAuth(c);
-  if (!auth?.userId) {
+  const auth = createAuth(c.env);
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session) {
     return c.json({ error: "Unauthorized" }, 401);
   }
-  c.set("userId", auth.userId);
+  c.set("userId", session.user.id);
   await next();
 }
 
@@ -111,7 +99,7 @@ app.route("/api/sync", syncRoutes);
 app.route("/api/sync", uploadRoutes);
 
 // ─── Protected routes ─────────────────────────────────────────────────────────
-app.get("/api/redis-test", requireClerkAuth, async (c) => {
+app.get("/api/redis-test", requireAuth, async (c) => {
   const redis = Redis.fromEnv(c.env);
   await redis.set("foo", "bar");
   const value = await redis.get("foo");
@@ -127,43 +115,7 @@ app.get("/health", (c) => {
   });
 });
 
-app.get("/api/clerk/users", requireClerkAuth, async (c) => {
-  return c.json({ error: "Forbidden" }, 403);
-});
-
-app.get("/api/clerk/user/:userId", requireClerkAuth, async (c) => {
-  try {
-    const userId = c.req.param("userId");
-
-    // Only allow users to fetch their own data
-    if (c.get("userId") !== userId) {
-      return c.json({ error: "Forbidden" }, 403);
-    }
-
-    const clerkClient = createClerkClient({
-      secretKey: c.env.CLERK_SECRET_KEY,
-    });
-
-    const clerkUser = await withTimeout(() => clerkClient.users.getUser(userId));
-
-    return c.json({
-      id: clerkUser.id,
-      firstName: clerkUser.firstName,
-      lastName: clerkUser.lastName,
-      fullName: clerkUser.fullName,
-      username: clerkUser.username,
-      imageUrl: clerkUser.imageUrl,
-      hasImage: clerkUser.hasImage,
-      lastSignInAt: clerkUser.lastSignInAt,
-      externalId: clerkUser.externalId,
-    });
-  } catch (error) {
-    console.error("Failed to get user:", error instanceof Error ? error.message : "unknown");
-    return c.json({ error: "Failed to get user" }, 500);
-  }
-});
-
-app.post("/api/audio/speech", requireClerkAuth, async (c) => {
+app.post("/api/audio/speech", requireAuth, async (c) => {
   try {
     const { input, voice } = await c.req.json();
 
@@ -208,7 +160,7 @@ app.post("/api/audio/speech", requireClerkAuth, async (c) => {
   }
 });
 
-app.get("/api/realtime/client_secrets", requireClerkAuth, async (c) => {
+app.get("/api/realtime/client_secrets", requireAuth, async (c) => {
   try {
     const response = await axios.post(
       "https://api.openai.com/v1/realtime/client_secrets",
@@ -243,7 +195,7 @@ app.get("/api/realtime/client_secrets", requireClerkAuth, async (c) => {
   }
 });
 
-app.post("/api/text/completions", requireClerkAuth, async (c) => {
+app.post("/api/text/completions", requireAuth, async (c) => {
   try {
     const body = await c.req.json();
     const input = body?.input;
@@ -268,7 +220,7 @@ app.post("/api/text/completions", requireClerkAuth, async (c) => {
 });
 
 // ─── POST /api/embed — Server-side embedding fallback ────────────────────────
-app.post("/api/embed", requireClerkAuth, async (c) => {
+app.post("/api/embed", requireAuth, async (c) => {
   const body = await c.req.json<{ texts: string[] }>();
 
   if (!body.texts || body.texts.length === 0) {
@@ -307,7 +259,7 @@ app.post("/api/embed", requireClerkAuth, async (c) => {
 });
 
 // ─── POST /api/audio/transcribe — Deepgram STT proxy ──────────────────────────
-app.post("/api/audio/transcribe", requireClerkAuth, async (c) => {
+app.post("/api/audio/transcribe", requireAuth, async (c) => {
   const contentType = c.req.header("Content-Type") || "audio/webm";
   const audioData = await c.req.arrayBuffer();
 

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { eq, gt, and, max, asc, sql, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
 import type { CloudflareBindings } from "../index";
-import { requireClerkAuth } from "../index";
+import { requireAuth } from "../index";
 import { createDb } from "../db/drizzle";
 import { books, highlights, conversations, messages } from "@rishi/shared/schema";
 import type { PushResponse, PullResponse } from "@rishi/shared/sync-types";
@@ -24,7 +24,7 @@ export const syncRoutes = new Hono<{
 // ─── POST /push ────────────────────────────────────────────────────────────────
 // Accepts dirty book and highlight records from client, upserts into D1 with LWW resolution.
 // filePath and coverPath are stripped before writing -- they are local-only paths.
-syncRoutes.post("/push", requireClerkAuth, async (c) => {
+syncRoutes.post("/push", requireAuth, async (c) => {
   const body = pushRequestSchema.parse(await c.req.json());
   const userId = c.get("userId");
   const db = createDb(c.env.DB);
@@ -304,7 +304,7 @@ syncRoutes.post("/push", requireClerkAuth, async (c) => {
 // ─── GET /pull ─────────────────────────────────────────────────────────────────
 // Returns books and highlights changed since the given syncVersion for the authenticated user.
 // filePath is set to '' and coverPath to null to prevent path contamination.
-syncRoutes.get("/pull", requireClerkAuth, async (c) => {
+syncRoutes.get("/pull", requireAuth, async (c) => {
   const sinceVersion = Number(c.req.query("since_version") ?? "0");
   if (!Number.isFinite(sinceVersion) || sinceVersion < 0) {
     return c.json({ error: "since_version must be a non-negative number" }, 400);
