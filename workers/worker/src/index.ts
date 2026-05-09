@@ -8,6 +8,7 @@ import * as Sentry from "@sentry/cloudflare";
 import { Redis } from "@upstash/redis/cloudflare";
 import { syncRoutes } from "./routes/sync";
 import { uploadRoutes } from "./routes/upload";
+import { desktopRoutes } from "./routes/desktop";
 import { createAuth } from "./auth";
 
 /** Constant-time string comparison to prevent timing attacks. */
@@ -97,6 +98,7 @@ export async function requireAuth(c: any, next: () => Promise<void>) {
 // ─── Sync routes ─────────────────────────────────────────────────────────────
 app.route("/api/sync", syncRoutes);
 app.route("/api/sync", uploadRoutes);
+app.route("/desktop", desktopRoutes);
 
 // ─── Protected routes ─────────────────────────────────────────────────────────
 app.get("/api/redis-test", requireAuth, async (c) => {
