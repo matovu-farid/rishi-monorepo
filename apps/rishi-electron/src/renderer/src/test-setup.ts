@@ -103,3 +103,20 @@ Object.defineProperty(window, 'electron', {
   value: mockElectronAPI,
   writable: true
 })
+
+// Mock window.api (the new Better Auth IPC surface) for tests.
+const mockAuthApi = {
+  startMagicLink: vi.fn().mockResolvedValue(undefined),
+  startGoogle: vi.fn().mockResolvedValue(undefined),
+  getSession: vi.fn().mockResolvedValue(null),
+  signOut: vi.fn().mockResolvedValue(undefined),
+  deleteAccount: vi.fn().mockResolvedValue(undefined),
+  getToken: vi.fn().mockResolvedValue(null),
+  onSessionChange: vi.fn().mockReturnValue(() => {}),
+  isMacAppStore: false
+}
+
+Object.defineProperty(window, 'api', {
+  value: { auth: mockAuthApi },
+  writable: true
+})
