@@ -21,10 +21,15 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 export interface CloudflareBindings {
+  BETTER_AUTH_SECRET: string;
   DEEPGRAM_KEY: string;
   OPENAI_API_KEY: string;
-  CLERK_SECRET_KEY: string;
-  CLERK_PUBLISHABLE_KEY: string;
+  GOOGLE_CLIENT_ID: string;
+  GOOGLE_CLIENT_SECRET: string;
+  RESEND_API_KEY: string;
+  PUBLIC_API_URL: string;
+  PUBLIC_WEB_URL: string;
+  RISHI_DESKTOP_STATE: KVNamespace;
   UPSTASH_REDIS_REST_URL: string;
   UPSTASH_REDIS_REST_TOKEN: string;
   DEV_BYPASS_SECRET?: string;

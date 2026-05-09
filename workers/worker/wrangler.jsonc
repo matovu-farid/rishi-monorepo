@@ -23,5 +23,16 @@
       "binding": "BOOK_STORAGE",
       "bucket_name": "rishi-books"
     }
-  ]
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "RISHI_DESKTOP_STATE",
+      "id": "12eb084c99f44bebafcf1143bc457f58",
+      "preview_id": "49a43a76aac747ad8472856f33e1eeda"
+    }
+  ],
+  "vars": {
+    "PUBLIC_API_URL": "https://api.fidexa.org",
+    "PUBLIC_WEB_URL": "https://app.fidexa.org"
+  }
 }
