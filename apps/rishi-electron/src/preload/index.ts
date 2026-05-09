@@ -72,7 +72,9 @@ const electronAPI: ElectronAPI = {
   scanForBooks: (mode: string) => ipcRenderer.invoke('scanner:scan', mode),
   cancelScan: () => ipcRenderer.invoke('scanner:cancel'),
 
-  // Auth (cached user profile only — token comes from Clerk in renderer)
+  // Legacy auth shims — kept for backwards-compat with renderer code that
+  // hasn't been ported off the old Clerk-shaped helpers yet. The Better
+  // Auth surface lives on `window.api.auth.*` instead (see below).
   clearAuth: () => ipcRenderer.invoke('auth:clear'),
   getUserFromStore: () => ipcRenderer.invoke('auth:getUserFromStore'),
   saveUserToStore: (user: unknown) => ipcRenderer.invoke('auth:saveUserToStore', user),

@@ -1,7 +1,8 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  readonly VITE_CLERK_PUBLISHABLE_KEY: string
+  // No app-specific Vite env vars currently — Better Auth runs entirely
+  // in the main process, so the renderer needs no auth-related VITE_ keys.
 }
 
 interface ImportMeta {

@@ -5,27 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Rishi</title>
     <!--
-      Warm up the TCP/TLS connection to Clerk's Frontend API and pre-resolve
-      Google's OAuth host while the renderer is still booting. This shaves
-      noticeable latency off the first <SignIn /> render and the first
-      "Continue with Google" click.
+      Pre-resolve the worker host so the first authenticated API call
+      doesn't pay the DNS round-trip. Sign-in itself happens in the user's
+      default browser via `rishi://` deep links, so we don't need to warm
+      any third-party auth domains from the renderer.
     -->
-    <link rel="preconnect" href="https://clerk.fidexa.org" crossorigin />
-    <link rel="preconnect" href="https://img.clerk.com" crossorigin />
-    <link rel="dns-prefetch" href="https://clerk.fidexa.org" />
-    <link rel="dns-prefetch" href="https://accounts.google.com" />
-    <link rel="dns-prefetch" href="https://img.clerk.com" />
+    <link rel="dns-prefetch" href="https://rishi-worker.faridmato90.workers.dev" />
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self' local-file:;
-        script-src 'self' 'unsafe-inline' 'unsafe-eval' https://clerk.fidexa.org https://*.clerk.accounts.dev https://cdnjs.cloudflare.com blob:;
+        script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com blob:;
         style-src 'self' 'unsafe-inline';
-        img-src 'self' data: blob: local-file: https://img.clerk.com https://*.r2.dev https://*.clerk.com;
-        connect-src 'self' ws://localhost:* http://localhost:* local-file: https://cdnjs.cloudflare.com https://rishi-worker.faridmato90.workers.dev https://api.openai.com wss://api.openai.com https://*.clerk.accounts.dev https://clerk.fidexa.org https://*.clerk.com;
+        img-src 'self' data: blob: local-file: https://*.r2.dev;
+        connect-src 'self' ws://localhost:* http://localhost:* local-file: https://cdnjs.cloudflare.com https://rishi-worker.faridmato90.workers.dev https://api.openai.com wss://api.openai.com;
         worker-src 'self' blob: https://cdnjs.cloudflare.com;
         media-src 'self' blob: data: local-file:;
         font-src 'self' data:;
-        frame-src 'self' local-file: blob: about: https://clerk.fidexa.org https://*.clerk.accounts.dev;
+        frame-src 'self' local-file: blob: about:;
         child-src 'self' blob: about:;"
     />
   </head>

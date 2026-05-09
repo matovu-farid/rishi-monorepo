@@ -7,7 +7,6 @@ import { initDesktopSync, destroyDesktopSync } from '@/modules/sync-triggers'
 import { SyncStatusIndicator } from '../components/SyncStatusIndicator'
 import { WelcomeModal } from '@/components/auth/WelcomeModal'
 import { SignInBanner } from '@/components/auth/SignInBanner'
-import { ClerkAuthSync } from '@/components/auth/ClerkAuth'
 import SignInModal from '@/components/auth/SignInModal'
 import { TourProvider } from '@/components/tutorial/TourProvider'
 import { ErrorBoundary } from '../components/ErrorBoundary'
@@ -42,9 +41,6 @@ function RootComponent(): JSX.Element {
 
   return (
     <>
-      {/* Clerk auth sync - keeps Zustand in sync with Clerk state */}
-      <ClerkAuthSync />
-
       {isPending && (
         <div className="fixed inset-0 z-50 w-full h-screen place-items-center grid bg-white">
           <Loader />
