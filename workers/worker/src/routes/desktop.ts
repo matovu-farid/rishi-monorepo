@@ -9,7 +9,7 @@ const StartBody = z.object({
   code_challenge: z.string().min(43).max(128),
   redirect_scheme: z.literal("rishi-electron"),
   mode: z.enum(["magic-link", "oauth-google"]),
-  email: z.string().email().optional(),
+  email: z.email().optional(),
 })
 
 interface StoredState {
