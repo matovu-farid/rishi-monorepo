@@ -1,13 +1,12 @@
 "use client"
 
-import { useState, useEffect, Suspense } from "react"
-import { useSearchParams, useRouter } from "next/navigation"
+import { useState, useEffect, Suspense, type FormEvent } from "react"
+import { useSearchParams } from "next/navigation"
 import { authClient, signIn } from "@/lib/auth-client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
 function SignInPageInner() {
-  const router = useRouter()
   const params = useSearchParams()
   const provider = params.get("provider")
   const returnTo = params.get("returnTo") ?? "/"
@@ -28,7 +27,7 @@ function SignInPageInner() {
     }
   }, [provider])
 
-  async function sendMagicLink(e: React.FormEvent) {
+  async function sendMagicLink(e: FormEvent) {
     e.preventDefault()
     setStatus("sending")
     setErrorMsg("")
