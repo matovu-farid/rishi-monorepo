@@ -7,6 +7,7 @@
     "cf-typegen": "wrangler types --env-interface CloudflareBindings"
   },
   "dependencies": {
+    "@better-auth/passkey": "^1.6.10",
     "@react-email/components": "^1.0.12",
     "@react-email/render": "^2.0.8",
     "@rishi/shared": "file:../../packages/shared",

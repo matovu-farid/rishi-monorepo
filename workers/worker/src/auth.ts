@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth"
 import { magicLink } from "better-auth/plugins"
+import { passkey } from "@better-auth/passkey"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
 import { Resend } from "resend"
 import { createDb } from "./db/drizzle"
@@ -35,6 +36,11 @@ export function createAuth(env: CloudflareBindings) {
           })
         },
         expiresIn: 60 * 10,
+      }),
+      passkey({
+        rpID: env.PUBLIC_WEB_URL.replace(/^https?:\/\//, "").replace(/:\d+$/, ""),
+        rpName: "Rishi",
+        origin: env.PUBLIC_WEB_URL,
       }),
     ],
     session: {
