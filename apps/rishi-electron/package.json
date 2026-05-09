@@ -30,7 +30,6 @@
     "test:e2e:open": "cypress open"
   },
   "dependencies": {
-    "@clerk/clerk-react": "^5.22.0",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "@openai/agents": "^0.3.9",

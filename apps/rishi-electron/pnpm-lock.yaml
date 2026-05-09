@@ -8,9 +8,6 @@ importers:
 
   .:
     dependencies:
-      '@clerk/clerk-react':
-        specifier: ^5.22.0
-        version: 5.61.3(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@electron-toolkit/preload':
         specifier: ^3.0.2
         version: 3.0.2(electron@39.8.9)
