@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ElectronAPI } from './types.js'
+import type { Api, AuthUser, ElectronAPI } from './types.js'
 
 const electronAPI: ElectronAPI = {
   // Book operations
@@ -203,4 +203,24 @@ const electronAPI: ElectronAPI = {
   }
 }
 
+const api: Api = {
+  auth: {
+    startMagicLink: (email: string) => ipcRenderer.invoke('auth:start-magic-link', email),
+    startGoogle: () => ipcRenderer.invoke('auth:start-google'),
+    getSession: () => ipcRenderer.invoke('auth:get-session'),
+    signOut: () => ipcRenderer.invoke('auth:sign-out'),
+    deleteAccount: () => ipcRenderer.invoke('auth:delete-account'),
+    getToken: () => ipcRenderer.invoke('auth:get-token'),
+    onSessionChange: (cb: (user: AuthUser | null) => void) => {
+      const handler = (_e: unknown, user: AuthUser | null): void => cb(user)
+      ipcRenderer.on('session-changed', handler)
+      return () => {
+        ipcRenderer.removeListener('session-changed', handler)
+      }
+    },
+    isMacAppStore: !!process.mas
+  }
+}
+
 contextBridge.exposeInMainWorld('electron', electronAPI)
+contextBridge.exposeInMainWorld('api', api)

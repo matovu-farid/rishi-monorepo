@@ -180,6 +180,33 @@ export interface User {
   externalId?: string | null
 }
 
+/**
+ * Better-Auth user shape returned by the new auth IPC surface.
+ * Distinct from the legacy Clerk-shaped `User` above (still consumed by
+ * older renderer code until Chunk F migrates it).
+ */
+export interface AuthUser {
+  id: string
+  email: string
+  name?: string
+  image?: string
+}
+
+export interface AuthApi {
+  startMagicLink: (email: string) => Promise<void>
+  startGoogle: () => Promise<void>
+  getSession: () => Promise<AuthUser | null>
+  signOut: () => Promise<void>
+  deleteAccount: () => Promise<void>
+  getToken: () => Promise<string | null>
+  onSessionChange: (cb: (user: AuthUser | null) => void) => () => void
+  isMacAppStore: boolean
+}
+
+export interface Api {
+  auth: AuthApi
+}
+
 export interface Book {
   id: number
   kind: string
@@ -360,5 +387,6 @@ export interface ErrorDump {
 declare global {
   interface Window {
     electron: ElectronAPI
+    api: Api
   }
 }
