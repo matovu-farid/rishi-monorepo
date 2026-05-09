@@ -7,8 +7,6 @@
     "cf-typegen": "wrangler types --env-interface CloudflareBindings"
   },
   "dependencies": {
-    "@clerk/backend": "^2.29.0",
-    "@hono/clerk-auth": "^3.0.3",
     "@react-email/components": "^1.0.12",
     "@react-email/render": "^2.0.8",
     "@rishi/shared": "file:../../packages/shared",
