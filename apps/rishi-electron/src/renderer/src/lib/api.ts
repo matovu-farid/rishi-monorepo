@@ -3,7 +3,29 @@
  * All functions mirror the original Tauri command signatures.
  */
 
+import { getAuthToken } from '@/modules/auth'
+
 // Re-export types that match the original generated types
+
+/**
+ * Build auth headers for outbound calls to our worker.
+ *
+ * Better Auth's session middleware accepts the session token via either the
+ * `rishi.session_token` cookie or an `Authorization: Bearer …` header. We
+ * use the cookie form because that's the canonical Better Auth shape and
+ * mirrors what the web app sends; the worker's `requireAuth` middleware
+ * accepts both via `auth.api.getSession({ headers })`.
+ */
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const token = await getAuthToken()
+  return token ? { Cookie: `rishi.session_token=${token}` } : {}
+}
+
+/**
+ * Legacy User shape — kept around for renderer code that still consumes
+ * the old Clerk-style fields. Prefer `AuthUser` from `@preload/types` for
+ * new code.
+ */
 export interface User {
   id: string
   firstName?: string | null
@@ -314,13 +336,10 @@ export async function getDevBypassSecret(): Promise<string | null> {
 const WORKER_URL = 'https://rishi-worker.faridmato90.workers.dev'
 
 export async function getRealtimeClientSecret(): Promise<string> {
-  const { getAuthToken } = await import('@/modules/auth')
-  const token = await getAuthToken()
+  const authHeaders = await getAuthHeaders()
+  const headers: Record<string, string> = { ...authHeaders }
 
-  const headers: Record<string, string> = {}
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`
-  } else {
+  if (Object.keys(authHeaders).length === 0) {
     const devBypass = await api().getDevBypassSecret()
     if (devBypass) {
       headers['X-Dev-Bypass'] = devBypass
