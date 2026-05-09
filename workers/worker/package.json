@@ -14,12 +14,15 @@
     "@upstash/redis": "^1.36.0",
     "aws4fetch": "^1.0.20",
     "axios": "^1.13.2",
+    "better-auth": "^1.6.10",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.10.6",
     "openai": "^6.9.0",
+    "resend": "^6.12.3",
     "zod": "^4.1.13"
   },
   "devDependencies": {
+    "@better-auth/cli": "^1.4.21",
     "@cloudflare/workers-types": "^4.20260405.1",
     "@types/node": "^25.5.2",
     "drizzle-kit": "^0.31.0",
