@@ -48,6 +48,27 @@ export default function AccountSettingsPage() {
       </section>
 
       <section className="space-y-4 pt-8 border-t">
+        <h2 className="text-lg font-semibold">Passkeys</h2>
+        <p className="text-sm text-muted-foreground">
+          Sign in faster on this device with Touch ID, Face ID, or your security key.
+        </p>
+        <Button
+          variant="outline"
+          onClick={async () => {
+            try {
+              await authClient.passkey.addPasskey({ name: "Browser passkey" })
+              alert("Passkey saved.")
+            } catch (err: unknown) {
+              const message = err instanceof Error ? err.message : "Failed to save passkey"
+              alert(message)
+            }
+          }}
+        >
+          Add a passkey
+        </Button>
+      </section>
+
+      <section className="space-y-4 pt-8 border-t">
         <h2 className="text-lg font-semibold text-destructive">Danger zone</h2>
         <p className="text-sm text-muted-foreground">
           Permanently delete your account, library, and all sync data. This cannot be undone.

@@ -13,6 +13,7 @@
     "test:e2e:ci": "start-server-and-test 'bun run dev' http://localhost:3000/favicon.ico 'cypress run'"
   },
   "dependencies": {
+    "@better-auth/passkey": "^1.6.10",
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "1.2.2",
     "@radix-ui/react-alert-dialog": "1.1.4",

@@ -99,6 +99,20 @@ function SignInPageInner() {
       >
         Continue with Google
       </Button>
+      <Button
+        variant="outline"
+        className="w-full mt-2"
+        onClick={async () => {
+          try {
+            await authClient.signIn.passkey({ autoFill: false })
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : "Passkey sign-in failed"
+            setErrorMsg(message)
+          }
+        }}
+      >
+        Sign in with passkey
+      </Button>
     </div>
   )
 }
