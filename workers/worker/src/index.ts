@@ -10,6 +10,7 @@ import { Redis } from "@upstash/redis/cloudflare";
 import { clerkMiddleware, getAuth } from "@hono/clerk-auth";
 import { syncRoutes } from "./routes/sync";
 import { uploadRoutes } from "./routes/upload";
+import { createAuth } from "./auth";
 
 /** Constant-time string comparison to prevent timing attacks. */
 function timingSafeEqual(a: string, b: string): boolean {
@@ -57,11 +58,26 @@ const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string
 app.use(
   "*",
   cors({
-    origin: ["https://rishi.fidexa.org", "tauri://localhost", "http://tauri.localhost", "http://localhost:5173", "http://localhost:5174"],
+    origin: [
+      "https://rishi.fidexa.org",
+      "https://app.fidexa.org",
+      "tauri://localhost",
+      "http://tauri.localhost",
+      "http://localhost:3000",
+      "http://localhost:5173",
+      "http://localhost:5174",
+    ],
     allowHeaders: ["Content-Type", "Authorization", "X-Dev-Bypass"],
-    allowMethods: ["GET", "POST", "OPTIONS"],
+    allowMethods: ["GET", "POST", "OPTIONS", "DELETE"],
+    credentials: true,
   })
 );
+
+// Better Auth handles all /api/auth/* internally
+app.on(["GET", "POST"], "/api/auth/*", async (c) => {
+  const auth = createAuth(c.env);
+  return auth.handler(c.req.raw);
+});
 
 app.use("*", clerkMiddleware());
 
