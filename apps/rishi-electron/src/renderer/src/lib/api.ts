@@ -283,12 +283,6 @@ export async function cancelScan(): Promise<void> {
 }
 
 // ---- Auth ----
-export async function getAuthTokenCmd(): Promise<string | null> {
-  return api().getAuthToken()
-}
-export async function signout(): Promise<void> {
-  return api().signout()
-}
 export async function getUserFromStore(): Promise<User | null> {
   return api().getUserFromStore()
 }
@@ -317,8 +311,39 @@ export async function isDev(): Promise<boolean> {
 export async function getDevBypassSecret(): Promise<string | null> {
   return api().getDevBypassSecret()
 }
+const WORKER_URL = 'https://rishi-worker.faridmato90.workers.dev'
+
 export async function getRealtimeClientSecret(): Promise<string> {
-  return api().getRealtimeClientSecret()
+  const { getAuthToken } = await import('@/modules/auth')
+  const token = await getAuthToken()
+
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  } else {
+    const devBypass = await api().getDevBypassSecret()
+    if (devBypass) {
+      headers['X-Dev-Bypass'] = devBypass
+    } else {
+      throw new Error('Not authenticated')
+    }
+  }
+
+  const response = await fetch(`${WORKER_URL}/api/realtime/client_secrets`, {
+    method: 'GET',
+    headers
+  })
+
+  if (!response.ok) {
+    throw new Error(`Worker API responded with status ${response.status}`)
+  }
+
+  const data = (await response.json()) as { client_secret?: { value?: string } }
+  const secret = data?.client_secret?.value
+  if (!secret) {
+    throw new Error('No client_secret in worker response')
+  }
+  return secret
 }
 
 // ---- Process Job (embedding + indexing) ----

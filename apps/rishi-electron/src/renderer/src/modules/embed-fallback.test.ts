@@ -1,6 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { embedWithFallback } from './embed-fallback'
+import * as authModule from './auth'
 import type { EmbedParam } from '@/lib/api'
+
+vi.mock('./auth', async () => {
+  const actual = await vi.importActual<typeof import('./auth')>('./auth')
+  return {
+    ...actual,
+    getAuthToken: vi.fn().mockResolvedValue('test-token')
+  }
+})
 
 describe('embedWithFallback', () => {
   const sampleParams: EmbedParam[] = [
@@ -16,7 +25,7 @@ describe('embedWithFallback', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(window.electron.getAuthToken).mockResolvedValue('test-token')
+    vi.mocked(authModule.getAuthToken).mockResolvedValue('test-token')
     vi.mocked(window.electron.getDevBypassSecret).mockResolvedValue(null)
   })
 
@@ -57,7 +66,7 @@ describe('embedWithFallback', () => {
 
   it('should include auth token in server request', async () => {
     vi.mocked(window.electron.embed).mockRejectedValue(new Error('fail'))
-    vi.mocked(window.electron.getAuthToken).mockResolvedValue('my-jwt')
+    vi.mocked(authModule.getAuthToken).mockResolvedValue('my-jwt')
 
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -79,7 +88,7 @@ describe('embedWithFallback', () => {
 
   it('should use dev bypass when no auth token available', async () => {
     vi.mocked(window.electron.embed).mockRejectedValue(new Error('fail'))
-    vi.mocked(window.electron.getAuthToken).mockResolvedValue(null)
+    vi.mocked(authModule.getAuthToken).mockResolvedValue(null)
     vi.mocked(window.electron.getDevBypassSecret).mockResolvedValue('dev-secret')
 
     global.fetch = vi.fn().mockResolvedValue({
@@ -113,25 +122,6 @@ describe('embedWithFallback', () => {
   it('should throw timeout error after 30 seconds', async () => {
     vi.mocked(window.electron.embed).mockRejectedValue(new Error('fail'))
 
-    // Simulate an abort
-    global.fetch = vi.fn().mockImplementation((_url, opts) => {
-      return new Promise((_resolve, reject) => {
-        if (opts?.signal) {
-          opts.signal.addEventListener('abort', () => {
-            reject(new DOMException('aborted', 'AbortError'))
-          })
-        }
-        // Simulate the abort controller firing
-        setTimeout(() => {
-          if (opts?.signal) {
-            // The abort controller triggers via the 30s timeout in the module
-          }
-        }, 100)
-      })
-    })
-
-    // Instead of waiting 30 seconds, just verify the timeout constant is used
-    // by checking the AbortController is passed in the signal
     const fetchSpy = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ embeddings: [new Array(384).fill(0)] })

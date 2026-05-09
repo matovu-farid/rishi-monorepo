@@ -62,29 +62,10 @@ export interface ElectronAPI {
   scanForBooks: (mode: string) => Promise<number>
   cancelScan: () => Promise<void>
 
-  // Auth
-  getAuthToken: () => Promise<string | null>
-  saveAuthToken: (token: string, expiresAt: number) => Promise<void>
+  // Auth (cached user profile only — Clerk owns the JWT in the renderer)
   clearAuth: () => Promise<void>
   getUserFromStore: () => Promise<User | null>
   saveUserToStore: (user: User) => Promise<void>
-
-  // Deep-link auth (PKCE)
-  getOAuthState: () => Promise<{ state: string; codeChallenge: string }>
-  completeAuth: (state: string) => Promise<User>
-  checkAuthStatus: (
-    state: string
-  ) => Promise<{ status?: string; retryCount?: number; createdAt?: number; error?: string }>
-  signout: () => Promise<void>
-  onDeepLink: (callback: (url: string) => void) => () => void
-
-  // Token refresh & user fetch
-  refreshAuthToken: () => Promise<number | null>
-  getUser: (userId: string) => Promise<User | null>
-
-  // Auth debug
-  logAuthDebug: (state: string, step: string, data?: string, error?: string) => Promise<void>
-  getAuthDebug: (state: string) => Promise<unknown[]>
 
   // Debug
   dumpError: (error: ErrorDump) => Promise<void>
@@ -98,7 +79,6 @@ export interface ElectronAPI {
   // Utilities
   isDev: () => Promise<boolean>
   getDevBypassSecret: () => Promise<string | null>
-  getRealtimeClientSecret: () => Promise<string>
   showOpenDialog: (options: unknown) => Promise<{ filePaths: string[] }>
   openExternal: (url: string) => Promise<void>
   getOsInfo: () => Promise<{ platform: string; arch: string; version: string }>

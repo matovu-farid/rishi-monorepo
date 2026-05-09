@@ -72,31 +72,10 @@ const electronAPI: ElectronAPI = {
   scanForBooks: (mode: string) => ipcRenderer.invoke('scanner:scan', mode),
   cancelScan: () => ipcRenderer.invoke('scanner:cancel'),
 
-  // Auth
-  getAuthToken: () => ipcRenderer.invoke('auth:getToken'),
-  saveAuthToken: (token: string, expiresAt: number) =>
-    ipcRenderer.invoke('auth:saveToken', token, expiresAt),
+  // Auth (cached user profile only — token comes from Clerk in renderer)
   clearAuth: () => ipcRenderer.invoke('auth:clear'),
   getUserFromStore: () => ipcRenderer.invoke('auth:getUserFromStore'),
   saveUserToStore: (user: unknown) => ipcRenderer.invoke('auth:saveUserToStore', user),
-
-  // Deep-link auth (PKCE)
-  getOAuthState: () => ipcRenderer.invoke('auth:getOAuthState'),
-  completeAuth: (state: string) => ipcRenderer.invoke('auth:completeAuth', state),
-  checkAuthStatus: (state: string) => ipcRenderer.invoke('auth:checkAuthStatus', state),
-  signout: () => ipcRenderer.invoke('auth:signout'),
-  refreshAuthToken: () => ipcRenderer.invoke('auth:refreshToken'),
-  getUser: (userId: string) => ipcRenderer.invoke('auth:getUser', userId),
-  logAuthDebug: (state: string, step: string, data?: string, error?: string) =>
-    ipcRenderer.invoke('auth:logDebug', state, step, data, error),
-  getAuthDebug: (state: string) => ipcRenderer.invoke('auth:getDebug', state),
-  onDeepLink: (callback: (url: string) => void) => {
-    const handler = (_event: unknown, url: string) => callback(url)
-    ipcRenderer.on('deep-link', handler)
-    return () => {
-      ipcRenderer.removeListener('deep-link', handler)
-    }
-  },
 
   // Debug/error
   dumpError: (error: unknown) => ipcRenderer.invoke('debug:dumpError', error),
@@ -110,7 +89,6 @@ const electronAPI: ElectronAPI = {
   // Utilities
   isDev: () => ipcRenderer.invoke('util:isDev'),
   getDevBypassSecret: () => ipcRenderer.invoke('util:getDevBypassSecret'),
-  getRealtimeClientSecret: () => ipcRenderer.invoke('util:getRealtimeClientSecret'),
   showOpenDialog: (options: unknown) => ipcRenderer.invoke('dialog:showOpen', options),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   getOsInfo: () => ipcRenderer.invoke('util:getOsInfo'),

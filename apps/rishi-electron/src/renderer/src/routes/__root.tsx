@@ -8,6 +8,7 @@ import { SyncStatusIndicator } from '../components/SyncStatusIndicator'
 import { WelcomeModal } from '@/components/auth/WelcomeModal'
 import { SignInBanner } from '@/components/auth/SignInBanner'
 import { ClerkAuthSync } from '@/components/auth/ClerkAuth'
+import SignInModal from '@/components/auth/SignInModal'
 import { TourProvider } from '@/components/tutorial/TourProvider'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { useHydrateAuth } from '@/hooks/useHydrateAuth'
@@ -57,6 +58,7 @@ function RootComponent(): JSX.Element {
       <ErrorBoundary>
         <Outlet />
       </ErrorBoundary>
+      <SignInModal />
       <WelcomeModal />
       <SignInBanner />
       <TourProvider />

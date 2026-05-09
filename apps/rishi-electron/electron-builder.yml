@@ -6,10 +6,6 @@ directories:
 files:
   - out/**
   - package.json
-protocols:
-  - name: Rishi Electron
-    schemes:
-      - rishi-electron
 asarUnpack:
   - resources/**
   - node_modules/better-sqlite3/**

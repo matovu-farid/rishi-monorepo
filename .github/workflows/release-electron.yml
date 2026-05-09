@@ -38,11 +38,11 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            build_cmd: pnpm run build && pnpm exec electron-builder --mac --x64 --arm64
+            build_cmd: pnpm run build:mac
           - os: ubuntu-22.04
-            build_cmd: pnpm run build && pnpm exec electron-builder --linux
+            build_cmd: pnpm run build:linux
           - os: windows-latest
-            build_cmd: pnpm run build && pnpm exec electron-builder --win
+            build_cmd: pnpm run build:win
 
     runs-on: ${{ matrix.os }}
     defaults:

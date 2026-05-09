@@ -12,6 +12,7 @@ interface AuthState {
   welcomeSeen: boolean
   bannerDismissed: boolean
   devMode: boolean
+  signInOpen: boolean
 
   // Actions
   setUser: (user: User | null) => void
@@ -22,6 +23,8 @@ interface AuthState {
   dismissWelcome: () => void
   setWelcomeSeen: () => void
   setAuthHydrated: (value: boolean) => void
+  openSignIn: () => void
+  closeSignIn: () => void
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -33,11 +36,14 @@ export const useAuthStore = create<AuthState>()(
       welcomeSeen: false,
       bannerDismissed: false,
       devMode: false,
+      signInOpen: false,
 
       setUser: (user) => set({ user }),
       setSigningIn: (value) => set({ signingIn: value }),
       setDevMode: (value) => set({ devMode: value }),
       setAuthHydrated: (value) => set({ authHydrated: value }),
+      openSignIn: () => set({ signInOpen: true }),
+      closeSignIn: () => set({ signInOpen: false }),
 
       hydrateAuth: () => {
         try {

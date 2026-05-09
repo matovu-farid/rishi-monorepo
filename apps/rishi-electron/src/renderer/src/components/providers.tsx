@@ -29,7 +29,22 @@ function ClerkWrapper({ children }: PropsWithChildren) {
   if (!isClerkUsable()) {
     return <>{children}</>
   }
-  return <ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY}>{children}</ClerkProvider>
+  // The renderer runs on a localhost HTTP origin in both dev (vite, fixed
+  // port) and production (a tiny Node http server in the main process,
+  // ephemeral port). Tell Clerk's client-side redirect validator to trust
+  // the current origin regardless of port — this is a no-op for OAuth
+  // server-side validation (which lives in the Clerk Dashboard) but
+  // suppresses the SDK's "unsafe redirect" warnings during the flow.
+  const currentOrigin =
+    typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1'
+  return (
+    <ClerkProvider
+      publishableKey={CLERK_PUBLISHABLE_KEY}
+      allowedRedirectOrigins={[currentOrigin, /^http:\/\/127\.0\.0\.1(:\d+)?$/, /^http:\/\/localhost(:\d+)?$/]}
+    >
+      {children}
+    </ClerkProvider>
+  )
 }
 
 function Providers({ children }: PropsWithChildren): JSX.Element {

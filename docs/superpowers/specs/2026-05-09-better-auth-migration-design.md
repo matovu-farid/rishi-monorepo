@@ -148,6 +148,10 @@ export function createAuth(env: Env) {
         clientSecret: env.GOOGLE_CLIENT_SECRET,
       },
     },
+    user: {
+      // Enables auth.api.deleteUser() — required for Apple guideline 5.1.1(v)
+      deleteUser: { enabled: true },
+    },
     plugins: [
       magicLink({
         sendMagicLink: async ({ email, url }) => {

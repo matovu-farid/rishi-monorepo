@@ -1,13 +1,12 @@
-import { Loader2, Sparkles } from 'lucide-react'
+import { Sparkles } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
-import { startSignInFlow } from '@/modules/auth'
 
 export function WelcomeModal() {
   const welcomeSeen = useAuthStore((s) => s.welcomeSeen)
   const authHydrated = useAuthStore((s) => s.authHydrated)
   const user = useAuthStore((s) => s.user)
-  const signingIn = useAuthStore((s) => s.signingIn)
   const dismissWelcome = useAuthStore((s) => s.dismissWelcome)
+  const openSignIn = useAuthStore((s) => s.openSignIn)
 
   if (welcomeSeen || !authHydrated || user) return null
 
@@ -25,10 +24,8 @@ export function WelcomeModal() {
         <div className="flex flex-col gap-3">
           <button
             className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-            disabled={signingIn}
-            onClick={() => startSignInFlow()}
+            onClick={openSignIn}
           >
-            {signingIn ? <Loader2 size={16} className="animate-spin" /> : null}
             Sign in
           </button>
           <button

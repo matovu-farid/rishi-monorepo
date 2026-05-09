@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Rishi</title>
+    <!--
+      Warm up the TCP/TLS connection to Clerk's Frontend API and pre-resolve
+      Google's OAuth host while the renderer is still booting. This shaves
+      noticeable latency off the first <SignIn /> render and the first
+      "Continue with Google" click.
+    -->
+    <link rel="preconnect" href="https://clerk.fidexa.org" crossorigin />
+    <link rel="preconnect" href="https://img.clerk.com" crossorigin />
+    <link rel="dns-prefetch" href="https://clerk.fidexa.org" />
+    <link rel="dns-prefetch" href="https://accounts.google.com" />
+    <link rel="dns-prefetch" href="https://img.clerk.com" />
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self' local-file:;

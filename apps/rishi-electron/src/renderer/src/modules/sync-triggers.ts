@@ -46,25 +46,23 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
       'Content-Type': 'application/json'
     }
 
-    if (token === 'dev-placeholder-token') {
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    } else {
       const secret = await window.electron.getDevBypassSecret()
       if (secret) {
         headers['X-Dev-Bypass'] = secret
       } else {
-        // No bypass secret configured -- skip the request silently
-        return new Response(JSON.stringify({ error: 'Not authenticated (dev)' }), {
+        return new Response(JSON.stringify({ error: 'Not authenticated' }), {
           status: 401,
           headers: { 'Content-Type': 'application/json' }
         })
       }
-    } else if (token) {
-      headers['Authorization'] = `Bearer ${token}`
     }
 
     const syncController = new AbortController()
     const syncTimeout = setTimeout(() => syncController.abort(), 30_000)
 
-    // If caller provided a signal, forward its abort to our controller
     if (init?.signal) {
       init.signal.addEventListener('abort', () => syncController.abort(), { once: true })
     }
@@ -89,8 +87,8 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = await getAuthToken()
   const response = await makeRequest(token)
 
-  // Retry once on 401 with a fresh token (may have expired during the request)
-  if (response.status === 401 && token !== 'dev-placeholder-token') {
+  // Retry once on 401 with a freshly-minted token in case the previous one expired mid-flight.
+  if (response.status === 401 && token) {
     const freshToken = await getAuthToken()
     if (freshToken && freshToken !== token) {
       return makeRequest(freshToken)
@@ -109,12 +107,7 @@ export async function triggerSync(): Promise<void> {
   notifyListeners()
 
   try {
-    // Proactive token refresh before sync — matches Tauri behavior
-    try {
-      await window.electron.refreshAuthToken()
-    } catch {
-      /* best-effort */
-    }
+    // Clerk handles token refresh automatically via getToken().
     await engine.sync()
     syncStatus = 'synced'
     lastSyncAt = Date.now()

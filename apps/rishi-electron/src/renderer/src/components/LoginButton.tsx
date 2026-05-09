@@ -1,11 +1,14 @@
 import { LogIn, LogOut } from 'lucide-react'
+import { useClerk } from '@clerk/clerk-react'
 import { Button } from './ui/Button'
 import { useAuthStore } from '@/stores/authStore'
-import { startSignInFlow } from '@/modules/auth'
+import { clearAuth } from '@/modules/auth'
 
 export function LoginButton() {
   const user = useAuthStore((s) => s.user)
   const setUser = useAuthStore((s) => s.setUser)
+  const openSignIn = useAuthStore((s) => s.openSignIn)
+  const { signOut } = useClerk()
 
   if (user) {
     return (
@@ -28,7 +31,8 @@ export function LoginButton() {
           startIcon={<LogOut size={20} />}
           onClick={async () => {
             setUser(null)
-            await window.electron.signout()
+            await signOut()
+            await clearAuth()
           }}
         >
           Logout
@@ -42,7 +46,7 @@ export function LoginButton() {
       variant="ghost"
       className="cursor-pointer"
       startIcon={<LogIn size={20} />}
-      onClick={() => startSignInFlow()}
+      onClick={openSignIn}
     >
       Login
     </Button>
