@@ -7,6 +7,7 @@ import { startRendererServer, stopRendererServer } from './utils/rendererServer.
 import { registerAllIpcHandlers } from './ipc/index.js'
 import { initDatabase } from './database/index.js'
 import { initVectorDb } from './vectordb/index.js'
+import { registerAuthIpc, handleUrl, findDeepLinkInArgv, authService } from './auth/index.js'
 
 // Initialize Sentry as early as possible so startup crashes are captured.
 initMainSentry()
@@ -106,56 +107,14 @@ function createWindow(): void {
   if (mainWindow) attachDebugInstrumentation(mainWindow, 'main')
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    const url = details.url
-
-    // Clerk OAuth (Google, GitHub, Apple, etc.) uses popups whose URLs route
-    // through Clerk's Frontend API host, then to the OAuth provider, then
-    // back. These MUST open inside the app (Apple App Store rejects sign-in
-    // flows that leave for the system browser). Returning `allow` opens a
-    // child BrowserWindow that shares the renderer's session.
-    //
-    // We match both the dev tenant (clerk.accounts.dev) and the prod
-    // tenant (clerk.fidexa.org), plus the major identity providers.
+    // No more in-app OAuth popups — auth runs via system browser + deep-link.
+    // Anything that opens a window goes to the system browser.
     if (
-      url.includes('clerk.accounts.dev') ||
-      url.includes('clerk.fidexa.org') ||
-      url.includes('accounts.google.com') ||
-      url.includes('github.com/login') ||
-      url.includes('appleid.apple.com') ||
-      url.includes('facebook.com/login') ||
-      url.includes('facebook.com/v') // Facebook OAuth versioned endpoints
+      details.url.startsWith('http:') ||
+      details.url.startsWith('https:') ||
+      details.url.startsWith('mailto:')
     ) {
-      return {
-        action: 'allow',
-        // Larger size so Google's passkey/Touch-ID prompt isn't clipped.
-        overrideBrowserWindowOptions: {
-          width: 600,
-          height: 800,
-          autoHideMenuBar: true,
-          // Child windows do NOT inherit parent webPreferences (Electron 14+).
-          // We deliberately avoid `sandbox: true` here: it places the renderer
-          // inside Chromium's seatbelt sandbox, which on macOS prevents the
-          // platform-authenticator delegate from raising a Touch ID / passkey
-          // prompt during WebAuthn ceremonies. This caused Google OAuth to
-          // hang at "Verifying" with no system dialog appearing.
-          //
-          // We DO turn web security back on (parent has it disabled for
-          // epub.js srcdoc iframes, which is irrelevant here) so cross-origin
-          // OAuth flows behave like a normal browser. The popup has no
-          // preload and no node integration, so this is safe.
-          webPreferences: {
-            sandbox: false,
-            contextIsolation: true,
-            nodeIntegration: false,
-            webSecurity: true
-          }
-        }
-      }
-    }
-
-    // All other outbound links go to the system browser as usual.
-    if (url.startsWith('http:') || url.startsWith('https:') || url.startsWith('mailto:')) {
-      shell.openExternal(url)
+      shell.openExternal(details.url)
     }
     return { action: 'deny' }
   })
@@ -190,7 +149,16 @@ const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
+    // Windows / Linux: deep-link URLs arrive as command-line args
+    const deepLinkUrl = findDeepLinkInArgv(argv)
+    if (deepLinkUrl) {
+      handleUrl(
+        deepLinkUrl,
+        (url) => void authService.handleCallback(url),
+        () => mainWindow,
+      )
+    }
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
@@ -214,6 +182,14 @@ app.whenReady().then(async () => {
   registerAllIpcHandlers()
 
   createWindow()
+
+  registerAuthIpc(() => mainWindow)
+
+  // Windows/Linux: app may have been launched FROM a deep-link (cold start)
+  const initialDeepLink = findDeepLinkInArgv(process.argv)
+  if (initialDeepLink) {
+    void authService.handleCallback(initialDeepLink)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
