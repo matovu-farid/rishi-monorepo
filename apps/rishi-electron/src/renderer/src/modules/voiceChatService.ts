@@ -1,9 +1,9 @@
 import type { RealtimeSession } from '@openai/agents/realtime'
-import { getOrFetchKey, prefetchRealtimeKey } from './realtime'
+import { prefetchRealtimeKey } from './realtime'
 import { buildRealtimeAgent } from './buildRealtimeAgent'
 import { captureError } from '@/utils/sentry'
 
-export type VoiceChatState = 'idle' | 'connecting' | 'active' | 'paused' | 'disposing'
+export type VoiceChatState = 'idle' | 'connecting' | 'active' | 'paused'
 
 export interface VoiceChatEvents {
   onStateChange: (state: VoiceChatState) => void
@@ -101,12 +101,15 @@ export const voiceChatService = {
       session.interrupt()
       session.mute(true)
       if (audioElement) audioElement.muted = true
+      setState('paused')
+      listeners.onChatStatusChange?.('idle')
+      scheduleIdleTimer()
     } catch (err) {
       captureError(err, { operation: 'voiceChatService', step: 'deactivate' })
+      // We can't trust the session is actually muted — full dispose is safer
+      // than leaving a hot mic with the service in a 'paused' state.
+      this.dispose()
     }
-    setState('paused')
-    listeners.onChatStatusChange?.('idle')
-    scheduleIdleTimer()
   },
 
   dispose() {
@@ -125,7 +128,11 @@ export const voiceChatService = {
       mediaStream.getTracks().forEach((t) => t.stop())
       mediaStream = null
     }
-    audioElement = null
+    if (audioElement) {
+      audioElement.pause()
+      audioElement.srcObject = null
+      audioElement = null
+    }
     setState('idle')
     listeners.onChatStatusChange?.('idle')
   },
@@ -140,12 +147,10 @@ export const voiceChatService = {
     listeners = {}
     state = 'idle'
   },
+  // Bypasses setState() intentionally — test setup should not fire onStateChange listeners
   _setSessionForTests(fakeSession: RealtimeSession, bookId: number) {
     session = fakeSession
     currentBookId = bookId
     state = 'active'
   }
 }
-
-// Re-export for convenience
-export { getOrFetchKey }

@@ -144,4 +144,21 @@ describe('voiceChatService', () => {
     voiceChatService.prewarmKey()
     expect(prefetchRealtimeKey).toHaveBeenCalledTimes(1)
   })
+
+  it('deactivate falls back to dispose when interrupt throws', () => {
+    const throwingInterrupt = vi.fn(() => {
+      throw new Error('interrupt failed')
+    })
+    voiceChatService._setSessionForTests({
+      interrupt: throwingInterrupt,
+      mute: mockMute,
+      close: mockClose
+    } as never, 1)
+
+    voiceChatService.deactivate()
+
+    expect(throwingInterrupt).toHaveBeenCalledTimes(1)
+    expect(mockClose).toHaveBeenCalledTimes(1) // dispose() ran
+    expect(voiceChatService.getState()).toBe('idle') // not 'paused'
+  })
 })
