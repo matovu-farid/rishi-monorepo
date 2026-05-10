@@ -7,6 +7,7 @@ export interface ElectronAPI {
   updateBookCover: (bookId: number, cover: number[]) => Promise<void>
   updateBookLocation: (bookId: number, location: string) => Promise<void>
   hasSavedEpubData: (bookId: number) => Promise<boolean>
+  getBookOutline: (bookId: number) => Promise<BookOutline>
 
   // Page/chunk data
   savePageDataMany: (pageData: ChunkDataInsertable[]) => Promise<void>
@@ -205,6 +206,12 @@ export interface AuthApi {
 
 export interface Api {
   auth: AuthApi
+}
+
+export interface BookOutline {
+  title: string
+  author: string | null
+  chapters: string[]
 }
 
 export interface Book {

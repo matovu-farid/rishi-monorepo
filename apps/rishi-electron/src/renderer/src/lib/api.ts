@@ -189,6 +189,16 @@ export async function hasSavedEpubData(params: { bookId: number }): Promise<bool
   return api().hasSavedEpubData(params.bookId)
 }
 
+export interface BookOutline {
+  title: string
+  author: string | null
+  chapters: string[]
+}
+
+export async function getBookOutline(bookId: number): Promise<BookOutline> {
+  return api().getBookOutline(bookId)
+}
+
 // ---- Chunks/Page Data ----
 export async function savePageDataMany(params: { pageData: ChunkDataInsertable[] }): Promise<void> {
   return api().savePageDataMany(params.pageData)

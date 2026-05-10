@@ -12,6 +12,7 @@ const electronAPI: ElectronAPI = {
   updateBookLocation: (bookId: number, location: string) =>
     ipcRenderer.invoke('books:updateLocation', bookId, location),
   hasSavedEpubData: (bookId: number) => ipcRenderer.invoke('books:hasSavedEpubData', bookId),
+  getBookOutline: (bookId: number) => ipcRenderer.invoke('books:getOutline', bookId),
 
   // Page/chunk data
   savePageDataMany: (pageData: unknown[]) => ipcRenderer.invoke('chunks:saveMany', pageData),
