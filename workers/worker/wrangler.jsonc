@@ -34,5 +34,8 @@
   "vars": {
     "PUBLIC_API_URL": "https://api.fidexa.org",
     "PUBLIC_WEB_URL": "https://app.fidexa.org"
-  }
+  },
+  "routes": [
+    { "pattern": "api.fidexa.org", "custom_domain": true }
+  ]
 }
