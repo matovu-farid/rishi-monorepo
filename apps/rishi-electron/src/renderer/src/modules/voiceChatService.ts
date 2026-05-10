@@ -20,6 +20,7 @@ const IDLE_TIMEOUT_MS = 15 * 60 * 1000
 // Module-level singleton state
 let state: VoiceChatState = 'idle'
 let session: RealtimeSession | null = null
+let sessionCleanup: (() => void) | null = null
 let currentBookId: number | null = null
 let idleTimer: ReturnType<typeof setTimeout> | null = null
 let mediaStream: MediaStream | null = null
@@ -125,6 +126,8 @@ export const voiceChatService = {
       })
 
       // 5. Create the session
+      // apiKey is supplied at connect() time via the ephemeral key; the constructor
+      // arg is required by the type but ignored when connect() provides one.
       const newSession = new RealtimeSession(agent, { transport, apiKey: '' })
 
       // 6. Wire status events (forwarded to chat-status listener)
@@ -157,6 +160,17 @@ export const voiceChatService = {
       newSession.on('agent_tool_start', onToolStart)
       newSession.on('agent_tool_end', onToolEnd)
       newSession.on('error', onError)
+
+      // Teardown closure: removes all listeners on dispose
+      sessionCleanup = () => {
+        newSession.off('agent_start', onAgentStart)
+        newSession.off('audio_start', onAudioStart)
+        newSession.off('audio_stopped', onAudioStopped)
+        newSession.off('agent_end', onAgentEnd)
+        newSession.off('agent_tool_start', onToolStart)
+        newSession.off('agent_tool_end', onToolEnd)
+        newSession.off('error', onError)
+      }
 
       // 7. Fetch ephemeral key + connect
       const apiKey = await getOrFetchKey()
@@ -194,6 +208,10 @@ export const voiceChatService = {
 
   dispose() {
     clearIdleTimer()
+    if (sessionCleanup) {
+      sessionCleanup()
+      sessionCleanup = null
+    }
     const s = session
     session = null
     currentBookId = null
@@ -221,6 +239,7 @@ export const voiceChatService = {
   _resetForTests() {
     clearIdleTimer()
     session = null
+    sessionCleanup = null
     currentBookId = null
     mediaStream = null
     audioElement = null

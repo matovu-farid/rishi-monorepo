@@ -232,4 +232,14 @@ describe('voiceChatService cold path', () => {
     voiceChatService.dispose()
     expect(stopSpy).toHaveBeenCalledTimes(1)
   })
+
+  it('removes session event listeners on dispose', async () => {
+    await voiceChatService.activate(7, 'x')
+    // 7 .on() calls during cold-path activation
+    expect(mockSessionOn).toHaveBeenCalledTimes(7)
+
+    voiceChatService.dispose()
+    // 7 .off() calls during dispose
+    expect(mockSessionOff).toHaveBeenCalledTimes(7)
+  })
 })
