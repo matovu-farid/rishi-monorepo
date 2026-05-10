@@ -375,18 +375,25 @@ export function _getBookOutlineWithDb(
   if (!bookRow) {
     return { title: '', author: null, chapters: [] }
   }
-  const chapterRows = sqlite
-    .prepare<[number], { chapter: string }>(
-      `SELECT chapter FROM chunk_data
-       WHERE book_id = ? AND chapter IS NOT NULL AND chapter != ''
-       GROUP BY chapter
-       ORDER BY MIN(page_number)`
-    )
-    .all(bookId)
+  let chapters: string[] = []
+  try {
+    const chapterRows = sqlite
+      .prepare<[number], { chapter: string }>(
+        `SELECT chapter FROM chunk_data
+         WHERE book_id = ? AND chapter IS NOT NULL AND chapter != ''
+         GROUP BY chapter
+         ORDER BY MIN(page_number)`
+      )
+      .all(bookId)
+    chapters = chapterRows.map((r) => r.chapter)
+  } catch {
+    // chapter column doesn't exist in this DB version — return empty chapters.
+    // Outline is now primarily populated via epubjs TOC in the renderer.
+  }
   return {
     title: bookRow.title,
     author: bookRow.author ?? null,
-    chapters: chapterRows.map((r) => r.chapter)
+    chapters
   }
 }
 

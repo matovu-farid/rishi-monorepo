@@ -38,6 +38,8 @@ import { triggerSyncOnWrite } from '@/modules/sync-triggers'
 import { getHighlightHex } from '@/types/highlight'
 import type { HighlightColor } from '@/types/highlight'
 import type { Contents } from 'epubjs'
+import type { NavItem } from 'epubjs'
+import { tocToChapters } from './tocToChapters'
 import { SelectionPopover } from '@/components/highlights/SelectionPopover'
 import { HighlightsPanel } from '@/components/highlights/HighlightsPanel'
 import { ReaderSettings } from '@/components/reader/ReaderSettings'
@@ -234,10 +236,22 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     return Promise.all(paragraphs.map((paragraph) => removeHighlight(r, paragraph.cfiRange)))
   }
   const setBookId = useEpubStore((s) => s.setBookId)
+  const setBookOutline = useEpubStore((s) => s.setBookOutline)
   useEffect(() => {
     setBookId(book.id.toString())
     usePageTracker.getState().initBook(book.id.toString())
   }, [book.id])
+
+  const handleTocChange = useCallback(
+    (toc: NavItem[]) => {
+      setBookOutline({
+        title: book.title,
+        author: book.author ?? null,
+        chapters: tocToChapters(toc)
+      })
+    },
+    [book.title, book.author, setBookOutline]
+  )
 
   // Manage epubStore subscription lifecycle — init on mount, cleanup on unmount.
   // Use a component-local ref so rapid navigation doesn't cause cleanup to wipe
@@ -536,6 +550,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           onNext={() => pageCurl.autoTurn('right')}
           onPrev={() => pageCurl.autoTurn('left')}
           hidePrev={isFirstPage}
+          tocChanged={handleTocChange}
           loadingView={
             <div className="w-full h-screen grid items-center">
               <Loader />
