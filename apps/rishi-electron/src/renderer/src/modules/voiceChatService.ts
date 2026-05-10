@@ -35,6 +35,8 @@ let audioElement: HTMLAudioElement | null = null
 let listeners: Partial<VoiceChatEvents> = {}
 let lastContextFingerprint: string | null = null
 let hasUsedVoiceInSession = false
+let activateInFlight: Promise<void> | null = null
+let preconnectIntent = false
 
 function setState(next: VoiceChatState) {
   if (state === next) return
@@ -82,11 +84,15 @@ export const voiceChatService = {
    */
   async preconnect(bookId: number, ctx: VoiceChatContext): Promise<void> {
     if (!hasUsedVoiceInSession) return
-    if (session && currentBookId === bookId) return // Already connected to this book
+    if (session && currentBookId === bookId) return
+    if (activateInFlight) return // Another activate already in progress
+    preconnectIntent = true
     try {
-      await this.activate(bookId, ctx)
-      // Immediately mute — the session is hot but the user hasn't clicked yet
-      if (session) {
+      await this.activate(bookId, ctx, { fromPreconnect: true })
+      // Only mute if the user did NOT click during our activate.
+      // If preconnectIntent was cleared (by a user-initiated activate),
+      // skip the mute so the user sees 'active' as they expect.
+      if (preconnectIntent && session) {
         session.interrupt()
         session.mute(true)
         if (audioElement) audioElement.muted = true
@@ -95,6 +101,8 @@ export const voiceChatService = {
     } catch (err) {
       captureError(err, { operation: 'voiceChatService', step: 'preconnect' })
       // Swallow — preconnect is best-effort
+    } finally {
+      preconnectIntent = false
     }
   },
 
@@ -104,7 +112,29 @@ export const voiceChatService = {
    * - Subsequent call on same book: updateAgent + unmute (near-instant).
    * - Call on different book: dispose old session, then full setup for new book.
    */
-  async activate(bookId: number, ctx: VoiceChatContext): Promise<void> {
+  async activate(
+    bookId: number,
+    ctx: VoiceChatContext,
+    opts: { fromPreconnect?: boolean } = {}
+  ): Promise<void> {
+    // User-initiated activate cancels any in-flight preconnect intent
+    if (!opts.fromPreconnect) {
+      preconnectIntent = false
+    }
+    // In-flight guard: if activate is already running, await it instead of
+    // starting a second cold path (would leak WebRTC + session resources).
+    if (activateInFlight) {
+      return activateInFlight
+    }
+    activateInFlight = this._doActivate(bookId, ctx)
+    try {
+      await activateInFlight
+    } finally {
+      activateInFlight = null
+    }
+  },
+
+  async _doActivate(bookId: number, ctx: VoiceChatContext): Promise<void> {
     clearIdleTimer()
 
     // Book switched while a session is alive — fully dispose first
@@ -308,6 +338,8 @@ export const voiceChatService = {
     isAgentSpeaking = false
     lastContextFingerprint = null
     hasUsedVoiceInSession = false
+    activateInFlight = null
+    preconnectIntent = false
   },
   // Bypasses setState() intentionally — test setup should not fire onStateChange listeners
   _setSessionForTests(fakeSession: RealtimeSession, bookId: number) {

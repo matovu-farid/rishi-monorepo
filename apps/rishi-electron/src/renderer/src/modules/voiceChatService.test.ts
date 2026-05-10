@@ -337,4 +337,53 @@ describe('voiceChatService cold path', () => {
     await voiceChatService.activate(7, { pageText: 'x' })
     expect(voiceChatService._hasUsedVoiceInSession()).toBe(true)
   })
+
+  it('preconnect does NOT mute when user clicks during preconnect (warm path takes over)', async () => {
+    // First activation establishes hasUsedVoiceInSession + first session
+    await voiceChatService.activate(7, { pageText: 'first' })
+    voiceChatService.dispose()
+
+    // Now simulate: preconnect starts, user clicks during the await
+    const preconnectPromise = voiceChatService.preconnect(8, { pageText: 'preconnect' })
+    // Before preconnect's activate resolves, user click triggers activate
+    const userClickPromise = voiceChatService.activate(8, { pageText: 'preconnect' })
+
+    await Promise.all([preconnectPromise, userClickPromise])
+
+    // Session should NOT be muted — user expects to be active
+    expect(voiceChatService.getState()).toBe('active')
+    // mute(true) should NOT have been called after the activate's mute(false)
+    const lastMuteCall = mockMute.mock.calls[mockMute.mock.calls.length - 1]
+    expect(lastMuteCall).toEqual([false])
+  })
+
+  it('concurrent activate calls share the same in-flight promise (no resource leak)', async () => {
+    voiceChatService._resetForTests()
+    mockConnect.mockClear()
+
+    // Fire two activates concurrently
+    const [r1, r2] = await Promise.all([
+      voiceChatService.activate(9, { pageText: 'a' }),
+      voiceChatService.activate(9, { pageText: 'a' })
+    ])
+
+    // Only ONE cold path should have run — only one connect() call
+    expect(mockConnect).toHaveBeenCalledTimes(1)
+    expect(r1).toBeUndefined()
+    expect(r2).toBeUndefined()
+  })
+
+  it('preconnect followed by user click ends in active state via warm path', async () => {
+    // Set up: use voice once to set the flag
+    await voiceChatService.activate(7, { pageText: 'first' })
+    voiceChatService.dispose()
+
+    // Preconnect leaves the service in 'paused'
+    await voiceChatService.preconnect(8, { pageText: 'preconnect' })
+    expect(voiceChatService.getState()).toBe('paused')
+
+    // User clicks — activate runs warm path (session exists, same bookId)
+    await voiceChatService.activate(8, { pageText: 'preconnect' })
+    expect(voiceChatService.getState()).toBe('active')
+  })
 })
