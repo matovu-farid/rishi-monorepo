@@ -242,4 +242,21 @@ describe('voiceChatService cold path', () => {
     // 7 .off() calls during dispose
     expect(mockSessionOff).toHaveBeenCalledTimes(7)
   })
+
+  it('plays ready chime only on first agent_start', async () => {
+    const { playReadyChime } = await import('@/modules/readyChime')
+    await voiceChatService.activate(7, 'x')
+
+    // Find the registered onAgentStart handler from the mockSessionOn calls
+    const agentStartCall = mockSessionOn.mock.calls.find((c) => c[0] === 'agent_start')
+    expect(agentStartCall).toBeDefined()
+    const onAgentStart = agentStartCall![1] as () => void
+
+    onAgentStart()
+    expect(playReadyChime).toHaveBeenCalledTimes(1)
+
+    onAgentStart()
+    onAgentStart()
+    expect(playReadyChime).toHaveBeenCalledTimes(1) // still only once
+  })
 })

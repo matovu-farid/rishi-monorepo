@@ -3,7 +3,6 @@ import { OpenAIRealtimeWebRTC } from '@openai/agents-realtime'
 import { getOrFetchKey, prefetchRealtimeKey } from './realtime'
 import { buildRealtimeAgent } from './buildRealtimeAgent'
 import { captureError } from '@/utils/sentry'
-import { useChatStore } from '@/stores/chatStore'
 import { playReadyChime } from '@/modules/readyChime'
 import { startThinkingSound, stopThinkingSound } from '@/modules/thinkingSound'
 
@@ -18,6 +17,8 @@ export interface VoiceChatEvents {
 const IDLE_TIMEOUT_MS = 15 * 60 * 1000
 
 // Module-level singleton state
+let hasFiredReadyChime = false
+let isAgentSpeaking = false
 let state: VoiceChatState = 'idle'
 let session: RealtimeSession | null = null
 let sessionCleanup: (() => void) | null = null
@@ -135,15 +136,24 @@ export const voiceChatService = {
         listeners.onChatStatusChange?.(next)
 
       const onAgentStart = () => {
-        if (useChatStore.getState().chatStatus === 'connecting') {
+        if (!hasFiredReadyChime) {
+          hasFiredReadyChime = true
           playReadyChime()
         }
         status('thinking')
       }
-      const onAudioStart = () => status('speaking')
-      const onAudioStopped = () => status('idle')
+      const onAudioStart = () => {
+        isAgentSpeaking = true
+        status('speaking')
+      }
+      const onAudioStopped = () => {
+        isAgentSpeaking = false
+        status('idle')
+      }
       const onAgentEnd = () => {
-        if (useChatStore.getState().chatStatus === 'thinking') status('idle')
+        // Only transition to idle if audio isn't currently playing
+        // (audio_start may follow agent_end with a small lag)
+        if (!isAgentSpeaking) status('idle')
       }
       const onToolStart = () => startThinkingSound()
       const onToolEnd = () => stopThinkingSound()
@@ -190,7 +200,7 @@ export const voiceChatService = {
   },
 
   deactivate() {
-    if (!session) return
+    if (state !== 'active') return
     try {
       session.interrupt()
       session.mute(true)
@@ -233,6 +243,8 @@ export const voiceChatService = {
     }
     setState('idle')
     listeners.onChatStatusChange?.('idle')
+    hasFiredReadyChime = false
+    isAgentSpeaking = false
   },
 
   // --- test hooks ---
@@ -245,6 +257,8 @@ export const voiceChatService = {
     audioElement = null
     listeners = {}
     state = 'idle'
+    hasFiredReadyChime = false
+    isAgentSpeaking = false
   },
   // Bypasses setState() intentionally — test setup should not fire onStateChange listeners
   _setSessionForTests(fakeSession: RealtimeSession, bookId: number) {

@@ -27,7 +27,7 @@ export const useChatStore = create<ChatState>()(
       voiceChatService.setListeners({
         onChatStatusChange: (status) => set({ chatStatus: status }),
         onEndedByAgent: () => {
-          set({ isChatting: false, chatStatus: 'idle' })
+          set({ isChatting: false })
           voiceChatService.deactivate()
         }
       })
