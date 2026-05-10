@@ -5,8 +5,14 @@ import { buildRealtimeAgent } from './buildRealtimeAgent'
 import { captureError } from '@/utils/sentry'
 import { playReadyChime } from '@/modules/readyChime'
 import { startThinkingSound, stopThinkingSound } from '@/modules/thinkingSound'
+import type { BookOutline } from '@/lib/api'
 
 export type VoiceChatState = 'idle' | 'connecting' | 'active' | 'paused'
+
+export interface VoiceChatContext {
+  pageText: string
+  outline?: BookOutline
+}
 
 export interface VoiceChatEvents {
   onStateChange: (state: VoiceChatState) => void
@@ -27,6 +33,10 @@ let idleTimer: ReturnType<typeof setTimeout> | null = null
 let mediaStream: MediaStream | null = null
 let audioElement: HTMLAudioElement | null = null
 let listeners: Partial<VoiceChatEvents> = {}
+let lastContextFingerprint: string | null = null
+let hasUsedVoiceInSession = false
+let activateInFlight: Promise<void> | null = null
+let preconnectIntent = false
 
 function setState(next: VoiceChatState) {
   if (state === next) return
@@ -48,6 +58,10 @@ function scheduleIdleTimer() {
   }, IDLE_TIMEOUT_MS)
 }
 
+function fingerprintContext(ctx: VoiceChatContext): string {
+  return `${ctx.pageText}\n${JSON.stringify(ctx.outline ?? {})}`
+}
+
 export const voiceChatService = {
   getState(): VoiceChatState {
     return state
@@ -63,12 +77,64 @@ export const voiceChatService = {
   },
 
   /**
+   * Pre-warm the WebRTC connection in the background after the user has used voice chat
+   * at least once this session. Saves ~600-1500ms on first activation in subsequent books.
+   * No-op if the user hasn't used voice yet — we don't want to burn the WebRTC handshake
+   * for users who never use voice.
+   */
+  async preconnect(bookId: number, ctx: VoiceChatContext): Promise<void> {
+    if (!hasUsedVoiceInSession) return
+    if (session && currentBookId === bookId) return
+    if (activateInFlight) return // Another activate already in progress
+    preconnectIntent = true
+    try {
+      await this.activate(bookId, ctx, { fromPreconnect: true })
+      // Only mute if the user did NOT click during our activate.
+      // If preconnectIntent was cleared (by a user-initiated activate),
+      // skip the mute so the user sees 'active' as they expect.
+      if (preconnectIntent && session) {
+        session.interrupt()
+        session.mute(true)
+        if (audioElement) audioElement.muted = true
+        setState('paused')
+      }
+    } catch (err) {
+      captureError(err, { operation: 'voiceChatService', step: 'preconnect' })
+      // Swallow — preconnect is best-effort
+    } finally {
+      preconnectIntent = false
+    }
+  },
+
+  /**
    * Start or resume voice chat for the given book.
    * - First call: full setup (mic prompt + WebRTC handshake + agent build) — Task 3 wires this.
    * - Subsequent call on same book: updateAgent + unmute (near-instant).
    * - Call on different book: dispose old session, then full setup for new book.
    */
-  async activate(bookId: number, pageText: string): Promise<void> {
+  async activate(
+    bookId: number,
+    ctx: VoiceChatContext,
+    opts: { fromPreconnect?: boolean } = {}
+  ): Promise<void> {
+    // User-initiated activate cancels any in-flight preconnect intent
+    if (!opts.fromPreconnect) {
+      preconnectIntent = false
+    }
+    // In-flight guard: if activate is already running, await it instead of
+    // starting a second cold path (would leak WebRTC + session resources).
+    if (activateInFlight) {
+      return activateInFlight
+    }
+    activateInFlight = this._doActivate(bookId, ctx)
+    try {
+      await activateInFlight
+    } finally {
+      activateInFlight = null
+    }
+  },
+
+  async _doActivate(bookId: number, ctx: VoiceChatContext): Promise<void> {
     clearIdleTimer()
 
     // Book switched while a session is alive — fully dispose first
@@ -77,15 +143,20 @@ export const voiceChatService = {
     }
 
     if (session && currentBookId === bookId) {
-      // Warm path: refresh agent with new page text, then unmute
+      // Warm path: refresh agent with new page text (if changed), then unmute
       setState('connecting')
       try {
-        const newAgent = buildRealtimeAgent({
-          bookId,
-          pageText,
-          onEndConversation: () => listeners.onEndedByAgent?.()
-        })
-        await session.updateAgent(newAgent as never)
+        const fp = fingerprintContext(ctx)
+        if (fp !== lastContextFingerprint) {
+          const newAgent = buildRealtimeAgent({
+            bookId,
+            pageText: ctx.pageText,
+            outline: ctx.outline,
+            onEndConversation: () => listeners.onEndedByAgent?.()
+          })
+          await session.updateAgent(newAgent as never)
+          lastContextFingerprint = fp
+        }
         session.mute(false)
         if (audioElement) audioElement.muted = false
         setState('active')
@@ -120,10 +191,11 @@ export const voiceChatService = {
         audioElement
       })
 
-      // 4. Build the agent with current page text
+      // 4. Build the agent with current page text and optional outline
       const agent = buildRealtimeAgent({
         bookId,
-        pageText,
+        pageText: ctx.pageText,
+        outline: ctx.outline,
         onEndConversation: () => listeners.onEndedByAgent?.()
       })
 
@@ -189,10 +261,12 @@ export const voiceChatService = {
 
       session = newSession
       currentBookId = bookId
+      lastContextFingerprint = fingerprintContext(ctx)
       if (audioElement) audioElement.muted = false
       newSession.mute(false)
       setState('active')
       listeners.onChatStatusChange?.('idle')
+      hasUsedVoiceInSession = true
     } catch (err) {
       captureError(err, { operation: 'voiceChatService', step: 'activate_cold' })
       setState('idle')
@@ -247,6 +321,7 @@ export const voiceChatService = {
     listeners.onChatStatusChange?.('idle')
     hasFiredReadyChime = false
     isAgentSpeaking = false
+    lastContextFingerprint = null
   },
 
   // --- test hooks ---
@@ -261,11 +336,18 @@ export const voiceChatService = {
     state = 'idle'
     hasFiredReadyChime = false
     isAgentSpeaking = false
+    lastContextFingerprint = null
+    hasUsedVoiceInSession = false
+    activateInFlight = null
+    preconnectIntent = false
   },
   // Bypasses setState() intentionally — test setup should not fire onStateChange listeners
   _setSessionForTests(fakeSession: RealtimeSession, bookId: number) {
     session = fakeSession
     currentBookId = bookId
     state = 'active'
+  },
+  _hasUsedVoiceInSession() {
+    return hasUsedVoiceInSession
   }
 }

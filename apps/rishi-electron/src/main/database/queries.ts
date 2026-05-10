@@ -348,3 +348,49 @@ export function getTextFromVectorId(id: number): ChunkText | undefined {
     data: row.data as string
   }
 }
+
+// ---------------------------------------------------------------------------
+// Book outline query
+// ---------------------------------------------------------------------------
+
+export interface BookOutline {
+  title: string
+  author: string | null
+  chapters: string[]
+}
+
+/**
+ * Pure SQL helper exposed for unit testing without the global drizzle wrapper.
+ * Use `getBookOutline(bookId)` from production code.
+ */
+export function _getBookOutlineWithDb(
+  sqlite: import('better-sqlite3').Database,
+  bookId: number
+): BookOutline {
+  const bookRow = sqlite
+    .prepare<[number], { title: string; author: string | null }>(
+      'SELECT title, author FROM books WHERE id = ?'
+    )
+    .get(bookId)
+  if (!bookRow) {
+    return { title: '', author: null, chapters: [] }
+  }
+  const chapterRows = sqlite
+    .prepare<[number], { chapter: string }>(
+      `SELECT chapter FROM chunk_data
+       WHERE book_id = ? AND chapter IS NOT NULL AND chapter != ''
+       GROUP BY chapter
+       ORDER BY MIN(page_number)`
+    )
+    .all(bookId)
+  return {
+    title: bookRow.title,
+    author: bookRow.author ?? null,
+    chapters: chapterRows.map((r) => r.chapter)
+  }
+}
+
+export async function getBookOutline(bookId: number): Promise<BookOutline> {
+  const sqlite = getDb()
+  return _getBookOutlineWithDb(sqlite, bookId)
+}

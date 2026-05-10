@@ -31,8 +31,9 @@ export function registerSearchHandlers(): void {
         // 1. Embed the query text
         const embedding = await embedText(queryText)
 
-        // 2. Search vectors for the book's index (uses book_ prefix to match processJob)
-        const indexName = `book_${bookId}`
+        // 2. Search the vector index. Name must match the save-side name in
+        // src/renderer/src/modules/process_epub.ts: `${bookId}-vectordb`.
+        const indexName = `${bookId}-vectordb`
         const results = await searchVectors(indexName, embedding, embedding.length, k)
 
         // 3. Retrieve text for each matching vector

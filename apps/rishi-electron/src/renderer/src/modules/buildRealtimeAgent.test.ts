@@ -68,4 +68,56 @@ describe('buildRealtimeAgent', () => {
       k: 3
     })
   })
+
+  it('embeds book title and author into instructions when outline is provided', () => {
+    const agent = buildRealtimeAgent({
+      bookId: 42,
+      pageText: 'x',
+      outline: {
+        title: 'The Pragmatic Programmer',
+        author: 'Hunt and Thomas',
+        chapters: ['Introduction', 'Chapter 1']
+      },
+      onEndConversation: vi.fn()
+    })
+    expect(agent.instructions).toContain('The Pragmatic Programmer')
+    expect(agent.instructions).toContain('Hunt and Thomas')
+  })
+
+  it('embeds the chapter list into instructions when outline is provided', () => {
+    const agent = buildRealtimeAgent({
+      bookId: 42,
+      pageText: 'x',
+      outline: {
+        title: 'Book',
+        author: null,
+        chapters: ['Foreword', 'Chapter 1: Beginnings', 'Chapter 2: Middles']
+      },
+      onEndConversation: vi.fn()
+    })
+    expect(agent.instructions).toContain('Foreword')
+    expect(agent.instructions).toContain('Chapter 1: Beginnings')
+    expect(agent.instructions).toContain('Chapter 2: Middles')
+  })
+
+  it('omits the outline section when outline is not provided', () => {
+    const agent = buildRealtimeAgent({
+      bookId: 42,
+      pageText: 'x',
+      onEndConversation: vi.fn()
+    })
+    expect(agent.instructions).not.toContain('## Book Outline')
+  })
+
+  it('handles outline with null author gracefully', () => {
+    const agent = buildRealtimeAgent({
+      bookId: 42,
+      pageText: 'x',
+      outline: { title: 'Anon Book', author: null, chapters: [] },
+      onEndConversation: vi.fn()
+    })
+    expect(agent.instructions).toContain('Anon Book')
+    expect(agent.instructions).not.toContain('null')
+    expect(agent.instructions).not.toContain('undefined')
+  })
 })

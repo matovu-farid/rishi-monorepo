@@ -10,7 +10,7 @@ import {
 } from '@/modules/epubwrapper'
 import { usePlayerStore } from '@/stores/playerStore'
 import { processEpubJob } from '@/modules/process_epub'
-import { hasSavedEpubData } from '@/lib/api'
+import { hasSavedEpubData, getBookOutline, type BookOutline } from '@/lib/api'
 import { useChatStore } from './chatStore'
 import { prefetchRealtimeKey } from '@/modules/realtime'
 import { voiceChatService } from '@/modules/voiceChatService'
@@ -31,6 +31,7 @@ interface EpubState {
   currentEpubLocation: string
   theme: ThemeType
   renditionCount: number
+  bookOutline: BookOutline | null
 
   setRendition: (rendition: Rendition | null) => void
   setParagraphRendition: (rendition: Rendition | null) => void
@@ -38,6 +39,7 @@ interface EpubState {
   setCurrentEpubLocation: (location: string) => void
   setTheme: (theme: ThemeType) => void
   incrementRenditionCount: () => void
+  setBookOutline: (outline: BookOutline | null) => void
   reset: () => void
 }
 
@@ -50,10 +52,12 @@ export const useEpubStore = create<EpubState>()(
       currentEpubLocation: '',
       theme: ThemeType.White,
       renditionCount: 0,
+      bookOutline: null,
 
       setRendition: (rendition) => set({ rendition }),
       setParagraphRendition: (paragraphRendition) => set({ paragraphRendition }),
       setBookId: (bookId) => set({ bookId }),
+      setBookOutline: (bookOutline) => set({ bookOutline }),
       setCurrentEpubLocation: (currentEpubLocation) => set({ currentEpubLocation }),
       setTheme: (theme) => set({ theme }),
       incrementRenditionCount: () => set((state) => ({ renditionCount: state.renditionCount + 1 })),
@@ -230,8 +234,32 @@ export function initEpubSubscriptions(): (() => void)[] {
   const unsubBookId = useEpubStore.subscribe(
     (state) => state.bookId,
     (bookId) => {
-      if (bookId) prefetchRealtimeKey()
-      else voiceChatService.dispose()
+      if (bookId) {
+        prefetchRealtimeKey()
+        // Fetch outline in background — best-effort, won't block voice chat start
+        // Capture bookId at fetch time. If the user switches books before the
+        // fetch resolves, we'd otherwise overwrite the new book's outline with
+        // the stale fetch result.
+        const capturedBookId = bookId
+        getBookOutline(Number(bookId))
+          .then((outline) => {
+            if (useEpubStore.getState().bookId !== capturedBookId) return
+            useEpubStore.getState().setBookOutline(outline)
+            // Pre-connect in the background. Service is a no-op if voice
+            // chat hasn't been used yet this session.
+            const pageText = usePlayerStore
+              .getState()
+              .currentParagraphs.map((p) => p.text)
+              .join('\n')
+            void voiceChatService.preconnect(Number(bookId), { pageText, outline })
+          })
+          .catch(() => {
+            /* outline is best-effort; voice chat still works without it */
+          })
+      } else {
+        useEpubStore.getState().setBookOutline(null)
+        voiceChatService.dispose()
+      }
     }
   )
   unsubs.push(unsubBookId)

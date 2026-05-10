@@ -6,7 +6,8 @@ import {
   deleteBook,
   updateBookCover,
   updateBookLocation,
-  hasSavedEpubData
+  hasSavedEpubData,
+  getBookOutline
 } from '../database/queries.js'
 
 export function registerBookHandlers(): void {
@@ -76,6 +77,16 @@ export function registerBookHandlers(): void {
     } catch (error) {
       throw new Error(
         `Failed to check epub data for book ${bookId}: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+  })
+
+  ipcMain.handle('books:getOutline', async (_event, bookId: number) => {
+    try {
+      return await getBookOutline(bookId)
+    } catch (error) {
+      throw new Error(
+        `Failed to get book outline: ${error instanceof Error ? error.message : String(error)}`
       )
     }
   })

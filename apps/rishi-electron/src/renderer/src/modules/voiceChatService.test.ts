@@ -119,7 +119,7 @@ describe('voiceChatService', () => {
     voiceChatService.deactivate()
     vi.advanceTimersByTime(10 * 60 * 1000)
 
-    await voiceChatService.activate(1, 'fresh page text')
+    await voiceChatService.activate(1, { pageText: 'fresh page text' })
     expect(mockMute).toHaveBeenLastCalledWith(false)
     expect(mockUpdateAgent).toHaveBeenCalledTimes(1)
 
@@ -140,7 +140,7 @@ describe('voiceChatService', () => {
     // It will then try to create a new one via the (stubbed) transport — that
     // path is exercised more fully in Task 3 tests. Here we only verify the
     // dispose-on-mismatch happens.
-    await voiceChatService.activate(2, 'text for book 2').catch(() => {
+    await voiceChatService.activate(2, { pageText: 'text for book 2' }).catch(() => {
       /* expected: new-session path not fully wired in this task */
     })
     expect(mockClose).toHaveBeenCalledTimes(1)
@@ -191,9 +191,46 @@ describe('voiceChatService', () => {
       updateAgent: mockUpdateAgent
     } as never, 1)
 
-    await voiceChatService.activate(1, 'fresh text')
+    await voiceChatService.activate(1, { pageText: 'fresh text' })
 
     expect(onChatStatusChange).toHaveBeenCalledWith('idle')
+  })
+
+  it('warm path skips updateAgent when context fingerprint is unchanged', async () => {
+    voiceChatService._setSessionForTests({
+      mute: mockMute,
+      interrupt: mockInterrupt,
+      close: mockClose,
+      updateAgent: mockUpdateAgent
+    } as never, 1)
+
+    // First warm activate establishes the fingerprint
+    await voiceChatService.activate(1, { pageText: 'same text' })
+    expect(mockUpdateAgent).toHaveBeenCalledTimes(1)
+
+    // Deactivate then reactivate with identical context
+    voiceChatService.deactivate()
+    await voiceChatService.activate(1, { pageText: 'same text' })
+
+    // updateAgent should NOT be called a second time — context is unchanged
+    expect(mockUpdateAgent).toHaveBeenCalledTimes(1)
+    // But mute(false) still fires
+    expect(mockMute).toHaveBeenLastCalledWith(false)
+  })
+
+  it('warm path calls updateAgent when page text changes', async () => {
+    voiceChatService._setSessionForTests({
+      mute: mockMute,
+      interrupt: mockInterrupt,
+      close: mockClose,
+      updateAgent: mockUpdateAgent
+    } as never, 1)
+
+    await voiceChatService.activate(1, { pageText: 'page 1 text' })
+    voiceChatService.deactivate()
+    await voiceChatService.activate(1, { pageText: 'page 2 text' })
+
+    expect(mockUpdateAgent).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -214,7 +251,7 @@ describe('voiceChatService cold path', () => {
   it('cold activate: getUserMedia + transport + session.connect, then unmute', async () => {
     const { OpenAIRealtimeWebRTC } = await import('@openai/agents-realtime')
 
-    await voiceChatService.activate(7, 'fresh text')
+    await voiceChatService.activate(7, { pageText: 'fresh text' })
 
     expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({ audio: true })
     expect(OpenAIRealtimeWebRTC).toHaveBeenCalledTimes(1)
@@ -224,12 +261,12 @@ describe('voiceChatService cold path', () => {
   })
 
   it('cold activate caches mediaStream and audio element across activate/deactivate cycles', async () => {
-    await voiceChatService.activate(7, 'text 1')
+    await voiceChatService.activate(7, { pageText: 'text 1' })
     const firstGetUserMediaCount = (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>)
       .mock.calls.length
 
     voiceChatService.deactivate()
-    await voiceChatService.activate(7, 'text 2')
+    await voiceChatService.activate(7, { pageText: 'text 2' })
 
     // No new mic prompt — same stream reused
     expect(
@@ -243,13 +280,13 @@ describe('voiceChatService cold path', () => {
       getTracks: () => [{ stop: stopSpy }]
     })
 
-    await voiceChatService.activate(7, 'x')
+    await voiceChatService.activate(7, { pageText: 'x' })
     voiceChatService.dispose()
     expect(stopSpy).toHaveBeenCalledTimes(1)
   })
 
   it('removes session event listeners on dispose', async () => {
-    await voiceChatService.activate(7, 'x')
+    await voiceChatService.activate(7, { pageText: 'x' })
     // 7 .on() calls during cold-path activation
     expect(mockSessionOn).toHaveBeenCalledTimes(7)
 
@@ -260,7 +297,7 @@ describe('voiceChatService cold path', () => {
 
   it('plays ready chime only on first agent_start', async () => {
     const { playReadyChime } = await import('@/modules/readyChime')
-    await voiceChatService.activate(7, 'x')
+    await voiceChatService.activate(7, { pageText: 'x' })
 
     // Find the registered onAgentStart handler from the mockSessionOn calls
     const agentStartCall = mockSessionOn.mock.calls.find((c) => c[0] === 'agent_start')
@@ -273,5 +310,80 @@ describe('voiceChatService cold path', () => {
     onAgentStart()
     onAgentStart()
     expect(playReadyChime).toHaveBeenCalledTimes(1) // still only once
+  })
+
+  it('preconnect runs the cold path and leaves the session muted in paused state', async () => {
+    // Simulate that voice has been used this session
+    await voiceChatService.activate(7, { pageText: 'first activation' })
+    voiceChatService.dispose()
+
+    // Now preconnect — hasUsedVoiceInSession should be true
+    await voiceChatService.preconnect(8, { pageText: 'preconnect text' })
+    expect(mockConnect).toHaveBeenCalled()
+    expect(mockMute).toHaveBeenLastCalledWith(true)
+    expect(voiceChatService.getState()).toBe('paused')
+  })
+
+  it('preconnect is a no-op when hasUsedVoiceInSession is false', async () => {
+    voiceChatService._resetForTests()
+    await voiceChatService.preconnect(7, { pageText: 'x' })
+    expect(mockConnect).not.toHaveBeenCalled()
+    expect(voiceChatService.getState()).toBe('idle')
+  })
+
+  it('first successful cold activate sets hasUsedVoiceInSession', async () => {
+    voiceChatService._resetForTests()
+    expect(voiceChatService._hasUsedVoiceInSession()).toBe(false)
+    await voiceChatService.activate(7, { pageText: 'x' })
+    expect(voiceChatService._hasUsedVoiceInSession()).toBe(true)
+  })
+
+  it('preconnect does NOT mute when user clicks during preconnect (warm path takes over)', async () => {
+    // First activation establishes hasUsedVoiceInSession + first session
+    await voiceChatService.activate(7, { pageText: 'first' })
+    voiceChatService.dispose()
+
+    // Now simulate: preconnect starts, user clicks during the await
+    const preconnectPromise = voiceChatService.preconnect(8, { pageText: 'preconnect' })
+    // Before preconnect's activate resolves, user click triggers activate
+    const userClickPromise = voiceChatService.activate(8, { pageText: 'preconnect' })
+
+    await Promise.all([preconnectPromise, userClickPromise])
+
+    // Session should NOT be muted — user expects to be active
+    expect(voiceChatService.getState()).toBe('active')
+    // mute(true) should NOT have been called after the activate's mute(false)
+    const lastMuteCall = mockMute.mock.calls[mockMute.mock.calls.length - 1]
+    expect(lastMuteCall).toEqual([false])
+  })
+
+  it('concurrent activate calls share the same in-flight promise (no resource leak)', async () => {
+    voiceChatService._resetForTests()
+    mockConnect.mockClear()
+
+    // Fire two activates concurrently
+    const [r1, r2] = await Promise.all([
+      voiceChatService.activate(9, { pageText: 'a' }),
+      voiceChatService.activate(9, { pageText: 'a' })
+    ])
+
+    // Only ONE cold path should have run — only one connect() call
+    expect(mockConnect).toHaveBeenCalledTimes(1)
+    expect(r1).toBeUndefined()
+    expect(r2).toBeUndefined()
+  })
+
+  it('preconnect followed by user click ends in active state via warm path', async () => {
+    // Set up: use voice once to set the flag
+    await voiceChatService.activate(7, { pageText: 'first' })
+    voiceChatService.dispose()
+
+    // Preconnect leaves the service in 'paused'
+    await voiceChatService.preconnect(8, { pageText: 'preconnect' })
+    expect(voiceChatService.getState()).toBe('paused')
+
+    // User clicks — activate runs warm path (session exists, same bookId)
+    await voiceChatService.activate(8, { pageText: 'preconnect' })
+    expect(voiceChatService.getState()).toBe('active')
   })
 })

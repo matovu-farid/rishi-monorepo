@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { devtools, subscribeWithSelector } from 'zustand/middleware'
 import { voiceChatService } from '@/modules/voiceChatService'
 import { usePlayerStore } from './playerStore'
+import { useEpubStore } from './epubStore'
 import { captureError } from '@/utils/sentry'
 
 export type ChatStatus = 'idle' | 'connecting' | 'thinking' | 'speaking'
@@ -60,9 +61,14 @@ export const useChatStore = create<ChatState>()(
             .getState()
             .currentParagraphs.map((p) => p.text)
             .join('\n')
+          // Read outline from epubStore — guard against stale outline by
+          // verifying epubStore's bookId still matches the one we're starting for
+          const epubState = useEpubStore.getState()
+          const outline =
+            epubState.bookId === String(bookId) ? (epubState.bookOutline ?? undefined) : undefined
 
           voiceChatService
-            .activate(bookId, pageText)
+            .activate(bookId, { pageText, outline })
             .then(() => {
               if (get()._chatGeneration !== gen || !get().isChatting) {
                 voiceChatService.deactivate()
