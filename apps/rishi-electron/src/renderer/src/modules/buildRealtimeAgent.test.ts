@@ -48,4 +48,24 @@ describe('buildRealtimeAgent', () => {
     await endTool.execute({ reason: 'user said bye' })
     expect(onEnd).toHaveBeenCalledWith('user said bye')
   })
+
+  it('bookContext tool queries with the captured bookId', async () => {
+    const { getContextForQuery } = await import('@/lib/api')
+    const agent = buildRealtimeAgent({
+      bookId: 42,
+      pageText: 'x',
+      onEndConversation: vi.fn()
+    })
+    const bookContextTool = agent.tools.find(
+      (t: { name: string }) => t.name === 'bookContext'
+    ) as unknown as {
+      execute: (args: { queryText: string }) => Promise<unknown>
+    }
+    await bookContextTool.execute({ queryText: 'who is the protagonist?' })
+    expect(getContextForQuery).toHaveBeenCalledWith({
+      bookId: 42,
+      queryText: 'who is the protagonist?',
+      k: 3
+    })
+  })
 })
