@@ -20,7 +20,7 @@ let _cachedKey: string | null = null
 let _cachedKeyTime = 0
 let _prefetchPromise: Promise<string> | null = null
 
-async function getOrFetchKey(): Promise<string> {
+export async function getOrFetchKey(): Promise<string> {
   if (_cachedKey && Date.now() - _cachedKeyTime < KEY_TTL_MS) {
     return _cachedKey
   }
