@@ -237,8 +237,16 @@ export function initEpubSubscriptions(): (() => void)[] {
       if (bookId) {
         prefetchRealtimeKey()
         // Fetch outline in background — best-effort, won't block voice chat start
+        // Capture bookId at fetch time. If the user switches books before the
+        // fetch resolves, we'd otherwise overwrite the new book's outline with
+        // the stale fetch result.
+        const capturedBookId = bookId
         getBookOutline(Number(bookId))
-          .then((outline) => useEpubStore.getState().setBookOutline(outline))
+          .then((outline) => {
+            if (useEpubStore.getState().bookId === capturedBookId) {
+              useEpubStore.getState().setBookOutline(outline)
+            }
+          })
           .catch(() => {
             /* outline is best-effort; voice chat still works without it */
           })

@@ -119,7 +119,7 @@ describe('voiceChatService', () => {
     voiceChatService.deactivate()
     vi.advanceTimersByTime(10 * 60 * 1000)
 
-    await voiceChatService.activate(1, 'fresh page text')
+    await voiceChatService.activate(1, { pageText: 'fresh page text' })
     expect(mockMute).toHaveBeenLastCalledWith(false)
     expect(mockUpdateAgent).toHaveBeenCalledTimes(1)
 
@@ -140,7 +140,7 @@ describe('voiceChatService', () => {
     // It will then try to create a new one via the (stubbed) transport — that
     // path is exercised more fully in Task 3 tests. Here we only verify the
     // dispose-on-mismatch happens.
-    await voiceChatService.activate(2, 'text for book 2').catch(() => {
+    await voiceChatService.activate(2, { pageText: 'text for book 2' }).catch(() => {
       /* expected: new-session path not fully wired in this task */
     })
     expect(mockClose).toHaveBeenCalledTimes(1)
@@ -191,7 +191,7 @@ describe('voiceChatService', () => {
       updateAgent: mockUpdateAgent
     } as never, 1)
 
-    await voiceChatService.activate(1, 'fresh text')
+    await voiceChatService.activate(1, { pageText: 'fresh text' })
 
     expect(onChatStatusChange).toHaveBeenCalledWith('idle')
   })
@@ -214,7 +214,7 @@ describe('voiceChatService cold path', () => {
   it('cold activate: getUserMedia + transport + session.connect, then unmute', async () => {
     const { OpenAIRealtimeWebRTC } = await import('@openai/agents-realtime')
 
-    await voiceChatService.activate(7, 'fresh text')
+    await voiceChatService.activate(7, { pageText: 'fresh text' })
 
     expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({ audio: true })
     expect(OpenAIRealtimeWebRTC).toHaveBeenCalledTimes(1)
@@ -224,12 +224,12 @@ describe('voiceChatService cold path', () => {
   })
 
   it('cold activate caches mediaStream and audio element across activate/deactivate cycles', async () => {
-    await voiceChatService.activate(7, 'text 1')
+    await voiceChatService.activate(7, { pageText: 'text 1' })
     const firstGetUserMediaCount = (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>)
       .mock.calls.length
 
     voiceChatService.deactivate()
-    await voiceChatService.activate(7, 'text 2')
+    await voiceChatService.activate(7, { pageText: 'text 2' })
 
     // No new mic prompt — same stream reused
     expect(
@@ -243,13 +243,13 @@ describe('voiceChatService cold path', () => {
       getTracks: () => [{ stop: stopSpy }]
     })
 
-    await voiceChatService.activate(7, 'x')
+    await voiceChatService.activate(7, { pageText: 'x' })
     voiceChatService.dispose()
     expect(stopSpy).toHaveBeenCalledTimes(1)
   })
 
   it('removes session event listeners on dispose', async () => {
-    await voiceChatService.activate(7, 'x')
+    await voiceChatService.activate(7, { pageText: 'x' })
     // 7 .on() calls during cold-path activation
     expect(mockSessionOn).toHaveBeenCalledTimes(7)
 
@@ -260,7 +260,7 @@ describe('voiceChatService cold path', () => {
 
   it('plays ready chime only on first agent_start', async () => {
     const { playReadyChime } = await import('@/modules/readyChime')
-    await voiceChatService.activate(7, 'x')
+    await voiceChatService.activate(7, { pageText: 'x' })
 
     // Find the registered onAgentStart handler from the mockSessionOn calls
     const agentStartCall = mockSessionOn.mock.calls.find((c) => c[0] === 'agent_start')

@@ -5,8 +5,14 @@ import { buildRealtimeAgent } from './buildRealtimeAgent'
 import { captureError } from '@/utils/sentry'
 import { playReadyChime } from '@/modules/readyChime'
 import { startThinkingSound, stopThinkingSound } from '@/modules/thinkingSound'
+import type { BookOutline } from '@/lib/api'
 
 export type VoiceChatState = 'idle' | 'connecting' | 'active' | 'paused'
+
+export interface VoiceChatContext {
+  pageText: string
+  outline?: BookOutline
+}
 
 export interface VoiceChatEvents {
   onStateChange: (state: VoiceChatState) => void
@@ -68,7 +74,7 @@ export const voiceChatService = {
    * - Subsequent call on same book: updateAgent + unmute (near-instant).
    * - Call on different book: dispose old session, then full setup for new book.
    */
-  async activate(bookId: number, pageText: string): Promise<void> {
+  async activate(bookId: number, ctx: VoiceChatContext): Promise<void> {
     clearIdleTimer()
 
     // Book switched while a session is alive — fully dispose first
@@ -82,7 +88,8 @@ export const voiceChatService = {
       try {
         const newAgent = buildRealtimeAgent({
           bookId,
-          pageText,
+          pageText: ctx.pageText,
+          outline: ctx.outline,
           onEndConversation: () => listeners.onEndedByAgent?.()
         })
         await session.updateAgent(newAgent as never)
@@ -120,10 +127,11 @@ export const voiceChatService = {
         audioElement
       })
 
-      // 4. Build the agent with current page text
+      // 4. Build the agent with current page text and optional outline
       const agent = buildRealtimeAgent({
         bookId,
-        pageText,
+        pageText: ctx.pageText,
+        outline: ctx.outline,
         onEndConversation: () => listeners.onEndedByAgent?.()
       })
 

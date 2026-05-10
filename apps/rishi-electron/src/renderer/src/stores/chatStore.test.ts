@@ -30,6 +30,10 @@ vi.mock('@/stores/playerStore', () => ({
   usePlayerStore: { getState: () => ({ send: vi.fn(), currentParagraphs: [] }) }
 }))
 
+vi.mock('@/stores/epubStore', () => ({
+  useEpubStore: { getState: () => ({ bookId: '42', bookOutline: null }) }
+}))
+
 vi.mock('@/utils/sentry', () => ({ captureError: vi.fn() }))
 
 describe('chatStore', () => {
@@ -60,7 +64,10 @@ describe('chatStore', () => {
     useChatStore.getState().startChat(42)
     // activate is async — await microtask flush
     await Promise.resolve()
-    expect(mockActivate).toHaveBeenCalledWith(42, expect.any(String))
+    expect(mockActivate).toHaveBeenCalledWith(42, {
+      pageText: expect.any(String),
+      outline: undefined
+    })
   })
 
   it('stopConversation resets state and calls deactivate', () => {
