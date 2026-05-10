@@ -9,15 +9,17 @@ const mockSessionOn = vi.fn()
 const mockSessionOff = vi.fn()
 
 vi.mock('@openai/agents/realtime', () => ({
-  RealtimeSession: vi.fn().mockImplementation(() => ({
-    mute: mockMute,
-    interrupt: mockInterrupt,
-    close: mockClose,
-    updateAgent: mockUpdateAgent,
-    connect: mockConnect,
-    on: mockSessionOn,
-    off: mockSessionOff
-  })),
+  RealtimeSession: vi.fn().mockImplementation(function () {
+    return {
+      mute: mockMute,
+      interrupt: mockInterrupt,
+      close: mockClose,
+      updateAgent: mockUpdateAgent,
+      connect: mockConnect,
+      on: mockSessionOn,
+      off: mockSessionOff
+    }
+  }),
   RealtimeAgent: vi.fn(),
   tool: vi.fn()
 }))
@@ -40,9 +42,26 @@ vi.mock('@openai/agents-realtime', async () => {
   const actual = await vi.importActual<object>('@openai/agents-realtime')
   return {
     ...actual,
-    OpenAIRealtimeWebRTC: vi.fn().mockImplementation(() => ({}))
+    OpenAIRealtimeWebRTC: vi.fn().mockImplementation(function () {
+      return {}
+    })
   }
 })
+
+vi.mock('@/modules/readyChime', () => ({
+  playReadyChime: vi.fn()
+}))
+
+vi.mock('@/modules/thinkingSound', () => ({
+  startThinkingSound: vi.fn(),
+  stopThinkingSound: vi.fn()
+}))
+
+vi.mock('@/stores/chatStore', () => ({
+  useChatStore: {
+    getState: vi.fn().mockReturnValue({ chatStatus: 'connecting' })
+  }
+}))
 
 import { voiceChatService } from './voiceChatService'
 
@@ -160,5 +179,57 @@ describe('voiceChatService', () => {
     expect(throwingInterrupt).toHaveBeenCalledTimes(1)
     expect(mockClose).toHaveBeenCalledTimes(1) // dispose() ran
     expect(voiceChatService.getState()).toBe('idle') // not 'paused'
+  })
+})
+
+describe('voiceChatService cold path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    voiceChatService._resetForTests()
+
+    // Stub getUserMedia globally
+    const fakeStream = {
+      getTracks: () => [{ stop: vi.fn() }]
+    }
+    ;(global.navigator as unknown as { mediaDevices: { getUserMedia: typeof vi.fn } }).mediaDevices = {
+      getUserMedia: vi.fn().mockResolvedValue(fakeStream)
+    }
+  })
+
+  it('cold activate: getUserMedia + transport + session.connect, then unmute', async () => {
+    const { OpenAIRealtimeWebRTC } = await import('@openai/agents-realtime')
+
+    await voiceChatService.activate(7, 'fresh text')
+
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({ audio: true })
+    expect(OpenAIRealtimeWebRTC).toHaveBeenCalledTimes(1)
+    expect(mockConnect).toHaveBeenCalledWith({ apiKey: 'test-key' })
+    expect(mockMute).toHaveBeenCalledWith(false)
+    expect(voiceChatService.getState()).toBe('active')
+  })
+
+  it('cold activate caches mediaStream and audio element across activate/deactivate cycles', async () => {
+    await voiceChatService.activate(7, 'text 1')
+    const firstGetUserMediaCount = (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>)
+      .mock.calls.length
+
+    voiceChatService.deactivate()
+    await voiceChatService.activate(7, 'text 2')
+
+    // No new mic prompt — same stream reused
+    expect(
+      (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mock.calls.length
+    ).toBe(firstGetUserMediaCount)
+  })
+
+  it('disposes mediaStream tracks on dispose()', async () => {
+    const stopSpy = vi.fn()
+    ;(navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      getTracks: () => [{ stop: stopSpy }]
+    })
+
+    await voiceChatService.activate(7, 'x')
+    voiceChatService.dispose()
+    expect(stopSpy).toHaveBeenCalledTimes(1)
   })
 })

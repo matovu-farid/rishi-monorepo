@@ -1,7 +1,11 @@
-import type { RealtimeSession } from '@openai/agents/realtime'
-import { prefetchRealtimeKey } from './realtime'
+import { RealtimeSession } from '@openai/agents/realtime'
+import { OpenAIRealtimeWebRTC } from '@openai/agents-realtime'
+import { getOrFetchKey, prefetchRealtimeKey } from './realtime'
 import { buildRealtimeAgent } from './buildRealtimeAgent'
 import { captureError } from '@/utils/sentry'
+import { useChatStore } from '@/stores/chatStore'
+import { playReadyChime } from '@/modules/readyChime'
+import { startThinkingSound, stopThinkingSound } from '@/modules/thinkingSound'
 
 export type VoiceChatState = 'idle' | 'connecting' | 'active' | 'paused'
 
@@ -91,8 +95,84 @@ export const voiceChatService = {
       return
     }
 
-    // Cold path — wired in Task 3. For now, throw so tests are clear.
-    throw new Error('voiceChatService.activate cold path not yet implemented')
+    // Cold path: first-time activation or after dispose
+    setState('connecting')
+    listeners.onChatStatusChange?.('connecting')
+
+    try {
+      // 1. Acquire mic (cached after first call)
+      if (!mediaStream) {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      }
+
+      // 2. Create audio element (cached after first call)
+      if (!audioElement) {
+        audioElement = document.createElement('audio')
+        audioElement.autoplay = true
+      }
+
+      // 3. Build the WebRTC transport with pre-injected media
+      const transport = new OpenAIRealtimeWebRTC({
+        mediaStream,
+        audioElement
+      })
+
+      // 4. Build the agent with current page text
+      const agent = buildRealtimeAgent({
+        bookId,
+        pageText,
+        onEndConversation: () => listeners.onEndedByAgent?.()
+      })
+
+      // 5. Create the session
+      const newSession = new RealtimeSession(agent, { transport, apiKey: '' })
+
+      // 6. Wire status events (forwarded to chat-status listener)
+      const status = (next: 'idle' | 'connecting' | 'thinking' | 'speaking') =>
+        listeners.onChatStatusChange?.(next)
+
+      const onAgentStart = () => {
+        if (useChatStore.getState().chatStatus === 'connecting') {
+          playReadyChime()
+        }
+        status('thinking')
+      }
+      const onAudioStart = () => status('speaking')
+      const onAudioStopped = () => status('idle')
+      const onAgentEnd = () => {
+        if (useChatStore.getState().chatStatus === 'thinking') status('idle')
+      }
+      const onToolStart = () => startThinkingSound()
+      const onToolEnd = () => stopThinkingSound()
+      const onError = (err: unknown) => {
+        captureError(err, { operation: 'voiceChatService', step: 'session_error' })
+        stopThinkingSound()
+        voiceChatService.dispose()
+      }
+
+      newSession.on('agent_start', onAgentStart)
+      newSession.on('audio_start', onAudioStart)
+      newSession.on('audio_stopped', onAudioStopped)
+      newSession.on('agent_end', onAgentEnd)
+      newSession.on('agent_tool_start', onToolStart)
+      newSession.on('agent_tool_end', onToolEnd)
+      newSession.on('error', onError)
+
+      // 7. Fetch ephemeral key + connect
+      const apiKey = await getOrFetchKey()
+      await newSession.connect({ apiKey })
+
+      session = newSession
+      currentBookId = bookId
+      if (audioElement) audioElement.muted = false
+      newSession.mute(false)
+      setState('active')
+    } catch (err) {
+      captureError(err, { operation: 'voiceChatService', step: 'activate_cold' })
+      setState('idle')
+      listeners.onChatStatusChange?.('idle')
+      throw err
+    }
   },
 
   deactivate() {
