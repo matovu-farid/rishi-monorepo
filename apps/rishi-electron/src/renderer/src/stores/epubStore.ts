@@ -13,6 +13,7 @@ import { processEpubJob } from '@/modules/process_epub'
 import { hasSavedEpubData } from '@/lib/api'
 import { useChatStore } from './chatStore'
 import { prefetchRealtimeKey } from '@/modules/realtime'
+import { voiceChatService } from '@/modules/voiceChatService'
 import { captureError } from '@/utils/sentry'
 
 export { ThemeType }
@@ -221,12 +222,17 @@ export function initEpubSubscriptions(): (() => void)[] {
     )
   )
 
-  // Side effect: pre-fetch the realtime API key when a book is opened so voice chat starts faster
+  // Side effect: pre-fetch the realtime API key when a book is opened (faster voice chat start);
+  // dispose the voice session when the book closes (release mic + close WebRTC).
   unsubs.push(
     useEpubStore.subscribe(
       (state) => state.bookId,
       (bookId) => {
-        if (bookId) prefetchRealtimeKey()
+        if (bookId) {
+          prefetchRealtimeKey()
+        } else {
+          voiceChatService.dispose()
+        }
       }
     )
   )
