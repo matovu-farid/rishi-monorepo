@@ -11,7 +11,8 @@
  * Token is fetched via IPC from the main process where it's stored encrypted.
  *
  * Suitable for forwarding to backends that accept the same token (we send
- * it as a `Cookie: rishi.session_token=…` header to the worker).
+ * it as an `Authorization: Bearer …` header to the worker — `Cookie` is a
+ * forbidden header in Chromium's fetch and is silently dropped).
  */
 export async function getAuthToken(): Promise<string | null> {
   return await window.api.auth.getToken()

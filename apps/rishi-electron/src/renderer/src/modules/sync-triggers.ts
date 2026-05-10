@@ -6,7 +6,7 @@ import { createSyncEngine, type SyncEngine } from '@rishi/shared/sync-engine'
 import { DesktopSyncAdapter } from './sync-adapter'
 import { getAuthToken } from './auth'
 
-const WORKER_URL = 'https://rishi-worker.faridmato90.workers.dev'
+const WORKER_URL = 'https://api.fidexa.org'
 const SYNC_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
 
 export type SyncStatus = 'not-synced' | 'syncing' | 'synced' | 'error' | 'offline'

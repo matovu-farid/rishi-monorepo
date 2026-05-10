@@ -10,7 +10,7 @@ import type {
   DownloadUrlResponse
 } from '@rishi/shared/sync-types'
 
-const WORKER_URL = 'https://rishi-worker.faridmato90.workers.dev'
+const WORKER_URL = 'https://api.fidexa.org'
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const token = await getAuthToken()

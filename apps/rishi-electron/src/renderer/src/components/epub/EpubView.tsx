@@ -14,11 +14,10 @@ import {
   Highlighter,
   MessageSquare,
   MoreVertical,
-  Menu as MenuIcon,
-  Mic,
-  MicOff
+  Menu as MenuIcon
 } from 'lucide-react'
 import AIChatOrb from '../chat/AIChatOrb'
+import VoiceChatLauncher from '../chat/VoiceChatLauncher'
 import { IconButton } from '@/components/ui/IconButton'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import TTSControls from '@/components/tts/TTSControls'
@@ -129,18 +128,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   const { requireAuth, AuthDialog } = useRequireAuth()
 
   const isChatting = useChatStore((s) => s.isChatting)
-  const setIsChatting = useChatStore((s) => s.setIsChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
-
-  const handleMicClick = () => {
-    requireAuth('voice-input', () => {
-      setIsChatting((prev) => !prev)
-    })
-  }
-
-  const handleStopChat = () => {
-    setIsChatting(false)
-  }
 
   // Load EPUB as ArrayBuffer via IPC
   const [epubData, setEpubData] = useState<ArrayBuffer | null>(null)
@@ -511,23 +499,6 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
             </button>
           </PopoverContent>
         </Popover>
-        {!isChatting ? (
-          <button
-            onClick={handleMicClick}
-            className={cn('p-2 rounded-md', getTextColor())}
-            aria-label="Start voice chat"
-          >
-            <Mic size={20} />
-          </button>
-        ) : (
-          <button
-            onClick={handleStopChat}
-            className={cn('p-2 rounded-md', getTextColor())}
-            aria-label="Stop voice chat"
-          >
-            <MicOff size={20} />
-          </button>
-        )}
       </ReaderToolbar>
 
       {/* Theme menu (triggered from more menu) */}
@@ -761,6 +732,9 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       {isChatting && (
         <AIChatOrb chatStatus={chatStatus} onClick={() => setChatPanelOpen((prev) => !prev)} />
       )}
+
+      {/* Voice chat launcher — paired above the TTS play orb */}
+      <VoiceChatLauncher />
 
       {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
       <div style={{ display: isChatting ? 'none' : 'contents' }}>

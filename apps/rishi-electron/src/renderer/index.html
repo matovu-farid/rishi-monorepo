@@ -10,14 +10,14 @@
       default browser via `rishi://` deep links, so we don't need to warm
       any third-party auth domains from the renderer.
     -->
-    <link rel="dns-prefetch" href="https://rishi-worker.faridmato90.workers.dev" />
+    <link rel="dns-prefetch" href="https://api.fidexa.org" />
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self' local-file:;
         script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com blob:;
         style-src 'self' 'unsafe-inline';
         img-src 'self' data: blob: local-file: https://*.r2.dev;
-        connect-src 'self' ws://localhost:* http://localhost:* local-file: https://cdnjs.cloudflare.com https://rishi-worker.faridmato90.workers.dev https://api.openai.com wss://api.openai.com;
+        connect-src 'self' ws://localhost:* http://localhost:* local-file: https://cdnjs.cloudflare.com https://api.fidexa.org https://api.openai.com wss://api.openai.com;
         worker-src 'self' blob: https://cdnjs.cloudflare.com;
         media-src 'self' blob: data: local-file:;
         font-src 'self' data:;

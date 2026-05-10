@@ -178,3 +178,27 @@ desktopRoutes.post("/poll", async (c) => {
 
   return c.json({ session_token: result.session_token })
 })
+
+const CancelBody = z.object({
+  states: z.array(z.uuid()).max(50),
+})
+
+/**
+ * Best-effort cleanup for in-flight states the desktop has abandoned (sign-out,
+ * delete-account). Deletes both the state and result records so a stale email
+ * link click can't write a session into Redis for an attempt the desktop has
+ * already given up on.
+ *
+ * Unauthenticated by design — knowing the state UUID is the only "permission"
+ * required, mirroring the trust model of /desktop/poll.
+ */
+desktopRoutes.post("/cancel", async (c) => {
+  const body = CancelBody.safeParse(await c.req.json())
+  if (!body.success) return c.json({ error: "bad_request" }, 400)
+  if (body.data.states.length === 0) return c.json({ ok: true })
+
+  const redis = Redis.fromEnv(c.env)
+  const keys = body.data.states.flatMap((s) => [stateKey(s), resultKey(s)])
+  await redis.del(...keys)
+  return c.json({ ok: true })
+})

@@ -175,20 +175,51 @@ class AuthService {
   }
 
   async signOut(): Promise<void> {
+    // Capture in-flight poll states before cancelling so we can clean them up
+    // server-side too — otherwise stale state/result records sit in Redis until
+    // their TTL expires, and a races-with-old-attempt scenario can hand the
+    // desktop the wrong session token.
+    const pendingStates = Array.from(this.polls.keys())
     this.cancelAllPolls()
+
     const token = await readSession()
     if (token) {
-      await fetch(`${API_URL}/api/auth/sign-out`, {
+      // Better Auth's sign-out enforces Content-Type: application/json — without
+      // it, returns 415 and the DB session stays alive. Same for the body.
+      const res = await fetch(`${API_URL}/api/auth/sign-out`, {
         method: "POST",
-        headers: { Cookie: `rishi.session_token=${token}` },
-      }).catch(() => {})
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: "{}",
+      }).catch((err) => {
+        console.warn("[auth] sign-out request failed", err)
+        return null
+      })
+      if (res && !res.ok) {
+        const body = await res.text().catch(() => "")
+        console.warn("[auth] sign-out non-OK", res.status, body)
+      }
     }
+
+    if (pendingStates.length > 0) {
+      await fetch(`${API_URL}/desktop/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ states: pendingStates }),
+      }).catch((err) => {
+        console.warn("[auth] desktop/cancel request failed", err)
+      })
+    }
+
     await clearSession()
     this.currentUser = null
     this.notify()
   }
 
   async deleteAccount(): Promise<void> {
+    const pendingStates = Array.from(this.polls.keys())
     this.cancelAllPolls()
     const token = await readSession()
     if (!token) return
@@ -196,11 +227,20 @@ class AuthService {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Cookie: `rishi.session_token=${token}`,
+        Authorization: `Bearer ${token}`,
       },
       body: "{}",
     })
     if (!res.ok) throw new Error(`delete failed: ${res.status}`)
+    if (pendingStates.length > 0) {
+      await fetch(`${API_URL}/desktop/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ states: pendingStates }),
+      }).catch((err) => {
+        console.warn("[auth] desktop/cancel request failed", err)
+      })
+    }
     await clearSession()
     this.currentUser = null
     this.notify()
@@ -212,7 +252,7 @@ class AuthService {
 
   private async fetchUser(token: string): Promise<User | null> {
     const res = await fetch(`${API_URL}/api/auth/get-session`, {
-      headers: { Cookie: `rishi.session_token=${token}` },
+      headers: { Authorization: `Bearer ${token}` },
     })
     if (!res.ok) return null
     const data = (await res.json()) as { user: User } | null

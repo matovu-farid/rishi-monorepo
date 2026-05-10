@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react'
 import { IconButton } from '@/components/ui/IconButton'
 import { ThemeType } from '@/themes/common'
-import { Loader2, Menu as MenuIcon, LayoutGrid, Mic, MicOff } from 'lucide-react'
+import { Loader2, Menu as MenuIcon, LayoutGrid } from 'lucide-react'
 import AIChatOrb from '../../chat/AIChatOrb'
+import VoiceChatLauncher from '../../chat/VoiceChatLauncher'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { Document, Outline, pdfjs } from 'react-pdf'
 import type { DocumentInitParameters } from 'pdfjs-dist/types/src/display/api'
@@ -65,20 +66,9 @@ export function PdfView({
   const setPageNumber = usePdfStore((s) => s.setPageNumber)
   const currentPageNumber = usePdfStore((s) => s.pageNumber)
 
-  const { requireAuth, AuthDialog } = useRequireAuth()
+  const { AuthDialog } = useRequireAuth()
   const isChatting = useChatStore((s) => s.isChatting)
-  const setIsChatting = useChatStore((s) => s.setIsChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
-
-  const handleMicClick = () => {
-    requireAuth('voice-input', () => {
-      setIsChatting((prev: boolean) => !prev)
-    })
-  }
-
-  const handleStopChat = () => {
-    setIsChatting(false)
-  }
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   useScrolling(scrollContainerRef)
@@ -336,29 +326,6 @@ export function PdfView({
           label={`Page ${currentPageNumber}`}
           className={cn('hover:bg-black/10 dark:hover:bg-white/10 border-none', getTextColor())}
         />
-        {!isChatting ? (
-          <button
-            onClick={handleMicClick}
-            className={cn(
-              'p-2 rounded-md hover:bg-black/10 dark:hover:bg-white/10',
-              getTextColor()
-            )}
-            aria-label="Start voice chat"
-          >
-            <Mic size={20} />
-          </button>
-        ) : (
-          <button
-            onClick={handleStopChat}
-            className={cn(
-              'p-2 rounded-md hover:bg-black/10 dark:hover:bg-white/10',
-              getTextColor()
-            )}
-            aria-label="Stop voice chat"
-          >
-            <MicOff size={20} />
-          </button>
-        )}
       </ReaderToolbar>
 
       {/* Main PDF Viewer Area */}
@@ -469,6 +436,9 @@ export function PdfView({
         {isChatting && (
           <AIChatOrb chatStatus={chatStatus} onClick={() => setChatPanelOpen((prev) => !prev)} />
         )}
+
+        {/* Voice chat launcher — paired above the TTS play orb */}
+        <VoiceChatLauncher />
 
         {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
         <div style={{ display: isChatting ? 'none' : 'contents' }}>

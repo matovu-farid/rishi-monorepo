@@ -1,5 +1,5 @@
 import { betterAuth } from "better-auth"
-import { magicLink } from "better-auth/plugins"
+import { magicLink, bearer } from "better-auth/plugins"
 import { passkey } from "@better-auth/passkey"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
 import { Resend } from "resend"
@@ -22,9 +22,14 @@ export function createAuth(env: CloudflareBindings) {
       google: {
         clientId: env.GOOGLE_CLIENT_ID,
         clientSecret: env.GOOGLE_CLIENT_SECRET,
+        // Always show Google's account picker so users can switch Google accounts
+        // after signing out of the desktop app — without this, Google silently
+        // re-uses whichever account is already signed in to the browser.
+        prompt: "select_account",
       },
     },
     plugins: [
+      bearer(),
       magicLink({
         sendMagicLink: async ({ email, url }) => {
           const resend = new Resend(env.RESEND_API_KEY)

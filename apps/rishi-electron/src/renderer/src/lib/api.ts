@@ -10,15 +10,13 @@ import { getAuthToken } from '@/modules/auth'
 /**
  * Build auth headers for outbound calls to our worker.
  *
- * Better Auth's session middleware accepts the session token via either the
- * `rishi.session_token` cookie or an `Authorization: Bearer …` header. We
- * use the cookie form because that's the canonical Better Auth shape and
- * mirrors what the web app sends; the worker's `requireAuth` middleware
- * accepts both via `auth.api.getSession({ headers })`.
+ * Must use `Authorization: Bearer …` — the `Cookie` header is a forbidden
+ * request header in Chromium's fetch implementation and is silently stripped
+ * from renderer-side requests, leaving the call unauthenticated.
  */
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const token = await getAuthToken()
-  return token ? { Cookie: `rishi.session_token=${token}` } : {}
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 /**
@@ -333,7 +331,7 @@ export async function isDev(): Promise<boolean> {
 export async function getDevBypassSecret(): Promise<string | null> {
   return api().getDevBypassSecret()
 }
-const WORKER_URL = 'https://rishi-worker.faridmato90.workers.dev'
+const WORKER_URL = 'https://api.fidexa.org'
 
 export async function getRealtimeClientSecret(): Promise<string> {
   const authHeaders = await getAuthHeaders()

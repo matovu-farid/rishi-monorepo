@@ -4,7 +4,7 @@ import { getAuthToken } from '@/modules/auth'
 import { triggerSyncOnWrite } from '@/modules/sync-triggers'
 import type { Message, SourceChunk } from '@/types/conversation'
 
-const WORKER_URL = 'https://rishi-worker.faridmato90.workers.dev'
+const WORKER_URL = 'https://api.fidexa.org'
 
 interface UseChatReturn {
   messages: Message[]
