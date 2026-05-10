@@ -2,7 +2,8 @@ import { ipcMain } from 'electron'
 import {
   generateEmbeddings,
   saveVectors as vectorSave,
-  searchVectors as vectorSearch
+  searchVectors as vectorSearch,
+  hasVectorsForBook as vectorsHasFor
 } from '../vectordb/index.js'
 
 export function registerVectorHandlers(): void {
@@ -44,6 +45,14 @@ export function registerVectorHandlers(): void {
       }
     }
   )
+
+  ipcMain.handle('vectors:hasFor', async (_event, bookId: number) => {
+    try {
+      return vectorsHasFor(bookId)
+    } catch {
+      return false
+    }
+  })
 
   ipcMain.handle(
     'vectors:processJob',

@@ -22,6 +22,7 @@ export interface ElectronAPI {
   embed: (params: EmbedParam[]) => Promise<EmbedResult[]>
   saveVectors: (name: string, dim: number, vectors: VectorData[]) => Promise<void>
   searchVectors: (name: string, query: number[], dim: number, k: number) => Promise<SearchResult[]>
+  hasVectorsForBook: (bookId: number) => Promise<boolean>
 
   // File format operations
   getBookData: (path: string) => Promise<BookData>

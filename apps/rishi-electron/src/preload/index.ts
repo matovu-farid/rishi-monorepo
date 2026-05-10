@@ -32,6 +32,7 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('vectors:save', name, dim, vectors),
   searchVectors: (name: string, query: number[], dim: number, k: number) =>
     ipcRenderer.invoke('vectors:search', name, query, dim, k),
+  hasVectorsForBook: (bookId: number) => ipcRenderer.invoke('vectors:hasFor', bookId),
 
   // File format operations
   getBookData: (path: string) => ipcRenderer.invoke('formats:getBookData', path),

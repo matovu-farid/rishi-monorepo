@@ -244,6 +244,9 @@ export async function searchVectors(params: {
 }): Promise<SearchResult[]> {
   return api().searchVectors(params.name, params.query, params.dim, params.k)
 }
+export async function hasVectorsForBook(bookId: number): Promise<boolean> {
+  return api().hasVectorsForBook(bookId)
+}
 
 // ---- File Formats ----
 export async function getBookData(params: { path: string }): Promise<BookData> {

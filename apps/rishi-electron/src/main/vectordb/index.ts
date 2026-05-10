@@ -128,6 +128,16 @@ export function initVectorDb(): void {
 }
 
 /**
+ * Returns true if a persisted HNSW index file exists for the given book, or
+ * if the index is already loaded in the in-memory cache.
+ */
+export function hasVectorsForBook(bookId: number): boolean {
+  const name = `${bookId}-vectordb`
+  if (indices.has(name)) return true
+  return existsSync(indexPath(name))
+}
+
+/**
  * Insert (or update) vectors into the index identified by `name`.
  *
  * If the index does not yet exist it is created with the provided dimension.
