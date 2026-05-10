@@ -195,6 +195,43 @@ describe('voiceChatService', () => {
 
     expect(onChatStatusChange).toHaveBeenCalledWith('idle')
   })
+
+  it('warm path skips updateAgent when context fingerprint is unchanged', async () => {
+    voiceChatService._setSessionForTests({
+      mute: mockMute,
+      interrupt: mockInterrupt,
+      close: mockClose,
+      updateAgent: mockUpdateAgent
+    } as never, 1)
+
+    // First warm activate establishes the fingerprint
+    await voiceChatService.activate(1, { pageText: 'same text' })
+    expect(mockUpdateAgent).toHaveBeenCalledTimes(1)
+
+    // Deactivate then reactivate with identical context
+    voiceChatService.deactivate()
+    await voiceChatService.activate(1, { pageText: 'same text' })
+
+    // updateAgent should NOT be called a second time — context is unchanged
+    expect(mockUpdateAgent).toHaveBeenCalledTimes(1)
+    // But mute(false) still fires
+    expect(mockMute).toHaveBeenLastCalledWith(false)
+  })
+
+  it('warm path calls updateAgent when page text changes', async () => {
+    voiceChatService._setSessionForTests({
+      mute: mockMute,
+      interrupt: mockInterrupt,
+      close: mockClose,
+      updateAgent: mockUpdateAgent
+    } as never, 1)
+
+    await voiceChatService.activate(1, { pageText: 'page 1 text' })
+    voiceChatService.deactivate()
+    await voiceChatService.activate(1, { pageText: 'page 2 text' })
+
+    expect(mockUpdateAgent).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('voiceChatService cold path', () => {

@@ -33,6 +33,7 @@ let idleTimer: ReturnType<typeof setTimeout> | null = null
 let mediaStream: MediaStream | null = null
 let audioElement: HTMLAudioElement | null = null
 let listeners: Partial<VoiceChatEvents> = {}
+let lastContextFingerprint: string | null = null
 
 function setState(next: VoiceChatState) {
   if (state === next) return
@@ -52,6 +53,10 @@ function scheduleIdleTimer() {
   idleTimer = setTimeout(() => {
     voiceChatService.dispose()
   }, IDLE_TIMEOUT_MS)
+}
+
+function fingerprintContext(ctx: VoiceChatContext): string {
+  return `${ctx.pageText}\n${JSON.stringify(ctx.outline ?? {})}`
 }
 
 export const voiceChatService = {
@@ -83,16 +88,20 @@ export const voiceChatService = {
     }
 
     if (session && currentBookId === bookId) {
-      // Warm path: refresh agent with new page text, then unmute
+      // Warm path: refresh agent with new page text (if changed), then unmute
       setState('connecting')
       try {
-        const newAgent = buildRealtimeAgent({
-          bookId,
-          pageText: ctx.pageText,
-          outline: ctx.outline,
-          onEndConversation: () => listeners.onEndedByAgent?.()
-        })
-        await session.updateAgent(newAgent as never)
+        const fp = fingerprintContext(ctx)
+        if (fp !== lastContextFingerprint) {
+          const newAgent = buildRealtimeAgent({
+            bookId,
+            pageText: ctx.pageText,
+            outline: ctx.outline,
+            onEndConversation: () => listeners.onEndedByAgent?.()
+          })
+          await session.updateAgent(newAgent as never)
+          lastContextFingerprint = fp
+        }
         session.mute(false)
         if (audioElement) audioElement.muted = false
         setState('active')
@@ -197,6 +206,7 @@ export const voiceChatService = {
 
       session = newSession
       currentBookId = bookId
+      lastContextFingerprint = fingerprintContext(ctx)
       if (audioElement) audioElement.muted = false
       newSession.mute(false)
       setState('active')
@@ -255,6 +265,7 @@ export const voiceChatService = {
     listeners.onChatStatusChange?.('idle')
     hasFiredReadyChime = false
     isAgentSpeaking = false
+    lastContextFingerprint = null
   },
 
   // --- test hooks ---
@@ -269,6 +280,7 @@ export const voiceChatService = {
     state = 'idle'
     hasFiredReadyChime = false
     isAgentSpeaking = false
+    lastContextFingerprint = null
   },
   // Bypasses setState() intentionally — test setup should not fire onStateChange listeners
   _setSessionForTests(fakeSession: RealtimeSession, bookId: number) {
