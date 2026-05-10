@@ -200,7 +200,7 @@ export const voiceChatService = {
   },
 
   deactivate() {
-    if (state !== 'active') return
+    if (state !== 'active' || !session) return
     try {
       session.interrupt()
       session.mute(true)
