@@ -34,6 +34,7 @@ let mediaStream: MediaStream | null = null
 let audioElement: HTMLAudioElement | null = null
 let listeners: Partial<VoiceChatEvents> = {}
 let lastContextFingerprint: string | null = null
+let hasUsedVoiceInSession = false
 
 function setState(next: VoiceChatState) {
   if (state === next) return
@@ -71,6 +72,30 @@ export const voiceChatService = {
   /** Prefetch the OpenAI ephemeral key — safe to call on book open. Does NOT prompt for mic. */
   prewarmKey() {
     prefetchRealtimeKey()
+  },
+
+  /**
+   * Pre-warm the WebRTC connection in the background after the user has used voice chat
+   * at least once this session. Saves ~600-1500ms on first activation in subsequent books.
+   * No-op if the user hasn't used voice yet — we don't want to burn the WebRTC handshake
+   * for users who never use voice.
+   */
+  async preconnect(bookId: number, ctx: VoiceChatContext): Promise<void> {
+    if (!hasUsedVoiceInSession) return
+    if (session && currentBookId === bookId) return // Already connected to this book
+    try {
+      await this.activate(bookId, ctx)
+      // Immediately mute — the session is hot but the user hasn't clicked yet
+      if (session) {
+        session.interrupt()
+        session.mute(true)
+        if (audioElement) audioElement.muted = true
+        setState('paused')
+      }
+    } catch (err) {
+      captureError(err, { operation: 'voiceChatService', step: 'preconnect' })
+      // Swallow — preconnect is best-effort
+    }
   },
 
   /**
@@ -211,6 +236,7 @@ export const voiceChatService = {
       newSession.mute(false)
       setState('active')
       listeners.onChatStatusChange?.('idle')
+      hasUsedVoiceInSession = true
     } catch (err) {
       captureError(err, { operation: 'voiceChatService', step: 'activate_cold' })
       setState('idle')
@@ -281,11 +307,15 @@ export const voiceChatService = {
     hasFiredReadyChime = false
     isAgentSpeaking = false
     lastContextFingerprint = null
+    hasUsedVoiceInSession = false
   },
   // Bypasses setState() intentionally — test setup should not fire onStateChange listeners
   _setSessionForTests(fakeSession: RealtimeSession, bookId: number) {
     session = fakeSession
     currentBookId = bookId
     state = 'active'
+  },
+  _hasUsedVoiceInSession() {
+    return hasUsedVoiceInSession
   }
 }

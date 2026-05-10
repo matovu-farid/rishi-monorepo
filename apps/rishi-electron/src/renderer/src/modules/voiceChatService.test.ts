@@ -311,4 +311,30 @@ describe('voiceChatService cold path', () => {
     onAgentStart()
     expect(playReadyChime).toHaveBeenCalledTimes(1) // still only once
   })
+
+  it('preconnect runs the cold path and leaves the session muted in paused state', async () => {
+    // Simulate that voice has been used this session
+    await voiceChatService.activate(7, { pageText: 'first activation' })
+    voiceChatService.dispose()
+
+    // Now preconnect — hasUsedVoiceInSession should be true
+    await voiceChatService.preconnect(8, { pageText: 'preconnect text' })
+    expect(mockConnect).toHaveBeenCalled()
+    expect(mockMute).toHaveBeenLastCalledWith(true)
+    expect(voiceChatService.getState()).toBe('paused')
+  })
+
+  it('preconnect is a no-op when hasUsedVoiceInSession is false', async () => {
+    voiceChatService._resetForTests()
+    await voiceChatService.preconnect(7, { pageText: 'x' })
+    expect(mockConnect).not.toHaveBeenCalled()
+    expect(voiceChatService.getState()).toBe('idle')
+  })
+
+  it('first successful cold activate sets hasUsedVoiceInSession', async () => {
+    voiceChatService._resetForTests()
+    expect(voiceChatService._hasUsedVoiceInSession()).toBe(false)
+    await voiceChatService.activate(7, { pageText: 'x' })
+    expect(voiceChatService._hasUsedVoiceInSession()).toBe(true)
+  })
 })

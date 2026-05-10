@@ -243,9 +243,15 @@ export function initEpubSubscriptions(): (() => void)[] {
         const capturedBookId = bookId
         getBookOutline(Number(bookId))
           .then((outline) => {
-            if (useEpubStore.getState().bookId === capturedBookId) {
-              useEpubStore.getState().setBookOutline(outline)
-            }
+            if (useEpubStore.getState().bookId !== capturedBookId) return
+            useEpubStore.getState().setBookOutline(outline)
+            // Pre-connect in the background. Service is a no-op if voice
+            // chat hasn't been used yet this session.
+            const pageText = usePlayerStore
+              .getState()
+              .currentParagraphs.map((p) => p.text)
+              .join('\n')
+            void voiceChatService.preconnect(Number(bookId), { pageText, outline })
           })
           .catch(() => {
             /* outline is best-effort; voice chat still works without it */
