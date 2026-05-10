@@ -1,8 +1,7 @@
 import { ipcMain, BrowserWindow } from "electron"
 import { authService } from "./auth-service"
-import { setupDeepLinkHandler, handleUrl, findDeepLinkInArgv } from "./deep-link"
 
-export function registerAuthIpc(getMainWindow: () => BrowserWindow | null): void {
+export function registerAuthIpc(_getMainWindow: () => BrowserWindow | null): void {
   // Hydrate stored session on app start
   void authService.hydrate()
 
@@ -12,11 +11,6 @@ export function registerAuthIpc(getMainWindow: () => BrowserWindow | null): void
       win.webContents.send("session-changed", user)
     }
   })
-
-  setupDeepLinkHandler(
-    (url) => void authService.handleCallback(url),
-    getMainWindow,
-  )
 
   ipcMain.handle("auth:start-magic-link", async (_evt, email: string) => {
     await authService.startMagicLink(email)
@@ -39,5 +33,4 @@ export function registerAuthIpc(getMainWindow: () => BrowserWindow | null): void
   ipcMain.handle("auth:get-token", async () => await authService.getSessionToken())
 }
 
-export { handleUrl, findDeepLinkInArgv }
 export { authService } from "./auth-service"

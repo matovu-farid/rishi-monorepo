@@ -7,7 +7,7 @@ import { startRendererServer, stopRendererServer } from './utils/rendererServer.
 import { registerAllIpcHandlers } from './ipc/index.js'
 import { initDatabase } from './database/index.js'
 import { initVectorDb } from './vectordb/index.js'
-import { registerAuthIpc, handleUrl, findDeepLinkInArgv, authService } from './auth/index.js'
+import { registerAuthIpc } from './auth/index.js'
 
 // Initialize Sentry as early as possible so startup crashes are captured.
 initMainSentry()
@@ -149,16 +149,7 @@ const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
   app.quit()
 } else {
-  app.on('second-instance', (_event, argv) => {
-    // Windows / Linux: deep-link URLs arrive as command-line args
-    const deepLinkUrl = findDeepLinkInArgv(argv)
-    if (deepLinkUrl) {
-      handleUrl(
-        deepLinkUrl,
-        (url) => void authService.handleCallback(url),
-        () => mainWindow,
-      )
-    }
+  app.on('second-instance', () => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
@@ -184,12 +175,6 @@ app.whenReady().then(async () => {
   createWindow()
 
   registerAuthIpc(() => mainWindow)
-
-  // Windows/Linux: app may have been launched FROM a deep-link (cold start)
-  const initialDeepLink = findDeepLinkInArgv(process.argv)
-  if (initialDeepLink) {
-    void authService.handleCallback(initialDeepLink)
-  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

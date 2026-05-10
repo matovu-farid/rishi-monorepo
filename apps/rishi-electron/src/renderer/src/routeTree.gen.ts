@@ -34,32 +34,32 @@ const SettingsAccountRoute = SettingsAccountRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexLazyRoute
-  '/books/$id': typeof BooksIdLazyRoute
   '/settings/account': typeof SettingsAccountRoute
+  '/books/$id': typeof BooksIdLazyRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexLazyRoute
-  '/books/$id': typeof BooksIdLazyRoute
   '/settings/account': typeof SettingsAccountRoute
+  '/books/$id': typeof BooksIdLazyRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexLazyRoute
-  '/books/$id': typeof BooksIdLazyRoute
   '/settings/account': typeof SettingsAccountRoute
+  '/books/$id': typeof BooksIdLazyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/books/$id' | '/settings/account'
+  fullPaths: '/' | '/settings/account' | '/books/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/books/$id' | '/settings/account'
-  id: '__root__' | '/' | '/books/$id' | '/settings/account'
+  to: '/' | '/settings/account' | '/books/$id'
+  id: '__root__' | '/' | '/settings/account' | '/books/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexLazyRoute: typeof IndexLazyRoute
-  BooksIdLazyRoute: typeof BooksIdLazyRoute
   SettingsAccountRoute: typeof SettingsAccountRoute
+  BooksIdLazyRoute: typeof BooksIdLazyRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -90,8 +90,8 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexLazyRoute: IndexLazyRoute,
-  BooksIdLazyRoute: BooksIdLazyRoute,
   SettingsAccountRoute: SettingsAccountRoute,
+  BooksIdLazyRoute: BooksIdLazyRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
