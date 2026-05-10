@@ -222,20 +222,20 @@ export function initEpubSubscriptions(): (() => void)[] {
     )
   )
 
-  // Side effect: pre-fetch the realtime API key when a book is opened (faster voice chat start);
-  // dispose the voice session when the book closes (release mic + close WebRTC).
-  unsubs.push(
-    useEpubStore.subscribe(
-      (state) => state.bookId,
-      (bookId) => {
-        if (bookId) {
-          prefetchRealtimeKey()
-        } else {
-          voiceChatService.dispose()
-        }
-      }
-    )
+  // Side effect: pre-fetch the realtime API key when a book is opened; dispose the voice
+  // session when the book closes. We register TWO cleanups: the subscription unsubscribe
+  // and an explicit dispose. The explicit dispose is required because React unmounts the
+  // view (which triggers cleanupEpubSubscriptions) BEFORE the route's bookId reset fires,
+  // so the subscription would otherwise miss the transition to ''.
+  const unsubBookId = useEpubStore.subscribe(
+    (state) => state.bookId,
+    (bookId) => {
+      if (bookId) prefetchRealtimeKey()
+      else voiceChatService.dispose()
+    }
   )
+  unsubs.push(unsubBookId)
+  unsubs.push(() => voiceChatService.dispose())
 
   // Side effect: when isChatting turns on and bookId exists, start realtime session
   unsubs.push(

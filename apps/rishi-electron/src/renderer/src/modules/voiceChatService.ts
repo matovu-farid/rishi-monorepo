@@ -89,6 +89,7 @@ export const voiceChatService = {
         session.mute(false)
         if (audioElement) audioElement.muted = false
         setState('active')
+        listeners.onChatStatusChange?.('idle')
       } catch (err) {
         captureError(err, { operation: 'voiceChatService', step: 'activate_warm' })
         setState('idle')
@@ -191,6 +192,7 @@ export const voiceChatService = {
       if (audioElement) audioElement.muted = false
       newSession.mute(false)
       setState('active')
+      listeners.onChatStatusChange?.('idle')
     } catch (err) {
       captureError(err, { operation: 'voiceChatService', step: 'activate_cold' })
       setState('idle')

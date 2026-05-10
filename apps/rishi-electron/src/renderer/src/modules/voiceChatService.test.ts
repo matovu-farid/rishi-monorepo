@@ -180,6 +180,21 @@ describe('voiceChatService', () => {
     expect(mockClose).toHaveBeenCalledTimes(1) // dispose() ran
     expect(voiceChatService.getState()).toBe('idle') // not 'paused'
   })
+
+  it('warm path emits onChatStatusChange(idle) after re-activation', async () => {
+    const onChatStatusChange = vi.fn()
+    voiceChatService.setListeners({ onChatStatusChange })
+    voiceChatService._setSessionForTests({
+      mute: mockMute,
+      interrupt: mockInterrupt,
+      close: mockClose,
+      updateAgent: mockUpdateAgent
+    } as never, 1)
+
+    await voiceChatService.activate(1, 'fresh text')
+
+    expect(onChatStatusChange).toHaveBeenCalledWith('idle')
+  })
 })
 
 describe('voiceChatService cold path', () => {
