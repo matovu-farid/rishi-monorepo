@@ -1,4 +1,5 @@
 import { getContextForQuery } from '@/lib/api'
+import type { BookOutline } from '@/lib/api'
 import { RealtimeAgent, tool } from '@openai/agents/realtime'
 import { z } from 'zod'
 import { captureError } from '@/utils/sentry'
@@ -6,13 +7,29 @@ import { captureError } from '@/utils/sentry'
 export interface BuildAgentOptions {
   bookId: number
   pageText: string
+  outline?: BookOutline
   onEndConversation: (reason: string) => void
 }
 
-const INSTRUCTIONS_TEMPLATE = (pageText: string) => `## Role and Goal
+function renderOutlineSection(outline: BookOutline | undefined): string {
+  if (!outline) return ''
+  const authorLine = outline.author ? `**Author:** ${outline.author}\n` : ''
+  const chapterLines =
+    outline.chapters.length > 0
+      ? `**Chapters:**\n${outline.chapters.map((c) => `- ${c}`).join('\n')}\n`
+      : ''
+  return `## Book Outline
+**Title:** ${outline.title}
+${authorLine}${chapterLines}
+Use this outline to orient the user across the book. If they ask about a specific chapter that isn't on their current page, you may use the bookContext tool to retrieve relevant passages from that chapter.
+
+`
+}
+
+const INSTRUCTIONS_TEMPLATE = (pageText: string, outline?: BookOutline) => `## Role and Goal
 You are a teacher and educational assistant whose role is to help the user understand the book they are reading. Your goal is to make complex concepts accessible and answer questions in a way that enhances their comprehension of the material.
 
-## Current Page Content
+${renderOutlineSection(outline)}## Current Page Content
 The user is currently looking at this page:
 """
 ${pageText || '(No page text available)'}
@@ -128,7 +145,7 @@ Ending conversations:
 - Provide a clear reason in the tool call describing why the conversation is ending (e.g., "User thanked me and indicated they're done", "User explicitly requested to end the conversation", "User confirmed they have no more questions").
 - DO NOT end conversations abruptly without user indication—only use this tool when the user has clearly signaled they're done.`
 
-export function buildRealtimeAgent({ bookId, pageText, onEndConversation }: BuildAgentOptions): RealtimeAgent {
+export function buildRealtimeAgent({ bookId, pageText, outline, onEndConversation }: BuildAgentOptions): RealtimeAgent {
   const bookContextExecute = async ({ queryText }: { queryText: string }) => {
     try {
       const context = await getContextForQuery({ bookId, queryText, k: 3 })
@@ -171,7 +188,7 @@ export function buildRealtimeAgent({ bookId, pageText, onEndConversation }: Buil
   return new RealtimeAgent({
     name: 'Assistant',
     voice: 'alloy',
-    instructions: INSTRUCTIONS_TEMPLATE(pageText),
+    instructions: INSTRUCTIONS_TEMPLATE(pageText, outline),
     tools: [bookContextTool, endConversationTool]
   })
 }
