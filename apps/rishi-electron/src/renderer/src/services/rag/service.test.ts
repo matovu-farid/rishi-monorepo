@@ -1,6 +1,8 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, type Mock } from 'vitest'
 import type { RagIpcChannels } from './index'
 import { createRagService } from './index'
+
+type EmbedFn = (text: string) => Promise<number[]>
 
 /**
  * Build a fake RagIpcChannels. All methods are vi.fn() spies returning
@@ -20,8 +22,8 @@ export function makeIpc(overrides: Partial<RagIpcChannels> = {}): RagIpcChannels
  * Build a deterministic fake embed function. Returns a fixed 384-dim vector
  * regardless of input. Real assertions in tests use spy methods, not vector content.
  */
-export function makeEmbed(): ReturnType<typeof vi.fn> {
-  return vi.fn().mockResolvedValue(new Array(384).fill(0.5))
+export function makeEmbed(): Mock<EmbedFn> {
+  return vi.fn<EmbedFn>().mockResolvedValue(new Array(384).fill(0.5))
 }
 
 describe('RagService.searchSemantic', () => {
