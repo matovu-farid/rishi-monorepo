@@ -36,7 +36,7 @@ export interface VoiceChatContext {
 }
 
 export class OfflineError extends Error {
-  override readonly name = 'OfflineError'
+  override readonly name: 'OfflineError' = 'OfflineError'
   constructor() {
     super('You are offline. Voice chat is unavailable until you reconnect.')
   }

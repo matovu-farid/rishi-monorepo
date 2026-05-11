@@ -9,6 +9,7 @@ import {
 } from './book-import'
 import { createConnectivityService, type ConnectivityService } from './connectivity'
 export { useIsOnline } from './connectivity'
+import { createVoiceChatService, type VoiceChatService } from './voice-chat'
 
 export type { DiscoveredBook, PageDataInsertable, ScanProgress } from './book-import'
 import { createSyncEngine } from '@rishi/shared/sync-engine'
@@ -16,6 +17,12 @@ import { embedSingleText, embedWithFallback } from '@/modules/embed-fallback'
 import { hashBookFile, uploadBookFile } from '@/modules/file-sync'
 import { copyBookToAppData } from '@/modules/books'
 import { getAuthToken } from '@/modules/auth'
+import { buildRealtimeAgent } from '@/modules/buildRealtimeAgent'
+import { playReadyChime } from '@/modules/readyChime'
+import { startThinkingSound, stopThinkingSound } from '@/modules/thinkingSound'
+import { getRealtimeClientSecret } from '@/lib/api'
+import { RealtimeSession } from '@openai/agents/realtime'
+import { OpenAIRealtimeWebRTC } from '@openai/agents-realtime'
 import config from '@/config.json'
 
 let _connectivity: ConnectivityService | null = null
@@ -209,4 +216,50 @@ export function getBookImportService(): BookImportService {
     })
   }
   return _import
+}
+
+let _voiceChat: VoiceChatService | null = null
+
+export function getVoiceChatService(): VoiceChatService {
+  if (!_voiceChat) {
+    _voiceChat = createVoiceChatService({
+      rag: getRagService(),
+      connectivity: getConnectivityService(),
+      ipc: { getRealtimeClientSecret },
+      webrtcFactory: ({ mediaStream, audioElement }) =>
+        new OpenAIRealtimeWebRTC({
+          mediaStream: mediaStream as unknown as MediaStream,
+          audioElement: audioElement as unknown as HTMLAudioElement
+        }) as never,
+      agentFactory: ({ bookId, pageText, outline, onEndConversation, rag }) =>
+        buildRealtimeAgent({ bookId, pageText, outline, onEndConversation, rag }) as never,
+      sessionFactory: (agent, opts) =>
+        new RealtimeSession(agent as never, {
+          transport: opts.transport as never,
+          apiKey: opts.apiKey
+        }) as never,
+      media: {
+        getUserMedia: (constraints) =>
+          navigator.mediaDevices.getUserMedia(constraints) as never,
+        createAudioElement: () => {
+          const a = document.createElement('audio')
+          a.autoplay = true
+          return a
+        }
+      },
+      effects: { playReadyChime, startThinkingSound, stopThinkingSound },
+      clock: {
+        now: () => Date.now(),
+        setTimeout: (fn, ms) => setTimeout(fn, ms),
+        clearTimeout: (handle) => clearTimeout(handle)
+      },
+      config: {
+        idleTimeoutMs: 15 * 60 * 1000,
+        connectTimeoutMs: 60 * 1000,
+        keyTtlMs: 9 * 60 * 1000
+      }
+    })
+    _voiceChat.start()
+  }
+  return _voiceChat
 }
