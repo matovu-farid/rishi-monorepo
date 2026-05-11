@@ -226,3 +226,33 @@ A service spec must not introduce new product features. If a refactor surfaces a
 4. Repeat per service in the order above.
 5. After Stage 1 lands: evaluate each service against the Stage 2 rubric; spec Stage 2 adoptions individually.
 6. After Stage 1 lands: IPC consolidation gets its own spec.
+
+## Stage 2 outcome (closed 2026-05-11)
+
+Stage 2 is **closed** with **2 of 6 services on Effect-TS**: TTS (PR #14) and Voice Chat (PR #16). Sync and Book Import stay plain TypeScript.
+
+### Canary results
+
+| Canary | PR | LoC delta | Pain signals | Verdict |
+|---|---|---|---|---|
+| TTS | [#14](https://github.com/matovu-farid/rishi-monorepo/pull/14) | +42% (program.ts + errors.ts vs queue.ts + transport.ts) | 0/3 | Neutral |
+| Voice Chat | [#16](https://github.com/matovu-farid/rishi-monorepo/pull/16) | +60% (activation-program.ts + errors.ts; service.ts shrank but didn't fully offset) | 0/3 | Neutral |
+
+### Decision per the canary matrix
+
+Both canaries verdict **Neutral**. Per the Voice Chat Stage 2 spec's canary matrix (Neutral + Neutral = stop), Stage 2 closes here. No Stage 2 work on Sync or Book Import. The remaining services stay plain TypeScript indefinitely.
+
+### What we learned (for future Effect adoption decisions)
+
+Concrete friction documented across both canaries:
+
+1. **`Ref.unsafeGet` / `Ref.unsafeUpdate` / `Queue.unsafeSize` are not exported in `effect@3.21.2`.** Only `Ref.unsafeMake` is callable. To read/update Refs synchronously from outside Effect-land, wrap `Effect.runSync(Ref.get/update)` in local helpers.
+2. **`Effect.catchAllCause` does NOT fire on `Fiber.interrupt` causes.** Use `Effect.onInterrupt` for cancellation cleanup, or rely on `acquireRelease`'s release callback.
+3. **`Effect.scoped` runs finalizers on success too.** A `success` flag inversion pattern is required if you only want teardown on failure/interrupt.
+4. **`Cache.make` uses the wall clock for TTL.** Tests that inject a fake clock can't drive cache expiry; the workaround is either a real-clock + sleep test or adopting Effect's `TestClock`.
+5. **Generator syntax (`Effect.gen(function*() { yield* ... })`) is noisy** relative to async/await for short pipelines. Use `Effect.gen` only when the pipeline is genuinely multi-step async with branching.
+6. **The Effect ↔ Promise boundary needs a workaround for surfacing interrupt vs error.** `Cause.isInterruptedOnly` is awkward at the boundary; we ended up with a sentinel `Error.message` string. This is a smell but contained.
+
+### Rubric guidance going forward
+
+Effect inside a service is **value-positive but not value-large**. Future services should clear a higher bar than the original 2-of-5 axes: prefer Effect only when the service hits ≥4 of 5 axes AND the service has a long-lived resource lifecycle (WebRTC connection, file stream, socket) that benefits unambiguously from `acquireRelease`. Concurrency + retry alone are not enough to clear the bar — plain TS handles those without much pain.
