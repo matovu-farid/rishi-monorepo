@@ -87,3 +87,86 @@ describe('indexBook — skip when fully indexed', () => {
     expect(events).toEqual([])
   })
 })
+
+describe('indexBook — full pipeline (chunks + vectors)', () => {
+  it('saves chunks, embeds in batches of 2, and saves vectors with name "<bookId>-vectordb"', async () => {
+    const { db, savePageDataCalls, saveVectorsCalls } = makeDb({ chunksExist: false })
+    const rag = makeRag()
+    const embed = makeEmbed()
+    const events: ImportProgressEvent[] = []
+
+    await indexBook(
+      { db, rag, embed, embedBatchSize: 2 },
+      42,
+      samplePageData,
+      (e) => events.push(e)
+    )
+
+    expect(savePageDataCalls).toHaveLength(2)
+    expect(saveVectorsCalls).toHaveLength(1)
+    expect(saveVectorsCalls[0].name).toBe('42-vectordb')
+    expect(saveVectorsCalls[0].dim).toBe(3)
+    expect(events).toEqual([{ kind: 'indexing', bookId: 42, reason: 'chunks-missing' }])
+  })
+})
+
+describe('indexBook — re-embed regression (chunks exist, vectors missing)', () => {
+  it('does NOT re-save chunks; DOES embed and save vectors', async () => {
+    const { db, savePageDataCalls, saveVectorsCalls } = makeDb({ chunksExist: true })
+    const rag = makeRag() // not indexed
+    const embed = makeEmbed()
+    const events: ImportProgressEvent[] = []
+
+    await indexBook(
+      { db, rag, embed, embedBatchSize: 2 },
+      42,
+      samplePageData,
+      (e) => events.push(e)
+    )
+
+    expect(savePageDataCalls).toEqual([])
+    expect(saveVectorsCalls).toHaveLength(1)
+    expect(saveVectorsCalls[0].name).toBe('42-vectordb')
+    expect(events).toEqual([{ kind: 'indexing', bookId: 42, reason: 'vectors-missing' }])
+  })
+})
+
+describe('indexBook — embed failure is swallowed', () => {
+  it('saves chunks but resolves void when embed throws', async () => {
+    const { db, savePageDataCalls, saveVectorsCalls } = makeDb({ chunksExist: false })
+    const rag = makeRag()
+    const embed = makeEmbed({ failNTimes: 1 })
+    const events: ImportProgressEvent[] = []
+
+    await expect(
+      indexBook(
+        { db, rag, embed, embedBatchSize: 2 },
+        42,
+        samplePageData,
+        (e) => events.push(e)
+      )
+    ).resolves.toBeUndefined()
+
+    expect(savePageDataCalls).toHaveLength(2) // chunks were saved
+    expect(saveVectorsCalls).toEqual([]) // vectors were NOT saved
+  })
+})
+
+describe('indexBook — reads pageData from DB when omitted', () => {
+  it('uses db.getAllPageDataByBookId when caller passes no pageData and chunks exist', async () => {
+    const dbPageData = [
+      { id: 10, pageNumber: 1, bookId: 42, data: 'A' },
+      { id: 11, pageNumber: 2, bookId: 42, data: 'B' }
+    ]
+    const { db, saveVectorsCalls } = makeDb({ chunksExist: true, pageData: dbPageData })
+    const rag = makeRag() // not indexed -> vectors-missing branch
+    const embed = makeEmbed()
+    const events: ImportProgressEvent[] = []
+
+    await indexBook({ db, rag, embed, embedBatchSize: 2 }, 42, undefined, (e) => events.push(e))
+
+    expect(db.getAllPageDataByBookId).toHaveBeenCalledWith(42)
+    expect(saveVectorsCalls).toHaveLength(1)
+    expect(events).toEqual([{ kind: 'indexing', bookId: 42, reason: 'vectors-missing' }])
+  })
+})
