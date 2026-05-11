@@ -54,6 +54,7 @@
     "clsx": "^2.1.1",
     "dompurify": "^3.2.6",
     "drizzle-orm": "^0.45.2",
+    "effect": "^3.21.2",
     "electron-updater": "^6.6.2",
     "embla-carousel-react": "^8.6.0",
     "epubjs": "^0.3.93",
