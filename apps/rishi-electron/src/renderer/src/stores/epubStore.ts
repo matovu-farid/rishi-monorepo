@@ -158,9 +158,7 @@ export function initEpubSubscriptions(): (() => void)[] {
           (paragraphRendition !== previous.paragraphRendition || bookId !== previous.bookId)
         ) {
           void getAllParagraphsForBook(paragraphRendition, bookId)
-            .then((paragraphs) =>
-              getBookImportService().indexBook(Number(bookId), paragraphs)
-            )
+            .then((paragraphs) => getBookImportService().indexBook(Number(bookId), paragraphs))
             .catch((err) => captureError(err, { operation: 'epub', step: 'index_book' }))
         }
       },
