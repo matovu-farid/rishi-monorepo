@@ -5,8 +5,7 @@
  * to state-dump.json for debugging. No-op in production.
  */
 import { usePlayerStore } from '../stores/playerStore'
-import { ttsQueue } from '../modules/ttsQueue'
-import { ttsService } from '../modules/ttsService'
+import { getTtsService } from '../services'
 
 const IS_DEV = import.meta.env.DEV
 
@@ -36,7 +35,7 @@ export function logStateEvent(event: string, data: Record<string, unknown> = {})
 
 async function buildStateDump(): Promise<Record<string, unknown>> {
   const playerState = usePlayerStore.getState()
-  const queueStatus = ttsQueue.getQueueStatus()
+  const queueStatus = getTtsService().getQueueStatus()
 
   let devMode: boolean | null = null
   let hasToken = false
@@ -61,10 +60,6 @@ async function buildStateDump(): Promise<Record<string, unknown>> {
       errors: playerState.errors
     },
     ttsQueue: queueStatus,
-    ttsService: {
-      activeRequests: (ttsService as any).activeRequests?.size ?? 0,
-      pendingListeners: (ttsService as any).pendingListeners?.size ?? 0
-    },
     auth: { devMode, hasToken },
     history
   }
