@@ -84,10 +84,7 @@ export default function SignInModal(): React.JSX.Element | null {
               We sent a sign-in link to <strong>{email || 'your inbox'}</strong>. Open it on this
               device.
             </p>
-            <button
-              onClick={() => setStatus('idle')}
-              className="text-sm text-gray-500 underline"
-            >
+            <button onClick={() => setStatus('idle')} className="text-sm text-gray-500 underline">
               Use a different email
             </button>
           </div>

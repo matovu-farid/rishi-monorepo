@@ -32,44 +32,44 @@ export function PremiumFeatureDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent>
-          <DialogHeader>
-            <div className="flex items-center gap-3">
-              <div className="rounded-full bg-primary/10 p-2">
-                <Icon size={20} className="text-primary" />
-              </div>
-              <DialogTitle>{config.title}</DialogTitle>
+      <DialogContent>
+        <DialogHeader>
+          <div className="flex items-center gap-3">
+            <div className="rounded-full bg-primary/10 p-2">
+              <Icon size={20} className="text-primary" />
             </div>
-            <DialogDescription className="pt-2">{config.description}</DialogDescription>
-          </DialogHeader>
+            <DialogTitle>{config.title}</DialogTitle>
+          </div>
+          <DialogDescription className="pt-2">{config.description}</DialogDescription>
+        </DialogHeader>
 
-          {config.bullets.length > 0 && (
-            <ul className="mt-2 space-y-2 text-sm">
-              {config.bullets.map((b) => (
-                <li key={b} className="flex items-start gap-2">
-                  <Check size={16} className="mt-0.5 shrink-0 text-primary" />
-                  <span>{b}</span>
-                </li>
-              ))}
-            </ul>
-          )}
+        {config.bullets.length > 0 && (
+          <ul className="mt-2 space-y-2 text-sm">
+            {config.bullets.map((b) => (
+              <li key={b} className="flex items-start gap-2">
+                <Check size={16} className="mt-0.5 shrink-0 text-primary" />
+                <span>{b}</span>
+              </li>
+            ))}
+          </ul>
+        )}
 
-          <DialogFooter>
-            <button
-              type="button"
-              className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-              onClick={() => onOpenChange(false)}
-            >
-              Maybe later
-            </button>
-            <button
-              type="button"
-              className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
-              onClick={handleSignIn}
-            >
-              <LogIn size={16} className="mr-2" />
-              Sign in
-            </button>
+        <DialogFooter>
+          <button
+            type="button"
+            className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+            onClick={() => onOpenChange(false)}
+          >
+            Maybe later
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+            onClick={handleSignIn}
+          >
+            <LogIn size={16} className="mr-2" />
+            Sign in
+          </button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

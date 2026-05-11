@@ -84,9 +84,7 @@ export async function embedWithFallback(embedParams: EmbedParam[]): Promise<Embe
 }
 
 export async function embedSingleText(text: string): Promise<number[]> {
-  const results = await embedWithFallback([
-    { text, metadata: { id: 0, pageNumber: 0, bookId: 0 } },
-  ])
+  const results = await embedWithFallback([{ text, metadata: { id: 0, pageNumber: 0, bookId: 0 } }])
   if (!results[0]) throw new Error('Embed returned empty result')
   return results[0].embedding
 }

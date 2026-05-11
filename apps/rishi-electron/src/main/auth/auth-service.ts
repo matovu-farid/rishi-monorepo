@@ -1,8 +1,8 @@
-import { shell, BrowserWindow } from "electron"
-import { generatePkcePair } from "./pkce"
-import { readSession, writeSession, clearSession } from "./session-store"
+import { shell, BrowserWindow } from 'electron'
+import { generatePkcePair } from './pkce'
+import { readSession, writeSession, clearSession } from './session-store'
 
-const API_URL = process.env.RISHI_API_URL ?? "https://api.fidexa.org"
+const API_URL = process.env.RISHI_API_URL ?? 'https://api.fidexa.org'
 
 const POLL_INTERVAL_MS = 2_000
 const POLL_TIMEOUT_MS = 10 * 60 * 1_000 // 10 min — covers slow email + click-then-walk-away
@@ -58,13 +58,13 @@ class AuthService {
   async startMagicLink(email: string): Promise<void> {
     const { code_verifier, code_challenge } = generatePkcePair()
     const res = await fetch(`${API_URL}/desktop/start`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email,
         code_challenge,
-        mode: "magic-link",
-      }),
+        mode: 'magic-link'
+      })
     })
     if (!res.ok) throw new Error(`magic-link send failed: ${res.status}`)
     const { state } = (await res.json()) as { state: string }
@@ -78,15 +78,15 @@ class AuthService {
    *   - We poll for the result the same way as magic-link
    */
   async startGoogleSignIn(): Promise<void> {
-    if (process.mas) throw new Error("google_unavailable_on_mas")
+    if (process.mas) throw new Error('google_unavailable_on_mas')
     const { code_verifier, code_challenge } = generatePkcePair()
     const res = await fetch(`${API_URL}/desktop/start`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         code_challenge,
-        mode: "oauth-google",
-      }),
+        mode: 'oauth-google'
+      })
     })
     if (!res.ok) throw new Error(`oauth start failed: ${res.status}`)
     const { state, web_url } = (await res.json()) as { state: string; web_url: string }
@@ -117,14 +117,14 @@ class AuthService {
       startedAt: Date.now(),
       cancel: () => {
         cancelled = true
-      },
+      }
     }
     this.polls.set(state, handle)
 
     void (async () => {
       while (!cancelled) {
         if (Date.now() - handle.startedAt > POLL_TIMEOUT_MS) {
-          console.warn("[auth] poll timeout for state", state)
+          console.warn('[auth] poll timeout for state', state)
           this.polls.delete(state)
           return
         }
@@ -132,13 +132,13 @@ class AuthService {
         let res: Response
         try {
           res = await fetch(`${API_URL}/desktop/poll`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ state, code_verifier }),
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ state, code_verifier })
           })
         } catch (err) {
           // Transient network error — log and try again next tick
-          console.warn("[auth] poll fetch failed (will retry)", err)
+          console.warn('[auth] poll fetch failed (will retry)', err)
           await sleep(POLL_INTERVAL_MS)
           continue
         }
@@ -166,8 +166,8 @@ class AuthService {
         }
 
         // 400/403/410 etc. — terminal failure for this state
-        const body = await res.text().catch(() => "")
-        console.error("[auth] poll terminal error", res.status, body)
+        const body = await res.text().catch(() => '')
+        console.error('[auth] poll terminal error', res.status, body)
         this.polls.delete(state)
         return
       }
@@ -187,29 +187,29 @@ class AuthService {
       // Better Auth's sign-out enforces Content-Type: application/json — without
       // it, returns 415 and the DB session stays alive. Same for the body.
       const res = await fetch(`${API_URL}/api/auth/sign-out`, {
-        method: "POST",
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
         },
-        body: "{}",
+        body: '{}'
       }).catch((err) => {
-        console.warn("[auth] sign-out request failed", err)
+        console.warn('[auth] sign-out request failed', err)
         return null
       })
       if (res && !res.ok) {
-        const body = await res.text().catch(() => "")
-        console.warn("[auth] sign-out non-OK", res.status, body)
+        const body = await res.text().catch(() => '')
+        console.warn('[auth] sign-out non-OK', res.status, body)
       }
     }
 
     if (pendingStates.length > 0) {
       await fetch(`${API_URL}/desktop/cancel`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ states: pendingStates }),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ states: pendingStates })
       }).catch((err) => {
-        console.warn("[auth] desktop/cancel request failed", err)
+        console.warn('[auth] desktop/cancel request failed', err)
       })
     }
 
@@ -224,21 +224,21 @@ class AuthService {
     const token = await readSession()
     if (!token) return
     const res = await fetch(`${API_URL}/api/auth/delete-user`, {
-      method: "POST",
+      method: 'POST',
       headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
       },
-      body: "{}",
+      body: '{}'
     })
     if (!res.ok) throw new Error(`delete failed: ${res.status}`)
     if (pendingStates.length > 0) {
       await fetch(`${API_URL}/desktop/cancel`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ states: pendingStates }),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ states: pendingStates })
       }).catch((err) => {
-        console.warn("[auth] desktop/cancel request failed", err)
+        console.warn('[auth] desktop/cancel request failed', err)
       })
     }
     await clearSession()
@@ -252,7 +252,7 @@ class AuthService {
 
   private async fetchUser(token: string): Promise<User | null> {
     const res = await fetch(`${API_URL}/api/auth/get-session`, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${token}` }
     })
     if (!res.ok) return null
     const data = (await res.json()) as { user: User } | null

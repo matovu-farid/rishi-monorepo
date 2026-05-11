@@ -1,13 +1,20 @@
 import { RealtimeSession } from '@openai/agents/realtime'
 import { OpenAIRealtimeWebRTC } from '@openai/agents-realtime'
+import { createActor } from 'xstate'
 import { getOrFetchKey, prefetchRealtimeKey } from './realtime'
 import { buildRealtimeAgent } from './buildRealtimeAgent'
 import { captureError } from '@/utils/sentry'
 import { playReadyChime } from '@/modules/readyChime'
 import { startThinkingSound, stopThinkingSound } from '@/modules/thinkingSound'
 import type { BookOutline } from '@/lib/api'
+import {
+  voiceChatMachine,
+  type VoiceChatStateValue,
+  type VoiceErrorReason
+} from '@/machines/voiceChatMachine'
+import { connectivityActor, isOnline } from '@/modules/connectivity'
 
-export type VoiceChatState = 'idle' | 'connecting' | 'active' | 'paused'
+export type VoiceChatState = VoiceChatStateValue
 
 export interface VoiceChatContext {
   pageText: string
@@ -20,12 +27,23 @@ export interface VoiceChatEvents {
   onEndedByAgent: () => void
 }
 
-const IDLE_TIMEOUT_MS = 15 * 60 * 1000
+export class OfflineError extends Error {
+  constructor() {
+    super('You are offline. Voice chat is unavailable until you reconnect.')
+    this.name = 'OfflineError'
+  }
+}
 
-// Module-level singleton state
+const IDLE_TIMEOUT_MS = 15 * 60 * 1000
+const CONNECT_TIMEOUT_MS = 60 * 1000
+
+// Module-level singleton actor — the source of truth for voice chat state.
+const actor = createActor(voiceChatMachine)
+actor.start()
+
+// Module-level singleton state (effects + caches)
 let hasFiredReadyChime = false
 let isAgentSpeaking = false
-let state: VoiceChatState = 'idle'
 let session: RealtimeSession | null = null
 let sessionCleanup: (() => void) | null = null
 let currentBookId: number | null = null
@@ -38,10 +56,32 @@ let hasUsedVoiceInSession = false
 let activateInFlight: Promise<void> | null = null
 let preconnectIntent = false
 
-function setState(next: VoiceChatState) {
-  if (state === next) return
-  state = next
-  listeners.onStateChange?.(state)
+// Fire onStateChange whenever the machine transitions
+actor.subscribe((snapshot) => {
+  listeners.onStateChange?.(snapshot.value as VoiceChatState)
+})
+
+// Reflect connectivity into the voice machine. When network drops mid-session
+// we tear the session down and surface 'offline' to the UI.
+connectivityActor.subscribe((snapshot) => {
+  if (snapshot.value === 'offline') {
+    if (session) {
+      disposeInternal()
+    }
+    actor.send({ type: 'OFFLINE' })
+  } else if (snapshot.value === 'online' && actor.getSnapshot().value === 'offline') {
+    actor.send({ type: 'ONLINE' })
+  }
+})
+
+function classifyActivateError(err: unknown): VoiceErrorReason {
+  if (err instanceof OfflineError) return 'connect_failed'
+  const name = (err as { name?: string })?.name
+  const message = (err as { message?: string })?.message ?? ''
+  if (name === 'NotAllowedError' || name === 'NotFoundError') return 'mic_denied'
+  if (message.includes('Not authenticated') || message.includes('auth')) return 'auth_failed'
+  if (message.includes('timed out')) return 'timeout'
+  return 'connect_failed'
 }
 
 function clearIdleTimer() {
@@ -62,9 +102,53 @@ function fingerprintContext(ctx: VoiceChatContext): string {
   return `${ctx.pageText}\n${JSON.stringify(ctx.outline ?? {})}`
 }
 
+// Internal dispose used by connectivity handler — separated to avoid recursion
+// (dispose() sends DISPOSE which would re-enter the connectivity check otherwise).
+function disposeInternal() {
+  clearIdleTimer()
+  if (sessionCleanup) {
+    sessionCleanup()
+    sessionCleanup = null
+  }
+  const s = session
+  session = null
+  currentBookId = null
+  if (s) {
+    try {
+      s.close()
+    } catch (err) {
+      captureError(err, { operation: 'voiceChatService', step: 'dispose_close' })
+    }
+  }
+  if (mediaStream) {
+    mediaStream.getTracks().forEach((t) => t.stop())
+    mediaStream = null
+  }
+  if (audioElement) {
+    audioElement.pause()
+    audioElement.srcObject = null
+    audioElement = null
+  }
+  listeners.onChatStatusChange?.('idle')
+  hasFiredReadyChime = false
+  isAgentSpeaking = false
+  lastContextFingerprint = null
+}
+
 export const voiceChatService = {
+  /** xstate actor — subscribe with actor.subscribe() or useSelector(). */
+  actor,
+
   getState(): VoiceChatState {
-    return state
+    return actor.getSnapshot().value as VoiceChatState
+  },
+
+  getError() {
+    return actor.getSnapshot().context.error
+  },
+
+  dismissError() {
+    actor.send({ type: 'DISMISS_ERROR' })
   },
 
   setListeners(next: Partial<VoiceChatEvents>) {
@@ -80,12 +164,13 @@ export const voiceChatService = {
    * Pre-warm the WebRTC connection in the background after the user has used voice chat
    * at least once this session. Saves ~600-1500ms on first activation in subsequent books.
    * No-op if the user hasn't used voice yet — we don't want to burn the WebRTC handshake
-   * for users who never use voice.
+   * for users who never use voice. No-op if offline.
    */
   async preconnect(bookId: number, ctx: VoiceChatContext): Promise<void> {
     if (!hasUsedVoiceInSession) return
+    if (!isOnline()) return
     if (session && currentBookId === bookId) return
-    if (activateInFlight) return // Another activate already in progress
+    if (activateInFlight) return
     preconnectIntent = true
     try {
       await this.activate(bookId, ctx, { fromPreconnect: true })
@@ -96,11 +181,10 @@ export const voiceChatService = {
         session.interrupt()
         session.mute(true)
         if (audioElement) audioElement.muted = true
-        setState('paused')
+        actor.send({ type: 'DEACTIVATE' })
       }
     } catch (err) {
       captureError(err, { operation: 'voiceChatService', step: 'preconnect' })
-      // Swallow — preconnect is best-effort
     } finally {
       preconnectIntent = false
     }
@@ -108,21 +192,23 @@ export const voiceChatService = {
 
   /**
    * Start or resume voice chat for the given book.
-   * - First call: full setup (mic prompt + WebRTC handshake + agent build) — Task 3 wires this.
+   * - First call: full setup (mic prompt + WebRTC handshake + agent build).
    * - Subsequent call on same book: updateAgent + unmute (near-instant).
    * - Call on different book: dispose old session, then full setup for new book.
+   * Throws OfflineError synchronously if offline.
    */
   async activate(
     bookId: number,
     ctx: VoiceChatContext,
     opts: { fromPreconnect?: boolean } = {}
   ): Promise<void> {
-    // User-initiated activate cancels any in-flight preconnect intent
+    if (!isOnline()) {
+      actor.send({ type: 'OFFLINE' })
+      throw new OfflineError()
+    }
     if (!opts.fromPreconnect) {
       preconnectIntent = false
     }
-    // In-flight guard: if activate is already running, await it instead of
-    // starting a second cold path (would leak WebRTC + session resources).
     if (activateInFlight) {
       return activateInFlight
     }
@@ -144,7 +230,7 @@ export const voiceChatService = {
 
     if (session && currentBookId === bookId) {
       // Warm path: refresh agent with new page text (if changed), then unmute
-      setState('connecting')
+      actor.send({ type: 'CONNECT_STARTED' })
       try {
         const fp = fingerprintContext(ctx)
         if (fp !== lastContextFingerprint) {
@@ -159,20 +245,25 @@ export const voiceChatService = {
         }
         session.mute(false)
         if (audioElement) audioElement.muted = false
-        setState('active')
+        actor.send({ type: 'CONNECT_SUCCEEDED' })
         listeners.onChatStatusChange?.('idle')
       } catch (err) {
         captureError(err, { operation: 'voiceChatService', step: 'activate_warm' })
-        setState('idle')
+        actor.send({
+          type: 'CONNECT_FAILED',
+          reason: classifyActivateError(err),
+          message: err instanceof Error ? err.message : undefined
+        })
         throw err
       }
       return
     }
 
     // Cold path: first-time activation or after dispose
-    setState('connecting')
+    actor.send({ type: 'CONNECT_STARTED' })
     listeners.onChatStatusChange?.('connecting')
 
+    let newSession: RealtimeSession | null = null
     try {
       // 1. Acquire mic (cached after first call)
       if (!mediaStream) {
@@ -202,7 +293,7 @@ export const voiceChatService = {
       // 5. Create the session
       // apiKey is supplied at connect() time via the ephemeral key; the constructor
       // arg is required by the type but ignored when connect() provides one.
-      const newSession = new RealtimeSession(agent, { transport, apiKey: '' })
+      newSession = new RealtimeSession(agent, { transport, apiKey: '' })
 
       // 6. Wire status events (forwarded to chat-status listener)
       const status = (next: 'idle' | 'connecting' | 'thinking' | 'speaking') =>
@@ -233,6 +324,11 @@ export const voiceChatService = {
       const onError = (err: unknown) => {
         captureError(err, { operation: 'voiceChatService', step: 'session_error' })
         stopThinkingSound()
+        actor.send({
+          type: 'SESSION_ERROR',
+          reason: 'session_error',
+          message: err instanceof Error ? err.message : undefined
+        })
         voiceChatService.dispose()
       }
 
@@ -245,43 +341,81 @@ export const voiceChatService = {
       newSession.on('error', onError)
 
       // Teardown closure: removes all listeners on dispose
+      const s = newSession
       sessionCleanup = () => {
-        newSession.off('agent_start', onAgentStart)
-        newSession.off('audio_start', onAudioStart)
-        newSession.off('audio_stopped', onAudioStopped)
-        newSession.off('agent_end', onAgentEnd)
-        newSession.off('agent_tool_start', onToolStart)
-        newSession.off('agent_tool_end', onToolEnd)
-        newSession.off('error', onError)
+        s.off('agent_start', onAgentStart)
+        s.off('audio_start', onAudioStart)
+        s.off('audio_stopped', onAudioStopped)
+        s.off('agent_end', onAgentEnd)
+        s.off('agent_tool_start', onToolStart)
+        s.off('agent_tool_end', onToolEnd)
+        s.off('error', onError)
       }
 
-      // 7. Fetch ephemeral key + connect
+      // 7. Fetch ephemeral key + connect (with timeout — WebRTC handshake can
+      // stall silently on flaky networks, leaving the panel "open but stuck")
       const apiKey = await getOrFetchKey()
-      await newSession.connect({ apiKey })
+      let connectTimeout: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([
+          newSession.connect({ apiKey }),
+          new Promise<never>((_, reject) => {
+            connectTimeout = setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    `Realtime session connect timed out after ${CONNECT_TIMEOUT_MS / 1000}s`
+                  )
+                ),
+              CONNECT_TIMEOUT_MS
+            )
+          })
+        ])
+      } finally {
+        if (connectTimeout) clearTimeout(connectTimeout)
+      }
 
       session = newSession
       currentBookId = bookId
       lastContextFingerprint = fingerprintContext(ctx)
       if (audioElement) audioElement.muted = false
       newSession.mute(false)
-      setState('active')
+      actor.send({ type: 'CONNECT_SUCCEEDED' })
       listeners.onChatStatusChange?.('idle')
       hasUsedVoiceInSession = true
     } catch (err) {
       captureError(err, { operation: 'voiceChatService', step: 'activate_cold' })
-      setState('idle')
+      // Tear down the half-built session so a timed-out connect that finishes
+      // in the background can't leave a hot mic + WebRTC pipe running invisibly.
+      if (sessionCleanup) {
+        sessionCleanup()
+        sessionCleanup = null
+      }
+      if (newSession) {
+        try {
+          newSession.close()
+        } catch {
+          // best-effort; already in the error path
+        }
+      }
+      actor.send({
+        type: 'CONNECT_FAILED',
+        reason: classifyActivateError(err),
+        message: err instanceof Error ? err.message : undefined
+      })
       listeners.onChatStatusChange?.('idle')
       throw err
     }
   },
 
   deactivate() {
-    if (state !== 'active' || !session) return
+    const value = actor.getSnapshot().value
+    if (value !== 'active' || !session) return
     try {
       session.interrupt()
       session.mute(true)
       if (audioElement) audioElement.muted = true
-      setState('paused')
+      actor.send({ type: 'DEACTIVATE' })
       listeners.onChatStatusChange?.('idle')
       scheduleIdleTimer()
     } catch (err) {
@@ -293,35 +427,8 @@ export const voiceChatService = {
   },
 
   dispose() {
-    clearIdleTimer()
-    if (sessionCleanup) {
-      sessionCleanup()
-      sessionCleanup = null
-    }
-    const s = session
-    session = null
-    currentBookId = null
-    if (s) {
-      try {
-        s.close()
-      } catch (err) {
-        captureError(err, { operation: 'voiceChatService', step: 'dispose_close' })
-      }
-    }
-    if (mediaStream) {
-      mediaStream.getTracks().forEach((t) => t.stop())
-      mediaStream = null
-    }
-    if (audioElement) {
-      audioElement.pause()
-      audioElement.srcObject = null
-      audioElement = null
-    }
-    setState('idle')
-    listeners.onChatStatusChange?.('idle')
-    hasFiredReadyChime = false
-    isAgentSpeaking = false
-    lastContextFingerprint = null
+    disposeInternal()
+    actor.send({ type: 'DISPOSE' })
   },
 
   // --- test hooks ---
@@ -333,19 +440,19 @@ export const voiceChatService = {
     mediaStream = null
     audioElement = null
     listeners = {}
-    state = 'idle'
     hasFiredReadyChime = false
     isAgentSpeaking = false
     lastContextFingerprint = null
     hasUsedVoiceInSession = false
     activateInFlight = null
     preconnectIntent = false
+    actor.send({ type: 'DISPOSE' })
   },
-  // Bypasses setState() intentionally — test setup should not fire onStateChange listeners
   _setSessionForTests(fakeSession: RealtimeSession, bookId: number) {
     session = fakeSession
     currentBookId = bookId
-    state = 'active'
+    actor.send({ type: 'CONNECT_STARTED' })
+    actor.send({ type: 'CONNECT_SUCCEEDED' })
   },
   _hasUsedVoiceInSession() {
     return hasUsedVoiceInSession

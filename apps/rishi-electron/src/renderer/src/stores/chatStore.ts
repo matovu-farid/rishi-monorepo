@@ -1,15 +1,20 @@
 import { create } from 'zustand'
 import { devtools, subscribeWithSelector } from 'zustand/middleware'
-import { voiceChatService } from '@/modules/voiceChatService'
+import { voiceChatService, OfflineError } from '@/modules/voiceChatService'
 import { usePlayerStore } from './playerStore'
 import { useEpubStore } from './epubStore'
 import { captureError } from '@/utils/sentry'
+import type { VoiceChatStateValue, VoiceErrorReason } from '@/machines/voiceChatMachine'
 
 export type ChatStatus = 'idle' | 'connecting' | 'thinking' | 'speaking'
 
 interface ChatState {
   isChatting: boolean
   chatStatus: ChatStatus
+  /** Typed voice-chat lifecycle state from the xstate machine */
+  voiceState: VoiceChatStateValue
+  /** Set when voice chat enters 'error' state (timeout, mic, auth, etc.) */
+  voiceError: { reason: VoiceErrorReason; message?: string } | null
   /** Incremented on each startChat, checked on resolve to discard stale activations */
   _chatGeneration: number
   /** True while activate() is in flight — prevents concurrent starts */
@@ -19,12 +24,14 @@ interface ChatState {
   setChatStatus: (status: ChatStatus) => void
   startChat: (bookId: number) => void
   stopConversation: () => void
+  dismissVoiceError: () => void
 }
 
 export const useChatStore = create<ChatState>()(
   devtools(
     subscribeWithSelector((set, get) => {
-      // Wire service → store listeners once on module init
+      // Wire service → store: chat status events (thinking/speaking) and
+      // agent-initiated end. Voice machine state flows via actor subscription.
       voiceChatService.setListeners({
         onChatStatusChange: (status) => set({ chatStatus: status }),
         onEndedByAgent: () => {
@@ -33,9 +40,20 @@ export const useChatStore = create<ChatState>()(
         }
       })
 
+      // Mirror voice machine state into the store so React components can
+      // subscribe to typed states (offline/error/etc.) without touching the actor.
+      voiceChatService.actor.subscribe((snapshot) => {
+        set({
+          voiceState: snapshot.value as VoiceChatStateValue,
+          voiceError: snapshot.context.error
+        })
+      })
+
       return {
         isChatting: false,
         chatStatus: 'idle' as ChatStatus,
+        voiceState: voiceChatService.getState(),
+        voiceError: voiceChatService.getError(),
         _chatGeneration: 0,
         _isStarting: false,
 
@@ -76,7 +94,9 @@ export const useChatStore = create<ChatState>()(
               set({ _isStarting: false })
             })
             .catch((err) => {
-              captureError(err, { operation: 'chatStore', step: 'activate' })
+              if (!(err instanceof OfflineError)) {
+                captureError(err, { operation: 'chatStore', step: 'activate' })
+              }
               set({ isChatting: false, chatStatus: 'idle', _isStarting: false })
             })
         },
@@ -89,6 +109,10 @@ export const useChatStore = create<ChatState>()(
             _chatGeneration: _chatGeneration + 1
           })
           voiceChatService.deactivate()
+        },
+
+        dismissVoiceError: () => {
+          voiceChatService.dismissError()
         }
       }
     }),
