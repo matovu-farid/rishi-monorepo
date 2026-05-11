@@ -201,6 +201,24 @@ export function deleteBook(id: number): void {
 }
 
 /**
+ * Hard-delete all chunk_data rows for a book. Chunks are local-only (not
+ * sync-tracked), so removing them frees DB + FTS index space immediately.
+ * Called from the books:delete IPC handler alongside the .hnsw cleanup.
+ */
+export function deleteChunksByBookId(bookId: number): void {
+  _deleteChunksByBookIdWithDb(getDb(), bookId)
+}
+
+/** Test-only db-injectable variant; mirrors the _getBookOutlineWithDb pattern. */
+export function _deleteChunksByBookIdWithDb(
+  db: ReturnType<typeof getDb>,
+  bookId: number
+): number {
+  const result = db.prepare('DELETE FROM chunk_data WHERE book_id = ?').run(bookId)
+  return result.changes
+}
+
+/**
  * Update only the cover blob for a book.
  */
 export function updateBookCover(id: number, cover: number[] | Buffer): void {
