@@ -98,6 +98,136 @@ export const baseConfig: BookImportConfig = {
   embedBatchSize: 2
 }
 
+describe('runImport — unsupported extension', () => {
+  it('returns stage: unsupported and never touches formats / DB', async () => {
+    const { formats, calls } = makeFormats()
+    const { fs, copyCalls, removeCalls } = makeFs()
+    const { db, savedBooks } = makeDbForImport()
+    const fileSync = makeFileSync()
+    const events: ImportProgressEvent[] = []
+
+    const result = await runImport(
+      { formats, fs, db, fileSync, config: baseConfig },
+      '/Downloads/note.txt',
+      (e) => events.push(e)
+    )
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.stage).toBe('unsupported')
+      expect(result.error).toMatch(/Unsupported format: \.txt/)
+    }
+    // Copy DID run (we copy before dispatch in pipeline order); format calls did not.
+    expect(copyCalls).toEqual(['/Downloads/note.txt'])
+    expect(calls).toEqual([])
+    expect(savedBooks).toEqual([])
+    // No rollback for unsupported (the file is a normal copy; caller may delete).
+    expect(removeCalls).toEqual([])
+    expect(events.map((e) => e.kind)).toEqual(['copying', 'failed'])
+  })
+})
+
+describe('runImport — copy failure', () => {
+  it('returns stage: copy and never parses', async () => {
+    const { formats, calls } = makeFormats()
+    const { fs, removeCalls } = makeFs({
+      copyImpl: async () => {
+        throw new Error('disk full')
+      }
+    })
+    const { db } = makeDbForImport()
+    const fileSync = makeFileSync()
+    const events: ImportProgressEvent[] = []
+
+    const result = await runImport(
+      { formats, fs, db, fileSync, config: baseConfig },
+      '/Downloads/book.epub',
+      (e) => events.push(e)
+    )
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.stage).toBe('copy')
+    expect(calls).toEqual([])
+    expect(removeCalls).toEqual([])
+    expect(events.map((e) => e.kind)).toEqual(['copying', 'failed'])
+  })
+})
+
+describe('runImport — parse failure rolls back the copy', () => {
+  it('removes the copied file and returns stage: parse', async () => {
+    const failingFormats = {
+      getBookData: vi.fn(async () => {
+        throw new Error('bad zip')
+      }),
+      getPdfData: vi.fn(),
+      getMobiData: vi.fn(),
+      getDjvuData: vi.fn()
+    }
+    const { fs, removeCalls } = makeFs()
+    const { db, savedBooks } = makeDbForImport()
+    const fileSync = makeFileSync()
+    const events: ImportProgressEvent[] = []
+
+    const result = await runImport(
+      { formats: failingFormats, fs, db, fileSync, config: baseConfig },
+      '/Downloads/broken.epub',
+      (e) => events.push(e)
+    )
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.stage).toBe('parse')
+    expect(removeCalls).toEqual(['/userData/broken.epub'])
+    expect(savedBooks).toEqual([])
+    expect(events.map((e) => e.kind)).toEqual(['copying', 'parsing', 'failed'])
+  })
+})
+
+describe('runImport — save failure does NOT roll back copy', () => {
+  it('returns stage: save and leaves the copied file on disk', async () => {
+    const { formats } = makeFormats()
+    const { fs, removeCalls } = makeFs()
+    const { db } = makeDbForImport({ failOn: 'saveBook' })
+    const fileSync = makeFileSync()
+    const events: ImportProgressEvent[] = []
+
+    const result = await runImport(
+      { formats, fs, db, fileSync, config: baseConfig },
+      '/Downloads/book.epub',
+      (e) => events.push(e)
+    )
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.stage).toBe('save')
+    expect(removeCalls).toEqual([])
+    expect(events.map((e) => e.kind)).toEqual(['copying', 'parsing', 'saving', 'failed'])
+  })
+})
+
+describe('runImport — upload failure does NOT affect result', () => {
+  it('returns ok and emits upload-failed asynchronously', async () => {
+    const { formats } = makeFormats()
+    const { fs } = makeFs()
+    const { db } = makeDbForImport()
+    const fileSync = makeFileSync({ throwOn: 'upload' })
+    const events: ImportProgressEvent[] = []
+
+    const result = await runImport(
+      { formats, fs, db, fileSync, config: baseConfig },
+      '/Downloads/book.epub',
+      (e) => events.push(e)
+    )
+
+    expect(result.ok).toBe(true)
+    // `done` fires synchronously after save; `upload-failed` arrives on the next tick.
+    await new Promise((r) => setTimeout(r, 0))
+    const kinds = events.map((e) => e.kind)
+    expect(kinds).toContain('upload-started')
+    expect(kinds).toContain('upload-failed')
+    // `done` must come before `upload-failed`.
+    expect(kinds.indexOf('done')).toBeLessThan(kinds.indexOf('upload-failed'))
+  })
+})
+
 describe('runImport — happy path EPUB', () => {
   it('returns { ok: true } and emits copying -> parsing -> saving -> done', async () => {
     const { formats } = makeFormats()

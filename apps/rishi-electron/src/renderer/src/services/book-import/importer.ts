@@ -7,7 +7,8 @@ import type {
   ImportProgressEvent,
   ImportResult
 } from './types'
-import { dispatchFormatExtraction, UnsupportedFormatError } from './dispatch'
+import { extOf, formatFor, UnsupportedFormatError } from './dispatch'
+import type { BookDataParsed, BookFormat } from './types'
 
 export interface ImporterDeps {
   formats: FormatsIpc
@@ -101,24 +102,31 @@ export async function runImport(
     return { ok: false, filePath, stage: 'copy', error }
   }
 
-  // Stage 2: parse via format dispatch.
-  let format: 'epub' | 'pdf' | 'mobi' | 'azw3' | 'djvu'
-  let bookData
+  // Stage 2a: resolve format (extension check) — short-circuit unsupported
+  // BEFORE emitting `parsing`.
+  const extension = extOf(filePath)
+  const resolvedFormat = formatFor(extension)
+  if (resolvedFormat === null) {
+    const err = new UnsupportedFormatError(extension)
+    emit({ kind: 'failed', filePath, stage: 'unsupported', error: err.message })
+    return { ok: false, filePath, stage: 'unsupported', error: err.message }
+  }
+  const format: BookFormat = resolvedFormat
+
+  // Stage 2b: parse via the right formats IPC.
+  emit({ kind: 'parsing', filePath, format })
+  let bookData: BookDataParsed
   try {
-    const dispatched = await dispatchFormatExtraction(deps.formats, filePath)
-    format = dispatched.format
-    emit({ kind: 'parsing', filePath, format })
-    const parsed = await withTimeout(
-      Promise.resolve(dispatched.data),
-      deps.config.parseTimeoutMs,
-      'Extracting metadata'
-    )
-    bookData = parsed
+    const parsePromise: Promise<BookDataParsed> =
+      format === 'epub'
+        ? deps.formats.getBookData(filePath)
+        : format === 'pdf'
+          ? deps.formats.getPdfData(filePath)
+          : format === 'mobi' || format === 'azw3'
+            ? deps.formats.getMobiData(filePath)
+            : deps.formats.getDjvuData(filePath)
+    bookData = await withTimeout(parsePromise, deps.config.parseTimeoutMs, 'Extracting metadata')
   } catch (err) {
-    if (err instanceof UnsupportedFormatError) {
-      emit({ kind: 'failed', filePath, stage: 'unsupported', error: err.message })
-      return { ok: false, filePath, stage: 'unsupported', error: err.message }
-    }
     const error = messageOf(err, 'Parse failed')
     emit({ kind: 'failed', filePath, stage: 'parse', error })
     // Rollback the copied file (best-effort).
