@@ -1,4 +1,4 @@
-import { getContextForQuery } from '@/lib/api'
+import { getRagService } from '@/services'
 import type { BookOutline } from '@/lib/api'
 import { RealtimeAgent, tool } from '@openai/agents/realtime'
 import { z } from 'zod'
@@ -57,8 +57,8 @@ When the user clearly signals they're done (e.g., "thanks, that's all", "goodbye
 export function buildRealtimeAgent({ bookId, pageText, outline, onEndConversation }: BuildAgentOptions): RealtimeAgent {
   const bookContextExecute = async ({ queryText }: { queryText: string }) => {
     try {
-      const context = await getContextForQuery({ bookId, queryText, k: 3 })
-      return context
+      const chunks = await getRagService().searchSemantic(queryText, bookId, 3)
+      return chunks.map((c) => c.text)
     } catch (err) {
       captureError(err, { operation: 'realtime', step: 'bookContext_tool' })
       return ['Unable to retrieve book context at this time.']
