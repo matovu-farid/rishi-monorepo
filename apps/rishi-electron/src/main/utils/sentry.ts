@@ -3,7 +3,7 @@ import * as Sentry from '@sentry/electron/main'
 
 const DSN =
   process.env.SENTRY_DSN ||
-  'https://79d31f9f084402224dc303f699941691@o4510586781958144.ingest.de.sentry.io/4510586797555792'
+  'https://37b935f34d09bb053baeff3a28d6b9d1@o4510586781958144.ingest.de.sentry.io/4511372584747088'
 
 let initialized = false
 
