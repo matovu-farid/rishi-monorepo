@@ -126,3 +126,25 @@ describe('BookImportService.importFromPath — happy path', () => {
     ])
   })
 })
+
+describe('BookImportService.importBatch', () => {
+  it('continues after one failure and returns results in input order', async () => {
+    // The middle path has an unsupported extension; the others succeed.
+    const deps = makeDeps()
+    const service = createBookImportService(deps)
+    const events: ImportProgressEvent[] = []
+    service.onImportProgress((e) => events.push(e))
+
+    const results = await service.importBatch([
+      '/Downloads/one.epub',
+      '/Downloads/middle.unknownext',
+      '/Downloads/three.pdf'
+    ])
+
+    expect(results).toHaveLength(3)
+    expect(results[0].ok).toBe(true)
+    expect(results[1].ok).toBe(false)
+    if (!results[1].ok) expect(results[1].stage).toBe('unsupported')
+    expect(results[2].ok).toBe(true)
+  })
+})
