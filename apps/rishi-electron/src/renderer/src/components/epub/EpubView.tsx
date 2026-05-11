@@ -28,7 +28,7 @@ import { type Book } from '@/lib/api'
 import { updateBookLocation } from '@/lib/api'
 import { BackButton } from '../BackButton'
 import { saveHighlight, getHighlightsForBook } from '@/modules/highlight-storage'
-import { triggerSyncOnWrite } from '@/modules/sync-triggers'
+import { getSyncService } from '@/services'
 import { getHighlightHex } from '@/types/highlight'
 import type { HighlightColor } from '@/types/highlight'
 import type { Contents } from 'epubjs'
@@ -216,7 +216,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         text: selectionInfo.text,
         color
       })
-        .then(() => triggerSyncOnWrite())
+        .then(() => getSyncService().triggerWrite())
         .catch((err) => console.warn('[highlight] save failed:', err))
       setSelectionInfo(null)
     },
@@ -574,7 +574,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
                 bookId: book.id.toString(),
                 location: epubcfi
               })
-              triggerSyncOnWrite()
+              getSyncService().triggerWrite()
             }
 
             setCurrentEpubLocation(epubcfi)
