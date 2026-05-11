@@ -5,20 +5,10 @@ import { toast } from 'react-toastify'
 import { Button } from './ui/Button'
 import { Trash2, Plus, Search } from 'lucide-react'
 // chooseFiles moved into BookDiscoveryModal
-import {
-  Book,
-  deleteBook,
-  getBookData,
-  getBooks,
-  getDjvuData,
-  getMobiData,
-  getPdfData,
-  saveBook
-} from '@/lib/api'
-import { copyBookToAppData } from '@/modules/books'
+import { Book, deleteBook, getBooks } from '@/lib/api'
+import { getBookImportService } from '@/services'
 import { prefetchRealtimeKey } from '@/modules/realtime'
 import { prefetchTTSForBooks } from '@/modules/ttsPrefetch'
-import { hashBookFile, uploadBookFile } from '@/modules/file-sync'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
@@ -27,29 +17,6 @@ import { LoginButton } from './LoginButton'
 import { UpdateMenu } from './UpdateMenu'
 import { BookDiscoveryModal } from './BookDiscoveryModal'
 import { HelpMenu } from './HelpMenu'
-
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)),
-      ms
-    )
-    promise.then(
-      (v) => {
-        clearTimeout(timer)
-        resolve(v)
-      },
-      (e) => {
-        clearTimeout(timer)
-        reject(e)
-      }
-    )
-  })
-}
-
-const COPY_TIMEOUT = 2 * 60 * 1000
-const EXTRACT_TIMEOUT = 60 * 1000
-const SAVE_TIMEOUT = 30 * 1000
 
 function bytesToBlobUrl(bytes: number[]): string | null {
   if (!bytes || bytes.length === 0) return null
@@ -160,80 +127,24 @@ export default function FileComponent(): React.JSX.Element {
     }
   })
 
-  const importBook = async (filePath: string) => {
-    try {
-      const ext = filePath.split('.').pop()?.toLowerCase()
-      const bookPath = await withTimeout(copyBookToAppData(filePath), COPY_TIMEOUT, 'Copying file')
+  const processFilePaths = async (filePaths: string[]) => {
+    const svc = getBookImportService()
+    const results = await svc.importBatch(filePaths)
 
-      let bookData
-      if (ext === 'epub')
-        bookData = await withTimeout(
-          getBookData({ path: bookPath }),
-          EXTRACT_TIMEOUT,
-          'Extracting metadata'
-        )
-      else if (ext === 'pdf')
-        bookData = await withTimeout(
-          getPdfData({ path: bookPath }),
-          EXTRACT_TIMEOUT,
-          'Extracting metadata'
-        )
-      else if (ext === 'mobi' || ext === 'azw3')
-        bookData = await withTimeout(
-          getMobiData({ path: bookPath }),
-          EXTRACT_TIMEOUT,
-          'Extracting metadata'
-        )
-      else if (ext === 'djvu')
-        bookData = await withTimeout(
-          getDjvuData({ path: bookPath }),
-          EXTRACT_TIMEOUT,
-          'Extracting metadata'
-        )
-      else {
-        toast.error(`Unsupported format: .${ext}`)
-        return
+    let lastSuccess: { ok: true; bookId: number } | null = null
+    for (const r of results) {
+      if (!r.ok) {
+        toast.error(`Failed to import ${r.filePath}: ${r.error}`)
+        continue
       }
-
-      const book = await withTimeout(
-        saveBook({
-          book: {
-            coverKind: bookData.coverKind || '',
-            title: bookData.title || '',
-            author: bookData.author || '',
-            publisher: bookData.publisher || '',
-            filepath: bookPath,
-            location: ext === 'mobi' ? '0' : '1',
-            version: 0,
-            kind: bookData.kind,
-            cover: bookData.cover
-          }
-        }),
-        SAVE_TIMEOUT,
-        'Saving to library'
-      )
-
-      // Hash + upload (non-blocking)
-      try {
-        const fileHash = await hashBookFile(bookPath)
-        const formatForUpload = (ext === 'azw3' ? 'mobi' : ext) as 'epub' | 'pdf' | 'mobi' | 'djvu'
-        const { r2Key } = await uploadBookFile(bookPath, fileHash, formatForUpload || 'epub')
-        await window.electron.booksUpdateFileHash(book.id, fileHash, r2Key)
-      } catch (err) {
-        console.warn('[file-sync] Upload failed, will retry:', err)
-      }
-
-      await queryClient.invalidateQueries({ queryKey: ['books'] })
-      setNewBookId(null)
-      setTimeout(() => setNewBookId(book.id.toString()), 0)
-    } catch (err) {
-      console.error('Error importing:', err)
-      toast.error(err instanceof Error ? err.message : 'Import failed')
+      lastSuccess = { ok: true, bookId: r.bookId }
     }
-  }
 
-  const processFilePaths = (filePaths: string[]) => {
-    filePaths.forEach((fp) => void importBook(fp))
+    await queryClient.invalidateQueries({ queryKey: ['books'] })
+    if (lastSuccess) {
+      setNewBookId(null)
+      setTimeout(() => setNewBookId(String(lastSuccess!.bookId)), 0)
+    }
   }
 
   // React Dropzone for drag-and-drop (replaces Tauri drag-drop)
@@ -248,7 +159,7 @@ export default function FileComponent(): React.JSX.Element {
     onDrop: (files) => {
       // In Electron, dropped files have .path
       const paths = files.map((f) => (f as any).path).filter(Boolean)
-      processFilePaths(paths)
+      void processFilePaths(paths)
     }
   })
 
@@ -425,12 +336,7 @@ export default function FileComponent(): React.JSX.Element {
           </button>
         </div>
       )}
-      <BookDiscoveryModal
-        open={discoveryOpen}
-        onClose={() => setDiscoveryOpen(false)}
-        onImport={(fp) => processFilePaths([fp])}
-        onImportFiles={processFilePaths}
-      />
+      <BookDiscoveryModal open={discoveryOpen} onClose={() => setDiscoveryOpen(false)} />
     </div>
   )
 }
