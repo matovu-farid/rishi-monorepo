@@ -17,7 +17,7 @@ function makeFetch(opts: {
     if (opts.rejectWith) throw opts.rejectWith
     const headers = new Headers()
     if (opts.retryAfter) headers.set('Retry-After', opts.retryAfter)
-    return new Response(status === 200 ? bytes : opts.errorBody ?? '', {
+    return new Response(status === 200 ? (bytes as BodyInit) : opts.errorBody ?? '', {
       status,
       headers
     })

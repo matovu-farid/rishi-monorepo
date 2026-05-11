@@ -20,7 +20,10 @@ export function makeFetch(opts: {
     calls.push({ url, init })
     const headers = new Headers()
     if (opts.retryAfter) headers.set('Retry-After', opts.retryAfter)
-    return new Response(status === 200 ? bytes : opts.errorBody ?? '', { status, headers })
+    return new Response(status === 200 ? (bytes as BodyInit) : opts.errorBody ?? '', {
+      status,
+      headers
+    })
   })
   return { fetch, calls, callCount: () => calls.length }
 }
