@@ -75,7 +75,9 @@ function requireHnsw(): HierarchicalNSWType {
 function createIndex(dim: number, maxElements: number): InstanceType<HierarchicalNSWType> {
   const HNSW = requireHnsw()
   const index = new HNSW('cosine', dim)
-  index.initIndex(maxElements, M, EF_CONSTRUCTION)
+  // 5th arg `allowReplaceDeleted` must be true so saveVectors can call
+  // addPoint(..., replaceDeleted=true) when re-embedding existing chunks.
+  index.initIndex(maxElements, M, EF_CONSTRUCTION, 100, true)
   index.setEf(DEFAULT_EF_SEARCH)
   return index
 }
@@ -90,7 +92,9 @@ function loadIndexFromDisk(name: string, dim: number): IndexEntry | undefined {
 
   const HNSW = requireHnsw()
   const index = new HNSW('cosine', dim)
-  index.readIndexSync(filePath)
+  // 2nd arg `allowReplaceDeleted` must match what createIndex sets so
+  // addPoint(..., replaceDeleted=true) works for indices loaded from disk.
+  index.readIndexSync(filePath, true)
   index.setEf(DEFAULT_EF_SEARCH)
 
   const count = index.getCurrentCount()
