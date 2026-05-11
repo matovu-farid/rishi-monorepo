@@ -1,8 +1,11 @@
+import { Effect, Fiber } from 'effect'
 import { createActor } from 'xstate'
 import { voiceChatMachine } from './machine'
 import { createEmitter } from './emitter'
 import { createKeyCache } from './key-cache'
 import { OfflineError } from './types'
+import { makeActivationProgram, isInterruptCause, type SessionHandle } from './activation-program'
+import { type ActivationError } from './errors'
 import { captureError } from '@/utils/sentry'
 import type {
   AudioElementLike,
@@ -33,18 +36,7 @@ function fingerprintContext(ctx: VoiceChatContext): string {
 }
 
 export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatService {
-  const {
-    rag,
-    connectivity,
-    ipc,
-    webrtcFactory,
-    agentFactory,
-    sessionFactory,
-    media,
-    effects,
-    clock,
-    config
-  } = deps
+  const { rag, connectivity, ipc, agentFactory, effects, clock, config } = deps
 
   const stateEmitter = createEmitter<VoiceChatPublicState>()
   const chatStatusEmitter = createEmitter<ChatStatus>()
@@ -66,7 +58,16 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
     clock
   })
 
-  // Session-scoped state, in closure (not module).
+  const program = makeActivationProgram({
+    deps,
+    emit: {
+      chatStatus: (s) => chatStatusEmitter.emit(s),
+      endedByAgent: (r) => endedByAgentEmitter.emit(r)
+    },
+    keyCacheGet: () => keyCache.get()
+  })
+
+  // Session-scoped state, in closure.
   let session: RealtimeSessionLike | null = null
   let sessionCleanup: (() => void) | null = null
   let currentBookId: number | null = null
@@ -75,11 +76,8 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
   let audioElement: AudioElementLike | null = null
   let lastContextFingerprint: string | null = null
   let hasUsedVoiceInSession = false
-  let activateInFlight: Promise<void> | null = null
-  let activateGeneration = 0
+  let currentFiber: Fiber.RuntimeFiber<SessionHandle, ActivationError> | null = null
   let preconnectIntent = false
-  let hasFiredReadyChime = false
-  let isAgentSpeaking = false
   let connectivityUnsub: (() => void) | null = null
   let started = false
 
@@ -124,16 +122,22 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
       audioElement = null
     }
     chatStatusEmitter.emit('idle')
-    hasFiredReadyChime = false
-    isAgentSpeaking = false
     lastContextFingerprint = null
   }
 
-  async function doActivate(
-    bookId: number,
-    ctx: VoiceChatContext,
-    gen: number
-  ): Promise<void> {
+  function onSessionError(err: unknown) {
+    captureError(err, { operation: 'voiceChatService', step: 'session_error' })
+    effects.stopThinkingSound()
+    actor.send({
+      type: 'SESSION_ERROR',
+      reason: 'session_error',
+      message: err instanceof Error ? err.message : undefined
+    })
+    disposeInternal()
+    actor.send({ type: 'DISPOSE' })
+  }
+
+  async function doActivate(bookId: number, ctx: VoiceChatContext): Promise<void> {
     clearIdleTimer()
 
     // Different bookId — dispose existing session first.
@@ -142,7 +146,7 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
       actor.send({ type: 'DISPOSE' })
     }
 
-    // Warm path: same bookId, session still alive.
+    // Warm path: same bookId, session still alive. Plain TS — no Effect.
     if (session && currentBookId === bookId) {
       actor.send({ type: 'CONNECT_STARTED' })
       try {
@@ -156,165 +160,68 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
             rag
           })
           await session.updateAgent(newAgent)
-          if (gen !== activateGeneration) return
           lastContextFingerprint = fp
         }
         session.mute(false)
         if (audioElement) audioElement.muted = false
-        if (gen !== activateGeneration) return
         actor.send({ type: 'CONNECT_SUCCEEDED' })
         chatStatusEmitter.emit('idle')
       } catch (err) {
         captureError(err, { operation: 'voiceChatService', step: 'activate_warm' })
-        if (gen === activateGeneration) {
-          actor.send({
-            type: 'CONNECT_FAILED',
-            reason: classifyError(err),
-            message: err instanceof Error ? err.message : undefined
-          })
-        }
-        throw err
-      }
-      return
-    }
-
-    // Cold path.
-    actor.send({ type: 'CONNECT_STARTED' })
-    chatStatusEmitter.emit('connecting')
-
-    let newSession: RealtimeSessionLike | null = null
-    try {
-      if (!mediaStream) {
-        mediaStream = await media.getUserMedia({ audio: true })
-      }
-      if (!audioElement) {
-        audioElement = media.createAudioElement()
-      }
-      const transport = webrtcFactory({ mediaStream, audioElement })
-      const agent = agentFactory({
-        bookId,
-        pageText: ctx.pageText,
-        outline: ctx.outline,
-        onEndConversation: (reason) => endedByAgentEmitter.emit(reason),
-        rag
-      })
-      newSession = sessionFactory(agent, { transport, apiKey: '' })
-
-      const status = (s: ChatStatus) => chatStatusEmitter.emit(s)
-      const onAgentStart = () => {
-        if (!hasFiredReadyChime) {
-          hasFiredReadyChime = true
-          effects.playReadyChime()
-        }
-        status('thinking')
-      }
-      const onAudioStart = () => {
-        isAgentSpeaking = true
-        status('speaking')
-      }
-      const onAudioStopped = () => {
-        isAgentSpeaking = false
-        status('idle')
-      }
-      const onAgentEnd = () => {
-        if (!isAgentSpeaking) status('idle')
-      }
-      const onToolStart = () => effects.startThinkingSound()
-      const onToolEnd = () => effects.stopThinkingSound()
-      const onError = (err: unknown) => {
-        captureError(err, { operation: 'voiceChatService', step: 'session_error' })
-        effects.stopThinkingSound()
-        actor.send({
-          type: 'SESSION_ERROR',
-          reason: 'session_error',
-          message: err instanceof Error ? err.message : undefined
-        })
-        disposeInternal()
-        actor.send({ type: 'DISPOSE' })
-      }
-      newSession.on('agent_start', onAgentStart)
-      newSession.on('audio_start', onAudioStart)
-      newSession.on('audio_stopped', onAudioStopped)
-      newSession.on('agent_end', onAgentEnd)
-      newSession.on('agent_tool_start', onToolStart)
-      newSession.on('agent_tool_end', onToolEnd)
-      newSession.on('error', onError)
-
-      const s = newSession
-      sessionCleanup = () => {
-        s.off('agent_start', onAgentStart)
-        s.off('audio_start', onAudioStart)
-        s.off('audio_stopped', onAudioStopped)
-        s.off('agent_end', onAgentEnd)
-        s.off('agent_tool_start', onToolStart)
-        s.off('agent_tool_end', onToolEnd)
-        s.off('error', onError)
-      }
-
-      const apiKey = await keyCache.get()
-
-      // Connect with timeout race.
-      let connectTimeout: ReturnType<ClockPort['setTimeout']> | null = null
-      try {
-        await Promise.race([
-          newSession.connect({ apiKey }),
-          new Promise<never>((_, reject) => {
-            connectTimeout = clock.setTimeout(() => {
-              reject(
-                new Error(
-                  `Realtime session connect timed out after ${config.connectTimeoutMs / 1000}s`
-                )
-              )
-            }, config.connectTimeoutMs)
-          })
-        ])
-      } finally {
-        if (connectTimeout !== null) clock.clearTimeout(connectTimeout)
-      }
-
-      if (gen !== activateGeneration) {
-        // Stale activation — tear down half-built session and bail without
-        // emitting CONNECT_SUCCEEDED.
-        if (sessionCleanup) sessionCleanup()
-        sessionCleanup = null
-        try {
-          newSession.close()
-        } catch {
-          /* best effort */
-        }
-        return
-      }
-
-      session = newSession
-      currentBookId = bookId
-      lastContextFingerprint = fingerprintContext(ctx)
-      if (audioElement) audioElement.muted = false
-      newSession.mute(false)
-      actor.send({ type: 'CONNECT_SUCCEEDED' })
-      chatStatusEmitter.emit('idle')
-      hasUsedVoiceInSession = true
-    } catch (err) {
-      captureError(err, { operation: 'voiceChatService', step: 'activate_cold' })
-      if (sessionCleanup) {
-        sessionCleanup()
-        sessionCleanup = null
-      }
-      if (newSession) {
-        try {
-          newSession.close()
-        } catch {
-          /* best effort */
-        }
-      }
-      if (gen === activateGeneration) {
         actor.send({
           type: 'CONNECT_FAILED',
           reason: classifyError(err),
           message: err instanceof Error ? err.message : undefined
         })
-        chatStatusEmitter.emit('idle')
+        throw err
       }
+      return
+    }
+
+    // Cold path — Effect program.
+    if (currentFiber) {
+      // Supersede the previous activation. The acquireRelease releases inside
+      // the program will tear down any half-built resources automatically.
+      await Effect.runPromise(Fiber.interrupt(currentFiber))
+    }
+
+    actor.send({ type: 'CONNECT_STARTED' })
+    chatStatusEmitter.emit('connecting')
+
+    const { promise, fiber } = program.activate({ bookId, ctx })
+    currentFiber = fiber
+
+    try {
+      const handle = await promise
+
+      // Hand resources to service.ts's closure.
+      session = handle.session
+      mediaStream = handle.mediaStream
+      audioElement = handle.audioElement
+      sessionCleanup = handle.cleanup
+      currentBookId = bookId
+      lastContextFingerprint = fingerprintContext(ctx)
+
+      // Wire the session 'error' handler post-resolve (xstate-land, not Effect).
+      session.on('error', onSessionError)
+
+      actor.send({ type: 'CONNECT_SUCCEEDED' })
+      chatStatusEmitter.emit('idle')
+      hasUsedVoiceInSession = true
+    } catch (err) {
+      // Superseded by a subsequent activate() — silent.
+      if (isInterruptCause(err)) return
+
+      captureError(err, { operation: 'voiceChatService', step: 'activate_cold' })
+      actor.send({
+        type: 'CONNECT_FAILED',
+        reason: classifyError(err),
+        message: err instanceof Error ? err.message : undefined
+      })
+      chatStatusEmitter.emit('idle')
       throw err
+    } finally {
+      if (currentFiber === fiber) currentFiber = null
     }
   }
 
@@ -335,10 +242,14 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
     stop() {
       if (!started) return
       started = false
+      // Interrupt any in-flight activation, then tear down.
+      if (currentFiber) {
+        Effect.runFork(Fiber.interrupt(currentFiber))
+        currentFiber = null
+      }
       disposeInternal()
       if (connectivityUnsub) connectivityUnsub()
       connectivityUnsub = null
-      activateGeneration++
     },
 
     async activate(bookId, ctx) {
@@ -346,33 +257,17 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
         actor.send({ type: 'OFFLINE' })
         throw new OfflineError()
       }
-      // A user-initiated activate (i.e. NOT initiated by preconnect itself)
-      // should clear preconnectIntent so the post-activate auto-mute in
-      // preconnect() becomes a no-op when the user has already taken over.
-      // preconnect() routes through activate() but suppresses this reset by
-      // first setting preconnectIntent itself then re-asserting after the
-      // activate resolves (see preconnect()).
-      activateGeneration++
-      const gen = activateGeneration
-      if (activateInFlight) return activateInFlight
-      activateInFlight = doActivate(bookId, ctx, gen)
-      try {
-        await activateInFlight
-      } finally {
-        activateInFlight = null
-      }
+      await doActivate(bookId, ctx)
     },
 
     async preconnect(bookId, ctx) {
       if (!hasUsedVoiceInSession) return
       if (!connectivity.isOnline()) return
       if (session && currentBookId === bookId) return
-      if (activateInFlight) return
       preconnectIntent = true
       try {
         await svc.activate(bookId, ctx)
         if (preconnectIntent && session) {
-          // Cast to RealtimeSessionLike for closure-scoped narrowing.
           const s: RealtimeSessionLike = session
           s.interrupt()
           s.mute(true)
@@ -404,6 +299,10 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
     },
 
     dispose() {
+      if (currentFiber) {
+        Effect.runFork(Fiber.interrupt(currentFiber))
+        currentFiber = null
+      }
       disposeInternal()
       actor.send({ type: 'DISPOSE' })
     },
