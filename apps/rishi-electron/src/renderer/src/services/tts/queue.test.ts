@@ -65,3 +65,36 @@ describe('queue.enqueue', () => {
     expect(cache.saveAudio).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('queue dedup', () => {
+  it('coalesces two concurrent enqueues with the same requestId into one fetch', async () => {
+    // Block the fetch on a promise we control so both enqueues land while in-flight
+    let resolveFetch: (b: ArrayBuffer) => void = () => {}
+    const fetchAudio = vi.fn(
+      () =>
+        new Promise<ArrayBuffer>((resolve) => {
+          resolveFetch = resolve
+        })
+    )
+    const cache = makeCacheStub()
+    const queue = createQueue({
+      cache,
+      fetchAudio,
+      maxConcurrent: 8,
+      maxRetries: 0,
+      backoffBaseMs: 1
+    })
+
+    const p1 = queue.enqueue({ bookId: 'b', cfiRange: 'c', text: 'hi', priority: 0 })
+    const p2 = queue.enqueue({ bookId: 'b', cfiRange: 'c', text: 'hi', priority: 0 })
+
+    // Let microtasks settle so the first enqueue reaches the in-flight state
+    await new Promise((r) => setTimeout(r, 0))
+    resolveFetch(new Uint8Array([7, 7]).buffer as ArrayBuffer)
+
+    const [r1, r2] = await Promise.all([p1, p2])
+    expect(new Uint8Array(r1)).toEqual(new Uint8Array([7, 7]))
+    expect(new Uint8Array(r2)).toEqual(new Uint8Array([7, 7]))
+    expect(fetchAudio).toHaveBeenCalledTimes(1)
+  })
+})
