@@ -1,22 +1,18 @@
 import type { Book } from '@/lib/api'
 import { getBook, updateBookCover } from '@/lib/api'
-import { usePdfStore } from '@/stores/pdfStore'
 
 export async function updateStoredCoverImage(book: Book) {
   if (book.coverKind && book.coverKind != 'fallback') return
-  // set page to 1
-  if (usePdfStore.getState().pageNumber !== 1) {
-    usePdfStore.getState().setPageNumber(1)
-  }
+  // Opportunistic only: if page 1's canvas is already in the DOM (overscan
+  // or the user is near the start), capture it. Never seek the reader to
+  // page 1 — that would clobber the user's saved reading position.
   const canvas = document.querySelector<HTMLCanvasElement>('[data-page-number="1"] canvas')
   if (!canvas) return
-  console.log('>>> Found canvas for cover image extraction.')
 
   const blob = await new Promise<Blob | null>((resolve) => {
     canvas.toBlob(resolve)
   })
   if (!blob) return
-  console.log('>>> Extracted cover image blob from canvas.')
 
   await updateCoverImage(blob, book.id)
 }

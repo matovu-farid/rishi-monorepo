@@ -41,7 +41,6 @@ function BookView(): React.JSX.Element {
 
   const setBookNavigationState = usePdfStore((s) => s.setBookNavigationState)
   useEffect(() => {
-    setBookNavigationState(BookNavigationState.Navigated)
     return () => {
       setBookNavigationState(BookNavigationState.Idle)
       setBook(null)

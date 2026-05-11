@@ -2,9 +2,8 @@
 // Hook utilities and helpers for tracking and synchronizing the active PDF page.
 // --------------------------------------------------------------------------------------
 import { usePdfStore, BookNavigationState } from '@/stores/pdfStore'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { getCurrrentPageNumber } from '../utils/getCurrentPageNumbers'
-import { debounce } from 'throttle-debounce'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -28,7 +27,10 @@ export function useCurrentPageNumber(
   const currentPageNumber = usePdfStore((s) => s.pageNumber)
   const setScrollPageNumber = usePdfStore((s) => s.setScrollPageNumber)
   const setPageNumber = usePdfStore((s) => s.setPageNumber)
+  const navState = usePdfStore((s) => s.bookNavigationState)
   const bookId = book.id
+  const lastSavedRef = useRef<number | null>(parseInt(book.location, 10) || null)
+  const pendingSaveRef = useRef<number | null>(null)
 
   // ------------------------------------------------------------------------------------
   // Dereference the scrolling container once so listeners can be registered cleanly.
@@ -138,18 +140,55 @@ export function useCurrentPageNumber(
   }, [])
 
   useEffect(() => {
-    // Debounce the backend update to avoid excessive writes during scrolling,
-    // but allow a delay so that the current page number is initialized properly.
-    // using the saved book number
-    setTimeout(() => {
-      debounce(1000, () => {
-        updateBookLocationMutation.mutate({
-          bookId: bookId.toString(),
-          location: currentPageNumber.toString()
-        })
-      })()
-    }, 1000)
-  }, [currentPageNumber])
+    // Only persist after the initial seek has landed; otherwise the broken
+    // canvas-default-of-1 in `getCurrrentPageNumber` would clobber the saved
+    // location with "1".
+    if (navState !== BookNavigationState.Navigated) return
+    if (!currentPageNumber || isNaN(currentPageNumber)) return
+    if (currentPageNumber === lastSavedRef.current) return
+
+    pendingSaveRef.current = currentPageNumber
+    const target = currentPageNumber
+    const handle = setTimeout(() => {
+      updateBookLocationMutation.mutate({
+        bookId: bookId.toString(),
+        location: String(target)
+      })
+      lastSavedRef.current = target
+      pendingSaveRef.current = null
+    }, 400)
+
+    return () => clearTimeout(handle)
+  }, [currentPageNumber, navState])
+
+  // Flush the latest visible page on unmount. Polling only ticks every 500ms,
+  // so closing within that window leaves `pendingSaveRef` empty — sample the
+  // DOM directly to catch the user's actual last position.
+  useEffect(() => {
+    return () => {
+      let target: number | null = null
+      try {
+        const hasCanvases =
+          document.querySelectorAll('[data-page-number]:has(> canvas)').length > 0
+        if (hasCanvases) {
+          // Trust the DOM only when canvases exist; otherwise the function
+          // returns `1` as a sentinel and would clobber a real saved page.
+          const fromDom = getCurrrentPageNumber(window)
+          if (fromDom > 0) target = fromDom
+        }
+      } catch {
+        // Non-DOM env (tests) — fall through.
+      }
+      if (target === null) target = pendingSaveRef.current
+      if (target === null) {
+        const fromStore = usePdfStore.getState().pageNumber
+        if (fromStore && fromStore > 0 && !isNaN(fromStore)) target = fromStore
+      }
+      if (target !== null && target !== lastSavedRef.current && target > 0 && !isNaN(target)) {
+        void updateBookLocation({ bookId: Number(bookId), newLocation: String(target) })
+      }
+    }
+  }, [bookId])
   //
   return currentPageNumber
 }
