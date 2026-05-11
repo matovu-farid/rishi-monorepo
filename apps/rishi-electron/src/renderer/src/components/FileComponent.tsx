@@ -6,8 +6,7 @@ import { Button } from './ui/Button'
 import { Trash2, Plus, Search } from 'lucide-react'
 // chooseFiles moved into BookDiscoveryModal
 import { Book, deleteBook, getBooks } from '@/lib/api'
-import { getBookImportService } from '@/services'
-import { prefetchRealtimeKey } from '@/modules/realtime'
+import { getBookImportService, getVoiceChatService } from '@/services'
 import { prefetchTTSForBooks } from '@/modules/ttsPrefetch'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useEffect, useMemo, useState, useCallback } from 'react'
@@ -97,7 +96,7 @@ export default function FileComponent(): React.JSX.Element {
   } = useQuery({
     queryKey: ['books'],
     queryFn: async () => {
-      prefetchRealtimeKey()
+      getVoiceChatService().prewarmKey()
       const books = await getBooks()
       const pdfIds = books.filter((b) => b.kind === 'pdf').map((b) => b.id)
       setAllBooks(pdfIds)
