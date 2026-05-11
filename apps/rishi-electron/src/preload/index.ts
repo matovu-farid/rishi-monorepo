@@ -17,6 +17,8 @@ const electronAPI: ElectronAPI = {
   // Page/chunk data
   savePageDataMany: (pageData: unknown[]) => ipcRenderer.invoke('chunks:saveMany', pageData),
   getAllPageDataByBookId: (bookId: number) => ipcRenderer.invoke('chunks:getByBookId', bookId),
+  getIndexedPageNumbers: (bookId: number): Promise<number[]> =>
+    ipcRenderer.invoke('chunks:getIndexedPages', bookId),
 
   // Search
   searchBookText: (query: string, bookId: number) =>

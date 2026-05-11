@@ -366,40 +366,6 @@ export async function getRealtimeClientSecret(): Promise<string> {
   return secret
 }
 
-// ---- Process Job (embedding + indexing) ----
-export async function processJob(params: {
-  pageNumber: number
-  bookId: number
-  pageData: ChunkDataInsertable[]
-}): Promise<void> {
-  // Save page data first to get the actual DB row IDs
-  await api().savePageDataMany(params.pageData)
-
-  // Retrieve the saved rows to get their actual auto-incremented IDs
-  const savedData = await api().getAllPageDataByBookId(params.bookId)
-  // Filter to just the pages we saved (by page number match)
-  const relevantChunks = savedData.filter((d) =>
-    params.pageData.some((pd) => pd.pageNumber === d.pageNumber && pd.data === d.data)
-  )
-
-  if (relevantChunks.length === 0) return
-
-  // Embed using actual DB row IDs so vector search results can be looked up
-  const embedResults = await api().embed(
-    relevantChunks.map((chunk) => ({
-      text: chunk.data,
-      metadata: { id: chunk.id, pageNumber: chunk.pageNumber, bookId: params.bookId }
-    }))
-  )
-  if (embedResults.length > 0) {
-    const vectors = embedResults.map((r) => ({
-      id: r.metadata.id,
-      vector: r.embedding
-    }))
-    await api().saveVectors(`book_${params.bookId}`, embedResults[0].dim, vectors)
-  }
-}
-
 // ---- Helpers ----
 /**
  * Convert a local file path to a URL that the renderer can load.

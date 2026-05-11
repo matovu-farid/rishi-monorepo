@@ -1,5 +1,9 @@
 import { ipcMain } from 'electron'
-import { savePageDataMany, getAllPageDataByBookId } from '../database/queries.js'
+import {
+  savePageDataMany,
+  getAllPageDataByBookId,
+  getIndexedPageNumbers
+} from '../database/queries.js'
 
 export function registerChunkHandlers(): void {
   ipcMain.handle('chunks:saveMany', async (_event, pageData: unknown[]) => {
@@ -18,6 +22,16 @@ export function registerChunkHandlers(): void {
     } catch (error) {
       throw new Error(
         `Failed to get page data for book ${bookId}: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+  })
+
+  ipcMain.handle('chunks:getIndexedPages', (_event, bookId: number) => {
+    try {
+      return getIndexedPageNumbers(bookId)
+    } catch (error) {
+      throw new Error(
+        `Failed to get indexed pages for book ${bookId}: ${error instanceof Error ? error.message : String(error)}`
       )
     }
   })

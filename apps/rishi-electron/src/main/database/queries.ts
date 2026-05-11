@@ -224,7 +224,9 @@ export function _deleteChunksByBookIdWithDb(
 export function updateBookCover(id: number, cover: number[] | Buffer): void {
   const db = getDb()
   const buf = Array.isArray(cover) ? Buffer.from(cover) : cover
-  db.prepare('UPDATE books SET cover = ?, is_dirty = 1 WHERE id = ?').run(buf, id)
+  db.prepare(
+    "UPDATE books SET cover = ?, cover_kind = 'png', is_dirty = 1 WHERE id = ?"
+  ).run(buf, id)
 }
 
 /**
@@ -311,6 +313,19 @@ export function savePageDataMany(pageData: PageData[]): void {
   })
 
   insertMany(pageData)
+}
+
+/**
+ * Return the set of page numbers already present in chunk_data for a book.
+ * Used to skip re-extracting and re-embedding pages that have been indexed
+ * already, e.g. across app restarts or after a partial run.
+ */
+export function getIndexedPageNumbers(bookId: number): number[] {
+  const db = getDb()
+  const rows = db
+    .prepare('SELECT DISTINCT page_number FROM chunk_data WHERE book_id = ?')
+    .all(bookId) as Array<Record<string, unknown>>
+  return rows.map((row) => row.page_number as number)
 }
 
 /**

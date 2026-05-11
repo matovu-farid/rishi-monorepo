@@ -31,7 +31,10 @@ import { queryClient } from '@/components/providers'
 import { useCurrentPageNumber } from '../hooks/useCurrentPageNumber'
 import { PDFDocumentProxy } from 'pdfjs-dist'
 import { useVirualization } from '../hooks/useVirualization'
-import { TextExtractor } from './text-extractor'
+import { Effect, Fiber } from 'effect'
+import { indexBookProgram } from '@/services/indexing/index-program'
+import { loadPdfDocument, extractPageParagraphs } from '@/services/indexing/text-extraction'
+import { useIndexingStore } from '@/stores/indexingStore'
 import { updateBookLocation } from '@/lib/api'
 import type { Book } from '@/lib/api'
 import { BackButton } from '@/components/BackButton'
@@ -279,6 +282,98 @@ export function PdfView({
     }
   }, [book.filepath])
 
+  // pdfjs transfers (detaches) the underlying ArrayBuffer when a Document
+  // loads. Give each <Document> consumer its own clone so the main viewer
+  // and the TOC sidebar don't fight over a single buffer — otherwise
+  // whichever loads second sees an empty buffer and renders
+  // "Failed to load PDF file."
+  const mainPdfFile = useMemo(
+    () => (pdfData ? { data: new Uint8Array(pdfData.data) } : null),
+    [pdfData]
+  )
+  const tocPdfFile = useMemo(
+    () => (pdfData ? { data: new Uint8Array(pdfData.data) } : null),
+    [pdfData]
+  )
+
+  // Background indexing: extract per-page text and ship to the embedding/vector
+  // pipeline so chat/RAG works for this book. Runs as an Effect fiber with
+  // bounded concurrency; interrupted when the book unmounts.
+  useEffect(() => {
+    if (!pdfData?.data) return
+
+    let cancelled = false
+    let fiber: Fiber.RuntimeFiber<void, Error> | null = null
+    let doc: Awaited<ReturnType<typeof loadPdfDocument>> | null = null
+
+    const run = async (): Promise<void> => {
+      try {
+        doc = await loadPdfDocument(pdfData.data)
+        if (cancelled) {
+          await doc.destroy()
+          doc = null
+          return
+        }
+
+        const numPages = doc.numPages
+
+        // Pages already in chunk_data don't need to be re-extracted or
+        // re-embedded. Fetch them once upfront and skip them in the schedule.
+        const indexedPages = await window.electron.getIndexedPageNumbers(book.id)
+        if (cancelled) return
+        const skipPages = new Set(indexedPages)
+
+        // Short-circuit if the whole book is already indexed.
+        if (skipPages.size >= numPages) {
+          useIndexingStore.getState().start(book.id, numPages)
+          useIndexingStore.getState().finish(book.id)
+          return
+        }
+
+        // Seed the progress store: total = numPages, done = pages already
+        // indexed so the UI reflects existing work immediately.
+        useIndexingStore.getState().start(book.id, numPages)
+        for (let i = 0; i < skipPages.size; i++) {
+          useIndexingStore.getState().advance(book.id)
+        }
+
+        // Index the page the user is opening on first so chat/RAG works for
+        // their current location immediately. book.location is a string
+        // holding the saved page number; falls back to 1 on fresh opens.
+        const startPage = parseInt(book.location ?? '1', 10) || 1
+
+        const docRef = doc
+        fiber = Effect.runFork(
+          indexBookProgram({
+            bookId: book.id,
+            numPages,
+            startPage,
+            skipPages,
+            extract: (pageNumber) => extractPageParagraphs(docRef, pageNumber),
+            saveChunks: (chunks) => window.electron.savePageDataMany(chunks),
+            processJob: (pageNumber, items) =>
+              window.electron.processJob(pageNumber, book.id, items),
+            onAdvance: () => useIndexingStore.getState().advance(book.id),
+            onFinish: () => useIndexingStore.getState().finish(book.id),
+            onError: (msg) => useIndexingStore.getState().error(book.id, msg)
+          })
+        )
+      } catch (err) {
+        useIndexingStore
+          .getState()
+          .error(book.id, err instanceof Error ? err.message : String(err))
+      }
+    }
+
+    void run()
+
+    return () => {
+      cancelled = true
+      if (fiber) Effect.runFork(Fiber.interrupt(fiber))
+      if (doc) void doc.destroy()
+    }
+  }, [pdfData?.data, book.id])
+
   return (
     <div
       ref={scrollContainerRef}
@@ -340,10 +435,10 @@ export function PdfView({
             <Loader2 size={20} className="animate-spin" />
           </div>
         )}
-        {pdfData && (
+        {mainPdfFile && (
           <Document
             className="flex items-center justify-center flex-col"
-            file={pdfData}
+            file={mainPdfFile}
             options={pdfOptions}
             onLoadSuccess={onDocumentLoadSuccess}
             onItemClick={onItemClick}
@@ -421,12 +516,6 @@ export function PdfView({
                   ></div>
                 </div>
               ))}
-              <TextExtractor
-                pageWidth={pageWidth}
-                pdfHeight={pdfHeight}
-                isDualPage={isDualPage}
-                bookId={book.id.toString()}
-              />
             </div>
           </Document>
         )}
@@ -477,8 +566,8 @@ export function PdfView({
               '[&_a]:text-gray-700 [&_a:hover]:bg-gray-100 [&_a:hover]:text-black [&_a]:border-gray-100 [&_a:hover]:pl-6'
             )}
           >
-            {pdfData && (
-              <Document file={pdfData} options={pdfOptions}>
+            {tocPdfFile && (
+              <Document file={tocPdfFile} options={pdfOptions}>
                 <Outline onItemClick={onItemClick} />
               </Document>
             )}

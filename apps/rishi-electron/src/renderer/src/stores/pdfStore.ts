@@ -44,7 +44,6 @@ interface PdfState {
   isTextGot: boolean
   virtualizer: any | null
   bookNavigationState: BookNavigationState
-  backgroundPage: number
   isRenderedPageState: Record<number, boolean>
   hasNavigatedToPage: boolean
   isLookingForNextParagraph: boolean
@@ -69,7 +68,6 @@ interface PdfState {
   setIsTextGot: (value: boolean) => void
   setVirtualizer: (v: any) => void
   setBookNavigationState: (state: BookNavigationState) => void
-  setBackgroundPage: (value: number | ((prev: number) => number)) => void
   setHasNavigatedToPage: (value: boolean) => void
   setIsLookingForNextParagraph: (value: boolean) => void
   setIsPdfRendered: (bookId: string, isRendered: boolean) => void
@@ -102,7 +100,6 @@ export const usePdfStore = create<PdfState>()(
       isTextGot: false,
       virtualizer: null,
       bookNavigationState: BookNavigationState.Idle,
-      backgroundPage: 1,
       isRenderedPageState: {},
       hasNavigatedToPage: false,
       isLookingForNextParagraph: false,
@@ -156,10 +153,6 @@ export const usePdfStore = create<PdfState>()(
       setIsTextGot: (value) => set({ isTextGot: value }),
       setVirtualizer: (v) => set({ virtualizer: v }),
       setBookNavigationState: (state) => set({ bookNavigationState: state }),
-      setBackgroundPage: (value) =>
-        set((state) => ({
-          backgroundPage: typeof value === 'function' ? value(state.backgroundPage) : value
-        })),
       setHasNavigatedToPage: (value) => set({ hasNavigatedToPage: value }),
       setIsLookingForNextParagraph: (value) => set({ isLookingForNextParagraph: value }),
       setIsPdfRendered: (bookId, isRendered) =>

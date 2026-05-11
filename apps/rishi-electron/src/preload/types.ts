@@ -12,6 +12,7 @@ export interface ElectronAPI {
   // Page/chunk data
   savePageDataMany: (pageData: ChunkDataInsertable[]) => Promise<void>
   getAllPageDataByBookId: (bookId: number) => Promise<PageData[]>
+  getIndexedPageNumbers: (bookId: number) => Promise<number[]>
 
   // Search
   searchBookText: (query: string, bookId: number) => Promise<TextSearchResult[]>

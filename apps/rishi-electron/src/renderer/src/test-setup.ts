@@ -13,6 +13,7 @@ const mockElectronAPI = {
   getBookOutline: vi.fn().mockResolvedValue({ title: '', author: null, chapters: [] }),
   savePageDataMany: vi.fn().mockResolvedValue(undefined),
   getAllPageDataByBookId: vi.fn().mockResolvedValue([]),
+  getIndexedPageNumbers: vi.fn().mockResolvedValue([]),
   searchBookText: vi.fn().mockResolvedValue([]),
   getTextFromVectorId: vi.fn().mockResolvedValue(undefined),
   embed: vi.fn().mockResolvedValue([]),
