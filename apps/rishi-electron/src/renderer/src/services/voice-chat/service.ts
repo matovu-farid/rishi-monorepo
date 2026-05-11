@@ -32,6 +32,14 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
   const actor = createActor(voiceChatMachine)
   actor.start()
 
+  let lastPublicState: VoiceChatPublicState = actor.getSnapshot().value as VoiceChatPublicState
+  actor.subscribe(() => {
+    const next = actor.getSnapshot().value as VoiceChatPublicState
+    if (next === lastPublicState) return
+    lastPublicState = next
+    stateEmitter.emit(next)
+  })
+
   // Suppress unused-binding warnings until later tasks wire them.
   void rag
   void ipc

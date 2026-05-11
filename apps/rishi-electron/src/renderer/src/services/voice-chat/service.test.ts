@@ -304,3 +304,20 @@ describe('createVoiceChatService — lifecycle', () => {
     expect(svc.getState()).toBe('idle')
   })
 })
+
+describe('createVoiceChatService — onStateChange', () => {
+  it('edge-detects no-value transitions (same machine value -> no fire)', () => {
+    const svc = createVoiceChatService(makeDeps())
+    const spy = vi.fn()
+    svc.onStateChange(spy)
+
+    svc.dispose()
+    svc.dispose()
+    svc.dispose()
+
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  // Multi-subscriber + offline transition assertions land in Task 10
+  // (connectivity wiring). Edge-detection is sufficient here.
+})
