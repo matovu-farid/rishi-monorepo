@@ -30,7 +30,9 @@ vi.mock('@/modules/realtime', () => ({
 }))
 
 vi.mock('@/modules/buildRealtimeAgent', () => ({
-  buildRealtimeAgent: vi.fn().mockReturnValue({ /* fake agent */ })
+  buildRealtimeAgent: vi.fn().mockReturnValue({
+    /* fake agent */
+  })
 }))
 
 vi.mock('@/utils/sentry', () => ({
@@ -88,11 +90,14 @@ describe('voiceChatService', () => {
 
   it('schedules idle timeout on deactivate when active', async () => {
     // Set internal state to a "fake-connected" state via test hook
-    voiceChatService._setSessionForTests({
-      mute: mockMute,
-      interrupt: mockInterrupt,
-      close: mockClose
-    } as never, 1)
+    voiceChatService._setSessionForTests(
+      {
+        mute: mockMute,
+        interrupt: mockInterrupt,
+        close: mockClose
+      } as never,
+      1
+    )
 
     voiceChatService.deactivate()
     expect(mockInterrupt).toHaveBeenCalledTimes(1)
@@ -109,12 +114,15 @@ describe('voiceChatService', () => {
   })
 
   it('cancels idle timer when reactivated within timeout', async () => {
-    voiceChatService._setSessionForTests({
-      mute: mockMute,
-      interrupt: mockInterrupt,
-      close: mockClose,
-      updateAgent: mockUpdateAgent
-    } as never, 1)
+    voiceChatService._setSessionForTests(
+      {
+        mute: mockMute,
+        interrupt: mockInterrupt,
+        close: mockClose,
+        updateAgent: mockUpdateAgent
+      } as never,
+      1
+    )
 
     voiceChatService.deactivate()
     vi.advanceTimersByTime(10 * 60 * 1000)
@@ -129,12 +137,15 @@ describe('voiceChatService', () => {
   })
 
   it('disposes existing session when activating with a different bookId', async () => {
-    voiceChatService._setSessionForTests({
-      mute: mockMute,
-      interrupt: mockInterrupt,
-      close: mockClose,
-      updateAgent: mockUpdateAgent
-    } as never, 1)
+    voiceChatService._setSessionForTests(
+      {
+        mute: mockMute,
+        interrupt: mockInterrupt,
+        close: mockClose,
+        updateAgent: mockUpdateAgent
+      } as never,
+      1
+    )
 
     // Note: activate(2, ...) should detect bookId mismatch and dispose old session.
     // It will then try to create a new one via the (stubbed) transport — that
@@ -147,11 +158,14 @@ describe('voiceChatService', () => {
   })
 
   it('dispose() closes session and returns to idle', () => {
-    voiceChatService._setSessionForTests({
-      mute: mockMute,
-      interrupt: mockInterrupt,
-      close: mockClose
-    } as never, 1)
+    voiceChatService._setSessionForTests(
+      {
+        mute: mockMute,
+        interrupt: mockInterrupt,
+        close: mockClose
+      } as never,
+      1
+    )
 
     voiceChatService.dispose()
     expect(mockClose).toHaveBeenCalledTimes(1)
@@ -168,11 +182,14 @@ describe('voiceChatService', () => {
     const throwingInterrupt = vi.fn(() => {
       throw new Error('interrupt failed')
     })
-    voiceChatService._setSessionForTests({
-      interrupt: throwingInterrupt,
-      mute: mockMute,
-      close: mockClose
-    } as never, 1)
+    voiceChatService._setSessionForTests(
+      {
+        interrupt: throwingInterrupt,
+        mute: mockMute,
+        close: mockClose
+      } as never,
+      1
+    )
 
     voiceChatService.deactivate()
 
@@ -184,12 +201,15 @@ describe('voiceChatService', () => {
   it('warm path emits onChatStatusChange(idle) after re-activation', async () => {
     const onChatStatusChange = vi.fn()
     voiceChatService.setListeners({ onChatStatusChange })
-    voiceChatService._setSessionForTests({
-      mute: mockMute,
-      interrupt: mockInterrupt,
-      close: mockClose,
-      updateAgent: mockUpdateAgent
-    } as never, 1)
+    voiceChatService._setSessionForTests(
+      {
+        mute: mockMute,
+        interrupt: mockInterrupt,
+        close: mockClose,
+        updateAgent: mockUpdateAgent
+      } as never,
+      1
+    )
 
     await voiceChatService.activate(1, { pageText: 'fresh text' })
 
@@ -197,12 +217,15 @@ describe('voiceChatService', () => {
   })
 
   it('warm path skips updateAgent when context fingerprint is unchanged', async () => {
-    voiceChatService._setSessionForTests({
-      mute: mockMute,
-      interrupt: mockInterrupt,
-      close: mockClose,
-      updateAgent: mockUpdateAgent
-    } as never, 1)
+    voiceChatService._setSessionForTests(
+      {
+        mute: mockMute,
+        interrupt: mockInterrupt,
+        close: mockClose,
+        updateAgent: mockUpdateAgent
+      } as never,
+      1
+    )
 
     // First warm activate establishes the fingerprint
     await voiceChatService.activate(1, { pageText: 'same text' })
@@ -219,12 +242,15 @@ describe('voiceChatService', () => {
   })
 
   it('warm path calls updateAgent when page text changes', async () => {
-    voiceChatService._setSessionForTests({
-      mute: mockMute,
-      interrupt: mockInterrupt,
-      close: mockClose,
-      updateAgent: mockUpdateAgent
-    } as never, 1)
+    voiceChatService._setSessionForTests(
+      {
+        mute: mockMute,
+        interrupt: mockInterrupt,
+        close: mockClose,
+        updateAgent: mockUpdateAgent
+      } as never,
+      1
+    )
 
     await voiceChatService.activate(1, { pageText: 'page 1 text' })
     voiceChatService.deactivate()
@@ -243,7 +269,9 @@ describe('voiceChatService cold path', () => {
     const fakeStream = {
       getTracks: () => [{ stop: vi.fn() }]
     }
-    ;(global.navigator as unknown as { mediaDevices: { getUserMedia: typeof vi.fn } }).mediaDevices = {
+    ;(
+      global.navigator as unknown as { mediaDevices: { getUserMedia: typeof vi.fn } }
+    ).mediaDevices = {
       getUserMedia: vi.fn().mockResolvedValue(fakeStream)
     }
   })

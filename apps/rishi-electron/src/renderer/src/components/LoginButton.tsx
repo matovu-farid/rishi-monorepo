@@ -13,11 +13,7 @@ export function LoginButton(): React.JSX.Element {
       <div className="flex gap-2 items-center">
         {/* User avatar — always show for authenticated users */}
         {user.image ? (
-          <img
-            src={user.image}
-            alt={altLabel}
-            className="w-8 h-8 rounded-full object-cover"
-          />
+          <img src={user.image} alt={altLabel} className="w-8 h-8 rounded-full object-cover" />
         ) : (
           <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-sm font-medium text-gray-600">
             {initial}

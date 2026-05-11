@@ -33,8 +33,16 @@ const samplePageData = [
 ]
 
 const sampleEmbedResults = [
-  { metadata: { id: 1, pageNumber: 1, bookId: 42 }, text: 'Chapter 1 text', embedding: [0.1, 0.2, 0.3] },
-  { metadata: { id: 2, pageNumber: 2, bookId: 42 }, text: 'Chapter 2 text', embedding: [0.4, 0.5, 0.6] }
+  {
+    metadata: { id: 1, pageNumber: 1, bookId: 42 },
+    text: 'Chapter 1 text',
+    embedding: [0.1, 0.2, 0.3]
+  },
+  {
+    metadata: { id: 2, pageNumber: 2, bookId: 42 },
+    text: 'Chapter 2 text',
+    embedding: [0.4, 0.5, 0.6]
+  }
 ]
 
 describe('processEpubJob', () => {

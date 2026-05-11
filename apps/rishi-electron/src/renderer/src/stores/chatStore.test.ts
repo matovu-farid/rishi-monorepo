@@ -1,28 +1,36 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useChatStore } from './chatStore'
 
-const {
-  mockActivate,
-  mockDeactivate,
-  mockDispose,
-  mockSetListeners,
-  mockGetState
-} = vi.hoisted(() => ({
-  mockActivate: vi.fn().mockResolvedValue(undefined),
-  mockDeactivate: vi.fn(),
-  mockDispose: vi.fn(),
-  mockSetListeners: vi.fn(),
-  mockGetState: vi.fn().mockReturnValue('idle')
-}))
+const { mockActivate, mockDeactivate, mockDispose, mockSetListeners, mockGetState, mockActor } =
+  vi.hoisted(() => ({
+    mockActivate: vi.fn().mockResolvedValue(undefined),
+    mockDeactivate: vi.fn(),
+    mockDispose: vi.fn(),
+    mockSetListeners: vi.fn(),
+    mockGetState: vi.fn().mockReturnValue('idle'),
+    mockActor: {
+      subscribe: vi.fn().mockReturnValue({ unsubscribe: vi.fn() }),
+      getSnapshot: vi.fn().mockReturnValue({ value: 'idle', context: { error: null } })
+    }
+  }))
 
 vi.mock('@/modules/voiceChatService', () => ({
   voiceChatService: {
+    actor: mockActor,
     activate: mockActivate,
     deactivate: mockDeactivate,
     dispose: mockDispose,
     setListeners: mockSetListeners,
     getState: mockGetState,
+    getError: vi.fn().mockReturnValue(null),
+    dismissError: vi.fn(),
     prewarmKey: vi.fn()
+  },
+  OfflineError: class OfflineError extends Error {
+    constructor() {
+      super('offline')
+      this.name = 'OfflineError'
+    }
   }
 }))
 

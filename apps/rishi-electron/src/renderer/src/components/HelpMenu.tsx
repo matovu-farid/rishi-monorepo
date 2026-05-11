@@ -19,7 +19,10 @@ export function HelpMenu() {
   const [version, setVersion] = useState('')
 
   useEffect(() => {
-    window.electron?.getAppVersion?.().then(setVersion).catch(() => {})
+    window.electron
+      ?.getAppVersion?.()
+      .then(setVersion)
+      .catch(() => {})
   }, [])
 
   const open = (url: string): void => {

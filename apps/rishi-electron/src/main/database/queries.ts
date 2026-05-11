@@ -368,9 +368,10 @@ export function _getBookOutlineWithDb(
   bookId: number
 ): BookOutline {
   const bookRow = sqlite
-    .prepare<[number], { title: string; author: string | null }>(
-      'SELECT title, author FROM books WHERE id = ?'
-    )
+    .prepare<
+      [number],
+      { title: string; author: string | null }
+    >('SELECT title, author FROM books WHERE id = ?')
     .get(bookId)
   if (!bookRow) {
     return { title: '', author: null, chapters: [] }

@@ -9,13 +9,7 @@ import { Radio, RadioGroup } from '@/components/ui/Radio'
 import { ThemeType } from '@/themes/common'
 import { themes } from '@/themes/themes'
 import createIReactReaderTheme from '@/themes/readerThemes'
-import {
-  Palette,
-  Highlighter,
-  MessageSquare,
-  MoreVertical,
-  Menu as MenuIcon
-} from 'lucide-react'
+import { Palette, Highlighter, MessageSquare, MoreVertical, Menu as MenuIcon } from 'lucide-react'
 import AIChatOrb from '../chat/AIChatOrb'
 import VoiceChatLauncher from '../chat/VoiceChatLauncher'
 import { IconButton } from '@/components/ui/IconButton'

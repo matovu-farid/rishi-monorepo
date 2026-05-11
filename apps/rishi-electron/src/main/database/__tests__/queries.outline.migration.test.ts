@@ -18,7 +18,20 @@ describe('getBookOutline against the real migration', () => {
         `INSERT INTO books (kind, cover, title, author, publisher, filepath, location, cover_kind, format, sync_version, is_dirty, is_deleted)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run('epub', Buffer.alloc(0), 'Test Book', 'Author', '', '/tmp/test.epub', '', 'png', 'epub', 0, 1, 0)
+      .run(
+        'epub',
+        Buffer.alloc(0),
+        'Test Book',
+        'Author',
+        '',
+        '/tmp/test.epub',
+        '',
+        'png',
+        'epub',
+        0,
+        1,
+        0
+      )
     const bookId = result.lastInsertRowid as number
     // Should not throw — even if no chunks/chapters yet
     expect(() => _getBookOutlineWithDb(db, bookId)).not.toThrow()
@@ -32,7 +45,20 @@ describe('getBookOutline against the real migration', () => {
         `INSERT INTO books (kind, cover, title, author, publisher, filepath, location, cover_kind, format, sync_version, is_dirty, is_deleted)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run('epub', Buffer.alloc(0), 'Test Book', 'Author', '', '/tmp/test.epub', '', 'png', 'epub', 0, 1, 0)
+      .run(
+        'epub',
+        Buffer.alloc(0),
+        'Test Book',
+        'Author',
+        '',
+        '/tmp/test.epub',
+        '',
+        'png',
+        'epub',
+        0,
+        1,
+        0
+      )
     const bookId = result.lastInsertRowid as number
     const outline = _getBookOutlineWithDb(db, bookId)
     expect(outline.title).toBe('Test Book')

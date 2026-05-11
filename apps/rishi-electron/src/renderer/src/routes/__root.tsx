@@ -5,6 +5,7 @@ import { useEffect, type JSX } from 'react'
 import { getBooks } from '@/lib/api'
 import { initDesktopSync, destroyDesktopSync } from '@/modules/sync-triggers'
 import { SyncStatusIndicator } from '../components/SyncStatusIndicator'
+import { NetworkBanner } from '../components/NetworkBanner'
 import { WelcomeModal } from '@/components/auth/WelcomeModal'
 import { SignInBanner } from '@/components/auth/SignInBanner'
 import SignInModal from '@/components/auth/SignInModal'
@@ -61,6 +62,7 @@ function RootComponent(): JSX.Element {
       <div className="fixed bottom-4 left-4 z-50 w-40">
         <SyncStatusIndicator />
       </div>
+      <NetworkBanner />
     </>
   )
 }

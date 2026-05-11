@@ -1,10 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Settings } from 'lucide-react'
-import {
-  Popover,
-  PopoverTrigger,
-  PopoverContent
-} from '@/components/ui/popover'
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import {
   checkForUpdates,
   downloadUpdate,
@@ -87,9 +83,7 @@ export function UpdateMenu() {
           </div>
         )}
 
-        {statusLine && (
-          <div className="mt-2 text-xs text-muted-foreground">{statusLine}</div>
-        )}
+        {statusLine && <div className="mt-2 text-xs text-muted-foreground">{statusLine}</div>}
       </PopoverContent>
     </Popover>
   )

@@ -17,7 +17,7 @@
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "postinstall": "electron-builder install-app-deps || true; node scripts/ensure-sharp-vendor.cjs",
+    "postinstall": "electron-rebuild -f && node scripts/ensure-sharp-vendor.cjs",
     "clean:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true,maxRetries:5,retryDelay:300})\"",
     "build:unpack": "pnpm run clean:dist && pnpm run build && electron-builder --dir",
     "build:win": "pnpm run clean:dist && pnpm run build && electron-builder --win",

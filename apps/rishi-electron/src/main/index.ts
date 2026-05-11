@@ -39,9 +39,7 @@ function attachDebugInstrumentation(win: BrowserWindow, label: string): void {
   // can't get lost behind other apps the way `mode: 'detach'` can.
   wc.openDevTools({ mode: 'right' })
   wc.on('did-start-loading', () => console.log(`[debug:${label}] did-start-loading`))
-  wc.on('did-finish-load', () =>
-    console.log(`[debug:${label}] did-finish-load`, wc.getURL())
-  )
+  wc.on('did-finish-load', () => console.log(`[debug:${label}] did-finish-load`, wc.getURL()))
   wc.on('did-fail-load', (_e, code, desc, url) =>
     console.log(`[debug:${label}] did-fail-load`, { code, desc, url })
   )
