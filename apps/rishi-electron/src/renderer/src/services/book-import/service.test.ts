@@ -148,3 +148,66 @@ describe('BookImportService.importBatch', () => {
     expect(results[2].ok).toBe(true)
   })
 })
+
+describe('BookImportService.indexBook', () => {
+  it('skips when chunks AND vectors exist (delegates to indexer)', async () => {
+    const { db } = makeRagDb({ chunksExist: true })
+    const rag = makeRag({ indexedBookIds: new Set([42]) })
+    const embed = makeEmbed()
+    const service = createBookImportService(makeDeps({ db, rag, embed }))
+
+    await service.indexBook(42, [{ id: 1, pageNumber: 1, bookId: 42, data: 'A' }])
+
+    expect(db.savePageDataMany).not.toHaveBeenCalled()
+    expect(db.saveVectors).not.toHaveBeenCalled()
+    expect(embed).not.toHaveBeenCalled()
+  })
+
+  it('runs the full pipeline when neither chunks nor vectors exist', async () => {
+    const { db } = makeRagDb({ chunksExist: false })
+    const rag = makeRag()
+    const embed = makeEmbed()
+    const events: ImportProgressEvent[] = []
+    const service = createBookImportService(makeDeps({ db, rag, embed }))
+    service.onImportProgress((e) => events.push(e))
+
+    await service.indexBook(42, [
+      { id: 1, pageNumber: 1, bookId: 42, data: 'A' },
+      { id: 2, pageNumber: 2, bookId: 42, data: 'B' }
+    ])
+
+    expect(db.savePageDataMany).toHaveBeenCalledTimes(1)
+    expect(db.saveVectors).toHaveBeenCalledTimes(1)
+    expect(events).toContainEqual({ kind: 'indexing', bookId: 42, reason: 'chunks-missing' })
+  })
+
+  it('re-embeds when chunks exist but vectors are missing (regression)', async () => {
+    const { db } = makeRagDb({ chunksExist: true })
+    const rag = makeRag() // not indexed
+    const embed = makeEmbed()
+    const events: ImportProgressEvent[] = []
+    const service = createBookImportService(makeDeps({ db, rag, embed }))
+    service.onImportProgress((e) => events.push(e))
+
+    await service.indexBook(42, [{ id: 1, pageNumber: 1, bookId: 42, data: 'A' }])
+
+    expect(db.savePageDataMany).not.toHaveBeenCalled()
+    expect(db.saveVectors).toHaveBeenCalledTimes(1)
+    expect(events).toContainEqual({ kind: 'indexing', bookId: 42, reason: 'vectors-missing' })
+  })
+
+  it('falls back to db.getAllPageDataByBookId when pageData omitted', async () => {
+    const { db } = makeRagDb({
+      chunksExist: true,
+      pageData: [{ id: 1, pageNumber: 1, bookId: 42, data: 'from-db' }]
+    })
+    const rag = makeRag()
+    const embed = makeEmbed()
+    const service = createBookImportService(makeDeps({ db, rag, embed }))
+
+    await service.indexBook(42)
+
+    expect(db.getAllPageDataByBookId).toHaveBeenCalledWith(42)
+    expect(db.saveVectors).toHaveBeenCalledTimes(1)
+  })
+})
