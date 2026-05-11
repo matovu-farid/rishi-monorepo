@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Pencil, Trash2 } from 'lucide-react'
 import { getHighlightsForBook, deleteHighlightById } from '@/modules/highlight-storage'
-import { triggerSyncOnWrite } from '@/modules/sync-triggers'
+import { getSyncService } from '@/services'
 import { getHighlightHex, type HighlightColor } from '@/types/highlight'
 import { NoteEditor } from './NoteEditor'
 import type { HighlightRow } from '@/modules/highlight-storage'
@@ -39,7 +39,7 @@ export function HighlightsPanel({
   const handleDelete = async (highlightId: string) => {
     try {
       await deleteHighlightById(highlightId)
-      triggerSyncOnWrite()
+      getSyncService().triggerWrite()
       await refreshHighlights()
     } catch (err) {
       console.error('[highlights] delete failed:', err)
