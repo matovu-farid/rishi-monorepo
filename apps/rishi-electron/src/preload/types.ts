@@ -15,7 +15,7 @@ export interface ElectronAPI {
 
   // Search
   searchBookText: (query: string, bookId: number) => Promise<TextSearchResult[]>
-  getTextFromVectorId: (vectorId: number) => Promise<string>
+  getTextFromVectorId: (vectorId: number) => Promise<PageData | undefined>
   getContextForQuery: (queryText: string, bookId: number, k: number) => Promise<string[]>
 
   // Vector operations
