@@ -274,18 +274,27 @@ export function hasSavedEpubData(bookId: number): boolean {
 
 /**
  * Bulk-insert page data rows inside a single transaction for performance.
+ *
+ * Honors `row.id` when supplied so callers (specifically the book-import
+ * indexer) can pin chunk PKs to the hash-derived IDs produced by
+ * `stringToNumberID(bookId-section-startCfi-endCfi)`. Those same IDs are
+ * used as hnsw vector labels in saveVectors, so chunk_data.id and hnsw
+ * labels must align for getTextFromVectorId lookups to resolve.
+ *
+ * If `row.id` is omitted, SQLite assigns an AUTOINCREMENT id (legacy path).
  */
 export function savePageDataMany(pageData: PageData[]): void {
   if (pageData.length === 0) return
 
   const db = getDb()
   const stmt = db.prepare(
-    'INSERT INTO chunk_data (page_number, book_id, data) VALUES (@pageNumber, @bookId, @data)'
+    'INSERT INTO chunk_data (id, page_number, book_id, data) VALUES (@id, @pageNumber, @bookId, @data)'
   )
 
   const insertMany = db.transaction((rows: PageData[]) => {
     for (const row of rows) {
       stmt.run({
+        id: row.id ?? null,
         pageNumber: row.pageNumber,
         bookId: row.bookId,
         data: row.data
