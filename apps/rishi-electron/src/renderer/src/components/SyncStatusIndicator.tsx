@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
-import { onSyncStatusChange } from '@/modules/sync-triggers'
+import { getSyncService } from '@/services'
+import type { SyncStatus } from '@/services/sync'
 
 export function SyncStatusIndicator() {
-  const [status, setStatus] = useState<string>('not-synced')
+  const [status, setStatus] = useState<SyncStatus>(() => getSyncService().getStatus().status)
 
   useEffect(() => {
-    return onSyncStatusChange(setStatus)
+    return getSyncService().onStatusChange((snapshot) => {
+      setStatus(snapshot.status)
+    })
   }, [])
 
   if (status === 'synced' || status === 'not-synced') return null
