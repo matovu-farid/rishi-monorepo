@@ -1,7 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { getRagService } from '@/services'
+import { getRagService, getSyncService } from '@/services'
 import { getAuthToken } from '@/modules/auth'
-import { triggerSyncOnWrite } from '@/modules/sync-triggers'
 import type { Message, SourceChunk } from '@/types/conversation'
 
 const WORKER_URL = 'https://api.fidexa.org'
@@ -207,7 +206,7 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
         setMessages((prev) => [...prev, assistantMessage])
 
         // 11. Trigger sync
-        triggerSyncOnWrite()
+        getSyncService().triggerWrite()
       } catch (err) {
         console.error('[useChat] sendMessage failed:', err)
         setError('Message failed to send. Check your connection and try again.')
