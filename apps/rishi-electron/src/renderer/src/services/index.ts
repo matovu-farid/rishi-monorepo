@@ -1,25 +1,48 @@
 import { createRagService, type RagService } from './rag'
 import { createTtsService, type AuthHeader, type TtsService } from './tts'
-import {
-  createSyncService,
-  type ConnectivityPort,
-  type SyncService
-} from './sync'
+import { createSyncService, type SyncService } from './sync'
 import {
   createBookImportService,
   createScannerPort,
   type BookImportService,
   type ScannerPort
 } from './book-import'
+import { createConnectivityService, type ConnectivityService } from './connectivity'
+export { useIsOnline } from './connectivity'
 
 export type { DiscoveredBook, PageDataInsertable, ScanProgress } from './book-import'
 import { createSyncEngine } from '@rishi/shared/sync-engine'
-import { connectivityActor, isOnline } from '@/modules/connectivity'
 import { embedSingleText, embedWithFallback } from '@/modules/embed-fallback'
 import { hashBookFile, uploadBookFile } from '@/modules/file-sync'
 import { copyBookToAppData } from '@/modules/books'
 import { getAuthToken } from '@/modules/auth'
 import config from '@/config.json'
+
+let _connectivity: ConnectivityService | null = null
+let _connectivityOverride: ConnectivityService | null = null
+
+export function getConnectivityService(): ConnectivityService {
+  if (_connectivityOverride) return _connectivityOverride
+  if (!_connectivity) {
+    _connectivity = createConnectivityService({
+      source: {
+        get onLine() {
+          return navigator.onLine
+        },
+        addEventListener: (type, listener) => window.addEventListener(type, listener),
+        removeEventListener: (type, listener) =>
+          window.removeEventListener(type, listener)
+      }
+    })
+    _connectivity.start()
+  }
+  return _connectivity
+}
+
+/** Test-only seam. Production code never sets this. */
+export function setTestConnectivityService(override: ConnectivityService | null): void {
+  _connectivityOverride = override
+}
 
 let _rag: RagService | null = null
 
@@ -86,21 +109,6 @@ let _sync: SyncService | null = null
 
 export function getSyncService(): SyncService {
   if (!_sync) {
-    const connectivity: ConnectivityPort = {
-      isOnline,
-      subscribe: (listener) => {
-        let last = isOnline()
-        const sub = connectivityActor.subscribe(() => {
-          const next = isOnline()
-          if (next !== last) {
-            last = next
-            listener(next)
-          }
-        })
-        return () => sub.unsubscribe()
-      }
-    }
-
     _sync = createSyncService({
       ipc: {
         syncGetDirtyBooks: window.electron.syncGetDirtyBooks,
@@ -125,7 +133,7 @@ export function getSyncService(): SyncService {
       fetch: globalThis.fetch.bind(globalThis),
       getAuthToken,
       getDevBypassSecret: window.electron.getDevBypassSecret,
-      connectivity,
+      connectivity: getConnectivityService(),
       clock: {
         now: () => Date.now(),
         setTimeout: (fn, ms) => setTimeout(fn, ms),
