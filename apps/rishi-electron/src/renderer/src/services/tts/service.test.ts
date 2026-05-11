@@ -59,4 +59,75 @@ describe('TtsService.requestAudio', () => {
     await new Promise((r) => setTimeout(r, 0))
     expect(ipc.writeFile).toHaveBeenCalled() // cache write
   })
+
+  it('cache hit → no HTTP call', async () => {
+    const { ipc } = makeIpc()
+    // Pre-populate the cache by saving via the cache module the same way service does
+    const { createCache } = await import('./cache')
+    const cache = createCache({ ipc, cacheMaxBytes: baseConfig.cacheMaxBytes })
+    await cache.saveAudio('book-1', 'cfi-x', new Uint8Array([9, 9, 9]))
+
+    const { fetch, callCount } = makeFetch({})
+    const service = createTtsService({
+      ipc,
+      fetch,
+      getAuthToken: makeAuth({ kind: 'bearer', token: 'tok' }),
+      config: baseConfig
+    })
+
+    const url = await service.requestAudio({
+      bookId: 'book-1',
+      cfiRange: 'cfi-x',
+      text: 'hello',
+      priority: 0
+    })
+
+    expect(url).toMatch(/^blob:/)
+    expect(callCount()).toBe(0)
+  })
+})
+
+describe('TtsService.onAudioReady', () => {
+  it('fires with {bookId, cfiRange, audioPath} after a successful request', async () => {
+    const { ipc } = makeIpc()
+    const { fetch } = makeFetch({ audioBytes: new Uint8Array([1, 2]) })
+    const service = createTtsService({
+      ipc,
+      fetch,
+      getAuthToken: makeAuth({ kind: 'bearer', token: 't' }),
+      config: baseConfig
+    })
+    const handler = vi.fn()
+    service.onAudioReady(handler)
+
+    await service.requestAudio({ bookId: 'b', cfiRange: 'c', text: 'x', priority: 0 })
+
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bookId: 'b',
+        cfiRange: 'c',
+        audioPath: expect.stringMatching(/^blob:/)
+      })
+    )
+  })
+
+  it('unsubscribe() prevents subsequent emits from reaching the handler', async () => {
+    const { ipc } = makeIpc()
+    const { fetch } = makeFetch({})
+    const service = createTtsService({
+      ipc,
+      fetch,
+      getAuthToken: makeAuth({ kind: 'bearer', token: 't' }),
+      config: baseConfig
+    })
+    const handler = vi.fn()
+    const unsub = service.onAudioReady(handler)
+
+    await service.requestAudio({ bookId: 'b', cfiRange: 'c1', text: 'x', priority: 0 })
+    unsub()
+    await service.requestAudio({ bookId: 'b', cfiRange: 'c2', text: 'y', priority: 0 })
+
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
 })
