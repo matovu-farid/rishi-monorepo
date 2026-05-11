@@ -3,7 +3,7 @@ import Loader from './Loader'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
 import { Button } from './ui/Button'
-import { Trash2, Plus, Search } from 'lucide-react'
+import { Trash2, Plus, Search, BookOpen } from 'lucide-react'
 // chooseFiles moved into BookDiscoveryModal
 import { Book, deleteBook, getBooks } from '@/lib/api'
 import { getBookImportService, getVoiceChatService } from '@/services'
@@ -43,24 +43,17 @@ function BookCoverImage({ book }: { book: Book }) {
   }, [book.id])
 
   if (!coverUrl) {
-    // Placeholder cover for books without cover images
     return (
-      <div className="w-[200px] h-[280px] bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg flex flex-col items-center justify-center shadow-lg p-4">
-        <div className="text-4xl mb-2 opacity-30">📖</div>
-        <p className="text-xs text-gray-500 text-center font-medium truncate w-full">
-          {book.title}
-        </p>
-        <p className="text-xs text-gray-400 text-center truncate w-full">{book.author}</p>
+      <div className="w-full aspect-[5/7] bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg flex items-center justify-center shadow-sm">
+        <BookOpen className="w-1/4 h-1/4 text-gray-300" strokeWidth={1.5} />
       </div>
     )
   }
 
   return (
     <img
-      className="object-fill shadow-3xl drop-shadow-lg rounded-lg"
+      className="w-full aspect-[5/7] object-cover rounded-lg shadow-lg"
       src={coverUrl}
-      width={200}
-      height={280}
       alt={book.title}
     />
   )
@@ -208,9 +201,12 @@ export default function FileComponent(): React.JSX.Element {
     )
 
   return (
-    <div {...getRootProps()} className="w-full h-full overflow-hidden">
+    <div {...getRootProps()} className="w-full h-full flex flex-col overflow-hidden">
       <input {...getInputProps()} />
-      <div data-electron-drag-region className="px-4 pt-10 pb-2 flex items-center gap-2">
+      <div
+        data-electron-drag-region
+        className="px-4 pt-10 pb-2 flex items-center gap-2 flex-none"
+      >
         <div className="relative flex-1 max-w-xs">
           <Search
             size={16}
@@ -240,84 +236,84 @@ export default function FileComponent(): React.JSX.Element {
         <HelpMenu />
       </div>
 
-      {lastReadBook && (
-        <div className="px-5 mb-4">
-          <p className="text-xs text-gray-400 uppercase tracking-wider mb-2">Reading Now</p>
-          <Link
-            to="/books/$id"
-            params={{ id: lastReadBook.id.toString() }}
-            className="flex items-center gap-4 bg-gray-50 rounded-xl p-3 hover:bg-gray-100 transition-colors"
-          >
-            <div className="w-16 shrink-0">
-              <BookCoverImage book={lastReadBook} />
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-gray-900 truncate">{lastReadBook.title}</p>
-              <p className="text-xs text-gray-500 truncate">{lastReadBook.author}</p>
-            </div>
-          </Link>
-        </div>
-      )}
-
-      <motion.div
-        data-tour="book-grid"
-        layout
-        initial="animate"
-        animate="animate"
-        style={
-          filteredBooks.length > 0
-            ? {
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
-                gridAutoFlow: 'row'
-              }
-            : {}
-        }
-        className={
-          filteredBooks.length > 0
-            ? 'w-full p-5 gap-[30px] place-items-baseline cursor-pointer'
-            : 'grid place-items-center gap-3 rounded-3xl w-[50vw] h-[50vh] p-5 mx-auto'
-        }
-      >
-        {isDragActive && (!books || books.length === 0) ? (
-          <p>Drop the files here ...</p>
-        ) : filteredBooks.length > 0 ? (
-          <AnimatePresence>
-            {filteredBooks.map((book) => (
-              <motion.div
-                key={book.id}
-                initial={{ opacity: 0.5, scale: 0.7 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0.5, scale: 0.7 }}
-                className="p-2 grid relative transition-transform duration-200 ease-out hover:scale-[1.03]"
-                onContextMenu={(e) => {
-                  e.preventDefault()
-                  setContextMenu({ x: e.clientX, y: e.clientY, book })
-                }}
-              >
-                <Link
-                  to="/books/$id"
-                  params={{ id: book.id.toString() }}
-                  className="rounded-3xl bg-transparent"
-                >
-                  <BookCoverImage book={book} />
-                </Link>
-                <p className="text-xs font-medium text-gray-900 truncate mt-1 max-w-[200px]">
-                  {book.title}
-                </p>
-                <p className="text-xs text-gray-500 truncate max-w-[200px]">{book.author}</p>
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        ) : (
-          <div className="text-center">
-            <p className="mb-4">No books yet. Add your first book!</p>
-            <p className="text-sm text-gray-500">
-              You can also drag and drop EPUB, PDF, MOBI, or DJVU files here
-            </p>
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+        {lastReadBook && (
+          <div className="px-5 mb-4">
+            <p className="text-xs text-gray-400 uppercase tracking-wider mb-2">Reading Now</p>
+            <Link
+              to="/books/$id"
+              params={{ id: lastReadBook.id.toString() }}
+              className="flex items-center gap-4 bg-gray-50 rounded-xl p-3 hover:bg-gray-100 transition-colors"
+            >
+              <div className="w-16 shrink-0">
+                <BookCoverImage book={lastReadBook} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-gray-900 truncate">{lastReadBook.title}</p>
+                <p className="text-xs text-gray-500 truncate">{lastReadBook.author}</p>
+              </div>
+            </Link>
           </div>
         )}
-      </motion.div>
+
+        <motion.div
+          data-tour="book-grid"
+          layout
+          initial="animate"
+          animate="animate"
+          style={
+            filteredBooks.length > 0
+              ? {
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+                  gridAutoFlow: 'row'
+                }
+              : {}
+          }
+          className={
+            filteredBooks.length > 0
+              ? 'w-full p-5 gap-x-6 gap-y-8 items-start cursor-pointer'
+              : 'grid place-items-center gap-3 rounded-3xl w-[50vw] h-[50vh] p-5 mx-auto'
+          }
+        >
+          {isDragActive && (!books || books.length === 0) ? (
+            <p>Drop the files here ...</p>
+          ) : filteredBooks.length > 0 ? (
+            <AnimatePresence>
+              {filteredBooks.map((book) => (
+                <motion.div
+                  key={book.id}
+                  initial={{ opacity: 0.5, scale: 0.7 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0.5, scale: 0.7 }}
+                  className="flex flex-col gap-1 relative transition-transform duration-200 ease-out hover:scale-[1.03]"
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    setContextMenu({ x: e.clientX, y: e.clientY, book })
+                  }}
+                >
+                  <Link
+                    to="/books/$id"
+                    params={{ id: book.id.toString() }}
+                    className="block bg-transparent"
+                  >
+                    <BookCoverImage book={book} />
+                  </Link>
+                  <p className="text-xs font-medium text-gray-900 truncate mt-1">{book.title}</p>
+                  <p className="text-xs text-gray-500 truncate">{book.author}</p>
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          ) : (
+            <div className="text-center">
+              <p className="mb-4">No books yet. Add your first book!</p>
+              <p className="text-sm text-gray-500">
+                You can also drag and drop EPUB, PDF, MOBI, or DJVU files here
+              </p>
+            </div>
+          )}
+        </motion.div>
+      </div>
 
       {contextMenu && (
         <div
