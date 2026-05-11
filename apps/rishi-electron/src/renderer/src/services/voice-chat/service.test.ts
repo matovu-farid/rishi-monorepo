@@ -321,3 +321,75 @@ describe('createVoiceChatService — onStateChange', () => {
   // Multi-subscriber + offline transition assertions land in Task 10
   // (connectivity wiring). Edge-detection is sufficient here.
 })
+
+describe('createVoiceChatService — activate (cold happy path)', () => {
+  it('idle → connecting → active; mic + transport + agent + session + connect + mute(false)', async () => {
+    const media = makeMedia()
+    const webrtc = makeWebrtc()
+    const agent = makeAgent()
+    const session = makeSession()
+    const ipc = makeIpc({ key: 'EPHEMERAL' })
+    const states: VoiceChatPublicState[] = []
+
+    const svc = createVoiceChatService(
+      makeDeps({
+        media,
+        webrtcFactory: webrtc.factory,
+        agentFactory: agent.factory,
+        sessionFactory: session.factory,
+        ipc
+      })
+    )
+    svc.onStateChange((s) => states.push(s))
+
+    await svc.activate(7, { pageText: 'hello' })
+
+    expect(states).toEqual(['connecting', 'active'])
+    expect(media.getUserMedia).toHaveBeenCalledWith({ audio: true })
+    expect(webrtc.callCount()).toBe(1)
+    expect(agent.lastArgs()?.bookId).toBe(7)
+    expect(agent.lastArgs()?.pageText).toBe('hello')
+    expect(session.connect).toHaveBeenCalledWith({ apiKey: 'EPHEMERAL' })
+    expect(session.mute).toHaveBeenCalledWith(false)
+    expect(svc.getState()).toBe('active')
+  })
+
+  it('deactivate() from active → paused; session.interrupt + mute(true)', async () => {
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ sessionFactory: session.factory })
+    )
+    await svc.activate(1, { pageText: 'p' })
+    svc.deactivate()
+
+    expect(session.interrupt).toHaveBeenCalledTimes(1)
+    expect(session.mute).toHaveBeenLastCalledWith(true)
+    expect(svc.getState()).toBe('paused')
+  })
+
+  it('dispose() from active → idle; session.close() called', async () => {
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ sessionFactory: session.factory })
+    )
+    await svc.activate(1, { pageText: 'p' })
+    svc.dispose()
+
+    expect(session.close).toHaveBeenCalledTimes(1)
+    expect(svc.getState()).toBe('idle')
+  })
+
+  it('chatStatus fires connecting → idle around a cold activate', async () => {
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ sessionFactory: session.factory })
+    )
+    const statuses: ChatStatus[] = []
+    svc.onChatStatus((s) => statuses.push(s))
+
+    await svc.activate(1, { pageText: 'p' })
+
+    expect(statuses[0]).toBe('connecting')
+    expect(statuses[statuses.length - 1]).toBe('idle')
+  })
+})
