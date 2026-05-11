@@ -604,3 +604,48 @@ describe('createVoiceChatService — connectivity gating', () => {
     expect(spy).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('createVoiceChatService — RAG passthrough + onEndedByAgent', () => {
+  it('passes the injected RagService through agentFactory', async () => {
+    const rag = makeRag()
+    const agent = makeAgent()
+    const svc = createVoiceChatService(
+      makeDeps({ rag, agentFactory: agent.factory })
+    )
+    await svc.activate(1, { pageText: 'p' })
+
+    expect(agent.lastArgs()?.rag).toBe(rag)
+    expect(agent.lastArgs()?.bookId).toBe(1)
+  })
+
+  it('onEndedByAgent fires when the agent invokes endConversation tool', async () => {
+    const agent = makeAgent()
+    const svc = createVoiceChatService(
+      makeDeps({ agentFactory: agent.factory })
+    )
+    const spy = vi.fn()
+    svc.onEndedByAgent(spy)
+
+    await svc.activate(1, { pageText: 'p' })
+    agent.triggerEnd('all done')
+
+    expect(spy).toHaveBeenCalledWith('all done')
+  })
+
+  it('onEndedByAgent unsubscribe stops further deliveries', async () => {
+    const agent = makeAgent()
+    const svc = createVoiceChatService(
+      makeDeps({ agentFactory: agent.factory })
+    )
+    const spy = vi.fn()
+    const off = svc.onEndedByAgent(spy)
+
+    await svc.activate(1, { pageText: 'p' })
+    agent.triggerEnd('one')
+    off()
+    agent.triggerEnd('two')
+
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('one')
+  })
+})
