@@ -23,8 +23,7 @@ import type {
 // is needed (service.ts's getState/getError contract is synchronous).
 const refGet = <A>(r: Ref.Ref<A>): A => Effect.runSync(Ref.get(r))
 const refSet = <A>(r: Ref.Ref<A>, v: A): void => Effect.runSync(Ref.set(r, v))
-const refUpd = <A>(r: Ref.Ref<A>, f: (a: A) => A): void =>
-  Effect.runSync(Ref.update(r, f))
+const refUpd = <A>(r: Ref.Ref<A>, f: (a: A) => A): void => Effect.runSync(Ref.update(r, f))
 
 // Re-export the helpers under a void-suppressing reference so TS doesn't
 // complain about unused helpers in this file. They are part of the intended
@@ -73,10 +72,10 @@ export interface ActivationProgram {
    * listeners (agent_start, audio_start, audio_stopped, agent_end,
    * agent_tool_start, agent_tool_end).
    */
-  activate(input: {
-    bookId: number
-    ctx: VoiceChatContext
-  }): { promise: Promise<SessionHandle>; fiber: Fiber.RuntimeFiber<SessionHandle, ActivationError> }
+  activate(input: { bookId: number; ctx: VoiceChatContext }): {
+    promise: Promise<SessionHandle>
+    fiber: Fiber.RuntimeFiber<SessionHandle, ActivationError>
+  }
 }
 
 /** True iff a thrown value came from Effect interpreting an interrupt cause. */
@@ -232,8 +231,7 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
         }).pipe(
           Effect.timeoutFail({
             duration: Duration.millis(deps.config.connectTimeoutMs),
-            onTimeout: () =>
-              new ConnectTimeoutError({ ms: deps.config.connectTimeoutMs })
+            onTimeout: () => new ConnectTimeoutError({ ms: deps.config.connectTimeoutMs })
           })
         )
 
