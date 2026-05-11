@@ -19,13 +19,12 @@ export function createRagService(deps: RagServiceDeps): RagService {
       const result: SemanticChunk[] = []
       for (let i = 0; i < hits.length; i++) {
         const chunk = chunks[i]
-        // Note: orphan handling (skip undefined) is added by Task 4's TDD pair.
-        // Happy-path code assumes all chunks resolve.
+        if (!chunk) continue
         result.push({
-          chunkId: chunk!.id,
-          bookId: chunk!.bookId,
-          pageNumber: chunk!.pageNumber,
-          text: chunk!.data,
+          chunkId: chunk.id,
+          bookId: chunk.bookId,
+          pageNumber: chunk.pageNumber,
+          text: chunk.data,
           distance: hits[i].distance,
         })
       }

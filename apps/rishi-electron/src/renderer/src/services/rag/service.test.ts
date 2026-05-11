@@ -82,4 +82,27 @@ describe('RagService.searchSemantic', () => {
     expect(embed).not.toHaveBeenCalled()
     expect(ipc.searchVectors).not.toHaveBeenCalled()
   })
+
+  it('silently drops vector hits whose chunk row is missing', async () => {
+    const embed = makeEmbed()
+    const ipc = makeIpc({
+      searchVectors: vi.fn().mockResolvedValue([
+        { id: 10, distance: 0.1 },
+        { id: 20, distance: 0.2 },
+        { id: 30, distance: 0.3 },
+      ]),
+      getTextFromVectorId: vi.fn(async (id: number) => {
+        if (id === 10) return { id: 10, pageNumber: 1, bookId: 5, data: 'ten' }
+        if (id === 20) return undefined // orphaned vector
+        if (id === 30) return { id: 30, pageNumber: 3, bookId: 5, data: 'thirty' }
+        return undefined
+      }),
+    })
+    const service = createRagService({ ipc, embed })
+
+    const result = await service.searchSemantic('q', 5, 3)
+
+    expect(result).toHaveLength(2)
+    expect(result.map((c) => c.chunkId)).toEqual([10, 30])
+  })
 })
