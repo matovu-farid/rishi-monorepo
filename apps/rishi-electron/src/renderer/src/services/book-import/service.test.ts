@@ -282,3 +282,20 @@ describe('BookImportService.startDiscovery', () => {
     expect(scanner.cancelCount()).toBe(0)
   })
 })
+
+describe('BookImportService.onImportProgress', () => {
+  it('unsubscribe stops further events from being delivered', async () => {
+    const service = createBookImportService(makeDeps())
+    const seen: ImportProgressEvent[] = []
+    const unsub = service.onImportProgress((e) => seen.push(e))
+
+    await service.importFromPath('/Downloads/a.epub')
+    const seenAfterFirst = seen.length
+    expect(seenAfterFirst).toBeGreaterThan(0)
+
+    unsub()
+    await service.importFromPath('/Downloads/b.epub')
+
+    expect(seen.length).toBe(seenAfterFirst) // unchanged after unsubscribe
+  })
+})
