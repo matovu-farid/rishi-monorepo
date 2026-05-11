@@ -59,8 +59,23 @@ export function createCache(deps: CacheDeps): Cache {
     async getAudio() {
       throw new Error('not implemented')
     },
-    async saveAudio() {
-      throw new Error('not implemented')
+    async saveAudio(bookId, cfiRange, bytes, textHash) {
+      if (bytes.byteLength === 0) {
+        throw new Error('Audio blob is zero bytes, skipping cache write')
+      }
+      const path = await audioPath(bookId, cfiRange)
+      await ipc.writeFile(path, bytes)
+
+      if (textHash && !cfiRange.startsWith('texthash:')) {
+        try {
+          const mirror = await audioPath(bookId, `texthash:${md5(textHash)}`)
+          const mirrorExists = await ipc.exists(mirror)
+          if (!mirrorExists) await ipc.copyFile(path, mirror)
+        } catch {
+          // Non-critical — CFI-based lookup still works
+        }
+      }
+      return path
     },
     async clearBook() {
       throw new Error('not implemented')

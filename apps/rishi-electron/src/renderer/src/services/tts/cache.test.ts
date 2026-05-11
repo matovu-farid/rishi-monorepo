@@ -73,3 +73,41 @@ describe('cache.audioPath', () => {
     expect(ipc.mkdir).toHaveBeenCalledWith('/userData/tts-cache/book-1')
   })
 })
+
+describe('cache.saveAudio', () => {
+  it('writes the bytes under the CFI key and copies to the text-hash key', async () => {
+    const { ipc, files } = makeIpc()
+    const cache = createCache({ ipc, cacheMaxBytes: 500 * 1024 * 1024 })
+    const bytes = new Uint8Array([1, 2, 3, 4])
+
+    const path = await cache.saveAudio('book-1', 'cfi-x', bytes, 'hello world')
+
+    expect(path).toMatch(/\.mp3$/)
+    expect(ipc.writeFile).toHaveBeenCalledTimes(1)
+    // copyFile to text-hash mirror
+    expect(ipc.copyFile).toHaveBeenCalledTimes(1)
+    // Both keys present in the in-memory FS
+    expect([...files.keys()].filter((k) => k.endsWith('.mp3'))).toHaveLength(2)
+  })
+
+  it('rejects empty audio buffers without writing', async () => {
+    const { ipc } = makeIpc()
+    const cache = createCache({ ipc, cacheMaxBytes: 500 * 1024 * 1024 })
+
+    await expect(cache.saveAudio('book-1', 'cfi-x', new Uint8Array(0))).rejects.toThrow(
+      'Audio blob is zero bytes'
+    )
+    expect(ipc.writeFile).not.toHaveBeenCalled()
+  })
+
+  it('does not duplicate the text-hash copy when cfiRange already starts with texthash:', async () => {
+    const { ipc } = makeIpc()
+    const cache = createCache({ ipc, cacheMaxBytes: 500 * 1024 * 1024 })
+    const bytes = new Uint8Array([1, 2, 3])
+
+    await cache.saveAudio('book-1', 'texthash:abc', bytes, 'hello')
+
+    expect(ipc.writeFile).toHaveBeenCalledTimes(1)
+    expect(ipc.copyFile).not.toHaveBeenCalled()
+  })
+})
