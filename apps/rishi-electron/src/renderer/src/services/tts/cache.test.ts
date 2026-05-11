@@ -111,3 +111,38 @@ describe('cache.saveAudio', () => {
     expect(ipc.copyFile).not.toHaveBeenCalled()
   })
 })
+
+describe('cache.getAudio', () => {
+  it('returns the cached ArrayBuffer when the CFI key hits', async () => {
+    const { ipc } = makeIpc()
+    const cache = createCache({ ipc, cacheMaxBytes: 500 * 1024 * 1024 })
+    await cache.saveAudio('book-1', 'cfi-x', new Uint8Array([9, 9, 9]))
+
+    const got = await cache.getAudio('book-1', 'cfi-x')
+
+    expect(got).not.toBeNull()
+    expect(new Uint8Array(got!)).toEqual(new Uint8Array([9, 9, 9]))
+  })
+
+  it('falls back to text-hash key when CFI is absent', async () => {
+    const { ipc } = makeIpc()
+    const cache = createCache({ ipc, cacheMaxBytes: 500 * 1024 * 1024 })
+    // Save under cfi-x WITH textHash so mirror is created
+    await cache.saveAudio('book-1', 'cfi-x', new Uint8Array([7, 7]), 'paragraph text')
+
+    // Looking up a different CFI but with the same text-hash should resolve
+    const got = await cache.getAudio('book-1', 'cfi-different', 'paragraph text')
+
+    expect(got).not.toBeNull()
+    expect(new Uint8Array(got!)).toEqual(new Uint8Array([7, 7]))
+  })
+
+  it('returns null when both lookups miss', async () => {
+    const { ipc } = makeIpc()
+    const cache = createCache({ ipc, cacheMaxBytes: 500 * 1024 * 1024 })
+
+    const got = await cache.getAudio('book-1', 'cfi-missing', 'no-text')
+
+    expect(got).toBeNull()
+  })
+})

@@ -56,8 +56,18 @@ export function createCache(deps: CacheDeps): Cache {
 
   return {
     audioPath,
-    async getAudio() {
-      throw new Error('not implemented')
+    async getAudio(bookId, cfiRange, textHash) {
+      const cfiPath = await audioPath(bookId, cfiRange)
+      if (await ipc.exists(cfiPath)) {
+        return ipc.readFile(cfiPath)
+      }
+      if (textHash) {
+        const mirror = await audioPath(bookId, `texthash:${md5(textHash)}`)
+        if (await ipc.exists(mirror)) {
+          return ipc.readFile(mirror)
+        }
+      }
+      return null
     },
     async saveAudio(bookId, cfiRange, bytes, textHash) {
       if (bytes.byteLength === 0) {
