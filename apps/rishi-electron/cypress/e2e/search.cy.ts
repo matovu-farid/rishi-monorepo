@@ -44,13 +44,6 @@ describe('Search', () => {
       })
     })
 
-    it('should have getContextForQuery for semantic search', () => {
-      cy.window().then((win) => {
-        expect(win.electron).to.have.property('getContextForQuery')
-        expect(win.electron.getContextForQuery).to.be.a('function')
-      })
-    })
-
     it('should have embed method for vector-based search', () => {
       cy.window().then((win) => {
         expect(win.electron).to.have.property('embed')

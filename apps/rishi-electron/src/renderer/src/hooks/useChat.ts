@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { getContextForQuery } from '@/lib/api'
+import { getRagService } from '@/services'
 import { getAuthToken } from '@/modules/auth'
 import { triggerSyncOnWrite } from '@/modules/sync-triggers'
 import type { Message, SourceChunk } from '@/types/conversation'
@@ -130,27 +130,17 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
         setMessages((prev) => [...prev, userMessage])
 
         // 3. RAG retrieval
-        const contextTexts = await getContextForQuery({
-          queryText: text,
-          bookId,
-          k: 5
-        })
+        const chunks = await getRagService().searchSemantic(text, bookId, 5)
 
-        // 4. Get source chunk metadata from chunk_data table
-        const sourceChunks: SourceChunk[] = []
-        for (const contextText of contextTexts) {
-          const pageNumber = await window.electron.messagesGetChunkPage(bookId, contextText)
-          if (pageNumber !== null) {
-            sourceChunks.push({
-              id: 0,
-              text: contextText.substring(0, 200),
-              pageNumber
-            })
-          }
-        }
+        // 4. Map directly to source chunk metadata — pageNumber arrives with the chunk
+        const sourceChunks: SourceChunk[] = chunks.map((c) => ({
+          id: c.chunkId,
+          text: c.text.substring(0, 200),
+          pageNumber: c.pageNumber
+        }))
 
         // 5. Build system prompt with RAG context
-        const systemPrompt = `You are a helpful AI assistant that answers questions about books. Use the following context from the book to answer the user's question. If the context doesn't contain relevant information, say so.\n\nContext:\n${contextTexts.join('\n\n')}`
+        const systemPrompt = `You are a helpful AI assistant that answers questions about books. Use the following context from the book to answer the user's question. If the context doesn't contain relevant information, say so.\n\nContext:\n${chunks.map((c) => c.text).join('\n\n')}`
 
         // 6. Get recent conversation history (last 6 messages)
         const recentMessages = messages.slice(-6)

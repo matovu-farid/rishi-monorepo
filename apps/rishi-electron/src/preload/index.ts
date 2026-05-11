@@ -23,8 +23,6 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('search:text', query, bookId),
   getTextFromVectorId: (vectorId: number) =>
     ipcRenderer.invoke('search:textFromVectorId', vectorId),
-  getContextForQuery: (queryText: string, bookId: number, k: number) =>
-    ipcRenderer.invoke('search:contextForQuery', queryText, bookId, k),
 
   // Vector operations
   embed: (params: unknown[]) => ipcRenderer.invoke('vectors:embed', params),

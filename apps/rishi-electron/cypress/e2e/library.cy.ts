@@ -58,7 +58,6 @@ const seedElectron = (overrides = {}) => {
       processJob: cy.stub().resolves(undefined),
       copyFile: cy.stub().resolves(undefined),
       getAllPageDataByBookId: cy.stub().resolves([]),
-      getContextForQuery: cy.stub().resolves([]),
       embed: cy.stub().resolves([]),
       searchVectors: cy.stub().resolves([]),
       getRealtimeClientSecret: cy.stub().resolves('test-key'),

@@ -1,8 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import { buildRealtimeAgent } from './buildRealtimeAgent'
 
-vi.mock('@/lib/api', () => ({
-  getContextForQuery: vi.fn().mockResolvedValue(['stub'])
+const searchSemanticMock = vi.fn().mockResolvedValue([{ text: 'stub', vectorId: 1, score: 0.9 }])
+
+vi.mock('@/services', () => ({
+  getRagService: () => ({
+    searchSemantic: searchSemanticMock
+  })
 }))
 
 describe('buildRealtimeAgent', () => {
@@ -42,7 +46,9 @@ describe('buildRealtimeAgent', () => {
       pageText: 'x',
       onEndConversation: onEnd
     })
-    const endTool = agent.tools.find((t: { name: string }) => t.name === 'endConversation') as unknown as {
+    const endTool = agent.tools.find(
+      (t: { name: string }) => t.name === 'endConversation'
+    ) as unknown as {
       execute: (args: { reason: string }) => Promise<unknown>
     }
     await endTool.execute({ reason: 'user said bye' })
@@ -50,7 +56,7 @@ describe('buildRealtimeAgent', () => {
   })
 
   it('bookContext tool queries with the captured bookId', async () => {
-    const { getContextForQuery } = await import('@/lib/api')
+    searchSemanticMock.mockClear()
     const agent = buildRealtimeAgent({
       bookId: 42,
       pageText: 'x',
@@ -61,12 +67,9 @@ describe('buildRealtimeAgent', () => {
     ) as unknown as {
       execute: (args: { queryText: string }) => Promise<unknown>
     }
-    await bookContextTool.execute({ queryText: 'who is the protagonist?' })
-    expect(getContextForQuery).toHaveBeenCalledWith({
-      bookId: 42,
-      queryText: 'who is the protagonist?',
-      k: 3
-    })
+    const result = await bookContextTool.execute({ queryText: 'who is the protagonist?' })
+    expect(searchSemanticMock).toHaveBeenCalledWith('who is the protagonist?', 42, 3)
+    expect(result).toEqual(['stub'])
   })
 
   it('embeds book title and author into instructions when outline is provided', () => {
