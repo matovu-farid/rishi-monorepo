@@ -146,3 +146,26 @@ describe('cache.getAudio', () => {
     expect(got).toBeNull()
   })
 })
+
+describe('cache.clearBook', () => {
+  it('removes the book directory recursively and forgets its membership', async () => {
+    const { ipc, files } = makeIpc()
+    const cache = createCache({ ipc, cacheMaxBytes: 500 * 1024 * 1024 })
+    await cache.saveAudio('book-1', 'cfi-a', new Uint8Array([1]))
+    await cache.saveAudio('book-1', 'cfi-b', new Uint8Array([2]))
+    expect([...files.keys()].filter((k) => k.includes('/book-1/'))).toHaveLength(2)
+
+    await cache.clearBook('book-1')
+
+    expect([...files.keys()].filter((k) => k.includes('/book-1/'))).toHaveLength(0)
+    expect(ipc.removeFile).toHaveBeenCalledWith('/userData/tts-cache/book-1')
+  })
+
+  it('is a no-op when the book directory does not exist', async () => {
+    const { ipc } = makeIpc()
+    const cache = createCache({ ipc, cacheMaxBytes: 500 * 1024 * 1024 })
+
+    await expect(cache.clearBook('never-cached')).resolves.toBeUndefined()
+    expect(ipc.removeFile).not.toHaveBeenCalled()
+  })
+})

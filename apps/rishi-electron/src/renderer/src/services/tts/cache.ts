@@ -87,8 +87,13 @@ export function createCache(deps: CacheDeps): Cache {
       }
       return path
     },
-    async clearBook() {
-      throw new Error('not implemented')
+    async clearBook(bookId) {
+      await init()
+      const dir = `${rootDir}/${bookId}`
+      knownBookDirs.delete(dir)
+      if (await ipc.exists(dir)) {
+        await ipc.removeFile(dir)
+      }
     },
     async evictIfNeeded() {
       throw new Error('not implemented')
