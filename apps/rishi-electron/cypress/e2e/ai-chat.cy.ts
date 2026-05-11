@@ -59,12 +59,12 @@ describe('AI Chat', () => {
 
   it('should have the IPC methods needed for AI chat', () => {
     cy.window().then((win) => {
-      expect(win.electron).to.have.property('getContextForQuery')
-      expect(win.electron.getContextForQuery).to.be.a('function')
       expect(win.electron).to.have.property('embed')
       expect(win.electron.embed).to.be.a('function')
       expect(win.electron).to.have.property('searchVectors')
       expect(win.electron.searchVectors).to.be.a('function')
+      expect(win.electron).to.have.property('getTextFromVectorId')
+      expect(win.electron.getTextFromVectorId).to.be.a('function')
     })
   })
 
