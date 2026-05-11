@@ -353,3 +353,72 @@ describe('SyncService.onStatusChange', () => {
     expect(calls).not.toContain('error')
   })
 })
+
+describe('SyncService apiFetch (passed into engineFactory)', () => {
+  it('builds an apiFetch that retries 401 once with a fresh bearer token', async () => {
+    // We intercept the apiFetch by capturing the value passed to engineFactory.
+    let capturedApiFetch:
+      | ((path: string, init?: RequestInit) => Promise<Response>)
+      | null = null
+    const engineFactory: EngineFactory = (cfg) => {
+      capturedApiFetch = cfg.apiFetch
+      return { sync: async () => {} }
+    }
+
+    let tokenCalls = 0
+    const tokens = ['stale-token', 'fresh-token']
+    const getAuthToken = vi.fn(async () => tokens[tokenCalls++] ?? 'fresh-token')
+
+    const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>
+      const auth = headers['Authorization']
+      if (auth === 'Bearer stale-token') return new Response('', { status: 401 })
+      return new Response('{"ok":true}', { status: 200 })
+    })
+
+    const service = createSyncService(
+      makeDeps({ engineFactory, getAuthToken, fetch })
+    )
+    service.start()
+
+    expect(capturedApiFetch).not.toBeNull()
+    const res = await capturedApiFetch!('/sync/push', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(getAuthToken).toHaveBeenCalledTimes(2)
+  })
+
+  it('falls back to X-Dev-Bypass header when no auth token is available', async () => {
+    let capturedApiFetch:
+      | ((path: string, init?: RequestInit) => Promise<Response>)
+      | null = null
+    const engineFactory: EngineFactory = (cfg) => {
+      capturedApiFetch = cfg.apiFetch
+      return { sync: async () => {} }
+    }
+
+    const fetch = vi.fn(
+      async (_url: string, init?: RequestInit) =>
+        new Response(
+          JSON.stringify({ headers: init?.headers }),
+          { status: 200 }
+        )
+    )
+
+    const service = createSyncService(
+      makeDeps({
+        engineFactory,
+        getAuthToken: makeAuthToken(null),
+        getDevBypassSecret: makeDevBypass('s3cret'),
+        fetch
+      })
+    )
+    service.start()
+
+    await capturedApiFetch!('/sync/pull')
+    const sentHeaders = fetch.mock.calls[0][1]?.headers as Record<string, string>
+    expect(sentHeaders['X-Dev-Bypass']).toBe('s3cret')
+    expect(sentHeaders['Authorization']).toBeUndefined()
+  })
+})

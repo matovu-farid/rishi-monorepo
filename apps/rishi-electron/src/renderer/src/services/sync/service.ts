@@ -10,6 +10,70 @@ import { makeAdapter } from './adapter'
 import { createDebouncer } from './debounce'
 import { createEmitter } from './emitter'
 
+interface ApiFetchDeps {
+  fetch: SyncServiceDeps['fetch']
+  getAuthToken: SyncServiceDeps['getAuthToken']
+  getDevBypassSecret: SyncServiceDeps['getDevBypassSecret']
+  workerUrl: string
+  requestTimeoutMs: number
+}
+
+function createApiFetch(
+  deps: ApiFetchDeps
+): (path: string, init?: RequestInit) => Promise<Response> {
+  return async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+    const token = await deps.getAuthToken()
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), deps.requestTimeoutMs)
+    if (init?.signal) {
+      init.signal.addEventListener('abort', () => controller.abort(), { once: true })
+    }
+
+    try {
+      const headers: Record<string, string> = {
+        ...((init?.headers as Record<string, string>) ?? {}),
+        'Content-Type': 'application/json'
+      }
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`
+      } else {
+        const secret = await deps.getDevBypassSecret()
+        if (secret) {
+          headers['X-Dev-Bypass'] = secret
+        } else {
+          return new Response(JSON.stringify({ error: 'Not authenticated' }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' }
+          })
+        }
+      }
+
+      let response = await deps.fetch(`${deps.workerUrl}${path}`, {
+        ...init,
+        headers,
+        signal: controller.signal
+      })
+
+      // Retry once on 401 with a freshly-minted token.
+      if (response.status === 401 && token) {
+        const freshToken = await deps.getAuthToken()
+        if (freshToken && freshToken !== token) {
+          const retryHeaders = { ...headers, Authorization: `Bearer ${freshToken}` }
+          response = await deps.fetch(`${deps.workerUrl}${path}`, {
+            ...init,
+            headers: retryHeaders,
+            signal: controller.signal
+          })
+        }
+      }
+      return response
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+}
+
 export function createSyncService(deps: SyncServiceDeps): SyncService {
   const { ipc, engineFactory, connectivity, clock, windowEvents, config } = deps
 
@@ -60,12 +124,14 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       if (started) return
       started = true
 
-      // apiFetch is built once and closed over the adapter; the engine
-      // factory binds them together. For Task 10 we pass a no-op
-      // apiFetch — Task 16 wires the real auth-aware wrapper.
       const adapter = makeAdapter(ipc)
-      const apiFetch = async (): Promise<Response> =>
-        new Response('{}', { status: 200 })
+      const apiFetch = createApiFetch({
+        fetch: deps.fetch,
+        getAuthToken: deps.getAuthToken,
+        getDevBypassSecret: deps.getDevBypassSecret,
+        workerUrl: config.workerUrl,
+        requestTimeoutMs: config.requestTimeoutMs
+      })
       engine = engineFactory({ adapter, apiFetch })
 
       focusHandler = () => {
