@@ -210,6 +210,30 @@ describe('BookImportService.indexBook', () => {
     expect(db.getAllPageDataByBookId).toHaveBeenCalledWith(42)
     expect(db.saveVectors).toHaveBeenCalledTimes(1)
   })
+
+  it('isIndexing reflects in-flight state: false → true during run → false after', async () => {
+    const { db } = makeRagDb({ chunksExist: false })
+    const rag = makeRag()
+    // Use a deferred embed so we can observe the in-flight state mid-call.
+    let resolveEmbed!: (value: never[]) => void
+    const embedDeferred = new Promise<never[]>((res) => {
+      resolveEmbed = res as (v: never[]) => void
+    })
+    const embed = vi.fn(() => embedDeferred) as unknown as ReturnType<typeof makeEmbed>
+    const service = createBookImportService(makeDeps({ db, rag, embed }))
+
+    expect(service.isIndexing(42)).toBe(false)
+
+    const inflight = service.indexBook(42, [{ id: 1, pageNumber: 1, bookId: 42, data: 'A' }])
+    // Yield once so the indexer reaches its await on embed().
+    await Promise.resolve()
+    expect(service.isIndexing(42)).toBe(true)
+    expect(service.isIndexing(99)).toBe(false)
+
+    resolveEmbed([] as never[])
+    await inflight
+    expect(service.isIndexing(42)).toBe(false)
+  })
 })
 
 describe('BookImportService.startDiscovery', () => {

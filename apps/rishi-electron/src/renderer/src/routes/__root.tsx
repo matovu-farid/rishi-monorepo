@@ -5,6 +5,7 @@ import { useEffect, type JSX } from 'react'
 import { getBooks } from '@/lib/api'
 import { getSyncService } from '@/services'
 import { SyncStatusIndicator } from '../components/SyncStatusIndicator'
+import { IndexingStatusIndicator } from '../components/IndexingStatusIndicator'
 import { NetworkBanner } from '../components/NetworkBanner'
 import { WelcomeModal } from '@/components/auth/WelcomeModal'
 import { SignInBanner } from '@/components/auth/SignInBanner'
@@ -62,6 +63,9 @@ function RootComponent(): JSX.Element {
       <TourProvider />
       <div className="fixed bottom-4 left-4 z-50 w-40">
         <SyncStatusIndicator />
+      </div>
+      <div className="fixed bottom-4 right-4 z-50 w-40 flex justify-end">
+        <IndexingStatusIndicator />
       </div>
       <NetworkBanner />
     </>

@@ -2,10 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { buildRealtimeAgent } from './buildRealtimeAgent'
 
 const searchSemanticMock = vi.fn().mockResolvedValue([{ text: 'stub', vectorId: 1, score: 0.9 }])
+const isIndexingMock = vi.fn().mockReturnValue(false)
 
 vi.mock('@/services', () => ({
   getRagService: () => ({
     searchSemantic: searchSemanticMock
+  }),
+  getBookImportService: () => ({
+    isIndexing: isIndexingMock
   })
 }))
 
@@ -17,6 +21,7 @@ vi.mock('@/utils/sentry', () => ({
 describe('buildRealtimeAgent', () => {
   beforeEach(() => {
     captureErrorMock.mockClear()
+    isIndexingMock.mockReturnValue(false)
     ;(window.electron.dumpError as ReturnType<typeof vi.fn>).mockClear()
   })
   it('embeds the current page text into the instructions', () => {
@@ -131,6 +136,30 @@ describe('buildRealtimeAgent', () => {
     expect(agent.instructions).toContain('Anon Book')
     expect(agent.instructions).not.toContain('null')
     expect(agent.instructions).not.toContain('undefined')
+  })
+
+  it('bookContext while indexing: returns wait-message, does NOT call searchSemantic', async () => {
+    isIndexingMock.mockReturnValue(true)
+    searchSemanticMock.mockClear()
+
+    const agent = buildRealtimeAgent({
+      bookId: 42,
+      pageText: 'x',
+      onEndConversation: vi.fn()
+    })
+    const bookContextTool = agent.tools.find(
+      (t: { name: string }) => t.name === 'bookContext'
+    ) as unknown as {
+      execute: (args: { queryText: string }) => Promise<unknown>
+    }
+
+    const result = (await bookContextTool.execute({
+      queryText: 'what does chapter 3 say'
+    })) as string[]
+
+    expect(searchSemanticMock).not.toHaveBeenCalled()
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatch(/still indexing/i)
   })
 
   it('bookContext empty result: dumps with context, warns to console, returns the empty array', async () => {

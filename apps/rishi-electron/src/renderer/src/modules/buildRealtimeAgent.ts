@@ -1,4 +1,4 @@
-import { getRagService } from '@/services'
+import { getRagService, getBookImportService } from '@/services'
 import type { BookOutline } from '@/lib/api'
 import type { RagService } from '@/services/rag'
 import { RealtimeAgent, tool } from '@openai/agents/realtime'
@@ -152,6 +152,15 @@ export function buildRealtimeAgent({
       'bookContext',
       ['Unable to retrieve book context at this time.'],
       async () => {
+        // If indexing is still in flight for this book, the vector store
+        // doesn't have all embeddings yet — searchSemantic would return a
+        // partial or empty result. Return a sentinel instruction that the
+        // agent reads aloud so the user knows to wait a moment.
+        if (getBookImportService().isIndexing(bookId)) {
+          return [
+            "I'm still indexing this book — please give me a moment and try asking again."
+          ]
+        }
         const chunks = await ragService.searchSemantic(queryText, bookId, 3)
         return chunks.map((c) => c.text)
       },

@@ -61,13 +61,24 @@ export function createBookImportService(deps: BookImportServiceDeps): BookImport
     return results
   }
 
+  const indexingBookIds = new Set<number>()
+
   async function indexBook(bookId: number, pageData?: PageDataInsertable[]): Promise<void> {
-    await runIndex(
-      { db: deps.db, rag: deps.rag, embed: deps.embed, embedBatchSize: deps.config.embedBatchSize },
-      bookId,
-      pageData,
-      (e) => progress.emit(e)
-    )
+    indexingBookIds.add(bookId)
+    try {
+      await runIndex(
+        { db: deps.db, rag: deps.rag, embed: deps.embed, embedBatchSize: deps.config.embedBatchSize },
+        bookId,
+        pageData,
+        (e) => progress.emit(e)
+      )
+    } finally {
+      indexingBookIds.delete(bookId)
+    }
+  }
+
+  function isIndexing(bookId: number): boolean {
+    return indexingBookIds.has(bookId)
   }
 
   function startDiscovery(mode: 'default' | 'full'): void {
@@ -92,6 +103,7 @@ export function createBookImportService(deps: BookImportServiceDeps): BookImport
     importFromPath,
     importBatch,
     indexBook,
+    isIndexing,
     startDiscovery,
     cancelDiscovery,
     onDiscoveryEvent: (listener) => discovery.on(listener),

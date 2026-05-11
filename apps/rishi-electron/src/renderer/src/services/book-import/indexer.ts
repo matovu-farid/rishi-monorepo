@@ -67,6 +67,7 @@ export async function indexBook(
   }
 
   // Embed + save vectors. Best-effort: swallow failures so page data stays.
+  let ok = true
   try {
     const embedParams: EmbedParam[] = pageData.map((p) => ({
       text: p.data,
@@ -80,6 +81,8 @@ export async function indexBook(
       }
     }
   } catch (err) {
+    ok = false
     console.error('[book-import] embedding/vector save failed, will retry on next open:', err)
   }
+  progressEmit({ kind: 'indexed', bookId, ok })
 }
