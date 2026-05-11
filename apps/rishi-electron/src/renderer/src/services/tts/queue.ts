@@ -94,7 +94,9 @@ export function createQueue(deps: QueueDeps): Queue {
 
   function isRetryableMessage(err: unknown): boolean {
     const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase()
-    return /timeout|network|rate limit|server error|temporary|connection|econnreset/.test(msg)
+    return /timeout|network|rate limit|server error|temporary|transient|connection|econnreset/.test(
+      msg
+    )
   }
 
   function trimIfNeeded(): void {

@@ -98,3 +98,49 @@ describe('queue dedup', () => {
     expect(fetchAudio).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('queue retry', () => {
+  it('retries on transient TtsTransportError and ultimately resolves', async () => {
+    const transport = makeTransport({
+      bytes: new Uint8Array([5, 6, 7]),
+      failNTimes: 2
+    })
+    const cache = makeCacheStub()
+    const queue = createQueue({
+      cache,
+      fetchAudio: transport.fetchAudio,
+      maxConcurrent: 1,
+      maxRetries: 3,
+      backoffBaseMs: 1
+    })
+
+    const bytes = await queue.enqueue({
+      bookId: 'b',
+      cfiRange: 'c',
+      text: 'hi',
+      priority: 0
+    })
+
+    expect(new Uint8Array(bytes)).toEqual(new Uint8Array([5, 6, 7]))
+    expect(transport.callCount()).toBe(3) // 2 fails + 1 success
+  })
+
+  it('rejects after maxRetries on persistent transient error', async () => {
+    const transport = makeTransport({
+      failNTimes: 99
+    })
+    const cache = makeCacheStub()
+    const queue = createQueue({
+      cache,
+      fetchAudio: transport.fetchAudio,
+      maxConcurrent: 1,
+      maxRetries: 2,
+      backoffBaseMs: 1
+    })
+
+    await expect(
+      queue.enqueue({ bookId: 'b', cfiRange: 'c', text: 'hi', priority: 0 })
+    ).rejects.toThrow('transient')
+    expect(transport.callCount()).toBe(3) // 1 initial + 2 retries
+  })
+})
