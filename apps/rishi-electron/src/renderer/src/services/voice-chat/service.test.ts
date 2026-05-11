@@ -484,3 +484,49 @@ describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
     expect(media.getUserMedia).not.toHaveBeenCalled()
   })
 })
+
+describe('createVoiceChatService — errors', () => {
+  it('mic denial classifies as mic_denied; state → error; getError populated', async () => {
+    const media = makeMedia({ denyMic: true })
+    const svc = createVoiceChatService(makeDeps({ media }))
+
+    await expect(svc.activate(1, { pageText: 'p' })).rejects.toMatchObject({
+      name: 'NotAllowedError'
+    })
+
+    expect(svc.getState()).toBe('error')
+    expect(svc.getError()).toEqual({ reason: 'mic_denied', message: 'Permission denied' })
+  })
+
+  it('auth failure classifies as auth_failed', async () => {
+    const ipc = makeIpc({ failWith: new Error('Not authenticated') })
+    const svc = createVoiceChatService(makeDeps({ ipc }))
+
+    await expect(svc.activate(1, { pageText: 'p' })).rejects.toThrow(/Not authenticated/)
+    expect(svc.getError()?.reason).toBe('auth_failed')
+  })
+
+  it('session.connect failure classifies as connect_failed; half-built session closed', async () => {
+    const session = makeSession({ connectFailWith: new Error('boom') })
+    const svc = createVoiceChatService(
+      makeDeps({ sessionFactory: session.factory })
+    )
+
+    await expect(svc.activate(1, { pageText: 'p' })).rejects.toThrow('boom')
+    expect(session.close).toHaveBeenCalled()
+    expect(svc.getError()?.reason).toBe('connect_failed')
+    expect(svc.getState()).toBe('error')
+  })
+
+  it('dismissError clears the error and transitions error → idle', async () => {
+    const ipc = makeIpc({ failWith: new Error('Not authenticated') })
+    const svc = createVoiceChatService(makeDeps({ ipc }))
+
+    await expect(svc.activate(1, { pageText: 'p' })).rejects.toThrow()
+    expect(svc.getState()).toBe('error')
+
+    svc.dismissError()
+    expect(svc.getState()).toBe('idle')
+    expect(svc.getError()).toBeNull()
+  })
+})
