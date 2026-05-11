@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { updateHighlightNote } from '@/modules/highlight-storage'
-import { triggerSyncOnWrite } from '@/modules/sync-triggers'
+import { getSyncService } from '@/services'
 import type { HighlightRow } from '@/modules/highlight-storage'
 
 interface NoteEditorProps {
@@ -22,7 +22,7 @@ export function NoteEditor({ highlight, open, onOpenChange, onSaved }: NoteEdito
   const handleSave = async () => {
     if (!highlight) return
     await updateHighlightNote(highlight.id, noteValue)
-    triggerSyncOnWrite()
+    getSyncService().triggerWrite()
     onSaved()
     onOpenChange(false)
   }

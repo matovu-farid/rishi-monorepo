@@ -1,5 +1,12 @@
 import { createRagService, type RagService } from './rag'
 import { createTtsService, type AuthHeader, type TtsService } from './tts'
+import {
+  createSyncService,
+  type ConnectivityPort,
+  type SyncService
+} from './sync'
+import { createSyncEngine } from '@rishi/shared/sync-engine'
+import { connectivityActor, isOnline } from '@/modules/connectivity'
 import { embedSingleText } from '@/modules/embed-fallback'
 import { getAuthToken } from '@/modules/auth'
 import config from '@/config.json'
@@ -63,4 +70,72 @@ export function getTtsService(): TtsService {
     })
   }
   return _tts
+}
+
+let _sync: SyncService | null = null
+
+export function getSyncService(): SyncService {
+  if (!_sync) {
+    const connectivity: ConnectivityPort = {
+      isOnline,
+      subscribe: (listener) => {
+        let last = isOnline()
+        const sub = connectivityActor.subscribe(() => {
+          const next = isOnline()
+          if (next !== last) {
+            last = next
+            listener(next)
+          }
+        })
+        return () => sub.unsubscribe()
+      }
+    }
+
+    _sync = createSyncService({
+      ipc: {
+        syncGetDirtyBooks: window.electron.syncGetDirtyBooks,
+        syncGetDirtyHighlights: window.electron.syncGetDirtyHighlights,
+        syncGetDirtyConversations: window.electron.syncGetDirtyConversations,
+        syncGetDirtyMessages: window.electron.syncGetDirtyMessages,
+        syncGetLastVersion: window.electron.syncGetLastVersion,
+        syncMarkBooksClean: window.electron.syncMarkBooksClean,
+        syncMarkHighlightsClean: window.electron.syncMarkHighlightsClean,
+        syncMarkConversationsClean: window.electron.syncMarkConversationsClean,
+        syncMarkMessagesClean: window.electron.syncMarkMessagesClean,
+        syncApplyBookConflict: window.electron.syncApplyBookConflict,
+        syncApplyHighlightConflict: window.electron.syncApplyHighlightConflict,
+        syncApplyConversationConflict: window.electron.syncApplyConversationConflict,
+        syncUpsertBook: window.electron.syncUpsertBook,
+        syncUpsertHighlight: window.electron.syncUpsertHighlight,
+        syncUpsertConversation: window.electron.syncUpsertConversation,
+        syncInsertMessage: window.electron.syncInsertMessage,
+        syncUpdateLastVersion: window.electron.syncUpdateLastVersion
+      },
+      engineFactory: createSyncEngine,
+      fetch: globalThis.fetch.bind(globalThis),
+      getAuthToken,
+      getDevBypassSecret: window.electron.getDevBypassSecret,
+      connectivity,
+      clock: {
+        now: () => Date.now(),
+        setTimeout: (fn, ms) => setTimeout(fn, ms),
+        clearTimeout: (handle) => clearTimeout(handle),
+        setInterval: (fn, ms) => setInterval(fn, ms),
+        clearInterval: (handle) => clearInterval(handle)
+      },
+      windowEvents: {
+        addEventListener: (type, listener) => window.addEventListener(type, listener),
+        removeEventListener: (type, listener) =>
+          window.removeEventListener(type, listener),
+        dispatchEvent: (event) => window.dispatchEvent(event)
+      },
+      config: {
+        workerUrl: 'https://api.fidexa.org',
+        intervalMs: 5 * 60 * 1000,
+        debounceMs: 2000,
+        requestTimeoutMs: 30_000
+      }
+    })
+  }
+  return _sync
 }
