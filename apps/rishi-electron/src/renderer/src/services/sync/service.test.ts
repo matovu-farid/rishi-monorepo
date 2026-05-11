@@ -163,3 +163,57 @@ describe('SyncService.stop', () => {
     expect(() => service.stop()).not.toThrow()
   })
 })
+
+describe('SyncService.triggerWrite', () => {
+  it('debounces multiple calls within config.debounceMs into a single sync', async () => {
+    const clock = makeClock()
+    const { engineFactory, syncCount } = makeEngine()
+    const service = createSyncService(makeDeps({ clock, engineFactory }))
+
+    service.start()
+    await new Promise((r) => setTimeout(r, 0)) // let initial sync settle
+    expect(syncCount()).toBe(1)
+
+    service.triggerWrite()
+    service.triggerWrite()
+    service.triggerWrite()
+    clock.tick(baseConfig.debounceMs - 1)
+    expect(syncCount()).toBe(1)
+
+    clock.tick(1)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(syncCount()).toBe(2)
+  })
+
+  it('is a no-op before start()', async () => {
+    const clock = makeClock()
+    const { engineFactory, syncCount } = makeEngine()
+    const service = createSyncService(makeDeps({ clock, engineFactory }))
+
+    service.triggerWrite()
+    clock.tick(baseConfig.debounceMs * 2)
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(syncCount()).toBe(0)
+  })
+
+  it('is a no-op when connectivity reports offline', async () => {
+    const clock = makeClock()
+    const connectivity = makeConnectivity({ initialOnline: true })
+    const { engineFactory, syncCount } = makeEngine()
+    const service = createSyncService(
+      makeDeps({ clock, connectivity, engineFactory })
+    )
+
+    service.start()
+    await new Promise((r) => setTimeout(r, 0))
+    const baseline = syncCount() // 1 from initial sync
+
+    connectivity.setOnline(false)
+    service.triggerWrite()
+    clock.tick(baseConfig.debounceMs * 2)
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(syncCount()).toBe(baseline)
+  })
+})
