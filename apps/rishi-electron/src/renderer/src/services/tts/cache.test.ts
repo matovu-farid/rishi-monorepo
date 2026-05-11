@@ -169,3 +169,32 @@ describe('cache.clearBook', () => {
     expect(ipc.removeFile).not.toHaveBeenCalled()
   })
 })
+
+describe('cache.evictIfNeeded', () => {
+  it('removes oldest files until total size is under threshold', async () => {
+    const { ipc, files } = makeIpc()
+    // tight cap: 10 bytes total, threshold = 0.8 * 10 = 8 bytes
+    const cache = createCache({ ipc, cacheMaxBytes: 10 })
+    // Three 4-byte files = 12 bytes total → over 80% threshold
+    await cache.saveAudio('book-1', 'cfi-1', new Uint8Array([1, 1, 1, 1]))
+    await cache.saveAudio('book-1', 'cfi-2', new Uint8Array([2, 2, 2, 2]))
+    await cache.saveAudio('book-1', 'cfi-3', new Uint8Array([3, 3, 3, 3]))
+
+    await cache.evictIfNeeded()
+
+    // Should evict oldest file(s) until ≤ 8 bytes remain
+    const totalBytes = [...files.values()].reduce((n, b) => n + b.byteLength, 0)
+    expect(totalBytes).toBeLessThanOrEqual(8)
+    expect(ipc.removeFile).toHaveBeenCalled()
+  })
+
+  it('is a no-op when total size is below threshold', async () => {
+    const { ipc } = makeIpc()
+    const cache = createCache({ ipc, cacheMaxBytes: 1000 })
+    await cache.saveAudio('book-1', 'cfi-1', new Uint8Array([1, 2, 3]))
+
+    await cache.evictIfNeeded()
+
+    expect(ipc.removeFile).not.toHaveBeenCalled()
+  })
+})

@@ -96,7 +96,23 @@ export function createCache(deps: CacheDeps): Cache {
       }
     },
     async evictIfNeeded() {
-      throw new Error('not implemented')
+      await init()
+      const total = await ipc.getDirSize(rootDir)
+      const threshold = deps.cacheMaxBytes * 0.8
+      if (total <= threshold) return
+
+      const stats = await ipc.getCacheFileStats(rootDir)
+      stats.sort((a, b) => a.mtimeMs - b.mtimeMs) // oldest first
+      let current = total
+      for (const file of stats) {
+        if (current <= threshold) break
+        try {
+          await ipc.removeFile(file.path)
+          current -= file.size
+        } catch {
+          // best-effort
+        }
+      }
     }
   }
 }
