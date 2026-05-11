@@ -3,7 +3,48 @@ import type { BookOutline } from '@/lib/api'
 import type { RagService } from '@/services/rag'
 import { RealtimeAgent, tool } from '@openai/agents/realtime'
 import { z } from 'zod'
+import { Effect } from 'effect'
 import { captureError } from '@/utils/sentry'
+
+/**
+ * Runs a realtime-agent tool execute under Effect so failures are observable
+ * in three places at once (console, local error-dump file, Sentry) instead of
+ * being silently swallowed by the OpenAI agents library. The tool still
+ * resolves with `fallback` so the agent can keep the conversation flowing.
+ *
+ * Effect is here (vs plain try/catch) because tool calls are the most
+ * error-prone surface in the voice-chat flow — IPC, network, and provider
+ * latency all converge — and we want the option to add `Effect.timeout` /
+ * retry later without restructuring.
+ */
+function runToolCall<T>(
+  toolName: string,
+  fallback: T,
+  task: () => Promise<T>
+): Promise<T> {
+  const program = Effect.tryPromise({
+    try: task,
+    catch: (err) => (err instanceof Error ? err : new Error(String(err)))
+  }).pipe(
+    Effect.catchAll((err) =>
+      Effect.sync(() => {
+        console.error(`[voice-chat] tool '${toolName}' failed:`, err)
+        void window.electron
+          .dumpError({
+            source: 'voice-chat-agent',
+            location: `realtimeAgent.tools.${toolName}`,
+            error: err.message,
+            stack: err.stack ?? null,
+            context: null
+          })
+          .catch(() => undefined)
+        captureError(err, { operation: 'realtime', step: `${toolName}_tool` })
+        return fallback
+      })
+    )
+  )
+  return Effect.runPromise(program)
+}
 
 export interface BuildAgentOptions {
   bookId: number
@@ -70,15 +111,11 @@ export function buildRealtimeAgent({
   rag
 }: BuildAgentOptions): RealtimeAgent {
   const ragService: RagService = rag ?? getRagService()
-  const bookContextExecute = async ({ queryText }: { queryText: string }) => {
-    try {
+  const bookContextExecute = ({ queryText }: { queryText: string }) =>
+    runToolCall<string[]>('bookContext', ['Unable to retrieve book context at this time.'], async () => {
       const chunks = await ragService.searchSemantic(queryText, bookId, 3)
       return chunks.map((c) => c.text)
-    } catch (err) {
-      captureError(err, { operation: 'realtime', step: 'bookContext_tool' })
-      return ['Unable to retrieve book context at this time.']
-    }
-  }
+    })
 
   const bookContextTool = Object.assign(
     tool({
@@ -93,9 +130,10 @@ export function buildRealtimeAgent({
     { execute: bookContextExecute }
   )
 
-  const endConversationExecute = async ({ reason }: { reason: string }) => {
-    onEndConversation(reason)
-  }
+  const endConversationExecute = ({ reason }: { reason: string }) =>
+    runToolCall<void>('endConversation', undefined, async () => {
+      onEndConversation(reason)
+    })
 
   const endConversationTool = Object.assign(
     tool({

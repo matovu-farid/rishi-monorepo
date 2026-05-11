@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { buildRealtimeAgent } from './buildRealtimeAgent'
 
 const searchSemanticMock = vi.fn().mockResolvedValue([{ text: 'stub', vectorId: 1, score: 0.9 }])
@@ -9,7 +9,16 @@ vi.mock('@/services', () => ({
   })
 }))
 
+const captureErrorMock = vi.fn()
+vi.mock('@/utils/sentry', () => ({
+  captureError: (...args: unknown[]) => captureErrorMock(...args)
+}))
+
 describe('buildRealtimeAgent', () => {
+  beforeEach(() => {
+    captureErrorMock.mockClear()
+    ;(window.electron.dumpError as ReturnType<typeof vi.fn>).mockClear()
+  })
   it('embeds the current page text into the instructions', () => {
     const agent = buildRealtimeAgent({
       bookId: 42,
@@ -122,5 +131,74 @@ describe('buildRealtimeAgent', () => {
     expect(agent.instructions).toContain('Anon Book')
     expect(agent.instructions).not.toContain('null')
     expect(agent.instructions).not.toContain('undefined')
+  })
+
+  it('bookContext failure: dumps to error file, logs to console, returns fallback', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    searchSemanticMock.mockRejectedValueOnce(new Error('rag exploded'))
+
+    const agent = buildRealtimeAgent({
+      bookId: 42,
+      pageText: 'x',
+      onEndConversation: vi.fn()
+    })
+    const bookContextTool = agent.tools.find(
+      (t: { name: string }) => t.name === 'bookContext'
+    ) as unknown as {
+      execute: (args: { queryText: string }) => Promise<unknown>
+    }
+
+    const result = await bookContextTool.execute({ queryText: 'anything' })
+    expect(result).toEqual(['Unable to retrieve book context at this time.'])
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      "[voice-chat] tool 'bookContext' failed:",
+      expect.objectContaining({ message: 'rag exploded' })
+    )
+    expect(window.electron.dumpError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'voice-chat-agent',
+        location: 'realtimeAgent.tools.bookContext',
+        error: 'rag exploded'
+      })
+    )
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'rag exploded' }),
+      expect.objectContaining({ operation: 'realtime', step: 'bookContext_tool' })
+    )
+
+    consoleErrorSpy.mockRestore()
+  })
+
+  it('endConversation failure: callback throw still dumps + logs + does not propagate', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const onEnd = vi.fn().mockImplementation(() => {
+      throw new Error('callback boom')
+    })
+
+    const agent = buildRealtimeAgent({
+      bookId: 42,
+      pageText: 'x',
+      onEndConversation: onEnd
+    })
+    const endTool = agent.tools.find(
+      (t: { name: string }) => t.name === 'endConversation'
+    ) as unknown as {
+      execute: (args: { reason: string }) => Promise<unknown>
+    }
+
+    // Must not throw — the agent infra would otherwise be unable to advance.
+    await expect(endTool.execute({ reason: 'bye' })).resolves.toBeUndefined()
+
+    expect(window.electron.dumpError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'voice-chat-agent',
+        location: 'realtimeAgent.tools.endConversation',
+        error: 'callback boom'
+      })
+    )
+    expect(captureErrorMock).toHaveBeenCalled()
+
+    consoleErrorSpy.mockRestore()
   })
 })
