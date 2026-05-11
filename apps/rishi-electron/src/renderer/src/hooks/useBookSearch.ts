@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { searchBookText, getContextForQuery } from '@/lib/api'
+import { getRagService } from '@/services'
 
 export type SearchMode = 'exact' | 'semantic'
 
@@ -78,12 +78,12 @@ export function useBookSearch({ bookId, bookFormat, epubSearchFn }: UseBookSearc
           )
         } else {
           // Use FTS5 for PDF/MOBI/DjVu
-          const ftsResults = await searchBookText({ query: cleanQuery, bookId })
+          const ftsResults = await getRagService().searchText(cleanQuery, bookId)
           if (queryRef.current !== searchQuery || bookIdRef.current !== bookId) return
           setResults(
             ftsResults.map((r) => ({
-              id: `fts-${r.id}`,
-              snippet: r.data,
+              id: `fts-${r.chunkId}`,
+              snippet: r.text,
               highlightedSnippet: r.snippet,
               pageNumber: r.pageNumber,
               mode: 'exact' as SearchMode
@@ -110,22 +110,15 @@ export function useBookSearch({ bookId, bookFormat, epubSearchFn }: UseBookSearc
       setActiveMode('semantic')
 
       try {
-        const contextTexts = await getContextForQuery({ queryText: cleanQuery, bookId, k: 10 })
+        const chunks = await getRagService().searchSemantic(cleanQuery, bookId, 10)
         if (queryRef.current !== searchQuery || bookIdRef.current !== bookId) return
 
-        // Resolve page numbers from chunk_data
-        const resultsWithPages: BookSearchResult[] = await Promise.all(
-          contextTexts.map(async (text, i) => {
-            const pageNumber = await window.electron.messagesGetChunkPage(bookId, text)
-
-            return {
-              id: `semantic-${i}`,
-              snippet: text.length > 200 ? text.slice(0, 200) + '...' : text,
-              pageNumber: pageNumber ?? undefined,
-              mode: 'semantic' as SearchMode
-            }
-          })
-        )
+        const resultsWithPages: BookSearchResult[] = chunks.map((c) => ({
+          id: `semantic-${c.chunkId}`,
+          snippet: c.text.length > 200 ? c.text.slice(0, 200) + '...' : c.text,
+          pageNumber: c.pageNumber,
+          mode: 'semantic' as SearchMode
+        }))
 
         setResults(resultsWithPages)
       } catch (err) {
