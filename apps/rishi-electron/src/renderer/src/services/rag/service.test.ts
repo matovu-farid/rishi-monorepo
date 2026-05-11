@@ -105,4 +105,15 @@ describe('RagService.searchSemantic', () => {
     expect(result).toHaveLength(2)
     expect(result.map((c) => c.chunkId)).toEqual([10, 30])
   })
+
+  it('propagates embed failure and does not call searchVectors', async () => {
+    const embed = vi.fn<EmbedFn>().mockRejectedValue(new Error('embedding provider unavailable'))
+    const ipc = makeIpc()
+    const service = createRagService({ ipc, embed })
+
+    await expect(service.searchSemantic('hello', 5, 3)).rejects.toThrow(
+      'embedding provider unavailable'
+    )
+    expect(ipc.searchVectors).not.toHaveBeenCalled()
+  })
 })
