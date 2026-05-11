@@ -1,32 +1,13 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { X, BookOpen, Download, DownloadCloud, FolderOpen, Loader2, FilePlus } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { ClipLoader } from 'react-spinners'
-import { cancelScan } from '@/lib/api'
 import { chooseFiles } from '@/modules/chooseFiles'
-
-interface DiscoveredBook {
-  filepath: string
-  filename: string
-  title: string | null
-  author: string | null
-  format: string
-  fileSize: number
-  folder: string
-  fileHash: string | null
-}
-
-interface ScanProgress {
-  folder: string
-  scanned: number
-  total: number
-}
+import { getBookImportService, type DiscoveredBook, type ScanProgress } from '@/services'
 
 interface BookDiscoveryModalProps {
   open: boolean
   onClose: () => void
-  onImport: (filepath: string) => void
-  onImportFiles?: (filePaths: string[]) => void
 }
 
 type ScanMode = 'default' | 'full'
@@ -37,12 +18,7 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function BookDiscoveryModal({
-  open,
-  onClose,
-  onImport,
-  onImportFiles
-}: BookDiscoveryModalProps) {
+export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
   const [books, setBooks] = useState<DiscoveredBook[]>([])
   const [filter, setFilter] = useState('')
   const [scanning, setScanning] = useState(false)
@@ -51,17 +27,11 @@ export function BookDiscoveryModal({
   const [mode, setMode] = useState<ScanMode>('default')
   const [importingPaths, setImportingPaths] = useState<Set<string>>(new Set())
 
-  const unsubRefs = useRef<Array<() => void>>([])
-
   const handleBrowseFiles = async () => {
     try {
       const filePaths = await chooseFiles()
       if (filePaths.length > 0) {
-        if (onImportFiles) {
-          onImportFiles(filePaths)
-        } else {
-          filePaths.forEach((fp) => onImport(fp))
-        }
+        void getBookImportService().importBatch(filePaths)
         handleClose()
       }
     } catch (err) {
@@ -69,74 +39,45 @@ export function BookDiscoveryModal({
     }
   }
 
-  const cleanupListeners = useCallback(() => {
-    unsubRefs.current.forEach((fn) => fn())
-    unsubRefs.current = []
-  }, [])
+  useEffect(() => {
+    if (!open) return
+    const svc = getBookImportService()
 
-  const startScan = useCallback(async (scanMode: ScanMode) => {
     setBooks([])
     setProgress(null)
     setScanComplete(false)
     setScanning(true)
 
-    try {
-      await window.electron.scanForBooks(scanMode)
-    } catch (err) {
-      console.error('Failed to start scan:', err)
-    } finally {
-      setScanning(false)
-      setScanComplete(true)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!open) return
-
-    let cancelled = false
-
-    // Listen for scan events from main process
-    const unsub1 = window.electron.on('scan-result', (...args: unknown[]) => {
-      if (cancelled) return
-      const book = args[0] as DiscoveredBook
-      if (book?.filepath) {
-        setBooks((prev) => [...prev, book])
+    const unsub = svc.onDiscoveryEvent((event) => {
+      if (event.kind === 'book-found') {
+        setBooks((prev) => [...prev, event.book])
+      } else if (event.kind === 'progress') {
+        setProgress(event.progress)
+      } else if (event.kind === 'complete') {
+        setScanning(false)
+        setScanComplete(true)
+        setProgress(null)
+      } else if (event.kind === 'error') {
+        console.error('[discovery] scanner error:', event.error)
+        setScanning(false)
       }
     })
-    const unsub2 = window.electron.on('scan-progress', (...args: unknown[]) => {
-      if (cancelled) return
-      setProgress(args[0] as ScanProgress)
-    })
-    const unsub3 = window.electron.on('scan-complete', () => {
-      if (cancelled) return
-      setScanning(false)
-      setScanComplete(true)
-      setProgress(null)
-    })
 
-    unsubRefs.current = [unsub1, unsub2, unsub3]
-
-    if (!cancelled) {
-      void startScan('default')
-    }
+    svc.startDiscovery(mode)
 
     return () => {
-      cancelled = true
-      cleanupListeners()
-      void cancelScan()
+      unsub()
+      void svc.cancelDiscovery()
     }
-  }, [open, startScan, cleanupListeners])
+  }, [open, mode])
 
-  const handleModeChange = async (newMode: ScanMode) => {
+  const handleModeChange = (newMode: ScanMode) => {
     if (newMode === mode) return
-    setMode(newMode)
-    await cancelScan()
-    void startScan(newMode)
+    setMode(newMode) // useEffect on `mode` will restart discovery
   }
 
   const handleClose = async () => {
-    await cancelScan()
-    cleanupListeners()
+    await getBookImportService().cancelDiscovery()
     setBooks([])
     setFilter('')
     setScanning(false)
@@ -149,7 +90,7 @@ export function BookDiscoveryModal({
   const handleImport = (filepath: string) => {
     setImportingPaths((prev) => new Set(prev).add(filepath))
     setBooks((prev) => prev.filter((b) => b.filepath !== filepath))
-    onImport(filepath)
+    void getBookImportService().importBatch([filepath])
   }
 
   const handleImportAll = () => {
@@ -158,7 +99,7 @@ export function BookDiscoveryModal({
     toImport.forEach((b) => newPaths.add(b.filepath))
     setImportingPaths(newPaths)
     setBooks((prev) => prev.filter((b) => !newPaths.has(b.filepath)))
-    toImport.forEach((b) => onImport(b.filepath))
+    void getBookImportService().importBatch(toImport.map((b) => b.filepath))
   }
 
   const filteredBooks = books.filter((b) => {

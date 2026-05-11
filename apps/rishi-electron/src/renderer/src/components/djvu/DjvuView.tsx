@@ -23,8 +23,7 @@ import AIChatOrb from '../chat/AIChatOrb'
 import VoiceChatLauncher from '../chat/VoiceChatLauncher'
 import { usePlayerStore } from '@/stores/playerStore'
 import type { ParagraphWithIndex } from '@/models/player_control'
-import { processEpubJob } from '@/modules/process_epub'
-import type { PageDataInsertable } from '@/modules/process_epub'
+import { getBookImportService, type PageDataInsertable } from '@/services'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
 import { stringToNumberID } from '@/lib/utils'
@@ -355,7 +354,7 @@ export function DjvuView({ book }: { book: Book }) {
         }
 
         if (allPageData.length > 0) {
-          await processEpubJob(book.id, allPageData)
+          await getBookImportService().indexBook(book.id, allPageData)
         }
       } catch (err) {
         console.warn('[DjvuView] failed to generate embeddings:', err)
