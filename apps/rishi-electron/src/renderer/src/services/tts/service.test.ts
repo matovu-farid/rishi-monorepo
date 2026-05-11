@@ -131,3 +131,66 @@ describe('TtsService.onAudioReady', () => {
     expect(handler).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('TtsService auth + error paths', () => {
+  it('propagates auth failure; does not call fetch; emits onError', async () => {
+    const { ipc } = makeIpc()
+    const { fetch, callCount } = makeFetch({})
+    const service = createTtsService({
+      ipc,
+      fetch,
+      getAuthToken: vi.fn(async () => {
+        throw new Error('no session')
+      }),
+      config: baseConfig
+    })
+    const errHandler = vi.fn()
+    service.onError(errHandler)
+
+    await expect(
+      service.requestAudio({ bookId: 'b', cfiRange: 'c', text: 't', priority: 0 })
+    ).rejects.toThrow('no session')
+
+    expect(callCount()).toBe(0)
+    expect(errHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ bookId: 'b', cfiRange: 'c', error: 'no session' })
+    )
+  })
+
+  it('sends X-Dev-Bypass header when auth port returns dev-bypass', async () => {
+    const { ipc } = makeIpc()
+    const { fetch, calls } = makeFetch({})
+    const service = createTtsService({
+      ipc,
+      fetch,
+      getAuthToken: makeAuth({ kind: 'dev-bypass', secret: 'secret-xyz' }),
+      config: baseConfig
+    })
+
+    await service.requestAudio({ bookId: 'b', cfiRange: 'c', text: 't', priority: 0 })
+
+    const headers = calls[0].init.headers as Record<string, string>
+    expect(headers['X-Dev-Bypass']).toBe('secret-xyz')
+    expect(headers['Authorization']).toBeUndefined()
+  })
+
+  it('rejects on HTTP 401 with no retries and emits onError', async () => {
+    const { ipc } = makeIpc()
+    const { fetch, callCount } = makeFetch({ status: 401, errorBody: 'unauthorized' })
+    const service = createTtsService({
+      ipc,
+      fetch,
+      getAuthToken: makeAuth({ kind: 'bearer', token: 't' }),
+      config: baseConfig
+    })
+    const errHandler = vi.fn()
+    service.onError(errHandler)
+
+    await expect(
+      service.requestAudio({ bookId: 'b', cfiRange: 'c', text: 't', priority: 0 })
+    ).rejects.toThrow('401')
+
+    expect(callCount()).toBe(1)
+    expect(errHandler).toHaveBeenCalled()
+  })
+})
