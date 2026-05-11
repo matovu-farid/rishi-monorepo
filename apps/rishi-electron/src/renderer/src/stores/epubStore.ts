@@ -12,8 +12,7 @@ import { usePlayerStore } from '@/stores/playerStore'
 import { type BookOutline } from '@/lib/api'
 import { getBookImportService } from '@/services'
 import { useChatStore } from './chatStore'
-import { prefetchRealtimeKey } from '@/modules/realtime'
-import { voiceChatService } from '@/modules/voiceChatService'
+import { getVoiceChatService } from '@/services'
 import { captureError } from '@/utils/sentry'
 
 export { ThemeType }
@@ -231,17 +230,17 @@ export function initEpubSubscriptions(): (() => void)[] {
     (state) => state.bookId,
     (bookId) => {
       if (bookId) {
-        prefetchRealtimeKey()
+        getVoiceChatService().prewarmKey()
         // Outline is populated by EpubView via the epubjs TOC callback.
         // We just need to wait for it before preconnecting — subscribe below.
       } else {
         useEpubStore.getState().setBookOutline(null)
-        voiceChatService.dispose()
+        getVoiceChatService().dispose()
       }
     }
   )
   unsubs.push(unsubBookId)
-  unsubs.push(() => voiceChatService.dispose())
+  unsubs.push(() => getVoiceChatService().dispose())
 
   // When the outline arrives (from EpubView's tocChanged), preconnect if appropriate
   unsubs.push(
@@ -254,7 +253,7 @@ export function initEpubSubscriptions(): (() => void)[] {
           .getState()
           .currentParagraphs.map((p) => p.text)
           .join('\n')
-        void voiceChatService.preconnect(Number(bookId), { pageText, outline })
+        void getVoiceChatService().preconnect(Number(bookId), { pageText, outline })
       }
     )
   )

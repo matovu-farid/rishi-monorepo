@@ -1,5 +1,6 @@
 import { getRagService } from '@/services'
 import type { BookOutline } from '@/lib/api'
+import type { RagService } from '@/services/rag'
 import { RealtimeAgent, tool } from '@openai/agents/realtime'
 import { z } from 'zod'
 import { captureError } from '@/utils/sentry'
@@ -9,6 +10,13 @@ export interface BuildAgentOptions {
   pageText: string
   outline?: BookOutline
   onEndConversation: (reason: string) => void
+  /**
+   * Optional RAG service for bookContext tool calls. When omitted, falls
+   * back to `getRagService()` for backwards compatibility with the legacy
+   * module-scoped `voiceChatService.ts`. The new `services/voice-chat/`
+   * factory always supplies this dep explicitly.
+   */
+  rag?: RagService
 }
 
 function renderOutlineSection(outline: BookOutline | undefined): string {
@@ -58,11 +66,13 @@ export function buildRealtimeAgent({
   bookId,
   pageText,
   outline,
-  onEndConversation
+  onEndConversation,
+  rag
 }: BuildAgentOptions): RealtimeAgent {
+  const ragService: RagService = rag ?? getRagService()
   const bookContextExecute = async ({ queryText }: { queryText: string }) => {
     try {
-      const chunks = await getRagService().searchSemantic(queryText, bookId, 3)
+      const chunks = await ragService.searchSemantic(queryText, bookId, 3)
       return chunks.map((c) => c.text)
     } catch (err) {
       captureError(err, { operation: 'realtime', step: 'bookContext_tool' })

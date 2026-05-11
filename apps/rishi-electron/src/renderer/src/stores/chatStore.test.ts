@@ -1,31 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { useChatStore } from './chatStore'
 
-const { mockActivate, mockDeactivate, mockDispose, mockSetListeners, mockGetState, mockActor } =
-  vi.hoisted(() => ({
-    mockActivate: vi.fn().mockResolvedValue(undefined),
-    mockDeactivate: vi.fn(),
-    mockDispose: vi.fn(),
-    mockSetListeners: vi.fn(),
-    mockGetState: vi.fn().mockReturnValue('idle'),
-    mockActor: {
-      subscribe: vi.fn().mockReturnValue({ unsubscribe: vi.fn() }),
-      getSnapshot: vi.fn().mockReturnValue({ value: 'idle', context: { error: null } })
-    }
-  }))
-
-vi.mock('@/modules/voiceChatService', () => ({
-  voiceChatService: {
-    actor: mockActor,
-    activate: mockActivate,
-    deactivate: mockDeactivate,
-    dispose: mockDispose,
-    setListeners: mockSetListeners,
-    getState: mockGetState,
+const { fakeVoice } = vi.hoisted(() => ({
+  fakeVoice: {
+    start: vi.fn(),
+    stop: vi.fn(),
+    activate: vi.fn().mockResolvedValue(undefined),
+    preconnect: vi.fn().mockResolvedValue(undefined),
+    deactivate: vi.fn(),
+    dispose: vi.fn(),
+    prewarmKey: vi.fn(),
+    getState: vi.fn().mockReturnValue('idle' as const),
     getError: vi.fn().mockReturnValue(null),
     dismissError: vi.fn(),
-    prewarmKey: vi.fn()
-  },
+    onStateChange: vi.fn().mockReturnValue(() => {}),
+    onChatStatus: vi.fn().mockReturnValue(() => {}),
+    onEndedByAgent: vi.fn().mockReturnValue(() => {})
+  }
+}))
+
+vi.mock('@/services', () => ({
+  getVoiceChatService: () => fakeVoice
+}))
+
+vi.mock('@/services/voice-chat', () => ({
   OfflineError: class OfflineError extends Error {
     constructor() {
       super('offline')
@@ -44,14 +41,16 @@ vi.mock('@/stores/epubStore', () => ({
 
 vi.mock('@/utils/sentry', () => ({ captureError: vi.fn() }))
 
+// Import AFTER the mocks above so chatStore's module-scope getVoiceChatService()
+// call resolves to the fakeVoice stub.
+import { useChatStore } from './chatStore'
+
 describe('chatStore', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useChatStore.setState({
       isChatting: false,
-      chatStatus: 'idle',
-      _chatGeneration: 0,
-      _isStarting: false
+      chatStatus: 'idle'
     })
   })
 
@@ -60,19 +59,19 @@ describe('chatStore', () => {
     expect(useChatStore.getState().isChatting).toBe(false)
   })
 
-  it('setIsChatting(false) calls voiceChatService.deactivate', () => {
+  it('setIsChatting(false) calls voice.deactivate', () => {
     useChatStore.setState({ isChatting: true })
     useChatStore.getState().setIsChatting(false)
-    expect(mockDeactivate).toHaveBeenCalledTimes(1)
+    expect(fakeVoice.deactivate).toHaveBeenCalledTimes(1)
     expect(useChatStore.getState().isChatting).toBe(false)
   })
 
-  it('startChat delegates to voiceChatService.activate', async () => {
+  it('startChat delegates to voice.activate', async () => {
     useChatStore.setState({ isChatting: true })
     useChatStore.getState().startChat(42)
     // activate is async — await microtask flush
     await Promise.resolve()
-    expect(mockActivate).toHaveBeenCalledWith(42, {
+    expect(fakeVoice.activate).toHaveBeenCalledWith(42, {
       pageText: expect.any(String),
       outline: undefined
     })
@@ -83,12 +82,6 @@ describe('chatStore', () => {
     useChatStore.getState().stopConversation()
     expect(useChatStore.getState().isChatting).toBe(false)
     expect(useChatStore.getState().chatStatus).toBe('idle')
-    expect(mockDeactivate).toHaveBeenCalledTimes(1)
-  })
-
-  it('prevents concurrent startChat calls', () => {
-    useChatStore.setState({ _isStarting: true, isChatting: true })
-    useChatStore.getState().startChat(1)
-    expect(mockActivate).not.toHaveBeenCalled()
+    expect(fakeVoice.deactivate).toHaveBeenCalledTimes(1)
   })
 })
