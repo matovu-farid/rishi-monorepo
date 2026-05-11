@@ -19,8 +19,7 @@ import VoiceChatLauncher from '@/components/chat/VoiceChatLauncher'
 import { themes } from '@/themes/themes'
 import { usePlayerStore } from '@/stores/playerStore'
 import type { ParagraphWithIndex } from '@/models/player_control'
-import { processEpubJob } from '@/modules/process_epub'
-import type { PageDataInsertable } from '@/modules/process_epub'
+import { getBookImportService, type PageDataInsertable } from '@/services'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { useChatStore } from '@/stores/chatStore'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
@@ -248,7 +247,7 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
         }
 
         if (allPageData.length > 0) {
-          await processEpubJob(book.id, allPageData)
+          await getBookImportService().indexBook(book.id, allPageData)
         }
       } catch (err) {
         console.warn('[MobiView] failed to generate embeddings:', err)

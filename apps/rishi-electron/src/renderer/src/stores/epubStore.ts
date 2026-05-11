@@ -9,8 +9,8 @@ import {
   getPreviousViewParagraphs
 } from '@/modules/epubwrapper'
 import { usePlayerStore } from '@/stores/playerStore'
-import { processEpubJob } from '@/modules/process_epub'
-import { hasSavedEpubData, type BookOutline } from '@/lib/api'
+import { type BookOutline } from '@/lib/api'
+import { getBookImportService } from '@/services'
 import { useChatStore } from './chatStore'
 import { prefetchRealtimeKey } from '@/modules/realtime'
 import { voiceChatService } from '@/modules/voiceChatService'
@@ -157,17 +157,11 @@ export function initEpubSubscriptions(): (() => void)[] {
           bookId &&
           (paragraphRendition !== previous.paragraphRendition || bookId !== previous.bookId)
         ) {
-          void hasSavedEpubData({ bookId: Number(bookId) })
-            .then((hasSaved) => {
-              if (!hasSaved) {
-                void getAllParagraphsForBook(paragraphRendition, bookId)
-                  .then((paragraphs) => {
-                    void processEpubJob(Number(bookId), paragraphs)
-                  })
-                  .catch((err) => captureError(err, { operation: 'epub', step: 'get_paragraphs' }))
-              }
-            })
-            .catch((err) => captureError(err, { operation: 'epub', step: 'check_saved_data' }))
+          void getAllParagraphsForBook(paragraphRendition, bookId)
+            .then((paragraphs) =>
+              getBookImportService().indexBook(Number(bookId), paragraphs)
+            )
+            .catch((err) => captureError(err, { operation: 'epub', step: 'index_book' }))
         }
       },
       {

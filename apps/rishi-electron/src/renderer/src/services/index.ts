@@ -12,7 +12,7 @@ import {
   type ScannerPort
 } from './book-import'
 
-export type { DiscoveredBook, ScanProgress } from './book-import'
+export type { DiscoveredBook, PageDataInsertable, ScanProgress } from './book-import'
 import { createSyncEngine } from '@rishi/shared/sync-engine'
 import { connectivityActor, isOnline } from '@/modules/connectivity'
 import { embedSingleText, embedWithFallback } from '@/modules/embed-fallback'
