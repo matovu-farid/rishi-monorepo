@@ -46,7 +46,9 @@ describe('buildRealtimeAgent', () => {
       pageText: 'x',
       onEndConversation: onEnd
     })
-    const endTool = agent.tools.find((t: { name: string }) => t.name === 'endConversation') as unknown as {
+    const endTool = agent.tools.find(
+      (t: { name: string }) => t.name === 'endConversation'
+    ) as unknown as {
       execute: (args: { reason: string }) => Promise<unknown>
     }
     await endTool.execute({ reason: 'user said bye' })
