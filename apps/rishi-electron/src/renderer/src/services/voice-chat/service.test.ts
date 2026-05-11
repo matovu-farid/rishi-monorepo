@@ -530,3 +530,77 @@ describe('createVoiceChatService — errors', () => {
     expect(svc.getError()).toBeNull()
   })
 })
+
+describe('createVoiceChatService — connectivity gating', () => {
+  it('activate while offline rejects with OfflineError; state → offline', async () => {
+    const connectivity = makeConnectivity({ initialOnline: false })
+    const media = makeMedia()
+    const svc = createVoiceChatService(
+      makeDeps({ connectivity, media })
+    )
+
+    await expect(svc.activate(1, { pageText: 'p' })).rejects.toBeInstanceOf(OfflineErrorImport)
+    expect(svc.getState()).toBe('offline')
+    expect(media.getUserMedia).not.toHaveBeenCalled()
+  })
+
+  it('mid-session offline transition disposes the session + state → offline', async () => {
+    const connectivity = makeConnectivity({ initialOnline: true })
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ connectivity, sessionFactory: session.factory })
+    )
+    svc.start()
+    await svc.activate(1, { pageText: 'p' })
+    expect(svc.getState()).toBe('active')
+
+    connectivity.setOnline(false)
+
+    expect(session.close).toHaveBeenCalled()
+    expect(svc.getState()).toBe('offline')
+  })
+
+  it('offline → online transitions back to idle (error cleared)', async () => {
+    const connectivity = makeConnectivity({ initialOnline: false })
+    const svc = createVoiceChatService(makeDeps({ connectivity }))
+    svc.start()
+    // Synchronously enter offline via failed activate.
+    await expect(svc.activate(1, { pageText: 'p' })).rejects.toBeInstanceOf(OfflineErrorImport)
+    expect(svc.getState()).toBe('offline')
+
+    connectivity.setOnline(true)
+
+    expect(svc.getState()).toBe('idle')
+    expect(svc.getError()).toBeNull()
+  })
+
+  it('onStateChange fans out to multiple subscribers on offline transition', () => {
+    const connectivity = makeConnectivity({ initialOnline: true })
+    const svc = createVoiceChatService(makeDeps({ connectivity }))
+    svc.start()
+    const a = vi.fn()
+    const b = vi.fn()
+    svc.onStateChange(a)
+    svc.onStateChange(b)
+
+    connectivity.setOnline(false)
+
+    expect(a).toHaveBeenCalledWith('offline')
+    expect(b).toHaveBeenCalledWith('offline')
+  })
+
+  it('unsubscribe stops further onStateChange invocations', () => {
+    const connectivity = makeConnectivity({ initialOnline: true })
+    const svc = createVoiceChatService(makeDeps({ connectivity }))
+    svc.start()
+    const spy = vi.fn()
+    const off = svc.onStateChange(spy)
+
+    connectivity.setOnline(false)
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    off()
+    connectivity.setOnline(true)
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+})
