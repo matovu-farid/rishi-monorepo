@@ -80,7 +80,7 @@ export function registerVectorHandlers(): void {
               id: r.metadata.id,
               vector: r.embedding
             }))
-            await vectorSave(`book_${bookId}`, embedResults[0].dim, vectors)
+            await vectorSave(`${bookId}-vectordb`, embedResults[0].dim, vectors)
           }
         }
       } catch (error) {
