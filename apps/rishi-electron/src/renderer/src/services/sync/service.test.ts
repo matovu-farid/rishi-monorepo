@@ -308,3 +308,48 @@ describe('SyncService error classification', () => {
     expect(service.getStatus().status).toBe('error')
   })
 })
+
+describe('SyncService.onStatusChange', () => {
+  it('invokes the listener immediately on subscribe and again on every transition; unsubscribe stops delivery', async () => {
+    const { engineFactory } = makeEngine()
+    const service = createSyncService(makeDeps({ engineFactory }))
+    const calls: string[] = []
+    const unsub = service.onStatusChange((s) => calls.push(s.status))
+
+    expect(calls).toEqual(['not-synced']) // immediate
+
+    service.start()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(calls).toEqual(['not-synced', 'syncing', 'synced'])
+
+    unsub()
+    service.stop()
+    service.start() // restart should fire more events but listener should be gone
+    await new Promise((r) => setTimeout(r, 0))
+    expect(calls).toEqual(['not-synced', 'syncing', 'synced']) // unchanged
+  })
+
+  it('suppresses status updates after stop() even if a sync is mid-flight', async () => {
+    let resolveSync: () => void = () => {}
+    const blocker = new Promise<void>((r) => {
+      resolveSync = r
+    })
+    const { engineFactory } = makeEngine({ syncImpl: () => blocker })
+    const service = createSyncService(makeDeps({ engineFactory }))
+    const calls: string[] = []
+    service.onStatusChange((s) => calls.push(s.status))
+
+    service.start() // status → syncing, awaits engine.sync
+    await new Promise((r) => setTimeout(r, 0))
+    expect(calls).toContain('syncing')
+    expect(calls).not.toContain('synced')
+
+    service.stop()
+    resolveSync()
+    await new Promise((r) => setTimeout(r, 0))
+
+    // No 'synced' or 'error' snapshot should have been emitted after stop()
+    expect(calls).not.toContain('synced')
+    expect(calls).not.toContain('error')
+  })
+})
