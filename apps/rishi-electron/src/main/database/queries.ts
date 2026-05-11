@@ -282,13 +282,21 @@ export function hasSavedEpubData(bookId: number): boolean {
  * labels must align for getTextFromVectorId lookups to resolve.
  *
  * If `row.id` is omitted, SQLite assigns an AUTOINCREMENT id (legacy path).
+ *
+ * Uses INSERT OR IGNORE: hash-derived IDs are deterministic by design, so a
+ * collision means the row is already present (concurrent indexBook calls,
+ * paragraphs that hash to the same value, or re-running a partially-failed
+ * batch). Silently skipping is idempotent and correct — without OR IGNORE,
+ * one duplicate would abort the whole transaction and leave the book
+ * unindexed forever. FTS triggers fire on actual inserts only, so skipped
+ * rows don't desync chunk_data_fts.
  */
 export function savePageDataMany(pageData: PageData[]): void {
   if (pageData.length === 0) return
 
   const db = getDb()
   const stmt = db.prepare(
-    'INSERT INTO chunk_data (id, page_number, book_id, data) VALUES (@id, @pageNumber, @bookId, @data)'
+    'INSERT OR IGNORE INTO chunk_data (id, page_number, book_id, data) VALUES (@id, @pageNumber, @bookId, @data)'
   )
 
   const insertMany = db.transaction((rows: PageData[]) => {
