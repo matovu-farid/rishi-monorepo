@@ -194,3 +194,62 @@ describe('TtsService auth + error paths', () => {
     expect(errHandler).toHaveBeenCalled()
   })
 })
+
+describe('TtsService.cancelBookRequests / getQueueStatus / clearBookCache', () => {
+  it('cancelBookRequests rejects all in-flight requests for that book only', async () => {
+    const { ipc } = makeIpc()
+    const fetch = vi.fn(() => new Promise<Response>(() => {})) // never resolves
+    const service = createTtsService({
+      ipc,
+      fetch,
+      getAuthToken: makeAuth({ kind: 'bearer', token: 't' }),
+      config: baseConfig
+    })
+
+    const a = service.requestAudio({ bookId: 'A', cfiRange: 'c1', text: 'x', priority: 0 })
+    const b = service.requestAudio({ bookId: 'B', cfiRange: 'c2', text: 'y', priority: 0 })
+    await new Promise((r) => setTimeout(r, 0))
+
+    service.cancelBookRequests('A')
+
+    await expect(a).rejects.toThrow('Request cancelled')
+    const winner = await Promise.race([
+      b.then(() => 'resolved'),
+      new Promise<string>((r) => setTimeout(() => r('pending'), 10))
+    ])
+    expect(winner).toBe('pending')
+  })
+
+  it('getQueueStatus returns { pending, isProcessing, active }', () => {
+    const { ipc } = makeIpc()
+    const { fetch } = makeFetch({})
+    const service = createTtsService({
+      ipc,
+      fetch,
+      getAuthToken: makeAuth({ kind: 'bearer', token: 't' }),
+      config: baseConfig
+    })
+
+    const status = service.getQueueStatus()
+    expect(status).toEqual({ pending: 0, isProcessing: false, active: 0 })
+  })
+
+  it('clearBookCache removes the book directory', async () => {
+    const { ipc, files } = makeIpc()
+    const { createCache } = await import('./cache')
+    const cache = createCache({ ipc, cacheMaxBytes: baseConfig.cacheMaxBytes })
+    await cache.saveAudio('book-X', 'cfi-1', new Uint8Array([1]))
+    expect([...files.keys()].some((k) => k.includes('/book-X/'))).toBe(true)
+
+    const { fetch } = makeFetch({})
+    const service = createTtsService({
+      ipc,
+      fetch,
+      getAuthToken: makeAuth({ kind: 'bearer', token: 't' }),
+      config: baseConfig
+    })
+    await service.clearBookCache('book-X')
+
+    expect([...files.keys()].some((k) => k.includes('/book-X/'))).toBe(false)
+  })
+})
