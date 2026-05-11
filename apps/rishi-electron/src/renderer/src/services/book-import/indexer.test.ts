@@ -106,7 +106,10 @@ describe('indexBook — full pipeline (chunks + vectors)', () => {
     expect(saveVectorsCalls).toHaveLength(1)
     expect(saveVectorsCalls[0].name).toBe('42-vectordb')
     expect(saveVectorsCalls[0].dim).toBe(3)
-    expect(events).toEqual([{ kind: 'indexing', bookId: 42, reason: 'chunks-missing' }])
+    expect(events).toEqual([
+      { kind: 'indexing', bookId: 42, reason: 'chunks-missing' },
+      { kind: 'indexed', bookId: 42, ok: true }
+    ])
   })
 })
 
@@ -127,7 +130,10 @@ describe('indexBook — re-embed regression (chunks exist, vectors missing)', ()
     expect(savePageDataCalls).toEqual([])
     expect(saveVectorsCalls).toHaveLength(1)
     expect(saveVectorsCalls[0].name).toBe('42-vectordb')
-    expect(events).toEqual([{ kind: 'indexing', bookId: 42, reason: 'vectors-missing' }])
+    expect(events).toEqual([
+      { kind: 'indexing', bookId: 42, reason: 'vectors-missing' },
+      { kind: 'indexed', bookId: 42, ok: true }
+    ])
   })
 })
 
@@ -167,6 +173,28 @@ describe('indexBook — reads pageData from DB when omitted', () => {
 
     expect(db.getAllPageDataByBookId).toHaveBeenCalledWith(42)
     expect(saveVectorsCalls).toHaveLength(1)
-    expect(events).toEqual([{ kind: 'indexing', bookId: 42, reason: 'vectors-missing' }])
+    expect(events).toEqual([
+      { kind: 'indexing', bookId: 42, reason: 'vectors-missing' },
+      { kind: 'indexed', bookId: 42, ok: true }
+    ])
+  })
+})
+
+describe('indexBook — emits `indexed: ok=false` on embed failure', () => {
+  it('still emits the final indexed event so listeners (e.g. UI indicators) can clear', async () => {
+    const { db } = makeDb({ chunksExist: false })
+    const rag = makeRag()
+    const embed = makeEmbed({ failNTimes: 1 })
+    const events: ImportProgressEvent[] = []
+
+    await indexBook(
+      { db, rag, embed, embedBatchSize: 2 },
+      42,
+      samplePageData,
+      (e) => events.push(e)
+    )
+
+    const indexed = events.find((e) => e.kind === 'indexed')
+    expect(indexed).toEqual({ kind: 'indexed', bookId: 42, ok: false })
   })
 })

@@ -55,6 +55,7 @@ export type ImportProgressEvent =
   | { kind: 'upload-started'; filePath: string; bookId: number }
   | { kind: 'upload-failed'; filePath: string; bookId: number; error: string }
   | { kind: 'indexing'; bookId: number; reason: 'chunks-missing' | 'vectors-missing' }
+  | { kind: 'indexed'; bookId: number; ok: boolean }
   | { kind: 'done'; filePath: string; bookId: number; format: BookFormat }
   | { kind: 'failed'; filePath: string; stage: ImportFailure['stage']; error: string }
 
@@ -166,6 +167,13 @@ export interface BookImportService {
    * chunks from the DB via `db.getAllPageDataByBookId`.
    */
   indexBook(bookId: number, pageData?: PageDataInsertable[]): Promise<void>
+
+  /**
+   * Returns true while `indexBook(bookId, …)` is in flight. Used by the
+   * voice-chat realtime agent to tell the user "still indexing, try again"
+   * instead of returning an empty bookContext result.
+   */
+  isIndexing(bookId: number): boolean
 
   /**
    * Start the scanner. Calling while a scan is running cancels the prior scan
