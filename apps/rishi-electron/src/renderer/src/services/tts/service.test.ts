@@ -20,7 +20,7 @@ export function makeFetch(opts: {
     calls.push({ url, init })
     const headers = new Headers()
     if (opts.retryAfter) headers.set('Retry-After', opts.retryAfter)
-    return new Response(status === 200 ? (bytes as BodyInit) : opts.errorBody ?? '', {
+    return new Response(status === 200 ? (bytes as BodyInit) : (opts.errorBody ?? ''), {
       status,
       headers
     })
@@ -28,8 +28,7 @@ export function makeFetch(opts: {
   return { fetch, calls, callCount: () => calls.length }
 }
 
-export const makeAuth = (auth: AuthHeader): (() => Promise<AuthHeader>) =>
-  vi.fn(async () => auth)
+export const makeAuth = (auth: AuthHeader): (() => Promise<AuthHeader>) => vi.fn(async () => auth)
 
 export const baseConfig: TtsConfig = {
   audioWorkerUrl: 'https://api.example.com/audio/speech',
@@ -254,5 +253,106 @@ describe('TtsService.cancelBookRequests / getQueueStatus / clearBookCache', () =
     await service.clearBookCache('book-X')
 
     expect([...files.keys()].some((k) => k.includes('/book-X/'))).toBe(false)
+  })
+})
+
+/**
+ * Build a fake fetch that returns a scripted sequence of responses
+ * (status + optional bytes). Calls beyond the scripted length repeat
+ * the final entry. Used to test retry-then-succeed and exhausted-retry.
+ */
+function makeScriptedFetch(script: Array<{ status: number; bytes?: Uint8Array; body?: string }>): {
+  fetch: (url: string, init: RequestInit) => Promise<Response>
+  callCount: () => number
+} {
+  let i = 0
+  const calls: Array<{ url: string; init: RequestInit }> = []
+  const fetch = vi.fn(async (url: string, init: RequestInit) => {
+    calls.push({ url, init })
+    const idx = Math.min(i, script.length - 1)
+    i++
+    const entry = script[idx]
+    const status = entry.status
+    const headers = new Headers()
+    return new Response(status === 200 ? (entry.bytes as BodyInit) : (entry.body ?? ''), {
+      status,
+      headers
+    })
+  })
+  return { fetch, callCount: () => calls.length }
+}
+
+describe('TtsService retry + dedup at the boundary', () => {
+  it('retries through transient 503s and ultimately resolves with audio bytes', async () => {
+    const { ipc } = makeIpc()
+    const { fetch, callCount } = makeScriptedFetch([
+      { status: 503, body: 'down' },
+      { status: 503, body: 'still down' },
+      { status: 200, bytes: new Uint8Array([1, 2, 3]) }
+    ])
+    const service = createTtsService({
+      ipc,
+      fetch,
+      getAuthToken: makeAuth({ kind: 'bearer', token: 't' }),
+      // Tiny backoff so the test finishes in milliseconds.
+      config: { ...baseConfig, maxConcurrent: 1 }
+    })
+
+    const url = await service.requestAudio({
+      bookId: 'b',
+      cfiRange: 'c',
+      text: 'hi',
+      priority: 1
+    })
+
+    expect(url).toMatch(/^blob:/)
+    expect(callCount()).toBe(3)
+  }, 15_000)
+
+  it('rejects after retries exhausted on persistent 503 (4 attempts: 1 + 3 retries)', async () => {
+    const { ipc } = makeIpc()
+    const { fetch, callCount } = makeScriptedFetch([{ status: 503, body: 'down' }])
+    const service = createTtsService({
+      ipc,
+      fetch,
+      getAuthToken: makeAuth({ kind: 'bearer', token: 't' }),
+      config: { ...baseConfig, maxConcurrent: 1 }
+    })
+
+    await expect(
+      service.requestAudio({ bookId: 'b', cfiRange: 'c', text: 'hi', priority: 1 })
+    ).rejects.toThrow(/503/)
+
+    expect(callCount()).toBe(4)
+  }, 30_000)
+
+  it('coalesces two concurrent requests with the same (bookId, cfiRange) into one fetch', async () => {
+    const { ipc } = makeIpc()
+    // Block the fetch on a controlled promise so both submits land while in-flight.
+    let resolveFetch: (r: Response) => void = () => {}
+    const fetch = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve
+        })
+    )
+    const service = createTtsService({
+      ipc,
+      fetch,
+      getAuthToken: makeAuth({ kind: 'bearer', token: 't' }),
+      config: baseConfig
+    })
+
+    const p1 = service.requestAudio({ bookId: 'b', cfiRange: 'c', text: 'hi', priority: 0 })
+    const p2 = service.requestAudio({ bookId: 'b', cfiRange: 'c', text: 'hi', priority: 0 })
+
+    // Let microtasks settle so the first submit reaches the in-flight state.
+    await new Promise((r) => setTimeout(r, 0))
+    resolveFetch(new Response(new Uint8Array([7, 7]) as BodyInit, { status: 200 }))
+
+    const [u1, u2] = await Promise.all([p1, p2])
+    expect(u1).toMatch(/^blob:/)
+    expect(u2).toMatch(/^blob:/)
+    expect(fetch).toHaveBeenCalledTimes(1)
   })
 })

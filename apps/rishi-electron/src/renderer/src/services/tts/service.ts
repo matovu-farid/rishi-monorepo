@@ -7,29 +7,19 @@ import type {
   TtsServiceDeps
 } from './types'
 import { createCache } from './cache'
-import { createQueue } from './queue'
-import { fetchAudio as transportFetchAudio } from './transport'
 import { createEmitter } from './emitter'
+import { makeProgram } from './program'
 
 export function createTtsService(deps: TtsServiceDeps): TtsService {
   const cache = createCache({ ipc: deps.ipc, cacheMaxBytes: deps.config.cacheMaxBytes })
   const audioReady = createEmitter<AudioReadyEvent>()
   const errors = createEmitter<AudioErrorEvent>()
 
-  const queue = createQueue({
+  const program = makeProgram({
     cache,
-    fetchAudio: async (text) => {
-      const auth = await deps.getAuthToken()
-      return transportFetchAudio({
-        fetch: deps.fetch,
-        auth,
-        config: deps.config,
-        text
-      })
-    },
-    maxConcurrent: deps.config.maxConcurrent,
-    maxRetries: 3,
-    backoffBaseMs: 1000
+    fetch: deps.fetch,
+    getAuthToken: deps.getAuthToken,
+    config: deps.config
   })
 
   async function requestAudio(req: AudioRequest): Promise<string> {
@@ -41,7 +31,7 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
         audioReady.emit({ bookId: req.bookId, cfiRange: req.cfiRange, audioPath: url })
         return url
       }
-      const bytes = await queue.enqueue({
+      const bytes = await program.submit({
         bookId: req.bookId,
         cfiRange: req.cfiRange,
         text: req.text,
@@ -60,10 +50,10 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
   return {
     requestAudio,
     cancelRequest(bookId, cfiRange) {
-      return queue.cancel(`${bookId}-${cfiRange}`)
+      return program.cancel(`${bookId}-${cfiRange}`)
     },
     cancelBookRequests(bookId) {
-      queue.cancelBook(bookId)
+      program.cancelBook(bookId)
     },
     async clearBookCache(bookId) {
       try {
@@ -73,7 +63,7 @@ export function createTtsService(deps: TtsServiceDeps): TtsService {
       }
     },
     getQueueStatus(): QueueStatus {
-      return queue.status()
+      return program.status()
     },
     onAudioReady(cb) {
       return audioReady.on(cb)
