@@ -217,3 +217,41 @@ describe('SyncService.triggerWrite', () => {
     expect(syncCount()).toBe(baseline)
   })
 })
+
+describe('SyncService connectivity transitions', () => {
+  it('offline transition sets status to offline immediately (no engine call)', async () => {
+    const connectivity = makeConnectivity({ initialOnline: true })
+    const { engineFactory, syncCount } = makeEngine()
+    const service = createSyncService(makeDeps({ connectivity, engineFactory }))
+
+    service.start()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(service.getStatus().status).toBe('synced')
+    const baseline = syncCount()
+
+    connectivity.setOnline(false)
+
+    expect(service.getStatus().status).toBe('offline')
+    expect(syncCount()).toBe(baseline) // no new engine call
+  })
+
+  it('online recovery from offline kicks a sync', async () => {
+    const connectivity = makeConnectivity({ initialOnline: true })
+    const { engineFactory, syncCount } = makeEngine()
+    const service = createSyncService(makeDeps({ connectivity, engineFactory }))
+    const snapshots: string[] = []
+    service.onStatusChange((s) => snapshots.push(s.status))
+
+    service.start()
+    await new Promise((r) => setTimeout(r, 0))
+    connectivity.setOnline(false)
+    expect(service.getStatus().status).toBe('offline')
+
+    connectivity.setOnline(true)
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(syncCount()).toBe(2) // initial + online-recovery
+    expect(snapshots).toContain('offline')
+    expect(snapshots[snapshots.length - 1]).toBe('synced')
+  })
+})
