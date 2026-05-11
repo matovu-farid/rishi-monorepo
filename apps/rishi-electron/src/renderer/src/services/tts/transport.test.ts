@@ -71,4 +71,56 @@ describe('fetchAudio (transport)', () => {
     expect(headers['X-Dev-Bypass']).toBe('s3cret')
     expect(headers['Authorization']).toBeUndefined()
   })
+
+  it('throws TtsTransportError with retryable=false on 401', async () => {
+    const { fetch } = makeFetch({ status: 401, errorBody: 'unauthorized' })
+
+    const err = await fetchAudio({
+      fetch,
+      auth: bearer,
+      config: baseConfig,
+      text: 'hi'
+    }).catch((e) => e)
+    expect(err).toBeInstanceOf(TtsTransportError)
+    expect(err.status).toBe(401)
+    expect(err.retryable).toBe(false)
+    expect(err.retryAfterMs).toBeNull()
+  })
+
+  it('throws TtsTransportError with retryable=true and parsed retryAfterMs on 429', async () => {
+    const { fetch } = makeFetch({ status: 429, errorBody: 'slow down', retryAfter: '2' })
+
+    const err = await fetchAudio({
+      fetch,
+      auth: bearer,
+      config: baseConfig,
+      text: 'hi'
+    }).catch((e) => e)
+    expect(err).toBeInstanceOf(TtsTransportError)
+    expect(err.status).toBe(429)
+    expect(err.retryable).toBe(true)
+    expect(err.retryAfterMs).toBe(2000)
+  })
+
+  it('throws TtsTransportError with retryable=true on 503', async () => {
+    const { fetch } = makeFetch({ status: 503, errorBody: 'down' })
+
+    const err = await fetchAudio({
+      fetch,
+      auth: bearer,
+      config: baseConfig,
+      text: 'hi'
+    }).catch((e) => e)
+    expect(err).toBeInstanceOf(TtsTransportError)
+    expect(err.status).toBe(503)
+    expect(err.retryable).toBe(true)
+  })
+
+  it('propagates network errors raised by fetch', async () => {
+    const { fetch } = makeFetch({ rejectWith: new Error('ECONNRESET') })
+
+    await expect(
+      fetchAudio({ fetch, auth: bearer, config: baseConfig, text: 'hi' })
+    ).rejects.toThrow('ECONNRESET')
+  })
 })
