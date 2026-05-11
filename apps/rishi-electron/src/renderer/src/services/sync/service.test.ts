@@ -255,3 +255,56 @@ describe('SyncService connectivity transitions', () => {
     expect(snapshots[snapshots.length - 1]).toBe('synced')
   })
 })
+
+describe('SyncService error classification', () => {
+  it('engine error with connectivity online classifies as error', async () => {
+    const connectivity = makeConnectivity({ initialOnline: true })
+    const { engineFactory } = makeEngine({
+      syncImpl: async () => {
+        throw new Error('boom')
+      }
+    })
+    const service = createSyncService(makeDeps({ connectivity, engineFactory }))
+
+    service.start()
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(service.getStatus().status).toBe('error')
+  })
+
+  it('engine error with connectivity offline classifies as offline', async () => {
+    const connectivity = makeConnectivity({ initialOnline: true })
+    const { engineFactory } = makeEngine({
+      syncImpl: async () => {
+        connectivity.setOnline(false) // model: network died mid-flight
+        throw new Error('network down')
+      }
+    })
+    const service = createSyncService(makeDeps({ connectivity, engineFactory }))
+
+    service.start()
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(service.getStatus().status).toBe('offline')
+  })
+
+  it('AUTH_EXPIRED dispatches sync-auth-expired event and sets status to error', async () => {
+    const windowEvents = makeWindowEvents()
+    const { engineFactory } = makeEngine({
+      syncImpl: async () => {
+        throw new Error('AUTH_EXPIRED')
+      }
+    })
+    const service = createSyncService(makeDeps({ windowEvents, engineFactory }))
+
+    const dispatched: Event[] = []
+    windowEvents.addEventListener('sync-auth-expired', (e) => dispatched.push(e))
+
+    service.start()
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(dispatched).toHaveLength(1)
+    expect(dispatched[0].type).toBe('sync-auth-expired')
+    expect(service.getStatus().status).toBe('error')
+  })
+})
