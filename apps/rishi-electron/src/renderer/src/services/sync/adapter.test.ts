@@ -78,3 +78,37 @@ describe('adapter.getDirtyBooks', () => {
     })
   })
 })
+
+describe('adapter pass-through', () => {
+  it('markHighlightsClean forwards ids + version verbatim to ipc', async () => {
+    const ipc = makeIpc()
+    const adapter = makeAdapter(ipc)
+
+    await adapter.markHighlightsClean(['h-1', 'h-2'], 7)
+
+    expect(ipc.syncMarkHighlightsClean).toHaveBeenCalledTimes(1)
+    expect(ipc.syncMarkHighlightsClean).toHaveBeenCalledWith(['h-1', 'h-2'], 7)
+  })
+
+  it('applyBookConflict forwards the conflict object + version verbatim', async () => {
+    const ipc = makeIpc()
+    const adapter = makeAdapter(ipc)
+    const conflict = { id: 'b-1', updatedAt: 9 }
+
+    await adapter.applyBookConflict(conflict, 12)
+
+    expect(ipc.syncApplyBookConflict).toHaveBeenCalledWith(conflict, 12)
+  })
+
+  it('upsertRemoteHighlight forwards the remote record + updateLastSyncVersion forwards the version', async () => {
+    const ipc = makeIpc()
+    const adapter = makeAdapter(ipc)
+    const remote = { id: 'h-9', text: 'remote text' }
+
+    await adapter.upsertRemoteHighlight(remote)
+    await adapter.updateLastSyncVersion(99)
+
+    expect(ipc.syncUpsertHighlight).toHaveBeenCalledWith(remote)
+    expect(ipc.syncUpdateLastVersion).toHaveBeenCalledWith(99)
+  })
+})
