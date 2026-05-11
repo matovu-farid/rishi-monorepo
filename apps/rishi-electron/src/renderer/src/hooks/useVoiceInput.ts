@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { getAuthToken } from '@/modules/auth'
 
-const WORKER_URL = 'https://rishi-worker.faridmato90.workers.dev'
+const WORKER_URL = 'https://api.fidexa.org'
 
 interface UseVoiceInputReturn {
   isRecording: boolean

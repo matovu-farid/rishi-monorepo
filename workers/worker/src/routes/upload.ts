@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { eq, and } from "drizzle-orm";
 import { AwsClient } from "aws4fetch";
 import type { CloudflareBindings } from "../index";
-import { requireWorkerAuth } from "../index";
+import { requireAuth } from "../index";
 import { createDb } from "../db/drizzle";
 import { books } from "@rishi/shared/schema";
 import type {
@@ -52,7 +52,7 @@ function isR2KeySafe(r2Key: string, expectedPrefix: string): boolean {
 // ─── POST /upload-url ──────────────────────────────────────────────────────────
 // Returns a presigned PUT URL for direct R2 upload, or {exists: true} for dedup.
 // Does NOT sign Content-Type in headers (per research pitfall -- signQuery only).
-uploadRoutes.post("/upload-url", requireWorkerAuth, async (c) => {
+uploadRoutes.post("/upload-url", requireAuth, async (c) => {
   const body = await c.req.json<UploadUrlRequest>();
 
   if (!body.fileHash || !/^[a-fA-F0-9]{64}$/.test(body.fileHash)) {
@@ -106,7 +106,7 @@ uploadRoutes.post("/upload-url", requireWorkerAuth, async (c) => {
 
 // ─── POST /download-url ────────────────────────────────────────────────────────
 // Returns a presigned GET URL for downloading a file from R2.
-uploadRoutes.post("/download-url", requireWorkerAuth, async (c) => {
+uploadRoutes.post("/download-url", requireAuth, async (c) => {
   const body = await c.req.json<DownloadUrlRequest>();
   const userId = c.get("userId");
 

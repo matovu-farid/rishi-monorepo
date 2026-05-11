@@ -1,17 +1,16 @@
-import { Sparkles, X, LogIn, Loader2 } from 'lucide-react'
+import { Sparkles, X, LogIn } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
-import { startSignInFlow } from '@/modules/auth'
 
 /**
  * Persistent bottom-left card prompting unauthenticated returning users to
- * sign in via the system browser (deep-link flow).
+ * sign in via Clerk's in-app modal.
  */
 export function SignInBanner(): React.JSX.Element | null {
   const visible = useAuthStore(
     (s) => s.authHydrated && s.user === null && s.welcomeSeen && !s.bannerDismissed
   )
   const dismiss = useAuthStore((s) => s.dismissBanner)
-  const signingIn = useAuthStore((s) => s.signingIn)
+  const openSignIn = useAuthStore((s) => s.openSignIn)
 
   if (!visible) return null
 
@@ -30,10 +29,9 @@ export function SignInBanner(): React.JSX.Element | null {
       </div>
       <button
         className="inline-flex items-center gap-1 rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
-        disabled={signingIn}
-        onClick={() => startSignInFlow()}
+        onClick={openSignIn}
       >
-        {signingIn ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}
+        <LogIn size={14} />
         Sign in
       </button>
       <button

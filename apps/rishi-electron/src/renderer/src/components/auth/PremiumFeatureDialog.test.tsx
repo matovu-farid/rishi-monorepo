@@ -1,20 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { PremiumFeatureDialog } from './PremiumFeatureDialog'
-import { useAuthStore } from '@/stores/authStore'
 import { PREMIUM_FEATURES } from './features'
+import { useAuthStore } from '@/stores/authStore'
 
-// Mock auth module
-vi.mock('@/modules/auth', () => ({
-  startSignInFlow: vi.fn().mockResolvedValue(undefined),
-  clearPendingOAuthState: vi.fn()
-}))
+beforeEach(() => {
+  useAuthStore.setState({ signInOpen: false })
+})
 
 describe('PremiumFeatureDialog', () => {
-  beforeEach(() => {
-    useAuthStore.setState({ signingIn: false })
-  })
-
   it('renders dialog with TTS feature content when open', () => {
     render(<PremiumFeatureDialog open={true} onOpenChange={() => {}} feature="tts" />)
 
@@ -52,39 +46,20 @@ describe('PremiumFeatureDialog', () => {
     expect(screen.getByText('Sign in')).toBeInTheDocument()
   })
 
-  it('shows loading state when signing in', () => {
-    useAuthStore.setState({ signingIn: true })
-
-    render(<PremiumFeatureDialog open={true} onOpenChange={() => {}} feature="tts" />)
-
-    expect(screen.getByText(/Signing in/)).toBeInTheDocument()
-  })
-
-  it('shows Cancel button instead of Maybe later when signing in', () => {
-    useAuthStore.setState({ signingIn: true })
-
-    render(<PremiumFeatureDialog open={true} onOpenChange={() => {}} feature="tts" />)
-
-    expect(screen.getByText('Cancel')).toBeInTheDocument()
-    expect(screen.queryByText('Maybe later')).not.toBeInTheDocument()
-  })
-
-  it('resets signingIn state and closes dialog when Cancel is clicked', () => {
-    useAuthStore.setState({ signingIn: true })
+  it('opens the sign-in flow and closes the dialog when Sign in is clicked', () => {
     const onOpenChange = vi.fn()
-
     render(<PremiumFeatureDialog open={true} onOpenChange={onOpenChange} feature="tts" />)
 
-    fireEvent.click(screen.getByText('Cancel'))
-    expect(useAuthStore.getState().signingIn).toBe(false)
+    fireEvent.click(screen.getByText('Sign in'))
+
     expect(onOpenChange).toHaveBeenCalledWith(false)
+    expect(useAuthStore.getState().signInOpen).toBe(true)
   })
 
   it('does not show bullets for ai-generic feature', () => {
     render(<PremiumFeatureDialog open={true} onOpenChange={() => {}} feature="ai-generic" />)
 
     expect(screen.getByText(PREMIUM_FEATURES['ai-generic'].title)).toBeInTheDocument()
-    // ai-generic has no bullets, so no list items should be rendered
     expect(screen.queryByRole('listitem')).not.toBeInTheDocument()
   })
 })

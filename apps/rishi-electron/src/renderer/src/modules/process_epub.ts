@@ -3,7 +3,7 @@
  * Ported from the Tauri version to use Electron's @/lib/api functions.
  */
 
-import { saveVectors, hasSavedEpubData, savePageDataMany } from '@/lib/api'
+import { saveVectors, hasSavedEpubData, savePageDataMany, hasVectorsForBook } from '@/lib/api'
 import type { EmbedParam, Vector, ChunkDataInsertable } from '@/lib/api'
 import { embedWithFallback } from './embed-fallback'
 
@@ -25,21 +25,28 @@ function batchEmbed(embedParams: EmbedParam[]): EmbedParam[][] {
 
 export async function processEpubJob(bookId: number, pageData: PageDataInsertable[]) {
   try {
-    if (pageData.length === 0) {
-      return
-    }
-    if (await hasSavedEpubData({ bookId })) {
-      return
+    if (pageData.length === 0) return
+
+    const chunksExist = await hasSavedEpubData({ bookId })
+    const vectorsExist = await hasVectorsForBook(bookId)
+
+    if (chunksExist && vectorsExist) return // fully indexed, nothing to do
+
+    if (!chunksExist) {
+      // Convert to ChunkDataInsertable for savePageDataMany
+      const chunkData: ChunkDataInsertable[] = pageData.map((item) => ({
+        id: item.id,
+        pageNumber: item.pageNumber,
+        bookId: item.bookId,
+        data: item.data
+      }))
+      // Save page data first so it is persisted even if embedding later fails
+      await savePageDataMany({ pageData: chunkData })
     }
 
-    // Convert to ChunkDataInsertable for savePageDataMany
-    const chunkData: ChunkDataInsertable[] = pageData.map((item) => ({
-      id: item.id,
-      pageNumber: item.pageNumber,
-      bookId: item.bookId,
-      data: item.data
-    }))
-
+    // Embedding/vector save is best-effort.
+    // Runs when chunks were just saved OR when chunks exist but vectors are missing
+    // (recovery from a previously failed embedding step).
     const embedParams: EmbedParam[] = pageData.map((item) => ({
       text: item.data,
       metadata: {
@@ -49,12 +56,6 @@ export async function processEpubJob(bookId: number, pageData: PageDataInsertabl
       }
     }))
 
-    // Save page data first, then embed
-    // This ensures data is in the database even if embedding fails
-    await savePageDataMany({ pageData: chunkData })
-
-    // Embedding/vector save is best-effort -- page data is already persisted.
-    // If this fails, the book's page data is intact and vectors can be retried.
     try {
       const batches = batchEmbed(embedParams)
       for (const batch of batches) {
@@ -66,9 +67,9 @@ export async function processEpubJob(bookId: number, pageData: PageDataInsertabl
           text: result.text,
           metadata: result.metadata
         }))
-        const vectors: Vector[] = vectorObjects.map((vector) => ({
-          id: vector.id,
-          vector: vector.vector
+        const vectors: Vector[] = vectorObjects.map((v) => ({
+          id: v.id,
+          vector: v.vector
         }))
 
         if (vectorObjects.length > 0) {

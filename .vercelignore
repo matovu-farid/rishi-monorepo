@@ -1,0 +1,47 @@
+# Excludes everything Vercel doesn't need to upload to build the web app.
+# rootDirectory is set to "apps/web" in Vercel project settings.
+# "Include files outside root directory" is enabled so workspace deps still resolve.
+# We allow apps/web, workers/worker (referenced by web?), packages/shared, and root manifests.
+
+# Heavy unrelated apps
+apps/main
+apps/mobile
+apps/rishi-electron
+apps/dioxus
+
+# Tauri-only packages (massive)
+packages/tauri-cypress
+packages/tauri-cypress-runner
+packages/tauri-plugin-oauth-pkce
+
+# Build artifacts everywhere
+**/node_modules
+**/.next
+**/.wrangler
+**/.turbo
+**/dist
+**/out
+**/target
+**/.cache
+**/coverage
+
+# Logs / state
+**/*.log
+**/.DS_Store
+**/.env*
+!**/.env.example
+!**/.env.local.example
+
+# Tooling state
+.git
+.github
+.claude
+.superpowers
+.planning
+.worktrees
+.agents
+
+# Local databases
+**/*.db
+**/*.sqlite
+**/sqlite:*

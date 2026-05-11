@@ -10,9 +10,10 @@ import {
 } from '@/modules/epubwrapper'
 import { usePlayerStore } from '@/stores/playerStore'
 import { processEpubJob } from '@/modules/process_epub'
-import { hasSavedEpubData } from '@/lib/api'
+import { hasSavedEpubData, type BookOutline } from '@/lib/api'
 import { useChatStore } from './chatStore'
 import { prefetchRealtimeKey } from '@/modules/realtime'
+import { voiceChatService } from '@/modules/voiceChatService'
 import { captureError } from '@/utils/sentry'
 
 export { ThemeType }
@@ -30,6 +31,7 @@ interface EpubState {
   currentEpubLocation: string
   theme: ThemeType
   renditionCount: number
+  bookOutline: BookOutline | null
 
   setRendition: (rendition: Rendition | null) => void
   setParagraphRendition: (rendition: Rendition | null) => void
@@ -37,6 +39,7 @@ interface EpubState {
   setCurrentEpubLocation: (location: string) => void
   setTheme: (theme: ThemeType) => void
   incrementRenditionCount: () => void
+  setBookOutline: (outline: BookOutline | null) => void
   reset: () => void
 }
 
@@ -49,10 +52,12 @@ export const useEpubStore = create<EpubState>()(
       currentEpubLocation: '',
       theme: ThemeType.White,
       renditionCount: 0,
+      bookOutline: null,
 
       setRendition: (rendition) => set({ rendition }),
       setParagraphRendition: (paragraphRendition) => set({ paragraphRendition }),
       setBookId: (bookId) => set({ bookId }),
+      setBookOutline: (bookOutline) => set({ bookOutline }),
       setCurrentEpubLocation: (currentEpubLocation) => set({ currentEpubLocation }),
       setTheme: (theme) => set({ theme }),
       incrementRenditionCount: () => set((state) => ({ renditionCount: state.renditionCount + 1 })),
@@ -221,12 +226,43 @@ export function initEpubSubscriptions(): (() => void)[] {
     )
   )
 
-  // Side effect: pre-fetch the realtime API key when a book is opened so voice chat starts faster
+  // Side effect: pre-fetch the realtime API key when a book is opened; dispose the voice
+  // session when the book closes. We register TWO cleanups: the subscription unsubscribe
+  // and an explicit dispose. The explicit dispose is required because React unmounts the
+  // view (which triggers cleanupEpubSubscriptions) BEFORE the route's bookId reset fires,
+  // so the subscription would otherwise miss the transition to ''.
+  //
+  // NOTE: Outline is no longer fetched here via IPC. EpubView populates it via the
+  // epubjs TOC callback (tocChanged prop on ReactReader). The outline subscription
+  // below triggers preconnect once the outline arrives from that callback.
+  const unsubBookId = useEpubStore.subscribe(
+    (state) => state.bookId,
+    (bookId) => {
+      if (bookId) {
+        prefetchRealtimeKey()
+        // Outline is populated by EpubView via the epubjs TOC callback.
+        // We just need to wait for it before preconnecting — subscribe below.
+      } else {
+        useEpubStore.getState().setBookOutline(null)
+        voiceChatService.dispose()
+      }
+    }
+  )
+  unsubs.push(unsubBookId)
+  unsubs.push(() => voiceChatService.dispose())
+
+  // When the outline arrives (from EpubView's tocChanged), preconnect if appropriate
   unsubs.push(
     useEpubStore.subscribe(
-      (state) => state.bookId,
-      (bookId) => {
-        if (bookId) prefetchRealtimeKey()
+      (state) => state.bookOutline,
+      (outline) => {
+        const bookId = useEpubStore.getState().bookId
+        if (!bookId || !outline) return
+        const pageText = usePlayerStore
+          .getState()
+          .currentParagraphs.map((p) => p.text)
+          .join('\n')
+        void voiceChatService.preconnect(Number(bookId), { pageText, outline })
       }
     )
   )

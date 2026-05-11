@@ -3,7 +3,27 @@
  * All functions mirror the original Tauri command signatures.
  */
 
+import { getAuthToken } from '@/modules/auth'
+
 // Re-export types that match the original generated types
+
+/**
+ * Build auth headers for outbound calls to our worker.
+ *
+ * Must use `Authorization: Bearer …` — the `Cookie` header is a forbidden
+ * request header in Chromium's fetch implementation and is silently stripped
+ * from renderer-side requests, leaving the call unauthenticated.
+ */
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const token = await getAuthToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+/**
+ * Legacy User shape — kept around for renderer code that still consumes
+ * the old Clerk-style fields. Prefer `AuthUser` from `@preload/types` for
+ * new code.
+ */
 export interface User {
   id: string
   firstName?: string | null
@@ -169,6 +189,16 @@ export async function hasSavedEpubData(params: { bookId: number }): Promise<bool
   return api().hasSavedEpubData(params.bookId)
 }
 
+export interface BookOutline {
+  title: string
+  author: string | null
+  chapters: string[]
+}
+
+export async function getBookOutline(bookId: number): Promise<BookOutline> {
+  return api().getBookOutline(bookId)
+}
+
 // ---- Chunks/Page Data ----
 export async function savePageDataMany(params: { pageData: ChunkDataInsertable[] }): Promise<void> {
   return api().savePageDataMany(params.pageData)
@@ -213,6 +243,9 @@ export async function searchVectors(params: {
   k: number
 }): Promise<SearchResult[]> {
   return api().searchVectors(params.name, params.query, params.dim, params.k)
+}
+export async function hasVectorsForBook(bookId: number): Promise<boolean> {
+  return api().hasVectorsForBook(bookId)
 }
 
 // ---- File Formats ----
@@ -283,12 +316,6 @@ export async function cancelScan(): Promise<void> {
 }
 
 // ---- Auth ----
-export async function getAuthTokenCmd(): Promise<string | null> {
-  return api().getAuthToken()
-}
-export async function signout(): Promise<void> {
-  return api().signout()
-}
 export async function getUserFromStore(): Promise<User | null> {
   return api().getUserFromStore()
 }
@@ -317,8 +344,36 @@ export async function isDev(): Promise<boolean> {
 export async function getDevBypassSecret(): Promise<string | null> {
   return api().getDevBypassSecret()
 }
+const WORKER_URL = 'https://api.fidexa.org'
+
 export async function getRealtimeClientSecret(): Promise<string> {
-  return api().getRealtimeClientSecret()
+  const authHeaders = await getAuthHeaders()
+  const headers: Record<string, string> = { ...authHeaders }
+
+  if (Object.keys(authHeaders).length === 0) {
+    const devBypass = await api().getDevBypassSecret()
+    if (devBypass) {
+      headers['X-Dev-Bypass'] = devBypass
+    } else {
+      throw new Error('Not authenticated')
+    }
+  }
+
+  const response = await fetch(`${WORKER_URL}/api/realtime/client_secrets`, {
+    method: 'GET',
+    headers
+  })
+
+  if (!response.ok) {
+    throw new Error(`Worker API responded with status ${response.status}`)
+  }
+
+  const data = (await response.json()) as { client_secret?: { value?: string } }
+  const secret = data?.client_secret?.value
+  if (!secret) {
+    throw new Error('No client_secret in worker response')
+  }
+  return secret
 }
 
 // ---- Process Job (embedding + indexing) ----

@@ -7,6 +7,7 @@ export interface ElectronAPI {
   updateBookCover: (bookId: number, cover: number[]) => Promise<void>
   updateBookLocation: (bookId: number, location: string) => Promise<void>
   hasSavedEpubData: (bookId: number) => Promise<boolean>
+  getBookOutline: (bookId: number) => Promise<BookOutline>
 
   // Page/chunk data
   savePageDataMany: (pageData: ChunkDataInsertable[]) => Promise<void>
@@ -21,6 +22,7 @@ export interface ElectronAPI {
   embed: (params: EmbedParam[]) => Promise<EmbedResult[]>
   saveVectors: (name: string, dim: number, vectors: VectorData[]) => Promise<void>
   searchVectors: (name: string, query: number[], dim: number, k: number) => Promise<SearchResult[]>
+  hasVectorsForBook: (bookId: number) => Promise<boolean>
 
   // File format operations
   getBookData: (path: string) => Promise<BookData>
@@ -62,29 +64,10 @@ export interface ElectronAPI {
   scanForBooks: (mode: string) => Promise<number>
   cancelScan: () => Promise<void>
 
-  // Auth
-  getAuthToken: () => Promise<string | null>
-  saveAuthToken: (token: string, expiresAt: number) => Promise<void>
+  // Auth (cached user profile only — Clerk owns the JWT in the renderer)
   clearAuth: () => Promise<void>
   getUserFromStore: () => Promise<User | null>
   saveUserToStore: (user: User) => Promise<void>
-
-  // Deep-link auth (PKCE)
-  getOAuthState: () => Promise<{ state: string; codeChallenge: string }>
-  completeAuth: (state: string) => Promise<User>
-  checkAuthStatus: (
-    state: string
-  ) => Promise<{ status?: string; retryCount?: number; createdAt?: number; error?: string }>
-  signout: () => Promise<void>
-  onDeepLink: (callback: (url: string) => void) => () => void
-
-  // Token refresh & user fetch
-  refreshAuthToken: () => Promise<number | null>
-  getUser: (userId: string) => Promise<User | null>
-
-  // Auth debug
-  logAuthDebug: (state: string, step: string, data?: string, error?: string) => Promise<void>
-  getAuthDebug: (state: string) => Promise<unknown[]>
 
   // Debug
   dumpError: (error: ErrorDump) => Promise<void>
@@ -98,7 +81,6 @@ export interface ElectronAPI {
   // Utilities
   isDev: () => Promise<boolean>
   getDevBypassSecret: () => Promise<string | null>
-  getRealtimeClientSecret: () => Promise<string>
   showOpenDialog: (options: unknown) => Promise<{ filePaths: string[] }>
   openExternal: (url: string) => Promise<void>
   getOsInfo: () => Promise<{ platform: string; arch: string; version: string }>
@@ -198,6 +180,39 @@ export interface User {
   hasImage: boolean
   lastSignInAt?: number | null
   externalId?: string | null
+}
+
+/**
+ * Better-Auth user shape returned by the new auth IPC surface.
+ * Distinct from the legacy Clerk-shaped `User` above (still consumed by
+ * older renderer code until Chunk F migrates it).
+ */
+export interface AuthUser {
+  id: string
+  email: string
+  name?: string
+  image?: string
+}
+
+export interface AuthApi {
+  startMagicLink: (email: string) => Promise<void>
+  startGoogle: () => Promise<void>
+  getSession: () => Promise<AuthUser | null>
+  signOut: () => Promise<void>
+  deleteAccount: () => Promise<void>
+  getToken: () => Promise<string | null>
+  onSessionChange: (cb: (user: AuthUser | null) => void) => () => void
+  isMacAppStore: boolean
+}
+
+export interface Api {
+  auth: AuthApi
+}
+
+export interface BookOutline {
+  title: string
+  author: string | null
+  chapters: string[]
 }
 
 export interface Book {
@@ -380,5 +395,6 @@ export interface ErrorDump {
 declare global {
   interface Window {
     electron: ElectronAPI
+    api: Api
   }
 }

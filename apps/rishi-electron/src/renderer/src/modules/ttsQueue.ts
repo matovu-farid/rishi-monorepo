@@ -344,16 +344,16 @@ export class TTSQueue extends EventEmitter {
         'Content-Type': 'application/json'
       }
 
-      if (!token || token === 'dev-placeholder-token') {
-        // Dev mode: try the bypass secret from the Electron main process
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`
+      } else {
+        // No Clerk session — fall back to the dev bypass secret if configured
         const devBypassSecret = await window.electron.getDevBypassSecret()
         if (devBypassSecret) {
           headers['X-Dev-Bypass'] = devBypassSecret
         } else {
           throw new Error('Not authenticated -- sign in to use text-to-speech')
         }
-      } else {
-        headers['Authorization'] = `Bearer ${token}`
       }
 
       const ttsController = new AbortController()
@@ -402,7 +402,6 @@ export class TTSQueue extends EventEmitter {
           bodyExcerpt,
           authMode: headers['Authorization'] ? 'bearer' : 'dev-bypass',
           hasToken: Boolean(token),
-          tokenIsPlaceholder: token === 'dev-placeholder-token',
           isPackaged: import.meta.env.PROD,
           workerUrl: url
         })

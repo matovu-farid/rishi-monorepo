@@ -17,11 +17,10 @@ import {
   Menu as MenuIcon,
   MessageSquare,
   ZoomIn,
-  ZoomOut,
-  Mic,
-  MicOff
+  ZoomOut
 } from 'lucide-react'
 import AIChatOrb from '../chat/AIChatOrb'
+import VoiceChatLauncher from '../chat/VoiceChatLauncher'
 import { usePlayerStore } from '@/stores/playerStore'
 import type { ParagraphWithIndex } from '@/models/player_control'
 import { processEpubJob } from '@/modules/process_epub'
@@ -63,18 +62,7 @@ export function DjvuView({ book }: { book: Book }) {
   const [tocOpen, setTocOpen] = useState(false)
   const { requireAuth, AuthDialog } = useRequireAuth()
   const isChatting = useChatStore((s) => s.isChatting)
-  const setIsChatting = useChatStore((s) => s.setIsChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
-
-  const handleMicClick = () => {
-    requireAuth('voice-input', () => {
-      setIsChatting((prev) => !prev)
-    })
-  }
-
-  const handleStopChat = () => {
-    setIsChatting(false)
-  }
 
   const bookSyncIdRef = useRef<string | null>(null)
 
@@ -404,23 +392,6 @@ export function DjvuView({ book }: { book: Book }) {
         >
           <MessageSquare size={20} />
         </button>
-        {!isChatting ? (
-          <button
-            onClick={handleMicClick}
-            className="p-2 rounded-md text-black hover:bg-black/10"
-            aria-label="Start voice chat"
-          >
-            <Mic size={20} />
-          </button>
-        ) : (
-          <button
-            onClick={handleStopChat}
-            className="p-2 rounded-md text-black hover:bg-black/10"
-            aria-label="Stop voice chat"
-          >
-            <MicOff size={20} />
-          </button>
-        )}
       </ReaderToolbar>
 
       {/* Main scrollable area */}
@@ -511,6 +482,9 @@ export function DjvuView({ book }: { book: Book }) {
       {isChatting && (
         <AIChatOrb chatStatus={chatStatus} onClick={() => setChatPanelOpen((prev) => !prev)} />
       )}
+
+      {/* Voice chat launcher — paired above the TTS play orb */}
+      <VoiceChatLauncher />
 
       {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
       <div style={{ display: isChatting ? 'none' : 'contents' }}>

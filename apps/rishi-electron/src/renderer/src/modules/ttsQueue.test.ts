@@ -15,6 +15,9 @@ vi.mock('./ttsCache', () => ({
 vi.mock('@/utils/sentry', () => ({ captureError: vi.fn() }))
 vi.mock('@/utils/stateDump', () => ({ dumpState: vi.fn(), logStateEvent: vi.fn() }))
 vi.mock('./ttsService', () => ({ ttsService: {} }))
+vi.mock('./auth', () => ({
+  getAuthToken: vi.fn().mockResolvedValue('test-token')
+}))
 
 import { ttsQueue } from './ttsQueue'
 
@@ -29,8 +32,7 @@ describe('TTSQueue', () => {
       arrayBuffer: () => Promise.resolve(audioBuffer),
       blob: () => Promise.resolve(new Blob([audioBuffer], { type: 'audio/mpeg' }))
     })
-    // Mock auth token
-    window.electron.getAuthToken = vi.fn().mockResolvedValue('test-token') as any
+    // Mock dev bypass
     window.electron.getDevBypassSecret = vi.fn().mockResolvedValue(null) as any
   })
 

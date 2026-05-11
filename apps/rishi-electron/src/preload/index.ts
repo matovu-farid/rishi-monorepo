@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ElectronAPI } from './types.js'
+import type { Api, AuthUser, ElectronAPI } from './types.js'
 
 const electronAPI: ElectronAPI = {
   // Book operations
@@ -12,6 +12,7 @@ const electronAPI: ElectronAPI = {
   updateBookLocation: (bookId: number, location: string) =>
     ipcRenderer.invoke('books:updateLocation', bookId, location),
   hasSavedEpubData: (bookId: number) => ipcRenderer.invoke('books:hasSavedEpubData', bookId),
+  getBookOutline: (bookId: number) => ipcRenderer.invoke('books:getOutline', bookId),
 
   // Page/chunk data
   savePageDataMany: (pageData: unknown[]) => ipcRenderer.invoke('chunks:saveMany', pageData),
@@ -31,6 +32,7 @@ const electronAPI: ElectronAPI = {
     ipcRenderer.invoke('vectors:save', name, dim, vectors),
   searchVectors: (name: string, query: number[], dim: number, k: number) =>
     ipcRenderer.invoke('vectors:search', name, query, dim, k),
+  hasVectorsForBook: (bookId: number) => ipcRenderer.invoke('vectors:hasFor', bookId),
 
   // File format operations
   getBookData: (path: string) => ipcRenderer.invoke('formats:getBookData', path),
@@ -72,31 +74,12 @@ const electronAPI: ElectronAPI = {
   scanForBooks: (mode: string) => ipcRenderer.invoke('scanner:scan', mode),
   cancelScan: () => ipcRenderer.invoke('scanner:cancel'),
 
-  // Auth
-  getAuthToken: () => ipcRenderer.invoke('auth:getToken'),
-  saveAuthToken: (token: string, expiresAt: number) =>
-    ipcRenderer.invoke('auth:saveToken', token, expiresAt),
+  // Legacy auth shims — kept for backwards-compat with renderer code that
+  // hasn't been ported off the old Clerk-shaped helpers yet. The Better
+  // Auth surface lives on `window.api.auth.*` instead (see below).
   clearAuth: () => ipcRenderer.invoke('auth:clear'),
   getUserFromStore: () => ipcRenderer.invoke('auth:getUserFromStore'),
   saveUserToStore: (user: unknown) => ipcRenderer.invoke('auth:saveUserToStore', user),
-
-  // Deep-link auth (PKCE)
-  getOAuthState: () => ipcRenderer.invoke('auth:getOAuthState'),
-  completeAuth: (state: string) => ipcRenderer.invoke('auth:completeAuth', state),
-  checkAuthStatus: (state: string) => ipcRenderer.invoke('auth:checkAuthStatus', state),
-  signout: () => ipcRenderer.invoke('auth:signout'),
-  refreshAuthToken: () => ipcRenderer.invoke('auth:refreshToken'),
-  getUser: (userId: string) => ipcRenderer.invoke('auth:getUser', userId),
-  logAuthDebug: (state: string, step: string, data?: string, error?: string) =>
-    ipcRenderer.invoke('auth:logDebug', state, step, data, error),
-  getAuthDebug: (state: string) => ipcRenderer.invoke('auth:getDebug', state),
-  onDeepLink: (callback: (url: string) => void) => {
-    const handler = (_event: unknown, url: string) => callback(url)
-    ipcRenderer.on('deep-link', handler)
-    return () => {
-      ipcRenderer.removeListener('deep-link', handler)
-    }
-  },
 
   // Debug/error
   dumpError: (error: unknown) => ipcRenderer.invoke('debug:dumpError', error),
@@ -110,7 +93,6 @@ const electronAPI: ElectronAPI = {
   // Utilities
   isDev: () => ipcRenderer.invoke('util:isDev'),
   getDevBypassSecret: () => ipcRenderer.invoke('util:getDevBypassSecret'),
-  getRealtimeClientSecret: () => ipcRenderer.invoke('util:getRealtimeClientSecret'),
   showOpenDialog: (options: unknown) => ipcRenderer.invoke('dialog:showOpen', options),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   getOsInfo: () => ipcRenderer.invoke('util:getOsInfo'),
@@ -225,4 +207,24 @@ const electronAPI: ElectronAPI = {
   }
 }
 
+const api: Api = {
+  auth: {
+    startMagicLink: (email: string) => ipcRenderer.invoke('auth:start-magic-link', email),
+    startGoogle: () => ipcRenderer.invoke('auth:start-google'),
+    getSession: () => ipcRenderer.invoke('auth:get-session'),
+    signOut: () => ipcRenderer.invoke('auth:sign-out'),
+    deleteAccount: () => ipcRenderer.invoke('auth:delete-account'),
+    getToken: () => ipcRenderer.invoke('auth:get-token'),
+    onSessionChange: (cb: (user: AuthUser | null) => void) => {
+      const handler = (_e: unknown, user: AuthUser | null): void => cb(user)
+      ipcRenderer.on('session-changed', handler)
+      return () => {
+        ipcRenderer.removeListener('session-changed', handler)
+      }
+    },
+    isMacAppStore: !!process.mas
+  }
+}
+
 contextBridge.exposeInMainWorld('electron', electronAPI)
+contextBridge.exposeInMainWorld('api', api)

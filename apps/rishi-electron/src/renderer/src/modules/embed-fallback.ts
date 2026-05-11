@@ -9,7 +9,7 @@
 import type { EmbedParam, EmbedResult } from '@/lib/api'
 import { getAuthToken } from './auth'
 
-const WORKER_URL = 'https://rishi-worker.faridmato90.workers.dev'
+const WORKER_URL = 'https://api.fidexa.org'
 
 /**
  * Send texts to the server for embedding when on-device fails.

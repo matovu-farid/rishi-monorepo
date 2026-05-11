@@ -17,18 +17,19 @@
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "postinstall": "electron-builder install-app-deps || true",
-    "build:unpack": "pnpm run build && electron-builder --dir",
-    "build:win": "pnpm run build && electron-builder --win",
-    "build:mac": "pnpm run build && electron-builder --mac",
-    "build:linux": "pnpm run build && electron-builder --linux",
+    "postinstall": "electron-builder install-app-deps || true; node scripts/ensure-sharp-vendor.cjs",
+    "clean:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true,maxRetries:5,retryDelay:300})\"",
+    "build:unpack": "pnpm run clean:dist && pnpm run build && electron-builder --dir",
+    "build:win": "pnpm run clean:dist && pnpm run build && electron-builder --win",
+    "build:mac": "pnpm run clean:dist && pnpm run build && electron-builder --mac --x64 --arm64",
+    "build:mac:debug": "pnpm run clean:dist && electron-vite build --sourcemap && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --dir -c.mac.notarize=false -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.gatekeeperAssess=false",
+    "build:linux": "pnpm run clean:dist && pnpm run build && electron-builder --linux",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "cypress run",
     "test:e2e:open": "cypress open"
   },
   "dependencies": {
-    "@clerk/clerk-react": "^5.22.0",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
     "@openai/agents": "^0.3.9",
@@ -134,7 +135,8 @@
       "better-sqlite3",
       "electron",
       "esbuild",
-      "hnswlib-node"
+      "hnswlib-node",
+      "sharp"
     ]
   }
 }

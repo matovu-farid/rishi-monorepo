@@ -39,7 +39,6 @@ async function buildStateDump(): Promise<Record<string, unknown>> {
   const queueStatus = ttsQueue.getQueueStatus()
 
   let devMode: boolean | null = null
-  let tokenType: string | null = null
   let hasToken = false
   try {
     devMode = await window.electron.isDev()
@@ -47,9 +46,9 @@ async function buildStateDump(): Promise<Record<string, unknown>> {
     /* ignore */
   }
   try {
-    const token = await window.electron.getAuthToken()
+    const { getAuthToken } = await import('../modules/auth')
+    const token = await getAuthToken()
     hasToken = !!token
-    tokenType = token === 'dev-placeholder-token' ? 'dev-placeholder' : 'jwt'
   } catch {
     /* ignore */
   }
@@ -66,7 +65,7 @@ async function buildStateDump(): Promise<Record<string, unknown>> {
       activeRequests: (ttsService as any).activeRequests?.size ?? 0,
       pendingListeners: (ttsService as any).pendingListeners?.size ?? 0
     },
-    auth: { devMode, hasToken, tokenType },
+    auth: { devMode, hasToken },
     history
   }
 }

@@ -11,6 +11,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as SettingsAccountRouteImport } from './routes/settings/account'
 
 const IndexLazyRouteImport = createFileRoute('/')()
 const BooksIdLazyRouteImport = createFileRoute('/books/$id')()
@@ -25,30 +26,39 @@ const BooksIdLazyRoute = BooksIdLazyRouteImport.update({
   path: '/books/$id',
   getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/books.$id.lazy').then((d) => d.Route))
+const SettingsAccountRoute = SettingsAccountRouteImport.update({
+  id: '/settings/account',
+  path: '/settings/account',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexLazyRoute
+  '/settings/account': typeof SettingsAccountRoute
   '/books/$id': typeof BooksIdLazyRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexLazyRoute
+  '/settings/account': typeof SettingsAccountRoute
   '/books/$id': typeof BooksIdLazyRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexLazyRoute
+  '/settings/account': typeof SettingsAccountRoute
   '/books/$id': typeof BooksIdLazyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/books/$id'
+  fullPaths: '/' | '/settings/account' | '/books/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/books/$id'
-  id: '__root__' | '/' | '/books/$id'
+  to: '/' | '/settings/account' | '/books/$id'
+  id: '__root__' | '/' | '/settings/account' | '/books/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexLazyRoute: typeof IndexLazyRoute
+  SettingsAccountRoute: typeof SettingsAccountRoute
   BooksIdLazyRoute: typeof BooksIdLazyRoute
 }
 
@@ -68,11 +78,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof BooksIdLazyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings/account': {
+      id: '/settings/account'
+      path: '/settings/account'
+      fullPath: '/settings/account'
+      preLoaderRoute: typeof SettingsAccountRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexLazyRoute: IndexLazyRoute,
+  SettingsAccountRoute: SettingsAccountRoute,
   BooksIdLazyRoute: BooksIdLazyRoute,
 }
 export const routeTree = rootRouteImport

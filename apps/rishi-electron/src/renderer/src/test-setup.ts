@@ -10,6 +10,7 @@ const mockElectronAPI = {
   updateBookCover: vi.fn().mockResolvedValue(undefined),
   updateBookLocation: vi.fn().mockResolvedValue(undefined),
   hasSavedEpubData: vi.fn().mockResolvedValue(false),
+  getBookOutline: vi.fn().mockResolvedValue({ title: '', author: null, chapters: [] }),
   savePageDataMany: vi.fn().mockResolvedValue(undefined),
   getAllPageDataByBookId: vi.fn().mockResolvedValue([]),
   searchBookText: vi.fn().mockResolvedValue([]),
@@ -44,21 +45,16 @@ const mockElectronAPI = {
   getDefaultBookFolders: vi.fn().mockResolvedValue([]),
   scanForBooks: vi.fn().mockResolvedValue(0),
   cancelScan: vi.fn().mockResolvedValue(undefined),
-  getAuthToken: vi.fn().mockResolvedValue(null),
-  saveAuthToken: vi.fn().mockResolvedValue(undefined),
   clearAuth: vi.fn().mockResolvedValue(undefined),
   getUserFromStore: vi.fn().mockResolvedValue(null),
   saveUserToStore: vi.fn().mockResolvedValue(undefined),
   dumpError: vi.fn().mockResolvedValue(undefined),
   readErrorDump: vi.fn().mockResolvedValue(''),
   clearErrorDump: vi.fn().mockResolvedValue(undefined),
-  logAuthDebug: vi.fn().mockResolvedValue(undefined),
-  getAuthDebug: vi.fn().mockResolvedValue([]),
   getStoreValue: vi.fn().mockResolvedValue(null),
   setStoreValue: vi.fn().mockResolvedValue(undefined),
   isDev: vi.fn().mockResolvedValue(true),
   getDevBypassSecret: vi.fn().mockResolvedValue('test-secret'),
-  getRealtimeClientSecret: vi.fn().mockResolvedValue('test-key'),
   showOpenDialog: vi.fn().mockResolvedValue({ filePaths: [] }),
   openExternal: vi.fn().mockResolvedValue(undefined),
   getOsInfo: vi.fn().mockResolvedValue({ platform: 'darwin', arch: 'arm64', version: '25.0' }),
@@ -80,15 +76,6 @@ const mockElectronAPI = {
   messagesList: vi.fn().mockResolvedValue([]),
   messagesCreate: vi.fn().mockResolvedValue(undefined),
   messagesGetChunkPage: vi.fn().mockResolvedValue(null),
-  getOAuthState: vi
-    .fn()
-    .mockResolvedValue({ state: 'test-state', codeChallenge: 'test-challenge' }),
-  completeAuth: vi.fn().mockResolvedValue({ id: 'test-user' }),
-  checkAuthStatus: vi.fn().mockResolvedValue({ status: 'pending' }),
-  signout: vi.fn().mockResolvedValue(undefined),
-  refreshAuthToken: vi.fn().mockResolvedValue(null),
-  getUser: vi.fn().mockResolvedValue(null),
-  onDeepLink: vi.fn().mockReturnValue(() => {}),
   // Sync (typed)
   syncGetDirtyBooks: vi.fn().mockResolvedValue([]),
   syncGetDirtyHighlights: vi.fn().mockResolvedValue([]),
@@ -115,5 +102,22 @@ const mockElectronAPI = {
 
 Object.defineProperty(window, 'electron', {
   value: mockElectronAPI,
+  writable: true
+})
+
+// Mock window.api (the new Better Auth IPC surface) for tests.
+const mockAuthApi = {
+  startMagicLink: vi.fn().mockResolvedValue(undefined),
+  startGoogle: vi.fn().mockResolvedValue(undefined),
+  getSession: vi.fn().mockResolvedValue(null),
+  signOut: vi.fn().mockResolvedValue(undefined),
+  deleteAccount: vi.fn().mockResolvedValue(undefined),
+  getToken: vi.fn().mockResolvedValue(null),
+  onSessionChange: vi.fn().mockReturnValue(() => {}),
+  isMacAppStore: false
+}
+
+Object.defineProperty(window, 'api', {
+  value: { auth: mockAuthApi },
   writable: true
 })

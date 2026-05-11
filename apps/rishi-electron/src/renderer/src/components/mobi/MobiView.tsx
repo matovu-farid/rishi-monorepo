@@ -13,15 +13,9 @@ import {
 import type { Book } from '@/lib/api'
 import { BackButton } from '@/components/BackButton'
 import TTSControls from '@/components/tts/TTSControls'
-import {
-  ChevronLeft,
-  ChevronRight,
-  MessageSquare,
-  Menu as MenuIcon,
-  Mic,
-  MicOff
-} from 'lucide-react'
+import { ChevronLeft, ChevronRight, MessageSquare, Menu as MenuIcon } from 'lucide-react'
 import AIChatOrb from '@/components/chat/AIChatOrb'
+import VoiceChatLauncher from '@/components/chat/VoiceChatLauncher'
 import { themes } from '@/themes/themes'
 import { usePlayerStore } from '@/stores/playerStore'
 import type { ParagraphWithIndex } from '@/models/player_control'
@@ -62,18 +56,7 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   const bookSyncIdRef = useRef<string | null>(null)
 
   const isChatting = useChatStore((s) => s.isChatting)
-  const setIsChatting = useChatStore((s) => s.setIsChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
-
-  const handleMicClick = () => {
-    requireAuth('voice-input', () => {
-      setIsChatting((prev) => !prev)
-    })
-  }
-
-  const handleStopChat = () => {
-    setIsChatting(false)
-  }
 
   // Set bookId for voice chat
   const setBookId = useEpubStore((s) => s.setBookId)
@@ -338,23 +321,6 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
         >
           <MessageSquare size={20} />
         </button>
-        {!isChatting ? (
-          <button
-            onClick={handleMicClick}
-            className="p-2 rounded-md text-black hover:bg-black/10"
-            aria-label="Start voice chat"
-          >
-            <Mic size={20} />
-          </button>
-        ) : (
-          <button
-            onClick={handleStopChat}
-            className="p-2 rounded-md text-black hover:bg-black/10"
-            aria-label="Stop voice chat"
-          >
-            <MicOff size={20} />
-          </button>
-        )}
       </ReaderToolbar>
 
       {/* Main content area */}
@@ -406,6 +372,9 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
       {isChatting && (
         <AIChatOrb chatStatus={chatStatus} onClick={() => setChatPanelOpen((prev) => !prev)} />
       )}
+
+      {/* Voice chat launcher — paired above the TTS play orb */}
+      <VoiceChatLauncher />
 
       {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
       <div style={{ display: isChatting ? 'none' : 'contents' }}>
