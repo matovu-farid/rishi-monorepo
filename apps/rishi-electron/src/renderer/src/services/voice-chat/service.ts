@@ -346,7 +346,12 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
         actor.send({ type: 'OFFLINE' })
         throw new OfflineError()
       }
-      preconnectIntent = false
+      // A user-initiated activate (i.e. NOT initiated by preconnect itself)
+      // should clear preconnectIntent so the post-activate auto-mute in
+      // preconnect() becomes a no-op when the user has already taken over.
+      // preconnect() routes through activate() but suppresses this reset by
+      // first setting preconnectIntent itself then re-asserting after the
+      // activate resolves (see preconnect()).
       activateGeneration++
       const gen = activateGeneration
       if (activateInFlight) return activateInFlight

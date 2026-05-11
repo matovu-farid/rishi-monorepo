@@ -393,3 +393,94 @@ describe('createVoiceChatService — activate (cold happy path)', () => {
     expect(statuses[statuses.length - 1]).toBe('idle')
   })
 })
+
+describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
+  it('warm activate on same bookId calls updateAgent when ctx changes; no new mic prompt', async () => {
+    const media = makeMedia()
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ media, sessionFactory: session.factory })
+    )
+    await svc.activate(1, { pageText: 'a' })
+    expect(media.getUserMedia).toHaveBeenCalledTimes(1)
+
+    await svc.activate(1, { pageText: 'b' })
+
+    expect(session.updateAgent).toHaveBeenCalledTimes(1)
+    expect(media.getUserMedia).toHaveBeenCalledTimes(1) // not called again
+  })
+
+  it('warm activate skips updateAgent when ctx fingerprint is unchanged', async () => {
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ sessionFactory: session.factory })
+    )
+    await svc.activate(1, { pageText: 'same' })
+    await svc.activate(1, { pageText: 'same' })
+
+    expect(session.updateAgent).not.toHaveBeenCalled()
+  })
+
+  it('activate on different bookId disposes the old session first', async () => {
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ sessionFactory: session.factory })
+    )
+    await svc.activate(1, { pageText: 'a' })
+    await svc.activate(2, { pageText: 'b' })
+
+    expect(session.close).toHaveBeenCalledTimes(1)
+    expect(svc.getState()).toBe('active')
+  })
+
+  it('concurrent activate calls share the in-flight promise', async () => {
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ sessionFactory: session.factory })
+    )
+    const [p1, p2] = [svc.activate(7, { pageText: 'p' }), svc.activate(7, { pageText: 'p' })]
+    await Promise.all([p1, p2])
+
+    expect(session.connect).toHaveBeenCalledTimes(1)
+  })
+
+  it('preconnect is no-op when hasUsedVoiceInSession is false', async () => {
+    const session = makeSession()
+    const ipc = makeIpc()
+    const svc = createVoiceChatService(
+      makeDeps({ sessionFactory: session.factory, ipc })
+    )
+    await svc.preconnect(1, { pageText: 'p' })
+
+    expect(session.connect).not.toHaveBeenCalled()
+    expect(ipc.getRealtimeClientSecret).not.toHaveBeenCalled()
+  })
+
+  it('preconnect after a real activate connects + mutes (paused)', async () => {
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ sessionFactory: session.factory })
+    )
+    await svc.activate(1, { pageText: 'p' })
+    svc.dispose()
+
+    await svc.preconnect(1, { pageText: 'p' })
+
+    // Two cold connects total: the user-initiated one and the preconnect.
+    expect(session.connect).toHaveBeenCalledTimes(2)
+    expect(session.mute).toHaveBeenLastCalledWith(true)
+    expect(svc.getState()).toBe('paused')
+  })
+
+  it('prewarmKey() fetches the ephemeral key without prompting for mic', async () => {
+    const ipc = makeIpc({ key: 'PREWARM' })
+    const media = makeMedia()
+    const svc = createVoiceChatService(makeDeps({ ipc, media }))
+
+    svc.prewarmKey()
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ipc.getRealtimeClientSecret).toHaveBeenCalledTimes(1)
+    expect(media.getUserMedia).not.toHaveBeenCalled()
+  })
+})
