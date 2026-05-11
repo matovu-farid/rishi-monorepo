@@ -7,10 +7,21 @@ import { Effect } from 'effect'
 import { captureError } from '@/utils/sentry'
 
 /**
- * Runs a realtime-agent tool execute under Effect so failures are observable
- * in three places at once (console, local error-dump file, Sentry) instead of
- * being silently swallowed by the OpenAI agents library. The tool still
- * resolves with `fallback` so the agent can keep the conversation flowing.
+ * Runs a realtime-agent tool execute under Effect so its outcome is
+ * observable in three places at once (console, local error-dump file,
+ * Sentry on error) instead of being silently swallowed by the OpenAI agents
+ * library. The tool still resolves with `fallback` on error so the agent
+ * can keep the conversation flowing.
+ *
+ * Three outcomes get logged:
+ *   - `error`  → console.error + dumpError + captureError, return fallback
+ *   - `empty`  → console.warn + dumpError (no Sentry), return real result
+ *   - `ok`     → console.info only
+ *
+ * "Empty" is opt-in via the optional `inspect` arg — the caller decides
+ * what counts as an empty result for that tool (e.g., `[].length === 0`
+ * for bookContext). Knowing the difference between "tool errored" and
+ * "tool returned 0 hits" is the most common debugging question.
  *
  * Effect is here (vs plain try/catch) because tool calls are the most
  * error-prone surface in the voice-chat flow — IPC, network, and provider
@@ -20,12 +31,37 @@ import { captureError } from '@/utils/sentry'
 function runToolCall<T>(
   toolName: string,
   fallback: T,
-  task: () => Promise<T>
+  task: () => Promise<T>,
+  inspect?: {
+    isEmpty: (result: T) => boolean
+    contextOnEmpty: () => string
+  }
 ): Promise<T> {
   const program = Effect.tryPromise({
     try: task,
     catch: (err) => (err instanceof Error ? err : new Error(String(err)))
   }).pipe(
+    Effect.tap((result) =>
+      Effect.sync(() => {
+        if (inspect && inspect.isEmpty(result)) {
+          console.warn(
+            `[voice-chat] tool '${toolName}' returned empty result. context:`,
+            inspect.contextOnEmpty()
+          )
+          void window.electron
+            .dumpError({
+              source: 'voice-chat-agent',
+              location: `realtimeAgent.tools.${toolName}`,
+              error: 'empty result',
+              stack: null,
+              context: inspect.contextOnEmpty()
+            })
+            .catch(() => undefined)
+        } else {
+          console.info(`[voice-chat] tool '${toolName}' ok`)
+        }
+      })
+    ),
     Effect.catchAll((err) =>
       Effect.sync(() => {
         console.error(`[voice-chat] tool '${toolName}' failed:`, err)
@@ -112,10 +148,18 @@ export function buildRealtimeAgent({
 }: BuildAgentOptions): RealtimeAgent {
   const ragService: RagService = rag ?? getRagService()
   const bookContextExecute = ({ queryText }: { queryText: string }) =>
-    runToolCall<string[]>('bookContext', ['Unable to retrieve book context at this time.'], async () => {
-      const chunks = await ragService.searchSemantic(queryText, bookId, 3)
-      return chunks.map((c) => c.text)
-    })
+    runToolCall<string[]>(
+      'bookContext',
+      ['Unable to retrieve book context at this time.'],
+      async () => {
+        const chunks = await ragService.searchSemantic(queryText, bookId, 3)
+        return chunks.map((c) => c.text)
+      },
+      {
+        isEmpty: (chunks) => chunks.length === 0,
+        contextOnEmpty: () => `bookId=${bookId} queryText=${JSON.stringify(queryText)}`
+      }
+    )
 
   const bookContextTool = Object.assign(
     tool({
