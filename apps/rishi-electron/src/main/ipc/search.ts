@@ -1,7 +1,5 @@
 import { ipcMain } from 'electron'
 import { searchBookText, getTextFromVectorId } from '../database/queries.js'
-import { embedText } from '../vectordb/index.js'
-import { searchVectors } from '../vectordb/index.js'
 
 export function registerSearchHandlers(): void {
   ipcMain.handle('search:text', async (_event, query: string, bookId: number) => {
@@ -23,38 +21,4 @@ export function registerSearchHandlers(): void {
       )
     }
   })
-
-  ipcMain.handle(
-    'search:contextForQuery',
-    async (_event, queryText: string, bookId: number, k: number) => {
-      try {
-        // 1. Embed the query text
-        const embedding = await embedText(queryText)
-
-        // 2. Search the vector index. Name must match the save-side name in
-        // src/renderer/src/modules/process_epub.ts: `${bookId}-vectordb`.
-        const indexName = `${bookId}-vectordb`
-        const results = await searchVectors(indexName, embedding, embedding.length, k)
-
-        // 3. Retrieve text for each matching vector
-        const contextTexts: string[] = []
-        for (const result of results) {
-          try {
-            const chunk = getTextFromVectorId(result.id)
-            if (chunk) {
-              contextTexts.push(chunk.data)
-            }
-          } catch {
-            // Skip individual retrieval failures
-          }
-        }
-
-        return contextTexts
-      } catch (error) {
-        throw new Error(
-          `Failed to get context for query: ${error instanceof Error ? error.message : String(error)}`
-        )
-      }
-    }
-  )
 }
