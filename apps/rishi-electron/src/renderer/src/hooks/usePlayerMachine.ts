@@ -4,7 +4,7 @@ import { createActor } from 'xstate'
 import { playerMachine } from '@/machines/playerMachine'
 import { usePlayerStore } from '@/stores/playerStore'
 import type { PlayerStoreState } from '@/stores/playerStore'
-import { ttsService } from '@/modules/ttsService'
+import { getTtsService } from '@/services'
 import { usePdfStore } from '@/stores/pdfStore'
 import isEqual from 'fast-deep-equal'
 
@@ -55,8 +55,8 @@ export function usePlayerMachine(bookId: string) {
         if (machineState === 'playing' || machineState === 'loading') {
           for (const p of paragraphs) {
             if (p.text.trim()) {
-              void ttsService
-                .requestAudio(bookId, p.index, p.text, 0)
+              void getTtsService()
+                .requestAudio({ bookId, cfiRange: p.index, text: p.text, priority: 0 })
                 .catch((err) => console.warn('[player] audio prefetch failed:', err))
             }
           }
@@ -73,8 +73,8 @@ export function usePlayerMachine(bookId: string) {
         if (machineState === 'playing' || machineState === 'loading') {
           for (const p of paragraphs) {
             if (p.text.trim()) {
-              void ttsService
-                .requestAudio(bookId, p.index, p.text, 0)
+              void getTtsService()
+                .requestAudio({ bookId, cfiRange: p.index, text: p.text, priority: 0 })
                 .catch((err) => console.warn('[player] next page prefetch failed:', err))
             }
           }
@@ -120,8 +120,13 @@ export function usePlayerMachine(bookId: string) {
           }, 2000)
         } else {
           // Fetch audio via TTS service (returns blob URL in Electron)
-          ttsService
-            .requestAudio(ctx.bookId, paragraph.index, paragraph.text, 1)
+          getTtsService()
+            .requestAudio({
+              bookId: ctx.bookId,
+              cfiRange: paragraph.index,
+              text: paragraph.text,
+              priority: 1
+            })
             .then((blobUrl) => {
               if (gen !== fetchGeneration) return // stale
               return loadAndPlayAudio(blobUrl)
@@ -177,7 +182,7 @@ export function usePlayerMachine(bookId: string) {
       }
 
       if (state === 'idle' && prevState !== 'idle') {
-        cleanupAudio()
+        cleanupAudio(bookId)
         usePlayerStore.setState({
           activeParagraph: null,
           endedParagraph: null,
@@ -275,7 +280,7 @@ export function usePlayerMachine(bookId: string) {
       audioElement.removeEventListener('ended', handleEnded)
       audioElement.removeEventListener('error', handleError)
       usePlayerStore.getState().setSend(() => {})
-      cleanupAudio()
+      cleanupAudio(bookId)
       actor.stop()
       actorRef.current = null
     }
@@ -320,10 +325,12 @@ function stopAudio(): void {
   audioElement.currentTime = 0
 }
 
-function cleanupAudio(): void {
+function cleanupAudio(bookId: string): void {
   audioElement.pause()
   audioElement.src = ''
-  ttsService.clearQueue()
+  // Cancel any in-flight or pending TTS requests for this book.
+  // Other books (e.g. library prefetch) keep running.
+  getTtsService().cancelBookRequests(bookId)
 }
 
 let _prefetchTimer: ReturnType<typeof setTimeout> | null = null
@@ -340,16 +347,21 @@ function schedulePrefetch(
     for (let i = 1; i <= 5; i++) {
       const idx = currentIndex + i
       if (idx < currentParagraphs.length && currentParagraphs[idx].text.trim()) {
-        void ttsService
-          .requestAudio(bookId, currentParagraphs[idx].index, currentParagraphs[idx].text, 0)
+        void getTtsService()
+          .requestAudio({
+            bookId,
+            cfiRange: currentParagraphs[idx].index,
+            text: currentParagraphs[idx].text,
+            priority: 0
+          })
           .catch((err) => console.warn('[audio] prefetch current page failed:', err))
       }
     }
     // Prefetch next page paragraphs
     for (const p of nextPageParagraphs) {
       if (p.text.trim()) {
-        void ttsService
-          .requestAudio(bookId, p.index, p.text, 0)
+        void getTtsService()
+          .requestAudio({ bookId, cfiRange: p.index, text: p.text, priority: 0 })
           .catch((err) => console.warn('[audio] prefetch next page failed:', err))
       }
     }

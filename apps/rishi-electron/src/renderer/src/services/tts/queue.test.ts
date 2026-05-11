@@ -1,0 +1,195 @@
+import { describe, it, expect, vi } from 'vitest'
+import { createQueue } from './queue'
+
+/** Build a fake transport that resolves with the given bytes after N rejects. */
+export function makeTransport(opts: {
+  bytes?: Uint8Array
+  failNTimes?: number
+  reject?: Error
+}) {
+  const bytes = opts.bytes ?? new Uint8Array([0xff, 0xfb, 0x90])
+  let calls = 0
+  let failsLeft = opts.failNTimes ?? 0
+  const fetchAudio = vi.fn(async (): Promise<ArrayBuffer> => {
+    calls++
+    if (opts.reject) throw opts.reject
+    if (failsLeft > 0) {
+      failsLeft--
+      throw new Error('transient')
+    }
+    return bytes.buffer.slice(
+      bytes.byteOffset,
+      bytes.byteOffset + bytes.byteLength
+    ) as ArrayBuffer
+  })
+  return { fetchAudio, callCount: () => calls }
+}
+
+/** Build a fake cache that always misses, captures saves in-memory. */
+export function makeCacheStub() {
+  const saves: Array<{ bookId: string; cfiRange: string; bytes: Uint8Array }> = []
+  return {
+    audioPath: vi.fn(async (b: string, c: string) => `/cache/${b}/${c}.mp3`),
+    getAudio: vi.fn(async () => null),
+    saveAudio: vi.fn(async (bookId: string, cfiRange: string, bytes: Uint8Array) => {
+      saves.push({ bookId, cfiRange, bytes })
+      return `/cache/${bookId}/${cfiRange}.mp3`
+    }),
+    clearBook: vi.fn(async () => {}),
+    evictIfNeeded: vi.fn(async () => {}),
+    saves
+  }
+}
+
+describe('queue.enqueue', () => {
+  it('fetches audio when cache misses and resolves with bytes', async () => {
+    const transport = makeTransport({ bytes: new Uint8Array([1, 2, 3]) })
+    const cache = makeCacheStub()
+    const queue = createQueue({
+      cache,
+      fetchAudio: transport.fetchAudio,
+      maxConcurrent: 8,
+      maxRetries: 3,
+      backoffBaseMs: 1
+    })
+
+    const bytes = await queue.enqueue({
+      bookId: 'book-1',
+      cfiRange: 'cfi-x',
+      text: 'hello',
+      priority: 1
+    })
+
+    expect(new Uint8Array(bytes)).toEqual(new Uint8Array([1, 2, 3]))
+    expect(transport.callCount()).toBe(1)
+    expect(cache.saveAudio).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('queue dedup', () => {
+  it('coalesces two concurrent enqueues with the same requestId into one fetch', async () => {
+    // Block the fetch on a promise we control so both enqueues land while in-flight
+    let resolveFetch: (b: ArrayBuffer) => void = () => {}
+    const fetchAudio = vi.fn(
+      () =>
+        new Promise<ArrayBuffer>((resolve) => {
+          resolveFetch = resolve
+        })
+    )
+    const cache = makeCacheStub()
+    const queue = createQueue({
+      cache,
+      fetchAudio,
+      maxConcurrent: 8,
+      maxRetries: 0,
+      backoffBaseMs: 1
+    })
+
+    const p1 = queue.enqueue({ bookId: 'b', cfiRange: 'c', text: 'hi', priority: 0 })
+    const p2 = queue.enqueue({ bookId: 'b', cfiRange: 'c', text: 'hi', priority: 0 })
+
+    // Let microtasks settle so the first enqueue reaches the in-flight state
+    await new Promise((r) => setTimeout(r, 0))
+    resolveFetch(new Uint8Array([7, 7]).buffer as ArrayBuffer)
+
+    const [r1, r2] = await Promise.all([p1, p2])
+    expect(new Uint8Array(r1)).toEqual(new Uint8Array([7, 7]))
+    expect(new Uint8Array(r2)).toEqual(new Uint8Array([7, 7]))
+    expect(fetchAudio).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('queue retry', () => {
+  it('retries on transient TtsTransportError and ultimately resolves', async () => {
+    const transport = makeTransport({
+      bytes: new Uint8Array([5, 6, 7]),
+      failNTimes: 2
+    })
+    const cache = makeCacheStub()
+    const queue = createQueue({
+      cache,
+      fetchAudio: transport.fetchAudio,
+      maxConcurrent: 1,
+      maxRetries: 3,
+      backoffBaseMs: 1
+    })
+
+    const bytes = await queue.enqueue({
+      bookId: 'b',
+      cfiRange: 'c',
+      text: 'hi',
+      priority: 0
+    })
+
+    expect(new Uint8Array(bytes)).toEqual(new Uint8Array([5, 6, 7]))
+    expect(transport.callCount()).toBe(3) // 2 fails + 1 success
+  })
+
+  it('rejects after maxRetries on persistent transient error', async () => {
+    const transport = makeTransport({
+      failNTimes: 99
+    })
+    const cache = makeCacheStub()
+    const queue = createQueue({
+      cache,
+      fetchAudio: transport.fetchAudio,
+      maxConcurrent: 1,
+      maxRetries: 2,
+      backoffBaseMs: 1
+    })
+
+    await expect(
+      queue.enqueue({ bookId: 'b', cfiRange: 'c', text: 'hi', priority: 0 })
+    ).rejects.toThrow('transient')
+    expect(transport.callCount()).toBe(3) // 1 initial + 2 retries
+  })
+})
+
+describe('queue cancellation', () => {
+  it('cancel(requestId) rejects the enqueued promise with "Request cancelled"', async () => {
+    const fetchAudio = vi.fn(() => new Promise<ArrayBuffer>(() => {})) // never resolves
+    const queue = createQueue({
+      cache: makeCacheStub(),
+      fetchAudio,
+      maxConcurrent: 1,
+      maxRetries: 0,
+      backoffBaseMs: 1
+    })
+
+    const p = queue.enqueue({ bookId: 'b', cfiRange: 'c', text: 'hi', priority: 0 })
+    // Let it land in the active map
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(queue.cancel('b-c')).toBe(true)
+    await expect(p).rejects.toThrow('Request cancelled')
+    // Second cancel is a no-op
+    expect(queue.cancel('b-c')).toBe(false)
+  })
+
+  it('cancelBook(bookId) rejects every pending request for that book only', async () => {
+    const fetchAudio = vi.fn(() => new Promise<ArrayBuffer>(() => {}))
+    const queue = createQueue({
+      cache: makeCacheStub(),
+      fetchAudio,
+      maxConcurrent: 8,
+      maxRetries: 0,
+      backoffBaseMs: 1
+    })
+
+    const a1 = queue.enqueue({ bookId: 'A', cfiRange: 'c1', text: 't1', priority: 0 })
+    const a2 = queue.enqueue({ bookId: 'A', cfiRange: 'c2', text: 't2', priority: 0 })
+    const b1 = queue.enqueue({ bookId: 'B', cfiRange: 'c3', text: 't3', priority: 0 })
+
+    await new Promise((r) => setTimeout(r, 0))
+    queue.cancelBook('A')
+
+    await expect(a1).rejects.toThrow('Request cancelled')
+    await expect(a2).rejects.toThrow('Request cancelled')
+    // b1 is still in-flight (fetchAudio never resolves) — assert by racing a tiny timeout
+    const winner = await Promise.race([
+      b1.then(() => 'resolved'),
+      new Promise<string>((r) => setTimeout(() => r('pending'), 10))
+    ])
+    expect(winner).toBe('pending')
+  })
+})

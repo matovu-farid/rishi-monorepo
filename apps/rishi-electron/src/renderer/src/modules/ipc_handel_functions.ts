@@ -1,9 +1,9 @@
 /**
- * TTS service wrapper functions for Electron.
- * Replaces Tauri's convertFileSrc with blob URL handling since
- * Electron TTS returns blob URLs directly from the renderer-side queue.
+ * Thin Sentry-instrumented delegate around the TTS service's `requestAudio`.
+ * Kept as a named export so library-level callers (e.g. `ttsPrefetch`) can
+ * benefit from the structured error capture without re-implementing it.
  */
-import { ttsService } from './ttsService'
+import { getTtsService } from '@/services'
 import { captureError } from '../utils/sentry'
 
 export const requestTTSAudio = async (
@@ -13,9 +13,7 @@ export const requestTTSAudio = async (
   priority = 0
 ) => {
   try {
-    // In Electron, ttsService.requestAudio already returns a blob URL
-    const audioUrl = await ttsService.requestAudio(bookId, cfiRange, text, priority)
-    return audioUrl
+    return await getTtsService().requestAudio({ bookId, cfiRange, text, priority })
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error)
     console.error(`TTS request failed [${bookId}]: ${msg}`)
