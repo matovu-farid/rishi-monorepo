@@ -211,3 +211,74 @@ describe('BookImportService.indexBook', () => {
     expect(db.saveVectors).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('BookImportService.startDiscovery', () => {
+  it('streams scanner events through onDiscoveryEvent', () => {
+    const scanner = makeScanner()
+    const service = createBookImportService(makeDeps({ scanner }))
+    const events: DiscoveryEvent[] = []
+    service.onDiscoveryEvent((e) => events.push(e))
+
+    service.startDiscovery('default')
+
+    const book: DiscoveredBook = {
+      filepath: '/B/a.epub',
+      filename: 'a.epub',
+      title: null,
+      author: null,
+      format: 'epub',
+      fileSize: 1,
+      folder: '/B',
+      fileHash: null
+    }
+    scanner.emit({ kind: 'result', book })
+    scanner.emit({ kind: 'result', book: { ...book, filepath: '/B/b.epub', filename: 'b.epub' } })
+    scanner.emit({ kind: 'progress', progress: { folder: '/B', scanned: 2, total: 10 } })
+    scanner.emit({ kind: 'complete' })
+
+    expect(scanner.startCount()).toBe(1)
+    expect(scanner.lastMode()).toBe('default')
+    expect(events.map((e) => e.kind)).toEqual([
+      'book-found',
+      'book-found',
+      'progress',
+      'complete'
+    ])
+    const completeEvent = events.find((e) => e.kind === 'complete')
+    expect(completeEvent).toEqual({ kind: 'complete', cancelled: false })
+  })
+
+  it('single-flight: starting while running cancels the prior scan first', () => {
+    const scanner = makeScanner()
+    const service = createBookImportService(makeDeps({ scanner }))
+
+    service.startDiscovery('default')
+    service.startDiscovery('full')
+
+    expect(scanner.cancelCount()).toBe(1)
+    expect(scanner.startCount()).toBe(2)
+    expect(scanner.lastMode()).toBe('full')
+  })
+
+  it('cancelDiscovery propagates to scanner.cancel and emits complete with cancelled=true', async () => {
+    const scanner = makeScanner()
+    const service = createBookImportService(makeDeps({ scanner }))
+    const events: DiscoveryEvent[] = []
+    service.onDiscoveryEvent((e) => events.push(e))
+
+    service.startDiscovery('default')
+    await service.cancelDiscovery()
+
+    expect(scanner.cancelCount()).toBe(1)
+    expect(events).toContainEqual({ kind: 'complete', cancelled: true })
+  })
+
+  it('cancelDiscovery is a no-op when nothing is running', async () => {
+    const scanner = makeScanner()
+    const service = createBookImportService(makeDeps({ scanner }))
+
+    await service.cancelDiscovery()
+
+    expect(scanner.cancelCount()).toBe(0)
+  })
+})
