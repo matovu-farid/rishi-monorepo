@@ -214,9 +214,6 @@ export async function searchBookText(params: {
 }): Promise<TextSearchResult[]> {
   return api().searchBookText(params.query, params.bookId)
 }
-export async function getTextFromVectorId(params: { vectorId: number }): Promise<string> {
-  return api().getTextFromVectorId(params.vectorId)
-}
 export async function getContextForQuery(params: {
   queryText: string
   bookId: number
