@@ -117,3 +117,46 @@ describe('RagService.searchSemantic', () => {
     expect(ipc.searchVectors).not.toHaveBeenCalled()
   })
 })
+
+describe('RagService.searchText', () => {
+  it('passes through FTS5 results with snippet preserved', async () => {
+    const embed = makeEmbed()
+    const ipc = makeIpc({
+      searchBookText: vi.fn().mockResolvedValue([
+        {
+          id: 7,
+          pageNumber: 12,
+          bookId: 5,
+          data: 'full chunk text',
+          snippet: 'the <mark>query</mark> appears here',
+        },
+      ]),
+    })
+    const service = createRagService({ ipc, embed })
+
+    const result = await service.searchText('query', 5)
+
+    expect(result).toEqual([
+      {
+        chunkId: 7,
+        bookId: 5,
+        pageNumber: 12,
+        text: 'full chunk text',
+        snippet: 'the <mark>query</mark> appears here',
+      },
+    ])
+    expect(ipc.searchBookText).toHaveBeenCalledTimes(1)
+    expect(ipc.searchBookText).toHaveBeenCalledWith('query', 5)
+  })
+
+  it('returns [] for empty query without calling IPC', async () => {
+    const embed = makeEmbed()
+    const ipc = makeIpc()
+    const service = createRagService({ ipc, embed })
+
+    const result = await service.searchText('', 5)
+
+    expect(result).toEqual([])
+    expect(ipc.searchBookText).not.toHaveBeenCalled()
+  })
+})

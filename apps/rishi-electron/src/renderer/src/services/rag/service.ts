@@ -2,6 +2,7 @@ import type {
   RagService,
   RagServiceDeps,
   SemanticChunk,
+  TextMatch,
 } from './types'
 
 const EMBEDDING_DIM = 384
@@ -30,8 +31,16 @@ export function createRagService(deps: RagServiceDeps): RagService {
       }
       return result
     },
-    async searchText(_query, _bookId) {
-      throw new Error('not implemented')
+    async searchText(query, bookId) {
+      if (query.trim().length === 0) return []
+      const hits = await ipc.searchBookText(query, bookId)
+      return hits.map<TextMatch>((h) => ({
+        chunkId: h.id,
+        bookId: h.bookId,
+        pageNumber: h.pageNumber,
+        text: h.data,
+        snippet: h.snippet,
+      }))
     },
     async isIndexed(_bookId) {
       throw new Error('not implemented')
