@@ -42,8 +42,8 @@ export function createRagService(deps: RagServiceDeps): RagService {
         snippet: h.snippet,
       }))
     },
-    async isIndexed(_bookId) {
-      throw new Error('not implemented')
+    async isIndexed(bookId) {
+      return ipc.hasVectorsForBook(bookId)
     },
   }
 }

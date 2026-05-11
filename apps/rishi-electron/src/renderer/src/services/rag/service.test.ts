@@ -160,3 +160,16 @@ describe('RagService.searchText', () => {
     expect(ipc.searchBookText).not.toHaveBeenCalled()
   })
 })
+
+describe('RagService.isIndexed', () => {
+  it('returns true when the book has a vector index', async () => {
+    const embed = makeEmbed()
+    const ipc = makeIpc({
+      hasVectorsForBook: vi.fn(async (bookId: number) => bookId === 5),
+    })
+    const service = createRagService({ ipc, embed })
+
+    await expect(service.isIndexed(5)).resolves.toBe(true)
+    await expect(service.isIndexed(99)).resolves.toBe(false)
+  })
+})
