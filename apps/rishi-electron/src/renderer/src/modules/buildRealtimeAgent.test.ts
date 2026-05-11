@@ -133,6 +133,42 @@ describe('buildRealtimeAgent', () => {
     expect(agent.instructions).not.toContain('undefined')
   })
 
+  it('bookContext empty result: dumps with context, warns to console, returns the empty array', async () => {
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    searchSemanticMock.mockResolvedValueOnce([])
+
+    const agent = buildRealtimeAgent({
+      bookId: 42,
+      pageText: 'x',
+      onEndConversation: vi.fn()
+    })
+    const bookContextTool = agent.tools.find(
+      (t: { name: string }) => t.name === 'bookContext'
+    ) as unknown as {
+      execute: (args: { queryText: string }) => Promise<unknown>
+    }
+
+    const result = await bookContextTool.execute({ queryText: 'what is X' })
+    expect(result).toEqual([])
+
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      "[voice-chat] tool 'bookContext' returned empty result. context:",
+      'bookId=42 queryText="what is X"'
+    )
+    expect(window.electron.dumpError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'voice-chat-agent',
+        location: 'realtimeAgent.tools.bookContext',
+        error: 'empty result',
+        context: 'bookId=42 queryText="what is X"'
+      })
+    )
+    // Sentry should NOT fire on empty — only on real errors.
+    expect(captureErrorMock).not.toHaveBeenCalled()
+
+    consoleWarnSpy.mockRestore()
+  })
+
   it('bookContext failure: dumps to error file, logs to console, returns fallback', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     searchSemanticMock.mockRejectedValueOnce(new Error('rag exploded'))
