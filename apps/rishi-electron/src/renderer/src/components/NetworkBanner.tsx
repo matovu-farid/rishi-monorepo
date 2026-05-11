@@ -1,6 +1,6 @@
 import { WifiOff } from 'lucide-react'
 import type { JSX } from 'react'
-import { useIsOnline } from '@/hooks/useConnectivity'
+import { useIsOnline } from '@/services'
 
 export function NetworkBanner(): JSX.Element | null {
   const isOnline = useIsOnline()

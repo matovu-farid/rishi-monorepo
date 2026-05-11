@@ -12,7 +12,7 @@ import {
   type VoiceChatStateValue,
   type VoiceErrorReason
 } from '@/machines/voiceChatMachine'
-import { connectivityActor, isOnline } from '@/modules/connectivity'
+import { getConnectivityService } from '@/services'
 
 export type VoiceChatState = VoiceChatStateValue
 
@@ -63,13 +63,13 @@ actor.subscribe((snapshot) => {
 
 // Reflect connectivity into the voice machine. When network drops mid-session
 // we tear the session down and surface 'offline' to the UI.
-connectivityActor.subscribe((snapshot) => {
-  if (snapshot.value === 'offline') {
+getConnectivityService().subscribe((online) => {
+  if (!online) {
     if (session) {
       disposeInternal()
     }
     actor.send({ type: 'OFFLINE' })
-  } else if (snapshot.value === 'online' && actor.getSnapshot().value === 'offline') {
+  } else if (actor.getSnapshot().value === 'offline') {
     actor.send({ type: 'ONLINE' })
   }
 })
@@ -168,7 +168,7 @@ export const voiceChatService = {
    */
   async preconnect(bookId: number, ctx: VoiceChatContext): Promise<void> {
     if (!hasUsedVoiceInSession) return
-    if (!isOnline()) return
+    if (!getConnectivityService().isOnline()) return
     if (session && currentBookId === bookId) return
     if (activateInFlight) return
     preconnectIntent = true
@@ -202,7 +202,7 @@ export const voiceChatService = {
     ctx: VoiceChatContext,
     opts: { fromPreconnect?: boolean } = {}
   ): Promise<void> {
-    if (!isOnline()) {
+    if (!getConnectivityService().isOnline()) {
       actor.send({ type: 'OFFLINE' })
       throw new OfflineError()
     }
