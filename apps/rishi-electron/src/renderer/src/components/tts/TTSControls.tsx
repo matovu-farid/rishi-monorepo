@@ -1,5 +1,5 @@
 import { Play, Pause, Square, SkipBack, SkipForward, AlertTriangle, Loader2 } from 'lucide-react'
-import { toast } from 'react-toastify'
+import { toast } from 'sonner'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
@@ -114,7 +114,7 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
   const handleShowErrorDetails = () => {
     toast.info(`Errors: ${errors.join(', ')}`, {
       position: 'top-center',
-      autoClose: 5000
+      duration: 5000
     })
   }
 
@@ -302,13 +302,10 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
         <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50">
           {toast.error(error, {
             position: 'top-center',
-            autoClose: 6000,
-            hideProgressBar: false,
-            closeOnClick: true,
-            pauseOnHover: true,
-            draggable: true,
-            onClose: handleErrorClose
-          })}
+            duration: 6000,
+            onDismiss: handleErrorClose,
+            onAutoClose: handleErrorClose
+          }) && null}
         </div>
       )}
     </ContextualHint>

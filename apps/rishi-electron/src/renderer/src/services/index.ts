@@ -11,7 +11,12 @@ import { createConnectivityService, type ConnectivityService } from './connectiv
 export { useIsOnline } from './connectivity'
 import { createVoiceChatService, type VoiceChatService } from './voice-chat'
 
-export type { DiscoveredBook, PageDataInsertable, ScanProgress } from './book-import'
+export type {
+  DiscoveredBook,
+  ImportResult,
+  PageDataInsertable,
+  ScanProgress
+} from './book-import'
 import { createSyncEngine } from '@rishi/shared/sync-engine'
 import { embedSingleText, embedWithFallback } from '@/modules/embed-fallback'
 import { hashBookFile, uploadBookFile } from '@/modules/file-sync'

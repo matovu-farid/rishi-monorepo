@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useEpubStore } from '@/stores/epubStore'
 import { useMutation } from '@tanstack/react-query'
-import { toast } from 'react-toastify'
+import { toast } from 'sonner'
 
 import {
   getMobiChapter,

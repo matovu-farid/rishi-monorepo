@@ -165,6 +165,11 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
       if (connectivityUnsub) connectivityUnsub()
       connectivityUnsub = null
       engine = null
+      // Reset status so a subsequent start() (e.g. React StrictMode remount or
+      // sign-out/sign-in) isn't blocked by the `status === 'syncing'` guard in
+      // runSync(). The in-flight runSync still bails via its engine-identity
+      // check, so we won't emit a stale 'synced' from the prior engine.
+      setStatus('not-synced')
     },
 
     triggerWrite() {

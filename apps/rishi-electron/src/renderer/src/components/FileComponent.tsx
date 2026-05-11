@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Loader from './Loader'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { toast } from 'react-toastify'
+import { toast } from 'sonner'
 import { Button } from './ui/Button'
 import { Trash2, Plus, Search } from 'lucide-react'
 // chooseFiles moved into BookDiscoveryModal

@@ -1,7 +1,7 @@
 import Loader from '@/components/Loader'
 import { ReactReader } from '@/components/react-reader'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { toast } from 'react-toastify'
+import { toast } from 'sonner'
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Menu } from '@/components/ui/Menu'

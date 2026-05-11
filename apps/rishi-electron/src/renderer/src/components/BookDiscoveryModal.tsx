@@ -1,9 +1,37 @@
 import { useState, useEffect } from 'react'
 import { X, BookOpen, Download, DownloadCloud, FolderOpen, Loader2, FilePlus } from 'lucide-react'
+import { toast } from 'sonner'
+import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/Button'
 import { ClipLoader } from 'react-spinners'
 import { chooseFiles } from '@/modules/chooseFiles'
-import { getBookImportService, type DiscoveredBook, type ScanProgress } from '@/services'
+import {
+  getBookImportService,
+  type DiscoveredBook,
+  type ImportResult,
+  type ScanProgress
+} from '@/services'
+
+function basename(path: string): string {
+  const parts = path.split(/[\\/]/)
+  return parts[parts.length - 1] || path
+}
+
+function summarizeBatchResults(results: ImportResult[]): {
+  ok: number
+  failed: number
+  message: string
+} {
+  const ok = results.filter((r) => r.ok).length
+  const failed = results.length - ok
+  const message =
+    failed === 0
+      ? `Imported ${ok} book${ok === 1 ? '' : 's'}`
+      : ok === 0
+        ? `Failed to import ${failed} book${failed === 1 ? '' : 's'}`
+        : `Imported ${ok}, failed ${failed}`
+  return { ok, failed, message }
+}
 
 interface BookDiscoveryModalProps {
   open: boolean
@@ -19,6 +47,7 @@ function formatFileSize(bytes: number): string {
 }
 
 export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
+  const queryClient = useQueryClient()
   const [books, setBooks] = useState<DiscoveredBook[]>([])
   const [filter, setFilter] = useState('')
   const [scanning, setScanning] = useState(false)
@@ -27,13 +56,29 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
   const [mode, setMode] = useState<ScanMode>('default')
   const [importingPaths, setImportingPaths] = useState<Set<string>>(new Set())
 
+  async function runImport(filePaths: string[]): Promise<ImportResult[]> {
+    const results = await getBookImportService().importBatch(filePaths)
+    await queryClient.invalidateQueries({ queryKey: ['books'] })
+    return results
+  }
+
   const handleBrowseFiles = async () => {
     try {
       const filePaths = await chooseFiles()
-      if (filePaths.length > 0) {
-        void getBookImportService().importBatch(filePaths)
-        handleClose()
-      }
+      if (filePaths.length === 0) return
+
+      const label =
+        filePaths.length === 1
+          ? `"${basename(filePaths[0])}"`
+          : `${filePaths.length} books`
+
+      setFilter('')
+      toast.promise(runImport(filePaths), {
+        loading: `Importing ${label}...`,
+        success: (results) => summarizeBatchResults(results).message,
+        error: `Failed to import ${label}`
+      })
+      handleClose()
     } catch (err) {
       console.error('Failed to open file picker:', err)
     }
@@ -87,19 +132,39 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
     onClose()
   }
 
-  const handleImport = (filepath: string) => {
-    setImportingPaths((prev) => new Set(prev).add(filepath))
-    setBooks((prev) => prev.filter((b) => b.filepath !== filepath))
-    void getBookImportService().importBatch([filepath])
+  const handleImport = (book: DiscoveredBook) => {
+    setImportingPaths((prev) => new Set(prev).add(book.filepath))
+    setBooks((prev) => prev.filter((b) => b.filepath !== book.filepath))
+    setFilter('')
+
+    const label = `"${book.title ?? book.filename}"`
+    toast.promise(runImport([book.filepath]), {
+      loading: `Importing ${label}...`,
+      success: (results) => {
+        const r = results[0]
+        if (!r || !r.ok) return `Failed to import ${label}`
+        return `Imported ${label}`
+      },
+      error: `Failed to import ${label}`
+    })
   }
 
   const handleImportAll = () => {
     const toImport = filteredBooks
+    if (toImport.length === 0) return
+
     const newPaths = new Set(importingPaths)
     toImport.forEach((b) => newPaths.add(b.filepath))
     setImportingPaths(newPaths)
     setBooks((prev) => prev.filter((b) => !newPaths.has(b.filepath)))
-    void getBookImportService().importBatch(toImport.map((b) => b.filepath))
+    setFilter('')
+
+    const count = toImport.length
+    toast.promise(runImport(toImport.map((b) => b.filepath)), {
+      loading: `Importing ${count} book${count === 1 ? '' : 's'}...`,
+      success: (results) => summarizeBatchResults(results).message,
+      error: `Failed to import ${count} book${count === 1 ? '' : 's'}`
+    })
   }
 
   const filteredBooks = books.filter((b) => {
@@ -196,6 +261,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
             placeholder="Filter by title, author, or filename..."
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
+            autoFocus
             className="w-full bg-gray-50 text-gray-900 placeholder-gray-400 text-sm rounded-lg px-3 py-2 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:border-transparent"
           />
 
@@ -255,7 +321,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleImport(book.filepath)}
+                        onClick={() => handleImport(book)}
                         startIcon={<Download size={14} />}
                         className="shrink-0 text-gray-500 hover:text-gray-700 hover:bg-gray-200 opacity-0 group-hover:opacity-100 transition-opacity"
                       >
