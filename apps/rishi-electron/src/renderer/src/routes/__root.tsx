@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { createRootRoute, Outlet } from '@tanstack/react-router'
 import { useEffect, type JSX } from 'react'
 import { getBooks } from '@/lib/api'
-import { initDesktopSync, destroyDesktopSync } from '@/modules/sync-triggers'
+import { getSyncService } from '@/services'
 import { SyncStatusIndicator } from '../components/SyncStatusIndicator'
 import { NetworkBanner } from '../components/NetworkBanner'
 import { WelcomeModal } from '@/components/auth/WelcomeModal'
@@ -25,9 +25,10 @@ function RootComponent(): JSX.Element {
 
   // Initialize desktop sync on app mount
   useEffect(() => {
-    initDesktopSync()
+    const sync = getSyncService()
+    sync.start()
     return () => {
-      destroyDesktopSync()
+      sync.stop()
     }
   }, [])
 
