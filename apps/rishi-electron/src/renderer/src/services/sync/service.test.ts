@@ -127,3 +127,39 @@ describe('SyncService.start', () => {
     expect(service.getStatus().lastSyncAt).toBe(clock.now())
   })
 })
+
+describe('SyncService.start idempotency', () => {
+  it('second start() is a no-op (engineFactory called once, only one initial sync)', async () => {
+    const { engineFactory, syncCount } = makeEngine()
+    const service = createSyncService(makeDeps({ engineFactory }))
+
+    service.start()
+    service.start()
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(engineFactory).toHaveBeenCalledTimes(1)
+    expect(syncCount()).toBe(1)
+  })
+})
+
+describe('SyncService.stop', () => {
+  it('removes focus listener, clears interval, and is idempotent', async () => {
+    const clock = makeClock()
+    const windowEvents = makeWindowEvents()
+    const { engineFactory } = makeEngine()
+    const service = createSyncService(makeDeps({ clock, windowEvents, engineFactory }))
+
+    service.start()
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(windowEvents.listeners('focus').length).toBe(1)
+    expect(clock.pendingTimers()).toBeGreaterThan(0)
+
+    service.stop()
+    expect(windowEvents.listeners('focus').length).toBe(0)
+    expect(clock.pendingTimers()).toBe(0)
+
+    // Second stop() does not throw
+    expect(() => service.stop()).not.toThrow()
+  })
+})

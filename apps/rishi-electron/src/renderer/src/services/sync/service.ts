@@ -68,6 +68,23 @@ export function createSyncService(deps: SyncServiceDeps): SyncService {
         new Response('{}', { status: 200 })
       engine = engineFactory({ adapter, apiFetch })
 
+      focusHandler = () => {
+        void runSync()
+      }
+      windowEvents.addEventListener('focus', focusHandler)
+
+      connectivityUnsub = connectivity.subscribe((online) => {
+        if (online && status === 'offline') {
+          void runSync()
+        } else if (!online) {
+          setStatus('offline')
+        }
+      })
+
+      intervalHandle = clock.setInterval(() => {
+        if (connectivity.isOnline()) void runSync()
+      }, config.intervalMs)
+
       void runSync()
     },
 
