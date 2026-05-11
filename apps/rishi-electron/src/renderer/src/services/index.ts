@@ -5,9 +5,17 @@ import {
   type ConnectivityPort,
   type SyncService
 } from './sync'
+import {
+  createBookImportService,
+  createScannerPort,
+  type BookImportService,
+  type ScannerPort
+} from './book-import'
 import { createSyncEngine } from '@rishi/shared/sync-engine'
 import { connectivityActor, isOnline } from '@/modules/connectivity'
-import { embedSingleText } from '@/modules/embed-fallback'
+import { embedSingleText, embedWithFallback } from '@/modules/embed-fallback'
+import { hashBookFile, uploadBookFile } from '@/modules/file-sync'
+import { copyBookToAppData } from '@/modules/books'
 import { getAuthToken } from '@/modules/auth'
 import config from '@/config.json'
 
@@ -138,4 +146,57 @@ export function getSyncService(): SyncService {
     })
   }
   return _sync
+}
+
+let _import: BookImportService | null = null
+
+export function getBookImportService(): BookImportService {
+  if (!_import) {
+    const scanner: ScannerPort = createScannerPort(
+      {
+        scanForBooks: async (mode) => {
+          await window.electron.scanForBooks(mode)
+        },
+        cancelScan: () => window.electron.cancelScan()
+      },
+      (channel, listener) => window.electron.on(channel, listener)
+    )
+
+    _import = createBookImportService({
+      formats: {
+        getBookData: (path) => window.electron.getBookData(path),
+        getPdfData: (path) => window.electron.getPdfData(path),
+        getMobiData: (path) => window.electron.getMobiData(path),
+        getDjvuData: (path) => window.electron.getDjvuData(path)
+      },
+      db: {
+        saveBook: (b) => window.electron.saveBook(b),
+        savePageDataMany: (rows) => window.electron.savePageDataMany(rows),
+        getAllPageDataByBookId: (bookId) => window.electron.getAllPageDataByBookId(bookId),
+        hasSavedEpubData: (bookId) => window.electron.hasSavedEpubData(bookId),
+        saveVectors: (name, dim, vectors) => window.electron.saveVectors(name, dim, vectors)
+      },
+      fs: {
+        copyBookToAppData,
+        removeFile: (path) => window.electron.removeFile(path),
+        getAppDataPath: () => window.electron.getAppDataPath()
+      },
+      fileSync: {
+        hashBookFile,
+        uploadBookFile,
+        booksUpdateFileHash: (bookId, hash, r2Key) =>
+          window.electron.booksUpdateFileHash(bookId, hash, r2Key)
+      },
+      rag: getRagService(),
+      embed: embedWithFallback,
+      scanner,
+      config: {
+        copyTimeoutMs: 2 * 60 * 1000,
+        parseTimeoutMs: 60 * 1000,
+        saveTimeoutMs: 30 * 1000,
+        embedBatchSize: 2
+      }
+    })
+  }
+  return _import
 }
