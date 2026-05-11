@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { createActor } from 'xstate'
-import { voiceChatMachine } from '../voiceChatMachine'
+import { voiceChatMachine } from './machine'
 
 function startActor() {
   return createActor(voiceChatMachine).start()
