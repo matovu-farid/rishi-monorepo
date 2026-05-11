@@ -1,9 +1,4 @@
-import type {
-  RagService,
-  RagServiceDeps,
-  SemanticChunk,
-  TextMatch,
-} from './types'
+import type { RagService, RagServiceDeps, SemanticChunk, TextMatch } from './types'
 
 const EMBEDDING_DIM = 384
 const indexName = (bookId: number): string => `${bookId}-vectordb`
@@ -26,7 +21,7 @@ export function createRagService(deps: RagServiceDeps): RagService {
           bookId: chunk.bookId,
           pageNumber: chunk.pageNumber,
           text: chunk.data,
-          distance: hits[i].distance,
+          distance: hits[i].distance
         })
       }
       return result
@@ -39,11 +34,11 @@ export function createRagService(deps: RagServiceDeps): RagService {
         bookId: h.bookId,
         pageNumber: h.pageNumber,
         text: h.data,
-        snippet: h.snippet,
+        snippet: h.snippet
       }))
     },
     async isIndexed(bookId) {
       return ipc.hasVectorsForBook(bookId)
-    },
+    }
   }
 }

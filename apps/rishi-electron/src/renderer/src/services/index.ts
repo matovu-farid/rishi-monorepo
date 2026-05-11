@@ -10,9 +10,9 @@ export function getRagService(): RagService {
         searchVectors: window.electron.searchVectors,
         getTextFromVectorId: window.electron.getTextFromVectorId,
         searchBookText: window.electron.searchBookText,
-        hasVectorsForBook: window.electron.hasVectorsForBook,
+        hasVectorsForBook: window.electron.hasVectorsForBook
       },
-      embed: embedSingleText,
+      embed: embedSingleText
     })
   }
   return _rag

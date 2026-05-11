@@ -136,7 +136,7 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
         const sourceChunks: SourceChunk[] = chunks.map((c) => ({
           id: c.chunkId,
           text: c.text.substring(0, 200),
-          pageNumber: c.pageNumber,
+          pageNumber: c.pageNumber
         }))
 
         // 5. Build system prompt with RAG context

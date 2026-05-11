@@ -14,7 +14,7 @@ export function makeIpc(overrides: Partial<RagIpcChannels> = {}): RagIpcChannels
     getTextFromVectorId: vi.fn().mockResolvedValue(undefined),
     searchBookText: vi.fn().mockResolvedValue([]),
     hasVectorsForBook: vi.fn().mockResolvedValue(false),
-    ...overrides,
+    ...overrides
   }
 }
 
@@ -32,13 +32,13 @@ describe('RagService.searchSemantic', () => {
     const ipc = makeIpc({
       searchVectors: vi.fn().mockResolvedValue([
         { id: 10, distance: 0.1 },
-        { id: 20, distance: 0.3 },
+        { id: 20, distance: 0.3 }
       ]),
       getTextFromVectorId: vi.fn(async (id: number) => {
         if (id === 10) return { id: 10, pageNumber: 3, bookId: 5, data: 'chunk 10 text' }
         if (id === 20) return { id: 20, pageNumber: 7, bookId: 5, data: 'chunk 20 text' }
         return undefined
-      }),
+      })
     })
     const service = createRagService({ ipc, embed })
 
@@ -46,17 +46,12 @@ describe('RagService.searchSemantic', () => {
 
     expect(result).toEqual([
       { chunkId: 10, bookId: 5, pageNumber: 3, text: 'chunk 10 text', distance: 0.1 },
-      { chunkId: 20, bookId: 5, pageNumber: 7, text: 'chunk 20 text', distance: 0.3 },
+      { chunkId: 20, bookId: 5, pageNumber: 7, text: 'chunk 20 text', distance: 0.3 }
     ])
     expect(embed).toHaveBeenCalledTimes(1)
     expect(embed).toHaveBeenCalledWith('hello world')
     expect(ipc.searchVectors).toHaveBeenCalledTimes(1)
-    expect(ipc.searchVectors).toHaveBeenCalledWith(
-      '5-vectordb',
-      expect.any(Array),
-      384,
-      3
-    )
+    expect(ipc.searchVectors).toHaveBeenCalledWith('5-vectordb', expect.any(Array), 384, 3)
   })
 
   it('returns [] immediately for empty query without calling embed or IPC', async () => {
@@ -89,14 +84,14 @@ describe('RagService.searchSemantic', () => {
       searchVectors: vi.fn().mockResolvedValue([
         { id: 10, distance: 0.1 },
         { id: 20, distance: 0.2 },
-        { id: 30, distance: 0.3 },
+        { id: 30, distance: 0.3 }
       ]),
       getTextFromVectorId: vi.fn(async (id: number) => {
         if (id === 10) return { id: 10, pageNumber: 1, bookId: 5, data: 'ten' }
         if (id === 20) return undefined // orphaned vector
         if (id === 30) return { id: 30, pageNumber: 3, bookId: 5, data: 'thirty' }
         return undefined
-      }),
+      })
     })
     const service = createRagService({ ipc, embed })
 
@@ -128,9 +123,9 @@ describe('RagService.searchText', () => {
           pageNumber: 12,
           bookId: 5,
           data: 'full chunk text',
-          snippet: 'the <mark>query</mark> appears here',
-        },
-      ]),
+          snippet: 'the <mark>query</mark> appears here'
+        }
+      ])
     })
     const service = createRagService({ ipc, embed })
 
@@ -142,8 +137,8 @@ describe('RagService.searchText', () => {
         bookId: 5,
         pageNumber: 12,
         text: 'full chunk text',
-        snippet: 'the <mark>query</mark> appears here',
-      },
+        snippet: 'the <mark>query</mark> appears here'
+      }
     ])
     expect(ipc.searchBookText).toHaveBeenCalledTimes(1)
     expect(ipc.searchBookText).toHaveBeenCalledWith('query', 5)
@@ -165,7 +160,7 @@ describe('RagService.isIndexed', () => {
   it('returns true when the book has a vector index', async () => {
     const embed = makeEmbed()
     const ipc = makeIpc({
-      hasVectorsForBook: vi.fn(async (bookId: number) => bookId === 5),
+      hasVectorsForBook: vi.fn(async (bookId: number) => bookId === 5)
     })
     const service = createRagService({ ipc, embed })
 

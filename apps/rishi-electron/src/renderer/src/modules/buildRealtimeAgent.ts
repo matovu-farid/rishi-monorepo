@@ -54,7 +54,12 @@ When the user clearly signals they're done (e.g., "thanks, that's all", "goodbye
 - When explaining concepts, break down complexity and use analogies. Briefly check understanding before moving on.
 - Keep responses concise unless depth is requested.`
 
-export function buildRealtimeAgent({ bookId, pageText, outline, onEndConversation }: BuildAgentOptions): RealtimeAgent {
+export function buildRealtimeAgent({
+  bookId,
+  pageText,
+  outline,
+  onEndConversation
+}: BuildAgentOptions): RealtimeAgent {
   const bookContextExecute = async ({ queryText }: { queryText: string }) => {
     try {
       const chunks = await getRagService().searchSemantic(queryText, bookId, 3)
