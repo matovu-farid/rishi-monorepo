@@ -61,4 +61,14 @@ describe('fetchAudio (transport)', () => {
       speed: 1.0
     })
   })
+
+  it('uses X-Dev-Bypass header (and no Authorization) when auth is dev-bypass', async () => {
+    const { fetch, calls } = makeFetch({})
+
+    await fetchAudio({ fetch, auth: devBypass, config: baseConfig, text: 'hi' })
+
+    const headers = calls[0].init.headers as Record<string, string>
+    expect(headers['X-Dev-Bypass']).toBe('s3cret')
+    expect(headers['Authorization']).toBeUndefined()
+  })
 })
