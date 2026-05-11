@@ -193,8 +193,9 @@ export function makeProgram(deps: ProgramDeps): Program {
               Effect.catchAll((err: TtsTaggedError) =>
                 Effect.sync(() => item.reject(toPublicError(err)))
               ),
-              // Interrupt: rejected as a Cancelled error.
-              Effect.catchAllCause(() =>
+              // Interrupt: rejected as a Cancelled error. Effect.catchAllCause
+              // does NOT fire on a Fiber.interrupt cause; onInterrupt does.
+              Effect.onInterrupt(() =>
                 Effect.sync(() => {
                   const cancelled = new CancelledError({ requestId: item.requestId })
                   item.reject(toPublicError(cancelled))

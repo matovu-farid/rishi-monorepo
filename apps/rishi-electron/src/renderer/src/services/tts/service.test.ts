@@ -20,7 +20,7 @@ export function makeFetch(opts: {
     calls.push({ url, init })
     const headers = new Headers()
     if (opts.retryAfter) headers.set('Retry-After', opts.retryAfter)
-    return new Response(status === 200 ? (bytes as BodyInit) : opts.errorBody ?? '', {
+    return new Response(status === 200 ? (bytes as BodyInit) : (opts.errorBody ?? ''), {
       status,
       headers
     })
@@ -28,8 +28,7 @@ export function makeFetch(opts: {
   return { fetch, calls, callCount: () => calls.length }
 }
 
-export const makeAuth = (auth: AuthHeader): (() => Promise<AuthHeader>) =>
-  vi.fn(async () => auth)
+export const makeAuth = (auth: AuthHeader): (() => Promise<AuthHeader>) => vi.fn(async () => auth)
 
 export const baseConfig: TtsConfig = {
   audioWorkerUrl: 'https://api.example.com/audio/speech',
@@ -262,9 +261,10 @@ describe('TtsService.cancelBookRequests / getQueueStatus / clearBookCache', () =
  * (status + optional bytes). Calls beyond the scripted length repeat
  * the final entry. Used to test retry-then-succeed and exhausted-retry.
  */
-function makeScriptedFetch(
-  script: Array<{ status: number; bytes?: Uint8Array; body?: string }>
-): { fetch: ReturnType<typeof vi.fn>; callCount: () => number } {
+function makeScriptedFetch(script: Array<{ status: number; bytes?: Uint8Array; body?: string }>): {
+  fetch: (url: string, init: RequestInit) => Promise<Response>
+  callCount: () => number
+} {
   let i = 0
   const calls: Array<{ url: string; init: RequestInit }> = []
   const fetch = vi.fn(async (url: string, init: RequestInit) => {
