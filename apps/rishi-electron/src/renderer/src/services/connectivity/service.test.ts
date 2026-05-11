@@ -75,3 +75,104 @@ describe('ConnectivityService.start', () => {
     expect(source.listenerCount('offline')).toBe(1)
   })
 })
+
+describe('ConnectivityService.subscribe', () => {
+  it('fires listeners with false on online → offline transition', () => {
+    const source = makeFakeSource({ initialOnline: true })
+    const service = createConnectivityService({ source })
+    const spy = vi.fn()
+    service.start()
+    service.subscribe(spy)
+
+    source.goOffline()
+
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith(false)
+    expect(service.isOnline()).toBe(false)
+  })
+
+  it('fires listeners with true on offline → online transition', () => {
+    const source = makeFakeSource({ initialOnline: false })
+    const service = createConnectivityService({ source })
+    const spy = vi.fn()
+    service.start()
+    service.subscribe(spy)
+
+    source.goOnline()
+
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith(true)
+    expect(service.isOnline()).toBe(true)
+  })
+
+  it('edge-detects duplicate offline events (no double fire)', () => {
+    const source = makeFakeSource({ initialOnline: true })
+    const service = createConnectivityService({ source })
+    const spy = vi.fn()
+    service.start()
+    service.subscribe(spy)
+
+    source.goOffline()
+    // The fake's goOffline() is a no-op when already offline; this exercises
+    // the actor's no-op-transition path. The service's edge-detector also
+    // guards against any duplicate that does propagate from the actor.
+    source.goOffline()
+
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith(false)
+  })
+
+  it('unsubscribe stops invocations; multiple subscribers each receive notifications', () => {
+    const source = makeFakeSource({ initialOnline: true })
+    const service = createConnectivityService({ source })
+    const a = vi.fn()
+    const b = vi.fn()
+    service.start()
+    const unsubA = service.subscribe(a)
+    service.subscribe(b)
+
+    source.goOffline()
+    expect(a).toHaveBeenCalledTimes(1)
+    expect(a).toHaveBeenCalledWith(false)
+    expect(b).toHaveBeenCalledTimes(1)
+    expect(b).toHaveBeenCalledWith(false)
+
+    unsubA()
+    source.goOnline()
+    expect(a).toHaveBeenCalledTimes(1) // unchanged
+    expect(b).toHaveBeenCalledTimes(2)
+    expect(b).toHaveBeenLastCalledWith(true)
+  })
+})
+
+describe('ConnectivityService.stop', () => {
+  it('removes source listeners; subsequent transitions do not fire subscribers', () => {
+    const source = makeFakeSource({ initialOnline: true })
+    const service = createConnectivityService({ source })
+    const spy = vi.fn()
+    service.start()
+    service.subscribe(spy)
+
+    expect(source.listenerCount('online')).toBe(1)
+    expect(source.listenerCount('offline')).toBe(1)
+
+    service.stop()
+    expect(source.listenerCount('online')).toBe(0)
+    expect(source.listenerCount('offline')).toBe(0)
+
+    source.goOffline()
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('is idempotent — calling stop() twice is a no-op', () => {
+    const source = makeFakeSource({ initialOnline: true })
+    const service = createConnectivityService({ source })
+
+    service.start()
+    service.stop()
+    service.stop() // no throw
+
+    expect(source.listenerCount('online')).toBe(0)
+    expect(source.listenerCount('offline')).toBe(0)
+  })
+})
