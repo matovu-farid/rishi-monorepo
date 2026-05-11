@@ -58,4 +58,28 @@ describe('RagService.searchSemantic', () => {
       3
     )
   })
+
+  it('returns [] immediately for empty query without calling embed or IPC', async () => {
+    const embed = makeEmbed()
+    const ipc = makeIpc()
+    const service = createRagService({ ipc, embed })
+
+    const result = await service.searchSemantic('', 5, 3)
+
+    expect(result).toEqual([])
+    expect(embed).not.toHaveBeenCalled()
+    expect(ipc.searchVectors).not.toHaveBeenCalled()
+  })
+
+  it('returns [] immediately for whitespace-only query', async () => {
+    const embed = makeEmbed()
+    const ipc = makeIpc()
+    const service = createRagService({ ipc, embed })
+
+    const result = await service.searchSemantic('   \n\t  ', 5, 3)
+
+    expect(result).toEqual([])
+    expect(embed).not.toHaveBeenCalled()
+    expect(ipc.searchVectors).not.toHaveBeenCalled()
+  })
 })

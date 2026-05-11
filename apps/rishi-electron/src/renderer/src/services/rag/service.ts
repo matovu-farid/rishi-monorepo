@@ -12,6 +12,7 @@ export function createRagService(deps: RagServiceDeps): RagService {
 
   return {
     async searchSemantic(query, bookId, k) {
+      if (query.trim().length === 0) return []
       const vector = await embed(query)
       const hits = await ipc.searchVectors(indexName(bookId), vector, EMBEDDING_DIM, k)
       const chunks = await Promise.all(hits.map((h) => ipc.getTextFromVectorId(h.id)))
