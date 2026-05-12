@@ -8,7 +8,6 @@ import { Trash2, Plus, Search, BookOpen } from 'lucide-react'
 import { Book, deleteBook, getBooks } from '@/lib/api'
 import { getBookImportService, getVoiceChatService } from '@/services'
 import { prefetchTTSForBooks } from '@/modules/ttsPrefetch'
-import { motion, AnimatePresence } from 'framer-motion'
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { usePdfStore } from '@/stores/pdfStore'
@@ -32,6 +31,10 @@ function bytesToBlobUrl(bytes: number[]): string | null {
 }
 
 function BookCoverImage({ book }: { book: Book }) {
+  // NOTE: don't switch this to useMemo. StrictMode's simulated double-invoke
+  // runs the effect cleanup once before the second mount; useMemo would
+  // cache the revoked URL, breaking the <img>. useState lets the effect
+  // mint a fresh URL on the second mount.
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
 
   useEffect(() => {
@@ -256,11 +259,8 @@ export default function FileComponent(): React.JSX.Element {
           </div>
         )}
 
-        <motion.div
+        <div
           data-tour="book-grid"
-          layout
-          initial="animate"
-          animate="animate"
           style={
             filteredBooks.length > 0
               ? {
@@ -279,31 +279,26 @@ export default function FileComponent(): React.JSX.Element {
           {isDragActive && (!books || books.length === 0) ? (
             <p>Drop the files here ...</p>
           ) : filteredBooks.length > 0 ? (
-            <AnimatePresence>
-              {filteredBooks.map((book) => (
-                <motion.div
-                  key={book.id}
-                  initial={{ opacity: 0.5, scale: 0.7 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0.5, scale: 0.7 }}
-                  className="flex flex-col gap-1 relative transition-transform duration-200 ease-out hover:scale-[1.03]"
-                  onContextMenu={(e) => {
-                    e.preventDefault()
-                    setContextMenu({ x: e.clientX, y: e.clientY, book })
-                  }}
+            filteredBooks.map((book) => (
+              <div
+                key={book.id}
+                className="flex flex-col gap-1 relative transition-transform duration-200 ease-out hover:scale-[1.03]"
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setContextMenu({ x: e.clientX, y: e.clientY, book })
+                }}
+              >
+                <Link
+                  to="/books/$id"
+                  params={{ id: book.id.toString() }}
+                  className="block bg-transparent"
                 >
-                  <Link
-                    to="/books/$id"
-                    params={{ id: book.id.toString() }}
-                    className="block bg-transparent"
-                  >
-                    <BookCoverImage book={book} />
-                  </Link>
-                  <p className="text-xs font-medium text-gray-900 truncate mt-1">{book.title}</p>
-                  <p className="text-xs text-gray-500 truncate">{book.author}</p>
-                </motion.div>
-              ))}
-            </AnimatePresence>
+                  <BookCoverImage book={book} />
+                </Link>
+                <p className="text-xs font-medium text-gray-900 truncate mt-1">{book.title}</p>
+                <p className="text-xs text-gray-500 truncate">{book.author}</p>
+              </div>
+            ))
           ) : (
             <div className="text-center">
               <p className="mb-4">No books yet. Add your first book!</p>
@@ -312,7 +307,7 @@ export default function FileComponent(): React.JSX.Element {
               </p>
             </div>
           )}
-        </motion.div>
+        </div>
       </div>
 
       {contextMenu && (

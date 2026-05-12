@@ -2,7 +2,6 @@ import Loader from '@/components/Loader'
 import { useQuery } from '@tanstack/react-query'
 import { createLazyFileRoute } from '@tanstack/react-router'
 import React, { useEffect } from 'react'
-import { motion } from 'framer-motion'
 import { usePdfStore, BookNavigationState } from '@/stores/pdfStore'
 import { useEpubStore } from '@/stores/epubStore'
 import { usePageTracker } from '@/modules/epub-page-tracker'
@@ -61,21 +60,19 @@ function BookView(): React.JSX.Element {
   }
 
   return (
-    <motion.div layout>
-      <React.Suspense
-        fallback={
-          <div className="w-full h-screen grid place-items-center">
-            <Loader />
-          </div>
-        }
-      >
-        {book?.kind === 'pdf' && (
-          <PdfView filepath={convertFileSrc(book.filepath)} key={book.id.toString()} book={book} />
-        )}
-        {book?.kind === 'epub' && <EpubView key={book.id} book={book} />}
-        {book?.kind === 'mobi' && <MobiView key={book.id} book={book} />}
-        {book?.kind === 'djvu' && <DjvuView key={book.id} book={book} />}
-      </React.Suspense>
-    </motion.div>
+    <React.Suspense
+      fallback={
+        <div className="w-full h-screen grid place-items-center">
+          <Loader />
+        </div>
+      }
+    >
+      {book?.kind === 'pdf' && (
+        <PdfView filepath={convertFileSrc(book.filepath)} key={book.id.toString()} book={book} />
+      )}
+      {book?.kind === 'epub' && <EpubView key={book.id} book={book} />}
+      {book?.kind === 'mobi' && <MobiView key={book.id} book={book} />}
+      {book?.kind === 'djvu' && <DjvuView key={book.id} book={book} />}
+    </React.Suspense>
   )
 }
