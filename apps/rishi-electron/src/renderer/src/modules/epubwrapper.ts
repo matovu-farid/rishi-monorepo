@@ -12,19 +12,33 @@ export type ParagraphWithCFI = {
   endCfi: string
 }
 // Overload 1: with urlOrData and optional options
-export function initialize(urlOrData: string | ArrayBuffer, options?: BookOptions): Book
+export function initialize(
+  urlOrData: string | ArrayBuffer | Uint8Array,
+  options?: BookOptions
+): Book
 
 // Overload 2: with only optional options
 export function initialize(options?: BookOptions): Book
 
 // Implementation
 export function initialize(
-  urlOrDataOrOptions?: string | ArrayBuffer | BookOptions,
+  urlOrDataOrOptions?: string | ArrayBuffer | Uint8Array | BookOptions,
   options?: BookOptions
 ): Book {
   let epub: Book
   if (typeof urlOrDataOrOptions === 'string' || urlOrDataOrOptions instanceof ArrayBuffer) {
     epub = Epub(urlOrDataOrOptions, options)
+  } else if (urlOrDataOrOptions instanceof Uint8Array) {
+    // epub.js's runtime type-check is `instanceof ArrayBuffer`, which
+    // a Uint8Array view fails. Slice into a standalone ArrayBuffer so
+    // the data path is taken (otherwise epub.js treats the arg as
+    // BookOptions, ending up with no data source and a Book that
+    // never finishes loading).
+    const buf = urlOrDataOrOptions.buffer.slice(
+      urlOrDataOrOptions.byteOffset,
+      urlOrDataOrOptions.byteOffset + urlOrDataOrOptions.byteLength
+    ) as ArrayBuffer
+    epub = Epub(buf, options)
   } else {
     epub = Epub(urlOrDataOrOptions)
   }

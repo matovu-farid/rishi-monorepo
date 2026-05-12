@@ -46,6 +46,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { usePageTracker } from '@/modules/epub-page-tracker'
 import { dumpError } from '@/utils/errorDump'
+import { getCachedEpub } from '@/services/reader-cache/epub-cache'
 
 function cn(...classes: string[]) {
   return classes.filter(Boolean).join(' ')
@@ -126,23 +127,38 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   const isChatting = useChatStore((s) => s.isChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
 
-  // Load EPUB as ArrayBuffer via IPC
-  const [epubData, setEpubData] = useState<ArrayBuffer | null>(null)
+  // Load EPUB bytes via IPC. The lazy initializer reads the warm-restore
+  // cache synchronously so a reopen renders with bytes (and the cached
+  // parsed Book downstream) on the very first paint — no loader flash.
+  const [epubData, setEpubData] = useState<Uint8Array | null>(
+    () => getCachedEpub(book.id)?.bytes ?? null
+  )
   useEffect(() => {
+    if (epubData) return
     let cancelled = false
     window.electron
       .readFile(book.filepath)
       .then((data) => {
-        if (!cancelled) {
-          const buf = data instanceof ArrayBuffer ? data : new Uint8Array(data as any).buffer
-          setEpubData(buf)
+        if (cancelled) return
+        let bytes: Uint8Array
+        if (data instanceof ArrayBuffer) {
+          bytes = new Uint8Array(data)
+        } else if (ArrayBuffer.isView(data)) {
+          bytes = new Uint8Array(
+            (data as ArrayBufferView).buffer,
+            (data as ArrayBufferView).byteOffset,
+            (data as ArrayBufferView).byteLength
+          )
+        } else {
+          bytes = new Uint8Array(Object.values(data as Record<string, number>))
         }
+        setEpubData(bytes)
       })
       .catch((err) => console.error('[epub] Failed to load:', err))
     return () => {
       cancelled = true
     }
-  }, [book.filepath])
+  }, [book.filepath, epubData])
 
   // Keep toolbar visible when any panel is open
   const panelOpen =
@@ -537,6 +553,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       >
         <ReactReader
           key={`reader-${book.id}`}
+          bookCacheKey={book.id}
           showToc={true}
           bookSyncId={bookSyncId}
           tocExpanded={tocOpen}

@@ -13,6 +13,7 @@ import {
   removeHighlight
 } from '../../../modules/epubwrapper'
 import { useNavStore } from '../../../stores/navStore'
+import { getCachedEpub, setCachedEpub } from '../../../services/reader-cache/epub-cache'
 
 export { EpubViewStyle } from './style'
 
@@ -36,7 +37,7 @@ export type IToc = {
  * This component is the core viewer that handles rendering EPUB books
  */
 export type IEpubViewProps = {
-  url: string | ArrayBuffer // The EPUB file source (can be URL or raw data)
+  url: string | ArrayBuffer | Uint8Array // The EPUB file source (can be URL or raw data)
   epubInitOptions?: Partial<BookOptions> // Options for initializing the book
   epubOptions?: Partial<RenditionOptionsFix> // Options for rendering the book
   epubViewStyles?: IEpubViewStyle // Custom styling for the viewer
@@ -53,6 +54,13 @@ export type IEpubViewProps = {
   onPageParagraphsExtracted?(data: { paragraphs: ParagraphWithCFI[] }): void // Callback when page paragraphs are extracted
   onNextPageParagraphs?(data: { paragraphs: ParagraphWithCFI[] }): void // Callback when next page paragraphs are extracted
   onPreviousPageParagraphs?(data: { paragraphs: ParagraphWithCFI[] }): void // Callback when previous page paragraphs are extracted
+  // When set, the inner viewer consults the warm-restore Book cache:
+  // on hit it reuses the cached Book and skips book.destroy() on
+  // unmount; on miss it saves the freshly-parsed Book after load.
+  // Only pass this for the visible reader — epub.js binds one rendition
+  // per Book, so a second consumer (e.g. the paragraph reader) would
+  // clobber the cached rendition.
+  bookCacheKey?: number
 }
 
 // Component state tracking loading status and table of contents
@@ -68,11 +76,7 @@ type IEpubViewState = {
  * Handles book initialization, rendering, navigation, and event management
  */
 export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
-  state: Readonly<IEpubViewState> = {
-    isLoaded: false,
-    isError: false,
-    toc: []
-  }
+  state: Readonly<IEpubViewState>
 
   // Reference to the DOM element where the book will be rendered
   viewerRef = React.createRef<HTMLDivElement>()
@@ -87,14 +91,44 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
   constructor(props: IEpubViewProps) {
     super(props)
     this.location = props.location
-    this.book = this.rendition = this.prevPage = this.nextPage = undefined
+    this.rendition = this.prevPage = this.nextPage = undefined
+
+    // Warm-restore fast path: if the cache holds a parsed Book for
+    // this id, seed isLoaded=true synchronously so the very first
+    // render skips the loadingView. Without this, the standard
+    // initBook → book.loaded.navigation.then(...) microtask leaves
+    // one paint frame of "Loading..." visible on reopen — which is
+    // what users perceive as "the cache isn't working".
+    const cached =
+      props.bookCacheKey !== undefined ? getCachedEpub(props.bookCacheKey) : undefined
+    if (cached) {
+      this.book = cached.document
+      const tocFromCache =
+        ((cached.document.navigation as { toc?: NavItem[] } | undefined)?.toc as
+          | NavItem[]
+          | undefined) ?? []
+      this.state = { isLoaded: true, isError: false, toc: tocFromCache }
+    } else {
+      this.book = undefined
+      this.state = { isLoaded: false, isError: false, toc: [] }
+    }
   }
 
   /**
    * Component lifecycle: Setup
    */
   componentDidMount() {
-    this.initBook()
+    // Cache hit: this.book is already the cached, fully-loaded Book.
+    // Skip the initialize() + loaded.navigation wait and attach the
+    // rendition immediately so the user sees content on the first
+    // paint after mount.
+    if (this.book) {
+      const { tocChanged } = this.props
+      if (tocChanged) tocChanged(this.state.toc)
+      this.initReader()
+    } else {
+      this.initBook()
+    }
     document.addEventListener('keyup', this.handleKeyPress, false)
   }
 
@@ -102,13 +136,38 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
    * Initialize the EPUB book
    */
   initBook() {
-    const { url, tocChanged, epubInitOptions = {} } = this.props
-    if (this.book) {
-      this.book.destroy()
+    const { url, tocChanged, epubInitOptions = {}, bookCacheKey } = this.props
+
+    // Warm-restore: if the cache has a parsed Book for this id, reuse
+    // it instead of re-parsing the bytes. Only the previous book we
+    // own (not the cached one) gets destroyed before replacing.
+    const cached = bookCacheKey !== undefined ? getCachedEpub(bookCacheKey) : undefined
+    if (cached) {
+      if (this.book && this.book !== cached.document) {
+        this.book.destroy()
+      }
+      this.book = cached.document
+    } else {
+      if (this.book) {
+        this.book.destroy()
+      }
+      this.book = initialize(url, epubInitOptions)
     }
-    this.book = initialize(url, epubInitOptions)
 
     void this.book?.loaded.navigation.then(({ toc }) => {
+      // Populate the cache on first parse. setCachedEpub no-ops on the
+      // same (id, book) pair, so it's safe to call on cache hits too.
+      if (bookCacheKey !== undefined && this.book) {
+        // url here is the raw EPUB bytes — coerce to Uint8Array for
+        // the cache's size accounting.
+        const bytes =
+          url instanceof Uint8Array
+            ? url
+            : url instanceof ArrayBuffer
+              ? new Uint8Array(url)
+              : null
+        if (bytes) setCachedEpub(bookCacheKey, this.book, bytes)
+      }
       this.setState(
         {
           isLoaded: true,
@@ -137,10 +196,17 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
     }
 
     if (this.book) {
-      try {
-        this.book.destroy()
-      } catch (error) {
-        console.warn('Error destroying book:', error)
+      // Only destroy the Book if the cache isn't holding onto it.
+      // The cache owns the destroy of any entry it manages — calling
+      // book.destroy() here would invalidate a still-cached entry.
+      const { bookCacheKey } = this.props
+      const cached = bookCacheKey !== undefined ? getCachedEpub(bookCacheKey) : undefined
+      if (!cached || cached.document !== this.book) {
+        try {
+          this.book.destroy()
+        } catch (error) {
+          console.warn('Error destroying book:', error)
+        }
       }
     }
 
