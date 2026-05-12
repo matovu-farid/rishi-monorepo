@@ -85,12 +85,9 @@ export function useVirualization(
     gap: PAGE_GAP
   })
   setVirtualizer(virtualizer)
-  const handlePageRendered = useCallback(
-    (_index: number) => {
-      setHasNavigatedToPage(true)
-    },
-    [virtualizer]
-  )
+  const handlePageRendered = useCallback(() => {
+    setHasNavigatedToPage(true)
+  }, [setHasNavigatedToPage])
 
   useEffect(() => {
     if (hasRequestedInitialScroll.current) return

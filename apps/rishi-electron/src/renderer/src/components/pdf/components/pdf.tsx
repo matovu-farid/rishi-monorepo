@@ -177,6 +177,10 @@ export function PdfView({
   const setPageCount = usePdfStore((s) => s.setPageCount)
 
   const pageWidth = isDualPage ? dualPageWidth : pdfWidth
+  // Stable string for memoized PageComponent — `book.id.toString()` returns a
+  // new primitive each render which is equal by value but we keep this memo'd
+  // for clarity and to avoid recomputation.
+  const bookIdStr = useMemo(() => book.id.toString(), [book.id])
 
   const hasNavigatedToPage = usePdfStore((s) => s.hasNavigatedToPage)
   const { virtualizer, virtualItems, pageRefs, handlePageRendered } = useVirualization(
@@ -339,64 +343,26 @@ export function PdfView({
   }, [pdfData?.data, book.id])
 
   return (
-    <div
-      ref={scrollContainerRef}
-      className={cn(
-        'relative h-screen w-full overflow-y-scroll ',
-        !isDualPage && isFullscreen ? '' : '',
-        'bg-gray-300'
-      )}
-      // overflowAnchor: the browser's built-in scroll-anchoring fights the
-      // virtualizer's `adjustments` mechanism on backward scroll, producing
-      // a back-and-forth jitter when an upper page (re)mounts. Disabling it
-      // is the official tanstack/virtual recommendation for variable-size
-      // virtualizers (see examples/dynamic).
-      // contain: strict isolates layout/paint to this subtree, which is also
-      // recommended for the dynamic-size pattern.
-      style={{ overflowAnchor: 'none', contain: 'strict' }}
-    >
-      {/** White loading screen */}
-      {!hasNavigatedToPage && (
-        <div className="w-screen h-screen grid place-items-center bg-white z-100 pointer-events-none">
-          <Loader2 size={20} className="animate-spin" />
-        </div>
-      )}
-
-      {/* Fixed Top Bar — auto-hides after 2s */}
-      <ReaderToolbar
-        panelsOpen={tocOpen || thumbOpen}
-        leftContent={
-          <IconButton
-            color="inherit"
-            onClick={() => setTocOpen(true)}
-            className={cn('hover:bg-black/10 dark:hover:bg-white/10 border-none', getTextColor())}
-            aria-label="Open table of contents"
-          >
-            <MenuIcon size={20} />
-          </IconButton>
-        }
+    <div className={cn('relative h-screen w-full', !isDualPage && isFullscreen ? '' : '', 'bg-gray-300')}>
+      <div
+        ref={scrollContainerRef}
+        className="h-full w-full overflow-y-scroll"
+        // overflowAnchor: the browser's built-in scroll-anchoring fights the
+        // virtualizer's `adjustments` mechanism on backward scroll, producing
+        // a back-and-forth jitter when an upper page (re)mounts. Disabling it
+        // is the official tanstack/virtual recommendation for variable-size
+        // virtualizers (see examples/dynamic).
+        // contain: strict isolates layout/paint to this subtree, which is also
+        // recommended for the dynamic-size pattern. NOTE: `contain: strict`
+        // (which includes `paint`) makes this element a containing block for
+        // `position: fixed` descendants — so fixed overlays (ReaderToolbar,
+        // AIChatOrb, ChatPanel, etc.) MUST be rendered as siblings, not
+        // children, of this div. Otherwise they anchor to the scroll
+        // container's top and scroll away with the content.
+        style={{ overflowAnchor: 'none', contain: 'strict' }}
       >
-        <BackButton />
-
-        <IconButton
-          color="inherit"
-          onClick={() => setThumbOpen(true)}
-          className={cn('hover:bg-black/10 dark:hover:bg-white/10 border-none', getTextColor())}
-          aria-label="Open page thumbnails"
-        >
-          <LayoutGrid size={20} />
-        </IconButton>
-
-        <BookmarkButton
-          bookSyncId={bookSyncId}
-          location={String(currentPageNumber)}
-          label={`Page ${currentPageNumber}`}
-          className={cn('hover:bg-black/10 dark:hover:bg-white/10 border-none', getTextColor())}
-        />
-      </ReaderToolbar>
-
-      {/* Main PDF Viewer Area */}
-      <div className="flex items-center justify-center  px-2 py-1">
+        {/* Main PDF Viewer Area */}
+        <div className="flex items-center justify-center  px-2 py-1">
         {loadError && (
           <div className={cn('p-4 text-center', getTextColor())}>
             <p className="text-red-500">Failed to load PDF: {loadError}</p>
@@ -489,10 +455,8 @@ export function PdfView({
                         pdfWidth={pageWidth}
                         pdfHeight={pdfHeight}
                         isDualPage={isDualPage}
-                        bookId={book.id.toString()}
-                        onRenderComplete={() => {
-                          handlePageRendered(virtualItem.index)
-                        }}
+                        bookId={bookIdStr}
+                        onRenderComplete={handlePageRendered}
                       />
                       <div className="group/page absolute bottom-1 left-0 right-0 text-center py-1">
                         <span className="text-xs text-gray-400">
@@ -509,31 +473,77 @@ export function PdfView({
             </div>
           </Document>
         )}
-        {AuthDialog}
-
-        {/* AI chat orb */}
-        {isChatting && (
-          <AIChatOrb chatStatus={chatStatus} onClick={() => setChatPanelOpen((prev) => !prev)} />
-        )}
-
-        {/* Voice chat launcher — paired above the TTS play orb */}
-        <VoiceChatLauncher />
-
-        {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
-        <div style={{ display: isChatting ? 'none' : 'contents' }}>
-          <TTSControls key={book.id.toString()} bookId={book.id.toString()} />
         </div>
-
-        {/* Chat Panel */}
-        <ChatPanel
-          bookId={book.id}
-          bookSyncId={bookSyncId}
-          bookTitle={book.title}
-          rendition={null}
-          open={chatPanelOpen}
-          onOpenChange={setChatPanelOpen}
-        />
       </div>
+
+      {/* All overlays below live OUTSIDE the scroll container so their
+          `position: fixed` styles anchor to the viewport (the scroll
+          container has `contain: strict` which would otherwise trap them). */}
+
+      {/** White loading screen */}
+      {!hasNavigatedToPage && (
+        <div className="fixed inset-0 grid place-items-center bg-white z-100 pointer-events-none">
+          <Loader2 size={20} className="animate-spin" />
+        </div>
+      )}
+
+      {/* Fixed Top Bar — auto-hides after 2s */}
+      <ReaderToolbar
+        panelsOpen={tocOpen || thumbOpen}
+        leftContent={
+          <IconButton
+            color="inherit"
+            onClick={() => setTocOpen(true)}
+            className={cn('hover:bg-black/10 dark:hover:bg-white/10 border-none', getTextColor())}
+            aria-label="Open table of contents"
+          >
+            <MenuIcon size={20} />
+          </IconButton>
+        }
+      >
+        <BackButton />
+
+        <IconButton
+          color="inherit"
+          onClick={() => setThumbOpen(true)}
+          className={cn('hover:bg-black/10 dark:hover:bg-white/10 border-none', getTextColor())}
+          aria-label="Open page thumbnails"
+        >
+          <LayoutGrid size={20} />
+        </IconButton>
+
+        <BookmarkButton
+          bookSyncId={bookSyncId}
+          location={String(currentPageNumber)}
+          label={`Page ${currentPageNumber}`}
+          className={cn('hover:bg-black/10 dark:hover:bg-white/10 border-none', getTextColor())}
+        />
+      </ReaderToolbar>
+
+      {AuthDialog}
+
+      {/* AI chat orb */}
+      {isChatting && (
+        <AIChatOrb chatStatus={chatStatus} onClick={() => setChatPanelOpen((prev) => !prev)} />
+      )}
+
+      {/* Voice chat launcher — paired above the TTS play orb */}
+      <VoiceChatLauncher />
+
+      {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
+      <div style={{ display: isChatting ? 'none' : 'contents' }}>
+        <TTSControls key={book.id.toString()} bookId={book.id.toString()} />
+      </div>
+
+      {/* Chat Panel */}
+      <ChatPanel
+        bookId={book.id}
+        bookSyncId={bookSyncId}
+        bookTitle={book.title}
+        rendition={null}
+        open={chatPanelOpen}
+        onOpenChange={setChatPanelOpen}
+      />
       {/* TOC Sidebar */}
       <ReaderTOC
         open={tocOpen}
