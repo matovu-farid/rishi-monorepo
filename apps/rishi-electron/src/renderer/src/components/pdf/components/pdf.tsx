@@ -6,6 +6,12 @@ import AIChatOrb from '../../chat/AIChatOrb'
 import VoiceChatLauncher from '../../chat/VoiceChatLauncher'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { Outline, pdfjs } from 'react-pdf'
+// AnnotationLayer (rendered by <Page>) reads `pdf` + `linkService` from
+// react-pdf's DocumentContext. We bypass <Document> so we provide the
+// context ourselves. These are internal paths but stable: react-pdf's
+// package.json exposes `./*` mapped to its dist tree.
+import DocumentContext from 'react-pdf/dist/DocumentContext.js'
+import LinkService from 'react-pdf/dist/LinkService.js'
 import type { DocumentInitParameters } from 'pdfjs-dist/types/src/display/api'
 import { getCachedPdf, setCachedPdf } from '@/services/reader-cache/pdf-cache'
 import { usePlayerStore } from '@/stores/playerStore'
@@ -285,6 +291,37 @@ export function PdfView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfProxy, setPageCount, setPdfDocProxy])
 
+  // Stand-in for the DocumentContext that <Document> would normally provide.
+  // AnnotationLayer (inside <Page>) reads `pdf` + `linkService` from this
+  // context and throws an invariant if either is missing. We instantiate a
+  // single LinkService and bind it to the current proxy whenever it changes.
+  // registerPage/unregisterPage are no-ops — react-pdf only uses them for
+  // internal Outline auto-scroll, which we drive ourselves via pdfReader.
+  const linkServiceRef = useRef<LinkService>(null as unknown as LinkService)
+  if (linkServiceRef.current === null) {
+    linkServiceRef.current = new LinkService()
+  }
+  useEffect(() => {
+    if (pdfProxy) linkServiceRef.current.setDocument(pdfProxy)
+  }, [pdfProxy])
+
+  const documentContextValue = useMemo(
+    () =>
+      pdfProxy
+        ? {
+            pdf: pdfProxy,
+            linkService: linkServiceRef.current,
+            onItemClick,
+            registerPage: () => {},
+            unregisterPage: () => {}
+          }
+        : null,
+    // onItemClick reads pdfReader/setTocOpen via closure; both are stable
+    // identities within a given mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pdfProxy]
+  )
+
   // Background indexing: extract per-page text and ship to the embedding/vector
   // pipeline so chat/RAG works for this book. Runs as an Effect fiber with
   // bounded concurrency; interrupted when the book unmounts.
@@ -398,7 +435,8 @@ export function PdfView({
             <Loader2 size={20} className="animate-spin" />
           </div>
         )}
-        {pdfProxy && (
+        {pdfProxy && documentContextValue && (
+          <DocumentContext.Provider value={documentContextValue}>
           <div className="flex items-center justify-center flex-col">
             <div
               style={{
@@ -480,6 +518,7 @@ export function PdfView({
               </div>
             </div>
           </div>
+          </DocumentContext.Provider>
         )}
         </div>
       </div>
