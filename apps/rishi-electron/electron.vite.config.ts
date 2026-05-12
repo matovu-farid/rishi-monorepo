@@ -13,15 +13,32 @@ const pdfjsDistPath = path.dirname(require.resolve('pdfjs-dist/package.json'))
 const cMapsDir = normalizePath(path.join(pdfjsDistPath, 'cmaps'))
 const standardFontsDir = normalizePath(path.join(pdfjsDistPath, 'standard_fonts'))
 
+// Pure-JS deps to bundle into out/main/index.js. Anything not listed here stays
+// external and is resolved from node_modules at runtime. electron-builder's pnpm
+// dep walker silently drops transitive deps on Windows, so we inline the pure-JS
+// ones to remove the risk class entirely.
+//
+// Keep external (do NOT add here):
+//   - better-sqlite3, hnswlib-node, @xenova/transformers — native bindings
+//   - @sentry/electron — crashpad handler copied from node_modules by electron-builder
+//   - electron-updater — reads app-update.yml via process.resourcesPath at runtime
+const BUNDLE_INTO_MAIN = [
+  'jszip',
+  'drizzle-orm',
+  '@electron-toolkit/utils'
+]
+
 export default defineConfig({
   main: {
     build: {
-      rollupOptions: {
-        external: ['better-sqlite3', 'hnswlib-node', 'epubjs', '@xenova/transformers']
-      }
+      externalizeDeps: { exclude: BUNDLE_INTO_MAIN }
     }
   },
-  preload: {},
+  preload: {
+    build: {
+      externalizeDeps: true
+    }
+  },
   renderer: {
     root: resolve('src/renderer'),
     resolve: {
