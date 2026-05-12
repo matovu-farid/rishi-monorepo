@@ -1,8 +1,0 @@
-[application]
-name = "rishi"
-default_platform = "desktop"
-asset_dir = "assets"
-
-[bundle]
-identifier = "org.fidexa.rishi"
-publisher = "Fidexa"

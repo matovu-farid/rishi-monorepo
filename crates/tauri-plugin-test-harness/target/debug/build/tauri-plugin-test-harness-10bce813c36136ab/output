@@ -1,6 +1,0 @@
-cargo:rerun-if-changed=permissions
-cargo:PERMISSION_FILES_PATH=/Users/faridmatovu/projects/rishi-monorepo/crates/tauri-plugin-test-harness/target/debug/build/tauri-plugin-test-harness-10bce813c36136ab/out/tauri-plugin-test-harness-permission-files
-cargo:rerun-if-env-changed=REMOVE_UNUSED_COMMANDS
-cargo:rustc-check-cfg=cfg(mobile)
-cargo:rustc-check-cfg=cfg(desktop)
-cargo:rustc-cfg=desktop

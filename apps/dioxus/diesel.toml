@@ -1,7 +1,0 @@
-[print_schema]
-file = "src/schema.rs"
-# Exclude FTS5 shadow tables that Diesel cannot model
-filter = { except_tables = ["chunk_data_fts", "chunk_data_fts_config", "chunk_data_fts_data", "chunk_data_fts_docsize", "chunk_data_fts_idx"] }
-
-[migrations_directory]
-dir = "migrations"
