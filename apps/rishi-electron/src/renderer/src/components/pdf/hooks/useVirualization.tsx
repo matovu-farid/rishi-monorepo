@@ -29,8 +29,14 @@ export function useVirualization(
   const hasRequestedInitialScroll = useRef(false)
   const scrollToFn: VirtualizerOptions<any, any>['scrollToFn'] = React.useCallback(
     (offset, canSmooth, instance) => {
-      // Respect the behavior option: skip animation for "auto" (instant navigation)
-      if (canSmooth?.behavior === 'auto') {
+      // Skip the smooth animation when:
+      //   - behavior is 'auto' (instant navigation), or
+      //   - the virtualizer is sending an `adjustments` value to compensate
+      //     for layout shifts after item re-measurement. Animating only
+      //     `offset` while `elementScroll` silently adds `adjustments` to the
+      //     final scrollTop produces drifting scroll positions and lands the
+      //     user on the wrong page on every reopen.
+      if (canSmooth?.behavior === 'auto' || canSmooth?.adjustments) {
         elementScroll(offset, canSmooth, instance)
         return
       }

@@ -16,7 +16,7 @@ import { cn } from '@/lib/utils'
 import 'react-pdf/dist/Page/AnnotationLayer.css'
 import 'react-pdf/dist/Page/TextLayer.css'
 
-import { usePdfStore, BookNavigationState } from '@/stores/pdfStore'
+import { usePdfStore } from '@/stores/pdfStore'
 import { ThumbnailSidebar } from './thumbnail-sidebar'
 import TTSControls from '@/components/tts/TTSControls'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -25,17 +25,13 @@ import { useScrolling } from '../hooks/useScrolling'
 import { usePdfNavigation } from '../hooks/usePdfNavigation'
 import { PageComponent } from './pdf-page'
 import { useSetupMenu } from '../hooks/useSetupMenu'
-import { useMutation } from '@tanstack/react-query'
-import { toast } from 'sonner'
-import { queryClient } from '@/components/providers'
-import { useCurrentPageNumber } from '../hooks/useCurrentPageNumber'
 import { PDFDocumentProxy } from 'pdfjs-dist'
 import { useVirualization } from '../hooks/useVirualization'
 import { Effect, Fiber } from 'effect'
 import { indexBookProgram } from '@/services/indexing/index-program'
 import { loadPdfDocument, extractPageParagraphs } from '@/services/indexing/text-extraction'
 import { useIndexingStore } from '@/stores/indexingStore'
-import { updateBookLocation } from '@/lib/api'
+import { usePdfReader } from '@/hooks/usePdfReader'
 import type { Book } from '@/lib/api'
 import { BackButton } from '@/components/BackButton'
 import { BookmarkButton } from '@/components/bookmarks/BookmarkButton'
@@ -64,9 +60,7 @@ export function PdfView({
   const thumbOpen = usePdfStore((s) => s.thumbnailSidebarOpen)
   const setThumbOpen = usePdfStore((s) => s.setThumbnailSidebarOpen)
   const setPdfDocProxy = usePdfStore((s) => s.setPdfDocumentProxy)
-  const setBookNavState = usePdfStore((s) => s.setBookNavigationState)
 
-  const setPageNumber = usePdfStore((s) => s.setPageNumber)
   const currentPageNumber = usePdfStore((s) => s.pageNumber)
 
   const { AuthDialog } = useRequireAuth()
@@ -166,22 +160,6 @@ export function PdfView({
 
   // Mount the paragraph atoms so they're available for the player control
 
-  const updateBookLocationMutation = useMutation({
-    mutationFn: async ({ bookId, location }: { bookId: string; location: string }) => {
-      await updateBookLocation({
-        bookId: Number(bookId),
-        newLocation: location
-      })
-    },
-
-    onError(_error) {
-      toast.error('Can not change book page')
-    },
-    onSuccess() {
-      void queryClient.invalidateQueries({ queryKey: ['books'] })
-    }
-  })
-
   function getTextColor() {
     switch (theme) {
       case ThemeType.White:
@@ -196,11 +174,6 @@ export function PdfView({
   const pageCount = usePdfStore((s) => s.pageCount)
   const setPageCount = usePdfStore((s) => s.setPageCount)
 
-  function onDocumentLoadSuccess(pdf: PDFDocumentProxy): void {
-    setPageCount(pdf.numPages)
-    setPdfDocProxy(pdf)
-  }
-
   const pageWidth = isDualPage ? dualPageWidth : pdfWidth
 
   const hasNavigatedToPage = usePdfStore((s) => s.hasNavigatedToPage)
@@ -209,37 +182,25 @@ export function PdfView({
     book
   )
 
-  useCurrentPageNumber(scrollContainerRef, book, virtualizer)
+  // pdfReader owns navigation + persistence via xstate. Replaces the old
+  // useCurrentPageNumber tangle of useEffects (initial-seek lockout, debounced
+  // save with unmount-flush, paragraph publishing) with one explicit machine
+  // whose state can't be stomped from outside.
+  const pdfReader = usePdfReader(book, virtualizer, scrollContainerRef)
 
-  // useCurrentPageNumberNavigation(scrollContainerRef, book.id, virtualizer);
+  function onDocumentLoadSuccess(pdf: PDFDocumentProxy): void {
+    setPageCount(pdf.numPages)
+    setPdfDocProxy(pdf)
+    pdfReader.sendDocLoaded(pdf.numPages)
+  }
+
   function onItemClick({ pageNumber: itemPageNumber }: { pageNumber: number }) {
-    // Determine direction based on page number comparison
-    virtualizer.scrollToIndex(itemPageNumber - 1, {
-      align: 'start',
-      behavior: 'smooth'
-    })
-    setPageNumber(itemPageNumber)
+    pdfReader.seekTo(itemPageNumber)
     setTocOpen(false)
-    // Update book location when navigating via TOC
-    updateBookLocationMutation.mutate({
-      bookId: book.id.toString(),
-      location: itemPageNumber.toString()
-    })
   }
 
   function onThumbnailNavigate(pageNumber: number) {
-    // Reset navigation state to Idle so setPageNumber is not a no-op
-    // (setPageNumberAtom skips if BookNavigationState is Navigating)
-    setBookNavState(BookNavigationState.Idle)
-    virtualizer.scrollToIndex(pageNumber - 1, {
-      align: 'start',
-      behavior: 'smooth'
-    })
-    setPageNumber(pageNumber)
-    updateBookLocationMutation.mutate({
-      bookId: book.id.toString(),
-      location: pageNumber.toString()
-    })
+    pdfReader.seekTo(pageNumber)
   }
 
   // PDF data loading via Electron IPC
@@ -552,8 +513,7 @@ export function PdfView({
         onBookmarkNavigate={(location) => {
           const pageNum = parseInt(location, 10)
           if (pageNum > 0) {
-            virtualizer.scrollToIndex(pageNum - 1, { align: 'start', behavior: 'smooth' })
-            setPageNumber(pageNum)
+            pdfReader.seekTo(pageNum)
             setTocOpen(false)
           }
         }}
