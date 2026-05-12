@@ -1,5 +1,6 @@
 import { memo, useCallback } from 'react'
 import { Page } from 'react-pdf'
+import type { PDFDocumentProxy } from 'pdfjs-dist'
 
 import { usePdfStore } from '@/stores/pdfStore'
 import { Loader2 } from 'lucide-react'
@@ -13,7 +14,8 @@ function PageComponentInner({
   pdfWidth,
   isDualPage = false,
   bookId,
-  onRenderComplete
+  onRenderComplete,
+  pdf
 }: {
   thispageNumber: number
   pdfHeight?: number
@@ -21,6 +23,10 @@ function PageComponentInner({
   isDualPage?: boolean
   bookId: string
   onRenderComplete?: () => void
+  // pdf prop is required when <Page> is rendered outside a <Document> wrapper.
+  // PdfView owns the proxy via the warm-restore cache, so we pass it down
+  // explicitly here.
+  pdf: PDFDocumentProxy
 }) {
   // Subscriptions: keep them to scalar values only so unrelated store writes
   // (currentViewParagraphs reference churn during TTS, pageNumber bumps from
@@ -86,6 +92,7 @@ function PageComponentInner({
 
   return (
     <Page
+      pdf={pdf}
       pageNumber={pageNumber}
       key={pageNumber.toString()}
       customTextRenderer={customTextRenderer}

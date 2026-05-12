@@ -5,8 +5,9 @@ import { Loader2, Menu as MenuIcon, LayoutGrid } from 'lucide-react'
 import AIChatOrb from '../../chat/AIChatOrb'
 import VoiceChatLauncher from '../../chat/VoiceChatLauncher'
 import { ChatPanel } from '@/components/chat/ChatPanel'
-import { Document, Outline, pdfjs } from 'react-pdf'
+import { Outline, pdfjs } from 'react-pdf'
 import type { DocumentInitParameters } from 'pdfjs-dist/types/src/display/api'
+import { getCachedPdf, setCachedPdf } from '@/services/reader-cache/pdf-cache'
 import { usePlayerStore } from '@/stores/playerStore'
 import { nextPage, previousPage } from '../utils/pageControls'
 
@@ -194,12 +195,6 @@ export function PdfView({
   // whose state can't be stomped from outside.
   const pdfReader = usePdfReader(book, virtualizer, scrollContainerRef)
 
-  function onDocumentLoadSuccess(pdf: PDFDocumentProxy): void {
-    setPageCount(pdf.numPages)
-    setPdfDocProxy(pdf)
-    pdfReader.sendDocLoaded(pdf.numPages)
-  }
-
   function onItemClick({ pageNumber: itemPageNumber }: { pageNumber: number }) {
     pdfReader.seekTo(itemPageNumber)
     setTocOpen(false)
@@ -209,65 +204,92 @@ export function PdfView({
     pdfReader.seekTo(pageNumber)
   }
 
-  // PDF data loading via Electron IPC
-  const [pdfData, setPdfData] = useState<{ data: Uint8Array } | null>(null)
+  // PDF loading — bypasses react-pdf's <Document> so we own the proxy
+  // lifecycle. The warm-restore cache (services/reader-cache/pdf-cache)
+  // holds up to 3 parsed proxies keyed by bookId; reopening a recently-
+  // viewed book skips the ~800ms parse entirely. The cache also owns
+  // proxy.destroy() so we never call it from here.
+  //
+  // The lazy initializers read the cache synchronously so a cache hit
+  // renders with the proxy on the very first paint — no loader flash.
+  const [pdfProxy, setPdfProxy] = useState<PDFDocumentProxy | null>(
+    () => getCachedPdf(book.id)?.proxy ?? null
+  )
+  const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(
+    () => getCachedPdf(book.id)?.bytes ?? null
+  )
   const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     setLoadError(null)
-    setPdfData(null)
 
-    window.electron
-      .readFile(book.filepath)
-      .then((data) => {
+    if (getCachedPdf(book.id)) {
+      // Cache hit — state already initialized from cache by useState.
+      return () => {
+        cancelled = true
+      }
+    }
+
+    ;(async () => {
+      try {
+        const data = await window.electron.readFile(book.filepath)
         if (cancelled) return
-        let arr: Uint8Array
+        let bytes: Uint8Array
         if (data instanceof ArrayBuffer) {
-          arr = new Uint8Array(data)
+          bytes = new Uint8Array(data)
         } else if (ArrayBuffer.isView(data)) {
-          arr = new Uint8Array(
+          bytes = new Uint8Array(
             (data as any).buffer,
             (data as any).byteOffset,
             (data as any).byteLength
           )
         } else {
-          const values = Object.values(data as any) as number[]
-          arr = new Uint8Array(values)
+          bytes = new Uint8Array(Object.values(data as any) as number[])
         }
-        setPdfData({ data: arr })
-      })
-      .catch((err) => {
+        // pdfjs detaches the buffer it parses; pass a clone so `bytes` stays
+        // intact for indexing and re-parse.
+        const loadingTask = pdfjs.getDocument({ data: bytes.slice(), ...pdfOptions })
+        const proxy = await loadingTask.promise
+        if (cancelled) {
+          void proxy.destroy()
+          return
+        }
+        setCachedPdf(book.id, proxy, bytes)
+        setPdfProxy(proxy)
+        setPdfBytes(bytes)
+      } catch (err) {
         if (!cancelled) {
-          console.error('[pdf] readFile failed:', err)
+          console.error('[pdf] load failed:', err)
           setLoadError(err instanceof Error ? err.message : String(err))
         }
-      })
+      }
+    })()
 
     return () => {
       cancelled = true
     }
-  }, [book.filepath])
+  }, [book.id, book.filepath])
 
-  // pdfjs transfers (detaches) the underlying ArrayBuffer when a Document
-  // loads. Give each <Document> consumer its own clone so the main viewer
-  // and the TOC sidebar don't fight over a single buffer — otherwise
-  // whichever loads second sees an empty buffer and renders
-  // "Failed to load PDF file."
-  const mainPdfFile = useMemo(
-    () => (pdfData ? { data: new Uint8Array(pdfData.data) } : null),
-    [pdfData]
-  )
-  const tocPdfFile = useMemo(
-    () => (pdfData ? { data: new Uint8Array(pdfData.data) } : null),
-    [pdfData]
-  )
+  // Hydrate the singleton pdfStore + the reader machine whenever the proxy
+  // resolves (from cache or fresh parse). Kept separate from the loader so
+  // a cache hit fires synchronously on mount.
+  useEffect(() => {
+    if (!pdfProxy) return
+    setPageCount(pdfProxy.numPages)
+    setPdfDocProxy(pdfProxy)
+    pdfReader.sendDocLoaded(pdfProxy.numPages)
+    // pdfReader is a hook result — its identity changes per render. Listing
+    // it here would re-fire on every render; we only want this to run when
+    // the proxy actually changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfProxy, setPageCount, setPdfDocProxy])
 
   // Background indexing: extract per-page text and ship to the embedding/vector
   // pipeline so chat/RAG works for this book. Runs as an Effect fiber with
   // bounded concurrency; interrupted when the book unmounts.
   useEffect(() => {
-    if (!pdfData?.data) return
+    if (!pdfBytes) return
 
     let cancelled = false
     let fiber: Fiber.RuntimeFiber<void, Error> | null = null
@@ -275,7 +297,10 @@ export function PdfView({
 
     const run = async (): Promise<void> => {
       try {
-        doc = await loadPdfDocument(pdfData.data)
+        // Indexing keeps its own throwaway proxy — it walks every page and
+        // can run after the visible reader unmounts. Sharing the cached
+        // proxy would risk indexing destroying it on its own cleanup.
+        doc = await loadPdfDocument(pdfBytes)
         if (cancelled) {
           await doc.destroy()
           doc = null
@@ -340,7 +365,7 @@ export function PdfView({
       if (fiber) Effect.runFork(Fiber.interrupt(fiber))
       if (doc) void doc.destroy()
     }
-  }, [pdfData?.data, book.id])
+  }, [pdfBytes, book.id])
 
   return (
     <div className={cn('relative h-screen w-full', !isDualPage && isFullscreen ? '' : '', 'bg-gray-300')}>
@@ -368,31 +393,13 @@ export function PdfView({
             <p className="text-red-500">Failed to load PDF: {loadError}</p>
           </div>
         )}
-        {!pdfData && !loadError && (
+        {!pdfProxy && !loadError && (
           <div className={cn('w-full h-screen grid place-items-center', getTextColor())}>
             <Loader2 size={20} className="animate-spin" />
           </div>
         )}
-        {mainPdfFile && (
-          <Document
-            className="flex items-center justify-center flex-col"
-            file={mainPdfFile}
-            options={pdfOptions}
-            onLoadSuccess={onDocumentLoadSuccess}
-            onItemClick={onItemClick}
-            error={
-              <div className={cn('p-4 text-center', getTextColor())}>
-                <p className="text-red-500">Error loading PDF. Please try again.</p>
-              </div>
-            }
-            loading={
-              <div className={cn('w-full h-screen grid place-items-center', getTextColor())}>
-                <Loader2 size={20} className="animate-spin" />
-              </div>
-            }
-            externalLinkTarget="_blank"
-            externalLinkRel="noopener noreferrer nofollow"
-          >
+        {pdfProxy && (
+          <div className="flex items-center justify-center flex-col">
             <div
               style={{
                 height: `${virtualizer.getTotalSize()}px`,
@@ -451,6 +458,7 @@ export function PdfView({
                     >
                       <PageComponent
                         key={`page-${virtualItem.index + 1}`}
+                        pdf={pdfProxy}
                         thispageNumber={virtualItem.index + 1}
                         pdfWidth={pageWidth}
                         pdfHeight={pdfHeight}
@@ -471,7 +479,7 @@ export function PdfView({
                 ))}
               </div>
             </div>
-          </Document>
+          </div>
         )}
         </div>
       </div>
@@ -565,11 +573,7 @@ export function PdfView({
               '[&_a]:text-gray-700 [&_a:hover]:bg-gray-100 [&_a:hover]:text-black [&_a]:border-gray-100 [&_a:hover]:pl-6'
             )}
           >
-            {tocPdfFile && (
-              <Document file={tocPdfFile} options={pdfOptions}>
-                <Outline onItemClick={onItemClick} />
-              </Document>
-            )}
+            {pdfProxy && <Outline pdf={pdfProxy} onItemClick={onItemClick} />}
           </div>
         }
       />

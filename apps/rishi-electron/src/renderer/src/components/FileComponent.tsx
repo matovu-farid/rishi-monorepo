@@ -15,6 +15,7 @@ import { LoginButton } from './LoginButton'
 import { UpdateMenu } from './UpdateMenu'
 import { BookDiscoveryModal } from './BookDiscoveryModal'
 import { HelpMenu } from './HelpMenu'
+import { evictPdf } from '@/services/reader-cache/pdf-cache'
 
 // Module-level caches survive library remounts (e.g., navigating back from a
 // reader). Two pieces are needed to avoid the white flash on re-entry:
@@ -143,6 +144,7 @@ export default function FileComponent(): React.JSX.Element {
       await deleteBook({ bookId: book.id })
       removeBook(book.id)
       revokeCachedCoverUrl(book.id)
+      evictPdf(book.id)
     },
     onError: (err) => {
       console.error('Error deleting book:', err)

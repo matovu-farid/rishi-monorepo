@@ -34,8 +34,10 @@ function BookView(): React.JSX.Element {
       setBook(book)
       return book
     },
-    staleTime: 0,
-    gcTime: 0
+    // Keep the metadata around so reopening within a session is instant.
+    // Bound by gcTime so unused entries eventually drop.
+    staleTime: Infinity,
+    gcTime: 5 * 60 * 1000
   })
 
   const setBookNavigationState = usePdfStore((s) => s.setBookNavigationState)
