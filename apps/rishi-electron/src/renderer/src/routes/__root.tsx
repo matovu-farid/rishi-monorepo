@@ -14,6 +14,7 @@ import { TourProvider } from '@/components/tutorial/TourProvider'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { useHydrateAuth } from '@/hooks/useHydrateAuth'
 import { useStartupUpdateCheck } from '@/hooks/useStartupUpdateCheck'
+import { useFileOpenHandler } from '@/hooks/useFileOpenHandler'
 
 export const Route = createRootRoute({
   component: () => <RootComponent />
@@ -23,6 +24,7 @@ function RootComponent(): JSX.Element {
   // Hydrate auth from secure storage + register deep-link listener
   useHydrateAuth()
   useStartupUpdateCheck()
+  useFileOpenHandler()
 
   // Initialize desktop sync on app mount
   useEffect(() => {

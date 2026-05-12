@@ -1,5 +1,5 @@
-import { app, BrowserWindow, shell, protocol, net } from 'electron'
-import { join } from 'path'
+import { app, BrowserWindow, shell, protocol, net, ipcMain } from 'electron'
+import { join, extname } from 'path'
 import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { initMainSentry } from './utils/sentry.js'
@@ -8,6 +8,39 @@ import { registerAllIpcHandlers } from './ipc/index.js'
 import { initDatabase } from './database/index.js'
 import { initVectorDb } from './vectordb/index.js'
 import { registerAuthIpc } from './auth/index.js'
+
+// File types Rishi advertises in the OS "Open With" menu (see
+// electron-builder.yml `fileAssociations`). The OS routes a matching file
+// click to this binary; we then forward the path to the renderer for import.
+const SUPPORTED_BOOK_EXTENSIONS = new Set(['.epub', '.pdf', '.mobi', '.azw3', '.djvu'])
+
+function isSupportedBookPath(p: string): boolean {
+  return SUPPORTED_BOOK_EXTENSIONS.has(extname(p).toLowerCase())
+}
+
+// Paths captured before the renderer is ready to receive them. Drained
+// after `did-finish-load`, or pulled by the renderer via `files:getPending`.
+const pendingOpenFiles: string[] = []
+let rendererReady = false
+
+function deliverOpenFiles(paths: string[]): void {
+  const filtered = paths.filter(isSupportedBookPath)
+  if (filtered.length === 0) return
+  if (rendererReady && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('open-files', filtered)
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  } else {
+    pendingOpenFiles.push(...filtered)
+  }
+}
+
+// macOS routes file double-clicks through this event — must be registered
+// before `app.whenReady` resolves so first-launch files aren't dropped.
+app.on('open-file', (event, filePath) => {
+  event.preventDefault()
+  deliverOpenFiles([filePath])
+})
 
 // Initialize Sentry as early as possible so startup crashes are captured.
 initMainSentry()
@@ -102,6 +135,16 @@ function createWindow(): void {
     mainWindow?.show()
   })
 
+  // Flush any file paths buffered before the renderer subscribed (first-launch
+  // from Finder/Explorer, or any open-file event that arrived during startup).
+  mainWindow.webContents.once('did-finish-load', () => {
+    rendererReady = true
+    if (pendingOpenFiles.length > 0) {
+      const paths = pendingOpenFiles.splice(0)
+      mainWindow?.webContents.send('open-files', paths)
+    }
+  })
+
   if (mainWindow) attachDebugInstrumentation(mainWindow, 'main')
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -147,7 +190,9 @@ const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
+    // Windows/Linux deliver "Open With" file paths via argv on a second launch.
+    deliverOpenFiles(argv.slice(1).filter((a) => !a.startsWith('-')))
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
@@ -169,6 +214,19 @@ app.whenReady().then(async () => {
   await initDatabase()
   initVectorDb()
   registerAllIpcHandlers()
+
+  // Race guard: if the renderer mounts before `did-finish-load` fires, it
+  // calls this to drain whatever was buffered.
+  ipcMain.handle('files:getPending', () => {
+    rendererReady = true
+    return pendingOpenFiles.splice(0)
+  })
+
+  // First-launch file path (Windows/Linux deliver it via argv; macOS uses
+  // the `open-file` event handler registered above).
+  if (process.platform !== 'darwin') {
+    deliverOpenFiles(process.argv.slice(1).filter((a) => !a.startsWith('-')))
+  }
 
   createWindow()
 

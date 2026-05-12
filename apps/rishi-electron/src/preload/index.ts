@@ -96,6 +96,7 @@ const electronAPI: ElectronAPI = {
   showOpenDialog: (options: unknown) => ipcRenderer.invoke('dialog:showOpen', options),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   getOsInfo: () => ipcRenderer.invoke('util:getOsInfo'),
+  getPendingOpenFiles: () => ipcRenderer.invoke('files:getPending'),
 
   // Books extra (typed)
   booksGetSyncId: (bookId: number) => ipcRenderer.invoke('books:getSyncId', bookId),

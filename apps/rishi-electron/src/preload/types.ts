@@ -84,6 +84,7 @@ export interface ElectronAPI {
   showOpenDialog: (options: unknown) => Promise<{ filePaths: string[] }>
   openExternal: (url: string) => Promise<void>
   getOsInfo: () => Promise<{ platform: string; arch: string; version: string }>
+  getPendingOpenFiles: () => Promise<string[]>
 
   // Books extra (typed)
   booksGetSyncId: (bookId: number) => Promise<string | null>
