@@ -6,7 +6,7 @@ import { loadPdfDocument, extractPageParagraphs } from './text-extraction'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const PDF_PATH = resolve(__dirname, '../../../../../cypress/fixtures/test-book.pdf')
+const PDF_PATH = resolve(__dirname, '../../../../../e2e/fixtures/test-book.pdf')
 
 describe('text-extraction (real PDF)', () => {
   let doc: PDFDocumentProxy
