@@ -3,7 +3,7 @@ import { Page } from 'react-pdf'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 
 import { usePdfStore } from '@/stores/pdfStore'
-import { Loader2 } from 'lucide-react'
+import Loader from '@/components/Loader'
 type Transform = [number, number, number, number, number, number]
 
 const PARAGRAPH_INDEX_PER_PAGE = 10000
@@ -108,7 +108,7 @@ function PageComponentInner({
           className="bg-white grid place-items-center"
           style={{ width: pdfWidth, aspectRatio: '8.5 / 11' }}
         >
-          <Loader2 size={20} className="animate-spin" />
+          <Loader />
         </div>
       }
       onRenderSuccess={handleRenderSuccess}

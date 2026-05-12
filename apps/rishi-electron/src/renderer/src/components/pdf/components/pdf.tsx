@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react'
 import { IconButton } from '@/components/ui/IconButton'
 import { ThemeType } from '@/themes/common'
-import { Loader2, Menu as MenuIcon, LayoutGrid } from 'lucide-react'
+import { Menu as MenuIcon, LayoutGrid } from 'lucide-react'
+import Loader from '@/components/Loader'
 import AIChatOrb from '../../chat/AIChatOrb'
 import VoiceChatLauncher from '../../chat/VoiceChatLauncher'
 import { ChatPanel } from '@/components/chat/ChatPanel'
@@ -189,7 +190,6 @@ export function PdfView({
   // for clarity and to avoid recomputation.
   const bookIdStr = useMemo(() => book.id.toString(), [book.id])
 
-  const hasNavigatedToPage = usePdfStore((s) => s.hasNavigatedToPage)
   const { virtualizer, virtualItems, pageRefs, handlePageRendered } = useVirualization(
     scrollContainerRef,
     book
@@ -219,7 +219,7 @@ export function PdfView({
   // The lazy initializers read the cache synchronously so a cache hit
   // renders with the proxy on the very first paint — no loader flash.
   const [pdfProxy, setPdfProxy] = useState<PDFDocumentProxy | null>(
-    () => getCachedPdf(book.id)?.proxy ?? null
+    () => getCachedPdf(book.id)?.document ?? null
   )
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(
     () => getCachedPdf(book.id)?.bytes ?? null
@@ -431,8 +431,8 @@ export function PdfView({
           </div>
         )}
         {!pdfProxy && !loadError && (
-          <div className={cn('w-full h-screen grid place-items-center', getTextColor())}>
-            <Loader2 size={20} className="animate-spin" />
+          <div className="w-full h-screen grid place-items-center">
+            <Loader />
           </div>
         )}
         {pdfProxy && documentContextValue && (
@@ -526,13 +526,6 @@ export function PdfView({
       {/* All overlays below live OUTSIDE the scroll container so their
           `position: fixed` styles anchor to the viewport (the scroll
           container has `contain: strict` which would otherwise trap them). */}
-
-      {/** White loading screen */}
-      {!hasNavigatedToPage && (
-        <div className="fixed inset-0 grid place-items-center bg-white z-100 pointer-events-none">
-          <Loader2 size={20} className="animate-spin" />
-        </div>
-      )}
 
       {/* Fixed Top Bar — auto-hides after 2s */}
       <ReaderToolbar
