@@ -74,7 +74,17 @@ export function PageComponent({
         setPageData(pageNumber, data)
       }}
       loading={
-        <div className="w-screen bg-white  h-screen grid place-items-center">
+        // Match the rendered Page's dimensions so the slot doesn't shrink
+        // when the canvas replaces this placeholder. A shrink causes the
+        // virtualizer to apply a scrollTop adjustment when pages above the
+        // viewport (re)mount — visible as a back-and-forth jitter at page
+        // boundaries when scrolling up. PDF pages are commonly portrait
+        // ~8.5×11; we use that aspect ratio so width=pdfWidth picks a
+        // height close to the rendered page's natural height.
+        <div
+          className="bg-white grid place-items-center"
+          style={{ width: pdfWidth, aspectRatio: '8.5 / 11' }}
+        >
           <Loader2 size={20} className="animate-spin" />
         </div>
       }
