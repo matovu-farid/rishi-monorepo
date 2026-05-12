@@ -16,6 +16,29 @@ import { UpdateMenu } from './UpdateMenu'
 import { BookDiscoveryModal } from './BookDiscoveryModal'
 import { HelpMenu } from './HelpMenu'
 
+// Module-level cache so blob URLs survive library remounts (e.g., navigating
+// back from a reader). Without this, every BookCoverImage instance restarts
+// with coverUrl=null, paints a placeholder, then swaps in the image on the
+// next tick — visible as a blank flash. The cache holds one URL per book.id
+// for the lifetime of the renderer process; entries are revoked on delete.
+const coverUrlCache = new Map<number, string>()
+
+function getCachedCoverUrl(book: Book): string | null {
+  const cached = coverUrlCache.get(book.id)
+  if (cached) return cached
+  const url = bytesToBlobUrl(book.cover)
+  if (url) coverUrlCache.set(book.id, url)
+  return url
+}
+
+function revokeCachedCoverUrl(bookId: number): void {
+  const url = coverUrlCache.get(bookId)
+  if (url) {
+    URL.revokeObjectURL(url)
+    coverUrlCache.delete(bookId)
+  }
+}
+
 function bytesToBlobUrl(bytes: number[]): string | null {
   if (!bytes || bytes.length === 0) return null
   const uint8Array = new Uint8Array(bytes)
@@ -31,19 +54,10 @@ function bytesToBlobUrl(bytes: number[]): string | null {
 }
 
 function BookCoverImage({ book }: { book: Book }) {
-  // NOTE: don't switch this to useMemo. StrictMode's simulated double-invoke
-  // runs the effect cleanup once before the second mount; useMemo would
-  // cache the revoked URL, breaking the <img>. useState lets the effect
-  // mint a fresh URL on the second mount.
-  const [coverUrl, setCoverUrl] = useState<string | null>(null)
-
-  useEffect(() => {
-    const url = bytesToBlobUrl(book.cover)
-    setCoverUrl(url)
-    return () => {
-      if (url) URL.revokeObjectURL(url)
-    }
-  }, [book.id])
+  // Read from module cache during render — no state, no effect, no flash.
+  // The cache outlives this component, so remounts hit it instead of
+  // re-decoding bytes and triggering a placeholder paint.
+  const coverUrl = getCachedCoverUrl(book)
 
   if (!coverUrl) {
     return (
@@ -112,6 +126,7 @@ export default function FileComponent(): React.JSX.Element {
     mutationFn: async ({ book }: { book: Book }) => {
       await deleteBook({ bookId: book.id })
       removeBook(book.id)
+      revokeCachedCoverUrl(book.id)
     },
     onError: (err) => {
       console.error('Error deleting book:', err)
