@@ -51,9 +51,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned to 10.22.0 — pnpm 10.29.3+ has a regression (pnpm/pnpm#10601)
+      # that silently drops transitive deps during install. Symptoms: app.asar
+      # missing file-uri-to-path (bindings -> better-sqlite3), setimmediate
+      # (jszip), and ~90 other transitives — app fails to launch on Windows
+      # and macOS with "Cannot find module" errors. Re-evaluate when 10.x has
+      # a fix released.
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 10.22.0
 
       - uses: actions/setup-node@v4
         with:
