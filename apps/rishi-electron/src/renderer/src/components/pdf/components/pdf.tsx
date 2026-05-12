@@ -27,6 +27,7 @@ import { PageComponent } from './pdf-page'
 import { useSetupMenu } from '../hooks/useSetupMenu'
 import { PDFDocumentProxy } from 'pdfjs-dist'
 import { useVirualization } from '../hooks/useVirualization'
+import { PAGE_GAP } from '../utils/constants'
 import { parsePdfLocation } from '@/lib/pdfLocation'
 import { Effect, Fiber } from 'effect'
 import { indexBookProgram } from '@/services/indexing/index-program'
@@ -345,6 +346,14 @@ export function PdfView({
         !isDualPage && isFullscreen ? '' : '',
         'bg-gray-300'
       )}
+      // overflowAnchor: the browser's built-in scroll-anchoring fights the
+      // virtualizer's `adjustments` mechanism on backward scroll, producing
+      // a back-and-forth jitter when an upper page (re)mounts. Disabling it
+      // is the official tanstack/virtual recommendation for variable-size
+      // virtualizers (see examples/dynamic).
+      // contain: strict isolates layout/paint to this subtree, which is also
+      // recommended for the dynamic-size pattern.
+      style={{ overflowAnchor: 'none', contain: 'strict' }}
     >
       {/** White loading screen */}
       {!hasNavigatedToPage && (
@@ -425,8 +434,30 @@ export function PdfView({
                 position: 'relative'
               }}
             >
-              {virtualItems.map((virtualItem) => (
-                <div key={'collection-' + virtualItem.key}>
+              {/*
+                Recommended dynamic-virtualizer layout (per tanstack/virtual
+                examples/dynamic): one absolute wrapper positioned at the
+                first visible item's start, with items flowing naturally
+                inside. The previous per-item `position:absolute` +
+                `transform: translateY(item.start)` pattern made every
+                item independently anchored, so when an upper item was
+                re-measured during backward scroll, every item below it
+                had to re-render with a new transform — racing the
+                virtualizer's scrollTop adjustment and producing a visible
+                jitter at page boundaries. With the natural-flow pattern
+                only the wrapper's translateY needs updating; items below
+                a re-measured one shift naturally with no transform churn.
+              */}
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  transform: `translateY(${virtualItems[0]?.start ?? 0}px)`
+                }}
+              >
+                {virtualItems.map((virtualItem) => (
                   <div
                     key={virtualItem.key}
                     data-index={virtualItem.index}
@@ -438,9 +469,13 @@ export function PdfView({
                       }
                       virtualizer.measureElement(node)
                     }}
-                    className="absolute left-0 top-0 flex w-full justify-center"
+                    className="flex w-full justify-center"
                     style={{
-                      transform: `translateY(${virtualItem.start}px)`
+                      // Render the inter-page gap as natural margin so the
+                      // virtualizer's `gap` config matches the actual DOM
+                      // (virtualizer counts N-1 gaps for N items, so the
+                      // last item gets no margin).
+                      marginBottom: virtualItem.index < pageCount - 1 ? PAGE_GAP : 0
                     }}
                   >
                     <div
@@ -456,8 +491,6 @@ export function PdfView({
                         isDualPage={isDualPage}
                         bookId={book.id.toString()}
                         onRenderComplete={() => {
-                          // setHasNavigatedToPage(true);
-                          // handlePageRendered(virtualItem.index)
                           handlePageRendered(virtualItem.index)
                         }}
                       />
@@ -471,14 +504,8 @@ export function PdfView({
                       </div>
                     </div>
                   </div>
-
-                  <div
-                    className=" "
-                    data-background-page-number={virtualItem.index + 1}
-                    style={{ width: pageWidth ?? 'auto' }}
-                  ></div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           </Document>
         )}
