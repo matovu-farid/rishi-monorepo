@@ -9,6 +9,7 @@ import 'react-pdf/dist/Page/TextLayer.css'
 import { elementScroll } from '@tanstack/react-virtual'
 import type { VirtualizerOptions } from '@tanstack/react-virtual'
 import { usePdfStore } from '@/stores/pdfStore'
+import { parsePdfLocation } from '@/lib/pdfLocation'
 import { PAGE_HEIGHT, PAGE_GAP } from '../utils/constants'
 import type { Book } from '@/lib/api'
 function easeInOutQuint(t: number) {
@@ -18,11 +19,19 @@ export function useVirualization(
   scrollContainerRef: React.RefObject<HTMLDivElement | null>,
   book: Book
 ) {
-  const initialPageIndexRef = useRef(Math.max(0, Number.parseInt(book.location, 10) - 1))
+  const initialPosition = parsePdfLocation(book.location)
+  const initialPageIndexRef = useRef(Math.max(0, initialPosition.page - 1))
   const numPages = usePdfStore((s) => s.pageCount)
   const setHasNavigatedToPage = usePdfStore((s) => s.setHasNavigatedToPage)
   const estimatedPageHeight = PAGE_HEIGHT
   const scrollingRef = useRef<number | null>(null)
+  // initialOffset uses ESTIMATED page heights — the virtualizer hasn't
+  // measured anything yet. Don't add the saved sub-page offset here: the
+  // estimated page-N start usually differs from the measured page-N start
+  // by hundreds of pixels, so adding the (measured) sub-page offset to the
+  // (estimated) page start lands the user wildly off. usePdfReader applies
+  // the sub-page offset after the seek-landed poll has snapped to the
+  // correct measured page start.
   const initialOffsetRef = useRef(initialPageIndexRef.current * (estimatedPageHeight + PAGE_GAP))
   const setVirtualizer = usePdfStore((s) => s.setVirtualizer)
   const pageRefs = useRef(new Map<number, HTMLElement>())

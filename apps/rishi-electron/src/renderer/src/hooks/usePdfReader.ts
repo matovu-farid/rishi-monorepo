@@ -6,36 +6,39 @@ import { pdfReaderMachine } from '@/machines/pdfReaderMachine'
 import { usePdfStore } from '@/stores/pdfStore'
 import { usePlayerStore } from '@/stores/playerStore'
 import { updateBookLocation } from '@/lib/api'
+import { formatPdfLocation, parsePdfLocation } from '@/lib/pdfLocation'
 import { pageDataToParagraphs } from '@/components/pdf/utils/getPageParagraphs'
 import type { Book } from '@/lib/api'
 
 /**
- * Returns the page index (1-based) currently most-visible in the virtualizer's
- * viewport, or 0 if the virtualizer has no items rendered yet. Uses the
- * container's actual scrollTop (authoritative) and virtualizer item geometry.
- * No DOM queries, no canvas sentinels.
+ * Returns `{ page, offset }` describing the page currently most-visible in
+ * the virtualizer's viewport AND how many pixels have been scrolled past
+ * the top of that page. Used both to detect page changes and to persist
+ * sub-page scroll position so reopening lands at the same offset, not
+ * snapped to the page boundary.
  */
-function visiblePageFromVirtualizer(
+function visiblePositionFromVirtualizer(
   virtualizer: Virtualizer<HTMLDivElement, Element>,
   container: HTMLElement | null
-): number {
+): { page: number; offset: number } {
   const items = virtualizer.getVirtualItems()
-  if (items.length === 0) return 0
+  if (items.length === 0) return { page: 0, offset: 0 }
   const scrollTop = container?.scrollTop ?? virtualizer.scrollOffset ?? 0
-  const viewportSize = container?.clientHeight ?? 0
-  const center = scrollTop + viewportSize / 2
 
-  let closest = items[0]
-  let closestDist = Math.abs(closest.start + closest.size / 2 - center)
-  for (let i = 1; i < items.length; i++) {
-    const item = items[i]
-    const dist = Math.abs(item.start + item.size / 2 - center)
-    if (dist < closestDist) {
-      closestDist = dist
-      closest = item
+  // Pick the page whose [start, start+size) range contains the viewport's
+  // top edge — i.e. the topmost visible page, matching the user's mental
+  // model of "I'm reading at this scrollTop". The previous heuristic
+  // (closest center to viewport center) collapsed sub-page offset to 0
+  // whenever the viewport center happened to land in the next page's half.
+  let topmost = items[0]
+  for (const item of items) {
+    if (item.start <= scrollTop && scrollTop < item.start + item.size) {
+      topmost = item
+      break
     }
+    if (item.start <= scrollTop) topmost = item
   }
-  return closest.index + 1
+  return { page: topmost.index + 1, offset: Math.max(0, scrollTop - topmost.start) }
 }
 
 export type UsePdfReaderApi = {
@@ -67,20 +70,22 @@ export function usePdfReader(
   useEffect(() => {
     if (!virtualizer) return
 
-    const initialPage = parseInt(book.location, 10) || 1
+    const { page: parsedPage, offset: parsedOffset } = parsePdfLocation(book.location)
+    const initialPage = parsedPage > 0 ? parsedPage : 1
+    const initialOffset = parsedOffset
     const bookId = book.id
 
     const machine = pdfReaderMachine.provide({
       actors: {
         saveLocation: fromPromise<
-          { savedPage: number },
-          { bookId: number; page: number }
+          { savedPage: number; savedOffset: number },
+          { bookId: number; page: number; offset: number }
         >(async ({ input }) => {
           await updateBookLocation({
             bookId: input.bookId,
-            newLocation: String(input.page)
+            newLocation: formatPdfLocation({ page: input.page, offset: input.offset })
           })
-          return { savedPage: input.page }
+          return { savedPage: input.page, savedOffset: input.offset }
         })
       },
       actions: {
@@ -88,13 +93,18 @@ export function usePdfReader(
         flushSave: ({ context }) => {
           void updateBookLocation({
             bookId: context.bookId,
-            newLocation: String(context.currentPage)
+            newLocation: formatPdfLocation({
+              page: context.currentPage,
+              offset: context.currentOffset
+            })
           })
         }
       }
     })
 
-    const actor = createActor(machine, { input: { bookId, initialPage } })
+    const actor = createActor(machine, {
+      input: { bookId, initialPage, initialOffset }
+    })
 
     apiRef.current = {
       sendDocLoaded: (numPages) => actor.send({ type: 'DOC_LOADED', numPages }),
@@ -112,16 +122,28 @@ export function usePdfReader(
       }
     })
 
-    // --- Drive virtualizer.scrollToIndex when the machine enters seeking
-    // with a new target. The user (or initial-restore) requests a seek;
-    // the virtualizer animates; the scroll listener / landed-poll detects
-    // arrival and sends SEEK_LANDED.
+    // --- Drive virtualizer scroll when the machine enters seeking with a
+    // new target. We don't use scrollToIndex(target-1, { align: 'start' })
+    // because that lands at page-start exactly — losing the saved sub-page
+    // offset. Instead we compute the absolute target (pageStart + pendingOffset)
+    // from the virtualizer's measured offsets and call scrollToOffset.
+    // pendingOffset is non-zero only on initial restore; user-initiated
+    // SEEK_REQUESTED clears it so jump-to-page lands at page top.
+    const driveSeek = (targetPage: number, offset: number): void => {
+      const offsetInfo = virtualizer.getOffsetForIndex(targetPage - 1, 'start')
+      if (!offsetInfo) {
+        virtualizer.scrollToIndex(targetPage - 1, { align: 'start' })
+        return
+      }
+      const [pageStart] = offsetInfo
+      virtualizer.scrollToOffset(pageStart + offset, { align: 'start' })
+    }
     let lastDrivenTarget: number | null = null
     const seekDriverUnsub = actor.subscribe((snap) => {
       const target = snap.context.seekTarget
       if (target !== null && target !== lastDrivenTarget) {
         lastDrivenTarget = target
-        virtualizer.scrollToIndex(target - 1, { align: 'start' })
+        driveSeek(target, snap.context.pendingOffset)
       } else if (target === null) {
         lastDrivenTarget = null
       }
@@ -156,9 +178,9 @@ export function usePdfReader(
         const delta = Math.abs(currentScrollTop - lastSeenScrollTop)
         lastSeenScrollTop = currentScrollTop
         if (delta < 4) return
-        const visible = visiblePageFromVirtualizer(virtualizer, container)
-        if (!visible) return
-        actor.send({ type: 'PAGE_CHANGED', page: visible })
+        const { page, offset } = visiblePositionFromVirtualizer(virtualizer, container)
+        if (!page) return
+        actor.send({ type: 'PAGE_CHANGED', page, offset })
       }, 80)
     }
     container?.addEventListener('scroll', handleScroll, { passive: true })
@@ -175,13 +197,15 @@ export function usePdfReader(
       prevRegion = region
     })
 
-    // --- Seek-landed detection. While the machine is in `seeking`, poll the
-    // visible page every 100ms; when it matches the target, send SEEK_LANDED.
-    // Re-issues scrollToIndex on each tick where visible !== target — the
-    // virtualizer's first scroll uses estimated page heights, and once the
-    // actual pages render and get measured, the layout shifts. Without
-    // re-scrolling, the user would land on a drifted page and that wrong page
-    // would get saved.
+    // --- Seek-landed detection. While the machine is in `seeking`, poll
+    // every 100ms; when the topmost visible page matches the target, send
+    // SEEK_LANDED. Re-drives the seek (via driveSeek, which uses measured
+    // page offsets + pendingOffset) on each tick where visible !== target —
+    // the virtualizer's first scroll uses estimated page heights, and once
+    // the actual pages render and get measured, the layout shifts. Without
+    // re-driving, the user would land on a drifted page (or at page-start
+    // with no sub-page offset applied) and that wrong position would get
+    // saved.
     let landedInterval: ReturnType<typeof setInterval> | null = null
     let landedTicks = 0
     const landedUnsub = actor.subscribe((snap) => {
@@ -189,16 +213,17 @@ export function usePdfReader(
       if (isSeeking && !landedInterval) {
         landedTicks = 0
         landedInterval = setInterval(() => {
-          const target = actor.getSnapshot().context.seekTarget
+          const ctx = actor.getSnapshot().context
+          const target = ctx.seekTarget
           if (target === null) return
-          const visible = visiblePageFromVirtualizer(virtualizer, container)
+          const { page: visible } = visiblePositionFromVirtualizer(virtualizer, container)
           landedTicks++
           if (visible === target) {
             actor.send({ type: 'SEEK_LANDED' })
             return
           }
           if (landedTicks <= 30) {
-            virtualizer.scrollToIndex(target - 1, { align: 'start' })
+            driveSeek(target, ctx.pendingOffset)
           } else {
             // Give up after ~3s; accept whatever's visible so we don't hang.
             actor.send({ type: 'SEEK_LANDED' })

@@ -27,6 +27,7 @@ import { PageComponent } from './pdf-page'
 import { useSetupMenu } from '../hooks/useSetupMenu'
 import { PDFDocumentProxy } from 'pdfjs-dist'
 import { useVirualization } from '../hooks/useVirualization'
+import { parsePdfLocation } from '@/lib/pdfLocation'
 import { Effect, Fiber } from 'effect'
 import { indexBookProgram } from '@/services/indexing/index-program'
 import { loadPdfDocument, extractPageParagraphs } from '@/services/indexing/text-extraction'
@@ -300,8 +301,9 @@ export function PdfView({
 
         // Index the page the user is opening on first so chat/RAG works for
         // their current location immediately. book.location is a string
-        // holding the saved page number; falls back to 1 on fresh opens.
-        const startPage = parseInt(book.location ?? '1', 10) || 1
+        // holding the saved page number (or "page:offset"); falls back to 1
+        // on fresh opens.
+        const startPage = parsePdfLocation(book.location).page || 1
 
         const docRef = doc
         fiber = Effect.runFork(
