@@ -16,18 +16,28 @@ import { UpdateMenu } from './UpdateMenu'
 import { BookDiscoveryModal } from './BookDiscoveryModal'
 import { HelpMenu } from './HelpMenu'
 
-// Module-level cache so blob URLs survive library remounts (e.g., navigating
-// back from a reader). Without this, every BookCoverImage instance restarts
-// with coverUrl=null, paints a placeholder, then swaps in the image on the
-// next tick — visible as a blank flash. The cache holds one URL per book.id
-// for the lifetime of the renderer process; entries are revoked on delete.
+// Module-level caches survive library remounts (e.g., navigating back from a
+// reader). Two pieces are needed to avoid the white flash on re-entry:
+//   1. URL cache: skips re-running URL.createObjectURL on every mount.
+//   2. Image cache: holds a detached HTMLImageElement per cover. Keeping a
+//      live Image reference prevents the browser from evicting the decoded
+//      pixels when the visible <img> unmounts. On remount the new <img> hits
+//      the same blob URL and the browser reuses the warm decode → paints on
+//      first frame instead of flashing white.
+// Both entries are released in revokeCachedCoverUrl when a book is deleted.
 const coverUrlCache = new Map<number, string>()
+const coverImageCache = new Map<number, HTMLImageElement>()
 
 function getCachedCoverUrl(book: Book): string | null {
   const cached = coverUrlCache.get(book.id)
   if (cached) return cached
   const url = bytesToBlobUrl(book.cover)
-  if (url) coverUrlCache.set(book.id, url)
+  if (!url) return null
+  coverUrlCache.set(book.id, url)
+  const preload = new Image()
+  preload.src = url
+  void preload.decode().catch(() => {})
+  coverImageCache.set(book.id, preload)
   return url
 }
 
@@ -37,6 +47,7 @@ function revokeCachedCoverUrl(bookId: number): void {
     URL.revokeObjectURL(url)
     coverUrlCache.delete(bookId)
   }
+  coverImageCache.delete(bookId)
 }
 
 function bytesToBlobUrl(bytes: number[]): string | null {
@@ -72,6 +83,11 @@ function BookCoverImage({ book }: { book: Book }) {
       className="w-full aspect-[5/7] object-cover rounded-lg shadow-lg"
       src={coverUrl}
       alt={book.title}
+      // sync: paint the cover in the same frame the <img> mounts.
+      // Without this, the new <img> mounts with an empty raster on the
+      // first paint and the decoded pixels arrive a frame later — that's
+      // the brief white flash on library re-entry.
+      decoding="sync"
     />
   )
 }
