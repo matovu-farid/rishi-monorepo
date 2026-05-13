@@ -46,11 +46,13 @@ test.describe('Book import & open lifecycle', () => {
     await expect(app.page.locator('[data-tour="book-grid"]')).toBeVisible({ timeout: 10000 })
 
     await openBook(app.page, book.id)
-    await expect(app.page.locator('[data-tour="reader-toolbar"]').first()).toBeAttached({
+    // Wait for the PDF scroll container to mount — this is the reader's
+    // unmistakable shell. The native menu is the back path; no in-window
+    // back link to assert against anymore.
+    await expect(app.page.locator('div.overflow-y-scroll').first()).toBeAttached({
       timeout: 15000
     })
     await app.page.waitForTimeout(3000)
-    await expect(app.page.locator('a[href="/#/"]').first()).toBeVisible()
   })
 
   test('EPUB imports and reaches the reader view', async () => {

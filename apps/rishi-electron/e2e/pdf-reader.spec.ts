@@ -33,16 +33,6 @@ test.describe('PDF reader', () => {
     await app.page.waitForTimeout(3000)
   })
 
-  test('back link to library exists', async () => {
-    await expect(app.page.locator('a[href="/#/"]').first()).toBeVisible({ timeout: 15000 })
-  })
-
-  test('reader toolbar is mounted', async () => {
-    await expect(app.page.locator('[data-tour="reader-toolbar"]').first()).toBeAttached({
-      timeout: 15000
-    })
-  })
-
   test('voice chat launcher is present', async () => {
     await expect(app.page.locator('[aria-label="Start voice chat"]').first()).toBeVisible({
       timeout: 15000

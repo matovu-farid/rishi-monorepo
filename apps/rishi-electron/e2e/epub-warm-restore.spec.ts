@@ -107,15 +107,11 @@ test('first open populates the cache, second open hits it', async () => {
     expect(stats.hits, 'reopen produces at least one cache hit').toBeGreaterThan(0)
     expect(stats.misses, 'reopen produces zero cache misses').toBe(0)
 
-    // Sanity: no ErrorBoundary, toolbar visible.
+    // Sanity: no ErrorBoundary fallback.
     await expect(
       app.page.locator('text=Something went wrong'),
       'no ErrorBoundary after reopen'
     ).toHaveCount(0)
-    await expect(
-      app.page.locator('[data-tour="reader-toolbar"]'),
-      'toolbar mounts after reopen'
-    ).toBeVisible({ timeout: 5000 })
   } finally {
     await closeApp(app)
   }

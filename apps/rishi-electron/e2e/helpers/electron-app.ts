@@ -151,11 +151,6 @@ export async function getBookLocation(page: Page, bookId: number): Promise<strin
   }, bookId)
 }
 
-export async function revealReaderToolbar(page: Page): Promise<void> {
-  await page.mouse.move(500, 10)
-  await page.waitForTimeout(200)
-}
-
 /** Press Escape (and click outside) until any dialog/popover overlay is gone. */
 export async function closeOverlays(page: Page): Promise<void> {
   const selector =

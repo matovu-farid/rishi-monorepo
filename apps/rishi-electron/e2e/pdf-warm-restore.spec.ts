@@ -28,7 +28,6 @@ import {
  *
  * Asserts:
  *   - No ErrorBoundary fallback after reopen.
- *   - Reader toolbar mounts.
  *   - At least one rendered page canvas appears.
  */
 test('reopening a PDF hits the warm-restore cache and renders pages', async () => {
@@ -59,11 +58,6 @@ test('reopening a PDF hits the warm-restore cache and renders pages', async () =
       app.page.locator('text=Something went wrong'),
       'no ErrorBoundary fallback after reopen'
     ).toHaveCount(0)
-
-    await expect(
-      app.page.locator('[data-tour="reader-toolbar"]'),
-      'toolbar mounts after reopen'
-    ).toBeVisible({ timeout: 5000 })
 
     await expect(
       app.page.locator('canvas.react-pdf__Page__canvas').first(),

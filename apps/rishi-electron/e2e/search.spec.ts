@@ -5,8 +5,6 @@ import {
   deleteAllBooks,
   importBook,
   launchApp,
-  openBook,
-  revealReaderToolbar,
   type LaunchedApp
 } from './helpers/electron-app'
 
@@ -39,17 +37,6 @@ test.describe('Search', () => {
     await expect(input).toHaveValue('Machine Learning')
     await input.fill('')
     await expect(input).toHaveValue('')
-  })
-
-  test('reader toolbar mounts in the EPUB reader', async () => {
-    await openBook(app.page, bookId)
-    await expect(app.page.locator('[aria-label="Next page"]').first()).toBeVisible({
-      timeout: 30000
-    })
-    await revealReaderToolbar(app.page)
-    await expect(app.page.locator('[data-tour="reader-toolbar"]').first()).toBeAttached({
-      timeout: 5000
-    })
   })
 
   test('searchBookText IPC accepts a query', async () => {
