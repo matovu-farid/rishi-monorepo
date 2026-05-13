@@ -144,6 +144,13 @@ export function PdfView({
       })
   }, [book.id])
 
+  // Publish the book title to main so the Window menu's open-books submenu
+  // shows the real title (not whatever the DB had at window-creation time).
+  useEffect(() => {
+    const e = (window as unknown as { electron: { send(c: string, p: unknown): void } }).electron
+    e?.send('window:setBookTitle', { bookId: book.id, title: book.title })
+  }, [book.id, book.title])
+
   // Configure PDF.js options with CDN fallback for better font and image support
   const pdfOptions = useMemo<DocumentInitParameters>(
     () => ({

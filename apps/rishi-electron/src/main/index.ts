@@ -220,6 +220,45 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
   ipcMain.handle('window:list', async () => {
     return openBookTitlesArray()
   })
+
+  // Renderer publishes the book title once the reader has loaded so the
+  // Window submenu (and the per-window menu context) shows the real title
+  // instead of whatever the DB had at window-creation time. We update the
+  // sender's own context, then mirror the new openBookTitles list into every
+  // other live window's context so their Window submenu picks it up without
+  // waiting for the next focus event.
+  ipcMain.on(
+    'window:setBookTitle',
+    (event, { bookId, title }: { bookId: number; title: string }) => {
+      openBookTitles.set(bookId, title)
+      const senderId = event.sender.id
+      const ctx = windowContexts.get(senderId)
+      if (ctx) {
+        const updated = {
+          ...ctx,
+          openBookTitles: openBookTitlesArray()
+        } as MenuContext
+        windowContexts.set(senderId, updated)
+        if (BrowserWindow.fromWebContents(event.sender) === BrowserWindow.getFocusedWindow()) {
+          menuInstaller!.setContext(updated)
+        }
+      }
+
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (w.webContents.id === senderId) continue
+        const otherCtx = windowContexts.get(w.webContents.id)
+        if (!otherCtx) continue
+        const updatedOther = {
+          ...otherCtx,
+          openBookTitles: openBookTitlesArray()
+        } as MenuContext
+        windowContexts.set(w.webContents.id, updatedOther)
+        if (w === BrowserWindow.getFocusedWindow()) {
+          menuInstaller!.setContext(updatedOther)
+        }
+      }
+    }
+  )
 }
 
 function openBookTitlesArray(): { bookId: number; title: string }[] {

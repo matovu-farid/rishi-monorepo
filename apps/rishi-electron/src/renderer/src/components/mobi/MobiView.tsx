@@ -108,6 +108,12 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
     })
   }, [book.id])
 
+  // Publish title so the native Window menu sees the loaded book.
+  useEffect(() => {
+    const e = (window as unknown as { electron: { send(c: string, p: unknown): void } }).electron
+    e?.send('window:setBookTitle', { bookId: book.id, title: book.title })
+  }, [book.id, book.title])
+
   // Fetch total chapter count on mount
   useEffect(() => {
     getMobiChapterCount({ path: book.filepath })
