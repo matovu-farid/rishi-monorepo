@@ -45,10 +45,29 @@ test.describe('Library', () => {
     await app.page.reload()
     await app.page.waitForTimeout(1500)
 
-    await expect(app.page.locator('text=Library Open Test').first()).toBeVisible({ timeout: 10000 })
-    await app.page.locator(`a[href*="/books/${book.id}"]`).first().click()
-    await app.page.waitForTimeout(1500)
-    expect(await app.page.evaluate(() => window.location.hash)).toContain(`/books/${book.id}`)
+    // Phase 3: book rows are <button>s that spawn a new BrowserWindow.
+    // Click the row's cover button — the wrapping <div> that contains the
+    // title is the grid cell; the button is its first child.
+    await expect(app.page.locator('text=Library Open Test').first()).toBeVisible({
+      timeout: 10000
+    })
+    await app.page
+      .locator('[data-tour="book-grid"] > div', { hasText: 'Library Open Test' })
+      .locator('button')
+      .first()
+      .click()
+    // Poll the shared context for the new book window.
+    const ctx = app.page.context()
+    const deadline = Date.now() + 10000
+    let opened = false
+    while (Date.now() < deadline) {
+      if (ctx.pages().some((p) => p.url().includes(`/books/${book.id}`))) {
+        opened = true
+        break
+      }
+      await app.page.waitForTimeout(100)
+    }
+    expect(opened, 'a book window for the imported id should appear').toBe(true)
   })
 
   test('search filters book list by title', async () => {

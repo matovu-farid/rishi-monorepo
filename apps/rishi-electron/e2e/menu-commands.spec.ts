@@ -68,8 +68,7 @@ test('Bookmarks > Add Bookmark adds a row in the DB when a PDF is open', async (
 
     const bookPage = await openBook(launched.page, book.id)
     // Wait for the PDF reader to mount and resolve its bookSyncId so
-    // `addBookmark` has a target. The toolbar's Next-page button is the same
-    // anchor `bookmarks.spec.ts` waits on.
+    // `addBookmark` has a target.
     await bookPage
       .locator('[aria-label="Next page"]')
       .first()
@@ -77,39 +76,36 @@ test('Bookmarks > Add Bookmark adds a row in the DB when a PDF is open', async (
       .catch(() => {})
     await bookPage.waitForTimeout(1200)
 
-    // Focus the book window so the native menu rebuilds against its context
-    // (pre-seeded by `window:openBook` from the DB row). Phase 3 spawned the
-    // window with the correct identity + context, so we no longer need to
-    // hand-push setMenuContext from the test — focus is enough.
-    const bookWebContentsId = await bookPage.evaluate(
-      // Each Page has its own WebContents; this returns the window in main
-      // that owns it. Not directly exposed — we instead bringToFront via the
-      // Playwright Page handle.
-      () => 0
-    )
-    void bookWebContentsId
-    await bookPage.bringToFront()
-    await launched.app.evaluate(({ BrowserWindow }, { url }) => {
-      const wins = BrowserWindow.getAllWindows()
-      const win = wins.find((w) => w.webContents.getURL().includes(url)) ?? wins[0]
-      if (!win) return
-      if (win.isMinimized()) win.restore()
-      win.show()
-      win.focus()
-    }, { url: `/books/${book.id}` })
-    await launched.page.waitForTimeout(800)
-
-    const before = await launched.page.evaluate(async (sid) => {
+    // Read bookmark count BEFORE clicking — query via the book window to
+    // avoid moving focus away. Either window can read the DB; the IPC is
+    // process-global.
+    const before = await bookPage.evaluate(async (sid) => {
       const e = (window as unknown as { electron: Record<string, Function> }).electron
       const list = (await e.bookmarksList(sid)) as unknown[]
       return list.length
     }, syncId)
 
+    // Force-focus the book window right before clicking the menu — the
+    // menu dispatcher in main sends `menu:command` to the focused window,
+    // and only the PDF reader has an `addBookmark` handler.
+    await launched.app.evaluate(
+      ({ BrowserWindow }, { url }) => {
+        const wins = BrowserWindow.getAllWindows()
+        const win = wins.find((w) => w.webContents.getURL().includes(url))
+        if (!win) return
+        if (win.isMinimized()) win.restore()
+        win.show()
+        win.focus()
+      },
+      { url: `/books/${book.id}` }
+    )
+    await launched.page.waitForTimeout(400)
+
     const clicked = await clickMenuItem(launched.app, ['Bookmarks', 'Add Bookmark'])
     expect(clicked).toBe(true)
-    await launched.page.waitForTimeout(800)
+    await launched.page.waitForTimeout(1200)
 
-    const after = await launched.page.evaluate(async (sid) => {
+    const after = await bookPage.evaluate(async (sid) => {
       const e = (window as unknown as { electron: Record<string, Function> }).electron
       const list = (await e.bookmarksList(sid)) as unknown[]
       return list.length
