@@ -3,6 +3,7 @@ import { join } from 'path'
 import BetterSqlite3 from 'better-sqlite3'
 import type Database from 'better-sqlite3'
 import { runMigrations } from './migrations.js'
+import { repairBookKinds } from './repair.js'
 
 let db: Database.Database | null = null
 
@@ -43,6 +44,11 @@ export async function initDatabase(): Promise<void> {
   const applied = runMigrations(db)
   if (applied > 0) {
     console.log(`[database] Applied ${applied} migration(s)`)
+  }
+
+  const repaired = repairBookKinds(db)
+  if (repaired > 0) {
+    console.log(`[database] Repaired ${repaired} AZW3 books mis-tagged as MOBI`)
   }
 
   console.log(`[database] Ready — ${dbPath}`)
