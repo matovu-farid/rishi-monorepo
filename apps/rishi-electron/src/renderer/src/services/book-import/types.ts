@@ -9,8 +9,8 @@ import type {
 } from '@/lib/api'
 import type { RagService } from '../rag'
 
-/** Five supported file extensions, normalized to lowercase. */
-export type BookFormat = 'epub' | 'pdf' | 'mobi' | 'azw3' | 'djvu'
+/** Supported file extensions, normalized to lowercase. */
+export type BookFormat = 'epub' | 'pdf' | 'mobi' | 'azw3'
 
 /** What a format port returns after parsing. Shape from `@/lib/api`. */
 export interface BookDataParsed {
@@ -83,12 +83,11 @@ export type DiscoveryEvent =
   | { kind: 'complete'; cancelled: boolean }
   | { kind: 'error'; error: string }
 
-/** Exactly the four format IPCs the service uses. */
+/** The format IPCs the service uses. */
 export interface FormatsIpc {
   getBookData(path: string): Promise<BookDataParsed>
   getPdfData(path: string): Promise<BookDataParsed>
   getMobiData(path: string): Promise<BookDataParsed>
-  getDjvuData(path: string): Promise<BookDataParsed>
 }
 
 /** Exactly the five DB IPCs the service uses. */
@@ -113,7 +112,7 @@ export interface FileSyncIpc {
   uploadBookFile(
     filePath: string,
     hash: string,
-    format: 'epub' | 'pdf' | 'mobi' | 'djvu'
+    format: 'epub' | 'pdf' | 'mobi'
   ): Promise<{ r2Key: string }>
   booksUpdateFileHash(bookId: number, hash: string, r2Key: string): Promise<void>
 }

@@ -2,7 +2,7 @@ import { ipcMain, app, BrowserWindow } from 'electron'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 
-const SUPPORTED_EXTENSIONS = new Set(['.pdf', '.epub', '.mobi', '.azw3', '.djvu'])
+const SUPPORTED_EXTENSIONS = new Set(['.pdf', '.epub', '.mobi', '.azw3'])
 
 let scanCancelled = false
 

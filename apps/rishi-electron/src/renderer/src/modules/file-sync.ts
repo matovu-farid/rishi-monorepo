@@ -39,13 +39,12 @@ export async function hashBookFile(filepath: string): Promise<string> {
 export async function uploadBookFile(
   filePath: string,
   fileHash: string,
-  format: 'epub' | 'pdf' | 'mobi' | 'djvu'
+  format: 'epub' | 'pdf' | 'mobi'
 ): Promise<{ r2Key: string }> {
   const contentTypes: Record<string, string> = {
     epub: 'application/epub+zip',
     pdf: 'application/pdf',
-    mobi: 'application/x-mobipocket-ebook',
-    djvu: 'image/vnd.djvu'
+    mobi: 'application/x-mobipocket-ebook'
   }
   const contentType = contentTypes[format] ?? 'application/octet-stream'
   const headers = await getAuthHeaders()

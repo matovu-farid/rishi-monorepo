@@ -1,6 +1,5 @@
 import { test, expect } from '@playwright/test'
 import {
-  DJVU_FIXTURE,
   MOBI_FIXTURE,
   closeApp,
   deleteAllBooks,
@@ -10,7 +9,7 @@ import {
   type LaunchedApp
 } from './helpers/electron-app'
 
-test.describe('MOBI & DJVU readers', () => {
+test.describe('MOBI reader', () => {
   let app: LaunchedApp
 
   test.beforeAll(async () => {
@@ -37,17 +36,6 @@ test.describe('MOBI & DJVU readers', () => {
     await expect(bookPage.locator('a[href="/"]')).toHaveCount(
       await bookPage.locator('a[href="/"]').count()
     )
-    await expect(bookPage.locator('body')).not.toBeEmpty()
-  })
-
-  test('DJVU book opens and renders', async () => {
-    const book = await importBook(app.page, {
-      fixturePath: DJVU_FIXTURE,
-      kind: 'djvu',
-      title: 'DJVU Render Test'
-    })
-    const bookPage = await openBook(app.page, book.id)
-    await bookPage.waitForTimeout(3000)
     await expect(bookPage.locator('body')).not.toBeEmpty()
   })
 

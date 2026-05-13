@@ -7,7 +7,6 @@ export const FIXTURES_DIR = path.resolve(__dirname, '../fixtures')
 export const PDF_FIXTURE = path.join(FIXTURES_DIR, 'test-book.pdf')
 export const EPUB_FIXTURE = path.join(FIXTURES_DIR, 'test-book.epub')
 export const MOBI_FIXTURE = path.join(FIXTURES_DIR, 'test-book.mobi')
-export const DJVU_FIXTURE = path.join(FIXTURES_DIR, 'test-book.djvu')
 
 const MAIN_ENTRY = path.resolve(__dirname, '../../out/main/index.js')
 
@@ -75,7 +74,7 @@ export async function dismissTour(page: Page): Promise<void> {
 
 export interface ImportOptions {
   fixturePath: string
-  kind: 'pdf' | 'epub' | 'mobi' | 'djvu'
+  kind: 'pdf' | 'epub' | 'mobi'
   title?: string
 }
 
@@ -96,9 +95,7 @@ export async function importBook(page: Page, opts: ImportOptions): Promise<Impor
         ? e.getPdfData
         : input.kind === 'mobi'
           ? e.getMobiData
-          : input.kind === 'djvu'
-            ? e.getDjvuData
-            : e.getBookData
+          : e.getBookData
 
     let data: Record<string, unknown>
     try {

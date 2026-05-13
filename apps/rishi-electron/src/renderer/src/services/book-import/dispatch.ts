@@ -25,8 +25,6 @@ export function formatFor(extension: string): BookFormat | null {
       return 'mobi'
     case 'azw3':
       return 'azw3'
-    case 'djvu':
-      return 'djvu'
     default:
       return null
   }
@@ -52,8 +50,6 @@ export async function dispatchFormatExtraction(
 
   if (format === 'epub') return { format, data: await formats.getBookData(filePath) }
   if (format === 'pdf') return { format, data: await formats.getPdfData(filePath) }
-  if (format === 'mobi' || format === 'azw3')
-    return { format, data: await formats.getMobiData(filePath) }
-  // format === 'djvu'
-  return { format, data: await formats.getDjvuData(filePath) }
+  // format === 'mobi' || format === 'azw3'
+  return { format, data: await formats.getMobiData(filePath) }
 }

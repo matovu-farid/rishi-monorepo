@@ -50,12 +50,11 @@ function runUpload(
   deps: ImporterDeps,
   bookId: number,
   bookPath: string,
-  format: 'epub' | 'pdf' | 'mobi' | 'azw3' | 'djvu',
+  format: 'epub' | 'pdf' | 'mobi' | 'azw3',
   filePath: string,
   emit: (event: ImportProgressEvent) => void
 ): void {
-  const formatForUpload: 'epub' | 'pdf' | 'mobi' | 'djvu' =
-    format === 'azw3' ? 'mobi' : format
+  const formatForUpload: 'epub' | 'pdf' | 'mobi' = format === 'azw3' ? 'mobi' : format
   setTimeout(() => {
     emit({ kind: 'upload-started', filePath, bookId })
     void uploadInner()
@@ -122,9 +121,7 @@ export async function runImport(
         ? deps.formats.getBookData(filePath)
         : format === 'pdf'
           ? deps.formats.getPdfData(filePath)
-          : format === 'mobi' || format === 'azw3'
-            ? deps.formats.getMobiData(filePath)
-            : deps.formats.getDjvuData(filePath)
+          : deps.formats.getMobiData(filePath)
     bookData = await withTimeout(parsePromise, deps.config.parseTimeoutMs, 'Extracting metadata')
   } catch (err) {
     const error = messageOf(err, 'Parse failed')

@@ -28,13 +28,9 @@ export interface ElectronAPI {
   getBookData: (path: string) => Promise<BookData>
   getPdfData: (path: string) => Promise<BookData>
   getMobiData: (path: string) => Promise<BookData>
-  getDjvuData: (path: string) => Promise<BookData>
   getMobiChapter: (path: string, chapterIndex: number) => Promise<string>
   getMobiChapterCount: (path: string) => Promise<number>
   getMobiText: (path: string, chapterIndex: number) => Promise<string[]>
-  getDjvuPage: (path: string, pageNumber: number, dpi: number) => Promise<number[]>
-  getDjvuPageCount: (path: string) => Promise<number>
-  getDjvuPageText: (path: string, pageNumber: number) => Promise<string[]>
 
   // File system
   checkFileSize: (path: string, format: string) => Promise<FileSizeCheck>

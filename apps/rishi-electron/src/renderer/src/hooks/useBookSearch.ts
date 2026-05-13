@@ -77,7 +77,7 @@ export function useBookSearch({ bookId, bookFormat, epubSearchFn }: UseBookSearc
             }))
           )
         } else {
-          // Use FTS5 for PDF/MOBI/DjVu
+          // Use FTS5 for PDF/MOBI
           const ftsResults = await getRagService().searchText(cleanQuery, bookId)
           if (queryRef.current !== searchQuery || bookIdRef.current !== bookId) return
           setResults(

@@ -21,7 +21,6 @@ const SIZE_LIMITS: Record<string, { warn: number; block: number }> = {
   pdf: { warn: 200 * 1024 * 1024, block: 1024 * 1024 * 1024 },
   mobi: { warn: 100 * 1024 * 1024, block: 500 * 1024 * 1024 },
   azw3: { warn: 100 * 1024 * 1024, block: 500 * 1024 * 1024 },
-  djvu: { warn: 200 * 1024 * 1024, block: 1024 * 1024 * 1024 },
   default: { warn: 100 * 1024 * 1024, block: 500 * 1024 * 1024 }
 }
 

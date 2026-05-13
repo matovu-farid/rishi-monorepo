@@ -16,7 +16,7 @@ export const PREMIUM_FEATURES: Record<PremiumFeature, PremiumFeatureConfig> = {
     description: 'AI-powered text-to-speech turns any book into an audiobook.',
     bullets: [
       'Natural, expressive voices',
-      'Reads EPUB, PDF, MOBI, and DjVu',
+      'Reads EPUB, PDF, and MOBI',
       'Remembers your spot across devices'
     ]
   },

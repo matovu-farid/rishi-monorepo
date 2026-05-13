@@ -15,7 +15,6 @@ export function makeFormats(opts?: {
   epubReturns?: BookDataParsed
   pdfReturns?: BookDataParsed
   mobiReturns?: BookDataParsed
-  djvuReturns?: BookDataParsed
 }): { formats: FormatsIpc; calls: Array<{ method: keyof FormatsIpc; path: string }> } {
   const calls: Array<{ method: keyof FormatsIpc; path: string }> = []
   const formats: FormatsIpc = {
@@ -30,10 +29,6 @@ export function makeFormats(opts?: {
     getMobiData: vi.fn(async (path: string) => {
       calls.push({ method: 'getMobiData', path })
       return opts?.mobiReturns ?? { ...sampleParsed, kind: 'mobi' }
-    }),
-    getDjvuData: vi.fn(async (path: string) => {
-      calls.push({ method: 'getDjvuData', path })
-      return opts?.djvuReturns ?? { ...sampleParsed, kind: 'djvu' }
     })
   }
   return { formats, calls }
@@ -71,13 +66,6 @@ describe('dispatchFormatExtraction — extension routing', () => {
     const result = await dispatchFormatExtraction(formats, '/tmp/book.azw3')
     expect(result.format).toBe('azw3')
     expect(calls).toEqual([{ method: 'getMobiData', path: '/tmp/book.azw3' }])
-  })
-
-  it('routes .djvu to formats.getDjvuData', async () => {
-    const { formats, calls } = makeFormats()
-    const result = await dispatchFormatExtraction(formats, '/tmp/book.djvu')
-    expect(result.format).toBe('djvu')
-    expect(calls).toEqual([{ method: 'getDjvuData', path: '/tmp/book.djvu' }])
   })
 
   it('throws UnsupportedFormatError for unknown extensions', async () => {

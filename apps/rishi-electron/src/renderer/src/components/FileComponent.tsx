@@ -180,8 +180,7 @@ export default function FileComponent(): React.JSX.Element {
     accept: {
       'application/epub+zip': ['.epub'],
       'application/pdf': ['.pdf'],
-      'application/x-mobipocket-ebook': ['.mobi', '.azw3'],
-      'image/vnd.djvu': ['.djvu']
+      'application/x-mobipocket-ebook': ['.mobi', '.azw3']
     },
     onDrop: (files) => {
       // In Electron, dropped files have .path
@@ -335,7 +334,7 @@ export default function FileComponent(): React.JSX.Element {
             <div className="text-center">
               <p className="mb-4">No books yet. Add your first book!</p>
               <p className="text-sm text-gray-500">
-                You can also drag and drop EPUB, PDF, MOBI, or DJVU files here
+                You can also drag and drop EPUB, PDF, or MOBI files here
               </p>
             </div>
           )}
