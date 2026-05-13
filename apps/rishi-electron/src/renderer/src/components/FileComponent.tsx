@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Loader from './Loader'
-import { Link, useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
 import { Button } from './ui/Button'
 import { Trash2, Plus, Search, BookOpen } from 'lucide-react'
@@ -98,23 +97,21 @@ export default function FileComponent(): React.JSX.Element {
   const setAllBooks = usePdfStore((s) => s.setAllBooks)
   const removeBook = usePdfStore((s) => s.removeBook)
   const queryClient = useQueryClient()
-  const navigate = useNavigate()
   const [newBookId, setNewBookId] = useState<string | null>(null)
   const [discoveryOpen, setDiscoveryOpen] = useState(false)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; book: Book } | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [lastReadBookId, setLastReadBookId] = useState<string | null>(null)
 
-  const navigateToNewBook = useCallback(
-    (bookId: string) => {
-      void navigate({ to: '/books/$id', params: { id: bookId } })
-    },
-    [navigate]
-  )
+  const openBookInNewWindow = useCallback((bookId: number) => {
+    void (
+      window as unknown as { electron: { openBook(id: number): Promise<void> } }
+    ).electron.openBook(bookId)
+  }, [])
 
   useEffect(() => {
-    if (newBookId) navigateToNewBook(newBookId)
-  }, [newBookId, navigateToNewBook])
+    if (newBookId) openBookInNewWindow(Number(newBookId))
+  }, [newBookId, openBookInNewWindow])
 
   const {
     isPending,
@@ -278,10 +275,10 @@ export default function FileComponent(): React.JSX.Element {
         {lastReadBook && (
           <div className="px-5 mb-4">
             <p className="text-xs text-gray-400 uppercase tracking-wider mb-2">Reading Now</p>
-            <Link
-              to="/books/$id"
-              params={{ id: lastReadBook.id.toString() }}
-              className="flex items-center gap-4 bg-gray-50 rounded-xl p-3 hover:bg-gray-100 transition-colors"
+            <button
+              type="button"
+              onClick={() => openBookInNewWindow(lastReadBook.id)}
+              className="flex items-center gap-4 bg-gray-50 rounded-xl p-3 hover:bg-gray-100 transition-colors w-full text-left"
             >
               <div className="w-16 shrink-0">
                 <BookCoverImage book={lastReadBook} />
@@ -290,7 +287,7 @@ export default function FileComponent(): React.JSX.Element {
                 <p className="text-sm font-medium text-gray-900 truncate">{lastReadBook.title}</p>
                 <p className="text-xs text-gray-500 truncate">{lastReadBook.author}</p>
               </div>
-            </Link>
+            </button>
           </div>
         )}
 
@@ -323,13 +320,13 @@ export default function FileComponent(): React.JSX.Element {
                   setContextMenu({ x: e.clientX, y: e.clientY, book })
                 }}
               >
-                <Link
-                  to="/books/$id"
-                  params={{ id: book.id.toString() }}
-                  className="block bg-transparent"
+                <button
+                  type="button"
+                  onClick={() => openBookInNewWindow(book.id)}
+                  className="block bg-transparent w-full p-0 border-0 cursor-pointer"
                 >
                   <BookCoverImage book={book} />
-                </Link>
+                </button>
                 <p className="text-xs font-medium text-gray-900 truncate mt-1">{book.title}</p>
                 <p className="text-xs text-gray-500 truncate">{book.author}</p>
               </div>
