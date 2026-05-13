@@ -20,6 +20,8 @@ import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
 import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
 import { parseAzw3, extractSectionParagraphs, type FoliateSection } from './parser'
+import { injectReaderStyles } from './reader-styles'
+import { findParagraphElement, parseParagraphIndex, setActiveClass } from './highlight'
 
 function stringToNumberID(str: string): number {
   let hash = 0
@@ -226,6 +228,63 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [goNext, goPrev])
 
+  // Inject reader CSS (top padding + 2-column + .rishi-tts-active) into
+  // each loaded chapter document. Runs on every iframe `load` because the
+  // iframe is remounted with a fresh contentDocument per chapterUrl.
+  // Also re-applies the highlight class if TTS is currently reading a
+  // paragraph in this chapter (the class is wiped when the doc reloads).
+  const handleIframeLoad = useCallback(() => {
+    const iframe = iframeRef.current
+    const doc = iframe?.contentDocument
+    if (!doc) return
+    injectReaderStyles(doc)
+    const active = usePlayerStore.getState().activeParagraph
+    if (active) {
+      const parsed = parseParagraphIndex(active.index)
+      if (parsed && parsed.chapter === chapterIndex) {
+        setActiveClass(findParagraphElement(doc, parsed.paragraph), true)
+      }
+    }
+  }, [chapterIndex])
+
+  // Toggle the TTS highlight class on the matching iframe element as the
+  // player advances. Only highlights paragraphs belonging to the current
+  // chapter (cross-chapter highlights would require navigation).
+  useEffect(() => {
+    const docOf = (): Document | null => iframeRef.current?.contentDocument ?? null
+
+    const apply = (raw: string | undefined, on: boolean): void => {
+      if (!raw) return
+      const parsed = parseParagraphIndex(raw)
+      if (!parsed || parsed.chapter !== chapterIndex) return
+      setActiveClass(findParagraphElement(docOf(), parsed.paragraph), on)
+    }
+
+    const unsubActive = usePlayerStore.subscribe(
+      (s) => s.activeParagraph,
+      (paragraph) => {
+        if (paragraph) apply(paragraph.index, true)
+      }
+    )
+    const unsubEnded = usePlayerStore.subscribe(
+      (s) => s.endedParagraph,
+      (paragraph) => {
+        if (paragraph) apply(paragraph.index, false)
+      }
+    )
+    const unsubMove = usePlayerStore.subscribe(
+      (s) => s.lastMove,
+      (move) => {
+        if (move?.from) apply(move.from.index, false)
+      }
+    )
+    return () => {
+      unsubActive()
+      unsubEnded()
+      unsubMove()
+    }
+  }, [chapterIndex])
+
   // Publish paragraphs to playerStore for TTS. Current chapter immediately,
   // next/prev debounced to avoid wasted work on rapid chapter flips.
   const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -377,6 +436,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
           <iframe
             ref={iframeRef}
             src={chapterUrl}
+            onLoad={handleIframeLoad}
             className="w-full h-full border-none"
             title={book.title}
             // `allow-scripts` is required so that KF8 books containing inline
