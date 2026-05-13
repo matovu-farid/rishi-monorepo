@@ -172,6 +172,12 @@ export interface ElectronAPI {
   windowIdentity: { kind: 'library' } | { kind: 'book'; bookId: number }
   onMenuCommand: (cb: (c: { command: string; arg?: unknown }) => void) => () => void
   setMenuContext: (partial: Record<string, unknown>) => void
+  /**
+   * Ask main to rebuild this window's native menu from fresh DB state —
+   * refreshes Open Recent / Window submenu lists. Cheap: same path as the
+   * focus listener.
+   */
+  refreshMenu: () => void
   openBook: (bookId: number) => Promise<void>
   closeBook: (bookId: number) => Promise<void>
   focusLibrary: () => Promise<void>

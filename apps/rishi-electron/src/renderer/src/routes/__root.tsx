@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { createRootRoute, Outlet, useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, type JSX } from 'react'
 import { getBooks } from '@/lib/api'
-import { getSyncService } from '@/services'
+import { getSyncService, getBookImportService } from '@/services'
 import { SyncStatusIndicator } from '../components/SyncStatusIndicator'
 import { IndexingStatusIndicator } from '../components/IndexingStatusIndicator'
 import { NetworkBanner } from '../components/NetworkBanner'
@@ -71,6 +71,17 @@ function RootComponent(): JSX.Element {
     () => ({
       toggleTheme: (): void => {
         document.documentElement.classList.toggle('dark')
+      },
+      // File > Open Recent → open the chosen book in its own window. Available
+      // from any window (library or book); routes through the same IPC that
+      // toolbar / book-cover clicks use.
+      openRecent: (arg?: unknown): void => {
+        const id = (arg as { bookId?: number } | undefined)?.bookId
+        if (typeof id !== 'number') return
+        const e = (
+          window as unknown as { electron: { openBook(id: number): Promise<void> } }
+        ).electron
+        void e.openBook(id)
       }
     }),
     []
@@ -84,6 +95,17 @@ function RootComponent(): JSX.Element {
     return () => {
       sync.stop()
     }
+  }, [])
+
+  // After a successful import, ask main to rebuild the menu so File > Open
+  // Recent reflects the new book without waiting for a window focus event.
+  useEffect(() => {
+    return getBookImportService().onImportProgress((event) => {
+      if (event.kind === 'done') {
+        const e = (window as unknown as { electron?: { refreshMenu?(): void } }).electron
+        e?.refreshMenu?.()
+      }
+    })
   }, [])
 
   const { isPending, error, isError } = useQuery({

@@ -12,7 +12,7 @@ import { WindowManager } from './windows/windowManager.js'
 import { makeBrowserWindowFactory } from './windows/createBrowserWindow.js'
 import { MenuInstaller } from './menu/installMenu.js'
 import type { MenuContext, MenuCommand, BookFormat } from './menu/commands.js'
-import { getBook } from './database/queries.js'
+import { getBook, listRecentBooks } from './database/queries.js'
 
 // File types Rishi advertises in the OS "Open With" menu (see
 // electron-builder.yml `fileAssociations`). The OS routes a matching file
@@ -168,8 +168,34 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
   )
 
   app.on('browser-window-focus', (_e, win) => {
-    const ctx = windowContexts.get(win.webContents.id) ?? defaultLibraryContext()
-    menuInstaller!.setContext(ctx)
+    const base = windowContexts.get(win.webContents.id) ?? defaultLibraryContext()
+    // Always refresh dynamic lists on focus so Open Recent / Window submenus
+    // reflect current DB state without waiting for a renderer ping.
+    const refreshed = {
+      ...base,
+      recentBooks: safeListRecentBooks(),
+      openBookTitles: openBookTitlesArray()
+    } as MenuContext
+    windowContexts.set(win.webContents.id, refreshed)
+    menuInstaller!.setContext(refreshed)
+  })
+
+  // Forcible refresh of the focused window's menu — used by the library
+  // renderer after a successful import so Open Recent picks up the new book
+  // without waiting for a focus event. Cheap: same path as focus listener.
+  // Re-installs unconditionally: in headless tests / certain platform states
+  // the renderer's window may not be the OS-focused window, but the request
+  // still needs to take effect.
+  ipcMain.on('menu:refresh', (event) => {
+    const id = event.sender.id
+    const base = windowContexts.get(id) ?? defaultLibraryContext()
+    const refreshed = {
+      ...base,
+      recentBooks: safeListRecentBooks(),
+      openBookTitles: openBookTitlesArray()
+    } as MenuContext
+    windowContexts.set(id, refreshed)
+    menuInstaller!.setContext(refreshed)
   })
 
   ipcMain.on('menu:setContext', (event, partial: Partial<MenuContext>) => {
@@ -198,7 +224,7 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
         dualPage: false,
         isReading: false,
         theme: 'light',
-        recentBooks: [],
+        recentBooks: safeListRecentBooks(),
         openBookTitles: openBookTitlesArray(),
         bookmarks: []
       })
@@ -265,11 +291,20 @@ function openBookTitlesArray(): { bookId: number; title: string }[] {
   return Array.from(openBookTitles, ([bookId, title]) => ({ bookId, title }))
 }
 
+function safeListRecentBooks(): { bookId: number; title: string }[] {
+  try {
+    return listRecentBooks(10)
+  } catch {
+    // DB may not be ready yet (very early focus events on startup).
+    return []
+  }
+}
+
 function defaultLibraryContext(): MenuContext {
   return {
     kind: 'library',
     theme: 'light',
-    recentBooks: [],
+    recentBooks: safeListRecentBooks(),
     openBookTitles: openBookTitlesArray()
   }
 }

@@ -220,6 +220,9 @@ const electronAPI: ElectronAPI = {
   setMenuContext: (partial: Record<string, unknown>) => {
     ipcRenderer.send('menu:setContext', partial)
   },
+  refreshMenu: () => {
+    ipcRenderer.send('menu:refresh')
+  },
   openBook: (bookId: number) => ipcRenderer.invoke('window:openBook', { bookId }),
   closeBook: (bookId: number) => ipcRenderer.invoke('window:closeBook', { bookId }),
   focusLibrary: () => ipcRenderer.invoke('window:focusLibrary'),
