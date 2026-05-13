@@ -1,7 +1,7 @@
 import Loader from '../components/Loader'
 import { useQuery } from '@tanstack/react-query'
 import { createRootRoute, Outlet } from '@tanstack/react-router'
-import { useEffect, type JSX } from 'react'
+import { useEffect, useMemo, type JSX } from 'react'
 import { getBooks } from '@/lib/api'
 import { getSyncService } from '@/services'
 import { SyncStatusIndicator } from '../components/SyncStatusIndicator'
@@ -26,7 +26,20 @@ function RootComponent(): JSX.Element {
   useHydrateAuth()
   useStartupUpdateCheck()
   useFileOpenHandler()
-  useMenuCommands({})
+  // Library-level menu handlers. Toggle dark/light by flipping the `dark`
+  // class on <html> — matches the menu builder's label-flip pattern. The menu
+  // label itself only updates after the renderer reports the new theme via
+  // `setMenuContext({ theme })`, but for now this is enough to make the menu
+  // command observable in the renderer (and e2e-testable).
+  const menuHandlers = useMemo(
+    () => ({
+      toggleTheme: (): void => {
+        document.documentElement.classList.toggle('dark')
+      }
+    }),
+    []
+  )
+  useMenuCommands(menuHandlers)
 
   // Initialize desktop sync on app mount
   useEffect(() => {
