@@ -21,11 +21,22 @@ export const READER_CSS = `
     column-count: 2;
     column-gap: 2.5rem;
     column-rule: 1px solid rgba(127, 127, 127, 0.15);
+    column-fill: balance;
     padding: 3rem 2.25rem 1.5rem 2.25rem;
     overflow-x: hidden;
   }
-  body > *, body > * > * {
+  /* Some KF8 books wrap the whole chapter in a single <div>. Without this,
+     CSS columns treat the wrapper as one block and can't split it, so column
+     2 stays empty. Forcing display:contents collapses the wrapper into the
+     flowing children. */
+  body > div:only-child {
+    display: contents;
+  }
+  /* Keep images and figures intact instead of slicing them across columns. */
+  img, figure, picture, table, pre {
     break-inside: avoid-column;
+    max-width: 100%;
+    height: auto;
   }
   .rishi-tts-active {
     background-color: rgba(255, 224, 102, 0.45);
