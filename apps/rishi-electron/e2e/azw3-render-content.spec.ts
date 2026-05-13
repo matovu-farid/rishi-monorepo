@@ -92,6 +92,18 @@ test('AZW3 reader paints the book content into the iframe', async () => {
     // (Empirically, a 1200x800 PNG of solid white is < 5 KB; one with
     // glyphs or images is much larger.)
     expect(dataLen, 'iframe screenshot byte length').toBeGreaterThan(6000)
+
+    // 4) The iframe sandbox must include both `allow-same-origin` AND
+    //    `allow-scripts`. Real publisher AZW3s contain inline scripts and
+    //    `<iframe srcdoc=...>` subframes; without `allow-scripts` the
+    //    document layout never finishes and the page stays blank. Foliate's
+    //    own paginator uses the same pair (see node_modules/foliate-js/
+    //    paginator.js).
+    const sandbox = await iframe.getAttribute('sandbox')
+    expect(sandbox, 'iframe sandbox attribute').not.toBeNull()
+    const tokens = (sandbox ?? '').split(/\s+/).filter(Boolean)
+    expect(tokens).toContain('allow-same-origin')
+    expect(tokens).toContain('allow-scripts')
   } finally {
     await closeApp(launched)
   }
