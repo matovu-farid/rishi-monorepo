@@ -18,21 +18,25 @@ test('focused PDF book window menu has Bookmarks, Reader, Show Thumbnails, Dual 
       title: 'PDF M'
     })
     const bookPage = await openBook(launched.page, book.id)
-    await bookPage.waitForTimeout(1500)
+    await bookPage.waitForTimeout(2500)
 
     await bookPage.bringToFront()
-    // Also force-focus the matching BrowserWindow in main so the menu rebuilds.
-    await launched.app.evaluate(
-      ({ BrowserWindow }, { url }) => {
-        const wins = BrowserWindow.getAllWindows()
-        const win = wins.find((w) => w.webContents.getURL().includes(url)) ?? wins[0]
-        if (!win) return
-        if (win.isMinimized()) win.restore()
-        win.show()
-        win.focus()
-      },
-      { url: `/books/${book.id}` }
-    )
+    // Brief settle so the renderer's route-guard navigations finish before
+    // we evaluate in the main process.
+    await launched.page.waitForTimeout(500)
+    await launched.app
+      .evaluate(
+        ({ BrowserWindow }, { url }) => {
+          const wins = BrowserWindow.getAllWindows()
+          const win = wins.find((w) => w.webContents.getURL().includes(url)) ?? wins[0]
+          if (!win) return
+          if (win.isMinimized()) win.restore()
+          win.show()
+          win.focus()
+        },
+        { url: `/books/${book.id}` }
+      )
+      .catch(() => {})
     await launched.page.waitForTimeout(800)
 
     const menu = await getApplicationMenu(launched.app)

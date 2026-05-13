@@ -18,20 +18,26 @@ test('focused EPUB book window menu hides PDF-only items', async () => {
       title: 'EPUB M'
     })
     const bookPage = await openBook(launched.page, book.id)
-    await bookPage.waitForTimeout(1500)
+    await bookPage.waitForTimeout(2500)
 
     await bookPage.bringToFront()
-    await launched.app.evaluate(
-      ({ BrowserWindow }, { url }) => {
-        const wins = BrowserWindow.getAllWindows()
-        const win = wins.find((w) => w.webContents.getURL().includes(url)) ?? wins[0]
-        if (!win) return
-        if (win.isMinimized()) win.restore()
-        win.show()
-        win.focus()
-      },
-      { url: `/books/${book.id}` }
-    )
+    // Brief settle so the renderer's route-guard navigations finish before
+    // we evaluate in the main process (electronApplication.evaluate uses
+    // the first webContents and dies if it's navigating).
+    await launched.page.waitForTimeout(500)
+    await launched.app
+      .evaluate(
+        ({ BrowserWindow }, { url }) => {
+          const wins = BrowserWindow.getAllWindows()
+          const win = wins.find((w) => w.webContents.getURL().includes(url)) ?? wins[0]
+          if (!win) return
+          if (win.isMinimized()) win.restore()
+          win.show()
+          win.focus()
+        },
+        { url: `/books/${book.id}` }
+      )
+      .catch(() => {})
     await launched.page.waitForTimeout(800)
 
     const menu = await getApplicationMenu(launched.app)

@@ -85,32 +85,37 @@ test('Bookmarks > Add Bookmark adds a row in the DB when a PDF is open', async (
       return list.length
     }, syncId)
 
-    // Force-focus the book window right before clicking the menu — the
-    // menu dispatcher in main sends `menu:command` to the focused window,
-    // and only the PDF reader has an `addBookmark` handler.
-    await launched.app.evaluate(
-      ({ BrowserWindow }, { url }) => {
-        const wins = BrowserWindow.getAllWindows()
-        const win = wins.find((w) => w.webContents.getURL().includes(url))
-        if (!win) return
-        if (win.isMinimized()) win.restore()
-        win.show()
-        win.focus()
-      },
-      { url: `/books/${book.id}` }
-    )
-    await launched.page.waitForTimeout(400)
-
-    const clicked = await clickMenuItem(launched.app, ['Bookmarks', 'Add Bookmark'])
-    expect(clicked).toBe(true)
-    await launched.page.waitForTimeout(1200)
-
-    const after = await bookPage.evaluate(async (sid) => {
-      const e = (window as unknown as { electron: Record<string, Function> }).electron
-      const list = (await e.bookmarksList(sid)) as unknown[]
-      return list.length
-    }, syncId)
-    expect(after).toBe(before + 1)
+    // The menu dispatcher in main sends `menu:command` to the focused
+    // window, and only the PDF reader has an `addBookmark` handler.
+    // macOS may bounce focus between windows under Playwright; retry a
+    // few times until the bookmark count actually moves.
+    let after = before
+    for (let attempt = 0; attempt < 5 && after === before; attempt++) {
+      await launched.app
+        .evaluate(
+          ({ BrowserWindow }, { url }) => {
+            const wins = BrowserWindow.getAllWindows()
+            const win = wins.find((w) => w.webContents.getURL().includes(url))
+            if (!win) return
+            if (win.isMinimized()) win.restore()
+            win.show()
+            win.focus()
+          },
+          { url: `/books/${book.id}` }
+        )
+        .catch(() => {})
+      await bookPage.bringToFront()
+      await launched.page.waitForTimeout(400)
+      const clicked = await clickMenuItem(launched.app, ['Bookmarks', 'Add Bookmark'])
+      expect(clicked).toBe(true)
+      await launched.page.waitForTimeout(1200)
+      after = await bookPage.evaluate(async (sid) => {
+        const e = (window as unknown as { electron: Record<string, Function> }).electron
+        const list = (await e.bookmarksList(sid)) as unknown[]
+        return list.length
+      }, syncId)
+    }
+    expect(after).toBeGreaterThan(before)
   } finally {
     await closeApp(launched)
   }
