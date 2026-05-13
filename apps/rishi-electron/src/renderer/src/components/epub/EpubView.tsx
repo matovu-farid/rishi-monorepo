@@ -4,16 +4,11 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Menu } from '@/components/ui/Menu'
-import { Radio, RadioGroup } from '@/components/ui/Radio'
 import { ThemeType } from '@/themes/common'
 import { themes } from '@/themes/themes'
 import createIReactReaderTheme from '@/themes/readerThemes'
-import { Palette, Highlighter, MessageSquare, MoreVertical, Menu as MenuIcon } from 'lucide-react'
 import AIChatOrb from '../chat/AIChatOrb'
 import VoiceChatLauncher from '../chat/VoiceChatLauncher'
-import { IconButton } from '@/components/ui/IconButton'
-import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import TTSControls from '@/components/tts/TTSControls'
 import { useChatStore } from '@/stores/chatStore'
 import type { Rendition } from 'epubjs'
@@ -26,7 +21,6 @@ import { useNavStore } from '@/stores/navStore'
 import { highlightRange, removeHighlight, getCurrentViewParagraphs } from '@/modules/epubwrapper'
 import { type Book } from '@/lib/api'
 import { updateBookLocation } from '@/lib/api'
-import { BackButton } from '../BackButton'
 import { saveHighlight, getHighlightsForBook } from '@/modules/highlight-storage'
 import { getSyncService } from '@/services'
 import { getHighlightHex } from '@/types/highlight'
@@ -36,11 +30,8 @@ import type { NavItem } from 'epubjs'
 import { tocToChapters } from './tocToChapters'
 import { SelectionPopover } from '@/components/highlights/SelectionPopover'
 import { HighlightsPanel } from '@/components/highlights/HighlightsPanel'
-import { ReaderSettings } from '@/components/reader/ReaderSettings'
-import { ReaderToolbar } from '@/components/reader/ReaderToolbar'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
-import { BookmarkButton } from '@/components/bookmarks/BookmarkButton'
 import { BookmarksList } from '@/components/bookmarks/BookmarksList'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -49,10 +40,6 @@ import { dumpError } from '@/utils/errorDump'
 import { getCachedEpub } from '@/services/reader-cache/epub-cache'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
 import { toggleBookmark } from '@/modules/bookmark-storage'
-
-function cn(...classes: string[]) {
-  return classes.filter(Boolean).join(' ')
-}
 
 function updateTheme(rendition: Rendition, theme: ThemeType) {
   const reditionThemes = rendition.themes
@@ -63,8 +50,6 @@ function updateTheme(rendition: Rendition, theme: ThemeType) {
 
 export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme)
-  const setTheme = useEpubStore((s) => s.setTheme)
-  const [menuOpen, setMenuOpen] = useState(false)
   const [currentLocation, setCurrentLocation] = useState<string>(book.location || '0')
   // Sync with book.location when it changes from a refetch (e.g., returning from library).
   // Only sync before the rendition has settled to avoid overriding user navigation.
@@ -199,15 +184,6 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       cancelled = true
     }
   }, [book.filepath, epubData])
-
-  // Keep toolbar visible when any panel is open
-  const panelOpen =
-    menuOpen ||
-    highlightsPanelOpen ||
-    chatPanelOpen ||
-    bookmarksPanelOpen ||
-    tocOpen ||
-    !!selectionInfo
 
   // Look up the book's sync_id for highlight storage and bookmark functionality
   useEffect(() => {
@@ -444,11 +420,6 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
 
   const setParagraphRendition = useEpubStore((s) => s.setParagraphRendition)
 
-  const handleThemeChange = (newTheme: ThemeType) => {
-    setTheme(newTheme)
-    setMenuOpen(false)
-  }
-
   const updateBookLocationMutation = useMutation({
     mutationFn: async ({ bookId, location }: { bookId: string; location: string }) => {
       await updateBookLocation({
@@ -465,17 +436,6 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   })
   // Update rendition state when ref becomes available
 
-  function getTextColor() {
-    switch (theme) {
-      case ThemeType.White:
-        return 'text-black hover:bg-black/10 hover:text-black'
-      case ThemeType.Dark:
-        return 'text-white hover:bg-white/10 hover:text-white'
-      default:
-        return 'text-black hover:bg-black/10 hover:text-black'
-    }
-  }
-
   // Show loading state while EPUB data is being fetched
   if (!epubData) {
     return (
@@ -487,105 +447,6 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
 
   return (
     <div className="relative">
-      {/* Unified top toolbar — matches PDF layout */}
-      <ReaderToolbar
-        panelsOpen={panelOpen}
-        leftContent={
-          <IconButton
-            color="inherit"
-            onClick={() => setTocOpen((v) => !v)}
-            className="hover:bg-transparent border-none"
-          >
-            <MenuIcon size={20} className={getTextColor()} />
-          </IconButton>
-        }
-      >
-        <BackButton />
-
-        <BookmarkButton
-          bookSyncId={bookSyncId}
-          location={currentLocation}
-          label={pageCurrent ? `Page ${pageCurrent}` : undefined}
-          className="hover:bg-transparent border-none"
-        />
-
-        <ReaderSettings rendition={rendition} />
-
-        <Popover>
-          <PopoverTrigger asChild>
-            <button className={cn('p-2 rounded-md', getTextColor())} aria-label="More options">
-              <MoreVertical size={20} />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent className="w-48 p-1" align="end">
-            <button
-              onClick={() => setBookmarksPanelOpen(true)}
-              className="flex items-center gap-3 px-3 py-2 text-sm rounded hover:bg-accent w-full text-left"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" />
-                <line x1="9" y1="10" x2="15" y2="10" />
-                <line x1="12" y1="7" x2="12" y2="13" />
-              </svg>
-              Bookmarks
-            </button>
-            <button
-              onClick={() => setHighlightsPanelOpen(true)}
-              className="flex items-center gap-3 px-3 py-2 text-sm rounded hover:bg-accent w-full text-left"
-            >
-              <Highlighter size={16} />
-              Highlights
-            </button>
-            <button
-              onClick={() => requireAuth('chat', () => setChatPanelOpen(true))}
-              className="flex items-center gap-3 px-3 py-2 text-sm rounded hover:bg-accent w-full text-left"
-            >
-              <MessageSquare size={16} />
-              Chat
-            </button>
-            <button
-              onClick={() => setMenuOpen(true)}
-              className="flex items-center gap-3 px-3 py-2 text-sm rounded hover:bg-accent w-full text-left"
-            >
-              <Palette size={16} />
-              Theme
-            </button>
-          </PopoverContent>
-        </Popover>
-      </ReaderToolbar>
-
-      {/* Theme menu (triggered from more menu) */}
-      <Menu
-        trigger={<span />}
-        open={menuOpen}
-        onOpen={() => setMenuOpen(true)}
-        onClose={() => setMenuOpen(false)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-        theme={themes[theme]}
-      >
-        <div className="p-3">
-          <RadioGroup
-            value={theme}
-            onChange={(value) => handleThemeChange(value as ThemeType)}
-            name="theme-selector"
-            theme={themes[theme]}
-          >
-            {(Object.keys(themes) as Array<keyof typeof themes>).map((themeKey) => (
-              <Radio key={themeKey} value={themeKey} label={themeKey} theme={themes[theme]} />
-            ))}
-          </RadioGroup>
-        </div>
-      </Menu>
       <div
         style={{ height: '100vh', position: 'relative', overflow: 'hidden', touchAction: 'pan-y' }}
         {...pageCurl.pointerHandlers}

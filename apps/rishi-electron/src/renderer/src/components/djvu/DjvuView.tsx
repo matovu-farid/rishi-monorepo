@@ -9,17 +9,9 @@ import {
   updateBookLocation
 } from '@/lib/api'
 import type { Book } from '@/lib/api'
-import { BackButton } from '@/components/BackButton'
 import TTSControls from '@/components/tts/TTSControls'
 import { IconButton } from '@/components/ui/IconButton'
-import {
-  ChevronLeft,
-  ChevronRight,
-  Menu as MenuIcon,
-  MessageSquare,
-  ZoomIn,
-  ZoomOut
-} from 'lucide-react'
+import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react'
 import AIChatOrb from '../chat/AIChatOrb'
 import VoiceChatLauncher from '../chat/VoiceChatLauncher'
 import { usePlayerStore } from '@/stores/playerStore'
@@ -28,8 +20,6 @@ import { getBookImportService, type PageDataInsertable } from '@/services'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
 import { stringToNumberID } from '@/lib/utils'
-import { BookmarkButton } from '@/components/bookmarks/BookmarkButton'
-import { ReaderToolbar } from '@/components/reader/ReaderToolbar'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { useChatStore } from '@/stores/chatStore'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
@@ -407,35 +397,6 @@ export function DjvuView({ book }: { book: Book }) {
 
   return (
     <div className="relative h-screen w-full flex flex-col bg-gray-900">
-      {/* Top bar */}
-      <ReaderToolbar
-        panelsOpen={tocOpen || chatPanelOpen}
-        leftContent={
-          <IconButton
-            color="inherit"
-            onClick={() => setTocOpen(true)}
-            className="hover:bg-transparent border-none"
-          >
-            <MenuIcon size={20} />
-          </IconButton>
-        }
-      >
-        <BackButton />
-        <BookmarkButton
-          bookSyncId={bookSyncIdRef.current ?? ''}
-          location={String(currentPage)}
-          label={`Page ${currentPage}`}
-          className="hover:bg-transparent border-none"
-        />
-        <button
-          onClick={() => requireAuth('chat', () => setChatPanelOpen(true))}
-          className="p-2 rounded-md text-black hover:bg-black/10"
-          aria-label="Open chat panel"
-        >
-          <MessageSquare size={20} />
-        </button>
-      </ReaderToolbar>
-
       {/* Main scrollable area */}
       <div className="flex-1 overflow-auto flex items-start justify-center pt-16 pb-24">
         {error && (

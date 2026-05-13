@@ -1,7 +1,5 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react'
-import { IconButton } from '@/components/ui/IconButton'
 import { ThemeType } from '@/themes/common'
-import { Menu as MenuIcon, LayoutGrid } from 'lucide-react'
 import Loader from '@/components/Loader'
 import AIChatOrb from '../../chat/AIChatOrb'
 import VoiceChatLauncher from '../../chat/VoiceChatLauncher'
@@ -32,7 +30,6 @@ import { useUpdateCoverIMage } from '../hooks/useUpdateCoverIMage'
 import { useScrolling } from '../hooks/useScrolling'
 import { usePdfNavigation } from '../hooks/usePdfNavigation'
 import { PageComponent } from './pdf-page'
-import { useSetupMenu } from '../hooks/useSetupMenu'
 import { PDFDocumentProxy } from 'pdfjs-dist'
 import { useVirualization } from '../hooks/useVirualization'
 import { PAGE_GAP } from '../utils/constants'
@@ -43,9 +40,6 @@ import { loadPdfDocument, extractPageParagraphs } from '@/services/indexing/text
 import { useIndexingStore } from '@/stores/indexingStore'
 import { usePdfReader } from '@/hooks/usePdfReader'
 import type { Book } from '@/lib/api'
-import { BackButton } from '@/components/BackButton'
-import { BookmarkButton } from '@/components/bookmarks/BookmarkButton'
-import { ReaderToolbar } from '@/components/reader/ReaderToolbar'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { useChatStore } from '@/stores/chatStore'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
@@ -74,8 +68,6 @@ export function PdfView({
   const setThumbOpen = usePdfStore((s) => s.setThumbnailSidebarOpen)
   const setPdfDocProxy = usePdfStore((s) => s.setPdfDocumentProxy)
 
-  const currentPageNumber = usePdfStore((s) => s.pageNumber)
-
   const { requireAuth, AuthDialog } = useRequireAuth()
   const isChatting = useChatStore((s) => s.isChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
@@ -85,7 +77,6 @@ export function PdfView({
   useScrolling(scrollContainerRef)
 
   useUpdateCoverIMage(book)
-  useSetupMenu()
   // Ref for the scrollable container
 
   const resetParaphState = usePdfStore((s) => s.resetParagraphState)
@@ -464,8 +455,8 @@ export function PdfView({
         // contain: strict isolates layout/paint to this subtree, which is also
         // recommended for the dynamic-size pattern. NOTE: `contain: strict`
         // (which includes `paint`) makes this element a containing block for
-        // `position: fixed` descendants — so fixed overlays (ReaderToolbar,
-        // AIChatOrb, ChatPanel, etc.) MUST be rendered as siblings, not
+        // `position: fixed` descendants — so fixed overlays (AIChatOrb,
+        // ChatPanel, etc.) MUST be rendered as siblings, not
         // children, of this div. Otherwise they anchor to the scroll
         // container's top and scroll away with the content.
         style={{ overflowAnchor: 'none', contain: 'strict' }}
@@ -573,39 +564,6 @@ export function PdfView({
       {/* All overlays below live OUTSIDE the scroll container so their
           `position: fixed` styles anchor to the viewport (the scroll
           container has `contain: strict` which would otherwise trap them). */}
-
-      {/* Fixed Top Bar — auto-hides after 2s */}
-      <ReaderToolbar
-        panelsOpen={tocOpen || thumbOpen}
-        leftContent={
-          <IconButton
-            color="inherit"
-            onClick={() => setTocOpen(true)}
-            className={cn('hover:bg-black/10 dark:hover:bg-white/10 border-none', getTextColor())}
-            aria-label="Open table of contents"
-          >
-            <MenuIcon size={20} />
-          </IconButton>
-        }
-      >
-        <BackButton />
-
-        <IconButton
-          color="inherit"
-          onClick={() => setThumbOpen(true)}
-          className={cn('hover:bg-black/10 dark:hover:bg-white/10 border-none', getTextColor())}
-          aria-label="Open page thumbnails"
-        >
-          <LayoutGrid size={20} />
-        </IconButton>
-
-        <BookmarkButton
-          bookSyncId={bookSyncId}
-          location={String(currentPageNumber)}
-          label={`Page ${currentPageNumber}`}
-          className={cn('hover:bg-black/10 dark:hover:bg-white/10 border-none', getTextColor())}
-        />
-      </ReaderToolbar>
 
       {AuthDialog}
 

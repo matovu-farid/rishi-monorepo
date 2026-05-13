@@ -11,9 +11,8 @@ import {
   updateBookLocation
 } from '@/lib/api'
 import type { Book } from '@/lib/api'
-import { BackButton } from '@/components/BackButton'
 import TTSControls from '@/components/tts/TTSControls'
-import { ChevronLeft, ChevronRight, MessageSquare, Menu as MenuIcon } from 'lucide-react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import AIChatOrb from '@/components/chat/AIChatOrb'
 import VoiceChatLauncher from '@/components/chat/VoiceChatLauncher'
 import { themes } from '@/themes/themes'
@@ -23,10 +22,7 @@ import { getBookImportService, type PageDataInsertable } from '@/services'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { useChatStore } from '@/stores/chatStore'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
-import { BookmarkButton } from '@/components/bookmarks/BookmarkButton'
-import { ReaderToolbar } from '@/components/reader/ReaderToolbar'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
-import { IconButton } from '@/components/ui/IconButton'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
 import { toggleBookmark } from '@/modules/bookmark-storage'
 
@@ -335,35 +331,6 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
       className="relative h-screen flex flex-col"
       style={{ background: themes[theme].background }}
     >
-      {/* Top bar */}
-      <ReaderToolbar
-        panelsOpen={tocOpen || chatPanelOpen}
-        leftContent={
-          <IconButton
-            color="inherit"
-            onClick={() => setTocOpen(true)}
-            className="hover:bg-transparent border-none"
-          >
-            <MenuIcon size={20} />
-          </IconButton>
-        }
-      >
-        <BackButton />
-        <BookmarkButton
-          bookSyncId={bookSyncIdRef.current ?? ''}
-          location={String(chapterIndex)}
-          label={`Chapter ${chapterIndex + 1}`}
-          className="hover:bg-transparent border-none"
-        />
-        <button
-          onClick={() => requireAuth('chat', () => setChatPanelOpen(true))}
-          className="p-2 rounded-md text-black hover:bg-black/10"
-          aria-label="Open chat panel"
-        >
-          <MessageSquare size={20} />
-        </button>
-      </ReaderToolbar>
-
       {/* Main content area */}
       <div className="flex-1 overflow-hidden">
         {loading ? (
