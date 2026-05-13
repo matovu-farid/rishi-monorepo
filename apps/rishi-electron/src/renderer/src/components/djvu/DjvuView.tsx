@@ -23,7 +23,7 @@ import { stringToNumberID } from '@/lib/utils'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { useChatStore } from '@/stores/chatStore'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
-import { toggleBookmark } from '@/modules/bookmark-storage'
+import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
 
 const PAGE_CACHE_SIZE = 5
 const MIN_ZOOM = 0.5
@@ -74,9 +74,10 @@ export function DjvuView({ book }: { book: Book }) {
           location: String(page),
           label: `Page ${page}`
         })
-          .then(() =>
+          .then(async () => {
             queryClient.invalidateQueries({ queryKey: ['bookmarks', syncId] })
-          )
+            await publishBookmarksToMenu(syncId)
+          })
           .catch((err) => console.warn('[menu] addBookmark failed:', err))
       },
       readAloudToggle: () => {
@@ -104,10 +105,11 @@ export function DjvuView({ book }: { book: Book }) {
     setBookId(book.id.toString())
   }, [book.id, setBookId])
 
-  // Look up the book's sync_id for chat
+  // Look up the book's sync_id for chat + publish bookmarks to the menu.
   useEffect(() => {
-    void window.electron.booksGetSyncId(book.id).then((syncId) => {
+    void window.electron.booksGetSyncId(book.id).then(async (syncId) => {
       bookSyncIdRef.current = syncId
+      if (syncId) await publishBookmarksToMenu(syncId)
     })
   }, [book.id])
 

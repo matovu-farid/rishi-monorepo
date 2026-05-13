@@ -44,7 +44,7 @@ import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { useChatStore } from '@/stores/chatStore'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
-import { toggleBookmark } from '@/modules/bookmark-storage'
+import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
 import { useQueryClient } from '@tanstack/react-query'
 
 // Configure PDF.js worker
@@ -144,6 +144,21 @@ export function PdfView({
       })
   }, [book.id])
 
+  // Publish bookmarks to the native-menu context whenever the sync id is
+  // first known. Subsequent edits (addBookmark) re-publish from the menu
+  // handler. Cancellation guards against unmount during the async read.
+  useEffect(() => {
+    if (!bookSyncId) return
+    let cancelled = false
+    void (async () => {
+      if (cancelled) return
+      await publishBookmarksToMenu(bookSyncId)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [bookSyncId])
+
   // Publish the book title to main so the Window menu's open-books submenu
   // shows the real title (not whatever the DB had at window-creation time).
   useEffect(() => {
@@ -222,9 +237,10 @@ export function PdfView({
           location: String(pageNum),
           label: `Page ${pageNum}`
         })
-          .then(() =>
+          .then(async () => {
             queryClient.invalidateQueries({ queryKey: ['bookmarks', bookSyncId] })
-          )
+            await publishBookmarksToMenu(bookSyncId)
+          })
           .catch((err) => console.warn('[menu] addBookmark failed:', err))
       },
       readAloudToggle: () => {

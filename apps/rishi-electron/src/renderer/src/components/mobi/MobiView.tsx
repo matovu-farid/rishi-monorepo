@@ -24,7 +24,7 @@ import { useChatStore } from '@/stores/chatStore'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
-import { toggleBookmark } from '@/modules/bookmark-storage'
+import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
 
 // Simple string hash function (replaces stringToNumberID from Tauri's xxhash64)
 function stringToNumberID(str: string): number {
@@ -71,9 +71,10 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
           location: String(idx),
           label: `Chapter ${idx + 1}`
         })
-          .then(() =>
+          .then(async () => {
             queryClient.invalidateQueries({ queryKey: ['bookmarks', syncId] })
-          )
+            await publishBookmarksToMenu(syncId)
+          })
           .catch((err) => console.warn('[menu] addBookmark failed:', err))
       },
       readAloudToggle: () => {
@@ -101,10 +102,11 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
     setBookId(book.id.toString())
   }, [book.id, setBookId])
 
-  // Look up the book's sync_id for chat
+  // Look up the book's sync_id for chat + publish bookmarks for the menu.
   useEffect(() => {
-    void window.electron.booksGetSyncId(book.id).then((syncId) => {
+    void window.electron.booksGetSyncId(book.id).then(async (syncId) => {
       bookSyncIdRef.current = syncId
+      if (syncId) await publishBookmarksToMenu(syncId)
     })
   }, [book.id])
 

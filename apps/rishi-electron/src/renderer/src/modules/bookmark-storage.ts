@@ -39,6 +39,38 @@ export async function getBookmarksForBook(bookSyncId: string): Promise<BookmarkR
   return window.electron.bookmarksList(bookSyncId)
 }
 
+/**
+ * Fetch the current bookmark list for a book and publish a summary into the
+ * native menu context so the Bookmarks > recent submenu (book windows) shows
+ * up to 10 most-recent jumps. Safe to call repeatedly: noop on missing
+ * bookSyncId or absent preload bridge (test envs).
+ */
+export async function publishBookmarksToMenu(bookSyncId: string): Promise<void> {
+  if (!bookSyncId) return
+  const e = (
+    window as unknown as {
+      electron?: {
+        bookmarksList(id: string): Promise<BookmarkRow[]>
+        setMenuContext(p: Record<string, unknown>): void
+      }
+    }
+  ).electron
+  if (!e?.bookmarksList || !e?.setMenuContext) return
+  try {
+    const rows = await e.bookmarksList(bookSyncId)
+    const summary = rows
+      .filter((b) => b.isDeleted === 0)
+      .map((b) => ({
+        id: b.id,
+        label: b.label && b.label.length > 0 ? b.label : `Page ${b.location}`,
+        location: b.location
+      }))
+    e.setMenuContext({ bookmarks: summary })
+  } catch (err) {
+    console.warn('[menu] publishBookmarksToMenu failed:', err)
+  }
+}
+
 export async function saveBookmark(params: {
   bookId: string
   location: string

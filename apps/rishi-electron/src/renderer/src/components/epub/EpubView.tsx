@@ -39,7 +39,7 @@ import { usePageTracker } from '@/modules/epub-page-tracker'
 import { dumpError } from '@/utils/errorDump'
 import { getCachedEpub } from '@/services/reader-cache/epub-cache'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
-import { toggleBookmark } from '@/modules/bookmark-storage'
+import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
 
 function updateTheme(rendition: Rendition, theme: ThemeType) {
   const reditionThemes = rendition.themes
@@ -128,9 +128,10 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           location: currentLocation,
           label: pageCurrent ? `Page ${pageCurrent}` : undefined
         })
-          .then(() =>
+          .then(async () => {
             queryClient.invalidateQueries({ queryKey: ['bookmarks', bookSyncId] })
-          )
+            await publishBookmarksToMenu(bookSyncId)
+          })
           .catch((err) => console.warn('[menu] addBookmark failed:', err))
       },
       readAloudToggle: () => {
@@ -192,6 +193,13 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       if (syncId) setBookSyncId(syncId)
     })
   }, [book.id])
+
+  // Publish bookmarks to the menu context once sync_id is known. The
+  // addBookmark menu handler re-publishes after edits.
+  useEffect(() => {
+    if (!bookSyncId) return
+    void publishBookmarksToMenu(bookSyncId)
+  }, [bookSyncId])
 
   // Publish title so the native Window menu sees the loaded book.
   useEffect(() => {

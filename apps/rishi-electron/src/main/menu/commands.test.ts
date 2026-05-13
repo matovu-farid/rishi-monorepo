@@ -14,7 +14,7 @@ describe('menu command vocabulary', () => {
       { command: 'toggleDualPage' },
       { command: 'addBookmark' },
       { command: 'showAllBookmarks' },
-      { command: 'jumpToBookmark', arg: { bookmarkId: 9 } },
+      { command: 'jumpToBookmark', arg: { bookmarkId: 'bm-9' } },
       { command: 'readAloudToggle' },
       { command: 'voiceChat' },
       { command: 'openChat' },

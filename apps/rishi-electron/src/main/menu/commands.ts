@@ -10,7 +10,9 @@ export interface OpenBookTitle {
   title: string
 }
 export interface BookmarkSummary {
-  id: number
+  // Bookmarks are stored with UUID string ids (see `bookmarks` table); this
+  // mirrors that so the menu builder and renderer stay aligned with the DB.
+  id: string
   label: string
   location: string
 }
@@ -26,7 +28,7 @@ export type MenuCommand =
   | { command: 'toggleDualPage' }
   | { command: 'addBookmark' }
   | { command: 'showAllBookmarks' }
-  | { command: 'jumpToBookmark'; arg: { bookmarkId: number } }
+  | { command: 'jumpToBookmark'; arg: { bookmarkId: string } }
   | { command: 'readAloudToggle' }
   | { command: 'voiceChat' }
   | { command: 'openChat' }
