@@ -53,6 +53,12 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   const [chapterIndex, setChapterIndex] = useState(initialLocation.chapter)
   const [pageWithinChapter, setPageWithinChapter] = useState(initialLocation.page)
   const [pagesInCurrentChapter, setPagesInCurrentChapter] = useState(1)
+  // Per-chapter measured page counts, keyed by chapterIndex. Built up
+  // lazily as the user visits chapters (or as ResizeObserver re-measures
+  // them). Unmeasured chapters contribute 0 to globalTotal — that's why
+  // the visible "of N" defaults to '?' until at least one chapter is
+  // measured.
+  const [chapterPageCounts, setChapterPageCounts] = useState<Record<number, number>>({})
 
   const [sections, setSections] = useState<FoliateSection[]>([])
   const [chapterCount, setChapterCount] = useState(0)
@@ -331,6 +337,12 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         paddingRight
       )
       setPagesInCurrentChapter(total)
+      // Record this chapter's measured size so the global page counter
+      // can sum across visited chapters. Only update if the value changed
+      // to avoid unnecessary renders.
+      setChapterPageCounts((prev) =>
+        prev[chapterIndex] === total ? prev : { ...prev, [chapterIndex]: total }
+      )
 
       // Resolve any pending cross-chapter navigation request.
       const pending = pendingPageAfterLoadRef.current
@@ -387,6 +399,12 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
           paddingRight
         )
         setPagesInCurrentChapter(total)
+        // Resize can change a chapter's page count (e.g. window narrows
+        // ⇒ more columns). Keep chapterPageCounts in sync so the global
+        // counter stays accurate.
+        setChapterPageCounts((prev) =>
+          prev[chapterIndex] === total ? prev : { ...prev, [chapterIndex]: total }
+        )
         applyScrollToPage(doc, win, pageWithinChapter, total, pageStep)
       })
     })
@@ -395,7 +413,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
       cancelAnimationFrame(raf)
       observer.disconnect()
     }
-  }, [applyScrollToPage, pageWithinChapter, chapterUrl])
+  }, [applyScrollToPage, pageWithinChapter, chapterUrl, chapterIndex])
 
   /** Read the live per-page stride from the iframe's computed style. We read
    *  this fresh on every call instead of caching it because CSS variables and
@@ -694,6 +712,29 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   const atLastPage =
     chapterIndex === chapterCount - 1 && pageWithinChapter >= pagesInCurrentChapter - 1
 
+  // Global page counter. The displayed "X of Y" is computed across all
+  // measured chapters so it doesn't reset at chapter boundaries. Chapters
+  // not yet visited contribute 0 to the running totals (we don't pre-
+  // measure every chapter on book open). The invariant the e2e test
+  // relies on: each forward click increases globalCurrent by exactly 1,
+  // including the click that crosses a chapter boundary — which holds
+  // because measureAndScroll records chapterPageCounts[K] *before* the
+  // user can click past the end of chapter K.
+  const globalCurrent = useMemo(() => {
+    let sum = 0
+    for (let i = 0; i < chapterIndex; i++) {
+      sum += chapterPageCounts[i] ?? 0
+    }
+    return sum + pageWithinChapter + 1
+  }, [chapterPageCounts, chapterIndex, pageWithinChapter])
+  const globalTotal = useMemo(() => {
+    let sum = 0
+    for (let i = 0; i < chapterCount; i++) {
+      sum += chapterPageCounts[i] ?? 0
+    }
+    return sum
+  }, [chapterPageCounts, chapterCount])
+
   return (
     <div className="relative h-screen flex flex-col" style={{ background: themeStyle.background }}>
       <div className="flex-1 overflow-hidden">
@@ -737,15 +778,18 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
       />
 
       {/* Subtle bottom page counter — "X" by default, "X of Y" on hover.
-          Values are now per-chapter page counts (total across the entire
-          book would require pre-measuring every chapter, which we don't do).
-          Tests rely on data-current / data-total so they don't depend on
-          hover-state text. */}
+          Values are global page numbers (summed across all measured
+          chapters) so the counter advances monotonically across chapter
+          boundaries instead of resetting to 1. Until a chapter is
+          actually visited it contributes 0 to globalTotal — that's why
+          the visible "of N" falls back to '?' before any chapters are
+          measured. Tests rely on data-current / data-total so they don't
+          depend on hover-state text. */}
       {chapterCount > 0 && (
         <div
           data-testid="azw3-page-counter"
-          data-current={pageWithinChapter + 1}
-          data-total={pagesInCurrentChapter}
+          data-current={globalCurrent}
+          data-total={globalTotal || globalCurrent}
           className="group/page"
           style={{
             position: 'fixed',
@@ -765,8 +809,8 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
               opacity: 0.4
             }}
           >
-            <span>{pageWithinChapter + 1}</span>
-            <span className="hidden group-hover/page:inline"> of {pagesInCurrentChapter}</span>
+            <span>{globalCurrent}</span>
+            <span className="hidden group-hover/page:inline"> of {globalTotal || '?'}</span>
           </span>
         </div>
       )}

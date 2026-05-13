@@ -86,6 +86,10 @@ test('AZW3 reader keeps the leftmost column aligned across pages', async () => {
     expect(page0, 'page 0 measurement').not.toBeNull()
     expect(page0!.minLeft, 'page 0 should find at least one visible paragraph').not.toBeNull()
     const expectedLeft = page0!.minLeft as number
+    // data-current is now a global page number that starts at whatever
+    // the initial measurement says, not a per-chapter "1". Use it as a
+    // baseline and assert each click increments by exactly 1.
+    const initialCurrent = Number(await counter.getAttribute('data-current'))
 
     for (let i = 1; i < samples; i++) {
       await bookPage.locator('button[aria-label="Next page"]').click()
@@ -94,7 +98,7 @@ test('AZW3 reader keeps the leftmost column aligned across pages', async () => {
           timeout: 5000,
           intervals: [100, 250]
         })
-        .toBe(i + 1)
+        .toBe(initialCurrent + i)
       await bookPage.waitForTimeout(150) // let scroll settle
       const m = await measure()
       expect(m, `page ${i} measurement`).not.toBeNull()
