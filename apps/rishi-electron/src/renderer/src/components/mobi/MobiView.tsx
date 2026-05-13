@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useEpubStore } from '@/stores/epubStore'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
 import {
@@ -27,6 +27,8 @@ import { BookmarkButton } from '@/components/bookmarks/BookmarkButton'
 import { ReaderToolbar } from '@/components/reader/ReaderToolbar'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { IconButton } from '@/components/ui/IconButton'
+import { useMenuCommands } from '@/hooks/useMenuCommands'
+import { toggleBookmark } from '@/modules/bookmark-storage'
 
 // Simple string hash function (replaces stringToNumberID from Tauri's xxhash64)
 function stringToNumberID(str: string): number {
@@ -56,6 +58,46 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
 
   const isChatting = useChatStore((s) => s.isChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
+  const queryClient = useQueryClient()
+
+  // Wire native-menu commands. Toolbar buttons remain the primary entry
+  // point; menu items dispatch the same actions. MOBI has no thumbnails or
+  // dual-page so those commands are not registered here.
+  const menuHandlers = useMemo(
+    () => ({
+      toggleTOC: () => setTocOpen((v) => !v),
+      addBookmark: () => {
+        const syncId = bookSyncIdRef.current
+        if (!syncId) return
+        const idx = chapterIndex
+        void toggleBookmark({
+          bookSyncId: syncId,
+          location: String(idx),
+          label: `Chapter ${idx + 1}`
+        })
+          .then(() =>
+            queryClient.invalidateQueries({ queryKey: ['bookmarks', syncId] })
+          )
+          .catch((err) => console.warn('[menu] addBookmark failed:', err))
+      },
+      readAloudToggle: () => {
+        const send = usePlayerStore.getState().send
+        if (!send) return
+        const state = usePlayerStore.getState().playingState
+        if (state === 'playing') send({ type: 'PAUSE' })
+        else if (state.startsWith('paused')) send({ type: 'RESUME' })
+        else requireAuth('tts', () => send({ type: 'PLAY' }))
+      },
+      openChat: () => requireAuth('chat', () => setChatPanelOpen((v) => !v)),
+      voiceChat: () => {
+        const { isChatting: chatting, setIsChatting } = useChatStore.getState()
+        if (chatting) setIsChatting(false)
+        else requireAuth('voice-input', () => setIsChatting(true))
+      }
+    }),
+    [requireAuth, chapterIndex, queryClient]
+  )
+  useMenuCommands(menuHandlers)
 
   // Set bookId for voice chat
   const setBookId = useEpubStore((s) => s.setBookId)

@@ -3,7 +3,7 @@ import { ReactReader } from '@/components/react-reader'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Menu } from '@/components/ui/Menu'
 import { Radio, RadioGroup } from '@/components/ui/Radio'
 import { ThemeType } from '@/themes/common'
@@ -47,6 +47,8 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { usePageTracker } from '@/modules/epub-page-tracker'
 import { dumpError } from '@/utils/errorDump'
 import { getCachedEpub } from '@/services/reader-cache/epub-cache'
+import { useMenuCommands } from '@/hooks/useMenuCommands'
+import { toggleBookmark } from '@/modules/bookmark-storage'
 
 function cn(...classes: string[]) {
   return classes.filter(Boolean).join(' ')
@@ -126,6 +128,44 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
 
   const isChatting = useChatStore((s) => s.isChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
+  const queryClient = useQueryClient()
+
+  // Wire native-menu commands. Toolbar buttons remain the primary entry
+  // point; menu items dispatch the same actions. EPUB has no thumbnails or
+  // dual-page so those commands are not registered here.
+  const menuHandlers = useMemo(
+    () => ({
+      toggleTOC: () => setTocOpen((v) => !v),
+      addBookmark: () => {
+        if (!bookSyncId) return
+        void toggleBookmark({
+          bookSyncId,
+          location: currentLocation,
+          label: pageCurrent ? `Page ${pageCurrent}` : undefined
+        })
+          .then(() =>
+            queryClient.invalidateQueries({ queryKey: ['bookmarks', bookSyncId] })
+          )
+          .catch((err) => console.warn('[menu] addBookmark failed:', err))
+      },
+      readAloudToggle: () => {
+        const send = usePlayerStore.getState().send
+        if (!send) return
+        const state = usePlayerStore.getState().playingState
+        if (state === 'playing') send({ type: 'PAUSE' })
+        else if (state.startsWith('paused')) send({ type: 'RESUME' })
+        else requireAuth('tts', () => send({ type: 'PLAY' }))
+      },
+      openChat: () => requireAuth('chat', () => setChatPanelOpen((v) => !v)),
+      voiceChat: () => {
+        const { isChatting: chatting, setIsChatting } = useChatStore.getState()
+        if (chatting) setIsChatting(false)
+        else requireAuth('voice-input', () => setIsChatting(true))
+      }
+    }),
+    [requireAuth, bookSyncId, currentLocation, pageCurrent, queryClient]
+  )
+  useMenuCommands(menuHandlers)
 
   // Load EPUB bytes via IPC. The lazy initializer reads the warm-restore
   // cache synchronously so a reopen renders with bytes (and the cached
@@ -409,7 +449,6 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     setMenuOpen(false)
   }
 
-  const queryClient = useQueryClient()
   const updateBookLocationMutation = useMutation({
     mutationFn: async ({ bookId, location }: { bookId: string; location: string }) => {
       await updateBookLocation({

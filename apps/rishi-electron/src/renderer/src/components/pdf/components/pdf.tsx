@@ -49,6 +49,9 @@ import { ReaderToolbar } from '@/components/reader/ReaderToolbar'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { useChatStore } from '@/stores/chatStore'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
+import { useMenuCommands } from '@/hooks/useMenuCommands'
+import { toggleBookmark } from '@/modules/bookmark-storage'
+import { useQueryClient } from '@tanstack/react-query'
 
 // Configure PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -73,9 +76,10 @@ export function PdfView({
 
   const currentPageNumber = usePdfStore((s) => s.pageNumber)
 
-  const { AuthDialog } = useRequireAuth()
+  const { requireAuth, AuthDialog } = useRequireAuth()
   const isChatting = useChatStore((s) => s.isChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
+  const queryClient = useQueryClient()
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   useScrolling(scrollContainerRef)
@@ -201,6 +205,48 @@ export function PdfView({
   // save with unmount-flush, paragraph publishing) with one explicit machine
   // whose state can't be stomped from outside.
   const pdfReader = usePdfReader(book, virtualizer, scrollContainerRef)
+
+  // Wire native-menu commands. Toolbar buttons remain the primary entry
+  // point; menu items dispatch the same actions. Setters from useState and
+  // store actions read via getState() are stable identities, so this memo
+  // only rebinds when `requireAuth`/`bookSyncId`/`book.id` change.
+  const menuHandlers = useMemo(
+    () => ({
+      toggleTOC: () => setTocOpen((v) => !v),
+      toggleThumbnails: () => setThumbOpen((v) => !v),
+      toggleDualPage: () =>
+        usePdfStore.setState((s) => ({ isDualPage: !s.isDualPage })),
+      addBookmark: () => {
+        if (!bookSyncId) return
+        const pageNum = usePdfStore.getState().pageNumber
+        void toggleBookmark({
+          bookSyncId,
+          location: String(pageNum),
+          label: `Page ${pageNum}`
+        })
+          .then(() =>
+            queryClient.invalidateQueries({ queryKey: ['bookmarks', bookSyncId] })
+          )
+          .catch((err) => console.warn('[menu] addBookmark failed:', err))
+      },
+      readAloudToggle: () => {
+        const send = usePlayerStore.getState().send
+        if (!send) return
+        const state = usePlayerStore.getState().playingState
+        if (state === 'playing') send({ type: 'PAUSE' })
+        else if (state.startsWith('paused')) send({ type: 'RESUME' })
+        else requireAuth('tts', () => send({ type: 'PLAY' }))
+      },
+      openChat: () => requireAuth('chat', () => setChatPanelOpen((v) => !v)),
+      voiceChat: () => {
+        const { isChatting: chatting, setIsChatting } = useChatStore.getState()
+        if (chatting) setIsChatting(false)
+        else requireAuth('voice-input', () => setIsChatting(true))
+      }
+    }),
+    [requireAuth, bookSyncId, queryClient, setThumbOpen]
+  )
+  useMenuCommands(menuHandlers)
 
   function onItemClick({ pageNumber: itemPageNumber }: { pageNumber: number }) {
     pdfReader.seekTo(itemPageNumber)

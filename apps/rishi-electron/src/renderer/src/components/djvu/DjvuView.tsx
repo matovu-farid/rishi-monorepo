@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useEpubStore } from '@/stores/epubStore'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   getDjvuPage,
   getDjvuPageCount,
@@ -31,6 +32,8 @@ import { BookmarkButton } from '@/components/bookmarks/BookmarkButton'
 import { ReaderToolbar } from '@/components/reader/ReaderToolbar'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { useChatStore } from '@/stores/chatStore'
+import { useMenuCommands } from '@/hooks/useMenuCommands'
+import { toggleBookmark } from '@/modules/bookmark-storage'
 
 const PAGE_CACHE_SIZE = 5
 const MIN_ZOOM = 0.5
@@ -62,8 +65,48 @@ export function DjvuView({ book }: { book: Book }) {
   const { requireAuth, AuthDialog } = useRequireAuth()
   const isChatting = useChatStore((s) => s.isChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
+  const queryClient = useQueryClient()
 
   const bookSyncIdRef = useRef<string | null>(null)
+
+  // Wire native-menu commands. Toolbar buttons remain the primary entry
+  // point; menu items dispatch the same actions. DJVU has no thumbnails or
+  // dual-page so those commands are not registered here.
+  const menuHandlers = useMemo(
+    () => ({
+      toggleTOC: () => setTocOpen((v) => !v),
+      addBookmark: () => {
+        const syncId = bookSyncIdRef.current
+        if (!syncId) return
+        const page = currentPage
+        void toggleBookmark({
+          bookSyncId: syncId,
+          location: String(page),
+          label: `Page ${page}`
+        })
+          .then(() =>
+            queryClient.invalidateQueries({ queryKey: ['bookmarks', syncId] })
+          )
+          .catch((err) => console.warn('[menu] addBookmark failed:', err))
+      },
+      readAloudToggle: () => {
+        const send = usePlayerStore.getState().send
+        if (!send) return
+        const state = usePlayerStore.getState().playingState
+        if (state === 'playing') send({ type: 'PAUSE' })
+        else if (state.startsWith('paused')) send({ type: 'RESUME' })
+        else requireAuth('tts', () => send({ type: 'PLAY' }))
+      },
+      openChat: () => requireAuth('chat', () => setChatPanelOpen((v) => !v)),
+      voiceChat: () => {
+        const { isChatting: chatting, setIsChatting } = useChatStore.getState()
+        if (chatting) setIsChatting(false)
+        else requireAuth('voice-input', () => setIsChatting(true))
+      }
+    }),
+    [requireAuth, currentPage, queryClient]
+  )
+  useMenuCommands(menuHandlers)
 
   // Set bookId for voice chat
   const setBookId = useEpubStore((s) => s.setBookId)
