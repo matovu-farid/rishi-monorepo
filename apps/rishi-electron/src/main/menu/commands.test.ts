@@ -6,7 +6,6 @@ describe('menu command vocabulary', () => {
     const all: MenuCommand[] = [
       { command: 'importBook' },
       { command: 'openRecent', arg: { bookId: 1 } },
-      { command: 'closeWindow' },
       { command: 'focusLibrary' },
       { command: 'toggleTheme' },
       { command: 'toggleTOC' },

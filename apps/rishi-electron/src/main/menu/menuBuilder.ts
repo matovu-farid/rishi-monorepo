@@ -19,11 +19,7 @@ export function buildMenu(ctx: MenuContext, dispatch: Dispatch): MenuItemConstru
       { label: 'Open Recent', submenu: buildRecentSubmenu(ctx.recentBooks, dispatch) },
       { type: 'separator' },
       ctx.kind === 'book'
-        ? {
-            label: 'Close Book',
-            accelerator: ACCELERATORS.closeWindow,
-            click: fire({ command: 'closeWindow' })
-          }
+        ? { label: 'Close Book', accelerator: ACCELERATORS.closeWindow, role: 'close' }
         : { label: 'Close Window', accelerator: ACCELERATORS.closeWindow, role: 'close' }
     ]
   }

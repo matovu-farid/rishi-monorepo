@@ -62,15 +62,37 @@ function RootComponent(): JSX.Element {
   }, [])
 
 
+  // Publish the initial theme to the main process on mount so the View menu's
+  // "Switch to Light/Dark Mode" label reflects reality the first time the menu
+  // is built for this window.
+  useEffect(() => {
+    const theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+    const e = (
+      window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
+    ).electron
+    e?.setMenuContext({ theme })
+  }, [])
+
   // Library-level menu handlers. Toggle dark/light by flipping the `dark`
-  // class on <html> — matches the menu builder's label-flip pattern. The menu
-  // label itself only updates after the renderer reports the new theme via
-  // `setMenuContext({ theme })`, but for now this is enough to make the menu
-  // command observable in the renderer (and e2e-testable).
+  // class on <html>, then publish the new theme so the menu label updates.
   const menuHandlers = useMemo(
     () => ({
       toggleTheme: (): void => {
         document.documentElement.classList.toggle('dark')
+        const theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+        const e = (
+          window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
+        ).electron
+        e?.setMenuContext({ theme })
+      },
+      // Window > Library (⌘1) → focus the library window. Available from any
+      // window — the main process either focuses the existing library window
+      // or spawns one if it was closed.
+      focusLibrary: (): void => {
+        const e = (
+          window as unknown as { electron: { focusLibrary(): Promise<void> } }
+        ).electron
+        void e.focusLibrary()
       },
       // File > Open Recent → open the chosen book in its own window. Available
       // from any window (library or book); routes through the same IPC that

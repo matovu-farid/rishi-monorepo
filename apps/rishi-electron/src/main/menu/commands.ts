@@ -20,7 +20,6 @@ export interface BookmarkSummary {
 export type MenuCommand =
   | { command: 'importBook' }
   | { command: 'openRecent'; arg: { bookId: number } }
-  | { command: 'closeWindow' }
   | { command: 'focusLibrary' }
   | { command: 'toggleTheme' }
   | { command: 'toggleTOC' }
