@@ -111,8 +111,13 @@ test('AZW3 reader paints the book content into the iframe', async () => {
 
 // Regression for the user-reported bug: the fixture book shows 72 pages in
 // GroupDocs but Rishi shows only "1 / 1" because foliate-js's KF8 splitter
-// emits a single SKEL entry containing the whole book. The parser must
-// synthesize virtual pages from a single section so the reader paginates.
+// emits a single SKEL entry containing the whole book.
+//
+// Under the viewport-snapped column model, the whole chapter is loaded into
+// the iframe and CSS columns split it into N viewport-wide pages — Next page
+// simply scrolls `body.scrollLeft` forward by one viewport. data-total now
+// reflects pages-within-current-chapter; for this 339KB single-section
+// fixture that's many pages.
 test('AZW3 reader paginates single-section books', async () => {
   test.setTimeout(60000)
   const launched = await launchApp()
@@ -129,12 +134,9 @@ test('AZW3 reader paginates single-section books', async () => {
     // hover-state text. Fall back to data-testid lookup.
     const counter = bookPage.locator('[data-testid="azw3-page-counter"]')
     await counter.waitFor({ state: 'attached', timeout: 20000 })
-    const total = Number(await counter.getAttribute('data-total'))
-    const current = Number(await counter.getAttribute('data-current'))
-    expect(total, `expected paginated total > 1, got ${total}`).toBeGreaterThan(1)
 
-    // 2) Wait for the iframe body to settle on the current virtual page so we
-    //    have a stable textContent snapshot.
+    // Wait for the iframe to load + settle so the renderer has had a chance
+    // to measure the column-paginated chapter and update data-total.
     const iframe = bookPage.locator('iframe[title="AZW3 Pagination"]')
     await expect(iframe).toBeVisible({ timeout: 10000 })
     const frame = bookPage.frameLocator('iframe[title="AZW3 Pagination"]')
@@ -147,9 +149,19 @@ test('AZW3 reader paginates single-section books', async () => {
       )
       .toBeGreaterThan(50)
 
-    const firstText = await body.evaluate((el) => (el.textContent ?? '').trim())
+    // Wait for measurement to settle — data-total should be > 1 once the
+    // column algorithm has laid out the chapter.
+    await expect
+      .poll(async () => Number(await counter.getAttribute('data-total')), {
+        timeout: 20000,
+        intervals: [200, 500, 1000]
+      })
+      .toBeGreaterThan(1)
 
-    // 3) Click Next page, counter must advance, body text must change.
+    const current = Number(await counter.getAttribute('data-current'))
+
+    // Click Next page — data-current must advance by 1 (scrollLeft jumps to
+    // the next viewport-wide column page).
     await bookPage.locator('button[aria-label="Next page"]').click()
     await expect
       .poll(async () => Number(await counter.getAttribute('data-current')), {
@@ -157,14 +169,6 @@ test('AZW3 reader paginates single-section books', async () => {
         intervals: [200, 500]
       })
       .toBe(current + 1)
-
-    await expect
-      .poll(
-        async () =>
-          await body.evaluate((el) => (el.textContent ?? '').trim()),
-        { timeout: 20000, intervals: [200, 500, 1000] }
-      )
-      .not.toBe(firstText)
   } finally {
     await closeApp(launched)
   }

@@ -11,10 +11,11 @@
  * The Blob URL returned by `section.load()` points to a serialized HTML
  * document that can be set as an `<iframe src=...>` directly.
  *
- * Some publishers emit a single SKEL entry containing the whole book, which
- * leaves the reader stuck on "1 / 1". When that happens we synthesize a
- * paginated set of virtual sections from the one parsed document so the
- * reader behaves like a normal paginated book. See {@link paginateSection}.
+ * Each section is returned to the renderer whole; the renderer applies
+ * viewport-snapped CSS column pagination to the iframe document (see
+ * `reader-styles.ts` + `Azw3View.tsx`). The legacy word-count pagination
+ * helper (`paginateSection`) is still exported for unit tests and is
+ * available for callers that want explicit per-page section objects.
  */
 
 // foliate-js types are not published; locally narrow to what we use.
@@ -92,14 +93,22 @@ export const WORDS_PER_PAGE = 400
 
 /**
  * Load and parse an AZW3 file from raw bytes. Returns the foliate-js book
- * instance plus a filtered list of renderable sections. If the book has only
- * a single section (typical of publisher-emitted single-SKEL KF8 files), the
- * section is split into ~`wordsPerPage`-sized virtual pages so the reader can
- * paginate through it.
+ * instance plus a filtered list of renderable sections.
+ *
+ * Each section is returned whole — the renderer loads the full chapter into
+ * a single iframe and uses CSS column pagination (driven by
+ * `reader-styles.ts`) to paginate it horizontally across the viewport. The
+ * renderer is also responsible for calling {@link stripKindleResourceLinks}
+ * on the loaded document before rendering (foliate rewrites most kindle:
+ * URLs, but some legacy `<link>` references slip through).
+ *
+ * `opts.wordsPerPage` is kept for backward compatibility with callers (and
+ * tests) that still want the legacy word-count pagination; it is no longer
+ * used here.
  */
 export async function parseAzw3(
   bytes: ArrayBuffer,
-  opts: { wordsPerPage?: number } = {}
+  _opts: { wordsPerPage?: number } = {}
 ): Promise<{ book: FoliateBook; sections: FoliateSection[] }> {
   // Wrap the ArrayBuffer in a Blob — foliate-js calls `.slice(...).arrayBuffer()`
   // on the input, both of which Blob supports natively.
@@ -125,16 +134,11 @@ export async function parseAzw3(
     (s) => typeof s?.load === 'function' && s.linear !== 'no'
   )
 
-  let bodySections: FoliateSection[]
-  if (filtered.length !== 1) {
-    // Multi-section books already paginate fine — keep them as-is.
-    bodySections = filtered
-  } else {
-    // Single-section case: synthesize virtual pages.
-    const wordsPerPage = Math.max(50, opts.wordsPerPage ?? WORDS_PER_PAGE)
-    const virtualPages = await paginateSection(filtered[0], wordsPerPage)
-    bodySections = virtualPages.length > 0 ? virtualPages : filtered
-  }
+  // Return each section whole — the renderer column-paginates inside the
+  // iframe using viewport-snapped CSS columns. Previously we synthesized
+  // virtual word-count pages here; that responsibility now lives in the
+  // renderer's iframe load handler.
+  const bodySections: FoliateSection[] = filtered
 
   // KF8 books carry the cover in EXTH metadata, not as a renderable section.
   // Prepend a synthetic cover page so the reader's page 1 matches what other
@@ -169,7 +173,7 @@ export async function extractSectionParagraphs(section: FoliateSection): Promise
  * the KF8 `createDocument` always parses as XHTML — and on malformed publisher
  * markup that drops the body content — while `loadSection` falls back to HTML.
  */
-async function loadSectionDocument(section: FoliateSection): Promise<Document> {
+export async function loadSectionDocument(section: FoliateSection): Promise<Document> {
   if (typeof section.load !== 'function') throw new Error('section has no load()')
   const url = await section.load()
   const res = await fetch(url)

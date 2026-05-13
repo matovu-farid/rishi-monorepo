@@ -19,9 +19,15 @@ import { useRequireAuth } from '@/hooks/useRequireAuth'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
 import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
-import { parseAzw3, extractSectionParagraphs, type FoliateSection } from './parser'
+import {
+  parseAzw3,
+  extractSectionParagraphs,
+  stripKindleResourceLinks,
+  type FoliateSection
+} from './parser'
 import { injectReaderStyles } from './reader-styles'
 import { findParagraphElement, parseParagraphIndex, setActiveClass } from './highlight'
+import { computePageStep, formatLocation, measurePageCount, parseLocation } from './pagination'
 
 function stringToNumberID(str: string): number {
   let hash = 0
@@ -32,13 +38,22 @@ function stringToNumberID(str: string): number {
   return Math.abs(hash)
 }
 
+/** Debounce delay before persisting reading location. Page turns fire often
+ *  (one per click + per TTS paragraph advance) so we coalesce updates. */
+const LOCATION_PERSIST_DEBOUNCE_MS = 500
+
 export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme)
   const [tocOpen, setTocOpen] = useState(false)
-  const [chapterIndex, setChapterIndex] = useState(() => {
-    const parsed = Number(book.location)
-    return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0
-  })
+
+  // Persisted reading position is now `<chapter>:<page>`. parseLocation
+  // also accepts the legacy bare-integer form so reopening an existing book
+  // doesn't reset the reader to the cover.
+  const initialLocation = useMemo(() => parseLocation(book.location), [book.location])
+  const [chapterIndex, setChapterIndex] = useState(initialLocation.chapter)
+  const [pageWithinChapter, setPageWithinChapter] = useState(initialLocation.page)
+  const [pagesInCurrentChapter, setPagesInCurrentChapter] = useState(1)
+
   const [sections, setSections] = useState<FoliateSection[]>([])
   const [chapterCount, setChapterCount] = useState(0)
   const [chapterUrl, setChapterUrl] = useState<string | null>(null)
@@ -48,6 +63,14 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
   const { requireAuth, AuthDialog } = useRequireAuth()
   const bookSyncIdRef = useRef<string | null>(null)
+
+  // When navigating backward across a chapter boundary, we want to land on
+  // the *last* page of the new chapter — but we can't know how many pages
+  // that chapter has until it loads. Stash the request here and have the
+  // load handler apply it.
+  // Numeric values are explicit page offsets; 'last' means "last page",
+  // resolved against the actual measured page count after layout settles.
+  const pendingPageAfterLoadRef = useRef<number | 'last' | null>(null)
 
   const isChatting = useChatStore((s) => s.isChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
@@ -64,7 +87,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         const idx = chapterIndex
         void toggleBookmark({
           bookSyncId: syncId,
-          location: String(idx),
+          location: formatLocation(idx, pageWithinChapter),
           label: `Chapter ${idx + 1}`
         })
           .then(async () => {
@@ -88,7 +111,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         else requireAuth('voice-input', () => setIsChatting(true))
       }
     }),
-    [requireAuth, chapterIndex, queryClient]
+    [requireAuth, chapterIndex, pageWithinChapter, queryClient]
   )
   useMenuCommands(menuHandlers)
 
@@ -199,65 +222,286 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     }
   }, [sections, chapterIndex, chapterCount])
 
-  // Persist reading position
+  // Persist reading position — debounced. Page turns fire on every click
+  // and on every TTS paragraph advance, so write at most once every 500ms.
   const updateLocationMutation = useMutation({
-    mutationFn: async (index: number) => {
-      await updateBookLocation({ bookId: book.id, newLocation: String(index) })
+    mutationFn: async (loc: string) => {
+      await updateBookLocation({ bookId: book.id, newLocation: loc })
     },
     onError() {
       toast.error('Failed to save reading position')
     }
   })
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Hold a stable ref to the mutation so the persist effect doesn't re-run
+  // every render when mutation identity changes.
+  const persistMutationRef = useRef(updateLocationMutation)
+  persistMutationRef.current = updateLocationMutation
   useEffect(() => {
-    updateLocationMutation.mutate(chapterIndex)
-  }, [chapterIndex])
-
-  const goNext = useCallback(() => {
-    setChapterIndex((prev) => Math.min(prev + 1, chapterCount - 1))
-  }, [chapterCount])
-  const goPrev = useCallback(() => {
-    setChapterIndex((prev) => Math.max(prev - 1, 0))
-  }, [])
-
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent): void {
-      if (e.key === 'ArrowRight') goNext()
-      else if (e.key === 'ArrowLeft') goPrev()
+    if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
+    persistTimerRef.current = setTimeout(() => {
+      persistMutationRef.current.mutate(formatLocation(chapterIndex, pageWithinChapter))
+    }, LOCATION_PERSIST_DEBOUNCE_MS)
+    return () => {
+      if (persistTimerRef.current) {
+        clearTimeout(persistTimerRef.current)
+        // Flush on unmount so the last position is always saved even if the
+        // user closes the book within the debounce window.
+        persistMutationRef.current.mutate(formatLocation(chapterIndex, pageWithinChapter))
+      }
     }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [goNext, goPrev])
+  }, [chapterIndex, pageWithinChapter])
 
-  // Inject reader CSS (top padding + 2-column + .rishi-tts-active) into
-  // each loaded chapter document. Runs on every iframe `load` because the
-  // iframe is remounted with a fresh contentDocument per chapterUrl.
-  // Also re-applies the highlight class if TTS is currently reading a
-  // paragraph in this chapter (the class is wiped when the doc reloads).
+  /**
+   * Apply the desired `pageWithinChapter` to the iframe's body.scrollLeft.
+   * `pageStep` is the horizontal stride between pages (clientWidth + columnGap)
+   * — see computePageStep in ./pagination. Returns the page index that was
+   * actually scrolled to (after clamping).
+   */
+  const applyScrollToPage = useCallback(
+    (
+      doc: Document,
+      _iframeWin: Window,
+      desiredPage: number,
+      totalPages: number,
+      pageStep: number
+    ): number => {
+      const clamped = Math.max(0, Math.min(desiredPage, totalPages - 1))
+      const body = doc.body
+      if (body) {
+        const left = clamped * pageStep
+        // `behavior: 'instant'` avoids the default smooth-scroll animation
+        // (which feels sluggish on chapter switches and would race React).
+        body.scrollTo({ left, top: 0, behavior: 'instant' as ScrollBehavior })
+        // Fallback for engines that don't implement scrollTo on body.
+        body.scrollLeft = left
+      }
+      return clamped
+    },
+    []
+  )
+
+  // Inject reader CSS, strip Kindle-internal resource refs, measure the
+  // column-paginated chapter, and scroll to the desired page on every
+  // iframe load. Runs on every chapter switch because the iframe is
+  // remounted with a fresh contentDocument per chapterUrl.
   const handleIframeLoad = useCallback(() => {
     const iframe = iframeRef.current
     const doc = iframe?.contentDocument
-    if (!doc) return
+    const iframeWin = iframe?.contentWindow
+    if (!doc || !iframeWin) return
     injectReaderStyles(doc)
-    const active = usePlayerStore.getState().activeParagraph
-    if (active) {
-      const parsed = parseParagraphIndex(active.index)
-      if (parsed && parsed.chapter === chapterIndex) {
-        setActiveClass(findParagraphElement(doc, parsed.paragraph), true)
+    // Foliate rewrites most kindle: URLs when serving section blobs, but
+    // legacy stylesheet `<link>` tags survive and trigger CSP fetch errors
+    // in the iframe. Drop them before measurement so they don't influence
+    // layout.
+    stripKindleResourceLinks(doc)
+
+    const measureAndScroll = async (): Promise<void> => {
+      // Wait for fonts and layout to settle before measuring scrollWidth.
+      // Without this, the first measurement often comes back too small
+      // because web-font loading shifts the column flow.
+      try {
+        await doc.fonts?.ready
+      } catch {
+        // doc.fonts might be undefined or throw in non-CSSFontLoading envs.
+      }
+      await new Promise<void>((resolve) =>
+        iframeWin.requestAnimationFrame(() => resolve())
+      )
+
+      const body = doc.body
+      // Column-aware stride: CSS multicol places a `column-gap` between every
+      // pair of adjacent columns, INCLUDING between the last column of page N
+      // and the first column of page N+1. So the per-page stride is
+      // `clientWidth + columnGap`, not `viewportWidth`.
+      const cs = body ? iframeWin.getComputedStyle(body) : null
+      const columnGap = cs ? parseFloat(cs.columnGap || '0') || 0 : 0
+      const clientWidth = body?.clientWidth ?? 0
+      const pageStep = computePageStep(clientWidth, columnGap)
+      const total = measurePageCount(body?.scrollWidth ?? 0, clientWidth, columnGap)
+      setPagesInCurrentChapter(total)
+
+      // Resolve any pending cross-chapter navigation request.
+      const pending = pendingPageAfterLoadRef.current
+      pendingPageAfterLoadRef.current = null
+      const desired =
+        pending === 'last' ? total - 1 : pending !== null ? pending : pageWithinChapter
+      const applied = applyScrollToPage(doc, iframeWin, desired, total, pageStep)
+      if (applied !== pageWithinChapter) setPageWithinChapter(applied)
+
+      // Re-apply the TTS highlight class if we're reading a paragraph in
+      // this chapter (the class is wiped when the doc reloads).
+      const active = usePlayerStore.getState().activeParagraph
+      if (active) {
+        const parsed = parseParagraphIndex(active.index)
+        if (parsed && parsed.chapter === chapterIndex) {
+          setActiveClass(findParagraphElement(doc, parsed.paragraph), true)
+        }
       }
     }
-  }, [chapterIndex])
+
+    void measureAndScroll()
+  }, [applyScrollToPage, chapterIndex, pageWithinChapter])
+
+  // Re-measure on iframe resize so the "current page" stays visible after
+  // the user resizes the window. We compute the *current* page from the
+  // existing scrollLeft, scale it against the new viewport, and re-apply.
+  useEffect(() => {
+    const iframe = iframeRef.current
+    if (!iframe) return
+    let raf = 0
+    const observer = new ResizeObserver(() => {
+      const doc = iframe.contentDocument
+      const win = iframe.contentWindow
+      if (!doc || !win || !doc.body) return
+      // Batch into a rAF so a flurry of resize events only re-measures once.
+      cancelAnimationFrame(raf)
+      raf = win.requestAnimationFrame(() => {
+        const body = doc.body
+        // Re-read column-gap from computed style on every resize; CSS variables
+        // and media queries can change it. The page stride is
+        // `clientWidth + columnGap` — see computePageStep / Azw3View bug notes.
+        const cs = win.getComputedStyle(body)
+        const columnGap = parseFloat(cs.columnGap || '0') || 0
+        const clientWidth = body.clientWidth
+        const pageStep = computePageStep(clientWidth, columnGap)
+        const total = measurePageCount(body.scrollWidth, clientWidth, columnGap)
+        setPagesInCurrentChapter(total)
+        applyScrollToPage(doc, win, pageWithinChapter, total, pageStep)
+      })
+    })
+    observer.observe(iframe)
+    return () => {
+      cancelAnimationFrame(raf)
+      observer.disconnect()
+    }
+  }, [applyScrollToPage, pageWithinChapter, chapterUrl])
+
+  /** Read the live per-page stride from the iframe's computed style. We read
+   *  this fresh on every call instead of caching it because CSS variables and
+   *  media queries can change the column-gap on resize. */
+  const readPageStep = useCallback((doc: Document, win: Window): number => {
+    const body = doc.body
+    if (!body) return 1
+    const cs = win.getComputedStyle(body)
+    const columnGap = parseFloat(cs.columnGap || '0') || 0
+    return computePageStep(body.clientWidth, columnGap)
+  }, [])
+
+  const goNextPage = useCallback(() => {
+    const iframe = iframeRef.current
+    const doc = iframe?.contentDocument
+    const win = iframe?.contentWindow
+    if (pageWithinChapter + 1 < pagesInCurrentChapter) {
+      const next = pageWithinChapter + 1
+      setPageWithinChapter(next)
+      if (doc && win)
+        applyScrollToPage(doc, win, next, pagesInCurrentChapter, readPageStep(doc, win))
+      return
+    }
+    // End of chapter — advance to the next, landing on page 0.
+    if (chapterIndex < chapterCount - 1) {
+      pendingPageAfterLoadRef.current = 0
+      setPageWithinChapter(0)
+      setChapterIndex(chapterIndex + 1)
+    }
+  }, [
+    applyScrollToPage,
+    chapterCount,
+    chapterIndex,
+    pageWithinChapter,
+    pagesInCurrentChapter,
+    readPageStep
+  ])
+
+  const goPrevPage = useCallback(() => {
+    const iframe = iframeRef.current
+    const doc = iframe?.contentDocument
+    const win = iframe?.contentWindow
+    if (pageWithinChapter > 0) {
+      const prev = pageWithinChapter - 1
+      setPageWithinChapter(prev)
+      if (doc && win)
+        applyScrollToPage(doc, win, prev, pagesInCurrentChapter, readPageStep(doc, win))
+      return
+    }
+    // Start of chapter — fall back to the previous chapter, landing on its
+    // last page. We can't know the last page until the new chapter loads
+    // and measures; defer to handleIframeLoad via the pending ref. Also
+    // reset pageWithinChapter to 0 *before* the chapter swap so the
+    // intermediate state never tries to read a stale page index from the
+    // freshly-mounted iframe — mirrors what goNextPage does.
+    if (chapterIndex > 0) {
+      pendingPageAfterLoadRef.current = 'last'
+      setPageWithinChapter(0)
+      setChapterIndex(chapterIndex - 1)
+    }
+  }, [applyScrollToPage, chapterIndex, pageWithinChapter, pagesInCurrentChapter, readPageStep])
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key === 'ArrowRight') goNextPage()
+      else if (e.key === 'ArrowLeft') goPrevPage()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [goNextPage, goPrevPage])
 
   // Toggle the TTS highlight class on the matching iframe element as the
   // player advances. Only highlights paragraphs belonging to the current
-  // chapter (cross-chapter highlights would require navigation).
+  // chapter. When the active paragraph is on a different column page,
+  // scroll horizontally to bring it into view.
   useEffect(() => {
     const docOf = (): Document | null => iframeRef.current?.contentDocument ?? null
+    const winOf = (): Window | null => iframeRef.current?.contentWindow ?? null
 
     const apply = (raw: string | undefined, on: boolean): void => {
       if (!raw) return
       const parsed = parseParagraphIndex(raw)
       if (!parsed || parsed.chapter !== chapterIndex) return
-      setActiveClass(findParagraphElement(docOf(), parsed.paragraph), on)
+      const doc = docOf()
+      const win = winOf()
+      const el = findParagraphElement(doc, parsed.paragraph)
+      setActiveClass(el, on)
+
+      if (on && el && doc && win) {
+        // Bring the active paragraph onto the visible column page. The
+        // element's bounding rect is in iframe-viewport coordinates: if
+        // its left is negative, it's on an earlier column page; if its
+        // right is past the viewport width, it's on a later page.
+        const rect = el.getBoundingClientRect()
+        const body = doc.body
+        if (!body) return
+        const viewportWidth = win.innerWidth
+        if (rect.left < 0 || rect.right > viewportWidth) {
+          // Read pageStep fresh from computed style — it can change on
+          // resize, and the TTS subscription is registered once per chapter.
+          const cs = win.getComputedStyle(body)
+          const columnGap = parseFloat(cs.columnGap || '0') || 0
+          const pageStep = computePageStep(body.clientWidth, columnGap)
+          // Compute the column page that contains this element's left edge.
+          // Snap to the column page boundary using pageStep (not viewport
+          // width) so we don't accumulate the column-gap error every time
+          // TTS scrolls a paragraph into view.
+          const elementLeftFromBodyStart = body.scrollLeft + rect.left
+          const targetPage = Math.max(
+            0,
+            Math.min(
+              pagesInCurrentChapter - 1,
+              Math.floor(elementLeftFromBodyStart / pageStep)
+            )
+          )
+          const applied = applyScrollToPage(
+            doc,
+            win,
+            targetPage,
+            pagesInCurrentChapter,
+            pageStep
+          )
+          setPageWithinChapter((prev) => (prev === applied ? prev : applied))
+        }
+      }
     }
 
     const unsubActive = usePlayerStore.subscribe(
@@ -336,26 +580,18 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
 
   // Handle page-turn events from Player (TTS exhausted current chapter)
   useEffect(() => {
-    const handleNextEmptied = (): void => {
-      if (chapterCount === 0) return
-      setChapterIndex((prev) => Math.min(prev + 1, chapterCount - 1))
-    }
-    const handlePrevEmptied = (): void => {
-      if (chapterCount === 0) return
-      setChapterIndex((prev) => Math.max(prev - 1, 0))
-    }
     const unsubPage = usePlayerStore.subscribe(
       (s) => s.pageRequest,
       (request) => {
-        if (request === 'next') handleNextEmptied()
-        if (request === 'prev') handlePrevEmptied()
+        if (request === 'next') goNextPage()
+        if (request === 'prev') goPrevPage()
         if (request) usePlayerStore.getState().clearPageRequest()
       }
     )
     return () => {
       unsubPage()
     }
-  }, [chapterCount])
+  }, [goNextPage, goPrevPage])
 
   // Generate embeddings on first open (for AI chat)
   useEffect(() => {
@@ -372,6 +608,9 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         // emit a single combined entry per virtualGroupId instead of indexing
         // 87 near-duplicate per-page slices. This both saves time and keeps
         // the indexing pipeline aligned with the original section semantics.
+        // (Today parseAzw3 returns whole sections so virtualGroupId is only
+        //  set for the cover; the dedupe logic is kept defensively in case a
+        //  caller pre-paginates sections via `paginateSection`.)
         const seenGroups = new Set<string>()
         for (let i = 0; i < sections.length; i++) {
           const section = sections[i]
@@ -422,6 +661,11 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   // background color matches the theme via the wrapper div.
   const themeStyle = themes[theme]
 
+  // Whether Next/Prev buttons are on the absolute edge of the book.
+  const atFirstPage = chapterIndex === 0 && pageWithinChapter === 0
+  const atLastPage =
+    chapterIndex === chapterCount - 1 && pageWithinChapter >= pagesInCurrentChapter - 1
+
   return (
     <div className="relative h-screen flex flex-col" style={{ background: themeStyle.background }}>
       <div className="flex-1 overflow-hidden">
@@ -434,6 +678,11 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
           </div>
         ) : chapterUrl ? (
           <iframe
+            // Force a fresh DOM node per chapter so React tears down and
+            // recreates the iframe — guarantees a clean onLoad fires and
+            // prevents stale `contentDocument` reads between src change and
+            // load completion.
+            key={chapterIndex}
             ref={iframeRef}
             src={chapterUrl}
             onLoad={handleIframeLoad}
@@ -453,19 +702,22 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
       {/* Side-edge navigation arrows — same component the EPUB reader uses
           so the two readers share the same UX. */}
       <NavigationArrows
-        onPrev={goPrev}
-        onNext={goNext}
-        hidePrev={chapterIndex <= 0}
-        hideNext={chapterIndex >= chapterCount - 1}
+        onPrev={goPrevPage}
+        onNext={goNextPage}
+        hidePrev={atFirstPage}
+        hideNext={atLastPage}
       />
 
       {/* Subtle bottom page counter — "X" by default, "X of Y" on hover.
-          Mirrors EpubView's pageCurrent indicator. */}
+          Values are now per-chapter page counts (total across the entire
+          book would require pre-measuring every chapter, which we don't do).
+          Tests rely on data-current / data-total so they don't depend on
+          hover-state text. */}
       {chapterCount > 0 && (
         <div
           data-testid="azw3-page-counter"
-          data-current={chapterIndex + 1}
-          data-total={chapterCount}
+          data-current={pageWithinChapter + 1}
+          data-total={pagesInCurrentChapter}
           className="group/page"
           style={{
             position: 'fixed',
@@ -485,8 +737,8 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
               opacity: 0.4
             }}
           >
-            <span>{chapterIndex + 1}</span>
-            <span className="hidden group-hover/page:inline"> of {chapterCount}</span>
+            <span>{pageWithinChapter + 1}</span>
+            <span className="hidden group-hover/page:inline"> of {pagesInCurrentChapter}</span>
           </span>
         </div>
       )}
@@ -507,9 +759,11 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         title="Navigation"
         bookSyncId={bookSyncIdRef.current ?? ''}
         onBookmarkNavigate={(location) => {
-          const idx = parseInt(location, 10)
-          if (Number.isFinite(idx) && idx >= 0) {
-            setChapterIndex(idx)
+          const parsed = parseLocation(location)
+          if (parsed.chapter >= 0) {
+            // Land on the persisted page within the chapter.
+            pendingPageAfterLoadRef.current = parsed.page
+            setChapterIndex(parsed.chapter)
             setTocOpen(false)
           }
         }}
