@@ -15,6 +15,7 @@ import { ErrorBoundary } from '../components/ErrorBoundary'
 import { useHydrateAuth } from '@/hooks/useHydrateAuth'
 import { useStartupUpdateCheck } from '@/hooks/useStartupUpdateCheck'
 import { useFileOpenHandler } from '@/hooks/useFileOpenHandler'
+import { useMenuCommands } from '@/hooks/useMenuCommands'
 
 export const Route = createRootRoute({
   component: () => <RootComponent />
@@ -25,6 +26,7 @@ function RootComponent(): JSX.Element {
   useHydrateAuth()
   useStartupUpdateCheck()
   useFileOpenHandler()
+  useMenuCommands({})
 
   // Initialize desktop sync on app mount
   useEffect(() => {
