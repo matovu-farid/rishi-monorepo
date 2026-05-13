@@ -176,3 +176,68 @@ export async function closeOverlays(page: Page): Promise<void> {
     await page.waitForTimeout(200)
   }
 }
+
+export interface MenuShape {
+  label?: string
+  role?: string
+  accelerator?: string
+  type?: string
+  checked?: boolean
+  visible?: boolean
+  enabled?: boolean
+  submenu?: MenuShape[]
+}
+
+export async function getApplicationMenu(app: ElectronApplication): Promise<MenuShape[]> {
+  return (await app.evaluate(({ Menu }) => {
+    const m = Menu.getApplicationMenu()
+    if (!m) return []
+    const walk = (items: Electron.MenuItem[]): unknown[] =>
+      items.map((i) => ({
+        label: i.label || undefined,
+        role: (i as unknown as { role?: string }).role,
+        accelerator: (i as unknown as { accelerator?: string }).accelerator,
+        type: i.type,
+        checked: i.checked,
+        visible: i.visible,
+        enabled: i.enabled,
+        submenu: i.submenu ? walk(i.submenu.items) : undefined
+      }))
+    return walk(m.items)
+  })) as MenuShape[]
+}
+
+export function findMenuItem(menu: MenuShape[], pathLabels: string[]): MenuShape | undefined {
+  let cursor: MenuShape[] | undefined = menu
+  let found: MenuShape | undefined
+  for (const label of pathLabels) {
+    if (!cursor) return undefined
+    found = cursor.find((m) => m.label === label)
+    if (!found) return undefined
+    cursor = found.submenu
+  }
+  return found
+}
+
+export async function clickMenuItem(
+  app: ElectronApplication,
+  pathLabels: string[]
+): Promise<boolean> {
+  return (await app.evaluate(({ Menu }, labels) => {
+    const m = Menu.getApplicationMenu()
+    if (!m) return false
+    const find = (items: Electron.MenuItem[], rest: string[]): Electron.MenuItem | null => {
+      if (rest.length === 0) return null
+      const [head, ...tail] = rest
+      const hit = items.find((i) => i.label === head)
+      if (!hit) return null
+      if (tail.length === 0) return hit
+      if (!hit.submenu) return null
+      return find(hit.submenu.items, tail)
+    }
+    const item = find(m.items, labels)
+    if (!item) return false
+    item.click()
+    return true
+  }, pathLabels)) as boolean
+}
