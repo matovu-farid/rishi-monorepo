@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { hasSavedEpubData, updateBookLocation } from '@/lib/api'
 import type { Book } from '@/lib/api'
 import TTSControls from '@/components/tts/TTSControls'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { NavigationArrows } from '@/components/react-reader/components'
 import AIChatOrb from '@/components/chat/AIChatOrb'
 import VoiceChatLauncher from '@/components/chat/VoiceChatLauncher'
 import { themes } from '@/themes/themes'
@@ -450,29 +450,46 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         ) : null}
       </div>
 
-      <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-10">
-        <div className="flex items-center gap-3 px-4 py-2 bg-black/60 rounded-2xl backdrop-blur-lg">
-          <button
-            onClick={goPrev}
-            disabled={chapterIndex <= 0}
-            className="p-1 text-white disabled:opacity-30 hover:opacity-80 transition-opacity"
-            aria-label="Previous chapter"
+      {/* Side-edge navigation arrows — same component the EPUB reader uses
+          so the two readers share the same UX. */}
+      <NavigationArrows
+        onPrev={goPrev}
+        onNext={goNext}
+        hidePrev={chapterIndex <= 0}
+        hideNext={chapterIndex >= chapterCount - 1}
+      />
+
+      {/* Subtle bottom page counter — "X" by default, "X of Y" on hover.
+          Mirrors EpubView's pageCurrent indicator. */}
+      {chapterCount > 0 && (
+        <div
+          data-testid="azw3-page-counter"
+          data-current={chapterIndex + 1}
+          data-total={chapterCount}
+          className="group/page"
+          style={{
+            position: 'fixed',
+            bottom: 0,
+            left: 0,
+            right: 0,
+            textAlign: 'center',
+            zIndex: 5,
+            padding: '8px 0',
+            pointerEvents: 'none'
+          }}
+        >
+          <span
+            style={{
+              fontSize: 12,
+              color: themeStyle.color,
+              opacity: 0.4
+            }}
           >
-            <ChevronLeft size={20} />
-          </button>
-          <span className="text-white text-sm font-medium min-w-[4rem] text-center">
-            {chapterCount > 0 ? `${chapterIndex + 1} / ${chapterCount}` : '...'}
+            <span>{chapterIndex + 1}</span>
+            <span className="hidden group-hover/page:inline"> of {chapterCount}</span>
           </span>
-          <button
-            onClick={goNext}
-            disabled={chapterIndex >= chapterCount - 1}
-            className="p-1 text-white disabled:opacity-30 hover:opacity-80 transition-opacity"
-            aria-label="Next chapter"
-          >
-            <ChevronRight size={20} />
-          </button>
         </div>
-      </div>
+      )}
 
       {isChatting && (
         <AIChatOrb chatStatus={chatStatus} onClick={() => setChatPanelOpen((prev) => !prev)} />

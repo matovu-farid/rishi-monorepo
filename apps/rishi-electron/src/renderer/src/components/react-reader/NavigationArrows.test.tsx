@@ -15,6 +15,18 @@ describe('NavigationArrows', () => {
     expect(screen.getByLabelText('Next page')).toBeInTheDocument()
   })
 
+  it('hides the next button when hideNext is true', () => {
+    render(<NavigationArrows onPrev={vi.fn()} onNext={vi.fn()} hideNext />)
+    expect(screen.getByLabelText('Previous page')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Next page')).not.toBeInTheDocument()
+  })
+
+  it('hides both buttons when hidePrev and hideNext are true', () => {
+    render(<NavigationArrows onPrev={vi.fn()} onNext={vi.fn()} hidePrev hideNext />)
+    expect(screen.queryByLabelText('Previous page')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Next page')).not.toBeInTheDocument()
+  })
+
   it('calls onPrev when the previous button is clicked', () => {
     const onPrev = vi.fn()
     render(<NavigationArrows onPrev={onPrev} onNext={vi.fn()} />)

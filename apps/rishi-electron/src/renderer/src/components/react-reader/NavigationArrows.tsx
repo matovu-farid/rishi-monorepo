@@ -4,6 +4,7 @@ export interface NavigationArrowsProps {
   onPrev: () => void
   onNext: () => void
   hidePrev?: boolean
+  hideNext?: boolean
 }
 
 /**
@@ -11,7 +12,12 @@ export interface NavigationArrowsProps {
  * Renders semi-transparent left/right arrow buttons overlaid on the reader edges.
  * Becomes more visible on hover.
  */
-export function NavigationArrows({ onPrev, onNext, hidePrev = false }: NavigationArrowsProps) {
+export function NavigationArrows({
+  onPrev,
+  onNext,
+  hidePrev = false,
+  hideNext = false
+}: NavigationArrowsProps) {
   const buttonClass =
     'absolute top-1/2 -translate-y-1/2 z-10 flex items-center justify-center ' +
     'w-12 h-24 text-gray-300 hover:text-gray-600 ' +
@@ -30,14 +36,16 @@ export function NavigationArrows({ onPrev, onNext, hidePrev = false }: Navigatio
           <ChevronLeft size={40} />
         </button>
       )}
-      <button
-        className={`${buttonClass} right-0`}
-        onClick={onNext}
-        onPointerDown={(e) => e.stopPropagation()}
-        aria-label="Next page"
-      >
-        <ChevronRight size={40} />
-      </button>
+      {!hideNext && (
+        <button
+          className={`${buttonClass} right-0`}
+          onClick={onNext}
+          onPointerDown={(e) => e.stopPropagation()}
+          aria-label="Next page"
+        >
+          <ChevronRight size={40} />
+        </button>
+      )}
     </>
   )
 }
