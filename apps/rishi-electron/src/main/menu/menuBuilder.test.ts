@@ -50,6 +50,13 @@ describe('buildMenu — library', () => {
     expect(labelLight).toBeDefined()
     expect(labelDark).toBeDefined()
   })
+
+  it('View exposes Reload, Force Reload, and Toggle Developer Tools', () => {
+    const tpl = buildMenu(libraryCtx, vi.fn())
+    expect(findItem(tpl, ['View', 'Reload'])?.role).toBe('reload')
+    expect(findItem(tpl, ['View', 'Force Reload'])?.role).toBe('forceReload')
+    expect(findItem(tpl, ['View', 'Toggle Developer Tools'])?.role).toBe('toggleDevTools')
+  })
 })
 
 const pdfCtx: BookMenuContext = {
