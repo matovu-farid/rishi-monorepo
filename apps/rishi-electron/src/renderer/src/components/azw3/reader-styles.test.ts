@@ -37,4 +37,17 @@ describe('READER_CSS', () => {
     expect(READER_CSS).toMatch(/padding:\s*3rem/)
     expect(READER_CSS).toMatch(/\.rishi-tts-active/)
   })
+
+  // Regression: an earlier version applied break-inside: avoid-column to
+  // every body child. KF8 chapters often wrap content in a single <div>, so
+  // that rule stuffed the entire chapter into column 1 and left column 2
+  // permanently empty. The fix collapses single-child wrappers via
+  // display:contents and limits break-inside to images/figures/tables.
+  it('does not apply break-inside: avoid-column to generic body children', () => {
+    expect(READER_CSS).not.toMatch(/body\s*>\s*\*[^{]*\{[^}]*break-inside:\s*avoid-column/)
+  })
+
+  it('collapses single-child wrapper divs with display: contents', () => {
+    expect(READER_CSS).toMatch(/body\s*>\s*div:only-child\s*\{[^}]*display:\s*contents/)
+  })
 })
