@@ -53,6 +53,18 @@ describe('computePageStep', () => {
   })
 })
 
+describe('computePageStep with body padding', () => {
+  it('subtracts left+right padding from the stride', () => {
+    // viewport=1000, padding=36 each side, gap=40
+    // expected pageStep = 1000 - 36 - 36 + 40 = 968
+    expect(computePageStep(1000, 40, 36, 36)).toBe(968)
+  })
+
+  it('falls back to (clientWidth + gap) when padding is 0', () => {
+    expect(computePageStep(1000, 40, 0, 0)).toBe(1040)
+  })
+})
+
 describe('measurePageCount', () => {
   it('returns 1 when clientWidth is zero or negative', () => {
     expect(measurePageCount(1000, 0, 0)).toBe(1)

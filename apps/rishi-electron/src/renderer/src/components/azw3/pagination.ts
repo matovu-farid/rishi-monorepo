@@ -42,12 +42,24 @@ export function formatLocation(chapter: number, page: number): string {
 
 /**
  * Compute the per-page horizontal stride for CSS-column pagination.
- * A "page" shows `columnCount` columns at a time. The stride between pages
- * is `clientWidth + columnGap` because the gap between the last column of
- * page N and the first column of page N+1 lives at the page boundary.
+ *
+ * The stride between pages is NOT just `clientWidth + columnGap` — it
+ * also has to subtract the body's horizontal padding because the column
+ * flow lives inside the padded content box, not at the body's edges. With
+ * `box-sizing: border-box`, the leftmost column starts at `x = paddingLeft`
+ * and the rightmost column of any page ends at `x = clientWidth - paddingRight`,
+ * leaving `2*paddingX` worth of body width that does NOT advance with each
+ * page. The trailing column-gap at the page boundary IS counted toward
+ * the advance.
  */
-export function computePageStep(clientWidth: number, columnGap: number): number {
-  return Math.max(1, clientWidth + columnGap)
+export function computePageStep(
+  clientWidth: number,
+  columnGap: number,
+  paddingLeft = 0,
+  paddingRight = 0
+): number {
+  const step = clientWidth - paddingLeft - paddingRight + columnGap
+  return Math.max(1, step)
 }
 
 /**
@@ -58,10 +70,12 @@ export function computePageStep(clientWidth: number, columnGap: number): number 
 export function measurePageCount(
   scrollWidth: number,
   clientWidth: number,
-  columnGap: number
+  columnGap: number,
+  paddingLeft = 0,
+  paddingRight = 0
 ): number {
   if (clientWidth <= 0) return 1
-  const pageStep = computePageStep(clientWidth, columnGap)
+  const pageStep = computePageStep(clientWidth, columnGap, paddingLeft, paddingRight)
   if (scrollWidth <= clientWidth) return 1
   return Math.floor((scrollWidth - clientWidth) / pageStep) + 1
 }
