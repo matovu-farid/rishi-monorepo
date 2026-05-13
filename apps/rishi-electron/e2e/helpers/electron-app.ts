@@ -131,10 +131,32 @@ export async function deleteAllBooks(page: Page): Promise<void> {
   })
 }
 
-export async function openBook(page: Page, bookId: number): Promise<void> {
-  await page.evaluate((id) => {
-    window.location.hash = `#/books/${id}`
+/**
+ * Open a book in its own BrowserWindow (Phase 3+). Calls the
+ * `window:openBook` IPC on the *library* page, then polls the shared
+ * browser context until the new book window appears and returns its Page.
+ *
+ * Tests that previously operated on `launched.page` for reader assertions
+ * must instead use the Page returned here. If a book window for `bookId`
+ * already exists, that existing page is returned.
+ */
+export async function openBook(page: Page, bookId: number): Promise<Page> {
+  await page.evaluate(async (id) => {
+    const e = (window as unknown as { electron: { openBook(id: number): Promise<void> } }).electron
+    await e.openBook(id)
   }, bookId)
+  const ctx = page.context()
+  const deadline = Date.now() + 10000
+  while (Date.now() < deadline) {
+    const found = ctx.pages().find((p) => p.url().includes(`/books/${bookId}`))
+    if (found) {
+      // Settle the load state so callers can immediately query DOM.
+      await found.waitForLoadState('domcontentloaded').catch(() => {})
+      return found
+    }
+    await page.waitForTimeout(100)
+  }
+  throw new Error(`openBook: no window appeared for bookId=${bookId}`)
 }
 
 export async function gotoLibrary(page: Page): Promise<void> {

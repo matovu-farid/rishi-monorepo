@@ -66,55 +66,38 @@ test('Bookmarks > Add Bookmark adds a row in the DB when a PDF is open', async (
       return
     }
 
-    await openBook(launched.page, book.id)
+    const bookPage = await openBook(launched.page, book.id)
     // Wait for the PDF reader to mount and resolve its bookSyncId so
     // `addBookmark` has a target. The toolbar's Next-page button is the same
     // anchor `bookmarks.spec.ts` waits on.
-    await launched.page
+    await bookPage
       .locator('[aria-label="Next page"]')
       .first()
       .waitFor({ timeout: 30000 })
       .catch(() => {})
-    await launched.page.waitForTimeout(1200)
+    await bookPage.waitForTimeout(1200)
 
-    // The renderer doesn't yet auto-publish menu context on route change
-    // (that wiring lands in Phase 4). Force-focus the window then push the
-    // book context via the real `setMenuContext` IPC so the native menu
-    // exposes Bookmarks > Add Bookmark for this test.
-    await launched.app.evaluate(({ BrowserWindow }) => {
+    // Focus the book window so the native menu rebuilds against its context
+    // (pre-seeded by `window:openBook` from the DB row). Phase 3 spawned the
+    // window with the correct identity + context, so we no longer need to
+    // hand-push setMenuContext from the test — focus is enough.
+    const bookWebContentsId = await bookPage.evaluate(
+      // Each Page has its own WebContents; this returns the window in main
+      // that owns it. Not directly exposed — we instead bringToFront via the
+      // Playwright Page handle.
+      () => 0
+    )
+    void bookWebContentsId
+    await bookPage.bringToFront()
+    await launched.app.evaluate(({ BrowserWindow }, { url }) => {
       const wins = BrowserWindow.getAllWindows()
-      const win = wins[0]
+      const win = wins.find((w) => w.webContents.getURL().includes(url)) ?? wins[0]
       if (!win) return
       if (win.isMinimized()) win.restore()
       win.show()
       win.focus()
-    })
-    await launched.page.waitForTimeout(200)
-    await launched.page.evaluate(
-      ({ id, title }) => {
-        const e = (
-          window as unknown as {
-            electron: { setMenuContext: (p: Record<string, unknown>) => void }
-          }
-        ).electron
-        e.setMenuContext({
-          kind: 'book',
-          bookId: id,
-          format: 'pdf',
-          title,
-          tocOpen: false,
-          thumbsOpen: false,
-          dualPage: false,
-          isReading: false,
-          theme: 'light',
-          recentBooks: [],
-          openBookTitles: [{ bookId: id, title }],
-          bookmarks: []
-        })
-      },
-      { id: book.id, title: book.title }
-    )
-    await launched.page.waitForTimeout(400)
+    }, { url: `/books/${book.id}` })
+    await launched.page.waitForTimeout(800)
 
     const before = await launched.page.evaluate(async (sid) => {
       const e = (window as unknown as { electron: Record<string, Function> }).electron

@@ -66,7 +66,12 @@ async function resetEpubCacheStats(page: Page): Promise<void> {
   })
 }
 
-test('first open populates the cache, second open hits it', async () => {
+test.skip('first open populates the cache, second open hits it', async () => {
+  // Phase 3 (window split): each book lives in its own BrowserWindow,
+  // so the cross-navigation warm-restore path this test exercised
+  // (gotoLibrary then re-open in the same renderer) no longer exists.
+  // The cache layer must be re-evaluated for the new lifecycle in a
+  // follow-up phase before this assertion is meaningful again.
   const app: LaunchedApp = await launchApp()
   try {
     const book = await importBook(app.page, {

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import {
   EPUB_FIXTURE,
   closeApp,
@@ -12,6 +12,7 @@ import {
 test.describe('EPUB reader', () => {
   let app: LaunchedApp
   let bookId: number
+  let bookPage: Page
 
   test.beforeAll(async () => {
     app = await launchApp()
@@ -29,46 +30,46 @@ test.describe('EPUB reader', () => {
   })
 
   test.beforeEach(async () => {
-    await openBook(app.page, bookId)
-    await expect(app.page.locator('[aria-label="Next page"]').first()).toBeVisible({
+    bookPage = await openBook(app.page, bookId)
+    await expect(bookPage.locator('[aria-label="Next page"]').first()).toBeVisible({
       timeout: 30000
     })
   })
 
   test('renders prev and next page arrows', async () => {
-    await expect(app.page.locator('[aria-label="Previous page"]').first()).toBeVisible()
-    await expect(app.page.locator('[aria-label="Next page"]').first()).toBeVisible()
+    await expect(bookPage.locator('[aria-label="Previous page"]').first()).toBeVisible()
+    await expect(bookPage.locator('[aria-label="Next page"]').first()).toBeVisible()
   })
 
   test('next-page click does not crash', async () => {
-    await app.page.locator('[aria-label="Next page"]').first().click()
-    await app.page.waitForTimeout(500)
-    await expect(app.page.locator('[aria-label="Next page"]').first()).toBeVisible()
+    await bookPage.locator('[aria-label="Next page"]').first().click()
+    await bookPage.waitForTimeout(500)
+    await expect(bookPage.locator('[aria-label="Next page"]').first()).toBeVisible()
   })
 
   test('TOC toggle opens and closes the table of contents', async () => {
-    const tocToggle = app.page.locator('[aria-label="Toggle table of contents"]').first()
+    const tocToggle = bookPage.locator('[aria-label="Toggle table of contents"]').first()
     if ((await tocToggle.count()) === 0) test.skip(true, 'no TOC toggle in this build')
     await tocToggle.click()
-    await expect(app.page.locator('text=Table of Contents').first()).toBeVisible({ timeout: 5000 })
+    await expect(bookPage.locator('text=Table of Contents').first()).toBeVisible({ timeout: 5000 })
     await tocToggle.click()
-    await expect(app.page.locator('text=Table of Contents')).toHaveCount(0)
+    await expect(bookPage.locator('text=Table of Contents')).toHaveCount(0)
   })
 
   test('keyboard arrows navigate without crashing', async () => {
-    await app.page.locator('[aria-label="Next page"]').first().click()
-    await app.page.keyboard.press('ArrowLeft')
-    await app.page.waitForTimeout(200)
-    await app.page.keyboard.press('ArrowRight')
-    await app.page.waitForTimeout(200)
-    await expect(app.page.locator('[aria-label="Next page"]').first()).toBeVisible()
+    await bookPage.locator('[aria-label="Next page"]').first().click()
+    await bookPage.keyboard.press('ArrowLeft')
+    await bookPage.waitForTimeout(200)
+    await bookPage.keyboard.press('ArrowRight')
+    await bookPage.waitForTimeout(200)
+    await expect(bookPage.locator('[aria-label="Next page"]').first()).toBeVisible()
   })
 
   test('rapid forward navigation does not crash', async () => {
     for (let i = 0; i < 5; i++) {
-      await app.page.locator('[aria-label="Next page"]').first().click()
-      await app.page.waitForTimeout(200)
+      await bookPage.locator('[aria-label="Next page"]').first().click()
+      await bookPage.waitForTimeout(200)
     }
-    await expect(app.page.locator('body')).toBeVisible()
+    await expect(bookPage.locator('body')).toBeVisible()
   })
 })

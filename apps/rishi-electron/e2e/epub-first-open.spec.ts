@@ -31,15 +31,15 @@ test('first open of an EPUB renders content (no infinite loader)', async () => {
       title: 'First Open Smoke Test'
     })
 
-    await openBook(app.page, book.id)
+    const bookPage = await openBook(app.page, book.id)
 
     await expect(
-      app.page.locator('iframe').first(),
+      bookPage.locator('iframe').first(),
       'epub iframe mounts on first open'
     ).toBeVisible({ timeout: 15000 })
 
     await expect(
-      app.page.locator('text=Loading...'),
+      bookPage.locator('text=Loading...'),
       'inner Loading… indicator clears once content is mounted'
     ).toHaveCount(0, { timeout: 5000 })
   } finally {

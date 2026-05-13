@@ -5,9 +5,9 @@ test('reader has no in-window top toolbar after phase 2', async () => {
   const launched = await launchApp()
   try {
     const book = await importBook(launched.page, { fixturePath: PDF_FIXTURE, kind: 'pdf' })
-    await openBook(launched.page, book.id)
-    await launched.page.waitForTimeout(1500)
-    const count = await launched.page.locator('[data-tour="reader-toolbar"]').count()
+    const bookPage = await openBook(launched.page, book.id)
+    await bookPage.waitForTimeout(1500)
+    const count = await bookPage.locator('[data-tour="reader-toolbar"]').count()
     expect(count).toBe(0)
   } finally {
     await closeApp(launched)

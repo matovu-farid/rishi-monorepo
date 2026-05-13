@@ -34,21 +34,21 @@ test('scrolling up across a page boundary does not jitter', async () => {
       title: 'Jitter Test'
     })
 
-    await openBook(app.page, book.id)
-    await app.page.waitForTimeout(3000)
+    const bookPage = await openBook(app.page, book.id)
+    await bookPage.waitForTimeout(3000)
 
     // Scroll down well past the initial overscan window so pages above
     // get unmounted. Wait for renders / measurements to settle.
-    await app.page.evaluate(() => {
+    await bookPage.evaluate(() => {
       const el = document.querySelector<HTMLElement>('div.overflow-y-scroll')
       if (!el) throw new Error('no scroll container')
       el.scrollTo({ top: 14000, behavior: 'auto' })
     })
-    await app.page.waitForTimeout(2500)
+    await bookPage.waitForTimeout(2500)
 
     // Now scroll up by ~600px to cross at least one page boundary upward.
     // The page coming into view from above will need to mount + render.
-    const samples = await app.page.evaluate(async () => {
+    const samples = await bookPage.evaluate(async () => {
       const el = document.querySelector<HTMLElement>('div.overflow-y-scroll')
       if (!el) throw new Error('no scroll container')
       const target = el.scrollTop - 600

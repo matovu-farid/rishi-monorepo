@@ -32,10 +32,12 @@ test.describe('MOBI & DJVU readers', () => {
       kind: 'mobi',
       title: 'MOBI Render Test'
     })
-    await openBook(app.page, book.id)
-    await app.page.waitForTimeout(3000)
-    await expect(app.page.locator('a[href="/"]')).toHaveCount(await app.page.locator('a[href="/"]').count())
-    await expect(app.page.locator('body')).not.toBeEmpty()
+    const bookPage = await openBook(app.page, book.id)
+    await bookPage.waitForTimeout(3000)
+    await expect(bookPage.locator('a[href="/"]')).toHaveCount(
+      await bookPage.locator('a[href="/"]').count()
+    )
+    await expect(bookPage.locator('body')).not.toBeEmpty()
   })
 
   test('DJVU book opens and renders', async () => {
@@ -44,9 +46,9 @@ test.describe('MOBI & DJVU readers', () => {
       kind: 'djvu',
       title: 'DJVU Render Test'
     })
-    await openBook(app.page, book.id)
-    await app.page.waitForTimeout(3000)
-    await expect(app.page.locator('body')).not.toBeEmpty()
+    const bookPage = await openBook(app.page, book.id)
+    await bookPage.waitForTimeout(3000)
+    await expect(bookPage.locator('body')).not.toBeEmpty()
   })
 
   test('non-existent book id does not crash', async () => {

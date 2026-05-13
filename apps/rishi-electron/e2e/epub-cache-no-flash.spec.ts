@@ -25,7 +25,13 @@ import {
  * This spec polls the DOM at high frequency during a warm-restore
  * reopen and asserts the "Loading..." text never appears.
  */
-test('warm-restore reopen does not flash the inner loading view', async () => {
+test.skip('warm-restore reopen does not flash the inner loading view', async () => {
+  // Phase 3 (window split) replaced in-window navigation with one
+  // BrowserWindow per book. The original cache-warm-restore code path
+  // (gotoLibrary then re-mount the reader in the same window) no longer
+  // exists — instead, closing the book window destroys its renderer
+  // entirely. Skipping until the cache layer is reworked around the
+  // new BrowserWindow lifecycle.
   const app: LaunchedApp = await launchApp()
   try {
     const book = await importBook(app.page, {
