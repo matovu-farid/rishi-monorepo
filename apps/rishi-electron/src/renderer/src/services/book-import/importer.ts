@@ -121,7 +121,9 @@ export async function runImport(
         ? deps.formats.getBookData(filePath)
         : format === 'pdf'
           ? deps.formats.getPdfData(filePath)
-          : deps.formats.getMobiData(filePath)
+          : format === 'azw3'
+            ? deps.formats.getAzw3Data(filePath)
+            : deps.formats.getMobiData(filePath)
     bookData = await withTimeout(parsePromise, deps.config.parseTimeoutMs, 'Extracting metadata')
   } catch (err) {
     const error = messageOf(err, 'Parse failed')

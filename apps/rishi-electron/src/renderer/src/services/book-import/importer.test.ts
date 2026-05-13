@@ -160,7 +160,8 @@ describe('runImport — parse failure rolls back the copy', () => {
         throw new Error('bad zip')
       }),
       getPdfData: vi.fn(),
-      getMobiData: vi.fn()
+      getMobiData: vi.fn(),
+      getAzw3Data: vi.fn()
     }
     const { fs, removeCalls } = makeFs()
     const { db, savedBooks } = makeDbForImport()
