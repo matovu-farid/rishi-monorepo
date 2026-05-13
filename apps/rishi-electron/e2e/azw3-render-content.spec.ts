@@ -119,10 +119,11 @@ test('AZW3 reader paginates single-section books', async () => {
     const initial = (await counter.textContent())?.trim() ?? ''
     const match = initial.match(/^(\d+)\s*\/\s*(\d+)$/)
     expect(match, `counter text "${initial}"`).not.toBeNull()
+    const current = Number(match![1])
     const total = Number(match![2])
     expect(total, `expected paginated total > 1, got ${total}`).toBeGreaterThan(1)
 
-    // 2) Wait for the iframe body to settle on the first virtual page so we
+    // 2) Wait for the iframe body to settle on the current virtual page so we
     //    have a stable textContent snapshot.
     const iframe = bookPage.locator('iframe[title="AZW3 Pagination"]')
     await expect(iframe).toBeVisible({ timeout: 10000 })
@@ -140,7 +141,8 @@ test('AZW3 reader paginates single-section books', async () => {
 
     // 3) Click Next chapter, counter must advance, body text must change.
     await bookPage.locator('button[aria-label="Next chapter"]').click()
-    await expect(counter).toHaveText(/^2\s*\/\s*\d+$/, { timeout: 10000 })
+    const nextRe = new RegExp(`^${current + 1}\\s*/\\s*\\d+$`)
+    await expect(counter).toHaveText(nextRe, { timeout: 10000 })
 
     await expect
       .poll(

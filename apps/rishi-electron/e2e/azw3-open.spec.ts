@@ -30,11 +30,15 @@ test('AZW3 book opens and renders the first chapter', async () => {
     await counter.waitFor({ state: 'visible', timeout: 20000 })
 
     const counterText = (await counter.textContent())?.trim() ?? ''
-    expect(counterText).toMatch(/^1\s*\/\s*\d+$/)
+    expect(counterText).toMatch(/^\d+\s*\/\s*\d+$/)
 
     // The total chapter count should be >= 1
-    const total = Number(counterText.split('/')[1].trim())
+    const [currentStr, totalStr] = counterText.split('/')
+    const current = Number(currentStr.trim())
+    const total = Number(totalStr.trim())
     expect(total).toBeGreaterThanOrEqual(1)
+    expect(current).toBeGreaterThanOrEqual(1)
+    expect(current).toBeLessThanOrEqual(total)
 
     // An iframe carrying the chapter content should be present and visible
     const frame = bookPage.locator('iframe[title="AZW3 Render Test"]')

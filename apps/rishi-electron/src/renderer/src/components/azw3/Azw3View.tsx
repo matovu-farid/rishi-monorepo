@@ -309,8 +309,34 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         if (alreadySaved) return
 
         const allPageData: PageDataInsertable[] = []
+        // Virtual sections (paginateSection) all share a single source doc, so
+        // emit a single combined entry per virtualGroupId instead of indexing
+        // 87 near-duplicate per-page slices. This both saves time and keeps
+        // the indexing pipeline aligned with the original section semantics.
+        const seenGroups = new Set<string>()
         for (let i = 0; i < sections.length; i++) {
-          const texts = await extractSectionParagraphs(sections[i])
+          const section = sections[i]
+          if (section.virtualGroupId) {
+            if (seenGroups.has(section.virtualGroupId)) continue
+            seenGroups.add(section.virtualGroupId)
+            const groupTexts: string[] = []
+            for (let j = i; j < sections.length; j++) {
+              if (sections[j].virtualGroupId !== section.virtualGroupId) break
+              const texts = await extractSectionParagraphs(sections[j])
+              for (const t of texts) groupTexts.push(t)
+            }
+            const combined = groupTexts.join('\n').trim()
+            if (combined.length > 0) {
+              allPageData.push({
+                id: stringToNumberID(`${book.id}-azw3-${section.virtualGroupId}`),
+                pageNumber: i + 1,
+                bookId: book.id,
+                data: combined
+              })
+            }
+            continue
+          }
+          const texts = await extractSectionParagraphs(section)
           const combined = texts.join('\n').trim()
           if (combined.length > 0) {
             allPageData.push({
