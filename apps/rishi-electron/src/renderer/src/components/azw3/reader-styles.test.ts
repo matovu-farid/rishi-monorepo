@@ -38,13 +38,27 @@ describe('READER_CSS', () => {
     expect(READER_CSS).toMatch(/\.rishi-tts-active/)
   })
 
-  // Regression: an earlier version applied break-inside: avoid-column to
-  // every body child. KF8 chapters often wrap content in a single <div>, so
-  // that rule stuffed the entire chapter into column 1 and left column 2
-  // permanently empty. The fix collapses single-child wrappers via
-  // display:contents and limits break-inside to images/figures/tables.
-  it('does not apply break-inside: avoid-column to generic body children', () => {
-    expect(READER_CSS).not.toMatch(/body\s*>\s*\*[^{]*\{[^}]*break-inside:\s*avoid-column/)
+  // Viewport-snapped pagination: the body must be locked to a single
+  // viewport so column-fill: auto creates new columns horizontally when
+  // content overflows vertically. The renderer drives `scrollLeft` in
+  // viewport-wide steps to flip pages.
+  it('locks the body to a single viewport (height: 100vh)', () => {
+    expect(READER_CSS).toMatch(/height:\s*100vh/)
+  })
+
+  // Regression: column-fill: balance (the previous default) would even out
+  // the two columns and limit overflow to one viewport, breaking horizontal
+  // pagination. column-fill: auto is what makes the columns flow horizontally
+  // beyond the viewport so we can scroll page-by-page.
+  it('sets column-fill: auto so columns flow horizontally instead of balancing', () => {
+    expect(READER_CSS).toMatch(/column-fill:\s*auto/)
+  })
+
+  // The visible column-rule gutter was removed alongside the switch to
+  // viewport pagination — the rule is also drawn after the visible viewport
+  // for off-screen columns, leading to visual artifacts on page turns.
+  it('does not draw a visible column-rule between columns', () => {
+    expect(READER_CSS).not.toMatch(/column-rule:/)
   })
 
   it('collapses single-child wrapper divs with display: contents', () => {
