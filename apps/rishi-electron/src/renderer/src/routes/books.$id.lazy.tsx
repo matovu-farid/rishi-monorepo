@@ -7,10 +7,11 @@ import { useEpubStore } from '@/stores/epubStore'
 import { usePageTracker } from '@/modules/epub-page-tracker'
 import { getBook, convertFileSrc } from '@/lib/api'
 
-// Lazy-loaded format viewers
+// Lazy-loaded format viewers. Azw3View handles both kindle formats — foliate-js's
+// MOBI.open() auto-detects KF8 (.azw3) vs MOBI6 (.mobi) and dispatches accordingly,
+// so the legacy MobiView is no longer wired in. Kept as dead code to ease rollback.
 const PdfView = React.lazy(() => import('@/components/pdf/PdfView'))
 const EpubView = React.lazy(() => import('@/components/epub/EpubView'))
-const MobiView = React.lazy(() => import('@/components/mobi/MobiView'))
 const Azw3View = React.lazy(() => import('@/components/azw3/Azw3View'))
 
 export const Route = createLazyFileRoute('/books/$id')({
@@ -73,8 +74,9 @@ function BookView(): React.JSX.Element {
         <PdfView filepath={convertFileSrc(book.filepath)} key={book.id.toString()} book={book} />
       )}
       {book?.kind === 'epub' && <EpubView key={book.id} book={book} />}
-      {book?.kind === 'mobi' && <MobiView key={book.id} book={book} />}
-      {book?.kind === 'azw3' && <Azw3View key={book.id} book={book} />}
+      {(book?.kind === 'mobi' || book?.kind === 'azw3') && (
+        <Azw3View key={book.id} book={book} />
+      )}
     </React.Suspense>
   )
 }
