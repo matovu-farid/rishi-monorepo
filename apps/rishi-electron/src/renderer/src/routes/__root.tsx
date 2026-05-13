@@ -1,7 +1,7 @@
 import Loader from '../components/Loader'
 import { useQuery } from '@tanstack/react-query'
 import { createRootRoute, Outlet, useNavigate } from '@tanstack/react-router'
-import { useEffect, useMemo, type JSX } from 'react'
+import { useEffect, useMemo, type JSX, type CSSProperties } from 'react'
 import { getBooks } from '@/lib/api'
 import { getSyncService, getBookImportService } from '@/services'
 import { SyncStatusIndicator } from '../components/SyncStatusIndicator'
@@ -141,6 +141,27 @@ function RootComponent(): JSX.Element {
 
   return (
     <>
+      {/* Transparent top strip that gives the window a draggable handle. With
+          titleBarStyle 'hiddenInset' and the native reader toolbar removed,
+          book windows have no drag region — content extends edge-to-edge.
+          pointerEvents:none lets clicks fall through to content; the
+          traffic-light buttons (drawn by macOS above this layer) stay
+          clickable as the OS handles them outside the DOM. */}
+      <div
+        aria-hidden
+        style={
+          {
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 28,
+            zIndex: 9999,
+            pointerEvents: 'none',
+            WebkitAppRegion: 'drag'
+          } as CSSProperties
+        }
+      />
       {isPending && (
         <div className="fixed inset-0 z-50 w-full h-screen place-items-center grid bg-white">
           <Loader />
