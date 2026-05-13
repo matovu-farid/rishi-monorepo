@@ -188,7 +188,8 @@ export function getBookImportService(): BookImportService {
       formats: {
         getBookData: (path) => window.electron.getBookData(path),
         getPdfData: (path) => window.electron.getPdfData(path),
-        getMobiData: (path) => window.electron.getMobiData(path)
+        getMobiData: (path) => window.electron.getMobiData(path),
+        getAzw3Data: (path) => window.electron.getAzw3Data(path)
       },
       db: {
         saveBook: (b) => window.electron.saveBook(b),

@@ -50,6 +50,7 @@ export async function dispatchFormatExtraction(
 
   if (format === 'epub') return { format, data: await formats.getBookData(filePath) }
   if (format === 'pdf') return { format, data: await formats.getPdfData(filePath) }
-  // format === 'mobi' || format === 'azw3'
+  if (format === 'azw3') return { format, data: await formats.getAzw3Data(filePath) }
+  // format === 'mobi'
   return { format, data: await formats.getMobiData(filePath) }
 }

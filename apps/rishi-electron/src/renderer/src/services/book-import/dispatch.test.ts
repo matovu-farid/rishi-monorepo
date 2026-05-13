@@ -15,6 +15,7 @@ export function makeFormats(opts?: {
   epubReturns?: BookDataParsed
   pdfReturns?: BookDataParsed
   mobiReturns?: BookDataParsed
+  azw3Returns?: BookDataParsed
 }): { formats: FormatsIpc; calls: Array<{ method: keyof FormatsIpc; path: string }> } {
   const calls: Array<{ method: keyof FormatsIpc; path: string }> = []
   const formats: FormatsIpc = {
@@ -29,6 +30,10 @@ export function makeFormats(opts?: {
     getMobiData: vi.fn(async (path: string) => {
       calls.push({ method: 'getMobiData', path })
       return opts?.mobiReturns ?? { ...sampleParsed, kind: 'mobi' }
+    }),
+    getAzw3Data: vi.fn(async (path: string) => {
+      calls.push({ method: 'getAzw3Data', path })
+      return opts?.azw3Returns ?? { ...sampleParsed, kind: 'azw3' }
     })
   }
   return { formats, calls }
@@ -61,11 +66,12 @@ describe('dispatchFormatExtraction — extension routing', () => {
     expect(calls).toEqual([{ method: 'getMobiData', path: '/tmp/book.mobi' }])
   })
 
-  it('routes .azw3 to formats.getMobiData (today behavior)', async () => {
+  it('routes .azw3 to formats.getAzw3Data and returns kind=azw3', async () => {
     const { formats, calls } = makeFormats()
     const result = await dispatchFormatExtraction(formats, '/tmp/book.azw3')
     expect(result.format).toBe('azw3')
-    expect(calls).toEqual([{ method: 'getMobiData', path: '/tmp/book.azw3' }])
+    expect(result.data.kind).toBe('azw3')
+    expect(calls).toEqual([{ method: 'getAzw3Data', path: '/tmp/book.azw3' }])
   })
 
   it('throws UnsupportedFormatError for unknown extensions', async () => {

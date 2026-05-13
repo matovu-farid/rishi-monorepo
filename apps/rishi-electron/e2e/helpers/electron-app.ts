@@ -123,6 +123,64 @@ export async function importBook(page: Page, opts: ImportOptions): Promise<Impor
   }, opts)
 }
 
+/**
+ * Drive a real OS-style "open with" import by firing the main process's
+ * `open-file` event with the fixture path. This exercises the production
+ * pipeline: deliverOpenFiles → renderer `open-files` IPC →
+ * useFileOpenHandler → getBookImportService().importBatch → dispatch →
+ * formats IPC → saveBook. Unlike `importBook`, this does NOT bypass dispatch,
+ * so it catches routing regressions like `.azw3` ending up as `kind: 'mobi'`.
+ *
+ * Returns the imported book id once it shows up in the renderer's books list.
+ */
+export async function importBookViaOpenFile(
+  launched: LaunchedApp,
+  fixturePath: string,
+  opts: { timeoutMs?: number } = {}
+): Promise<number> {
+  const timeout = opts.timeoutMs ?? 30000
+
+  // Snapshot existing books so we can detect the new one after import.
+  const before = await launched.page.evaluate(async () => {
+    const e = (window as unknown as { electron: Record<string, Function> }).electron
+    const list = (await e.getBooks()) as Array<{ id: number }>
+    return list.map((b) => b.id)
+  })
+  const beforeIds = new Set(before)
+
+  // Fire the OS open-file event from the main process. The signature is
+  // `(event, filePath)`; we pass a stub event whose preventDefault is a no-op.
+  await launched.app.evaluate(({ app }, filePath) => {
+    app.emit('open-file', { preventDefault: () => {} }, filePath)
+  }, fixturePath)
+
+  // Poll the books table until a new row appears.
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const newId = await launched.page.evaluate(async (ids) => {
+      const e = (window as unknown as { electron: Record<string, Function> }).electron
+      const list = (await e.getBooks()) as Array<{ id: number }>
+      const known = new Set(ids)
+      const found = list.find((b) => !known.has(b.id))
+      return found?.id ?? null
+    }, [...beforeIds])
+    if (typeof newId === 'number') return newId
+    await launched.page.waitForTimeout(200)
+  }
+  throw new Error(`importBookViaOpenFile: no new book appeared within ${timeout}ms`)
+}
+
+export async function getBookKind(
+  page: Page,
+  bookId: number
+): Promise<string | null> {
+  return await page.evaluate(async (id) => {
+    const e = (window as unknown as { electron: Record<string, Function> }).electron
+    const b = (await e.getBook(id)) as { kind?: string } | null
+    return b?.kind ?? null
+  }, bookId)
+}
+
 export async function deleteAllBooks(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const e = (window as unknown as { electron: Record<string, Function> }).electron

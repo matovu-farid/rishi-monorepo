@@ -88,6 +88,7 @@ export interface FormatsIpc {
   getBookData(path: string): Promise<BookDataParsed>
   getPdfData(path: string): Promise<BookDataParsed>
   getMobiData(path: string): Promise<BookDataParsed>
+  getAzw3Data(path: string): Promise<BookDataParsed>
 }
 
 /** Exactly the five DB IPCs the service uses. */
