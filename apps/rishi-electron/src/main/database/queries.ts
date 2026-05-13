@@ -104,6 +104,40 @@ export function getAllBooks(): Book[] {
 }
 
 /**
+ * Pure-SQL variant of `listRecentBooks` for unit testing without the global
+ * `getDb()` wrapper. Returns the most-recently-touched non-deleted books,
+ * most-recent first, capped at `limit`.
+ *
+ * The `books` schema has no created_at/updated_at — id is auto-increment,
+ * so a higher id ≈ "more recent". When the schema lacks an `is_deleted`
+ * column (older test DBs), we just skip that filter.
+ */
+export function _listRecentBooksWithDb(
+  db: import('better-sqlite3').Database,
+  limit: number
+): { bookId: number; title: string }[] {
+  // Detect whether is_deleted column exists; older test DBs may omit it.
+  const cols = db
+    .prepare<[], { name: string }>('PRAGMA table_info(books)')
+    .all() as Array<{ name: string }>
+  const hasIsDeleted = cols.some((c) => c.name === 'is_deleted')
+
+  const sql = hasIsDeleted
+    ? 'SELECT id as bookId, title FROM books WHERE COALESCE(is_deleted, 0) = 0 ORDER BY id DESC LIMIT ?'
+    : 'SELECT id as bookId, title FROM books ORDER BY id DESC LIMIT ?'
+
+  return db.prepare(sql).all(limit) as { bookId: number; title: string }[]
+}
+
+/**
+ * Return the most-recently-touched non-deleted books, capped at `limit`.
+ * Used to populate the File > Open Recent submenu in the native menu.
+ */
+export function listRecentBooks(limit: number): { bookId: number; title: string }[] {
+  return _listRecentBooksWithDb(getDb(), limit)
+}
+
+/**
  * Return a single book by id, or `undefined` if not found.
  */
 export function getBook(id: number): Book | undefined {

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useEpubStore } from '@/stores/epubStore'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
 import {
@@ -11,9 +11,8 @@ import {
   updateBookLocation
 } from '@/lib/api'
 import type { Book } from '@/lib/api'
-import { BackButton } from '@/components/BackButton'
 import TTSControls from '@/components/tts/TTSControls'
-import { ChevronLeft, ChevronRight, MessageSquare, Menu as MenuIcon } from 'lucide-react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import AIChatOrb from '@/components/chat/AIChatOrb'
 import VoiceChatLauncher from '@/components/chat/VoiceChatLauncher'
 import { themes } from '@/themes/themes'
@@ -23,10 +22,9 @@ import { getBookImportService, type PageDataInsertable } from '@/services'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { useChatStore } from '@/stores/chatStore'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
-import { BookmarkButton } from '@/components/bookmarks/BookmarkButton'
-import { ReaderToolbar } from '@/components/reader/ReaderToolbar'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
-import { IconButton } from '@/components/ui/IconButton'
+import { useMenuCommands } from '@/hooks/useMenuCommands'
+import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
 
 // Simple string hash function (replaces stringToNumberID from Tauri's xxhash64)
 function stringToNumberID(str: string): number {
@@ -56,6 +54,47 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
 
   const isChatting = useChatStore((s) => s.isChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
+  const queryClient = useQueryClient()
+
+  // Wire native-menu commands. Toolbar buttons remain the primary entry
+  // point; menu items dispatch the same actions. MOBI has no thumbnails or
+  // dual-page so those commands are not registered here.
+  const menuHandlers = useMemo(
+    () => ({
+      toggleTOC: () => setTocOpen((v) => !v),
+      addBookmark: () => {
+        const syncId = bookSyncIdRef.current
+        if (!syncId) return
+        const idx = chapterIndex
+        void toggleBookmark({
+          bookSyncId: syncId,
+          location: String(idx),
+          label: `Chapter ${idx + 1}`
+        })
+          .then(async () => {
+            queryClient.invalidateQueries({ queryKey: ['bookmarks', syncId] })
+            await publishBookmarksToMenu(syncId)
+          })
+          .catch((err) => console.warn('[menu] addBookmark failed:', err))
+      },
+      readAloudToggle: () => {
+        const send = usePlayerStore.getState().send
+        if (!send) return
+        const state = usePlayerStore.getState().playingState
+        if (state === 'playing') send({ type: 'PAUSE' })
+        else if (state.startsWith('paused')) send({ type: 'RESUME' })
+        else requireAuth('tts', () => send({ type: 'PLAY' }))
+      },
+      openChat: () => requireAuth('chat', () => setChatPanelOpen((v) => !v)),
+      voiceChat: () => {
+        const { isChatting: chatting, setIsChatting } = useChatStore.getState()
+        if (chatting) setIsChatting(false)
+        else requireAuth('voice-input', () => setIsChatting(true))
+      }
+    }),
+    [requireAuth, chapterIndex, queryClient]
+  )
+  useMenuCommands(menuHandlers)
 
   // Set bookId for voice chat
   const setBookId = useEpubStore((s) => s.setBookId)
@@ -63,12 +102,46 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
     setBookId(book.id.toString())
   }, [book.id, setBookId])
 
-  // Look up the book's sync_id for chat
+  // Look up the book's sync_id for chat + publish bookmarks for the menu.
   useEffect(() => {
-    void window.electron.booksGetSyncId(book.id).then((syncId) => {
+    void window.electron.booksGetSyncId(book.id).then(async (syncId) => {
       bookSyncIdRef.current = syncId
+      if (syncId) await publishBookmarksToMenu(syncId)
     })
   }, [book.id])
+
+  // Publish title so the native Window menu sees the loaded book.
+  useEffect(() => {
+    const e = (window as unknown as { electron: { send(c: string, p: unknown): void } }).electron
+    e?.send('window:setBookTitle', { bookId: book.id, title: book.title })
+  }, [book.id, book.title])
+
+  // Mirror TOC sheet state into the menu context so the View > Show TOC
+  // checkbox flips with the actual sidebar state.
+  useEffect(() => {
+    const e = (
+      window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
+    ).electron
+    if (!e) return
+    e.setMenuContext({ tocOpen })
+  }, [tocOpen])
+
+  // Mirror TTS play state into the menu so the Reader > Read Aloud label
+  // flips to "Stop Read Aloud" while playback is active.
+  useEffect(() => {
+    const e = (
+      window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
+    ).electron
+    if (!e) return
+    const unsub = usePlayerStore.subscribe(
+      (s) => s.playingState,
+      (state) => {
+        e.setMenuContext({ isReading: state === 'playing' })
+      }
+    )
+    e.setMenuContext({ isReading: usePlayerStore.getState().playingState === 'playing' })
+    return unsub
+  }, [])
 
   // Fetch total chapter count on mount
   useEffect(() => {
@@ -293,35 +366,6 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
       className="relative h-screen flex flex-col"
       style={{ background: themes[theme].background }}
     >
-      {/* Top bar */}
-      <ReaderToolbar
-        panelsOpen={tocOpen || chatPanelOpen}
-        leftContent={
-          <IconButton
-            color="inherit"
-            onClick={() => setTocOpen(true)}
-            className="hover:bg-transparent border-none"
-          >
-            <MenuIcon size={20} />
-          </IconButton>
-        }
-      >
-        <BackButton />
-        <BookmarkButton
-          bookSyncId={bookSyncIdRef.current ?? ''}
-          location={String(chapterIndex)}
-          label={`Chapter ${chapterIndex + 1}`}
-          className="hover:bg-transparent border-none"
-        />
-        <button
-          onClick={() => requireAuth('chat', () => setChatPanelOpen(true))}
-          className="p-2 rounded-md text-black hover:bg-black/10"
-          aria-label="Open chat panel"
-        >
-          <MessageSquare size={20} />
-        </button>
-      </ReaderToolbar>
-
       {/* Main content area */}
       <div className="flex-1 overflow-hidden">
         {loading ? (

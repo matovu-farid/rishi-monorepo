@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import {
   PDF_FIXTURE,
   closeApp,
@@ -12,6 +12,7 @@ import {
 test.describe('PDF reader', () => {
   let app: LaunchedApp
   let bookId: number
+  let bookPage: Page
 
   test.beforeAll(async () => {
     app = await launchApp()
@@ -29,41 +30,34 @@ test.describe('PDF reader', () => {
   })
 
   test.beforeEach(async () => {
-    await openBook(app.page, bookId)
-    await app.page.waitForTimeout(3000)
-  })
-
-  test('back link to library exists', async () => {
-    await expect(app.page.locator('a[href="/#/"]').first()).toBeVisible({ timeout: 15000 })
-  })
-
-  test('reader toolbar is mounted', async () => {
-    await expect(app.page.locator('[data-tour="reader-toolbar"]').first()).toBeAttached({
-      timeout: 15000
-    })
+    bookPage = await openBook(app.page, bookId)
+    await bookPage.waitForTimeout(3000)
   })
 
   test('voice chat launcher is present', async () => {
-    await expect(app.page.locator('[aria-label="Start voice chat"]').first()).toBeVisible({
+    await expect(bookPage.locator('[aria-label="Start voice chat"]').first()).toBeVisible({
       timeout: 15000
     })
   })
 
   test('TTS orb is present', async () => {
-    await expect(app.page.locator('[aria-label="Expand TTS controls"]').first()).toBeVisible({
+    await expect(bookPage.locator('[aria-label="Expand TTS controls"]').first()).toBeVisible({
       timeout: 15000
     })
   })
 
   test('keyboard navigation does not crash', async () => {
-    await app.page.keyboard.press('ArrowRight')
-    await app.page.waitForTimeout(300)
-    await app.page.keyboard.press('ArrowLeft')
-    await app.page.waitForTimeout(300)
-    await expect(app.page.locator('body')).toBeVisible()
+    await bookPage.keyboard.press('ArrowRight')
+    await bookPage.waitForTimeout(300)
+    await bookPage.keyboard.press('ArrowLeft')
+    await bookPage.waitForTimeout(300)
+    await expect(bookPage.locator('body')).toBeVisible()
   })
 
   test('invalid book id does not crash the app', async () => {
+    // The route guard now intercepts library hash changes to /books/N and
+    // spawns a window instead, so this test exercises the legacy hash on
+    // the library page directly to ensure nothing crashes.
     await app.page.evaluate(() => {
       window.location.hash = '#/books/999999'
     })

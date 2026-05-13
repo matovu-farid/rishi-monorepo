@@ -28,13 +28,6 @@ export const TOUR_STEPS: TourStep[] = [
     position: 'above'
   },
   {
-    target: 'reader-toolbar',
-    title: 'Reader Controls',
-    description: 'Access settings, bookmarks, table of contents, and more from the toolbar.',
-    position: 'below',
-    routePrefix: '/books'
-  },
-  {
     target: 'ai-chat',
     title: 'Chat With Your Book',
     description:

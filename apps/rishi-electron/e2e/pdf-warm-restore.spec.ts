@@ -28,10 +28,13 @@ import {
  *
  * Asserts:
  *   - No ErrorBoundary fallback after reopen.
- *   - Reader toolbar mounts.
  *   - At least one rendered page canvas appears.
  */
-test('reopening a PDF hits the warm-restore cache and renders pages', async () => {
+test.skip('reopening a PDF hits the warm-restore cache and renders pages', async () => {
+  // Phase 3 (window split): each book lives in its own BrowserWindow, so
+  // the in-window reopen path this test asserted on no longer exists.
+  // The pdf-cache LRU semantics will be re-validated with the new
+  // window lifecycle in a follow-up.
   const app: LaunchedApp = await launchApp()
   try {
     const book = await importBook(app.page, {
@@ -59,11 +62,6 @@ test('reopening a PDF hits the warm-restore cache and renders pages', async () =
       app.page.locator('text=Something went wrong'),
       'no ErrorBoundary fallback after reopen'
     ).toHaveCount(0)
-
-    await expect(
-      app.page.locator('[data-tour="reader-toolbar"]'),
-      'toolbar mounts after reopen'
-    ).toBeVisible({ timeout: 5000 })
 
     await expect(
       app.page.locator('canvas.react-pdf__Page__canvas').first(),

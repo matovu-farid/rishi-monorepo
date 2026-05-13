@@ -1,7 +1,5 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react'
-import { IconButton } from '@/components/ui/IconButton'
 import { ThemeType } from '@/themes/common'
-import { Menu as MenuIcon, LayoutGrid } from 'lucide-react'
 import Loader from '@/components/Loader'
 import AIChatOrb from '../../chat/AIChatOrb'
 import VoiceChatLauncher from '../../chat/VoiceChatLauncher'
@@ -32,7 +30,6 @@ import { useUpdateCoverIMage } from '../hooks/useUpdateCoverIMage'
 import { useScrolling } from '../hooks/useScrolling'
 import { usePdfNavigation } from '../hooks/usePdfNavigation'
 import { PageComponent } from './pdf-page'
-import { useSetupMenu } from '../hooks/useSetupMenu'
 import { PDFDocumentProxy } from 'pdfjs-dist'
 import { useVirualization } from '../hooks/useVirualization'
 import { PAGE_GAP } from '../utils/constants'
@@ -43,12 +40,12 @@ import { loadPdfDocument, extractPageParagraphs } from '@/services/indexing/text
 import { useIndexingStore } from '@/stores/indexingStore'
 import { usePdfReader } from '@/hooks/usePdfReader'
 import type { Book } from '@/lib/api'
-import { BackButton } from '@/components/BackButton'
-import { BookmarkButton } from '@/components/bookmarks/BookmarkButton'
-import { ReaderToolbar } from '@/components/reader/ReaderToolbar'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { useChatStore } from '@/stores/chatStore'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
+import { useMenuCommands } from '@/hooks/useMenuCommands'
+import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
+import { useQueryClient } from '@tanstack/react-query'
 
 // Configure PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -71,17 +68,15 @@ export function PdfView({
   const setThumbOpen = usePdfStore((s) => s.setThumbnailSidebarOpen)
   const setPdfDocProxy = usePdfStore((s) => s.setPdfDocumentProxy)
 
-  const currentPageNumber = usePdfStore((s) => s.pageNumber)
-
-  const { AuthDialog } = useRequireAuth()
+  const { requireAuth, AuthDialog } = useRequireAuth()
   const isChatting = useChatStore((s) => s.isChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
+  const queryClient = useQueryClient()
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   useScrolling(scrollContainerRef)
 
   useUpdateCoverIMage(book)
-  useSetupMenu()
   // Ref for the scrollable container
 
   const resetParaphState = usePdfStore((s) => s.resetParagraphState)
@@ -149,6 +144,46 @@ export function PdfView({
       })
   }, [book.id])
 
+  // Publish bookmarks to the native-menu context whenever the sync id is
+  // first known. Subsequent edits (addBookmark) re-publish from the menu
+  // handler. Cancellation guards against unmount during the async read.
+  useEffect(() => {
+    if (!bookSyncId) return
+    let cancelled = false
+    void (async () => {
+      if (cancelled) return
+      await publishBookmarksToMenu(bookSyncId)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [bookSyncId])
+
+  // Publish the book title to main so the Window menu's open-books submenu
+  // shows the real title (not whatever the DB had at window-creation time).
+  useEffect(() => {
+    const e = (window as unknown as { electron: { send(c: string, p: unknown): void } }).electron
+    e?.send('window:setBookTitle', { bookId: book.id, title: book.title })
+  }, [book.id, book.title])
+
+  // Mirror TTS play state into the menu so the Reader > Read Aloud label
+  // flips to "Stop Read Aloud" while playback is active.
+  useEffect(() => {
+    const e = (
+      window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
+    ).electron
+    if (!e) return
+    const unsub = usePlayerStore.subscribe(
+      (s) => s.playingState,
+      (state) => {
+        e.setMenuContext({ isReading: state === 'playing' })
+      }
+    )
+    // Initial publish so the menu reflects the current state on mount.
+    e.setMenuContext({ isReading: usePlayerStore.getState().playingState === 'playing' })
+    return unsub
+  }, [])
+
   // Configure PDF.js options with CDN fallback for better font and image support
   const pdfOptions = useMemo<DocumentInitParameters>(
     () => ({
@@ -168,6 +203,18 @@ export function PdfView({
   useEffect(() => {
     isDualPageRef.current = isDualPage
   }, [isDualPage])
+
+  // Mirror reader UI state into the native menu context so the View menu's
+  // checkmarks (Show TOC, Show Thumbnails, Dual Page) flip with the actual
+  // reader state — not whatever value happened to be in the menu when the
+  // window was last focused.
+  useEffect(() => {
+    const e = (
+      window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
+    ).electron
+    if (!e) return
+    e.setMenuContext({ tocOpen, thumbsOpen: thumbOpen, dualPage: isDualPage })
+  }, [tocOpen, thumbOpen, isDualPage])
 
   // Mount the paragraph atoms so they're available for the player control
 
@@ -201,6 +248,49 @@ export function PdfView({
   // save with unmount-flush, paragraph publishing) with one explicit machine
   // whose state can't be stomped from outside.
   const pdfReader = usePdfReader(book, virtualizer, scrollContainerRef)
+
+  // Wire native-menu commands. Toolbar buttons remain the primary entry
+  // point; menu items dispatch the same actions. Setters from useState and
+  // store actions read via getState() are stable identities, so this memo
+  // only rebinds when `requireAuth`/`bookSyncId`/`book.id` change.
+  const menuHandlers = useMemo(
+    () => ({
+      toggleTOC: () => setTocOpen((v) => !v),
+      toggleThumbnails: () => setThumbOpen((v) => !v),
+      toggleDualPage: () =>
+        usePdfStore.setState((s) => ({ isDualPage: !s.isDualPage })),
+      addBookmark: () => {
+        if (!bookSyncId) return
+        const pageNum = usePdfStore.getState().pageNumber
+        void toggleBookmark({
+          bookSyncId,
+          location: String(pageNum),
+          label: `Page ${pageNum}`
+        })
+          .then(async () => {
+            queryClient.invalidateQueries({ queryKey: ['bookmarks', bookSyncId] })
+            await publishBookmarksToMenu(bookSyncId)
+          })
+          .catch((err) => console.warn('[menu] addBookmark failed:', err))
+      },
+      readAloudToggle: () => {
+        const send = usePlayerStore.getState().send
+        if (!send) return
+        const state = usePlayerStore.getState().playingState
+        if (state === 'playing') send({ type: 'PAUSE' })
+        else if (state.startsWith('paused')) send({ type: 'RESUME' })
+        else requireAuth('tts', () => send({ type: 'PLAY' }))
+      },
+      openChat: () => requireAuth('chat', () => setChatPanelOpen((v) => !v)),
+      voiceChat: () => {
+        const { isChatting: chatting, setIsChatting } = useChatStore.getState()
+        if (chatting) setIsChatting(false)
+        else requireAuth('voice-input', () => setIsChatting(true))
+      }
+    }),
+    [requireAuth, bookSyncId, queryClient, setThumbOpen]
+  )
+  useMenuCommands(menuHandlers)
 
   function onItemClick({ pageNumber: itemPageNumber }: { pageNumber: number }) {
     pdfReader.seekTo(itemPageNumber)
@@ -418,8 +508,8 @@ export function PdfView({
         // contain: strict isolates layout/paint to this subtree, which is also
         // recommended for the dynamic-size pattern. NOTE: `contain: strict`
         // (which includes `paint`) makes this element a containing block for
-        // `position: fixed` descendants — so fixed overlays (ReaderToolbar,
-        // AIChatOrb, ChatPanel, etc.) MUST be rendered as siblings, not
+        // `position: fixed` descendants — so fixed overlays (AIChatOrb,
+        // ChatPanel, etc.) MUST be rendered as siblings, not
         // children, of this div. Otherwise they anchor to the scroll
         // container's top and scroll away with the content.
         style={{ overflowAnchor: 'none', contain: 'strict' }}
@@ -527,39 +617,6 @@ export function PdfView({
       {/* All overlays below live OUTSIDE the scroll container so their
           `position: fixed` styles anchor to the viewport (the scroll
           container has `contain: strict` which would otherwise trap them). */}
-
-      {/* Fixed Top Bar — auto-hides after 2s */}
-      <ReaderToolbar
-        panelsOpen={tocOpen || thumbOpen}
-        leftContent={
-          <IconButton
-            color="inherit"
-            onClick={() => setTocOpen(true)}
-            className={cn('hover:bg-black/10 dark:hover:bg-white/10 border-none', getTextColor())}
-            aria-label="Open table of contents"
-          >
-            <MenuIcon size={20} />
-          </IconButton>
-        }
-      >
-        <BackButton />
-
-        <IconButton
-          color="inherit"
-          onClick={() => setThumbOpen(true)}
-          className={cn('hover:bg-black/10 dark:hover:bg-white/10 border-none', getTextColor())}
-          aria-label="Open page thumbnails"
-        >
-          <LayoutGrid size={20} />
-        </IconButton>
-
-        <BookmarkButton
-          bookSyncId={bookSyncId}
-          location={String(currentPageNumber)}
-          label={`Page ${currentPageNumber}`}
-          className={cn('hover:bg-black/10 dark:hover:bg-white/10 border-none', getTextColor())}
-        />
-      </ReaderToolbar>
 
       {AuthDialog}
 

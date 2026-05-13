@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import {
   EPUB_FIXTURE,
   closeApp,
@@ -13,6 +13,7 @@ import {
 test.describe('Text-to-speech controls', () => {
   let app: LaunchedApp
   let bookId: number
+  let bookPage: Page
 
   test.beforeAll(async () => {
     app = await launchApp()
@@ -31,36 +32,36 @@ test.describe('Text-to-speech controls', () => {
 
   test.beforeEach(async () => {
     await closeOverlays(app.page)
-    await openBook(app.page, bookId)
-    await expect(app.page.locator('[aria-label="Expand TTS controls"]').first()).toBeVisible({
+    bookPage = await openBook(app.page, bookId)
+    await expect(bookPage.locator('[aria-label="Expand TTS controls"]').first()).toBeVisible({
       timeout: 15000
     })
   })
 
   test('orb is fixed-position bottom-right', async () => {
-    const orb = app.page.locator('[aria-label="Expand TTS controls"]')
+    const orb = bookPage.locator('[aria-label="Expand TTS controls"]')
     await expect(orb).toHaveCSS('position', 'fixed')
   })
 
   test('expanding the orb reveals Play / Previous / Next / Stop', async () => {
-    await app.page.locator('[aria-label="Expand TTS controls"]').click()
-    await expect(app.page.locator('[aria-label="Play"]')).toBeVisible({ timeout: 5000 })
-    await expect(app.page.locator('[aria-label="Previous"]')).toBeVisible()
-    await expect(app.page.locator('[aria-label="Next"]')).toBeVisible()
-    await expect(app.page.locator('[aria-label="Stop"]')).toBeVisible()
+    await bookPage.locator('[aria-label="Expand TTS controls"]').click()
+    await expect(bookPage.locator('[aria-label="Play"]')).toBeVisible({ timeout: 5000 })
+    await expect(bookPage.locator('[aria-label="Previous"]')).toBeVisible()
+    await expect(bookPage.locator('[aria-label="Next"]')).toBeVisible()
+    await expect(bookPage.locator('[aria-label="Stop"]')).toBeVisible()
   })
 
   test('Stop is disabled when nothing is playing', async () => {
-    await app.page.locator('[aria-label="Expand TTS controls"]').click()
-    await expect(app.page.locator('[aria-label="Stop"]')).toBeDisabled()
+    await bookPage.locator('[aria-label="Expand TTS controls"]').click()
+    await expect(bookPage.locator('[aria-label="Stop"]')).toBeDisabled()
   })
 
   test('Play without auth opens premium dialog', async () => {
-    await app.page.locator('[aria-label="Expand TTS controls"]').click()
-    await app.page.locator('[aria-label="Play"]').click()
-    await expect(app.page.locator("[data-slot='dialog-content']")).toBeVisible({ timeout: 5000 })
-    await expect(app.page.locator('text=Sign in').first()).toBeVisible()
-    await app.page.locator('text=Maybe later').first().click()
-    await expect(app.page.locator("[data-slot='dialog-content']")).toHaveCount(0)
+    await bookPage.locator('[aria-label="Expand TTS controls"]').click()
+    await bookPage.locator('[aria-label="Play"]').click()
+    await expect(bookPage.locator("[data-slot='dialog-content']")).toBeVisible({ timeout: 5000 })
+    await expect(bookPage.locator('text=Sign in').first()).toBeVisible()
+    await bookPage.locator('text=Maybe later').first().click()
+    await expect(bookPage.locator("[data-slot='dialog-content']")).toHaveCount(0)
   })
 })

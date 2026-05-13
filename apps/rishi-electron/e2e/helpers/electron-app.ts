@@ -131,10 +131,32 @@ export async function deleteAllBooks(page: Page): Promise<void> {
   })
 }
 
-export async function openBook(page: Page, bookId: number): Promise<void> {
-  await page.evaluate((id) => {
-    window.location.hash = `#/books/${id}`
+/**
+ * Open a book in its own BrowserWindow (Phase 3+). Calls the
+ * `window:openBook` IPC on the *library* page, then polls the shared
+ * browser context until the new book window appears and returns its Page.
+ *
+ * Tests that previously operated on `launched.page` for reader assertions
+ * must instead use the Page returned here. If a book window for `bookId`
+ * already exists, that existing page is returned.
+ */
+export async function openBook(page: Page, bookId: number): Promise<Page> {
+  await page.evaluate(async (id) => {
+    const e = (window as unknown as { electron: { openBook(id: number): Promise<void> } }).electron
+    await e.openBook(id)
   }, bookId)
+  const ctx = page.context()
+  const deadline = Date.now() + 10000
+  while (Date.now() < deadline) {
+    const found = ctx.pages().find((p) => p.url().includes(`/books/${bookId}`))
+    if (found) {
+      // Settle the load state so callers can immediately query DOM.
+      await found.waitForLoadState('domcontentloaded').catch(() => {})
+      return found
+    }
+    await page.waitForTimeout(100)
+  }
+  throw new Error(`openBook: no window appeared for bookId=${bookId}`)
 }
 
 export async function gotoLibrary(page: Page): Promise<void> {
@@ -149,11 +171,6 @@ export async function getBookLocation(page: Page, bookId: number): Promise<strin
     const b = (await e.getBook(id)) as { location?: string } | null
     return b?.location
   }, bookId)
-}
-
-export async function revealReaderToolbar(page: Page): Promise<void> {
-  await page.mouse.move(500, 10)
-  await page.waitForTimeout(200)
 }
 
 /** Press Escape (and click outside) until any dialog/popover overlay is gone. */
@@ -175,4 +192,69 @@ export async function closeOverlays(page: Page): Promise<void> {
       .catch(() => {})
     await page.waitForTimeout(200)
   }
+}
+
+export interface MenuShape {
+  label?: string
+  role?: string
+  accelerator?: string
+  type?: string
+  checked?: boolean
+  visible?: boolean
+  enabled?: boolean
+  submenu?: MenuShape[]
+}
+
+export async function getApplicationMenu(app: ElectronApplication): Promise<MenuShape[]> {
+  return (await app.evaluate(({ Menu }) => {
+    const m = Menu.getApplicationMenu()
+    if (!m) return []
+    const walk = (items: Electron.MenuItem[]): unknown[] =>
+      items.map((i) => ({
+        label: i.label || undefined,
+        role: (i as unknown as { role?: string }).role,
+        accelerator: (i as unknown as { accelerator?: string }).accelerator,
+        type: i.type,
+        checked: i.checked,
+        visible: i.visible,
+        enabled: i.enabled,
+        submenu: i.submenu ? walk(i.submenu.items) : undefined
+      }))
+    return walk(m.items)
+  })) as MenuShape[]
+}
+
+export function findMenuItem(menu: MenuShape[], pathLabels: string[]): MenuShape | undefined {
+  let cursor: MenuShape[] | undefined = menu
+  let found: MenuShape | undefined
+  for (const label of pathLabels) {
+    if (!cursor) return undefined
+    found = cursor.find((m) => m.label === label)
+    if (!found) return undefined
+    cursor = found.submenu
+  }
+  return found
+}
+
+export async function clickMenuItem(
+  app: ElectronApplication,
+  pathLabels: string[]
+): Promise<boolean> {
+  return (await app.evaluate(({ Menu }, labels) => {
+    const m = Menu.getApplicationMenu()
+    if (!m) return false
+    const find = (items: Electron.MenuItem[], rest: string[]): Electron.MenuItem | null => {
+      if (rest.length === 0) return null
+      const [head, ...tail] = rest
+      const hit = items.find((i) => i.label === head)
+      if (!hit) return null
+      if (tail.length === 0) return hit
+      if (!hit.submenu) return null
+      return find(hit.submenu.items, tail)
+    }
+    const item = find(m.items, labels)
+    if (!item) return false
+    item.click()
+    return true
+  }, pathLabels)) as boolean
 }

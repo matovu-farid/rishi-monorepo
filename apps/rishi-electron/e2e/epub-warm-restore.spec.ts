@@ -66,7 +66,12 @@ async function resetEpubCacheStats(page: Page): Promise<void> {
   })
 }
 
-test('first open populates the cache, second open hits it', async () => {
+test.skip('first open populates the cache, second open hits it', async () => {
+  // Phase 3 (window split): each book lives in its own BrowserWindow,
+  // so the cross-navigation warm-restore path this test exercised
+  // (gotoLibrary then re-open in the same renderer) no longer exists.
+  // The cache layer must be re-evaluated for the new lifecycle in a
+  // follow-up phase before this assertion is meaningful again.
   const app: LaunchedApp = await launchApp()
   try {
     const book = await importBook(app.page, {
@@ -107,15 +112,11 @@ test('first open populates the cache, second open hits it', async () => {
     expect(stats.hits, 'reopen produces at least one cache hit').toBeGreaterThan(0)
     expect(stats.misses, 'reopen produces zero cache misses').toBe(0)
 
-    // Sanity: no ErrorBoundary, toolbar visible.
+    // Sanity: no ErrorBoundary fallback.
     await expect(
       app.page.locator('text=Something went wrong'),
       'no ErrorBoundary after reopen'
     ).toHaveCount(0)
-    await expect(
-      app.page.locator('[data-tour="reader-toolbar"]'),
-      'toolbar mounts after reopen'
-    ).toBeVisible({ timeout: 5000 })
   } finally {
     await closeApp(app)
   }

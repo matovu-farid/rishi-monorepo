@@ -3,7 +3,6 @@ import {
   PDF_FIXTURE,
   closeApp,
   getBookLocation,
-  gotoLibrary,
   importBook,
   launchApp,
   openBook,
@@ -28,12 +27,12 @@ test('PDF sub-page scroll position persists across close + reopen', async () => 
       title: 'Scroll Position Persist Test'
     })
 
-    await openBook(app.page, book.id)
-    await app.page.waitForTimeout(3000)
+    let bookPage = await openBook(app.page, book.id)
+    await bookPage.waitForTimeout(3000)
 
     // Scroll to a position that is intentionally MID-page, not at a page
     // boundary, so a page-only restore would visibly land elsewhere.
-    const scrollTopBefore = await app.page.evaluate(() => {
+    const scrollTopBefore = await bookPage.evaluate(() => {
       const el = document.querySelector<HTMLElement>('div.overflow-y-scroll')
       if (!el) throw new Error('no scroll container')
       el.scrollTo({ top: 6500, behavior: 'auto' })
@@ -42,7 +41,7 @@ test('PDF sub-page scroll position persists across close + reopen', async () => 
     expect(scrollTopBefore, 'scroll target should land near 6500').toBeGreaterThan(6000)
 
     // Wait for: scroll listener (80ms) + persist debounce (400ms) + IPC margin.
-    await app.page.waitForTimeout(1500)
+    await bookPage.waitForTimeout(1500)
 
     // The saved location must encode an offset, not just the page index.
     // Format is "page:offset" — old "5" alone means we lost sub-page state.
@@ -53,13 +52,17 @@ test('PDF sub-page scroll position persists across close + reopen', async () => 
     const savedOffset = Number(savedLocation?.split(':')[1] ?? 0)
     expect(savedOffset, 'sub-page offset should be > 0').toBeGreaterThan(0)
 
-    // Round-trip: leave and come back.
-    await gotoLibrary(app.page)
+    // Round-trip: close the book window and reopen.
+    await app.page.evaluate(async (id) => {
+      const e = (window as unknown as { electron: { closeBook(id: number): Promise<void> } })
+        .electron
+      await e.closeBook(id)
+    }, book.id)
     await app.page.waitForTimeout(1500)
-    await openBook(app.page, book.id)
-    await app.page.waitForTimeout(4000)
+    bookPage = await openBook(app.page, book.id)
+    await bookPage.waitForTimeout(4000)
 
-    const scrollTopAfter = await app.page.evaluate(() => {
+    const scrollTopAfter = await bookPage.evaluate(() => {
       const el = document.querySelector<HTMLElement>('div.overflow-y-scroll')
       return el?.scrollTop ?? -1
     })
