@@ -1,6 +1,6 @@
 import Loader from '../components/Loader'
 import { useQuery } from '@tanstack/react-query'
-import { createRootRoute, Outlet } from '@tanstack/react-router'
+import { createRootRoute, Outlet, useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, type JSX } from 'react'
 import { getBooks } from '@/lib/api'
 import { getSyncService } from '@/services'
@@ -26,6 +26,42 @@ function RootComponent(): JSX.Element {
   useHydrateAuth()
   useStartupUpdateCheck()
   useFileOpenHandler()
+
+  // Window-identity guard: keeps each BrowserWindow on the route that matches
+  // the identity flag injected at window creation (see preload/windowIdentity).
+  //   - library window: any legacy `#/books/N` hash spawns a book window and
+  //     resets the library hash to `/`.
+  //   - book window: forces the URL to `/books/<bookId>` if it isn't already.
+  // Runs once on mount — identity is fixed for the lifetime of the window.
+  const navigate = useNavigate()
+  useEffect(() => {
+    const e = (
+      window as unknown as {
+        electron: {
+          windowIdentity?: { kind: 'library' } | { kind: 'book'; bookId: number }
+          openBook(id: number): Promise<void>
+        }
+      }
+    ).electron
+    const id = e?.windowIdentity
+    const path = window.location.hash.replace(/^#/, '')
+
+    if (id?.kind === 'library') {
+      const m = path.match(/^\/books\/(\d+)/)
+      if (m) {
+        void e.openBook(Number(m[1]))
+        void navigate({ to: '/' })
+      }
+    } else if (id?.kind === 'book') {
+      if (!path.startsWith('/books/')) {
+        void navigate({ to: '/books/$id', params: { id: String(id.bookId) } })
+      }
+    }
+    // Intentional: identity is set once at window creation; no need to re-run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+
   // Library-level menu handlers. Toggle dark/light by flipping the `dark`
   // class on <html> — matches the menu builder's label-flip pattern. The menu
   // label itself only updates after the renderer reports the new theme via
