@@ -248,8 +248,8 @@ export async function getPdfData(params: { path: string }): Promise<BookData> {
 export async function getMobiData(params: { path: string }): Promise<BookData> {
   return api().getMobiData(params.path)
 }
-export async function getDjvuData(params: { path: string }): Promise<BookData> {
-  return api().getDjvuData(params.path)
+export async function getAzw3Data(params: { path: string }): Promise<BookData> {
+  return api().getAzw3Data(params.path)
 }
 export async function getMobiChapter(params: {
   path: string
@@ -265,22 +265,6 @@ export async function getMobiText(params: {
   chapterIndex: number
 }): Promise<string[]> {
   return api().getMobiText(params.path, params.chapterIndex)
-}
-export async function getDjvuPage(params: {
-  path: string
-  pageNumber: number
-  dpi: number
-}): Promise<number[]> {
-  return api().getDjvuPage(params.path, params.pageNumber, params.dpi)
-}
-export async function getDjvuPageCount(params: { path: string }): Promise<number> {
-  return api().getDjvuPageCount(params.path)
-}
-export async function getDjvuPageText(params: {
-  path: string
-  pageNumber: number
-}): Promise<string[]> {
-  return api().getDjvuPageText(params.path, params.pageNumber)
 }
 
 // ---- File System ----

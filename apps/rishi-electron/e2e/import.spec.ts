@@ -1,6 +1,5 @@
 import { test, expect } from '@playwright/test'
 import {
-  DJVU_FIXTURE,
   EPUB_FIXTURE,
   MOBI_FIXTURE,
   PDF_FIXTURE,
@@ -50,14 +49,6 @@ test.describe('Import & metadata extraction', () => {
       return await e.getMobiData(p)
     }, MOBI_FIXTURE)
     expect(data).toMatchObject({ kind: 'mobi' })
-  })
-
-  test('getDjvuData returns DJVU metadata', async () => {
-    const data = await app.page.evaluate(async (p) => {
-      const e = (window as unknown as { electron: Record<string, Function> }).electron
-      return await e.getDjvuData(p)
-    }, DJVU_FIXTURE)
-    expect(data).toMatchObject({ kind: 'djvu' })
   })
 
   test('checkFileSize returns ok or warn for fixture PDFs', async () => {

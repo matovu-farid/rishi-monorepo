@@ -64,7 +64,7 @@ describe('Premium Features Config', () => {
   it('should have specific bullet text for TTS feature', () => {
     const tts = PREMIUM_FEATURES.tts
     expect(tts.bullets).toContain('Natural, expressive voices')
-    expect(tts.bullets).toContain('Reads EPUB, PDF, MOBI, and DjVu')
+    expect(tts.bullets).toContain('Reads EPUB, PDF, and MOBI')
     expect(tts.bullets).toContain('Remembers your spot across devices')
   })
 

@@ -39,17 +39,12 @@ const electronAPI: ElectronAPI = {
   getBookData: (path: string) => ipcRenderer.invoke('formats:getBookData', path),
   getPdfData: (path: string) => ipcRenderer.invoke('formats:getPdfData', path),
   getMobiData: (path: string) => ipcRenderer.invoke('formats:getMobiData', path),
-  getDjvuData: (path: string) => ipcRenderer.invoke('formats:getDjvuData', path),
+  getAzw3Data: (path: string) => ipcRenderer.invoke('formats:getAzw3Data', path),
   getMobiChapter: (path: string, chapterIndex: number) =>
     ipcRenderer.invoke('formats:getMobiChapter', path, chapterIndex),
   getMobiChapterCount: (path: string) => ipcRenderer.invoke('formats:getMobiChapterCount', path),
   getMobiText: (path: string, chapterIndex: number) =>
     ipcRenderer.invoke('formats:getMobiText', path, chapterIndex),
-  getDjvuPage: (path: string, pageNumber: number, dpi: number) =>
-    ipcRenderer.invoke('formats:getDjvuPage', path, pageNumber, dpi),
-  getDjvuPageCount: (path: string) => ipcRenderer.invoke('formats:getDjvuPageCount', path),
-  getDjvuPageText: (path: string, pageNumber: number) =>
-    ipcRenderer.invoke('formats:getDjvuPageText', path, pageNumber),
 
   // File system
   checkFileSize: (path: string, format: string) =>

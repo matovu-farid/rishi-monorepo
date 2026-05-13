@@ -17,7 +17,7 @@ import { getBook, listRecentBooks } from './database/queries.js'
 // File types Rishi advertises in the OS "Open With" menu (see
 // electron-builder.yml `fileAssociations`). The OS routes a matching file
 // click to this binary; we then forward the path to the renderer for import.
-const SUPPORTED_BOOK_EXTENSIONS = new Set(['.epub', '.pdf', '.mobi', '.azw3', '.djvu'])
+const SUPPORTED_BOOK_EXTENSIONS = new Set(['.epub', '.pdf', '.mobi', '.azw3'])
 
 function isSupportedBookPath(p: string): boolean {
   return SUPPORTED_BOOK_EXTENSIONS.has(extname(p).toLowerCase())

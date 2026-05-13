@@ -1,4 +1,4 @@
-export type BookFormat = 'pdf' | 'epub' | 'mobi' | 'djvu'
+export type BookFormat = 'pdf' | 'epub' | 'mobi'
 export type Theme = 'light' | 'dark'
 
 export interface RecentBook {

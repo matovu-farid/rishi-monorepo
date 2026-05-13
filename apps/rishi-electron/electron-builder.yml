@@ -27,11 +27,6 @@ fileAssociations:
     description: Kindle eBook
     role: Viewer
     mimeType: application/vnd.amazon.ebook
-  - ext: djvu
-    name: DjVu Document
-    description: DjVu Document
-    role: Viewer
-    mimeType: image/vnd.djvu
 asarUnpack:
   - resources/**
   - node_modules/better-sqlite3/**

@@ -87,12 +87,6 @@ describe('buildMenu — book', () => {
     expect(findItem(tpl, ['View', 'Dual Page'])).toBeUndefined()
   })
 
-  it('DJVU hides PDF-only items', () => {
-    const tpl = buildMenu({ ...pdfCtx, format: 'djvu' }, vi.fn())
-    expect(findItem(tpl, ['View', 'Show Thumbnails'])).toBeUndefined()
-    expect(findItem(tpl, ['View', 'Dual Page'])).toBeUndefined()
-  })
-
   it('Show TOC reflects tocOpen as checked', () => {
     const open = buildMenu({ ...pdfCtx, tocOpen: true }, vi.fn())
     const closed = buildMenu({ ...pdfCtx, tocOpen: false }, vi.fn())
