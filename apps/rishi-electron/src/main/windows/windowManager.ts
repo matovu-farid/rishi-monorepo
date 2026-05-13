@@ -47,8 +47,11 @@ export class WindowManager {
 
   closeBook(bookId: number): void {
     const w = this.books.get(bookId)
+    // The 'closed' listener registered in openBook removes the map entry — no
+    // need for an unconditional delete here. The fake window in the unit test
+    // fires 'closed' synchronously from close(), so the test still observes
+    // the map entry removed.
     if (w && !w.isDestroyed()) w.close()
-    this.books.delete(bookId)
   }
 
   hasBook(bookId: number): boolean {
