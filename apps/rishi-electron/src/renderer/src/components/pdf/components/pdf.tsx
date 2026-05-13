@@ -158,7 +158,8 @@ export function PdfView({
     }),
     []
   )
-  const { isDualPage, pdfWidth, pdfHeight, dualPageWidth, isFullscreen } = usePdfNavigation()
+  const { isDualPage, pdfWidth, pdfHeight, dualPageWidth, isFullscreen } =
+    usePdfNavigation(scrollContainerRef)
 
   // Setup View submenu in the app menu for PDF view
   const isDualPageRef = useRef(isDualPage)
@@ -408,7 +409,7 @@ export function PdfView({
     <div className={cn('relative h-screen w-full', !isDualPage && isFullscreen ? '' : '', 'bg-gray-300')}>
       <div
         ref={scrollContainerRef}
-        className="h-full w-full overflow-y-scroll"
+        className="h-full w-full overflow-y-scroll overflow-x-hidden"
         // overflowAnchor: the browser's built-in scroll-anchoring fights the
         // virtualizer's `adjustments` mechanism on backward scroll, producing
         // a back-and-forth jitter when an upper page (re)mounts. Disabling it
