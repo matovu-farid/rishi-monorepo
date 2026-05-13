@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { Api, AuthUser, ElectronAPI } from './types.js'
+import { parseWindowIdentity, type WindowIdentity } from './windowIdentity'
 
 const electronAPI: ElectronAPI = {
   // Book operations
@@ -205,7 +206,24 @@ const electronAPI: ElectronAPI = {
   },
   send: (channel: string, ...args: unknown[]) => {
     ipcRenderer.send(channel, ...args)
-  }
+  },
+
+  // Window identity + menu API
+  windowIdentity: parseWindowIdentity(process.argv) as WindowIdentity,
+  onMenuCommand: (cb: (c: { command: string; arg?: unknown }) => void) => {
+    const handler = (_e: unknown, payload: { command: string; arg?: unknown }): void => cb(payload)
+    ipcRenderer.on('menu:command', handler)
+    return () => {
+      ipcRenderer.removeListener('menu:command', handler)
+    }
+  },
+  setMenuContext: (partial: Record<string, unknown>) => {
+    ipcRenderer.send('menu:setContext', partial)
+  },
+  openBook: (bookId: number) => ipcRenderer.invoke('window:openBook', { bookId }),
+  closeBook: (bookId: number) => ipcRenderer.invoke('window:closeBook', { bookId }),
+  focusLibrary: () => ipcRenderer.invoke('window:focusLibrary'),
+  listOpenBooks: () => ipcRenderer.invoke('window:list')
 }
 
 const api: Api = {

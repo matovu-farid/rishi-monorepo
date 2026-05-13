@@ -167,6 +167,15 @@ export interface ElectronAPI {
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void
   once: (channel: string, callback: (...args: unknown[]) => void) => void
   send: (channel: string, ...args: unknown[]) => void
+
+  // Window identity + menu (injected by main via additionalArguments)
+  windowIdentity: { kind: 'library' } | { kind: 'book'; bookId: number }
+  onMenuCommand: (cb: (c: { command: string; arg?: unknown }) => void) => () => void
+  setMenuContext: (partial: Record<string, unknown>) => void
+  openBook: (bookId: number) => Promise<void>
+  closeBook: (bookId: number) => Promise<void>
+  focusLibrary: () => Promise<void>
+  listOpenBooks: () => Promise<Array<{ bookId: number; title: string }>>
 }
 
 export type FileSizeCheck = 'ok' | 'warn' | 'blocked'
