@@ -25,17 +25,13 @@ test('AZW3 book opens and renders the first chapter', async () => {
     const bookPage = await openBook(launched.page, book.id)
 
     // Wait for the chapter counter — proves the renderer parsed the file,
-    // received a chapter count, and the view is mounted. Format: "1 / N".
-    const counter = bookPage.locator('text=/^\\d+\\s*\\/\\s*\\d+$/').first()
-    await counter.waitFor({ state: 'visible', timeout: 20000 })
+    // received a chapter count, and the view is mounted. Values exposed via
+    // data-current / data-total so tests don't depend on hover-state text.
+    const counter = bookPage.locator('[data-testid="azw3-page-counter"]')
+    await counter.waitFor({ state: 'attached', timeout: 20000 })
 
-    const counterText = (await counter.textContent())?.trim() ?? ''
-    expect(counterText).toMatch(/^\d+\s*\/\s*\d+$/)
-
-    // The total chapter count should be >= 1
-    const [currentStr, totalStr] = counterText.split('/')
-    const current = Number(currentStr.trim())
-    const total = Number(totalStr.trim())
+    const total = Number(await counter.getAttribute('data-total'))
+    const current = Number(await counter.getAttribute('data-current'))
     expect(total).toBeGreaterThanOrEqual(1)
     expect(current).toBeGreaterThanOrEqual(1)
     expect(current).toBeLessThanOrEqual(total)

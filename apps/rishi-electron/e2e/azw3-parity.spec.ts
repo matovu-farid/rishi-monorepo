@@ -21,36 +21,36 @@ test.describe('AZW3 reader — feature parity with MOBI', () => {
       })
       const bookPage = await openBook(launched.page, book.id)
 
-      const counter = bookPage.locator('text=/^\\d+\\s*\\/\\s*\\d+$/').first()
-      await counter.waitFor({ state: 'visible', timeout: 20000 })
+      const counter = bookPage.locator('[data-testid="azw3-page-counter"]')
+      await counter.waitFor({ state: 'attached', timeout: 20000 })
 
-      // Skip the navigation assertion if the test fixture has only one
-      // section (the Next button would be disabled). The test still proves
-      // the navigation UI is wired by reading the counter.
-      const initial = (await counter.textContent())?.trim() ?? ''
-      const [, totalStr] = initial.split('/')
-      const total = Number(totalStr.trim())
+      const total = Number(await counter.getAttribute('data-total'))
+      const current = Number(await counter.getAttribute('data-current'))
       if (total < 2) {
-        // Single-section fixture — assert that Next is disabled and we're at 1/1.
-        expect(initial).toMatch(/^1\s*\/\s*1$/)
-        const next = bookPage.locator('button[aria-label="Next chapter"]')
-        await expect(next).toBeDisabled()
+        // Single-page fixture — Next must be hidden on the only page.
+        expect(current).toBe(1)
+        expect(total).toBe(1)
+        await expect(bookPage.locator('button[aria-label="Next page"]')).toHaveCount(0)
         return
       }
 
-      // Multi-section fixture — click Next, counter must advance by one.
-      const [currentStr] = initial.split('/')
-      const current = Number(currentStr.trim())
-      await bookPage.locator('button[aria-label="Next chapter"]').click()
-      await expect(counter).toHaveText(new RegExp(`^${current + 1}\\s*/\\s*\\d+$`), {
-        timeout: 5000
-      })
+      // Multi-page fixture — click Next, counter must advance by one.
+      await bookPage.locator('button[aria-label="Next page"]').click()
+      await expect
+        .poll(async () => Number(await counter.getAttribute('data-current')), {
+          timeout: 5000,
+          intervals: [100, 250]
+        })
+        .toBe(current + 1)
 
       // Click Prev — counter returns to the original position.
-      await bookPage.locator('button[aria-label="Previous chapter"]').click()
-      await expect(counter).toHaveText(new RegExp(`^${current}\\s*/\\s*\\d+$`), {
-        timeout: 5000
-      })
+      await bookPage.locator('button[aria-label="Previous page"]').click()
+      await expect
+        .poll(async () => Number(await counter.getAttribute('data-current')), {
+          timeout: 5000,
+          intervals: [100, 250]
+        })
+        .toBe(current)
     } finally {
       await closeApp(launched)
     }
@@ -68,8 +68,8 @@ test.describe('AZW3 reader — feature parity with MOBI', () => {
 
       // Wait for the reader to mount before invoking the menu (so the
       // book-window context is registered in main).
-      const counter = bookPage.locator('text=/^\\d+\\s*\\/\\s*\\d+$/').first()
-      await counter.waitFor({ state: 'visible', timeout: 20000 })
+      const counter = bookPage.locator('[data-testid="azw3-page-counter"]')
+      await counter.waitFor({ state: 'attached', timeout: 20000 })
       await bookPage.bringToFront()
       await bookPage.waitForTimeout(300)
 
@@ -113,8 +113,8 @@ test.describe('AZW3 reader — feature parity with MOBI', () => {
 
       const bookPage = await openBook(launched.page, book.id)
 
-      const counter = bookPage.locator('text=/^\\d+\\s*\\/\\s*\\d+$/').first()
-      await counter.waitFor({ state: 'visible', timeout: 20000 })
+      const counter = bookPage.locator('[data-testid="azw3-page-counter"]')
+      await counter.waitFor({ state: 'attached', timeout: 20000 })
       await bookPage.bringToFront()
       await bookPage.waitForTimeout(800)
 

@@ -35,8 +35,8 @@ test('AZW3 reader paints the book content into the iframe', async () => {
     })
     const bookPage = await openBook(launched.page, book.id)
 
-    const counter = bookPage.locator('text=/^\\d+\\s*\\/\\s*\\d+$/').first()
-    await counter.waitFor({ state: 'visible', timeout: 20000 })
+    const counter = bookPage.locator('[data-testid="azw3-page-counter"]')
+    await counter.waitFor({ state: 'attached', timeout: 20000 })
 
     const iframe = bookPage.locator('iframe[title="AZW3 Visible"]')
     await expect(iframe).toBeVisible({ timeout: 10000 })
@@ -124,15 +124,13 @@ test('AZW3 reader paginates single-section books', async () => {
     })
     const bookPage = await openBook(launched.page, book.id)
 
-    const counter = bookPage.locator('text=/^\\d+\\s*\\/\\s*\\d+$/').first()
-    await counter.waitFor({ state: 'visible', timeout: 20000 })
-
-    // 1) The counter must show N > 1.
-    const initial = (await counter.textContent())?.trim() ?? ''
-    const match = initial.match(/^(\d+)\s*\/\s*(\d+)$/)
-    expect(match, `counter text "${initial}"`).not.toBeNull()
-    const current = Number(match![1])
-    const total = Number(match![2])
+    // Counter is now a subtle EPUB-style indicator with data attributes —
+    // `data-current` / `data-total` expose values without needing visible
+    // hover-state text. Fall back to data-testid lookup.
+    const counter = bookPage.locator('[data-testid="azw3-page-counter"]')
+    await counter.waitFor({ state: 'attached', timeout: 20000 })
+    const total = Number(await counter.getAttribute('data-total'))
+    const current = Number(await counter.getAttribute('data-current'))
     expect(total, `expected paginated total > 1, got ${total}`).toBeGreaterThan(1)
 
     // 2) Wait for the iframe body to settle on the current virtual page so we
@@ -151,10 +149,14 @@ test('AZW3 reader paginates single-section books', async () => {
 
     const firstText = await body.evaluate((el) => (el.textContent ?? '').trim())
 
-    // 3) Click Next chapter, counter must advance, body text must change.
-    await bookPage.locator('button[aria-label="Next chapter"]').click()
-    const nextRe = new RegExp(`^${current + 1}\\s*/\\s*\\d+$`)
-    await expect(counter).toHaveText(nextRe, { timeout: 10000 })
+    // 3) Click Next page, counter must advance, body text must change.
+    await bookPage.locator('button[aria-label="Next page"]').click()
+    await expect
+      .poll(async () => Number(await counter.getAttribute('data-current')), {
+        timeout: 10000,
+        intervals: [200, 500]
+      })
+      .toBe(current + 1)
 
     await expect
       .poll(
