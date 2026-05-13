@@ -44,7 +44,14 @@ export function buildMenu(ctx: MenuContext, dispatch: Dispatch): MenuItemConstru
       label: themeLabel,
       accelerator: ACCELERATORS.toggleTheme,
       click: fire({ command: 'toggleTheme' })
-    }
+    },
+    { type: 'separator' },
+    // Built-in Electron roles handle the actual reload / devtools toggle —
+    // they include sensible default accelerators (⌘R / Ctrl+R, ⌥⌘I /
+    // Ctrl+Shift+I) and stay enabled only when a window is focused.
+    { role: 'reload', label: 'Reload' },
+    { role: 'forceReload', label: 'Force Reload' },
+    { role: 'toggleDevTools', label: 'Toggle Developer Tools' }
   ]
   if (ctx.kind === 'book') {
     viewSubmenu.push(
