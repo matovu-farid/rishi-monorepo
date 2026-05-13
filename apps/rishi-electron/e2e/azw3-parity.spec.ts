@@ -38,13 +38,19 @@ test.describe('AZW3 reader — feature parity with MOBI', () => {
         return
       }
 
-      // Multi-section fixture — click Next, counter must advance to 2/N
+      // Multi-section fixture — click Next, counter must advance by one.
+      const [currentStr] = initial.split('/')
+      const current = Number(currentStr.trim())
       await bookPage.locator('button[aria-label="Next chapter"]').click()
-      await expect(counter).toHaveText(/^2\s*\/\s*\d+$/, { timeout: 5000 })
+      await expect(counter).toHaveText(new RegExp(`^${current + 1}\\s*/\\s*\\d+$`), {
+        timeout: 5000
+      })
 
-      // Click Prev — counter returns to 1/N
+      // Click Prev — counter returns to the original position.
       await bookPage.locator('button[aria-label="Previous chapter"]').click()
-      await expect(counter).toHaveText(/^1\s*\/\s*\d+$/, { timeout: 5000 })
+      await expect(counter).toHaveText(new RegExp(`^${current}\\s*/\\s*\\d+$`), {
+        timeout: 5000
+      })
     } finally {
       await closeApp(launched)
     }
