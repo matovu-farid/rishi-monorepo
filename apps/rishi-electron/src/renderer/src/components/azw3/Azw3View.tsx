@@ -379,7 +379,12 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
             src={chapterUrl}
             className="w-full h-full border-none"
             title={book.title}
-            sandbox="allow-same-origin"
+            // `allow-scripts` is required so that KF8 books containing inline
+            // scripts or `<iframe srcdoc=...>` subframes can finish laying
+            // out — without it, real publisher AZW3s render blank ("Blocked
+            // script execution in 'about:srcdoc'"). Matches what foliate-js's
+            // own paginator uses on its iframes (see paginator.js).
+            sandbox="allow-same-origin allow-scripts"
             style={{ background: themeStyle.background }}
           />
         ) : null}
