@@ -46,6 +46,45 @@ export interface FoliateBook {
     author?: string | string[] | { name: string } | Array<{ name: string }>
   }
   toc?: FoliateTocEntry[]
+  /** KF8 books store the cover in EXTH metadata, not as a section. Foliate
+   *  exposes it via this method when available. */
+  getCover?: () => Promise<Blob | undefined>
+}
+
+/**
+ * Build a synthetic first section whose body is just an `<img>` tag pointing
+ * at the cover image's object URL. Exported so it can be unit-tested without
+ * spinning up a real MOBI parser.
+ */
+export function makeCoverSection(coverBlob: Blob): FoliateSection {
+  let cachedUrl: string | null = null
+  let cachedDoc: Document | null = null
+
+  const buildHtml = (imgUrl: string): string =>
+    `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Cover</title>` +
+    `<style>html,body{margin:0;padding:0;}` +
+    `body{display:flex;align-items:center;justify-content:center;` +
+    `min-height:100vh;background:transparent;}` +
+    `img{max-width:100%;max-height:100vh;height:auto;display:block;}` +
+    `</style></head><body><img src="${imgUrl}" alt="Cover"/></body></html>`
+
+  return {
+    id: 'azw3-cover',
+    virtualGroupId: 'azw3-cover',
+    load: async (): Promise<string> => {
+      if (cachedUrl) return cachedUrl
+      const imgUrl = URL.createObjectURL(coverBlob)
+      const html = buildHtml(imgUrl)
+      cachedUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
+      return cachedUrl
+    },
+    createDocument: async (): Promise<Document> => {
+      if (cachedDoc) return cachedDoc
+      const imgUrl = URL.createObjectURL(coverBlob)
+      cachedDoc = new DOMParser().parseFromString(buildHtml(imgUrl), 'text/html')
+      return cachedDoc
+    }
+  }
 }
 
 /** Default words-per-virtual-page when synthesizing pagination. */
@@ -86,17 +125,24 @@ export async function parseAzw3(
     (s) => typeof s?.load === 'function' && s.linear !== 'no'
   )
 
-  // Multi-section books already paginate fine — return as-is.
+  let bodySections: FoliateSection[]
   if (filtered.length !== 1) {
-    return { book, sections: filtered }
+    // Multi-section books already paginate fine — keep them as-is.
+    bodySections = filtered
+  } else {
+    // Single-section case: synthesize virtual pages.
+    const wordsPerPage = Math.max(50, opts.wordsPerPage ?? WORDS_PER_PAGE)
+    const virtualPages = await paginateSection(filtered[0], wordsPerPage)
+    bodySections = virtualPages.length > 0 ? virtualPages : filtered
   }
 
-  // Single-section case: synthesize virtual pages.
-  const wordsPerPage = Math.max(50, opts.wordsPerPage ?? WORDS_PER_PAGE)
-  const virtualPages = await paginateSection(filtered[0], wordsPerPage)
-  // If pagination produced nothing (createDocument failed, empty body, etc.)
-  // fall back to the original single section so the reader still renders.
-  return { book, sections: virtualPages.length > 0 ? virtualPages : filtered }
+  // KF8 books carry the cover in EXTH metadata, not as a renderable section.
+  // Prepend a synthetic cover page so the reader's page 1 matches what other
+  // viewers (GroupDocs, Kindle) show. Best-effort: if the file has no cover
+  // or foliate throws, just skip — body pages still render.
+  const coverBlob = await book.getCover?.().catch(() => undefined)
+  const sections = coverBlob ? [makeCoverSection(coverBlob), ...bodySections] : bodySections
+  return { book, sections }
 }
 
 /** Extract plain text paragraphs from a foliate section for TTS. Returns []
@@ -141,6 +187,27 @@ async function loadSectionDocument(section: FoliateSection): Promise<Document> {
     doc = parser.parseFromString(text, 'text/html')
   }
   return doc
+}
+
+/**
+ * Remove `<link>` and `<img>` elements whose URLs reference Kindle-internal
+ * schemes (`kindle:flow:`, `kindle:embed:`, `kindle:pos:`). These would
+ * trigger CSP fetch errors in the iframe without contributing to render —
+ * foliate already rewrites them on the section blob path, but legacy
+ * stylesheet links sometimes survive. Exported for testing.
+ */
+export function stripKindleResourceLinks(doc: Document): number {
+  let removed = 0
+  const candidates = doc.querySelectorAll<HTMLElement>('link[href], img[src]')
+  for (const el of Array.from(candidates)) {
+    const attr = el.tagName.toLowerCase() === 'link' ? 'href' : 'src'
+    const value = el.getAttribute(attr) ?? ''
+    if (value.startsWith('kindle:')) {
+      el.remove()
+      removed += 1
+    }
+  }
+  return removed
 }
 
 /** Count whitespace-delimited words in a node's text content. */
@@ -193,6 +260,11 @@ export async function paginateSection(
     sourceDoc = await section.createDocument().catch(() => null)
   }
   if (!sourceDoc) return []
+  // Drop Kindle-internal resource links that the browser can't fetch
+  // (`kindle:flow:`, `kindle:embed:`, `kindle:pos:`). Foliate rewrites these
+  // when serving section blobs, but stylesheet `<link>` tags slip through and
+  // produce CSP errors in the iframe.
+  stripKindleResourceLinks(sourceDoc)
 
   // For XHTML documents `doc.body` returns the HTML-namespaced body, which is
   // null for KF8's serialized output (foliate uses the XHTML namespace). Fall
