@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react'
-import { useNavigate } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { getBookImportService } from '@/services'
@@ -10,7 +9,6 @@ import { getBookImportService } from '@/services'
  * before this listener subscribes — drained via `getPendingOpenFiles`).
  */
 export function useFileOpenHandler(): void {
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
   // Guards against overlapping batches when multiple files are double-clicked
   // in quick succession — the importer isn't reentrant per filepath.
@@ -33,7 +31,11 @@ export function useFileOpenHandler(): void {
           }
         }
         if (firstSuccess !== null) {
-          void navigate({ to: '/books/$id', params: { id: String(firstSuccess) } })
+          // Phase 3: each book lives in its own BrowserWindow. Ask the main
+          // process to spawn one rather than navigating the library window.
+          void (
+            window as unknown as { electron: { openBook(id: number): Promise<void> } }
+          ).electron.openBook(firstSuccess)
         }
       } finally {
         inFlight.current = false
@@ -53,5 +55,5 @@ export function useFileOpenHandler(): void {
     return () => {
       unsubscribe()
     }
-  }, [navigate, queryClient])
+  }, [queryClient])
 }
