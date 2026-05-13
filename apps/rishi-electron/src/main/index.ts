@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, protocol, net, ipcMain } from 'electron'
+import { app, BrowserWindow, shell, protocol, net, ipcMain, Menu } from 'electron'
 import { join, extname } from 'path'
 import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -8,6 +8,11 @@ import { registerAllIpcHandlers } from './ipc/index.js'
 import { initDatabase } from './database/index.js'
 import { initVectorDb } from './vectordb/index.js'
 import { registerAuthIpc } from './auth/index.js'
+import { WindowManager } from './windows/windowManager.js'
+import { makeBrowserWindowFactory } from './windows/createBrowserWindow.js'
+import { MenuInstaller } from './menu/installMenu.js'
+import type { MenuContext, MenuCommand, BookFormat } from './menu/commands.js'
+import { getBook } from './database/queries.js'
 
 // File types Rishi advertises in the OS "Open With" menu (see
 // electron-builder.yml `fileAssociations`). The OS routes a matching file
@@ -26,10 +31,11 @@ let rendererReady = false
 function deliverOpenFiles(paths: string[]): void {
   const filtered = paths.filter(isSupportedBookPath)
   if (filtered.length === 0) return
-  if (rendererReady && mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('open-files', filtered)
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.focus()
+  const lib = libraryWindowFromManager()
+  if (rendererReady && lib && !lib.isDestroyed()) {
+    lib.webContents.send('open-files', filtered)
+    if (lib.isMinimized()) lib.restore()
+    lib.focus()
   } else {
     pendingOpenFiles.push(...filtered)
   }
@@ -55,7 +61,13 @@ initMainSentry()
 // up — that's intentional; debug logging stays out of normal launches.)
 const isDebugBuild = process.env.RISHI_DEBUG === '1'
 
-let mainWindow: BrowserWindow | null = null
+let windowManager: WindowManager | null = null
+let menuInstaller: MenuInstaller | null = null
+// Per-window MenuContext, keyed by webContents.id. Persists across focus
+// switches so each window's menu is rebuilt from its own last reported state.
+const windowContexts = new Map<number, MenuContext>()
+// Mirror of openBookTitles for the Window menu's open-books submenu.
+const openBookTitles = new Map<number, string>()
 
 /**
  * Attach verbose lifecycle + console listeners to a webContents and open
@@ -110,46 +122,24 @@ function registerLocalFileProtocol(): void {
   })
 }
 
-function createWindow(): void {
-  mainWindow = new BrowserWindow({
-    width: 1024,
-    height: 770,
-    minWidth: 800,
-    minHeight: 600,
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 15, y: 10 },
-    show: false,
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
-      contextIsolation: true,
-      nodeIntegration: false,
-      // epub.js creates about:srcdoc iframes that need script execution.
-      // webSecurity must be false so Chromium doesn't sandbox those frames.
-      // Security is maintained via contextIsolation + preload + CSP.
-      webSecurity: false
-    }
-  })
+function libraryWindowFromManager(): BrowserWindow | null {
+  const w = windowManager?.getLibrary()
+  return (w as unknown as BrowserWindow | null) ?? null
+}
 
-  mainWindow.on('ready-to-show', () => {
-    mainWindow?.show()
-  })
-
-  // Flush any file paths buffered before the renderer subscribed (first-launch
-  // from Finder/Explorer, or any open-file event that arrived during startup).
-  mainWindow.webContents.once('did-finish-load', () => {
+function attachLibraryWindowSideEffects(win: BrowserWindow): void {
+  // Drain buffered open-file paths after the renderer finishes loading.
+  win.webContents.once('did-finish-load', () => {
     rendererReady = true
     if (pendingOpenFiles.length > 0) {
       const paths = pendingOpenFiles.splice(0)
-      mainWindow?.webContents.send('open-files', paths)
+      win.webContents.send('open-files', paths)
     }
   })
 
-  if (mainWindow) attachDebugInstrumentation(mainWindow, 'main')
+  attachDebugInstrumentation(win, 'main')
 
-  mainWindow.webContents.setWindowOpenHandler((details) => {
-    // No more in-app OAuth popups — auth runs via system browser + deep-link.
-    // Anything that opens a window goes to the system browser.
+  win.webContents.setWindowOpenHandler((details) => {
     if (
       details.url.startsWith('http:') ||
       details.url.startsWith('https:') ||
@@ -160,29 +150,94 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  // Instrument OAuth popups (Clerk, Google, etc.) when debugging the
-  // passkey/WebAuthn hang. `did-create-window` fires after Electron creates
-  // the child BrowserWindow from the `setWindowOpenHandler` 'allow' return.
-  mainWindow.webContents.on('did-create-window', (childWindow, { url }) => {
+  win.webContents.on('did-create-window', (childWindow, { url }) => {
     console.log('[main] popup created:', url)
     attachDebugInstrumentation(childWindow, 'oauth-popup')
   })
+}
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    // Production: serve the bundled renderer from a localhost HTTP server
-    // instead of `file://`. This is required for Clerk OAuth (Clerk's
-    // Frontend API rejects `file:` as a redirect URL scheme) and unblocks
-    // other web platform features that Chromium gates on file:// origins.
-    const rendererRoot = join(__dirname, '../renderer')
-    startRendererServer(rendererRoot)
-      .then((url) => mainWindow!.loadURL(url))
-      .catch((err) => {
-        console.error('[main] renderer server failed to start, falling back to file://', err)
-        mainWindow!.loadFile(join(rendererRoot, 'index.html'))
+function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
+  const factory = makeBrowserWindowFactory({ loadUrl, preloadPath })
+  windowManager = new WindowManager(factory)
+  menuInstaller = new MenuInstaller(
+    (template) => Menu.setApplicationMenu(Menu.buildFromTemplate(template)),
+    (cmd: MenuCommand) => {
+      const focused = BrowserWindow.getFocusedWindow()
+      if (focused) focused.webContents.send('menu:command', cmd)
+    }
+  )
+
+  app.on('browser-window-focus', (_e, win) => {
+    const ctx = windowContexts.get(win.webContents.id) ?? defaultLibraryContext()
+    menuInstaller!.setContext(ctx)
+  })
+
+  ipcMain.on('menu:setContext', (event, partial: Partial<MenuContext>) => {
+    const id = event.sender.id
+    const merged = mergeContext(windowContexts.get(id), partial)
+    windowContexts.set(id, merged)
+    if (BrowserWindow.fromWebContents(event.sender) === BrowserWindow.getFocusedWindow()) {
+      menuInstaller!.setContext(merged)
+    }
+  })
+
+  ipcMain.handle('window:openBook', async (_e, { bookId }: { bookId: number }) => {
+    const w = windowManager!.openBook(bookId) as unknown as BrowserWindow
+    // Pre-seed the book window's menu context from the DB (better-sqlite3
+    // sync read) so the menu shows the right format-specific items the first
+    // time it focuses, before the renderer's setMenuContext lands.
+    const row = getBook(bookId)
+    if (row) {
+      windowContexts.set(w.webContents.id, {
+        kind: 'book',
+        bookId,
+        format: row.kind as BookFormat,
+        title: row.title,
+        tocOpen: false,
+        thumbsOpen: false,
+        dualPage: false,
+        isReading: false,
+        theme: 'light',
+        recentBooks: [],
+        openBookTitles: openBookTitlesArray(),
+        bookmarks: []
       })
+      openBookTitles.set(bookId, row.title)
+    }
+  })
+
+  ipcMain.handle('window:closeBook', async (_e, { bookId }: { bookId: number }) => {
+    windowManager!.closeBook(bookId)
+    openBookTitles.delete(bookId)
+  })
+
+  ipcMain.handle('window:focusLibrary', async () => {
+    const lib = windowManager!.openLibrary() as unknown as BrowserWindow
+    if (lib.isMinimized()) lib.restore()
+    lib.focus()
+  })
+
+  ipcMain.handle('window:list', async () => {
+    return openBookTitlesArray()
+  })
+}
+
+function openBookTitlesArray(): { bookId: number; title: string }[] {
+  return Array.from(openBookTitles, ([bookId, title]) => ({ bookId, title }))
+}
+
+function defaultLibraryContext(): MenuContext {
+  return {
+    kind: 'library',
+    theme: 'light',
+    recentBooks: [],
+    openBookTitles: openBookTitlesArray()
   }
+}
+
+function mergeContext(prev: MenuContext | undefined, partial: Partial<MenuContext>): MenuContext {
+  if (!prev) return { ...defaultLibraryContext(), ...(partial as object) } as MenuContext
+  return { ...prev, ...(partial as object) } as MenuContext
 }
 
 // Single-instance lock so a second launch focuses the existing window
@@ -193,9 +248,10 @@ if (!gotTheLock) {
   app.on('second-instance', (_event, argv) => {
     // Windows/Linux deliver "Open With" file paths via argv on a second launch.
     deliverOpenFiles(argv.slice(1).filter((a) => !a.startsWith('-')))
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.focus()
+    const lib = libraryWindowFromManager()
+    if (lib) {
+      if (lib.isMinimized()) lib.restore()
+      lib.focus()
     }
   })
 }
@@ -228,13 +284,32 @@ app.whenReady().then(async () => {
     deliverOpenFiles(process.argv.slice(1).filter((a) => !a.startsWith('-')))
   }
 
-  createWindow()
+  const preloadPath = join(__dirname, '../preload/index.js')
+  let loadUrl: string
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    loadUrl = process.env['ELECTRON_RENDERER_URL'] as string
+  } else {
+    const rendererRoot = join(__dirname, '../renderer')
+    try {
+      loadUrl = await startRendererServer(rendererRoot)
+    } catch (err) {
+      console.error('[main] renderer server failed to start, falling back to file://', err)
+      loadUrl = `file://${join(rendererRoot, 'index.html')}`
+    }
+  }
 
-  registerAuthIpc(() => mainWindow)
+  bootstrapMenuAndWindows(loadUrl, preloadPath)
+  const libWin = windowManager!.openLibrary() as unknown as BrowserWindow
+  attachLibraryWindowSideEffects(libWin)
+  menuInstaller!.setContext(defaultLibraryContext())
+
+  registerAuthIpc(() => libraryWindowFromManager())
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
+      const w = windowManager!.openLibrary() as unknown as BrowserWindow
+      attachLibraryWindowSideEffects(w)
+      menuInstaller!.setContext(defaultLibraryContext())
     }
   })
 })
@@ -248,5 +323,3 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   void stopRendererServer()
 })
-
-export { mainWindow }
