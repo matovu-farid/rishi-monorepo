@@ -11,6 +11,7 @@ import { getBook, convertFileSrc } from '@/lib/api'
 const PdfView = React.lazy(() => import('@/components/pdf/PdfView'))
 const EpubView = React.lazy(() => import('@/components/epub/EpubView'))
 const MobiView = React.lazy(() => import('@/components/mobi/MobiView'))
+const Azw3View = React.lazy(() => import('@/components/azw3/Azw3View'))
 
 export const Route = createLazyFileRoute('/books/$id')({
   component: () => <BookView />
@@ -73,6 +74,7 @@ function BookView(): React.JSX.Element {
       )}
       {book?.kind === 'epub' && <EpubView key={book.id} book={book} />}
       {book?.kind === 'mobi' && <MobiView key={book.id} book={book} />}
+      {book?.kind === 'azw3' && <Azw3View key={book.id} book={book} />}
     </React.Suspense>
   )
 }

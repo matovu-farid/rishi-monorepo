@@ -39,6 +39,7 @@ const electronAPI: ElectronAPI = {
   getBookData: (path: string) => ipcRenderer.invoke('formats:getBookData', path),
   getPdfData: (path: string) => ipcRenderer.invoke('formats:getPdfData', path),
   getMobiData: (path: string) => ipcRenderer.invoke('formats:getMobiData', path),
+  getAzw3Data: (path: string) => ipcRenderer.invoke('formats:getAzw3Data', path),
   getMobiChapter: (path: string, chapterIndex: number) =>
     ipcRenderer.invoke('formats:getMobiChapter', path, chapterIndex),
   getMobiChapterCount: (path: string) => ipcRenderer.invoke('formats:getMobiChapterCount', path),

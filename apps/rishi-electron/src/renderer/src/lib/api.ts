@@ -248,6 +248,9 @@ export async function getPdfData(params: { path: string }): Promise<BookData> {
 export async function getMobiData(params: { path: string }): Promise<BookData> {
   return api().getMobiData(params.path)
 }
+export async function getAzw3Data(params: { path: string }): Promise<BookData> {
+  return api().getAzw3Data(params.path)
+}
 export async function getMobiChapter(params: {
   path: string
   chapterIndex: number

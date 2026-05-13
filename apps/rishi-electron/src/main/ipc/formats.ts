@@ -584,6 +584,53 @@ async function extractMobiData(filePath: string): Promise<BookDataResult> {
 }
 
 /**
+ * Extract metadata from an AZW3 (Kindle KF8) file. AZW3 uses the same PDB
+ * container as MOBI, so the existing MOBI header / EXTH parsers extract
+ * title, author, publisher, and cover bytes. The renderer is responsible
+ * for actually rendering the KF8 payload (via foliate-js).
+ */
+async function extractAzw3Data(filePath: string): Promise<BookDataResult> {
+  const data = await fs.readFile(filePath)
+  const buf = Buffer.from(data)
+
+  let title: string | null = null
+  let author: string | null = null
+  let publisher: string | null = null
+  let cover: number[] = []
+  let coverMimeType: string | null = null
+
+  try {
+    const parsed = parseMobiMetadata(buf)
+    title = parsed.title
+    author = parsed.author
+    publisher = parsed.publisher
+    cover = parsed.cover
+    coverMimeType = parsed.coverMimeType
+  } catch {
+    // Some KF8-only files have headers MOBI parsers don't fully understand;
+    // we fall back to filename-derived metadata and let foliate-js do the
+    // heavy lifting in the renderer.
+  }
+
+  const ext = path.extname(filePath)
+  const basename = path.basename(filePath, ext)
+  const md5Hash = crypto.createHash('md5').update(filePath).digest('hex')
+
+  return {
+    id: md5Hash,
+    kind: 'azw3',
+    cover,
+    title: title ?? basename,
+    author,
+    publisher,
+    filepath: filePath,
+    location: '0',
+    coverKind: coverMimeType ?? 'fallback',
+    version: 1
+  }
+}
+
+/**
  * Get all chapters from a MOBI file.
  */
 async function getMobiChapters(filePath: string): Promise<string[]> {
@@ -664,6 +711,17 @@ export function registerFormatHandlers(): void {
     } catch (error) {
       throw new Error(
         `Failed to extract MOBI data from "${filePath}": ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+  })
+
+  // --- AZW3 (Kindle KF8) ---
+  ipcMain.handle('formats:getAzw3Data', async (_event, filePath: string) => {
+    try {
+      return await extractAzw3Data(filePath)
+    } catch (error) {
+      throw new Error(
+        `Failed to extract AZW3 data from "${filePath}": ${error instanceof Error ? error.message : String(error)}`
       )
     }
   })

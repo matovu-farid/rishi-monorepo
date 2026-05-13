@@ -28,6 +28,7 @@ export interface ElectronAPI {
   getBookData: (path: string) => Promise<BookData>
   getPdfData: (path: string) => Promise<BookData>
   getMobiData: (path: string) => Promise<BookData>
+  getAzw3Data: (path: string) => Promise<BookData>
   getMobiChapter: (path: string, chapterIndex: number) => Promise<string>
   getMobiChapterCount: (path: string) => Promise<number>
   getMobiText: (path: string, chapterIndex: number) => Promise<string[]>
