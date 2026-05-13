@@ -166,6 +166,24 @@ export function PdfView({
     e?.send('window:setBookTitle', { bookId: book.id, title: book.title })
   }, [book.id, book.title])
 
+  // Mirror TTS play state into the menu so the Reader > Read Aloud label
+  // flips to "Stop Read Aloud" while playback is active.
+  useEffect(() => {
+    const e = (
+      window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
+    ).electron
+    if (!e) return
+    const unsub = usePlayerStore.subscribe(
+      (s) => s.playingState,
+      (state) => {
+        e.setMenuContext({ isReading: state === 'playing' })
+      }
+    )
+    // Initial publish so the menu reflects the current state on mount.
+    e.setMenuContext({ isReading: usePlayerStore.getState().playingState === 'playing' })
+    return unsub
+  }, [])
+
   // Configure PDF.js options with CDN fallback for better font and image support
   const pdfOptions = useMemo<DocumentInitParameters>(
     () => ({
@@ -185,6 +203,18 @@ export function PdfView({
   useEffect(() => {
     isDualPageRef.current = isDualPage
   }, [isDualPage])
+
+  // Mirror reader UI state into the native menu context so the View menu's
+  // checkmarks (Show TOC, Show Thumbnails, Dual Page) flip with the actual
+  // reader state — not whatever value happened to be in the menu when the
+  // window was last focused.
+  useEffect(() => {
+    const e = (
+      window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
+    ).electron
+    if (!e) return
+    e.setMenuContext({ tocOpen, thumbsOpen: thumbOpen, dualPage: isDualPage })
+  }, [tocOpen, thumbOpen, isDualPage])
 
   // Mount the paragraph atoms so they're available for the player control
 

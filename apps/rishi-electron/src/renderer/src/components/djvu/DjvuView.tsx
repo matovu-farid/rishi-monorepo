@@ -119,6 +119,33 @@ export function DjvuView({ book }: { book: Book }) {
     e?.send('window:setBookTitle', { bookId: book.id, title: book.title })
   }, [book.id, book.title])
 
+  // Mirror TOC sheet state into the menu context so the View > Show TOC
+  // checkbox flips with the actual sidebar state.
+  useEffect(() => {
+    const e = (
+      window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
+    ).electron
+    if (!e) return
+    e.setMenuContext({ tocOpen })
+  }, [tocOpen])
+
+  // Mirror TTS play state into the menu so the Reader > Read Aloud label
+  // flips to "Stop Read Aloud" while playback is active.
+  useEffect(() => {
+    const e = (
+      window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
+    ).electron
+    if (!e) return
+    const unsub = usePlayerStore.subscribe(
+      (s) => s.playingState,
+      (state) => {
+        e.setMenuContext({ isReading: state === 'playing' })
+      }
+    )
+    e.setMenuContext({ isReading: usePlayerStore.getState().playingState === 'playing' })
+    return unsub
+  }, [])
+
   // Load total page count on mount
   useEffect(() => {
     mountedRef.current = true
