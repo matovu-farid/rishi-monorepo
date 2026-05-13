@@ -313,13 +313,23 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
       const body = doc.body
       // Column-aware stride: CSS multicol places a `column-gap` between every
       // pair of adjacent columns, INCLUDING between the last column of page N
-      // and the first column of page N+1. So the per-page stride is
-      // `clientWidth + columnGap`, not `viewportWidth`.
+      // and the first column of page N+1. Body also has horizontal padding
+      // (`box-sizing: border-box`) so the stride is
+      // `clientWidth - paddingLeft - paddingRight + columnGap` — see
+      // computePageStep in ./pagination.
       const cs = body ? iframeWin.getComputedStyle(body) : null
       const columnGap = cs ? parseFloat(cs.columnGap || '0') || 0 : 0
+      const paddingLeft = cs ? parseFloat(cs.paddingLeft || '0') || 0 : 0
+      const paddingRight = cs ? parseFloat(cs.paddingRight || '0') || 0 : 0
       const clientWidth = body?.clientWidth ?? 0
-      const pageStep = computePageStep(clientWidth, columnGap)
-      const total = measurePageCount(body?.scrollWidth ?? 0, clientWidth, columnGap)
+      const pageStep = computePageStep(clientWidth, columnGap, paddingLeft, paddingRight)
+      const total = measurePageCount(
+        body?.scrollWidth ?? 0,
+        clientWidth,
+        columnGap,
+        paddingLeft,
+        paddingRight
+      )
       setPagesInCurrentChapter(total)
 
       // Resolve any pending cross-chapter navigation request.
@@ -359,14 +369,23 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
       cancelAnimationFrame(raf)
       raf = win.requestAnimationFrame(() => {
         const body = doc.body
-        // Re-read column-gap from computed style on every resize; CSS variables
-        // and media queries can change it. The page stride is
-        // `clientWidth + columnGap` — see computePageStep / Azw3View bug notes.
+        // Re-read column-gap and horizontal padding from computed style on
+        // every resize; CSS variables and media queries can change either.
+        // The page stride is `clientWidth - paddingLeft - paddingRight +
+        // columnGap` — see computePageStep / Azw3View bug notes.
         const cs = win.getComputedStyle(body)
         const columnGap = parseFloat(cs.columnGap || '0') || 0
+        const paddingLeft = parseFloat(cs.paddingLeft || '0') || 0
+        const paddingRight = parseFloat(cs.paddingRight || '0') || 0
         const clientWidth = body.clientWidth
-        const pageStep = computePageStep(clientWidth, columnGap)
-        const total = measurePageCount(body.scrollWidth, clientWidth, columnGap)
+        const pageStep = computePageStep(clientWidth, columnGap, paddingLeft, paddingRight)
+        const total = measurePageCount(
+          body.scrollWidth,
+          clientWidth,
+          columnGap,
+          paddingLeft,
+          paddingRight
+        )
         setPagesInCurrentChapter(total)
         applyScrollToPage(doc, win, pageWithinChapter, total, pageStep)
       })
@@ -380,13 +399,15 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
 
   /** Read the live per-page stride from the iframe's computed style. We read
    *  this fresh on every call instead of caching it because CSS variables and
-   *  media queries can change the column-gap on resize. */
+   *  media queries can change the column-gap or horizontal padding on resize. */
   const readPageStep = useCallback((doc: Document, win: Window): number => {
     const body = doc.body
     if (!body) return 1
     const cs = win.getComputedStyle(body)
     const columnGap = parseFloat(cs.columnGap || '0') || 0
-    return computePageStep(body.clientWidth, columnGap)
+    const paddingLeft = parseFloat(cs.paddingLeft || '0') || 0
+    const paddingRight = parseFloat(cs.paddingRight || '0') || 0
+    return computePageStep(body.clientWidth, columnGap, paddingLeft, paddingRight)
   }, [])
 
   const goNextPage = useCallback(() => {
@@ -479,7 +500,14 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
           // resize, and the TTS subscription is registered once per chapter.
           const cs = win.getComputedStyle(body)
           const columnGap = parseFloat(cs.columnGap || '0') || 0
-          const pageStep = computePageStep(body.clientWidth, columnGap)
+          const paddingLeft = parseFloat(cs.paddingLeft || '0') || 0
+          const paddingRight = parseFloat(cs.paddingRight || '0') || 0
+          const pageStep = computePageStep(
+            body.clientWidth,
+            columnGap,
+            paddingLeft,
+            paddingRight
+          )
           // Compute the column page that contains this element's left edge.
           // Snap to the column page boundary using pageStep (not viewport
           // width) so we don't accumulate the column-gap error every time
