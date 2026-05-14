@@ -51,7 +51,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
 
   return (
     <div className="flex flex-col gap-1">
-      {voiceError && <p className="text-xs text-red-500 px-1">{voiceError}</p>}
+      {voiceError ? <p className="text-xs text-red-500 px-1">{voiceError}</p> : null}
       <div className="flex items-center gap-1">
         <input
           type="text"

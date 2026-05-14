@@ -61,7 +61,8 @@ test('book window windowIdentity is book; library is library', async () => {
     const identities = await Promise.all(
       allWins.map(async (p) => {
         return await p.evaluate(
-          () => (window as unknown as { electron: { windowIdentity: unknown } }).electron.windowIdentity
+          () =>
+            (window as unknown as { electron: { windowIdentity: unknown } }).electron.windowIdentity
         )
       })
     )

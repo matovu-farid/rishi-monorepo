@@ -38,8 +38,7 @@ function PageComponentInner({
   // Only ONE page has the active highlight at any moment. Other pages should
   // be inert. Cheap math, no extra subscription.
   const isMyHighlightedPage =
-    isHighlighting &&
-    Math.floor(Number(highlightedIdx) / PARAGRAPH_INDEX_PER_PAGE) === pageNumber
+    isHighlighting && Math.floor(Number(highlightedIdx) / PARAGRAPH_INDEX_PER_PAGE) === pageNumber
 
   // Subscribe to the *resolved paragraph object* (or null) instead of the
   // whole paragraphs array. When `isMyHighlightedPage` is false the selector

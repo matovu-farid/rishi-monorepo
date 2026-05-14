@@ -145,7 +145,9 @@ export const useTutorialStore = create<TutorialState>()(
         persistTourCompleted(false)
         try {
           if (typeof localStorage !== 'undefined') localStorage.removeItem(HINTS_SEEN_KEY)
-        } catch {}
+        } catch {
+          // no-op
+        }
       },
 
       dismissHint: (hintId: string) => {

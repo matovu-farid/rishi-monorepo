@@ -9,7 +9,7 @@ import {
   getPreviousViewParagraphs
 } from '@/modules/epubwrapper'
 import { usePlayerStore } from '@/stores/playerStore'
-import { type BookOutline } from '@/lib/api'
+import type { BookOutline } from '@/lib/api'
 import { getBookImportService } from '@/services'
 import { useChatStore } from './chatStore'
 import { getVoiceChatService } from '@/services'
@@ -117,7 +117,7 @@ export function publishCurrentEpubParagraphs() {
         }))
         usePlayerStore.getState().setNextPageParagraphs(mapped)
       })
-      .catch((err) => console.warn('[epub] republish next paragraph fetch failed:', err))
+      .catch((err: unknown) => console.warn('[epub] republish next paragraph fetch failed:', err))
 
     void getPreviousViewParagraphs(r)
       .then((prevParagraphs) => {
@@ -127,7 +127,7 @@ export function publishCurrentEpubParagraphs() {
         }))
         usePlayerStore.getState().setPrevPageParagraphs(mapped)
       })
-      .catch((err) => console.warn('[epub] republish prev paragraph fetch failed:', err))
+      .catch((err: unknown) => console.warn('[epub] republish prev paragraph fetch failed:', err))
   }, 300)
 }
 
@@ -158,7 +158,7 @@ export function initEpubSubscriptions(): (() => void)[] {
         ) {
           void getAllParagraphsForBook(paragraphRendition, bookId)
             .then((paragraphs) => getBookImportService().indexBook(Number(bookId), paragraphs))
-            .catch((err) => captureError(err, { operation: 'epub', step: 'index_book' }))
+            .catch((err: unknown) => captureError(err, { operation: 'epub', step: 'index_book' }))
         }
       },
       {
@@ -200,7 +200,7 @@ export function initEpubSubscriptions(): (() => void)[] {
               }))
               usePlayerStore.getState().setNextPageParagraphs(mapped)
             })
-            .catch((err) => console.warn('[epub] next paragraph fetch failed:', err))
+            .catch((err: unknown) => console.warn('[epub] next paragraph fetch failed:', err))
 
           void getPreviousViewParagraphs(r)
             .then((prevParagraphs) => {
@@ -210,7 +210,7 @@ export function initEpubSubscriptions(): (() => void)[] {
               }))
               usePlayerStore.getState().setPrevPageParagraphs(mapped)
             })
-            .catch((err) => console.warn('[epub] prev paragraph fetch failed:', err))
+            .catch((err: unknown) => console.warn('[epub] prev paragraph fetch failed:', err))
         }, 50)
       },
       { equalityFn: (a, b) => a.rendition === b.rendition && a.location === b.location }

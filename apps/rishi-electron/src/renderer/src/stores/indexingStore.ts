@@ -21,7 +21,7 @@ interface IndexingState {
   progress: (bookId: number) => number
 }
 
-export const useIndexingStore = create<IndexingState>((set, get) => ({
+export const useIndexingStore = create<IndexingState>()((set, get) => ({
   byBookId: {},
 
   start: (bookId, total) =>

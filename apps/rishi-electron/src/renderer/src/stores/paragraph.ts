@@ -1,4 +1,4 @@
-import { ParagraphWithIndex } from '@/models/player_control'
+import type { ParagraphWithIndex } from '@/models/player_control'
 import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
 

@@ -19,7 +19,7 @@ export const Route = createLazyFileRoute('/books/$id')({
 })
 
 function BookView(): React.JSX.Element {
-  const { id } = Route.useParams() as { id: string }
+  const { id } = Route.useParams()
   const setBook = usePdfStore((s) => s.setBook)
 
   const {
@@ -32,7 +32,6 @@ function BookView(): React.JSX.Element {
     queryFn: async () => {
       const book = await getBook({ bookId: Number(id) })
       if (!book) throw new Error('Book not found')
-      setBook(book)
       return book
     },
     // Keep the metadata around so reopening within a session is instant.
@@ -40,6 +39,13 @@ function BookView(): React.JSX.Element {
     staleTime: Infinity,
     gcTime: 5 * 60 * 1000
   })
+
+  // Push the loaded book into the global store as a side-effect — kept out
+  // of queryFn so the query closure stays free of `setBook` and the cache
+  // can replay without re-running setters.
+  useEffect(() => {
+    if (book) setBook(book)
+  }, [book, setBook])
 
   const setBookNavigationState = usePdfStore((s) => s.setBookNavigationState)
   useEffect(() => {
@@ -49,7 +55,7 @@ function BookView(): React.JSX.Element {
       useEpubStore.getState().reset()
       usePageTracker.getState().reset()
     }
-  }, [])
+  }, [setBook, setBookNavigationState])
 
   if (isError) {
     return <div className="w-full h-full place-items-center grid">{error.message}</div>
@@ -74,9 +80,7 @@ function BookView(): React.JSX.Element {
         <PdfView filepath={convertFileSrc(book.filepath)} key={book.id.toString()} book={book} />
       )}
       {book?.kind === 'epub' && <EpubView key={book.id} book={book} />}
-      {(book?.kind === 'mobi' || book?.kind === 'azw3') && (
-        <Azw3View key={book.id} book={book} />
-      )}
+      {(book?.kind === 'mobi' || book?.kind === 'azw3') && <Azw3View key={book.id} book={book} />}
     </React.Suspense>
   )
 }

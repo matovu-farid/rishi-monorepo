@@ -25,11 +25,11 @@ function TocEntry({ data, onNavigate, depth }: TocEntryProps) {
       >
         {data.label}
       </button>
-      {data.subitems &&
-        data.subitems.length > 0 &&
-        data.subitems.map((item, i) => (
-          <TocEntry key={i} data={item} onNavigate={onNavigate} depth={depth + 1} />
-        ))}
+      {data.subitems && data.subitems.length > 0
+        ? data.subitems.map((item, i) => (
+            <TocEntry key={i} data={item} onNavigate={onNavigate} depth={depth + 1} />
+          ))
+        : null}
     </div>
   )
 }
@@ -62,7 +62,7 @@ export function TableOfContents({ toc, onNavigate, isOpen, onClose }: TableOfCon
 
   return (
     <AnimatePresence>
-      {isOpen && (
+      {isOpen ? (
         <>
           {/* Dark backdrop overlay */}
           <motion.div
@@ -111,7 +111,7 @@ export function TableOfContents({ toc, onNavigate, isOpen, onClose }: TableOfCon
             </div>
           </motion.div>
         </>
-      )}
+      ) : null}
     </AnimatePresence>
   )
 }

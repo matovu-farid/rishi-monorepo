@@ -75,7 +75,7 @@ export function installErrorDumpHandlers(): void {
       })
       .join(' ')
 
-    const firstError = args.find((a) => a instanceof Error) as Error | undefined
+    const firstError = args.find((a) => a instanceof Error)
 
     dumpError({
       source: 'frontend',

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useChat } from '@/hooks/useChat'
@@ -37,17 +37,23 @@ export function ChatPanel({
     void rendition?.display(pageNumber)
   }
 
-  // Build the loading message placeholder
-  const loadingMessage: Message | null = isLoading
-    ? {
-        id: '__loading__',
-        conversationId: '',
-        role: 'assistant',
-        content: '',
-        sourceChunks: null,
-        createdAt: Date.now()
-      }
-    : null
+  // Build the loading message placeholder. createdAt is unused by ChatMessage
+  // so we use 0 — Date.now() is impure and can't be called during render
+  // (react-hooks/purity rule).
+  const loadingMessage: Message | null = useMemo(
+    () =>
+      isLoading
+        ? {
+            id: '__loading__',
+            conversationId: '',
+            role: 'assistant',
+            content: '',
+            sourceChunks: null,
+            createdAt: 0
+          }
+        : null,
+    [isLoading]
+  )
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -61,7 +67,7 @@ export function ChatPanel({
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <h3 className="text-base font-semibold mb-1">Ask about this book</h3>
               <p className="text-sm text-muted-foreground">
-                Ask a question and get answers grounded in the book's content.
+                Ask a question and get answers grounded in the book&apos;s content.
               </p>
             </div>
           ) : (
@@ -69,15 +75,15 @@ export function ChatPanel({
               {messages.map((msg) => (
                 <ChatMessage key={msg.id} message={msg} onSourceNavigate={handleSourceNavigate} />
               ))}
-              {loadingMessage && (
+              {loadingMessage ? (
                 <ChatMessage message={loadingMessage} onSourceNavigate={handleSourceNavigate} />
-              )}
+              ) : null}
               <div ref={scrollEndRef} />
             </div>
           )}
         </ScrollArea>
 
-        {error && <p className="px-4 py-1 text-sm text-destructive">{error}</p>}
+        {error ? <p className="px-4 py-1 text-sm text-destructive">{error}</p> : null}
 
         <div className="px-4 pb-4 pt-2">
           <ChatInput onSend={sendMessage} disabled={isLoading} />

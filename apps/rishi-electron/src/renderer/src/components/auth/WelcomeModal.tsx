@@ -18,8 +18,8 @@ export function WelcomeModal() {
           <h2 className="text-2xl font-bold">Welcome to Rishi</h2>
         </div>
         <p className="text-gray-600 mb-6">
-          Your AI-powered reading companion. Import books, get summaries, chat about what you're
-          reading, and listen with text-to-speech.
+          Your AI-powered reading companion. Import books, get summaries, chat about what
+          you&apos;re reading, and listen with text-to-speech.
         </p>
         <div className="flex flex-col gap-3">
           <button

@@ -24,7 +24,11 @@ export function getCurrrentPageNumber(window: Window): number {
     return isVisible
   })
   const canvasData = visibleCanvasDivs.map((canvasDiv) => {
-    const pageNumber = parseInt(canvasDiv.dataset.pageNumber || '1')
+    // Treat both missing and empty `data-page-number` as "no value", so we
+    // never feed `parseInt('')` (which yields NaN). A real page number is
+    // always a non-empty string of digits.
+    const rawPageNumber = canvasDiv.dataset.pageNumber
+    const pageNumber = parseInt(rawPageNumber !== undefined && rawPageNumber !== '' ? rawPageNumber : '1')
     const canvas = canvasDiv.querySelector<HTMLCanvasElement>('canvas')
     return {
       pageNumber,

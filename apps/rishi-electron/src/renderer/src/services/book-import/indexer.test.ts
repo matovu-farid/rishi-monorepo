@@ -48,7 +48,7 @@ export function makeEmbed(opts?: {
   failNTimes?: number
 }): (params: EmbedParam[]) => Promise<EmbedResult[]> {
   let failsLeft = opts?.failNTimes ?? 0
-  return vi.fn(async (params) => {
+  return vi.fn(async (params: EmbedParam[]) => {
     if (failsLeft > 0) {
       failsLeft -= 1
       throw new Error('embed failed')
@@ -74,11 +74,8 @@ describe('indexBook — skip when fully indexed', () => {
     const embed = makeEmbed()
     const events: ImportProgressEvent[] = []
 
-    await indexBook(
-      { db, rag, embed, embedBatchSize: 2 },
-      42,
-      samplePageData,
-      (e) => events.push(e)
+    await indexBook({ db, rag, embed, embedBatchSize: 2 }, 42, samplePageData, (e) =>
+      events.push(e)
     )
 
     expect(savePageDataCalls).toEqual([])
@@ -95,11 +92,8 @@ describe('indexBook — full pipeline (chunks + vectors)', () => {
     const embed = makeEmbed()
     const events: ImportProgressEvent[] = []
 
-    await indexBook(
-      { db, rag, embed, embedBatchSize: 2 },
-      42,
-      samplePageData,
-      (e) => events.push(e)
+    await indexBook({ db, rag, embed, embedBatchSize: 2 }, 42, samplePageData, (e) =>
+      events.push(e)
     )
 
     expect(savePageDataCalls).toHaveLength(2)
@@ -120,11 +114,8 @@ describe('indexBook — re-embed regression (chunks exist, vectors missing)', ()
     const embed = makeEmbed()
     const events: ImportProgressEvent[] = []
 
-    await indexBook(
-      { db, rag, embed, embedBatchSize: 2 },
-      42,
-      samplePageData,
-      (e) => events.push(e)
+    await indexBook({ db, rag, embed, embedBatchSize: 2 }, 42, samplePageData, (e) =>
+      events.push(e)
     )
 
     expect(savePageDataCalls).toEqual([])
@@ -145,12 +136,7 @@ describe('indexBook — embed failure is swallowed', () => {
     const events: ImportProgressEvent[] = []
 
     await expect(
-      indexBook(
-        { db, rag, embed, embedBatchSize: 2 },
-        42,
-        samplePageData,
-        (e) => events.push(e)
-      )
+      indexBook({ db, rag, embed, embedBatchSize: 2 }, 42, samplePageData, (e) => events.push(e))
     ).resolves.toBeUndefined()
 
     expect(savePageDataCalls).toHaveLength(2) // chunks were saved
@@ -187,11 +173,8 @@ describe('indexBook — emits `indexed: ok=false` on embed failure', () => {
     const embed = makeEmbed({ failNTimes: 1 })
     const events: ImportProgressEvent[] = []
 
-    await indexBook(
-      { db, rag, embed, embedBatchSize: 2 },
-      42,
-      samplePageData,
-      (e) => events.push(e)
+    await indexBook({ db, rag, embed, embedBatchSize: 2 }, 42, samplePageData, (e) =>
+      events.push(e)
     )
 
     const indexed = events.find((e) => e.kind === 'indexed')

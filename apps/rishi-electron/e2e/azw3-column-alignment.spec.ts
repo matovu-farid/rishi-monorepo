@@ -1,11 +1,5 @@
 import { test, expect } from '@playwright/test'
-import {
-  AZW3_FIXTURE,
-  closeApp,
-  importBook,
-  launchApp,
-  openBook
-} from './helpers/electron-app'
+import { AZW3_FIXTURE, closeApp, importBook, launchApp, openBook } from './helpers/electron-app'
 
 // Regression for an accumulating column-alignment drift: each page-turn
 // should leave the leftmost column at exactly the same x-offset inside

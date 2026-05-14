@@ -1,6 +1,6 @@
 import { useRef, useEffect } from 'react'
 import { Thumbnail } from 'react-pdf'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { useThumbnailVirtualizer } from '../hooks/useThumbnailVirtualizer'
 import { usePdfStore } from '@/stores/pdfStore'
 import { cn } from '@/lib/utils'
 
@@ -20,16 +20,30 @@ export function ThumbnailSidebar({
   const pdfProxy = usePdfStore((s) => s.pdfDocumentProxy)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const thumbVirtualizer = useVirtualizer({
+  const thumbVirtualizer = useThumbnailVirtualizer({
     count: numPages,
     getScrollElement: () => containerRef.current,
     estimateSize: () => THUMBNAIL_HEIGHT + GAP,
     overscan: 3
   })
 
+  // Snapshot the latest virtualizer + current page in refs so the
+  // mount-only scroll-to effect doesn't have to depend on values that
+  // change every render (`thumbVirtualizer` identity churns each render
+  // and `currentPage` advances as the user reads — depending on them
+  // would re-fire the auto-scroll on every page turn, hijacking the
+  // sidebar's manual scroll position).
+  const thumbVirtualizerRef = useRef(thumbVirtualizer)
+  const currentPageRef = useRef(currentPage)
   useEffect(() => {
-    if (currentPage > 0) {
-      thumbVirtualizer.scrollToIndex(currentPage - 1, { align: 'center' })
+    thumbVirtualizerRef.current = thumbVirtualizer
+    currentPageRef.current = currentPage
+  })
+
+  useEffect(() => {
+    const page = currentPageRef.current
+    if (page > 0) {
+      thumbVirtualizerRef.current.scrollToIndex(page - 1, { align: 'center' })
     }
   }, [])
 

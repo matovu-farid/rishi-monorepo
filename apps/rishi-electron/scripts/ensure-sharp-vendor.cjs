@@ -4,8 +4,14 @@
 // downloader gets skipped on every install — leaving sharp's binding unable to dlopen
 // libvips-cpp.42.dylib at runtime. Detect and fix here.
 
+// Why: CommonJS-only post-install script
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const fs = require('node:fs')
+// Why: CommonJS-only post-install script
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const path = require('node:path')
+// Why: CommonJS-only post-install script
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { execFileSync } = require('node:child_process')
 
 const pnpmDir = path.join(__dirname, '..', 'node_modules', '.pnpm')

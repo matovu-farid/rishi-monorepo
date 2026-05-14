@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react'
+import type React from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 
 interface MenuProps {
@@ -30,7 +31,7 @@ export const Menu: React.FC<MenuProps> = ({
   const menuRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLDivElement>(null)
 
-  const isOpen = controlledOpen !== undefined ? controlledOpen : internalOpen
+  const isOpen = controlledOpen ?? internalOpen
 
   const handleClose = () => {
     if (controlledOpen === undefined) {
@@ -139,8 +140,8 @@ export const Menu: React.FC<MenuProps> = ({
             className="fixed z-[9999] border border-gray-200 rounded-md shadow-lg py-1 min-w-[160px] max-h-[300px] overflow-y-auto"
             style={{
               ...getMenuPosition(),
-              backgroundColor: theme?.background || '#ffffff',
-              color: theme?.color || '#000000',
+              backgroundColor: theme?.background ?? '#ffffff',
+              color: theme?.color ?? '#000000',
               borderColor: theme?.color ? `${theme.color}20` : '#e5e7eb'
             }}
           >

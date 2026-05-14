@@ -43,7 +43,9 @@ describe('createReaderCache — get/set/evict basics', () => {
     cache.set(1, { id: 'a' }, makeBytes(100))
     const first = cache.get(1)!.lastAccess
     // Busy-wait a tick so Date.now() advances even on fast hardware.
-    await new Promise((r) => setTimeout(r, 5))
+    await new Promise((r) => {
+      setTimeout(r, 5)
+    })
     const second = cache.get(1)!.lastAccess
     expect(second).toBeGreaterThan(first)
   })
@@ -69,15 +71,23 @@ describe('createReaderCache — LRU by entry count', () => {
     const c = { id: 'c' }
     const d = { id: 'd' }
     cache.set(1, a, makeBytes(10))
-    await new Promise((r) => setTimeout(r, 2))
+    await new Promise((r) => {
+      setTimeout(r, 2)
+    })
     cache.set(2, b, makeBytes(10))
-    await new Promise((r) => setTimeout(r, 2))
+    await new Promise((r) => {
+      setTimeout(r, 2)
+    })
     cache.set(3, c, makeBytes(10))
-    await new Promise((r) => setTimeout(r, 2))
+    await new Promise((r) => {
+      setTimeout(r, 2)
+    })
 
     // Touch #1 so #2 becomes the LRU.
     cache.get(1)
-    await new Promise((r) => setTimeout(r, 2))
+    await new Promise((r) => {
+      setTimeout(r, 2)
+    })
 
     cache.set(4, d, makeBytes(10))
 
@@ -140,9 +150,13 @@ describe('createReaderCache — total-byte budget', () => {
     const b = { id: 'b' }
     const c = { id: 'c' }
     cache.set(1, a, makeBytes(900))
-    await new Promise((r) => setTimeout(r, 2))
+    await new Promise((r) => {
+      setTimeout(r, 2)
+    })
     cache.set(2, b, makeBytes(900))
-    await new Promise((r) => setTimeout(r, 2))
+    await new Promise((r) => {
+      setTimeout(r, 2)
+    })
     // Total now 1800/2000. Adding 900 → 2700, must evict to fit.
     cache.set(3, c, makeBytes(900))
 
@@ -163,18 +177,19 @@ describe('createReaderCache — total-byte budget', () => {
 
 describe('createReaderCache — interaction', () => {
   it('count cap and byte cap compose without double-destroying', async () => {
-    const docs = [
-      { id: 'a' },
-      { id: 'b' },
-      { id: 'c' },
-      { id: 'd' }
-    ]
+    const docs = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]
     cache.set(1, docs[0], makeBytes(600))
-    await new Promise((r) => setTimeout(r, 2))
+    await new Promise((r) => {
+      setTimeout(r, 2)
+    })
     cache.set(2, docs[1], makeBytes(600))
-    await new Promise((r) => setTimeout(r, 2))
+    await new Promise((r) => {
+      setTimeout(r, 2)
+    })
     cache.set(3, docs[2], makeBytes(600))
-    await new Promise((r) => setTimeout(r, 2))
+    await new Promise((r) => {
+      setTimeout(r, 2)
+    })
     // Total 1800/2000, count 3/3. Adding a 4th 600B entry exceeds
     // both budgets — evict exactly one (the oldest), not two.
     cache.set(4, docs[3], makeBytes(600))

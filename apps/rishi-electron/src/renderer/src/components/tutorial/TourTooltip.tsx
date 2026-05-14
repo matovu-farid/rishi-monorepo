@@ -77,6 +77,8 @@ export function TourTooltip({
   }, [step.target, step.position])
 
   useEffect(() => {
+    // Why: measuring DOM rect into state — must run post-render to read layout
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     measure()
     let timer: ReturnType<typeof setTimeout>
     const handleResize = () => {
@@ -95,7 +97,7 @@ export function TourTooltip({
 
   return (
     <AnimatePresence mode="wait">
-      {pos && (
+      {pos ? (
         <motion.div
           key={step.target}
           className="fixed z-[60] bg-white text-gray-900 rounded-xl shadow-xl border border-gray-200 p-4 w-72"
@@ -141,7 +143,7 @@ export function TourTooltip({
             </div>
           </div>
         </motion.div>
-      )}
+      ) : null}
     </AnimatePresence>
   )
 }

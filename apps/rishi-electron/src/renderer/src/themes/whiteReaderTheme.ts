@@ -1,4 +1,4 @@
-import { ReaderTheme } from './commonReader'
+import type { ReaderTheme } from './commonReader'
 
 const whiteReaderTheme: ReaderTheme = {
   background: '#fff',

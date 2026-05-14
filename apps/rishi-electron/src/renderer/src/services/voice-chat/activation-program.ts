@@ -1,4 +1,5 @@
-import { Effect, Ref, Fiber, Duration, Cause, Exit } from 'effect'
+import type { Fiber } from 'effect'
+import { Effect, Ref, Duration, Cause, Exit } from 'effect'
 import {
   MicDeniedError,
   AuthFailedError,
@@ -83,7 +84,7 @@ export function isInterruptCause(err: unknown): boolean {
   if (err instanceof Error && err.message === '__VOICE_CHAT_INTERRUPTED__') return true
   // Belt-and-braces for unwrapped FiberFailure cases.
   if (typeof err === 'object' && err !== null && 'cause' in err) {
-    const c = (err as { cause: unknown }).cause
+    const c = err.cause
     if (Cause.isCause(c) && Cause.isInterruptedOnly(c)) return true
   }
   return false
@@ -274,7 +275,7 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
           const failures = Array.from(Cause.failures(cause))
           const first = failures.length > 0 ? failures[0] : null
           if (first) {
-            reject(toPublicError(first as ActivationError))
+            reject(toPublicError(first))
             return
           }
           // Defect — surface a generic ConnectFailedError-mapped Error.

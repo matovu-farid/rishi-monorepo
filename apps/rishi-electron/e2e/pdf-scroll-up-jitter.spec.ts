@@ -58,7 +58,9 @@ test('scrolling up across a page boundary does not jitter', async () => {
       const start = performance.now()
       while (performance.now() - start < 600) {
         out.push(el.scrollTop)
-        await new Promise((r) => setTimeout(r, 16))
+        await new Promise((r) => {
+          setTimeout(r, 16)
+        })
       }
       return { target, samples: out }
     })

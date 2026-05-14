@@ -1,4 +1,4 @@
-import React from 'react'
+import type React from 'react'
 import { Mic, MicOff } from 'lucide-react'
 import { useChatStore } from '@/stores/chatStore'
 import { useRequireAuth } from '@/hooks/useRequireAuth'

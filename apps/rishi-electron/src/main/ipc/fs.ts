@@ -1,7 +1,8 @@
-import { ipcMain, app } from 'electron'
+import { app } from 'electron'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import JSZip from 'jszip'
+import { handle } from '../../preload/ipc-contract.js'
 
 /**
  * Assert that the given file/directory path is inside the app's userData directory.
@@ -25,7 +26,7 @@ const SIZE_LIMITS: Record<string, { warn: number; block: number }> = {
 }
 
 export function registerFsHandlers(): void {
-  ipcMain.handle('fs:checkFileSize', async (_event, filePath: string, format: string) => {
+  handle('fs:checkFileSize', async (_event, filePath, format) => {
     try {
       const stat = await fs.stat(filePath)
       const limits = SIZE_LIMITS[format] ?? SIZE_LIMITS.default
@@ -43,7 +44,7 @@ export function registerFsHandlers(): void {
     }
   })
 
-  ipcMain.handle('fs:unzip', async (_event, filePath: string, outDir: string) => {
+  handle('fs:unzip', async (_event, filePath, outDir) => {
     try {
       const data = await fs.readFile(filePath)
       const zip = await JSZip.loadAsync(data)
@@ -75,7 +76,7 @@ export function registerFsHandlers(): void {
     }
   })
 
-  ipcMain.handle('fs:copyFile', async (_event, src: string, dest: string) => {
+  handle('fs:copyFile', async (_event, src, dest) => {
     try {
       await fs.copyFile(src, dest)
     } catch (error) {
@@ -85,7 +86,7 @@ export function registerFsHandlers(): void {
     }
   })
 
-  ipcMain.handle('fs:getAppDataPath', async () => {
+  handle('fs:getAppDataPath', () => {
     try {
       return app.getPath('userData')
     } catch (error) {
@@ -95,7 +96,7 @@ export function registerFsHandlers(): void {
     }
   })
 
-  ipcMain.handle('fs:readFile', async (_event, filePath: string) => {
+  handle('fs:readFile', async (_event, filePath) => {
     try {
       // Return the Node.js Buffer directly - Electron's IPC serializes it
       // as a Uint8Array on the renderer side via structured clone
@@ -109,12 +110,14 @@ export function registerFsHandlers(): void {
     }
   })
 
-  ipcMain.handle('fs:writeFile', async (_event, filePath: string, data: unknown) => {
+  handle('fs:writeFile', async (_event, filePath, data) => {
     try {
       const buffer =
-        data instanceof Buffer || data instanceof Uint8Array
+        data instanceof Uint8Array
           ? data
-          : Buffer.from(typeof data === 'string' ? data : JSON.stringify(data))
+          : data instanceof ArrayBuffer
+            ? Buffer.from(data)
+            : Buffer.from(data)
       await fs.writeFile(filePath, buffer)
     } catch (error) {
       throw new Error(
@@ -123,7 +126,7 @@ export function registerFsHandlers(): void {
     }
   })
 
-  ipcMain.handle('fs:exists', async (_event, filePath: string) => {
+  handle('fs:exists', async (_event, filePath) => {
     try {
       await fs.access(filePath)
       return true
@@ -132,7 +135,7 @@ export function registerFsHandlers(): void {
     }
   })
 
-  ipcMain.handle('fs:mkdir', async (_event, dirPath: string) => {
+  handle('fs:mkdir', async (_event, dirPath) => {
     try {
       await fs.mkdir(dirPath, { recursive: true })
     } catch (error) {
@@ -142,7 +145,7 @@ export function registerFsHandlers(): void {
     }
   })
 
-  ipcMain.handle('fs:readDir', async (_event, dirPath: string) => {
+  handle('fs:readDir', async (_event, dirPath) => {
     try {
       assertSafePath(dirPath)
       const entries = await fs.readdir(dirPath)
@@ -154,7 +157,7 @@ export function registerFsHandlers(): void {
     }
   })
 
-  ipcMain.handle('fs:removeFile', async (_event, filePath: string) => {
+  handle('fs:removeFile', async (_event, filePath) => {
     try {
       assertSafePath(filePath)
       await fs.rm(filePath, { recursive: true, force: true })
@@ -165,7 +168,7 @@ export function registerFsHandlers(): void {
     }
   })
 
-  ipcMain.handle('fs:getDirSize', async (_event, dirPath: string) => {
+  handle('fs:getDirSize', async (_event, dirPath) => {
     try {
       assertSafePath(dirPath)
       return await getDirectorySize(dirPath)
@@ -174,7 +177,7 @@ export function registerFsHandlers(): void {
     }
   })
 
-  ipcMain.handle('fs:getCacheFileStats', async (_event, dirPath: string) => {
+  handle('fs:getCacheFileStats', async (_event, dirPath) => {
     try {
       assertSafePath(dirPath)
       return await collectFileStats(dirPath)

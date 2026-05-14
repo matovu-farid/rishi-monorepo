@@ -11,6 +11,8 @@ export const AZW3_FIXTURE = path.join(FIXTURES_DIR, 'test-book.azw3')
 
 const MAIN_ENTRY = path.resolve(__dirname, '../../out/main/index.js')
 
+type IpcFn = (...args: unknown[]) => unknown
+
 export interface LaunchedApp {
   app: ElectronApplication
   page: Page
@@ -86,7 +88,7 @@ export interface ImportedBook {
 
 export async function importBook(page: Page, opts: ImportOptions): Promise<ImportedBook> {
   return await page.evaluate(async (input) => {
-    const e = (window as unknown as { electron: Record<string, Function> }).electron
+    const e = (window as unknown as { electron: Record<string, IpcFn> }).electron
     const appData = await e.getAppDataPath()
     const dest = `${appData}/${Date.now()}-${input.kind}-${Math.random().toString(36).slice(2, 8)}`
     await e.copyFile(input.fixturePath, dest)
@@ -102,7 +104,7 @@ export async function importBook(page: Page, opts: ImportOptions): Promise<Impor
 
     let data: Record<string, unknown>
     try {
-      data = await dataFn(dest)
+      data = (await dataFn(dest)) as Record<string, unknown>
     } catch {
       data = { kind: input.kind, cover: [], title: input.title ?? null, coverKind: '' }
     }
@@ -142,7 +144,7 @@ export async function importBookViaOpenFile(
 
   // Snapshot existing books so we can detect the new one after import.
   const before = await launched.page.evaluate(async () => {
-    const e = (window as unknown as { electron: Record<string, Function> }).electron
+    const e = (window as unknown as { electron: Record<string, IpcFn> }).electron
     const list = (await e.getBooks()) as Array<{ id: number }>
     return list.map((b) => b.id)
   })
@@ -157,25 +159,25 @@ export async function importBookViaOpenFile(
   // Poll the books table until a new row appears.
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
-    const newId = await launched.page.evaluate(async (ids) => {
-      const e = (window as unknown as { electron: Record<string, Function> }).electron
-      const list = (await e.getBooks()) as Array<{ id: number }>
-      const known = new Set(ids)
-      const found = list.find((b) => !known.has(b.id))
-      return found?.id ?? null
-    }, [...beforeIds])
+    const newId = await launched.page.evaluate(
+      async (ids) => {
+        const e = (window as unknown as { electron: Record<string, IpcFn> }).electron
+        const list = (await e.getBooks()) as Array<{ id: number }>
+        const known = new Set(ids)
+        const found = list.find((b) => !known.has(b.id))
+        return found?.id ?? null
+      },
+      [...beforeIds]
+    )
     if (typeof newId === 'number') return newId
     await launched.page.waitForTimeout(200)
   }
   throw new Error(`importBookViaOpenFile: no new book appeared within ${timeout}ms`)
 }
 
-export async function getBookKind(
-  page: Page,
-  bookId: number
-): Promise<string | null> {
+export async function getBookKind(page: Page, bookId: number): Promise<string | null> {
   return await page.evaluate(async (id) => {
-    const e = (window as unknown as { electron: Record<string, Function> }).electron
+    const e = (window as unknown as { electron: Record<string, IpcFn> }).electron
     const b = (await e.getBook(id)) as { kind?: string } | null
     return b?.kind ?? null
   }, bookId)
@@ -183,7 +185,7 @@ export async function getBookKind(
 
 export async function deleteAllBooks(page: Page): Promise<void> {
   await page.evaluate(async () => {
-    const e = (window as unknown as { electron: Record<string, Function> }).electron
+    const e = (window as unknown as { electron: Record<string, IpcFn> }).electron
     const books = (await e.getBooks()) as Array<{ id: number }>
     for (const b of books) await e.deleteBook(b.id)
   })
@@ -225,7 +227,7 @@ export async function gotoLibrary(page: Page): Promise<void> {
 
 export async function getBookLocation(page: Page, bookId: number): Promise<string | undefined> {
   return await page.evaluate(async (id) => {
-    const e = (window as unknown as { electron: Record<string, Function> }).electron
+    const e = (window as unknown as { electron: Record<string, IpcFn> }).electron
     const b = (await e.getBook(id)) as { location?: string } | null
     return b?.location
   }, bookId)

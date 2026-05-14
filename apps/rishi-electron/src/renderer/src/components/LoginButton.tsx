@@ -7,8 +7,16 @@ export function LoginButton(): React.JSX.Element {
   const openSignIn = useAuthStore((s) => s.openSignIn)
 
   if (user) {
-    const initial = (user.name?.[0] || user.email?.[0] || 'U').toUpperCase()
-    const altLabel = user.name || user.email || 'User'
+    // Pick the first non-empty char of name, then email, then 'U'.
+    // `??` would treat empty string as a valid value, so we coerce empty to
+    // `undefined` first to preserve the original "skip blanks" intent.
+    const nameChar = user.name && user.name.length > 0 ? user.name[0] : undefined
+    const emailChar = user.email.length > 0 ? user.email[0] : undefined
+    const initial = (nameChar ?? emailChar ?? 'U').toUpperCase()
+    const altLabel: string =
+      (user.name && user.name.length > 0 ? user.name : undefined) ??
+      (user.email.length > 0 ? user.email : undefined) ??
+      'User'
     return (
       <div className="flex gap-2 items-center">
         {/* User avatar — always show for authenticated users */}

@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type React from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useEpubStore } from '@/stores/epubStore'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
 import {
@@ -44,13 +45,12 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
     return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0
   })
   const [chapterCount, setChapterCount] = useState(0)
-  const [chapterHtml, setChapterHtml] = useState('')
-  const [loading, setLoading] = useState(true)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const embeddingsProcessedRef = useRef(false)
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
   const { requireAuth, AuthDialog } = useRequireAuth()
   const bookSyncIdRef = useRef<string | null>(null)
+  const [bookSyncId, setBookSyncId] = useState<string>('')
 
   const isChatting = useChatStore((s) => s.isChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
@@ -63,19 +63,18 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
     () => ({
       toggleTOC: () => setTocOpen((v) => !v),
       addBookmark: () => {
-        const syncId = bookSyncIdRef.current
-        if (!syncId) return
+        if (!bookSyncId) return
         const idx = chapterIndex
         void toggleBookmark({
-          bookSyncId: syncId,
+          bookSyncId,
           location: String(idx),
           label: `Chapter ${idx + 1}`
         })
           .then(async () => {
-            queryClient.invalidateQueries({ queryKey: ['bookmarks', syncId] })
-            await publishBookmarksToMenu(syncId)
+            void queryClient.invalidateQueries({ queryKey: ['bookmarks', bookSyncId] })
+            await publishBookmarksToMenu(bookSyncId)
           })
-          .catch((err) => console.warn('[menu] addBookmark failed:', err))
+          .catch((err: unknown) => console.warn('[menu] addBookmark failed:', err))
       },
       readAloudToggle: () => {
         const send = usePlayerStore.getState().send
@@ -92,7 +91,7 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
         else requireAuth('voice-input', () => setIsChatting(true))
       }
     }),
-    [requireAuth, chapterIndex, queryClient]
+    [requireAuth, bookSyncId, chapterIndex, queryClient]
   )
   useMenuCommands(menuHandlers)
 
@@ -106,7 +105,10 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     void window.electron.booksGetSyncId(book.id).then(async (syncId) => {
       bookSyncIdRef.current = syncId
-      if (syncId) await publishBookmarksToMenu(syncId)
+      if (syncId) {
+        setBookSyncId(syncId)
+        await publishBookmarksToMenu(syncId)
+      }
     })
   }, [book.id])
 
@@ -147,30 +149,36 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     getMobiChapterCount({ path: book.filepath })
       .then((count) => setChapterCount(count))
-      .catch((err) => {
+      .catch((err: unknown) => {
         console.error('[MobiView] failed to get chapter count:', err)
         toast.error('Failed to load MOBI chapter count')
       })
   }, [book.filepath])
 
-  // Fetch chapter HTML when index changes
+  // Fetch chapter HTML when index changes. Using TanStack Query lets us
+  // derive `loading` from query state instead of calling setLoading(true)
+  // synchronously inside a useEffect (which trips react-hooks/set-state-in-effect).
+  const {
+    data: chapterHtml = '',
+    isPending: chapterPending,
+    error: chapterError
+  } = useQuery({
+    queryKey: ['mobi-chapter', book.filepath, chapterIndex],
+    queryFn: () => getMobiChapter({ path: book.filepath, chapterIndex }),
+    enabled: chapterCount > 0
+  })
+  const loading = chapterCount === 0 || chapterPending
   useEffect(() => {
-    if (chapterCount === 0) return
-    setLoading(true)
-    getMobiChapter({ path: book.filepath, chapterIndex })
-      .then((html) => {
-        setChapterHtml(html)
-        setLoading(false)
-      })
-      .catch((err) => {
-        console.error('[MobiView] failed to get chapter:', err)
-        toast.error('Failed to load chapter')
-        setLoading(false)
-      })
-  }, [book.filepath, chapterIndex, chapterCount])
+    if (chapterError) {
+      console.error('[MobiView] failed to get chapter:', chapterError)
+      toast.error('Failed to load chapter')
+    }
+  }, [chapterError])
 
-  // Persist reading position
-  const updateLocationMutation = useMutation({
+  // Persist reading position. Destructure `mutate` so the effect's dep array
+  // doesn't pull in the unstable mutation result
+  // (@tanstack/query/no-unstable-deps).
+  const { mutate: persistLocationMutate } = useMutation({
     mutationFn: async (index: number) => {
       await updateBookLocation({
         bookId: book.id,
@@ -183,8 +191,8 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   })
 
   useEffect(() => {
-    updateLocationMutation.mutate(chapterIndex)
-  }, [chapterIndex])
+    persistLocationMutate(chapterIndex)
+  }, [chapterIndex, persistLocationMutate])
 
   // Navigation helpers
   const goNext = useCallback(() => {
@@ -224,7 +232,7 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
         }))
         usePlayerStore.getState().setCurrentParagraphs(paragraphs)
       })
-      .catch((err) => console.warn('[MobiView] failed to get text for TTS:', err))
+      .catch((err: unknown) => console.warn('[MobiView] failed to get text for TTS:', err))
 
     // Debounce next/prev chapter prefetch
     if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current)
@@ -239,7 +247,7 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
             }))
             usePlayerStore.getState().setNextPageParagraphs(paragraphs)
           })
-          .catch((err) => console.warn('[MobiView] failed to prefetch next chapter:', err))
+          .catch((err: unknown) => console.warn('[MobiView] failed to prefetch next chapter:', err))
       } else {
         usePlayerStore.getState().setNextPageParagraphs([])
       }
@@ -254,7 +262,7 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
             }))
             usePlayerStore.getState().setPrevPageParagraphs(paragraphs)
           })
-          .catch((err) => console.warn('[MobiView] failed to prefetch prev chapter:', err))
+          .catch((err: unknown) => console.warn('[MobiView] failed to prefetch prev chapter:', err))
       } else {
         usePlayerStore.getState().setPrevPageParagraphs([])
       }
@@ -412,9 +420,9 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
       </div>
 
       {/* AI chat orb */}
-      {isChatting && (
+      {isChatting ? (
         <AIChatOrb chatStatus={chatStatus} onClick={() => setChatPanelOpen((prev) => !prev)} />
-      )}
+      ) : null}
 
       {/* Voice chat launcher — paired above the TTS play orb */}
       <VoiceChatLauncher />
@@ -429,7 +437,7 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
         open={tocOpen}
         onOpenChange={setTocOpen}
         title="Navigation"
-        bookSyncId={bookSyncIdRef.current ?? ''}
+        bookSyncId={bookSyncId}
         onBookmarkNavigate={(location) => {
           const idx = parseInt(location, 10)
           if (Number.isFinite(idx) && idx >= 0) {
@@ -449,7 +457,7 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
       {/* Chat Panel */}
       <ChatPanel
         bookId={book.id}
-        bookSyncId={bookSyncIdRef.current ?? ''}
+        bookSyncId={bookSyncId}
         bookTitle={book.title}
         rendition={null}
         open={chatPanelOpen}

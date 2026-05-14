@@ -37,6 +37,8 @@ export function SpotlightOverlay({
   }, [targetSelector, padding])
 
   useEffect(() => {
+    // Why: measuring DOM rect into state — must run post-render to read layout
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     measure()
 
     let resizeTimer: ReturnType<typeof setTimeout>
@@ -62,7 +64,7 @@ export function SpotlightOverlay({
 
   return (
     <AnimatePresence>
-      {rect && (
+      {rect ? (
         <motion.svg
           key="spotlight"
           className="fixed inset-0 z-[55] pointer-events-auto"
@@ -100,7 +102,7 @@ export function SpotlightOverlay({
             mask="url(#spotlight-mask)"
           />
         </motion.svg>
-      )}
+      ) : null}
     </AnimatePresence>
   )
 }

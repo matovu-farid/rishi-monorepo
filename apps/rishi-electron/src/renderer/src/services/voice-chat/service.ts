@@ -5,7 +5,7 @@ import { createEmitter } from './emitter'
 import { createKeyCache } from './key-cache'
 import { OfflineError } from './types'
 import { makeActivationProgram, isInterruptCause, type SessionHandle } from './activation-program'
-import { type ActivationError } from './errors'
+import type { ActivationError } from './errors'
 import { captureError } from '@/utils/sentry'
 import type {
   AudioElementLike,
@@ -44,9 +44,9 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
 
   const actor = createActor(voiceChatMachine)
   actor.start()
-  let lastPublicState: VoiceChatPublicState = actor.getSnapshot().value as VoiceChatPublicState
+  let lastPublicState: VoiceChatPublicState = actor.getSnapshot().value
   actor.subscribe(() => {
-    const next = actor.getSnapshot().value as VoiceChatPublicState
+    const next = actor.getSnapshot().value
     if (next === lastPublicState) return
     lastPublicState = next
     stateEmitter.emit(next)
@@ -160,6 +160,9 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
             rag
           })
           await session.updateAgent(newAgent)
+          // Why: warm path is serialized — doActivate is the only writer of
+          // lastContextFingerprint and runs to completion before another call.
+          // eslint-disable-next-line require-atomic-updates
           lastContextFingerprint = fp
         }
         session.mute(false)
@@ -189,18 +192,26 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
     chatStatusEmitter.emit('connecting')
 
     const { promise, fiber } = program.activate({ bookId, ctx })
+    // Why: cold-path is single-flight — the prior fiber (if any) was awaited
+    // and interrupted above, so currentFiber has no other writers at this point.
+    // eslint-disable-next-line require-atomic-updates
     currentFiber = fiber
 
     try {
       const handle = await promise
 
       // Hand resources to service.ts's closure.
+      // Why: resource handoff after `await promise`. The Effect fiber is the sole
+      // producer of `handle`; the closure variables are only written by doActivate
+      // and disposeInternal (which is called serially on next activate).
+      /* eslint-disable require-atomic-updates */
       session = handle.session
       mediaStream = handle.mediaStream
       audioElement = handle.audioElement
       sessionCleanup = handle.cleanup
       currentBookId = bookId
       lastContextFingerprint = fingerprintContext(ctx)
+      /* eslint-enable require-atomic-updates */
 
       // Wire the session 'error' handler post-resolve (xstate-land, not Effect).
       session.on('error', onSessionError)
@@ -312,7 +323,7 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
     },
 
     getState() {
-      return actor.getSnapshot().value as VoiceChatPublicState
+      return actor.getSnapshot().value
     },
 
     getError(): VoiceError | null {

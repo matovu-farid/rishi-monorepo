@@ -1,4 +1,5 @@
-import { Theme, ThemeType } from './common'
+import type { Theme } from './common'
+import { ThemeType } from './common'
 import grayReaderTheme from './grayReaderTheme'
 import whiteReaderTheme from './whiteReaderTheme'
 import yellowReaderTheme from './yellowReaderTheme'

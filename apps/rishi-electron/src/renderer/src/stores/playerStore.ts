@@ -2,8 +2,14 @@
 import { create } from 'zustand'
 import { subscribeWithSelector } from 'zustand/middleware'
 import type { ParagraphWithIndex } from '@/models/player_control'
+import type { PlayerMachineEvent } from '@/machines/playerMachine'
 
 export type { ParagraphWithIndex }
+
+/** Public send signature for the player xstate actor. Component code dispatches
+ *  events through this, mirrored from `ActorRefFrom<typeof playerMachine>['send']`
+ *  but kept as a structural function to avoid a circular import. */
+export type PlayerSend = (event: PlayerMachineEvent) => void
 
 export type Direction = 'forward' | 'backward'
 
@@ -40,7 +46,7 @@ interface PlayerStore {
   pageRequest: 'next' | 'prev' | null
 
   // --- Machine send reference for non-React code ---
-  send: ((event: any) => void) | null
+  send: PlayerSend | null
 
   // --- Actions: format readers call these ---
   setCurrentParagraphs: (p: ParagraphWithIndex[]) => void
@@ -51,7 +57,7 @@ interface PlayerStore {
   requestNextPage: () => void
   requestPrevPage: () => void
   clearPageRequest: () => void
-  setSend: (send: (event: any) => void) => void
+  setSend: (send: PlayerSend) => void
 }
 
 export const usePlayerStore = create<PlayerStore>()(

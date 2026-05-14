@@ -11,8 +11,7 @@ function createTestActor(opts?: {
   saveImpl?: (input: SaveInput) => Promise<SaveOutput>
 }) {
   const saveImpl =
-    opts?.saveImpl ??
-    (async ({ page, offset }) => ({ savedPage: page, savedOffset: offset }))
+    opts?.saveImpl ?? (async ({ page, offset }) => ({ savedPage: page, savedOffset: offset }))
   const machine = pdfReaderMachine.provide({
     actors: {
       saveLocation: fromPromise<SaveOutput, SaveInput>(({ input }) => saveImpl(input))

@@ -32,6 +32,8 @@ export function HighlightsPanel({
 
   useEffect(() => {
     if (open && bookSyncId) {
+      // Why: state depends on async DB load — legitimate effect setState pattern
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       void refreshHighlights()
     }
   }, [open, bookSyncId, refreshHighlights])
@@ -91,10 +93,10 @@ export function HighlightsPanel({
                   onMouseLeave={() => setHoveredId(null)}
                 >
                   <p className="text-sm line-clamp-2">{hl.text}</p>
-                  {hl.chapter && <p className="text-xs text-gray-500 mt-1">{hl.chapter}</p>}
-                  {hl.note && (
+                  {hl.chapter ? <p className="text-xs text-gray-500 mt-1">{hl.chapter}</p> : null}
+                  {hl.note ? (
                     <p className="text-xs italic text-gray-500 mt-1 line-clamp-1">{hl.note}</p>
-                  )}
+                  ) : null}
 
                   {hoveredId === hl.id && (
                     <div className="absolute right-2 top-2 flex items-center gap-1">

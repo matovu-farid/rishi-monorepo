@@ -1,165 +1,208 @@
-export interface ElectronAPI {
-  // Book operations
-  getBooks: () => Promise<Book[]>
-  getBook: (bookId: number) => Promise<Book | null>
-  saveBook: (book: BookInsertable) => Promise<Book>
-  deleteBook: (bookId: number) => Promise<void>
-  updateBookCover: (bookId: number, cover: number[]) => Promise<void>
-  updateBookLocation: (bookId: number, location: string) => Promise<void>
-  hasSavedEpubData: (bookId: number) => Promise<boolean>
-  getBookOutline: (bookId: number) => Promise<BookOutline>
+import type { IpcContract } from './ipc-contract'
 
-  // Page/chunk data
-  savePageDataMany: (pageData: ChunkDataInsertable[]) => Promise<void>
-  getAllPageDataByBookId: (bookId: number) => Promise<PageData[]>
-  getIndexedPageNumbers: (bookId: number) => Promise<number[]>
+// ---------------------------------------------------------------------------
+// Renderer-facing API surface
+//
+// `ElectronAPI` is derived from `IpcContract` (the single source of truth for
+// the IPC surface) so its method signatures cannot drift from what the main
+// process actually accepts/returns. The non-invoke pieces below (event-based
+// `on/once/send`, the window identity, the menu helpers) live outside the
+// contract because they're not request/response — they keep their hand-written
+// shapes.
+// ---------------------------------------------------------------------------
+
+/**
+ * Mapping from IPC channel name → renderer method name. Every entry in
+ * `IpcContract` must appear here (compile-time-checked below).
+ *
+ * Channel names are kebab-case-ish and namespaced (`books:getAll`); method
+ * names are flat camelCase chosen to read naturally at the call site
+ * (`window.electron.getBooks()`). Keeping the mapping explicit here avoids
+ * a fragile string transformation while preserving a single source of truth.
+ */
+export type ChannelToMethod = {
+  // Books
+  'books:getAll': 'getBooks'
+  'books:get': 'getBook'
+  'books:save': 'saveBook'
+  'books:delete': 'deleteBook'
+  'books:updateCover': 'updateBookCover'
+  'books:updateLocation': 'updateBookLocation'
+  'books:hasSavedEpubData': 'hasSavedEpubData'
+  'books:getOutline': 'getBookOutline'
+  'books:getSyncId': 'booksGetSyncId'
+  'books:updateFilepath': 'booksUpdateFilepath'
+  'books:updateFileHash': 'booksUpdateFileHash'
+
+  // Chunks
+  'chunks:saveMany': 'savePageDataMany'
+  'chunks:getByBookId': 'getAllPageDataByBookId'
+  'chunks:getIndexedPages': 'getIndexedPageNumbers'
 
   // Search
-  searchBookText: (query: string, bookId: number) => Promise<TextSearchResult[]>
-  getTextFromVectorId: (vectorId: number) => Promise<PageData | undefined>
+  'search:text': 'searchBookText'
+  'search:textFromVectorId': 'getTextFromVectorId'
 
-  // Vector operations
-  embed: (params: EmbedParam[]) => Promise<EmbedResult[]>
-  saveVectors: (name: string, dim: number, vectors: VectorData[]) => Promise<void>
-  searchVectors: (name: string, query: number[], dim: number, k: number) => Promise<SearchResult[]>
-  hasVectorsForBook: (bookId: number) => Promise<boolean>
+  // Vectors
+  'vectors:embed': 'embed'
+  'vectors:save': 'saveVectors'
+  'vectors:search': 'searchVectors'
+  'vectors:hasFor': 'hasVectorsForBook'
+  'vectors:processJob': 'processJob'
 
-  // File format operations
-  getBookData: (path: string) => Promise<BookData>
-  getPdfData: (path: string) => Promise<BookData>
-  getMobiData: (path: string) => Promise<BookData>
-  getAzw3Data: (path: string) => Promise<BookData>
-  getMobiChapter: (path: string, chapterIndex: number) => Promise<string>
-  getMobiChapterCount: (path: string) => Promise<number>
-  getMobiText: (path: string, chapterIndex: number) => Promise<string[]>
+  // Formats
+  'formats:getBookData': 'getBookData'
+  'formats:getPdfData': 'getPdfData'
+  'formats:getMobiData': 'getMobiData'
+  'formats:getAzw3Data': 'getAzw3Data'
+  'formats:getMobiChapter': 'getMobiChapter'
+  'formats:getMobiChapterCount': 'getMobiChapterCount'
+  'formats:getMobiText': 'getMobiText'
 
-  // File system
-  checkFileSize: (path: string, format: string) => Promise<FileSizeCheck>
-  unzip: (filePath: string, outDir: string) => Promise<string>
-  copyFile: (src: string, dest: string) => Promise<void>
-  getAppDataPath: () => Promise<string>
-  readFile: (path: string) => Promise<ArrayBuffer>
-  writeFile: (path: string, data: unknown) => Promise<void>
-  exists: (path: string) => Promise<boolean>
-  mkdir: (path: string) => Promise<void>
-  readDir: (path: string) => Promise<string[]>
-  removeFile: (path: string) => Promise<void>
-  getDirSize: (path: string) => Promise<number>
-  getCacheFileStats: (
-    path: string
-  ) => Promise<Array<{ path: string; size: number; mtimeMs: number }>>
-
-  // Vector operations (batch)
-  processJob: (
-    pageNumber: number,
-    bookId: number,
-    pageData: Array<{ text: string; id: number }>
-  ) => Promise<void>
+  // FS
+  'fs:checkFileSize': 'checkFileSize'
+  'fs:unzip': 'unzip'
+  'fs:copyFile': 'copyFile'
+  'fs:getAppDataPath': 'getAppDataPath'
+  'fs:readFile': 'readFile'
+  'fs:writeFile': 'writeFile'
+  'fs:exists': 'exists'
+  'fs:mkdir': 'mkdir'
+  'fs:readDir': 'readDir'
+  'fs:removeFile': 'removeFile'
+  'fs:getDirSize': 'getDirSize'
+  'fs:getCacheFileStats': 'getCacheFileStats'
 
   // Scanner
-  getDefaultBookFolders: () => Promise<string[]>
-  scanForBooks: (mode: string) => Promise<number>
-  cancelScan: () => Promise<void>
+  'scanner:getDefaultFolders': 'getDefaultBookFolders'
+  'scanner:scan': 'scanForBooks'
+  'scanner:cancel': 'cancelScan'
 
-  // Auth (cached user profile only — Clerk owns the JWT in the renderer)
-  clearAuth: () => Promise<void>
-  getUserFromStore: () => Promise<User | null>
-  saveUserToStore: (user: User) => Promise<void>
+  // Auth (cached profile)
+  'auth:clear': 'clearAuth'
+  'auth:getUserFromStore': 'getUserFromStore'
+  'auth:saveUserToStore': 'saveUserToStore'
 
   // Debug
-  dumpError: (error: ErrorDump) => Promise<void>
-  readErrorDump: () => Promise<string>
-  clearErrorDump: () => Promise<void>
+  'debug:dumpError': 'dumpError'
+  'debug:readErrorDump': 'readErrorDump'
+  'debug:clearErrorDump': 'clearErrorDump'
+  'debug:dumpState': 'dumpState'
+  'debug:readStateDump': 'readStateDump'
 
-  // Settings store
-  getStoreValue: (key: string) => Promise<unknown>
-  setStoreValue: (key: string, value: unknown) => Promise<void>
+  // Store
+  'store:get': 'getStoreValue'
+  'store:set': 'setStoreValue'
 
   // Utilities
-  isDev: () => Promise<boolean>
-  getDevBypassSecret: () => Promise<string | null>
-  showOpenDialog: (options: unknown) => Promise<{ filePaths: string[] }>
-  openExternal: (url: string) => Promise<void>
-  getOsInfo: () => Promise<{ platform: string; arch: string; version: string }>
-  getPendingOpenFiles: () => Promise<string[]>
+  'util:isDev': 'isDev'
+  'util:getDevBypassSecret': 'getDevBypassSecret'
+  'util:getOsInfo': 'getOsInfo'
+  'shell:openExternal': 'openExternal'
+  'dialog:showOpen': 'showOpenDialog'
+  'files:getPending': 'getPendingOpenFiles'
 
-  // Books extra (typed)
-  booksGetSyncId: (bookId: number) => Promise<string | null>
-  booksUpdateFilepath: (bookId: number, filepath: string) => Promise<void>
-  booksUpdateFileHash: (bookId: number, fileHash: string, fileR2Key: string) => Promise<void>
+  // Bookmarks
+  'bookmarks:list': 'bookmarksList'
+  'bookmarks:save': 'bookmarksSave'
+  'bookmarks:delete': 'bookmarksDelete'
 
-  // Bookmarks (typed)
-  bookmarksList: (bookId: string) => Promise<BookmarkRow[]>
-  bookmarksSave: (params: {
-    id: string
-    bookId: string
-    location: string
-    label: string
-  }) => Promise<void>
-  bookmarksDelete: (bookmarkId: string) => Promise<void>
+  // Highlights
+  'highlights:list': 'highlightsList'
+  'highlights:save': 'highlightsSave'
+  'highlights:delete': 'highlightsDelete'
+  'highlights:deleteById': 'highlightsDeleteById'
+  'highlights:updateNote': 'highlightsUpdateNote'
+  'highlights:updateColor': 'highlightsUpdateColor'
 
-  // Highlights (typed)
-  highlightsList: (bookId: string) => Promise<HighlightRow[]>
-  highlightsSave: (params: {
-    bookSyncId: string
-    cfiRange: string
-    text: string
-    color?: string
-    note?: string
-    chapter?: string
-  }) => Promise<string>
-  highlightsDelete: (bookSyncId: string, cfiRange: string) => Promise<void>
-  highlightsDeleteById: (highlightId: string) => Promise<void>
-  highlightsUpdateNote: (highlightId: string, note: string) => Promise<void>
-  highlightsUpdateColor: (highlightId: string, color: string) => Promise<void>
+  // Conversations / Messages
+  'conversations:findForBook': 'conversationsFindForBook'
+  'conversations:create': 'conversationsCreate'
+  'conversations:updateTimestamp': 'conversationsUpdateTimestamp'
+  'messages:list': 'messagesList'
+  'messages:create': 'messagesCreate'
+  'messages:getChunkPage': 'messagesGetChunkPage'
 
-  // Conversations (typed)
-  conversationsFindForBook: (bookSyncId: string) => Promise<ConversationRow | null>
-  conversationsCreate: (params: { id: string; bookId: string; title: string }) => Promise<void>
-  conversationsUpdateTimestamp: (conversationId: string) => Promise<void>
-
-  // Messages (typed)
-  messagesList: (conversationId: string) => Promise<MessageRow[]>
-  messagesCreate: (params: {
-    id: string
-    conversationId: string
-    role: string
-    content: string
-    sourceChunks?: string
-  }) => Promise<void>
-  messagesGetChunkPage: (bookId: number, text: string) => Promise<number | null>
-
-  // Sync (typed)
-  syncGetDirtyBooks: () => Promise<unknown[]>
-  syncGetDirtyHighlights: () => Promise<unknown[]>
-  syncGetDirtyConversations: () => Promise<unknown[]>
-  syncGetDirtyMessages: () => Promise<unknown[]>
-  syncGetLastVersion: () => Promise<number>
-  syncMarkBooksClean: (ids: string[], syncVersion: number) => Promise<void>
-  syncMarkHighlightsClean: (ids: string[], syncVersion: number) => Promise<void>
-  syncMarkConversationsClean: (ids: string[], syncVersion: number) => Promise<void>
-  syncMarkMessagesClean: (ids: string[], syncVersion: number) => Promise<void>
-  syncApplyBookConflict: (conflict: Record<string, unknown>, syncVersion: number) => Promise<void>
-  syncApplyHighlightConflict: (
-    conflict: Record<string, unknown>,
-    syncVersion: number
-  ) => Promise<void>
-  syncApplyConversationConflict: (
-    conflict: Record<string, unknown>,
-    syncVersion: number
-  ) => Promise<void>
-  syncUpsertBook: (remote: Record<string, unknown>) => Promise<void>
-  syncUpsertHighlight: (remote: Record<string, unknown>) => Promise<void>
-  syncUpsertConversation: (remote: Record<string, unknown>) => Promise<void>
-  syncInsertMessage: (remote: Record<string, unknown>) => Promise<void>
-  syncUpdateLastVersion: (version: number) => Promise<void>
+  // Sync
+  'sync:getDirtyBooks': 'syncGetDirtyBooks'
+  'sync:getDirtyHighlights': 'syncGetDirtyHighlights'
+  'sync:getDirtyConversations': 'syncGetDirtyConversations'
+  'sync:getDirtyMessages': 'syncGetDirtyMessages'
+  'sync:getLastVersion': 'syncGetLastVersion'
+  'sync:markBooksClean': 'syncMarkBooksClean'
+  'sync:markHighlightsClean': 'syncMarkHighlightsClean'
+  'sync:markConversationsClean': 'syncMarkConversationsClean'
+  'sync:markMessagesClean': 'syncMarkMessagesClean'
+  'sync:applyBookConflict': 'syncApplyBookConflict'
+  'sync:applyHighlightConflict': 'syncApplyHighlightConflict'
+  'sync:applyConversationConflict': 'syncApplyConversationConflict'
+  'sync:upsertBook': 'syncUpsertBook'
+  'sync:upsertHighlight': 'syncUpsertHighlight'
+  'sync:upsertConversation': 'syncUpsertConversation'
+  'sync:insertMessage': 'syncInsertMessage'
+  'sync:updateLastVersion': 'syncUpdateLastVersion'
 
   // Updater
-  checkForUpdates: () => Promise<{ updateAvailable: boolean; version?: string | null }>
-  downloadUpdate: () => Promise<void>
-  installUpdate: () => Promise<void>
-  getAppVersion: () => Promise<string>
+  'updater:check': 'checkForUpdates'
+  'updater:download': 'downloadUpdate'
+  'updater:install': 'installUpdate'
+  'updater:getAppVersion': 'getAppVersion'
 
+  // Window
+  'window:openBook': 'openBook'
+  'window:closeBook': 'closeBook'
+  'window:focusLibrary': 'focusLibrary'
+  'window:list': 'listOpenBooks'
+
+  // Better-auth (lives on `window.api.auth`, not `electronAPI` — but we
+  // still want the channels to flow through `IpcContract` for the helper
+  // wrapper coverage in preload/index.ts).
+  'auth:start-magic-link': never
+  'auth:start-google': never
+  'auth:get-session': never
+  'auth:sign-out': never
+  'auth:delete-account': never
+  'auth:get-token': never
+}
+
+// Compile-time check: every channel in IpcContract must appear in ChannelToMethod.
+type _AssertChannelToMethodCoversContract = [
+  Exclude<keyof IpcContract, keyof ChannelToMethod>
+] extends [never]
+  ? true
+  : [
+      'Missing ChannelToMethod entry for channel(s):',
+      Exclude<keyof IpcContract, keyof ChannelToMethod>
+    ]
+type _Check = _AssertChannelToMethodCoversContract
+// Reference the alias so unused-type warnings don't strip it.
+export type __ChannelToMethodCovers = _Check
+
+/** Maps an IpcContract entry to a method signature on `ElectronAPI`. */
+type MethodFromChannel<K extends keyof IpcContract> = (
+  ...args: IpcContract[K]['args']
+) => Promise<IpcContract[K]['returns']>
+
+/**
+ * Channels that are exposed on `window.electron` (i.e. those with a
+ * non-`never` mapping entry). The better-auth channels live on
+ * `window.api.auth` instead, so they're excluded here.
+ */
+type ChannelOnElectron = {
+  [K in keyof IpcContract]: ChannelToMethod[K] extends string ? K : never
+}[keyof IpcContract]
+
+/** The auto-derived invoke surface on `window.electron`. */
+type DerivedInvokeApi = {
+  [K in ChannelOnElectron as ChannelToMethod[K] & string]: MethodFromChannel<K>
+}
+
+/**
+ * Renderer-facing API. The invoke surface is auto-derived from
+ * `IpcContract`; the event/window/menu helpers below are not request/reply
+ * channels, so they're declared explicitly.
+ */
+export type ElectronAPI = DerivedInvokeApi & {
   // Events
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void
   once: (channel: string, callback: (...args: unknown[]) => void) => void
@@ -175,11 +218,11 @@ export interface ElectronAPI {
    * focus listener.
    */
   refreshMenu: () => void
-  openBook: (bookId: number) => Promise<void>
-  closeBook: (bookId: number) => Promise<void>
-  focusLibrary: () => Promise<void>
-  listOpenBooks: () => Promise<Array<{ bookId: number; title: string }>>
 }
+
+// ---------------------------------------------------------------------------
+// Shared data types
+// ---------------------------------------------------------------------------
 
 export type FileSizeCheck = 'ok' | 'warn' | 'blocked'
 

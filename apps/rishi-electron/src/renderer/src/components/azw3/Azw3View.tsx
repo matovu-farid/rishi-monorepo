@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type React from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useEpubStore } from '@/stores/epubStore'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
 import { hasSavedEpubData, updateBookLocation } from '@/lib/api'
@@ -50,9 +51,39 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   // also accepts the legacy bare-integer form so reopening an existing book
   // doesn't reset the reader to the cover.
   const initialLocation = useMemo(() => parseLocation(book.location), [book.location])
-  const [chapterIndex, setChapterIndex] = useState(initialLocation.chapter)
+  const [rawChapterIndex, setChapterIndex] = useState(initialLocation.chapter)
   const [pageWithinChapter, setPageWithinChapter] = useState(initialLocation.page)
   const [pagesInCurrentChapter, setPagesInCurrentChapter] = useState(1)
+
+  // Parse the AZW3 file on mount. Bytes come straight off disk via the
+  // existing readFile IPC; foliate-js handles the KF8 decoding in-renderer.
+  // We use TanStack Query so `loading` is derived from query state instead
+  // of calling setLoading inside an effect (react-hooks/set-state-in-effect).
+  // Defined here (before the useMemo that wires native-menu commands) so
+  // `chapterIndex` is in scope by the time menuHandlers references it.
+  const {
+    data: parseResult,
+    isPending: parsePending,
+    error: parseError
+  } = useQuery({
+    queryKey: ['azw3-parse', book.filepath],
+    queryFn: async () => {
+      const bytes = await window.electron.readFile(book.filepath)
+      return parseAzw3(bytes)
+    },
+    staleTime: Infinity,
+    gcTime: Infinity
+  })
+  const sections = useMemo<FoliateSection[]>(() => parseResult?.sections ?? [], [parseResult])
+  const chapterCount = sections.length
+
+  // Clamp persisted chapterIndex into the valid range as soon as we know
+  // the section count. Books imported via the test helper default to
+  // location='1' which would otherwise overshoot for a single-section book.
+  // Derive the clamped value so the actual exposed `chapterIndex` is always
+  // in range without needing a setState-in-effect to fix it up.
+  const chapterIndex =
+    chapterCount === 0 ? rawChapterIndex : Math.min(Math.max(rawChapterIndex, 0), chapterCount - 1)
   // Per-chapter measured page counts, keyed by chapterIndex. Built up
   // lazily as the user visits chapters (or as ResizeObserver re-measures
   // them). Unmeasured chapters contribute 0 to globalTotal — that's why
@@ -60,15 +91,14 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   // measured.
   const [chapterPageCounts, setChapterPageCounts] = useState<Record<number, number>>({})
 
-  const [sections, setSections] = useState<FoliateSection[]>([])
-  const [chapterCount, setChapterCount] = useState(0)
-  const [chapterUrl, setChapterUrl] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const embeddingsProcessedRef = useRef(false)
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
   const { requireAuth, AuthDialog } = useRequireAuth()
   const bookSyncIdRef = useRef<string | null>(null)
+  // Mirror the sync id into state so JSX can read it without touching the
+  // ref during render (react-hooks/refs).
+  const [bookSyncId, setBookSyncId] = useState<string>('')
 
   // When navigating backward across a chapter boundary, we want to land on
   // the *last* page of the new chapter — but we can't know how many pages
@@ -97,10 +127,10 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
           label: `Chapter ${idx + 1}`
         })
           .then(async () => {
-            queryClient.invalidateQueries({ queryKey: ['bookmarks', syncId] })
+            void queryClient.invalidateQueries({ queryKey: ['bookmarks', syncId] })
             await publishBookmarksToMenu(syncId)
           })
-          .catch((err) => console.warn('[menu] addBookmark failed:', err))
+          .catch((err: unknown) => console.warn('[menu] addBookmark failed:', err))
       },
       readAloudToggle: () => {
         const send = usePlayerStore.getState().send
@@ -131,7 +161,10 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     void window.electron.booksGetSyncId(book.id).then(async (syncId) => {
       bookSyncIdRef.current = syncId
-      if (syncId) await publishBookmarksToMenu(syncId)
+      if (syncId) {
+        setBookSyncId(syncId)
+        await publishBookmarksToMenu(syncId)
+      }
     })
   }, [book.id])
 
@@ -166,71 +199,49 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     return unsub
   }, [])
 
-  // Parse the AZW3 file on mount. Bytes come straight off disk via the
-  // existing readFile IPC; foliate-js handles the KF8 decoding in-renderer.
+  // Surface parse errors / empty-book to the user. This effect only reads
+  // from query state and shows a toast — it does not call setState.
   useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    ;(async () => {
-      try {
-        const bytes = await window.electron.readFile(book.filepath)
-        const { sections: parsed } = await parseAzw3(bytes)
-        if (cancelled) return
-        setSections(parsed)
-        setChapterCount(parsed.length)
-        // Clamp persisted chapterIndex into the valid range. Books imported
-        // via the test helper default to location='1' which would otherwise
-        // overshoot for a single-section book.
-        if (parsed.length > 0) {
-          setChapterIndex((prev) => Math.min(Math.max(prev, 0), parsed.length - 1))
-        }
-        if (parsed.length === 0) {
-          toast.error('AZW3 file has no readable sections')
-          setLoading(false)
-        }
-      } catch (err) {
-        if (cancelled) return
-        console.error('[Azw3View] parse failed:', err)
-        toast.error('Failed to load AZW3 book')
-        setLoading(false)
-      }
-    })()
-    return () => {
-      cancelled = true
+    if (parseError) {
+      console.error('[Azw3View] parse failed:', parseError)
+      toast.error('Failed to load AZW3 book')
+    } else if (parseResult?.sections.length === 0) {
+      toast.error('AZW3 file has no readable sections')
     }
-  }, [book.filepath])
+  }, [parseError, parseResult])
 
-  // Load the current chapter URL when chapterIndex changes.
+  // Load the current chapter URL when chapterIndex changes. Using useQuery
+  // here too so loading state is derived rather than imperatively set.
+  const currentSection = sections[chapterIndex]
+  const {
+    data: chapterUrl = null,
+    isPending: chapterPending,
+    error: chapterError
+  } = useQuery({
+    queryKey: ['azw3-chapter', book.filepath, chapterIndex, currentSection],
+    queryFn: async () => {
+      if (!currentSection?.load) return null
+      return currentSection.load()
+    },
+    enabled: chapterCount > 0 && !!currentSection
+  })
+
   useEffect(() => {
-    if (chapterCount === 0 || !sections[chapterIndex]) return
-    let cancelled = false
-    setLoading(true)
-    const section = sections[chapterIndex]
-    if (!section.load) {
-      setLoading(false)
-      return
+    if (chapterError) {
+      console.error('[Azw3View] failed to load section:', chapterError)
+      toast.error('Failed to load chapter')
     }
-    section
-      .load()
-      .then((url) => {
-        if (cancelled) return
-        setChapterUrl(url)
-        setLoading(false)
-      })
-      .catch((err) => {
-        if (cancelled) return
-        console.error('[Azw3View] failed to load section:', err)
-        toast.error('Failed to load chapter')
-        setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [sections, chapterIndex, chapterCount])
+  }, [chapterError])
+
+  const loading =
+    parsePending || (parseResult !== undefined && parseResult.sections.length > 0 && chapterPending)
 
   // Persist reading position — debounced. Page turns fire on every click
   // and on every TTS paragraph advance, so write at most once every 500ms.
-  const updateLocationMutation = useMutation({
+  // Destructure `mutate` so the persist effect's dependency array can list
+  // a referentially-stable function instead of the unstable mutation result
+  // (@tanstack/query/no-unstable-deps).
+  const { mutate: persistLocationMutate } = useMutation({
     mutationFn: async (loc: string) => {
       await updateBookLocation({ bookId: book.id, newLocation: loc })
     },
@@ -239,21 +250,24 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     }
   })
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Hold a stable ref to the mutation so the persist effect doesn't re-run
-  // every render when mutation identity changes.
-  const persistMutationRef = useRef(updateLocationMutation)
-  persistMutationRef.current = updateLocationMutation
+  // Hold a stable ref to the mutate fn so the persist effect doesn't re-run
+  // every render. Refs are written from an effect (not during render) to
+  // satisfy react-hooks/refs.
+  const persistMutateRef = useRef(persistLocationMutate)
+  useEffect(() => {
+    persistMutateRef.current = persistLocationMutate
+  }, [persistLocationMutate])
   useEffect(() => {
     if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
     persistTimerRef.current = setTimeout(() => {
-      persistMutationRef.current.mutate(formatLocation(chapterIndex, pageWithinChapter))
+      persistMutateRef.current(formatLocation(chapterIndex, pageWithinChapter))
     }, LOCATION_PERSIST_DEBOUNCE_MS)
     return () => {
       if (persistTimerRef.current) {
         clearTimeout(persistTimerRef.current)
         // Flush on unmount so the last position is always saved even if the
         // user closes the book within the debounce window.
-        persistMutationRef.current.mutate(formatLocation(chapterIndex, pageWithinChapter))
+        persistMutateRef.current(formatLocation(chapterIndex, pageWithinChapter))
       }
     }
   }, [chapterIndex, pageWithinChapter])
@@ -312,9 +326,9 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
       } catch {
         // doc.fonts might be undefined or throw in non-CSSFontLoading envs.
       }
-      await new Promise<void>((resolve) =>
+      await new Promise<void>((resolve) => {
         iframeWin.requestAnimationFrame(() => resolve())
-      )
+      })
 
       const body = doc.body
       // Column-aware stride: CSS multicol places a `column-gap` between every
@@ -347,8 +361,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
       // Resolve any pending cross-chapter navigation request.
       const pending = pendingPageAfterLoadRef.current
       pendingPageAfterLoadRef.current = null
-      const desired =
-        pending === 'last' ? total - 1 : pending !== null ? pending : pageWithinChapter
+      const desired = pending === 'last' ? total - 1 : (pending ?? pageWithinChapter)
       const applied = applyScrollToPage(doc, iframeWin, desired, total, pageStep)
       if (applied !== pageWithinChapter) setPageWithinChapter(applied)
 
@@ -357,7 +370,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
       const active = usePlayerStore.getState().activeParagraph
       if (active) {
         const parsed = parseParagraphIndex(active.index)
-        if (parsed && parsed.chapter === chapterIndex) {
+        if (parsed?.chapter === chapterIndex) {
           setActiveClass(findParagraphElement(doc, parsed.paragraph), true)
         }
       }
@@ -487,6 +500,13 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [goNextPage, goPrevPage])
 
+  // Hold the latest measured page count in a ref so the TTS subscription
+  // effect below can read it without re-subscribing on every measurement.
+  const pagesInCurrentChapterRef = useRef(pagesInCurrentChapter)
+  useEffect(() => {
+    pagesInCurrentChapterRef.current = pagesInCurrentChapter
+  }, [pagesInCurrentChapter])
+
   // Toggle the TTS highlight class on the matching iframe element as the
   // player advances. Only highlights paragraphs belonging to the current
   // chapter. When the active paragraph is on a different column page,
@@ -498,7 +518,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     const apply = (raw: string | undefined, on: boolean): void => {
       if (!raw) return
       const parsed = parseParagraphIndex(raw)
-      if (!parsed || parsed.chapter !== chapterIndex) return
+      if (parsed?.chapter !== chapterIndex) return
       const doc = docOf()
       const win = winOf()
       const el = findParagraphElement(doc, parsed.paragraph)
@@ -520,31 +540,21 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
           const columnGap = parseFloat(cs.columnGap || '0') || 0
           const paddingLeft = parseFloat(cs.paddingLeft || '0') || 0
           const paddingRight = parseFloat(cs.paddingRight || '0') || 0
-          const pageStep = computePageStep(
-            body.clientWidth,
-            columnGap,
-            paddingLeft,
-            paddingRight
-          )
+          const pageStep = computePageStep(body.clientWidth, columnGap, paddingLeft, paddingRight)
           // Compute the column page that contains this element's left edge.
           // Snap to the column page boundary using pageStep (not viewport
           // width) so we don't accumulate the column-gap error every time
           // TTS scrolls a paragraph into view.
           const elementLeftFromBodyStart = body.scrollLeft + rect.left
+          // Read the latest measured page count from a ref so this effect
+          // stays subscribed across re-measurements (it's only re-built when
+          // the chapter changes).
+          const totalPages = pagesInCurrentChapterRef.current
           const targetPage = Math.max(
             0,
-            Math.min(
-              pagesInCurrentChapter - 1,
-              Math.floor(elementLeftFromBodyStart / pageStep)
-            )
+            Math.min(totalPages - 1, Math.floor(elementLeftFromBodyStart / pageStep))
           )
-          const applied = applyScrollToPage(
-            doc,
-            win,
-            targetPage,
-            pagesInCurrentChapter,
-            pageStep
-          )
+          const applied = applyScrollToPage(doc, win, targetPage, totalPages, pageStep)
           setPageWithinChapter((prev) => (prev === applied ? prev : applied))
         }
       }
@@ -573,7 +583,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
       unsubEnded()
       unsubMove()
     }
-  }, [chapterIndex])
+  }, [applyScrollToPage, chapterIndex])
 
   // Publish paragraphs to playerStore for TTS. Current chapter immediately,
   // next/prev debounced to avoid wasted work on rapid chapter flips.
@@ -815,9 +825,9 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         </div>
       )}
 
-      {isChatting && (
+      {isChatting ? (
         <AIChatOrb chatStatus={chatStatus} onClick={() => setChatPanelOpen((prev) => !prev)} />
-      )}
+      ) : null}
 
       <VoiceChatLauncher />
 
@@ -829,7 +839,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         open={tocOpen}
         onOpenChange={setTocOpen}
         title="Navigation"
-        bookSyncId={bookSyncIdRef.current ?? ''}
+        bookSyncId={bookSyncId}
         onBookmarkNavigate={(location) => {
           const parsed = parseLocation(location)
           if (parsed.chapter >= 0) {
@@ -850,7 +860,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
 
       <ChatPanel
         bookId={book.id}
-        bookSyncId={bookSyncIdRef.current ?? ''}
+        bookSyncId={bookSyncId}
         bookTitle={book.title}
         rendition={null}
         open={chatPanelOpen}

@@ -112,7 +112,7 @@ export default function SignInModal(): React.JSX.Element | null {
               >
                 {status === 'sending' ? 'Sending…' : 'Continue'}
               </button>
-              {errorMsg && <p className="text-sm text-red-600">{errorMsg}</p>}
+              {errorMsg ? <p className="text-sm text-red-600">{errorMsg}</p> : null}
             </form>
             {!isMacAppStore && (
               <>

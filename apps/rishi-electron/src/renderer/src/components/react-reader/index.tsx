@@ -1,35 +1,16 @@
 // Core React imports and third-party libraries
 import React, { PureComponent } from 'react'
-import { type SwipeEventData } from 'react-swipeable'
+import type { SwipeEventData } from 'react-swipeable'
 import { EpubView, type IEpubViewProps } from './epub_viewer'
 import type { IEpubViewStyle } from './epub_viewer/style'
 import { ReactReaderStyle as defaultStyles, type IReactReaderStyle } from './style'
-import { type NavItem } from 'epubjs'
+import type { NavItem, Contents } from 'epubjs'
+import type Section from 'epubjs/types/section'
 import { SwipeWrapper, NavigationArrows } from './components'
 import { ReaderTOC } from '../reader/ReaderTOC'
+import { TocItem } from './TocItem'
 import type { ParagraphWithCFI } from '../../types'
 import { useNavStore } from '../../stores/navStore'
-
-// Recursive TOC item for the ReaderTOC content
-function TocItem({ data, setLocation }: { data: NavItem; setLocation: (href: string) => void }) {
-  return (
-    <div>
-      <button
-        onClick={() => setLocation(data.href)}
-        className="block w-full text-left py-3 px-4 text-sm text-gray-700 hover:bg-gray-100 hover:pl-6 border-b border-gray-100 cursor-pointer transition-all duration-200"
-      >
-        {data.label}
-      </button>
-      {data.subitems && data.subitems.length > 0 && (
-        <div style={{ paddingLeft: 16 }}>
-          {data.subitems.map((item, i) => (
-            <TocItem key={i} data={item} setLocation={setLocation} />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
 
 // Search result object containing location and excerpt
 type SearchResult = { cfi: string; excerpt: string }
@@ -103,7 +84,7 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
       this.props.onNext()
     } else {
       const node = this.readerRef.current
-      if (node && node.nextPage) {
+      if (node?.nextPage) {
         node.nextPage()
       }
     }
@@ -114,7 +95,7 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
       this.props.onPrev()
     } else {
       const node = this.readerRef.current
-      if (node && node.prevPage) {
+      if (node?.prevPage) {
         node.prevPage()
       }
     }
@@ -126,7 +107,7 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
       {
         toc: toc
       },
-      () => tocChanged && tocChanged(toc)
+      () => tocChanged?.(toc)
     )
   }
 
@@ -159,7 +140,7 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
     const rendition = this.readerRef.current.rendition
 
     if (rendition) {
-      rendition.hooks.content.register((contents: { window: { document } }) => {
+      rendition.hooks.content.register((contents: Contents) => {
         const iframeDoc = contents.window.document
 
         iframeDoc.removeEventListener('wheel', this.handleWheel)
@@ -184,17 +165,17 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
     const results: SearchResult[] = []
     const promises: Promise<void>[] = []
 
-    book.spine.each((item) => {
-      if (query == '' || query == null) results
+    book.spine.each((item: Section) => {
+      if (query === '' || query == null) return
       const promise = (async () => {
         try {
-          await item.load(book.load.bind(book) as (url: string) => Promise<unknown>)
+          await item.load(book.load.bind(book))
           const doc = item.document
           const textNodes: Node[] = []
           if (!doc) return
 
           const treeWalker = doc.createTreeWalker(doc, NodeFilter.SHOW_TEXT)
-          let node
+          let node: Node | null
           while ((node = treeWalker.nextNode())) {
             textNodes.push(node)
           }
@@ -211,7 +192,7 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
             let foundOffset = pos
 
             while (nodeIndex < textNodes.length) {
-              const nodeText = textNodes[nodeIndex].textContent || ''
+              const nodeText = textNodes[nodeIndex].textContent ?? ''
               if (foundOffset < nodeText.length) break
               foundOffset -= nodeText.length
               nodeIndex++
@@ -226,8 +207,8 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
                 const cfi = item.cfiFromRange(range)
 
                 const excerpt = `${fullText.substring(
-                  Math.max(0, pos - (this.props.contextLength || 15)),
-                  pos + searchQuery.length + (this.props.contextLength || 15)
+                  Math.max(0, pos - (this.props.contextLength ?? 15)),
+                  pos + searchQuery.length + (this.props.contextLength ?? 15)
                 )}`
 
                 results.push({ cfi, excerpt })
@@ -249,7 +230,7 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
 
     await Promise.all(promises)
 
-    if (query == this.props.searchQuery) {
+    if (query === this.props.searchQuery) {
       this.props.onSearchResults?.(results)
     }
   }
@@ -285,9 +266,7 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
       <div style={readerStyles.container}>
         {/* Main reader area */}
         <div style={readerStyles.readerArea}>
-          <div style={{ ...readerStyles.titleArea, pointerEvents: 'none' } as React.CSSProperties}>
-            {title}
-          </div>
+          <div style={{ ...readerStyles.titleArea, pointerEvents: 'none' }}>{title}</div>
 
           {/* Swipe gesture wrapper for touch navigation */}
           <SwipeWrapper
@@ -335,7 +314,7 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
                 onNextPageParagraphs={this.props.onNextPageParagraphs}
                 onPreviousPageParagraphs={this.props.onPreviousPageParagraphs}
               />
-              {swipeable && <div style={readerStyles.swipeWrapper} />}
+              {swipeable ? <div style={readerStyles.swipeWrapper} /> : null}
             </div>
           </SwipeWrapper>
 
@@ -348,7 +327,7 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
         </div>
 
         {/* Unified TOC sidebar using shared ReaderTOC */}
-        {showToc && toc && (
+        {showToc && toc ? (
           <ReaderTOC
             open={expandedToc}
             onOpenChange={(open) => {
@@ -369,7 +348,7 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
               </div>
             }
           />
-        )}
+        ) : null}
       </div>
     )
   }

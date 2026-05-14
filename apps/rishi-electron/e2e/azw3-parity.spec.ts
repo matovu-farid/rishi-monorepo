@@ -100,7 +100,9 @@ test.describe('AZW3 reader — feature parity with MOBI', () => {
       // the syncId arrives after mount, the bookmark handler stays null
       // for the lifetime of that window.
       const syncId = await launched.page.evaluate(async (id) => {
-        const e = (window as unknown as { electron: Record<string, Function> }).electron
+        const e = (
+          window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> }
+        ).electron
         const existing = (await e.booksGetSyncId(id)) as string | null
         if (existing) return existing
         const row = (await e.getBook(id)) as Record<string, unknown> | null
@@ -119,7 +121,9 @@ test.describe('AZW3 reader — feature parity with MOBI', () => {
       await bookPage.waitForTimeout(800)
 
       const before = (await bookPage.evaluate(async (s) => {
-        const e = (window as unknown as { electron: Record<string, Function> }).electron
+        const e = (
+          window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> }
+        ).electron
         const list = (await e.bookmarksList(s)) as unknown[]
         return list.length
       }, syncId)) as number
@@ -149,7 +153,9 @@ test.describe('AZW3 reader — feature parity with MOBI', () => {
         expect(clicked).toBe(true)
         await launched.page.waitForTimeout(800)
         after = (await bookPage.evaluate(async (s) => {
-          const e = (window as unknown as { electron: Record<string, Function> }).electron
+          const e = (
+            window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> }
+          ).electron
           const list = (await e.bookmarksList(s)) as unknown[]
           return list.length
         }, syncId)) as number

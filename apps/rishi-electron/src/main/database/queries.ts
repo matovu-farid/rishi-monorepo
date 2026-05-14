@@ -1,3 +1,4 @@
+import type { Database } from 'better-sqlite3'
 import { getDb } from './index.js'
 
 // ---------------------------------------------------------------------------
@@ -28,8 +29,25 @@ export interface Book {
   isDeleted: number
 }
 
+/**
+ * Row read from `chunk_data` — `id` is always present (SQLite assigns the
+ * PK on insert).
+ */
 export interface PageData {
-  id?: number
+  id: number
+  pageNumber: number
+  bookId: number
+  data: string
+}
+
+/**
+ * Insert-shaped chunk row. `id` may be omitted (auto-assigned) or pinned
+ * to a hash-derived value by the indexer. Matches the IPC
+ * `ChunkDataInsertable` payload shape so `chunks:saveMany` callers don't
+ * have to coerce nulls.
+ */
+export interface PageDataInsertable {
+  id?: number | null
   pageNumber: number
   bookId: number
   data: string
@@ -63,7 +81,7 @@ function rowToBook(row: Record<string, unknown>): Book {
       ? Array.from(rawCover)
       : rawCover instanceof Uint8Array
         ? Array.from(rawCover)
-        : ((rawCover as number[]) ?? [])
+        : ((rawCover as number[] | null) ?? [])
 
   return {
     id: row.id as number,
@@ -76,14 +94,14 @@ function rowToBook(row: Record<string, unknown>): Book {
     location: row.location as string,
     coverKind: row.cover_kind as string,
     version: row.version as number,
-    syncId: (row.sync_id as string) ?? null,
-    fileHash: (row.file_hash as string) ?? null,
-    fileR2Key: (row.file_r2_key as string) ?? null,
-    coverR2Key: (row.cover_r2_key as string) ?? null,
+    syncId: (row.sync_id as string | null) ?? null,
+    fileHash: (row.file_hash as string | null) ?? null,
+    fileR2Key: (row.file_r2_key as string | null) ?? null,
+    coverR2Key: (row.cover_r2_key as string | null) ?? null,
     format: row.format as string,
-    currentCfi: (row.current_cfi as string) ?? null,
-    currentPage: (row.current_page as number) ?? null,
-    userId: (row.user_id as string) ?? null,
+    currentCfi: (row.current_cfi as string | null) ?? null,
+    currentPage: (row.current_page as number | null) ?? null,
+    userId: (row.user_id as string | null) ?? null,
     syncVersion: row.sync_version as number,
     isDirty: row.is_dirty as number,
     isDeleted: row.is_deleted as number
@@ -113,13 +131,13 @@ export function getAllBooks(): Book[] {
  * column (older test DBs), we just skip that filter.
  */
 export function _listRecentBooksWithDb(
-  db: import('better-sqlite3').Database,
+  db: Database,
   limit: number
 ): { bookId: number; title: string }[] {
   // Detect whether is_deleted column exists; older test DBs may omit it.
-  const cols = db
-    .prepare<[], { name: string }>('PRAGMA table_info(books)')
-    .all() as Array<{ name: string }>
+  const cols = db.prepare<[], { name: string }>('PRAGMA table_info(books)').all() as Array<{
+    name: string
+  }>
   const hasIsDeleted = cols.some((c) => c.name === 'is_deleted')
 
   const sql = hasIsDeleted
@@ -147,47 +165,75 @@ export function getBook(id: number): Book | undefined {
 }
 
 /**
+ * Insert-shape for `saveBook`. Mirrors the IPC `BookInsertable` payload —
+ * `id` may be omitted (new book) or supplied (upsert by primary key), and
+ * `cover` is the number[] form produced by the renderer (converted to a
+ * Buffer here for SQLite's blob column).
+ */
+export interface BookSaveInput {
+  id?: number | null
+  kind?: string | null
+  cover?: number[] | Buffer | null
+  title?: string | null
+  author?: string | null
+  publisher?: string | null
+  filepath?: string | null
+  location?: string | null
+  coverKind?: string | null
+  version?: number | null
+  syncId?: string | null
+  fileHash?: string | null
+  fileR2Key?: string | null
+  coverR2Key?: string | null
+  format?: string | null
+  currentCfi?: string | null
+  currentPage?: number | null
+  userId?: string | null
+  syncVersion?: number | null
+  isDirty?: number | null
+  isDeleted?: number | null
+}
+
+/**
  * Insert a new book or update an existing one (upsert on `id`).
  * Returns the full Book object (with generated id for inserts).
  * Accepts partial input with sensible defaults for missing fields.
  */
-export function saveBook(input: Record<string, unknown>): Book {
+export function saveBook(input: BookSaveInput): Book {
   const db = getDb()
 
   // Normalize: convert number[] cover to Buffer for SQLite BLOB
   const rawCover = input.cover
-  const cover = Array.isArray(rawCover)
-    ? Buffer.from(rawCover)
-    : ((rawCover as Buffer) ?? Buffer.alloc(0))
+  const cover = Array.isArray(rawCover) ? Buffer.from(rawCover) : (rawCover ?? Buffer.alloc(0))
 
   // Infer format from kind if not provided
-  const kind = (input.kind as string) ?? 'epub'
-  const format = (input.format as string) ?? kind
+  const kind = input.kind ?? 'epub'
+  const format = input.format ?? kind
 
   const params = {
     kind,
     cover,
-    title: (input.title as string) ?? '',
-    author: (input.author as string) ?? '',
-    publisher: (input.publisher as string) ?? '',
-    filepath: (input.filepath as string) ?? '',
-    location: (input.location as string) ?? '',
-    coverKind: (input.coverKind as string) ?? 'png',
-    version: (input.version as number) ?? 0,
-    syncId: (input.syncId as string) ?? null,
-    fileHash: (input.fileHash as string) ?? null,
-    fileR2Key: (input.fileR2Key as string) ?? null,
-    coverR2Key: (input.coverR2Key as string) ?? null,
+    title: input.title ?? '',
+    author: input.author ?? '',
+    publisher: input.publisher ?? '',
+    filepath: input.filepath ?? '',
+    location: input.location ?? '',
+    coverKind: input.coverKind ?? 'png',
+    version: input.version ?? 0,
+    syncId: input.syncId ?? null,
+    fileHash: input.fileHash ?? null,
+    fileR2Key: input.fileR2Key ?? null,
+    coverR2Key: input.coverR2Key ?? null,
     format,
-    currentCfi: (input.currentCfi as string) ?? null,
-    currentPage: (input.currentPage as number) ?? null,
-    userId: (input.userId as string) ?? null,
-    syncVersion: (input.syncVersion as number) ?? 0,
-    isDirty: (input.isDirty as number) ?? 1,
-    isDeleted: (input.isDeleted as number) ?? 0
+    currentCfi: input.currentCfi ?? null,
+    currentPage: input.currentPage ?? null,
+    userId: input.userId ?? null,
+    syncVersion: input.syncVersion ?? 0,
+    isDirty: input.isDirty ?? 1,
+    isDeleted: input.isDeleted ?? 0
   }
 
-  const bookId = input.id as number | undefined
+  const bookId = input.id ?? undefined
 
   if (bookId != null) {
     db.prepare(
@@ -244,10 +290,7 @@ export function deleteChunksByBookId(bookId: number): void {
 }
 
 /** Test-only db-injectable variant; mirrors the _getBookOutlineWithDb pattern. */
-export function _deleteChunksByBookIdWithDb(
-  db: ReturnType<typeof getDb>,
-  bookId: number
-): number {
+export function _deleteChunksByBookIdWithDb(db: ReturnType<typeof getDb>, bookId: number): number {
   const result = db.prepare('DELETE FROM chunk_data WHERE book_id = ?').run(bookId)
   return result.changes
 }
@@ -258,9 +301,10 @@ export function _deleteChunksByBookIdWithDb(
 export function updateBookCover(id: number, cover: number[] | Buffer): void {
   const db = getDb()
   const buf = Array.isArray(cover) ? Buffer.from(cover) : cover
-  db.prepare(
-    "UPDATE books SET cover = ?, cover_kind = 'png', is_dirty = 1 WHERE id = ?"
-  ).run(buf, id)
+  db.prepare("UPDATE books SET cover = ?, cover_kind = 'png', is_dirty = 1 WHERE id = ?").run(
+    buf,
+    id
+  )
 }
 
 /**
@@ -327,7 +371,7 @@ export function hasSavedEpubData(bookId: number): boolean {
  * unindexed forever. FTS triggers fire on actual inserts only, so skipped
  * rows don't desync chunk_data_fts.
  */
-export function savePageDataMany(pageData: PageData[]): void {
+export function savePageDataMany(pageData: PageDataInsertable[]): void {
   if (pageData.length === 0) return
 
   const db = getDb()
@@ -335,7 +379,7 @@ export function savePageDataMany(pageData: PageData[]): void {
     'INSERT OR IGNORE INTO chunk_data (id, page_number, book_id, data) VALUES (@id, @pageNumber, @bookId, @data)'
   )
 
-  const insertMany = db.transaction((rows: PageData[]) => {
+  const insertMany = db.transaction((rows: PageDataInsertable[]) => {
     for (const row of rows) {
       stmt.run({
         id: row.id ?? null,
@@ -447,10 +491,7 @@ export interface BookOutline {
  * Pure SQL helper exposed for unit testing without the global drizzle wrapper.
  * Use `getBookOutline(bookId)` from production code.
  */
-export function _getBookOutlineWithDb(
-  sqlite: import('better-sqlite3').Database,
-  bookId: number
-): BookOutline {
+export function _getBookOutlineWithDb(sqlite: Database, bookId: number): BookOutline {
   const bookRow = sqlite
     .prepare<
       [number],
@@ -482,7 +523,7 @@ export function _getBookOutlineWithDb(
   }
 }
 
-export async function getBookOutline(bookId: number): Promise<BookOutline> {
+export function getBookOutline(bookId: number): BookOutline {
   const sqlite = getDb()
   return _getBookOutlineWithDb(sqlite, bookId)
 }

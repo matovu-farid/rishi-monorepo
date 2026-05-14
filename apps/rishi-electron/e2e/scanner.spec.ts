@@ -28,21 +28,33 @@ test.describe('Book scanner / discovery modal', () => {
   })
 
   test('Add Book opens the discovery modal with scan controls', async () => {
-    await app.page.locator('button', { hasText: /^Add Book$/ }).first().click()
+    await app.page
+      .locator('button', { hasText: /^Add Book$/ })
+      .first()
+      .click()
     await expect(app.page.locator('text=Common folders')).toBeVisible({ timeout: 10000 })
     await expect(app.page.locator('text=Search entire computer')).toBeVisible()
     await expect(app.page.locator('input[placeholder*="Filter"]')).toBeVisible({ timeout: 10000 })
   })
 
   test('discovery modal shows a scanning indicator', async () => {
-    await app.page.locator('button', { hasText: /^Add Book$/ }).first().click()
+    await app.page
+      .locator('button', { hasText: /^Add Book$/ })
+      .first()
+      .click()
     await expect(app.page.locator('text=/Scanning/i').first()).toBeVisible({ timeout: 10000 })
   })
 
   test('Cancel closes the discovery modal', async () => {
-    await app.page.locator('button', { hasText: /^Add Book$/ }).first().click()
+    await app.page
+      .locator('button', { hasText: /^Add Book$/ })
+      .first()
+      .click()
     await expect(app.page.locator('text=Common folders')).toBeVisible({ timeout: 10000 })
-    await app.page.locator('button', { hasText: /^Cancel$/ }).first().click()
+    await app.page
+      .locator('button', { hasText: /^Cancel$/ })
+      .first()
+      .click()
     await expect(app.page.locator('text=Common folders')).toHaveCount(0)
   })
 })

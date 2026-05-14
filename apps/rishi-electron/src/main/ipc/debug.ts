@@ -1,6 +1,7 @@
-import { ipcMain, app } from 'electron'
+import { app } from 'electron'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
+import { handle } from '../../preload/ipc-contract.js'
 
 function getErrorDumpPath(): string {
   return path.join(app.getPath('userData'), 'error-dump.json')
@@ -11,7 +12,7 @@ function getStateDumpPath(): string {
 }
 
 export function registerDebugHandlers(): void {
-  ipcMain.handle('debug:dumpError', async (_event, error: unknown) => {
+  handle('debug:dumpError', async (_event, error) => {
     try {
       const dumpPath = getErrorDumpPath()
       const timestamp = new Date().toISOString()
@@ -26,7 +27,7 @@ export function registerDebugHandlers(): void {
         // No existing dump
       }
 
-      existingDumps.push({ ...((error as object) ?? {}), timestamp })
+      existingDumps.push({ ...error, timestamp })
 
       await fs.writeFile(dumpPath, JSON.stringify(existingDumps, null, 2))
     } catch (err) {
@@ -34,7 +35,7 @@ export function registerDebugHandlers(): void {
     }
   })
 
-  ipcMain.handle('debug:readErrorDump', async () => {
+  handle('debug:readErrorDump', async () => {
     try {
       const dumpPath = getErrorDumpPath()
 
@@ -52,7 +53,7 @@ export function registerDebugHandlers(): void {
     }
   })
 
-  ipcMain.handle('debug:clearErrorDump', async () => {
+  handle('debug:clearErrorDump', async () => {
     try {
       const dumpPath = getErrorDumpPath()
       await fs.unlink(dumpPath).catch(() => {})
@@ -65,7 +66,7 @@ export function registerDebugHandlers(): void {
 
   // ── State dump ──────────────────────────────────────────────────────
 
-  ipcMain.handle('debug:dumpState', async (_event, json: string) => {
+  handle('debug:dumpState', async (_event, json) => {
     try {
       const dumpPath = getStateDumpPath()
       await fs.writeFile(dumpPath, json, 'utf-8')
@@ -76,7 +77,7 @@ export function registerDebugHandlers(): void {
     }
   })
 
-  ipcMain.handle('debug:readStateDump', async () => {
+  handle('debug:readStateDump', async () => {
     try {
       const dumpPath = getStateDumpPath()
       try {

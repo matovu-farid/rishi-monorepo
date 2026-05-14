@@ -81,7 +81,7 @@ export function SearchPanel({
             onChange={(e) => handleQueryChange(e.target.value)}
             onKeyDown={handleKeyDown}
           />
-          {isSearching && <Loader2 size={14} className="animate-spin text-gray-400" />}
+          {isSearching ? <Loader2 size={14} className="animate-spin text-gray-400" /> : null}
         </div>
 
         {/* Result count */}
@@ -158,13 +158,13 @@ function SearchResultItem({
       ) : (
         <p className="text-sm line-clamp-3">{result.snippet}</p>
       )}
-      {(result.pageNumber || result.chapter) && (
+      {result.pageNumber || result.chapter ? (
         <p className="text-xs text-gray-500 mt-1">
           {[result.chapter, result.pageNumber ? `Page ${result.pageNumber}` : null]
             .filter(Boolean)
             .join(' · ')}
         </p>
-      )}
+      ) : null}
     </button>
   )
 }

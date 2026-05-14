@@ -61,7 +61,6 @@ function RootComponent(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-
   // Publish the initial theme to the main process on mount so the View menu's
   // "Switch to Light/Dark Mode" label reflects reality the first time the menu
   // is built for this window.
@@ -89,9 +88,7 @@ function RootComponent(): JSX.Element {
       // window — the main process either focuses the existing library window
       // or spawns one if it was closed.
       focusLibrary: (): void => {
-        const e = (
-          window as unknown as { electron: { focusLibrary(): Promise<void> } }
-        ).electron
+        const e = (window as unknown as { electron: { focusLibrary(): Promise<void> } }).electron
         void e.focusLibrary()
       },
       // File > Open Recent → open the chosen book in its own window. Available
@@ -100,9 +97,8 @@ function RootComponent(): JSX.Element {
       openRecent: (arg?: unknown): void => {
         const id = (arg as { bookId?: number } | undefined)?.bookId
         if (typeof id !== 'number') return
-        const e = (
-          window as unknown as { electron: { openBook(id: number): Promise<void> } }
-        ).electron
+        const e = (window as unknown as { electron: { openBook(id: number): Promise<void> } })
+          .electron
         void e.openBook(id)
       }
     }),
@@ -162,16 +158,16 @@ function RootComponent(): JSX.Element {
           } as CSSProperties
         }
       />
-      {isPending && (
+      {isPending ? (
         <div className="fixed inset-0 z-50 w-full h-screen place-items-center grid bg-white">
           <Loader />
         </div>
-      )}
-      {isError && (
+      ) : null}
+      {isError ? (
         <div className="fixed inset-0 z-50 w-full h-screen place-items-center grid bg-white">
           {error.message}
         </div>
-      )}
+      ) : null}
       <ErrorBoundary>
         <Outlet />
       </ErrorBoundary>

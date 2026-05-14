@@ -2,7 +2,12 @@ import { describe, it, expect, vi } from 'vitest'
 import { MenuInstaller, hashContext } from './installMenu'
 import type { MenuContext } from './commands'
 
-const libraryCtx: MenuContext = { kind: 'library', theme: 'light', recentBooks: [], openBookTitles: [] }
+const libraryCtx: MenuContext = {
+  kind: 'library',
+  theme: 'light',
+  recentBooks: [],
+  openBookTitles: []
+}
 
 describe('MenuInstaller', () => {
   it('builds the menu on first install', () => {
@@ -25,9 +30,18 @@ describe('MenuInstaller', () => {
     const inst = new MenuInstaller(setMenu, vi.fn())
     inst.setContext(libraryCtx)
     inst.setContext({
-      kind: 'book', bookId: 1, format: 'pdf', title: 'X',
-      tocOpen: false, thumbsOpen: false, dualPage: false, isReading: false,
-      theme: 'light', recentBooks: [], openBookTitles: [], bookmarks: []
+      kind: 'book',
+      bookId: 1,
+      format: 'pdf',
+      title: 'X',
+      tocOpen: false,
+      thumbsOpen: false,
+      dualPage: false,
+      isReading: false,
+      theme: 'light',
+      recentBooks: [],
+      openBookTitles: [],
+      bookmarks: []
     })
     expect(setMenu).toHaveBeenCalledTimes(2)
   })
@@ -49,9 +63,18 @@ describe('MenuInstaller', () => {
 
   it('hashContext changes when tocOpen flips', () => {
     const a: MenuContext = {
-      kind: 'book', bookId: 1, format: 'pdf', title: 'X',
-      tocOpen: false, thumbsOpen: false, dualPage: false, isReading: false,
-      theme: 'light', recentBooks: [], openBookTitles: [], bookmarks: []
+      kind: 'book',
+      bookId: 1,
+      format: 'pdf',
+      title: 'X',
+      tocOpen: false,
+      thumbsOpen: false,
+      dualPage: false,
+      isReading: false,
+      theme: 'light',
+      recentBooks: [],
+      openBookTitles: [],
+      bookmarks: []
     }
     const b = { ...a, tocOpen: true }
     expect(hashContext(a)).not.toBe(hashContext(b))

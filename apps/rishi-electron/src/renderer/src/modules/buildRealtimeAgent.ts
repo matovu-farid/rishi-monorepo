@@ -43,7 +43,7 @@ function runToolCall<T>(
   }).pipe(
     Effect.tap((result) =>
       Effect.sync(() => {
-        if (inspect && inspect.isEmpty(result)) {
+        if (inspect?.isEmpty(result)) {
           console.warn(
             `[voice-chat] tool '${toolName}' returned empty result. context:`,
             inspect.contextOnEmpty()
@@ -157,9 +157,7 @@ export function buildRealtimeAgent({
         // partial or empty result. Return a sentinel instruction that the
         // agent reads aloud so the user knows to wait a moment.
         if (getBookImportService().isIndexing(bookId)) {
-          return [
-            "I'm still indexing this book — please give me a moment and try asking again."
-          ]
+          return ["I'm still indexing this book — please give me a moment and try asking again."]
         }
         const chunks = await ragService.searchSemantic(queryText, bookId, 3)
         return chunks.map((c) => c.text)
@@ -184,8 +182,9 @@ export function buildRealtimeAgent({
   )
 
   const endConversationExecute = ({ reason }: { reason: string }) =>
-    runToolCall<void>('endConversation', undefined, async () => {
+    runToolCall<void>('endConversation', undefined, () => {
       onEndConversation(reason)
+      return Promise.resolve()
     })
 
   const endConversationTool = Object.assign(

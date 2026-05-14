@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { createActor, fromPromise } from 'xstate'
 import type { Virtualizer } from '@tanstack/react-virtual'
+import type { TextContent } from 'react-pdf'
 import isEqual from 'fast-deep-equal'
 import { pdfReaderMachine } from '@/machines/pdfReaderMachine'
 import { usePdfStore } from '@/stores/pdfStore'
@@ -283,14 +284,18 @@ export function usePdfReader(
         flush: () => {}
       }
     }
+    // Why: book.location is only the initial seed for the xstate actor (parsed once on mount); the machine then owns location internally. Re-running the effect on every location persist would tear down/recreate the actor and lose state. scrollContainerRef is a stable ref object.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [book.id, virtualizer])
 
+  // Why: apiRef.current holds the stable imperative handle to the xstate actor created in useEffect. Callers (PdfView) need synchronous access via the returned object. The ref's identity is stable across renders — only its current.* method bodies are swapped on effect re-run.
+  // eslint-disable-next-line react-hooks/refs
   return apiRef.current
 }
 
 function publishParagraphsForPage(
   page: number,
-  pageDataMap: Record<number, import('react-pdf').TextContent>
+  pageDataMap: Record<number, TextContent>
 ): void {
   const data = pageDataMap[page]
   if (!data) return

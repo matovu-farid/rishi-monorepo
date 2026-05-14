@@ -59,7 +59,7 @@ describe('repairBookKinds', () => {
     expect(repairBookKinds(db)).toBe(0)
   })
 
-  it("does not touch rows where filepath does not end in .azw3", () => {
+  it('does not touch rows where filepath does not end in .azw3', () => {
     insert(db, 'mobi', '/data/foo.azw3.bak')
     insert(db, 'mobi', '/data/x.azw3.tmp')
     insert(db, 'mobi', '/data/azw3-folder/book.mobi')

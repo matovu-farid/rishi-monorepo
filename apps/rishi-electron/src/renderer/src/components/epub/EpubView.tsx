@@ -3,8 +3,9 @@ import { ReactReader } from '@/components/react-reader'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ThemeType } from '@/themes/common'
+import type React from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ThemeType } from '@/themes/common'
 import { themes } from '@/themes/themes'
 import createIReactReaderTheme from '@/themes/readerThemes'
 import AIChatOrb from '../chat/AIChatOrb'
@@ -19,7 +20,7 @@ import { usePlayerStore } from '@/stores/playerStore'
 import { useNavMachine } from '@/hooks/useNavMachine'
 import { useNavStore } from '@/stores/navStore'
 import { highlightRange, removeHighlight, getCurrentViewParagraphs } from '@/modules/epubwrapper'
-import { type Book } from '@/lib/api'
+import type { Book } from '@/lib/api'
 import { updateBookLocation } from '@/lib/api'
 import { saveHighlight, getHighlightsForBook } from '@/modules/highlight-storage'
 import { getSyncService } from '@/services'
@@ -68,7 +69,11 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   const rendition = useEpubStore((s) => s.rendition)
   const setRendition = useEpubStore((s) => s.setRendition)
   const renditionRef = useRef(rendition)
-  renditionRef.current = rendition
+  // Mirror the latest rendition into a ref via effect — writing refs during
+  // render violates react-hooks/refs.
+  useEffect(() => {
+    renditionRef.current = rendition
+  }, [rendition])
 
   // Boot the centralised navigation state machine
   useNavMachine(rendition)
@@ -129,10 +134,10 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           label: pageCurrent ? `Page ${pageCurrent}` : undefined
         })
           .then(async () => {
-            queryClient.invalidateQueries({ queryKey: ['bookmarks', bookSyncId] })
+            void queryClient.invalidateQueries({ queryKey: ['bookmarks', bookSyncId] })
             await publishBookmarksToMenu(bookSyncId)
           })
-          .catch((err) => console.warn('[menu] addBookmark failed:', err))
+          .catch((err: unknown) => console.warn('[menu] addBookmark failed:', err))
       },
       readAloudToggle: () => {
         const send = usePlayerStore.getState().send
@@ -176,11 +181,11 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
             (data as ArrayBufferView).byteLength
           )
         } else {
-          bytes = new Uint8Array(Object.values(data as Record<string, number>))
+          bytes = new Uint8Array(Object.values(data))
         }
         setEpubData(bytes)
       })
-      .catch((err) => console.error('[epub] Failed to load:', err))
+      .catch((err: unknown) => console.error('[epub] Failed to load:', err))
     return () => {
       cancelled = true
     }
@@ -290,7 +295,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         color
       })
         .then(() => getSyncService().triggerWrite())
-        .catch((err) => console.warn('[highlight] save failed:', err))
+        .catch((err: unknown) => console.warn('[highlight] save failed:', err))
       setSelectionInfo(null)
     },
     [selectionInfo, rendition]
@@ -307,7 +312,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     setBookId(book.id.toString())
     usePageTracker.getState().initBook(book.id.toString())
-  }, [book.id])
+  }, [book.id, setBookId])
 
   const handleTocChange = useCallback(
     (toc: NavItem[]) => {
@@ -375,33 +380,33 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
 
     const unsubActive = usePlayerStore.subscribe(
       (s) => s.activeParagraph,
-      async (paragraph) => {
+      (paragraph) => {
         if (!paragraph) return
-        await highlightRange(rendition, paragraph.index)
+        void highlightRange(rendition, paragraph.index)
       }
     )
 
     const unsubEnded = usePlayerStore.subscribe(
       (s) => s.endedParagraph,
-      async (paragraph) => {
+      (paragraph) => {
         if (!paragraph) return
-        await removeHighlight(rendition, paragraph.index)
+        void removeHighlight(rendition, paragraph.index)
       }
     )
 
     const unsubMove = usePlayerStore.subscribe(
       (s) => s.lastMove,
-      async (move) => {
+      (move) => {
         if (!move) return
-        await removeHighlight(rendition, move.from.index)
+        void removeHighlight(rendition, move.from.index)
       }
     )
 
     const unsubState = usePlayerStore.subscribe(
       (s) => s.playingState,
-      async (state) => {
+      (state) => {
         if (state === 'stopped' || state === 'idle') {
-          await clearAllHighlights()
+          void clearAllHighlights()
         }
       }
     )
@@ -420,14 +425,14 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     if (rendition) {
       updateTheme(rendition, theme)
     }
-  }, [theme])
+  }, [theme, rendition])
 
   // Track cover page & recalculate avgLocsPerPage on resize/aspect ratio change
   useEffect(() => {
     if (!rendition) return
 
     const onRelocated = () => {
-      const loc = (rendition as any).location
+      const loc = rendition.location
       const spineIndex = loc?.start?.index ?? -1
       setIsFirstPage(spineIndex === 0)
       setIsFrontMatter(spineIndex <= 1) // Hide page number on cover + title page
@@ -437,13 +442,13 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     const onResized = () => {
       const pt = usePageTracker.getState()
       if (!pt.ready || !pt.locationsReady) return
-      const startCfi = (rendition as any)?.location?.start?.cfi
-      const endCfi = (rendition as any)?.location?.end?.cfi
+      const startCfi = rendition?.location?.start?.cfi
+      const endCfi = rendition?.location?.end?.cfi
       if (startCfi && endCfi) {
         const s = rendition.book.locations.locationFromCfi(startCfi) as unknown as number
         const e = rendition.book.locations.locationFromCfi(endCfi) as unknown as number
         if (typeof s === 'number' && typeof e === 'number' && e > s) {
-          const rawLocCount = ((rendition.book.locations as any)._locations ?? []).length
+          const rawLocCount = (rendition.book.locations._locations ?? []).length
           pt.build(rawLocCount, e - s)
         }
       }
@@ -555,9 +560,9 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
 
             // Make the cover (first spine section) appear on the right side
             // of the first two-page spread by injecting a blank column spacer.
-            _rendition.hooks.content.register((contents: any) => {
+            _rendition.hooks.content.register((contents: Contents) => {
               if (contents.sectionIndex === 0) {
-                const doc = contents.document as Document
+                const doc = contents.document
                 const spacer = doc.createElement('div')
                 spacer.setAttribute('data-cover-spacer', 'true')
                 spacer.style.breakAfter = 'column'
@@ -584,8 +589,8 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
 
               // Measure how many location markers fit in one visible spread
               const measureLocsPerView = (): number => {
-                const startCfi = (_rendition as any)?.location?.start?.cfi
-                const endCfi = (_rendition as any)?.location?.end?.cfi
+                const startCfi = _rendition.location?.start?.cfi
+                const endCfi = _rendition.location?.end?.cfi
                 if (startCfi && endCfi) {
                   const s = locFromCfi(startCfi)
                   const e = locFromCfi(endCfi)
@@ -608,7 +613,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
                 // so location.start.cfi is stale until "relocated" fires.
                 const seedOnRelocated = () => {
                   _rendition.off('relocated', seedOnRelocated)
-                  const cfi = (_rendition as any)?.location?.start?.cfi
+                  const cfi = _rendition.location?.start?.cfi
                   if (cfi) {
                     usePageTracker.getState().goToCfi(cfi, locFromCfi)
                     // Ensure the epub store has the location even when
@@ -626,26 +631,28 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               void _rendition.book.locations.generate(CHARS_PER_PAGE).then(() => {
                 console.log(
                   '[epub] Locations generated, count:',
-                  ((_rendition.book.locations as any)._locations ?? []).length
+                  (_rendition.book.locations._locations ?? []).length
                 )
                 usePageTracker.getState().setLocationsReady(true)
 
                 // Cache raw locations for instant restore next time
                 try {
                   localStorage.setItem(locsCacheKey, _rendition.book.locations.save())
-                } catch {}
+                } catch {
+                  // localStorage quota exceeded — non-fatal, locations will regenerate next time
+                }
 
                 // Wait for relocated so we can measure locsPerView
                 const buildOnce = () => {
                   _rendition.off('relocated', buildOnce)
-                  const rawLocCount = ((_rendition.book.locations as any)._locations ?? []).length
+                  const rawLocCount = (_rendition.book.locations._locations ?? []).length
                   const avgLocsPerPage = measureLocsPerView()
                   console.log('[epub] Building page tracker:', { rawLocCount, avgLocsPerPage })
                   usePageTracker.getState().build(rawLocCount, avgLocsPerPage)
                   console.log('[epub] Page tracker state:', usePageTracker.getState())
 
                   // Seed current page
-                  const startCfi = (_rendition as any)?.location?.start?.cfi
+                  const startCfi = _rendition.location?.start?.cfi
                   if (startCfi) {
                     usePageTracker.getState().goToCfi(startCfi, locFromCfi)
                     // Ensure the epub store has the location even when
@@ -662,13 +669,13 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
             })
           }}
         />
-        {pageCurl.active && (
+        {pageCurl.active ? (
           <PageCurlOverlay
             progress={pageCurl.progress}
             direction={pageCurl.direction}
             pageColor={themes[theme].background}
           />
-        )}
+        ) : null}
       </div>
       <div className="fixed top-0 left-9999 right-9999 bottom-0 -z-30 pointer-events-none opacity-0">
         <div style={{ height: '100vh', position: 'relative', overflow: 'hidden' }}>
@@ -696,9 +703,9 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       </div>
 
       {/* AI chat orb */}
-      {isChatting && (
+      {isChatting ? (
         <AIChatOrb chatStatus={chatStatus} onClick={() => setChatPanelOpen((prev) => !prev)} />
-      )}
+      ) : null}
 
       {/* Voice chat launcher — paired above the TTS play orb */}
       <VoiceChatLauncher />
@@ -709,7 +716,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       </div>
 
       {/* Highlight color picker popover */}
-      {selectionInfo && (
+      {selectionInfo ? (
         <SelectionPopover
           cfiRange={selectionInfo.cfiRange}
           selectedText={selectionInfo.text}
@@ -717,11 +724,11 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           onHighlight={handleHighlightColor}
           onClose={() => setSelectionInfo(null)}
         />
-      )}
+      ) : null}
 
       {/* Highlights side panel */}
       <HighlightsPanel
-        bookSyncId={bookSyncIdRef.current ?? ''}
+        bookSyncId={bookSyncId}
         rendition={rendition}
         open={highlightsPanelOpen}
         onOpenChange={setHighlightsPanelOpen}
@@ -751,7 +758,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       {/* Chat Panel */}
       <ChatPanel
         bookId={book.id}
-        bookSyncId={bookSyncIdRef.current ?? ''}
+        bookSyncId={bookSyncId}
         bookTitle={book.title}
         rendition={rendition}
         open={chatPanelOpen}
@@ -759,7 +766,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       />
 
       {/* Page number indicator — shows "X" normally, "X of Y" on hover; hidden on front matter */}
-      {pageReady && !isFrontMatter && (
+      {pageReady && !isFrontMatter ? (
         <div
           className="group/page"
           style={{
@@ -783,7 +790,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
             <span className="hidden group-hover/page:inline"> of {pageTotal}</span>
           </span>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

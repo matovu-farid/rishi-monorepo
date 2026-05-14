@@ -19,7 +19,11 @@ export interface BookData {
 
 export async function copyBookToAppData(filePath: string): Promise<string> {
   const appDataPath = await window.electron.getAppDataPath()
-  const fileName = filePath.split(/[\\/]/).pop() || 'book'
+  // `pop()` returns `''` for paths that end in a separator (trailing slash);
+  // collapse that to `undefined` so we always pick a usable filename rather
+  // than writing a file at `${appDataPath}/`.
+  const lastSegment = filePath.split(/[\\/]/).pop()
+  const fileName = lastSegment !== undefined && lastSegment !== '' ? lastSegment : 'book'
   const bookPath = `${appDataPath}/${fileName}`
   await window.electron.copyFile(filePath, bookPath)
   return bookPath
@@ -35,7 +39,7 @@ export async function getBooks(): Promise<BookData[]> {
 
 export async function getBook(id: string): Promise<BookData | undefined> {
   const books = await getBooks()
-  return books.find((book) => book.id == id)
+  return books.find((book) => book.id === id)
 }
 
 export async function storeBook(book: BookData): Promise<void> {
@@ -44,12 +48,12 @@ export async function storeBook(book: BookData): Promise<void> {
     await window.electron.setStoreValue('books', [book])
     return
   }
-  const savedBook = books.find((currBook) => currBook.id == book.id)
+  const savedBook = books.find((currBook) => currBook.id === book.id)
   if (!savedBook) {
     books.push(book)
   } else {
     books = books.map((currBook) => {
-      if (currBook.id != book.id) return currBook
+      if (currBook.id !== book.id) return currBook
       return {
         ...currBook,
         ...book,
@@ -65,7 +69,7 @@ export async function updateCoverImage(blob: Blob, id: string): Promise<void> {
   if (!book) return
   // only update it once
   if (book.version && book.version > 0) return
-  if (book.kind != 'pdf') return
+  if (book.kind !== 'pdf') return
   const cover = Array.from(new Uint8Array(await blob.arrayBuffer()))
   await updateBook({
     id: book.id,

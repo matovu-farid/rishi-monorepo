@@ -108,9 +108,7 @@ export const indexBookProgram = (deps: IndexBookDeps): Effect.Effect<void, Error
     })
 
   const skip = deps.skipPages ?? new Set<number>()
-  const ordered = pagesAroundCenter(deps.startPage ?? 1, deps.numPages).filter(
-    (p) => !skip.has(p)
-  )
+  const ordered = pagesAroundCenter(deps.startPage ?? 1, deps.numPages).filter((p) => !skip.has(p))
   const [priority, ...rest] = ordered
 
   const program = Effect.gen(function* () {

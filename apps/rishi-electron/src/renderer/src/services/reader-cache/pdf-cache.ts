@@ -15,11 +15,8 @@ const pdfCache = createReaderCache<PDFDocumentProxy>({
 })
 
 export const getCachedPdf = (bookId: number) => pdfCache.get(bookId)
-export const setCachedPdf = (
-  bookId: number,
-  proxy: PDFDocumentProxy,
-  bytes: Uint8Array
-): void => pdfCache.set(bookId, proxy, bytes)
+export const setCachedPdf = (bookId: number, proxy: PDFDocumentProxy, bytes: Uint8Array): void =>
+  pdfCache.set(bookId, proxy, bytes)
 export const evictPdf = (bookId: number): void => pdfCache.evict(bookId)
 
 // Diagnostic handle for e2e tests. See epub-cache.ts for rationale.

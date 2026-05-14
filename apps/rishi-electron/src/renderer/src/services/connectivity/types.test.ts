@@ -25,9 +25,18 @@ describe('ConnectivityService type compatibility', () => {
     >()
   })
 
-  it('window satisfies ConnectivitySource', () => {
-    // Compile-time assertion — fails build if window's typed surface drifts.
-    const _w: ConnectivitySource = window
-    void _w
+  it('the navigator + window split satisfies ConnectivitySource', () => {
+    // Compile-time assertion — fails build if the typed surface drifts.
+    // `onLine` lives on `navigator`, while `online`/`offline` events fire
+    // on `window`. Production composes them into a single source object
+    // (see `services/index.ts#getConnectivityService`).
+    const _source: ConnectivitySource = {
+      get onLine() {
+        return navigator.onLine
+      },
+      addEventListener: (type, listener) => window.addEventListener(type, listener),
+      removeEventListener: (type, listener) => window.removeEventListener(type, listener)
+    }
+    void _source
   })
 })

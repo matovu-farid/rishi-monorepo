@@ -18,10 +18,10 @@ const PREFETCH_PRIORITY = 0
  * Prefetch TTS audio for the page a book would open to.
  * Call from the library page after books are loaded.
  */
-export async function prefetchTTSForBooks(books: Book[]) {
+export function prefetchTTSForBooks(books: Book[]): void {
   for (const book of books) {
     // Don't block the loop -- fire-and-forget per book
-    void prefetchSingleBook(book).catch((err) =>
+    void prefetchSingleBook(book).catch((err: unknown) =>
       console.warn('[tts-prefetch] prefetch failed:', err)
     )
   }

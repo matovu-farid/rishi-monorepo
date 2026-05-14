@@ -1,7 +1,7 @@
-import { ipcMain } from 'electron'
 import { eq, and } from 'drizzle-orm'
 import { getDrizzle } from '../database/drizzle.js'
 import { bookmarks } from '../database/schema.js'
+import { handle } from '../../preload/ipc-contract.js'
 
 export interface BookmarkRow {
   id: string
@@ -17,7 +17,7 @@ export interface BookmarkRow {
 }
 
 export function registerBookmarkHandlers(): void {
-  ipcMain.handle('bookmarks:list', async (_event, bookId: string): Promise<BookmarkRow[]> => {
+  handle('bookmarks:list', (_event, bookId) => {
     const db = getDrizzle()
     return db
       .select()
@@ -27,29 +27,23 @@ export function registerBookmarkHandlers(): void {
       .all()
   })
 
-  ipcMain.handle(
-    'bookmarks:save',
-    async (
-      _event,
-      params: { id: string; bookId: string; location: string; label: string }
-    ): Promise<void> => {
-      const db = getDrizzle()
-      const now = Date.now()
-      await db.insert(bookmarks).values({
-        id: params.id,
-        bookId: params.bookId,
-        location: params.location,
-        label: params.label,
-        createdAt: now,
-        updatedAt: now,
-        syncVersion: 0,
-        isDirty: 1,
-        isDeleted: 0
-      })
-    }
-  )
+  handle('bookmarks:save', async (_event, params) => {
+    const db = getDrizzle()
+    const now = Date.now()
+    await db.insert(bookmarks).values({
+      id: params.id,
+      bookId: params.bookId,
+      location: params.location,
+      label: params.label,
+      createdAt: now,
+      updatedAt: now,
+      syncVersion: 0,
+      isDirty: 1,
+      isDeleted: 0
+    })
+  })
 
-  ipcMain.handle('bookmarks:delete', async (_event, bookmarkId: string): Promise<void> => {
+  handle('bookmarks:delete', async (_event, bookmarkId) => {
     const db = getDrizzle()
     await db
       .update(bookmarks)

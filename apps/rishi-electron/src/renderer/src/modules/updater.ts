@@ -23,7 +23,7 @@ interface UpdateState {
 export const useUpdateStore = create<UpdateState>()(
   devtools(
     (set) => ({
-      status: { kind: 'idle' } as UpdateStatus,
+      status: { kind: 'idle' },
       setStatus: (status) => set({ status })
     }),
     { name: 'update-store' }
@@ -123,6 +123,10 @@ export async function checkForUpdates(_opts?: { silent: boolean }): Promise<void
     console.warn('[updater] checkForUpdates failed:', msg)
     useUpdateStore.getState().setStatus({ kind: 'error', message: msg })
   } finally {
+    // Why: single-flight guard. The early-return at the top of this function is the
+    // sole gate; checkInFlight transitions true → false here serially with no other
+    // writers. The eslint rule cannot see the gate pattern.
+    // eslint-disable-next-line require-atomic-updates
     checkInFlight = false
   }
 }

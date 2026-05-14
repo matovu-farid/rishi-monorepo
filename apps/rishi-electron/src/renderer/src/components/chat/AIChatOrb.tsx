@@ -1,4 +1,4 @@
-import React from 'react'
+import type React from 'react'
 import { ContextualHint } from '@/components/tutorial/ContextualHint'
 import type { ChatStatus } from '@/stores/chatStore'
 
@@ -113,7 +113,7 @@ export default function AIChatOrb({ chatStatus, onClick }: AIChatOrbProps) {
         }}
       >
         {/* Pulsing ring shown while connecting */}
-        {isConnecting && (
+        {isConnecting ? (
           <div
             style={{
               position: 'absolute',
@@ -127,7 +127,7 @@ export default function AIChatOrb({ chatStatus, onClick }: AIChatOrbProps) {
               pointerEvents: 'none'
             }}
           />
-        )}
+        ) : null}
         <div className="flex items-center gap-[3px]">
           {barHeights.map((h, i) => (
             <div

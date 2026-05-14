@@ -11,12 +11,7 @@ export interface CacheDeps {
 export interface Cache {
   audioPath(bookId: string, cfiRange: string): Promise<string>
   getAudio(bookId: string, cfiRange: string, textHash?: string): Promise<ArrayBuffer | null>
-  saveAudio(
-    bookId: string,
-    cfiRange: string,
-    bytes: Uint8Array,
-    textHash?: string
-  ): Promise<string>
+  saveAudio(bookId: string, cfiRange: string, bytes: Uint8Array, textHash?: string): Promise<string>
   clearBook(bookId: string): Promise<void>
   evictIfNeeded(): Promise<void>
 }
@@ -28,13 +23,11 @@ export function createCache(deps: CacheDeps): Cache {
   const knownBookDirs = new Set<string>()
 
   async function init(): Promise<void> {
-    if (!initPromise) {
-      initPromise = (async () => {
-        const appData = await ipc.getAppDataPath()
-        rootDir = `${appData}/${TTS_CACHE_DIR}`
-        await ipc.mkdir(rootDir)
-      })()
-    }
+    initPromise ??= (async () => {
+      const appData = await ipc.getAppDataPath()
+      rootDir = `${appData}/${TTS_CACHE_DIR}`
+      await ipc.mkdir(rootDir)
+    })()
     return initPromise
   }
 

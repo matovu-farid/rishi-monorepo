@@ -3,8 +3,8 @@ import { BrowserWindow } from 'electron'
 import type { WindowIdentity } from './windowManager'
 
 export interface FactoryDeps {
-  loadUrl: string                       // dev: ELECTRON_RENDERER_URL; prod: http://localhost:<port>
-  preloadPath: string                   // path.join(__dirname, '../preload/index.js')
+  loadUrl: string // dev: ELECTRON_RENDERER_URL; prod: http://localhost:<port>
+  preloadPath: string // path.join(__dirname, '../preload/index.js')
 }
 
 export function makeBrowserWindowFactory(deps: FactoryDeps) {
@@ -29,7 +29,9 @@ export function makeBrowserWindowFactory(deps: FactoryDeps) {
     win.on('ready-to-show', () => win.show())
 
     const hash = identity.kind === 'book' ? `#/books/${identity.bookId}` : '#/'
-    win.loadURL(`${deps.loadUrl}${hash}`)
+    win.loadURL(`${deps.loadUrl}${hash}`).catch((err: unknown) => {
+      console.error('[createBrowserWindow] loadURL failed', err)
+    })
     return win
   }
 }

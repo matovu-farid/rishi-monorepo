@@ -1,6 +1,7 @@
-import { ipcMain, app, BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
+import { handle } from '../../preload/ipc-contract.js'
 
 const SUPPORTED_EXTENSIONS = new Set(['.pdf', '.epub', '.mobi', '.azw3'])
 
@@ -92,11 +93,11 @@ async function walkDirectory(
 }
 
 export function registerScannerHandlers(): void {
-  ipcMain.handle('scanner:getDefaultFolders', async () => {
+  handle('scanner:getDefaultFolders', () => {
     return getDefaultBookFolders()
   })
 
-  ipcMain.handle('scanner:scan', async (_event, mode: string) => {
+  handle('scanner:scan', async (_event, mode) => {
     scanCancelled = false
     let count = 0
 
@@ -138,7 +139,7 @@ export function registerScannerHandlers(): void {
     return count
   })
 
-  ipcMain.handle('scanner:cancel', async () => {
+  handle('scanner:cancel', () => {
     scanCancelled = true
   })
 }

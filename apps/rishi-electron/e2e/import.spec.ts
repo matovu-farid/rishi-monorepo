@@ -27,7 +27,8 @@ test.describe('Import & metadata extraction', () => {
 
   test('getPdfData returns valid metadata for a PDF fixture', async () => {
     const data = await app.page.evaluate(async (p) => {
-      const e = (window as unknown as { electron: Record<string, Function> }).electron
+      const e = (window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> })
+        .electron
       return await e.getPdfData(p)
     }, PDF_FIXTURE)
     expect(data).toMatchObject({ kind: 'pdf' })
@@ -36,7 +37,8 @@ test.describe('Import & metadata extraction', () => {
 
   test('getBookData returns EPUB metadata without hanging', async () => {
     const data = await app.page.evaluate(async (p) => {
-      const e = (window as unknown as { electron: Record<string, Function> }).electron
+      const e = (window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> })
+        .electron
       return await e.getBookData(p)
     }, EPUB_FIXTURE)
     expect(data).toMatchObject({ kind: 'epub' })
@@ -45,7 +47,8 @@ test.describe('Import & metadata extraction', () => {
 
   test('getMobiData returns MOBI metadata', async () => {
     const data = await app.page.evaluate(async (p) => {
-      const e = (window as unknown as { electron: Record<string, Function> }).electron
+      const e = (window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> })
+        .electron
       return await e.getMobiData(p)
     }, MOBI_FIXTURE)
     expect(data).toMatchObject({ kind: 'mobi' })
@@ -53,7 +56,8 @@ test.describe('Import & metadata extraction', () => {
 
   test('checkFileSize returns ok or warn for fixture PDFs', async () => {
     const result = await app.page.evaluate(async (p) => {
-      const e = (window as unknown as { electron: Record<string, Function> }).electron
+      const e = (window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> })
+        .electron
       return await e.checkFileSize(p, 'pdf')
     }, PDF_FIXTURE)
     expect(['ok', 'warn']).toContain(result)
@@ -61,7 +65,8 @@ test.describe('Import & metadata extraction', () => {
 
   test('copyFile + exists round-trips through getAppDataPath', async () => {
     const ok = await app.page.evaluate(async (src) => {
-      const e = (window as unknown as { electron: Record<string, Function> }).electron
+      const e = (window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> })
+        .electron
       const appData = (await e.getAppDataPath()) as string
       const dest = `${appData}/import-roundtrip.pdf`
       await e.copyFile(src, dest)
@@ -79,7 +84,8 @@ test.describe('Import & metadata extraction', () => {
       title: 'Import Persistence PDF'
     })
     const books = await app.page.evaluate(async () => {
-      const e = (window as unknown as { electron: Record<string, Function> }).electron
+      const e = (window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> })
+        .electron
       return (await e.getBooks()) as Array<{ id: number; title: string }>
     })
     expect(books.find((b) => b.id === book.id)?.title).toBe('Import Persistence PDF')

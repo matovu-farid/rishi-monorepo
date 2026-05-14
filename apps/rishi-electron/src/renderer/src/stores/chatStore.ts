@@ -36,9 +36,7 @@ export const useChatStore = create<ChatState>()(
       // Wiring site: service events → store actions. Subscriptions live for
       // the process lifetime; their unsubscribes are intentionally discarded.
       voice.onChatStatus((status) => set({ chatStatus: status }))
-      voice.onStateChange((state) =>
-        set({ voiceState: state, voiceError: voice.getError() })
-      )
+      voice.onStateChange((state) => set({ voiceState: state, voiceError: voice.getError() }))
       voice.onEndedByAgent(() => {
         set({ isChatting: false })
         voice.deactivate()
@@ -46,7 +44,7 @@ export const useChatStore = create<ChatState>()(
 
       return {
         isChatting: false,
-        chatStatus: 'idle' as ChatStatus,
+        chatStatus: 'idle',
         voiceState: voice.getState(),
         voiceError: voice.getError(),
 
@@ -74,7 +72,7 @@ export const useChatStore = create<ChatState>()(
           const outline =
             epubState.bookId === String(bookId) ? (epubState.bookOutline ?? undefined) : undefined
 
-          voice.activate(bookId, { pageText, outline }).catch((err) => {
+          voice.activate(bookId, { pageText, outline }).catch((err: unknown) => {
             if (!(err instanceof OfflineError)) {
               captureError(err, { operation: 'chatStore', step: 'activate' })
             }

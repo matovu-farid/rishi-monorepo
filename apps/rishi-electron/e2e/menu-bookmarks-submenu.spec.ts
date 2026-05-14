@@ -62,14 +62,10 @@ test('Bookmarks > recent submenu reflects added bookmarks', async () => {
 
     const menu = await getApplicationMenu(launched.app)
     const bookmarks = findMenuItem(menu, ['Bookmarks'])
-    const labels = (bookmarks?.submenu ?? [])
-      .map((m) => m.label)
-      .filter((l): l is string => !!l)
+    const labels = (bookmarks?.submenu ?? []).map((m) => m.label).filter((l): l is string => !!l)
     // At least one real bookmark entry beyond the static items + placeholder.
     expect(
-      labels.some(
-        (l) => l !== 'Add Bookmark' && l !== 'Show All Bookmarks…' && !l.startsWith('(')
-      )
+      labels.some((l) => l !== 'Add Bookmark' && l !== 'Show All Bookmarks…' && !l.startsWith('('))
     ).toBe(true)
   } finally {
     await closeApp(launched)

@@ -3,7 +3,7 @@ import type { BookOptions } from 'epubjs/types/book'
 import type View from 'epubjs/types/managers/view'
 import type Section from 'epubjs/types/section'
 import Epub, { EpubCFI, Contents } from 'epubjs'
-import { SpineItem } from 'epubjs/types/section'
+import type { SpineItem, Spine } from 'epubjs/types/section'
 
 export type ParagraphWithCFI = {
   text: string
@@ -54,21 +54,21 @@ export function getCurrentViewText(rendition: Rendition) {
   // Get the current location which includes the visible range
   const location = rendition.manager.currentLocation()
 
-  if (!location || !location.length || !location[0]) {
+  if (!location?.length || !location[0]) {
     return null
   }
 
   // Get the first visible section's mapping which contains the CFI range
   const visibleSection = location[0]
 
-  if (!visibleSection.mapping || !visibleSection.mapping.start || !visibleSection.mapping.end) {
+  if (!visibleSection.mapping?.start || !visibleSection.mapping.end) {
     return null
   }
 
   // Find the view for this section
   const view = rendition.manager.views.find({ index: visibleSection.index })
 
-  if (!view || !view.contents || !view.contents.document) {
+  if (!view?.contents?.document) {
     return null
   }
 
@@ -128,7 +128,7 @@ export function highlightRange(
     // Find the view that contains this CFI range
     const found = rendition.manager
       .visible()
-      .filter((view: { index: any }) => rangeCfi.spinePos === view.index)
+      .filter((view: View) => rangeCfi.spinePos === view.index)
 
     if (!found.length) {
       return Promise.reject(new Error('No view found for CFI range: ' + cfiRange))
@@ -160,7 +160,7 @@ export function highlightRange(
     const annotation = rendition.annotations.highlight(
       rangeCfi,
       data,
-      cb || (() => {}),
+      cb ?? (() => {}),
       className,
       mergedStyles
     )
@@ -195,7 +195,7 @@ export function removeHighlight(rendition: Rendition, cfiRange: string) {
     }
 
     // Find the view that contains this CFI range
-    const found = rendition.manager.visible().filter(function (view: { index: any }) {
+    const found = rendition.manager.visible().filter(function (view: View) {
       return rangeCfi.spinePos === view.index
     })
 
@@ -224,22 +224,17 @@ function _getTextNodesInRange(range: Range) {
   const textNodes: Node[] = []
 
   try {
-    if (!range || !range.commonAncestorContainer) {
-      console.error('_getTextNodesInRange: Invalid range provided')
-      return textNodes
-    }
-
     const walker = range.commonAncestorContainer.ownerDocument?.createTreeWalker(
       range.commonAncestorContainer,
       NodeFilter.SHOW_TEXT,
       {
         acceptNode: function (node) {
           try {
-            if (!node.textContent || !node.textContent.trim()) {
+            if (!node.textContent?.trim()) {
               return NodeFilter.FILTER_REJECT
             }
             return range.intersectsNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
-          } catch (e) {
+          } catch {
             return NodeFilter.FILTER_REJECT
           }
         }
@@ -268,17 +263,17 @@ function _findContainingBlockElement(textNode: Node) {
 
   while (element) {
     try {
-      if (element.matches && element.matches(blockSelectors)) {
+      if (element.matches(blockSelectors)) {
         return element
       }
-    } catch (e) {
+    } catch {
       const selectors = blockSelectors.split(', ')
       for (const selector of selectors) {
         try {
-          if (element.matches && element.matches(selector)) {
+          if (element.matches(selector)) {
             return element
           }
-        } catch (e2) {
+        } catch {
           continue
         }
       }
@@ -289,7 +284,10 @@ function _findContainingBlockElement(textNode: Node) {
   return null
 }
 function getPosition(view: View) {
-  const element = view?.element as HTMLDivElement
+  const element = view.element
+  if (!element) {
+    return null
+  }
   const iframe = element.querySelector('iframe')
   const position = iframe?.getBoundingClientRect()
   if (!position) {
@@ -306,9 +304,14 @@ function getPosition(view: View) {
 export async function getTotalPagesForBook(rendition: Rendition): Promise<number> {
   const book = rendition.book
 
-  const sections: Section[] = await book.loaded.spine.then((spine: any) => {
-    const sections = spine.spineItems
-    return sections
+  const sections: Section[] = await book.loaded.spine.then((spine) => {
+    // Why: epubjs upstream types declare `loaded.spine: Promise<SpineItem[]>`
+    // but the runtime actually resolves with the `Spine` instance (see
+    // epubjs/src/book.js: `this.loading.spine.resolve(this.spine)`). Our
+    // local augmentation merges these into a union — narrow at the call
+    // site rather than fighting the merge.
+    const spineItems = 'spineItems' in spine ? (spine as Spine).spineItems : spine
+    return spineItems as unknown as Section[]
   })
 
   const positions = (
@@ -322,16 +325,11 @@ export async function getTotalPagesForBook(rendition: Rendition): Promise<number
   )
     .filter((poisition) => poisition !== null)
     .sort((a, b) => a.right - b.right)
+  if (positions.length === 0 || !rendition.manager) {
+    return 0
+  }
   const firstPosition = positions[0]
-  if (!firstPosition) {
-    return 0
-  }
-
   const lastPosition = positions[positions.length - 1]
-  if (!lastPosition) {
-    return 0
-  }
-
   const totalWidth = lastPosition.right - firstPosition.left
   const pagesCount = totalWidth / rendition.manager.layout.width
   console.log({ pagesCount })
@@ -344,9 +342,14 @@ export async function getAllParagraphsForBook(
 ): Promise<{ data: string; bookId: number; pageNumber: number; id: number }[]> {
   const book = rendition.book
 
-  let sections: Section[] = await book.loaded.spine.then((spine: any) => {
-    const sections = spine.spineItems
-    return sections
+  let sections: Section[] = await book.loaded.spine.then((spine) => {
+    // Why: epubjs upstream types declare `loaded.spine: Promise<SpineItem[]>`
+    // but the runtime actually resolves with the `Spine` instance (see
+    // epubjs/src/book.js: `this.loading.spine.resolve(this.spine)`). Our
+    // local augmentation merges these into a union — narrow at the call
+    // site rather than fighting the merge.
+    const spineItems = 'spineItems' in spine ? (spine as Spine).spineItems : spine
+    return spineItems as unknown as Section[]
   })
   sections = sections.sort((a, b) => a.index - b.index)
   const views = await Promise.all(
@@ -483,11 +486,9 @@ function _getParagraphsFromRange(
         let lastTextOffset = 0
 
         for (const textNode of textNodes) {
-          const nodeText = textNode.textContent || ''
+          const nodeText = textNode.textContent ?? ''
 
-          if (!firstTextNode) {
-            firstTextNode = textNode
-          }
+          firstTextNode ??= textNode
           lastTextNode = textNode
 
           if (textNode === range.startContainer && textNode === range.endContainer) {
@@ -541,18 +542,16 @@ function _getParagraphsFromRange(
           rendition.settings.ignoreClass
         )
 
-        let startCfi: string, endCfi: string, cfiRange: string
-
         const mainCfi = elementCfi.toString()
-        startCfi = mainCfi
-        endCfi = mainCfi
+        const startCfi: string = mainCfi
+        const endCfi: string = mainCfi
 
         const rangeCfiObj = new EpubCFI(
           paragraphRange,
           contents.cfiBase,
           rendition.settings.ignoreClass
         )
-        cfiRange = rangeCfiObj.toString()
+        const cfiRange: string = rangeCfiObj.toString()
 
         paragraphs.push({
           text: elementText,
@@ -606,12 +605,12 @@ function getCurrentLocationPosition(rendition: Rendition) {
   const view = visible[0]
 
   const { index, href } = view.section
-  let globalViewPortPosition
+  let globalViewPortPosition: number
   const globalChapterPosition = view.position()
 
-  let localViewPortStartPosition
-  let localViewPortEndPosition
-  let pageWidth
+  let localViewPortStartPosition: number
+  let localViewPortEndPosition: number
+  let pageWidth: number
 
   if (manager.settings.direction === 'rtl') {
     globalViewPortPosition = container.right - scrolledX
@@ -651,13 +650,16 @@ function getMapping(
   localViewPortEndPosition: number,
   view: View
 ) {
-  if (!view || !view.contents || !view.contents.document) {
+  if (!view.contents?.document) {
     return null
   }
   const manager = rendition.manager
+  if (!manager) {
+    return null
+  }
   const mapping = manager.mapping.page(
     view.contents,
-    view.section.cfiBase,
+    view.section?.cfiBase ?? '',
     localViewPortStartPosition,
     localViewPortEndPosition
   )
@@ -668,30 +670,30 @@ function getMapping(
 export function getCurrentView(rendition: Rendition) {
   const location = rendition.manager.currentLocation()
 
-  if (!location || !location.length || !location[0]) {
+  if (!location?.length || !location[0]) {
     return null
   }
 
   const visibleSection = location[0]
 
-  if (!visibleSection.mapping || !visibleSection.mapping.start || !visibleSection.mapping.end) {
+  if (!visibleSection.mapping?.start || !visibleSection.mapping.end) {
     return null
   }
   const index = visibleSection.index
   const view = rendition.manager.views.find({ index })
-  return view || null
+  return view ?? null
 }
 
 export function getCurrentIndex(rendition: Rendition) {
   const location = rendition.manager.currentLocation()
 
-  if (!location || !location.length || !location[0]) {
+  if (!location?.length || !location[0]) {
     return null
   }
 
   const visibleSection = location[0]
 
-  if (!visibleSection.mapping || !visibleSection.mapping.start || !visibleSection.mapping.end) {
+  if (!visibleSection.mapping?.start || !visibleSection.mapping.end) {
     return null
   }
   const index = visibleSection.index
@@ -747,7 +749,9 @@ async function pollForViewToBeCreated(
       return view
     }
 
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
+    await new Promise((resolve) => {
+      setTimeout(resolve, pollIntervalMs)
+    })
   }
 
   return null
@@ -756,11 +760,11 @@ async function pollForViewToBeCreated(
 async function getViewFromSpineItem(spineItem: SpineItem, rendition: Rendition) {
   const loadPromise = spineItem.load(rendition.book.load.bind(rendition.book))
 
-  const timeoutPromise = new Promise<never>((_, reject) =>
+  const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => reject(new Error('Section load timeout')), 10000)
-  )
+  })
 
-  const loadedSection = (await Promise.race([loadPromise, timeoutPromise])) as Section
+  const loadedSection = await Promise.race([loadPromise, timeoutPromise])
 
   let view = rendition.manager.views.find({ index: spineItem.index })
   if (view) {
@@ -772,12 +776,12 @@ async function getViewFromSpineItem(spineItem: SpineItem, rendition: Rendition) 
     return view
   }
 
-  view = (await pollForViewToBeCreated(rendition, spineItem.index)) || undefined
+  view = (await pollForViewToBeCreated(rendition, spineItem.index)) ?? undefined
   if (view) {
     return view
   }
 
-  view = (await pollForViewToBeCreated(rendition, loadedSection.index)) || undefined
+  view = (await pollForViewToBeCreated(rendition, loadedSection.index)) ?? undefined
   return view
 }
 
@@ -819,7 +823,7 @@ function _getViewParagraphsSetup(rendition: Rendition): ViewParagraphsSetup | nu
     return null
   }
   return {
-    locationPosition: locationPosition as LocationPosition,
+    locationPosition: locationPosition,
     viewPortWidth,
     view
   }
@@ -833,28 +837,27 @@ async function _loadSectionParagraphsForUnloadedView(
 ): Promise<ParagraphWithCFI[]> {
   try {
     const loadPromise = spineItem.load(rendition.book.load.bind(rendition.book))
-    const timeoutPromise = new Promise<never>((_, reject) =>
+    const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(() => reject(new Error('Section load timeout')), 10000)
-    )
+    })
 
-    const loadedSection = (await Promise.race([loadPromise, timeoutPromise])) as Section
+    const loadedSection = await Promise.race([loadPromise, timeoutPromise])
 
-    if (!loadedSection || !loadedSection.document) {
+    if (!loadedSection.document) {
       return []
     }
 
     const document = loadedSection.document
     const body = document.body
 
-    if (!body) {
-      return []
-    }
-
     const contents = new Contents(document, body, spineItem.cfiBase, spineItem.index)
 
+    if (!rendition.manager) {
+      return []
+    }
     const mapping = rendition.manager.mapping.page(contents, spineItem.cfiBase, start, end)
 
-    if (!mapping || !mapping.start || !mapping.end) {
+    if (!mapping?.start || !mapping.end) {
       return []
     }
 
@@ -913,13 +916,13 @@ async function _getAdjacentViewParagraphs(
   ) {
     try {
       const loadPromise = adjacentSpineItem.load(rendition.book.load.bind(rendition.book))
-      const timeoutPromise = new Promise<never>((_, reject) =>
+      const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error('Section load timeout')), 10000)
-      )
+      })
 
-      const loadedSection = (await Promise.race([loadPromise, timeoutPromise])) as Section
+      const loadedSection = await Promise.race([loadPromise, timeoutPromise])
 
-      if (loadedSection && loadedSection.document) {
+      if (loadedSection?.document) {
         const document = loadedSection.document
         const body = document.body
 
@@ -1027,7 +1030,10 @@ function createParagraphsFromPostions(
 
   return paragraphs
 }
-export async function navigateToPage() {}
+export function navigateToPage(): Promise<void> {
+  // no-op: placeholder retained for API stability; intentionally empty
+  return Promise.resolve()
+}
 export async function getPreviousViewParagraphs(rendition: Rendition): Promise<ParagraphWithCFI[]> {
   const setup = _getViewParagraphsSetup(rendition)
   if (!setup) {
@@ -1049,12 +1055,12 @@ export function getParagraphsFromMapping({
   endCfiString: string
   view?: View
 }) {
-  const view = providedView || getCurrentView(rendition)
+  const view = providedView ?? getCurrentView(rendition)
   if (!view) {
     return []
   }
 
-  if (!view || !view.contents || !view.contents.document) {
+  if (!view?.contents?.document) {
     return []
   }
 

@@ -17,13 +17,13 @@ export const Radio: React.FC<RadioProps> = ({ label, value, className = '', them
         value={value}
         className={`w-4 h-4 border-gray-300 focus:ring-2 ${className}`}
         style={{
-          accentColor: theme?.color || '#2563eb',
+          accentColor: theme?.color ?? '#2563eb',
           borderColor: theme?.color ? `${theme.color}40` : '#d1d5db'
         }}
         {...props}
       />
       {label && (
-        <span className="ml-2 text-sm" style={{ color: theme?.color || '#374151' }}>
+        <span className="ml-2 text-sm" style={{ color: theme?.color ?? '#374151' }}>
           {label}
         </span>
       )}

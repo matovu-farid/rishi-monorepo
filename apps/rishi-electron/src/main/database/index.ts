@@ -27,7 +27,7 @@ export function getDb(): Database.Database {
  *
  * This function is idempotent — calling it more than once is a no-op.
  */
-export async function initDatabase(): Promise<void> {
+export function initDatabase(): void {
   if (db) {
     return
   }

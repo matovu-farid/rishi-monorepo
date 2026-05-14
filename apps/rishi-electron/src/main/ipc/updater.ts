@@ -1,6 +1,7 @@
 import { autoUpdater } from 'electron-updater'
-import { BrowserWindow, ipcMain, app } from 'electron'
+import { BrowserWindow, app } from 'electron'
 import { is } from '@electron-toolkit/utils'
+import { handle } from '../../preload/ipc-contract.js'
 
 /**
  * Register IPC handlers for the auto-updater.
@@ -58,7 +59,7 @@ export function registerUpdaterHandlers(): void {
 
   // ── IPC handlers ─────────────────────────────────────────────────────
 
-  ipcMain.handle('updater:check', async () => {
+  handle('updater:check', async () => {
     // Skip update checks in dev mode — there are no published builds to compare against.
     if (is.dev) {
       console.log('[updater] Skipping update check in dev mode')
@@ -76,7 +77,7 @@ export function registerUpdaterHandlers(): void {
     }
   })
 
-  ipcMain.handle('updater:download', async () => {
+  handle('updater:download', async () => {
     if (is.dev) {
       console.log('[updater] Skipping download in dev mode')
       return
@@ -89,12 +90,12 @@ export function registerUpdaterHandlers(): void {
     }
   })
 
-  ipcMain.handle('updater:install', () => {
+  handle('updater:install', () => {
     // quitAndInstall will close all windows, then launch the installer
     autoUpdater.quitAndInstall()
   })
 
-  ipcMain.handle('updater:getAppVersion', () => {
+  handle('updater:getAppVersion', () => {
     return app.getVersion()
   })
 }

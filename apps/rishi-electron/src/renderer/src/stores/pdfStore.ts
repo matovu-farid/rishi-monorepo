@@ -1,9 +1,16 @@
 import { create } from 'zustand'
 import { devtools, subscribeWithSelector } from 'zustand/middleware'
-import type { TextContent } from 'react-pdf'
+import type { TextContent, TextItem, TextMarkedContent } from 'react-pdf'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
+import type { Virtualizer } from '@tanstack/react-virtual'
 import type { ParagraphWithIndex } from '@/models/player_control'
 import type { Book } from '@/lib/api'
+
+/** PDF view uses `Virtualizer<HTMLDivElement, Element>` — the second arg is
+ *  the item element type, which @tanstack/react-virtual leaves as Element
+ *  here because each page row is a generic div. Matches the type already
+ *  used in `hooks/usePdfReader.ts`. */
+export type PdfVirtualizer = Virtualizer<HTMLDivElement, Element>
 
 export type Paragraph = ParagraphWithIndex & {
   dimensions: {
@@ -18,9 +25,7 @@ export enum BookNavigationState {
   Navigated
 }
 
-export function isTextItem(
-  item: import('react-pdf').TextItem | import('react-pdf').TextMarkedContent
-): item is import('react-pdf').TextItem {
+export function isTextItem(item: TextItem | TextMarkedContent): item is TextItem {
   return 'str' in item
 }
 
@@ -42,7 +47,7 @@ interface PdfState {
   highlightedParagraphIndex: string
   isHighlighting: boolean
   isTextGot: boolean
-  virtualizer: any | null
+  virtualizer: PdfVirtualizer | null
   bookNavigationState: BookNavigationState
   isRenderedPageState: Record<number, boolean>
   hasNavigatedToPage: boolean
@@ -66,7 +71,7 @@ interface PdfState {
   setHighlightedParagraphIndex: (index: string) => void
   setIsHighlighting: (value: boolean) => void
   setIsTextGot: (value: boolean) => void
-  setVirtualizer: (v: any) => void
+  setVirtualizer: (v: PdfVirtualizer | null) => void
   setBookNavigationState: (state: BookNavigationState) => void
   setHasNavigatedToPage: (value: boolean) => void
   setIsLookingForNextParagraph: (value: boolean) => void

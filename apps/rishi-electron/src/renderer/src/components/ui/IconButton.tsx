@@ -1,4 +1,4 @@
-import React from 'react'
+import type React from 'react'
 
 interface IconButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   size?: 'small' | 'medium' | 'large'

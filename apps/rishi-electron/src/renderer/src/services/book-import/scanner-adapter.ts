@@ -24,7 +24,7 @@ export function createScannerPort(ipc: ScannerIpc, on: WindowEventsOn): ScannerP
       const channel =
         kind === 'result' ? 'scan-result' : kind === 'progress' ? 'scan-progress' : 'scan-complete'
       return on(channel, (...args: unknown[]) => {
-        if (kind === 'complete') (listener as () => void)()
+        if (kind === 'complete') listener()
         else if (kind === 'result')
           (listener as (b: DiscoveredBook) => void)(args[0] as DiscoveredBook)
         else (listener as (p: ScanProgress) => void)(args[0] as ScanProgress)

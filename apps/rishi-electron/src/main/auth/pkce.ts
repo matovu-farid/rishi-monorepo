@@ -16,7 +16,7 @@ export function generatePkcePair(): PkcePair {
   return { code_verifier, code_challenge }
 }
 
-export async function verifyPkce(verifier: string, challenge: string): Promise<boolean> {
+export function verifyPkce(verifier: string, challenge: string): boolean {
   const expected = base64url(createHash('sha256').update(verifier).digest())
   return expected === challenge
 }

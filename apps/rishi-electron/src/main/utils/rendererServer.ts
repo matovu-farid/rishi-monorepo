@@ -83,7 +83,7 @@ export async function startRendererServer(rendererRoot: string): Promise<string>
   // than silently 404 every request.
   await stat(indexHtml)
 
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
       // Only serve GET/HEAD; everything else is a programming error.
       if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -91,7 +91,7 @@ export async function startRendererServer(rendererRoot: string): Promise<string>
         return
       }
 
-      const url = new URL(req.url || '/', 'http://127.0.0.1')
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1')
       const decoded = decodeURIComponent(url.pathname)
       let relPath = decoded.replace(/^\/+/, '') // strip leading /
       if (relPath === '' || relPath.endsWith('/')) {
@@ -141,6 +141,10 @@ export async function startRendererServer(rendererRoot: string): Promise<string>
       res.writeHead(500).end('Internal Server Error')
       console.error('[rendererServer] request failed', err)
     }
+  }
+
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void handleRequest(req, res)
   })
 
   // Try the preferred fixed port first so the renderer URL is stable across
@@ -180,6 +184,10 @@ export async function startRendererServer(rendererRoot: string): Promise<string>
   }
 
   serverInstance = server
+  // Why: single-writer — startRendererServer's early-return guard above
+  // (`if (serverUrl) return serverUrl`) prevents concurrent runs from racing
+  // this assignment.
+  // eslint-disable-next-line require-atomic-updates
   serverUrl = `http://127.0.0.1:${address.port}`
   return serverUrl
 }
@@ -193,5 +201,7 @@ export async function stopRendererServer(): Promise<void> {
   if (!s) return
   serverInstance = null
   serverUrl = null
-  await new Promise<void>((res) => s.close(() => res()))
+  await new Promise<void>((res) => {
+    s.close(() => res())
+  })
 }

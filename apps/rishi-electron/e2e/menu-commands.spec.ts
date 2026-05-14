@@ -52,7 +52,8 @@ test('Bookmarks > Add Bookmark adds a row in the DB when a PDF is open', async (
     // before opening the book so the addBookmark menu handler (which keys
     // off bookSyncId) picks up a non-null target on first mount.
     const syncId = await launched.page.evaluate(async (id) => {
-      const e = (window as unknown as { electron: Record<string, Function> }).electron
+      const e = (window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> })
+        .electron
       const existing = (await e.booksGetSyncId(id)) as string | null
       if (existing) return existing
       const row = (await e.getBook(id)) as Record<string, unknown> | null
@@ -80,7 +81,8 @@ test('Bookmarks > Add Bookmark adds a row in the DB when a PDF is open', async (
     // avoid moving focus away. Either window can read the DB; the IPC is
     // process-global.
     const before = await bookPage.evaluate(async (sid) => {
-      const e = (window as unknown as { electron: Record<string, Function> }).electron
+      const e = (window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> })
+        .electron
       const list = (await e.bookmarksList(sid)) as unknown[]
       return list.length
     }, syncId)
@@ -110,7 +112,9 @@ test('Bookmarks > Add Bookmark adds a row in the DB when a PDF is open', async (
       expect(clicked).toBe(true)
       await launched.page.waitForTimeout(1200)
       after = await bookPage.evaluate(async (sid) => {
-        const e = (window as unknown as { electron: Record<string, Function> }).electron
+        const e = (
+          window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> }
+        ).electron
         const list = (await e.bookmarksList(sid)) as unknown[]
         return list.length
       }, syncId)

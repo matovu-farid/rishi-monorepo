@@ -13,6 +13,7 @@ import { makeBrowserWindowFactory } from './windows/createBrowserWindow.js'
 import { MenuInstaller } from './menu/installMenu.js'
 import type { MenuContext, MenuCommand, BookFormat } from './menu/commands.js'
 import { getBook, listRecentBooks } from './database/queries.js'
+import { handle } from '../preload/ipc-contract.js'
 
 // File types Rishi advertises in the OS "Open With" menu (see
 // electron-builder.yml `fileAssociations`). The OS routes a matching file
@@ -145,7 +146,9 @@ function attachLibraryWindowSideEffects(win: BrowserWindow): void {
       details.url.startsWith('https:') ||
       details.url.startsWith('mailto:')
     ) {
-      shell.openExternal(details.url)
+      shell.openExternal(details.url).catch((err: unknown) => {
+        console.error('[main] shell.openExternal failed', err)
+      })
     }
     return { action: 'deny' }
   })
@@ -175,7 +178,7 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
       ...base,
       recentBooks: safeListRecentBooks(),
       openBookTitles: openBookTitlesArray()
-    } as MenuContext
+    }
     windowContexts.set(win.webContents.id, refreshed)
     menuInstaller!.setContext(refreshed)
   })
@@ -193,7 +196,7 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
       ...base,
       recentBooks: safeListRecentBooks(),
       openBookTitles: openBookTitlesArray()
-    } as MenuContext
+    }
     windowContexts.set(id, refreshed)
     menuInstaller!.setContext(refreshed)
   })
@@ -207,7 +210,7 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
     }
   })
 
-  ipcMain.handle('window:openBook', async (_e, { bookId }: { bookId: number }) => {
+  handle('window:openBook', (_e, bookId) => {
     const w = windowManager!.openBook(bookId) as unknown as BrowserWindow
     // Pre-seed the book window's menu context from the DB (better-sqlite3
     // sync read) so the menu shows the right format-specific items the first
@@ -232,18 +235,18 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
     }
   })
 
-  ipcMain.handle('window:closeBook', async (_e, { bookId }: { bookId: number }) => {
+  handle('window:closeBook', (_e, bookId) => {
     windowManager!.closeBook(bookId)
     openBookTitles.delete(bookId)
   })
 
-  ipcMain.handle('window:focusLibrary', async () => {
+  handle('window:focusLibrary', () => {
     const lib = windowManager!.openLibrary() as unknown as BrowserWindow
     if (lib.isMinimized()) lib.restore()
     lib.focus()
   })
 
-  ipcMain.handle('window:list', async () => {
+  handle('window:list', () => {
     return openBookTitlesArray()
   })
 
@@ -263,7 +266,7 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
         const updated = {
           ...ctx,
           openBookTitles: openBookTitlesArray()
-        } as MenuContext
+        }
         windowContexts.set(senderId, updated)
         if (BrowserWindow.fromWebContents(event.sender) === BrowserWindow.getFocusedWindow()) {
           menuInstaller!.setContext(updated)
@@ -277,7 +280,7 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
         const updatedOther = {
           ...otherCtx,
           openBookTitles: openBookTitlesArray()
-        } as MenuContext
+        }
         windowContexts.set(w.webContents.id, updatedOther)
         if (w === BrowserWindow.getFocusedWindow()) {
           menuInstaller!.setContext(updatedOther)
@@ -310,8 +313,8 @@ function defaultLibraryContext(): MenuContext {
 }
 
 function mergeContext(prev: MenuContext | undefined, partial: Partial<MenuContext>): MenuContext {
-  if (!prev) return { ...defaultLibraryContext(), ...(partial as object) } as MenuContext
-  return { ...prev, ...(partial as object) } as MenuContext
+  if (!prev) return { ...defaultLibraryContext(), ...(partial as object) }
+  return { ...prev, ...(partial as object) }
 }
 
 // Single-instance lock so a second launch focuses the existing window
@@ -330,63 +333,68 @@ if (!gotTheLock) {
   })
 }
 
-app.whenReady().then(async () => {
-  electronApp.setAppUserModelId('org.fidexa.rishi')
+app
+  .whenReady()
+  .then(async () => {
+    electronApp.setAppUserModelId('org.fidexa.rishi')
 
-  // Register custom protocol for serving local files to renderer
-  registerLocalFileProtocol()
+    // Register custom protocol for serving local files to renderer
+    registerLocalFileProtocol()
 
-  app.on('browser-window-created', (_, window) => {
-    optimizer.watchWindowShortcuts(window)
-  })
+    app.on('browser-window-created', (_, window) => {
+      optimizer.watchWindowShortcuts(window)
+    })
 
-  // Initialize backend services
-  await initDatabase()
-  initVectorDb()
-  registerAllIpcHandlers()
+    // Initialize backend services
+    initDatabase()
+    initVectorDb()
+    registerAllIpcHandlers()
 
-  // Race guard: if the renderer mounts before `did-finish-load` fires, it
-  // calls this to drain whatever was buffered.
-  ipcMain.handle('files:getPending', () => {
-    rendererReady = true
-    return pendingOpenFiles.splice(0)
-  })
+    // Race guard: if the renderer mounts before `did-finish-load` fires, it
+    // calls this to drain whatever was buffered.
+    handle('files:getPending', () => {
+      rendererReady = true
+      return pendingOpenFiles.splice(0)
+    })
 
-  // First-launch file path (Windows/Linux deliver it via argv; macOS uses
-  // the `open-file` event handler registered above).
-  if (process.platform !== 'darwin') {
-    deliverOpenFiles(process.argv.slice(1).filter((a) => !a.startsWith('-')))
-  }
-
-  const preloadPath = join(__dirname, '../preload/index.js')
-  let loadUrl: string
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    loadUrl = process.env['ELECTRON_RENDERER_URL'] as string
-  } else {
-    const rendererRoot = join(__dirname, '../renderer')
-    try {
-      loadUrl = await startRendererServer(rendererRoot)
-    } catch (err) {
-      console.error('[main] renderer server failed to start, falling back to file://', err)
-      loadUrl = `file://${join(rendererRoot, 'index.html')}`
+    // First-launch file path (Windows/Linux deliver it via argv; macOS uses
+    // the `open-file` event handler registered above).
+    if (process.platform !== 'darwin') {
+      deliverOpenFiles(process.argv.slice(1).filter((a) => !a.startsWith('-')))
     }
-  }
 
-  bootstrapMenuAndWindows(loadUrl, preloadPath)
-  const libWin = windowManager!.openLibrary() as unknown as BrowserWindow
-  attachLibraryWindowSideEffects(libWin)
-  menuInstaller!.setContext(defaultLibraryContext())
-
-  registerAuthIpc(() => libraryWindowFromManager())
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      const w = windowManager!.openLibrary() as unknown as BrowserWindow
-      attachLibraryWindowSideEffects(w)
-      menuInstaller!.setContext(defaultLibraryContext())
+    const preloadPath = join(__dirname, '../preload/index.js')
+    let loadUrl: string
+    if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+      loadUrl = process.env['ELECTRON_RENDERER_URL']
+    } else {
+      const rendererRoot = join(__dirname, '../renderer')
+      try {
+        loadUrl = await startRendererServer(rendererRoot)
+      } catch (err) {
+        console.error('[main] renderer server failed to start, falling back to file://', err)
+        loadUrl = `file://${join(rendererRoot, 'index.html')}`
+      }
     }
+
+    bootstrapMenuAndWindows(loadUrl, preloadPath)
+    const libWin = windowManager!.openLibrary() as unknown as BrowserWindow
+    attachLibraryWindowSideEffects(libWin)
+    menuInstaller!.setContext(defaultLibraryContext())
+
+    registerAuthIpc(() => libraryWindowFromManager())
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        const w = windowManager!.openLibrary() as unknown as BrowserWindow
+        attachLibraryWindowSideEffects(w)
+        menuInstaller!.setContext(defaultLibraryContext())
+      }
+    })
   })
-})
+  .catch((err: unknown) => {
+    console.error('[main] app initialization failed', err)
+  })
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

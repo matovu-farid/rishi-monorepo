@@ -36,10 +36,10 @@ export function makeFs(opts?: {
   return { fs, removeCalls, copyCalls }
 }
 
-export function makeDbForImport(opts?: {
-  savedBook?: Book
-  failOn?: 'saveBook'
-}): { db: BookStoreIpc; savedBooks: Book[] } {
+export function makeDbForImport(opts?: { savedBook?: Book; failOn?: 'saveBook' }): {
+  db: BookStoreIpc
+  savedBooks: Book[]
+} {
   const savedBooks: Book[] = []
   const fallback: Book = {
     id: 42,
@@ -78,9 +78,7 @@ export function makeFileSync(opts?: {
   throwOn?: 'upload' | 'updateHash'
 }): FileSyncIpc {
   return {
-    hashBookFile: vi.fn(async (path: string) =>
-      opts?.hashImpl ? opts.hashImpl(path) : 'abc123'
-    ),
+    hashBookFile: vi.fn(async (path: string) => (opts?.hashImpl ? opts.hashImpl(path) : 'abc123')),
     uploadBookFile: vi.fn(async () => {
       if (opts?.throwOn === 'upload') throw new Error('upload failed')
       return opts?.uploadImpl ? opts.uploadImpl() : { r2Key: 'r2/abc' }
@@ -219,7 +217,9 @@ describe('runImport — upload failure does NOT affect result', () => {
 
     expect(result.ok).toBe(true)
     // `done` fires synchronously after save; `upload-failed` arrives on the next tick.
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
     const kinds = events.map((e) => e.kind)
     expect(kinds).toContain('upload-started')
     expect(kinds).toContain('upload-failed')

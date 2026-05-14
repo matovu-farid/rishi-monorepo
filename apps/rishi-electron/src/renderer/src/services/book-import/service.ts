@@ -67,7 +67,12 @@ export function createBookImportService(deps: BookImportServiceDeps): BookImport
     indexingBookIds.add(bookId)
     try {
       await runIndex(
-        { db: deps.db, rag: deps.rag, embed: deps.embed, embedBatchSize: deps.config.embedBatchSize },
+        {
+          db: deps.db,
+          rag: deps.rag,
+          embed: deps.embed,
+          embedBatchSize: deps.config.embedBatchSize
+        },
         bookId,
         pageData,
         (e) => progress.emit(e)
@@ -94,6 +99,9 @@ export function createBookImportService(deps: BookImportServiceDeps): BookImport
   async function cancelDiscovery(): Promise<void> {
     if (!scanRunning) return
     await deps.scanner.cancel()
+    // Why: single-flight cancel. The early-return guards against concurrent
+    // cancels; the scanner.complete listener also clears scanRunning serially.
+    // eslint-disable-next-line require-atomic-updates
     scanRunning = false
     discovery.emit({ kind: 'complete', cancelled: true })
     teardownScanSubscriptions()

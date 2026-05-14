@@ -58,7 +58,7 @@ export function SelectionPopover({ position, onHighlight, onClose }: SelectionPo
             aria-label={`Highlight ${c.name}`}
             title={`Highlight ${c.name}`}
             onClick={() => {
-              onHighlight(c.name as HighlightColor)
+              onHighlight(c.name)
               onClose()
             }}
           />

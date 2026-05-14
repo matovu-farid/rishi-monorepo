@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useMemo, useRef } from 'react'
+import type React from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { ThemeType } from '@/themes/common'
 import Loader from '@/components/Loader'
 import AIChatOrb from '../../chat/AIChatOrb'
@@ -30,7 +31,7 @@ import { useUpdateCoverIMage } from '../hooks/useUpdateCoverIMage'
 import { useScrolling } from '../hooks/useScrolling'
 import { usePdfNavigation } from '../hooks/usePdfNavigation'
 import { PageComponent } from './pdf-page'
-import { PDFDocumentProxy } from 'pdfjs-dist'
+import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { useVirualization } from '../hooks/useVirualization'
 import { PAGE_GAP } from '../utils/constants'
 import { parsePdfLocation } from '@/lib/pdfLocation'
@@ -87,7 +88,7 @@ export function PdfView({
       setThumbOpen(false)
       setPdfDocProxy(null)
     }
-  }, [])
+  }, [resetParaphState, setThumbOpen, setPdfDocProxy])
 
   // Scoped playerStore subscriptions for PDF page navigation and highlighting.
   // These must be inside the component lifecycle so they are cleaned up when
@@ -243,6 +244,39 @@ export function PdfView({
     book
   )
 
+  // Stable ref-setter for each virtualized page item. Defined as a
+  // useCallback outside the JSX so React Compiler sees a single, stable
+  // callback identity rather than an inline arrow created during render
+  // (which the compiler conservatively flags as a render-time ref access
+  // when the closure touches `pageRefs.current` / virtualizer internals).
+  // The setter itself runs at commit time when React attaches the node,
+  // not during render — so the `.current` writes are safe.
+  //
+  // The index is read from the node's `data-index` attribute rather than
+  // captured via closure, so a single callback identity works for every
+  // virtualized item — without that, returning a fresh per-index closure
+  // each render would cause React to fire the ref callback on every
+  // render (detach + re-attach the DOM node).
+  //
+  // Returns a React 19 ref-callback cleanup so the entry is removed from
+  // pageRefs when the virtualizer unmounts the item.
+  const setPageNodeRef = useCallback(
+    (node: HTMLDivElement): (() => void) => {
+      const indexAttr = node.dataset.index
+      const index = indexAttr ? Number(indexAttr) : NaN
+      if (!Number.isNaN(index)) {
+        pageRefs.current.set(index, node)
+      }
+      virtualizer.measureElement(node)
+      return () => {
+        if (!Number.isNaN(index)) {
+          pageRefs.current.delete(index)
+        }
+      }
+    },
+    [pageRefs, virtualizer]
+  )
+
   // pdfReader owns navigation + persistence via xstate. Replaces the old
   // useCurrentPageNumber tangle of useEffects (initial-seek lockout, debounced
   // save with unmount-flush, paragraph publishing) with one explicit machine
@@ -257,8 +291,7 @@ export function PdfView({
     () => ({
       toggleTOC: () => setTocOpen((v) => !v),
       toggleThumbnails: () => setThumbOpen((v) => !v),
-      toggleDualPage: () =>
-        usePdfStore.setState((s) => ({ isDualPage: !s.isDualPage })),
+      toggleDualPage: () => usePdfStore.setState((s) => ({ isDualPage: !s.isDualPage })),
       addBookmark: () => {
         if (!bookSyncId) return
         const pageNum = usePdfStore.getState().pageNumber
@@ -268,10 +301,10 @@ export function PdfView({
           label: `Page ${pageNum}`
         })
           .then(async () => {
-            queryClient.invalidateQueries({ queryKey: ['bookmarks', bookSyncId] })
+            void queryClient.invalidateQueries({ queryKey: ['bookmarks', bookSyncId] })
             await publishBookmarksToMenu(bookSyncId)
           })
-          .catch((err) => console.warn('[menu] addBookmark failed:', err))
+          .catch((err: unknown) => console.warn('[menu] addBookmark failed:', err))
       },
       readAloudToggle: () => {
         const send = usePlayerStore.getState().send
@@ -292,14 +325,22 @@ export function PdfView({
   )
   useMenuCommands(menuHandlers)
 
-  function onItemClick({ pageNumber: itemPageNumber }: { pageNumber: number }) {
-    pdfReader.seekTo(itemPageNumber)
-    setTocOpen(false)
-  }
+  // Stable callbacks so the memos that consume them (documentContextValue,
+  // ReaderTOC props) keep stable identity across renders.
+  const onItemClick = useCallback(
+    ({ pageNumber: itemPageNumber }: { pageNumber: number }) => {
+      pdfReader.seekTo(itemPageNumber)
+      setTocOpen(false)
+    },
+    [pdfReader]
+  )
 
-  function onThumbnailNavigate(pageNumber: number) {
-    pdfReader.seekTo(pageNumber)
-  }
+  const onThumbnailNavigate = useCallback(
+    (pageNumber: number) => {
+      pdfReader.seekTo(pageNumber)
+    },
+    [pdfReader]
+  )
 
   // PDF loading — bypasses react-pdf's <Document> so we own the proxy
   // lifecycle. The warm-restore cache (services/reader-cache/pdf-cache)
@@ -319,30 +360,32 @@ export function PdfView({
 
   useEffect(() => {
     let cancelled = false
-    setLoadError(null)
 
     if (getCachedPdf(book.id)) {
-      // Cache hit — state already initialized from cache by useState.
+      // Cache hit — state already initialized from cache by useState. No
+      // need to clear loadError synchronously: this branch returns before
+      // any new error could be produced for this book.
       return () => {
         cancelled = true
       }
     }
 
-    ;(async () => {
+    void (async () => {
       try {
-        const data = await window.electron.readFile(book.filepath)
+        const data: unknown = await window.electron.readFile(book.filepath)
         if (cancelled) return
         let bytes: Uint8Array
         if (data instanceof ArrayBuffer) {
           bytes = new Uint8Array(data)
         } else if (ArrayBuffer.isView(data)) {
-          bytes = new Uint8Array(
-            (data as any).buffer,
-            (data as any).byteOffset,
-            (data as any).byteLength
-          )
+          // Why: ArrayBuffer.isView narrows to ArrayBufferView in TS but the
+          // structural fields we read live on every TypedArray + DataView.
+          const view = data
+          bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
         } else {
-          bytes = new Uint8Array(Object.values(data as any) as number[])
+          // Some serialization paths flatten typed arrays to {0: n, 1: n, ...}.
+          // Cast through the structural shape we expect rather than `any`.
+          bytes = new Uint8Array(Object.values(data as Record<string, number>))
         }
         // pdfjs detaches the buffer it parses; pass a clone so `bytes` stays
         // intact for indexing and re-parse.
@@ -355,6 +398,11 @@ export function PdfView({
         setCachedPdf(book.id, proxy, bytes)
         setPdfProxy(proxy)
         setPdfBytes(bytes)
+        // Clear any stale error from a previous attempt only after a fresh
+        // successful load. Avoids a synchronous setState-in-effect cascade
+        // (the effect would always fire setLoadError(null) on every run,
+        // including the cache-hit fast path).
+        setLoadError((prev) => (prev === null ? prev : null))
       } catch (err) {
         if (!cancelled) {
           console.error('[pdf] load failed:', err)
@@ -366,7 +414,7 @@ export function PdfView({
     return () => {
       cancelled = true
     }
-  }, [book.id, book.filepath])
+  }, [book.id, book.filepath, pdfOptions])
 
   // Hydrate the singleton pdfStore + the reader machine whenever the proxy
   // resolves (from cache or fresh parse). Kept separate from the loader so
@@ -388,29 +436,28 @@ export function PdfView({
   // single LinkService and bind it to the current proxy whenever it changes.
   // registerPage/unregisterPage are no-ops — react-pdf only uses them for
   // internal Outline auto-scroll, which we drive ourselves via pdfReader.
-  const linkServiceRef = useRef<LinkService>(null as unknown as LinkService)
-  if (linkServiceRef.current === null) {
-    linkServiceRef.current = new LinkService()
-  }
+  //
+  // Using lazy useState (not useRef) so the LinkService instance is a
+  // first-class render value — the React Compiler forbids reading
+  // `ref.current` during render, and `documentContextValue` (a memo
+  // consumed by JSX below) needs access to it on the render path.
+  const [linkService] = useState<LinkService>(() => new LinkService())
   useEffect(() => {
-    if (pdfProxy) linkServiceRef.current.setDocument(pdfProxy)
-  }, [pdfProxy])
+    if (pdfProxy) linkService.setDocument(pdfProxy)
+  }, [pdfProxy, linkService])
 
   const documentContextValue = useMemo(
     () =>
       pdfProxy
         ? {
             pdf: pdfProxy,
-            linkService: linkServiceRef.current,
+            linkService,
             onItemClick,
             registerPage: () => {},
             unregisterPage: () => {}
           }
         : null,
-    // onItemClick reads pdfReader/setTocOpen via closure; both are stable
-    // identities within a given mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pdfProxy]
+    [pdfProxy, linkService, onItemClick]
   )
 
   // Background indexing: extract per-page text and ship to the embedding/vector
@@ -421,21 +468,27 @@ export function PdfView({
 
     let cancelled = false
     let fiber: Fiber.RuntimeFiber<void, Error> | null = null
-    let doc: Awaited<ReturnType<typeof loadPdfDocument>> | null = null
+    // Hold the proxy in a single-slot box rather than a `let` that the
+    // async run reassigns. Both the async body and the cleanup function
+    // close over this object, so the cleanup always sees the current value
+    // without a race against `await`-deferred reassignment.
+    const docHolder: { current: Awaited<ReturnType<typeof loadPdfDocument>> | null } = {
+      current: null
+    }
 
     const run = async (): Promise<void> => {
       try {
         // Indexing keeps its own throwaway proxy — it walks every page and
         // can run after the visible reader unmounts. Sharing the cached
         // proxy would risk indexing destroying it on its own cleanup.
-        doc = await loadPdfDocument(pdfBytes)
+        const loadedDoc = await loadPdfDocument(pdfBytes)
         if (cancelled) {
-          await doc.destroy()
-          doc = null
+          await loadedDoc.destroy()
           return
         }
+        docHolder.current = loadedDoc
 
-        const numPages = doc.numPages
+        const numPages = loadedDoc.numPages
 
         // Pages already in chunk_data don't need to be re-extracted or
         // re-embedded. Fetch them once upfront and skip them in the schedule.
@@ -463,14 +516,13 @@ export function PdfView({
         // on fresh opens.
         const startPage = parsePdfLocation(book.location).page || 1
 
-        const docRef = doc
         fiber = Effect.runFork(
           indexBookProgram({
             bookId: book.id,
             numPages,
             startPage,
             skipPages,
-            extract: (pageNumber) => extractPageParagraphs(docRef, pageNumber),
+            extract: (pageNumber) => extractPageParagraphs(loadedDoc, pageNumber),
             saveChunks: (chunks) => window.electron.savePageDataMany(chunks),
             processJob: (pageNumber, items) =>
               window.electron.processJob(pageNumber, book.id, items),
@@ -480,9 +532,7 @@ export function PdfView({
           })
         )
       } catch (err) {
-        useIndexingStore
-          .getState()
-          .error(book.id, err instanceof Error ? err.message : String(err))
+        useIndexingStore.getState().error(book.id, err instanceof Error ? err.message : String(err))
       }
     }
 
@@ -491,12 +541,18 @@ export function PdfView({
     return () => {
       cancelled = true
       if (fiber) Effect.runFork(Fiber.interrupt(fiber))
-      if (doc) void doc.destroy()
+      if (docHolder.current) void docHolder.current.destroy()
     }
-  }, [pdfBytes, book.id])
+  }, [pdfBytes, book.id, book.location])
 
   return (
-    <div className={cn('relative h-screen w-full', !isDualPage && isFullscreen ? '' : '', 'bg-gray-300')}>
+    <div
+      className={cn(
+        'relative h-screen w-full',
+        !isDualPage && isFullscreen ? '' : '',
+        'bg-gray-300'
+      )}
+    >
       <div
         ref={scrollContainerRef}
         className="h-full w-full overflow-y-scroll overflow-x-hidden"
@@ -516,27 +572,27 @@ export function PdfView({
       >
         {/* Main PDF Viewer Area */}
         <div className="flex items-center justify-center  px-2 py-1">
-        {loadError && (
-          <div className={cn('p-4 text-center', getTextColor())}>
-            <p className="text-red-500">Failed to load PDF: {loadError}</p>
-          </div>
-        )}
-        {!pdfProxy && !loadError && (
-          <div className="w-full h-screen grid place-items-center">
-            <Loader />
-          </div>
-        )}
-        {pdfProxy && documentContextValue && (
-          <DocumentContext.Provider value={documentContextValue}>
-          <div className="flex items-center justify-center flex-col">
-            <div
-              style={{
-                height: `${virtualizer.getTotalSize()}px`,
-                width: '100%',
-                position: 'relative'
-              }}
-            >
-              {/*
+          {loadError ? (
+            <div className={cn('p-4 text-center', getTextColor())}>
+              <p className="text-red-500">Failed to load PDF: {loadError}</p>
+            </div>
+          ) : null}
+          {!pdfProxy && !loadError && (
+            <div className="w-full h-screen grid place-items-center">
+              <Loader />
+            </div>
+          )}
+          {pdfProxy && documentContextValue ? (
+            <DocumentContext.Provider value={documentContextValue}>
+              <div className="flex items-center justify-center flex-col">
+                <div
+                  style={{
+                    height: `${virtualizer.getTotalSize()}px`,
+                    width: '100%',
+                    position: 'relative'
+                  }}
+                >
+                  {/*
                 Recommended dynamic-virtualizer layout (per tanstack/virtual
                 examples/dynamic): one absolute wrapper positioned at the
                 first visible item's start, with items flowing naturally
@@ -550,67 +606,63 @@ export function PdfView({
                 only the wrapper's translateY needs updating; items below
                 a re-measured one shift naturally with no transform churn.
               */}
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  transform: `translateY(${virtualItems[0]?.start ?? 0}px)`
-                }}
-              >
-                {virtualItems.map((virtualItem) => (
                   <div
-                    key={virtualItem.key}
-                    data-index={virtualItem.index}
-                    ref={(node) => {
-                      if (node) {
-                        pageRefs.current.set(virtualItem.index, node)
-                      } else {
-                        pageRefs.current.delete(virtualItem.index)
-                      }
-                      virtualizer.measureElement(node)
-                    }}
-                    className="flex w-full justify-center"
                     style={{
-                      // Render the inter-page gap as natural margin so the
-                      // virtualizer's `gap` config matches the actual DOM
-                      // (virtualizer counts N-1 gaps for N items, so the
-                      // last item gets no margin).
-                      marginBottom: virtualItem.index < pageCount - 1 ? PAGE_GAP : 0
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      transform: `translateY(${virtualItems[0]?.start ?? 0}px)`
                     }}
                   >
-                    <div
-                      className="bg-white shadow-lg relative"
-                      data-page-number={virtualItem.index + 1}
-                      style={{ width: pageWidth ?? 'auto' }}
-                    >
-                      <PageComponent
-                        key={`page-${virtualItem.index + 1}`}
-                        pdf={pdfProxy}
-                        thispageNumber={virtualItem.index + 1}
-                        pdfWidth={pageWidth}
-                        pdfHeight={pdfHeight}
-                        isDualPage={isDualPage}
-                        bookId={bookIdStr}
-                        onRenderComplete={handlePageRendered}
-                      />
-                      <div className="group/page absolute bottom-1 left-0 right-0 text-center py-1">
-                        <span className="text-xs text-gray-400">
-                          <span>{virtualItem.index + 1}</span>
-                          {pageCount > 0 && (
-                            <span className="hidden group-hover/page:inline"> of {pageCount}</span>
-                          )}
-                        </span>
+                    {virtualItems.map((virtualItem) => (
+                      <div
+                        key={virtualItem.key}
+                        data-index={virtualItem.index}
+                        ref={setPageNodeRef}
+                        className="flex w-full justify-center"
+                        style={{
+                          // Render the inter-page gap as natural margin so the
+                          // virtualizer's `gap` config matches the actual DOM
+                          // (virtualizer counts N-1 gaps for N items, so the
+                          // last item gets no margin).
+                          marginBottom: virtualItem.index < pageCount - 1 ? PAGE_GAP : 0
+                        }}
+                      >
+                        <div
+                          className="bg-white shadow-lg relative"
+                          data-page-number={virtualItem.index + 1}
+                          style={{ width: pageWidth ?? 'auto' }}
+                        >
+                          <PageComponent
+                            key={`page-${virtualItem.index + 1}`}
+                            pdf={pdfProxy}
+                            thispageNumber={virtualItem.index + 1}
+                            pdfWidth={pageWidth}
+                            pdfHeight={pdfHeight}
+                            isDualPage={isDualPage}
+                            bookId={bookIdStr}
+                            onRenderComplete={handlePageRendered}
+                          />
+                          <div className="group/page absolute bottom-1 left-0 right-0 text-center py-1">
+                            <span className="text-xs text-gray-400">
+                              <span>{virtualItem.index + 1}</span>
+                              {pageCount > 0 && (
+                                <span className="hidden group-hover/page:inline">
+                                  {' '}
+                                  of {pageCount}
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        </div>
                       </div>
-                    </div>
+                    ))}
                   </div>
-                ))}
+                </div>
               </div>
-            </div>
-          </div>
-          </DocumentContext.Provider>
-        )}
+            </DocumentContext.Provider>
+          ) : null}
         </div>
       </div>
 
@@ -621,9 +673,9 @@ export function PdfView({
       {AuthDialog}
 
       {/* AI chat orb */}
-      {isChatting && (
+      {isChatting ? (
         <AIChatOrb chatStatus={chatStatus} onClick={() => setChatPanelOpen((prev) => !prev)} />
-      )}
+      ) : null}
 
       {/* Voice chat launcher — paired above the TTS play orb */}
       <VoiceChatLauncher />
@@ -663,7 +715,7 @@ export function PdfView({
               '[&_a]:text-gray-700 [&_a:hover]:bg-gray-100 [&_a:hover]:text-black [&_a]:border-gray-100 [&_a:hover]:pl-6'
             )}
           >
-            {pdfProxy && <Outline pdf={pdfProxy} onItemClick={onItemClick} />}
+            {pdfProxy ? <Outline pdf={pdfProxy} onItemClick={onItemClick} /> : null}
           </div>
         }
       />

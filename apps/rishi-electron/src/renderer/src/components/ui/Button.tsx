@@ -1,4 +1,4 @@
-import React from 'react'
+import type React from 'react'
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'text' | 'contained' | 'ghost' | 'default'
@@ -48,9 +48,9 @@ export const Button: React.FC<ButtonProps> = ({
   return (
     <button className={classes} disabled={disabled} {...props}>
       <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700 pointer-events-none" />
-      {startIcon && <span className="mr-2 relative z-10">{startIcon}</span>}
+      {startIcon ? <span className="mr-2 relative z-10">{startIcon}</span> : null}
       <span className="relative z-10">{children}</span>
-      {endIcon && <span className="ml-2 relative z-10">{endIcon}</span>}
+      {endIcon ? <span className="ml-2 relative z-10">{endIcon}</span> : null}
     </button>
   )
 }

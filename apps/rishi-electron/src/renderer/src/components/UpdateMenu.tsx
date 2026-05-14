@@ -18,7 +18,7 @@ export function UpdateMenu() {
       window.electron
         .getAppVersion()
         .then(setVersion)
-        .catch((err) => console.warn('[UpdateMenu] getAppVersion failed:', err))
+        .catch((err: unknown) => console.warn('[UpdateMenu] getAppVersion failed:', err))
     }
   }, [])
 
@@ -83,7 +83,7 @@ export function UpdateMenu() {
           </div>
         )}
 
-        {statusLine && <div className="mt-2 text-xs text-muted-foreground">{statusLine}</div>}
+        {statusLine ? <div className="mt-2 text-xs text-muted-foreground">{statusLine}</div> : null}
       </PopoverContent>
     </Popover>
   )

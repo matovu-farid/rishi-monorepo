@@ -42,8 +42,8 @@ describe('tagged errors → toPublic()', () => {
     expect(toPublicError(new CancelledError({ requestId: 'b-c' })).message).toBe(
       'Request cancelled'
     )
-    expect(
-      toPublicError(new QueueOverflowError({ requestId: 'b-c' })).message
-    ).toBe('Dropped from queue (low priority)')
+    expect(toPublicError(new QueueOverflowError({ requestId: 'b-c' })).message).toBe(
+      'Dropped from queue (low priority)'
+    )
   })
 })

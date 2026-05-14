@@ -1,8 +1,7 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { type JSX, type PropsWithChildren } from 'react'
+import { QueryClientProvider } from '@tanstack/react-query'
+import type { JSX, PropsWithChildren } from 'react'
 import { Toaster } from '@/components/ui/sonner'
-
-export const queryClient = new QueryClient()
+import { queryClient } from './queryClient'
 
 /**
  * App-wide providers. Authentication is handled out-of-band via the main

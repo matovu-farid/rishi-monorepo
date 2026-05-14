@@ -12,9 +12,7 @@ export const TTS_ACTIVE_CLASS = 'rishi-tts-active'
 
 /** Parse `azw3-{chap}-{idx}` → `{ chapter, paragraph }`. Returns null on a
  *  malformed input so callers can no-op safely. */
-export function parseParagraphIndex(
-  raw: string
-): { chapter: number; paragraph: number } | null {
+export function parseParagraphIndex(raw: string): { chapter: number; paragraph: number } | null {
   const m = /^azw3-(\d+)-(\d+)$/.exec(raw)
   if (!m) return null
   const chapter = Number(m[1])

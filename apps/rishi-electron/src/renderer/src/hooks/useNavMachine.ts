@@ -7,7 +7,7 @@
 import { useEffect, useRef } from 'react'
 import { createActor } from 'xstate'
 import { navMachine } from '@/machines/navMachine'
-import type { NavState } from '@/machines/navMachine'
+import type { NavMachineEvent } from '@/machines/navMachine'
 import { useNavStore } from '@/stores/navStore'
 import type { Rendition } from 'epubjs/types'
 
@@ -21,7 +21,9 @@ import type { Rendition } from 'epubjs/types'
  */
 export function useNavMachine(rendition: Rendition | null) {
   const renditionRef = useRef(rendition)
-  renditionRef.current = rendition
+  useEffect(() => {
+    renditionRef.current = rendition
+  }, [rendition])
 
   useEffect(() => {
     if (!rendition) return
@@ -33,7 +35,7 @@ export function useNavMachine(rendition: Rendition | null) {
 
     // -- State -> side-effect subscriber --
     const sub = actor.subscribe((snapshot) => {
-      const state = snapshot.value as NavState
+      const state = snapshot.value
       const ctx = snapshot.context
       const r = renditionRef.current
 
@@ -90,7 +92,7 @@ export function useNavMachine(rendition: Rendition | null) {
     // Publish send to the store BEFORE starting the actor so
     // any component reacting to the initial state change can
     // already dispatch events.
-    const send = actor.send.bind(actor) as (event: { type: string; [key: string]: any }) => void
+    const send: (event: NavMachineEvent) => void = actor.send.bind(actor)
     useNavStore.getState().setSend(send)
     actor.start()
 

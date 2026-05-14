@@ -31,12 +31,19 @@ interface BookPageData {
   lastCfi: string
 }
 
+function asScalar(v: unknown): string | number | undefined {
+  if (typeof v === 'string' || typeof v === 'number') return v
+  return undefined
+}
+
 function dump(action: string, data: Record<string, unknown>) {
+  const page = asScalar(data.page) ?? '?'
+  const locIndex = asScalar(data.locIndex) ?? '?'
   dumpError({
     source: 'EpubPageTracker',
     location: action,
     error: JSON.stringify(data),
-    context: `page=${data.page ?? '?'}, locIndex=${data.locIndex ?? '?'}`
+    context: `page=${page}, locIndex=${locIndex}`
   })
 }
 
@@ -255,10 +262,10 @@ export const usePageTracker = create<PageTrackerState>()(
       version: 2,
       migrate: (persisted, version) => {
         if (version === 1) {
-          const state = persisted as { _bookCache?: Record<string, any> }
+          const state = persisted as { _bookCache?: Record<string, Partial<BookPageData>> }
           if (state._bookCache) {
             for (const key of Object.keys(state._bookCache)) {
-              state._bookCache[key].lastCfi = state._bookCache[key].lastCfi || ''
+              state._bookCache[key].lastCfi = state._bookCache[key].lastCfi ?? ''
             }
           }
         }

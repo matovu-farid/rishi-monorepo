@@ -236,7 +236,7 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
         )}
 
         {/* Expanded: Control buttons */}
-        {expanded && (
+        {expanded ? (
           <>
             {/* Previous */}
             <button
@@ -283,7 +283,7 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
             </button>
 
             {/* Error indicator (dev only) */}
-            {import.meta.env.DEV && errors.length > 0 && (
+            {import.meta.env.DEV && errors.length > 0 ? (
               <button
                 onClick={handleShowErrorDetails}
                 aria-label="Show error details"
@@ -292,13 +292,13 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
               >
                 <AlertTriangle size={16} className="text-red-500" />
               </button>
-            )}
+            ) : null}
           </>
-        )}
+        ) : null}
       </div>
 
       {/* Error Toast */}
-      {showError && !!error && (
+      {showError && !!error ? (
         <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50">
           {toast.error(error, {
             position: 'top-center',
@@ -307,7 +307,7 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
             onAutoClose: handleErrorClose
           }) && null}
         </div>
-      )}
+      ) : null}
     </ContextualHint>
   )
 }

@@ -1,3 +1,4 @@
+import type * as PdfJs from 'pdfjs-dist'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { pageDataToParagraphs } from '@/components/pdf/utils/getPageParagraphs'
 
@@ -5,17 +6,18 @@ import { pageDataToParagraphs } from '@/components/pdf/utils/getPageParagraphs'
 // `pdfjs.GlobalWorkerOptions.workerSrc` for production. In Node test runs we
 // fall back to the legacy build with `disableWorker: true` so the same module
 // works in both environments.
-async function loadPdfjs(): Promise<typeof import('pdfjs-dist')> {
+async function loadPdfjs(): Promise<typeof PdfJs> {
   if (typeof window !== 'undefined' && (window as unknown as { electron?: unknown }).electron) {
     return import('pdfjs-dist')
   }
   const legacy = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  return legacy as unknown as typeof import('pdfjs-dist')
+  return legacy
 }
 
 export async function loadPdfDocument(bytes: Uint8Array): Promise<PDFDocumentProxy> {
   const pdfjs = await loadPdfjs()
-  const isTest = typeof window === 'undefined' || !(window as unknown as { electron?: unknown }).electron
+  const isTest =
+    typeof window === 'undefined' || !(window as unknown as { electron?: unknown }).electron
 
   // Clone the buffer because pdfjs transfers/detaches the underlying ArrayBuffer.
   const data = new Uint8Array(bytes)

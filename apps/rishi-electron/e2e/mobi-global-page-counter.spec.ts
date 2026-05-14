@@ -1,11 +1,5 @@
 import { test, expect } from '@playwright/test'
-import {
-  MOBI_FIXTURE,
-  closeApp,
-  importBook,
-  launchApp,
-  openBook
-} from './helpers/electron-app'
+import { MOBI_FIXTURE, closeApp, importBook, launchApp, openBook } from './helpers/electron-app'
 
 // Regression: the bottom page counter must reflect a global "page X of book"
 // number, not the per-chapter page index. The previous implementation surfaced
@@ -39,7 +33,9 @@ test('MOBI page counter advances globally across chapter boundaries', async () =
 
     const nextBtn = bookPage.locator('button[aria-label="Next page"]')
     let prev = Number(await counter.getAttribute('data-current'))
-    expect(Number.isFinite(prev) && prev >= 1, `initial counter should be ≥ 1, got ${prev}`).toBe(true)
+    expect(Number.isFinite(prev) && prev >= 1, `initial counter should be ≥ 1, got ${prev}`).toBe(
+      true
+    )
 
     // Track chapter changes through the iframe `src` (one blob URL per
     // chapter). Once we've crossed at least one boundary AND validated a few

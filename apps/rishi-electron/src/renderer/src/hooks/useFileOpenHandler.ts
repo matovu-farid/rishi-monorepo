@@ -26,8 +26,8 @@ export function useFileOpenHandler(): void {
         for (const r of results) {
           if (!r.ok) {
             toast.error(`Failed to import: ${r.error}`)
-          } else if (firstSuccess === null) {
-            firstSuccess = r.bookId
+          } else {
+            firstSuccess ??= r.bookId
           }
         }
         if (firstSuccess !== null) {
@@ -38,6 +38,8 @@ export function useFileOpenHandler(): void {
           ).electron.openBook(firstSuccess)
         }
       } finally {
+        // Why: This is the canonical mutex pattern (check-then-set + release in finally); the await above releases the loop but inFlight.current can only be true if THIS invocation set it on line 20, so no other concurrent writer can race.
+        // eslint-disable-next-line require-atomic-updates
         inFlight.current = false
       }
     }

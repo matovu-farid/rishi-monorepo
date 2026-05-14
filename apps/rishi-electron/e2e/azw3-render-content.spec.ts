@@ -1,11 +1,5 @@
 import { test, expect } from '@playwright/test'
-import {
-  AZW3_FIXTURE,
-  closeApp,
-  importBook,
-  launchApp,
-  openBook
-} from './helpers/electron-app'
+import { AZW3_FIXTURE, closeApp, importBook, launchApp, openBook } from './helpers/electron-app'
 
 // Regression for the user-reported bug: AZW3 opens but the reader is
 // visually blank even though foliate-js parses the file correctly.
@@ -21,7 +15,10 @@ test('AZW3 reader paints the book content into the iframe', async () => {
   launched.app.on('window', (p) => {
     p.on('console', (m) => {
       const text = m.text()
-      if (m.type() === 'error' || /Content Security Policy|azw3|parse|stylesheet|font/i.test(text)) {
+      if (
+        m.type() === 'error' ||
+        /Content Security Policy|azw3|parse|stylesheet|font/i.test(text)
+      ) {
         messages.push(`[${m.type()}] ${text}`)
       }
     })
@@ -80,7 +77,10 @@ test('AZW3 reader paints the book content into the iframe', async () => {
     // 3) Pixel-level visibility: screenshot the iframe region and make
     //    sure not every pixel is white. A completely white screenshot is
     //    proof the page is blank regardless of DOM contents.
-    const png = await iframe.screenshot({ omitBackground: false, path: 'test-results/azw3-iframe.png' })
+    const png = await iframe.screenshot({
+      omitBackground: false,
+      path: 'test-results/azw3-iframe.png'
+    })
     const dataLen = png.length
     expect(dataLen).toBeGreaterThan(2000) // sanity
 
@@ -142,11 +142,10 @@ test('AZW3 reader paginates single-section books', async () => {
     const frame = bookPage.frameLocator('iframe[title="AZW3 Pagination"]')
     const body = frame.locator('body')
     await expect
-      .poll(
-        async () =>
-          await body.evaluate((el) => (el.textContent ?? '').trim().length),
-        { timeout: 20000, intervals: [200, 500, 1000] }
-      )
+      .poll(async () => await body.evaluate((el) => (el.textContent ?? '').trim().length), {
+        timeout: 20000,
+        intervals: [200, 500, 1000]
+      })
       .toBeGreaterThan(50)
 
     // Wait for measurement to settle — data-total should be > 1 once the

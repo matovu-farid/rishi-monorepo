@@ -19,6 +19,7 @@ export function useVirualization(
   scrollContainerRef: React.RefObject<HTMLDivElement | null>,
   book: Book
 ) {
+  'use no memo'
   const initialPosition = parsePdfLocation(book.location)
   const initialPageIndexRef = useRef(Math.max(0, initialPosition.page - 1))
   const numPages = usePdfStore((s) => s.pageCount)
@@ -36,7 +37,7 @@ export function useVirualization(
   const setVirtualizer = usePdfStore((s) => s.setVirtualizer)
   const pageRefs = useRef(new Map<number, HTMLElement>())
   const hasRequestedInitialScroll = useRef(false)
-  const scrollToFn: VirtualizerOptions<any, any>['scrollToFn'] = React.useCallback(
+  const scrollToFn: VirtualizerOptions<HTMLDivElement, Element>['scrollToFn'] = React.useCallback(
     (offset, canSmooth, instance) => {
       // Skip the smooth animation when:
       //   - behavior is 'auto' (instant navigation), or
@@ -51,7 +52,7 @@ export function useVirualization(
       }
 
       const duration = 1000
-      const start = scrollContainerRef.current?.scrollTop || 0
+      const start = scrollContainerRef.current?.scrollTop ?? 0
       const startTime = (scrollingRef.current = Date.now())
 
       const run = () => {
@@ -71,9 +72,10 @@ export function useVirualization(
 
       requestAnimationFrame(run)
     },
-    []
+    [scrollContainerRef]
   )
 
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual returns un-memoizable refs; hook opts out via 'use no memo' above
   const virtualizer = useVirtualizer({
     count: numPages,
     getScrollElement: () => scrollContainerRef.current,
@@ -95,7 +97,7 @@ export function useVirualization(
     if (!scrollContainerRef.current) return
 
     hasRequestedInitialScroll.current = true
-  }, [numPages, virtualizer])
+  }, [numPages, virtualizer, scrollContainerRef])
 
   const virtualItems = virtualizer.getVirtualItems()
   return { virtualizer, virtualItems, pageRefs, handlePageRendered }

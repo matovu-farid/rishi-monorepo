@@ -68,9 +68,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
       if (filePaths.length === 0) return
 
       const label =
-        filePaths.length === 1
-          ? `"${basename(filePaths[0])}"`
-          : `${filePaths.length} books`
+        filePaths.length === 1 ? `"${basename(filePaths[0])}"` : `${filePaths.length} books`
 
       setFilter('')
       toast.promise(runImport(filePaths), {
@@ -78,7 +76,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
         success: (results) => summarizeBatchResults(results).message,
         error: `Failed to import ${label}`
       })
-      handleClose()
+      void handleClose()
     } catch (err) {
       console.error('Failed to open file picker:', err)
     }
@@ -88,6 +86,8 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
     if (!open) return
     const svc = getBookImportService()
 
+    // Why: resetting local state before kicking off external discovery subscription
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setBooks([])
     setProgress(null)
     setScanComplete(false)
@@ -142,7 +142,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
       loading: `Importing ${label}...`,
       success: (results) => {
         const r = results[0]
-        if (!r || !r.ok) return `Failed to import ${label}`
+        if (!r?.ok) return `Failed to import ${label}`
         return `Imported ${label}`
       },
       error: `Failed to import ${label}`
@@ -197,12 +197,12 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
           <div className="flex items-center gap-2">
             <BookOpen size={20} className="text-gray-600" />
             <h2 className="text-lg font-semibold text-gray-900">Add Book</h2>
-            {scanning && (
+            {scanning ? (
               <span className="ml-1 flex items-center gap-1 text-xs text-gray-400">
                 <Loader2 size={12} className="animate-spin" />
                 Scanning...
               </span>
-            )}
+            ) : null}
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -266,7 +266,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
           />
 
           {/* Progress indicator */}
-          {progress && (
+          {progress ? (
             <div className="text-xs text-gray-500 truncate">
               <span className="text-gray-400">Scanning:</span>{' '}
               <span className="text-gray-600">{progress.folder}</span>
@@ -276,7 +276,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
                 </span>
               )}
             </div>
-          )}
+          ) : null}
         </div>
 
         {/* Results */}
@@ -309,9 +309,9 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
                           {book.title ?? book.filename}
                         </p>
                         <div className="flex items-center gap-2 mt-0.5">
-                          {book.author && (
+                          {book.author ? (
                             <span className="text-xs text-gray-500 truncate">{book.author}</span>
-                          )}
+                          ) : null}
                           <span className="text-xs text-gray-400 uppercase">{book.format}</span>
                           <span className="text-xs text-gray-400">
                             {formatFileSize(book.fileSize)}

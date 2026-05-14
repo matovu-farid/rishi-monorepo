@@ -40,18 +40,16 @@ test.describe('Search', () => {
   })
 
   test('searchBookText IPC accepts a query', async () => {
-    const result = await app.page.evaluate(
-      async (id) => {
-        const e = (window as unknown as { electron: Record<string, Function> }).electron
-        try {
-          const r = await e.searchBookText('the', id)
-          return Array.isArray(r)
-        } catch {
-          return false
-        }
-      },
-      bookId
-    )
+    const result = await app.page.evaluate(async (id) => {
+      const e = (window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> })
+        .electron
+      try {
+        const r = await e.searchBookText('the', id)
+        return Array.isArray(r)
+      } catch {
+        return false
+      }
+    }, bookId)
     expect(result).toBe(true)
   })
 })

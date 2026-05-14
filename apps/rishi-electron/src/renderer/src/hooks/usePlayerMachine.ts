@@ -3,10 +3,11 @@ import { useEffect, useRef } from 'react'
 import { createActor } from 'xstate'
 import { playerMachine } from '@/machines/playerMachine'
 import { usePlayerStore } from '@/stores/playerStore'
-import type { PlayerStoreState } from '@/stores/playerStore'
+import type { PlayerStoreState, PlayerSend } from '@/stores/playerStore'
 import { getTtsService } from '@/services'
 import { usePdfStore } from '@/stores/pdfStore'
 import isEqual from 'fast-deep-equal'
+import type { TextItem, TextMarkedContent } from 'react-pdf'
 
 // Singleton HTMLAudioElement for TTS playback
 const audioElement = new Audio()
@@ -21,7 +22,7 @@ function mapStateValue(value: string | Record<string, string>): PlayerStoreState
 
 export function usePlayerMachine(bookId: string) {
   const actorRef = useRef<ReturnType<typeof createActor<typeof playerMachine>> | null>(null)
-  const sendRef = useRef<(event: any) => void>(() => {})
+  const sendRef = useRef<PlayerSend>(() => {})
 
   useEffect(() => {
     // Create and start the machine actor
@@ -57,7 +58,7 @@ export function usePlayerMachine(bookId: string) {
             if (p.text.trim()) {
               void getTtsService()
                 .requestAudio({ bookId, cfiRange: p.index, text: p.text, priority: 0 })
-                .catch((err) => console.warn('[player] audio prefetch failed:', err))
+                .catch((err: unknown) => console.warn('[player] audio prefetch failed:', err))
             }
           }
         }
@@ -75,7 +76,7 @@ export function usePlayerMachine(bookId: string) {
             if (p.text.trim()) {
               void getTtsService()
                 .requestAudio({ bookId, cfiRange: p.index, text: p.text, priority: 0 })
-                .catch((err) => console.warn('[player] next page prefetch failed:', err))
+                .catch((err: unknown) => console.warn('[player] next page prefetch failed:', err))
             }
           }
         }
@@ -144,7 +145,7 @@ export function usePlayerMachine(bookId: string) {
                 ctx.bookId
               )
             })
-            .catch((err) => {
+            .catch((err: unknown) => {
               if (gen !== fetchGeneration) return // stale
               const msg = err instanceof Error ? err.message : String(err)
               console.error(`Audio fetch/load failed [p${ctx.paragraphIndex}]: ${msg}`)
@@ -197,7 +198,7 @@ export function usePlayerMachine(bookId: string) {
 
     // --- 4. Track NEXT/PREV moves for highlight removal ---
     const originalSend = actor.send.bind(actor)
-    const wrappedSend = (event: any) => {
+    const wrappedSend: PlayerSend = (event) => {
       if (event.type === 'NEXT' || event.type === 'PREV') {
         const ctx = actor.getSnapshot().context
         const fromParagraph = ctx.currentParagraphs[ctx.paragraphIndex] ?? null
@@ -236,7 +237,13 @@ export function usePlayerMachine(bookId: string) {
         3: 'MEDIA_ERR_DECODE',
         4: 'MEDIA_ERR_SRC_NOT_SUPPORTED'
       }
-      const msg = error?.message || (code ? codeNames[code] : null) || 'Audio playback error'
+      // Pick the first usable string out of (message, code label, default).
+      // Empty error.message strings are treated as "missing" so we still fall
+      // back to the friendlier code label.
+      const msg =
+        (error?.message && error.message.length > 0 ? error.message : null) ??
+        (code !== undefined ? codeNames[code] : null) ??
+        'Audio playback error'
       actor.send({ type: 'AUDIO_ERROR', error: msg })
     }
 
@@ -254,8 +261,11 @@ export function usePlayerMachine(bookId: string) {
       // Convert text content items to paragraphs
       const items = pdfPageData.items || []
       const paragraphs = items
-        .filter((item: any) => 'str' in item && item.str.trim())
-        .map((item: any, idx: number) => ({
+        .filter(
+          (item: TextItem | TextMarkedContent): item is TextItem =>
+            'str' in item && item.str.trim() !== ''
+        )
+        .map((item: TextItem, idx: number) => ({
           index: `pdf-${pdfState.pageNumber}-${idx}`,
           text: item.str
         }))
@@ -287,6 +297,8 @@ export function usePlayerMachine(bookId: string) {
   }, [bookId])
 
   return {
+    // Why: sendRef.current holds the stable wrapped send function created in useEffect; callers consume the returned object synchronously. The ref's identity is stable across renders; only its current value swaps when the actor is recreated.
+    // eslint-disable-next-line react-hooks/refs
     send: sendRef.current
   }
 }
@@ -309,9 +321,13 @@ async function loadAndPlayAudio(blobUrl: string): Promise<void> {
       audioElement.removeEventListener('canplaythrough', handleCanPlay)
       audioElement.removeEventListener('error', handleError)
       const mediaError = (e.target as HTMLAudioElement)?.error
-      reject(
-        new Error(mediaError?.message || `Audio load error (code ${mediaError?.code ?? 'unknown'})`)
-      )
+      // Empty message strings should fall back to the descriptive default so
+      // we never reject with a blank `Error` message.
+      const message =
+        mediaError?.message && mediaError.message.length > 0
+          ? mediaError.message
+          : `Audio load error (code ${mediaError?.code ?? 'unknown'})`
+      reject(new Error(message))
     }
     audioElement.addEventListener('canplaythrough', handleCanPlay, { once: true })
     audioElement.addEventListener('error', handleError, { once: true })
@@ -354,7 +370,7 @@ function schedulePrefetch(
             text: currentParagraphs[idx].text,
             priority: 0
           })
-          .catch((err) => console.warn('[audio] prefetch current page failed:', err))
+          .catch((err: unknown) => console.warn('[audio] prefetch current page failed:', err))
       }
     }
     // Prefetch next page paragraphs
@@ -362,7 +378,7 @@ function schedulePrefetch(
       if (p.text.trim()) {
         void getTtsService()
           .requestAudio({ bookId, cfiRange: p.index, text: p.text, priority: 0 })
-          .catch((err) => console.warn('[audio] prefetch next page failed:', err))
+          .catch((err: unknown) => console.warn('[audio] prefetch next page failed:', err))
       }
     }
   }, 200)

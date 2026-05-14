@@ -1,8 +1,8 @@
-import { ipcMain } from 'electron'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as crypto from 'node:crypto'
 import JSZip from 'jszip'
+import { handle } from '../../preload/ipc-contract.js'
 
 // ---------- Shared types ----------
 
@@ -674,7 +674,7 @@ async function getMobiChapterText(filePath: string, chapterIndex: number): Promi
 
 export function registerFormatHandlers(): void {
   // --- EPUB ---
-  ipcMain.handle('formats:getBookData', async (_event, filePath: string) => {
+  handle('formats:getBookData', async (_event, filePath) => {
     console.log('[formats:getBookData] Called with:', filePath)
     try {
       const result = await extractEpubData(filePath)
@@ -694,7 +694,7 @@ export function registerFormatHandlers(): void {
   })
 
   // --- PDF ---
-  ipcMain.handle('formats:getPdfData', async (_event, filePath: string) => {
+  handle('formats:getPdfData', async (_event, filePath) => {
     try {
       return await extractPdfData(filePath)
     } catch (error) {
@@ -705,7 +705,7 @@ export function registerFormatHandlers(): void {
   })
 
   // --- MOBI ---
-  ipcMain.handle('formats:getMobiData', async (_event, filePath: string) => {
+  handle('formats:getMobiData', async (_event, filePath) => {
     try {
       return await extractMobiData(filePath)
     } catch (error) {
@@ -716,7 +716,7 @@ export function registerFormatHandlers(): void {
   })
 
   // --- AZW3 (Kindle KF8) ---
-  ipcMain.handle('formats:getAzw3Data', async (_event, filePath: string) => {
+  handle('formats:getAzw3Data', async (_event, filePath) => {
     try {
       return await extractAzw3Data(filePath)
     } catch (error) {
@@ -726,20 +726,17 @@ export function registerFormatHandlers(): void {
     }
   })
 
-  ipcMain.handle(
-    'formats:getMobiChapter',
-    async (_event, filePath: string, chapterIndex: number) => {
-      try {
-        return await getMobiChapterHtml(filePath, chapterIndex)
-      } catch (error) {
-        throw new Error(
-          `Failed to get MOBI chapter: ${error instanceof Error ? error.message : String(error)}`
-        )
-      }
+  handle('formats:getMobiChapter', async (_event, filePath, chapterIndex) => {
+    try {
+      return await getMobiChapterHtml(filePath, chapterIndex)
+    } catch (error) {
+      throw new Error(
+        `Failed to get MOBI chapter: ${error instanceof Error ? error.message : String(error)}`
+      )
     }
-  )
+  })
 
-  ipcMain.handle('formats:getMobiChapterCount', async (_event, filePath: string) => {
+  handle('formats:getMobiChapterCount', async (_event, filePath) => {
     try {
       return await getMobiChapterCount(filePath)
     } catch (error) {
@@ -749,7 +746,7 @@ export function registerFormatHandlers(): void {
     }
   })
 
-  ipcMain.handle('formats:getMobiText', async (_event, filePath: string, chapterIndex: number) => {
+  handle('formats:getMobiText', async (_event, filePath, chapterIndex) => {
     try {
       return await getMobiChapterText(filePath, chapterIndex)
     } catch (error) {

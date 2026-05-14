@@ -1,4 +1,4 @@
-import { ReaderTheme } from './commonReader'
+import type { ReaderTheme } from './commonReader'
 
 const yellowReaderTheme: ReaderTheme = {
   color: 'rgb(43 42 40)',

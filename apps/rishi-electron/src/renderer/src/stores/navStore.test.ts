@@ -59,8 +59,9 @@ describe('navStore', () => {
 
     const sendFn = useNavStore.getState().send
     expect(sendFn).not.toBeNull()
-    sendFn!({ type: 'NAVIGATE', target: 'chapter-5' })
-    expect(mockSend).toHaveBeenCalledWith({ type: 'NAVIGATE', target: 'chapter-5' })
+    const event = { type: 'DISPLAY', location: 'chapter-5' } as const
+    sendFn!(event)
+    expect(mockSend).toHaveBeenCalledWith(event)
   })
 
   it('should not throw when setting nav state rapidly', () => {

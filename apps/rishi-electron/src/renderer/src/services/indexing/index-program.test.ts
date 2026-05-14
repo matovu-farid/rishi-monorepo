@@ -14,7 +14,10 @@ interface ProcessedJob {
   items: Array<{ id: number; text: string }>
 }
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+const sleep = (ms: number): Promise<void> =>
+  new Promise<void>((r) => {
+    setTimeout(r, ms)
+  })
 
 describe('indexBookProgram', () => {
   it('processes every page exactly once', async () => {
@@ -90,9 +93,7 @@ describe('indexBookProgram', () => {
     await Effect.runPromise(program)
     expect(jobs).toHaveLength(1)
     expect(jobs[0].pageNumber).toBe(1)
-    expect(jobs[0].items).toEqual([
-      { id: 1 * 1_000_000 + 3 * 10_000 + 0, text: 'hello world' }
-    ])
+    expect(jobs[0].items).toEqual([{ id: 1 * 1_000_000 + 3 * 10_000 + 0, text: 'hello world' }])
   })
 
   it('skips pages with no paragraphs', async () => {

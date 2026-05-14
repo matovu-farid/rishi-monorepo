@@ -1,11 +1,7 @@
 import { createActor } from 'xstate'
 import { connectivityMachine } from '@/machines/connectivityMachine'
 import { createSubscribers } from './subscribers'
-import type {
-  ConnectivityListener,
-  ConnectivityService,
-  ConnectivityServiceDeps
-} from './types'
+import type { ConnectivityListener, ConnectivityService, ConnectivityServiceDeps } from './types'
 
 type ConnectivityActor = ReturnType<typeof createActor<typeof connectivityMachine>>
 

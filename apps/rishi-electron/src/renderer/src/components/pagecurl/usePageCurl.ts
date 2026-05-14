@@ -37,6 +37,12 @@ export function usePageCurl(callbacks: {
   onUndoNavigate: (dir: CurlDirection) => void
 }): PageCurlResult {
   const [active, setActive] = useState(false)
+  // `progress` and `direction` are returned to consumers and drive the
+  // PageCurlOverlay render, so they must live in state. We mirror them into
+  // refs so internal logic (event handlers, RAF tick) can read the live
+  // value synchronously without going through a re-render.
+  const [progress, setProgress] = useState(0)
+  const [direction, setDirection] = useState<CurlDirection>('right')
   const progressRef = useRef(0)
   const directionRef = useRef<CurlDirection>('right')
   const stateRef = useRef<CurlState>('idle')
@@ -47,11 +53,20 @@ export function usePageCurl(callbacks: {
   const lastMoveTimeRef = useRef(0)
   const lastProgressRef = useRef(0)
   const velocityRef = useRef(0)
-  const [, forceRender] = useState(0)
-  const kick = useCallback(() => forceRender((n) => n + 1), [])
+
+  const setProgressBoth = useCallback((p: number) => {
+    progressRef.current = p
+    setProgress(p)
+  }, [])
+  const setDirectionBoth = useCallback((d: CurlDirection) => {
+    directionRef.current = d
+    setDirection(d)
+  }, [])
 
   const callbacksRef = useRef(callbacks)
-  callbacksRef.current = callbacks
+  useEffect(() => {
+    callbacksRef.current = callbacks
+  })
 
   const cancelRaf = useCallback(() => {
     if (rafRef.current !== null) {
@@ -71,13 +86,12 @@ export function usePageCurl(callbacks: {
         const elapsed = now - startTime
         const rawT = Math.min(elapsed / duration, 1)
         const t = easeOutQuart(rawT)
-        progressRef.current = start + (target - start) * t
-        kick()
+        setProgressBoth(start + (target - start) * t)
 
         if (rawT < 1) {
           rafRef.current = requestAnimationFrame(tick)
         } else {
-          progressRef.current = target
+          setProgressBoth(target)
           rafRef.current = null
           onDone()
         }
@@ -85,7 +99,7 @@ export function usePageCurl(callbacks: {
 
       rafRef.current = requestAnimationFrame(tick)
     },
-    [cancelRaf, kick]
+    [cancelRaf, setProgressBoth]
   )
 
   const finish = useCallback(
@@ -97,12 +111,11 @@ export function usePageCurl(callbacks: {
         callbacksRef.current.onUndoNavigate(dir)
       }
       stateRef.current = 'idle'
-      progressRef.current = 0
+      setProgressBoth(0)
       navigatedRef.current = false
       setActive(false)
-      kick()
     },
-    [kick]
+    [setProgressBoth]
   )
 
   const commitOrCancel = useCallback(() => {
@@ -130,23 +143,23 @@ export function usePageCurl(callbacks: {
       if (!callbacksRef.current.onNavigate(dir)) return
 
       e.currentTarget.setPointerCapture(e.pointerId)
-      directionRef.current = dir
+      setDirectionBoth(dir)
       containerRectRef.current = rect
       stateRef.current = 'dragging'
 
       const W = rect.width
       const raw = dir === 'right' ? 1 - x / W : x / W
-      progressRef.current = Math.max(0, Math.min(1, raw))
+      const clamped = Math.max(0, Math.min(1, raw))
+      setProgressBoth(clamped)
 
       velocityRef.current = 0
       lastMoveTimeRef.current = performance.now()
-      lastProgressRef.current = progressRef.current
+      lastProgressRef.current = clamped
 
       navigatedRef.current = true
       setActive(true)
-      kick()
     },
-    [kick]
+    [setDirectionBoth, setProgressBoth]
   )
 
   const onPointerMove = useCallback(
@@ -172,10 +185,9 @@ export function usePageCurl(callbacks: {
       lastMoveTimeRef.current = now
       lastProgressRef.current = newProgress
 
-      progressRef.current = newProgress
-      kick()
+      setProgressBoth(newProgress)
     },
-    [kick]
+    [setProgressBoth]
   )
 
   const onPointerUp = useCallback(
@@ -201,16 +213,15 @@ export function usePageCurl(callbacks: {
       if (!callbacksRef.current.onNavigate(dir)) return
 
       cancelRaf()
-      directionRef.current = dir
-      progressRef.current = 0
+      setDirectionBoth(dir)
+      setProgressBoth(0)
       stateRef.current = 'animating'
       navigatedRef.current = true
       setActive(true)
-      kick()
 
       animateTo(1, AUTO_DURATION, () => finish(true))
     },
-    [cancelRaf, kick, animateTo, finish]
+    [cancelRaf, setDirectionBoth, setProgressBoth, animateTo, finish]
   )
 
   // Cancel any in-flight RAF on unmount
@@ -219,8 +230,8 @@ export function usePageCurl(callbacks: {
   }, [cancelRaf])
 
   return {
-    progress: progressRef.current,
-    direction: directionRef.current,
+    progress,
+    direction,
     active,
     pointerHandlers: {
       onPointerDown,

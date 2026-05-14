@@ -4,7 +4,8 @@ import { toast } from 'sonner'
 import { Button } from './ui/Button'
 import { Trash2, Plus, Search, BookOpen } from 'lucide-react'
 // chooseFiles moved into BookDiscoveryModal
-import { Book, deleteBook, getBooks } from '@/lib/api'
+import type { Book } from '@/lib/api'
+import { deleteBook, getBooks } from '@/lib/api'
 import { getBookImportService, getVoiceChatService } from '@/services'
 import { prefetchTTSForBooks } from '@/modules/ttsPrefetch'
 import { useEffect, useMemo, useState, useCallback } from 'react'
@@ -122,19 +123,26 @@ export default function FileComponent(): React.JSX.Element {
     queryKey: ['books'],
     queryFn: async () => {
       getVoiceChatService().prewarmKey()
-      const books = await getBooks()
-      const pdfIds = books.filter((b) => b.kind === 'pdf').map((b) => b.id)
-      setAllBooks(pdfIds)
-      books.forEach((book) => {
-        void queryClient.prefetchQuery({
-          queryKey: ['book', book.id.toString()],
-          queryFn: () => book
-        })
-      })
-      void prefetchTTSForBooks(books)
-      return books
+      return getBooks()
     }
   })
+
+  // Run side-effects when fresh book data arrives. Keeping these out of
+  // queryFn means the query closure stays stable (no setAllBooks/queryClient
+  // dependency), and we still re-run on every successful refetch because
+  // `books` identity changes.
+  useEffect(() => {
+    if (!books) return
+    const pdfIds = books.filter((b) => b.kind === 'pdf').map((b) => b.id)
+    setAllBooks(pdfIds)
+    books.forEach((book) => {
+      void queryClient.prefetchQuery({
+        queryKey: ['book', book.id.toString()],
+        queryFn: () => book
+      })
+    })
+    void prefetchTTSForBooks(books)
+  }, [books, setAllBooks, queryClient])
 
   const deleteBookMutation = useMutation({
     mutationKey: ['deleteBook'],
@@ -170,7 +178,7 @@ export default function FileComponent(): React.JSX.Element {
     await queryClient.invalidateQueries({ queryKey: ['books'] })
     if (lastSuccess) {
       setNewBookId(null)
-      setTimeout(() => setNewBookId(String(lastSuccess!.bookId)), 0)
+      setTimeout(() => setNewBookId(String(lastSuccess.bookId)), 0)
     }
   }
 
@@ -183,8 +191,11 @@ export default function FileComponent(): React.JSX.Element {
       'application/x-mobipocket-ebook': ['.mobi', '.azw3']
     },
     onDrop: (files) => {
-      // In Electron, dropped files have .path
-      const paths = files.map((f) => (f as any).path).filter(Boolean)
+      // In Electron, dropped files expose a non-standard `.path` —
+      // see src/renderer/src/types/electron-extensions.d.ts for the augmentation.
+      const paths = files
+        .map((f) => f.path)
+        .filter((p): p is string => typeof p === 'string' && p.length > 0)
       void processFilePaths(paths)
     }
   })
@@ -198,15 +209,21 @@ export default function FileComponent(): React.JSX.Element {
   useEffect(() => {
     try {
       const stored = localStorage.getItem('lastReadBookId')
+      // Why: hydrating from external (localStorage) into React state — legitimate async-like read
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       if (stored) setLastReadBookId(stored)
-    } catch {}
+    } catch {
+      // no-op
+    }
   }, [])
 
   useEffect(() => {
     const handler = () => {
       try {
         setLastReadBookId(localStorage.getItem('lastReadBookId'))
-      } catch {}
+      } catch {
+        // no-op
+      }
     }
     window.addEventListener('lastReadBookChanged', handler)
     return () => window.removeEventListener('lastReadBookChanged', handler)
@@ -237,10 +254,7 @@ export default function FileComponent(): React.JSX.Element {
   return (
     <div {...getRootProps()} className="w-full h-full flex flex-col overflow-hidden">
       <input {...getInputProps()} />
-      <div
-        data-electron-drag-region
-        className="px-4 pt-10 pb-2 flex items-center gap-2 flex-none"
-      >
+      <div data-electron-drag-region className="px-4 pt-10 pb-2 flex items-center gap-2 flex-none">
         <div className="relative flex-1 max-w-xs">
           <Search
             size={16}
@@ -271,7 +285,7 @@ export default function FileComponent(): React.JSX.Element {
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
-        {lastReadBook && (
+        {lastReadBook ? (
           <div className="px-5 mb-4">
             <p className="text-xs text-gray-400 uppercase tracking-wider mb-2">Reading Now</p>
             <button
@@ -288,7 +302,7 @@ export default function FileComponent(): React.JSX.Element {
               </div>
             </button>
           </div>
-        )}
+        ) : null}
 
         <div
           data-tour="book-grid"
@@ -341,7 +355,7 @@ export default function FileComponent(): React.JSX.Element {
         </div>
       </div>
 
-      {contextMenu && (
+      {contextMenu ? (
         <div
           className="fixed z-50 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[140px]"
           style={{ top: contextMenu.y, left: contextMenu.x }}
@@ -356,7 +370,7 @@ export default function FileComponent(): React.JSX.Element {
             <Trash2 size={16} /> Delete
           </button>
         </div>
-      )}
+      ) : null}
       <BookDiscoveryModal open={discoveryOpen} onClose={() => setDiscoveryOpen(false)} />
     </div>
   )

@@ -1,8 +1,13 @@
 import { app } from 'electron'
 import * as Sentry from '@sentry/electron/main'
 
+// `process.env.SENTRY_DSN` may be `undefined` *or* an empty string when the
+// env var is unset in CI/local builds — both cases should fall back to the
+// hard-coded production DSN, so we normalise empty strings to `undefined`
+// before applying the nullish coalesce.
+const envDsn = process.env.SENTRY_DSN === '' ? undefined : process.env.SENTRY_DSN
 const DSN =
-  process.env.SENTRY_DSN ||
+  envDsn ??
   'https://37b935f34d09bb053baeff3a28d6b9d1@o4510586781958144.ingest.de.sentry.io/4511372584747088'
 
 let initialized = false

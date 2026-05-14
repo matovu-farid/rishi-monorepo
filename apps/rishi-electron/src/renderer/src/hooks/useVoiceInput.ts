@@ -129,7 +129,7 @@ export function useVoiceInput(): UseVoiceInputReturn {
         } catch (err) {
           console.error('[useVoiceInput] transcription failed:', err)
           setError('Voice transcription failed. Please try again.')
-          reject(err)
+          reject(err instanceof Error ? err : new Error(String(err)))
         }
       }
 

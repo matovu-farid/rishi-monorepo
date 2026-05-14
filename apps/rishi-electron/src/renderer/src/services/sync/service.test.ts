@@ -15,9 +15,11 @@ import { makeClock } from './debounce.test'
  * Build an engine factory that returns a controllable `{ sync }`. The
  * caller can pass `syncImpl` to override the default no-op resolution.
  */
-export function makeEngine(opts?: {
-  syncImpl?: () => Promise<void>
-}): { engineFactory: EngineFactory; engine: EngineLike; syncCount: () => number } {
+export function makeEngine(opts?: { syncImpl?: () => Promise<void> }): {
+  engineFactory: EngineFactory
+  engine: EngineLike
+  syncCount: () => number
+} {
   let count = 0
   const sync = vi.fn(async () => {
     count++
@@ -49,8 +51,7 @@ export function makeConnectivity(opts?: {
   }
 }
 
-export const makeAuthToken = (token: string | null = 'test-bearer') =>
-  vi.fn(async () => token)
+export const makeAuthToken = (token: string | null = 'test-bearer') => vi.fn(async () => token)
 
 export const makeDevBypass = (secret: string | null = null) => vi.fn(async () => secret)
 
@@ -119,7 +120,9 @@ describe('SyncService.start', () => {
 
     service.start()
     // Drain microtasks: the initial sync awaits engine.sync().
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
 
     expect(syncCount()).toBe(1)
     expect(snapshots).toEqual(['not-synced', 'syncing', 'synced'])
@@ -135,7 +138,9 @@ describe('SyncService.start idempotency', () => {
 
     service.start()
     service.start()
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
 
     expect(engineFactory).toHaveBeenCalledTimes(1)
     expect(syncCount()).toBe(1)
@@ -150,7 +155,9 @@ describe('SyncService.stop', () => {
     const service = createSyncService(makeDeps({ clock, windowEvents, engineFactory }))
 
     service.start()
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
 
     expect(windowEvents.listeners('focus').length).toBe(1)
     expect(clock.pendingTimers()).toBeGreaterThan(0)
@@ -171,7 +178,9 @@ describe('SyncService.triggerWrite', () => {
     const service = createSyncService(makeDeps({ clock, engineFactory }))
 
     service.start()
-    await new Promise((r) => setTimeout(r, 0)) // let initial sync settle
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    }) // let initial sync settle
     expect(syncCount()).toBe(1)
 
     service.triggerWrite()
@@ -181,7 +190,9 @@ describe('SyncService.triggerWrite', () => {
     expect(syncCount()).toBe(1)
 
     clock.tick(1)
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
     expect(syncCount()).toBe(2)
   })
 
@@ -192,7 +203,9 @@ describe('SyncService.triggerWrite', () => {
 
     service.triggerWrite()
     clock.tick(baseConfig.debounceMs * 2)
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
 
     expect(syncCount()).toBe(0)
   })
@@ -201,18 +214,20 @@ describe('SyncService.triggerWrite', () => {
     const clock = makeClock()
     const connectivity = makeConnectivity({ initialOnline: true })
     const { engineFactory, syncCount } = makeEngine()
-    const service = createSyncService(
-      makeDeps({ clock, connectivity, engineFactory })
-    )
+    const service = createSyncService(makeDeps({ clock, connectivity, engineFactory }))
 
     service.start()
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
     const baseline = syncCount() // 1 from initial sync
 
     connectivity.setOnline(false)
     service.triggerWrite()
     clock.tick(baseConfig.debounceMs * 2)
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
 
     expect(syncCount()).toBe(baseline)
   })
@@ -225,7 +240,9 @@ describe('SyncService connectivity transitions', () => {
     const service = createSyncService(makeDeps({ connectivity, engineFactory }))
 
     service.start()
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
     expect(service.getStatus().status).toBe('synced')
     const baseline = syncCount()
 
@@ -243,12 +260,16 @@ describe('SyncService connectivity transitions', () => {
     service.onStatusChange((s) => snapshots.push(s.status))
 
     service.start()
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
     connectivity.setOnline(false)
     expect(service.getStatus().status).toBe('offline')
 
     connectivity.setOnline(true)
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
 
     expect(syncCount()).toBe(2) // initial + online-recovery
     expect(snapshots).toContain('offline')
@@ -267,7 +288,9 @@ describe('SyncService error classification', () => {
     const service = createSyncService(makeDeps({ connectivity, engineFactory }))
 
     service.start()
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
 
     expect(service.getStatus().status).toBe('error')
   })
@@ -283,7 +306,9 @@ describe('SyncService error classification', () => {
     const service = createSyncService(makeDeps({ connectivity, engineFactory }))
 
     service.start()
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
 
     expect(service.getStatus().status).toBe('offline')
   })
@@ -301,7 +326,9 @@ describe('SyncService error classification', () => {
     windowEvents.addEventListener('sync-auth-expired', (e) => dispatched.push(e))
 
     service.start()
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
 
     expect(dispatched).toHaveLength(1)
     expect(dispatched[0].type).toBe('sync-auth-expired')
@@ -319,13 +346,17 @@ describe('SyncService.onStatusChange', () => {
     expect(calls).toEqual(['not-synced']) // immediate
 
     service.start()
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
     expect(calls).toEqual(['not-synced', 'syncing', 'synced'])
 
     unsub()
     service.stop()
     service.start() // restart should fire more events but listener should be gone
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
     expect(calls).toEqual(['not-synced', 'syncing', 'synced']) // unchanged
   })
 
@@ -340,13 +371,17 @@ describe('SyncService.onStatusChange', () => {
     service.onStatusChange((s) => calls.push(s.status))
 
     service.start() // status → syncing, awaits engine.sync
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
     expect(calls).toContain('syncing')
     expect(calls).not.toContain('synced')
 
     service.stop()
     resolveSync()
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
 
     // No 'synced' or 'error' snapshot should have been emitted after stop()
     expect(calls).not.toContain('synced')
@@ -357,9 +392,7 @@ describe('SyncService.onStatusChange', () => {
 describe('SyncService apiFetch (passed into engineFactory)', () => {
   it('builds an apiFetch that retries 401 once with a fresh bearer token', async () => {
     // We intercept the apiFetch by capturing the value passed to engineFactory.
-    let capturedApiFetch:
-      | ((path: string, init?: RequestInit) => Promise<Response>)
-      | null = null
+    let capturedApiFetch: ((path: string, init?: RequestInit) => Promise<Response>) | null = null
     const engineFactory: EngineFactory = (cfg) => {
       capturedApiFetch = cfg.apiFetch
       return { sync: async () => {} }
@@ -376,9 +409,7 @@ describe('SyncService apiFetch (passed into engineFactory)', () => {
       return new Response('{"ok":true}', { status: 200 })
     })
 
-    const service = createSyncService(
-      makeDeps({ engineFactory, getAuthToken, fetch })
-    )
+    const service = createSyncService(makeDeps({ engineFactory, getAuthToken, fetch }))
     service.start()
 
     expect(capturedApiFetch).not.toBeNull()
@@ -390,9 +421,7 @@ describe('SyncService apiFetch (passed into engineFactory)', () => {
   })
 
   it('falls back to X-Dev-Bypass header when no auth token is available', async () => {
-    let capturedApiFetch:
-      | ((path: string, init?: RequestInit) => Promise<Response>)
-      | null = null
+    let capturedApiFetch: ((path: string, init?: RequestInit) => Promise<Response>) | null = null
     const engineFactory: EngineFactory = (cfg) => {
       capturedApiFetch = cfg.apiFetch
       return { sync: async () => {} }
@@ -400,10 +429,7 @@ describe('SyncService apiFetch (passed into engineFactory)', () => {
 
     const fetch = vi.fn(
       async (_url: string, init?: RequestInit) =>
-        new Response(
-          JSON.stringify({ headers: init?.headers }),
-          { status: 200 }
-        )
+        new Response(JSON.stringify({ headers: init?.headers }), { status: 200 })
     )
 
     const service = createSyncService(

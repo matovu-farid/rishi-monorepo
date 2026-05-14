@@ -20,26 +20,45 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
   const [conversationId, setConversationId] = useState<string | null>(null)
   const initialized = useRef(false)
 
-  // Reset initialization and clear stale state when book/bookSyncId changes.
+  // Reset initialization and clear stale state when the book changes.
+  // Why: bookId is an external prop; switching books must clear prior conversation state and force re-initialization of the async load below.
   useEffect(() => {
-    if (!bookSyncId) {
-      setMessages([])
-      setConversationId(null)
-    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMessages([])
+    setConversationId(null)
     initialized.current = false
-  }, [bookId, bookSyncId])
+  }, [bookId])
 
   // Load or create conversation on mount
   useEffect(() => {
-    if (initialized.current || !bookSyncId) return
+    if (initialized.current) return
     initialized.current = true
 
     let cancelled = false
 
     void (async () => {
       try {
+        // Conversations are keyed by syncId. Fresh imports may not have one
+        // yet — generate-and-persist on demand so chat works before the first
+        // sync push completes.
+        let effectiveSyncId = bookSyncId
+        if (!effectiveSyncId) {
+          const fromDb = await window.electron.booksGetSyncId(bookId)
+          if (cancelled) return
+          if (fromDb) {
+            effectiveSyncId = fromDb
+          } else {
+            const book = await window.electron.getBook(bookId)
+            if (cancelled) return
+            if (!book) throw new Error(`Book ${bookId} not found`)
+            effectiveSyncId = crypto.randomUUID()
+            await window.electron.saveBook({ ...book, syncId: effectiveSyncId, isDirty: 1 })
+            if (cancelled) return
+          }
+        }
+
         // Find existing conversation for this book
-        const existing = await window.electron.conversationsFindForBook(bookSyncId)
+        const existing = await window.electron.conversationsFindForBook(effectiveSyncId)
 
         if (cancelled) return
 
@@ -52,7 +71,7 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
           convId = crypto.randomUUID()
           await window.electron.conversationsCreate({
             id: convId,
-            bookId: bookSyncId,
+            bookId: effectiveSyncId,
             title: bookTitle ? `Chat about ${bookTitle}` : 'Chat about this book'
           })
         }
@@ -90,14 +109,15 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
       } catch (err) {
         if (cancelled) return
         console.error('[useChat] Failed to initialize conversation:', err)
-        setError('Failed to load conversation')
+        const detail = err instanceof Error ? err.message : String(err)
+        setError(`Failed to load conversation: ${detail}`)
       }
     })()
 
     return () => {
       cancelled = true
     }
-  }, [bookSyncId, bookTitle])
+  }, [bookId, bookSyncId, bookTitle])
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -138,31 +158,46 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
           pageNumber: c.pageNumber
         }))
 
-        // 5. Build system prompt with RAG context
-        const systemPrompt = `You are a helpful AI assistant that answers questions about books. Use the following context from the book to answer the user's question. If the context doesn't contain relevant information, say so.\n\nContext:\n${chunks.map((c) => c.text).join('\n\n')}`
+        // 5. Build the prompt. The Worker proxies OpenAI's Responses API and
+        // accepts `input` as a single string, so we flatten system prompt,
+        // recent history, and the new question into one transcript.
+        const contextBlock = chunks.map((c) => c.text).join('\n\n')
+        const historyBlock = messages
+          .slice(-6)
+          .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+          .join('\n\n')
+        const sections = [
+          "You are a helpful AI assistant that answers questions about books. Use the following context from the book to answer the user's question. If the context doesn't contain relevant information, say so.",
+          `Context:\n${contextBlock}`,
+          historyBlock,
+          `User: ${text}\nAssistant:`
+        ].filter((s) => s.length > 0)
+        const promptString = sections.join('\n\n')
 
-        // 6. Get recent conversation history (last 6 messages)
-        const recentMessages = messages.slice(-6)
+        // 6. Auth — prefer the Better Auth bearer; fall back to dev-bypass
+        // in dev builds so chat works without a signed-in session.
+        const token = await getAuthToken()
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+        if (token) {
+          headers.Authorization = `Bearer ${token}`
+        } else {
+          const devBypass = await window.electron.getDevBypassSecret()
+          if (devBypass) {
+            headers['X-Dev-Bypass'] = devBypass
+          } else {
+            throw new Error('Not authenticated — sign in to use chat')
+          }
+        }
 
         // 7. Call Worker LLM endpoint
-        const token = await getAuthToken()
         const completionController = new AbortController()
         const completionTimeout = setTimeout(() => completionController.abort(), 60_000)
         let response: Response
         try {
           response = await fetch(`${WORKER_URL}/api/text/completions`, {
             method: 'POST',
-            headers: {
-              Authorization: `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              input: [
-                { role: 'system', content: systemPrompt },
-                ...recentMessages.map((m) => ({ role: m.role, content: m.content })),
-                { role: 'user', content: text }
-              ]
-            }),
+            headers,
+            body: JSON.stringify({ input: promptString }),
             signal: completionController.signal
           })
         } catch (err) {

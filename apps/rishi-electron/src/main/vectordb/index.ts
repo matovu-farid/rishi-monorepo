@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { join } from 'path'
 import { mkdirSync, existsSync, unlinkSync } from 'fs'
+import type * as HnswLib from 'hnswlib-node'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -15,7 +16,7 @@ interface IndexEntry {
 
 // hnswlib-node is a native module — resolve its constructor type lazily so
 // the rest of the app can still boot when the binary is unavailable.
-type HierarchicalNSWType = typeof import('hnswlib-node').HierarchicalNSW
+type HierarchicalNSWType = typeof HnswLib.HierarchicalNSW
 
 let HierarchicalNSW: HierarchicalNSWType | null = null
 
@@ -57,7 +58,7 @@ function requireHnsw(): HierarchicalNSWType {
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const mod = require('hnswlib-node') as typeof import('hnswlib-node')
+    const mod = require('hnswlib-node') as typeof HnswLib
     HierarchicalNSW = mod.HierarchicalNSW
     return HierarchicalNSW
   } catch (err) {
@@ -152,11 +153,11 @@ export function hasVectorsForBook(bookId: number): boolean {
  * @param dim    - Dimensionality of the vectors (default 384).
  * @param vectors - The vectors to upsert, each with a numeric id.
  */
-export async function saveVectors(
+export function saveVectors(
   name: string,
   dim: number = DEFAULT_DIM,
   vectors: Array<{ id: number; vector: number[] }>
-): Promise<void> {
+): void {
   if (vectors.length === 0) return
 
   let entry = getOrLoadIndex(name, dim)
@@ -200,12 +201,12 @@ export async function saveVectors(
  *          first). Returns an empty array when the index does not exist or
  *          contains no vectors.
  */
-export async function searchVectors(
+export function searchVectors(
   name: string,
   query: number[],
   dim: number = DEFAULT_DIM,
   k: number = 5
-): Promise<Array<{ id: number; distance: number }>> {
+): Array<{ id: number; distance: number }> {
   const entry = getOrLoadIndex(name, dim)
   if (!entry || entry.count === 0) return []
 
@@ -253,7 +254,7 @@ export async function embedText(text: string): Promise<number[]> {
   return results[0]?.embedding ?? []
 }
 
-export async function deleteIndex(name: string): Promise<void> {
+export function deleteIndex(name: string): void {
   indices.delete(name)
 
   const filePath = indexPath(name)

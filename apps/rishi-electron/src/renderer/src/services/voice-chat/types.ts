@@ -6,13 +6,7 @@ import type { ConnectivityService } from '@/services/connectivity'
  * Public state surface. Same string union as the internal machine, re-named
  * at the boundary to make the public-vs-internal split visible.
  */
-export type VoiceChatPublicState =
-  | 'idle'
-  | 'connecting'
-  | 'active'
-  | 'paused'
-  | 'offline'
-  | 'error'
+export type VoiceChatPublicState = 'idle' | 'connecting' | 'active' | 'paused' | 'offline' | 'error'
 
 /** Chat-status surface — finer-grained than VoiceChatPublicState. */
 export type ChatStatus = 'idle' | 'connecting' | 'thinking' | 'speaking'
@@ -36,7 +30,7 @@ export interface VoiceChatContext {
 }
 
 export class OfflineError extends Error {
-  override readonly name: 'OfflineError' = 'OfflineError'
+  override readonly name = 'OfflineError' as const
   constructor() {
     super('You are offline. Voice chat is unavailable until you reconnect.')
   }
@@ -93,7 +87,7 @@ export interface RealtimeSessionLike {
   mute(muted: boolean): void
   interrupt(): void
   close(): void
-  updateAgent(agent: RealtimeAgentLike | unknown): Promise<void>
+  updateAgent(agent: unknown): Promise<void>
   on(event: string, listener: (...args: unknown[]) => void): void
   off(event: string, listener: (...args: unknown[]) => void): void
 }

@@ -99,14 +99,11 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
     // initBook → book.loaded.navigation.then(...) microtask leaves
     // one paint frame of "Loading..." visible on reopen — which is
     // what users perceive as "the cache isn't working".
-    const cached =
-      props.bookCacheKey !== undefined ? getCachedEpub(props.bookCacheKey) : undefined
+    const cached = props.bookCacheKey !== undefined ? getCachedEpub(props.bookCacheKey) : undefined
     if (cached) {
       this.book = cached.document
       const tocFromCache =
-        ((cached.document.navigation as { toc?: NavItem[] } | undefined)?.toc as
-          | NavItem[]
-          | undefined) ?? []
+        (cached.document.navigation as { toc?: NavItem[] } | undefined)?.toc ?? []
       this.state = { isLoaded: true, isError: false, toc: tocFromCache }
     } else {
       this.book = undefined
@@ -161,11 +158,7 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
         // url here is the raw EPUB bytes — coerce to Uint8Array for
         // the cache's size accounting.
         const bytes =
-          url instanceof Uint8Array
-            ? url
-            : url instanceof ArrayBuffer
-              ? new Uint8Array(url)
-              : null
+          url instanceof Uint8Array ? url : url instanceof ArrayBuffer ? new Uint8Array(url) : null
         if (bytes) setCachedEpub(bookCacheKey, this.book, bytes)
       }
       this.setState(
@@ -175,7 +168,7 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
           toc: toc
         },
         () => {
-          tocChanged && tocChanged(toc)
+          tocChanged?.(toc)
           this.initReader()
         }
       )
@@ -201,7 +194,7 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
       // book.destroy() here would invalidate a still-cached entry.
       const { bookCacheKey } = this.props
       const cached = bookCacheKey !== undefined ? getCachedEpub(bookCacheKey) : undefined
-      if (!cached || cached.document !== this.book) {
+      if (cached?.document !== this.book) {
         try {
           this.book.destroy()
         } catch (error) {
@@ -230,7 +223,7 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
    */
   componentDidUpdate(prevProps: IEpubViewProps) {
     if (prevProps.location !== this.props.location && this.location !== this.props.location) {
-      void this.rendition?.display(this.props.location + '')
+      void this.rendition?.display(String(this.props.location))
     }
     if (prevProps.url !== this.props.url) {
       this.initBook()
@@ -265,10 +258,10 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
 
         this.registerEvents()
 
-        getRendition && getRendition(rendition)
+        getRendition?.(rendition)
 
         if (typeof location === 'string' || typeof location === 'number') {
-          void rendition.display(location + '')
+          void rendition.display(String(location))
         } else if (toc.length > 0 && toc[0].href) {
           void rendition.display(toc[0].href)
         } else {
@@ -285,7 +278,7 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
     const { handleKeyPress, handleTextSelected } = this.props
     if (this.rendition) {
       this.rendition.on('locationChanged', this.onLocationChange)
-      this.rendition.on('keyup', handleKeyPress || this.handleKeyPress)
+      this.rendition.on('keyup', handleKeyPress ?? this.handleKeyPress)
       if (handleTextSelected) {
         this.rendition.on('selected', handleTextSelected)
       }
@@ -341,10 +334,10 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
       onNextPageParagraphs,
       onPreviousPageParagraphs
     } = this.props
-    const newLocation = `${loc.start}`
+    const newLocation = `${loc.start.cfi}`
     if (location !== newLocation) {
       this.location = newLocation
-      locationChanged && locationChanged(newLocation)
+      locationChanged?.(newLocation)
 
       if (onPageTextExtracted) {
         const pageTextData = this.getCurrentPageText()
@@ -476,9 +469,9 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
     const { loadingView = null, errorView = null, epubViewStyles = defaultStyles } = this.props
     return (
       <div style={epubViewStyles.viewHolder}>
-        {isLoaded && this.renderBook()}
+        {isLoaded ? this.renderBook() : null}
         {!isLoaded && !isError && loadingView}
-        {!isLoaded && isError && errorView}
+        {!isLoaded && isError ? errorView : null}
       </div>
     )
   }

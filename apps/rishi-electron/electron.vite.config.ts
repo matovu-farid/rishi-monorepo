@@ -22,11 +22,7 @@ const standardFontsDir = normalizePath(path.join(pdfjsDistPath, 'standard_fonts'
 //   - better-sqlite3, hnswlib-node, @xenova/transformers — native bindings
 //   - @sentry/electron — crashpad handler copied from node_modules by electron-builder
 //   - electron-updater — reads app-update.yml via process.resourcesPath at runtime
-const BUNDLE_INTO_MAIN = [
-  'jszip',
-  'drizzle-orm',
-  '@electron-toolkit/utils'
-]
+const BUNDLE_INTO_MAIN = ['jszip', 'drizzle-orm', '@electron-toolkit/utils']
 
 export default defineConfig({
   main: {

@@ -1,4 +1,4 @@
-import { type IReactReaderStyle } from '../style'
+import type { IReactReaderStyle } from '../style'
 
 // Props for TocToggleButton component
 export type TocToggleButtonProps = {

@@ -1,6 +1,4 @@
-export type WindowIdentity =
-  | { kind: 'library' }
-  | { kind: 'book'; bookId: number }
+export type WindowIdentity = { kind: 'library' } | { kind: 'book'; bookId: number }
 
 const FLAG = '--window-identity='
 

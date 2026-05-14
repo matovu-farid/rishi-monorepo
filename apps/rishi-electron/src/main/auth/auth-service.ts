@@ -193,7 +193,7 @@ class AuthService {
           Authorization: `Bearer ${token}`
         },
         body: '{}'
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         console.warn('[auth] sign-out request failed', err)
         return null
       })
@@ -208,7 +208,7 @@ class AuthService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ states: pendingStates })
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         console.warn('[auth] desktop/cancel request failed', err)
       })
     }
@@ -237,7 +237,7 @@ class AuthService {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ states: pendingStates })
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         console.warn('[auth] desktop/cancel request failed', err)
       })
     }
@@ -261,7 +261,9 @@ class AuthService {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
 }
 
 export const authService = new AuthService()

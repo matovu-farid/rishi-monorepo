@@ -1,16 +1,17 @@
-import { ipcMain, app, shell } from 'electron'
+import { app, shell } from 'electron'
 import * as os from 'node:os'
+import { handle } from '../../preload/ipc-contract.js'
 
 export function registerUtilHandlers(): void {
-  ipcMain.handle('util:isDev', async () => {
+  handle('util:isDev', () => {
     return !app.isPackaged
   })
 
-  ipcMain.handle('util:getDevBypassSecret', async () => {
+  handle('util:getDevBypassSecret', () => {
     return process.env.DEV_BYPASS_SECRET ?? null
   })
 
-  ipcMain.handle('util:getOsInfo', async () => {
+  handle('util:getOsInfo', () => {
     return {
       platform: process.platform,
       arch: process.arch,
@@ -18,7 +19,7 @@ export function registerUtilHandlers(): void {
     }
   })
 
-  ipcMain.handle('shell:openExternal', async (_event, url: string) => {
+  handle('shell:openExternal', async (_event, url) => {
     try {
       // Basic URL validation to prevent opening arbitrary protocols
       const parsed = new URL(url)

@@ -1,4 +1,4 @@
-import { TextItem } from 'pdfjs-dist/types/src/display/api'
+import type { TextItem } from 'pdfjs-dist/types/src/display/api'
 
 export const getParagraphThreshold = (item: TextItem): number => {
   // If height is available, use 1.5x the height

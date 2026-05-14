@@ -35,13 +35,13 @@ export function ChatMessage({ message, onSourceNavigate }: ChatMessageProps) {
       >
         <p className="text-sm whitespace-pre-wrap">{message.content}</p>
 
-        {!isUser && message.sourceChunks && message.sourceChunks.length > 0 && (
+        {!isUser && message.sourceChunks && message.sourceChunks.length > 0 ? (
           <div className="flex flex-wrap gap-1 mt-2">
             {message.sourceChunks.map((chunk) => (
               <SourceChip key={chunk.id} chunk={chunk} onNavigate={onSourceNavigate} />
             ))}
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   )

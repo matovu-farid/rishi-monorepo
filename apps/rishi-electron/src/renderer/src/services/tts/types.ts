@@ -39,9 +39,7 @@ export interface QueueStatus {
  * whether the user is signed in via Clerk or dev-bypass; it just branches
  * on the discriminator to pick the right HTTP header.
  */
-export type AuthHeader =
-  | { kind: 'bearer'; token: string }
-  | { kind: 'dev-bypass'; secret: string }
+export type AuthHeader = { kind: 'bearer'; token: string } | { kind: 'dev-bypass'; secret: string }
 
 /**
  * Exactly the 7 IPC channels the cache uses, plus `getAppDataPath` and
@@ -56,9 +54,7 @@ export interface TtsIpcChannels {
   copyFile(src: string, dest: string): Promise<void>
   removeFile(path: string): Promise<void>
   getDirSize(path: string): Promise<number>
-  getCacheFileStats(
-    dir: string
-  ): Promise<Array<{ path: string; size: number; mtimeMs: number }>>
+  getCacheFileStats(dir: string): Promise<Array<{ path: string; size: number; mtimeMs: number }>>
   getAppDataPath(): Promise<string>
 }
 

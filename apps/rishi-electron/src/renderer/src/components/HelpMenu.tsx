@@ -56,14 +56,14 @@ export function HelpMenu() {
           <MessageCircle size={14} className="mr-2" />
           Contact support
         </DropdownMenuItem>
-        {version && (
+        {version ? (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="text-xs text-gray-500 font-normal">
               Rishi v{version}
             </DropdownMenuLabel>
           </>
-        )}
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   )

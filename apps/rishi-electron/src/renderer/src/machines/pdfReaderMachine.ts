@@ -39,8 +39,7 @@ export type PdfReaderEvent =
   // changes that originated in viewing state (i.e. real user scrolls).
   | { type: 'COMMIT_PAGE'; page: number; offset: number }
 
-const clamp = (n: number, min: number, max: number): number =>
-  Math.min(Math.max(n, min), max)
+const clamp = (n: number, min: number, max: number): number => Math.min(Math.max(n, min), max)
 
 export const pdfReaderMachine = setup({
   types: {
@@ -54,9 +53,7 @@ export const pdfReaderMachine = setup({
     saveLocation: fromPromise<
       { savedPage: number; savedOffset: number },
       { bookId: number; page: number; offset: number }
-    >(async () => {
-      throw new Error('saveLocation actor not provided')
-    })
+    >(() => Promise.reject(new Error('saveLocation actor not provided')))
   },
   actions: {
     // Default no-op; React layer overrides via `.provide` to fire the IPC.
@@ -91,7 +88,7 @@ export const pdfReaderMachine = setup({
       currentPage: ({ context, event }) =>
         event.type === 'PAGE_CHANGED' ? event.page : context.currentPage,
       currentOffset: ({ context, event }) =>
-        event.type === 'PAGE_CHANGED' ? event.offset ?? 0 : context.currentOffset
+        event.type === 'PAGE_CHANGED' ? (event.offset ?? 0) : context.currentOffset
     }),
     markSaved: assign({
       lastSavedPage: ({ context, event }) => {
@@ -216,8 +213,7 @@ export const pdfReaderMachine = setup({
                 raise(({ event }) => ({
                   type: 'COMMIT_PAGE' as const,
                   page: event.type === 'PAGE_CHANGED' ? event.page : 0,
-                  offset:
-                    event.type === 'PAGE_CHANGED' ? event.offset ?? 0 : 0
+                  offset: event.type === 'PAGE_CHANGED' ? (event.offset ?? 0) : 0
                 }))
               ]
             },

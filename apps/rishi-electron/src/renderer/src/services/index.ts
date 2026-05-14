@@ -11,12 +11,7 @@ import { createConnectivityService, type ConnectivityService } from './connectiv
 export { useIsOnline } from './connectivity'
 import { createVoiceChatService, type VoiceChatService } from './voice-chat'
 
-export type {
-  DiscoveredBook,
-  ImportResult,
-  PageDataInsertable,
-  ScanProgress
-} from './book-import'
+export type { DiscoveredBook, ImportResult, PageDataInsertable, ScanProgress } from './book-import'
 import { createSyncEngine } from '@rishi/shared/sync-engine'
 import { embedSingleText, embedWithFallback } from '@/modules/embed-fallback'
 import { hashBookFile, uploadBookFile } from '@/modules/file-sync'
@@ -42,8 +37,7 @@ export function getConnectivityService(): ConnectivityService {
           return navigator.onLine
         },
         addEventListener: (type, listener) => window.addEventListener(type, listener),
-        removeEventListener: (type, listener) =>
-          window.removeEventListener(type, listener)
+        removeEventListener: (type, listener) => window.removeEventListener(type, listener)
       }
     })
     _connectivity.start()
@@ -59,17 +53,15 @@ export function setTestConnectivityService(override: ConnectivityService | null)
 let _rag: RagService | null = null
 
 export function getRagService(): RagService {
-  if (!_rag) {
-    _rag = createRagService({
-      ipc: {
-        searchVectors: window.electron.searchVectors,
-        getTextFromVectorId: window.electron.getTextFromVectorId,
-        searchBookText: window.electron.searchBookText,
-        hasVectorsForBook: window.electron.hasVectorsForBook
-      },
-      embed: embedSingleText
-    })
-  }
+  _rag ??= createRagService({
+    ipc: {
+      searchVectors: window.electron.searchVectors,
+      getTextFromVectorId: window.electron.getTextFromVectorId,
+      searchBookText: window.electron.searchBookText,
+      hasVectorsForBook: window.electron.hasVectorsForBook
+    },
+    embed: embedSingleText
+  })
   return _rag
 }
 
@@ -92,81 +84,76 @@ async function resolveTtsAuth(): Promise<AuthHeader> {
 }
 
 export function getTtsService(): TtsService {
-  if (!_tts) {
-    _tts = createTtsService({
-      ipc: {
-        mkdir: window.electron.mkdir,
-        exists: window.electron.exists,
-        writeFile: window.electron.writeFile,
-        readFile: window.electron.readFile,
-        copyFile: window.electron.copyFile,
-        removeFile: window.electron.removeFile,
-        getDirSize: window.electron.getDirSize,
-        getCacheFileStats: window.electron.getCacheFileStats,
-        getAppDataPath: window.electron.getAppDataPath
-      },
-      fetch: globalThis.fetch.bind(globalThis),
-      getAuthToken: resolveTtsAuth,
-      config: {
-        audioWorkerUrl: config.production.audio_worker_url,
-        cacheMaxBytes: 500 * 1024 * 1024,
-        maxConcurrent: 8
-      }
-    })
-  }
+  _tts ??= createTtsService({
+    ipc: {
+      mkdir: window.electron.mkdir,
+      exists: window.electron.exists,
+      writeFile: window.electron.writeFile,
+      readFile: window.electron.readFile,
+      copyFile: window.electron.copyFile,
+      removeFile: window.electron.removeFile,
+      getDirSize: window.electron.getDirSize,
+      getCacheFileStats: window.electron.getCacheFileStats,
+      getAppDataPath: window.electron.getAppDataPath
+    },
+    fetch: globalThis.fetch.bind(globalThis),
+    getAuthToken: resolveTtsAuth,
+    config: {
+      audioWorkerUrl: config.production.audio_worker_url,
+      cacheMaxBytes: 500 * 1024 * 1024,
+      maxConcurrent: 8
+    }
+  })
   return _tts
 }
 
 let _sync: SyncService | null = null
 
 export function getSyncService(): SyncService {
-  if (!_sync) {
-    _sync = createSyncService({
-      ipc: {
-        syncGetDirtyBooks: window.electron.syncGetDirtyBooks,
-        syncGetDirtyHighlights: window.electron.syncGetDirtyHighlights,
-        syncGetDirtyConversations: window.electron.syncGetDirtyConversations,
-        syncGetDirtyMessages: window.electron.syncGetDirtyMessages,
-        syncGetLastVersion: window.electron.syncGetLastVersion,
-        syncMarkBooksClean: window.electron.syncMarkBooksClean,
-        syncMarkHighlightsClean: window.electron.syncMarkHighlightsClean,
-        syncMarkConversationsClean: window.electron.syncMarkConversationsClean,
-        syncMarkMessagesClean: window.electron.syncMarkMessagesClean,
-        syncApplyBookConflict: window.electron.syncApplyBookConflict,
-        syncApplyHighlightConflict: window.electron.syncApplyHighlightConflict,
-        syncApplyConversationConflict: window.electron.syncApplyConversationConflict,
-        syncUpsertBook: window.electron.syncUpsertBook,
-        syncUpsertHighlight: window.electron.syncUpsertHighlight,
-        syncUpsertConversation: window.electron.syncUpsertConversation,
-        syncInsertMessage: window.electron.syncInsertMessage,
-        syncUpdateLastVersion: window.electron.syncUpdateLastVersion
-      },
-      engineFactory: createSyncEngine,
-      fetch: globalThis.fetch.bind(globalThis),
-      getAuthToken,
-      getDevBypassSecret: window.electron.getDevBypassSecret,
-      connectivity: getConnectivityService(),
-      clock: {
-        now: () => Date.now(),
-        setTimeout: (fn, ms) => setTimeout(fn, ms),
-        clearTimeout: (handle) => clearTimeout(handle),
-        setInterval: (fn, ms) => setInterval(fn, ms),
-        clearInterval: (handle) => clearInterval(handle)
-      },
-      windowEvents: {
-        addEventListener: (type, listener) => window.addEventListener(type, listener),
-        removeEventListener: (type, listener) =>
-          window.removeEventListener(type, listener),
-        dispatchEvent: (event) => window.dispatchEvent(event)
-      },
-      config: {
-        workerUrl: 'https://api.fidexa.org',
-        intervalMs: 5 * 60 * 1000,
-        debounceMs: 2000,
-        requestTimeoutMs: 30_000
-      }
-    })
-  }
+  _sync ??= createSyncService({
+    ipc: {
+      syncGetDirtyBooks: window.electron.syncGetDirtyBooks,
+      syncGetDirtyHighlights: window.electron.syncGetDirtyHighlights,
+      syncGetDirtyConversations: window.electron.syncGetDirtyConversations,
+      syncGetDirtyMessages: window.electron.syncGetDirtyMessages,
+      syncGetLastVersion: window.electron.syncGetLastVersion,
+      syncMarkBooksClean: window.electron.syncMarkBooksClean,
+      syncMarkHighlightsClean: window.electron.syncMarkHighlightsClean,
+      syncMarkConversationsClean: window.electron.syncMarkConversationsClean,
+      syncMarkMessagesClean: window.electron.syncMarkMessagesClean,
+      syncApplyBookConflict: window.electron.syncApplyBookConflict,
+      syncApplyHighlightConflict: window.electron.syncApplyHighlightConflict,
+      syncApplyConversationConflict: window.electron.syncApplyConversationConflict,
+      syncUpsertBook: window.electron.syncUpsertBook,
+      syncUpsertHighlight: window.electron.syncUpsertHighlight,
+      syncUpsertConversation: window.electron.syncUpsertConversation,
+      syncInsertMessage: window.electron.syncInsertMessage,
+      syncUpdateLastVersion: window.electron.syncUpdateLastVersion
+    },
+    engineFactory: createSyncEngine,
+    fetch: globalThis.fetch.bind(globalThis),
+    getAuthToken,
+    getDevBypassSecret: window.electron.getDevBypassSecret,
+    connectivity: getConnectivityService(),
+    clock: {
+      now: () => Date.now(),
+      setTimeout: (fn, ms) => setTimeout(fn, ms),
+      clearTimeout: (handle) => clearTimeout(handle),
+      setInterval: (fn, ms) => setInterval(fn, ms),
+      clearInterval: (handle) => clearInterval(handle)
+    },
+    windowEvents: {
+      addEventListener: (type, listener) => window.addEventListener(type, listener),
+      removeEventListener: (type, listener) => window.removeEventListener(type, listener),
+      dispatchEvent: (event) => window.dispatchEvent(event)
+    },
+    config: {
+      workerUrl: 'https://api.fidexa.org',
+      intervalMs: 5 * 60 * 1000,
+      debounceMs: 2000,
+      requestTimeoutMs: 30_000
+    }
+  })
   return _sync
 }
 
@@ -244,8 +231,7 @@ export function getVoiceChatService(): VoiceChatService {
           apiKey: opts.apiKey
         }) as never,
       media: {
-        getUserMedia: (constraints) =>
-          navigator.mediaDevices.getUserMedia(constraints) as never,
+        getUserMedia: (constraints) => navigator.mediaDevices.getUserMedia(constraints),
         createAudioElement: () => {
           const a = document.createElement('audio')
           a.autoplay = true

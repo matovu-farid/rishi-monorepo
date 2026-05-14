@@ -2,7 +2,13 @@
 // Embeddings module — local sentence embeddings via @xenova/transformers
 // ---------------------------------------------------------------------------
 
-type Pipeline = Awaited<ReturnType<typeof import('@xenova/transformers').pipeline>>
+import type { FeatureExtractionPipelineType } from '@xenova/transformers'
+
+// `pipeline()` returns a union of every pipeline subtype, none of which can
+// be statically narrowed from the `task` argument value. We always ask for
+// `feature-extraction`, which produces a `FeatureExtractionPipelineType` —
+// a callable that accepts `string | string[]` and resolves to a `Tensor`.
+type Pipeline = FeatureExtractionPipelineType
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -39,10 +45,13 @@ async function getPipeline(): Promise<Pipeline> {
   pipelineLoading = (async () => {
     try {
       const { pipeline } = await import('@xenova/transformers')
-      const pipe = await pipeline('feature-extraction', MODEL_NAME, {
+      // The runtime guarantees a FeatureExtractionPipeline because we pass
+      // 'feature-extraction'; the static return is a union of every pipeline
+      // subtype, so we narrow here at the construction boundary.
+      const pipe = (await pipeline('feature-extraction', MODEL_NAME, {
         // Quantised model for faster inference
         quantized: true
-      })
+      })) as Pipeline
       pipelineInstance = pipe
       return pipe
     } catch (err) {

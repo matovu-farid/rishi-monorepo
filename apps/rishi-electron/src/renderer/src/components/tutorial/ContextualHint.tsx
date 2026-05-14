@@ -44,7 +44,7 @@ export function ContextualHint({
   return (
     <div className="relative">
       {children}
-      {shouldShow && (
+      {shouldShow ? (
         <>
           {/* Pulsing dot */}
           <button
@@ -59,7 +59,7 @@ export function ContextualHint({
 
           {/* Hint popover */}
           <AnimatePresence>
-            {popoverOpen && (
+            {popoverOpen ? (
               <motion.div
                 className={`absolute z-[55] bg-white rounded-lg shadow-lg border border-gray-200 p-3 w-56 ${popoverPositionClasses[dotPosition]}`}
                 initial={{ opacity: 0, scale: 0.95 }}
@@ -80,7 +80,7 @@ export function ContextualHint({
                   Got it
                 </button>
               </motion.div>
-            )}
+            ) : null}
           </AnimatePresence>
 
           {/* Pulse animation keyframes */}
@@ -91,7 +91,7 @@ export function ContextualHint({
             }
           `}</style>
         </>
-      )}
+      ) : null}
     </div>
   )
 }

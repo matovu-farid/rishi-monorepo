@@ -34,9 +34,9 @@ export function makeRag(): RagService {
   } as unknown as RagService
 }
 
-export function makeConnectivity(
-  opts?: { initialOnline?: boolean }
-): ConnectivityService & { setOnline(b: boolean): void } {
+export function makeConnectivity(opts?: {
+  initialOnline?: boolean
+}): ConnectivityService & { setOnline(b: boolean): void } {
   let online = opts?.initialOnline ?? true
   const listeners = new Set<(online: boolean) => void>()
   return {
@@ -100,10 +100,7 @@ export function makeAgent(): {
   }
 }
 
-export function makeSession(opts?: {
-  connectDelayMs?: number
-  connectFailWith?: Error
-}): {
+export function makeSession(opts?: { connectDelayMs?: number; connectFailWith?: Error }): {
   factory: (agent: RealtimeAgentLike, opts: SessionFactoryOpts) => RealtimeSessionLike
   session: RealtimeSessionLike
   mute: ReturnType<typeof vi.fn>
@@ -120,7 +117,9 @@ export function makeSession(opts?: {
     lastConnectOpts = o
     if (opts?.connectFailWith) throw opts.connectFailWith
     if (opts?.connectDelayMs) {
-      await new Promise((r) => setTimeout(r, opts.connectDelayMs))
+      await new Promise((r) => {
+        setTimeout(r, opts.connectDelayMs)
+      })
     }
   })
   const mute = vi.fn()
@@ -251,9 +250,7 @@ export function makeConfig(overrides?: Partial<VoiceChatConfig>): VoiceChatConfi
   }
 }
 
-export function makeDeps(
-  overrides?: Partial<VoiceChatServiceDeps>
-): VoiceChatServiceDeps {
+export function makeDeps(overrides?: Partial<VoiceChatServiceDeps>): VoiceChatServiceDeps {
   return {
     rag: makeRag(),
     connectivity: makeConnectivity(),
@@ -356,9 +353,7 @@ describe('createVoiceChatService — activate (cold happy path)', () => {
 
   it('deactivate() from active → paused; session.interrupt + mute(true)', async () => {
     const session = makeSession()
-    const svc = createVoiceChatService(
-      makeDeps({ sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory }))
     await svc.activate(1, { pageText: 'p' })
     svc.deactivate()
 
@@ -369,9 +364,7 @@ describe('createVoiceChatService — activate (cold happy path)', () => {
 
   it('dispose() from active → idle; session.close() called', async () => {
     const session = makeSession()
-    const svc = createVoiceChatService(
-      makeDeps({ sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory }))
     await svc.activate(1, { pageText: 'p' })
     svc.dispose()
 
@@ -381,9 +374,7 @@ describe('createVoiceChatService — activate (cold happy path)', () => {
 
   it('chatStatus fires connecting → idle around a cold activate', async () => {
     const session = makeSession()
-    const svc = createVoiceChatService(
-      makeDeps({ sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory }))
     const statuses: ChatStatus[] = []
     svc.onChatStatus((s) => statuses.push(s))
 
@@ -398,9 +389,7 @@ describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
   it('warm activate on same bookId calls updateAgent when ctx changes; no new mic prompt', async () => {
     const media = makeMedia()
     const session = makeSession()
-    const svc = createVoiceChatService(
-      makeDeps({ media, sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ media, sessionFactory: session.factory }))
     await svc.activate(1, { pageText: 'a' })
     expect(media.getUserMedia).toHaveBeenCalledTimes(1)
 
@@ -412,9 +401,7 @@ describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
 
   it('warm activate skips updateAgent when ctx fingerprint is unchanged', async () => {
     const session = makeSession()
-    const svc = createVoiceChatService(
-      makeDeps({ sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory }))
     await svc.activate(1, { pageText: 'same' })
     await svc.activate(1, { pageText: 'same' })
 
@@ -423,9 +410,7 @@ describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
 
   it('activate on different bookId disposes the old session first', async () => {
     const session = makeSession()
-    const svc = createVoiceChatService(
-      makeDeps({ sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory }))
     await svc.activate(1, { pageText: 'a' })
     await svc.activate(2, { pageText: 'b' })
 
@@ -435,9 +420,7 @@ describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
 
   it('concurrent activate calls share the in-flight promise', async () => {
     const session = makeSession()
-    const svc = createVoiceChatService(
-      makeDeps({ sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory }))
     const [p1, p2] = [svc.activate(7, { pageText: 'p' }), svc.activate(7, { pageText: 'p' })]
     await Promise.all([p1, p2])
 
@@ -447,9 +430,7 @@ describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
   it('preconnect is no-op when hasUsedVoiceInSession is false', async () => {
     const session = makeSession()
     const ipc = makeIpc()
-    const svc = createVoiceChatService(
-      makeDeps({ sessionFactory: session.factory, ipc })
-    )
+    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory, ipc }))
     await svc.preconnect(1, { pageText: 'p' })
 
     expect(session.connect).not.toHaveBeenCalled()
@@ -458,9 +439,7 @@ describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
 
   it('preconnect after a real activate connects + mutes (paused)', async () => {
     const session = makeSession()
-    const svc = createVoiceChatService(
-      makeDeps({ sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory }))
     await svc.activate(1, { pageText: 'p' })
     svc.dispose()
 
@@ -478,7 +457,9 @@ describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
     const svc = createVoiceChatService(makeDeps({ ipc, media }))
 
     svc.prewarmKey()
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
 
     expect(ipc.getRealtimeClientSecret).toHaveBeenCalledTimes(1)
     expect(media.getUserMedia).not.toHaveBeenCalled()
@@ -508,9 +489,7 @@ describe('createVoiceChatService — errors', () => {
 
   it('session.connect failure classifies as connect_failed; half-built session closed', async () => {
     const session = makeSession({ connectFailWith: new Error('boom') })
-    const svc = createVoiceChatService(
-      makeDeps({ sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory }))
 
     await expect(svc.activate(1, { pageText: 'p' })).rejects.toThrow('boom')
     expect(session.close).toHaveBeenCalled()
@@ -535,9 +514,7 @@ describe('createVoiceChatService — connectivity gating', () => {
   it('activate while offline rejects with OfflineError; state → offline', async () => {
     const connectivity = makeConnectivity({ initialOnline: false })
     const media = makeMedia()
-    const svc = createVoiceChatService(
-      makeDeps({ connectivity, media })
-    )
+    const svc = createVoiceChatService(makeDeps({ connectivity, media }))
 
     await expect(svc.activate(1, { pageText: 'p' })).rejects.toBeInstanceOf(OfflineErrorImport)
     expect(svc.getState()).toBe('offline')
@@ -547,9 +524,7 @@ describe('createVoiceChatService — connectivity gating', () => {
   it('mid-session offline transition disposes the session + state → offline', async () => {
     const connectivity = makeConnectivity({ initialOnline: true })
     const session = makeSession()
-    const svc = createVoiceChatService(
-      makeDeps({ connectivity, sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ connectivity, sessionFactory: session.factory }))
     svc.start()
     await svc.activate(1, { pageText: 'p' })
     expect(svc.getState()).toBe('active')
@@ -609,9 +584,7 @@ describe('createVoiceChatService — RAG passthrough + onEndedByAgent', () => {
   it('passes the injected RagService through agentFactory', async () => {
     const rag = makeRag()
     const agent = makeAgent()
-    const svc = createVoiceChatService(
-      makeDeps({ rag, agentFactory: agent.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ rag, agentFactory: agent.factory }))
     await svc.activate(1, { pageText: 'p' })
 
     expect(agent.lastArgs()?.rag).toBe(rag)
@@ -620,9 +593,7 @@ describe('createVoiceChatService — RAG passthrough + onEndedByAgent', () => {
 
   it('onEndedByAgent fires when the agent invokes endConversation tool', async () => {
     const agent = makeAgent()
-    const svc = createVoiceChatService(
-      makeDeps({ agentFactory: agent.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ agentFactory: agent.factory }))
     const spy = vi.fn()
     svc.onEndedByAgent(spy)
 
@@ -634,9 +605,7 @@ describe('createVoiceChatService — RAG passthrough + onEndedByAgent', () => {
 
   it('onEndedByAgent unsubscribe stops further deliveries', async () => {
     const agent = makeAgent()
-    const svc = createVoiceChatService(
-      makeDeps({ agentFactory: agent.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ agentFactory: agent.factory }))
     const spy = vi.fn()
     const off = svc.onEndedByAgent(spy)
 

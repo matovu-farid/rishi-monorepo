@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react'
+import type React from 'react'
+import { useEffect, useState } from 'react'
 import { updateHighlightNote } from '@/modules/highlight-storage'
 import { getSyncService } from '@/services'
 import type { HighlightRow } from '@/modules/highlight-storage'
@@ -15,6 +16,8 @@ export function NoteEditor({ highlight, open, onOpenChange, onSaved }: NoteEdito
 
   useEffect(() => {
     if (highlight) {
+      // Why: resetting editable local state when prop changes — editable input requires owning state
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setNoteValue(highlight.note ?? '')
     }
   }, [highlight])

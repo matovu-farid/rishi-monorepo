@@ -72,18 +72,18 @@ export function makeCoverSection(coverBlob: Blob): FoliateSection {
   return {
     id: 'azw3-cover',
     virtualGroupId: 'azw3-cover',
-    load: async (): Promise<string> => {
-      if (cachedUrl) return cachedUrl
+    load: (): Promise<string> => {
+      if (cachedUrl) return Promise.resolve(cachedUrl)
       const imgUrl = URL.createObjectURL(coverBlob)
       const html = buildHtml(imgUrl)
       cachedUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
-      return cachedUrl
+      return Promise.resolve(cachedUrl)
     },
-    createDocument: async (): Promise<Document> => {
-      if (cachedDoc) return cachedDoc
+    createDocument: (): Promise<Document> => {
+      if (cachedDoc) return Promise.resolve(cachedDoc)
       const imgUrl = URL.createObjectURL(coverBlob)
       cachedDoc = new DOMParser().parseFromString(buildHtml(imgUrl), 'text/html')
-      return cachedDoc
+      return Promise.resolve(cachedDoc)
     }
   }
 }
@@ -122,7 +122,9 @@ export async function parseAzw3(
         open(file: Blob): Promise<FoliateBook>
       }
     }>,
-    import('foliate-js/vendor/fflate.js') as Promise<{ unzlibSync: (data: Uint8Array) => Uint8Array }>
+    import('foliate-js/vendor/fflate.js') as Promise<{
+      unzlibSync: (data: Uint8Array) => Uint8Array
+    }>
   ])
 
   const mobi = new mobiMod.MOBI({ unzlib: fflateMod.unzlibSync })
@@ -178,7 +180,10 @@ export async function loadSectionDocument(section: FoliateSection): Promise<Docu
   const url = await section.load()
   const res = await fetch(url)
   const text = await res.text()
-  const contentType = res.headers.get('content-type') || 'application/xhtml+xml'
+  // `Headers.get` returns `''` for a present-but-empty header — treat that as
+  // "missing" the same way as `null` so we always end up with a usable MIME.
+  const rawContentType = res.headers.get('content-type')
+  const contentType = rawContentType !== null && rawContentType !== '' ? rawContentType : 'application/xhtml+xml'
   const baseType = (contentType.split(';')[0] || '').trim() as DOMParserSupportedType
   const parser = new DOMParser()
   // Prefer the served content-type; fall back to text/html if XHTML parsing
@@ -273,10 +278,7 @@ export async function paginateSection(
   // For XHTML documents `doc.body` returns the HTML-namespaced body, which is
   // null for KF8's serialized output (foliate uses the XHTML namespace). Fall
   // back to a tag-name lookup so we find the body either way.
-  const body =
-    sourceDoc.body ??
-    (sourceDoc.getElementsByTagName('body')[0] as HTMLBodyElement | undefined) ??
-    null
+  const body = sourceDoc.body ?? sourceDoc.getElementsByTagName('body')[0] ?? null
   if (!body || body.children.length === 0) return []
 
   // Pick the deepest container that holds the actual flow of content. Some
@@ -428,7 +430,7 @@ function makeVirtualSection(args: VirtualSectionArgs): FoliateSection {
     const flow = findEmptyFlow(clonedHtml)
     for (const el of elements) flow.appendChild(el.cloneNode(true))
 
-    const fresh = skeleton.ownerDocument!.implementation.createDocument(
+    const fresh = skeleton.ownerDocument.implementation.createDocument(
       clonedHtml.namespaceURI,
       clonedHtml.localName,
       null
@@ -440,16 +442,16 @@ function makeVirtualSection(args: VirtualSectionArgs): FoliateSection {
   return {
     id: `virt-${groupId}-${index}`,
     virtualGroupId: groupId,
-    load: async (): Promise<string> => {
-      if (cachedUrl) return cachedUrl
-      if (!pageDoc) pageDoc = buildDocument()
+    load: (): Promise<string> => {
+      if (cachedUrl) return Promise.resolve(cachedUrl)
+      pageDoc ??= buildDocument()
       const serialized = serializer.serializeToString(pageDoc)
       cachedUrl = URL.createObjectURL(new Blob([serialized], { type: mimeType }))
-      return cachedUrl
+      return Promise.resolve(cachedUrl)
     },
-    createDocument: async (): Promise<Document> => {
-      if (!pageDoc) pageDoc = buildDocument()
-      return pageDoc
+    createDocument: (): Promise<Document> => {
+      pageDoc ??= buildDocument()
+      return Promise.resolve(pageDoc)
     }
   }
 }

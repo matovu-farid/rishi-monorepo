@@ -10,6 +10,9 @@
     "composite": true,
     "jsx": "react-jsx",
     "baseUrl": ".",
+    "noImplicitAny": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": false,
     "paths": {
       "@renderer/*": [
         "src/renderer/src/*"

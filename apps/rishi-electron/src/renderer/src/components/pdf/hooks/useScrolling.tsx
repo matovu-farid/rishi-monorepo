@@ -61,7 +61,7 @@ export function useScrolling(scrollContainerRef: React.RefObject<HTMLDivElement 
         usePlayerStore.getState().send?.({ type: 'RESUME' })
       }
     }
-  }, [])
+  }, [scrollContainerRef])
 
   // Auto-scroll to the highlighted paragraph
   useEffect(() => {
@@ -105,5 +105,5 @@ export function useScrolling(scrollContainerRef: React.RefObject<HTMLDivElement 
       })
     }, 100)
     return () => clearTimeout(timeout)
-  }, [highlightedParagraph, isRendered])
+  }, [highlightedParagraph, isRendered, scrollContainerRef])
 }

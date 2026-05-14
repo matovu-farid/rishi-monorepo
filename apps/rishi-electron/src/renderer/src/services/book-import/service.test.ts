@@ -62,7 +62,12 @@ export function makeScanner(): ScannerPort & {
         completeListeners.delete(l)
       }
     },
-    emit(event) {
+    emit(
+      event:
+        | { kind: 'result'; book: DiscoveredBook }
+        | { kind: 'progress'; progress: ScanProgress }
+        | { kind: 'complete' }
+    ) {
       if (event.kind === 'result') for (const l of resultListeners) l(event.book)
       else if (event.kind === 'progress') for (const l of progressListeners) l(event.progress)
       else for (const l of completeListeners) l()
@@ -116,7 +121,9 @@ describe('BookImportService.importFromPath — happy path', () => {
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.format).toBe('epub')
     // `upload-started` may arrive on next tick; wait for it.
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
     expect(events.map((e) => e.kind)).toEqual([
       'copying',
       'parsing',
@@ -262,12 +269,7 @@ describe('BookImportService.startDiscovery', () => {
 
     expect(scanner.startCount()).toBe(1)
     expect(scanner.lastMode()).toBe('default')
-    expect(events.map((e) => e.kind)).toEqual([
-      'book-found',
-      'book-found',
-      'progress',
-      'complete'
-    ])
+    expect(events.map((e) => e.kind)).toEqual(['book-found', 'book-found', 'progress', 'complete'])
     const completeEvent = events.find((e) => e.kind === 'complete')
     expect(completeEvent).toEqual({ kind: 'complete', cancelled: false })
   })

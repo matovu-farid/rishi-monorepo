@@ -7,7 +7,9 @@
  * @param wait - The number of milliseconds to delay
  * @returns A debounced version of the function
  */
-export function debounce<T extends (...args: any[]) => any>(
+// Why: T must be constrained to a variadic function type; due to parameter contravariance, replacing `any[]` with `unknown[]` or `never[]` would reject all real-world typed callers (the canonical variadic-generic shape).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function debounce<T extends (...args: any[]) => unknown>(
   func: T,
   wait: number
 ): (...args: Parameters<T>) => void {

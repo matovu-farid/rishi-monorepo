@@ -2,7 +2,7 @@ import type { Paragraph } from '@/stores/pdfStore'
 import type { TextContent } from 'react-pdf'
 import type { TextMarkedContent } from 'pdfjs-dist/types/src/display/api'
 
-import { TextItem } from 'pdfjs-dist/types/src/display/api'
+import type { TextItem } from 'pdfjs-dist/types/src/display/api'
 
 import { getParagraphThreshold } from '../utils/getParagraphThreshold'
 

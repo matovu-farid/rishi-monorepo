@@ -120,10 +120,9 @@ test.skip('warm-restore reopen does not flash the inner loading view', async () 
       return w.__loaderEverSeen === true
     })
 
-    expect(
-      seen,
-      'warm-restore reopen must not render the inner loading view at any frame'
-    ).toBe(false)
+    expect(seen, 'warm-restore reopen must not render the inner loading view at any frame').toBe(
+      false
+    )
   } finally {
     await closeApp(app)
   }

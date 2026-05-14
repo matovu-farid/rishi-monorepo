@@ -2,10 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { injectReaderStyles, READER_CSS, READER_STYLE_ID } from './reader-styles'
 
 function blankDoc(): Document {
-  return new DOMParser().parseFromString(
-    '<html><head></head><body></body></html>',
-    'text/html'
-  )
+  return new DOMParser().parseFromString('<html><head></head><body></body></html>', 'text/html')
 }
 
 describe('injectReaderStyles', () => {

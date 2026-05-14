@@ -1,17 +1,17 @@
 import type { Contents } from 'epubjs'
 import type Section from 'epubjs/types/section'
-import type { SpineItem } from 'epubjs/types/section'
+import type { SpineItem as _SpineItem } from 'epubjs/types/section'
 import type View from 'epubjs/types/managers/view'
 import type Layout from 'epubjs/types/layout'
 import type Manager from 'epubjs/types/managers/manager'
 import type Mapping from 'epubjs/types/mapping'
-import type Rendition from 'epubjs/types/rendition'
+import type _Rendition from 'epubjs/types/rendition'
 import type Annotations from 'epubjs/types/annotations'
 import type { EpubCFI } from 'epubjs'
 
 declare module 'epubjs/types/section' {
   export interface SpineItem {
-    load(request: (url: string) => Promise<any>): Promise<Section>
+    load(request: (url: string) => Promise<unknown>): Promise<Section>
     index: number
     cfiBase: string
     next(): SpineItem | null
@@ -31,7 +31,7 @@ declare module 'epubjs/types/section' {
     }
     document?: Document
     index: number
-    load(request?: Function): Promise<Section>
+    load(request?: (url: string) => Promise<unknown>): Promise<Section>
     next(): SpineItem | null
     prev(): SpineItem | null
   }
@@ -44,26 +44,42 @@ declare module 'epubjs/types/managers/view' {
     right: number
   }
 
+  // Note: `contents`, `section`, and `element` are assigned during view
+  // construction in epub.js but may be `undefined` before the view has
+  // finished mounting (e.g. during initial render or after destroy).
+  // Marking them optional matches runtime reality.
   export default interface View {
-    contents: Contents
-    section: Section
+    contents?: Contents
+    section?: Section
     index: number
     position(): ViewPosition
-    element: HTMLDivElement
+    element?: HTMLDivElement
   }
 }
 
 declare module 'epubjs/types/annotations' {
   export default interface Annotations {
-    _annotations: Record<string, any>
+    _annotations: Record<string, unknown>
     highlight(
       cfiRange: string | EpubCFI,
       data?: Record<string, unknown>,
       cb?: () => void,
       className?: string,
       styles?: Record<string, unknown>
-    ): any
+    ): unknown
     remove(cfiRange: string | EpubCFI, type: string): void
+  }
+}
+
+declare module 'epubjs/types/locations' {
+  export default interface Locations {
+    /**
+     * Internal array of generated CFI strings, one per location.
+     * Reaching into the private surface is the only way to read the
+     * raw count without round-tripping through `length()` which can
+     * lie before generate() resolves.
+     */
+    _locations: string[]
   }
 }
 
@@ -83,7 +99,12 @@ declare module 'epubjs/types/managers/manager' {
       find: ({ index }: { index: number }) => View | undefined
     }
     layout: Layout
-    currentLocation(): Section[]
+    /**
+     * Returns the currently visible sections, or an empty/undefined value
+     * if no view is currently displayed. Upstream types declare a non-empty
+     * `Section[]`, but in practice the array can be empty or undefined.
+     */
+    currentLocation(): Section[] | undefined
     mapping: Mapping
     visible(): View[]
     add(section: Section | SpineItem, forceRight: boolean): Promise<View>
@@ -94,7 +115,7 @@ declare module 'epubjs/types/managers/manager' {
       axis: 'horizontal' | 'vertical'
       fullsize?: boolean
       direction?: 'rtl' | 'ltr'
-      [key: string]: any
+      [key: string]: unknown
     }
   }
 }
@@ -103,13 +124,25 @@ declare module 'epubjs/types/rendition' {
   import type { Book } from 'epubjs'
 
   export default interface Rendition {
-    manager: Manager
+    /**
+     * The view manager. `undefined` until `attachTo`/`display` has been
+     * called, and after `destroy()`. Call sites must handle the optional
+     * case — upstream types declare this as non-optional.
+     */
+    manager?: Manager
     annotations: Annotations
     book: Book
     settings: {
       ignoreClass: string
-      [key: string]: any
+      [key: string]: unknown
     }
+    /**
+     * The current displayed location. `undefined` until the first
+     * `relocated` event fires — call sites must handle the optional case.
+     * Upstream types declare this as non-optional; we narrow it here so
+     * the optional-chain pattern in renderers is type-correct.
+     */
+    location?: Location
   }
 }
 
@@ -126,17 +159,26 @@ declare module 'epubjs/types/mapping' {
 
 declare module 'epubjs' {
   import type { SpineItem, Spine } from 'epubjs/types/section'
+  import type { NavItem } from 'epubjs'
 
   // Augment the Book interface to include loaded.spine with Spine type
   export interface Book {
     loaded: {
       spine: Promise<Spine>
-      navigation: Promise<{ toc: any[] }>
+      navigation: Promise<{ toc: NavItem[] }>
     }
     spine: {
       each: (callback: (item: SpineItem) => void) => void
     }
-    load: (url: string) => Promise<any>
+    load: (url: string) => Promise<unknown>
     destroy: () => void
+  }
+
+  // Upstream types declare `toRange` as returning `Range`, but the
+  // implementation returns `null` when the CFI cannot be resolved against
+  // the supplied document (e.g. document not yet attached, mismatched
+  // section). Reflect that in the type so call sites can guard.
+  export interface EpubCFI {
+    toRange(_doc?: Document, ignoreClass?: string): Range | null
   }
 }

@@ -58,7 +58,9 @@ describe('TtsService.requestAudio', () => {
     expect(callCount()).toBe(1)
     // Cache write is fire-and-forget (`void deps.cache.saveAudio(...)`); let
     // microtasks drain so the writeFile mock has been invoked before asserting.
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
     expect(ipc.writeFile).toHaveBeenCalled() // cache write
   })
 
@@ -210,14 +212,18 @@ describe('TtsService.cancelBookRequests / getQueueStatus / clearBookCache', () =
 
     const a = service.requestAudio({ bookId: 'A', cfiRange: 'c1', text: 'x', priority: 0 })
     const b = service.requestAudio({ bookId: 'B', cfiRange: 'c2', text: 'y', priority: 0 })
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
 
     service.cancelBookRequests('A')
 
     await expect(a).rejects.toThrow('Request cancelled')
     const winner = await Promise.race([
       b.then(() => 'resolved'),
-      new Promise<string>((r) => setTimeout(() => r('pending'), 10))
+      new Promise<string>((r) => {
+        setTimeout(() => r('pending'), 10)
+      })
     ])
     expect(winner).toBe('pending')
   })
@@ -347,7 +353,9 @@ describe('TtsService retry + dedup at the boundary', () => {
     const p2 = service.requestAudio({ bookId: 'b', cfiRange: 'c', text: 'hi', priority: 0 })
 
     // Let microtasks settle so the first submit reaches the in-flight state.
-    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
     resolveFetch(new Response(new Uint8Array([7, 7]) as BodyInit, { status: 200 }))
 
     const [u1, u2] = await Promise.all([p1, p2])

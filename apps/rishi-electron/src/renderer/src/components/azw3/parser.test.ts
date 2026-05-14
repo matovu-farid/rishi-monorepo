@@ -69,9 +69,7 @@ describe('stripKindleResourceLinks', () => {
   })
 
   it('removes <img> tags with kindle: src that foliate failed to rewrite', () => {
-    const doc = docOf(
-      '<img src="kindle:embed:0002"/><img src="blob:rishi/already-rewritten"/>'
-    )
+    const doc = docOf('<img src="kindle:embed:0002"/><img src="blob:rishi/already-rewritten"/>')
     const removed = stripKindleResourceLinks(doc)
     expect(removed).toBe(1)
     expect(doc.querySelectorAll('img').length).toBe(1)

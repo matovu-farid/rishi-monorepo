@@ -1,5 +1,6 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { BrowserWindow } from 'electron'
 import { authService } from './auth-service'
+import { handle } from '../../preload/ipc-contract'
 
 export function registerAuthIpc(_getMainWindow: () => BrowserWindow | null): void {
   // Hydrate stored session on app start
@@ -12,25 +13,25 @@ export function registerAuthIpc(_getMainWindow: () => BrowserWindow | null): voi
     }
   })
 
-  ipcMain.handle('auth:start-magic-link', async (_evt, email: string) => {
+  handle('auth:start-magic-link', async (_evt, email) => {
     await authService.startMagicLink(email)
   })
 
-  ipcMain.handle('auth:start-google', async () => {
+  handle('auth:start-google', async () => {
     await authService.startGoogleSignIn()
   })
 
-  ipcMain.handle('auth:get-session', () => authService.getUser())
+  handle('auth:get-session', () => authService.getUser())
 
-  ipcMain.handle('auth:sign-out', async () => {
+  handle('auth:sign-out', async () => {
     await authService.signOut()
   })
 
-  ipcMain.handle('auth:delete-account', async () => {
+  handle('auth:delete-account', async () => {
     await authService.deleteAccount()
   })
 
-  ipcMain.handle('auth:get-token', async () => await authService.getSessionToken())
+  handle('auth:get-token', async () => await authService.getSessionToken())
 }
 
 export { authService } from './auth-service'

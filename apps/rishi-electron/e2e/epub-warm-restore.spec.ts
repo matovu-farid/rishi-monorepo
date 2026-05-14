@@ -91,9 +91,7 @@ test.skip('first open populates the cache, second open hits it', async () => {
     // beat to run setCachedEpub before we navigate away.
     await app.page.waitForTimeout(500)
 
-    expect(await epubCacheHas(app.page, book.id), 'book is cached after first open').toBe(
-      true
-    )
+    expect(await epubCacheHas(app.page, book.id), 'book is cached after first open').toBe(true)
     expect(await epubCacheSize(app.page), 'one cached entry').toBe(1)
 
     // ---- Reopen: must hit the cache ----

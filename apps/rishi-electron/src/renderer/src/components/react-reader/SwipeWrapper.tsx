@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useRef } from 'react'
+import { type ReactNode, useCallback, useEffect, useRef } from 'react'
 import { type SwipeableProps, useSwipeable } from 'react-swipeable'
 import { useWheel } from '@use-gesture/react'
 
@@ -8,6 +8,9 @@ export interface SwipeWrapperProps {
   onSwipeLeft?: () => void
   onSwipeRight?: () => void
 }
+
+const DEBOUNCE_MS = 600
+const THRESHOLD = 300
 
 /**
  * SwipeWrapper Component
@@ -26,8 +29,18 @@ export function SwipeWrapper({
   const lastSwipeTime = useRef<number>(0)
   const accumulatedDeltaX = useRef<number>(0)
   const swipeConsumed = useRef<boolean>(false)
-  const debounceMs = 600
-  const threshold = 300
+
+  // `useSwipeable` returns a new `ref` callback on every render. We mirror the
+  // latest callback into a ref so our own `combinedRef` can stay stable, and
+  // re-invoke it with the current DOM node from an effect so react-swipeable
+  // always sees the up-to-date handler props.
+  const touchHandlersRef = useRef(touchHandlers.ref)
+  useEffect(() => {
+    touchHandlersRef.current = touchHandlers.ref
+    if (containerRef.current) {
+      touchHandlers.ref(containerRef.current)
+    }
+  }, [touchHandlers])
 
   const wheelHandler = useCallback(
     (state: { delta: [number, number]; event: WheelEvent }) => {
@@ -35,7 +48,7 @@ export function SwipeWrapper({
       const { delta, event } = state
       const [deltaX, deltaY] = delta
 
-      if (now - lastSwipeTime.current < debounceMs) {
+      if (now - lastSwipeTime.current < DEBOUNCE_MS) {
         event.preventDefault()
         return
       }
@@ -56,7 +69,7 @@ export function SwipeWrapper({
 
       accumulatedDeltaX.current += deltaX
 
-      if (Math.abs(accumulatedDeltaX.current) >= threshold) {
+      if (Math.abs(accumulatedDeltaX.current) >= THRESHOLD) {
         event.preventDefault()
         swipeConsumed.current = true
         lastSwipeTime.current = now
@@ -81,18 +94,12 @@ export function SwipeWrapper({
     eventOptions: { passive: false }
   })
 
-  // Combine refs from useSwipeable and our own container ref
-  const combinedRef = useCallback(
-    (node: HTMLDivElement | null) => {
-      containerRef.current = node
-      if (touchHandlers.ref && typeof touchHandlers.ref === 'function') {
-        touchHandlers.ref(node)
-      } else if (touchHandlers.ref && 'current' in touchHandlers.ref) {
-        ;(touchHandlers.ref as unknown as React.RefObject<HTMLDivElement | null>).current = node
-      }
-    },
-    [touchHandlers.ref]
-  )
+  // Stable callback ref: stores the DOM node and forwards it to the latest
+  // react-swipeable ref callback (which is a function per its typings).
+  const combinedRef = useCallback((node: HTMLDivElement | null) => {
+    containerRef.current = node
+    touchHandlersRef.current(node)
+  }, [])
 
   const { ref: _, ...touchHandlersWithoutRef } = touchHandlers
 

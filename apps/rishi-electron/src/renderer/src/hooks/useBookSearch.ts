@@ -33,7 +33,9 @@ export function useBookSearch({ bookId, bookFormat, epubSearchFn }: UseBookSearc
     queryRef.current = query
   }, [query])
 
-  bookIdRef.current = bookId
+  useEffect(() => {
+    bookIdRef.current = bookId
+  }, [bookId])
 
   // Detect if query is quoted
   const isQuotedQuery = useCallback((q: string) => {
@@ -73,7 +75,7 @@ export function useBookSearch({ bookId, bookFormat, epubSearchFn }: UseBookSearc
               snippet: r.excerpt,
               highlightedSnippet: highlightText(r.excerpt, cleanQuery),
               cfi: r.cfi,
-              mode: 'exact' as SearchMode
+              mode: 'exact'
             }))
           )
         } else {
@@ -86,7 +88,7 @@ export function useBookSearch({ bookId, bookFormat, epubSearchFn }: UseBookSearc
               snippet: r.text,
               highlightedSnippet: r.snippet,
               pageNumber: r.pageNumber,
-              mode: 'exact' as SearchMode
+              mode: 'exact'
             }))
           )
         }
@@ -117,7 +119,7 @@ export function useBookSearch({ bookId, bookFormat, epubSearchFn }: UseBookSearc
           id: `semantic-${c.chunkId}`,
           snippet: c.text.length > 200 ? c.text.slice(0, 200) + '...' : c.text,
           pageNumber: c.pageNumber,
-          mode: 'semantic' as SearchMode
+          mode: 'semantic'
         }))
 
         setResults(resultsWithPages)

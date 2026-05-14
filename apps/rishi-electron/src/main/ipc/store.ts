@@ -1,6 +1,7 @@
-import { ipcMain, app } from 'electron'
+import { app } from 'electron'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
+import { handle } from '../../preload/ipc-contract.js'
 
 function getStorePath(): string {
   return path.join(app.getPath('userData'), 'settings-store.json')
@@ -20,7 +21,7 @@ async function writeStore(store: Record<string, unknown>): Promise<void> {
 }
 
 export function registerStoreHandlers(): void {
-  ipcMain.handle('store:get', async (_event, key: string) => {
+  handle('store:get', async (_event, key) => {
     try {
       const store = await readStore()
       return store[key] ?? null
@@ -31,7 +32,7 @@ export function registerStoreHandlers(): void {
     }
   })
 
-  ipcMain.handle('store:set', async (_event, key: string, value: unknown) => {
+  handle('store:set', async (_event, key, value) => {
     try {
       const store = await readStore()
       store[key] = value

@@ -1,11 +1,5 @@
 import { test, expect } from '@playwright/test'
-import {
-  AZW3_FIXTURE,
-  closeApp,
-  importBook,
-  launchApp,
-  openBook
-} from './helpers/electron-app'
+import { AZW3_FIXTURE, closeApp, importBook, launchApp, openBook } from './helpers/electron-app'
 
 // TDD reproduction for AZW3 support. Mirrors what MOBI provides:
 //   - opens via the book window

@@ -1,7 +1,8 @@
-import { ipcMain, dialog, BrowserWindow } from 'electron'
+import { dialog, BrowserWindow } from 'electron'
+import { handle } from '../../preload/ipc-contract.js'
 
 export function registerDialogHandlers(): void {
-  ipcMain.handle('dialog:showOpen', async (_event, options: Electron.OpenDialogOptions) => {
+  handle('dialog:showOpen', async (_event, options) => {
     try {
       const focusedWindow = BrowserWindow.getFocusedWindow()
       const result = focusedWindow

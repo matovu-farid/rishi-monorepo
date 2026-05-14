@@ -92,7 +92,7 @@ function AccountSettings(): JSX.Element {
             </div>
           </div>
         )}
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error ? <p className="text-sm text-red-600">{error}</p> : null}
       </section>
     </div>
   )

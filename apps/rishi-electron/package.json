@@ -97,6 +97,8 @@
     "@electron-toolkit/tsconfig": "^2.0.0",
     "@playwright/test": "^1.59.1",
     "@tailwindcss/vite": "^4.1.16",
+    "@tanstack/eslint-plugin-query": "^5.100.10",
+    "@tanstack/eslint-plugin-router": "^1.161.6",
     "@tanstack/react-router-devtools": "^1.133.15",
     "@tanstack/router-plugin": "^1.133.27",
     "@testing-library/jest-dom": "^6.6.3",
