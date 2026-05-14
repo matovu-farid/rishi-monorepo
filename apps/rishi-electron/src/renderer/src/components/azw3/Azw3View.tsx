@@ -171,7 +171,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   // Publish title so the native Window menu sees the loaded book.
   useEffect(() => {
     const e = (window as unknown as { electron: { send(c: string, p: unknown): void } }).electron
-    e?.send('window:setBookTitle', { bookId: book.id, title: book.title })
+    e.send('window:setBookTitle', { bookId: book.id, title: book.title })
   }, [book.id, book.title])
 
   // Mirror TOC sheet state into the menu context.
@@ -179,7 +179,6 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     const e = (
       window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
     ).electron
-    if (!e) return
     e.setMenuContext({ tocOpen })
   }, [tocOpen])
 
@@ -188,7 +187,6 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     const e = (
       window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
     ).electron
-    if (!e) return
     const unsub = usePlayerStore.subscribe(
       (s) => s.playingState,
       (state) => {
@@ -220,7 +218,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   } = useQuery({
     queryKey: ['azw3-chapter', book.filepath, chapterIndex, currentSection],
     queryFn: async () => {
-      if (!currentSection?.load) return null
+      if (!currentSection.load) return null
       return currentSection.load()
     },
     enabled: chapterCount > 0 && !!currentSection
@@ -288,14 +286,12 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     ): number => {
       const clamped = Math.max(0, Math.min(desiredPage, totalPages - 1))
       const body = doc.body
-      if (body) {
-        const left = clamped * pageStep
-        // `behavior: 'instant'` avoids the default smooth-scroll animation
-        // (which feels sluggish on chapter switches and would race React).
-        body.scrollTo({ left, top: 0, behavior: 'instant' as ScrollBehavior })
-        // Fallback for engines that don't implement scrollTo on body.
-        body.scrollLeft = left
-      }
+      const left = clamped * pageStep
+      // `behavior: 'instant'` avoids the default smooth-scroll animation
+      // (which feels sluggish on chapter switches and would race React).
+      body.scrollTo({ left, top: 0, behavior: 'instant' as ScrollBehavior })
+      // Fallback for engines that don't implement scrollTo on body.
+      body.scrollLeft = left
       return clamped
     },
     []
@@ -322,7 +318,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
       // Without this, the first measurement often comes back too small
       // because web-font loading shifts the column flow.
       try {
-        await doc.fonts?.ready
+        await doc.fonts.ready
       } catch {
         // doc.fonts might be undefined or throw in non-CSSFontLoading envs.
       }
@@ -337,14 +333,14 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
       // (`box-sizing: border-box`) so the stride is
       // `clientWidth - paddingLeft - paddingRight + columnGap` — see
       // computePageStep in ./pagination.
-      const cs = body ? iframeWin.getComputedStyle(body) : null
-      const columnGap = cs ? parseFloat(cs.columnGap || '0') || 0 : 0
-      const paddingLeft = cs ? parseFloat(cs.paddingLeft || '0') || 0 : 0
-      const paddingRight = cs ? parseFloat(cs.paddingRight || '0') || 0 : 0
-      const clientWidth = body?.clientWidth ?? 0
+      const cs = iframeWin.getComputedStyle(body)
+      const columnGap = parseFloat(cs.columnGap || '0') || 0
+      const paddingLeft = parseFloat(cs.paddingLeft || '0') || 0
+      const paddingRight = parseFloat(cs.paddingRight || '0') || 0
+      const clientWidth = body.clientWidth
       const pageStep = computePageStep(clientWidth, columnGap, paddingLeft, paddingRight)
       const total = measurePageCount(
-        body?.scrollWidth ?? 0,
+        body.scrollWidth,
         clientWidth,
         columnGap,
         paddingLeft,
@@ -389,7 +385,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     const observer = new ResizeObserver(() => {
       const doc = iframe.contentDocument
       const win = iframe.contentWindow
-      if (!doc || !win || !doc.body) return
+      if (!doc || !win) return
       // Batch into a rAF so a flurry of resize events only re-measures once.
       cancelAnimationFrame(raf)
       raf = win.requestAnimationFrame(() => {
@@ -433,7 +429,6 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
    *  media queries can change the column-gap or horizontal padding on resize. */
   const readPageStep = useCallback((doc: Document, win: Window): number => {
     const body = doc.body
-    if (!body) return 1
     const cs = win.getComputedStyle(body)
     const columnGap = parseFloat(cs.columnGap || '0') || 0
     const paddingLeft = parseFloat(cs.paddingLeft || '0') || 0
@@ -531,7 +526,6 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         // right is past the viewport width, it's on a later page.
         const rect = el.getBoundingClientRect()
         const body = doc.body
-        if (!body) return
         const viewportWidth = win.innerWidth
         if (rect.left < 0 || rect.right > viewportWidth) {
           // Read pageStep fresh from computed style — it can change on
@@ -667,35 +661,58 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         // (Today parseAzw3 returns whole sections so virtualGroupId is only
         //  set for the cover; the dedupe logic is kept defensively in case a
         //  caller pre-paginates sections via `paginateSection`.)
+        // Plan extraction tasks linearly (no async work here) so we know the
+        // section index ranges that each output entry covers. Then run all
+        // per-section paragraph extractions in parallel — they don't share
+        // mutable state and order is reconstructed from the planned indices.
+        type Task = { kind: 'group'; pageNumber: number; id: number; sectionIdxs: number[] }
+        const tasks: Task[] = []
         const seenGroups = new Set<string>()
         for (let i = 0; i < sections.length; i++) {
           const section = sections[i]
           if (section.virtualGroupId) {
             if (seenGroups.has(section.virtualGroupId)) continue
             seenGroups.add(section.virtualGroupId)
-            const groupTexts: string[] = []
+            const sectionIdxs: number[] = []
             for (let j = i; j < sections.length; j++) {
               if (sections[j].virtualGroupId !== section.virtualGroupId) break
-              const texts = await extractSectionParagraphs(sections[j])
-              for (const t of texts) groupTexts.push(t)
+              sectionIdxs.push(j)
             }
-            const combined = groupTexts.join('\n').trim()
-            if (combined.length > 0) {
-              allPageData.push({
-                id: stringToNumberID(`${book.id}-azw3-${section.virtualGroupId}`),
-                pageNumber: i + 1,
-                bookId: book.id,
-                data: combined
-              })
-            }
+            tasks.push({
+              kind: 'group',
+              pageNumber: i + 1,
+              id: stringToNumberID(`${book.id}-azw3-${section.virtualGroupId}`),
+              sectionIdxs
+            })
             continue
           }
-          const texts = await extractSectionParagraphs(section)
-          const combined = texts.join('\n').trim()
+          tasks.push({
+            kind: 'group',
+            pageNumber: i + 1,
+            id: stringToNumberID(`${book.id}-azw3-${i}`),
+            sectionIdxs: [i]
+          })
+        }
+
+        // Extract paragraphs for every unique section once, in parallel.
+        const uniqueSectionIdxs = Array.from(new Set(tasks.flatMap((t) => t.sectionIdxs)))
+        const extractedEntries = await Promise.all(
+          uniqueSectionIdxs.map(async (idx) => {
+            const texts = await extractSectionParagraphs(sections[idx])
+            return [idx, texts] as const
+          })
+        )
+        const extracted = new Map<number, string[]>(extractedEntries)
+
+        for (const task of tasks) {
+          const combined = task.sectionIdxs
+            .flatMap((idx) => extracted.get(idx) ?? [])
+            .join('\n')
+            .trim()
           if (combined.length > 0) {
             allPageData.push({
-              id: stringToNumberID(`${book.id}-azw3-${i}`),
-              pageNumber: i + 1,
+              id: task.id,
+              pageNumber: task.pageNumber,
               bookId: book.id,
               data: combined
             })

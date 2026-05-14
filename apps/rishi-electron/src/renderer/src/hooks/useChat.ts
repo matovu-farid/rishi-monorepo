@@ -34,7 +34,11 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
     if (initialized.current) return
     initialized.current = true
 
-    let cancelled = false
+    // Use an object so the inner async closure observes mutations made by
+    // the cleanup. A primitive `let` would be narrowed by TS to its initial
+    // value within the closure, making the post-await guards appear dead.
+    const state: { cancelled: boolean } = { cancelled: false }
+    const isCancelled = (): boolean => state.cancelled
 
     void (async () => {
       try {
@@ -44,23 +48,23 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
         let effectiveSyncId = bookSyncId
         if (!effectiveSyncId) {
           const fromDb = await window.electron.booksGetSyncId(bookId)
-          if (cancelled) return
+          if (isCancelled()) return
           if (fromDb) {
             effectiveSyncId = fromDb
           } else {
             const book = await window.electron.getBook(bookId)
-            if (cancelled) return
+            if (isCancelled()) return
             if (!book) throw new Error(`Book ${bookId} not found`)
             effectiveSyncId = crypto.randomUUID()
             await window.electron.saveBook({ ...book, syncId: effectiveSyncId, isDirty: 1 })
-            if (cancelled) return
+            if (isCancelled()) return
           }
         }
 
         // Find existing conversation for this book
         const existing = await window.electron.conversationsFindForBook(effectiveSyncId)
 
-        if (cancelled) return
+        if (isCancelled()) return
 
         let convId: string
 
@@ -76,14 +80,14 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
           })
         }
 
-        if (cancelled) return
+        if (isCancelled()) return
 
         setConversationId(convId)
 
         // Load existing messages
         const rows = await window.electron.messagesList(convId)
 
-        if (cancelled) return
+        if (isCancelled()) return
 
         const loadedMessages: Message[] = rows.map((row) => ({
           id: row.id,
@@ -107,7 +111,7 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
 
         setMessages(loadedMessages)
       } catch (err) {
-        if (cancelled) return
+        if (isCancelled()) return
         console.error('[useChat] Failed to initialize conversation:', err)
         const detail = err instanceof Error ? err.message : String(err)
         setError(`Failed to load conversation: ${detail}`)
@@ -115,7 +119,7 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
     })()
 
     return () => {
-      cancelled = true
+      state.cancelled = true
     }
   }, [bookId, bookSyncId, bookTitle])
 

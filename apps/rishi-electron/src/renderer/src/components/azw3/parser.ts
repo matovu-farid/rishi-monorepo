@@ -132,9 +132,7 @@ export async function parseAzw3(
 
   // KF8 emits "linear: no" placeholders for non-spine entries; drop them so
   // chapter navigation only walks loadable sections.
-  const filtered = (book.sections || []).filter(
-    (s) => typeof s?.load === 'function' && s.linear !== 'no'
-  )
+  const filtered = book.sections.filter((s) => typeof s.load === 'function' && s.linear !== 'no')
 
   // Return each section whole — the renderer column-paginates inside the
   // iframe using viewport-snapped CSS columns. Previously we synthesized
@@ -160,7 +158,7 @@ export async function extractSectionParagraphs(section: FoliateSection): Promise
     const paragraphs: string[] = []
     const nodes = doc.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote')
     nodes.forEach((node) => {
-      const text = (node.textContent ?? '').trim()
+      const text = node.textContent.trim()
       if (text.length > 0) paragraphs.push(text)
     })
     return paragraphs
@@ -183,7 +181,8 @@ export async function loadSectionDocument(section: FoliateSection): Promise<Docu
   // `Headers.get` returns `''` for a present-but-empty header — treat that as
   // "missing" the same way as `null` so we always end up with a usable MIME.
   const rawContentType = res.headers.get('content-type')
-  const contentType = rawContentType !== null && rawContentType !== '' ? rawContentType : 'application/xhtml+xml'
+  const contentType =
+    rawContentType !== null && rawContentType !== '' ? rawContentType : 'application/xhtml+xml'
   const baseType = (contentType.split(';')[0] || '').trim() as DOMParserSupportedType
   const parser = new DOMParser()
   // Prefer the served content-type; fall back to text/html if XHTML parsing
@@ -192,7 +191,7 @@ export async function loadSectionDocument(section: FoliateSection): Promise<Docu
     text,
     baseType === 'text/html' ? 'text/html' : 'application/xhtml+xml'
   )
-  if (doc.querySelector('parsererror') || !doc.documentElement) {
+  if (doc.querySelector('parsererror')) {
     doc = parser.parseFromString(text, 'text/html')
   }
   return doc
@@ -276,9 +275,15 @@ export async function paginateSection(
   stripKindleResourceLinks(sourceDoc)
 
   // For XHTML documents `doc.body` returns the HTML-namespaced body, which is
-  // null for KF8's serialized output (foliate uses the XHTML namespace). Fall
-  // back to a tag-name lookup so we find the body either way.
-  const body = sourceDoc.body ?? sourceDoc.getElementsByTagName('body')[0] ?? null
+  // null at runtime for KF8's serialized output (foliate uses the XHTML
+  // namespace). DOM types claim `doc.body` is always non-null, so widen
+  // the cast and fall back to a tag-name lookup so we find the body either way.
+  // Cast both lookups to nullable — `doc.body` claims non-null in TS but is
+  // null at runtime for XHTML, and array index access is `T | undefined` only
+  // with `noUncheckedIndexedAccess` (which we don't have on).
+  const docBody = sourceDoc.body as HTMLElement | null
+  const taggedBody = sourceDoc.getElementsByTagName('body')[0] as HTMLElement | undefined
+  const body = docBody ?? taggedBody ?? null
   if (!body || body.children.length === 0) return []
 
   // Pick the deepest container that holds the actual flow of content. Some
@@ -378,7 +383,7 @@ function findFlow(html: Element, wrapperDepth: number): Element {
   const body = (html.getElementsByTagName('body')[0] as Element | undefined) ?? html
   let flow: Element = body
   for (let i = 0; i < wrapperDepth; i++) {
-    const next = flow.children[0]
+    const next = flow.children[0] as Element | undefined
     if (!next) break
     flow = next
   }

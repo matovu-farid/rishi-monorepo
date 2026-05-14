@@ -186,7 +186,9 @@ export const usePdfStore = create<PdfState>()(
         const s = get()
         const newRendered: Record<string, boolean> = {}
         for (const id of ids) {
-          newRendered[id] = s.pdfsRendered[id] ?? false
+          newRendered[id] = Object.prototype.hasOwnProperty.call(s.pdfsRendered, id)
+            ? s.pdfsRendered[id]
+            : false
         }
         set({ books: ids, pdfsRendered: newRendered })
       }

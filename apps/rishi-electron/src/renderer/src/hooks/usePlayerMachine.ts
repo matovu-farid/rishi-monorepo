@@ -98,7 +98,9 @@ export function usePlayerMachine(bookId: string) {
     const audioUnsub = actor.subscribe((snapshot) => {
       const state = mapStateValue(snapshot.value)
       const ctx = snapshot.context
-      const paragraph = ctx.currentParagraphs[ctx.paragraphIndex]
+      const paragraph = ctx.currentParagraphs[ctx.paragraphIndex] as
+        | (typeof ctx.currentParagraphs)[number]
+        | undefined
 
       if (state === 'loading') {
         // Clear old highlight immediately
@@ -201,10 +203,16 @@ export function usePlayerMachine(bookId: string) {
     const wrappedSend: PlayerSend = (event) => {
       if (event.type === 'NEXT' || event.type === 'PREV') {
         const ctx = actor.getSnapshot().context
-        const fromParagraph = ctx.currentParagraphs[ctx.paragraphIndex] ?? null
+        const fromParagraph =
+          (ctx.currentParagraphs[ctx.paragraphIndex] as
+            | (typeof ctx.currentParagraphs)[number]
+            | undefined) ?? null
         originalSend(event)
         const newCtx = actor.getSnapshot().context
-        const toParagraph = newCtx.currentParagraphs[newCtx.paragraphIndex] ?? null
+        const toParagraph =
+          (newCtx.currentParagraphs[newCtx.paragraphIndex] as
+            | (typeof newCtx.currentParagraphs)[number]
+            | undefined) ?? null
         if (fromParagraph && toParagraph) {
           usePlayerStore.setState({
             lastMove: {
@@ -256,10 +264,12 @@ export function usePlayerMachine(bookId: string) {
 
     // Seed paragraphs from PDF store if available
     const pdfState = usePdfStore.getState()
-    const pdfPageData = pdfState.pageNumberToPageData[pdfState.pageNumber]
+    const pdfPageData = pdfState.pageNumberToPageData[pdfState.pageNumber] as
+      | (typeof pdfState.pageNumberToPageData)[number]
+      | undefined
     if (pdfPageData) {
       // Convert text content items to paragraphs
-      const items = pdfPageData.items || []
+      const items = pdfPageData.items
       const paragraphs = items
         .filter(
           (item: TextItem | TextMarkedContent): item is TextItem =>
@@ -320,7 +330,7 @@ async function loadAndPlayAudio(blobUrl: string): Promise<void> {
     const handleError = (e: Event) => {
       audioElement.removeEventListener('canplaythrough', handleCanPlay)
       audioElement.removeEventListener('error', handleError)
-      const mediaError = (e.target as HTMLAudioElement)?.error
+      const mediaError = (e.target as HTMLAudioElement | null)?.error
       // Empty message strings should fall back to the descriptive default so
       // we never reject with a blank `Error` message.
       const message =

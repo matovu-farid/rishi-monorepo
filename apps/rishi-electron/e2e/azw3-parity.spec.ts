@@ -133,6 +133,7 @@ test.describe('AZW3 reader — feature parity with MOBI', () => {
       // bookmark count moves (or give up after a few attempts).
       let after = before
       for (let attempt = 0; attempt < 5 && after === before; attempt++) {
+        // eslint-disable-next-line no-await-in-loop -- E2E retry: each attempt waits for the previous focus/menu click to settle before re-checking.
         await launched.app
           .evaluate(
             ({ BrowserWindow }, { url }) => {
@@ -147,11 +148,16 @@ test.describe('AZW3 reader — feature parity with MOBI', () => {
             { url: `/books/${book.id}` }
           )
           .catch(() => {})
+        // eslint-disable-next-line no-await-in-loop -- E2E retry: sequential focus + menu interaction.
         await bookPage.bringToFront()
+        // eslint-disable-next-line no-await-in-loop -- E2E retry: wait between focus and menu click.
         await launched.page.waitForTimeout(400)
+        // eslint-disable-next-line no-await-in-loop -- E2E retry: menu click requires the focus state from above.
         const clicked = await clickMenuItem(launched.app, ['Bookmarks', 'Add Bookmark'])
         expect(clicked).toBe(true)
+        // eslint-disable-next-line no-await-in-loop -- E2E retry: wait for bookmark IPC to flush before reading count.
         await launched.page.waitForTimeout(800)
+        // eslint-disable-next-line no-await-in-loop -- E2E retry: each attempt re-reads the bookmark count to decide whether to keep retrying.
         after = (await bookPage.evaluate(async (s) => {
           const e = (
             window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> }

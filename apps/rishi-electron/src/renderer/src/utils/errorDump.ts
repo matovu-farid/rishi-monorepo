@@ -19,7 +19,7 @@ interface DumpErrorParams {
 export function dumpError(params: DumpErrorParams): void {
   if (!IS_DEV) return
   window.electron
-    ?.dumpError({
+    .dumpError({
       source: params.source,
       location: params.location,
       error: params.error,

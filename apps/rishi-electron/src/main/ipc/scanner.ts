@@ -5,7 +5,14 @@ import { handle } from '../../preload/ipc-contract.js'
 
 const SUPPORTED_EXTENSIONS = new Set(['.pdf', '.epub', '.mobi', '.azw3'])
 
-let scanCancelled = false
+// Wrapped in an object so TS narrowing of the literal `false` doesn't
+// hide the `scanState.cancelled = true` writes from other call paths.
+const scanState: { cancelled: boolean } = { cancelled: false }
+// Read through a function so each call escapes TS's narrowing — the rule
+// otherwise narrows direct reads to `false` after the first check.
+function isCancelled(): boolean {
+  return scanState.cancelled
+}
 
 function getDefaultBookFolders(): string[] {
   const home = app.getPath('home')
@@ -41,7 +48,7 @@ async function walkDirectory(
   visitedPaths: Set<string>,
   onFound: (filepath: string, stat: { size: number }) => void
 ): Promise<void> {
-  if (scanCancelled) return
+  if (isCancelled()) return
 
   let realPath: string
   try {
@@ -68,7 +75,7 @@ async function walkDirectory(
   })
 
   for (const entry of entries) {
-    if (scanCancelled) return
+    if (isCancelled()) return
     if (entry.name.startsWith('.')) continue
 
     const fullPath = path.join(dirPath, entry.name)
@@ -76,12 +83,14 @@ async function walkDirectory(
     if (entry.isDirectory()) {
       const skip = ['node_modules', '.git', '__pycache__', '.Trash', 'Library']
       if (!skip.includes(entry.name)) {
+        // eslint-disable-next-line no-await-in-loop -- Filesystem walk: serial recursion bounds memory and lets isCancelled() interrupt mid-scan promptly.
         await walkDirectory(fullPath, visitedPaths, onFound)
       }
     } else if (entry.isFile() || entry.isSymbolicLink()) {
       const ext = path.extname(entry.name).toLowerCase()
       if (SUPPORTED_EXTENSIONS.has(ext)) {
         try {
+          // eslint-disable-next-line no-await-in-loop -- Filesystem walk: serial stat keeps fd usage bounded under deep trees.
           const stat = await fs.stat(fullPath)
           onFound(fullPath, { size: stat.size })
         } catch {
@@ -98,7 +107,7 @@ export function registerScannerHandlers(): void {
   })
 
   handle('scanner:scan', async (_event, mode) => {
-    scanCancelled = false
+    scanState.cancelled = false
     let count = 0
 
     const folders = mode === 'full' ? [app.getPath('home')] : getDefaultBookFolders()
@@ -106,14 +115,16 @@ export function registerScannerHandlers(): void {
     const visitedPaths = new Set<string>()
 
     for (const folder of folders) {
-      if (scanCancelled) break
+      if (isCancelled()) break
 
       try {
+        // eslint-disable-next-line no-await-in-loop -- Sequential access check before walking each folder; respects isCancelled() between folders.
         await fs.access(folder)
       } catch {
         continue
       }
 
+      // eslint-disable-next-line no-await-in-loop -- Sequential walk per folder: shares visitedPaths set so the next folder skips already-visited subtrees.
       await walkDirectory(folder, visitedPaths, (filepath, stat) => {
         count++
         const ext = path.extname(filepath).toLowerCase().replace('.', '')
@@ -140,6 +151,6 @@ export function registerScannerHandlers(): void {
   })
 
   handle('scanner:cancel', () => {
-    scanCancelled = true
+    scanState.cancelled = true
   })
 }

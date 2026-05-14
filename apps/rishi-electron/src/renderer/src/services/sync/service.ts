@@ -32,7 +32,7 @@ function createApiFetch(
 
     try {
       const headers: Record<string, string> = {
-        ...((init?.headers as Record<string, string>) ?? {}),
+        ...((init?.headers as Record<string, string> | undefined) ?? {}),
         'Content-Type': 'application/json'
       }
       if (token) {

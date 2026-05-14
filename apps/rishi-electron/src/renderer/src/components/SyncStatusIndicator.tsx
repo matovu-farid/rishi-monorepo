@@ -19,7 +19,7 @@ export function SyncStatusIndicator() {
     offline: { text: 'Offline', color: 'text-gray-400' }
   }
 
-  const label = labels[status]
+  const label = labels[status] as { text: string; color: string } | undefined
   if (!label) return null
 
   return (

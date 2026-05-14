@@ -53,7 +53,7 @@ function revokeCachedCoverUrl(bookId: number): void {
 }
 
 function bytesToBlobUrl(bytes: number[]): string | null {
-  if (!bytes || bytes.length === 0) return null
+  if (bytes.length === 0) return null
   const uint8Array = new Uint8Array(bytes)
   let mimeType = 'image/jpeg'
   if (uint8Array.length >= 8) {
@@ -321,7 +321,7 @@ export default function FileComponent(): React.JSX.Element {
               : 'grid place-items-center gap-3 rounded-3xl w-[50vw] h-[50vh] p-5 mx-auto'
           }
         >
-          {isDragActive && (!books || books.length === 0) ? (
+          {isDragActive && books.length === 0 ? (
             <p>Drop the files here ...</p>
           ) : filteredBooks.length > 0 ? (
             filteredBooks.map((book) => (

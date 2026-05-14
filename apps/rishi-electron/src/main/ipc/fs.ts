@@ -54,21 +54,29 @@ export function registerFsHandlers(): void {
 
       const resolvedOutDir = path.resolve(outDir)
 
-      for (const [relativePath, file] of Object.entries(zip.files)) {
-        // Zip Slip protection: ensure extracted path stays within outDir
+      // Validate all entries first (synchronous Zip Slip check) so a malicious
+      // archive can't have some files extracted before we abort.
+      const entries = Object.entries(zip.files).map(([relativePath, file]) => {
         const targetPath = path.resolve(outDir, relativePath)
         if (!targetPath.startsWith(resolvedOutDir + path.sep) && targetPath !== resolvedOutDir) {
           throw new Error(`Zip entry "${relativePath}" would escape output directory (Zip Slip)`)
         }
+        return { targetPath, file }
+      })
 
-        if (file.dir) {
-          await fs.mkdir(targetPath, { recursive: true })
-        } else {
-          await fs.mkdir(path.dirname(targetPath), { recursive: true })
-          const content = await file.async('nodebuffer')
-          await fs.writeFile(targetPath, content)
-        }
-      }
+      // Extract all entries in parallel: each entry writes to its own path,
+      // and `fs.mkdir(..., { recursive: true })` is safe to run concurrently.
+      await Promise.all(
+        entries.map(async ({ targetPath, file }) => {
+          if (file.dir) {
+            await fs.mkdir(targetPath, { recursive: true })
+          } else {
+            await fs.mkdir(path.dirname(targetPath), { recursive: true })
+            const content = await file.async('nodebuffer')
+            await fs.writeFile(targetPath, content)
+          }
+        })
+      )
 
       return outDir
     } catch (error) {
@@ -189,47 +197,48 @@ export function registerFsHandlers(): void {
 
 /** Recursively compute total size of all files in a directory. */
 async function getDirectorySize(dirPath: string): Promise<number> {
-  let totalSize = 0
   try {
     const entries = await fs.readdir(dirPath, { withFileTypes: true })
-    for (const entry of entries) {
-      const entryPath = path.join(dirPath, entry.name)
-      if (entry.isDirectory()) {
-        totalSize += await getDirectorySize(entryPath)
-      } else {
-        const stat = await fs.stat(entryPath)
-        totalSize += stat.size
-      }
-    }
+    const sizes = await Promise.all(
+      entries.map(async (entry) => {
+        const entryPath = path.join(dirPath, entry.name)
+        if (entry.isDirectory()) return getDirectorySize(entryPath)
+        try {
+          const stat = await fs.stat(entryPath)
+          return stat.size
+        } catch {
+          return 0
+        }
+      })
+    )
+    return sizes.reduce((a, b) => a + b, 0)
   } catch {
     // Directory may not exist or be inaccessible
+    return 0
   }
-  return totalSize
 }
 
 /** Recursively collect file path, size, and mtimeMs for cache cleanup. */
 async function collectFileStats(
   dirPath: string
 ): Promise<Array<{ path: string; size: number; mtimeMs: number }>> {
-  const results: Array<{ path: string; size: number; mtimeMs: number }> = []
   try {
     const entries = await fs.readdir(dirPath, { withFileTypes: true })
-    for (const entry of entries) {
-      const entryPath = path.join(dirPath, entry.name)
-      if (entry.isDirectory()) {
-        const subResults = await collectFileStats(entryPath)
-        results.push(...subResults)
-      } else {
-        const stat = await fs.stat(entryPath)
-        results.push({
-          path: entryPath,
-          size: stat.size,
-          mtimeMs: stat.mtimeMs
-        })
-      }
-    }
+    const nested = await Promise.all(
+      entries.map(async (entry) => {
+        const entryPath = path.join(dirPath, entry.name)
+        if (entry.isDirectory()) return collectFileStats(entryPath)
+        try {
+          const stat = await fs.stat(entryPath)
+          return [{ path: entryPath, size: stat.size, mtimeMs: stat.mtimeMs }]
+        } catch {
+          return []
+        }
+      })
+    )
+    return nested.flat()
   } catch {
     // Directory may not exist
+    return []
   }
-  return results
 }

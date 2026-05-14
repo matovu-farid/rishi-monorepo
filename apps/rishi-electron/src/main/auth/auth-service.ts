@@ -131,6 +131,7 @@ class AuthService {
 
         let res: Response
         try {
+          // eslint-disable-next-line no-await-in-loop -- Polling loop: must await the poll response before deciding whether to keep polling.
           res = await fetch(`${API_URL}/desktop/poll`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -139,22 +140,27 @@ class AuthService {
         } catch (err) {
           // Transient network error — log and try again next tick
           console.warn('[auth] poll fetch failed (will retry)', err)
+          // eslint-disable-next-line no-await-in-loop -- Polling loop: backoff between retries.
           await sleep(POLL_INTERVAL_MS)
           continue
         }
 
         if (res.status === 204) {
           // Still pending
+          // eslint-disable-next-line no-await-in-loop -- Polling loop: backoff between polls while pending.
           await sleep(POLL_INTERVAL_MS)
           continue
         }
 
         if (res.status === 200) {
+          // eslint-disable-next-line no-await-in-loop -- Polling loop: parse session_token before persisting and exiting.
           const { session_token } = (await res.json()) as { session_token: string }
           this.polls.delete(state)
           // A successful sign-in supersedes any other in-flight attempts
           this.cancelAllPolls()
+          // eslint-disable-next-line no-await-in-loop -- Polling loop: must persist session before fetching user (token read from disk).
           await writeSession(session_token)
+          // eslint-disable-next-line no-await-in-loop -- Polling loop: fetchUser depends on the freshly-written session.
           this.currentUser = await this.fetchUser(session_token)
           this.notify()
           // Bring the app to the foreground so the user sees the result
@@ -166,6 +172,7 @@ class AuthService {
         }
 
         // 400/403/410 etc. — terminal failure for this state
+        // eslint-disable-next-line no-await-in-loop -- Polling loop: read error body before exiting.
         const body = await res.text().catch(() => '')
         console.error('[auth] poll terminal error', res.status, body)
         this.polls.delete(state)

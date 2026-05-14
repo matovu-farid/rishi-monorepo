@@ -130,8 +130,16 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
 
   const isPlaying = playingState === 'playing'
 
-  // --- Waveform bar heights ---
-  const barHeights = [8, 14, 20, 12]
+  // --- Waveform bars ---
+  // Stable IDs let React reconcile bars across re-renders without
+  // falling back to array-index keys (which `react/no-array-index-key`
+  // flags as a stale-state hazard).
+  const bars = [
+    { id: 'bar-0', height: 8 },
+    { id: 'bar-1', height: 14 },
+    { id: 'bar-2', height: 20 },
+    { id: 'bar-3', height: 12 }
+  ] as const
 
   // Shared liquid glass styles
   const glassContainer: React.CSSProperties = {
@@ -217,12 +225,12 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
         {/* Collapsed: Waveform bars */}
         {!expanded && (
           <div className="flex items-center gap-[3px]">
-            {barHeights.map((h, i) => (
+            {bars.map((bar, i) => (
               <div
-                key={i}
+                key={bar.id}
                 style={{
                   width: 3,
-                  height: h,
+                  height: bar.height,
                   borderRadius: 1.5,
                   backgroundColor: 'rgba(0,0,0,0.50)',
                   transformOrigin: 'center',

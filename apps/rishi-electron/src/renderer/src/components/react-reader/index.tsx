@@ -153,10 +153,9 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
 
   searchInBook = async (query?: string) => {
     if (!this.readerRef.current) return
-    const rendition = this.readerRef.current?.rendition
-    const book = rendition?.book
-    if (!book) return
-
+    const rendition = this.readerRef.current.rendition
+    if (!rendition) return
+    const book = rendition.book
     if (!query) {
       this.props.onSearchResults?.([])
       return
@@ -166,11 +165,10 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
     const promises: Promise<void>[] = []
 
     book.spine.each((item: Section) => {
-      if (query === '' || query == null) return
       const promise = (async () => {
         try {
           await item.load(book.load.bind(book))
-          const doc = item.document
+          const doc = item.document as Document | undefined
           const textNodes: Node[] = []
           if (!doc) return
 
@@ -327,7 +325,7 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
         </div>
 
         {/* Unified TOC sidebar using shared ReaderTOC */}
-        {showToc && toc ? (
+        {showToc ? (
           <ReaderTOC
             open={expandedToc}
             onOpenChange={(open) => {
@@ -338,9 +336,12 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
             onBookmarkNavigate={(loc) => this.setLocation(loc)}
             tocContent={
               <div className="overflow-y-auto">
-                {toc.map((item, i) => (
+                {toc.map((item) => (
                   <TocItem
-                    key={i}
+                    // `id` is the spine item identifier from epub.js —
+                    // guaranteed unique within a navigation tree. Falling
+                    // back to `href` covers malformed TOCs that omit `id`.
+                    key={item.id || item.href}
                     data={item}
                     setLocation={(href: string) => this.setLocation(href)}
                   />

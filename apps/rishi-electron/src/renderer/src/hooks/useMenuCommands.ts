@@ -11,7 +11,6 @@ export function useMenuCommands(handlers: MenuCommandHandlers): void {
         }
       }
     ).electron
-    if (!e?.onMenuCommand) return
     const dispose = e.onMenuCommand(({ command, arg }) => {
       const h = handlers[command]
       if (h) h(arg)

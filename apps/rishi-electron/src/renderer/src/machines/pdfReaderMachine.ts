@@ -99,7 +99,7 @@ export const pdfReaderMachine = setup({
       lastSavedOffset: ({ context, event }) => {
         if (!('output' in event)) return context.lastSavedOffset
         const out = (event as { output: { savedOffset: number } }).output
-        return out.savedOffset ?? 0
+        return out.savedOffset
       },
       saveError: null
     }),
@@ -127,7 +127,7 @@ export const pdfReaderMachine = setup({
       if (!('output' in event)) return false
       const out = (event as { output: { savedPage: number; savedOffset: number } }).output
       if (context.currentPage !== out.savedPage) return true
-      return Math.abs(context.currentOffset - (out.savedOffset ?? 0)) >= OFFSET_THRESHOLD_PX
+      return Math.abs(context.currentOffset - out.savedOffset) >= OFFSET_THRESHOLD_PX
     },
     flushable: ({ context }) => {
       if (context.currentPage <= 0) return false
@@ -212,8 +212,8 @@ export const pdfReaderMachine = setup({
                 'updateCurrentPage',
                 raise(({ event }) => ({
                   type: 'COMMIT_PAGE' as const,
-                  page: event.type === 'PAGE_CHANGED' ? event.page : 0,
-                  offset: event.type === 'PAGE_CHANGED' ? (event.offset ?? 0) : 0
+                  page: event.page,
+                  offset: event.offset ?? 0
                 }))
               ]
             },

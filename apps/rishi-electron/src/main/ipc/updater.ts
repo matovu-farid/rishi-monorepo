@@ -54,7 +54,7 @@ export function registerUpdaterHandlers(): void {
   })
 
   autoUpdater.on('error', (err) => {
-    sendToRenderers('update-error', err?.message ?? String(err))
+    sendToRenderers('update-error', err.message)
   })
 
   // ── IPC handlers ─────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ export function registerUpdaterHandlers(): void {
       const result = await autoUpdater.checkForUpdates()
       return {
         updateAvailable: !!result?.updateInfo,
-        version: result?.updateInfo?.version ?? null
+        version: result?.updateInfo.version ?? null
       }
     } catch (err) {
       console.error('[updater] checkForUpdates failed:', err)

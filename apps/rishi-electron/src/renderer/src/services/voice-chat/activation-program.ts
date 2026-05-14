@@ -91,8 +91,8 @@ export function isInterruptCause(err: unknown): boolean {
 }
 
 function mapMicError(e: unknown): MicDeniedError {
-  const name = (e as { name?: string })?.name
-  const message = (e as { message?: string })?.message ?? String(e)
+  const name = (e as { name?: string }).name
+  const message = (e as { message?: string }).message ?? String(e)
   if (name === 'NotAllowedError' || name === 'NotFoundError') {
     return new MicDeniedError({ name, message })
   }

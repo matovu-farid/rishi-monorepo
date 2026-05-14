@@ -215,7 +215,7 @@ export function findItem(
     if (!cursor) return undefined
     found = cursor.find((m) => m.label === label)
     if (!found) return undefined
-    cursor = (found.submenu as MenuItemConstructorOptions[]) ?? undefined
+    cursor = found.submenu as MenuItemConstructorOptions[] | undefined
   }
   return found
 }

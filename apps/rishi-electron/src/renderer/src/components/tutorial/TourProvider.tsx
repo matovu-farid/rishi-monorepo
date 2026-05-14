@@ -7,7 +7,7 @@ export function TourProvider() {
 
   if (!tourActive || tourPaused) return null
 
-  const step = TOUR_STEPS[tourStep]
+  const step = TOUR_STEPS[tourStep] as (typeof TOUR_STEPS)[number] | undefined
   if (!step) return null
 
   return (

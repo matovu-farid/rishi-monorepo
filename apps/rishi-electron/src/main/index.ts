@@ -64,6 +64,24 @@ const isDebugBuild = process.env.RISHI_DEBUG === '1'
 
 let windowManager: WindowManager | null = null
 let menuInstaller: MenuInstaller | null = null
+
+// Guarded accessors. Every call site that uses these is wired up *after*
+// `bootstrapMenuAndWindows` runs (either inside a callback registered there,
+// or in `app.whenReady` after that function returns). If we ever land here
+// before initialization, throwing surfaces the bug instead of a silent
+// `Cannot read properties of null` deeper in the stack.
+function getWindowManager(): WindowManager {
+  if (!windowManager) {
+    throw new Error('windowManager accessed before bootstrapMenuAndWindows()')
+  }
+  return windowManager
+}
+function getMenuInstaller(): MenuInstaller {
+  if (!menuInstaller) {
+    throw new Error('menuInstaller accessed before bootstrapMenuAndWindows()')
+  }
+  return menuInstaller
+}
 // Per-window MenuContext, keyed by webContents.id. Persists across focus
 // switches so each window's menu is rebuilt from its own last reported state.
 const windowContexts = new Map<number, MenuContext>()
@@ -180,7 +198,7 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
       openBookTitles: openBookTitlesArray()
     }
     windowContexts.set(win.webContents.id, refreshed)
-    menuInstaller!.setContext(refreshed)
+    getMenuInstaller().setContext(refreshed)
   })
 
   // Forcible refresh of the focused window's menu — used by the library
@@ -198,7 +216,7 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
       openBookTitles: openBookTitlesArray()
     }
     windowContexts.set(id, refreshed)
-    menuInstaller!.setContext(refreshed)
+    getMenuInstaller().setContext(refreshed)
   })
 
   ipcMain.on('menu:setContext', (event, partial: Partial<MenuContext>) => {
@@ -206,12 +224,12 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
     const merged = mergeContext(windowContexts.get(id), partial)
     windowContexts.set(id, merged)
     if (BrowserWindow.fromWebContents(event.sender) === BrowserWindow.getFocusedWindow()) {
-      menuInstaller!.setContext(merged)
+      getMenuInstaller().setContext(merged)
     }
   })
 
   handle('window:openBook', (_e, bookId) => {
-    const w = windowManager!.openBook(bookId) as unknown as BrowserWindow
+    const w = getWindowManager().openBook(bookId) as unknown as BrowserWindow
     // Pre-seed the book window's menu context from the DB (better-sqlite3
     // sync read) so the menu shows the right format-specific items the first
     // time it focuses, before the renderer's setMenuContext lands.
@@ -236,12 +254,12 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
   })
 
   handle('window:closeBook', (_e, bookId) => {
-    windowManager!.closeBook(bookId)
+    getWindowManager().closeBook(bookId)
     openBookTitles.delete(bookId)
   })
 
   handle('window:focusLibrary', () => {
-    const lib = windowManager!.openLibrary() as unknown as BrowserWindow
+    const lib = getWindowManager().openLibrary() as unknown as BrowserWindow
     if (lib.isMinimized()) lib.restore()
     lib.focus()
   })
@@ -269,7 +287,7 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
         }
         windowContexts.set(senderId, updated)
         if (BrowserWindow.fromWebContents(event.sender) === BrowserWindow.getFocusedWindow()) {
-          menuInstaller!.setContext(updated)
+          getMenuInstaller().setContext(updated)
         }
       }
 
@@ -283,7 +301,7 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
         }
         windowContexts.set(w.webContents.id, updatedOther)
         if (w === BrowserWindow.getFocusedWindow()) {
-          menuInstaller!.setContext(updatedOther)
+          getMenuInstaller().setContext(updatedOther)
         }
       }
     }
@@ -378,17 +396,17 @@ app
     }
 
     bootstrapMenuAndWindows(loadUrl, preloadPath)
-    const libWin = windowManager!.openLibrary() as unknown as BrowserWindow
+    const libWin = getWindowManager().openLibrary() as unknown as BrowserWindow
     attachLibraryWindowSideEffects(libWin)
-    menuInstaller!.setContext(defaultLibraryContext())
+    getMenuInstaller().setContext(defaultLibraryContext())
 
     registerAuthIpc(() => libraryWindowFromManager())
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        const w = windowManager!.openLibrary() as unknown as BrowserWindow
+        const w = getWindowManager().openLibrary() as unknown as BrowserWindow
         attachLibraryWindowSideEffects(w)
-        menuInstaller!.setContext(defaultLibraryContext())
+        getMenuInstaller().setContext(defaultLibraryContext())
       }
     })
   })

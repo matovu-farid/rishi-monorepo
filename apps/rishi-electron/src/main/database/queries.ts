@@ -249,7 +249,11 @@ export function saveBook(input: BookSaveInput): Book {
       WHERE id = @id
     `
     ).run({ ...params, id: bookId })
-    return getBook(bookId)!
+    const updated = getBook(bookId)
+    if (!updated) {
+      throw new Error(`saveBook: book ${bookId} disappeared after UPDATE`)
+    }
+    return updated
   }
 
   const info = db
@@ -269,7 +273,12 @@ export function saveBook(input: BookSaveInput): Book {
   `
     )
     .run(params)
-  return getBook(Number(info.lastInsertRowid))!
+  const newId = Number(info.lastInsertRowid)
+  const inserted = getBook(newId)
+  if (!inserted) {
+    throw new Error(`saveBook: failed to read back inserted book ${newId}`)
+  }
+  return inserted
 }
 
 /**

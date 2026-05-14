@@ -159,6 +159,7 @@ export async function importBookViaOpenFile(
   // Poll the books table until a new row appears.
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop -- Polling loop: each iteration must observe the current book list before deciding to retry.
     const newId = await launched.page.evaluate(
       async (ids) => {
         const e = (window as unknown as { electron: Record<string, IpcFn> }).electron
@@ -170,6 +171,7 @@ export async function importBookViaOpenFile(
       [...beforeIds]
     )
     if (typeof newId === 'number') return newId
+    // eslint-disable-next-line no-await-in-loop -- Polling loop: backoff between checks.
     await launched.page.waitForTimeout(200)
   }
   throw new Error(`importBookViaOpenFile: no new book appeared within ${timeout}ms`)
@@ -187,6 +189,7 @@ export async function deleteAllBooks(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const e = (window as unknown as { electron: Record<string, IpcFn> }).electron
     const books = (await e.getBooks()) as Array<{ id: number }>
+    // eslint-disable-next-line no-await-in-loop -- Test helper: serialize deleteBook IPC calls to avoid races against the same SQLite connection.
     for (const b of books) await e.deleteBook(b.id)
   })
 }
@@ -211,9 +214,11 @@ export async function openBook(page: Page, bookId: number): Promise<Page> {
     const found = ctx.pages().find((p) => p.url().includes(`/books/${bookId}`))
     if (found) {
       // Settle the load state so callers can immediately query DOM.
+      // eslint-disable-next-line no-await-in-loop -- Polling loop: only awaited when we have found the page and are about to return.
       await found.waitForLoadState('domcontentloaded').catch(() => {})
       return found
     }
+    // eslint-disable-next-line no-await-in-loop -- Polling loop: backoff between window-existence checks.
     await page.waitForTimeout(100)
   }
   throw new Error(`openBook: no window appeared for bookId=${bookId}`)
@@ -238,18 +243,24 @@ export async function closeOverlays(page: Page): Promise<void> {
   const selector =
     '[data-slot="dialog-overlay"], [data-slot="popover-content"], div.fixed.inset-0.z-40, div.fixed.inset-0.z-50'
   for (let i = 0; i < 5; i++) {
+    // eslint-disable-next-line no-await-in-loop -- Retry loop: each attempt observes overlay state before deciding whether to retry.
     const open = await page.locator(selector).count()
     if (open === 0) return
+    // eslint-disable-next-line no-await-in-loop -- Retry loop: sequential keypress + recheck.
     await page.keyboard.press('Escape')
+    // eslint-disable-next-line no-await-in-loop -- Retry loop: settle between attempts.
     await page.waitForTimeout(150)
+    // eslint-disable-next-line no-await-in-loop -- Retry loop: re-check overlay count after Escape.
     if ((await page.locator(selector).count()) === 0) return
     // Some Radix popovers won't dismiss on bare Escape — click their backdrop
     // (the inset-0 fixed div) directly to force-close.
+    // eslint-disable-next-line no-await-in-loop -- Retry loop: backdrop click is the fallback dismissal.
     await page
       .locator('div.fixed.inset-0.z-40')
       .first()
       .click({ position: { x: 5, y: 5 }, force: true })
       .catch(() => {})
+    // eslint-disable-next-line no-await-in-loop -- Retry loop: settle before next iteration.
     await page.waitForTimeout(200)
   }
 }

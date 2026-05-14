@@ -86,14 +86,18 @@ test('AZW3 reader keeps the leftmost column aligned across pages', async () => {
     const initialCurrent = Number(await counter.getAttribute('data-current'))
 
     for (let i = 1; i < samples; i++) {
+      // eslint-disable-next-line no-await-in-loop -- E2E test: must click Next, wait for page transition, then measure each page in sequence.
       await bookPage.locator('button[aria-label="Next page"]').click()
+      // eslint-disable-next-line no-await-in-loop -- E2E test: must observe each page's data-current before advancing.
       await expect
         .poll(async () => Number(await counter.getAttribute('data-current')), {
           timeout: 5000,
           intervals: [100, 250]
         })
         .toBe(initialCurrent + i)
+      // eslint-disable-next-line no-await-in-loop -- E2E test: must let scroll settle before measuring the next page.
       await bookPage.waitForTimeout(150) // let scroll settle
+      // eslint-disable-next-line no-await-in-loop -- E2E test: per-page measurement happens after the click above.
       const m = await measure()
       expect(m, `page ${i} measurement`).not.toBeNull()
       expect(m!.minLeft, `page ${i} minLeft should be defined`).not.toBeNull()

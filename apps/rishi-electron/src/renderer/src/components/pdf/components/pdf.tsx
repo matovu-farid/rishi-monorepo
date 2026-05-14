@@ -147,24 +147,17 @@ export function PdfView({
 
   // Publish bookmarks to the native-menu context whenever the sync id is
   // first known. Subsequent edits (addBookmark) re-publish from the menu
-  // handler. Cancellation guards against unmount during the async read.
+  // handler.
   useEffect(() => {
     if (!bookSyncId) return
-    let cancelled = false
-    void (async () => {
-      if (cancelled) return
-      await publishBookmarksToMenu(bookSyncId)
-    })()
-    return () => {
-      cancelled = true
-    }
+    void publishBookmarksToMenu(bookSyncId)
   }, [bookSyncId])
 
   // Publish the book title to main so the Window menu's open-books submenu
   // shows the real title (not whatever the DB had at window-creation time).
   useEffect(() => {
     const e = (window as unknown as { electron: { send(c: string, p: unknown): void } }).electron
-    e?.send('window:setBookTitle', { bookId: book.id, title: book.title })
+    e.send('window:setBookTitle', { bookId: book.id, title: book.title })
   }, [book.id, book.title])
 
   // Mirror TTS play state into the menu so the Reader > Read Aloud label
@@ -173,7 +166,6 @@ export function PdfView({
     const e = (
       window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
     ).electron
-    if (!e) return
     const unsub = usePlayerStore.subscribe(
       (s) => s.playingState,
       (state) => {
@@ -213,7 +205,6 @@ export function PdfView({
     const e = (
       window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
     ).electron
-    if (!e) return
     e.setMenuContext({ tocOpen, thumbsOpen: thumbOpen, dualPage: isDualPage })
   }, [tocOpen, thumbOpen, isDualPage])
 
@@ -359,21 +350,29 @@ export function PdfView({
   const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => {
-    let cancelled = false
+    // Use an object so the inner async closure observes mutations made by
+    // the cleanup. A primitive `let` would be narrowed by TS to its initial
+    // value within the closure, making the post-await guards appear dead.
+    const state: { cancelled: boolean } = { cancelled: false }
 
     if (getCachedPdf(book.id)) {
       // Cache hit — state already initialized from cache by useState. No
       // need to clear loadError synchronously: this branch returns before
       // any new error could be produced for this book.
       return () => {
-        cancelled = true
+        state.cancelled = true
       }
     }
+
+    // Read state.cancelled through a getter so that each call re-reads the
+    // mutable property — TS narrows direct reads to `false` after the first
+    // check, hiding the post-await re-checks from `no-unnecessary-condition`.
+    const isCancelled = (): boolean => state.cancelled
 
     void (async () => {
       try {
         const data: unknown = await window.electron.readFile(book.filepath)
-        if (cancelled) return
+        if (isCancelled()) return
         let bytes: Uint8Array
         if (data instanceof ArrayBuffer) {
           bytes = new Uint8Array(data)
@@ -391,7 +390,7 @@ export function PdfView({
         // intact for indexing and re-parse.
         const loadingTask = pdfjs.getDocument({ data: bytes.slice(), ...pdfOptions })
         const proxy = await loadingTask.promise
-        if (cancelled) {
+        if (isCancelled()) {
           void proxy.destroy()
           return
         }
@@ -404,7 +403,7 @@ export function PdfView({
         // including the cache-hit fast path).
         setLoadError((prev) => (prev === null ? prev : null))
       } catch (err) {
-        if (!cancelled) {
+        if (!isCancelled()) {
           console.error('[pdf] load failed:', err)
           setLoadError(err instanceof Error ? err.message : String(err))
         }
@@ -412,7 +411,7 @@ export function PdfView({
     })()
 
     return () => {
-      cancelled = true
+      state.cancelled = true
     }
   }, [book.id, book.filepath, pdfOptions])
 
@@ -466,7 +465,10 @@ export function PdfView({
   useEffect(() => {
     if (!pdfBytes) return
 
-    let cancelled = false
+    // Use an object so the inner async closure observes mutations made by
+    // the cleanup. A primitive `let` would be narrowed by TS to its initial
+    // value within the closure, making the post-await guards appear dead.
+    const state: { cancelled: boolean } = { cancelled: false }
     let fiber: Fiber.RuntimeFiber<void, Error> | null = null
     // Hold the proxy in a single-slot box rather than a `let` that the
     // async run reassigns. Both the async body and the cleanup function
@@ -476,13 +478,18 @@ export function PdfView({
       current: null
     }
 
+    // Read state.cancelled through a getter so that each call re-reads the
+    // mutable property — TS narrows direct reads to `false` after the first
+    // check, hiding the post-await re-checks from `no-unnecessary-condition`.
+    const isCancelled = (): boolean => state.cancelled
+
     const run = async (): Promise<void> => {
       try {
         // Indexing keeps its own throwaway proxy — it walks every page and
         // can run after the visible reader unmounts. Sharing the cached
         // proxy would risk indexing destroying it on its own cleanup.
         const loadedDoc = await loadPdfDocument(pdfBytes)
-        if (cancelled) {
+        if (isCancelled()) {
           await loadedDoc.destroy()
           return
         }
@@ -493,7 +500,7 @@ export function PdfView({
         // Pages already in chunk_data don't need to be re-extracted or
         // re-embedded. Fetch them once upfront and skip them in the schedule.
         const indexedPages = await window.electron.getIndexedPageNumbers(book.id)
-        if (cancelled) return
+        if (isCancelled()) return
         const skipPages = new Set(indexedPages)
 
         // Short-circuit if the whole book is already indexed.
@@ -539,7 +546,7 @@ export function PdfView({
     void run()
 
     return () => {
-      cancelled = true
+      state.cancelled = true
       if (fiber) Effect.runFork(Fiber.interrupt(fiber))
       if (docHolder.current) void docHolder.current.destroy()
     }
@@ -632,7 +639,7 @@ export function PdfView({
                         <div
                           className="bg-white shadow-lg relative"
                           data-page-number={virtualItem.index + 1}
-                          style={{ width: pageWidth ?? 'auto' }}
+                          style={{ width: pageWidth }}
                         >
                           <PageComponent
                             key={`page-${virtualItem.index + 1}`}

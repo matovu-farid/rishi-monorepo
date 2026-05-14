@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useAuthStore } from '@/stores/authStore'
 import { X } from 'lucide-react'
 
-const isMacAppStore = window.api?.auth?.isMacAppStore ?? false
+const isMacAppStore = window.api.auth.isMacAppStore
 
 /**
  * Magic-link sign-in modal.

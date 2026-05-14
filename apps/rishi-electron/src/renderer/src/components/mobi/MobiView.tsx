@@ -115,7 +115,7 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   // Publish title so the native Window menu sees the loaded book.
   useEffect(() => {
     const e = (window as unknown as { electron: { send(c: string, p: unknown): void } }).electron
-    e?.send('window:setBookTitle', { bookId: book.id, title: book.title })
+    e.send('window:setBookTitle', { bookId: book.id, title: book.title })
   }, [book.id, book.title])
 
   // Mirror TOC sheet state into the menu context so the View > Show TOC
@@ -124,7 +124,6 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
     const e = (
       window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
     ).electron
-    if (!e) return
     e.setMenuContext({ tocOpen })
   }, [tocOpen])
 
@@ -134,7 +133,6 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
     const e = (
       window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
     ).electron
-    if (!e) return
     const unsub = usePlayerStore.subscribe(
       (s) => s.playingState,
       (state) => {
@@ -313,19 +311,21 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
         const alreadySaved = await hasSavedEpubData({ bookId: book.id })
         if (alreadySaved) return
 
-        const allPageData: PageDataInsertable[] = []
-        for (let i = 0; i < chapterCount; i++) {
-          const texts = await getMobiText({ path: book.filepath, chapterIndex: i })
-          const combined = texts.join('\n').trim()
-          if (combined.length > 0) {
-            allPageData.push({
-              id: stringToNumberID(`${book.id}-mobi-${i}`),
-              pageNumber: i + 1,
-              bookId: book.id,
-              data: combined
-            })
-          }
-        }
+        // Per-chapter extraction is independent; run in parallel.
+        const chapters = await Promise.all(
+          Array.from({ length: chapterCount }, async (_, i) => {
+            const texts = await getMobiText({ path: book.filepath, chapterIndex: i })
+            return { i, combined: texts.join('\n').trim() }
+          })
+        )
+        const allPageData: PageDataInsertable[] = chapters
+          .filter(({ combined }) => combined.length > 0)
+          .map(({ i, combined }) => ({
+            id: stringToNumberID(`${book.id}-mobi-${i}`),
+            pageNumber: i + 1,
+            bookId: book.id,
+            data: combined
+          }))
 
         if (allPageData.length > 0) {
           await getBookImportService().indexBook(book.id, allPageData)

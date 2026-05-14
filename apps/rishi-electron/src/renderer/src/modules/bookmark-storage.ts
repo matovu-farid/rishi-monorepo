@@ -55,7 +55,7 @@ export async function publishBookmarksToMenu(bookSyncId: string): Promise<void> 
       }
     }
   ).electron
-  if (!e?.bookmarksList || !e?.setMenuContext) return
+  if (!e) return
   try {
     const rows = await e.bookmarksList(bookSyncId)
     const summary = rows
@@ -99,9 +99,8 @@ export async function toggleBookmark(params: {
   const matching = allBookmarks.filter((b) => locationsMatch(b.location, params.location))
 
   if (matching.length > 0) {
-    for (const bookmark of matching) {
-      await deleteBookmark(bookmark.id)
-    }
+    // Each delete targets a different row id; safe to run in parallel.
+    await Promise.all(matching.map((bookmark) => deleteBookmark(bookmark.id)))
     return { action: 'deleted' }
   }
 

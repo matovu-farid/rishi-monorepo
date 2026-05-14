@@ -20,13 +20,13 @@ export function HelpMenu() {
 
   useEffect(() => {
     window.electron
-      ?.getAppVersion?.()
+      .getAppVersion()
       .then(setVersion)
       .catch(() => {})
   }, [])
 
   const open = (url: string): void => {
-    void window.electron?.openExternal?.(url)
+    void window.electron.openExternal(url)
   }
 
   return (

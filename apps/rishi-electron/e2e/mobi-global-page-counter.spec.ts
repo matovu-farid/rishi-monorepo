@@ -51,14 +51,17 @@ test('MOBI page counter advances globally across chapter boundaries', async () =
     // reliably cross at least one boundary.
     const MAX_CLICKS = 80
     for (let i = 0; i < MAX_CLICKS; i++) {
+      // eslint-disable-next-line no-await-in-loop -- E2E test: must observe Next button visibility before clicking it.
       const nextVisible = await nextBtn.isVisible().catch(() => false)
       if (!nextVisible) break
 
+      // eslint-disable-next-line no-await-in-loop -- E2E test: each click depends on the previous page transition completing.
       await nextBtn.click()
 
       // Poll until the counter advances. If it never reaches prev + 1, the
       // bug just hit — fail the test with both the expected and observed
       // values so a regression is obvious in CI output.
+      // eslint-disable-next-line no-await-in-loop -- E2E test: poll for counter advance after each click.
       await expect
         .poll(async () => Number(await counter.getAttribute('data-current')), {
           timeout: 5000,
@@ -69,6 +72,7 @@ test('MOBI page counter advances globally across chapter boundaries', async () =
 
       prev = prev + 1
 
+      // eslint-disable-next-line no-await-in-loop -- E2E test: check chapter (iframe src) after each click.
       const currSrc = await iframe.getAttribute('src')
       if (currSrc !== lastSrc) {
         chapterCrossings += 1

@@ -43,7 +43,7 @@ function RootComponent(): JSX.Element {
         }
       }
     ).electron
-    const id = e?.windowIdentity
+    const id = e.windowIdentity
     const path = window.location.hash.replace(/^#/, '')
 
     if (id?.kind === 'library') {
@@ -69,7 +69,7 @@ function RootComponent(): JSX.Element {
     const e = (
       window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
     ).electron
-    e?.setMenuContext({ theme })
+    e.setMenuContext({ theme })
   }, [])
 
   // Library-level menu handlers. Toggle dark/light by flipping the `dark`
@@ -82,7 +82,7 @@ function RootComponent(): JSX.Element {
         const e = (
           window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
         ).electron
-        e?.setMenuContext({ theme })
+        e.setMenuContext({ theme })
       },
       // Window > Library (⌘1) → focus the library window. Available from any
       // window — the main process either focuses the existing library window

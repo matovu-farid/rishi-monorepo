@@ -47,14 +47,10 @@ export function initialize(
 }
 
 export function getCurrentViewText(rendition: Rendition) {
-  if (!rendition.manager) {
-    return null
-  }
-
   // Get the current location which includes the visible range
   const location = rendition.manager.currentLocation()
 
-  if (!location?.length || !location[0]) {
+  if (location.length === 0) {
     return null
   }
 
@@ -112,10 +108,6 @@ export function highlightRange(
   className = 'epubjs-hl',
   styles?: Record<string, unknown>
 ) {
-  if (!rendition.manager) {
-    return Promise.reject(new Error('Rendition manager not available'))
-  }
-
   try {
     // Parse the CFI range to validate it
     const rangeCfi = new EpubCFI(cfiRange)
@@ -181,10 +173,6 @@ export function highlightRange(
  * @returns {Promise<boolean>} Promise that resolves to true if highlight was removed, false if not found
  */
 export function removeHighlight(rendition: Rendition, cfiRange: string) {
-  if (!rendition.manager) {
-    return Promise.reject(new Error('Rendition manager not available'))
-  }
-
   try {
     // Parse the CFI range to validate it
     const rangeCfi = new EpubCFI(cfiRange)
@@ -325,7 +313,7 @@ export async function getTotalPagesForBook(rendition: Rendition): Promise<number
   )
     .filter((poisition) => poisition !== null)
     .sort((a, b) => a.right - b.right)
-  if (positions.length === 0 || !rendition.manager) {
+  if (positions.length === 0) {
     return 0
   }
   const firstPosition = positions[0]
@@ -379,7 +367,7 @@ export async function getAllParagraphsForBook(
         { direction: 'backward' }
       ).map((paragraph) => ({
         ...paragraph,
-        sectionId: view.section.index
+        sectionId: view.section?.index ?? -1
       }))
 
       return paragraphs
@@ -428,11 +416,13 @@ function reducePraragraphs(
       acc.length > 0 && paragraph.text.length < minLength && direction === 'forward'
 
     if (isPreviousParagraphTooShort || isCurrentParagraphTooShort) {
-      const lastParagraph = acc.pop()!
-
-      lastParagraph.text += '\n' + paragraph.text
-      lastParagraph.endCfi = paragraph.endCfi
-      pushed = lastParagraph
+      // Both branches above check `acc.length > 0`, so pop must yield a value.
+      const lastParagraph = acc.pop()
+      if (lastParagraph) {
+        lastParagraph.text += '\n' + paragraph.text
+        lastParagraph.endCfi = paragraph.endCfi
+        pushed = lastParagraph
+      }
     }
     acc.push(pushed)
     return acc
@@ -604,6 +594,9 @@ function getCurrentLocationPosition(rendition: Rendition) {
   }
   const view = visible[0]
 
+  if (!view.section) {
+    return null
+  }
   const { index, href } = view.section
   let globalViewPortPosition: number
   const globalChapterPosition = view.position()
@@ -654,9 +647,6 @@ function getMapping(
     return null
   }
   const manager = rendition.manager
-  if (!manager) {
-    return null
-  }
   const mapping = manager.mapping.page(
     view.contents,
     view.section?.cfiBase ?? '',
@@ -670,7 +660,7 @@ function getMapping(
 export function getCurrentView(rendition: Rendition) {
   const location = rendition.manager.currentLocation()
 
-  if (!location?.length || !location[0]) {
+  if (location.length === 0) {
     return null
   }
 
@@ -687,7 +677,7 @@ export function getCurrentView(rendition: Rendition) {
 export function getCurrentIndex(rendition: Rendition) {
   const location = rendition.manager.currentLocation()
 
-  if (!location?.length || !location[0]) {
+  if (location.length === 0) {
     return null
   }
 
@@ -701,9 +691,6 @@ export function getCurrentIndex(rendition: Rendition) {
   return index
 }
 export function getCurrentViewParagraphs(rendition: Rendition): ParagraphWithCFI[] {
-  if (!rendition.manager) {
-    return []
-  }
   const locationPosition = getCurrentLocationPosition(rendition)
 
   if (!locationPosition) {
@@ -749,6 +736,7 @@ async function pollForViewToBeCreated(
       return view
     }
 
+    // eslint-disable-next-line no-await-in-loop -- Polling loop: backoff between checks for view creation.
     await new Promise((resolve) => {
       setTimeout(resolve, pollIntervalMs)
     })
@@ -810,9 +798,6 @@ type ViewParagraphsSetup = {
 }
 
 function _getViewParagraphsSetup(rendition: Rendition): ViewParagraphsSetup | null {
-  if (!rendition.manager) {
-    return null
-  }
   const locationPosition = getCurrentLocationPosition(rendition)
   if (!locationPosition) {
     return null
@@ -843,18 +828,11 @@ async function _loadSectionParagraphsForUnloadedView(
 
     const loadedSection = await Promise.race([loadPromise, timeoutPromise])
 
-    if (!loadedSection.document) {
-      return []
-    }
-
     const document = loadedSection.document
     const body = document.body
 
     const contents = new Contents(document, body, spineItem.cfiBase, spineItem.index)
 
-    if (!rendition.manager) {
-      return []
-    }
     const mapping = rendition.manager.mapping.page(contents, spineItem.cfiBase, start, end)
 
     if (!mapping?.start || !mapping.end) {
@@ -889,7 +867,8 @@ async function _getAdjacentViewParagraphs(
 ): Promise<ParagraphWithCFI[]> {
   const { locationPosition, viewPortWidth, view } = setup
 
-  const adjacentSpineItem = direction === 'next' ? view.section.next() : view.section.prev()
+  const adjacentSpineItem =
+    direction === 'next' ? (view.section?.next() ?? null) : (view.section?.prev() ?? null)
 
   const secondChapter = adjacentSpineItem
     ? await getViewFromSpineItem(adjacentSpineItem, rendition).catch(() => null)
@@ -922,25 +901,21 @@ async function _getAdjacentViewParagraphs(
 
       const loadedSection = await Promise.race([loadPromise, timeoutPromise])
 
-      if (loadedSection?.document) {
-        const document = loadedSection.document
-        const body = document.body
+      const document = loadedSection.document
+      const body = document.body
 
-        if (body) {
-          const totalWidth =
-            rendition.manager.settings.axis === 'horizontal' ? body.scrollWidth : body.scrollHeight
+      const totalWidth =
+        rendition.manager.settings.axis === 'horizontal' ? body.scrollWidth : body.scrollHeight
 
-          const start = Math.max(0, totalWidth - remainingWidthForSecondChapter)
-          const end = totalWidth
+      const start = Math.max(0, totalWidth - remainingWidthForSecondChapter)
+      const end = totalWidth
 
-          secondChapterParagraphs = await _loadSectionParagraphsForUnloadedView(
-            adjacentSpineItem,
-            rendition,
-            start,
-            end
-          )
-        }
-      }
+      secondChapterParagraphs = await _loadSectionParagraphsForUnloadedView(
+        adjacentSpineItem,
+        rendition,
+        start,
+        end
+      )
     } catch (e) {
       console.error('Error loading previous section content:', e)
     }
@@ -1060,7 +1035,7 @@ export function getParagraphsFromMapping({
     return []
   }
 
-  if (!view?.contents?.document) {
+  if (!view.contents?.document) {
     return []
   }
 

@@ -209,7 +209,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   // Publish title so the native Window menu sees the loaded book.
   useEffect(() => {
     const e = (window as unknown as { electron: { send(c: string, p: unknown): void } }).electron
-    e?.send('window:setBookTitle', { bookId: book.id, title: book.title })
+    e.send('window:setBookTitle', { bookId: book.id, title: book.title })
   }, [book.id, book.title])
 
   // Mirror TOC sheet state into the menu context so the View > Show TOC
@@ -218,7 +218,6 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     const e = (
       window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
     ).electron
-    if (!e) return
     e.setMenuContext({ tocOpen })
   }, [tocOpen])
 
@@ -228,7 +227,6 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     const e = (
       window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
     ).electron
-    if (!e) return
     const unsub = usePlayerStore.subscribe(
       (s) => s.playingState,
       (state) => {
@@ -318,7 +316,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     (toc: NavItem[]) => {
       setBookOutline({
         title: book.title,
-        author: book.author ?? null,
+        author: book.author,
         chapters: tocToChapters(toc)
       })
     },
@@ -433,7 +431,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
 
     const onRelocated = () => {
       const loc = rendition.location
-      const spineIndex = loc?.start?.index ?? -1
+      const spineIndex = loc.start.index
       setIsFirstPage(spineIndex === 0)
       setIsFrontMatter(spineIndex <= 1) // Hide page number on cover + title page
     }
@@ -442,13 +440,13 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     const onResized = () => {
       const pt = usePageTracker.getState()
       if (!pt.ready || !pt.locationsReady) return
-      const startCfi = rendition?.location?.start?.cfi
-      const endCfi = rendition?.location?.end?.cfi
+      const startCfi = rendition.location.start.cfi
+      const endCfi = rendition.location.end.cfi
       if (startCfi && endCfi) {
         const s = rendition.book.locations.locationFromCfi(startCfi) as unknown as number
         const e = rendition.book.locations.locationFromCfi(endCfi) as unknown as number
         if (typeof s === 'number' && typeof e === 'number' && e > s) {
-          const rawLocCount = (rendition.book.locations._locations ?? []).length
+          const rawLocCount = rendition.book.locations._locations.length
           pt.build(rawLocCount, e - s)
         }
       }
@@ -548,7 +546,8 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               pt.goToCfi(
                 epubcfi,
                 (c: string) =>
-                  (rendition?.book.locations.locationFromCfi(c) as unknown as number) ?? 0
+                  (rendition?.book.locations.locationFromCfi(c) as unknown as number | undefined) ??
+                  0
               )
             }
           }}
@@ -589,8 +588,8 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
 
               // Measure how many location markers fit in one visible spread
               const measureLocsPerView = (): number => {
-                const startCfi = _rendition.location?.start?.cfi
-                const endCfi = _rendition.location?.end?.cfi
+                const startCfi = _rendition.location.start.cfi
+                const endCfi = _rendition.location.end.cfi
                 if (startCfi && endCfi) {
                   const s = locFromCfi(startCfi)
                   const e = locFromCfi(endCfi)
@@ -613,7 +612,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
                 // so location.start.cfi is stale until "relocated" fires.
                 const seedOnRelocated = () => {
                   _rendition.off('relocated', seedOnRelocated)
-                  const cfi = _rendition.location?.start?.cfi
+                  const cfi = _rendition.location.start.cfi
                   if (cfi) {
                     usePageTracker.getState().goToCfi(cfi, locFromCfi)
                     // Ensure the epub store has the location even when
@@ -631,7 +630,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               void _rendition.book.locations.generate(CHARS_PER_PAGE).then(() => {
                 console.log(
                   '[epub] Locations generated, count:',
-                  (_rendition.book.locations._locations ?? []).length
+                  _rendition.book.locations._locations.length
                 )
                 usePageTracker.getState().setLocationsReady(true)
 
@@ -645,14 +644,14 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
                 // Wait for relocated so we can measure locsPerView
                 const buildOnce = () => {
                   _rendition.off('relocated', buildOnce)
-                  const rawLocCount = (_rendition.book.locations._locations ?? []).length
+                  const rawLocCount = _rendition.book.locations._locations.length
                   const avgLocsPerPage = measureLocsPerView()
                   console.log('[epub] Building page tracker:', { rawLocCount, avgLocsPerPage })
                   usePageTracker.getState().build(rawLocCount, avgLocsPerPage)
                   console.log('[epub] Page tracker state:', usePageTracker.getState())
 
                   // Seed current page
-                  const startCfi = _rendition.location?.start?.cfi
+                  const startCfi = _rendition.location.start.cfi
                   if (startCfi) {
                     usePageTracker.getState().goToCfi(startCfi, locFromCfi)
                     // Ensure the epub store has the location even when

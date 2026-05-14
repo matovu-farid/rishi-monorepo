@@ -12,5 +12,5 @@ export async function chooseFiles(): Promise<string[]> {
       { name: 'MOBI Books', extensions: ['mobi', 'azw3'] }
     ]
   })
-  return result?.filePaths || []
+  return result.filePaths
 }

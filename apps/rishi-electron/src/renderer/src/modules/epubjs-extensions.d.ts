@@ -44,7 +44,7 @@ declare module 'epubjs/types/managers/view' {
     right: number
   }
 
-  // Note: `contents`, `section`, and `element` are assigned during view
+  // `contents`, `section`, and `element` are assigned during view
   // construction in epub.js but may be `undefined` before the view has
   // finished mounting (e.g. during initial render or after destroy).
   // Marking them optional matches runtime reality.
@@ -99,12 +99,7 @@ declare module 'epubjs/types/managers/manager' {
       find: ({ index }: { index: number }) => View | undefined
     }
     layout: Layout
-    /**
-     * Returns the currently visible sections, or an empty/undefined value
-     * if no view is currently displayed. Upstream types declare a non-empty
-     * `Section[]`, but in practice the array can be empty or undefined.
-     */
-    currentLocation(): Section[] | undefined
+    currentLocation(): Section[]
     mapping: Mapping
     visible(): View[]
     add(section: Section | SpineItem, forceRight: boolean): Promise<View>
@@ -124,12 +119,7 @@ declare module 'epubjs/types/rendition' {
   import type { Book } from 'epubjs'
 
   export default interface Rendition {
-    /**
-     * The view manager. `undefined` until `attachTo`/`display` has been
-     * called, and after `destroy()`. Call sites must handle the optional
-     * case — upstream types declare this as non-optional.
-     */
-    manager?: Manager
+    manager: Manager
     annotations: Annotations
     book: Book
     settings: {

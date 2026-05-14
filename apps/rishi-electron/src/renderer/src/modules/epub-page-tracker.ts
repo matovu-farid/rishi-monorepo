@@ -95,7 +95,7 @@ export const usePageTracker = create<PageTrackerState>()(
       _bookCache: {},
 
       initBook: (bookId) => {
-        const cached = get()._bookCache[bookId]
+        const cached = get()._bookCache[bookId] as BookPageData | undefined
         if (cached) {
           const total = calcTotal(cached.rawLocCount, cached.avgLocsPerPage)
           dump('initBook:cached', { bookId, ...cached, total })
@@ -164,8 +164,8 @@ export const usePageTracker = create<PageTrackerState>()(
         const { _lastLocIndex, _avgLocsPerPage, total, _locPageMap } = state
 
         // -- If this locIndex was seen before, reuse the stored page --
-        if (_locPageMap[locIndex] !== undefined) {
-          const storedPage = _locPageMap[locIndex]
+        const storedPage = _locPageMap[locIndex] as number | undefined
+        if (storedPage !== undefined) {
           dump('goToCfi:mapped', { locIndex, page: storedPage })
           set({ current: storedPage, _lastLocIndex: locIndex, _lastCfi: cfi })
           // Update book cache with latest position

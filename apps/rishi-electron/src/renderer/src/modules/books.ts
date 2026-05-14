@@ -44,10 +44,6 @@ export async function getBook(id: string): Promise<BookData | undefined> {
 
 export async function storeBook(book: BookData): Promise<void> {
   let books = await getBooks()
-  if (!books) {
-    await window.electron.setStoreValue('books', [book])
-    return
-  }
   const savedBook = books.find((currBook) => currBook.id === book.id)
   if (!savedBook) {
     books.push(book)
@@ -79,7 +75,6 @@ export async function updateCoverImage(blob: Blob, id: string): Promise<void> {
 
 export async function deleteBook(book: BookData): Promise<void> {
   const books = await getBooks()
-  if (!books) return
   const index = books.findIndex((b) => b.id === book.id)
   if (index === -1) return
   books.splice(index, 1)

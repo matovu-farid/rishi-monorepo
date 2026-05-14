@@ -56,7 +56,7 @@ async function buildStateDump(): Promise<Record<string, unknown>> {
     timestamp: new Date().toISOString(),
     player: {
       playingState: playerState.playingState,
-      activeParagraph: playerState.activeParagraph?.text?.substring(0, 80) ?? null,
+      activeParagraph: playerState.activeParagraph?.text.substring(0, 80) ?? null,
       errors: playerState.errors
     },
     ttsQueue: queueStatus,

@@ -26,8 +26,10 @@ function TocEntry({ data, onNavigate, depth }: TocEntryProps) {
         {data.label}
       </button>
       {data.subitems && data.subitems.length > 0
-        ? data.subitems.map((item, i) => (
-            <TocEntry key={i} data={item} onNavigate={onNavigate} depth={depth + 1} />
+        ? data.subitems.map((item) => (
+            // `href` is the chapter target — stable per spine item and
+            // unique within a TOC level for any well-formed EPUB.
+            <TocEntry key={item.href} data={item} onNavigate={onNavigate} depth={depth + 1} />
           ))
         : null}
     </div>
@@ -96,9 +98,11 @@ export function TableOfContents({ toc, onNavigate, isOpen, onClose }: TableOfCon
               Table of Contents
             </div>
             <div>
-              {toc.map((item, i) => (
+              {toc.map((item) => (
                 <TocEntry
-                  key={i}
+                  // `href` is the chapter target — stable per spine item
+                  // and unique within a TOC level for any well-formed EPUB.
+                  key={item.href}
                   data={item}
                   onNavigate={(href) => {
                     onNavigate(href)

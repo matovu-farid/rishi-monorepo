@@ -102,7 +102,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
         setScanning(false)
         setScanComplete(true)
         setProgress(null)
-      } else if (event.kind === 'error') {
+      } else {
         console.error('[discovery] scanner error:', event.error)
         setScanning(false)
       }
@@ -141,7 +141,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
     toast.promise(runImport([book.filepath]), {
       loading: `Importing ${label}...`,
       success: (results) => {
-        const r = results[0]
+        const r = results[0] as ImportResult | undefined
         if (!r?.ok) return `Failed to import ${label}`
         return `Imported ${label}`
       },
@@ -178,8 +178,9 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
   })
 
   const grouped = filteredBooks.reduce<Record<string, DiscoveredBook[]>>((acc, book) => {
-    if (!acc[book.folder]) acc[book.folder] = []
-    acc[book.folder].push(book)
+    const bucket = acc[book.folder] as DiscoveredBook[] | undefined
+    if (!bucket) acc[book.folder] = [book]
+    else bucket.push(book)
     return acc
   }, {})
 

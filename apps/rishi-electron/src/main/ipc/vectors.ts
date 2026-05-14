@@ -55,6 +55,7 @@ export function registerVectorHandlers(): void {
       const BATCH_SIZE = 32
       for (let i = 0; i < embedInput.length; i += BATCH_SIZE) {
         const batch = embedInput.slice(i, i + BATCH_SIZE)
+        // eslint-disable-next-line no-await-in-loop -- Backpressure: embedding model is CPU/GPU bound; running batches in parallel would oversubscribe and increase per-batch latency without throughput gain.
         const embedResults = await generateEmbeddings(batch)
 
         if (embedResults.length > 0) {

@@ -11,9 +11,9 @@ export type PdfLocation = { page: number; offset: number }
 
 export function parsePdfLocation(loc: string | null | undefined): PdfLocation {
   if (!loc) return { page: 0, offset: 0 }
-  const [pageStr, offsetStr] = loc.split(':')
-  const page = Number.parseInt(pageStr ?? '', 10)
-  const offset = Number.parseInt(offsetStr ?? '', 10)
+  const parts = loc.split(':') as (string | undefined)[]
+  const page = Number.parseInt(parts[0] ?? '', 10)
+  const offset = Number.parseInt(parts[1] ?? '', 10)
   return {
     page: Number.isFinite(page) && page > 0 ? page : 0,
     offset: Number.isFinite(offset) && offset > 0 ? offset : 0

@@ -1,5 +1,5 @@
 import type React from 'react'
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 
 interface MenuProps {
@@ -33,12 +33,15 @@ export const Menu: React.FC<MenuProps> = ({
 
   const isOpen = controlledOpen ?? internalOpen
 
-  const handleClose = () => {
+  // Wrapped in `useCallback` so the click-outside effect can list it as a
+  // dep without re-attaching the listener on every render — and so the
+  // `react-hooks/exhaustive-deps` rule stays satisfied.
+  const handleClose = useCallback(() => {
     if (controlledOpen === undefined) {
       setInternalOpen(false)
     }
     onClose?.()
-  }
+  }, [controlledOpen, onClose])
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -57,7 +60,7 @@ export const Menu: React.FC<MenuProps> = ({
       return () => document.removeEventListener('mousedown', handleClickOutside)
     }
     return undefined
-  }, [isOpen])
+  }, [isOpen, handleClose])
 
   const handleTriggerClick = () => {
     if (controlledOpen === undefined) {
@@ -72,7 +75,11 @@ export const Menu: React.FC<MenuProps> = ({
     }
   }
 
-  const getMenuPosition = () => {
+  // `useCallback` keyed on the reactive `anchorOrigin` fields keeps the
+  // identity stable across renders (so `setMenuRef` doesn't churn) while
+  // satisfying `react-hooks/exhaustive-deps`. `triggerRef` is a ref, so
+  // it's not a reactive dep.
+  const computeMenuPosition = useCallback((): React.CSSProperties => {
     if (!triggerRef.current) return {}
 
     const rect = triggerRef.current.getBoundingClientRect()
@@ -126,29 +133,41 @@ export const Menu: React.FC<MenuProps> = ({
     }
 
     return position
-  }
+  }, [anchorOrigin.vertical, anchorOrigin.horizontal])
+
+  // Re-runs when `computeMenuPosition` changes (i.e. when `anchorOrigin`
+  // changes), which re-applies inline styles to the mounted menu node —
+  // the desired behavior.
+  const setMenuRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      menuRef.current = node
+      if (!node) return
+      Object.assign(node.style, computeMenuPosition())
+    },
+    [computeMenuPosition]
+  )
 
   return (
     <>
       <div ref={triggerRef} onClick={handleTriggerClick}>
         {trigger}
       </div>
-      {isOpen &&
-        createPortal(
-          <div
-            ref={menuRef}
-            className="fixed z-[9999] border border-gray-200 rounded-md shadow-lg py-1 min-w-[160px] max-h-[300px] overflow-y-auto"
-            style={{
-              ...getMenuPosition(),
-              backgroundColor: theme?.background ?? '#ffffff',
-              color: theme?.color ?? '#000000',
-              borderColor: theme?.color ? `${theme.color}20` : '#e5e7eb'
-            }}
-          >
-            {children}
-          </div>,
-          document.body
-        )}
+      {isOpen
+        ? createPortal(
+            <div
+              ref={setMenuRef}
+              className="fixed z-[9999] border border-gray-200 rounded-md shadow-lg py-1 min-w-[160px] max-h-[300px] overflow-y-auto"
+              style={{
+                backgroundColor: theme?.background ?? '#ffffff',
+                color: theme?.color ?? '#000000',
+                borderColor: theme?.color ? `${theme.color}20` : '#e5e7eb'
+              }}
+            >
+              {children}
+            </div>,
+            document.body
+          )
+        : null}
     </>
   )
 }

@@ -46,7 +46,7 @@ export function useVirualization(
       //     `offset` while `elementScroll` silently adds `adjustments` to the
       //     final scrollTop produces drifting scroll positions and lands the
       //     user on the wrong page on every reopen.
-      if (canSmooth?.behavior === 'auto' || canSmooth?.adjustments) {
+      if (canSmooth.behavior === 'auto' || canSmooth.adjustments) {
         elementScroll(offset, canSmooth, instance)
         return
       }

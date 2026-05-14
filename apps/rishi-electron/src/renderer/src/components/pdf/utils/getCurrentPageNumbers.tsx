@@ -23,17 +23,20 @@ export function getCurrrentPageNumber(window: Window): number {
     const isVisible = canvasRect.top <= windowHeight && canvasRect.bottom >= 0
     return isVisible
   })
-  const canvasData = visibleCanvasDivs.map((canvasDiv) => {
+  const canvasData = visibleCanvasDivs.flatMap((canvasDiv) => {
     // Treat both missing and empty `data-page-number` as "no value", so we
     // never feed `parseInt('')` (which yields NaN). A real page number is
     // always a non-empty string of digits.
     const rawPageNumber = canvasDiv.dataset.pageNumber
-    const pageNumber = parseInt(rawPageNumber !== undefined && rawPageNumber !== '' ? rawPageNumber : '1')
+    const pageNumber = parseInt(
+      rawPageNumber !== undefined && rawPageNumber !== '' ? rawPageNumber : '1'
+    )
     const canvas = canvasDiv.querySelector<HTMLCanvasElement>('canvas')
-    return {
-      pageNumber,
-      canvas: canvas!
-    }
+    // The `visibleCanvasDivs` filter above only keeps divs with a canvas,
+    // but DOM mutation between filter and map is theoretically possible —
+    // skip rather than throw if the canvas vanished mid-frame.
+    if (!canvas) return []
+    return [{ pageNumber, canvas }]
   })
 
   if (canvasData.length === 0) return 1

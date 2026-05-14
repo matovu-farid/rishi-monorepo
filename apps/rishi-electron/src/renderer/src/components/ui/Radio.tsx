@@ -22,11 +22,11 @@ export const Radio: React.FC<RadioProps> = ({ label, value, className = '', them
         }}
         {...props}
       />
-      {label && (
+      {label ? (
         <span className="ml-2 text-sm" style={{ color: theme?.color ?? '#374151' }}>
           {label}
         </span>
-      )}
+      ) : null}
     </label>
   )
 }

@@ -343,7 +343,7 @@ export async function getRealtimeClientSecret(): Promise<string> {
   }
 
   const data = (await response.json()) as { client_secret?: { value?: string } }
-  const secret = data?.client_secret?.value
+  const secret = data.client_secret?.value
   if (!secret) {
     throw new Error('No client_secret in worker response')
   }

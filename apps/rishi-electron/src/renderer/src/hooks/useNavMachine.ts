@@ -59,8 +59,14 @@ export function useNavMachine(rendition: Rendition | null) {
           promise = r.next()
         } else if (ctx.pendingAction === 'prev') {
           promise = r.prev()
+        } else if (ctx.pendingLocation != null) {
+          promise = r.display(ctx.pendingLocation)
         } else {
-          promise = r.display(ctx.pendingLocation!)
+          // 'display' action without a location is a machine bug — settle
+          // immediately so we don't wedge in 'navigating' forever.
+          console.warn('[useNavMachine] display action with null pendingLocation')
+          settle()
+          return
         }
         promise.then(settle, settle)
       }

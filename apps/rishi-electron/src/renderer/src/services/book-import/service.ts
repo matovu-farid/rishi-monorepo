@@ -56,6 +56,7 @@ export function createBookImportService(deps: BookImportServiceDeps): BookImport
   async function importBatch(filePaths: string[]): Promise<ImportResult[]> {
     const results: ImportResult[] = []
     for (const fp of filePaths) {
+      // eslint-disable-next-line no-await-in-loop -- Backpressure: each import does heavy file I/O + DB writes; running them in parallel would saturate the disk and SQLite write queue.
       results.push(await importFromPath(fp))
     }
     return results

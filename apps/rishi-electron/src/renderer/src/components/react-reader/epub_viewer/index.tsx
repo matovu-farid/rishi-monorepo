@@ -151,7 +151,7 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
       this.book = initialize(url, epubInitOptions)
     }
 
-    void this.book?.loaded.navigation.then(({ toc }) => {
+    void this.book.loaded.navigation.then(({ toc }) => {
       // Populate the cache on first parse. setCachedEpub no-ops on the
       // same (id, book) pair, so it's safe to call on cache hits too.
       if (bookCacheKey !== undefined && this.book) {
@@ -337,7 +337,7 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
     const newLocation = `${loc.start.cfi}`
     if (location !== newLocation) {
       this.location = newLocation
-      locationChanged?.(newLocation)
+      locationChanged(newLocation)
 
       if (onPageTextExtracted) {
         const pageTextData = this.getCurrentPageText()

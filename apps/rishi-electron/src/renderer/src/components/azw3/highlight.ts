@@ -35,7 +35,7 @@ export function findParagraphElement(
   const nodes = doc.querySelectorAll(PARA_SELECTOR)
   let visible = -1
   for (const node of Array.from(nodes)) {
-    const text = (node.textContent ?? '').trim()
+    const text = node.textContent.trim()
     if (text.length === 0) continue
     visible += 1
     if (visible === paragraphIndex) return node

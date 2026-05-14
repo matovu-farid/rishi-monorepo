@@ -67,7 +67,9 @@ test.describe('EPUB reader', () => {
 
   test('rapid forward navigation does not crash', async () => {
     for (let i = 0; i < 5; i++) {
+      // eslint-disable-next-line no-await-in-loop -- E2E test: each click depends on the previous page transition completing.
       await bookPage.locator('[aria-label="Next page"]').first().click()
+      // eslint-disable-next-line no-await-in-loop -- E2E test: settle between rapid navigations.
       await bookPage.waitForTimeout(200)
     }
     await expect(bookPage.locator('body')).toBeVisible()

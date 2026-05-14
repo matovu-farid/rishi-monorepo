@@ -14,12 +14,10 @@ export function UpdateMenu() {
   const [version, setVersion] = useState<string>('')
 
   useEffect(() => {
-    if (window.electron?.getAppVersion) {
-      window.electron
-        .getAppVersion()
-        .then(setVersion)
-        .catch((err: unknown) => console.warn('[UpdateMenu] getAppVersion failed:', err))
-    }
+    window.electron
+      .getAppVersion()
+      .then(setVersion)
+      .catch((err: unknown) => console.warn('[UpdateMenu] getAppVersion failed:', err))
   }, [])
 
   const busy =

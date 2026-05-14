@@ -57,7 +57,7 @@ let listenersRegistered = false
  * Register one-time listeners for autoUpdater events forwarded from main process.
  */
 function ensureListeners(): void {
-  if (listenersRegistered || !window.electron) return
+  if (listenersRegistered) return
   listenersRegistered = true
 
   const { setStatus } = useUpdateStore.getState()
@@ -79,9 +79,9 @@ function ensureListeners(): void {
     }
     setStatus({
       kind: 'downloading',
-      percent: data?.percent ?? 0,
-      transferred: data?.transferred ?? 0,
-      total: data?.total ?? 0
+      percent: data.percent ?? 0,
+      transferred: data.transferred ?? 0,
+      total: data.total ?? 0
     })
   })
 
@@ -101,7 +101,6 @@ let checkInFlight = false
 
 export async function checkForUpdates(_opts?: { silent: boolean }): Promise<void> {
   if (checkInFlight) return
-  if (!window.electron) return
 
   ensureListeners()
 
@@ -111,7 +110,7 @@ export async function checkForUpdates(_opts?: { silent: boolean }): Promise<void
   try {
     const result = await window.electron.checkForUpdates()
 
-    if (!result?.updateAvailable) {
+    if (!result.updateAvailable) {
       // update-not-available event from main will also fire,
       // but set idle immediately for responsive UI
       useUpdateStore.getState().setStatus({ kind: 'idle' })
@@ -132,8 +131,6 @@ export async function checkForUpdates(_opts?: { silent: boolean }): Promise<void
 }
 
 export async function downloadUpdate(): Promise<void> {
-  if (!window.electron) return
-
   try {
     await window.electron.downloadUpdate()
   } catch (err) {
@@ -144,8 +141,6 @@ export async function downloadUpdate(): Promise<void> {
 }
 
 export function installUpdate(): void {
-  if (!window.electron) return
-
   useUpdateStore.getState().setStatus({ kind: 'installing' })
   void window.electron.installUpdate()
 }

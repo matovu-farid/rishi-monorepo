@@ -162,7 +162,7 @@ export function usePdfReader(
     let scrollDebounce: ReturnType<typeof setTimeout> | null = null
     const seekRegion = (snap: ReturnType<typeof actor.getSnapshot>): string => {
       const v = snap.value
-      return typeof v === 'object' && v !== null && 'seek' in v
+      return typeof v === 'object' && 'seek' in v
         ? String((v as Record<string, unknown>).seek)
         : String(v)
     }
@@ -245,7 +245,7 @@ export function usePdfReader(
       const page = snap.context.currentPage
       if (page === lastPublishedPage) return
       const pageDataMap = usePdfStore.getState().pageNumberToPageData
-      const data = pageDataMap[page]
+      const data = pageDataMap[page] as TextContent | undefined
       if (!data) return // page text not rendered yet; pdf-page will trigger re-eval
       lastPublishedPage = page
       publishParagraphsForPage(page, pageDataMap)
@@ -257,7 +257,7 @@ export function usePdfReader(
       (s) => s.pageNumberToPageData,
       (pageDataMap) => {
         const page = actor.getSnapshot().context.currentPage
-        if (!pageDataMap[page]) return
+        if (!(pageDataMap[page] as TextContent | undefined)) return
         publishParagraphsForPage(page, pageDataMap)
       }
     )
@@ -293,16 +293,13 @@ export function usePdfReader(
   return apiRef.current
 }
 
-function publishParagraphsForPage(
-  page: number,
-  pageDataMap: Record<number, TextContent>
-): void {
-  const data = pageDataMap[page]
+function publishParagraphsForPage(page: number, pageDataMap: Record<number, TextContent>): void {
+  const data = pageDataMap[page] as TextContent | undefined
   if (!data) return
   const newCurrent = pageDataToParagraphs(page, data)
-  const nextData = pageDataMap[page + 1]
+  const nextData = pageDataMap[page + 1] as TextContent | undefined
   const newNext = nextData ? pageDataToParagraphs(page + 1, nextData) : []
-  const prevData = pageDataMap[page - 1]
+  const prevData = pageDataMap[page - 1] as TextContent | undefined
   const newPrev = prevData ? pageDataToParagraphs(page - 1, prevData) : []
 
   const pdfState = usePdfStore.getState()

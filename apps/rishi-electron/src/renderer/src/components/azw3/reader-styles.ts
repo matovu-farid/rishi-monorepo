@@ -69,7 +69,7 @@ export const READER_CSS = `
  * call repeatedly — replaces existing rules if the element already exists.
  * Returns the style element for tests.
  */
-export function injectReaderStyles(doc: Document): HTMLStyleElement | null {
+export function injectReaderStyles(doc: Document | null | undefined): HTMLStyleElement | null {
   if (!doc?.head) return null
   let style = doc.getElementById(READER_STYLE_ID) as HTMLStyleElement | null
   if (!style) {

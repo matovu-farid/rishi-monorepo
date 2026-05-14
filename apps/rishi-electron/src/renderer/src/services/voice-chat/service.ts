@@ -23,8 +23,8 @@ import type {
 
 function classifyError(err: unknown): VoiceErrorReason {
   if (err instanceof OfflineError) return 'connect_failed'
-  const name = (err as { name?: string })?.name
-  const message = (err as { message?: string })?.message ?? ''
+  const name = (err as { name?: string }).name
+  const message = (err as { message?: string }).message ?? ''
   if (name === 'NotAllowedError' || name === 'NotFoundError') return 'mic_denied'
   if (message.includes('Not authenticated') || message.includes('auth')) return 'auth_failed'
   if (message.includes('timed out')) return 'timeout'
@@ -77,7 +77,10 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
   let lastContextFingerprint: string | null = null
   let hasUsedVoiceInSession = false
   let currentFiber: Fiber.RuntimeFiber<SessionHandle, ActivationError> | null = null
-  let preconnectIntent = false
+  // Wrapped in an object so TS doesn't narrow the literal `false` through
+  // post-await reads — the field is mutated from cleanup paths the rule's
+  // CFA can't see across.
+  const preconnect: { intent: boolean } = { intent: false }
   let connectivityUnsub: (() => void) | null = null
   let started = false
 
@@ -275,10 +278,11 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
       if (!hasUsedVoiceInSession) return
       if (!connectivity.isOnline()) return
       if (session && currentBookId === bookId) return
-      preconnectIntent = true
+      preconnect.intent = true
+      const stillIntending = (): boolean => preconnect.intent
       try {
         await svc.activate(bookId, ctx)
-        if (preconnectIntent && session) {
+        if (stillIntending() && session) {
           const s: RealtimeSessionLike = session
           s.interrupt()
           s.mute(true)
@@ -288,7 +292,7 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
       } catch (err) {
         captureError(err, { operation: 'voiceChatService', step: 'preconnect' })
       } finally {
-        preconnectIntent = false
+        preconnect.intent = false
       }
     },
 

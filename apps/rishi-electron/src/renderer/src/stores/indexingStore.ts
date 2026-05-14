@@ -34,7 +34,7 @@ export const useIndexingStore = create<IndexingState>()((set, get) => ({
 
   advance: (bookId) =>
     set((state) => {
-      const entry = state.byBookId[bookId]
+      const entry = state.byBookId[bookId] as IndexingEntry | undefined
       if (!entry) return state
       const done = Math.min(entry.done + 1, entry.total)
       return {
@@ -44,7 +44,7 @@ export const useIndexingStore = create<IndexingState>()((set, get) => ({
 
   finish: (bookId) =>
     set((state) => {
-      const entry = state.byBookId[bookId]
+      const entry = state.byBookId[bookId] as IndexingEntry | undefined
       if (!entry) return state
       return {
         byBookId: {
@@ -67,12 +67,12 @@ export const useIndexingStore = create<IndexingState>()((set, get) => ({
 
   reset: () => set({ byBookId: {} }),
 
-  getStatus: (bookId) => get().byBookId[bookId]?.status ?? 'idle',
+  getStatus: (bookId) => (get().byBookId[bookId] as IndexingEntry | undefined)?.status ?? 'idle',
 
-  isReady: (bookId) => get().byBookId[bookId]?.status === 'done',
+  isReady: (bookId) => (get().byBookId[bookId] as IndexingEntry | undefined)?.status === 'done',
 
   progress: (bookId) => {
-    const entry = get().byBookId[bookId]
+    const entry = get().byBookId[bookId] as IndexingEntry | undefined
     if (!entry || entry.total === 0) return 0
     return entry.done / entry.total
   }

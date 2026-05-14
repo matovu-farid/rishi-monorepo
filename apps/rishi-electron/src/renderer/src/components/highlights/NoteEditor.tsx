@@ -18,7 +18,7 @@ export function NoteEditor({ highlight, open, onOpenChange, onSaved }: NoteEdito
     if (highlight) {
       // Why: resetting editable local state when prop changes — editable input requires owning state
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setNoteValue(highlight.note ?? '')
+      setNoteValue(highlight.note)
     }
   }, [highlight])
 

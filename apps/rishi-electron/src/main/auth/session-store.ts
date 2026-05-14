@@ -21,7 +21,7 @@ export async function readSession(): Promise<string | null> {
     }
     return safeStorage.decryptString(buf)
   } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
     console.warn('[session-store] read failed', err)
     return null
   }
@@ -40,6 +40,6 @@ export async function clearSession(): Promise<void> {
   try {
     await fs.unlink(path())
   } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
   }
 }

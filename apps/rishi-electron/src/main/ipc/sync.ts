@@ -168,8 +168,7 @@ export function registerSyncHandlers(): void {
 
       const title = typeof remote.title === 'string' ? remote.title : local.title
       const author = typeof remote.author === 'string' ? remote.author : local.author
-      const format =
-        typeof remote.format === 'string' ? remote.format : local.format
+      const format = typeof remote.format === 'string' ? remote.format : local.format
 
       db.update(books)
         .set({

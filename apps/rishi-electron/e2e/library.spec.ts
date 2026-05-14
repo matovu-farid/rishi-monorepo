@@ -65,6 +65,7 @@ test.describe('Library', () => {
         opened = true
         break
       }
+      // eslint-disable-next-line no-await-in-loop -- Polling loop: backoff between window-existence checks.
       await app.page.waitForTimeout(100)
     }
     expect(opened, 'a book window for the imported id should appear').toBe(true)

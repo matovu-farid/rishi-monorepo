@@ -19,4 +19,4 @@ export async function getAuthToken(): Promise<string | null> {
 }
 
 /** Whether this build is destined for the Mac App Store. */
-export const isMacAppStore = window.api?.auth?.isMacAppStore ?? false
+export const isMacAppStore = window.api.auth.isMacAppStore

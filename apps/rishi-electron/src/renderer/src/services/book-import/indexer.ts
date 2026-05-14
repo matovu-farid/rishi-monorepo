@@ -74,9 +74,11 @@ export async function indexBook(
       metadata: { id: p.id, pageNumber: p.pageNumber, bookId }
     }))
     for (const batch of chunkArray(embedParams, deps.embedBatchSize)) {
+      // eslint-disable-next-line no-await-in-loop -- Backpressure: embedding model is CPU/GPU bound; parallel batches would oversubscribe and inflate peak memory.
       const results = await deps.embed(batch)
       const vectors = results.map((r) => ({ id: r.metadata.id, vector: r.embedding }))
       if (vectors.length > 0) {
+        // eslint-disable-next-line no-await-in-loop -- Vector save runs after each batch's embeddings; serialised with the embedding work above.
         await deps.db.saveVectors(`${bookId}-vectordb`, results[0].embedding.length, vectors)
       }
     }

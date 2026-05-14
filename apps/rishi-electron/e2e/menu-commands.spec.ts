@@ -93,6 +93,7 @@ test('Bookmarks > Add Bookmark adds a row in the DB when a PDF is open', async (
     // few times until the bookmark count actually moves.
     let after = before
     for (let attempt = 0; attempt < 5 && after === before; attempt++) {
+      // eslint-disable-next-line no-await-in-loop -- E2E retry: each attempt waits for the previous focus/menu click to settle before re-checking.
       await launched.app
         .evaluate(
           ({ BrowserWindow }, { url }) => {
@@ -106,11 +107,16 @@ test('Bookmarks > Add Bookmark adds a row in the DB when a PDF is open', async (
           { url: `/books/${book.id}` }
         )
         .catch(() => {})
+      // eslint-disable-next-line no-await-in-loop -- E2E retry: sequential focus + menu interaction.
       await bookPage.bringToFront()
+      // eslint-disable-next-line no-await-in-loop -- E2E retry: wait between focus and menu click.
       await launched.page.waitForTimeout(400)
+      // eslint-disable-next-line no-await-in-loop -- E2E retry: menu click depends on focus state above.
       const clicked = await clickMenuItem(launched.app, ['Bookmarks', 'Add Bookmark'])
       expect(clicked).toBe(true)
+      // eslint-disable-next-line no-await-in-loop -- E2E retry: wait for IPC to flush before reading count.
       await launched.page.waitForTimeout(1200)
+      // eslint-disable-next-line no-await-in-loop -- E2E retry: re-read bookmark count to decide whether to keep retrying.
       after = await bookPage.evaluate(async (sid) => {
         const e = (
           window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> }

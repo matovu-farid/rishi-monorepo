@@ -76,11 +76,11 @@ function BookView(): React.JSX.Element {
         </div>
       }
     >
-      {book?.kind === 'pdf' && (
+      {book.kind === 'pdf' && (
         <PdfView filepath={convertFileSrc(book.filepath)} key={book.id.toString()} book={book} />
       )}
-      {book?.kind === 'epub' && <EpubView key={book.id} book={book} />}
-      {(book?.kind === 'mobi' || book?.kind === 'azw3') && <Azw3View key={book.id} book={book} />}
+      {book.kind === 'epub' && <EpubView key={book.id} book={book} />}
+      {(book.kind === 'mobi' || book.kind === 'azw3') && <Azw3View key={book.id} book={book} />}
     </React.Suspense>
   )
 }

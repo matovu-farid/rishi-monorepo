@@ -100,6 +100,7 @@ export function createCache(deps: CacheDeps): Cache {
       for (const file of stats) {
         if (current <= threshold) break
         try {
+          // eslint-disable-next-line no-await-in-loop -- LRU eviction: each iteration's `current` decision depends on the prior removal completing so we stop as soon as we're under the threshold.
           await ipc.removeFile(file.path)
           current -= file.size
         } catch {

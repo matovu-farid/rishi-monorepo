@@ -129,6 +129,7 @@ export async function generateEmbeddings(texts: EmbeddingInput[]): Promise<Embed
     // shape [batch, tokens, dim]. When called with `{ pooling: 'mean',
     // normalize: true }` the library handles pooling, but not all versions
     // support these options — so we handle it manually for robustness.
+    // eslint-disable-next-line no-await-in-loop -- Backpressure: the local embedding pipeline is CPU/GPU bound; running batches in parallel would just queue them and increase peak memory.
     const output = await pipe(sentences, {
       pooling: 'mean',
       normalize: true
