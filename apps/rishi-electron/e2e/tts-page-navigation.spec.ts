@@ -1423,4 +1423,138 @@ test.describe('TTS state follows EPUB page navigation', () => {
       w.__rishi.setTestTtsService(null)
     })
   })
+
+  // ---------------------------------------------------------------------
+  // Regression: player PREV at the first paragraph must land on the LAST
+  // paragraph of the previous page (not paragraph 0).
+  //
+  // Bug: the hook hardcoded `direction: 'forward'` in the PAGE_NAVIGATING
+  // event fired when navState left 'idle'. The waitingForParagraphs →
+  // pageNavigating transition called setNavDirection, which overwrote the
+  // player's `direction='backward'` (set by setDirectionBackward on PREV)
+  // with 'forward'. When the previous page's paragraphs arrived,
+  // resetIndexByDirection saw direction='forward' and placed the player on
+  // paragraph 0 instead of the last paragraph.
+  //
+  // Fixes (both applied):
+  //   1. Hook: pass direction='backward' when pageRequest==='prev'.
+  //   2. State machine: waitingForParagraphs → pageNavigating preserves
+  //      direction (no setNavDirection) so the player's intent survives a
+  //      stale or wrong direction in the event.
+  // ---------------------------------------------------------------------
+  test('player PREV at first paragraph lands on last paragraph of previous page', async () => {
+    test.setTimeout(60_000)
+    const book = await importBook(app.page, {
+      fixturePath: EPUB_FIXTURE,
+      kind: 'epub',
+      title: 'TTS Prev First Paragraph'
+    })
+    await closeOverlays(app.page)
+    const bookPage = await openBook(app.page, book.id)
+    await expect(bookPage.locator('[aria-label="Next page"]').first()).toBeVisible({
+      timeout: 30000
+    })
+    await waitForParagraphs(bookPage)
+    await installMockTts(bookPage)
+
+    // Step over to page 2 so a previous page exists. Use the EPUB next-page
+    // arrow rather than player NEXT — we want a clean external nav, not a
+    // player-driven page request.
+    const startSnap = await readPlayerSnapshot(bookPage)
+    await bookPage.locator('[aria-label="Next page"]').first().click()
+    const page2Snap = await waitForLocationChange(bookPage, startSnap.location, 15000)
+    expect(
+      page2Snap.paragraphs.length,
+      'page 2 must have paragraphs for this test'
+    ).toBeGreaterThan(0)
+
+    // Start playback on page 2. Wait for the player to actually reach
+    // `playing` so the machine is in the right state when we send PREV.
+    await sendPlayerEvent(bookPage, 'PLAY')
+    await waitForPlayerState(bookPage, 'playing', 8000)
+
+    // Verify the player is at paragraphIndex=0 (first paragraph of page 2)
+    // so the PREV at boundary path is exercised.
+    const beforePrev = await bookPage.evaluate(() => {
+      const w = window as unknown as {
+        __rishi: {
+          playerStore: {
+            getState: () => {
+              activeParagraph: { index: string } | null
+              currentParagraphs: { index: string }[]
+            }
+          }
+        }
+      }
+      const s = w.__rishi.playerStore.getState()
+      return {
+        activeIndex: s.activeParagraph?.index ?? null,
+        firstIndex: s.currentParagraphs[0]?.index ?? null,
+        currentCount: s.currentParagraphs.length
+      }
+    })
+    expect(beforePrev.activeIndex).toBe(beforePrev.firstIndex)
+
+    const page2FirstCfi = page2Snap.paragraphs[0]?.index
+    expect(page2FirstCfi).toBeTruthy()
+
+    // Click player PREV at the first paragraph of page 2. Player should
+    // request the previous page and resume on its LAST paragraph.
+    await sendPlayerEvent(bookPage, 'PREV')
+
+    // Wait for the EPUB location to actually change (back to page 1).
+    await waitForLocationChange(bookPage, page2Snap.location, 15000)
+
+    // Player must reach `playing` on the previous page (proves auto-resume).
+    await waitForPlayerState(bookPage, 'playing', 10000)
+
+    // Verify the active paragraph is the LAST paragraph of the previous page,
+    // not the first. The bug landed it on paragraph 0 — this assertion is
+    // the precise regression check.
+    const afterPrev = await bookPage.evaluate(() => {
+      const w = window as unknown as {
+        __rishi: {
+          playerStore: {
+            getState: () => {
+              activeParagraph: { index: string; text: string } | null
+              currentParagraphs: { index: string; text: string }[]
+            }
+          }
+        }
+      }
+      const s = w.__rishi.playerStore.getState()
+      const last = s.currentParagraphs[s.currentParagraphs.length - 1] ?? null
+      const first = s.currentParagraphs[0] ?? null
+      return {
+        activeIndex: s.activeParagraph?.index ?? null,
+        activeText: s.activeParagraph?.text ?? null,
+        firstIndex: first?.index ?? null,
+        lastIndex: last?.index ?? null,
+        currentCount: s.currentParagraphs.length
+      }
+    })
+
+    expect(
+      afterPrev.activeIndex,
+      `After PREV at first paragraph, the active paragraph must be the LAST ` +
+        `paragraph of the previous page. Got activeIndex='${afterPrev.activeIndex}', ` +
+        `firstIndex='${afterPrev.firstIndex}', lastIndex='${afterPrev.lastIndex}'. ` +
+        `If activeIndex matches firstIndex, the bug is present: the player landed ` +
+        `on paragraph 0 of the previous page instead of its last paragraph.`
+    ).toBe(afterPrev.lastIndex)
+
+    // Defense in depth: when the page has > 1 paragraph, first and last
+    // differ, so the assertion above is meaningful. Guard against fixtures
+    // with single-paragraph pages where the test would pass vacuously.
+    if (afterPrev.currentCount > 1) {
+      expect(afterPrev.activeIndex).not.toBe(afterPrev.firstIndex)
+    }
+
+    // Teardown
+    await sendPlayerEvent(bookPage, 'STOP')
+    await bookPage.evaluate(() => {
+      const w = window as unknown as { __rishi: { setTestTtsService: (s: null) => void } }
+      w.__rishi.setTestTtsService(null)
+    })
+  })
 })

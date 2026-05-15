@@ -291,6 +291,42 @@ describe('playerMachine', () => {
       expect(actor.getSnapshot().value).toBe('loading')
     })
 
+    // Regression: when the user clicks the player's PREV button at the first
+    // paragraph of a page, the machine must remember it wanted to go BACKWARD
+    // even if the subsequent PAGE_NAVIGATING event reports a different
+    // direction (the hook used to hardcode 'forward'). On the previous page
+    // the player must land on the LAST paragraph, not paragraph 0.
+    it('PREV at first paragraph preserves backward direction through pageNavigating', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PLAY' })
+      actor.send({ type: 'AUDIO_LOADED' })
+
+      // Player at first paragraph clicks PREV.
+      actor.send({ type: 'PREV' })
+      expect(actor.getSnapshot().value).toBe('waitingForParagraphs')
+      expect(actor.getSnapshot().context.direction).toBe('backward')
+
+      // The hook used to hardcode direction='forward' in PAGE_NAVIGATING
+      // regardless of player intent. The state machine must preserve the
+      // direction it already set (backward) — this PAGE_NAVIGATING event's
+      // direction is best-effort, the player's existing intent wins.
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+      expect(actor.getSnapshot().context.direction).toBe('backward')
+
+      // Previous page's paragraphs arrive (5 paragraphs).
+      const prevPageParagraphs = Array.from({ length: 5 }, (_, i) => ({
+        index: `prev-${i}`,
+        text: `Previous page paragraph ${i}`
+      }))
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: prevPageParagraphs })
+
+      expect(actor.getSnapshot().value).toBe('loading')
+      // The user must land on the LAST paragraph of the previous page
+      // (index 4), not the first (index 0).
+      expect(actor.getSnapshot().context.paragraphIndex).toBe(4)
+    })
+
     it('stopped → NEXT at last paragraph → page nav does NOT auto-resume', () => {
       // Counter-test: user is stopped, clicks NEXT at boundary — they
       // explicitly want to navigate but not auto-play.

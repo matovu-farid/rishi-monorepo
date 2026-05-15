@@ -3,14 +3,18 @@ import { useEffect, useRef } from 'react'
 import { createActor } from 'xstate'
 import { playerMachine } from '@/machines/playerMachine'
 import { usePlayerStore } from '@/stores/playerStore'
-import type { PlayerStoreState, PlayerSend } from '@/stores/playerStore'
+import type { ParagraphWithIndex, PlayerStoreState, PlayerSend } from '@/stores/playerStore'
+import { useNavStore } from '@/stores/navStore'
 import { getTtsService } from '@/services'
 import { usePdfStore } from '@/stores/pdfStore'
+import { publishCurrentEpubParagraphs } from '@/stores/epubStore'
 import isEqual from 'fast-deep-equal'
 import type { TextItem, TextMarkedContent } from 'react-pdf'
 
-// Singleton HTMLAudioElement for TTS playback
-const audioElement = new Audio()
+// Singleton HTMLAudioElement for TTS playback. Exported so E2E tests can
+// observe `paused`/`src` to verify the player stops the previous page's
+// audio when navigating mid-playback.
+export const audioElement = new Audio()
 
 // Map XState machine state value to PlayerStoreState string
 function mapStateValue(value: string | Record<string, string>): PlayerStoreState {
@@ -33,12 +37,29 @@ export function usePlayerMachine(bookId: string) {
     const machineUnsub = actor.subscribe((snapshot) => {
       const state = mapStateValue(snapshot.value)
       const ctx = snapshot.context
-      const currentParagraph = ctx.currentParagraphs[ctx.paragraphIndex] ?? null
+      const currentParagraph: ParagraphWithIndex | null =
+        ctx.currentParagraphs[ctx.paragraphIndex] ?? null
+
+      // Invariant: activeParagraph is what the user is *currently hearing*,
+      // and it must be a paragraph on the visible page. It tracks the
+      // visible page exactly: `playing` → live paragraph; `paused.clean` →
+      // the paused-mid paragraph (paragraphs haven't changed); anything
+      // else (loading, paused.stale, stopped, idle, waiting,
+      // pageNavigating, error) → null. Previously this preserved the stale
+      // value during loading, leaving the highlight on the OLD page until
+      // the next TTS fetch resolved.
+      let nextActive: ParagraphWithIndex | null
+      if (state === 'playing') {
+        nextActive = currentParagraph
+      } else if (state === 'paused.clean') {
+        nextActive = usePlayerStore.getState().activeParagraph
+      } else {
+        nextActive = null
+      }
 
       usePlayerStore.setState({
         playingState: state,
-        activeParagraph:
-          state === 'playing' ? currentParagraph : usePlayerStore.getState().activeParagraph,
+        activeParagraph: nextActive,
         errors: ctx.errors
       })
     })
@@ -91,6 +112,51 @@ export function usePlayerMachine(bookId: string) {
       { equalityFn: isEqual }
     )
 
+    // --- 2b. navStore -> player: external page navigation ---
+    // When the EPUB rendition starts navigating (curl gesture or arrow
+    // button), navStore.navState leaves 'idle' *synchronously* inside the
+    // click handler — well before the 200 ms curl animation completes and
+    // long before PARAGRAPHS_UPDATED arrives. We use this signal to:
+    //   1. Pause audio NOW so the old page doesn't bleed into the curl.
+    //   2. Tell the machine via PAGE_NAVIGATING so it transitions out of
+    //      playing/loading/paused into the new `pageNavigating` state and
+    //      remembers whether to auto-resume on the new page.
+    const unsubNav = useNavStore.subscribe(
+      (s) => s.navState,
+      (navState, prevNavState) => {
+        if (prevNavState === 'idle' && navState !== 'idle') {
+          stopAudio()
+          // Clear the highlight immediately so the UI doesn't keep the old
+          // paragraph highlighted during the curl.
+          usePlayerStore.setState({ activeParagraph: null })
+          // When the player itself requested the nav (waitingForParagraphs
+          // → pageRequest), the request type tells us the direction. Read it
+          // BEFORE EpubView's tryConsumePageRequest clears it (subscribers
+          // fire synchronously inside navMachine.send, before the clear).
+          // For external nav (user clicked the EPUB arrow), pageRequest is
+          // null and we default to 'forward' so the player lands on paragraph
+          // 0 of the new page.
+          const pageRequest = usePlayerStore.getState().pageRequest
+          const direction: 'forward' | 'backward' =
+            pageRequest === 'prev' ? 'backward' : 'forward'
+          actor.send({ type: 'PAGE_NAVIGATING', direction })
+        }
+        // Nav completed (returned to idle). In the success path, the
+        // rendition fired `relocated` during r.next() which already pushed
+        // PARAGRAPHS_UPDATED into the machine — so by now we're in
+        // `loading` or beyond. If we are STILL in `pageNavigating`, the
+        // rendition either didn't navigate at all (epubjs No Section Found,
+        // end of book, transient error) or fired `relocated` with the same
+        // location. The player would otherwise wait 10s for the timeout —
+        // republish the current view immediately so the user recovers fast.
+        if (prevNavState !== 'idle' && navState === 'idle') {
+          if (mapStateValue(actor.getSnapshot().value) === 'pageNavigating') {
+            publishCurrentEpubParagraphs()
+          }
+        }
+      }
+    )
+
     // --- 3. Machine actions -> audio side effects ---
     let prevState = ''
     // Generation counter to cancel stale fetches when a new loading entry fires
@@ -103,6 +169,9 @@ export function usePlayerMachine(bookId: string) {
         | undefined
 
       if (state === 'loading') {
+        // Silence the previous page's audio immediately so it doesn't bleed
+        // into the new page while the next TTS fetch is in flight.
+        stopAudio()
         // Clear old highlight immediately
         usePlayerStore.setState({ activeParagraph: null })
         // Increment generation so any in-flight fetch from a previous attempt
@@ -132,7 +201,7 @@ export function usePlayerMachine(bookId: string) {
             })
             .then((blobUrl) => {
               if (gen !== fetchGeneration) return // stale
-              return loadAndPlayAudio(blobUrl)
+              return loadAndPlayAudio(blobUrl, () => gen !== fetchGeneration)
             })
             .then(() => {
               if (gen !== fetchGeneration) return // stale
@@ -182,6 +251,22 @@ export function usePlayerMachine(bookId: string) {
         usePlayerStore.setState({
           pageRequest: direction === 'backward' ? 'prev' : 'next'
         })
+      }
+
+      if (state === 'republishingParagraphs') {
+        stopAudio()
+        // Do NOT set pageRequest — the player has not asked for a new page.
+        // Re-read the rendition's current view and republish its paragraphs so
+        // the machine can proceed to loading.
+        publishCurrentEpubParagraphs()
+      }
+
+      // pageNavigating: external nav already in flight. Just silence audio
+      // and clear the highlight. Do NOT set pageRequest — the rendition is
+      // already curling and another request would double-navigate.
+      if (state === 'pageNavigating') {
+        stopAudio()
+        usePlayerStore.setState({ activeParagraph: null, endedParagraph: null })
       }
 
       if (state === 'idle' && prevState !== 'idle') {
@@ -299,6 +384,7 @@ export function usePlayerMachine(bookId: string) {
       unsubPrev()
       audioElement.removeEventListener('ended', handleEnded)
       audioElement.removeEventListener('error', handleError)
+      unsubNav()
       usePlayerStore.getState().setSend(() => {})
       cleanupAudio(bookId)
       actor.stop()
@@ -315,7 +401,7 @@ export function usePlayerMachine(bookId: string) {
 
 // --- Audio helpers (inline, uses the singleton audioElement) ---
 
-async function loadAndPlayAudio(blobUrl: string): Promise<void> {
+async function loadAndPlayAudio(blobUrl: string, isCancelled?: () => boolean): Promise<void> {
   audioElement.pause()
   audioElement.currentTime = 0
   audioElement.src = blobUrl
@@ -343,6 +429,10 @@ async function loadAndPlayAudio(blobUrl: string): Promise<void> {
     audioElement.addEventListener('error', handleError, { once: true })
   })
 
+  // After awaiting canplaythrough the state may have moved on (page flip,
+  // STOP, etc). If so, do NOT call play() — it would play this now-stale
+  // blob over whatever the player is currently loading.
+  if (isCancelled?.()) return
   await audioElement.play()
 }
 

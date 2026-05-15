@@ -454,8 +454,16 @@ export const playerMachine = setup({
         },
         PAGE_NAVIGATING: {
           target: 'pageNavigating',
-          // Preserve wantsAutoResume from however we got here.
-          actions: ['setNavDirection', 'clearCurrentParagraphs']
+          // Preserve wantsAutoResume AND direction from however we got here.
+          // The player set the direction (forward/backward) on entry to
+          // waitingForParagraphs based on the user's NEXT/PREV intent; the
+          // event's direction field is best-effort (the hook can't always
+          // tell which way the rendition is going) and must not overwrite
+          // the player's authoritative intent. Specifically, after PREV at
+          // the first paragraph the player needs direction='backward' to
+          // survive so resetIndexByDirection lands on the LAST paragraph of
+          // the previous page rather than the first.
+          actions: ['clearCurrentParagraphs']
         }
       }
     },
