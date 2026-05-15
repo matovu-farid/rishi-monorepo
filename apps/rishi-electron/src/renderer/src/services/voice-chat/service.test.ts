@@ -342,7 +342,16 @@ describe('createVoiceChatService — activate (cold happy path)', () => {
     await svc.activate(7, { pageText: 'hello' })
 
     expect(states).toEqual(['connecting', 'active'])
-    expect(media.getUserMedia).toHaveBeenCalledWith({ audio: true })
+    // Audio constraints request echo cancellation + noise suppression so TTS
+    // playback doesn't bleed from speakers into the mic and get re-sent
+    // through the realtime API as billable audio input.
+    expect(media.getUserMedia).toHaveBeenCalledWith({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    })
     expect(webrtc.callCount()).toBe(1)
     expect(agent.lastArgs()?.bookId).toBe(7)
     expect(agent.lastArgs()?.pageText).toBe('hello')
@@ -351,15 +360,18 @@ describe('createVoiceChatService — activate (cold happy path)', () => {
     expect(svc.getState()).toBe('active')
   })
 
-  it('deactivate() from active → paused; session.interrupt + mute(true)', async () => {
+  it('deactivate() from active → idle; session.close + mic tracks stopped', async () => {
+    const media = makeMedia()
+    const stopSpy = vi.fn()
+    media.stream.getTracks = () => [{ stop: stopSpy }]
     const session = makeSession()
-    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory }))
+    const svc = createVoiceChatService(makeDeps({ media, sessionFactory: session.factory }))
     await svc.activate(1, { pageText: 'p' })
     svc.deactivate()
 
-    expect(session.interrupt).toHaveBeenCalledTimes(1)
-    expect(session.mute).toHaveBeenLastCalledWith(true)
-    expect(svc.getState()).toBe('paused')
+    expect(session.close).toHaveBeenCalledTimes(1)
+    expect(stopSpy).toHaveBeenCalledTimes(1)
+    expect(svc.getState()).toBe('idle')
   })
 
   it('dispose() from active → idle; session.close() called', async () => {
@@ -408,6 +420,20 @@ describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
     expect(session.updateAgent).not.toHaveBeenCalled()
   })
 
+  it('warm activate does NOT call updateAgent when only activeParagraphText changes', async () => {
+    // activeParagraphText ticks on every TTS paragraph advance. Including it
+    // in the fingerprint causes session.updateAgent to re-upload the full
+    // multi-KB instructions block as input tokens once per paragraph — the
+    // primary cause of the May 2026 realtime-token cost spike.
+    const session = makeSession()
+    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory }))
+    await svc.activate(1, { pageText: 'page', activeParagraphText: 'first paragraph' })
+    await svc.activate(1, { pageText: 'page', activeParagraphText: 'second paragraph' })
+    await svc.activate(1, { pageText: 'page', activeParagraphText: 'third paragraph' })
+
+    expect(session.updateAgent).not.toHaveBeenCalled()
+  })
+
   it('activate on different bookId disposes the old session first', async () => {
     const session = makeSession()
     const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory }))
@@ -427,28 +453,32 @@ describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
     expect(session.connect).toHaveBeenCalledTimes(1)
   })
 
-  it('preconnect is no-op when hasUsedVoiceInSession is false', async () => {
+  it('preconnect never opens a session — always a no-op', async () => {
     const session = makeSession()
     const ipc = makeIpc()
-    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory, ipc }))
-    await svc.preconnect(1, { pageText: 'p' })
+    const media = makeMedia()
+    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory, ipc, media }))
 
-    expect(session.connect).not.toHaveBeenCalled()
-    expect(ipc.getRealtimeClientSecret).not.toHaveBeenCalled()
-  })
-
-  it('preconnect after a real activate connects + mutes (paused)', async () => {
-    const session = makeSession()
-    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory }))
+    // Even after a prior activate (which would have set hasUsedVoiceInSession),
+    // preconnect must not open a billable realtime session.
     await svc.activate(1, { pageText: 'p' })
     svc.dispose()
 
+    const connectCallsBefore = session.connect.mock.calls.length
+    const mediaCallsBefore = (media.getUserMedia as ReturnType<typeof vi.fn>).mock.calls.length
+    const keyCallsBefore = (ipc.getRealtimeClientSecret as ReturnType<typeof vi.fn>).mock.calls
+      .length
+
     await svc.preconnect(1, { pageText: 'p' })
 
-    // Two cold connects total: the user-initiated one and the preconnect.
-    expect(session.connect).toHaveBeenCalledTimes(2)
-    expect(session.mute).toHaveBeenLastCalledWith(true)
-    expect(svc.getState()).toBe('paused')
+    expect(session.connect.mock.calls.length).toBe(connectCallsBefore)
+    expect((media.getUserMedia as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+      mediaCallsBefore
+    )
+    expect((ipc.getRealtimeClientSecret as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+      keyCallsBefore
+    )
+    expect(svc.getState()).toBe('idle')
   })
 
   it('prewarmKey() fetches the ephemeral key without prompting for mic', async () => {

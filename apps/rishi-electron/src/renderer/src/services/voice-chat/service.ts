@@ -10,7 +10,6 @@ import { captureError } from '@/utils/sentry'
 import type {
   AudioElementLike,
   ChatStatus,
-  ClockPort,
   MediaStreamLike,
   RealtimeSessionLike,
   VoiceChatContext,
@@ -32,6 +31,11 @@ function classifyError(err: unknown): VoiceErrorReason {
 }
 
 function fingerprintContext(ctx: VoiceChatContext): string {
+  // Note: activeParagraphText is intentionally excluded. It changes on every
+  // TTS paragraph advance; including it forced session.updateAgent to re-upload
+  // the full instructions block as input tokens once per paragraph. The agent
+  // still receives the active paragraph in the COLD-path instructions when the
+  // session first opens — see buildRealtimeAgent.ts.
   return `${ctx.pageText}\n${JSON.stringify(ctx.outline ?? {})}`
 }
 
@@ -71,36 +75,14 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
   let session: RealtimeSessionLike | null = null
   let sessionCleanup: (() => void) | null = null
   let currentBookId: number | null = null
-  let idleTimer: ReturnType<ClockPort['setTimeout']> | null = null
   let mediaStream: MediaStreamLike | null = null
   let audioElement: AudioElementLike | null = null
   let lastContextFingerprint: string | null = null
-  let hasUsedVoiceInSession = false
   let currentFiber: Fiber.RuntimeFiber<SessionHandle, ActivationError> | null = null
-  // Wrapped in an object so TS doesn't narrow the literal `false` through
-  // post-await reads — the field is mutated from cleanup paths the rule's
-  // CFA can't see across.
-  const preconnect: { intent: boolean } = { intent: false }
   let connectivityUnsub: (() => void) | null = null
   let started = false
 
-  function clearIdleTimer() {
-    if (idleTimer !== null) {
-      clock.clearTimeout(idleTimer)
-      idleTimer = null
-    }
-  }
-
-  function scheduleIdleTimer() {
-    clearIdleTimer()
-    idleTimer = clock.setTimeout(() => {
-      disposeInternal()
-      actor.send({ type: 'DISPOSE' })
-    }, config.idleTimeoutMs)
-  }
-
   function disposeInternal() {
-    clearIdleTimer()
     if (sessionCleanup) {
       sessionCleanup()
       sessionCleanup = null
@@ -141,8 +123,6 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
   }
 
   async function doActivate(bookId: number, ctx: VoiceChatContext): Promise<void> {
-    clearIdleTimer()
-
     // Different bookId — dispose existing session first.
     if (session && currentBookId !== null && currentBookId !== bookId) {
       disposeInternal()
@@ -159,6 +139,7 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
             bookId,
             pageText: ctx.pageText,
             outline: ctx.outline,
+            activeParagraphText: ctx.activeParagraphText,
             onEndConversation: (reason) => endedByAgentEmitter.emit(reason),
             rag
           })
@@ -221,7 +202,6 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
 
       actor.send({ type: 'CONNECT_SUCCEEDED' })
       chatStatusEmitter.emit('idle')
-      hasUsedVoiceInSession = true
     } catch (err) {
       // Superseded by a subsequent activate() — silent.
       if (isInterruptCause(err)) return
@@ -274,43 +254,24 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
       await doActivate(bookId, ctx)
     },
 
-    async preconnect(bookId, ctx) {
-      if (!hasUsedVoiceInSession) return
-      if (!connectivity.isOnline()) return
-      if (session && currentBookId === bookId) return
-      preconnect.intent = true
-      const stillIntending = (): boolean => preconnect.intent
-      try {
-        await svc.activate(bookId, ctx)
-        if (stillIntending() && session) {
-          const s: RealtimeSessionLike = session
-          s.interrupt()
-          s.mute(true)
-          if (audioElement) audioElement.muted = true
-          actor.send({ type: 'DEACTIVATE' })
-        }
-      } catch (err) {
-        captureError(err, { operation: 'voiceChatService', step: 'preconnect' })
-      } finally {
-        preconnect.intent = false
-      }
+    preconnect(_bookId, _ctx) {
+      // Intentional no-op. The previous implementation opened a full WebRTC
+      // realtime session and muted it, which still billed audio/transcription
+      // tokens server-side on every book open. The first explicit activate()
+      // pays the cold-path latency; we don't pre-spend money to save it.
+      void _bookId
+      void _ctx
+      return Promise.resolve()
     },
 
     deactivate() {
       const value = actor.getSnapshot().value
       if (value !== 'active' || !session) return
-      try {
-        session.interrupt()
-        session.mute(true)
-        if (audioElement) audioElement.muted = true
-        actor.send({ type: 'DEACTIVATE' })
-        chatStatusEmitter.emit('idle')
-        scheduleIdleTimer()
-      } catch (err) {
-        captureError(err, { operation: 'voiceChatService', step: 'deactivate' })
-        disposeInternal()
-        actor.send({ type: 'DISPOSE' })
-      }
+      // Full teardown: closes WebRTC session, stops mic tracks, clears audio
+      // element. A muted-but-open session still bills audio/transcription
+      // tokens server-side. See investigation in commit message / issue.
+      disposeInternal()
+      actor.send({ type: 'DISPOSE' })
     },
 
     dispose() {

@@ -122,6 +122,7 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
       bookId,
       pageText: ctx.pageText,
       outline: ctx.outline,
+      activeParagraphText: ctx.activeParagraphText,
       onEndConversation: (reason) => emit.endedByAgent(reason),
       rag: deps.rag
     })
@@ -179,10 +180,19 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
 
     return Effect.scoped(
       Effect.gen(function* () {
-        // mic
+        // mic. Echo cancellation + noise suppression prevent TTS playback
+        // bleed from being captured by the mic and re-sent through realtime
+        // as billable audio input.
         const mediaStream = yield* Effect.acquireRelease(
           Effect.tryPromise({
-            try: () => deps.media.getUserMedia({ audio: true }),
+            try: () =>
+              deps.media.getUserMedia({
+                audio: {
+                  echoCancellation: true,
+                  noiseSuppression: true,
+                  autoGainControl: true
+                }
+              }),
             catch: (e) => mapMicError(e)
           }),
           (s) =>
