@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { Api, AuthUser, ElectronAPI } from './types.js'
 import { invoke } from './ipc-contract.js'
 import { parseWindowIdentity } from './windowIdentity'
@@ -51,6 +51,7 @@ const electronAPI: ElectronAPI = {
   removeFile: (path) => invoke('fs:removeFile', path),
   getDirSize: (path) => invoke('fs:getDirSize', path),
   getCacheFileStats: (path) => invoke('fs:getCacheFileStats', path),
+  getPathForFile: (file) => webUtils.getPathForFile(file),
 
   // Vector operations (batch)
   processJob: (pageNumber, bookId, pageData) =>

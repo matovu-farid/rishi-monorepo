@@ -37,6 +37,7 @@ const mockElectronAPI = {
   removeFile: vi.fn().mockResolvedValue(undefined),
   getDirSize: vi.fn().mockResolvedValue(0),
   getCacheFileStats: vi.fn().mockResolvedValue([]),
+  getPathForFile: vi.fn((file: File) => `/tmp/test/${file.name}`),
   processJob: vi.fn().mockResolvedValue(undefined),
   getDefaultBookFolders: vi.fn().mockResolvedValue([]),
   scanForBooks: vi.fn().mockResolvedValue(0),

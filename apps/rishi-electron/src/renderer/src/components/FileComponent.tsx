@@ -8,6 +8,11 @@ import type { Book } from '@/lib/api'
 import { deleteBook, getBooks } from '@/lib/api'
 import { getBookImportService, getVoiceChatService } from '@/services'
 import { prefetchTTSForBooks } from '@/modules/ttsPrefetch'
+import {
+  resolveDroppedFilePaths,
+  DroppedFilesError,
+  getFilesFromDropEvent
+} from '@/modules/handleDroppedFiles'
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { usePdfStore } from '@/stores/pdfStore'
@@ -182,21 +187,29 @@ export default function FileComponent(): React.JSX.Element {
     }
   }
 
-  // React Dropzone for drag-and-drop (replaces Tauri drag-drop)
+  // React Dropzone for drag-and-drop (replaces Tauri drag-drop).
+  // `getFilesFromEvent` overrides react-dropzone's default extractor so we
+  // get the original drag-drop File objects — required for Electron's
+  // `webUtils.getPathForFile` to return an absolute path.
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     noClick: true,
+    getFilesFromEvent: getFilesFromDropEvent,
     accept: {
       'application/epub+zip': ['.epub'],
       'application/pdf': ['.pdf'],
       'application/x-mobipocket-ebook': ['.mobi', '.azw3']
     },
     onDrop: (files) => {
-      // In Electron, dropped files expose a non-standard `.path` —
-      // see src/renderer/src/types/electron-extensions.d.ts for the augmentation.
-      const paths = files
-        .map((f) => f.path)
-        .filter((p): p is string => typeof p === 'string' && p.length > 0)
-      void processFilePaths(paths)
+      try {
+        const paths = resolveDroppedFilePaths(files, window.electron.getPathForFile)
+        void processFilePaths(paths)
+      } catch (err) {
+        if (err instanceof DroppedFilesError) {
+          toast.error(err.message)
+          return
+        }
+        throw err
+      }
     }
   })
 

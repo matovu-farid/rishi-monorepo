@@ -218,6 +218,13 @@ export type ElectronAPI = DerivedInvokeApi & {
    * focus listener.
    */
   refreshMenu: () => void
+
+  /**
+   * Resolve a renderer-side `File` (from drag-drop or `<input type=file>`)
+   * to its absolute filesystem path. Replaces the removed `File.path`
+   * augmentation — Electron 32+ requires `webUtils.getPathForFile`.
+   */
+  getPathForFile: (file: File) => string
 }
 
 // ---------------------------------------------------------------------------
