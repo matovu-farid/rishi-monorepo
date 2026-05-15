@@ -14,6 +14,10 @@ export type PlayerMachineContext = {
   errors: string[]
   retryCount: number
   timedOut: boolean
+  // True if the player should auto-resume loading the new page after an
+  // external PAGE_NAVIGATING event. Set when nav fires from an active state
+  // (playing/loading/paused); false from stopped/idle (user is silent).
+  wantsAutoResume: boolean
 }
 
 export type PlayerMachineEvent =
@@ -32,6 +36,11 @@ export type PlayerMachineEvent =
   | { type: 'PREV_PARAGRAPHS_UPDATED'; paragraphs: ParagraphWithIndex[] }
   | { type: 'CHAT_STARTED' }
   | { type: 'CLEANUP' }
+  // External page navigation has started (e.g. user clicked the EPUB next-page
+  // arrow). The rendition is curling and PARAGRAPHS_UPDATED will arrive later.
+  // The player must immediately stop playback on the OLD page so the user
+  // doesn't hear the previous paragraph during the curl animation.
+  | { type: 'PAGE_NAVIGATING'; direction: 'forward' | 'backward' }
 
 const initialContext: PlayerMachineContext = {
   bookId: '',
@@ -42,7 +51,8 @@ const initialContext: PlayerMachineContext = {
   prevPageParagraphs: [],
   errors: [],
   retryCount: 0,
-  timedOut: false
+  timedOut: false,
+  wantsAutoResume: false
 }
 
 export const playerMachine = setup({
@@ -104,7 +114,21 @@ export const playerMachine = setup({
     }),
     setDirectionForward: assign({ direction: 'forward' as const }),
     setDirectionBackward: assign({ direction: 'backward' as const }),
+    setNavDirection: assign({
+      direction: ({ event }) =>
+        event.type === 'PAGE_NAVIGATING' ? event.direction : ('forward' as const)
+    }),
+    // Clear the current paragraph view. When an external page navigation
+    // starts, the on-screen paragraphs are about to be replaced; clearing
+    // them prevents PLAY from racing the rendition and fetching the old
+    // page's paragraph 0.
+    clearCurrentParagraphs: assign({
+      currentParagraphs: [] as ParagraphWithIndex[],
+      paragraphIndex: 0
+    }),
     clearErrors: assign({ errors: [] as string[] }),
+    setWantsAutoResume: assign({ wantsAutoResume: true }),
+    clearWantsAutoResume: assign({ wantsAutoResume: false }),
     flagTimedOut: assign({ timedOut: true }),
     logLoadingTimeout: assign({
       errors: ({ context }) => {
@@ -130,6 +154,16 @@ export const playerMachine = setup({
       actions: 'resetAll'
     }
   },
+  // Note: PAGE_NAVIGATING is handled per-state below (not as a global handler)
+  // because behaviour differs:
+  //   - from playing/loading/paused we set wantsAutoResume and transition to
+  //     pageNavigating, AND clear stale currentParagraphs (the old page's
+  //     paragraphs must not persist into the new page);
+  //   - from stopped we transition to pageNavigating WITHOUT clearing
+  //     paragraphs — nothing's playing so there's no urgency, and clearing
+  //     would cause a fast PLAY-during-curl to route to waitingForParagraphs
+  //     and emit a spurious pageRequest='next' (double-nav bug);
+  //   - from idle the event is dropped (no book is open yet).
   states: {
     idle: {
       on: {
@@ -148,7 +182,10 @@ export const playerMachine = setup({
             target: 'loading'
           },
           {
-            target: 'waitingForParagraphs'
+            // Empty paragraphs means we lost them from a failed nav or
+            // initial load. Re-publish from the rendition rather than
+            // asking for a new page.
+            target: 'republishingParagraphs'
           }
         ],
         NEXT: [
@@ -190,6 +227,20 @@ export const playerMachine = setup({
         },
         PREV_PARAGRAPHS_UPDATED: {
           actions: ['storePrevParagraphs']
+        },
+        // External page navigation while we're already silent. Transition to
+        // pageNavigating — the existing state designed for "external nav in
+        // flight, wait for paragraphs". Going there directly avoids the
+        // spurious pageRequest='next' that would fire from
+        // waitingForParagraphs if PLAY arrives mid-nav (the PLAY → !hasParagraphs
+        // → waitingForParagraphs path used to clear paragraphs and double-navigate).
+        // Paragraphs are NOT cleared here because nothing's playing; when
+        // PARAGRAPHS_UPDATED arrives, pageNavigating transitions back to
+        // stopped (if no PLAY arrived) or loading (if PLAY did arrive and
+        // set wantsAutoResume).
+        PAGE_NAVIGATING: {
+          target: 'pageNavigating',
+          actions: ['setNavDirection', 'clearWantsAutoResume']
         }
       }
     },
@@ -233,6 +284,13 @@ export const playerMachine = setup({
         CLEANUP: {
           target: 'idle',
           actions: 'resetAll'
+        },
+        // Page nav started while we're mid-fetch: cancel any in-flight load
+        // by transitioning to pageNavigating. We remember we wanted to play
+        // so PARAGRAPHS_UPDATED auto-resumes loading on the new page.
+        PAGE_NAVIGATING: {
+          target: 'pageNavigating',
+          actions: ['setWantsAutoResume', 'setNavDirection', 'clearCurrentParagraphs']
         }
       }
     },
@@ -246,6 +304,12 @@ export const playerMachine = setup({
           target: 'stopped',
           actions: 'resetIndex'
         },
+        // Reaching waitingForParagraphs from playing means the user was
+        // actively listening — set wantsAutoResume so once the rendition
+        // delivers the new page's paragraphs (via the
+        // waitingForParagraphs → pageNavigating → PARAGRAPHS_UPDATED
+        // chain triggered by the hook setting pageRequest), playback
+        // continues automatically instead of dropping into `stopped`.
         AUDIO_ENDED: [
           {
             guard: 'hasMoreParagraphs',
@@ -254,7 +318,7 @@ export const playerMachine = setup({
           },
           {
             target: 'waitingForParagraphs',
-            actions: 'setDirectionForward'
+            actions: ['setDirectionForward', 'setWantsAutoResume']
           }
         ],
         NEXT: [
@@ -265,14 +329,14 @@ export const playerMachine = setup({
           },
           {
             target: 'waitingForParagraphs',
-            actions: 'setDirectionForward'
+            actions: ['setDirectionForward', 'setWantsAutoResume']
           }
         ],
         PREV: [
           {
             guard: 'isFirstParagraph',
             target: 'waitingForParagraphs',
-            actions: 'setDirectionBackward'
+            actions: ['setDirectionBackward', 'setWantsAutoResume']
           },
           {
             target: 'loading',
@@ -292,6 +356,13 @@ export const playerMachine = setup({
         AUDIO_ERROR: {
           target: 'error',
           actions: 'logError'
+        },
+        // External page nav started during playback. Stop audio (handled by
+        // the entry side-effect on pageNavigating) and auto-resume on the
+        // new page when PARAGRAPHS_UPDATED arrives.
+        PAGE_NAVIGATING: {
+          target: 'pageNavigating',
+          actions: ['setWantsAutoResume', 'setNavDirection', 'clearCurrentParagraphs']
         }
       }
     },
@@ -330,6 +401,12 @@ export const playerMachine = setup({
         },
         PREV_PARAGRAPHS_UPDATED: {
           actions: 'storePrevParagraphs'
+        },
+        // External page nav while paused: jump to the new page but stay
+        // effectively-paused (no auto-resume — user paused intentionally).
+        PAGE_NAVIGATING: {
+          target: 'pageNavigating',
+          actions: ['clearWantsAutoResume', 'setNavDirection', 'clearCurrentParagraphs']
         }
       },
       states: {
@@ -374,6 +451,99 @@ export const playerMachine = setup({
         STOP: {
           target: 'stopped',
           actions: 'resetIndex'
+        },
+        PAGE_NAVIGATING: {
+          target: 'pageNavigating',
+          // Preserve wantsAutoResume from however we got here.
+          actions: ['setNavDirection', 'clearCurrentParagraphs']
+        }
+      }
+    },
+
+    republishingParagraphs: {
+      // Entered when the machine is in `stopped` with empty currentParagraphs
+      // and the user clicks PLAY. Paragraphs were lost (typically via
+      // clearCurrentParagraphs during a failed/timed-out page navigation).
+      // The hook responds by calling publishCurrentEpubParagraphs(), which
+      // re-reads the rendition's current view and dispatches a fresh
+      // PARAGRAPHS_UPDATED. Unlike waitingForParagraphs, this state does NOT
+      // set pageRequest — the player has not asked for a new page.
+      after: {
+        10000: {
+          target: 'stopped',
+          actions: 'flagTimedOut'
+        }
+      },
+      on: {
+        PARAGRAPHS_UPDATED: {
+          target: 'loading',
+          actions: ['storeParagraphs', 'clearTimedOut', 'resetIndexByDirection']
+        },
+        STOP: {
+          target: 'stopped',
+          actions: 'resetIndex'
+        },
+        PAGE_NAVIGATING: {
+          target: 'pageNavigating',
+          actions: ['setNavDirection', 'clearCurrentParagraphs']
+        }
+      }
+    },
+
+    // Distinct from waitingForParagraphs:
+    //   - waitingForParagraphs is entered when the *player itself* wants the
+    //     next/prev page (via player NEXT/PREV) and emits a pageRequest so
+    //     the EPUB rendition navigates.
+    //   - pageNavigating is entered when an *external* navigation has
+    //     already started (user clicked the EPUB page arrow). The rendition
+    //     is already curling; emitting another pageRequest here would
+    //     double-navigate. So this state just waits for PARAGRAPHS_UPDATED
+    //     and resumes loading IFF the player was active before.
+    pageNavigating: {
+      after: {
+        10000: {
+          target: 'stopped',
+          actions: 'flagTimedOut'
+        }
+      },
+      on: {
+        PARAGRAPHS_UPDATED: [
+          {
+            guard: ({ context }) => context.wantsAutoResume,
+            target: 'loading',
+            actions: [
+              'storeParagraphs',
+              'clearTimedOut',
+              'resetIndexByDirection',
+              'clearWantsAutoResume'
+            ]
+          },
+          {
+            target: 'stopped',
+            actions: ['storeParagraphs', 'clearTimedOut', 'resetIndexByDirection']
+          }
+        ],
+        STOP: {
+          target: 'stopped',
+          actions: ['resetIndex', 'clearWantsAutoResume']
+        },
+        PLAY: {
+          // User clicked Play during a page-curl. Remember they want to play
+          // and wait for the new paragraphs to land before starting.
+          actions: 'setWantsAutoResume'
+        },
+        PAUSE: {
+          actions: 'clearWantsAutoResume'
+        },
+        PAGE_NAVIGATING: {
+          // A second nav (rapid Next clicks). Stay here; refresh direction.
+          actions: 'setNavDirection'
+        },
+        NEXT_PARAGRAPHS_UPDATED: {
+          actions: 'storeNextParagraphs'
+        },
+        PREV_PARAGRAPHS_UPDATED: {
+          actions: 'storePrevParagraphs'
         }
       }
     },
@@ -409,6 +579,15 @@ export const playerMachine = setup({
         PLAY: {
           target: 'loading',
           actions: ['clearErrors', 'resetIndex']
+        },
+        PAGE_NAVIGATING: {
+          target: 'pageNavigating',
+          actions: [
+            'clearErrors',
+            'clearWantsAutoResume',
+            'setNavDirection',
+            'clearCurrentParagraphs'
+          ]
         }
       }
     }

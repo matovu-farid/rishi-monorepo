@@ -28,10 +28,13 @@ describe('playerMachine', () => {
     expect(actor.getSnapshot().context.bookId).toBe('book1')
   })
 
-  it('should transition to waitingForParagraphs on PLAY when no paragraphs are loaded', () => {
+  it('should transition to republishingParagraphs on PLAY when no paragraphs are loaded', () => {
+    // PLAY in stopped+empty routes to republishingParagraphs (NOT
+    // waitingForParagraphs). The hook calls publishCurrentEpubParagraphs()
+    // rather than setting pageRequest, avoiding an unwanted page advance.
     actor.send({ type: 'INITIALIZE', bookId: 'book1' })
     actor.send({ type: 'PLAY' })
-    expect(actor.getSnapshot().value).toBe('waitingForParagraphs')
+    expect(actor.getSnapshot().value).toBe('republishingParagraphs')
   })
 
   it('should transition to loading on PLAY when paragraphs are loaded', () => {
@@ -47,6 +50,263 @@ describe('playerMachine', () => {
     actor.send({ type: 'PLAY' })
     actor.send({ type: 'AUDIO_LOADED' })
     expect(actor.getSnapshot().value).toBe('playing')
+  })
+
+  describe('PAGE_NAVIGATING (external page nav)', () => {
+    it('clears currentParagraphs and transitions to pageNavigating from playing', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PLAY' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      expect(actor.getSnapshot().value).toBe('playing')
+
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+      const snap = actor.getSnapshot()
+      expect(snap.value).toBe('pageNavigating')
+      expect(snap.context.currentParagraphs).toEqual([])
+      expect(snap.context.paragraphIndex).toBe(0)
+      expect(snap.context.wantsAutoResume).toBe(true)
+    })
+
+    it('STOP+PLAY from pageNavigating must NOT see the old paragraphs', () => {
+      // This is the exact user-reported scenario: nav happened, user
+      // clicked Stop+Play before the new paragraphs landed. PLAY in
+      // stopped state must not see the old page's paragraphs.
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PLAY' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+
+      actor.send({ type: 'STOP' })
+      expect(actor.getSnapshot().value).toBe('stopped')
+      expect(actor.getSnapshot().context.currentParagraphs).toEqual([])
+
+      actor.send({ type: 'PLAY' })
+      // No paragraphs in context, so PLAY routes to republishingParagraphs
+      // (the hook will call publishCurrentEpubParagraphs() — no pageRequest).
+      expect(actor.getSnapshot().value).toBe('republishingParagraphs')
+    })
+
+    it('auto-resumes loading on PARAGRAPHS_UPDATED if was playing before', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PLAY' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+
+      actor.send({
+        type: 'PARAGRAPHS_UPDATED',
+        paragraphs: [
+          { index: 'p-new-0', text: 'new' },
+          { index: 'p-new-1', text: 'next' }
+        ]
+      })
+      expect(actor.getSnapshot().value).toBe('loading')
+      expect(actor.getSnapshot().context.currentParagraphs[0].index).toBe('p-new-0')
+      expect(actor.getSnapshot().context.wantsAutoResume).toBe(false)
+    })
+
+    it('does NOT auto-resume if user was paused before nav', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PLAY' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      actor.send({ type: 'PAUSE' })
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+      expect(actor.getSnapshot().value).toBe('pageNavigating')
+      expect(actor.getSnapshot().context.wantsAutoResume).toBe(false)
+
+      actor.send({
+        type: 'PARAGRAPHS_UPDATED',
+        paragraphs: [{ index: 'p-new-0', text: 'new' }]
+      })
+      expect(actor.getSnapshot().value).toBe('stopped')
+    })
+
+    it('stopped + PAGE_NAVIGATING transitions to pageNavigating, paragraphs preserved', () => {
+      // After the fix: stopped:PAGE_NAVIGATING now transitions to
+      // pageNavigating (not stays in stopped) and does NOT clear paragraphs.
+      // This prevents a fast PLAY-after-nav from going to waitingForParagraphs
+      // and triggering a spurious pageRequest='next'.
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+      const snap = actor.getSnapshot()
+      expect(snap.value).toBe('pageNavigating')
+      expect(snap.context.currentParagraphs.length).toBe(3)
+      expect(snap.context.wantsAutoResume).toBe(false)
+      expect(snap.context.direction).toBe('forward')
+    })
+
+    // 5.1: stopped → pageNavigating on PAGE_NAVIGATING, paragraphs preserved.
+    it('stopped → pageNavigating preserves currentParagraphs and sets direction', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      const paragraphs = makeParagraphs(3)
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs })
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'backward' })
+      const snap = actor.getSnapshot()
+      expect(snap.value).toBe('pageNavigating')
+      expect(snap.context.currentParagraphs).toEqual(paragraphs)
+      expect(snap.context.direction).toBe('backward')
+      expect(snap.context.wantsAutoResume).toBe(false)
+    })
+
+    // 5.2: stopped → pageNavigating → PLAY → wantsAutoResume → loading on
+    // PARAGRAPHS_UPDATED. Proves user clicking PLAY during initial book-open
+    // curl still starts audio (no missed PLAY event).
+    it('PLAY during pageNavigating from stopped → loading on PARAGRAPHS_UPDATED', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+      expect(actor.getSnapshot().value).toBe('pageNavigating')
+
+      actor.send({ type: 'PLAY' })
+      expect(actor.getSnapshot().context.wantsAutoResume).toBe(true)
+      // Still in pageNavigating waiting for paragraphs to land.
+      expect(actor.getSnapshot().value).toBe('pageNavigating')
+
+      actor.send({
+        type: 'PARAGRAPHS_UPDATED',
+        paragraphs: [
+          { index: 'p-new-0', text: 'new page first paragraph' },
+          { index: 'p-new-1', text: 'new page second paragraph' }
+        ]
+      })
+      const snap = actor.getSnapshot()
+      expect(snap.value).toBe('loading')
+      expect(snap.context.paragraphIndex).toBe(0)
+      expect(snap.context.wantsAutoResume).toBe(false)
+    })
+
+    // 5.3: stopped → pageNavigating → PARAGRAPHS_UPDATED without PLAY → stopped.
+    // Proves nav with no user intent does not auto-play.
+    it('pageNavigating without PLAY returns to stopped on PARAGRAPHS_UPDATED', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+      expect(actor.getSnapshot().value).toBe('pageNavigating')
+
+      actor.send({
+        type: 'PARAGRAPHS_UPDATED',
+        paragraphs: [{ index: 'p-new-0', text: 'new' }]
+      })
+      const snap = actor.getSnapshot()
+      expect(snap.value).toBe('stopped')
+      expect(snap.context.wantsAutoResume).toBe(false)
+      expect(snap.context.currentParagraphs[0].index).toBe('p-new-0')
+    })
+
+    // 5.4: Integration — stopped:PAGE_NAVIGATING followed by PLAY exercises
+    // pageNavigating:PLAY which sets wantsAutoResume. Confirms the combined
+    // sequence works end-to-end.
+    it('stopped:PAGE_NAVIGATING then PLAY routes through pageNavigating:PLAY', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+
+      // Initial state.
+      expect(actor.getSnapshot().value).toBe('stopped')
+      expect(actor.getSnapshot().context.wantsAutoResume).toBe(false)
+
+      // External nav starts.
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+      expect(actor.getSnapshot().value).toBe('pageNavigating')
+      expect(actor.getSnapshot().context.wantsAutoResume).toBe(false)
+
+      // User clicks PLAY during the curl.
+      actor.send({ type: 'PLAY' })
+      expect(actor.getSnapshot().value).toBe('pageNavigating')
+      expect(actor.getSnapshot().context.wantsAutoResume).toBe(true)
+    })
+
+    // Regression: when the player auto-advances past the last paragraph on a
+    // page (AUDIO_ENDED), it should continue playing on the next page once
+    // PARAGRAPHS_UPDATED arrives. Previously playing → waitingForParagraphs
+    // did not set wantsAutoResume, so the subsequent PAGE_NAVIGATING (fired
+    // by the hook when nav state leaves idle) preserved wantsAutoResume=false
+    // and the player stopped on the new page.
+    it('playing → AUDIO_ENDED at last → page nav → PARAGRAPHS_UPDATED keeps loading', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(1) })
+      actor.send({ type: 'PLAY' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      expect(actor.getSnapshot().value).toBe('playing')
+
+      // Audio finishes the last paragraph — player asks for the next page.
+      actor.send({ type: 'AUDIO_ENDED' })
+      expect(actor.getSnapshot().value).toBe('waitingForParagraphs')
+      expect(actor.getSnapshot().context.wantsAutoResume).toBe(true)
+
+      // External nav fires (rendition started turning the page).
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+      expect(actor.getSnapshot().value).toBe('pageNavigating')
+      expect(actor.getSnapshot().context.wantsAutoResume).toBe(true)
+
+      // New page paragraphs arrive — must auto-resume to loading, not stopped.
+      actor.send({
+        type: 'PARAGRAPHS_UPDATED',
+        paragraphs: [
+          { index: 'p-new-0', text: 'next page first paragraph' },
+          { index: 'p-new-1', text: 'next page second paragraph' }
+        ]
+      })
+      expect(actor.getSnapshot().value).toBe('loading')
+      expect(actor.getSnapshot().context.paragraphIndex).toBe(0)
+      expect(actor.getSnapshot().context.wantsAutoResume).toBe(false)
+    })
+
+    it('playing → NEXT at last paragraph → page nav → PARAGRAPHS_UPDATED keeps loading', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(1) })
+      actor.send({ type: 'PLAY' })
+      actor.send({ type: 'AUDIO_LOADED' })
+
+      actor.send({ type: 'NEXT' })
+      expect(actor.getSnapshot().value).toBe('waitingForParagraphs')
+      expect(actor.getSnapshot().context.wantsAutoResume).toBe(true)
+
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+      actor.send({
+        type: 'PARAGRAPHS_UPDATED',
+        paragraphs: [{ index: 'p-new-0', text: 'new' }]
+      })
+      expect(actor.getSnapshot().value).toBe('loading')
+    })
+
+    it('playing → PREV at first paragraph → page nav → PARAGRAPHS_UPDATED keeps loading', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PLAY' })
+      actor.send({ type: 'AUDIO_LOADED' })
+
+      actor.send({ type: 'PREV' })
+      expect(actor.getSnapshot().value).toBe('waitingForParagraphs')
+      expect(actor.getSnapshot().context.wantsAutoResume).toBe(true)
+
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'backward' })
+      actor.send({
+        type: 'PARAGRAPHS_UPDATED',
+        paragraphs: [{ index: 'p-prev-0', text: 'prev' }]
+      })
+      expect(actor.getSnapshot().value).toBe('loading')
+    })
+
+    it('stopped → NEXT at last paragraph → page nav does NOT auto-resume', () => {
+      // Counter-test: user is stopped, clicks NEXT at boundary — they
+      // explicitly want to navigate but not auto-play.
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(1) })
+      actor.send({ type: 'NEXT' })
+      expect(actor.getSnapshot().value).toBe('waitingForParagraphs')
+      expect(actor.getSnapshot().context.wantsAutoResume).toBe(false)
+
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+      actor.send({
+        type: 'PARAGRAPHS_UPDATED',
+        paragraphs: [{ index: 'p-new-0', text: 'new' }]
+      })
+      expect(actor.getSnapshot().value).toBe('stopped')
+    })
   })
 
   it('should transition to paused on PAUSE from playing', () => {
@@ -452,7 +712,8 @@ describe('playerMachine', () => {
     actor.send({ type: 'INITIALIZE', bookId: 'book1' })
     actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: [] })
     actor.send({ type: 'PLAY' })
-    // No paragraphs -> waitingForParagraphs
-    expect(actor.getSnapshot().value).toBe('waitingForParagraphs')
+    // No paragraphs -> republishingParagraphs (hook will republish from the
+    // rendition without firing pageRequest).
+    expect(actor.getSnapshot().value).toBe('republishingParagraphs')
   })
 })
