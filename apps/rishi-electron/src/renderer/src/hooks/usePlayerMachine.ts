@@ -137,8 +137,7 @@ export function usePlayerMachine(bookId: string) {
           // null and we default to 'forward' so the player lands on paragraph
           // 0 of the new page.
           const pageRequest = usePlayerStore.getState().pageRequest
-          const direction: 'forward' | 'backward' =
-            pageRequest === 'prev' ? 'backward' : 'forward'
+          const direction: 'forward' | 'backward' = pageRequest === 'prev' ? 'backward' : 'forward'
           actor.send({ type: 'PAGE_NAVIGATING', direction })
         }
         // Nav completed (returned to idle). In the success path, the

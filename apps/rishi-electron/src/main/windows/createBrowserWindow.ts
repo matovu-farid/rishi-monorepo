@@ -54,9 +54,9 @@ export function makeBrowserWindowFactory(deps: FactoryDeps) {
           .catch((err: unknown) => {
             console.error('[createBrowserWindow] flush threw', err)
           })
-        const timeoutPromise = new Promise<void>((resolve) =>
+        const timeoutPromise = new Promise<void>((resolve) => {
           setTimeout(resolve, FLUSH_TIMEOUT_MS)
-        )
+        })
         void Promise.race([flushPromise, timeoutPromise]).then(() => {
           flushed = true
           if (!win.isDestroyed()) win.destroy()

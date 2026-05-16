@@ -111,18 +111,16 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       // so keep this strictly less than that to leave room for the IPC
       // round-trip.
       const waitStart = Date.now()
-      while (
-        useNavStore.getState().navState !== 'idle' &&
-        Date.now() - waitStart < 800
-      ) {
+      while (useNavStore.getState().navState !== 'idle' && Date.now() - waitStart < 800) {
         // eslint-disable-next-line no-await-in-loop -- Sequential settle poll.
-        await new Promise((r) => setTimeout(r, 50))
+        await new Promise<void>((r) => {
+          setTimeout(r, 50)
+        })
       }
       // Prefer the rendition's live position (it has the freshest CFI
       // after rendition.next() resolves). Fall back to whatever
       // locationChanged last published.
-      const liveCfi =
-        (renditionRef.current?.location?.start?.cfi as string | undefined) ?? undefined
+      const liveCfi = renditionRef.current?.location.start.cfi
       const cfi = liveCfi ?? lastSavedCfiRef.current ?? undefined
       if (!cfi) return
       // Only flush if the user actually navigated this session — never
@@ -616,6 +614,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               getSyncService().triggerWrite()
               // Record the latest CFI so the window-close flush has a value
               // to write even if the mutation above hasn't completed yet.
+              // eslint-disable-next-line react-hooks/immutability -- Refs are mutable by design; the lint rule misfires on this standard pattern.
               lastSavedCfiRef.current = epubcfi
             }
 
@@ -693,7 +692,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
                 // so location.start.cfi is stale until "relocated" fires.
                 const seedOnRelocated = () => {
                   _rendition.off('relocated', seedOnRelocated)
-                  const cfi = _rendition.location?.start?.cfi
+                  const cfi = _rendition.location.start.cfi
                   if (cfi) {
                     usePageTracker.getState().goToCfi(cfi, locFromCfi)
                     setCurrentEpubLocation(cfi)
@@ -731,7 +730,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
                 console.log('[epub] Page tracker state:', usePageTracker.getState())
 
                 // Seed current page from whatever the rendition is showing now.
-                const startCfi = _rendition.location?.start?.cfi
+                const startCfi = _rendition.location.start.cfi
                 if (startCfi) {
                   usePageTracker.getState().goToCfi(startCfi, locFromCfi)
                   setCurrentEpubLocation(startCfi)
