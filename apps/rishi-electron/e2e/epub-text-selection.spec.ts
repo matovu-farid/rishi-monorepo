@@ -67,13 +67,13 @@ test.describe('EPUB text selection', () => {
   })
 
   test.afterAll(async () => {
+    // Close the book BrowserWindow (a second Electron window) before deleting
+    // books and shutting down the app. Without this, Playwright's app.close()
+    // waits for all BrowserWindows to exit and hangs until the worker-teardown
+    // timeout fires. Closing bookPage explicitly lets Electron reach its
+    // natural "all windows closed" quit point.
+    await bookPage?.close().catch(() => {})
     await deleteAllBooks(app.page).catch(() => {})
-    // Force-quit via the Electron main-process API first so the book
-    // BrowserWindow (a separate Page) is closed before closeApp tries
-    // to shut down the ElectronApplication; this avoids the 60 s worker-
-    // teardown timeout when multi-window Electron apps are closed while
-    // a non-library window is still open.
-    await app.app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => {})
     await closeApp(app).catch(() => {})
   })
 
