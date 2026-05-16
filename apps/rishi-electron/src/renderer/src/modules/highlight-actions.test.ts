@@ -133,4 +133,72 @@ describe('deleteHighlightWithUndo — delete path', () => {
     expect(deleteHighlight).toHaveBeenCalledWith('book-1', 'cfi:1')
     expect(triggerWrite).toHaveBeenCalledTimes(1)
   })
+
+  it('handle.undo() calls applyVisual, saveHighlight and triggerWrite once', async () => {
+    const target = makeTarget()
+    const triggerWrite = vi.fn()
+    ;(getSyncService as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ triggerWrite })
+
+    const handle = await deleteHighlightWithUndo({
+      target,
+      bookSyncId: 'book-2',
+      cfiRange: 'cfi:2',
+      text: 'world',
+      color: 'yellow',
+      note: 'a note'
+    })
+
+    target.removeVisual.mockClear()
+    ;(deleteHighlight as unknown as ReturnType<typeof vi.fn>).mockClear()
+    triggerWrite.mockClear()
+
+    await handle.undo()
+
+    expect(target.applyVisual).toHaveBeenCalledTimes(1)
+    expect(saveHighlight).toHaveBeenCalledTimes(1)
+    expect(saveHighlight).toHaveBeenCalledWith({
+      bookSyncId: 'book-2',
+      cfiRange: 'cfi:2',
+      text: 'world',
+      color: 'yellow',
+      note: 'a note',
+      chapter: undefined
+    })
+    expect(triggerWrite).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns a working handle even if deleteHighlight rejects', async () => {
+    ;(deleteHighlight as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('boom'))
+    const target = makeTarget()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const handle = await deleteHighlightWithUndo({
+      target,
+      bookSyncId: 'book-3',
+      cfiRange: 'cfi:3',
+      text: 'x',
+      color: 'yellow'
+    })
+
+    expect(warn).toHaveBeenCalled()
+    expect(target.removeVisual).toHaveBeenCalledTimes(1)
+    await handle.undo()
+    expect(target.applyVisual).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
+  it('calling undo twice is safe — second call still re-applies visual but does not throw', async () => {
+    const target = makeTarget()
+    const handle = await deleteHighlightWithUndo({
+      target,
+      bookSyncId: 'book-4',
+      cfiRange: 'cfi:4',
+      text: 'x',
+      color: 'yellow'
+    })
+
+    await handle.undo()
+    await expect(handle.undo()).resolves.toBeUndefined()
+    expect(target.applyVisual).toHaveBeenCalledTimes(2)
+  })
 })
