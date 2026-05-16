@@ -44,6 +44,7 @@ import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
 import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { findParagraphForCfi } from '@/modules/cfi-to-paragraph'
+import { resolveLiveSelection } from '@/modules/resolve-live-selection'
 import { buildPartialFirst } from '@/modules/read-aloud-from'
 
 function updateTheme(rendition: Rendition, theme: ThemeType) {
@@ -286,29 +287,33 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     })
   }, [rendition, bookSyncIdRef])
 
-  // Handle user text selection -- show color picker popover instead of auto-highlight
-  const handleTextSelected = useCallback(
-    (cfiRange: string, contents: Contents) => {
-      const syncId = bookSyncIdRef.current
-      if (!syncId || !rendition) return
+  // Handle user text selection -- show color picker popover instead of auto-highlight.
+  //
+  // NOTE: This callback is bound to rendition.on('selected') ONCE by the
+  // class-based EpubView (epub_viewer/index.tsx). Its closure must not
+  // capture React state that may still be null at bind time — use refs
+  // (`renditionRef`, `bookSyncIdRef`) so the live values are read at
+  // event-fire time. Without this, the bound listener silently bails on
+  // every selection because the captured `rendition` is still null.
+  const handleTextSelected = useCallback((cfiRange: string, contents: Contents) => {
+    const syncId = bookSyncIdRef.current
+    if (!syncId || !renditionRef.current) return
 
-      const selection = contents.window.getSelection()
-      const selectedText = selection?.toString() ?? ''
-      if (!selectedText.trim()) return
+    const selection = contents.window.getSelection()
+    const selectedText = selection?.toString() ?? ''
+    if (!selectedText.trim()) return
 
-      // Get selection position for popover placement
-      const range = selection?.getRangeAt(0)
-      const rect = range?.getBoundingClientRect()
-      const iframeEl = contents.document.defaultView?.frameElement
-      const iframeRect = iframeEl?.getBoundingClientRect()
-      const x = (rect?.left ?? 0) + (iframeRect?.left ?? 0)
-      const y = (rect?.top ?? 0) + (iframeRect?.top ?? 0) - 50
+    // Get selection position for popover placement
+    const range = selection?.getRangeAt(0)
+    const rect = range?.getBoundingClientRect()
+    const iframeEl = contents.document.defaultView?.frameElement
+    const iframeRect = iframeEl?.getBoundingClientRect()
+    const x = (rect?.left ?? 0) + (iframeRect?.left ?? 0)
+    const y = (rect?.top ?? 0) + (iframeRect?.top ?? 0) - 50
 
-      useSelectionStore.getState().setEpubSelection({ cfiRange, text: selectedText })
-      setSelectionInfo({ cfiRange, text: selectedText, position: { x, y } })
-    },
-    [rendition, bookSyncIdRef]
-  )
+    useSelectionStore.getState().setEpubSelection({ cfiRange, text: selectedText })
+    setSelectionInfo({ cfiRange, text: selectedText, position: { x, y } })
+  }, [])
 
   // Handle color selection from the popover
   const handleHighlightColor = useCallback(
@@ -335,8 +340,19 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   )
 
   const handleReadAloudFrom = useCallback(() => {
-    const sel = useSelectionStore.getState().current
-    if (!sel || sel.format !== 'epub') return
+    // Resolve selection: prefer the live iframe selection (always fresh,
+    // works even when the rendition's `selected` event never populated the
+    // store) and fall back to the store (popover and ⌘⇧L paths may have
+    // primed it before triggering the action).
+    const live = resolveLiveSelection(renditionRef.current)
+    const stored = useSelectionStore.getState().current
+    const sel: { cfiRange: string; text: string } | null =
+      live ?? (stored?.format === 'epub' ? { cfiRange: stored.cfiRange, text: stored.text } : null)
+
+    if (!sel) {
+      console.warn('[readAloud] no live or stored selection — aborting')
+      return
+    }
 
     const playingState = usePlayerStore.getState().playingState
     if (playingState === 'idle' || playingState === 'pageNavigating') return

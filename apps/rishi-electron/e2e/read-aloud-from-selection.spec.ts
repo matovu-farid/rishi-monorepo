@@ -189,4 +189,83 @@ test.describe('Read Aloud From Selection', () => {
       { timeout: 10000 }
     )
   })
+
+  // Regression for the bug where the right-click "Read Aloud From Here" item
+  // would do nothing because the selectionStore was empty (the rendition's
+  // `selected` event never fired or its closure was stale). The IPC path
+  // must resolve the live iframe selection at handler-call time and not
+  // depend on the store being primed.
+  test('IPC reader:readAloudFromSelection works from a live iframe selection (empty store)', async () => {
+    // Make sure the store is empty so the only working source is the live
+    // iframe selection — exactly what the right-click path provides.
+    await bookPage.evaluate(() => {
+      const w = window as unknown as {
+        __rishi?: { selectionStore: { getState: () => { clear: () => void } } }
+      }
+      w.__rishi?.selectionStore.getState().clear()
+    })
+
+    // Create a real selection inside the EPUB iframe using the DOM API.
+    // (The rendition's `selected` event is irrelevant here — we want to
+    // prove the resolver picks it up from the live `window.getSelection()`.)
+    const selectionInfo = await bookPage.evaluate(() => {
+      const iframe = document.querySelector('iframe') as HTMLIFrameElement | null
+      if (!iframe?.contentDocument || !iframe.contentWindow) return null
+      const doc = iframe.contentDocument
+      const win = iframe.contentWindow
+      const textNode = doc
+        .createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
+        .nextNode() as Text | null
+      if (!textNode || !textNode.textContent) return null
+      const len = Math.min(20, textNode.textContent.length)
+      const range = doc.createRange()
+      range.setStart(textNode, 0)
+      range.setEnd(textNode, len)
+      const sel = win.getSelection()
+      sel?.removeAllRanges()
+      sel?.addRange(range)
+      return { selectedText: sel?.toString() ?? '' }
+    })
+
+    if (!selectionInfo || selectionInfo.selectedText.trim().length === 0) {
+      test.skip(true, 'Could not create iframe selection — fixture/render issue')
+      return
+    }
+
+    await clearTtsLog(bookPage)
+
+    // Confirm the store really is empty before we trigger.
+    const storeBefore = await bookPage.evaluate(() => {
+      const w = window as unknown as {
+        __rishi?: { selectionStore: { getState: () => { current: unknown } } }
+      }
+      return w.__rishi?.selectionStore.getState().current
+    })
+    expect(storeBefore).toBeNull()
+
+    // Simulate the right-click menu click via the same IPC channel the
+    // main-process context menu fires. Use the preload bridge to invoke
+    // the renderer-side listener directly.
+    await bookPage.evaluate(() => {
+      // The renderer is subscribed via window.electron.on('reader:readAloudFromSelection').
+      // We can't trigger an actual webContents.send from inside page.evaluate,
+      // so dispatch the same window CustomEvent the ⌘⇧L path uses — both
+      // paths share `handleReadAloudFrom`, so this exercises the same code.
+      window.dispatchEvent(new CustomEvent('rishi:readAloudFromSelection'))
+    })
+
+    await bookPage.waitForFunction(
+      () => {
+        const w = window as unknown as {
+          __rishi?: { playerStore: { getState: () => { playingState: string } } }
+        }
+        const state = w.__rishi?.playerStore.getState().playingState
+        return state === 'loading' || state === 'playing' || state === 'paused'
+      },
+      { timeout: 10000 }
+    )
+
+    const log = await readTtsLog(bookPage)
+    expect(log.length).toBeGreaterThan(0)
+  })
 })
