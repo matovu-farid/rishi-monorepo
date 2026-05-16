@@ -277,7 +277,14 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
   registerEvents() {
     const { handleKeyPress, handleTextSelected } = this.props
     if (this.rendition) {
-      this.rendition.on('locationChanged', this.onLocationChange)
+      // Use `relocated` rather than `locationChanged` to drive the location
+      // callback. In current epubjs, `locationChanged` fires before the
+      // navigation resolves and its payload's `start.cfi` is undefined —
+      // stringifying it yields the literal "undefined", which then equals
+      // the prop on subsequent fires and silently short-circuits ALL
+      // future location callbacks. The `relocated` event fires AFTER the
+      // navigation completes with a fully-populated Location.
+      this.rendition.on('relocated', this.onLocationChange)
       this.rendition.on('keyup', handleKeyPress ?? this.handleKeyPress)
       if (handleTextSelected) {
         this.rendition.on('selected', handleTextSelected)
