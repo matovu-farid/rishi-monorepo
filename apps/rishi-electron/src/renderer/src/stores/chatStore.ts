@@ -62,22 +62,23 @@ export const useChatStore = create<ChatState>()(
         setChatStatus: (status) => set({ chatStatus: status }),
 
         startChat: (bookId) => {
-          const pageText = usePlayerStore
-            .getState()
-            .currentParagraphs.map((p) => p.text)
-            .join('\n')
+          const playerState = usePlayerStore.getState()
+          const pageText = playerState.currentParagraphs.map((p) => p.text).join('\n')
+          const activeParagraphText = playerState.activeParagraph?.text
           // Read outline from epubStore — guard against stale outline by
           // verifying epubStore's bookId still matches the one we're starting for.
           const epubState = useEpubStore.getState()
           const outline =
             epubState.bookId === String(bookId) ? (epubState.bookOutline ?? undefined) : undefined
 
-          voice.activate(bookId, { pageText, outline }).catch((err: unknown) => {
-            if (!(err instanceof OfflineError)) {
-              captureError(err, { operation: 'chatStore', step: 'activate' })
-            }
-            set({ isChatting: false, chatStatus: 'idle' })
-          })
+          voice
+            .activate(bookId, { pageText, outline, activeParagraphText })
+            .catch((err: unknown) => {
+              if (!(err instanceof OfflineError)) {
+                captureError(err, { operation: 'chatStore', step: 'activate' })
+              }
+              set({ isChatting: false, chatStatus: 'idle' })
+            })
         },
 
         stopConversation: () => {

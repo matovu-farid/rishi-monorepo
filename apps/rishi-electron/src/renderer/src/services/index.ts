@@ -66,6 +66,12 @@ export function getRagService(): RagService {
 }
 
 let _tts: TtsService | null = null
+let _ttsOverride: TtsService | null = null
+
+/** Test-only seam. Production code never sets this. */
+export function setTestTtsService(override: TtsService | null): void {
+  _ttsOverride = override
+}
 
 /**
  * Resolves the auth header for the TTS transport.
@@ -84,6 +90,7 @@ async function resolveTtsAuth(): Promise<AuthHeader> {
 }
 
 export function getTtsService(): TtsService {
+  if (_ttsOverride) return _ttsOverride
   _tts ??= createTtsService({
     ipc: {
       mkdir: window.electron.mkdir,
@@ -223,8 +230,15 @@ export function getVoiceChatService(): VoiceChatService {
           mediaStream: mediaStream as unknown as MediaStream,
           audioElement: audioElement as unknown as HTMLAudioElement
         }) as never,
-      agentFactory: ({ bookId, pageText, outline, onEndConversation, rag }) =>
-        buildRealtimeAgent({ bookId, pageText, outline, onEndConversation, rag }) as never,
+      agentFactory: ({ bookId, pageText, outline, activeParagraphText, onEndConversation, rag }) =>
+        buildRealtimeAgent({
+          bookId,
+          pageText,
+          outline,
+          activeParagraphText,
+          onEndConversation,
+          rag
+        }) as never,
       sessionFactory: (agent, opts) =>
         new RealtimeSession(agent as never, {
           transport: opts.transport as never,

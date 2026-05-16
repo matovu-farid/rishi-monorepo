@@ -86,6 +86,8 @@ export interface BuildAgentOptions {
   bookId: number
   pageText: string
   outline?: BookOutline
+  /** The paragraph TTS was reading aloud at chat-start. Helps the model resolve deictic references. */
+  activeParagraphText?: string
   onEndConversation: (reason: string) => void
   /**
    * Optional RAG service for bookContext tool calls. When omitted, falls
@@ -111,7 +113,23 @@ Use this outline to orient the user across the book. If they ask about a specifi
 `
 }
 
-const INSTRUCTIONS_TEMPLATE = (pageText: string, outline?: BookOutline) => `## Role
+function renderActiveParagraphSection(activeParagraphText: string | undefined): string {
+  if (!activeParagraphText) return ''
+  return `## What the user just heard
+The user was just listening to this passage being read aloud:
+"""
+${activeParagraphText}
+"""
+This is part of the current page above. If they say "this", "that", "what you just read", or otherwise refer back to what they heard, they mean this passage.
+
+`
+}
+
+const INSTRUCTIONS_TEMPLATE = (
+  pageText: string,
+  outline?: BookOutline,
+  activeParagraphText?: string
+) => `## Role
 You are a teaching assistant helping the user understand the book they're reading. Make complex ideas accessible and answer questions in a way that aids comprehension.
 
 ${renderOutlineSection(outline)}## Current Page Content
@@ -119,6 +137,8 @@ ${renderOutlineSection(outline)}## Current Page Content
 ${pageText || '(No page text available)'}
 """
 If the question is answerable from this page, answer directly. Use the bookContext tool only for content outside this page.
+
+${renderActiveParagraphSection(activeParagraphText)}
 
 ## Rules
 - Vary phrasing — never repeat the same sentence verbatim in a single response.
@@ -143,6 +163,7 @@ export function buildRealtimeAgent({
   bookId,
   pageText,
   outline,
+  activeParagraphText,
   onEndConversation,
   rag
 }: BuildAgentOptions): RealtimeAgent {
@@ -202,7 +223,7 @@ export function buildRealtimeAgent({
   return new RealtimeAgent({
     name: 'Assistant',
     voice: 'alloy',
-    instructions: INSTRUCTIONS_TEMPLATE(pageText, outline),
+    instructions: INSTRUCTIONS_TEMPLATE(pageText, outline, activeParagraphText),
     tools: [bookContextTool, endConversationTool]
   })
 }

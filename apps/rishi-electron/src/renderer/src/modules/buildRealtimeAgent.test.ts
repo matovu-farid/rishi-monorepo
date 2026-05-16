@@ -42,6 +42,26 @@ describe('buildRealtimeAgent', () => {
     expect(agent.instructions).toContain('(No page text available)')
   })
 
+  it('embeds the active paragraph (what user just heard) into instructions when provided', () => {
+    const agent = buildRealtimeAgent({
+      bookId: 42,
+      pageText: 'Page text including the active sentence and more.',
+      activeParagraphText: 'the active sentence',
+      onEndConversation: vi.fn()
+    })
+    expect(agent.instructions).toMatch(/just heard|just read|currently/i)
+    expect(agent.instructions).toContain('the active sentence')
+  })
+
+  it('omits the "just heard" section when activeParagraphText is not provided', () => {
+    const agent = buildRealtimeAgent({
+      bookId: 42,
+      pageText: 'x',
+      onEndConversation: vi.fn()
+    })
+    expect(agent.instructions).not.toMatch(/just heard/i)
+  })
+
   it('exposes two tools: bookContext and endConversation', () => {
     const agent = buildRealtimeAgent({
       bookId: 42,

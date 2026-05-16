@@ -31,8 +31,14 @@ vi.mock('@/services/voice-chat', () => ({
   }
 }))
 
+const playerState = {
+  send: vi.fn(),
+  currentParagraphs: [] as Array<{ text: string }>,
+  activeParagraph: null as { text: string } | null
+}
+
 vi.mock('@/stores/playerStore', () => ({
-  usePlayerStore: { getState: () => ({ send: vi.fn(), currentParagraphs: [] }) }
+  usePlayerStore: { getState: () => playerState }
 }))
 
 vi.mock('@/stores/epubStore', () => ({
@@ -48,6 +54,8 @@ import { useChatStore } from './chatStore'
 describe('chatStore', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    playerState.currentParagraphs = []
+    playerState.activeParagraph = null
     useChatStore.setState({
       isChatting: false,
       chatStatus: 'idle'
@@ -73,8 +81,21 @@ describe('chatStore', () => {
     await Promise.resolve()
     expect(fakeVoice.activate).toHaveBeenCalledWith(42, {
       pageText: expect.any(String),
-      outline: undefined
+      outline: undefined,
+      activeParagraphText: undefined
     })
+  })
+
+  it('startChat forwards the active paragraph text (what TTS is reading)', async () => {
+    playerState.currentParagraphs = [{ text: 'Hello.' }, { text: 'World.' }]
+    playerState.activeParagraph = { text: 'World.' }
+    useChatStore.setState({ isChatting: true })
+    useChatStore.getState().startChat(42)
+    await Promise.resolve()
+    expect(fakeVoice.activate).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ activeParagraphText: 'World.' })
+    )
   })
 
   it('stopConversation resets state and calls deactivate', () => {
