@@ -44,6 +44,7 @@ import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-stora
 import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
 import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
+import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
 
 function updateTheme(rendition: Rendition, theme: ThemeType) {
   const reditionThemes = rendition.themes
@@ -325,12 +326,50 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     [selectionInfo, rendition]
   )
 
-  async function clearAllHighlights() {
+  const clearAllHighlights = useCallback(async () => {
     const r = renditionRef.current
     if (!r) return
-    const paragraphs = getCurrentViewParagraphs(r)
-    return Promise.all(paragraphs.map((paragraph) => removeHighlight(r, paragraph.cfiRange)))
-  }
+    return Promise.all(
+      getCurrentViewParagraphs(r).map((paragraph) => removeHighlight(r, paragraph.cfiRange))
+    )
+  }, [])
+
+  // Try to consume a pending pageRequest through the nav machine.
+  // Only succeeds when the machine is idle; otherwise leaves the
+  // request in place so the navState retry subscription (in the
+  // rendition effect below) can pick it up when the machine returns
+  // to idle. Stable across renders so usePageRequestSubscription's
+  // ref-based callback dispatch isn't churned.
+  const tryConsumePageRequest = useCallback(async () => {
+    // Hook is bound at component scope before rendition resolves; guard
+    // against running before there's anything to navigate.
+    if (!renditionRef.current) return
+    const request = usePlayerStore.getState().pageRequest
+    if (!request) return
+    const { navState, send } = useNavStore.getState()
+    if (navState !== 'idle' || !send) return
+    await clearAllHighlights()
+    // Re-check after async highlight removal — machine may have
+    // become busy in the meantime.
+    if (useNavStore.getState().navState !== 'idle') return
+    send({ type: request === 'next' ? 'NEXT' : 'PREV' })
+    // Only clear if the request hasn't been replaced by a new one
+    // during the await window (the player could set a fresh request
+    // while clearAllHighlights was in-flight).
+    if (usePlayerStore.getState().pageRequest === request) {
+      usePlayerStore.getState().clearPageRequest()
+    }
+  }, [clearAllHighlights])
+
+  // Route player page-turn requests through the nav machine.
+  // autoClear: false — tryConsumePageRequest clears the request itself
+  // (only when its guards succeed, to preserve the navState-retry path).
+  usePageRequestSubscription({
+    onNext: tryConsumePageRequest,
+    onPrev: tryConsumePageRequest,
+    autoClear: false
+  })
+
   const setBookId = useEpubStore((s) => s.setBookId)
   const setBookOutline = useEpubStore((s) => s.setBookOutline)
   useEffect(() => {
@@ -365,36 +404,9 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     if (!rendition) return
 
-    // Try to consume a pending pageRequest through the nav machine.
-    // Only succeeds when the machine is idle; otherwise leaves the
-    // request in place so the navState retry subscription (below) can
-    // pick it up when the machine returns to idle.
-    const tryConsumePageRequest = async () => {
-      const request = usePlayerStore.getState().pageRequest
-      if (!request) return
-      const { navState, send } = useNavStore.getState()
-      if (navState !== 'idle' || !send) return
-      await clearAllHighlights()
-      // Re-check after async highlight removal — machine may have
-      // become busy in the meantime.
-      if (useNavStore.getState().navState !== 'idle') return
-      send({ type: request === 'next' ? 'NEXT' : 'PREV' })
-      // Only clear if the request hasn't been replaced by a new one
-      // during the await window (the player could set a fresh request
-      // while clearAllHighlights was in-flight).
-      if (usePlayerStore.getState().pageRequest === request) {
-        usePlayerStore.getState().clearPageRequest()
-      }
-    }
-
-    const unsubPage = usePlayerStore.subscribe(
-      (s) => s.pageRequest,
-      () => {
-        void tryConsumePageRequest()
-      }
-    )
-
-    // Retry pending pageRequest when the nav machine returns to idle
+    // Retry pending pageRequest when the nav machine returns to idle.
+    // (The pageRequest subscription itself lives in
+    // usePageRequestSubscription at the top of the component.)
     const unsubNavRetry = useNavStore.subscribe(
       (s) => s.navState,
       (state) => {
@@ -436,14 +448,13 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     )
 
     return () => {
-      unsubPage()
       unsubNavRetry()
       unsubActive()
       unsubEnded()
       unsubMove()
       unsubState()
     }
-  }, [rendition])
+  }, [rendition, tryConsumePageRequest, clearAllHighlights])
 
   useEffect(() => {
     if (rendition) {
