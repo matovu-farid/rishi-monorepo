@@ -4,12 +4,12 @@ import { useEpubStore } from '@/stores/epubStore'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
-import { hasSavedEpubData, updateBookLocation } from '@/lib/api'
+import { updateBookLocation } from '@/lib/api'
 import type { Book } from '@/lib/api'
 import { NavigationArrows } from '@/components/react-reader/components'
 import { themes } from '@/themes/themes'
 import { usePlayerStore } from '@/stores/playerStore'
-import { getBookImportService, type PageDataInsertable } from '@/services'
+import type { PageDataInsertable } from '@/services'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
@@ -22,6 +22,7 @@ import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
 import { useChapterParagraphPrefetch } from '@/hooks/reader/useChapterParagraphPrefetch'
 import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
 import ReaderOverlayControls from '@/components/reader/ReaderOverlayControls'
+import { useBookEmbeddings } from '@/hooks/reader/useBookEmbeddings'
 import {
   parseAzw3,
   extractSectionParagraphs,
@@ -85,7 +86,6 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   const [chapterPageCounts, setChapterPageCounts] = useState<Record<number, number>>({})
 
   const iframeRef = useRef<HTMLIFrameElement>(null)
-  const embeddingsProcessedRef = useRef(false)
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
   const { requireAuth, AuthDialog } = useRequireAuth()
   const { bookSyncId, bookSyncIdRef } = useBookSyncId(book.id)
@@ -553,89 +553,83 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     autoClear: true
   })
 
-  // Generate embeddings on first open (for AI chat)
-  useEffect(() => {
-    if (chapterCount === 0 || embeddingsProcessedRef.current) return
-    embeddingsProcessedRef.current = true
-
-    void (async () => {
-      try {
-        const alreadySaved = await hasSavedEpubData({ bookId: book.id })
-        if (alreadySaved) return
-
-        const allPageData: PageDataInsertable[] = []
-        // Virtual sections (paginateSection) all share a single source doc, so
-        // emit a single combined entry per virtualGroupId instead of indexing
-        // 87 near-duplicate per-page slices. This both saves time and keeps
-        // the indexing pipeline aligned with the original section semantics.
-        // (Today parseAzw3 returns whole sections so virtualGroupId is only
-        //  set for the cover; the dedupe logic is kept defensively in case a
-        //  caller pre-paginates sections via `paginateSection`.)
-        // Plan extraction tasks linearly (no async work here) so we know the
-        // section index ranges that each output entry covers. Then run all
-        // per-section paragraph extractions in parallel — they don't share
-        // mutable state and order is reconstructed from the planned indices.
-        type Task = { kind: 'group'; pageNumber: number; id: number; sectionIdxs: number[] }
-        const tasks: Task[] = []
-        const seenGroups = new Set<string>()
-        for (let i = 0; i < sections.length; i++) {
-          const section = sections[i]
-          if (section.virtualGroupId) {
-            if (seenGroups.has(section.virtualGroupId)) continue
-            seenGroups.add(section.virtualGroupId)
-            const sectionIdxs: number[] = []
-            for (let j = i; j < sections.length; j++) {
-              if (sections[j].virtualGroupId !== section.virtualGroupId) break
-              sectionIdxs.push(j)
-            }
-            tasks.push({
-              kind: 'group',
-              pageNumber: i + 1,
-              id: stringToNumberID(`${book.id}-azw3-${section.virtualGroupId}`),
-              sectionIdxs
-            })
-            continue
+  // Generate embeddings on first open (for AI chat). The shared hook owns
+  // the hasIndexedBookData check + indexBook dispatch + run-once guard;
+  // we just build the AZW3-flavoured PageDataInsertable list, including
+  // the virtualGroupId dedup that keeps virtual sections from emitting
+  // 87 near-duplicate entries per source doc.
+  useBookEmbeddings({
+    bookId: book.id,
+    ready: chapterCount > 0,
+    buildPageData: async () => {
+      const allPageData: PageDataInsertable[] = []
+      // Virtual sections (paginateSection) all share a single source doc, so
+      // emit a single combined entry per virtualGroupId instead of indexing
+      // 87 near-duplicate per-page slices. This both saves time and keeps
+      // the indexing pipeline aligned with the original section semantics.
+      // (Today parseAzw3 returns whole sections so virtualGroupId is only
+      //  set for the cover; the dedupe logic is kept defensively in case a
+      //  caller pre-paginates sections via `paginateSection`.)
+      // Plan extraction tasks linearly (no async work here) so we know the
+      // section index ranges that each output entry covers. Then run all
+      // per-section paragraph extractions in parallel — they don't share
+      // mutable state and order is reconstructed from the planned indices.
+      type Task = { kind: 'group'; pageNumber: number; id: number; sectionIdxs: number[] }
+      const tasks: Task[] = []
+      const seenGroups = new Set<string>()
+      for (let i = 0; i < sections.length; i++) {
+        const section = sections[i]
+        if (section.virtualGroupId) {
+          if (seenGroups.has(section.virtualGroupId)) continue
+          seenGroups.add(section.virtualGroupId)
+          const sectionIdxs: number[] = []
+          for (let j = i; j < sections.length; j++) {
+            if (sections[j].virtualGroupId !== section.virtualGroupId) break
+            sectionIdxs.push(j)
           }
           tasks.push({
             kind: 'group',
             pageNumber: i + 1,
-            id: stringToNumberID(`${book.id}-azw3-${i}`),
-            sectionIdxs: [i]
+            id: stringToNumberID(`${book.id}-azw3-${section.virtualGroupId}`),
+            sectionIdxs
           })
+          continue
         }
-
-        // Extract paragraphs for every unique section once, in parallel.
-        const uniqueSectionIdxs = Array.from(new Set(tasks.flatMap((t) => t.sectionIdxs)))
-        const extractedEntries = await Promise.all(
-          uniqueSectionIdxs.map(async (idx) => {
-            const texts = await extractSectionParagraphs(sections[idx])
-            return [idx, texts] as const
-          })
-        )
-        const extracted = new Map<number, string[]>(extractedEntries)
-
-        for (const task of tasks) {
-          const combined = task.sectionIdxs
-            .flatMap((idx) => extracted.get(idx) ?? [])
-            .join('\n')
-            .trim()
-          if (combined.length > 0) {
-            allPageData.push({
-              id: task.id,
-              pageNumber: task.pageNumber,
-              bookId: book.id,
-              data: combined
-            })
-          }
-        }
-        if (allPageData.length > 0) {
-          await getBookImportService().indexBook(book.id, allPageData)
-        }
-      } catch (err) {
-        console.warn('[Azw3View] failed to generate embeddings:', err)
+        tasks.push({
+          kind: 'group',
+          pageNumber: i + 1,
+          id: stringToNumberID(`${book.id}-azw3-${i}`),
+          sectionIdxs: [i]
+        })
       }
-    })()
-  }, [book.id, sections, chapterCount])
+
+      // Extract paragraphs for every unique section once, in parallel.
+      const uniqueSectionIdxs = Array.from(new Set(tasks.flatMap((t) => t.sectionIdxs)))
+      const extractedEntries = await Promise.all(
+        uniqueSectionIdxs.map(async (idx) => {
+          const texts = await extractSectionParagraphs(sections[idx])
+          return [idx, texts] as const
+        })
+      )
+      const extracted = new Map<number, string[]>(extractedEntries)
+
+      for (const task of tasks) {
+        const combined = task.sectionIdxs
+          .flatMap((idx) => extracted.get(idx) ?? [])
+          .join('\n')
+          .trim()
+        if (combined.length > 0) {
+          allPageData.push({
+            id: task.id,
+            pageNumber: task.pageNumber,
+            bookId: book.id,
+            data: combined
+          })
+        }
+      }
+      return allPageData
+    }
+  })
 
   // Themed iframe wrapping HTML loaded from foliate's section Blob URL.
   // Unlike the MOBI view (srcDoc + per-chapter HTML), foliate-js gives us
