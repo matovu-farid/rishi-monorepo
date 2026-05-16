@@ -180,6 +180,16 @@ export async function checkForUpdates(opts?: { silent: boolean }): Promise<void>
     const msg = err instanceof Error ? err.message : String(err)
     console.warn('[updater] checkForUpdates failed:', msg)
     useUpdateStore.getState().setStatus({ kind: 'error', message: msg })
+    if (userInitiatedCheckPending) {
+      userInitiatedCheckPending = false
+      void window.electron.showMessageBox({
+        type: 'error',
+        message: 'Update check failed',
+        detail: msg,
+        buttons: ['OK'],
+        defaultId: 0
+      })
+    }
   } finally {
     // Why: single-flight guard. The early-return at the top of this function is the
     // sole gate; checkInFlight transitions true → false here serially with no other
