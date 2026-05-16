@@ -6,6 +6,11 @@ export interface KeyCache {
    * Concurrent callers share the in-flight promise.
    */
   get(): Promise<string>
+  /**
+   * Drop any cached key so the next `get()` refetches. Used when a setting
+   * that affects the minted key (e.g., language) changes.
+   */
+  invalidate(): void
 }
 
 export interface KeyCacheDeps {
@@ -49,6 +54,9 @@ export function createKeyCache(deps: KeyCacheDeps): KeyCache {
       })()
 
       return inflight
+    },
+    invalidate() {
+      cached = null
     }
   }
 }

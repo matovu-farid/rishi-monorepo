@@ -67,4 +67,16 @@ describe('createKeyCache', () => {
     await expect(Promise.all([p1, p2])).resolves.toEqual(['K1', 'K1'])
     expect(fetchFn).toHaveBeenCalledTimes(1)
   })
+
+  it('invalidate() forces the next get() to refetch', async () => {
+    const clock = makeClock()
+    clock.setNow(0)
+    const fetchFn = vi.fn().mockResolvedValueOnce('K1').mockResolvedValueOnce('K2')
+    const cache = createKeyCache({ fetch: fetchFn, ttlMs: 60_000, clock })
+
+    await expect(cache.get()).resolves.toBe('K1')
+    cache.invalidate()
+    await expect(cache.get()).resolves.toBe('K2')
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+  })
 })
