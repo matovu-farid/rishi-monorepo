@@ -12,7 +12,6 @@ import AIChatOrb from '@/components/chat/AIChatOrb'
 import VoiceChatLauncher from '@/components/chat/VoiceChatLauncher'
 import { themes } from '@/themes/themes'
 import { usePlayerStore } from '@/stores/playerStore'
-import type { ParagraphWithIndex } from '@/models/player_control'
 import { getBookImportService, type PageDataInsertable } from '@/services'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { useChatStore } from '@/stores/chatStore'
@@ -24,6 +23,7 @@ import { stringToNumberID } from '@/lib/utils'
 import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
 import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
+import { useChapterParagraphPrefetch } from '@/hooks/reader/useChapterParagraphPrefetch'
 import {
   parseAzw3,
   extractSectionParagraphs,
@@ -530,52 +530,22 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
 
   // Publish paragraphs to playerStore for TTS. Current chapter immediately,
   // next/prev debounced to avoid wasted work on rapid chapter flips.
-  const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => {
-    if (chapterCount === 0 || !sections[chapterIndex]) return
-
-    void extractSectionParagraphs(sections[chapterIndex]).then((texts) => {
-      const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
-        text,
-        index: `azw3-${chapterIndex}-${i}`
-      }))
-      usePlayerStore.getState().setCurrentParagraphs(paragraphs)
-    })
-
-    if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current)
-    prefetchTimerRef.current = setTimeout(() => {
-      if (chapterIndex < chapterCount - 1 && sections[chapterIndex + 1]) {
-        void extractSectionParagraphs(sections[chapterIndex + 1]).then((texts) => {
-          const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
-            text,
-            index: `azw3-${chapterIndex + 1}-${i}`
-          }))
-          usePlayerStore.getState().setNextPageParagraphs(paragraphs)
-        })
-      } else {
-        usePlayerStore.getState().setNextPageParagraphs([])
-      }
-      if (chapterIndex > 0 && sections[chapterIndex - 1]) {
-        void extractSectionParagraphs(sections[chapterIndex - 1]).then((texts) => {
-          const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
-            text,
-            index: `azw3-${chapterIndex - 1}-${i}`
-          }))
-          usePlayerStore.getState().setPrevPageParagraphs(paragraphs)
-        })
-      } else {
-        usePlayerStore.getState().setPrevPageParagraphs([])
-      }
-    }, 300)
-
-    return () => {
-      if (prefetchTimerRef.current) {
-        clearTimeout(prefetchTimerRef.current)
-        usePlayerStore.getState().setNextPageParagraphs([])
-        usePlayerStore.getState().setPrevPageParagraphs([])
-      }
+  // Note: noUncheckedIndexedAccess is off, so sections[idx] looks typed as
+  // FoliateSection even when out-of-range; check via Array.prototype.at to
+  // get a real `| undefined` result and short-circuit before parse completes.
+  useChapterParagraphPrefetch({
+    chapterIndex,
+    chapterCount,
+    indexPrefix: 'azw3',
+    fetchCurrent: async (idx) => {
+      const section = sections.at(idx)
+      return section ? extractSectionParagraphs(section) : []
+    },
+    fetchAt: async (idx) => {
+      const section = sections.at(idx)
+      return section ? extractSectionParagraphs(section) : []
     }
-  }, [sections, chapterIndex, chapterCount])
+  })
 
   // Handle page-turn events from Player (TTS exhausted current chapter)
   useEffect(() => {
