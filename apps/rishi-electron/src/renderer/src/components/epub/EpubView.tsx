@@ -273,7 +273,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         })
       }
     })
-  }, [rendition])
+  }, [rendition, bookSyncIdRef])
 
   // Handle user text selection -- show color picker popover instead of auto-highlight
   const handleTextSelected = useCallback(
@@ -295,7 +295,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
 
       setSelectionInfo({ cfiRange, text: selectedText, position: { x, y } })
     },
-    [rendition]
+    [rendition, bookSyncIdRef]
   )
 
   // Handle color selection from the popover
@@ -318,7 +318,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         .catch((err: unknown) => console.warn('[highlight] save failed:', err))
       setSelectionInfo(null)
     },
-    [selectionInfo, rendition]
+    [selectionInfo, rendition, bookSyncIdRef]
   )
 
   const clearAllHighlights = useCallback(async () => {
