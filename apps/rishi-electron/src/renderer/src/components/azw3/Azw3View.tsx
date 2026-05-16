@@ -21,6 +21,7 @@ import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
 import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
 import { stringToNumberID } from '@/lib/utils'
+import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
 import {
   parseAzw3,
   extractSectionParagraphs,
@@ -87,10 +88,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   const embeddingsProcessedRef = useRef(false)
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
   const { requireAuth, AuthDialog } = useRequireAuth()
-  const bookSyncIdRef = useRef<string | null>(null)
-  // Mirror the sync id into state so JSX can read it without touching the
-  // ref during render (react-hooks/refs).
-  const [bookSyncId, setBookSyncId] = useState<string>('')
+  const { bookSyncId, bookSyncIdRef } = useBookSyncId(book.id)
 
   // When navigating backward across a chapter boundary, we want to land on
   // the *last* page of the new chapter — but we can't know how many pages
@@ -139,7 +137,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         else requireAuth('voice-input', () => setIsChatting(true))
       }
     }),
-    [requireAuth, chapterIndex, pageWithinChapter, queryClient]
+    [requireAuth, chapterIndex, pageWithinChapter, queryClient, bookSyncIdRef]
   )
   useMenuCommands(menuHandlers)
 
@@ -148,17 +146,6 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     setBookId(book.id.toString())
   }, [book.id, setBookId])
-
-  // Look up the book's sync_id for chat + publish bookmarks for the menu.
-  useEffect(() => {
-    void window.electron.booksGetSyncId(book.id).then(async (syncId) => {
-      bookSyncIdRef.current = syncId
-      if (syncId) {
-        setBookSyncId(syncId)
-        await publishBookmarksToMenu(syncId)
-      }
-    })
-  }, [book.id])
 
   // Publish title so the native Window menu sees the loaded book.
   useEffect(() => {
