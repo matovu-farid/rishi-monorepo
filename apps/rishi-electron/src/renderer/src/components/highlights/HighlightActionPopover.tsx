@@ -47,6 +47,7 @@ export function HighlightActionPopover({
   }, [onClose])
 
   return (
+    // TODO(Wave F): clamp x/y to viewport so the popover doesn't get clipped against the right/bottom edges. Same gap exists in SelectionPopover.
     <div
       ref={containerRef}
       className="fixed z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-md p-2"
@@ -63,10 +64,8 @@ export function HighlightActionPopover({
               aria-label={`Change to ${c.name}`}
               title={`Change to ${c.name}`}
               className={
-                'rounded-full transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-blue-500 ' +
-                (isCurrent
-                  ? 'border-2 border-blue-500'
-                  : 'border border-gray-300/50')
+                'rounded-full border border-gray-300/50 transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-blue-500 ' +
+                (isCurrent ? 'ring-2 ring-inset ring-blue-500' : '')
               }
               style={{
                 width: 28,
