@@ -232,6 +232,9 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         } else {
           commonHandlers.readAloudToggle?.()
         }
+      },
+      showHighlights: () => {
+        setHighlightsPanelOpen(true)
       }
     }),
     [commonHandlers, bookSyncId, currentLocation, pageCurrent, queryClient]
