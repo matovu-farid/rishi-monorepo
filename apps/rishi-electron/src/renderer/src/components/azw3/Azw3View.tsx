@@ -6,15 +6,11 @@ import { toast } from 'sonner'
 
 import { hasSavedEpubData, updateBookLocation } from '@/lib/api'
 import type { Book } from '@/lib/api'
-import TTSControls from '@/components/tts/TTSControls'
 import { NavigationArrows } from '@/components/react-reader/components'
-import AIChatOrb from '@/components/chat/AIChatOrb'
-import VoiceChatLauncher from '@/components/chat/VoiceChatLauncher'
 import { themes } from '@/themes/themes'
 import { usePlayerStore } from '@/stores/playerStore'
 import { getBookImportService, type PageDataInsertable } from '@/services'
 import { ChatPanel } from '@/components/chat/ChatPanel'
-import { useChatStore } from '@/stores/chatStore'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
@@ -25,6 +21,7 @@ import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
 import { useChapterParagraphPrefetch } from '@/hooks/reader/useChapterParagraphPrefetch'
 import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
+import ReaderOverlayControls from '@/components/reader/ReaderOverlayControls'
 import {
   parseAzw3,
   extractSectionParagraphs,
@@ -101,8 +98,6 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   // resolved against the actual measured page count after layout settles.
   const pendingPageAfterLoadRef = useRef<number | 'last' | null>(null)
 
-  const isChatting = useChatStore((s) => s.isChatting)
-  const chatStatus = useChatStore((s) => s.chatStatus)
   const queryClient = useQueryClient()
 
   // Wire native-menu commands. Same surface as MobiView; AZW3 has no
@@ -757,15 +752,12 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         </div>
       )}
 
-      {isChatting ? (
-        <AIChatOrb chatStatus={chatStatus} onClick={() => setChatPanelOpen((prev) => !prev)} />
-      ) : null}
-
-      <VoiceChatLauncher />
-
-      <div style={{ display: isChatting ? 'none' : 'contents' }}>
-        <TTSControls bookId={book.id.toString()} />
-      </div>
+      {/* AI chat orb, voice chat launcher, and TTS controls */}
+      <ReaderOverlayControls
+        bookId={book.id.toString()}
+        chatPanelOpen={chatPanelOpen}
+        onChatOrbClick={() => setChatPanelOpen((prev) => !prev)}
+      />
 
       <ReaderTOC
         open={tocOpen}
