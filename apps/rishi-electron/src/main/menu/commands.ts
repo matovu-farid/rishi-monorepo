@@ -30,6 +30,7 @@ export type MenuCommand =
   | { command: 'jumpToBookmark'; arg: { bookmarkId: string } }
   | { command: 'readAloudToggle' }
   | { command: 'readAloudFromSelection' }
+  | { command: 'showHighlights' }
   | { command: 'voiceChat' }
   | { command: 'openChat' }
   | { command: 'openHelp' }

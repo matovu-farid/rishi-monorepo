@@ -156,4 +156,21 @@ describe('buildMenu — book', () => {
     const recent = findItem(tpl, ['File', 'Open Recent'])
     expect((recent!.submenu as MenuItemConstructorOptions[]).length).toBe(10)
   })
+
+  it('View > Show Highlights is present for EPUB books with CmdOrCtrl+Shift+H and dispatches showHighlights', () => {
+    const dispatch = vi.fn<(c: MenuCommand) => void>()
+    const epubCtx = { ...pdfCtx, format: 'epub' as const }
+    const tpl = buildMenu(epubCtx, dispatch)
+    const item = findItem(tpl, ['View', 'Show Highlights'])
+    expect(item).toBeDefined()
+    expect(item!.accelerator).toBe('CmdOrCtrl+Shift+H')
+    item!.click!(undefined as never, undefined as never, undefined as never)
+    expect(dispatch).toHaveBeenCalledWith({ command: 'showHighlights' })
+  })
+
+  it('View > Show Highlights is omitted for non-EPUB books', () => {
+    const dispatch = vi.fn<(c: MenuCommand) => void>()
+    const tpl = buildMenu(pdfCtx, dispatch)
+    expect(findItem(tpl, ['View', 'Show Highlights'])).toBeUndefined()
+  })
 })

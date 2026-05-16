@@ -16,4 +16,8 @@ describe('ACCELERATORS', () => {
     expect(ACCELERATORS.openChat).toBe('CmdOrCtrl+K')
     expect(ACCELERATORS.readAloudFromSelection).toBe('CmdOrCtrl+Shift+L')
   })
+
+  it('has Show Highlights bound to CmdOrCtrl+Shift+H', () => {
+    expect(ACCELERATORS.showHighlights).toBe('CmdOrCtrl+Shift+H')
+  })
 })

@@ -11,7 +11,8 @@ export const ACCELERATORS = {
   voiceChat: 'CmdOrCtrl+Shift+V',
   openChat: 'CmdOrCtrl+K',
   openSettings: 'CmdOrCtrl+,',
-  readAloudFromSelection: 'CmdOrCtrl+Shift+L'
+  readAloudFromSelection: 'CmdOrCtrl+Shift+L',
+  showHighlights: 'CmdOrCtrl+Shift+H'
 } as const
 
 export type AcceleratorKey = keyof typeof ACCELERATORS

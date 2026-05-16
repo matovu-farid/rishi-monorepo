@@ -94,6 +94,13 @@ export function buildMenu(ctx: MenuContext, dispatch: Dispatch): MenuItemConstru
         }
       )
     }
+    if (ctx.format === 'epub') {
+      viewSubmenu.push({
+        label: 'Show Highlights',
+        accelerator: ACCELERATORS.showHighlights,
+        click: fire({ command: 'showHighlights' })
+      })
+    }
   }
 
   const windowSubmenu: MenuItemConstructorOptions[] = [
