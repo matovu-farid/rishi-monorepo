@@ -63,7 +63,7 @@ declare module 'epubjs/types/annotations' {
     highlight(
       cfiRange: string | EpubCFI,
       data?: Record<string, unknown>,
-      cb?: () => void,
+      cb?: (e?: MouseEvent) => void,
       className?: string,
       styles?: Record<string, unknown>
     ): unknown
