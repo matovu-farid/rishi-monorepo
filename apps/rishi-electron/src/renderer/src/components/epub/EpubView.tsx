@@ -19,7 +19,8 @@ import { useNavStore } from '@/stores/navStore'
 import { highlightRange, removeHighlight, getCurrentViewParagraphs } from '@/modules/epubwrapper'
 import type { Book } from '@/lib/api'
 import { updateBookLocation } from '@/lib/api'
-import { saveHighlight, getHighlightsForBook } from '@/modules/highlight-storage'
+import { getHighlightsForBook } from '@/modules/highlight-storage'
+import { applyHighlightWithUndo } from '@/modules/highlight-actions'
 import { getSyncService } from '@/services'
 import { getHighlightHex } from '@/types/highlight'
 import type { HighlightColor } from '@/types/highlight'
@@ -43,6 +44,7 @@ import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
 import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
 import { useSelectionStore } from '@/stores/selectionStore'
+import { useUndoableHighlightShortcut } from '@/hooks/useUndoableHighlightShortcut'
 import { findParagraphForCfi } from '@/modules/cfi-to-paragraph'
 import { resolveLiveSelection } from '@/modules/resolve-live-selection'
 import { buildPartialFirst } from '@/modules/read-aloud-from'
@@ -191,6 +193,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   } | null>(null)
   const [highlightsPanelOpen, setHighlightsPanelOpen] = useState(false)
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
+  const { setLastUndoable } = useUndoableHighlightShortcut()
   const { requireAuth, AuthDialog } = useRequireAuth()
 
   const queryClient = useQueryClient()
@@ -320,23 +323,40 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     (color: HighlightColor) => {
       if (!selectionInfo || !rendition || !bookSyncIdRef.current) return
       const hex = getHighlightHex(color)
-      void highlightRange(rendition, selectionInfo.cfiRange, {}, () => {}, 'epubjs-hl', {
-        fill: hex,
-        'fill-opacity': '0.3',
-        'mix-blend-mode': 'multiply'
-      })
-      void saveHighlight({
-        bookSyncId: bookSyncIdRef.current,
-        cfiRange: selectionInfo.cfiRange,
-        text: selectionInfo.text,
+      const cfiRange = selectionInfo.cfiRange
+      const text = selectionInfo.text
+      const bookSyncId = bookSyncIdRef.current
+
+      void applyHighlightWithUndo({
+        target: {
+          applyVisual: async () => {
+            await highlightRange(rendition, cfiRange, {}, () => {}, 'epubjs-hl', {
+              fill: hex,
+              'fill-opacity': '0.3',
+              'mix-blend-mode': 'multiply'
+            })
+          },
+          removeVisual: async () => {
+            await removeHighlight(rendition, cfiRange)
+          }
+        },
+        bookSyncId,
+        cfiRange,
+        text,
         color
+      }).then((handle) => {
+        setLastUndoable(handle)
+        toast('Highlighted', {
+          action: { label: 'Undo', onClick: () => void handle.undo() },
+          duration: 5_000
+        })
       })
-        .then(() => getSyncService().triggerWrite())
-        .catch((err: unknown) => console.warn('[highlight] save failed:', err))
+
       setSelectionInfo(null)
       useSelectionStore.getState().clear()
     },
-    [selectionInfo, rendition, bookSyncIdRef]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectionInfo, rendition, setLastUndoable]
   )
 
   const handleReadAloudFrom = useCallback(() => {
