@@ -53,3 +53,47 @@ export async function applyHighlightWithUndo(args: ApplyHighlightArgs): Promise<
     }
   }
 }
+
+export interface DeleteHighlightArgs {
+  target: HighlightTarget
+  bookSyncId: string
+  cfiRange: string
+  text: string
+  color: HighlightColor
+  note?: string
+  chapter?: string | null
+}
+
+/**
+ * Delete a highlight optimistically and return a handle whose `undo()`
+ * re-applies the visual mark and re-inserts the row via saveHighlight.
+ * Errors during persistence are logged but never block the handle.
+ *
+ * Note: the underlying `highlights:save` IPC ignores soft-deleted rows in
+ * its upsert check, so undo inserts a FRESH row; the soft-deleted ghost
+ * remains. Sync semantics stay correct (both rows carry `isDirty=1`).
+ */
+export async function deleteHighlightWithUndo(args: DeleteHighlightArgs): Promise<HighlightHandle> {
+  const { target, bookSyncId, cfiRange, text, color, note, chapter } = args
+
+  await target.removeVisual()
+
+  try {
+    await deleteHighlight(bookSyncId, cfiRange)
+    getSyncService().triggerWrite()
+  } catch (err) {
+    console.warn('[highlight] delete failed:', err)
+  }
+
+  return {
+    async undo() {
+      await target.applyVisual()
+      try {
+        await saveHighlight({ bookSyncId, cfiRange, text, color, note, chapter })
+        getSyncService().triggerWrite()
+      } catch (err) {
+        console.warn('[highlight] re-save failed:', err)
+      }
+    }
+  }
+}

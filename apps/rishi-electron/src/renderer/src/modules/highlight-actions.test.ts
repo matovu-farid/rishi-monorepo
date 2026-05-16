@@ -11,7 +11,7 @@ vi.mock('@/services', () => ({
 
 import { saveHighlight, deleteHighlight } from '@/modules/highlight-storage'
 import { getSyncService } from '@/services'
-import { applyHighlightWithUndo } from './highlight-actions'
+import { applyHighlightWithUndo, deleteHighlightWithUndo } from './highlight-actions'
 
 function makeTarget() {
   return {
@@ -111,5 +111,26 @@ describe('applyHighlightWithUndo — undo path', () => {
     await handle.undo()
     await expect(handle.undo()).resolves.toBeUndefined()
     expect(target.removeVisual).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('deleteHighlightWithUndo — delete path', () => {
+  it('calls removeVisual, deleteHighlight and triggerWrite exactly once', async () => {
+    const target = makeTarget()
+    const triggerWrite = vi.fn()
+    ;(getSyncService as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ triggerWrite })
+
+    await deleteHighlightWithUndo({
+      target,
+      bookSyncId: 'book-1',
+      cfiRange: 'cfi:1',
+      text: 'hello',
+      color: 'yellow'
+    })
+
+    expect(target.removeVisual).toHaveBeenCalledTimes(1)
+    expect(deleteHighlight).toHaveBeenCalledTimes(1)
+    expect(deleteHighlight).toHaveBeenCalledWith('book-1', 'cfi:1')
+    expect(triggerWrite).toHaveBeenCalledTimes(1)
   })
 })
