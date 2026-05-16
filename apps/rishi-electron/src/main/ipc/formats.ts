@@ -3,6 +3,7 @@ import * as path from 'node:path'
 import * as crypto from 'node:crypto'
 import JSZip from 'jszip'
 import { handle } from '../../preload/ipc-contract.js'
+import { errorMessage } from '../utils/errors.js'
 
 // ---------- Shared types ----------
 
@@ -687,9 +688,7 @@ export function registerFormatHandlers(): void {
       return result
     } catch (error) {
       console.error('[formats:getBookData] Error:', error)
-      throw new Error(
-        `Failed to extract EPUB data from "${filePath}": ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to extract EPUB data from "${filePath}": ${errorMessage(error)}`)
     }
   })
 
@@ -698,9 +697,7 @@ export function registerFormatHandlers(): void {
     try {
       return await extractPdfData(filePath)
     } catch (error) {
-      throw new Error(
-        `Failed to extract PDF data from "${filePath}": ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to extract PDF data from "${filePath}": ${errorMessage(error)}`)
     }
   })
 
@@ -709,9 +706,7 @@ export function registerFormatHandlers(): void {
     try {
       return await extractMobiData(filePath)
     } catch (error) {
-      throw new Error(
-        `Failed to extract MOBI data from "${filePath}": ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to extract MOBI data from "${filePath}": ${errorMessage(error)}`)
     }
   })
 
@@ -720,9 +715,7 @@ export function registerFormatHandlers(): void {
     try {
       return await extractAzw3Data(filePath)
     } catch (error) {
-      throw new Error(
-        `Failed to extract AZW3 data from "${filePath}": ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to extract AZW3 data from "${filePath}": ${errorMessage(error)}`)
     }
   })
 
@@ -730,9 +723,7 @@ export function registerFormatHandlers(): void {
     try {
       return await getMobiChapterHtml(filePath, chapterIndex)
     } catch (error) {
-      throw new Error(
-        `Failed to get MOBI chapter: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to get MOBI chapter: ${errorMessage(error)}`)
     }
   })
 
@@ -740,9 +731,7 @@ export function registerFormatHandlers(): void {
     try {
       return await getMobiChapterCount(filePath)
     } catch (error) {
-      throw new Error(
-        `Failed to get MOBI chapter count: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to get MOBI chapter count: ${errorMessage(error)}`)
     }
   })
 
@@ -750,9 +739,7 @@ export function registerFormatHandlers(): void {
     try {
       return await getMobiChapterText(filePath, chapterIndex)
     } catch (error) {
-      throw new Error(
-        `Failed to get MOBI text: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to get MOBI text: ${errorMessage(error)}`)
     }
   })
 }

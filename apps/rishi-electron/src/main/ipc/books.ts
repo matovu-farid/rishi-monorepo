@@ -11,15 +11,14 @@ import {
 } from '../database/queries.js'
 import { deleteIndex } from '../vectordb/index.js'
 import { handle } from '../../preload/ipc-contract.js'
+import { errorMessage } from '../utils/errors.js'
 
 export function registerBookHandlers(): void {
   handle('books:getAll', () => {
     try {
       return getAllBooks()
     } catch (error) {
-      throw new Error(
-        `Failed to get all books: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to get all books: ${errorMessage(error)}`)
     }
   })
 
@@ -27,9 +26,7 @@ export function registerBookHandlers(): void {
     try {
       return getBook(bookId) ?? null
     } catch (error) {
-      throw new Error(
-        `Failed to get book ${bookId}: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to get book ${bookId}: ${errorMessage(error)}`)
     }
   })
 
@@ -37,9 +34,7 @@ export function registerBookHandlers(): void {
     try {
       return saveBook(book)
     } catch (error) {
-      throw new Error(
-        `Failed to save book: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to save book: ${errorMessage(error)}`)
     }
   })
 
@@ -55,9 +50,7 @@ export function registerBookHandlers(): void {
       deleteIndex(`${bookId}-vectordb`)
       return void deleteBook(bookId)
     } catch (error) {
-      throw new Error(
-        `Failed to delete book ${bookId}: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to delete book ${bookId}: ${errorMessage(error)}`)
     }
   })
 
@@ -65,9 +58,7 @@ export function registerBookHandlers(): void {
     try {
       return void updateBookCover(bookId, cover)
     } catch (error) {
-      throw new Error(
-        `Failed to update cover for book ${bookId}: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to update cover for book ${bookId}: ${errorMessage(error)}`)
     }
   })
 
@@ -75,9 +66,7 @@ export function registerBookHandlers(): void {
     try {
       return void updateBookLocation(bookId, location)
     } catch (error) {
-      throw new Error(
-        `Failed to update location for book ${bookId}: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to update location for book ${bookId}: ${errorMessage(error)}`)
     }
   })
 
@@ -85,9 +74,7 @@ export function registerBookHandlers(): void {
     try {
       return hasSavedEpubData(bookId)
     } catch (error) {
-      throw new Error(
-        `Failed to check epub data for book ${bookId}: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to check epub data for book ${bookId}: ${errorMessage(error)}`)
     }
   })
 
@@ -95,9 +82,7 @@ export function registerBookHandlers(): void {
     try {
       return getBookOutline(bookId)
     } catch (error) {
-      throw new Error(
-        `Failed to get book outline: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to get book outline: ${errorMessage(error)}`)
     }
   })
 }

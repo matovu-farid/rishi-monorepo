@@ -2,6 +2,7 @@ import { app } from 'electron'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import { handle } from '../../preload/ipc-contract.js'
+import { errorMessage } from '../utils/errors.js'
 
 function getErrorDumpPath(): string {
   return path.join(app.getPath('userData'), 'error-dump.json')
@@ -31,7 +32,7 @@ export function registerDebugHandlers(): void {
 
       await fs.writeFile(dumpPath, JSON.stringify(existingDumps, null, 2))
     } catch (err) {
-      throw new Error(`Failed to dump error: ${err instanceof Error ? err.message : String(err)}`)
+      throw new Error(`Failed to dump error: ${errorMessage(err)}`)
     }
   })
 
@@ -47,9 +48,7 @@ export function registerDebugHandlers(): void {
 
       return await fs.readFile(dumpPath, 'utf-8')
     } catch (error) {
-      throw new Error(
-        `Failed to read error dump: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to read error dump: ${errorMessage(error)}`)
     }
   })
 
@@ -58,9 +57,7 @@ export function registerDebugHandlers(): void {
       const dumpPath = getErrorDumpPath()
       await fs.unlink(dumpPath).catch(() => {})
     } catch (error) {
-      throw new Error(
-        `Failed to clear error dump: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to clear error dump: ${errorMessage(error)}`)
     }
   })
 
@@ -71,9 +68,7 @@ export function registerDebugHandlers(): void {
       const dumpPath = getStateDumpPath()
       await fs.writeFile(dumpPath, json, 'utf-8')
     } catch (error) {
-      throw new Error(
-        `Failed to dump state: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to dump state: ${errorMessage(error)}`)
     }
   })
 
@@ -87,9 +82,7 @@ export function registerDebugHandlers(): void {
       }
       return await fs.readFile(dumpPath, 'utf-8')
     } catch (error) {
-      throw new Error(
-        `Failed to read state dump: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to read state dump: ${errorMessage(error)}`)
     }
   })
 }

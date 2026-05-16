@@ -2,6 +2,7 @@ import { eq, and } from 'drizzle-orm'
 import { getDrizzle } from '../database/drizzle.js'
 import { highlights } from '../database/schema.js'
 import { handle } from '../../preload/ipc-contract.js'
+import { defaultSyncFields, softDeleteFields } from './_syncFields.js'
 
 export function registerHighlightHandlers(): void {
   handle('highlights:list', (_event, bookId) => {
@@ -59,9 +60,7 @@ export function registerHighlightHandlers(): void {
       chapter: params.chapter ?? null,
       createdAt: String(now),
       updatedAt: now,
-      syncVersion: 0,
-      isDirty: 1,
-      isDeleted: 0
+      ...defaultSyncFields
     })
 
     return id
@@ -71,16 +70,13 @@ export function registerHighlightHandlers(): void {
     const db = getDrizzle()
     await db
       .update(highlights)
-      .set({ isDeleted: 1, isDirty: 1, updatedAt: Date.now() })
+      .set(softDeleteFields())
       .where(and(eq(highlights.bookId, bookSyncId), eq(highlights.cfiRange, cfiRange)))
   })
 
   handle('highlights:deleteById', async (_event, highlightId) => {
     const db = getDrizzle()
-    await db
-      .update(highlights)
-      .set({ isDeleted: 1, isDirty: 1, updatedAt: Date.now() })
-      .where(eq(highlights.id, highlightId))
+    await db.update(highlights).set(softDeleteFields()).where(eq(highlights.id, highlightId))
   })
 
   handle('highlights:updateNote', async (_event, highlightId, note) => {

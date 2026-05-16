@@ -2,6 +2,7 @@ import { eq, and } from 'drizzle-orm'
 import { getDrizzle } from '../database/drizzle.js'
 import { bookmarks } from '../database/schema.js'
 import { handle } from '../../preload/ipc-contract.js'
+import { defaultSyncFields, softDeleteFields } from './_syncFields.js'
 
 export interface BookmarkRow {
   id: string
@@ -37,17 +38,12 @@ export function registerBookmarkHandlers(): void {
       label: params.label,
       createdAt: now,
       updatedAt: now,
-      syncVersion: 0,
-      isDirty: 1,
-      isDeleted: 0
+      ...defaultSyncFields
     })
   })
 
   handle('bookmarks:delete', async (_event, bookmarkId) => {
     const db = getDrizzle()
-    await db
-      .update(bookmarks)
-      .set({ isDeleted: 1, isDirty: 1, updatedAt: Date.now() })
-      .where(eq(bookmarks.id, bookmarkId))
+    await db.update(bookmarks).set(softDeleteFields()).where(eq(bookmarks.id, bookmarkId))
   })
 }

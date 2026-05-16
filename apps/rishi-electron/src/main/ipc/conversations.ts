@@ -2,6 +2,7 @@ import { eq, and, desc, asc } from 'drizzle-orm'
 import { getDrizzle } from '../database/drizzle.js'
 import { conversations, messages, chunkData } from '../database/schema.js'
 import { handle } from '../../preload/ipc-contract.js'
+import { defaultSyncFields } from './_syncFields.js'
 
 export function registerConversationHandlers(): void {
   // Find the most recent non-deleted conversation for a book
@@ -27,9 +28,7 @@ export function registerConversationHandlers(): void {
       title: params.title,
       createdAt: String(now),
       updatedAt: now,
-      syncVersion: 0,
-      isDirty: 1,
-      isDeleted: 0
+      ...defaultSyncFields
     })
   })
 
@@ -65,9 +64,7 @@ export function registerConversationHandlers(): void {
       sourceChunks: params.sourceChunks ?? null,
       createdAt: String(now),
       updatedAt: now,
-      syncVersion: 0,
-      isDirty: 1,
-      isDeleted: 0
+      ...defaultSyncFields
     })
   })
 

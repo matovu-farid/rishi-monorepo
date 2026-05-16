@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import type { User } from '../../preload/types.js'
 import { handle } from '../../preload/ipc-contract.js'
+import { errorMessage } from '../utils/errors.js'
 
 /** Path to the cached user profile JSON file. */
 function getUserStorePath(): string {
@@ -14,9 +15,7 @@ export function registerAuthHandlers(): void {
     try {
       await fs.unlink(getUserStorePath()).catch(() => {})
     } catch (error) {
-      throw new Error(
-        `Failed to clear auth: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to clear auth: ${errorMessage(error)}`)
     }
   })
 
@@ -33,9 +32,7 @@ export function registerAuthHandlers(): void {
       const data = await fs.readFile(userPath, 'utf-8')
       return JSON.parse(data) as User
     } catch (error) {
-      throw new Error(
-        `Failed to get user from store: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to get user from store: ${errorMessage(error)}`)
     }
   })
 
@@ -44,9 +41,7 @@ export function registerAuthHandlers(): void {
       const userPath = getUserStorePath()
       await fs.writeFile(userPath, JSON.stringify(user, null, 2))
     } catch (error) {
-      throw new Error(
-        `Failed to save user to store: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to save user to store: ${errorMessage(error)}`)
     }
   })
 }

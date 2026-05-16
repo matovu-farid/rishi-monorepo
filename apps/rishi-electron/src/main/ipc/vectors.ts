@@ -5,13 +5,14 @@ import {
   hasVectorsForBook as vectorsHasFor
 } from '../vectordb/index.js'
 import { handle } from '../../preload/ipc-contract.js'
+import { errorMessage } from '../utils/errors.js'
 
 export function registerVectorHandlers(): void {
   handle('vectors:embed', async (_event, params) => {
     try {
       return await generateEmbeddings(params)
     } catch (error) {
-      throw new Error(`Failed to embed: ${error instanceof Error ? error.message : String(error)}`)
+      throw new Error(`Failed to embed: ${errorMessage(error)}`)
     }
   })
 
@@ -19,9 +20,7 @@ export function registerVectorHandlers(): void {
     try {
       return void vectorSave(name, dim, vectors)
     } catch (error) {
-      throw new Error(
-        `Failed to save vectors for ${name}: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to save vectors for ${name}: ${errorMessage(error)}`)
     }
   })
 
@@ -29,9 +28,7 @@ export function registerVectorHandlers(): void {
     try {
       return vectorSearch(name, query, dim, k)
     } catch (error) {
-      throw new Error(
-        `Failed to search vectors for ${name}: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to search vectors for ${name}: ${errorMessage(error)}`)
     }
   })
 
@@ -67,9 +64,7 @@ export function registerVectorHandlers(): void {
         }
       }
     } catch (error) {
-      throw new Error(
-        `Failed to process job for book ${bookId}: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to process job for book ${bookId}: ${errorMessage(error)}`)
     }
   })
 }

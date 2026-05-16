@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import JSZip from 'jszip'
 import { handle } from '../../preload/ipc-contract.js'
+import { errorMessage } from '../utils/errors.js'
 
 /**
  * Assert that the given file/directory path is inside the app's userData directory.
@@ -38,9 +39,7 @@ export function registerFsHandlers(): void {
       }
       return 'ok'
     } catch (error) {
-      throw new Error(
-        `Failed to check file size: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to check file size: ${errorMessage(error)}`)
     }
   })
 
@@ -80,7 +79,7 @@ export function registerFsHandlers(): void {
 
       return outDir
     } catch (error) {
-      throw new Error(`Failed to unzip: ${error instanceof Error ? error.message : String(error)}`)
+      throw new Error(`Failed to unzip: ${errorMessage(error)}`)
     }
   })
 
@@ -88,9 +87,7 @@ export function registerFsHandlers(): void {
     try {
       await fs.copyFile(src, dest)
     } catch (error) {
-      throw new Error(
-        `Failed to copy file: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to copy file: ${errorMessage(error)}`)
     }
   })
 
@@ -98,9 +95,7 @@ export function registerFsHandlers(): void {
     try {
       return app.getPath('userData')
     } catch (error) {
-      throw new Error(
-        `Failed to get app data path: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to get app data path: ${errorMessage(error)}`)
     }
   })
 
@@ -112,9 +107,7 @@ export function registerFsHandlers(): void {
       // Convert to ArrayBuffer for clean serialization across IPC
       return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
     } catch (error) {
-      throw new Error(
-        `Failed to read file "${filePath}": ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to read file "${filePath}": ${errorMessage(error)}`)
     }
   })
 
@@ -128,9 +121,7 @@ export function registerFsHandlers(): void {
             : Buffer.from(data)
       await fs.writeFile(filePath, buffer)
     } catch (error) {
-      throw new Error(
-        `Failed to write file "${filePath}": ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to write file "${filePath}": ${errorMessage(error)}`)
     }
   })
 
@@ -147,9 +138,7 @@ export function registerFsHandlers(): void {
     try {
       await fs.mkdir(dirPath, { recursive: true })
     } catch (error) {
-      throw new Error(
-        `Failed to create directory "${dirPath}": ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to create directory "${dirPath}": ${errorMessage(error)}`)
     }
   })
 
@@ -159,9 +148,7 @@ export function registerFsHandlers(): void {
       const entries = await fs.readdir(dirPath)
       return entries
     } catch (error) {
-      throw new Error(
-        `Failed to read directory "${dirPath}": ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to read directory "${dirPath}": ${errorMessage(error)}`)
     }
   })
 
@@ -170,9 +157,7 @@ export function registerFsHandlers(): void {
       assertSafePath(filePath)
       await fs.rm(filePath, { recursive: true, force: true })
     } catch (error) {
-      throw new Error(
-        `Failed to remove "${filePath}": ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to remove "${filePath}": ${errorMessage(error)}`)
     }
   })
 

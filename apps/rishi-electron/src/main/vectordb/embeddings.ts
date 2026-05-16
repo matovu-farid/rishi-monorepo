@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type { FeatureExtractionPipelineType } from '@xenova/transformers'
+import { errorMessage } from '../utils/errors.js'
 
 // `pipeline()` returns a union of every pipeline subtype, none of which can
 // be statically narrowed from the `task` argument value. We always ask for
@@ -60,7 +61,7 @@ async function getPipeline(): Promise<Pipeline> {
       throw new Error(
         `Failed to load the embedding model "${MODEL_NAME}". ` +
           `This may be caused by a network issue during the initial model ` +
-          `download. Original error: ${err instanceof Error ? err.message : String(err)}`
+          `download. Original error: ${errorMessage(err)}`
       )
     }
   })()

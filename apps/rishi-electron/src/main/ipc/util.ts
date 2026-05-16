@@ -1,6 +1,7 @@
 import { app, shell } from 'electron'
 import * as os from 'node:os'
 import { handle } from '../../preload/ipc-contract.js'
+import { errorMessage } from '../utils/errors.js'
 
 export function registerUtilHandlers(): void {
   handle('util:isDev', () => {
@@ -28,9 +29,7 @@ export function registerUtilHandlers(): void {
       }
       await shell.openExternal(url)
     } catch (error) {
-      throw new Error(
-        `Failed to open external URL: ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to open external URL: ${errorMessage(error)}`)
     }
   })
 }

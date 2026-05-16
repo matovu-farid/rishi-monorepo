@@ -2,6 +2,7 @@ import { app } from 'electron'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import { handle } from '../../preload/ipc-contract.js'
+import { errorMessage } from '../utils/errors.js'
 
 function getStorePath(): string {
   return path.join(app.getPath('userData'), 'settings-store.json')
@@ -26,9 +27,7 @@ export function registerStoreHandlers(): void {
       const store = await readStore()
       return store[key] ?? null
     } catch (error) {
-      throw new Error(
-        `Failed to get store key "${key}": ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to get store key "${key}": ${errorMessage(error)}`)
     }
   })
 
@@ -38,9 +37,7 @@ export function registerStoreHandlers(): void {
       store[key] = value
       await writeStore(store)
     } catch (error) {
-      throw new Error(
-        `Failed to set store key "${key}": ${error instanceof Error ? error.message : String(error)}`
-      )
+      throw new Error(`Failed to set store key "${key}": ${errorMessage(error)}`)
     }
   })
 }

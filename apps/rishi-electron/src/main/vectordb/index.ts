@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { mkdirSync, existsSync, unlinkSync } from 'fs'
 import type * as HnswLib from 'hnswlib-node'
+import { errorMessage } from '../utils/errors.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -65,7 +66,7 @@ function requireHnsw(): HierarchicalNSWType {
     throw new Error(
       `hnswlib-node is not available on this platform. ` +
         `Vector search will be unavailable. ` +
-        `Original error: ${err instanceof Error ? err.message : String(err)}`
+        `Original error: ${errorMessage(err)}`
     )
   }
 }
