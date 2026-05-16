@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { act } from '@testing-library/react'
 import { useReaderGesture } from './useReaderGesture'
@@ -175,6 +175,109 @@ describe('useReaderGesture - touch two-finger', () => {
       )
     })
     // onNavigate called exactly once (the first claim only)
+    expect(onNavigate).toHaveBeenCalledTimes(1)
+  })
+})
+
+function makeWheelEvent(opts: { deltaX: number; deltaY: number }): React.WheelEvent {
+  return {
+    deltaX: opts.deltaX,
+    deltaY: opts.deltaY,
+    preventDefault: vi.fn()
+  } as unknown as React.WheelEvent
+}
+
+describe('useReaderGesture - wheel (trackpad)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('fires onNavigate("right") after accumulating > 50 px of leftward wheel', () => {
+    const onNavigate = vi.fn(() => true)
+    const { result } = renderHook(() =>
+      useReaderGesture({ onNavigate, onCommit: vi.fn(), onUndoNavigate: vi.fn() })
+    )
+    act(() => {
+      // 3 wheel ticks, each deltaX = +20, deltaY = +3 → cumulative 60
+      result.current.wheelHandlers.onWheel(makeWheelEvent({ deltaX: 20, deltaY: 3 }))
+      result.current.wheelHandlers.onWheel(makeWheelEvent({ deltaX: 20, deltaY: 3 }))
+      result.current.wheelHandlers.onWheel(makeWheelEvent({ deltaX: 20, deltaY: 3 }))
+    })
+    // Debounce hasn't fired yet
+    expect(onNavigate).not.toHaveBeenCalled()
+    act(() => {
+      vi.advanceTimersByTime(130)
+    })
+    // Positive deltaX = scroll right = next page
+    expect(onNavigate).toHaveBeenCalledWith('right')
+  })
+
+  it('fires onNavigate("left") for negative deltaX', () => {
+    const onNavigate = vi.fn(() => true)
+    const { result } = renderHook(() =>
+      useReaderGesture({ onNavigate, onCommit: vi.fn(), onUndoNavigate: vi.fn() })
+    )
+    act(() => {
+      result.current.wheelHandlers.onWheel(makeWheelEvent({ deltaX: -30, deltaY: 2 }))
+      result.current.wheelHandlers.onWheel(makeWheelEvent({ deltaX: -30, deltaY: 2 }))
+    })
+    act(() => {
+      vi.advanceTimersByTime(130)
+    })
+    expect(onNavigate).toHaveBeenCalledWith('left')
+  })
+
+  it('does NOT fire when vertical scroll dominates', () => {
+    const onNavigate = vi.fn(() => true)
+    const { result } = renderHook(() =>
+      useReaderGesture({ onNavigate, onCommit: vi.fn(), onUndoNavigate: vi.fn() })
+    )
+    act(() => {
+      // deltaY > deltaX * 1.5 → ignored
+      result.current.wheelHandlers.onWheel(makeWheelEvent({ deltaX: 10, deltaY: 50 }))
+      result.current.wheelHandlers.onWheel(makeWheelEvent({ deltaX: 10, deltaY: 50 }))
+      result.current.wheelHandlers.onWheel(makeWheelEvent({ deltaX: 10, deltaY: 50 }))
+    })
+    act(() => {
+      vi.advanceTimersByTime(130)
+    })
+    expect(onNavigate).not.toHaveBeenCalled()
+  })
+
+  it('ignores small horizontal deltas (< 6 per tick)', () => {
+    const onNavigate = vi.fn(() => true)
+    const { result } = renderHook(() =>
+      useReaderGesture({ onNavigate, onCommit: vi.fn(), onUndoNavigate: vi.fn() })
+    )
+    act(() => {
+      for (let i = 0; i < 20; i++) {
+        result.current.wheelHandlers.onWheel(makeWheelEvent({ deltaX: 3, deltaY: 0 }))
+      }
+    })
+    act(() => {
+      vi.advanceTimersByTime(130)
+    })
+    expect(onNavigate).not.toHaveBeenCalled()
+  })
+
+  it('does not double-fire within the same debounce window', () => {
+    const onNavigate = vi.fn(() => true)
+    const { result } = renderHook(() =>
+      useReaderGesture({ onNavigate, onCommit: vi.fn(), onUndoNavigate: vi.fn() })
+    )
+    act(() => {
+      result.current.wheelHandlers.onWheel(makeWheelEvent({ deltaX: 60, deltaY: 5 }))
+    })
+    act(() => {
+      vi.advanceTimersByTime(130)
+    })
+    expect(onNavigate).toHaveBeenCalledTimes(1)
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
     expect(onNavigate).toHaveBeenCalledTimes(1)
   })
 })

@@ -25,6 +25,10 @@ const COMMIT_THRESHOLD = 0.3
 const AUTO_DURATION = 200
 const SNAP_DURATION = 120
 const VELOCITY_COMMIT = 1.2
+const WHEEL_PER_TICK_MIN = 6
+const WHEEL_RATIO_GATE = 1.5
+const WHEEL_CUMULATIVE_THRESHOLD = 50
+const WHEEL_DEBOUNCE_MS = 120
 
 function easeOutQuart(t: number): number {
   return 1 - Math.pow(1 - t, 4)
@@ -48,6 +52,8 @@ export function useReaderGesture(callbacks: {
   const lastProgressRef = useRef(0)
   const velocityRef = useRef(0)
   const touchPointersRef = useRef<Map<number, { x: number; y: number }>>(new Map())
+  const wheelBufferRef = useRef(0)
+  const wheelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Helper: returns avg x of all active touch pointers
   const avgTouchX = (): number => {
@@ -74,6 +80,13 @@ export function useReaderGesture(callbacks: {
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current)
       rafRef.current = null
+    }
+  }, [])
+
+  const clearWheelTimer = useCallback(() => {
+    if (wheelTimerRef.current !== null) {
+      clearTimeout(wheelTimerRef.current)
+      wheelTimerRef.current = null
     }
   }, [])
 
@@ -260,9 +273,40 @@ export function useReaderGesture(callbacks: {
     [commitOrCancel]
   )
 
-  const onWheel = useCallback((_e: React.WheelEvent) => {
-    // Implemented in Task 5.
-  }, [])
+  const onWheel = useCallback(
+    (e: React.WheelEvent) => {
+      const dx = e.deltaX
+      const dy = e.deltaY
+      // Reject vertical-dominant gestures
+      if (Math.abs(dy) > Math.abs(dx) * WHEEL_RATIO_GATE) {
+        wheelBufferRef.current = 0
+        clearWheelTimer()
+        return
+      }
+      // Reject tiny ticks
+      if (Math.abs(dx) < WHEEL_PER_TICK_MIN) return
+      e.preventDefault()
+      wheelBufferRef.current += dx
+      clearWheelTimer()
+      wheelTimerRef.current = setTimeout(() => {
+        const sum = wheelBufferRef.current
+        wheelBufferRef.current = 0
+        wheelTimerRef.current = null
+        if (Math.abs(sum) < WHEEL_CUMULATIVE_THRESHOLD) return
+        const dir: CurlDirection = sum > 0 ? 'right' : 'left'
+        if (!callbacksRef.current.onNavigate(dir)) return
+        // Visual feedback via autoTurn
+        cancelRaf()
+        setDirectionBoth(dir)
+        setProgressBoth(0)
+        stateRef.current = 'animating'
+        navigatedRef.current = true
+        setActive(true)
+        animateTo(1, AUTO_DURATION, () => finish(true))
+      }, WHEEL_DEBOUNCE_MS)
+    },
+    [animateTo, cancelRaf, clearWheelTimer, finish, setActive, setDirectionBoth, setProgressBoth]
+  )
 
   const autoTurn = useCallback(
     (dir: CurlDirection) => {
@@ -280,8 +324,11 @@ export function useReaderGesture(callbacks: {
   )
 
   useEffect(() => {
-    return () => cancelRaf()
-  }, [cancelRaf])
+    return () => {
+      cancelRaf()
+      clearWheelTimer()
+    }
+  }, [cancelRaf, clearWheelTimer])
 
   return {
     progress,
