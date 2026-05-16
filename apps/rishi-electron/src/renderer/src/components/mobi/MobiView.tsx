@@ -28,6 +28,7 @@ import { useMenuCommands } from '@/hooks/useMenuCommands'
 import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
 import { stringToNumberID } from '@/lib/utils'
 import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
+import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 
 export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme)
@@ -92,36 +93,8 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
     setBookId(book.id.toString())
   }, [book.id, setBookId])
 
-  // Publish title so the native Window menu sees the loaded book.
-  useEffect(() => {
-    const e = (window as unknown as { electron: { send(c: string, p: unknown): void } }).electron
-    e.send('window:setBookTitle', { bookId: book.id, title: book.title })
-  }, [book.id, book.title])
-
-  // Mirror TOC sheet state into the menu context so the View > Show TOC
-  // checkbox flips with the actual sidebar state.
-  useEffect(() => {
-    const e = (
-      window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
-    ).electron
-    e.setMenuContext({ tocOpen })
-  }, [tocOpen])
-
-  // Mirror TTS play state into the menu so the Reader > Read Aloud label
-  // flips to "Stop Read Aloud" while playback is active.
-  useEffect(() => {
-    const e = (
-      window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
-    ).electron
-    const unsub = usePlayerStore.subscribe(
-      (s) => s.playingState,
-      (state) => {
-        e.setMenuContext({ isReading: state === 'playing' })
-      }
-    )
-    e.setMenuContext({ isReading: usePlayerStore.getState().playingState === 'playing' })
-    return unsub
-  }, [])
+  // Mirror reader state (book title, TOC open, TTS playing) into the native menu.
+  useReaderMenuSync({ book, tocOpen })
 
   // Fetch total chapter count on mount
   useEffect(() => {
