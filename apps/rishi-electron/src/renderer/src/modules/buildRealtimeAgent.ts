@@ -5,6 +5,7 @@ import { RealtimeAgent, tool } from '@openai/agents/realtime'
 import { z } from 'zod'
 import { Effect } from 'effect'
 import { captureError } from '@/utils/sentry'
+import { LANGUAGE_LABELS, isAllowedLanguage, DEFAULT_LANGUAGE } from '@/lib/languages'
 
 /**
  * Runs a realtime-agent tool execute under Effect so its outcome is
@@ -89,6 +90,8 @@ export interface BuildAgentOptions {
   /** The paragraph TTS was reading aloud at chat-start. Helps the model resolve deictic references. */
   activeParagraphText?: string
   onEndConversation: (reason: string) => void
+  /** ISO-639-1 code for the language the agent must respond in. */
+  language: string
   /**
    * Optional RAG service for bookContext tool calls. When omitted, falls
    * back to `getRagService()` for backwards compatibility with the legacy
@@ -125,14 +128,24 @@ This is part of the current page above. If they say "this", "that", "what you ju
 `
 }
 
+function renderLanguageSection(language: string): string {
+  const code = isAllowedLanguage(language) ? language : DEFAULT_LANGUAGE
+  const label = LANGUAGE_LABELS[code]
+  return `## Language
+Always respond in ${label} regardless of the user's accent or pronunciation. Treat all input as ${label} unless the user explicitly switches mid-conversation.
+
+`
+}
+
 const INSTRUCTIONS_TEMPLATE = (
   pageText: string,
+  language: string,
   outline?: BookOutline,
   activeParagraphText?: string
 ) => `## Role
 You are a teaching assistant helping the user understand the book they're reading. Make complex ideas accessible and answer questions in a way that aids comprehension.
 
-${renderOutlineSection(outline)}## Current Page Content
+${renderLanguageSection(language)}${renderOutlineSection(outline)}## Current Page Content
 """
 ${pageText || '(No page text available)'}
 """
@@ -165,6 +178,7 @@ export function buildRealtimeAgent({
   outline,
   activeParagraphText,
   onEndConversation,
+  language,
   rag
 }: BuildAgentOptions): RealtimeAgent {
   const ragService: RagService = rag ?? getRagService()
@@ -223,7 +237,7 @@ export function buildRealtimeAgent({
   return new RealtimeAgent({
     name: 'Assistant',
     voice: 'alloy',
-    instructions: INSTRUCTIONS_TEMPLATE(pageText, outline, activeParagraphText),
+    instructions: INSTRUCTIONS_TEMPLATE(pageText, language, outline, activeParagraphText),
     tools: [bookContextTool, endConversationTool]
   })
 }

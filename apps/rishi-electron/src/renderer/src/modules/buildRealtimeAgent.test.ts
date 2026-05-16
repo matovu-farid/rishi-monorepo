@@ -28,7 +28,8 @@ describe('buildRealtimeAgent', () => {
     const agent = buildRealtimeAgent({
       bookId: 42,
       pageText: 'The quick brown fox jumped over the lazy dog.',
-      onEndConversation: vi.fn()
+      onEndConversation: vi.fn(),
+      language: 'en'
     })
     expect(agent.instructions).toContain('The quick brown fox jumped over the lazy dog.')
   })
@@ -37,7 +38,8 @@ describe('buildRealtimeAgent', () => {
     const agent = buildRealtimeAgent({
       bookId: 42,
       pageText: '',
-      onEndConversation: vi.fn()
+      onEndConversation: vi.fn(),
+      language: 'en'
     })
     expect(agent.instructions).toContain('(No page text available)')
   })
@@ -47,7 +49,8 @@ describe('buildRealtimeAgent', () => {
       bookId: 42,
       pageText: 'Page text including the active sentence and more.',
       activeParagraphText: 'the active sentence',
-      onEndConversation: vi.fn()
+      onEndConversation: vi.fn(),
+      language: 'en'
     })
     expect(agent.instructions).toMatch(/just heard|just read|currently/i)
     expect(agent.instructions).toContain('the active sentence')
@@ -57,7 +60,8 @@ describe('buildRealtimeAgent', () => {
     const agent = buildRealtimeAgent({
       bookId: 42,
       pageText: 'x',
-      onEndConversation: vi.fn()
+      onEndConversation: vi.fn(),
+      language: 'en'
     })
     expect(agent.instructions).not.toMatch(/just heard/i)
   })
@@ -66,7 +70,8 @@ describe('buildRealtimeAgent', () => {
     const agent = buildRealtimeAgent({
       bookId: 42,
       pageText: 'x',
-      onEndConversation: vi.fn()
+      onEndConversation: vi.fn(),
+      language: 'en'
     })
     const toolNames = agent.tools.map((t: { name: string }) => t.name)
     expect(toolNames).toContain('bookContext')
@@ -78,7 +83,8 @@ describe('buildRealtimeAgent', () => {
     const agent = buildRealtimeAgent({
       bookId: 42,
       pageText: 'x',
-      onEndConversation: onEnd
+      onEndConversation: onEnd,
+      language: 'en'
     })
     const endTool = agent.tools.find(
       (t: { name: string }) => t.name === 'endConversation'
@@ -94,7 +100,8 @@ describe('buildRealtimeAgent', () => {
     const agent = buildRealtimeAgent({
       bookId: 42,
       pageText: 'x',
-      onEndConversation: vi.fn()
+      onEndConversation: vi.fn(),
+      language: 'en'
     })
     const bookContextTool = agent.tools.find(
       (t: { name: string }) => t.name === 'bookContext'
@@ -115,7 +122,8 @@ describe('buildRealtimeAgent', () => {
         author: 'Hunt and Thomas',
         chapters: ['Introduction', 'Chapter 1']
       },
-      onEndConversation: vi.fn()
+      onEndConversation: vi.fn(),
+      language: 'en'
     })
     expect(agent.instructions).toContain('The Pragmatic Programmer')
     expect(agent.instructions).toContain('Hunt and Thomas')
@@ -130,7 +138,8 @@ describe('buildRealtimeAgent', () => {
         author: null,
         chapters: ['Foreword', 'Chapter 1: Beginnings', 'Chapter 2: Middles']
       },
-      onEndConversation: vi.fn()
+      onEndConversation: vi.fn(),
+      language: 'en'
     })
     expect(agent.instructions).toContain('Foreword')
     expect(agent.instructions).toContain('Chapter 1: Beginnings')
@@ -141,7 +150,8 @@ describe('buildRealtimeAgent', () => {
     const agent = buildRealtimeAgent({
       bookId: 42,
       pageText: 'x',
-      onEndConversation: vi.fn()
+      onEndConversation: vi.fn(),
+      language: 'en'
     })
     expect(agent.instructions).not.toContain('## Book Outline')
   })
@@ -151,7 +161,8 @@ describe('buildRealtimeAgent', () => {
       bookId: 42,
       pageText: 'x',
       outline: { title: 'Anon Book', author: null, chapters: [] },
-      onEndConversation: vi.fn()
+      onEndConversation: vi.fn(),
+      language: 'en'
     })
     expect(agent.instructions).toContain('Anon Book')
     expect(agent.instructions).not.toContain('null')
@@ -165,7 +176,8 @@ describe('buildRealtimeAgent', () => {
     const agent = buildRealtimeAgent({
       bookId: 42,
       pageText: 'x',
-      onEndConversation: vi.fn()
+      onEndConversation: vi.fn(),
+      language: 'en'
     })
     const bookContextTool = agent.tools.find(
       (t: { name: string }) => t.name === 'bookContext'
@@ -189,7 +201,8 @@ describe('buildRealtimeAgent', () => {
     const agent = buildRealtimeAgent({
       bookId: 42,
       pageText: 'x',
-      onEndConversation: vi.fn()
+      onEndConversation: vi.fn(),
+      language: 'en'
     })
     const bookContextTool = agent.tools.find(
       (t: { name: string }) => t.name === 'bookContext'
@@ -225,7 +238,8 @@ describe('buildRealtimeAgent', () => {
     const agent = buildRealtimeAgent({
       bookId: 42,
       pageText: 'x',
-      onEndConversation: vi.fn()
+      onEndConversation: vi.fn(),
+      language: 'en'
     })
     const bookContextTool = agent.tools.find(
       (t: { name: string }) => t.name === 'bookContext'
@@ -264,7 +278,8 @@ describe('buildRealtimeAgent', () => {
     const agent = buildRealtimeAgent({
       bookId: 42,
       pageText: 'x',
-      onEndConversation: onEnd
+      onEndConversation: onEnd,
+      language: 'en'
     })
     const endTool = agent.tools.find(
       (t: { name: string }) => t.name === 'endConversation'
@@ -285,5 +300,35 @@ describe('buildRealtimeAgent', () => {
     expect(captureErrorMock).toHaveBeenCalled()
 
     consoleErrorSpy.mockRestore()
+  })
+
+  it('embeds the chosen language label into instructions (English)', () => {
+    const agent = buildRealtimeAgent({
+      bookId: 42,
+      pageText: 'x',
+      onEndConversation: vi.fn(),
+      language: 'en'
+    })
+    expect(agent.instructions).toMatch(/Always respond in English/)
+  })
+
+  it('embeds the chosen language label into instructions (Spanish)', () => {
+    const agent = buildRealtimeAgent({
+      bookId: 42,
+      pageText: 'x',
+      onEndConversation: vi.fn(),
+      language: 'es'
+    })
+    expect(agent.instructions).toMatch(/Always respond in Spanish/)
+  })
+
+  it('falls back to English label for an unknown language code', () => {
+    const agent = buildRealtimeAgent({
+      bookId: 42,
+      pageText: 'x',
+      onEndConversation: vi.fn(),
+      language: 'xx'
+    })
+    expect(agent.instructions).toMatch(/Always respond in English/)
   })
 })
