@@ -49,3 +49,64 @@ describe('applyHighlightWithUndo — apply path', () => {
     expect(triggerWrite).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('applyHighlightWithUndo — undo path', () => {
+  it('handle.undo() calls removeVisual, deleteHighlight and triggerWrite once', async () => {
+    const target = makeTarget()
+    const triggerWrite = vi.fn()
+    ;(getSyncService as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ triggerWrite })
+
+    const handle = await applyHighlightWithUndo({
+      target,
+      bookSyncId: 'book-2',
+      cfiRange: 'cfi:2',
+      text: 'world',
+      color: 'yellow'
+    })
+
+    // Reset counts so we only see undo-time activity.
+    target.applyVisual.mockClear()
+    ;(saveHighlight as unknown as ReturnType<typeof vi.fn>).mockClear()
+    triggerWrite.mockClear()
+
+    await handle.undo()
+
+    expect(target.removeVisual).toHaveBeenCalledTimes(1)
+    expect(deleteHighlight).toHaveBeenCalledTimes(1)
+    expect(deleteHighlight).toHaveBeenCalledWith('book-2', 'cfi:2')
+    expect(triggerWrite).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns a working handle even if saveHighlight rejects', async () => {
+    ;(saveHighlight as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('boom'))
+    const target = makeTarget()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const handle = await applyHighlightWithUndo({
+      target,
+      bookSyncId: 'book-3',
+      cfiRange: 'cfi:3',
+      text: 'x',
+      color: 'yellow'
+    })
+
+    expect(warn).toHaveBeenCalled()
+    await handle.undo()
+    expect(target.removeVisual).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
+  it('calling undo twice is safe — second call still removes visual but does not throw', async () => {
+    const target = makeTarget()
+    const handle = await applyHighlightWithUndo({
+      target,
+      bookSyncId: 'book-4',
+      cfiRange: 'cfi:4',
+      text: 'x',
+      color: 'yellow'
+    })
+
+    await handle.undo()
+    await expect(handle.undo()).resolves.toBeUndefined()
+  })
+})
