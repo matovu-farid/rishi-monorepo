@@ -7,6 +7,7 @@ interface SelectionPopoverProps {
   position: { x: number; y: number }
   onHighlight: (color: HighlightColor) => void
   onClose: () => void
+  onReadAloudFrom?: () => void
 }
 
 export function SelectionPopover({ position, onHighlight, onClose }: SelectionPopoverProps) {

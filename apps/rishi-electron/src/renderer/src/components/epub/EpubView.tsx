@@ -42,6 +42,9 @@ import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
 import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
 import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
+import { useSelectionStore } from '@/stores/selectionStore'
+import { findParagraphForCfi } from '@/modules/cfi-to-paragraph'
+import { buildPartialFirst } from '@/modules/read-aloud-from'
 
 function updateTheme(rendition: Rendition, theme: ThemeType) {
   const reditionThemes = rendition.themes
@@ -293,6 +296,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       const x = (rect?.left ?? 0) + (iframeRect?.left ?? 0)
       const y = (rect?.top ?? 0) + (iframeRect?.top ?? 0) - 50
 
+      useSelectionStore.getState().setEpubSelection({ cfiRange, text: selectedText })
       setSelectionInfo({ cfiRange, text: selectedText, position: { x, y } })
     },
     [rendition, bookSyncIdRef]
@@ -317,9 +321,58 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         .then(() => getSyncService().triggerWrite())
         .catch((err: unknown) => console.warn('[highlight] save failed:', err))
       setSelectionInfo(null)
+      useSelectionStore.getState().clear()
     },
     [selectionInfo, rendition, bookSyncIdRef]
   )
+
+  const handleReadAloudFrom = useCallback(() => {
+    const sel = useSelectionStore.getState().current
+    if (!sel || sel.format !== 'epub') return
+
+    const playingState = usePlayerStore.getState().playingState
+    if (playingState === 'idle' || playingState === 'pageNavigating') return
+
+    const paragraphs = usePlayerStore.getState().currentParagraphs
+    if (paragraphs.length === 0) return
+
+    const matched = findParagraphForCfi(paragraphs, sel.cfiRange)
+
+    const send = usePlayerStore.getState().send
+    if (!send) return
+
+    requireAuth('tts', () => {
+      if (!matched) {
+        // Selection not in any current paragraph — fall back to paragraph 0
+        // of current view with no override.
+        const first = paragraphs[0]
+        send({
+          type: 'PLAY_FROM',
+          paragraphIndex: 0,
+          partialFirstText: first.text,
+          partialFirstKey: first.index
+        })
+        return
+      }
+
+      const targetParagraph = paragraphs[matched.paragraphIndex]
+      const { partialFirstText, partialFirstKey } = buildPartialFirst(
+        targetParagraph.index,
+        targetParagraph.text,
+        matched.charOffsetInParagraph
+      )
+      send({
+        type: 'PLAY_FROM',
+        paragraphIndex: matched.paragraphIndex,
+        partialFirstText,
+        partialFirstKey
+      })
+    })
+
+    // Clear selection store; the popover may still be visible briefly but
+    // will close on its own.
+    useSelectionStore.getState().clear()
+  }, [requireAuth])
 
   const clearAllHighlights = useCallback(async () => {
     const r = renditionRef.current
@@ -757,7 +810,11 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           selectedText={selectionInfo.text}
           position={selectionInfo.position}
           onHighlight={handleHighlightColor}
-          onClose={() => setSelectionInfo(null)}
+          onReadAloudFrom={handleReadAloudFrom}
+          onClose={() => {
+            setSelectionInfo(null)
+            useSelectionStore.getState().clear()
+          }}
         />
       ) : null}
 
