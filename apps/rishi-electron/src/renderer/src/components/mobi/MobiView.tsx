@@ -4,17 +4,11 @@ import { useEpubStore } from '@/stores/epubStore'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
-import {
-  getMobiChapter,
-  getMobiChapterCount,
-  getMobiText,
-  hasSavedEpubData,
-  updateBookLocation
-} from '@/lib/api'
+import { getMobiChapter, getMobiChapterCount, getMobiText, updateBookLocation } from '@/lib/api'
 import type { Book } from '@/lib/api'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { themes } from '@/themes/themes'
-import { getBookImportService, type PageDataInsertable } from '@/services'
+import type { PageDataInsertable } from '@/services'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
@@ -27,6 +21,7 @@ import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
 import { useChapterParagraphPrefetch } from '@/hooks/reader/useChapterParagraphPrefetch'
 import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
 import ReaderOverlayControls from '@/components/reader/ReaderOverlayControls'
+import { useBookEmbeddings } from '@/hooks/reader/useBookEmbeddings'
 
 export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme)
@@ -37,7 +32,6 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   })
   const [chapterCount, setChapterCount] = useState(0)
   const iframeRef = useRef<HTMLIFrameElement>(null)
-  const embeddingsProcessedRef = useRef(false)
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
   const { requireAuth, AuthDialog } = useRequireAuth()
   const { bookSyncId } = useBookSyncId(book.id)
@@ -182,39 +176,28 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   })
 
   // Generate embeddings on first open (for AI chat)
-  useEffect(() => {
-    if (chapterCount === 0 || embeddingsProcessedRef.current) return
-    embeddingsProcessedRef.current = true
-
-    void (async () => {
-      try {
-        const alreadySaved = await hasSavedEpubData({ bookId: book.id })
-        if (alreadySaved) return
-
-        // Per-chapter extraction is independent; run in parallel.
-        const chapters = await Promise.all(
-          Array.from({ length: chapterCount }, async (_, i) => {
-            const texts = await getMobiText({ path: book.filepath, chapterIndex: i })
-            return { i, combined: texts.join('\n').trim() }
-          })
-        )
-        const allPageData: PageDataInsertable[] = chapters
-          .filter(({ combined }) => combined.length > 0)
-          .map(({ i, combined }) => ({
-            id: stringToNumberID(`${book.id}-mobi-${i}`),
-            pageNumber: i + 1,
-            bookId: book.id,
-            data: combined
-          }))
-
-        if (allPageData.length > 0) {
-          await getBookImportService().indexBook(book.id, allPageData)
-        }
-      } catch (err) {
-        console.warn('[MobiView] failed to generate embeddings:', err)
-      }
-    })()
-  }, [book.id, book.filepath, chapterCount])
+  useBookEmbeddings({
+    bookId: book.id,
+    ready: chapterCount > 0,
+    buildPageData: async () => {
+      // Per-chapter extraction is independent; run in parallel.
+      const chapters = await Promise.all(
+        Array.from({ length: chapterCount }, async (_, i) => {
+          const texts = await getMobiText({ path: book.filepath, chapterIndex: i })
+          return { i, combined: texts.join('\n').trim() }
+        })
+      )
+      const allPageData: PageDataInsertable[] = chapters
+        .filter(({ combined }) => combined.length > 0)
+        .map(({ i, combined }) => ({
+          id: stringToNumberID(`${book.id}-mobi-${i}`),
+          pageNumber: i + 1,
+          bookId: book.id,
+          data: combined
+        }))
+      return allPageData
+    }
+  })
 
   // Build themed srcdoc
   const srcdoc = useMemo(() => {
