@@ -100,6 +100,7 @@ export type ChannelToMethod = {
   'util:getOsInfo': 'getOsInfo'
   'shell:openExternal': 'openExternal'
   'dialog:showOpen': 'showOpenDialog'
+  'dialog:showMessageBox': 'showMessageBox'
   'files:getPending': 'getPendingOpenFiles'
 
   // Bookmarks

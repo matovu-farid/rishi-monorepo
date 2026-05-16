@@ -20,7 +20,18 @@ export function buildMenu(ctx: MenuContext, dispatch: Dispatch): MenuItemConstru
       { type: 'separator' },
       ctx.kind === 'book'
         ? { label: 'Close Book', accelerator: ACCELERATORS.closeWindow, role: 'close' }
-        : { label: 'Close Window', accelerator: ACCELERATORS.closeWindow, role: 'close' }
+        : { label: 'Close Window', accelerator: ACCELERATORS.closeWindow, role: 'close' },
+      ...(isMac
+        ? []
+        : ([
+            { type: 'separator' },
+            {
+              label: 'Preferences…',
+              accelerator: ACCELERATORS.openSettings,
+              click: fire({ command: 'openSettings' })
+            },
+            { label: 'Check for Updates…', click: fire({ command: 'checkForUpdates' }) }
+          ] as MenuItemConstructorOptions[]))
     ]
   }
 
@@ -125,6 +136,13 @@ export function buildMenu(ctx: MenuContext, dispatch: Dispatch): MenuItemConstru
       label: 'Rishi',
       submenu: [
         { label: 'About Rishi', click: fire({ command: 'about' }) },
+        { type: 'separator' },
+        {
+          label: 'Preferences…',
+          accelerator: ACCELERATORS.openSettings,
+          click: fire({ command: 'openSettings' })
+        },
+        { label: 'Check for Updates…', click: fire({ command: 'checkForUpdates' }) },
         { type: 'separator' },
         { role: 'services' },
         { type: 'separator' },

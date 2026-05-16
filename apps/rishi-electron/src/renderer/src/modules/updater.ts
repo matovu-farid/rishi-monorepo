@@ -52,6 +52,7 @@ export function renderStatus(status: UpdateStatus): string | null {
 }
 
 let listenersRegistered = false
+let userInitiatedCheckPending = false
 
 /**
  * Register one-time listeners for autoUpdater events forwarded from main process.
@@ -64,11 +65,25 @@ function ensureListeners(): void {
 
   window.electron.on('update-available', (info: unknown) => {
     const data = info as { version?: string } | undefined
-    setStatus({ kind: 'available', version: data?.version ?? 'unknown' })
+    const version = data?.version ?? 'unknown'
+    setStatus({ kind: 'available', version })
+    if (userInitiatedCheckPending) {
+      userInitiatedCheckPending = false
+      void promptDownload(version)
+    }
   })
 
   window.electron.on('update-not-available', () => {
     setStatus({ kind: 'idle' })
+    if (userInitiatedCheckPending) {
+      userInitiatedCheckPending = false
+      void window.electron.showMessageBox({
+        type: 'info',
+        message: "You're up to date.",
+        buttons: ['OK'],
+        defaultId: 0
+      })
+    }
   })
 
   window.electron.on('download-progress', (progress: unknown) => {
@@ -87,22 +102,66 @@ function ensureListeners(): void {
 
   window.electron.on('update-downloaded', (info: unknown) => {
     const data = info as { version?: string } | undefined
-    setStatus({ kind: 'ready', version: data?.version ?? 'unknown' })
+    const version = data?.version ?? 'unknown'
+    setStatus({ kind: 'ready', version })
+    void promptInstall(version)
   })
 
   window.electron.on('update-error', (error: unknown) => {
     const msg = typeof error === 'string' ? error : String(error)
     console.warn('[updater] error from main process:', msg)
     setStatus({ kind: 'error', message: msg })
+    if (userInitiatedCheckPending) {
+      userInitiatedCheckPending = false
+      void window.electron.showMessageBox({
+        type: 'error',
+        message: 'Update check failed',
+        detail: msg,
+        buttons: ['OK'],
+        defaultId: 0
+      })
+    }
   })
+}
+
+async function promptDownload(version: string): Promise<void> {
+  const result = await window.electron.showMessageBox({
+    type: 'info',
+    message: `Update v${version} is available.`,
+    detail: 'Would you like to download it now?',
+    buttons: ['Download', 'Not Now'],
+    defaultId: 0,
+    cancelId: 1
+  })
+  if (result.response === 0) {
+    void downloadUpdate()
+  }
+}
+
+async function promptInstall(version: string): Promise<void> {
+  const result = await window.electron.showMessageBox({
+    type: 'info',
+    message: `Rishi v${version} is ready to install.`,
+    detail: 'Restart now to apply the update?',
+    buttons: ['Restart & Install', 'Later'],
+    defaultId: 0,
+    cancelId: 1
+  })
+  if (result.response === 0) {
+    installUpdate()
+  }
 }
 
 let checkInFlight = false
 
-export async function checkForUpdates(_opts?: { silent: boolean }): Promise<void> {
+export async function checkForUpdates(opts?: { silent: boolean }): Promise<void> {
   if (checkInFlight) return
 
   ensureListeners()
+
+  if (opts && opts.silent === false) {
+    userInitiatedCheckPending = true
+  }
 
   checkInFlight = true
   useUpdateStore.getState().setStatus({ kind: 'checking' })

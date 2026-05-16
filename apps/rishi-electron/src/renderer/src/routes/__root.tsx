@@ -16,6 +16,7 @@ import { useHydrateAuth } from '@/hooks/useHydrateAuth'
 import { useStartupUpdateCheck } from '@/hooks/useStartupUpdateCheck'
 import { useFileOpenHandler } from '@/hooks/useFileOpenHandler'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
+import { checkForUpdates } from '@/modules/updater'
 
 export const Route = createRootRoute({
   component: () => <RootComponent />
@@ -100,6 +101,12 @@ function RootComponent(): JSX.Element {
         const e = (window as unknown as { electron: { openBook(id: number): Promise<void> } })
           .electron
         void e.openBook(id)
+      },
+      openSettings: (): void => {
+        void navigate({ to: '/settings/account' })
+      },
+      checkForUpdates: (): void => {
+        void checkForUpdates({ silent: false })
       }
     }),
     []

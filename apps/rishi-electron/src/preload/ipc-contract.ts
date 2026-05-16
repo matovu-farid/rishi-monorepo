@@ -161,6 +161,19 @@ export type IpcContract = {
     args: [options: Electron.OpenDialogOptions]
     returns: { filePaths: string[] }
   }
+  'dialog:showMessageBox': {
+    args: [
+      options: {
+        type?: 'none' | 'info' | 'error' | 'question' | 'warning'
+        message: string
+        detail?: string
+        buttons?: string[]
+        defaultId?: number
+        cancelId?: number
+      }
+    ]
+    returns: { response: number; checkboxChecked?: boolean }
+  }
   'files:getPending': { args: []; returns: string[] }
 
   // -- Bookmarks -------------------------------------------------------

@@ -84,6 +84,7 @@ const electronAPI: ElectronAPI = {
   isDev: () => invoke('util:isDev'),
   getDevBypassSecret: () => invoke('util:getDevBypassSecret'),
   showOpenDialog: (options) => invoke('dialog:showOpen', options),
+  showMessageBox: (options) => invoke('dialog:showMessageBox', options),
   openExternal: (url) => invoke('shell:openExternal', url),
   getOsInfo: () => invoke('util:getOsInfo'),
   getPendingOpenFiles: () => invoke('files:getPending'),

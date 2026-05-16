@@ -17,7 +17,6 @@ import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { usePdfStore } from '@/stores/pdfStore'
 import { LoginButton } from './LoginButton'
-import { UpdateMenu } from './UpdateMenu'
 import { BookDiscoveryModal } from './BookDiscoveryModal'
 import { HelpMenu } from './HelpMenu'
 import { evictPdf } from '@/services/reader-cache/pdf-cache'
@@ -293,7 +292,6 @@ export default function FileComponent(): React.JSX.Element {
           </Button>
         </div>
         <LoginButton />
-        <UpdateMenu />
         <HelpMenu />
       </div>
 

@@ -17,4 +17,19 @@ export function registerDialogHandlers(): void {
       throw new Error(`Failed to show open dialog: ${errorMessage(error)}`)
     }
   })
+
+  handle('dialog:showMessageBox', async (_event, options) => {
+    try {
+      const focusedWindow = BrowserWindow.getFocusedWindow()
+      const result = focusedWindow
+        ? await dialog.showMessageBox(focusedWindow, options)
+        : await dialog.showMessageBox(options)
+      return {
+        response: result.response,
+        checkboxChecked: result.checkboxChecked
+      }
+    } catch (error) {
+      throw new Error(`Failed to show message box: ${errorMessage(error)}`)
+    }
+  })
 }
