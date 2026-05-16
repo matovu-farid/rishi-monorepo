@@ -29,6 +29,7 @@ import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-stora
 import { stringToNumberID } from '@/lib/utils'
 import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
 import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
+import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
 
 export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme)
@@ -51,9 +52,17 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   // Wire native-menu commands. Toolbar buttons remain the primary entry
   // point; menu items dispatch the same actions. MOBI has no thumbnails or
   // dual-page so those commands are not registered here.
+  const commonHandlers = useCommonMenuHandlers({
+    // useRequireAuth narrows the feature key to PremiumFeature; the hook
+    // accepts a plain string so it can be shared across views without
+    // dragging the auth-features types into the primitive.
+    requireAuth: requireAuth as (feature: string, action: () => void) => void,
+    setChatPanelOpen,
+    setTocOpen
+  })
   const menuHandlers = useMemo(
     () => ({
-      toggleTOC: () => setTocOpen((v) => !v),
+      ...commonHandlers,
       addBookmark: () => {
         if (!bookSyncId) return
         const idx = chapterIndex
@@ -67,23 +76,9 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
             await publishBookmarksToMenu(bookSyncId)
           })
           .catch((err: unknown) => console.warn('[menu] addBookmark failed:', err))
-      },
-      readAloudToggle: () => {
-        const send = usePlayerStore.getState().send
-        if (!send) return
-        const state = usePlayerStore.getState().playingState
-        if (state === 'playing') send({ type: 'PAUSE' })
-        else if (state.startsWith('paused')) send({ type: 'RESUME' })
-        else requireAuth('tts', () => send({ type: 'PLAY' }))
-      },
-      openChat: () => requireAuth('chat', () => setChatPanelOpen((v) => !v)),
-      voiceChat: () => {
-        const { isChatting: chatting, setIsChatting } = useChatStore.getState()
-        if (chatting) setIsChatting(false)
-        else requireAuth('voice-input', () => setIsChatting(true))
       }
     }),
-    [requireAuth, bookSyncId, chapterIndex, queryClient]
+    [commonHandlers, bookSyncId, chapterIndex, queryClient]
   )
   useMenuCommands(menuHandlers)
 
