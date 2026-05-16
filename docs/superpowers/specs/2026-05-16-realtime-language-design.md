@@ -144,7 +144,7 @@ Tests are written first, per repo convention (red-green-refactor). Each componen
 |---|---|
 | `stores/prefsStore.test.ts` (new) | Default is `"en"`; hydrates from `window.electron.getStoreValue` mock; `setLanguage` writes via `setStoreValue` and invalidates voice-chat key |
 | `modules/buildRealtimeAgent.test.ts` (extend) | Instructions include the language line for `'en'`, `'es'`; falls back to English for unknown code |
-| `workers/worker/src/realtime.test.ts` (new — workers package has no existing tests) | `?language=es` injects `es` into OpenAI request body; missing/invalid → `en`; payload includes `audio.input.transcription.language`. May require extracting the route handler from `index.ts` into a testable module. |
+| Worker side | **Not unit-tested** in this change. The `workers/worker` package has no existing test infrastructure (no vitest, no test script). Setting that up is out of scope. Worker correctness is validated manually after deploy by changing the language in the renderer and confirming the realtime conversation behaves as expected. |
 | `services/voice-chat/service.test.ts` (extend) | Activate flow passes `language` from prefs into `agentFactory` and `getRealtimeClientSecret` |
 | `services/voice-chat/key-cache.test.ts` (extend) | `invalidate()` clears cached key; next `get()` re-fetches |
 
@@ -167,5 +167,4 @@ No new E2E tests — the existing voice-chat E2E covers the activation path; thi
 - `apps/rishi-electron/src/renderer/src/services/voice-chat/service.test.ts` — extend
 - `apps/rishi-electron/src/renderer/src/services/index.ts` — wire `voiceChatLanguage` into factory init, hydrate prefs at boot
 - `apps/rishi-electron/src/renderer/src/routes/settings/account.tsx` — add language select section
-- `workers/worker/src/index.ts` — accept and validate `?language=`, inject into session body (route handler may be extracted to `workers/worker/src/routes/realtime.ts` to be unit-testable)
-- `workers/worker/src/realtime.test.ts` — new test file (workers package currently has no tests; vitest config may need to be added)
+- `workers/worker/src/index.ts` — accept and validate `?language=`, inject into session body
