@@ -424,6 +424,16 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
             isDirty: 1,
             isDeleted: 0
           })
+          // Backfill the real DB row (specifically its id) so subsequent
+          // updateHighlightColor / updateHighlightNote calls hit the right
+          // row. Fire-and-forget — the toast/Cmd+Z UX doesn't depend on
+          // this completing first.
+          void getHighlightsForBook(bookSyncId)
+            .then((rows) => {
+              const fresh = rows.find((r) => r.cfiRange === cfiRange)
+              if (fresh) highlightsByRangeRef.current.set(cfiRange, fresh)
+            })
+            .catch((err: unknown) => console.warn('[highlight] backfill failed:', err))
           setLastUndoable(handle)
           toast('Highlighted', {
             action: { label: 'Undo', onClick: () => void handle.undo() },
@@ -456,14 +466,11 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         'mix-blend-mode': 'multiply'
       })
 
-      // DB update (only if we have a real DB id — pending sentinel skips).
-      if (row.id !== '__pending__') {
-        try {
-          await updateHighlightColor(row.id, newColor)
-          getSyncService().triggerWrite()
-        } catch (err) {
-          console.warn('[highlight] color update failed:', err)
-        }
+      try {
+        await updateHighlightColor(row.id, newColor)
+        getSyncService().triggerWrite()
+      } catch (err) {
+        console.warn('[highlight] color update failed:', err)
       }
 
       // Reflect in the map.
