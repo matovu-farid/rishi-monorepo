@@ -149,8 +149,21 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
     const onAgentEnd = (): void => {
       if (!isAgentSpeaking) emit.chatStatus('idle')
     }
-    const onToolStart = (): void => deps.effects.startThinkingSound()
-    const onToolEnd = (): void => deps.effects.stopThinkingSound()
+    const onToolStart = (): void => {
+      deps.effects.startThinkingSound()
+      // Emit thinking on tool entry so consumers see the agent is working
+      // and so the service's inactivity timer resets — a tool call > the
+      // inactivity timeout (e.g. slow RAG) must not auto-close the session.
+      emit.chatStatus('thinking')
+    }
+    const onToolEnd = (): void => {
+      deps.effects.stopThinkingSound()
+      // Stay in 'thinking' on tool completion — the agent may call another
+      // tool or about to speak. The next audio_start / agent_end will move
+      // status forward. This emit primarily exists to reset the inactivity
+      // timer so a back-to-back chain of tools doesn't accumulate timeout.
+      emit.chatStatus('thinking')
+    }
 
     const listeners: Array<readonly [string, (...args: unknown[]) => void]> = [
       ['agent_start', onAgentStart],

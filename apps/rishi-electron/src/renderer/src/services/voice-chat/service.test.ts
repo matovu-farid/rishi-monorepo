@@ -690,6 +690,57 @@ describe('createVoiceChatService — inactivity timeout', () => {
     expect(svc.getState()).toBe('idle')
   })
 
+  it('inactivity timeout fires onEndedByAgent listeners so consumers can reset UI state', async () => {
+    // Without this, chatStore.isChatting stays true after the timer fires:
+    // session is closed and billing stops (correct) but the chat overlay
+    // stays open because chatStore only resets isChatting on onEndedByAgent.
+    const clock = makeClock()
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({
+        clock,
+        sessionFactory: session.factory,
+        config: makeConfig({ inactivityTimeoutMs: 3 * 60 * 1000 })
+      })
+    )
+    const endedReasons: string[] = []
+    svc.onEndedByAgent((reason) => endedReasons.push(reason))
+    await svc.activate(1, { pageText: 'p' })
+
+    clock.tick(3 * 60 * 1000)
+
+    expect(endedReasons).toEqual(['inactivity_timeout'])
+    expect(session.close).toHaveBeenCalledTimes(1)
+    expect(svc.getState()).toBe('idle')
+  })
+
+  it('tool events reset the inactivity timer so long tool calls do not auto-close', async () => {
+    // agent_tool_start/end fire during RAG lookups. A tool call that takes
+    // longer than inactivityTimeoutMs would otherwise auto-close the session
+    // even though the agent is actively working.
+    const clock = makeClock()
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({
+        clock,
+        sessionFactory: session.factory,
+        config: makeConfig({ inactivityTimeoutMs: 3 * 60 * 1000 })
+      })
+    )
+    await svc.activate(1, { pageText: 'p' })
+
+    clock.tick(2 * 60 * 1000)
+    session.fire('agent_tool_start')
+    clock.tick(2 * 60 * 1000)
+    session.fire('agent_tool_end')
+    clock.tick(2 * 60 * 1000)
+
+    // Total fake time elapsed: 6m. With resets at +2m and +4m, no 3m window
+    // ever expires. Session must still be open.
+    expect(session.close).not.toHaveBeenCalled()
+    expect(svc.getState()).toBe('active')
+  })
+
   it('clears the inactivity timer on explicit dispose so it never double-fires', async () => {
     const clock = makeClock()
     const session = makeSession()

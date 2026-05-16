@@ -94,6 +94,11 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
   function scheduleInactivityTimer() {
     clearInactivityTimer()
     inactivityTimer = clock.setTimeout(() => {
+      // Notify consumers (chatStore) first so they can reset UI flags like
+      // isChatting before the session disappears. Reusing endedByAgentEmitter
+      // means existing onEndedByAgent listeners handle inactivity uniformly
+      // with agent-initiated endings.
+      endedByAgentEmitter.emit('inactivity_timeout')
       disposeInternal()
       actor.send({ type: 'DISPOSE' })
     }, config.inactivityTimeoutMs)
