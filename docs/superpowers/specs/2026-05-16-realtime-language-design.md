@@ -57,18 +57,15 @@ Both reads happen synchronously from a Zustand store that hydrates from IPC at a
 
 ### 1. `prefsStore.ts` (new) — `apps/rishi-electron/src/renderer/src/stores/prefsStore.ts`
 
-Zustand store. Single key `voiceChatLanguage` (default `"en"`). Hydrates lazily on first read via `window.electron.getPref('voiceChatLanguage')`. `setLanguage(lang)` writes through to IPC, calls `getVoiceChatService().invalidateKey()` (matching the existing pattern in `chatStore.ts:3` of stores reaching into the service singleton), then updates state.
+Zustand store. Single key `voiceChatLanguage` (default `"en"`). Hydrates lazily on first read via `window.electron.getStoreValue('voiceChatLanguage')`. `setLanguage(lang)` writes through to IPC (`window.electron.setStoreValue`), calls `getVoiceChatService().invalidateKey()` (matching the existing pattern in `chatStore.ts:3` of stores reaching into the service singleton), then updates state.
 
 Why a store rather than a hook: the worker-key fetch (`getRealtimeClientSecret`) and the agent factory both need this synchronously at activation time. A store gives them a sync read (`usePrefsStore.getState().voiceChatLanguage`) without an IPC round-trip on every voice-chat start.
 
-### 2. Main-process prefs handler (new) — `apps/rishi-electron/src/main/ipc/prefs.ts`
+### 2. Persistence: reuse existing store IPC
 
-Two channels added to `ipc-contract.ts`:
+The repo already has a generic key/value store at `store:get` / `store:set` (see `apps/rishi-electron/src/main/ipc/store.ts`) backed by `settings-store.json` in `app.getPath('userData')`. It's exposed on the renderer as `window.electron.getStoreValue(key)` / `setStoreValue(key, value)`.
 
-- `prefs:get` — `(key: string) => unknown | null`
-- `prefs:set` — `(key: string, value: unknown) => void`
-
-Backed by a single JSON file at `app.getPath('userData')/prefs.json`. Read on first call into memory; writes go through a debounced flush (50ms) to avoid hammering disk on rapid changes. The channel is intentionally generic so future prefs (theme, default voice, etc.) don't need new IPC channels.
+We reuse it as-is. No new IPC channels, no new main-process handlers. The single new key is `'voiceChatLanguage'`.
 
 ### 3. Worker change — `workers/worker/src/index.ts:165`
 
@@ -145,8 +142,7 @@ Tests are written first, per repo convention (red-green-refactor). Each componen
 
 | File | What to test |
 |---|---|
-| `stores/prefsStore.test.ts` (new) | Default is `"en"`; hydrates from IPC mock; `setLanguage` writes via IPC and invalidates voice-chat key |
-| `main/ipc/prefs.test.ts` (new) | `get` returns null for missing key; `set` then `get` round-trips; corrupt JSON → `get` returns null without throwing |
+| `stores/prefsStore.test.ts` (new) | Default is `"en"`; hydrates from `window.electron.getStoreValue` mock; `setLanguage` writes via `setStoreValue` and invalidates voice-chat key |
 | `modules/buildRealtimeAgent.test.ts` (extend) | Instructions include the language line for `'en'`, `'es'`; falls back to English for unknown code |
 | `workers/worker/src/realtime.test.ts` (new — workers package has no existing tests) | `?language=es` injects `es` into OpenAI request body; missing/invalid → `en`; payload includes `audio.input.transcription.language`. May require extracting the route handler from `index.ts` into a testable module. |
 | `services/voice-chat/service.test.ts` (extend) | Activate flow passes `language` from prefs into `agentFactory` and `getRealtimeClientSecret` |
@@ -159,12 +155,8 @@ No new E2E tests — the existing voice-chat E2E covers the activation path; thi
 **New:**
 - `apps/rishi-electron/src/renderer/src/stores/prefsStore.ts`
 - `apps/rishi-electron/src/renderer/src/stores/prefsStore.test.ts`
-- `apps/rishi-electron/src/main/ipc/prefs.ts`
-- `apps/rishi-electron/src/main/ipc/prefs.test.ts`
 
 **Modified:**
-- `apps/rishi-electron/src/preload/ipc-contract.ts` — add `prefs:get`, `prefs:set`
-- `apps/rishi-electron/src/main/index.ts` — register prefs IPC handler
 - `apps/rishi-electron/src/renderer/src/lib/api.ts` — `getRealtimeClientSecret(language)`
 - `apps/rishi-electron/src/renderer/src/modules/buildRealtimeAgent.ts` — language param + instructions section
 - `apps/rishi-electron/src/renderer/src/modules/buildRealtimeAgent.test.ts` — extend coverage
