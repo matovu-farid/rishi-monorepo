@@ -885,4 +885,17 @@ describe('playerMachine - PLAY_FROM', () => {
     expect(actor.getSnapshot().context.partialFirstText).toBeNull()
     expect(actor.getSnapshot().context.partialFirstParagraphIndex).toBeNull()
   })
+
+  it('override clears on CHAT_STARTED', () => {
+    const actor = setupPlayingState()
+    actor.send({
+      type: 'PLAY_FROM',
+      paragraphIndex: 1,
+      partialFirstText: 'override',
+      partialFirstKey: 'p1#s=0'
+    })
+    actor.send({ type: 'CHAT_STARTED' })
+    expect(actor.getSnapshot().context.partialFirstText).toBeNull()
+    expect(actor.getSnapshot().context.partialFirstParagraphIndex).toBeNull()
+  })
 })

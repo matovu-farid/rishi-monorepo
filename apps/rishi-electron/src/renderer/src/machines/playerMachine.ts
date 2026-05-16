@@ -196,7 +196,7 @@ export const playerMachine = setup({
   on: {
     CHAT_STARTED: {
       target: '.stopped',
-      actions: 'resetIndex'
+      actions: ['resetIndex', 'clearPartialFirst']
     },
     CLEANUP: {
       target: '.idle',
