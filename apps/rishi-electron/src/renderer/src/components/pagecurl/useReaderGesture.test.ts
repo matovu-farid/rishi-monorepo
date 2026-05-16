@@ -320,3 +320,29 @@ describe('useReaderGesture - wheel (trackpad)', () => {
     expect(onNavigate).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('useReaderGesture - autoTurn', () => {
+  it('calls onNavigate("right") and activates', () => {
+    const onNavigate = vi.fn(() => true)
+    const { result } = renderHook(() =>
+      useReaderGesture({ onNavigate, onCommit: vi.fn(), onUndoNavigate: vi.fn() })
+    )
+    act(() => {
+      result.current.autoTurn('right')
+    })
+    expect(onNavigate).toHaveBeenCalledWith('right')
+    expect(result.current.active).toBe(true)
+  })
+
+  it('autoTurn does nothing when onNavigate returns false', () => {
+    const onNavigate = vi.fn(() => false)
+    const { result } = renderHook(() =>
+      useReaderGesture({ onNavigate, onCommit: vi.fn(), onUndoNavigate: vi.fn() })
+    )
+    act(() => {
+      result.current.autoTurn('left')
+    })
+    expect(onNavigate).toHaveBeenCalledWith('left')
+    expect(result.current.active).toBe(false)
+  })
+})
