@@ -280,4 +280,43 @@ describe('useReaderGesture - wheel (trackpad)', () => {
     })
     expect(onNavigate).toHaveBeenCalledTimes(1)
   })
+
+  it('does not fire wheel-nav when a pointer drag is in progress', () => {
+    const onNavigate = vi.fn(() => true)
+    const { result } = renderHook(() =>
+      useReaderGesture({ onNavigate, onCommit: vi.fn(), onUndoNavigate: vi.fn() })
+    )
+    act(() => {
+      // Start a mouse drag in the edge zone — claims a curl, state becomes 'dragging'
+      result.current.pointerHandlers.onPointerDown(makeMockPointerEvent({ clientX: 10 }))
+      // While the drag is in progress, dispatch enough wheel ticks to fire
+      result.current.wheelHandlers.onWheel(makeWheelEvent({ deltaX: 60, deltaY: 5 }))
+    })
+    expect(onNavigate).toHaveBeenCalledTimes(1) // only the pointer claim
+    act(() => {
+      vi.advanceTimersByTime(130)
+    })
+    // The wheel debounce should NOT have fired a second navigation
+    expect(onNavigate).toHaveBeenCalledTimes(1)
+  })
+
+  it('fires a second time after the buffer resets', () => {
+    const onNavigate = vi.fn(() => true)
+    const { result } = renderHook(() =>
+      useReaderGesture({ onNavigate, onCommit: vi.fn(), onUndoNavigate: vi.fn() })
+    )
+    act(() => {
+      result.current.wheelHandlers.onWheel(makeWheelEvent({ deltaX: 60, deltaY: 5 }))
+    })
+    // Advance past debounce (120 ms) + animation (200 ms) so state returns to idle
+    act(() => { vi.advanceTimersByTime(350) })
+    expect(onNavigate).toHaveBeenCalledTimes(1)
+
+    // Second gesture after the buffer has been cleared and state is back to idle
+    act(() => {
+      result.current.wheelHandlers.onWheel(makeWheelEvent({ deltaX: 60, deltaY: 5 }))
+    })
+    act(() => { vi.advanceTimersByTime(350) })
+    expect(onNavigate).toHaveBeenCalledTimes(2)
+  })
 })

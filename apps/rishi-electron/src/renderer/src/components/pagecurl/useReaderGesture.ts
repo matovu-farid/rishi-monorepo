@@ -293,6 +293,7 @@ export function useReaderGesture(callbacks: {
         wheelBufferRef.current = 0
         wheelTimerRef.current = null
         if (Math.abs(sum) < WHEEL_CUMULATIVE_THRESHOLD) return
+        if (stateRef.current !== 'idle') return
         const dir: CurlDirection = sum > 0 ? 'right' : 'left'
         if (!callbacksRef.current.onNavigate(dir)) return
         // Visual feedback via autoTurn
