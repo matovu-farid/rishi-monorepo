@@ -79,6 +79,73 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   useNavMachine(rendition)
   const navSend = useNavStore((s) => s.send)
 
+  // Flip userNavHappenedRef the first time the nav machine leaves 'idle'.
+  // navState !== 'idle' implies a genuine user-initiated navigation
+  // (CURL_NEXT/CURL_PREV clicks, DISPLAY jumps from TOC/bookmarks, or
+  // TTS-driven page turns). Restore-drift relocateds happen outside the
+  // nav machine and so will NOT flip this ref.
+  useEffect(() => {
+    const unsub = useNavStore.subscribe(
+      (s) => s.navState,
+      (state) => {
+        if (!userNavHappenedRef.current && state !== 'idle') {
+          userNavHappenedRef.current = true
+        }
+      }
+    )
+    return unsub
+  }, [])
+
+  // Window-close flush. The save chain is async: click Next → page-curl
+  // animation (~200ms) → rendition.next() resolves → 'relocated' fires →
+  // mutation IPC. If the user closes the window mid-flight, the new CFI
+  // never reaches SQLite. The main process intercepts the window 'close'
+  // event and calls window.__rishi.flushPendingSaves(); this handler waits
+  // briefly for any in-flight nav to settle, then writes the latest known
+  // CFI directly via the synchronous IPC (no mutation queue).
+  useEffect(() => {
+    const flush = async (): Promise<void> => {
+      // Wait up to 800ms for any in-flight navigation to settle so we
+      // capture the click that triggered the close, not the position
+      // before it. Total close-flush budget is 1.5s in the main process,
+      // so keep this strictly less than that to leave room for the IPC
+      // round-trip.
+      const waitStart = Date.now()
+      while (
+        useNavStore.getState().navState !== 'idle' &&
+        Date.now() - waitStart < 800
+      ) {
+        // eslint-disable-next-line no-await-in-loop -- Sequential settle poll.
+        await new Promise((r) => setTimeout(r, 50))
+      }
+      // Prefer the rendition's live position (it has the freshest CFI
+      // after rendition.next() resolves). Fall back to whatever
+      // locationChanged last published.
+      const liveCfi =
+        (renditionRef.current?.location?.start?.cfi as string | undefined) ?? undefined
+      const cfi = liveCfi ?? lastSavedCfiRef.current ?? undefined
+      if (!cfi) return
+      // Only flush if the user actually navigated this session — never
+      // overwrite the saved position with a restore-drift CFI.
+      if (!userNavHappenedRef.current || !settledRef.current) return
+      try {
+        await window.electron.updateBookLocation(book.id, cfi)
+      } catch (err) {
+        console.error('[flushPendingSaves] save failed', err)
+      }
+    }
+    const w = window as unknown as {
+      __rishi?: { flushPendingSaves?: () => Promise<void> }
+    }
+    w.__rishi = w.__rishi ?? {}
+    w.__rishi.flushPendingSaves = flush
+    return () => {
+      if (w.__rishi?.flushPendingSaves === flush) {
+        delete w.__rishi.flushPendingSaves
+      }
+    }
+  }, [book.id])
+
   const pageCurl = usePageCurl({
     onNavigate: (dir) => {
       // Reject if the nav machine is busy — prevents double rendition calls
@@ -107,6 +174,14 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   // Don't save location to DB until rendition has settled at the saved position.
   // Without this, the transient initial position overwrites the correct saved CFI.
   const settledRef = useRef(false)
+  // Tracks whether the user has initiated at least one navigation this mount.
+  // Combined with settledRef, this prevents restore-drift "relocated" events
+  // (which can fire at a different CFI than the saved one) from overwriting
+  // the saved position in the DB.
+  const userNavHappenedRef = useRef(false)
+  // Latest CFI we've observed from a `locationChanged` callback. Updated on
+  // every published location and read by the window-close flush handler.
+  const lastSavedCfiRef = useRef<string | null>(null)
   const [selectionInfo, setSelectionInfo] = useState<{
     cfiRange: string
     text: string
@@ -528,14 +603,20 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               })
             })
 
-            // Only save to DB after rendition has settled at the saved position.
-            // Transient positions during initial load must not overwrite the saved CFI.
-            if (settledRef.current) {
+            // Only save to DB after rendition has settled at the saved position
+            // AND the user has performed at least one navigation. Restore-drift
+            // relocateds can fire at a column-start CFI that differs from the
+            // saved one; without the userNav gate they would silently
+            // overwrite the correct saved CFI on reopen.
+            if (settledRef.current && userNavHappenedRef.current) {
               updateBookLocationMutation.mutate({
                 bookId: book.id.toString(),
                 location: epubcfi
               })
               getSyncService().triggerWrite()
+              // Record the latest CFI so the window-close flush has a value
+              // to write even if the mutation above hasn't completed yet.
+              lastSavedCfiRef.current = epubcfi
             }
 
             setCurrentEpubLocation(epubcfi)
@@ -612,11 +693,9 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
                 // so location.start.cfi is stale until "relocated" fires.
                 const seedOnRelocated = () => {
                   _rendition.off('relocated', seedOnRelocated)
-                  const cfi = _rendition.location.start.cfi
+                  const cfi = _rendition.location?.start?.cfi
                   if (cfi) {
                     usePageTracker.getState().goToCfi(cfi, locFromCfi)
-                    // Ensure the epub store has the location even when
-                    // locationChanged is skipped (book opens at saved position).
                     setCurrentEpubLocation(cfi)
                   }
                   settledRef.current = true
@@ -641,29 +720,33 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
                   // localStorage quota exceeded — non-fatal, locations will regenerate next time
                 }
 
-                // Wait for relocated so we can measure locsPerView
-                const buildOnce = () => {
-                  _rendition.off('relocated', buildOnce)
-                  const rawLocCount = _rendition.book.locations._locations.length
-                  const avgLocsPerPage = measureLocsPerView()
-                  console.log('[epub] Building page tracker:', { rawLocCount, avgLocsPerPage })
-                  usePageTracker.getState().build(rawLocCount, avgLocsPerPage)
-                  console.log('[epub] Page tracker state:', usePageTracker.getState())
+                // Run build/seed synchronously after generate() resolves. We
+                // do NOT wait for a future 'relocated' event because if the
+                // user makes no further click, that event may never arrive —
+                // leaving settledRef false forever and dropping all saves.
+                const rawLocCount = _rendition.book.locations._locations.length
+                const avgLocsPerPage = measureLocsPerView()
+                console.log('[epub] Building page tracker:', { rawLocCount, avgLocsPerPage })
+                usePageTracker.getState().build(rawLocCount, avgLocsPerPage)
+                console.log('[epub] Page tracker state:', usePageTracker.getState())
 
-                  // Seed current page
-                  const startCfi = _rendition.location.start.cfi
-                  if (startCfi) {
-                    usePageTracker.getState().goToCfi(startCfi, locFromCfi)
-                    // Ensure the epub store has the location even when
-                    // locationChanged is skipped (book opens at saved position).
-                    setCurrentEpubLocation(startCfi)
-                  }
-                  settledRef.current = true
+                // Seed current page from whatever the rendition is showing now.
+                const startCfi = _rendition.location?.start?.cfi
+                if (startCfi) {
+                  usePageTracker.getState().goToCfi(startCfi, locFromCfi)
+                  setCurrentEpubLocation(startCfi)
                 }
-
-                // Always wait for relocated — it fires after epub.js navigates
-                // to the saved location, ensuring location.start.cfi is correct
-                _rendition.on('relocated', buildOnce)
+                settledRef.current = true
+                // If the user navigated during generation, flush the current
+                // CFI to the DB — no future 'relocated' is guaranteed, so the
+                // gated locationChanged handler may never get a chance to save.
+                if (userNavHappenedRef.current && startCfi) {
+                  updateBookLocationMutation.mutate({
+                    bookId: book.id.toString(),
+                    location: startCfi
+                  })
+                  getSyncService().triggerWrite()
+                }
               })
             })
           }}
