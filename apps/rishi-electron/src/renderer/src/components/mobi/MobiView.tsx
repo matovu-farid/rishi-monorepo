@@ -27,6 +27,7 @@ import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
 import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
 import { stringToNumberID } from '@/lib/utils'
+import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
 
 export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme)
@@ -40,8 +41,7 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   const embeddingsProcessedRef = useRef(false)
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
   const { requireAuth, AuthDialog } = useRequireAuth()
-  const bookSyncIdRef = useRef<string | null>(null)
-  const [bookSyncId, setBookSyncId] = useState<string>('')
+  const { bookSyncId } = useBookSyncId(book.id)
 
   const isChatting = useChatStore((s) => s.isChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
@@ -91,17 +91,6 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     setBookId(book.id.toString())
   }, [book.id, setBookId])
-
-  // Look up the book's sync_id for chat + publish bookmarks for the menu.
-  useEffect(() => {
-    void window.electron.booksGetSyncId(book.id).then(async (syncId) => {
-      bookSyncIdRef.current = syncId
-      if (syncId) {
-        setBookSyncId(syncId)
-        await publishBookmarksToMenu(syncId)
-      }
-    })
-  }, [book.id])
 
   // Publish title so the native Window menu sees the loaded book.
   useEffect(() => {
