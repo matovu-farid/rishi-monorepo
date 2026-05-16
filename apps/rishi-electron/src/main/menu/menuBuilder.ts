@@ -209,6 +209,11 @@ function buildReaderMenu(
         click: () => dispatch({ command: 'readAloudToggle' })
       },
       {
+        label: 'Read Aloud From Selection',
+        accelerator: ACCELERATORS.readAloudFromSelection,
+        click: () => dispatch({ command: 'readAloudFromSelection' })
+      },
+      {
         label: 'Voice Chat',
         accelerator: ACCELERATORS.voiceChat,
         click: () => dispatch({ command: 'voiceChat' })

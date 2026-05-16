@@ -220,6 +220,14 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
             await publishBookmarksToMenu(bookSyncId)
           })
           .catch((err: unknown) => console.warn('[menu] addBookmark failed:', err))
+      },
+      readAloudFromSelection: () => {
+        const sel = useSelectionStore.getState().current
+        if (sel) {
+          window.dispatchEvent(new CustomEvent('rishi:readAloudFromSelection'))
+        } else {
+          commonHandlers.readAloudToggle?.()
+        }
       }
     }),
     [commonHandlers, bookSyncId, currentLocation, pageCurrent, queryClient]
@@ -381,6 +389,17 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       handleReadAloudFrom()
     })
     return unsubscribe
+  }, [handleReadAloudFrom])
+
+  // Subscribe to the window CustomEvent dispatched by the ⌘⇧L menu shortcut
+  // (Task 11). Both the IPC path (context menu) and this path converge on
+  // the same handleReadAloudFrom adapter.
+  useEffect(() => {
+    const handler = (): void => {
+      handleReadAloudFrom()
+    }
+    window.addEventListener('rishi:readAloudFromSelection', handler)
+    return () => window.removeEventListener('rishi:readAloudFromSelection', handler)
   }, [handleReadAloudFrom])
 
   const clearAllHighlights = useCallback(async () => {
