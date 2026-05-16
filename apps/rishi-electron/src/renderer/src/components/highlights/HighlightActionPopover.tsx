@@ -1,0 +1,112 @@
+import { useEffect, useRef } from 'react'
+import { Pencil, Trash2 } from 'lucide-react'
+import { HIGHLIGHT_COLORS, type HighlightColor } from '@/types/highlight'
+
+export interface HighlightActionPopoverProps {
+  position: { x: number; y: number }
+  currentColor: HighlightColor
+  onSelectColor: (color: HighlightColor) => void
+  onEditNote: () => void
+  onDelete: () => void
+  onClose: () => void
+}
+
+export function HighlightActionPopover({
+  position,
+  currentColor,
+  onSelectColor,
+  onEditNote,
+  onDelete,
+  onClose
+}: HighlightActionPopoverProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        onClose()
+      }
+    }
+    // Same 100 ms delay as SelectionPopover so the click that opened the
+    // popover doesn't immediately close it.
+    const timer = setTimeout(() => {
+      document.addEventListener('mousedown', handleClickOutside)
+    }, 100)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [onClose])
+
+  return (
+    <div
+      ref={containerRef}
+      className="fixed z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-md p-2"
+      style={{ left: position.x, top: position.y }}
+    >
+      <div className="flex items-center gap-2">
+        {HIGHLIGHT_COLORS.map((c) => {
+          const isCurrent = c.name === currentColor
+          return (
+            <button
+              key={c.name}
+              type="button"
+              aria-pressed={isCurrent}
+              aria-label={`Change to ${c.name}`}
+              title={`Change to ${c.name}`}
+              className={
+                'rounded-full transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-blue-500 ' +
+                (isCurrent
+                  ? 'border-2 border-blue-500'
+                  : 'border border-gray-300/50')
+              }
+              style={{
+                width: 28,
+                height: 28,
+                backgroundColor: c.hex
+              }}
+              onClick={() => {
+                onSelectColor(c.name)
+                onClose()
+              }}
+            />
+          )
+        })}
+
+        <button
+          type="button"
+          aria-label="Edit note"
+          title="Edit note"
+          className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          onClick={() => {
+            onEditNote()
+            onClose()
+          }}
+        >
+          <Pencil size={16} className="text-gray-700 dark:text-gray-200" />
+        </button>
+
+        <button
+          type="button"
+          aria-label="Delete highlight"
+          title="Delete highlight"
+          className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 focus:outline-none focus:ring-2 focus:ring-red-500"
+          onClick={() => {
+            onDelete()
+            onClose()
+          }}
+        >
+          <Trash2 size={16} />
+        </button>
+      </div>
+    </div>
+  )
+}
