@@ -12,14 +12,10 @@ import {
   updateBookLocation
 } from '@/lib/api'
 import type { Book } from '@/lib/api'
-import TTSControls from '@/components/tts/TTSControls'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import AIChatOrb from '@/components/chat/AIChatOrb'
-import VoiceChatLauncher from '@/components/chat/VoiceChatLauncher'
 import { themes } from '@/themes/themes'
 import { getBookImportService, type PageDataInsertable } from '@/services'
 import { ChatPanel } from '@/components/chat/ChatPanel'
-import { useChatStore } from '@/stores/chatStore'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
@@ -30,6 +26,7 @@ import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
 import { useChapterParagraphPrefetch } from '@/hooks/reader/useChapterParagraphPrefetch'
 import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
+import ReaderOverlayControls from '@/components/reader/ReaderOverlayControls'
 
 export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme)
@@ -45,8 +42,6 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   const { requireAuth, AuthDialog } = useRequireAuth()
   const { bookSyncId } = useBookSyncId(book.id)
 
-  const isChatting = useChatStore((s) => s.isChatting)
-  const chatStatus = useChatStore((s) => s.chatStatus)
   const queryClient = useQueryClient()
 
   // Wire native-menu commands. Toolbar buttons remain the primary entry
@@ -304,18 +299,12 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
         </div>
       </div>
 
-      {/* AI chat orb */}
-      {isChatting ? (
-        <AIChatOrb chatStatus={chatStatus} onClick={() => setChatPanelOpen((prev) => !prev)} />
-      ) : null}
-
-      {/* Voice chat launcher — paired above the TTS play orb */}
-      <VoiceChatLauncher />
-
-      {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
-      <div style={{ display: isChatting ? 'none' : 'contents' }}>
-        <TTSControls bookId={book.id.toString()} />
-      </div>
+      {/* AI chat orb, voice chat launcher, and TTS controls */}
+      <ReaderOverlayControls
+        bookId={book.id.toString()}
+        chatPanelOpen={chatPanelOpen}
+        onChatOrbClick={() => setChatPanelOpen((prev) => !prev)}
+      />
 
       {/* TOC / Bookmarks Sidebar */}
       <ReaderTOC
