@@ -11,7 +11,7 @@ import createIReactReaderTheme from '@/themes/readerThemes'
 import ReaderOverlayControls from '@/components/reader/ReaderOverlayControls'
 import type { Rendition } from 'epubjs'
 import { PageCurlOverlay } from '../pagecurl/PageCurlOverlay'
-import { usePageCurl } from '../pagecurl/usePageCurl'
+import { useReaderGesture } from '../pagecurl/useReaderGesture'
 import { useEpubStore, initEpubSubscriptions } from '@/stores/epubStore'
 import { usePlayerStore } from '@/stores/playerStore'
 import { useNavMachine } from '@/hooks/useNavMachine'
@@ -145,7 +145,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     }
   }, [book.id])
 
-  const pageCurl = usePageCurl({
+  const pageCurl = useReaderGesture({
     onNavigate: (dir) => {
       // Reject if the nav machine is busy — prevents double rendition calls
       if (useNavStore.getState().navState !== 'idle' || !navSend) return false
@@ -526,6 +526,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       <div
         style={{ height: '100vh', position: 'relative', overflow: 'hidden', touchAction: 'pan-y' }}
         {...pageCurl.pointerHandlers}
+        {...pageCurl.wheelHandlers}
       >
         <ReactReader
           key={`reader-${book.id}`}
@@ -590,7 +591,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               )
             }
           }}
-          swipeable={true}
+          swipeable={false}
           readerStyles={createIReactReaderTheme(themes[theme].readerTheme)}
           handleTextSelected={handleTextSelected}
           getRendition={(_rendition) => {
@@ -731,7 +732,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
             title={book.title}
             location={currentLocation || book.location || 0}
             locationChanged={() => {}}
-            swipeable={true}
+            swipeable={false}
             readerStyles={createIReactReaderTheme(themes[theme].readerTheme)}
             getRendition={(_rendition) => {
               _rendition.once('rendered', () => {
