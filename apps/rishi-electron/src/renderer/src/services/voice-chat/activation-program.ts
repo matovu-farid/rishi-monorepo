@@ -124,7 +124,8 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
       outline: ctx.outline,
       activeParagraphText: ctx.activeParagraphText,
       onEndConversation: (reason) => emit.endedByAgent(reason),
-      rag: deps.rag
+      rag: deps.rag,
+      language: deps.getLanguage()
     })
     const session = deps.sessionFactory(agent, { transport, apiKey: '' })
 

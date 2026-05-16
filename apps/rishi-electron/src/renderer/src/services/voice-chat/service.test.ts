@@ -57,7 +57,7 @@ export function makeConnectivity(opts?: {
 
 export function makeIpc(opts?: { key?: string; failWith?: Error }): VoiceChatIpc {
   return {
-    getRealtimeClientSecret: vi.fn().mockImplementation(async () => {
+    getRealtimeClientSecret: vi.fn().mockImplementation(async (_language: string) => {
       if (opts?.failWith) throw opts.failWith
       return opts?.key ?? 'test-key'
     })
@@ -262,6 +262,7 @@ export function makeDeps(overrides?: Partial<VoiceChatServiceDeps>): VoiceChatSe
     effects: makeEffects(),
     clock: makeClock(),
     config: makeConfig(),
+    getLanguage: () => 'en',
     ...overrides
   }
 }
@@ -525,6 +526,46 @@ describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
 
     expect(ipc.getRealtimeClientSecret).toHaveBeenCalledTimes(1)
     expect(media.getUserMedia).not.toHaveBeenCalled()
+  })
+
+  it('invalidateKey() drops the cached ephemeral key so next activate() refetches', async () => {
+    const ipc = makeIpc({ key: 'EPHEMERAL' })
+    const svc = createVoiceChatService(makeDeps({ ipc }))
+    svc.start()
+
+    await svc.activate(1, { pageText: 'p' })
+    const callsAfterFirstActivate = (
+      ipc.getRealtimeClientSecret as ReturnType<typeof vi.fn>
+    ).mock.calls.length
+    svc.deactivate()
+
+    // Without invalidate, the key cache (TTL 9min) would skip the second fetch.
+    svc.invalidateKey()
+
+    await svc.activate(1, { pageText: 'p' })
+    const callsAfterSecondActivate = (
+      ipc.getRealtimeClientSecret as ReturnType<typeof vi.fn>
+    ).mock.calls.length
+
+    expect(callsAfterSecondActivate).toBe(callsAfterFirstActivate + 1)
+  })
+
+  it('passes language from getLanguage() to agentFactory and getRealtimeClientSecret', async () => {
+    const ipc = makeIpc({ key: 'EPHEMERAL' })
+    const agent = makeAgent()
+    const svc = createVoiceChatService(
+      makeDeps({
+        ipc,
+        agentFactory: agent.factory,
+        getLanguage: () => 'es'
+      })
+    )
+    svc.start()
+
+    await svc.activate(1, { pageText: 'p' })
+
+    expect(ipc.getRealtimeClientSecret).toHaveBeenCalledWith('es')
+    expect(agent.lastArgs()?.language).toBe('es')
   })
 })
 

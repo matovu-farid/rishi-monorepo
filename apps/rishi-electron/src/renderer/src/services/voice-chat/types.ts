@@ -41,7 +41,7 @@ export class OfflineError extends Error {
 // --- ports ---
 
 export interface VoiceChatIpc {
-  getRealtimeClientSecret(): Promise<string>
+  getRealtimeClientSecret(language: string): Promise<string>
 }
 
 export interface MediaStreamLike {
@@ -111,6 +111,8 @@ export interface AgentFactoryArgs {
   activeParagraphText?: string
   onEndConversation: (reason: string) => void
   rag: RagService
+  /** ISO-639-1 code for the language the agent must respond in. */
+  language: string
 }
 
 export interface WebrtcFactoryArgs {
@@ -134,6 +136,12 @@ export interface VoiceChatServiceDeps {
   effects: EffectsPort
   clock: ClockPort
   config: VoiceChatConfig
+  /**
+   * Read the user's chosen voice-chat language at activation time. Synchronous
+   * because the value lives in a hydrated Zustand store. Returns an ISO-639-1
+   * code; callers must accept any string and validate downstream.
+   */
+  getLanguage(): string
 }
 
 export interface VoiceChatService {
@@ -144,6 +152,12 @@ export interface VoiceChatService {
   deactivate(): void
   dispose(): void
   prewarmKey(): void
+  /**
+   * Drop the cached realtime ephemeral key. Call after changing a setting
+   * (e.g., language) that's baked into the minted key — the next activate()
+   * will refetch with the new value.
+   */
+  invalidateKey(): void
   getState(): VoiceChatPublicState
   getError(): VoiceError | null
   dismissError(): void

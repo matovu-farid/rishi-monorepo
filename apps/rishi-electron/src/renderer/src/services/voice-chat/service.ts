@@ -41,7 +41,7 @@ function fingerprintContext(ctx: VoiceChatContext): string {
 }
 
 export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatService {
-  const { rag, connectivity, ipc, agentFactory, effects, clock, config } = deps
+  const { rag, connectivity, ipc, agentFactory, effects, clock, config, getLanguage } = deps
 
   const stateEmitter = createEmitter<VoiceChatPublicState>()
   const chatStatusEmitter = createEmitter<ChatStatus>()
@@ -58,7 +58,7 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
   })
 
   const keyCache = createKeyCache({
-    fetch: () => ipc.getRealtimeClientSecret(),
+    fetch: () => ipc.getRealtimeClientSecret(getLanguage()),
     ttlMs: config.keyTtlMs,
     clock
   })
@@ -175,7 +175,8 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
             outline: ctx.outline,
             activeParagraphText: ctx.activeParagraphText,
             onEndConversation: (reason) => endedByAgentEmitter.emit(reason),
-            rag
+            rag,
+            language: getLanguage()
           })
           await session.updateAgent(newAgent)
           // Why: warm path is serialized — doActivate is the only writer of
@@ -330,6 +331,10 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
 
     prewarmKey() {
       void keyCache.get()
+    },
+
+    invalidateKey() {
+      keyCache.invalidate()
     },
 
     getState() {
