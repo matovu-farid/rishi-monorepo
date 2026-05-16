@@ -20,6 +20,7 @@ import { useRequireAuth } from '@/hooks/useRequireAuth'
 import { ReaderTOC } from '@/components/reader/ReaderTOC'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
 import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
+import { stringToNumberID } from '@/lib/utils'
 import {
   parseAzw3,
   extractSectionParagraphs,
@@ -29,15 +30,6 @@ import {
 import { injectReaderStyles } from './reader-styles'
 import { findParagraphElement, parseParagraphIndex, setActiveClass } from './highlight'
 import { computePageStep, formatLocation, measurePageCount, parseLocation } from './pagination'
-
-function stringToNumberID(str: string): number {
-  let hash = 0
-  for (let i = 0; i < str.length; i++) {
-    const ch = str.charCodeAt(i)
-    hash = ((hash << 5) - hash + ch) | 0
-  }
-  return Math.abs(hash)
-}
 
 /** Debounce delay before persisting reading location. Page turns fire often
  *  (one per click + per TTS paragraph advance) so we coalesce updates. */
