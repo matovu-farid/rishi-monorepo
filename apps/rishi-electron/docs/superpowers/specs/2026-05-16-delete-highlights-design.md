@@ -59,17 +59,15 @@ The existing `useUndoableHighlightShortcut` hook already accepts any `HighlightH
 
 ### Native menu
 
-A new "View → Show Highlights" item, accelerator `CmdOrCtrl+Shift+H`. When clicked, it emits a `reader:showHighlights` IPC event over the existing main→renderer command channel (same pattern used by `reader:readAloudFromSelection`, commit `2fa737cc`).
+A new "View → Show Highlights" item, accelerator `CmdOrCtrl+Shift+H`, gated on `ctx.format === 'epub'` (highlights are EPUB-only today). Both the menu item and the accelerator dispatch a new `{ command: 'showHighlights' }` payload through the existing `menu:command` IPC channel — the same mechanism `readAloudFromSelection`, `toggleTOC`, and every other application-menu command uses. No new IPC channel is added.
 
-### Preload contract & renderer subscription
+### Renderer subscription
 
-Register `reader:showHighlights` in `src/preload/ipc-contract.ts` alongside the existing reader command channels. Renderer subscribes via `useMenuCommands` inside EpubView and calls `setHighlightsPanelOpen(true)`.
+EpubView's existing `useMenuCommands` hook gains a `showHighlights` handler that calls `setHighlightsPanelOpen(true)`.
 
-### Renderer-level keyboard shortcut
+### Keyboard shortcut
 
-A global `Cmd/Ctrl+Shift+H` keydown listener mounted in `EpubView`. Same editable-target skip as the existing arrow-key and `Cmd+Z` listeners (INPUT/TEXTAREA/contentEditable). Listening at the renderer level rather than relying on the native accelerator means the shortcut still works when the EpubView is focused but the menu is not visible (e.g. macOS fullscreen with auto-hide).
-
-The two paths (menu and shortcut) both call `setHighlightsPanelOpen(true)`. No coordination needed; the panel is idempotent on open.
+`Cmd/Ctrl+Shift+H` is bound exclusively via the native menu accelerator (same path the rest of the app uses for `readAloudFromSelection`, `toggleTOC`, etc.). Electron's native menu accelerators work in fullscreen with auto-hidden menu bars, so a renderer-level fallback would add a duplicate handler with no benefit. The accelerator and the menu item dispatch the same `MenuCommand` payload through the existing `menu:command` IPC channel, and EpubView's `useMenuCommands` handler calls `setHighlightsPanelOpen(true)`.
 
 ## Part 2 — Inline Highlight Popover
 
