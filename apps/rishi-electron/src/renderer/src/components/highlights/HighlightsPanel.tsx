@@ -1,24 +1,29 @@
 import { useCallback, useEffect, useState } from 'react'
+import { toast } from 'sonner'
 import { Pencil, Trash2 } from 'lucide-react'
-import { getHighlightsForBook, deleteHighlightById } from '@/modules/highlight-storage'
-import { getSyncService } from '@/services'
+import { getHighlightsForBook } from '@/modules/highlight-storage'
+import { deleteHighlightWithUndo } from '@/modules/highlight-actions'
 import { getHighlightHex, type HighlightColor } from '@/types/highlight'
 import { NoteEditor } from './NoteEditor'
 import type { HighlightRow } from '@/modules/highlight-storage'
+import { highlightRange, removeHighlight } from '@/modules/epubwrapper'
 import type { Rendition } from 'epubjs/types'
+import type { HighlightHandle } from '@/modules/highlight-actions'
 
 interface HighlightsPanelProps {
   bookSyncId: string
   rendition: Rendition | null
   open: boolean
   onOpenChange: (open: boolean) => void
+  setLastUndoable: (handle: HighlightHandle) => void
 }
 
 export function HighlightsPanel({
   bookSyncId,
   rendition,
   open,
-  onOpenChange
+  onOpenChange,
+  setLastUndoable
 }: HighlightsPanelProps) {
   const [highlights, setHighlights] = useState<HighlightRow[]>([])
   const [editingHighlight, setEditingHighlight] = useState<HighlightRow | null>(null)
@@ -38,15 +43,50 @@ export function HighlightsPanel({
     }
   }, [open, bookSyncId, refreshHighlights])
 
-  const handleDelete = async (highlightId: string) => {
-    try {
-      await deleteHighlightById(highlightId)
-      getSyncService().triggerWrite()
-      await refreshHighlights()
-    } catch (err) {
-      console.error('[highlights] delete failed:', err)
-    }
-  }
+  const handleDelete = useCallback(
+    (hl: HighlightRow) => {
+      if (!rendition) return
+      const cfiRange = hl.cfiRange
+      const color = hl.color as HighlightColor
+      const hex = getHighlightHex(color)
+
+      void deleteHighlightWithUndo({
+        target: {
+          applyVisual: async () => {
+            await highlightRange(rendition, cfiRange, {}, () => {}, 'epubjs-hl', {
+              fill: hex,
+              'fill-opacity': '0.3',
+              'mix-blend-mode': 'multiply'
+            })
+          },
+          removeVisual: async () => {
+            await removeHighlight(rendition, cfiRange)
+          }
+        },
+        bookSyncId,
+        cfiRange,
+        text: hl.text,
+        color,
+        note: hl.note,
+        chapter: hl.chapter
+      })
+        .then((handle) => {
+          setLastUndoable(handle)
+          toast('Highlight deleted', {
+            action: {
+              label: 'Undo',
+              onClick: () => {
+                void handle.undo().then(() => refreshHighlights())
+              }
+            },
+            duration: 5_000
+          })
+          return refreshHighlights()
+        })
+        .catch((err: unknown) => console.warn('[highlights] delete failed:', err))
+    },
+    [bookSyncId, rendition, setLastUndoable, refreshHighlights]
+  )
 
   const handleNavigate = (cfiRange: string) => {
     void rendition?.display(cfiRange)
@@ -117,7 +157,7 @@ export function HighlightsPanel({
                         title="Delete highlight"
                         onClick={(e) => {
                           e.stopPropagation()
-                          void handleDelete(hl.id)
+                          handleDelete(hl)
                         }}
                       >
                         <Trash2 size={16} />
