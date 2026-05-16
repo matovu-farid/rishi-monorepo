@@ -561,18 +561,57 @@ export function parseMobiMetadata(buf: Buffer): {
   return { title, author, publisher, cover, coverMimeType }
 }
 
-async function extractMobiData(filePath: string): Promise<BookDataResult> {
+/**
+ * Extract metadata from a Kindle file (MOBI or AZW3). Both formats share the
+ * PDB container and EXTH header layout, so the same `parseMobiMetadata`
+ * parser handles both. The renderer is responsible for actually rendering
+ * the payload (foliate-js for AZW3, an HTML chapter extractor for MOBI).
+ *
+ * AZW3 is more permissive about header variants: some KF8-only files have
+ * record layouts the MOBI parser doesn't fully understand, so we swallow
+ * parse errors there and fall back to filename-derived metadata. MOBI
+ * files are well-formed in practice, so a parse failure on the 'mobi' path
+ * surfaces as a thrown error.
+ */
+async function extractKindleData(filePath: string, kind: 'mobi' | 'azw3'): Promise<BookDataResult> {
   const data = await fs.readFile(filePath)
   const buf = Buffer.from(data)
 
-  const { title, author, publisher, cover, coverMimeType } = parseMobiMetadata(buf)
+  let title: string | null = null
+  let author: string | null = null
+  let publisher: string | null = null
+  let cover: number[] = []
+  let coverMimeType: string | null = null
+
+  if (kind === 'azw3') {
+    try {
+      const parsed = parseMobiMetadata(buf)
+      title = parsed.title
+      author = parsed.author
+      publisher = parsed.publisher
+      cover = parsed.cover
+      coverMimeType = parsed.coverMimeType
+    } catch {
+      // Some KF8-only files have headers MOBI parsers don't fully understand;
+      // we fall back to filename-derived metadata and let foliate-js do the
+      // heavy lifting in the renderer.
+    }
+  } else {
+    const parsed = parseMobiMetadata(buf)
+    title = parsed.title
+    author = parsed.author
+    publisher = parsed.publisher
+    cover = parsed.cover
+    coverMimeType = parsed.coverMimeType
+  }
+
   const ext = path.extname(filePath)
   const basename = path.basename(filePath, ext)
   const md5Hash = crypto.createHash('md5').update(filePath).digest('hex')
 
   return {
     id: md5Hash,
-    kind: 'mobi',
+    kind,
     cover,
     title: title ?? basename,
     author,
@@ -584,51 +623,12 @@ async function extractMobiData(filePath: string): Promise<BookDataResult> {
   }
 }
 
-/**
- * Extract metadata from an AZW3 (Kindle KF8) file. AZW3 uses the same PDB
- * container as MOBI, so the existing MOBI header / EXTH parsers extract
- * title, author, publisher, and cover bytes. The renderer is responsible
- * for actually rendering the KF8 payload (via foliate-js).
- */
+async function extractMobiData(filePath: string): Promise<BookDataResult> {
+  return extractKindleData(filePath, 'mobi')
+}
+
 async function extractAzw3Data(filePath: string): Promise<BookDataResult> {
-  const data = await fs.readFile(filePath)
-  const buf = Buffer.from(data)
-
-  let title: string | null = null
-  let author: string | null = null
-  let publisher: string | null = null
-  let cover: number[] = []
-  let coverMimeType: string | null = null
-
-  try {
-    const parsed = parseMobiMetadata(buf)
-    title = parsed.title
-    author = parsed.author
-    publisher = parsed.publisher
-    cover = parsed.cover
-    coverMimeType = parsed.coverMimeType
-  } catch {
-    // Some KF8-only files have headers MOBI parsers don't fully understand;
-    // we fall back to filename-derived metadata and let foliate-js do the
-    // heavy lifting in the renderer.
-  }
-
-  const ext = path.extname(filePath)
-  const basename = path.basename(filePath, ext)
-  const md5Hash = crypto.createHash('md5').update(filePath).digest('hex')
-
-  return {
-    id: md5Hash,
-    kind: 'azw3',
-    cover,
-    title: title ?? basename,
-    author,
-    publisher,
-    filepath: filePath,
-    location: '0',
-    coverKind: coverMimeType ?? 'fallback',
-    version: 1
-  }
+  return extractKindleData(filePath, 'azw3')
 }
 
 /**
