@@ -66,7 +66,17 @@ export function useUndoableHighlightShortcut(): UndoableHighlightShortcut {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  useEffect(() => clearLastUndoable, [clearLastUndoable])
+  // Cancel any pending expiry timer when the hook unmounts. Written
+  // self-contained (not `() => clearLastUndoable`) so future changes to
+  // `clearLastUndoable`'s deps can't accidentally make this run every render.
+  useEffect(() => {
+    return () => {
+      if (slotRef.current) {
+        clearTimeout(slotRef.current.timer)
+        slotRef.current = null
+      }
+    }
+  }, [])
 
   return { setLastUndoable, clearLastUndoable }
 }

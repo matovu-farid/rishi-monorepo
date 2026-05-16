@@ -100,4 +100,40 @@ describe('useUndoableHighlightShortcut', () => {
     })
     expect(handle.undo).not.toHaveBeenCalled()
   })
+
+  it('ignores Cmd+Shift+Z (reserved for future redo binding)', () => {
+    const { result } = renderHook(() => useUndoableHighlightShortcut())
+    const handle = makeHandle()
+    act(() => {
+      result.current.setLastUndoable(handle)
+    })
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'z', metaKey: true, shiftKey: true })
+      )
+    })
+    expect(handle.undo).not.toHaveBeenCalled()
+  })
+
+  it('ignores Cmd+Z when focus is in a contentEditable element', () => {
+    const { result } = renderHook(() => useUndoableHighlightShortcut())
+    const handle = makeHandle()
+
+    const editable = document.createElement('div')
+    editable.contentEditable = 'true'
+    document.body.appendChild(editable)
+    editable.focus()
+
+    act(() => {
+      result.current.setLastUndoable(handle)
+    })
+    act(() => {
+      editable.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true })
+      )
+    })
+
+    expect(handle.undo).not.toHaveBeenCalled()
+    document.body.removeChild(editable)
+  })
 })
