@@ -22,6 +22,7 @@ function makeTarget() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  ;(getSyncService as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ triggerWrite: vi.fn() })
 })
 
 describe('applyHighlightWithUndo — apply path', () => {
@@ -91,6 +92,7 @@ describe('applyHighlightWithUndo — undo path', () => {
     })
 
     expect(warn).toHaveBeenCalled()
+    expect(target.applyVisual).toHaveBeenCalledTimes(1)
     await handle.undo()
     expect(target.removeVisual).toHaveBeenCalledTimes(1)
     warn.mockRestore()
@@ -108,5 +110,6 @@ describe('applyHighlightWithUndo — undo path', () => {
 
     await handle.undo()
     await expect(handle.undo()).resolves.toBeUndefined()
+    expect(target.removeVisual).toHaveBeenCalledTimes(2)
   })
 })
