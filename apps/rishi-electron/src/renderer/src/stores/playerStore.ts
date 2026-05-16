@@ -21,6 +21,8 @@ export type PlayerStoreState =
   | 'paused.clean'
   | 'paused.stale'
   | 'waitingForParagraphs'
+  | 'pageNavigating'
+  | 'republishingParagraphs'
   | 'error'
 
 interface PlayerStoreMove {

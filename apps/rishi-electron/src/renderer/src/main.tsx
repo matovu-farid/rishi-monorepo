@@ -1,4 +1,5 @@
 import './styles/globals.css'
+import './testing/expose-stores'
 import { StrictMode } from 'react'
 import ReactDOM from 'react-dom/client'
 import { RouterProvider, createRouter, createHashHistory } from '@tanstack/react-router'
