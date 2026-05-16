@@ -9,11 +9,18 @@ export interface FactoryDeps {
 
 export function makeBrowserWindowFactory(deps: FactoryDeps) {
   return (identity: WindowIdentity): BrowserWindow => {
+    const dims =
+      identity.kind === 'settings'
+        ? { width: 640, height: 720 }
+        : identity.kind === 'library'
+          ? { width: 1024, height: 770 }
+          : { width: 1100, height: 900 }
+
     const win = new BrowserWindow({
-      width: identity.kind === 'library' ? 1024 : 1100,
-      height: identity.kind === 'library' ? 770 : 900,
-      minWidth: 800,
-      minHeight: 600,
+      width: dims.width,
+      height: dims.height,
+      minWidth: identity.kind === 'settings' ? 480 : 800,
+      minHeight: identity.kind === 'settings' ? 480 : 600,
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 15, y: 10 },
       show: false,
@@ -64,7 +71,12 @@ export function makeBrowserWindowFactory(deps: FactoryDeps) {
       })
     }
 
-    const hash = identity.kind === 'book' ? `#/books/${identity.bookId}` : '#/'
+    const hash =
+      identity.kind === 'book'
+        ? `#/books/${identity.bookId}`
+        : identity.kind === 'settings'
+          ? '#/settings/account'
+          : '#/'
     win.loadURL(`${deps.loadUrl}${hash}`).catch((err: unknown) => {
       console.error('[createBrowserWindow] loadURL failed', err)
     })
@@ -73,7 +85,9 @@ export function makeBrowserWindowFactory(deps: FactoryDeps) {
 }
 
 function identityFlag(i: WindowIdentity): string {
-  return i.kind === 'book' ? `book:${i.bookId}` : 'library'
+  if (i.kind === 'book') return `book:${i.bookId}`
+  if (i.kind === 'settings') return 'settings'
+  return 'library'
 }
 
 export const __forTest = { identityFlag }

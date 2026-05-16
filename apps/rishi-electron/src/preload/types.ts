@@ -100,6 +100,7 @@ export type ChannelToMethod = {
   'util:getOsInfo': 'getOsInfo'
   'shell:openExternal': 'openExternal'
   'dialog:showOpen': 'showOpenDialog'
+  'dialog:showMessageBox': 'showMessageBox'
   'files:getPending': 'getPendingOpenFiles'
 
   // Bookmarks
@@ -153,6 +154,7 @@ export type ChannelToMethod = {
   'window:closeBook': 'closeBook'
   'window:focusLibrary': 'focusLibrary'
   'window:list': 'listOpenBooks'
+  'window:openSettings': 'openSettings'
 
   // Better-auth (lives on `window.api.auth`, not `electronAPI` — but we
   // still want the channels to flow through `IpcContract` for the helper
@@ -209,7 +211,7 @@ export type ElectronAPI = DerivedInvokeApi & {
   send: (channel: string, ...args: unknown[]) => void
 
   // Window identity + menu (injected by main via additionalArguments)
-  windowIdentity: { kind: 'library' } | { kind: 'book'; bookId: number }
+  windowIdentity: { kind: 'library' } | { kind: 'book'; bookId: number } | { kind: 'settings' }
   onMenuCommand: (cb: (c: { command: string; arg?: unknown }) => void) => () => void
   setMenuContext: (partial: Record<string, unknown>) => void
   /**

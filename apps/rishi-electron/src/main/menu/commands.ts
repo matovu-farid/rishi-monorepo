@@ -34,6 +34,8 @@ export type MenuCommand =
   | { command: 'openHelp' }
   | { command: 'reportIssue' }
   | { command: 'about' }
+  | { command: 'openSettings' }
+  | { command: 'checkForUpdates' }
 
 export type LibraryMenuContext = {
   kind: 'library'

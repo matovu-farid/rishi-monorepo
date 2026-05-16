@@ -15,6 +15,10 @@ describe('parseWindowIdentity', () => {
     expect(parseWindowIdentity(['--window-identity=book:42'])).toEqual({ kind: 'book', bookId: 42 })
   })
 
+  it('parses --window-identity=settings as { kind: "settings" }', () => {
+    expect(parseWindowIdentity(['--window-identity=settings'])).toEqual({ kind: 'settings' })
+  })
+
   it('falls back to library on malformed flag', () => {
     expect(parseWindowIdentity(['--window-identity=book:abc'])).toEqual({ kind: 'library' })
     expect(parseWindowIdentity(['--window-identity=garbage'])).toEqual({ kind: 'library' })

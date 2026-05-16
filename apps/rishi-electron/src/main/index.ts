@@ -228,6 +228,10 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
     }
   })
 
+  handle('window:openSettings', () => {
+    getWindowManager().openSettings()
+  })
+
   handle('window:openBook', (_e, bookId) => {
     const w = getWindowManager().openBook(bookId) as unknown as BrowserWindow
     // Pre-seed the book window's menu context from the DB (better-sqlite3

@@ -57,6 +57,30 @@ describe('buildMenu — library', () => {
     expect(findItem(tpl, ['View', 'Force Reload'])?.role).toBe('forceReload')
     expect(findItem(tpl, ['View', 'Toggle Developer Tools'])?.role).toBe('toggleDevTools')
   })
+
+  it('macOS app menu has Preferences with CmdOrCtrl+, that dispatches openSettings', () => {
+    const dispatch = vi.fn<(c: MenuCommand) => void>()
+    const tpl = buildMenu(libraryCtx, dispatch)
+    // On non-mac, the app menu is not present — skip then.
+    const isMac = process.platform === 'darwin'
+    if (!isMac) return
+    const prefs = findItem(tpl, ['Rishi', 'Preferences…'])
+    expect(prefs).toBeDefined()
+    expect(prefs!.accelerator).toBe('CmdOrCtrl+,')
+    prefs!.click!(undefined as never, undefined as never, undefined as never)
+    expect(dispatch).toHaveBeenCalledWith({ command: 'openSettings' })
+  })
+
+  it('macOS app menu has Check for Updates that dispatches checkForUpdates', () => {
+    const dispatch = vi.fn<(c: MenuCommand) => void>()
+    const tpl = buildMenu(libraryCtx, dispatch)
+    const isMac = process.platform === 'darwin'
+    if (!isMac) return
+    const item = findItem(tpl, ['Rishi', 'Check for Updates…'])
+    expect(item).toBeDefined()
+    item!.click!(undefined as never, undefined as never, undefined as never)
+    expect(dispatch).toHaveBeenCalledWith({ command: 'checkForUpdates' })
+  })
 })
 
 const pdfCtx: BookMenuContext = {

@@ -161,6 +161,19 @@ export type IpcContract = {
     args: [options: Electron.OpenDialogOptions]
     returns: { filePaths: string[] }
   }
+  'dialog:showMessageBox': {
+    args: [
+      options: {
+        type?: 'none' | 'info' | 'error' | 'question' | 'warning'
+        message: string
+        detail?: string
+        buttons?: string[]
+        defaultId?: number
+        cancelId?: number
+      }
+    ]
+    returns: { response: number; checkboxChecked?: boolean }
+  }
   'files:getPending': { args: []; returns: string[] }
 
   // -- Bookmarks -------------------------------------------------------
@@ -263,6 +276,7 @@ export type IpcContract = {
   'window:closeBook': { args: [bookId: number]; returns: void }
   'window:focusLibrary': { args: []; returns: void }
   'window:list': { args: []; returns: Array<{ bookId: number; title: string }> }
+  'window:openSettings': { args: []; returns: void }
 
   // -- Better-auth surface (window.api.auth.*) ------------------------
   'auth:start-magic-link': { args: [email: string]; returns: void }

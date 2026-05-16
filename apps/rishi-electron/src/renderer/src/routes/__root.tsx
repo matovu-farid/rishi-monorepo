@@ -16,6 +16,7 @@ import { useHydrateAuth } from '@/hooks/useHydrateAuth'
 import { useStartupUpdateCheck } from '@/hooks/useStartupUpdateCheck'
 import { useFileOpenHandler } from '@/hooks/useFileOpenHandler'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
+import { checkForUpdates } from '@/modules/updater'
 
 export const Route = createRootRoute({
   component: () => <RootComponent />
@@ -38,7 +39,10 @@ function RootComponent(): JSX.Element {
     const e = (
       window as unknown as {
         electron: {
-          windowIdentity?: { kind: 'library' } | { kind: 'book'; bookId: number }
+          windowIdentity?:
+            | { kind: 'library' }
+            | { kind: 'book'; bookId: number }
+            | { kind: 'settings' }
           openBook(id: number): Promise<void>
         }
       }
@@ -55,6 +59,10 @@ function RootComponent(): JSX.Element {
     } else if (id?.kind === 'book') {
       if (!path.startsWith('/books/')) {
         void navigate({ to: '/books/$id', params: { id: String(id.bookId) } })
+      }
+    } else if (id?.kind === 'settings') {
+      if (path !== '/settings/account') {
+        void navigate({ to: '/settings/account' })
       }
     }
     // Intentional: identity is set once at window creation; no need to re-run.
@@ -100,6 +108,13 @@ function RootComponent(): JSX.Element {
         const e = (window as unknown as { electron: { openBook(id: number): Promise<void> } })
           .electron
         void e.openBook(id)
+      },
+      openSettings: (): void => {
+        const e = (window as unknown as { electron: { openSettings(): Promise<void> } }).electron
+        void e.openSettings()
+      },
+      checkForUpdates: (): void => {
+        void checkForUpdates({ silent: false })
       }
     }),
     []

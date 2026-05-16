@@ -84,6 +84,7 @@ const electronAPI: ElectronAPI = {
   isDev: () => invoke('util:isDev'),
   getDevBypassSecret: () => invoke('util:getDevBypassSecret'),
   showOpenDialog: (options) => invoke('dialog:showOpen', options),
+  showMessageBox: (options) => invoke('dialog:showMessageBox', options),
   openExternal: (url) => invoke('shell:openExternal', url),
   getOsInfo: () => invoke('util:getOsInfo'),
   getPendingOpenFiles: () => invoke('files:getPending'),
@@ -182,7 +183,8 @@ const electronAPI: ElectronAPI = {
   openBook: (bookId) => invoke('window:openBook', bookId),
   closeBook: (bookId) => invoke('window:closeBook', bookId),
   focusLibrary: () => invoke('window:focusLibrary'),
-  listOpenBooks: () => invoke('window:list')
+  listOpenBooks: () => invoke('window:list'),
+  openSettings: () => invoke('window:openSettings')
 }
 
 const api: Api = {
