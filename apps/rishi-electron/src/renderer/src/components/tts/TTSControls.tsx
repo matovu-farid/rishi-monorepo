@@ -60,6 +60,27 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
     return () => clearDismissTimer()
   }, [clearDismissTimer])
 
+  // Keyboard shortcuts: ArrowDown → next paragraph, ArrowUp → prev paragraph.
+  // Mounted globally so the shortcut works whether or not the pill is expanded.
+  useEffect(() => {
+    if (disabled) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+      if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
+      const target = e.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
+        return
+      }
+      e.preventDefault()
+      send({ type: e.key === 'ArrowDown' ? 'NEXT' : 'PREV' })
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [send, disabled])
+
   // --- Mouse handlers for expanded pill ---
   const handleMouseEnter = () => {
     isHoveringRef.current = true
