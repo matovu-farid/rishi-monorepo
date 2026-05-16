@@ -374,6 +374,15 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     useSelectionStore.getState().clear()
   }, [requireAuth])
 
+  // Subscribe to the context-menu IPC event that fires when the user clicks
+  // "Read Aloud From Here" in the native right-click menu (Task 9/10).
+  useEffect(() => {
+    const unsubscribe = window.electron.on('reader:readAloudFromSelection', () => {
+      handleReadAloudFrom()
+    })
+    return unsubscribe
+  }, [handleReadAloudFrom])
+
   const clearAllHighlights = useCallback(async () => {
     const r = renditionRef.current
     if (!r) return
