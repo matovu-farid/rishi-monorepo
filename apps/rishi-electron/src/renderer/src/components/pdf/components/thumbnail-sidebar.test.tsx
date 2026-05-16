@@ -62,13 +62,25 @@ describe('ThumbnailSidebar', () => {
     expect(source).toContain('onItemClick')
   })
 
-  // PDFT-05: Virtualization renders only visible thumbnails (inlined in component)
-  it('component source uses useVirtualizer with overscan for lazy rendering', async () => {
+  // PDFT-05: Virtualization renders only visible thumbnails. The
+  // `useVirtualizer` call lives in a thin wrapper hook so the parent
+  // component stays React-Compiler-compilable — verify both pieces:
+  // the wrapper imports `useVirtualizer`, the component uses the wrapper
+  // with the expected overscan + iterates virtual items.
+  it('component wires useVirtualizer (via wrapper) with overscan for lazy rendering', async () => {
     const fs = await import('fs')
     const path = await import('path')
-    const source = fs.readFileSync(path.resolve(__dirname, './thumbnail-sidebar.tsx'), 'utf-8')
-    expect(source).toContain('useVirtualizer')
-    expect(source).toContain('overscan: 3')
-    expect(source).toContain('getVirtualItems')
+    const componentSource = fs.readFileSync(
+      path.resolve(__dirname, './thumbnail-sidebar.tsx'),
+      'utf-8'
+    )
+    const hookSource = fs.readFileSync(
+      path.resolve(__dirname, '../hooks/useThumbnailVirtualizer.tsx'),
+      'utf-8'
+    )
+    expect(hookSource).toContain('useVirtualizer')
+    expect(componentSource).toContain('useThumbnailVirtualizer')
+    expect(componentSource).toContain('overscan: 3')
+    expect(componentSource).toContain('getVirtualItems')
   })
 })
