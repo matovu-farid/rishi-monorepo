@@ -8,10 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ThemeType } from '@/themes/common'
 import { themes } from '@/themes/themes'
 import createIReactReaderTheme from '@/themes/readerThemes'
-import AIChatOrb from '../chat/AIChatOrb'
-import VoiceChatLauncher from '../chat/VoiceChatLauncher'
-import TTSControls from '@/components/tts/TTSControls'
-import { useChatStore } from '@/stores/chatStore'
+import ReaderOverlayControls from '@/components/reader/ReaderOverlayControls'
 import type { Rendition } from 'epubjs'
 import { PageCurlOverlay } from '../pagecurl/PageCurlOverlay'
 import { usePageCurl } from '../pagecurl/usePageCurl'
@@ -192,8 +189,6 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
   const { requireAuth, AuthDialog } = useRequireAuth()
 
-  const isChatting = useChatStore((s) => s.isChatting)
-  const chatStatus = useChatStore((s) => s.chatStatus)
   const queryClient = useQueryClient()
 
   // Wire native-menu commands. Toolbar buttons remain the primary entry
@@ -747,18 +742,12 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         </div>
       </div>
 
-      {/* AI chat orb */}
-      {isChatting ? (
-        <AIChatOrb chatStatus={chatStatus} onClick={() => setChatPanelOpen((prev) => !prev)} />
-      ) : null}
-
-      {/* Voice chat launcher — paired above the TTS play orb */}
-      <VoiceChatLauncher />
-
-      {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
-      <div style={{ display: isChatting ? 'none' : 'contents' }}>
-        <TTSControls bookId={book.id.toString()} />
-      </div>
+      {/* AI chat orb, voice chat launcher, and TTS controls */}
+      <ReaderOverlayControls
+        bookId={book.id.toString()}
+        chatPanelOpen={chatPanelOpen}
+        onChatOrbClick={() => setChatPanelOpen((prev) => !prev)}
+      />
 
       {/* Highlight color picker popover */}
       {selectionInfo ? (
