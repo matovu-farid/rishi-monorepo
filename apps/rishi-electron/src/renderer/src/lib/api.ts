@@ -189,6 +189,14 @@ export async function hasSavedEpubData(params: { bookId: number }): Promise<bool
   return api().hasSavedEpubData(params.bookId)
 }
 
+/** Renderer-side alias for {@link hasSavedEpubData}. The IPC channel name
+ *  `hasSavedEpubData` is preserved on the preload/main side, but consumers
+ *  outside the EPUB path should prefer this name — the function checks
+ *  whether *any* indexed chunk data exists for a book, regardless of format. */
+export async function hasIndexedBookData(params: { bookId: number }): Promise<boolean> {
+  return api().hasSavedEpubData(params.bookId)
+}
+
 export interface BookOutline {
   title: string
   author: string | null
