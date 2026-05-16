@@ -92,6 +92,8 @@ const mockElectronAPI = {
   syncInsertMessage: vi.fn().mockResolvedValue(undefined),
   syncUpdateLastVersion: vi.fn().mockResolvedValue(undefined),
 
+  setMenuContext: vi.fn(),
+
   on: vi.fn().mockReturnValue(() => {}),
   once: vi.fn(),
   send: vi.fn()
