@@ -24,6 +24,7 @@ import { getRealtimeClientSecret } from '@/lib/api'
 import { RealtimeSession } from '@openai/agents/realtime'
 import { OpenAIRealtimeWebRTC } from '@openai/agents-realtime'
 import config from '@/config.json'
+import { usePrefsStore } from '@/stores/prefsStore'
 
 let _connectivity: ConnectivityService | null = null
 let _connectivityOverride: ConnectivityService | null = null
@@ -230,14 +231,15 @@ export function getVoiceChatService(): VoiceChatService {
           mediaStream: mediaStream as unknown as MediaStream,
           audioElement: audioElement as unknown as HTMLAudioElement
         }) as never,
-      agentFactory: ({ bookId, pageText, outline, activeParagraphText, onEndConversation, rag }) =>
+      agentFactory: ({ bookId, pageText, outline, activeParagraphText, onEndConversation, rag, language }) =>
         buildRealtimeAgent({
           bookId,
           pageText,
           outline,
           activeParagraphText,
           onEndConversation,
-          rag
+          rag,
+          language
         }) as never,
       sessionFactory: (agent, opts) =>
         new RealtimeSession(agent as never, {
@@ -264,9 +266,19 @@ export function getVoiceChatService(): VoiceChatService {
         inactivityTimeoutMs: 3 * 60 * 1000,
         connectTimeoutMs: 60 * 1000,
         keyTtlMs: 9 * 60 * 1000
-      }
+      },
+      getLanguage: () => usePrefsStore.getState().voiceChatLanguage
     })
     _voiceChat.start()
+    // Fire-and-forget: hydration is sub-50ms; if a chat starts before it
+    // resolves, the store returns the default 'en'. Catch logs but does
+    // not surface — a failure here just leaves the user on the default.
+    void usePrefsStore
+      .getState()
+      .hydrate()
+      .catch((err) => {
+        console.warn('[prefs] hydrate failed', err)
+      })
   }
   return _voiceChat
 }
