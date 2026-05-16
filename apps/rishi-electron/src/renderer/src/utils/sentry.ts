@@ -9,9 +9,11 @@ export function initSentry(): void {
   if (initialized) return
   initialized = true
 
+  if (!import.meta.env.PROD) return
+
   Sentry.init({
     dsn: DSN,
-    environment: import.meta.env.PROD ? 'production' : 'development',
+    environment: 'production',
     tracesSampleRate: 0.1,
     sendDefaultPii: false
   })

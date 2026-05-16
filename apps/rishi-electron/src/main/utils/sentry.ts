@@ -16,10 +16,12 @@ export function initMainSentry(): void {
   if (initialized) return
   initialized = true
 
+  if (!app.isPackaged) return
+
   Sentry.init({
     dsn: DSN,
     release: `rishi-electron@${app.getVersion()}`,
-    environment: app.isPackaged ? 'production' : 'development',
+    environment: 'production',
     tracesSampleRate: 0.1,
     sendDefaultPii: false
   })
