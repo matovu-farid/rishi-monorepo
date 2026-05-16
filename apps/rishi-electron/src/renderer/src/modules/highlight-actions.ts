@@ -89,7 +89,14 @@ export async function deleteHighlightWithUndo(args: DeleteHighlightArgs): Promis
     async undo() {
       await target.applyVisual()
       try {
-        await saveHighlight({ bookSyncId, cfiRange, text, color, note, chapter })
+        await saveHighlight({
+          bookSyncId,
+          cfiRange,
+          text,
+          color,
+          note,
+          chapter: chapter ?? undefined
+        })
         getSyncService().triggerWrite()
       } catch (err) {
         console.warn('[highlight] re-save failed:', err)
