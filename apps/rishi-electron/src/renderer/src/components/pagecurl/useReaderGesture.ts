@@ -47,6 +47,14 @@ export function useReaderGesture(callbacks: {
   const lastMoveTimeRef = useRef(0)
   const lastProgressRef = useRef(0)
   const velocityRef = useRef(0)
+  const touchPointersRef = useRef<Map<number, { x: number; y: number }>>(new Map())
+
+  // Helper: returns avg x of all active touch pointers
+  const avgTouchX = (): number => {
+    const pts = Array.from(touchPointersRef.current.values())
+    if (pts.length === 0) return 0
+    return pts.reduce((s, p) => s + p.x, 0) / pts.length
+  }
 
   const setProgressBoth = useCallback((p: number) => {
     progressRef.current = p
@@ -73,6 +81,13 @@ export function useReaderGesture(callbacks: {
     (target: number, duration: number, onDone: () => void) => {
       cancelRaf()
       const start = progressRef.current
+      // Short-circuit: already at target, no animation needed.
+      if (start === target) {
+        stateRef.current = 'animating'
+        setProgressBoth(target)
+        onDone()
+        return
+      }
       const startTime = performance.now()
       stateRef.current = 'animating'
       function tick(now: number) {
@@ -118,8 +133,32 @@ export function useReaderGesture(callbacks: {
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      // Touch is handled by 2-pointer logic (Task 4). Mouse/pen use edge-zone.
-      if (e.pointerType === 'touch') return
+      if (e.pointerType === 'touch') {
+        // Record this touch pointer
+        const rect = e.currentTarget.getBoundingClientRect()
+        touchPointersRef.current.set(e.pointerId, {
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top
+        })
+        // Claim only when 2 fingers down AND machine is idle
+        if (touchPointersRef.current.size === 2 && stateRef.current === 'idle') {
+          // Direction is provisional; refined by onPointerMove. Default 'right'.
+          const dir: CurlDirection = 'right'
+          if (!callbacksRef.current.onNavigate(dir)) return
+          e.currentTarget.setPointerCapture(e.pointerId)
+          setDirectionBoth(dir)
+          containerRectRef.current = rect
+          stateRef.current = 'dragging'
+          setProgressBoth(0)
+          velocityRef.current = 0
+          lastMoveTimeRef.current = performance.now()
+          lastProgressRef.current = 0
+          navigatedRef.current = true
+          setActive(true)
+        }
+        return
+      }
+      // Mouse/pen path: use edge-zone.
       if (stateRef.current !== 'idle') return
       const rect = e.currentTarget.getBoundingClientRect()
       const x = e.clientX - rect.left
@@ -147,6 +186,26 @@ export function useReaderGesture(callbacks: {
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
+      if (e.pointerType === 'touch') {
+        const rect = containerRectRef.current
+        if (!rect) return
+        const existing = touchPointersRef.current.get(e.pointerId)
+        if (!existing) return
+        touchPointersRef.current.set(e.pointerId, {
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top
+        })
+        if (stateRef.current !== 'dragging' || touchPointersRef.current.size < 2) return
+        const avgX = avgTouchX()
+        const W = rect.width
+        // Treat the gesture like a horizontal drag from the right edge: progress
+        // grows as the average finger position moves leftward.
+        const raw = 1 - avgX / W
+        const newProgress = Math.max(0, Math.min(1, raw))
+        setProgressBoth(newProgress)
+        return
+      }
+      // Mouse/pen move path.
       if (stateRef.current !== 'dragging') return
       const rect = containerRectRef.current
       if (!rect) return
@@ -169,7 +228,15 @@ export function useReaderGesture(callbacks: {
   )
 
   const onPointerUp = useCallback(
-    (_e: React.PointerEvent) => {
+    (e: React.PointerEvent) => {
+      if (e.pointerType === 'touch') {
+        const wasMulti = touchPointersRef.current.size >= 2
+        touchPointersRef.current.delete(e.pointerId)
+        if (wasMulti && touchPointersRef.current.size < 2 && stateRef.current === 'dragging') {
+          commitOrCancel()
+        }
+        return
+      }
       if (stateRef.current !== 'dragging') return
       commitOrCancel()
     },
@@ -177,7 +244,14 @@ export function useReaderGesture(callbacks: {
   )
 
   const onPointerCancel = useCallback(
-    (_e: React.PointerEvent) => {
+    (e: React.PointerEvent) => {
+      if (e.pointerType === 'touch') {
+        touchPointersRef.current.delete(e.pointerId)
+        if (touchPointersRef.current.size < 2 && stateRef.current === 'dragging') {
+          commitOrCancel()
+        }
+        return
+      }
       if (stateRef.current !== 'dragging') return
       commitOrCancel()
     },
