@@ -22,6 +22,7 @@ import { useMenuCommands } from '@/hooks/useMenuCommands'
 import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
 import { stringToNumberID } from '@/lib/utils'
 import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
+import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 import {
   parseAzw3,
   extractSectionParagraphs,
@@ -147,34 +148,8 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     setBookId(book.id.toString())
   }, [book.id, setBookId])
 
-  // Publish title so the native Window menu sees the loaded book.
-  useEffect(() => {
-    const e = (window as unknown as { electron: { send(c: string, p: unknown): void } }).electron
-    e.send('window:setBookTitle', { bookId: book.id, title: book.title })
-  }, [book.id, book.title])
-
-  // Mirror TOC sheet state into the menu context.
-  useEffect(() => {
-    const e = (
-      window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
-    ).electron
-    e.setMenuContext({ tocOpen })
-  }, [tocOpen])
-
-  // Mirror TTS play state so the Reader > Read Aloud label flips while playing.
-  useEffect(() => {
-    const e = (
-      window as unknown as { electron: { setMenuContext(p: Record<string, unknown>): void } }
-    ).electron
-    const unsub = usePlayerStore.subscribe(
-      (s) => s.playingState,
-      (state) => {
-        e.setMenuContext({ isReading: state === 'playing' })
-      }
-    )
-    e.setMenuContext({ isReading: usePlayerStore.getState().playingState === 'playing' })
-    return unsub
-  }, [])
+  // Mirror reader state (book title, TOC open, TTS playing) into the native menu.
+  useReaderMenuSync({ book, tocOpen })
 
   // Surface parse errors / empty-book to the user. This effect only reads
   // from query state and shows a toast — it does not call setState.
