@@ -1094,6 +1094,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         open={highlightsPanelOpen}
         onOpenChange={setHighlightsPanelOpen}
         setLastUndoable={setLastUndoable}
+        makeAnnotationClickCb={makeAnnotationClickCb}
       />
 
       {/* Bookmarks side panel */}

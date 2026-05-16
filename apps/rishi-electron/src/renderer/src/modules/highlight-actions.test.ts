@@ -22,7 +22,9 @@ function makeTarget() {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  ;(getSyncService as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ triggerWrite: vi.fn() })
+  ;(getSyncService as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+    triggerWrite: vi.fn()
+  })
 })
 
 describe('applyHighlightWithUndo — apply path', () => {
@@ -168,7 +170,9 @@ describe('deleteHighlightWithUndo — delete path', () => {
   })
 
   it('returns a working handle even if deleteHighlight rejects', async () => {
-    ;(deleteHighlight as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('boom'))
+    ;(deleteHighlight as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('boom')
+    )
     const target = makeTarget()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 

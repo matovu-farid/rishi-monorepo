@@ -16,6 +16,7 @@ interface HighlightsPanelProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   setLastUndoable: (handle: HighlightHandle) => void
+  makeAnnotationClickCb: (cfiRange: string) => (e?: MouseEvent) => void
 }
 
 export function HighlightsPanel({
@@ -23,7 +24,8 @@ export function HighlightsPanel({
   rendition,
   open,
   onOpenChange,
-  setLastUndoable
+  setLastUndoable,
+  makeAnnotationClickCb
 }: HighlightsPanelProps) {
   const [highlights, setHighlights] = useState<HighlightRow[]>([])
   const [editingHighlight, setEditingHighlight] = useState<HighlightRow | null>(null)
@@ -53,11 +55,18 @@ export function HighlightsPanel({
       void deleteHighlightWithUndo({
         target: {
           applyVisual: async () => {
-            await highlightRange(rendition, cfiRange, {}, () => {}, 'epubjs-hl', {
-              fill: hex,
-              'fill-opacity': '0.3',
-              'mix-blend-mode': 'multiply'
-            })
+            await highlightRange(
+              rendition,
+              cfiRange,
+              {},
+              makeAnnotationClickCb(cfiRange),
+              'epubjs-hl',
+              {
+                fill: hex,
+                'fill-opacity': '0.3',
+                'mix-blend-mode': 'multiply'
+              }
+            )
           },
           removeVisual: async () => {
             await removeHighlight(rendition, cfiRange)
@@ -85,7 +94,7 @@ export function HighlightsPanel({
         })
         .catch((err: unknown) => console.warn('[highlights] delete failed:', err))
     },
-    [bookSyncId, rendition, setLastUndoable, refreshHighlights]
+    [bookSyncId, rendition, setLastUndoable, refreshHighlights, makeAnnotationClickCb]
   )
 
   const handleNavigate = (cfiRange: string) => {
