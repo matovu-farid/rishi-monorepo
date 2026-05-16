@@ -24,6 +24,7 @@ import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
 import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
 import { useChapterParagraphPrefetch } from '@/hooks/reader/useChapterParagraphPrefetch'
+import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
 import {
   parseAzw3,
   extractSectionParagraphs,
@@ -547,20 +548,15 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     }
   })
 
-  // Handle page-turn events from Player (TTS exhausted current chapter)
-  useEffect(() => {
-    const unsubPage = usePlayerStore.subscribe(
-      (s) => s.pageRequest,
-      (request) => {
-        if (request === 'next') goNextPage()
-        if (request === 'prev') goPrevPage()
-        if (request) usePlayerStore.getState().clearPageRequest()
-      }
-    )
-    return () => {
-      unsubPage()
-    }
-  }, [goNextPage, goPrevPage])
+  // Handle page-turn events from Player (TTS exhausted current chapter).
+  // goNextPage / goPrevPage close over pendingPageAfterLoadRef; the hook
+  // accesses these callbacks via internal refs so the subscription is not
+  // re-created on every re-render.
+  usePageRequestSubscription({
+    onNext: goNextPage,
+    onPrev: goPrevPage,
+    autoClear: true
+  })
 
   // Generate embeddings on first open (for AI chat)
   useEffect(() => {
