@@ -19,8 +19,9 @@ import { useNavStore } from '@/stores/navStore'
 import { highlightRange, removeHighlight, getCurrentViewParagraphs } from '@/modules/epubwrapper'
 import type { Book } from '@/lib/api'
 import { updateBookLocation } from '@/lib/api'
-import { getHighlightsForBook } from '@/modules/highlight-storage'
-import { applyHighlightWithUndo } from '@/modules/highlight-actions'
+import { getHighlightsForBook, updateHighlightColor } from '@/modules/highlight-storage'
+import type { HighlightRow } from '@/modules/highlight-storage'
+import { applyHighlightWithUndo, deleteHighlightWithUndo } from '@/modules/highlight-actions'
 import { getSyncService } from '@/services'
 import { getHighlightHex } from '@/types/highlight'
 import type { HighlightColor } from '@/types/highlight'
@@ -29,6 +30,8 @@ import type { NavItem } from 'epubjs'
 import { tocToChapters } from './tocToChapters'
 import { SelectionPopover } from '@/components/highlights/SelectionPopover'
 import { HighlightsPanel } from '@/components/highlights/HighlightsPanel'
+import { HighlightActionPopover } from '@/components/highlights/HighlightActionPopover'
+import { NoteEditor } from '@/components/highlights/NoteEditor'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
 import { BookmarksList } from '@/components/bookmarks/BookmarksList'
@@ -196,6 +199,49 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   const { setLastUndoable } = useUndoableHighlightShortcut()
   const { requireAuth, AuthDialog } = useRequireAuth()
 
+  // Map of cfiRange -> the latest HighlightRow, kept in a ref so the per-
+  // annotation click callback (registered once, never re-bound) can read
+  // the current color/note after edits.
+  const highlightsByRangeRef = useRef<Map<string, HighlightRow>>(new Map())
+
+  const [inlinePopover, setInlinePopover] = useState<{
+    cfiRange: string
+    position: { x: number; y: number }
+    currentColor: HighlightColor
+  } | null>(null)
+
+  const [editingNoteRow, setEditingNoteRow] = useState<HighlightRow | null>(null)
+
+  const onHighlightClickRef = useRef<(cfiRange: string) => (e?: MouseEvent) => void>(() => () => {})
+
+  useEffect(() => {
+    onHighlightClickRef.current = (cfiRange: string) => (e?: MouseEvent) => {
+      const row = highlightsByRangeRef.current.get(cfiRange)
+      if (!row) return
+      // Translate iframe-local click coords to viewport coords. If the event
+      // is missing (defensive — epubjs always passes one in current versions),
+      // center the popover at the viewport's mid-bottom.
+      let x = window.innerWidth / 2
+      let y = window.innerHeight / 2
+      if (e?.target instanceof Element) {
+        const iframe = e.target.ownerDocument.defaultView?.frameElement as HTMLElement | null
+        const iframeRect = iframe?.getBoundingClientRect()
+        x = (iframeRect?.left ?? 0) + e.clientX
+        y = (iframeRect?.top ?? 0) + e.clientY
+      }
+      setInlinePopover({
+        cfiRange,
+        position: { x, y },
+        currentColor: row.color as HighlightColor
+      })
+    }
+  })
+
+  const makeAnnotationClickCb = useCallback(
+    (cfiRange: string) => (e?: MouseEvent) => onHighlightClickRef.current(cfiRange)(e),
+    []
+  )
+
   const queryClient = useQueryClient()
 
   // Wire native-menu commands. Toolbar buttons remain the primary entry
@@ -282,16 +328,24 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     if (!rendition || !bookSyncIdRef.current) return
     const syncId = bookSyncIdRef.current
     void getHighlightsForBook(syncId).then((highlights) => {
+      highlightsByRangeRef.current.clear()
       for (const hl of highlights) {
-        const hex = getHighlightHex(hl.color as HighlightColor)
-        void highlightRange(rendition, hl.cfiRange, {}, () => {}, 'epubjs-hl', {
-          fill: hex,
-          'fill-opacity': '0.3',
-          'mix-blend-mode': 'multiply'
-        })
+        highlightsByRangeRef.current.set(hl.cfiRange, hl)
+        void highlightRange(
+          rendition,
+          hl.cfiRange,
+          {},
+          makeAnnotationClickCb(hl.cfiRange),
+          'epubjs-hl',
+          {
+            fill: getHighlightHex(hl.color as HighlightColor),
+            'fill-opacity': '0.3',
+            'mix-blend-mode': 'multiply'
+          }
+        )
       }
     })
-  }, [rendition, bookSyncIdRef])
+  }, [rendition, bookSyncIdRef, makeAnnotationClickCb])
 
   // Handle user text selection -- show color picker popover instead of auto-highlight.
   //
@@ -333,11 +387,14 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       void applyHighlightWithUndo({
         target: {
           applyVisual: async () => {
-            await highlightRange(rendition, cfiRange, {}, () => {}, 'epubjs-hl', {
-              fill: hex,
-              'fill-opacity': '0.3',
-              'mix-blend-mode': 'multiply'
-            })
+            await highlightRange(
+              rendition,
+              cfiRange,
+              {},
+              makeAnnotationClickCb(cfiRange),
+              'epubjs-hl',
+              { fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': 'multiply' }
+            )
           },
           removeVisual: async () => {
             await removeHighlight(rendition, cfiRange)
@@ -349,6 +406,24 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         color
       })
         .then((handle) => {
+          // Reflect the newly-created highlight in the click-time lookup map.
+          // The row's id/createdAt aren't observable here, but `cfiRange`,
+          // `text`, and `color` are enough for the popover.
+          highlightsByRangeRef.current.set(cfiRange, {
+            id: '__pending__',
+            bookId: bookSyncId,
+            cfiRange,
+            text,
+            color,
+            note: '',
+            chapter: null,
+            createdAt: String(Date.now()),
+            updatedAt: Date.now(),
+            syncId: null,
+            syncVersion: 0,
+            isDirty: 1,
+            isDeleted: 0
+          })
           setLastUndoable(handle)
           toast('Highlighted', {
             action: { label: 'Undo', onClick: () => void handle.undo() },
@@ -362,8 +437,98 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       setSelectionInfo(null)
       useSelectionStore.getState().clear()
     },
-    [selectionInfo, rendition, setLastUndoable, bookSyncIdRef]
+    [selectionInfo, rendition, setLastUndoable, bookSyncIdRef, makeAnnotationClickCb]
   )
+
+  const handleInlineColorChange = useCallback(
+    async (newColor: HighlightColor) => {
+      if (!inlinePopover || !rendition || !bookSyncIdRef.current) return
+      const cfiRange = inlinePopover.cfiRange
+      const row = highlightsByRangeRef.current.get(cfiRange)
+      if (!row) return
+      const newHex = getHighlightHex(newColor)
+
+      // Visual swap: remove old, re-draw with new color and the same click cb.
+      await removeHighlight(rendition, cfiRange)
+      await highlightRange(rendition, cfiRange, {}, makeAnnotationClickCb(cfiRange), 'epubjs-hl', {
+        fill: newHex,
+        'fill-opacity': '0.3',
+        'mix-blend-mode': 'multiply'
+      })
+
+      // DB update (only if we have a real DB id — pending sentinel skips).
+      if (row.id !== '__pending__') {
+        try {
+          await updateHighlightColor(row.id, newColor)
+          getSyncService().triggerWrite()
+        } catch (err) {
+          console.warn('[highlight] color update failed:', err)
+        }
+      }
+
+      // Reflect in the map.
+      highlightsByRangeRef.current.set(cfiRange, { ...row, color: newColor })
+    },
+    [inlinePopover, rendition, bookSyncIdRef, makeAnnotationClickCb]
+  )
+
+  const handleInlineDelete = useCallback(() => {
+    if (!inlinePopover || !rendition || !bookSyncIdRef.current) return
+    const cfiRange = inlinePopover.cfiRange
+    const row = highlightsByRangeRef.current.get(cfiRange)
+    if (!row) return
+    const hex = getHighlightHex(row.color as HighlightColor)
+    const bookSyncId = bookSyncIdRef.current
+
+    void deleteHighlightWithUndo({
+      target: {
+        applyVisual: async () => {
+          await highlightRange(
+            rendition,
+            cfiRange,
+            {},
+            makeAnnotationClickCb(cfiRange),
+            'epubjs-hl',
+            { fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': 'multiply' }
+          )
+        },
+        removeVisual: async () => {
+          await removeHighlight(rendition, cfiRange)
+        }
+      },
+      bookSyncId,
+      cfiRange,
+      text: row.text,
+      color: row.color as HighlightColor,
+      note: row.note,
+      chapter: row.chapter ?? undefined
+    })
+      .then((handle) => {
+        highlightsByRangeRef.current.delete(cfiRange)
+        setLastUndoable(handle)
+        toast('Highlight deleted', {
+          action: {
+            label: 'Undo',
+            onClick: () => {
+              void handle.undo().then(() => {
+                highlightsByRangeRef.current.set(cfiRange, row)
+              })
+            }
+          },
+          duration: 5_000
+        })
+      })
+      .catch((err: unknown) => {
+        console.warn('[highlight] delete failed:', err)
+      })
+  }, [inlinePopover, rendition, bookSyncIdRef, setLastUndoable, makeAnnotationClickCb])
+
+  const handleInlineEditNote = useCallback(() => {
+    if (!inlinePopover) return
+    const row = highlightsByRangeRef.current.get(inlinePopover.cfiRange)
+    if (!row) return
+    setEditingNoteRow(row)
+  }, [inlinePopover])
 
   const handleReadAloudFrom = useCallback(() => {
     // Resolve selection: prefer the live iframe selection (always fresh,
@@ -887,6 +1052,33 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           }}
         />
       ) : null}
+
+      {inlinePopover ? (
+        <HighlightActionPopover
+          position={inlinePopover.position}
+          currentColor={inlinePopover.currentColor}
+          onSelectColor={(c) => {
+            void handleInlineColorChange(c)
+          }}
+          onEditNote={handleInlineEditNote}
+          onDelete={handleInlineDelete}
+          onClose={() => setInlinePopover(null)}
+        />
+      ) : null}
+
+      <NoteEditor
+        highlight={editingNoteRow}
+        open={editingNoteRow !== null}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) setEditingNoteRow(null)
+        }}
+        onSaved={async () => {
+          // Refresh the in-memory map so the popover sees the new note next time.
+          if (!bookSyncIdRef.current) return
+          const rows = await getHighlightsForBook(bookSyncIdRef.current)
+          highlightsByRangeRef.current = new Map(rows.map((r) => [r.cfiRange, r]))
+        }}
+      />
 
       {/* Highlights side panel */}
       <HighlightsPanel
