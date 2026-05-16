@@ -6,7 +6,7 @@ vi.mock('@/modules/highlight-storage', () => ({
 }))
 
 vi.mock('@/services', () => ({
-  getSyncService: () => ({ triggerWrite: vi.fn() })
+  getSyncService: vi.fn(() => ({ triggerWrite: vi.fn() }))
 }))
 
 import { saveHighlight, deleteHighlight } from '@/modules/highlight-storage'
