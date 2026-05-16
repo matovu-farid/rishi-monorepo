@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { MutableRefObject } from 'react'
+import type { RefObject } from 'react'
 import { renderHook, waitFor } from '@testing-library/react'
 
 // Intercept publishBookmarksToMenu so we can assert it was called once the
@@ -15,7 +15,7 @@ vi.mock('@/modules/bookmark-storage', () => ({
 // is the expected red-phase failure mode.
 type BookSyncIdHook = (bookId: number) => {
   bookSyncId: string
-  bookSyncIdRef: MutableRefObject<string | null>
+  bookSyncIdRef: RefObject<string | null>
 }
 
 // Build the specifier from parts so vite's import-analysis can't statically
