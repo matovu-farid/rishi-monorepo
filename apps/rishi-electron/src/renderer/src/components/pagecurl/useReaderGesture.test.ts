@@ -150,4 +150,31 @@ describe('useReaderGesture - touch two-finger', () => {
     // Releasing back to 1 finger commits-or-cancels (cancel since progress=0)
     expect(onUndoNavigate).toHaveBeenCalledTimes(1)
   })
+
+  it('does not claim spuriously when a stale touch pointer is left in the map', () => {
+    const onNavigate = vi.fn(() => true)
+    const { result } = renderHook(() =>
+      useReaderGesture({ onNavigate, onCommit: vi.fn(), onUndoNavigate: vi.fn() })
+    )
+    act(() => {
+      // Gesture 1: two fingers, lift one
+      result.current.pointerHandlers.onPointerDown(
+        makeMockPointerEvent({ clientX: 200, pointerType: 'touch', pointerId: 1 })
+      )
+      result.current.pointerHandlers.onPointerDown(
+        makeMockPointerEvent({ clientX: 250, pointerType: 'touch', pointerId: 2 })
+      )
+      result.current.pointerHandlers.onPointerUp(
+        makeMockPointerEvent({ clientX: 250, pointerType: 'touch', pointerId: 2 })
+      )
+      // Finger 1 still held. State is now idle (animation completed synchronously
+      // via animateTo short-circuit since progress was 0).
+      // New finger arrives — should NOT trigger a second claim.
+      result.current.pointerHandlers.onPointerDown(
+        makeMockPointerEvent({ clientX: 300, pointerType: 'touch', pointerId: 3 })
+      )
+    })
+    // onNavigate called exactly once (the first claim only)
+    expect(onNavigate).toHaveBeenCalledTimes(1)
+  })
 })

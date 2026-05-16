@@ -116,6 +116,7 @@ export function useReaderGesture(callbacks: {
       stateRef.current = 'idle'
       setProgressBoth(0)
       navigatedRef.current = false
+      touchPointersRef.current.clear()
       setActive(false)
     },
     [setProgressBoth]
@@ -246,8 +247,9 @@ export function useReaderGesture(callbacks: {
   const onPointerCancel = useCallback(
     (e: React.PointerEvent) => {
       if (e.pointerType === 'touch') {
+        const wasMulti = touchPointersRef.current.size >= 2
         touchPointersRef.current.delete(e.pointerId)
-        if (touchPointersRef.current.size < 2 && stateRef.current === 'dragging') {
+        if (wasMulti && touchPointersRef.current.size < 2 && stateRef.current === 'dragging') {
           commitOrCancel()
         }
         return
