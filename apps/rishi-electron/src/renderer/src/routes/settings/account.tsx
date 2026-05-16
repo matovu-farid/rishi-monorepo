@@ -1,6 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useState, type JSX } from 'react'
 import { useAuthStore } from '@/stores/authStore'
+import { usePrefsStore } from '@/stores/prefsStore'
+import { ALLOWED_LANGUAGES, LANGUAGE_LABELS } from '@/lib/languages'
 
 export const Route = createFileRoute('/settings/account')({
   component: AccountSettings
@@ -22,6 +24,8 @@ function AccountSettings(): JSX.Element {
   const [deleting, setDeleting] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const voiceChatLanguage = usePrefsStore((s) => s.voiceChatLanguage)
+  const setVoiceChatLanguage = usePrefsStore((s) => s.setVoiceChatLanguage)
 
   if (!user) return <p className="p-8">Sign in to manage your account.</p>
 
@@ -56,6 +60,27 @@ function AccountSettings(): JSX.Element {
         >
           Sign out
         </button>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold">Voice chat language</h2>
+        <p className="text-sm text-gray-600">
+          The voice assistant will respond in this language. Change applies the next
+          time you start a chat.
+        </p>
+        <select
+          value={voiceChatLanguage}
+          onChange={(e) => {
+            void setVoiceChatLanguage(e.target.value as (typeof ALLOWED_LANGUAGES)[number])
+          }}
+          className="px-3 py-2 border border-gray-300 rounded-lg bg-white"
+        >
+          {ALLOWED_LANGUAGES.map((code) => (
+            <option key={code} value={code}>
+              {LANGUAGE_LABELS[code]}
+            </option>
+          ))}
+        </select>
       </section>
 
       <section className="pt-8 border-t space-y-3">
