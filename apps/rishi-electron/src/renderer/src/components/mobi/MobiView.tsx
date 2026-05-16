@@ -17,7 +17,6 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import AIChatOrb from '@/components/chat/AIChatOrb'
 import VoiceChatLauncher from '@/components/chat/VoiceChatLauncher'
 import { themes } from '@/themes/themes'
-import { usePlayerStore } from '@/stores/playerStore'
 import { getBookImportService, type PageDataInsertable } from '@/services'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { useChatStore } from '@/stores/chatStore'
@@ -30,6 +29,7 @@ import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
 import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
 import { useChapterParagraphPrefetch } from '@/hooks/reader/useChapterParagraphPrefetch'
+import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
 
 export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme)
@@ -173,30 +173,18 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
     fetchAt: (idx) => getMobiText({ path: book.filepath, chapterIndex: idx })
   })
 
-  // Handle page-turn events from Player (TTS exhausted current chapter)
-  useEffect(() => {
-    const handleNextEmptied = () => {
+  // Handle page-turn events from Player (TTS exhausted current chapter).
+  usePageRequestSubscription({
+    onNext: () => {
       if (chapterCount === 0) return
       setChapterIndex((prev) => Math.min(prev + 1, chapterCount - 1))
-    }
-    const handlePrevEmptied = () => {
+    },
+    onPrev: () => {
       if (chapterCount === 0) return
       setChapterIndex((prev) => Math.max(prev - 1, 0))
-    }
-
-    const unsubPage = usePlayerStore.subscribe(
-      (s) => s.pageRequest,
-      (request) => {
-        if (request === 'next') handleNextEmptied()
-        if (request === 'prev') handlePrevEmptied()
-        if (request) usePlayerStore.getState().clearPageRequest()
-      }
-    )
-
-    return () => {
-      unsubPage()
-    }
-  }, [chapterCount])
+    },
+    autoClear: true
+  })
 
   // Generate embeddings on first open (for AI chat)
   useEffect(() => {
