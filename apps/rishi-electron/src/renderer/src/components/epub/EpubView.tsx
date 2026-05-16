@@ -41,6 +41,7 @@ import { dumpError } from '@/utils/errorDump'
 import { getCachedEpub } from '@/services/reader-cache/epub-cache'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
 import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
+import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
 
 function updateTheme(rendition: Rendition, theme: ThemeType) {
   const reditionThemes = rendition.themes
@@ -160,8 +161,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       navSend?.({ type: 'CURL_CANCEL' })
     }
   })
-  const bookSyncIdRef = useRef<string | null>(null)
-  const [bookSyncId, setBookSyncId] = useState<string>('')
+  const { bookSyncId, bookSyncIdRef } = useBookSyncId(book.id)
   const [bookmarksPanelOpen, setBookmarksPanelOpen] = useState(false)
   const [tocOpen, setTocOpen] = useState(false)
   const pageReady = usePageTracker((s) => s.ready)
@@ -263,21 +263,6 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       cancelled = true
     }
   }, [book.filepath, epubData])
-
-  // Look up the book's sync_id for highlight storage and bookmark functionality
-  useEffect(() => {
-    void window.electron.booksGetSyncId(book.id).then((syncId) => {
-      bookSyncIdRef.current = syncId
-      if (syncId) setBookSyncId(syncId)
-    })
-  }, [book.id])
-
-  // Publish bookmarks to the menu context once sync_id is known. The
-  // addBookmark menu handler re-publishes after edits.
-  useEffect(() => {
-    if (!bookSyncId) return
-    void publishBookmarksToMenu(bookSyncId)
-  }, [bookSyncId])
 
   // Publish title so the native Window menu sees the loaded book.
   useEffect(() => {
