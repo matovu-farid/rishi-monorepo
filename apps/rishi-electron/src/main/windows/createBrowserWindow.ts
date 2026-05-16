@@ -1,5 +1,6 @@
 // src/main/windows/createBrowserWindow.ts
 import { BrowserWindow } from 'electron'
+import { registerReaderContextMenu } from '../contextMenu'
 import type { WindowIdentity } from './windowManager'
 
 export interface FactoryDeps {
@@ -80,6 +81,7 @@ export function makeBrowserWindowFactory(deps: FactoryDeps) {
     win.loadURL(`${deps.loadUrl}${hash}`).catch((err: unknown) => {
       console.error('[createBrowserWindow] loadURL failed', err)
     })
+    registerReaderContextMenu(win)
     return win
   }
 }
