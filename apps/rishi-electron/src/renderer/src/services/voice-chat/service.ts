@@ -10,6 +10,7 @@ import { captureError } from '@/utils/sentry'
 import type {
   AudioElementLike,
   ChatStatus,
+  ClockPort,
   MediaStreamLike,
   RealtimeSessionLike,
   VoiceChatContext,
@@ -65,7 +66,7 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
   const program = makeActivationProgram({
     deps,
     emit: {
-      chatStatus: (s) => chatStatusEmitter.emit(s),
+      chatStatus: (s) => emitChatStatus(s),
       endedByAgent: (r) => endedByAgentEmitter.emit(r)
     },
     keyCacheGet: () => keyCache.get()
@@ -79,10 +80,36 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
   let audioElement: AudioElementLike | null = null
   let lastContextFingerprint: string | null = null
   let currentFiber: Fiber.RuntimeFiber<SessionHandle, ActivationError> | null = null
+  let inactivityTimer: ReturnType<ClockPort['setTimeout']> | null = null
   let connectivityUnsub: (() => void) | null = null
   let started = false
 
+  function clearInactivityTimer() {
+    if (inactivityTimer !== null) {
+      clock.clearTimeout(inactivityTimer)
+      inactivityTimer = null
+    }
+  }
+
+  function scheduleInactivityTimer() {
+    clearInactivityTimer()
+    inactivityTimer = clock.setTimeout(() => {
+      disposeInternal()
+      actor.send({ type: 'DISPOSE' })
+    }, config.inactivityTimeoutMs)
+  }
+
+  // Wrap chatStatus emits so any activity (cold-path success, warm-path
+  // success, or session events: agent_start/audio_start/audio_stopped/
+  // agent_end/agent_tool_*) resets the inactivity timer. Without a live
+  // session we don't schedule — the timer only runs while billing is possible.
+  function emitChatStatus(s: ChatStatus): void {
+    if (session) scheduleInactivityTimer()
+    chatStatusEmitter.emit(s)
+  }
+
   function disposeInternal() {
+    clearInactivityTimer()
     if (sessionCleanup) {
       sessionCleanup()
       sessionCleanup = null
@@ -106,6 +133,8 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
       audioElement.srcObject = null
       audioElement = null
     }
+    // Direct emit here (not emitChatStatus) — session is already null, so
+    // there's nothing to schedule an inactivity timer against.
     chatStatusEmitter.emit('idle')
     lastContextFingerprint = null
   }
@@ -152,7 +181,7 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
         session.mute(false)
         if (audioElement) audioElement.muted = false
         actor.send({ type: 'CONNECT_SUCCEEDED' })
-        chatStatusEmitter.emit('idle')
+        emitChatStatus('idle')
       } catch (err) {
         captureError(err, { operation: 'voiceChatService', step: 'activate_warm' })
         actor.send({
@@ -173,6 +202,7 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
     }
 
     actor.send({ type: 'CONNECT_STARTED' })
+    // Direct emit — session not yet created, so no timer to schedule.
     chatStatusEmitter.emit('connecting')
 
     const { promise, fiber } = program.activate({ bookId, ctx })
@@ -201,7 +231,8 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
       session.on('error', onSessionError)
 
       actor.send({ type: 'CONNECT_SUCCEEDED' })
-      chatStatusEmitter.emit('idle')
+      // session is now set — emitChatStatus will start the inactivity timer.
+      emitChatStatus('idle')
     } catch (err) {
       // Superseded by a subsequent activate() — silent.
       if (isInterruptCause(err)) return
@@ -212,6 +243,7 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
         reason: classifyError(err),
         message: err instanceof Error ? err.message : undefined
       })
+      // Direct emit — cold path failed, session is null/discarded.
       chatStatusEmitter.emit('idle')
       throw err
     } finally {
@@ -266,10 +298,18 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
 
     deactivate() {
       const value = actor.getSnapshot().value
-      if (value !== 'active' || !session) return
+      if (value === 'idle' || value === 'offline' || value === 'error') return
+      // Interrupt any in-flight cold-path activation so its acquireRelease
+      // finalizers tear down the half-built mic/audio/session. Without this,
+      // a "connecting" deactivate would let the fiber resolve and install a
+      // live session into our closure that nothing ever closes.
+      if (currentFiber) {
+        Effect.runFork(Fiber.interrupt(currentFiber))
+        currentFiber = null
+      }
       // Full teardown: closes WebRTC session, stops mic tracks, clears audio
       // element. A muted-but-open session still bills audio/transcription
-      // tokens server-side. See investigation in commit message / issue.
+      // tokens server-side.
       disposeInternal()
       actor.send({ type: 'DISPOSE' })
     },

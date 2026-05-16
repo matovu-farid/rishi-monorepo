@@ -243,7 +243,7 @@ export function makeClock(): ClockPort & { tick(ms: number): void; setNow(t: num
 
 export function makeConfig(overrides?: Partial<VoiceChatConfig>): VoiceChatConfig {
   return {
-    idleTimeoutMs: 15 * 60 * 1000,
+    inactivityTimeoutMs: 3 * 60 * 1000,
     connectTimeoutMs: 60 * 1000,
     keyTtlMs: 9 * 60 * 1000,
     ...overrides
@@ -371,6 +371,38 @@ describe('createVoiceChatService — activate (cold happy path)', () => {
 
     expect(session.close).toHaveBeenCalledTimes(1)
     expect(stopSpy).toHaveBeenCalledTimes(1)
+    expect(svc.getState()).toBe('idle')
+  })
+
+  it('deactivate() during in-flight cold path interrupts fiber + tears down resources', async () => {
+    // Reviewer-found race: if the user taps "stop chat" while activate() is
+    // still connecting (cold path), the Effect fiber resolves, writes a live
+    // session into the service closure, and nothing closes it. Verify the
+    // fiber is interrupted so the acquireRelease finalizers tear everything
+    // down. After the race, no live session should remain.
+    const stopSpy = vi.fn()
+    const media = makeMedia()
+    media.stream.getTracks = () => [{ stop: stopSpy }]
+    const session = makeSession({ connectDelayMs: 50 })
+    const svc = createVoiceChatService(makeDeps({ media, sessionFactory: session.factory }))
+
+    const activatePromise = svc.activate(1, { pageText: 'p' })
+    // Yield once so the cold-path fiber starts and acquireRelease runs the
+    // mic + audio-element + session-build steps before connect's delay.
+    await new Promise((r) => {
+      setTimeout(r, 10)
+    })
+    expect(svc.getState()).toBe('connecting')
+
+    svc.deactivate()
+
+    // The activate() promise resolves or rejects (likely rejects with the
+    // synthetic interrupt) — either way, no live session should remain.
+    await activatePromise.catch(() => undefined)
+
+    // The acquireRelease finalizers stop the mic track and close the session.
+    expect(stopSpy).toHaveBeenCalledTimes(1)
+    expect(session.close).toHaveBeenCalledTimes(1)
     expect(svc.getState()).toBe('idle')
   })
 
@@ -607,6 +639,77 @@ describe('createVoiceChatService — connectivity gating', () => {
     off()
     connectivity.setOnline(true)
     expect(spy).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('createVoiceChatService — inactivity timeout', () => {
+  it('auto-closes the session after inactivityTimeoutMs of no activity', async () => {
+    const clock = makeClock()
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({
+        clock,
+        sessionFactory: session.factory,
+        config: makeConfig({ inactivityTimeoutMs: 3 * 60 * 1000 })
+      })
+    )
+    await svc.activate(1, { pageText: 'p' })
+    expect(svc.getState()).toBe('active')
+
+    clock.tick(3 * 60 * 1000)
+
+    expect(session.close).toHaveBeenCalledTimes(1)
+    expect(svc.getState()).toBe('idle')
+  })
+
+  it('resets the inactivity timer when the agent emits a chatStatus event', async () => {
+    const clock = makeClock()
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({
+        clock,
+        sessionFactory: session.factory,
+        config: makeConfig({ inactivityTimeoutMs: 3 * 60 * 1000 })
+      })
+    )
+    await svc.activate(1, { pageText: 'p' })
+
+    // Advance to T+2m (under the 3m limit), then simulate agent activity.
+    clock.tick(2 * 60 * 1000)
+    session.fire('audio_start')
+    // Advance another 2m — without reset this is T+4m (would have fired).
+    // With reset, only 2m has passed since last activity. No close.
+    clock.tick(2 * 60 * 1000)
+
+    expect(session.close).not.toHaveBeenCalled()
+    expect(svc.getState()).toBe('active')
+
+    // Advance one more minute (total 3m of inactivity since the reset) — now close.
+    clock.tick(1 * 60 * 1000)
+    expect(session.close).toHaveBeenCalledTimes(1)
+    expect(svc.getState()).toBe('idle')
+  })
+
+  it('clears the inactivity timer on explicit dispose so it never double-fires', async () => {
+    const clock = makeClock()
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({
+        clock,
+        sessionFactory: session.factory,
+        config: makeConfig({ inactivityTimeoutMs: 3 * 60 * 1000 })
+      })
+    )
+    await svc.activate(1, { pageText: 'p' })
+    svc.dispose()
+    expect(session.close).toHaveBeenCalledTimes(1)
+
+    clock.tick(10 * 60 * 1000)
+
+    // Timer would have fired at T+3m; if not cleared, it would call close on a
+    // null session — guarded — but state would flip out of idle.
+    expect(session.close).toHaveBeenCalledTimes(1)
+    expect(svc.getState()).toBe('idle')
   })
 })
 

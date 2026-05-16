@@ -245,7 +245,9 @@ export function getVoiceChatService(): VoiceChatService {
         clearTimeout: (handle) => clearTimeout(handle)
       },
       config: {
-        idleTimeoutMs: 15 * 60 * 1000,
+        // Auto-close after 3 minutes of no agent activity. Prevents a user
+        // leaving voice chat on from racking up open-ended audio billing.
+        inactivityTimeoutMs: 3 * 60 * 1000,
         connectTimeoutMs: 60 * 1000,
         keyTtlMs: 9 * 60 * 1000
       }

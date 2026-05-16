@@ -27,6 +27,8 @@ export interface VoiceError {
 export interface VoiceChatContext {
   pageText: string
   outline?: BookOutline
+  /** The paragraph TTS was on at chat-start, so the model can resolve "this", "what you just read", etc. */
+  activeParagraphText?: string
 }
 
 export class OfflineError extends Error {
@@ -71,7 +73,13 @@ export interface ClockPort {
 }
 
 export interface VoiceChatConfig {
-  idleTimeoutMs: number
+  /**
+   * Auto-close the realtime session after this many ms with no agent activity
+   * (no audio_start/audio_stopped/agent_start/agent_end/tool events). Prevents
+   * a user who leaves voice chat on and walks away from incurring open-ended
+   * audio + transcription token billing.
+   */
+  inactivityTimeoutMs: number
   connectTimeoutMs: number
   keyTtlMs: number
 }
@@ -100,6 +108,7 @@ export interface AgentFactoryArgs {
   bookId: number
   pageText: string
   outline?: BookOutline
+  activeParagraphText?: string
   onEndConversation: (reason: string) => void
   rag: RagService
 }
