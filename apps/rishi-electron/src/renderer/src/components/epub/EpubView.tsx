@@ -344,19 +344,22 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         cfiRange,
         text,
         color
-      }).then((handle) => {
-        setLastUndoable(handle)
-        toast('Highlighted', {
-          action: { label: 'Undo', onClick: () => void handle.undo() },
-          duration: 5_000
-        })
       })
+        .then((handle) => {
+          setLastUndoable(handle)
+          toast('Highlighted', {
+            action: { label: 'Undo', onClick: () => void handle.undo() },
+            duration: 5_000
+          })
+        })
+        .catch((err: unknown) => {
+          console.warn('[highlight] apply failed:', err)
+        })
 
       setSelectionInfo(null)
       useSelectionStore.getState().clear()
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectionInfo, rendition, setLastUndoable]
+    [selectionInfo, rendition, setLastUndoable, bookSyncIdRef]
   )
 
   const handleReadAloudFrom = useCallback(() => {
