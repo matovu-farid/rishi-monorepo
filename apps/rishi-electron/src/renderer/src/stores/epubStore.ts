@@ -23,6 +23,17 @@ export { ThemeType }
 let _prefetchTimer: ReturnType<typeof setTimeout> | null = null
 let _publishPrefetchTimer: ReturnType<typeof setTimeout> | null = null
 
+type RawParagraph = { text: string; cfiRange: string }
+type PlayerParagraph = { text: string; index: string }
+
+const toPlayerParagraph = (p: RawParagraph): PlayerParagraph => ({
+  text: p.text,
+  index: p.cfiRange
+})
+
+const warnFetch = (label: string) => (err: unknown) =>
+  console.warn(`[epub] ${label} paragraph fetch failed:`, err)
+
 interface EpubState {
   rendition: Rendition | null
   paragraphRendition: Rendition | null
@@ -97,10 +108,7 @@ export function publishCurrentEpubParagraphs() {
   const { rendition, currentEpubLocation } = useEpubStore.getState()
   if (!rendition || !currentEpubLocation) return
 
-  const paragraphs = getCurrentViewParagraphs(rendition).map((p) => ({
-    text: p.text,
-    index: p.cfiRange
-  }))
+  const paragraphs = getCurrentViewParagraphs(rendition).map(toPlayerParagraph)
   usePlayerStore.getState().setCurrentParagraphs(paragraphs)
 
   // Use a separate timer so re-publish doesn't cancel the subscription's debounce
@@ -111,23 +119,15 @@ export function publishCurrentEpubParagraphs() {
 
     void getNextViewParagraphs(r)
       .then((nextParagraphs) => {
-        const mapped = nextParagraphs.map((p) => ({
-          text: p.text,
-          index: p.cfiRange
-        }))
-        usePlayerStore.getState().setNextPageParagraphs(mapped)
+        usePlayerStore.getState().setNextPageParagraphs(nextParagraphs.map(toPlayerParagraph))
       })
-      .catch((err: unknown) => console.warn('[epub] republish next paragraph fetch failed:', err))
+      .catch(warnFetch('republish next'))
 
     void getPreviousViewParagraphs(r)
       .then((prevParagraphs) => {
-        const mapped = prevParagraphs.map((p) => ({
-          text: p.text,
-          index: p.cfiRange
-        }))
-        usePlayerStore.getState().setPrevPageParagraphs(mapped)
+        usePlayerStore.getState().setPrevPageParagraphs(prevParagraphs.map(toPlayerParagraph))
       })
-      .catch((err: unknown) => console.warn('[epub] republish prev paragraph fetch failed:', err))
+      .catch(warnFetch('republish prev'))
   }, 300)
 }
 
@@ -178,10 +178,7 @@ export function initEpubSubscriptions(): (() => void)[] {
         if (!rendition || !location) return
 
         // Current page — publish immediately (Player needs these to play)
-        const paragraphs = getCurrentViewParagraphs(rendition).map((p) => ({
-          text: p.text,
-          index: p.cfiRange
-        }))
+        const paragraphs = getCurrentViewParagraphs(rendition).map(toPlayerParagraph)
         usePlayerStore.getState().setCurrentParagraphs(paragraphs)
 
         // Next/prev pages — short debounce to skip rapid page flips while keeping
@@ -194,23 +191,15 @@ export function initEpubSubscriptions(): (() => void)[] {
 
           void getNextViewParagraphs(r)
             .then((nextParagraphs) => {
-              const mapped = nextParagraphs.map((p) => ({
-                text: p.text,
-                index: p.cfiRange
-              }))
-              usePlayerStore.getState().setNextPageParagraphs(mapped)
+              usePlayerStore.getState().setNextPageParagraphs(nextParagraphs.map(toPlayerParagraph))
             })
-            .catch((err: unknown) => console.warn('[epub] next paragraph fetch failed:', err))
+            .catch(warnFetch('next'))
 
           void getPreviousViewParagraphs(r)
             .then((prevParagraphs) => {
-              const mapped = prevParagraphs.map((p) => ({
-                text: p.text,
-                index: p.cfiRange
-              }))
-              usePlayerStore.getState().setPrevPageParagraphs(mapped)
+              usePlayerStore.getState().setPrevPageParagraphs(prevParagraphs.map(toPlayerParagraph))
             })
-            .catch((err: unknown) => console.warn('[epub] prev paragraph fetch failed:', err))
+            .catch(warnFetch('prev'))
         }, 50)
       },
       { equalityFn: (a, b) => a.rendition === b.rendition && a.location === b.location }
