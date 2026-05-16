@@ -328,7 +328,7 @@ export async function getDevBypassSecret(): Promise<string | null> {
 }
 const WORKER_URL = 'https://api.fidexa.org'
 
-export async function getRealtimeClientSecret(): Promise<string> {
+export async function getRealtimeClientSecret(language: string): Promise<string> {
   const authHeaders = await getAuthHeaders()
   const headers: Record<string, string> = { ...authHeaders }
 
@@ -341,7 +341,10 @@ export async function getRealtimeClientSecret(): Promise<string> {
     }
   }
 
-  const response = await fetch(`${WORKER_URL}/api/realtime/client_secrets`, {
+  const url = new URL(`${WORKER_URL}/api/realtime/client_secrets`)
+  url.searchParams.set('language', language)
+
+  const response = await fetch(url.toString(), {
     method: 'GET',
     headers
   })
