@@ -79,4 +79,25 @@ describe('createKeyCache', () => {
     await expect(cache.get()).resolves.toBe('K2')
     expect(fetchFn).toHaveBeenCalledTimes(2)
   })
+
+  it('invalidate() during an in-flight fetch discards that fetch result so the next get refetches', async () => {
+    const clock = makeClock()
+    let resolveFirst!: (v: string) => void
+    const fetchFn = vi.fn()
+      .mockImplementationOnce(() => new Promise<string>((r) => { resolveFirst = r }))
+      .mockResolvedValueOnce('K2')
+    const cache = createKeyCache({ fetch: fetchFn, ttlMs: 60_000, clock })
+
+    // Start an in-flight fetch. Don't await it yet.
+    const firstGet = cache.get()
+    // Invalidate while the fetch is mid-flight.
+    cache.invalidate()
+    // Now resolve the original fetch — this stale result must NOT populate `cached`.
+    resolveFirst('K1')
+    await firstGet
+
+    // Next get must refetch (not return the stale K1).
+    await expect(cache.get()).resolves.toBe('K2')
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+  })
 })

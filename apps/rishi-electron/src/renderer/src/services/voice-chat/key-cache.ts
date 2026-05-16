@@ -35,6 +35,10 @@ export function createKeyCache(deps: KeyCacheDeps): KeyCache {
   const { fetch, ttlMs, clock } = deps
   let cached: { key: string; fetchedAt: number } | null = null
   let inflight: Promise<string> | null = null
+  // Bumped on invalidate(). Each in-flight fetch captures the current value
+  // when it starts; if the generation has moved on by the time it resolves,
+  // it discards its result rather than overwriting `cached` with a stale key.
+  let generation = 0
 
   return {
     async get() {
@@ -43,13 +47,18 @@ export function createKeyCache(deps: KeyCacheDeps): KeyCache {
       }
       if (inflight) return inflight
 
+      const myGeneration = generation
       inflight = (async () => {
         try {
           const key = await fetch()
-          cached = { key, fetchedAt: clock.now() }
+          if (myGeneration === generation) {
+            cached = { key, fetchedAt: clock.now() }
+          }
           return key
         } finally {
-          inflight = null
+          if (myGeneration === generation) {
+            inflight = null
+          }
         }
       })()
 
@@ -57,6 +66,8 @@ export function createKeyCache(deps: KeyCacheDeps): KeyCache {
     },
     invalidate() {
       cached = null
+      inflight = null
+      generation++
     }
   }
 }
