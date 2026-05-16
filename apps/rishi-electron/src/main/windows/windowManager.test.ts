@@ -71,4 +71,32 @@ describe('WindowManager', () => {
     w.close()
     expect(wm.hasBook(7)).toBe(false)
   })
+
+  it('openSettings creates a window the first time', () => {
+    const factory: WindowFactory = vi.fn(() => makeFakeWindow())
+    const wm = new WindowManager(factory)
+    const w = wm.openSettings()
+    expect(factory).toHaveBeenCalledTimes(1)
+    expect(w).toBeDefined()
+  })
+
+  it('openSettings returns the existing window on second call and focuses it', () => {
+    const fake = makeFakeWindow()
+    const factory: WindowFactory = vi.fn(() => fake)
+    const wm = new WindowManager(factory)
+    const a = wm.openSettings()
+    const b = wm.openSettings()
+    expect(a).toBe(b)
+    expect(factory).toHaveBeenCalledTimes(1)
+    expect(fake.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('closeSettings closes the window and clears the slot', () => {
+    const factory: WindowFactory = vi.fn(() => makeFakeWindow())
+    const wm = new WindowManager(factory)
+    wm.openSettings()
+    expect(wm.getSettings()).not.toBeNull()
+    wm.closeSettings()
+    expect(wm.getSettings()).toBeNull()
+  })
 })

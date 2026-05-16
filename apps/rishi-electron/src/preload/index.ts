@@ -183,7 +183,8 @@ const electronAPI: ElectronAPI = {
   openBook: (bookId) => invoke('window:openBook', bookId),
   closeBook: (bookId) => invoke('window:closeBook', bookId),
   focusLibrary: () => invoke('window:focusLibrary'),
-  listOpenBooks: () => invoke('window:list')
+  listOpenBooks: () => invoke('window:list'),
+  openSettings: () => invoke('window:openSettings')
 }
 
 const api: Api = {

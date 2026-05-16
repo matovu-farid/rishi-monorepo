@@ -55,6 +55,7 @@ const mockElectronAPI = {
   showOpenDialog: vi.fn().mockResolvedValue({ filePaths: [] }),
   showMessageBox: vi.fn().mockResolvedValue({ response: 0 }),
   openExternal: vi.fn().mockResolvedValue(undefined),
+  openSettings: vi.fn().mockResolvedValue(undefined),
   getOsInfo: vi.fn().mockResolvedValue({ platform: 'darwin', arch: 'arm64', version: '25.0' }),
   bookmarksList: vi.fn().mockResolvedValue([]),
   bookmarksSave: vi.fn().mockResolvedValue(undefined),

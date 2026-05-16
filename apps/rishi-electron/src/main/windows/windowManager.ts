@@ -1,6 +1,9 @@
 import type { BrowserWindow } from 'electron'
 
-export type WindowIdentity = { kind: 'library' } | { kind: 'book'; bookId: number }
+export type WindowIdentity =
+  | { kind: 'library' }
+  | { kind: 'book'; bookId: number }
+  | { kind: 'settings' }
 
 export interface ManagedWindow {
   focus(): void
@@ -14,6 +17,7 @@ export type WindowFactory = (identity: WindowIdentity) => ManagedWindow | Browse
 
 export class WindowManager {
   private library: ManagedWindow | null = null
+  private settings: ManagedWindow | null = null
   private books = new Map<number, ManagedWindow>()
 
   constructor(private factory: WindowFactory) {}
@@ -28,6 +32,19 @@ export class WindowManager {
       this.library = null
     })
     this.library = w
+    return w
+  }
+
+  openSettings(): ManagedWindow {
+    if (this.settings && !this.settings.isDestroyed()) {
+      this.settings.focus()
+      return this.settings
+    }
+    const w = this.factory({ kind: 'settings' }) as ManagedWindow
+    w.on('closed', () => {
+      this.settings = null
+    })
+    this.settings = w
     return w
   }
 
@@ -54,12 +71,21 @@ export class WindowManager {
     if (w && !w.isDestroyed()) w.close()
   }
 
+  closeSettings(): void {
+    const w = this.settings
+    if (w && !w.isDestroyed()) w.close()
+  }
+
   hasBook(bookId: number): boolean {
     return this.books.has(bookId)
   }
 
   getLibrary(): ManagedWindow | null {
     return this.library
+  }
+
+  getSettings(): ManagedWindow | null {
+    return this.settings
   }
 
   getBook(bookId: number): ManagedWindow | null {
@@ -69,6 +95,7 @@ export class WindowManager {
   allWindows(): ManagedWindow[] {
     const list: ManagedWindow[] = []
     if (this.library) list.push(this.library)
+    if (this.settings) list.push(this.settings)
     for (const w of this.books.values()) list.push(w)
     return list
   }

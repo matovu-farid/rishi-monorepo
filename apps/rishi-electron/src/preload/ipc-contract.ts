@@ -276,6 +276,7 @@ export type IpcContract = {
   'window:closeBook': { args: [bookId: number]; returns: void }
   'window:focusLibrary': { args: []; returns: void }
   'window:list': { args: []; returns: Array<{ bookId: number; title: string }> }
+  'window:openSettings': { args: []; returns: void }
 
   // -- Better-auth surface (window.api.auth.*) ------------------------
   'auth:start-magic-link': { args: [email: string]; returns: void }
