@@ -29,6 +29,7 @@ export type MenuCommand =
   | { command: 'showAllBookmarks' }
   | { command: 'jumpToBookmark'; arg: { bookmarkId: string } }
   | { command: 'readAloudToggle' }
+  | { command: 'readAloudFromSelection' }
   | { command: 'voiceChat' }
   | { command: 'openChat' }
   | { command: 'openHelp' }

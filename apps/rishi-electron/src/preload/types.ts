@@ -205,7 +205,19 @@ type DerivedInvokeApi = {
  * channels, so they're declared explicitly.
  */
 export type ElectronAPI = DerivedInvokeApi & {
-  // Events
+  // Events — main → renderer push channels (no typed registry; channel names
+  // are string literals agreed upon between sender and subscriber).
+  //
+  // Known push channels (main → renderer):
+  //   'open-files'                   — drag-dropped or open-with file paths
+  //   'menu:command'                 — native menu action forwarded to focused window
+  //   'session-changed'              — auth session update (see window.api.auth)
+  //   'update-available'             — auto-updater status
+  //   'update-not-available'         — auto-updater status
+  //   'download-progress'            — auto-updater download progress
+  //   'update-downloaded'            — auto-updater ready to install
+  //   'update-error'                 — auto-updater error
+  //   'reader:readAloudFromSelection' — (Task 9/10) menu/gesture triggered read-aloud
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void
   once: (channel: string, callback: (...args: unknown[]) => void) => void
   send: (channel: string, ...args: unknown[]) => void

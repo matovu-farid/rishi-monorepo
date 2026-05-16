@@ -268,6 +268,7 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
 
           {/* Swipe gesture wrapper for touch navigation */}
           <SwipeWrapper
+            swipeable={swipeable}
             swipeProps={{
               onSwiped: (eventData: SwipeEventData) => {
                 const { dir } = eventData

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { Play } from 'lucide-react'
 import { HIGHLIGHT_COLORS, type HighlightColor } from '@/types/highlight'
 
 interface SelectionPopoverProps {
@@ -7,9 +8,15 @@ interface SelectionPopoverProps {
   position: { x: number; y: number }
   onHighlight: (color: HighlightColor) => void
   onClose: () => void
+  onReadAloudFrom?: () => void
 }
 
-export function SelectionPopover({ position, onHighlight, onClose }: SelectionPopoverProps) {
+export function SelectionPopover({
+  position,
+  onHighlight,
+  onClose,
+  onReadAloudFrom
+}: SelectionPopoverProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -46,6 +53,21 @@ export function SelectionPopover({ position, onHighlight, onClose }: SelectionPo
       style={{ left: position.x, top: position.y }}
     >
       <div className="flex items-center gap-2">
+        {onReadAloudFrom && (
+          <button
+            type="button"
+            className="rounded-full border border-gray-300/50 flex items-center justify-center transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-100 dark:bg-gray-700"
+            style={{ width: 28, height: 28 }}
+            aria-label="Read aloud from here"
+            title="Read aloud from here"
+            onClick={() => {
+              onReadAloudFrom()
+              onClose()
+            }}
+          >
+            <Play size={14} className="text-gray-700 dark:text-gray-200" />
+          </button>
+        )}
         {HIGHLIGHT_COLORS.map((c) => (
           <button
             key={c.name}

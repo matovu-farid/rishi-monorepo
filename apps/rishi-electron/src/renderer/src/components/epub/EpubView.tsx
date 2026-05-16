@@ -11,7 +11,7 @@ import createIReactReaderTheme from '@/themes/readerThemes'
 import ReaderOverlayControls from '@/components/reader/ReaderOverlayControls'
 import type { Rendition } from 'epubjs'
 import { PageCurlOverlay } from '../pagecurl/PageCurlOverlay'
-import { usePageCurl } from '../pagecurl/usePageCurl'
+import { useReaderGesture } from '../pagecurl/useReaderGesture'
 import { useEpubStore, initEpubSubscriptions } from '@/stores/epubStore'
 import { usePlayerStore } from '@/stores/playerStore'
 import { useNavMachine } from '@/hooks/useNavMachine'
@@ -42,6 +42,10 @@ import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
 import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
 import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
+import { useSelectionStore } from '@/stores/selectionStore'
+import { findParagraphForCfi } from '@/modules/cfi-to-paragraph'
+import { resolveLiveSelection } from '@/modules/resolve-live-selection'
+import { buildPartialFirst } from '@/modules/read-aloud-from'
 
 function updateTheme(rendition: Rendition, theme: ThemeType) {
   const reditionThemes = rendition.themes
@@ -145,7 +149,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     }
   }, [book.id])
 
-  const pageCurl = usePageCurl({
+  const pageCurl = useReaderGesture({
     onNavigate: (dir) => {
       // Reject if the nav machine is busy — prevents double rendition calls
       if (useNavStore.getState().navState !== 'idle' || !navSend) return false
@@ -217,6 +221,14 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
             await publishBookmarksToMenu(bookSyncId)
           })
           .catch((err: unknown) => console.warn('[menu] addBookmark failed:', err))
+      },
+      readAloudFromSelection: () => {
+        const sel = useSelectionStore.getState().current
+        if (sel) {
+          window.dispatchEvent(new CustomEvent('rishi:readAloudFromSelection'))
+        } else {
+          commonHandlers.readAloudToggle?.()
+        }
       }
     }),
     [commonHandlers, bookSyncId, currentLocation, pageCurrent, queryClient]
@@ -275,28 +287,33 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     })
   }, [rendition, bookSyncIdRef])
 
-  // Handle user text selection -- show color picker popover instead of auto-highlight
-  const handleTextSelected = useCallback(
-    (cfiRange: string, contents: Contents) => {
-      const syncId = bookSyncIdRef.current
-      if (!syncId || !rendition) return
+  // Handle user text selection -- show color picker popover instead of auto-highlight.
+  //
+  // NOTE: This callback is bound to rendition.on('selected') ONCE by the
+  // class-based EpubView (epub_viewer/index.tsx). Its closure must not
+  // capture React state that may still be null at bind time — use refs
+  // (`renditionRef`, `bookSyncIdRef`) so the live values are read at
+  // event-fire time. Without this, the bound listener silently bails on
+  // every selection because the captured `rendition` is still null.
+  const handleTextSelected = useCallback((cfiRange: string, contents: Contents) => {
+    const syncId = bookSyncIdRef.current
+    if (!syncId || !renditionRef.current) return
 
-      const selection = contents.window.getSelection()
-      const selectedText = selection?.toString() ?? ''
-      if (!selectedText.trim()) return
+    const selection = contents.window.getSelection()
+    const selectedText = selection?.toString() ?? ''
+    if (!selectedText.trim()) return
 
-      // Get selection position for popover placement
-      const range = selection?.getRangeAt(0)
-      const rect = range?.getBoundingClientRect()
-      const iframeEl = contents.document.defaultView?.frameElement
-      const iframeRect = iframeEl?.getBoundingClientRect()
-      const x = (rect?.left ?? 0) + (iframeRect?.left ?? 0)
-      const y = (rect?.top ?? 0) + (iframeRect?.top ?? 0) - 50
+    // Get selection position for popover placement
+    const range = selection?.getRangeAt(0)
+    const rect = range?.getBoundingClientRect()
+    const iframeEl = contents.document.defaultView?.frameElement
+    const iframeRect = iframeEl?.getBoundingClientRect()
+    const x = (rect?.left ?? 0) + (iframeRect?.left ?? 0)
+    const y = (rect?.top ?? 0) + (iframeRect?.top ?? 0) - 50
 
-      setSelectionInfo({ cfiRange, text: selectedText, position: { x, y } })
-    },
-    [rendition, bookSyncIdRef]
-  )
+    useSelectionStore.getState().setEpubSelection({ cfiRange, text: selectedText })
+    setSelectionInfo({ cfiRange, text: selectedText, position: { x, y } })
+  }, [])
 
   // Handle color selection from the popover
   const handleHighlightColor = useCallback(
@@ -317,9 +334,89 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         .then(() => getSyncService().triggerWrite())
         .catch((err: unknown) => console.warn('[highlight] save failed:', err))
       setSelectionInfo(null)
+      useSelectionStore.getState().clear()
     },
     [selectionInfo, rendition, bookSyncIdRef]
   )
+
+  const handleReadAloudFrom = useCallback(() => {
+    // Resolve selection: prefer the live iframe selection (always fresh,
+    // works even when the rendition's `selected` event never populated the
+    // store) and fall back to the store (popover and ⌘⇧L paths may have
+    // primed it before triggering the action).
+    const live = resolveLiveSelection(renditionRef.current)
+    const stored = useSelectionStore.getState().current
+    const sel: { cfiRange: string; text: string } | null =
+      live ?? (stored?.format === 'epub' ? { cfiRange: stored.cfiRange, text: stored.text } : null)
+
+    if (!sel) {
+      console.warn('[readAloud] no live or stored selection — aborting')
+      return
+    }
+
+    const playingState = usePlayerStore.getState().playingState
+    if (playingState === 'idle' || playingState === 'pageNavigating') return
+
+    const paragraphs = usePlayerStore.getState().currentParagraphs
+    if (paragraphs.length === 0) return
+
+    const matched = findParagraphForCfi(paragraphs, sel.cfiRange)
+
+    const send = usePlayerStore.getState().send
+    if (!send) return
+
+    requireAuth('tts', () => {
+      if (!matched) {
+        // Selection not in any current paragraph — fall back to paragraph 0
+        // of current view with no override.
+        const first = paragraphs[0]
+        send({
+          type: 'PLAY_FROM',
+          paragraphIndex: 0,
+          partialFirstText: first.text,
+          partialFirstKey: first.index
+        })
+        return
+      }
+
+      const targetParagraph = paragraphs[matched.paragraphIndex]
+      const { partialFirstText, partialFirstKey } = buildPartialFirst(
+        targetParagraph.index,
+        targetParagraph.text,
+        matched.charOffsetInParagraph
+      )
+      send({
+        type: 'PLAY_FROM',
+        paragraphIndex: matched.paragraphIndex,
+        partialFirstText,
+        partialFirstKey
+      })
+    })
+
+    // Clear selection store; the popover may still be visible briefly but
+    // will close on its own.
+    useSelectionStore.getState().clear()
+  }, [requireAuth])
+
+  // Subscribe to the context-menu IPC event that fires when the user clicks
+  // "Read Aloud From Here" in the native right-click menu (Task 9/10).
+  useEffect(() => {
+    const unsubscribe = window.electron.on('reader:readAloudFromSelection', () => {
+      handleReadAloudFrom()
+    })
+    return unsubscribe
+  }, [handleReadAloudFrom])
+
+  // Subscribe to the window CustomEvent dispatched by the ⌘⇧L menu shortcut
+  // (Task 11). Both the IPC path (context menu) and this path converge on
+  // the same handleReadAloudFrom adapter.
+  useEffect(() => {
+    const handler = (): void => {
+      handleReadAloudFrom()
+    }
+    window.addEventListener('rishi:readAloudFromSelection', handler)
+    return () => window.removeEventListener('rishi:readAloudFromSelection', handler)
+  }, [handleReadAloudFrom])
 
   const clearAllHighlights = useCallback(async () => {
     const r = renditionRef.current
@@ -526,6 +623,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       <div
         style={{ height: '100vh', position: 'relative', overflow: 'hidden', touchAction: 'pan-y' }}
         {...pageCurl.pointerHandlers}
+        {...pageCurl.wheelHandlers}
       >
         <ReactReader
           key={`reader-${book.id}`}
@@ -590,7 +688,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               )
             }
           }}
-          swipeable={true}
+          swipeable={false}
           readerStyles={createIReactReaderTheme(themes[theme].readerTheme)}
           handleTextSelected={handleTextSelected}
           getRendition={(_rendition) => {
@@ -731,7 +829,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
             title={book.title}
             location={currentLocation || book.location || 0}
             locationChanged={() => {}}
-            swipeable={true}
+            swipeable={false}
             readerStyles={createIReactReaderTheme(themes[theme].readerTheme)}
             getRendition={(_rendition) => {
               _rendition.once('rendered', () => {
@@ -756,7 +854,11 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           selectedText={selectionInfo.text}
           position={selectionInfo.position}
           onHighlight={handleHighlightColor}
-          onClose={() => setSelectionInfo(null)}
+          onReadAloudFrom={handleReadAloudFrom}
+          onClose={() => {
+            setSelectionInfo(null)
+            useSelectionStore.getState().clear()
+          }}
         />
       ) : null}
 

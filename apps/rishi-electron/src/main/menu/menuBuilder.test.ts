@@ -132,6 +132,16 @@ describe('buildMenu — book', () => {
     expect(findItem(playing, ['Reader', 'Stop Read Aloud'])).toBeDefined()
   })
 
+  it('Read Aloud From Selection has CmdOrCtrl+Shift+L and dispatches readAloudFromSelection', () => {
+    const dispatch = vi.fn<(c: MenuCommand) => void>()
+    const tpl = buildMenu(pdfCtx, dispatch)
+    const item = findItem(tpl, ['Reader', 'Read Aloud From Selection'])
+    expect(item).toBeDefined()
+    expect(item!.accelerator).toBe('CmdOrCtrl+Shift+L')
+    item!.click!(undefined as never, undefined as never, undefined as never)
+    expect(dispatch).toHaveBeenCalledWith({ command: 'readAloudFromSelection' })
+  })
+
   it('Bookmarks > Add Bookmark dispatches addBookmark', () => {
     const dispatch = vi.fn()
     const tpl = buildMenu(pdfCtx, dispatch)

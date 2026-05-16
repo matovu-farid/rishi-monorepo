@@ -73,9 +73,18 @@ export function usePlayerMachine(bookId: string) {
       (paragraphs) => {
         actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs })
         // Only prefetch when player is actively playing/loading
+        const ctx = actor.getSnapshot().context
         const machineState = mapStateValue(actor.getSnapshot().value)
         if (machineState === 'playing' || machineState === 'loading') {
-          for (const p of paragraphs) {
+          // When the override is active, skip prefetching the override paragraph
+          // because it has a different cache key (partialFirstKey) than the full
+          // paragraph — prefetching with the full key would populate the wrong
+          // cache entry and the loading branch would still fetch via the override key.
+          const overrideIdx =
+            ctx.partialFirstText !== null ? ctx.partialFirstParagraphIndex : null
+          for (let i = 0; i < paragraphs.length; i++) {
+            if (i === overrideIdx) continue
+            const p = paragraphs[i]
             if (p.text.trim()) {
               void getTtsService()
                 .requestAudio({ bookId, cfiRange: p.index, text: p.text, priority: 0 })
@@ -183,44 +192,55 @@ export function usePlayerMachine(bookId: string) {
             if (gen !== fetchGeneration) return
             actor.send({ type: 'AUDIO_ENDED' })
           }, 2000)
-        } else if (!paragraph.text.trim()) {
-          // Empty paragraph (e.g. image content). Skip after brief pause.
-          setTimeout(() => {
-            if (gen !== fetchGeneration) return
-            actor.send({ type: 'NEXT' })
-          }, 2000)
         } else {
-          // Fetch audio via TTS service (returns blob URL in Electron)
-          getTtsService()
-            .requestAudio({
-              bookId: ctx.bookId,
-              cfiRange: paragraph.index,
-              text: paragraph.text,
-              priority: 1
-            })
-            .then((blobUrl) => {
-              if (gen !== fetchGeneration) return // stale
-              return loadAndPlayAudio(blobUrl, () => gen !== fetchGeneration)
-            })
-            .then(() => {
-              if (gen !== fetchGeneration) return // stale
-              actor.send({ type: 'AUDIO_LOADED' })
-              // Update activeParagraph now that audio is playing
-              usePlayerStore.setState({ activeParagraph: paragraph })
-              // Schedule prefetch for upcoming paragraphs
-              schedulePrefetch(
-                ctx.paragraphIndex,
-                ctx.currentParagraphs,
-                ctx.nextPageParagraphs,
-                ctx.bookId
-              )
-            })
-            .catch((err: unknown) => {
-              if (gen !== fetchGeneration) return // stale
-              const msg = err instanceof Error ? err.message : String(err)
-              console.error(`Audio fetch/load failed [p${ctx.paragraphIndex}]: ${msg}`)
-              actor.send({ type: 'AUDIO_ERROR', error: msg })
-            })
+          // When a partial-first override is active for this paragraph, use the
+          // override text/key instead of the full paragraph content so TTS
+          // starts from the user's selection point.
+          const useOverride =
+            ctx.partialFirstText !== null &&
+            ctx.partialFirstParagraphIndex === ctx.paragraphIndex
+          const ttsText = useOverride ? ctx.partialFirstText! : paragraph.text
+          const ttsKey = useOverride ? ctx.partialFirstKey! : paragraph.index
+
+          if (!ttsText.trim()) {
+            // Empty paragraph (or selection resolved to whitespace). Skip.
+            setTimeout(() => {
+              if (gen !== fetchGeneration) return
+              actor.send({ type: 'NEXT' })
+            }, 2000)
+          } else {
+            // Fetch audio via TTS service (returns blob URL in Electron)
+            getTtsService()
+              .requestAudio({
+                bookId: ctx.bookId,
+                cfiRange: ttsKey,
+                text: ttsText,
+                priority: 1
+              })
+              .then((blobUrl) => {
+                if (gen !== fetchGeneration) return // stale
+                return loadAndPlayAudio(blobUrl, () => gen !== fetchGeneration)
+              })
+              .then(() => {
+                if (gen !== fetchGeneration) return // stale
+                actor.send({ type: 'AUDIO_LOADED' })
+                // Update activeParagraph now that audio is playing
+                usePlayerStore.setState({ activeParagraph: paragraph })
+                // Schedule prefetch for upcoming paragraphs
+                schedulePrefetch(
+                  ctx.paragraphIndex,
+                  ctx.currentParagraphs,
+                  ctx.nextPageParagraphs,
+                  ctx.bookId
+                )
+              })
+              .catch((err: unknown) => {
+                if (gen !== fetchGeneration) return // stale
+                const msg = err instanceof Error ? err.message : String(err)
+                console.error(`Audio fetch/load failed [p${ctx.paragraphIndex}]: ${msg}`)
+                actor.send({ type: 'AUDIO_ERROR', error: msg })
+              })
+          }
         }
       } else {
         // Left loading state -- invalidate any in-flight fetch

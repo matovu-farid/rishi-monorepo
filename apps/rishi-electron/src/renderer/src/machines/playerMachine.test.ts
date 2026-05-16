@@ -753,3 +753,149 @@ describe('playerMachine', () => {
     expect(actor.getSnapshot().value).toBe('republishingParagraphs')
   })
 })
+
+describe('playerMachine - PLAY_FROM', () => {
+  const paragraphs = [
+    { index: 'p0', text: 'First.' },
+    { index: 'p1', text: 'Second.' },
+    { index: 'p2', text: 'Third.' }
+  ]
+
+  function setupPlayingState() {
+    const actor = createActor(playerMachine).start()
+    actor.send({ type: 'INITIALIZE', bookId: 'book-1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs })
+    return actor
+  }
+
+  it('PLAY_FROM from stopped transitions to loading with the target paragraph index', () => {
+    const actor = setupPlayingState()
+    actor.send({
+      type: 'PLAY_FROM',
+      paragraphIndex: 2,
+      partialFirstText: 'override text',
+      partialFirstKey: 'p2#s=0'
+    })
+    expect(actor.getSnapshot().value).toBe('loading')
+    expect(actor.getSnapshot().context.paragraphIndex).toBe(2)
+    expect(actor.getSnapshot().context.partialFirstText).toBe('override text')
+    expect(actor.getSnapshot().context.partialFirstKey).toBe('p2#s=0')
+    expect(actor.getSnapshot().context.partialFirstParagraphIndex).toBe(2)
+  })
+
+  it('PLAY_FROM from playing transitions to loading with new index', () => {
+    const actor = setupPlayingState()
+    actor.send({
+      type: 'PLAY_FROM',
+      paragraphIndex: 0,
+      partialFirstText: 'p0 full',
+      partialFirstKey: 'p0#s=0'
+    })
+    actor.send({ type: 'AUDIO_LOADED' })
+    expect(actor.getSnapshot().value).toBe('playing')
+
+    actor.send({
+      type: 'PLAY_FROM',
+      paragraphIndex: 2,
+      partialFirstText: 'p2 override',
+      partialFirstKey: 'p2#s=5'
+    })
+    expect(actor.getSnapshot().value).toBe('loading')
+    expect(actor.getSnapshot().context.paragraphIndex).toBe(2)
+    expect(actor.getSnapshot().context.partialFirstParagraphIndex).toBe(2)
+  })
+
+  it('PLAY_FROM is ignored from idle', () => {
+    const actor = createActor(playerMachine).start()
+    actor.send({
+      type: 'PLAY_FROM',
+      paragraphIndex: 1,
+      partialFirstText: 'x',
+      partialFirstKey: 'p1#s=0'
+    })
+    expect(actor.getSnapshot().value).toBe('idle')
+    expect(actor.getSnapshot().context.partialFirstText).toBeNull()
+  })
+
+  it('PLAY_FROM is ignored from pageNavigating', () => {
+    const actor = setupPlayingState()
+    actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+    expect(actor.getSnapshot().value).toBe('pageNavigating')
+    actor.send({
+      type: 'PLAY_FROM',
+      paragraphIndex: 1,
+      partialFirstText: 'x',
+      partialFirstKey: 'p1#s=0'
+    })
+    expect(actor.getSnapshot().value).toBe('pageNavigating')
+    expect(actor.getSnapshot().context.partialFirstText).toBeNull()
+  })
+
+  it('override clears on STOP', () => {
+    const actor = setupPlayingState()
+    actor.send({
+      type: 'PLAY_FROM',
+      paragraphIndex: 1,
+      partialFirstText: 'override',
+      partialFirstKey: 'p1#s=0'
+    })
+    actor.send({ type: 'STOP' })
+    expect(actor.getSnapshot().context.partialFirstText).toBeNull()
+    expect(actor.getSnapshot().context.partialFirstParagraphIndex).toBeNull()
+  })
+
+  it('override clears on PAGE_NAVIGATING', () => {
+    const actor = setupPlayingState()
+    actor.send({
+      type: 'PLAY_FROM',
+      paragraphIndex: 1,
+      partialFirstText: 'override',
+      partialFirstKey: 'p1#s=0'
+    })
+    actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+    expect(actor.getSnapshot().context.partialFirstText).toBeNull()
+  })
+
+  it('override survives RESUME from paused.clean', () => {
+    const actor = setupPlayingState()
+    actor.send({
+      type: 'PLAY_FROM',
+      paragraphIndex: 1,
+      partialFirstText: 'override',
+      partialFirstKey: 'p1#s=0'
+    })
+    actor.send({ type: 'AUDIO_LOADED' })
+    actor.send({ type: 'PAUSE' })
+    actor.send({ type: 'RESUME' })
+    expect(actor.getSnapshot().value).toBe('playing')
+    expect(actor.getSnapshot().context.partialFirstText).toBe('override')
+  })
+
+  it('override clears after AUDIO_ENDED for the override paragraph', () => {
+    const actor = setupPlayingState()
+    actor.send({
+      type: 'PLAY_FROM',
+      paragraphIndex: 0,
+      partialFirstText: 'override',
+      partialFirstKey: 'p0#s=0'
+    })
+    actor.send({ type: 'AUDIO_LOADED' })
+    actor.send({ type: 'AUDIO_ENDED' })
+    expect(actor.getSnapshot().context.paragraphIndex).toBe(1)
+    expect(actor.getSnapshot().context.partialFirstText).toBeNull()
+    expect(actor.getSnapshot().context.partialFirstParagraphIndex).toBeNull()
+  })
+
+  it('override clears on CHAT_STARTED', () => {
+    const actor = setupPlayingState()
+    actor.send({
+      type: 'PLAY_FROM',
+      paragraphIndex: 1,
+      partialFirstText: 'override',
+      partialFirstKey: 'p1#s=0'
+    })
+    actor.send({ type: 'CHAT_STARTED' })
+    expect(actor.getSnapshot().context.partialFirstText).toBeNull()
+    expect(actor.getSnapshot().context.partialFirstParagraphIndex).toBeNull()
+  })
+})

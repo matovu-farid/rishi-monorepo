@@ -14,5 +14,6 @@ describe('ACCELERATORS', () => {
     expect(ACCELERATORS.readAloud).toBe('CmdOrCtrl+R')
     expect(ACCELERATORS.voiceChat).toBe('CmdOrCtrl+Shift+V')
     expect(ACCELERATORS.openChat).toBe('CmdOrCtrl+K')
+    expect(ACCELERATORS.readAloudFromSelection).toBe('CmdOrCtrl+Shift+L')
   })
 })

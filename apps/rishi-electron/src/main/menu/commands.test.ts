@@ -15,6 +15,7 @@ describe('menu command vocabulary', () => {
       { command: 'showAllBookmarks' },
       { command: 'jumpToBookmark', arg: { bookmarkId: 'bm-9' } },
       { command: 'readAloudToggle' },
+      { command: 'readAloudFromSelection' },
       { command: 'voiceChat' },
       { command: 'openChat' },
       { command: 'openHelp' },
