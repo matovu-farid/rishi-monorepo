@@ -18,7 +18,6 @@ import AIChatOrb from '@/components/chat/AIChatOrb'
 import VoiceChatLauncher from '@/components/chat/VoiceChatLauncher'
 import { themes } from '@/themes/themes'
 import { usePlayerStore } from '@/stores/playerStore'
-import type { ParagraphWithIndex } from '@/models/player_control'
 import { getBookImportService, type PageDataInsertable } from '@/services'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { useChatStore } from '@/stores/chatStore'
@@ -30,6 +29,7 @@ import { stringToNumberID } from '@/lib/utils'
 import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
 import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
+import { useChapterParagraphPrefetch } from '@/hooks/reader/useChapterParagraphPrefetch'
 
 export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme)
@@ -165,64 +165,13 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   // Publish paragraphs to playerStore for TTS.
   // Current chapter is published immediately; next/prev are debounced
   // so rapid chapter flips don't trigger wasted fetches.
-  const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => {
-    if (chapterCount === 0) return
-
-    // Current chapter paragraphs — publish immediately
-    getMobiText({ path: book.filepath, chapterIndex })
-      .then((texts) => {
-        const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
-          text,
-          index: `mobi-${chapterIndex}-${i}`
-        }))
-        usePlayerStore.getState().setCurrentParagraphs(paragraphs)
-      })
-      .catch((err: unknown) => console.warn('[MobiView] failed to get text for TTS:', err))
-
-    // Debounce next/prev chapter prefetch
-    if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current)
-    prefetchTimerRef.current = setTimeout(() => {
-      // Prefetch next chapter paragraphs
-      if (chapterIndex < chapterCount - 1) {
-        getMobiText({ path: book.filepath, chapterIndex: chapterIndex + 1 })
-          .then((texts) => {
-            const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
-              text,
-              index: `mobi-${chapterIndex + 1}-${i}`
-            }))
-            usePlayerStore.getState().setNextPageParagraphs(paragraphs)
-          })
-          .catch((err: unknown) => console.warn('[MobiView] failed to prefetch next chapter:', err))
-      } else {
-        usePlayerStore.getState().setNextPageParagraphs([])
-      }
-
-      // Prefetch previous chapter paragraphs
-      if (chapterIndex > 0) {
-        getMobiText({ path: book.filepath, chapterIndex: chapterIndex - 1 })
-          .then((texts) => {
-            const paragraphs: ParagraphWithIndex[] = texts.map((text, i) => ({
-              text,
-              index: `mobi-${chapterIndex - 1}-${i}`
-            }))
-            usePlayerStore.getState().setPrevPageParagraphs(paragraphs)
-          })
-          .catch((err: unknown) => console.warn('[MobiView] failed to prefetch prev chapter:', err))
-      } else {
-        usePlayerStore.getState().setPrevPageParagraphs([])
-      }
-    }, 300)
-
-    return () => {
-      if (prefetchTimerRef.current) {
-        clearTimeout(prefetchTimerRef.current)
-        // Clear stale prefetch data so Player doesn't use wrong chapter's paragraphs
-        usePlayerStore.getState().setNextPageParagraphs([])
-        usePlayerStore.getState().setPrevPageParagraphs([])
-      }
-    }
-  }, [book.filepath, chapterIndex, chapterCount])
+  useChapterParagraphPrefetch({
+    chapterIndex,
+    chapterCount,
+    indexPrefix: 'mobi',
+    fetchCurrent: (idx) => getMobiText({ path: book.filepath, chapterIndex: idx }),
+    fetchAt: (idx) => getMobiText({ path: book.filepath, chapterIndex: idx })
+  })
 
   // Handle page-turn events from Player (TTS exhausted current chapter)
   useEffect(() => {
