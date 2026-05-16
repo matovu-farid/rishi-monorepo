@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
-import { usePlayerStore } from '@/stores/playerStore'
+import { usePlayerStore, type PlayerStoreState } from '@/stores/playerStore'
 import { ContextualHint } from '@/components/tutorial/ContextualHint'
 
 interface TTSControlsProps {
@@ -13,6 +13,17 @@ interface TTSControlsProps {
 
 /** Duration before the expanded pill auto-collapses (ms). */
 const AUTO_DISMISS_MS = 4_000
+
+/** Player states that represent an active playback session — the pill must
+ *  not auto-collapse while in any of these. Idle / stopped / paused / error
+ *  still auto-collapse (intentional). */
+const ACTIVE_PLAYBACK_STATES: ReadonlySet<PlayerStoreState> = new Set([
+  'loading',
+  'playing',
+  'waitingForParagraphs',
+  'pageNavigating',
+  'republishingParagraphs'
+])
 
 export default function TTSControls({ bookId, disabled = false }: TTSControlsProps) {
   const [showError, setShowError] = useState(false)
@@ -43,14 +54,14 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
     }, AUTO_DISMISS_MS)
   }, [clearDismissTimer])
 
-  // When playingState changes, manage auto-dismiss timer
+  // When playingState changes, manage auto-dismiss timer.
+  // While in any active-playback state we suspend the timer; otherwise we
+  // start it (unless the user is hovering).
   useEffect(() => {
     if (!expanded) return
-    if (playingState === 'playing') {
-      // Suspend timer while playing
+    if (ACTIVE_PLAYBACK_STATES.has(playingState)) {
       clearDismissTimer()
     } else if (!isHoveringRef.current) {
-      // Paused / Stopped and not hovering → start countdown
       startDismissTimer()
     }
   }, [playingState, expanded, clearDismissTimer, startDismissTimer])
@@ -89,7 +100,7 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
 
   const handleMouseLeave = () => {
     isHoveringRef.current = false
-    if (expanded && playingState !== 'playing') {
+    if (expanded && !ACTIVE_PLAYBACK_STATES.has(playingState)) {
       startDismissTimer()
     }
   }
