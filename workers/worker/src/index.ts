@@ -11,6 +11,27 @@ import { uploadRoutes } from "./routes/upload";
 import { desktopRoutes } from "./routes/desktop";
 import { createAuth } from "./auth";
 
+// Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
+const ALLOWED_REALTIME_LANGUAGES = [
+  'en',
+  'es',
+  'fr',
+  'de',
+  'it',
+  'pt',
+  'ja',
+  'ko',
+  'zh',
+  'ar',
+  'hi',
+  'ru'
+] as const
+
+function coerceLanguage(raw: string | undefined): string {
+  if (!raw) return 'en'
+  return (ALLOWED_REALTIME_LANGUAGES as readonly string[]).includes(raw) ? raw : 'en'
+}
+
 /** Constant-time string comparison to prevent timing attacks. */
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -164,6 +185,7 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
 
 app.get("/api/realtime/client_secrets", requireAuth, async (c) => {
   try {
+    const language = coerceLanguage(c.req.query("language"));
     const response = await axios.post(
       "https://api.openai.com/v1/realtime/client_secrets",
       {
@@ -175,6 +197,11 @@ app.get("/api/realtime/client_secrets", requireAuth, async (c) => {
           type: "realtime",
           model: "gpt-realtime",
           instructions: "You are a friendly assistant.",
+          audio: {
+            input: {
+              transcription: { language },
+            },
+          },
         },
       },
       {
