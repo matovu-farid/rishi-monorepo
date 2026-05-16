@@ -89,3 +89,19 @@ describe('useReaderGesture - mouse edge-zone', () => {
     expect(result.current.active).toBe(false)
   })
 })
+
+describe('useReaderGesture - touch', () => {
+  it('ignores single-finger touch even in edge zone', () => {
+    const onNavigate = vi.fn(() => true)
+    const { result } = renderHook(() =>
+      useReaderGesture({ onNavigate, onCommit: vi.fn(), onUndoNavigate: vi.fn() })
+    )
+    act(() => {
+      result.current.pointerHandlers.onPointerDown(
+        makeMockPointerEvent({ clientX: 10, pointerType: 'touch', pointerId: 1 })
+      )
+    })
+    expect(onNavigate).not.toHaveBeenCalled()
+    expect(result.current.active).toBe(false)
+  })
+})
