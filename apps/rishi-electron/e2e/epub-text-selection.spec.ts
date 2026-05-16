@@ -122,4 +122,32 @@ test.describe('EPUB text selection', () => {
     // overlayCount would be > 0 — catching the regression.
     expect(overlayCount).toBe(0)
   })
+
+  test('mousedown on the reader area is not preventDefault-ed (no SwipeWrapper interference)', async () => {
+    const iframeEl = bookPage.locator('iframe').first()
+    await iframeEl.waitFor({ state: 'visible', timeout: 30000 })
+
+    // Find the parent area that wraps the iframe and dispatch a synthetic
+    // mousedown on it. Then check defaultPrevented. With SwipeWrapper's
+    // mousedown preventDefault active (swipeable={true}), this would be true.
+    const defaultPrevented = await bookPage.evaluate(() => {
+      // Find the iframe and walk up a few levels — SwipeWrapper renders its
+      // div somewhere in the ancestor chain.
+      const iframe = document.querySelector('iframe')
+      if (!iframe) return null
+      // Target the closest reader container ancestor
+      const target = iframe.parentElement?.parentElement ?? iframe.parentElement ?? iframe
+      const evt = new MouseEvent('mousedown', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 100,
+        clientY: 100,
+        button: 0
+      })
+      target.dispatchEvent(evt)
+      return evt.defaultPrevented
+    })
+
+    expect(defaultPrevented).toBe(false)
+  })
 })

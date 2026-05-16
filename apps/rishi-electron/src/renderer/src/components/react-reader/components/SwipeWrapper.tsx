@@ -8,6 +8,11 @@ export type SwipeWrapperProps = {
   swipeProps: Partial<SwipeableProps>
   onSwipeLeft?: () => void
   onSwipeRight?: () => void
+  /** When false, render children passthrough without any gesture wiring.
+   *  Used by the EPUB reader when an external gesture layer (e.g.
+   *  useReaderGesture) owns swipe/wheel handling and SwipeWrapper would
+   *  otherwise intercept mousedown/wheel events. Defaults to true. */
+  swipeable?: boolean
 }
 
 const DEBOUNCE_MS = 600 // Debounce period to prevent multiple swipes
@@ -18,13 +23,45 @@ const THRESHOLD = 300 // Minimum horizontal scroll distance
  * Wraps the reader with touch gesture and trackpad swipe support.
  * Touch swipes use react-swipeable; trackpad horizontal scrolling
  * uses @use-gesture/react with accumulation + debounce logic.
+ *
+ * When `swipeable={false}`, this component becomes a passthrough wrapper
+ * that does NOT install any pointer-event or wheel listeners, leaving
+ * external gesture layers free to handle the events themselves.
  */
 export const SwipeWrapper = ({
   children,
   swipeProps,
   onSwipeLeft,
-  onSwipeRight
+  onSwipeRight,
+  swipeable = true
 }: SwipeWrapperProps) => {
+  if (!swipeable) {
+    return <SwipeWrapperPassthrough>{children}</SwipeWrapperPassthrough>
+  }
+  return (
+    <SwipeWrapperActive
+      swipeProps={swipeProps}
+      onSwipeLeft={onSwipeLeft}
+      onSwipeRight={onSwipeRight}
+    >
+      {children}
+    </SwipeWrapperActive>
+  )
+}
+
+/** Plain passthrough div. No gesture wiring at all. */
+const SwipeWrapperPassthrough = ({ children }: { children: ReactNode }) => {
+  return <div style={{ height: '100%' }}>{children}</div>
+}
+
+/** The original gesture-active wrapper. Renamed for clarity but functionally
+ *  identical to the pre-Phase-0 SwipeWrapper body. */
+const SwipeWrapperActive = ({
+  children,
+  swipeProps,
+  onSwipeLeft,
+  onSwipeRight
+}: Omit<SwipeWrapperProps, 'swipeable'>) => {
   const containerRef = useRef<HTMLDivElement>(null)
   const touchHandlers = useSwipeable(swipeProps)
   const lastSwipeTime = useRef<number>(0)
