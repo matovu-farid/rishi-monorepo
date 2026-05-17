@@ -34,7 +34,15 @@ export function usePdfReadAloudFromSelection(params: UsePdfReadAloudFromSelectio
       if (playingState === 'idle' || playingState === 'pageNavigating') return
 
       const paragraphs = usePlayerStore.getState().currentParagraphs
-      if (paragraphs.length === 0) return
+      if (paragraphs.length === 0) {
+        // Surface the race instead of silently no-op-ing: user right-clicked
+        // before onGetTextSuccess populated currentParagraphs for the visible
+        // page. This window is short (sub-second on a normal page) but real.
+        console.warn(
+          '[pdf-read-aloud] no paragraphs published for this page yet — try again after the page finishes rendering'
+        )
+        return
+      }
 
       // First paragraph whose text contains the selection. The selection
       // could span a paragraph boundary; in that case we start playback
