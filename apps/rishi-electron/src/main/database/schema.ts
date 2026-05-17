@@ -46,7 +46,7 @@ export const highlights = sqliteTable('highlights', {
   id: text('id').primaryKey(),
   bookId: text('book_id').notNull(),
   format: text('format').notNull().default('epub'),
-  cfiRange: text('cfi_range'),
+  cfiRange: text('cfi_range').notNull().default(''),
   locator: text('locator'),
   text: text('text').notNull().default(''),
   color: text('color').notNull().default('yellow'),

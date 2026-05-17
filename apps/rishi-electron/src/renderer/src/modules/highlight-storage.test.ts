@@ -134,4 +134,24 @@ describe('highlight-storage — PDF support', () => {
     expect(rows[1].format).toBe('pdf')
     expect(rows[1].locator).toBe(JSON.stringify({ page: 1, rects: [] }))
   })
+
+  it('getHighlightsForBook surfaces cfiRange: null for PDF rows (empty-string to null mapping applied by main-process mapper)', async () => {
+    // The main-process mapper converts cfi_range='' to null before sending over IPC.
+    // The renderer receives null on the wire and must pass it through as-is.
+    const listMock = window.electron.highlightsList as unknown as ReturnType<typeof vi.fn>
+    listMock.mockResolvedValueOnce([
+      {
+        id: 'pdf-1', bookId: 'b1',
+        format: 'pdf', cfiRange: null, locator: JSON.stringify({ page: 2, rects: [{ x: 0, y: 0, w: 50, h: 10 }] }),
+        text: 'pdf text', color: 'blue', note: '', chapter: null,
+        createdAt: '2026-05-17T00:00:00.000Z', updatedAt: null,
+        syncId: null, syncVersion: 0, isDirty: 0, isDeleted: 0
+      }
+    ])
+
+    const rows: HighlightRow[] = await getHighlightsForBook('b1')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].cfiRange).toBeNull()
+    expect(rows[0].format).toBe('pdf')
+  })
 })

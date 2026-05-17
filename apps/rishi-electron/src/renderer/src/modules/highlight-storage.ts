@@ -3,23 +3,10 @@
  * Mirrors the Tauri Kysely-based highlight-storage.ts.
  */
 
-export interface HighlightRow {
-  id: string
-  bookId: string
-  format: 'epub' | 'pdf'
-  cfiRange: string | null
-  locator: string | null
-  text: string
-  color: string
-  note: string
-  chapter: string | null
-  createdAt: string
-  updatedAt: number | null
-  syncId: string | null
-  syncVersion: number
-  isDirty: number
-  isDeleted: number
-}
+// HighlightRow is the IPC boundary type — single source of truth lives in the
+// preload contract so main and renderer always agree on the wire shape.
+import type { HighlightRow } from '../../../preload/types'
+export type { HighlightRow }
 
 export interface PdfLocator {
   page: number

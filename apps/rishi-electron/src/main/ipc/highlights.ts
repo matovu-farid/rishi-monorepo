@@ -102,12 +102,22 @@ export function registerHighlightHandlers(): void {
     return id
   })
 
+  // EPUB-only delete channel: the format guard is intentional.
+  // PDF rows all share cfi_range='' so matching on cfiRange alone would
+  // mass-delete all PDF highlights for a book. PDF deletion must go through
+  // highlights:deleteById which targets a specific row by primary key.
   handle('highlights:delete', async (_event, bookSyncId, cfiRange) => {
     const db = getDrizzle()
     await db
       .update(highlights)
       .set(softDeleteFields())
-      .where(and(eq(highlights.bookId, bookSyncId), eq(highlights.cfiRange, cfiRange)))
+      .where(
+        and(
+          eq(highlights.bookId, bookSyncId),
+          eq(highlights.cfiRange, cfiRange),
+          eq(highlights.format, 'epub')
+        )
+      )
   })
 
   handle('highlights:deleteById', async (_event, highlightId) => {
