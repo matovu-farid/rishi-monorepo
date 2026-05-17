@@ -47,6 +47,14 @@ import { useRequireAuth } from '@/hooks/useRequireAuth'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
 import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
 import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import { SelectionPopover } from '@/components/highlights/SelectionPopover'
+import { usePdfTextSelection } from '@/hooks/usePdfTextSelection'
+import { useUndoableHighlightShortcut } from '@/hooks/useUndoableHighlightShortcut'
+import { applyHighlightWithUndoPdf } from '@/modules/highlight-actions'
+import { getHighlightsForBook, type HighlightRow, type PdfLocator } from '@/modules/highlight-storage'
+import type { PDFPageProxy } from 'pdfjs-dist'
+import type { HighlightColor } from '@/types/highlight'
 
 // Configure PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -75,6 +83,44 @@ export function PdfView({
   const queryClient = useQueryClient()
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const [highlights, setHighlights] = useState<HighlightRow[]>([])
+  const [selectionPopover, setSelectionPopover] = useState<{
+    locator: PdfLocator
+    text: string
+    anchorPos: { x: number; y: number }
+  } | null>(null)
+  const pageInfoRef = useRef<Map<number, { pageEl: HTMLElement; page: PDFPageProxy }>>(new Map())
+  const { setLastUndoable } = useUndoableHighlightShortcut()
+
+  useEffect(() => {
+    let active = true
+    const bookSyncId = book.syncId
+    if (!bookSyncId) return
+    void getHighlightsForBook(bookSyncId).then((rows) => {
+      if (!active) return
+      setHighlights(rows.filter((r) => r.format === 'pdf'))
+    })
+    return () => {
+      active = false
+    }
+  }, [book.syncId])
+
+  usePdfTextSelection({
+    containerRef: scrollContainerRef,
+    getPageElement: (n) => pageInfoRef.current.get(n)?.pageEl ?? null,
+    getViewport: (n) => {
+      const info = pageInfoRef.current.get(n)
+      if (!info) return null
+      const scale = info.pageEl.getBoundingClientRect().width / info.page.view[2]
+      // pdfjs-dist types return `any[]` from convertToViewportPoint; cast via
+      // unknown to the structural ViewportLike which expects [number, number].
+      return info.page.getViewport({ scale }) as unknown as import('@/modules/pdf-locator').ViewportLike
+    },
+    onSelect: (sel) =>
+      setSelectionPopover({ locator: sel.locator, text: sel.text, anchorPos: sel.anchorPos }),
+    onClear: () => setSelectionPopover(null)
+  })
+
   useScrolling(scrollContainerRef)
 
   useUpdateCoverIMage(book)
@@ -552,6 +598,58 @@ export function PdfView({
     }
   }, [pdfBytes, book.id, book.location])
 
+  const handleCreatePdfHighlight = async (color: HighlightColor): Promise<void> => {
+    if (!selectionPopover || !book.syncId) return
+    const bookSyncId = book.syncId
+    const { locator, text } = selectionPopover
+    setSelectionPopover(null)
+    try {
+      const handle = await applyHighlightWithUndoPdf({
+        target: {
+          applyVisual: async () => {
+            setHighlights((prev) => [
+              ...prev,
+              {
+                id: `pending-${Date.now()}`,
+                bookId: bookSyncId,
+                format: 'pdf',
+                cfiRange: null,
+                locator: JSON.stringify(locator),
+                text,
+                color,
+                note: '',
+                chapter: null,
+                createdAt: new Date().toISOString(),
+                updatedAt: null,
+                syncId: null,
+                syncVersion: 0,
+                isDirty: 1,
+                isDeleted: 0
+              }
+            ])
+          },
+          removeVisual: async () => {
+            const rows = await getHighlightsForBook(bookSyncId)
+            setHighlights(rows.filter((r) => r.format === 'pdf'))
+          }
+        },
+        bookSyncId,
+        locator,
+        text,
+        color
+      })
+      setLastUndoable(handle)
+      const rows = await getHighlightsForBook(bookSyncId)
+      setHighlights(rows.filter((r) => r.format === 'pdf'))
+      toast.success('Highlight added', {
+        action: { label: 'Undo', onClick: () => void handle.undo() }
+      })
+    } catch (err) {
+      console.error('Failed to apply PDF highlight', err)
+      toast.error('Could not save highlight')
+    }
+  }
+
   return (
     <div
       className={cn(
@@ -562,6 +660,7 @@ export function PdfView({
     >
       <div
         ref={scrollContainerRef}
+        data-testid="pdf-scroll-container"
         className="h-full w-full overflow-y-scroll overflow-x-hidden"
         // overflowAnchor: the browser's built-in scroll-anchoring fights the
         // virtualizer's `adjustments` mechanism on backward scroll, producing
@@ -650,6 +749,13 @@ export function PdfView({
                             isDualPage={isDualPage}
                             bookId={bookIdStr}
                             onRenderComplete={handlePageRendered}
+                            onPageReady={(num, info) => {
+                              pageInfoRef.current.set(num, info)
+                            }}
+                            highlights={highlights}
+                            onHighlightClick={() => {
+                              /* will be wired in Task 6 */
+                            }}
                           />
                           <div className="group/page absolute bottom-1 left-0 right-0 text-center py-1">
                             <span className="text-xs text-gray-400">
@@ -751,6 +857,15 @@ export function PdfView({
           </div>
         </SheetContent>
       </Sheet>
+      {selectionPopover && (
+        <SelectionPopover
+          cfiRange={''}
+          selectedText={selectionPopover.text}
+          position={selectionPopover.anchorPos}
+          onHighlight={(color) => void handleCreatePdfHighlight(color)}
+          onClose={() => setSelectionPopover(null)}
+        />
+      )}
     </div>
   )
 }
