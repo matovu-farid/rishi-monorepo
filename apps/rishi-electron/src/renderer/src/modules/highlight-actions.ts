@@ -1,4 +1,4 @@
-import { saveHighlight, deleteHighlight } from '@/modules/highlight-storage'
+import { saveHighlight, deleteHighlight, saveHighlightPdf, deleteHighlightById, type PdfLocator } from '@/modules/highlight-storage'
 import { getSyncService } from '@/services'
 import type { HighlightColor } from '@/types/highlight'
 
@@ -50,6 +50,32 @@ export async function applyHighlightWithUndo(args: ApplyHighlightArgs): Promise<
       } catch (err) {
         console.warn('[highlight] delete failed:', err)
       }
+    }
+  }
+}
+
+export interface ApplyHighlightPdfArgs {
+  target: HighlightTarget
+  bookSyncId: string
+  locator: PdfLocator
+  text: string
+  color: HighlightColor
+}
+
+export async function applyHighlightWithUndoPdf(
+  args: ApplyHighlightPdfArgs
+): Promise<HighlightHandle> {
+  await args.target.applyVisual()
+  const id = await saveHighlightPdf({
+    bookSyncId: args.bookSyncId,
+    locator: args.locator,
+    text: args.text,
+    color: args.color
+  })
+  return {
+    undo: async () => {
+      await args.target.removeVisual()
+      await deleteHighlightById(id)
     }
   }
 }

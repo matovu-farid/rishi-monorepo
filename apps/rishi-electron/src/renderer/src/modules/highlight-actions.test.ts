@@ -2,7 +2,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/modules/highlight-storage', () => ({
   saveHighlight: vi.fn().mockResolvedValue('hl-1'),
-  deleteHighlight: vi.fn().mockResolvedValue(undefined)
+  deleteHighlight: vi.fn().mockResolvedValue(undefined),
+  saveHighlightPdf: vi.fn(async (params: { bookSyncId: string; locator: unknown; text: string; color?: string; note?: string; chapter?: string | null }) =>
+    window.electron.highlightsSave({
+      format: 'pdf',
+      bookSyncId: params.bookSyncId,
+      cfiRange: null,
+      locator: JSON.stringify(params.locator),
+      text: params.text,
+      color: params.color ?? 'yellow',
+      note: params.note ?? '',
+      chapter: params.chapter ?? null
+    })
+  ),
+  deleteHighlightById: vi.fn(async (id: string) => window.electron.highlightsDeleteById(id))
 }))
 
 vi.mock('@/services', () => ({
@@ -11,7 +24,7 @@ vi.mock('@/services', () => ({
 
 import { saveHighlight, deleteHighlight } from '@/modules/highlight-storage'
 import { getSyncService } from '@/services'
-import { applyHighlightWithUndo, deleteHighlightWithUndo } from './highlight-actions'
+import { applyHighlightWithUndo, deleteHighlightWithUndo, applyHighlightWithUndoPdf } from './highlight-actions'
 
 function makeTarget() {
   return {
@@ -204,5 +217,34 @@ describe('deleteHighlightWithUndo — delete path', () => {
     await handle.undo()
     await expect(handle.undo()).resolves.toBeUndefined()
     expect(target.applyVisual).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('applyHighlightWithUndoPdf', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('persists via saveHighlightPdf and exposes an undo handle that calls deleteHighlightById', async () => {
+    const saveMock = window.electron.highlightsSave as unknown as ReturnType<typeof vi.fn>
+    saveMock.mockResolvedValueOnce('pdf-row-1')
+    const deleteMock = window.electron.highlightsDeleteById as unknown as ReturnType<typeof vi.fn>
+    deleteMock.mockResolvedValueOnce(undefined)
+
+    const applyVisual = vi.fn().mockResolvedValueOnce(undefined)
+    const removeVisual = vi.fn().mockResolvedValueOnce(undefined)
+    const handle = await applyHighlightWithUndoPdf({
+      target: { applyVisual, removeVisual },
+      bookSyncId: 'b1',
+      locator: { page: 2, rects: [{ x: 0, y: 0, w: 10, h: 10 }] },
+      text: 'hi',
+      color: 'yellow'
+    })
+
+    expect(applyVisual).toHaveBeenCalledTimes(1)
+    expect(saveMock).toHaveBeenCalledTimes(1)
+    expect(saveMock.mock.calls[0][0].format).toBe('pdf')
+
+    await handle.undo()
+    expect(removeVisual).toHaveBeenCalledTimes(1)
+    expect(deleteMock).toHaveBeenCalledWith('pdf-row-1')
   })
 })
