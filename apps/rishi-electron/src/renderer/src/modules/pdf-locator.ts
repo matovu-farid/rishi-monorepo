@@ -25,9 +25,9 @@ export function selectionToPdfLocator(
   pageNumber: number
 ): PdfLocator | null {
   if (range.collapsed) return null
-  const startPage = findPageAncestor(range.startContainer) ?? pageEl
-  const endPage = findPageAncestor(range.endContainer) ?? pageEl
-  if (startPage !== endPage) return null
+  const startPage = findPageAncestor(range.startContainer)
+  const endPage = findPageAncestor(range.endContainer)
+  if (!startPage || !endPage || startPage !== endPage) return null
 
   const pageRect = pageEl.getBoundingClientRect()
   const clientRects = Array.from(range.getClientRects())
@@ -53,10 +53,10 @@ export function selectionToPdfLocator(
 
 export function pdfLocatorToScreenRects(
   locator: PdfLocator,
-  pageEl: HTMLElement,
+  _pageEl: HTMLElement,
   viewport: ViewportLike
 ): Array<{ left: number; top: number; width: number; height: number }> {
-  void pageEl
+  // _pageEl is unused — screen rects are returned page-relative; callers position them in CSS via the page wrapper's positioning context.
   return locator.rects.map((r) => {
     const [vxLeft, vyBottom] = viewport.convertToViewportPoint(r.x, r.y)
     const [vxRight, vyTop] = viewport.convertToViewportPoint(r.x + r.w, r.y + r.h)

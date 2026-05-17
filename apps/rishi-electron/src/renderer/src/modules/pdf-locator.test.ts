@@ -57,6 +57,7 @@ describe('pdf-locator', () => {
 
     it('converts a single client rect into PDF coords with bottom-left origin', () => {
       const pageEl = makePageEl({ left: 50, top: 100, width: 400, height: 600 })
+      pageEl.className = 'react-pdf__Page'
       const viewport = makeViewport({ width: 400, height: 600, scale: 1 })
       const range = document.createRange()
       const text = document.createTextNode('xyz')
@@ -79,6 +80,7 @@ describe('pdf-locator', () => {
 
     it('produces stable locators across zoom (round-trip @ scale=2)', () => {
       const pageEl1 = makePageEl({ left: 0, top: 0, width: 400, height: 600 })
+      pageEl1.className = 'react-pdf__Page'
       const vp1 = makeViewport({ width: 400, height: 600, scale: 1 })
       const range = document.createRange()
       const t = document.createTextNode('abcdef')
@@ -93,6 +95,25 @@ describe('pdf-locator', () => {
       const vp2 = makeViewport({ width: 800, height: 1200, scale: 2 })
       const screenRects = pdfLocatorToScreenRects(loc, pageEl2, vp2 as never)
       expect(screenRects).toEqual([{ left: 0, top: 0, width: 100, height: 24 }])
+    })
+
+    it('filters out client rects with zero or negative width/height', () => {
+      const pageEl = makePageEl({ left: 0, top: 0, width: 400, height: 600 })
+      pageEl.className = 'react-pdf__Page'
+      const viewport = makeViewport({ width: 400, height: 600, scale: 1 })
+      const text = document.createTextNode('xyz')
+      pageEl.appendChild(text)
+      const range = document.createRange()
+      range.setStart(text, 0); range.setEnd(text, 3)
+      Object.defineProperty(range, 'getClientRects', {
+        value: () => [
+          { left: 0, top: 0, width: 0, height: 10, right: 0, bottom: 10 },     // zero width
+          { left: 0, top: 0, width: 10, height: 0, right: 10, bottom: 0 },     // zero height
+          { left: 0, top: 0, width: 10, height: 10, right: 10, bottom: 10 }    // valid
+        ]
+      })
+      const result = selectionToPdfLocator(range, pageEl, viewport as never, 1)
+      expect(result?.rects.length).toBe(1)
     })
   })
 
