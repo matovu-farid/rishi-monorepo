@@ -99,6 +99,19 @@ export function PdfView({
     hasNote: boolean
   } | null>(null)
   const [editingNoteRow, setEditingNoteRow] = useState<HighlightRow | null>(null)
+
+  // Bridge the native context-menu "Read Aloud From Here" IPC into a window
+  // CustomEvent so the player can react. EPUB takes the same shape — the
+  // event has CFI-specific consumers there; PDF's paragraph-aware consumer
+  // is a follow-up (v1 ships the channel + selection capture).
+  useEffect(() => {
+    const unsubscribe = window.electron.on('reader:readAloudFromSelection', () => {
+      const text = window.getSelection()?.toString()?.trim() ?? ''
+      if (!text) return
+      window.dispatchEvent(new CustomEvent('rishi:readAloudFromSelection', { detail: { text } }))
+    })
+    return unsubscribe
+  }, [])
   const pageInfoRef = useRef<Map<number, { pageEl: HTMLElement; page: PDFPageProxy }>>(new Map())
   const { setLastUndoable } = useUndoableHighlightShortcut()
 
