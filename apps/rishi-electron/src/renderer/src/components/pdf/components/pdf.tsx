@@ -50,6 +50,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { SelectionPopover } from '@/components/highlights/SelectionPopover'
 import { HighlightActionPopover } from '@/components/highlights/HighlightActionPopover'
+import { NoteEditor } from '@/components/highlights/NoteEditor'
 import { usePdfTextSelection } from '@/hooks/usePdfTextSelection'
 import { useUndoableHighlightShortcut } from '@/hooks/useUndoableHighlightShortcut'
 import { applyHighlightWithUndoPdf, deleteHighlightByIdWithUndo } from '@/modules/highlight-actions'
@@ -97,6 +98,7 @@ export function PdfView({
     currentColor: HighlightColor
     hasNote: boolean
   } | null>(null)
+  const [editingNoteRow, setEditingNoteRow] = useState<HighlightRow | null>(null)
   const pageInfoRef = useRef<Map<number, { pageEl: HTMLElement; page: PDFPageProxy }>>(new Map())
   const { setLastUndoable } = useUndoableHighlightShortcut()
 
@@ -931,12 +933,26 @@ export function PdfView({
           currentColor={inlinePopover.currentColor}
           onSelectColor={(c) => void handleInlineColorChange(c)}
           onEditNote={() => {
-            /* will be wired in Task 7 */
+            const row = highlights.find((r) => r.id === inlinePopover.rowId)
+            if (row) setEditingNoteRow(row)
+            setInlinePopover(null)
           }}
           onDelete={() => void handleInlineDelete()}
           onClose={() => setInlinePopover(null)}
         />
       )}
+      <NoteEditor
+        highlight={editingNoteRow}
+        open={editingNoteRow !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditingNoteRow(null)
+        }}
+        onSaved={async () => {
+          if (!book.syncId) return
+          const rows = await getHighlightsForBook(book.syncId)
+          setHighlights(rows.filter((r) => r.format === 'pdf'))
+        }}
+      />
     </div>
   )
 }
