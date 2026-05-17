@@ -208,6 +208,37 @@ export function removeHighlight(rendition: Rendition, cfiRange: string) {
   }
 }
 
+/**
+ * Resolve a CFI range string to a DOM Range inside the currently visible
+ * iframe view, or null if the CFI isn't in any visible view or doesn't
+ * resolve. Used by NoteIconOverlay to position icons against the rendered
+ * text without importing epubjs internals into the renderer code.
+ */
+export function resolveCfiToRange(rendition: Rendition, cfiRange: string): Range | null {
+  try {
+    const cfi = new EpubCFI(cfiRange)
+    if (!cfi.range) return null
+    const views = rendition.manager.visible().filter((v: View) => cfi.spinePos === v.index)
+    if (!views.length) return null
+    const view = views[0]
+    if (!view.contents) return null
+    return cfi.toRange(view.contents.document, rendition.settings.ignoreClass) ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Return the visible iframe element for the first visible view, or null.
+ * Used by NoteIconOverlay so it can target the right iframe document
+ * regardless of how many views the manager currently has mounted.
+ */
+export function getVisibleIframe(rendition: Rendition): HTMLIFrameElement | null {
+  const view = rendition.manager.visible()[0]
+  if (!view?.element) return null
+  return view.element.querySelector('iframe')
+}
+
 function _getTextNodesInRange(range: Range) {
   const textNodes: Node[] = []
 

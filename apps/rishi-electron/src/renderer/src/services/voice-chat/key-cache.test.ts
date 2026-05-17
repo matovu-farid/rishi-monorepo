@@ -83,8 +83,14 @@ describe('createKeyCache', () => {
   it('invalidate() during an in-flight fetch discards that fetch result so the next get refetches', async () => {
     const clock = makeClock()
     let resolveFirst!: (v: string) => void
-    const fetchFn = vi.fn()
-      .mockImplementationOnce(() => new Promise<string>((r) => { resolveFirst = r }))
+    const fetchFn = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<string>((r) => {
+            resolveFirst = r
+          })
+      )
       .mockResolvedValueOnce('K2')
     const cache = createKeyCache({ fetch: fetchFn, ttlMs: 60_000, clock })
 

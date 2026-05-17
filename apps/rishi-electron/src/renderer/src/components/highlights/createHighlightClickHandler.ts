@@ -7,6 +7,7 @@ export interface InlinePopoverState {
   cfiRange: string
   position: { x: number; y: number }
   currentColor: HighlightColor
+  hasNote: boolean
 }
 
 export interface CreateHighlightClickHandlerDeps {
@@ -38,7 +39,8 @@ export function createHighlightClickHandler(
     setInlinePopover({
       cfiRange,
       position: { x, y },
-      currentColor: row.color as HighlightColor
+      currentColor: row.color as HighlightColor,
+      hasNote: row.note.trim().length > 0
     })
   }
 }

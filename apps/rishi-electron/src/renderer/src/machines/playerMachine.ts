@@ -155,10 +155,8 @@ export const playerMachine = setup({
     clearTimedOut: assign({ timedOut: false }),
     resetAll: assign(() => ({ ...initialContext })),
     setPartialFirst: assign({
-      partialFirstText: ({ event }) =>
-        event.type === 'PLAY_FROM' ? event.partialFirstText : null,
-      partialFirstKey: ({ event }) =>
-        event.type === 'PLAY_FROM' ? event.partialFirstKey : null,
+      partialFirstText: ({ event }) => (event.type === 'PLAY_FROM' ? event.partialFirstText : null),
+      partialFirstKey: ({ event }) => (event.type === 'PLAY_FROM' ? event.partialFirstKey : null),
       partialFirstParagraphIndex: ({ event }) =>
         event.type === 'PLAY_FROM' ? event.paragraphIndex : null
     }),
@@ -168,8 +166,7 @@ export const playerMachine = setup({
       partialFirstParagraphIndex: null
     }),
     setParagraphIndexFromEvent: assign({
-      paragraphIndex: ({ event }) =>
-        event.type === 'PLAY_FROM' ? event.paragraphIndex : 0
+      paragraphIndex: ({ event }) => (event.type === 'PLAY_FROM' ? event.paragraphIndex : 0)
     }),
     // Check BEFORE advanceIndex: if partialFirstParagraphIndex matches the
     // current (pre-advance) paragraphIndex, this is the paragraph the override
@@ -343,7 +340,12 @@ export const playerMachine = setup({
         // so PARAGRAPHS_UPDATED auto-resumes loading on the new page.
         PAGE_NAVIGATING: {
           target: 'pageNavigating',
-          actions: ['setWantsAutoResume', 'setNavDirection', 'clearCurrentParagraphs', 'clearPartialFirst']
+          actions: [
+            'setWantsAutoResume',
+            'setNavDirection',
+            'clearCurrentParagraphs',
+            'clearPartialFirst'
+          ]
         },
         PLAY_FROM: {
           target: 'loading',
@@ -423,7 +425,12 @@ export const playerMachine = setup({
         // new page when PARAGRAPHS_UPDATED arrives.
         PAGE_NAVIGATING: {
           target: 'pageNavigating',
-          actions: ['setWantsAutoResume', 'setNavDirection', 'clearCurrentParagraphs', 'clearPartialFirst']
+          actions: [
+            'setWantsAutoResume',
+            'setNavDirection',
+            'clearCurrentParagraphs',
+            'clearPartialFirst'
+          ]
         },
         PLAY_FROM: {
           target: 'loading',
@@ -471,7 +478,12 @@ export const playerMachine = setup({
         // effectively-paused (no auto-resume — user paused intentionally).
         PAGE_NAVIGATING: {
           target: 'pageNavigating',
-          actions: ['clearWantsAutoResume', 'setNavDirection', 'clearCurrentParagraphs', 'clearPartialFirst']
+          actions: [
+            'clearWantsAutoResume',
+            'setNavDirection',
+            'clearCurrentParagraphs',
+            'clearPartialFirst'
+          ]
         }
       },
       states: {

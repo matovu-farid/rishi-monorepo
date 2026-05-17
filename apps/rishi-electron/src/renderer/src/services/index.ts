@@ -231,7 +231,15 @@ export function getVoiceChatService(): VoiceChatService {
           mediaStream: mediaStream as unknown as MediaStream,
           audioElement: audioElement as unknown as HTMLAudioElement
         }) as never,
-      agentFactory: ({ bookId, pageText, outline, activeParagraphText, onEndConversation, rag, language }) =>
+      agentFactory: ({
+        bookId,
+        pageText,
+        outline,
+        activeParagraphText,
+        onEndConversation,
+        rag,
+        language
+      }) =>
         buildRealtimeAgent({
           bookId,
           pageText,

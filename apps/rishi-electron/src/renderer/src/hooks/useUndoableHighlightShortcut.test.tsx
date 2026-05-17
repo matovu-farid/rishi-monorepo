@@ -1,9 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import {
-  useUndoableHighlightShortcut,
-  UNDO_WINDOW_MS
-} from './useUndoableHighlightShortcut'
+import { useUndoableHighlightShortcut, UNDO_WINDOW_MS } from './useUndoableHighlightShortcut'
 
 beforeEach(() => {
   vi.useFakeTimers()

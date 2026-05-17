@@ -80,8 +80,7 @@ export function usePlayerMachine(bookId: string) {
           // because it has a different cache key (partialFirstKey) than the full
           // paragraph — prefetching with the full key would populate the wrong
           // cache entry and the loading branch would still fetch via the override key.
-          const overrideIdx =
-            ctx.partialFirstText !== null ? ctx.partialFirstParagraphIndex : null
+          const overrideIdx = ctx.partialFirstText !== null ? ctx.partialFirstParagraphIndex : null
           for (let i = 0; i < paragraphs.length; i++) {
             if (i === overrideIdx) continue
             const p = paragraphs[i]
@@ -197,8 +196,7 @@ export function usePlayerMachine(bookId: string) {
           // override text/key instead of the full paragraph content so TTS
           // starts from the user's selection point.
           const useOverride =
-            ctx.partialFirstText !== null &&
-            ctx.partialFirstParagraphIndex === ctx.paragraphIndex
+            ctx.partialFirstText !== null && ctx.partialFirstParagraphIndex === ctx.paragraphIndex
           const ttsText = useOverride ? ctx.partialFirstText! : paragraph.text
           const ttsKey = useOverride ? ctx.partialFirstKey! : paragraph.index
 

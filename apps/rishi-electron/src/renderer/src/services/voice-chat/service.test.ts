@@ -534,18 +534,16 @@ describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
     svc.start()
 
     await svc.activate(1, { pageText: 'p' })
-    const callsAfterFirstActivate = (
-      ipc.getRealtimeClientSecret as ReturnType<typeof vi.fn>
-    ).mock.calls.length
+    const callsAfterFirstActivate = (ipc.getRealtimeClientSecret as ReturnType<typeof vi.fn>).mock
+      .calls.length
     svc.deactivate()
 
     // Without invalidate, the key cache (TTL 9min) would skip the second fetch.
     svc.invalidateKey()
 
     await svc.activate(1, { pageText: 'p' })
-    const callsAfterSecondActivate = (
-      ipc.getRealtimeClientSecret as ReturnType<typeof vi.fn>
-    ).mock.calls.length
+    const callsAfterSecondActivate = (ipc.getRealtimeClientSecret as ReturnType<typeof vi.fn>).mock
+      .calls.length
 
     expect(callsAfterSecondActivate).toBe(callsAfterFirstActivate + 1)
   })

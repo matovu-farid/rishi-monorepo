@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Pencil, Play, Trash2 } from 'lucide-react'
+import { MessageSquarePlus, MessageSquareText, Play, Trash2 } from 'lucide-react'
 import { HIGHLIGHT_COLORS, type HighlightColor } from '@/types/highlight'
 
 interface SelectionPopoverProps {
@@ -11,10 +11,14 @@ interface SelectionPopoverProps {
   onReadAloudFrom?: () => void
   /** When set, the matching swatch is marked active (existing-highlight mode). */
   currentColor?: HighlightColor
-  /** When set, renders an Edit-note button (existing-highlight mode). */
+  /** When set, renders the note button (existing-highlight mode). */
   onEditNote?: () => void
+  /** Renders the note button as "View note" (filled icon) instead of "Add note" — a visual indicator that a note already exists. */
+  hasNote?: boolean
   /** When set, renders a Delete button (existing-highlight mode). */
   onDelete?: () => void
+  /** When set (and `onEditNote` is NOT set), renders the "Add note" button for a fresh selection — clicking creates a note-only highlight. `onEditNote` wins if both are provided. */
+  onAddNote?: () => void
 }
 
 export function SelectionPopover({
@@ -24,8 +28,14 @@ export function SelectionPopover({
   onReadAloudFrom,
   currentColor,
   onEditNote,
-  onDelete
+  hasNote,
+  onDelete,
+  onAddNote
 }: SelectionPopoverProps) {
+  // Edit on an existing highlight wins over Add for a fresh selection so
+  // selecting text on top of an existing note doesn't accidentally create
+  // a second note-only row.
+  const noteHandler = onEditNote ?? onAddNote
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -103,18 +113,23 @@ export function SelectionPopover({
             />
           )
         })}
-        {onEditNote ? (
+        {noteHandler ? (
           <button
             type="button"
-            aria-label="Edit note"
-            title="Edit note"
-            className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            aria-label={hasNote ? 'View note' : 'Add note'}
+            title={hasNote ? 'View note' : 'Add note'}
+            className={
+              'p-1 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 ' +
+              (hasNote
+                ? 'text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/30'
+                : 'hover:bg-gray-100 dark:hover:bg-gray-700')
+            }
             onClick={() => {
-              onEditNote()
+              noteHandler()
               onClose()
             }}
           >
-            <Pencil size={16} className="text-gray-700 dark:text-gray-200" />
+            {hasNote ? <MessageSquareText size={16} /> : <MessageSquarePlus size={16} className="text-gray-700 dark:text-gray-200" />}
           </button>
         ) : null}
         {onDelete ? (

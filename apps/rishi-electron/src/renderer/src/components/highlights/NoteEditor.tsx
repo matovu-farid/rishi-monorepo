@@ -8,7 +8,10 @@ interface NoteEditorProps {
   highlight: HighlightRow | null
   open: boolean
   onOpenChange: (open: boolean) => void
-  onSaved: () => void
+  /** Called after the DB write completes. Awaited so callers can refresh
+      state before the editor closes — critical for orphan-cleanup races
+      where onOpenChange would otherwise see a stale highlights map. */
+  onSaved: () => void | Promise<void>
 }
 
 export function NoteEditor({ highlight, open, onOpenChange, onSaved }: NoteEditorProps) {
@@ -26,7 +29,11 @@ export function NoteEditor({ highlight, open, onOpenChange, onSaved }: NoteEdito
     if (!highlight) return
     await updateHighlightNote(highlight.id, noteValue)
     getSyncService().triggerWrite()
-    onSaved()
+    // Await onSaved so the parent's post-save state refresh completes
+    // before onOpenChange fires any close-side cleanup (e.g. the empty-
+    // note orphan deletion in EpubView). Without this, the cleanup
+    // deletes the row we just saved — the "icon never appears" bug.
+    await onSaved()
     onOpenChange(false)
   }
 

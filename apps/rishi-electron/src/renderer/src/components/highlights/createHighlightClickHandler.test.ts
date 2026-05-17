@@ -56,8 +56,42 @@ describe('createHighlightClickHandler', () => {
     expect(setInlinePopover).toHaveBeenCalledWith({
       cfiRange: r.cfiRange,
       position: { x: 500, y: 400 },
-      currentColor: 'green'
+      currentColor: 'green',
+      hasNote: false
     })
+  })
+
+  it('sets hasNote=true when the row has a non-empty note', () => {
+    const setInlinePopover = vi.fn()
+    const map = new Map<string, HighlightRow>()
+    const r = row({ note: 'a thought' })
+    map.set(r.cfiRange, r)
+
+    const handler = createHighlightClickHandler({
+      highlightsByRangeRef: { current: map },
+      renditionRef: { current: null },
+      setInlinePopover,
+      viewport: { innerWidth: 1000, innerHeight: 800 }
+    })
+
+    handler(r.cfiRange)(undefined)
+    expect(setInlinePopover).toHaveBeenCalledWith(expect.objectContaining({ hasNote: true }))
+  })
+
+  it('treats whitespace-only notes as no note (hasNote=false)', () => {
+    const setInlinePopover = vi.fn()
+    const r = row({ note: '   \n  ' })
+    const map = new Map<string, HighlightRow>([[r.cfiRange, r]])
+
+    const handler = createHighlightClickHandler({
+      highlightsByRangeRef: { current: map },
+      renditionRef: { current: null },
+      setInlinePopover,
+      viewport: { innerWidth: 1000, innerHeight: 800 }
+    })
+
+    handler(r.cfiRange)(undefined)
+    expect(setInlinePopover).toHaveBeenCalledWith(expect.objectContaining({ hasNote: false }))
   })
 
   it('is a no-op when the cfiRange is not in the map (does not open popover)', () => {
@@ -99,7 +133,8 @@ describe('createHighlightClickHandler', () => {
     expect(setInlinePopover).toHaveBeenCalledWith({
       cfiRange: r.cfiRange,
       position: { x: 190, y: 150 },
-      currentColor: 'yellow'
+      currentColor: 'yellow',
+      hasNote: false
     })
   })
 

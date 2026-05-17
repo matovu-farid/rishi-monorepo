@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import { Pencil, Trash2 } from 'lucide-react'
 import { getHighlightsForBook } from '@/modules/highlight-storage'
 import { deleteHighlightWithUndo } from '@/modules/highlight-actions'
-import { getHighlightHex, type HighlightColor } from '@/types/highlight'
+import { getHighlightHex, isNoteOnly, type HighlightColor } from '@/types/highlight'
 import { NoteEditor } from './NoteEditor'
 import type { HighlightRow } from '@/modules/highlight-storage'
 import { highlightRange, removeHighlight } from '@/modules/epubwrapper'
@@ -52,9 +52,14 @@ export function HighlightsPanel({
       const color = hl.color as HighlightColor
       const hex = getHighlightHex(color)
 
+      // Note-only rows have no SVG mark — applyVisual/removeVisual become
+      // no-ops so undo doesn't draw a phantom highlight and delete doesn't
+      // try to remove an annotation that was never added.
+      const noteOnly = isNoteOnly(hl)
       void deleteHighlightWithUndo({
         target: {
           applyVisual: async () => {
+            if (noteOnly) return
             await highlightRange(
               rendition,
               cfiRange,
@@ -69,6 +74,7 @@ export function HighlightsPanel({
             )
           },
           removeVisual: async () => {
+            if (noteOnly) return
             await removeHighlight(rendition, cfiRange)
           }
         },
@@ -135,7 +141,13 @@ export function HighlightsPanel({
                   key={hl.id}
                   className="relative cursor-pointer rounded-md p-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
                   style={{
-                    borderLeft: `3px solid ${getHighlightHex(hl.color as HighlightColor)}`
+                    // Note-only rows get a distinct blue strip (matching the
+                    // in-iframe note icon) — `getHighlightHex('none')` would
+                    // give a transparent border that makes the row look like
+                    // a layout glitch.
+                    borderLeft: isNoteOnly(hl)
+                      ? '3px solid #2563eb'
+                      : `3px solid ${getHighlightHex(hl.color as HighlightColor)}`
                   }}
                   onClick={() => handleNavigate(hl.cfiRange)}
                   onMouseEnter={() => setHoveredId(hl.id)}

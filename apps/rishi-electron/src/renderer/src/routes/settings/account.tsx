@@ -65,8 +65,8 @@ function AccountSettings(): JSX.Element {
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Voice chat language</h2>
         <p className="text-sm text-gray-600">
-          The voice assistant will respond in this language. Change applies the next
-          time you start a chat.
+          The voice assistant will respond in this language. Change applies the next time you start
+          a chat.
         </p>
         <select
           value={voiceChatLanguage}

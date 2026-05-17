@@ -1,6 +1,10 @@
 import { useEffect, useRef } from 'react'
-import { Pencil, Trash2 } from 'lucide-react'
-import { HIGHLIGHT_COLORS, type HighlightColor } from '@/types/highlight'
+import { MessageSquarePlus, MessageSquareText, Trash2 } from 'lucide-react'
+import {
+  HIGHLIGHT_COLORS,
+  NOTE_COLOR_NONE,
+  type HighlightColor
+} from '@/types/highlight'
 
 export interface HighlightActionPopoverProps {
   position: { x: number; y: number }
@@ -9,6 +13,8 @@ export interface HighlightActionPopoverProps {
   onEditNote: () => void
   onDelete: () => void
   onClose: () => void
+  /** Renders the note button as "View note" (filled icon) instead of "Add note" — a visual indicator that a note already exists. */
+  hasNote?: boolean
 }
 
 export function HighlightActionPopover({
@@ -17,7 +23,8 @@ export function HighlightActionPopover({
   onSelectColor,
   onEditNote,
   onDelete,
-  onClose
+  onClose,
+  hasNote
 }: HighlightActionPopoverProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -54,7 +61,7 @@ export function HighlightActionPopover({
       style={{ left: position.x, top: position.y }}
     >
       <div className="flex items-center gap-2">
-        {HIGHLIGHT_COLORS.map((c) => {
+        {currentColor !== NOTE_COLOR_NONE && HIGHLIGHT_COLORS.map((c) => {
           const isCurrent = c.name === currentColor
           return (
             <button
@@ -82,15 +89,20 @@ export function HighlightActionPopover({
 
         <button
           type="button"
-          aria-label="Edit note"
-          title="Edit note"
-          className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          aria-label={hasNote ? 'View note' : 'Add note'}
+          title={hasNote ? 'View note' : 'Add note'}
+          className={
+            'p-1 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 ' +
+            (hasNote
+              ? 'text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/30'
+              : 'hover:bg-gray-100 dark:hover:bg-gray-700')
+          }
           onClick={() => {
             onEditNote()
             onClose()
           }}
         >
-          <Pencil size={16} className="text-gray-700 dark:text-gray-200" />
+          {hasNote ? <MessageSquareText size={16} /> : <MessageSquarePlus size={16} className="text-gray-700 dark:text-gray-200" />}
         </button>
 
         <button

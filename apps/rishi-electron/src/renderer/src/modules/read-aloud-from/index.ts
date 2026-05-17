@@ -17,7 +17,9 @@ export function findSentenceStart(text: string, charOffset: number): number {
   const clamped = Math.min(Math.max(charOffset, 0), text.length)
 
   const Segmenter = (
-    Intl as unknown as { Segmenter?: new (locale: string, opts: { granularity: string }) => unknown }
+    Intl as unknown as {
+      Segmenter?: new (locale: string, opts: { granularity: string }) => unknown
+    }
   ).Segmenter
   if (Segmenter) {
     const seg = new Segmenter('en', { granularity: 'sentence' }) as {

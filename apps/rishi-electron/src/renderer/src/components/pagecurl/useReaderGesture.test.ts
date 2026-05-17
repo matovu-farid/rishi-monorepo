@@ -309,14 +309,18 @@ describe('useReaderGesture - wheel (trackpad)', () => {
       result.current.wheelHandlers.onWheel(makeWheelEvent({ deltaX: 60, deltaY: 5 }))
     })
     // Advance past debounce (120 ms) + animation (200 ms) so state returns to idle
-    act(() => { vi.advanceTimersByTime(350) })
+    act(() => {
+      vi.advanceTimersByTime(350)
+    })
     expect(onNavigate).toHaveBeenCalledTimes(1)
 
     // Second gesture after the buffer has been cleared and state is back to idle
     act(() => {
       result.current.wheelHandlers.onWheel(makeWheelEvent({ deltaX: 60, deltaY: 5 }))
     })
-    act(() => { vi.advanceTimersByTime(350) })
+    act(() => {
+      vi.advanceTimersByTime(350)
+    })
     expect(onNavigate).toHaveBeenCalledTimes(2)
   })
 })

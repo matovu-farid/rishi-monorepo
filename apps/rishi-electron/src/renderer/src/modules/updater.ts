@@ -159,7 +159,7 @@ export async function checkForUpdates(opts?: { silent: boolean }): Promise<void>
 
   ensureListeners()
 
-  if (opts && opts.silent === false) {
+  if (opts?.silent === false) {
     userInitiatedCheckPending = true
   }
 

@@ -29,39 +29,27 @@ describe('findParagraphForCfi', () => {
 
   it('returns the matching paragraph index when the selection start is inside it', () => {
     // Selection inside second paragraph (/4/4), chars 3-10
-    const result = findParagraphForCfi(
-      paragraphs,
-      'epubcfi(/6/4!/4/4,/1:3,/1:10)'
-    )
+    const result = findParagraphForCfi(paragraphs, 'epubcfi(/6/4!/4/4,/1:3,/1:10)')
     expect(result).not.toBeNull()
     expect(result!.paragraphIndex).toBe(1)
   })
 
   it('uses the first paragraph when selection is in it', () => {
     // Selection inside first paragraph (/4/2), chars 0-5
-    const result = findParagraphForCfi(
-      paragraphs,
-      'epubcfi(/6/4!/4/2,/1:0,/1:5)'
-    )
+    const result = findParagraphForCfi(paragraphs, 'epubcfi(/6/4!/4/2,/1:0,/1:5)')
     expect(result).not.toBeNull()
     expect(result!.paragraphIndex).toBe(0)
   })
 
   it('returns the char offset of the selection start within the paragraph text', () => {
     // Selection inside second paragraph starting at char 7
-    const result = findParagraphForCfi(
-      paragraphs,
-      'epubcfi(/6/4!/4/4,/1:7,/1:12)'
-    )
+    const result = findParagraphForCfi(paragraphs, 'epubcfi(/6/4!/4/4,/1:7,/1:12)')
     expect(result).not.toBeNull()
     expect(result!.charOffsetInParagraph).toBe(7)
   })
 
   it('returns the third paragraph when selection is in it', () => {
-    const result = findParagraphForCfi(
-      paragraphs,
-      'epubcfi(/6/4!/4/6,/1:2,/1:8)'
-    )
+    const result = findParagraphForCfi(paragraphs, 'epubcfi(/6/4!/4/6,/1:2,/1:8)')
     expect(result).not.toBeNull()
     expect(result!.paragraphIndex).toBe(2)
     expect(result!.charOffsetInParagraph).toBe(2)

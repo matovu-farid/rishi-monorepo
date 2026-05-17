@@ -2,16 +2,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/modules/highlight-storage', () => ({
   saveHighlight: vi.fn().mockResolvedValue('hl-1'),
-  deleteHighlight: vi.fn().mockResolvedValue(undefined)
+  deleteHighlight: vi.fn().mockResolvedValue(undefined),
+  getHighlightsForBook: vi.fn().mockResolvedValue([])
 }))
 
 vi.mock('@/services', () => ({
   getSyncService: vi.fn(() => ({ triggerWrite: vi.fn() }))
 }))
 
-import { saveHighlight, deleteHighlight } from '@/modules/highlight-storage'
+import {
+  saveHighlight,
+  deleteHighlight,
+  getHighlightsForBook,
+  type HighlightRow
+} from '@/modules/highlight-storage'
 import { getSyncService } from '@/services'
-import { applyHighlightWithUndo, deleteHighlightWithUndo } from './highlight-actions'
+import { applyHighlightWithUndo, deleteHighlightWithUndo, saveNoteOnly } from './highlight-actions'
+import { NOTE_COLOR_NONE } from '@/types/highlight'
 
 function makeTarget() {
   return {
@@ -206,3 +213,80 @@ describe('deleteHighlightWithUndo — delete path', () => {
     expect(target.applyVisual).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('saveNoteOnly — note-only highlight creation', () => {
+  function makeRow(over: Partial<HighlightRow> = {}): HighlightRow {
+    return {
+      id: 'db-id-1',
+      bookId: 'book-N',
+      cfiRange: 'cfi:N',
+      text: 'sample',
+      color: NOTE_COLOR_NONE,
+      note: '',
+      chapter: null,
+      createdAt: '0',
+      updatedAt: 0,
+      syncId: null,
+      syncVersion: 0,
+      isDirty: 1,
+      isDeleted: 0,
+      ...over
+    }
+  }
+
+  it("writes a row with color 'none' via saveHighlight and triggers a sync write", async () => {
+    const triggerWrite = vi.fn()
+    ;(getSyncService as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ triggerWrite })
+    const fresh = makeRow({ cfiRange: 'cfi:N1' })
+    ;(getHighlightsForBook as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce([fresh])
+
+    await saveNoteOnly({ bookSyncId: 'book-N', cfiRange: 'cfi:N1', text: 'sample' })
+
+    expect(saveHighlight).toHaveBeenCalledWith({
+      bookSyncId: 'book-N',
+      cfiRange: 'cfi:N1',
+      text: 'sample',
+      color: NOTE_COLOR_NONE
+    })
+    expect(triggerWrite).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not call any visual apply/remove function (note-only has no SVG mark)', async () => {
+    const fresh = makeRow({ cfiRange: 'cfi:N2' })
+    ;(getHighlightsForBook as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce([fresh])
+
+    // saveNoteOnly takes no `target` arg — type system already enforces
+    // this; the test guards against future shape drift by asserting the
+    // function resolves without any visual side-effect surface.
+    await expect(
+      saveNoteOnly({ bookSyncId: 'book-N', cfiRange: 'cfi:N2', text: 'sample' })
+    ).resolves.toBeDefined()
+  })
+
+  it('resolves with the freshly persisted HighlightRow (id backfilled from the DB)', async () => {
+    const fresh = makeRow({ id: 'db-real-id', cfiRange: 'cfi:N3', note: '' })
+    ;(getHighlightsForBook as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      makeRow({ id: 'other', cfiRange: 'cfi:OTHER' }),
+      fresh
+    ])
+
+    const row = await saveNoteOnly({
+      bookSyncId: 'book-N',
+      cfiRange: 'cfi:N3',
+      text: 'sample'
+    })
+
+    expect(row.id).toBe('db-real-id')
+    expect(row.cfiRange).toBe('cfi:N3')
+    expect(row.color).toBe(NOTE_COLOR_NONE)
+  })
+
+  it('rejects when the backfill query cannot find the saved row (the cfiRange did not persist)', async () => {
+    ;(getHighlightsForBook as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce([])
+
+    await expect(
+      saveNoteOnly({ bookSyncId: 'book-N', cfiRange: 'cfi:MISSING', text: 'sample' })
+    ).rejects.toThrow(/not found/i)
+  })
+})
+

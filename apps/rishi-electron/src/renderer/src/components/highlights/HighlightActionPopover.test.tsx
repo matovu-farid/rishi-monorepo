@@ -15,13 +15,13 @@ function baseProps() {
 }
 
 describe('HighlightActionPopover', () => {
-  it('renders a swatch per HIGHLIGHT_COLORS entry, plus Edit note and Delete buttons', () => {
+  it('renders a swatch per HIGHLIGHT_COLORS entry, plus a note button and Delete button', () => {
     render(<HighlightActionPopover {...baseProps()} />)
     for (const c of HIGHLIGHT_COLORS) {
       expect(screen.getByRole('button', { name: new RegExp(`change.*${c.name}`, 'i') }))
         .toBeInTheDocument()
     }
-    expect(screen.getByRole('button', { name: /edit note/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /add note/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /delete highlight/i })).toBeInTheDocument()
   })
 
@@ -34,12 +34,18 @@ describe('HighlightActionPopover', () => {
     expect(props.onClose).toHaveBeenCalledTimes(1)
   })
 
-  it('clicking Edit note fires onEditNote and then onClose', () => {
+  it('clicking the note button fires onEditNote and then onClose', () => {
     const props = baseProps()
     render(<HighlightActionPopover {...props} />)
-    fireEvent.click(screen.getByRole('button', { name: /edit note/i }))
+    fireEvent.click(screen.getByRole('button', { name: /add note/i }))
     expect(props.onEditNote).toHaveBeenCalledTimes(1)
     expect(props.onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('note button is labelled "View note" when hasNote is true (visual indicator that a note exists)', () => {
+    render(<HighlightActionPopover {...baseProps()} hasNote />)
+    expect(screen.getByRole('button', { name: /view note/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^add note/i })).toBeNull()
   })
 
   it('clicking Delete fires onDelete and then onClose', () => {
@@ -76,5 +82,28 @@ describe('HighlightActionPopover', () => {
     render(<HighlightActionPopover {...baseProps()} />)
     const yellowSwatch = screen.getByRole('button', { name: /change.*yellow/i })
     expect(yellowSwatch.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  describe('note-only highlight', () => {
+    it("does not render color swatches when currentColor is 'none'", () => {
+      render(<HighlightActionPopover {...baseProps()} currentColor={'none' as never} />)
+      for (const c of HIGHLIGHT_COLORS) {
+        expect(screen.queryByRole('button', { name: new RegExp(`change.*${c.name}`, 'i') }))
+          .toBeNull()
+      }
+    })
+
+    it("still renders note + delete buttons when currentColor is 'none'", () => {
+      render(<HighlightActionPopover {...baseProps()} currentColor={'none' as never} />)
+      expect(screen.getByRole('button', { name: /add note/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /delete highlight/i })).toBeInTheDocument()
+    })
+
+    it("fires onEditNote when the note button is clicked on a note-only popover", () => {
+      const props = baseProps()
+      render(<HighlightActionPopover {...props} currentColor={'none' as never} />)
+      fireEvent.click(screen.getByRole('button', { name: /add note/i }))
+      expect(props.onEditNote).toHaveBeenCalledTimes(1)
+    })
   })
 })

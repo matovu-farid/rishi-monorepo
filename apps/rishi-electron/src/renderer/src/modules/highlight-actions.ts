@@ -1,6 +1,11 @@
-import { saveHighlight, deleteHighlight } from '@/modules/highlight-storage'
+import {
+  saveHighlight,
+  deleteHighlight,
+  getHighlightsForBook,
+  type HighlightRow
+} from '@/modules/highlight-storage'
 import { getSyncService } from '@/services'
-import type { HighlightColor } from '@/types/highlight'
+import { NOTE_COLOR_NONE, type HighlightColor } from '@/types/highlight'
 
 /**
  * The visual side of a highlight — apply and remove. Injected so this
@@ -52,6 +57,36 @@ export async function applyHighlightWithUndo(args: ApplyHighlightArgs): Promise<
       }
     }
   }
+}
+
+export interface SaveNoteOnlyArgs {
+  bookSyncId: string
+  cfiRange: string
+  text: string
+}
+
+/**
+ * Create a note-only highlight row (no SVG mark, just an anchor for a note).
+ * Persists via `saveHighlight` with `color: 'none'`, then backfills the
+ * canonical row (with its DB-assigned id) via `getHighlightsForBook`.
+ *
+ * Unlike `applyHighlightWithUndo`, this has no undo handle and no visual
+ * side-effects — opening the NoteEditor on the returned row IS the user-
+ * facing confirmation. Adding undo here would surface a toast for a flow
+ * where there is nothing visually destructive to undo.
+ */
+export async function saveNoteOnly(args: SaveNoteOnlyArgs): Promise<HighlightRow> {
+  const { bookSyncId, cfiRange, text } = args
+
+  await saveHighlight({ bookSyncId, cfiRange, text, color: NOTE_COLOR_NONE })
+  getSyncService().triggerWrite()
+
+  const rows = await getHighlightsForBook(bookSyncId)
+  const fresh = rows.find((r) => r.cfiRange === cfiRange)
+  if (!fresh) {
+    throw new Error(`[saveNoteOnly] persisted row not found for cfiRange ${cfiRange}`)
+  }
+  return fresh
 }
 
 export interface DeleteHighlightArgs {

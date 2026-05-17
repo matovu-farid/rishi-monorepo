@@ -1,5 +1,6 @@
 // src/main/contextMenu.ts
-import { Menu, MenuItem, BrowserWindow } from 'electron'
+import type { BrowserWindow } from 'electron'
+import { Menu, MenuItem } from 'electron'
 
 /**
  * Registers a context-menu listener on the given BrowserWindow's webContents

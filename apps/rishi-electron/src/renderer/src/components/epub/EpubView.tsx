@@ -16,15 +16,30 @@ import { useEpubStore, initEpubSubscriptions } from '@/stores/epubStore'
 import { usePlayerStore } from '@/stores/playerStore'
 import { useNavMachine } from '@/hooks/useNavMachine'
 import { useNavStore } from '@/stores/navStore'
-import { highlightRange, removeHighlight, getCurrentViewParagraphs } from '@/modules/epubwrapper'
+import {
+  highlightRange,
+  removeHighlight,
+  getCurrentViewParagraphs,
+  resolveCfiToRange,
+  getVisibleIframe
+} from '@/modules/epubwrapper'
 import type { Book } from '@/lib/api'
 import { updateBookLocation } from '@/lib/api'
-import { getHighlightsForBook, updateHighlightColor } from '@/modules/highlight-storage'
+import {
+  getHighlightsForBook,
+  updateHighlightColor,
+  deleteHighlight
+} from '@/modules/highlight-storage'
 import type { HighlightRow } from '@/modules/highlight-storage'
-import { applyHighlightWithUndo, deleteHighlightWithUndo } from '@/modules/highlight-actions'
+import {
+  applyHighlightWithUndo,
+  deleteHighlightWithUndo,
+  saveNoteOnly
+} from '@/modules/highlight-actions'
 import { getSyncService } from '@/services'
-import { getHighlightHex } from '@/types/highlight'
+import { getHighlightHex, isNoteOnly } from '@/types/highlight'
 import type { HighlightColor } from '@/types/highlight'
+import { NoteIconOverlay } from '@/modules/note-icon-overlay'
 import type { Contents } from 'epubjs'
 import type { NavItem } from 'epubjs'
 import { tocToChapters } from './tocToChapters'
@@ -205,10 +220,15 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   // the current color/note after edits.
   const highlightsByRangeRef = useRef<Map<string, HighlightRow>>(new Map())
 
+  // In-iframe note icon overlay. Recreated whenever the iframe changes
+  // (page turn within the same view doesn't swap iframes, but reflow does).
+  const noteIconOverlayRef = useRef<NoteIconOverlay | null>(null)
+
   const [inlinePopover, setInlinePopover] = useState<{
     cfiRange: string
     position: { x: number; y: number }
     currentColor: HighlightColor
+    hasNote: boolean
   } | null>(null)
 
   // Stable highlight context for SelectionPopover's edit/delete buttons.
@@ -220,6 +240,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   const [selectionTargetHighlight, setSelectionTargetHighlight] = useState<{
     cfiRange: string
     currentColor: HighlightColor
+    hasNote: boolean
   } | null>(null)
 
   const [editingNoteRow, setEditingNoteRow] = useState<HighlightRow | null>(null)
@@ -237,7 +258,8 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         // `inlinePopover`.
         setSelectionTargetHighlight({
           cfiRange: state.cfiRange,
-          currentColor: state.currentColor
+          currentColor: state.currentColor,
+          hasNote: state.hasNote
         })
       }
     })
@@ -329,6 +351,37 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   // Mirror reader state (book title, TOC open, TTS playing) into the native menu.
   useReaderMenuSync({ book, tocOpen })
 
+  // Re-render the in-iframe note icons for whatever's currently in
+  // `highlightsByRangeRef`. Lazily constructs the overlay once the iframe
+  // is mounted; safe to call at any time (no-ops gracefully if there's no
+  // iframe yet).
+  const refreshNoteIcons = useCallback(() => {
+    const r = renditionRef.current
+    if (!r) return
+    const iframe = getVisibleIframe(r)
+    const iframeDoc = iframe?.contentDocument
+    if (!iframeDoc) return
+    // Re-create the overlay if the iframe doc changed (page reflow can
+    // swap iframes). Cheap to construct; no state inside.
+    if (!noteIconOverlayRef.current || noteIconOverlayRef.current.iframeDoc !== iframeDoc) {
+      noteIconOverlayRef.current?.destroy()
+      noteIconOverlayRef.current = new NoteIconOverlay({
+        iframeDoc,
+        // Read renditionRef on each resolution so a rendition swap that
+        // reuses the same iframe element doesn't leave a stale closure.
+        resolveRange: (cfi) => {
+          const live = renditionRef.current
+          return live ? resolveCfiToRange(live, cfi) : null
+        },
+        onIconClick: (cfi) => {
+          const row = highlightsByRangeRef.current.get(cfi)
+          if (row) setEditingNoteRow(row)
+        }
+      })
+    }
+    noteIconOverlayRef.current.render(highlightsByRangeRef.current.values())
+  }, [])
+
   // Load persisted highlights when rendition is ready
   useEffect(() => {
     if (!rendition || !bookSyncIdRef.current) return
@@ -337,6 +390,8 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       highlightsByRangeRef.current.clear()
       for (const hl of highlights) {
         highlightsByRangeRef.current.set(hl.cfiRange, hl)
+        // Note-only rows have no SVG mark — skip the highlightRange call.
+        if (isNoteOnly(hl)) continue
         void highlightRange(
           rendition,
           hl.cfiRange,
@@ -350,8 +405,26 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           }
         )
       }
+      refreshNoteIcons()
     })
-  }, [rendition, bookSyncIdRef, makeAnnotationClickCb])
+  }, [rendition, bookSyncIdRef, makeAnnotationClickCb, refreshNoteIcons])
+
+  // Re-paint note icons on rendition lifecycle events: page turns, layout
+  // changes, and any rendered view all invalidate previous icon positions.
+  useEffect(() => {
+    if (!rendition) return
+    const refresh = (): void => refreshNoteIcons()
+    rendition.on('relocated', refresh)
+    rendition.on('rendered', refresh)
+    rendition.on('resized', refresh)
+    return () => {
+      rendition.off('relocated', refresh)
+      rendition.off('rendered', refresh)
+      rendition.off('resized', refresh)
+      noteIconOverlayRef.current?.destroy()
+      noteIconOverlayRef.current = null
+    }
+  }, [rendition, refreshNoteIcons])
 
   // Handle user text selection -- show color picker popover instead of auto-highlight.
   //
@@ -456,6 +529,28 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     [selectionInfo, rendition, setLastUndoable, bookSyncIdRef, makeAnnotationClickCb]
   )
 
+  // Add-note-without-color: creates a note-only highlight row and opens
+  // the NoteEditor for it immediately. No undo toast — opening the editor
+  // IS the user-facing confirmation. No SVG mark is drawn; the in-iframe
+  // icon overlay surfaces it on next refresh.
+  const handleAddNoteFromSelection = useCallback(() => {
+    if (!selectionInfo || !bookSyncIdRef.current) return
+    const cfiRange = selectionInfo.cfiRange
+    const text = selectionInfo.text
+    const bookSyncId = bookSyncIdRef.current
+    void saveNoteOnly({ bookSyncId, cfiRange, text })
+      .then((row) => {
+        highlightsByRangeRef.current.set(cfiRange, row)
+        setEditingNoteRow(row)
+        refreshNoteIcons()
+      })
+      .catch((err: unknown) => {
+        console.warn('[highlight] saveNoteOnly failed:', err)
+      })
+    setSelectionInfo(null)
+    useSelectionStore.getState().clear()
+  }, [selectionInfo, bookSyncIdRef, refreshNoteIcons])
+
   // These handlers accept cfiRange as a parameter rather than reading the
   // `inlinePopover` state directly. The reason: when an action is invoked
   // from a sibling popover (SelectionPopover), the mousedown can trigger
@@ -498,10 +593,12 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       if (!row) return
       const hex = getHighlightHex(row.color as HighlightColor)
       const bookSyncId = bookSyncIdRef.current
+      const noteOnly = isNoteOnly(row)
 
       void deleteHighlightWithUndo({
         target: {
           applyVisual: async () => {
+            if (noteOnly) return
             await highlightRange(
               rendition,
               cfiRange,
@@ -512,6 +609,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
             )
           },
           removeVisual: async () => {
+            if (noteOnly) return
             await removeHighlight(rendition, cfiRange)
           }
         },
@@ -524,6 +622,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       })
         .then((handle) => {
           highlightsByRangeRef.current.delete(cfiRange)
+          refreshNoteIcons()
           setLastUndoable(handle)
           toast('Highlight deleted', {
             action: {
@@ -531,6 +630,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               onClick: () => {
                 void handle.undo().then(() => {
                   highlightsByRangeRef.current.set(cfiRange, row)
+                  refreshNoteIcons()
                 })
               }
             },
@@ -541,7 +641,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           console.warn('[highlight] delete failed:', err)
         })
     },
-    [rendition, bookSyncIdRef, setLastUndoable, makeAnnotationClickCb]
+    [rendition, bookSyncIdRef, setLastUndoable, makeAnnotationClickCb, refreshNoteIcons]
   )
 
   const handleHighlightEditNote = useCallback((cfiRange: string) => {
@@ -1083,6 +1183,8 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               ? () => handleHighlightEditNote(selectionTargetHighlight.cfiRange)
               : undefined
           }
+          onAddNote={selectionTargetHighlight ? undefined : handleAddNoteFromSelection}
+          hasNote={selectionTargetHighlight?.hasNote ?? false}
           onDelete={
             selectionTargetHighlight
               ? () => handleHighlightDelete(selectionTargetHighlight.cfiRange)
@@ -1104,6 +1206,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
             void handleHighlightColorChange(inlinePopover.cfiRange, c)
           }}
           onEditNote={() => handleHighlightEditNote(inlinePopover.cfiRange)}
+          hasNote={inlinePopover.hasNote}
           onDelete={() => handleHighlightDelete(inlinePopover.cfiRange)}
           onClose={() => setInlinePopover(null)}
         />
@@ -1113,13 +1216,49 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         highlight={editingNoteRow}
         open={editingNoteRow !== null}
         onOpenChange={(isOpen) => {
-          if (!isOpen) setEditingNoteRow(null)
+          if (isOpen) return
+          // On close (saved or discarded), drop empty-note note-only rows.
+          // Apple Books semantics: a note-only row with no text shouldn't
+          // exist — there's no color and no text, nothing to anchor.
+          // Covers both: (a) user added a note via "Add note" then
+          // discarded; (b) user cleared the text on an existing note-only
+          // row and saved.
+          const row = editingNoteRow
+          setEditingNoteRow(null)
+          if (!row) return
+          const live = highlightsByRangeRef.current.get(row.cfiRange) ?? row
+          if (isNoteOnly(live) && live.note.trim().length === 0) {
+            void deleteHighlight(live.bookId, live.cfiRange)
+              .then(() => {
+                highlightsByRangeRef.current.delete(live.cfiRange)
+                getSyncService().triggerWrite()
+                refreshNoteIcons()
+              })
+              .catch((err: unknown) =>
+                console.warn('[note] orphan cleanup failed:', err)
+              )
+          }
         }}
         onSaved={async () => {
           // Refresh the in-memory map so the popover sees the new note next time.
           if (!bookSyncIdRef.current) return
           const rows = await getHighlightsForBook(bookSyncIdRef.current)
           highlightsByRangeRef.current = new Map(rows.map((r) => [r.cfiRange, r]))
+          // Reflect note status into the live popover state so the icon
+          // swaps to "View note" right after saving without needing a fresh
+          // highlight click.
+          const editedCfi = editingNoteRow?.cfiRange
+          if (!editedCfi) return
+          const fresh = highlightsByRangeRef.current.get(editedCfi)
+          if (!fresh) return
+          const hasNote = fresh.note.trim().length > 0
+          setInlinePopover((prev) => (prev && prev.cfiRange === editedCfi ? { ...prev, hasNote } : prev))
+          setSelectionTargetHighlight((prev) =>
+            prev && prev.cfiRange === editedCfi ? { ...prev, hasNote } : prev
+          )
+          // Re-paint the in-iframe icons so a freshly-added note surfaces
+          // its marker immediately, and one that was cleared disappears.
+          refreshNoteIcons()
         }}
       />
 
