@@ -49,12 +49,14 @@ import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-stora
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { SelectionPopover } from '@/components/highlights/SelectionPopover'
+import { HighlightActionPopover } from '@/components/highlights/HighlightActionPopover'
 import { usePdfTextSelection } from '@/hooks/usePdfTextSelection'
 import { useUndoableHighlightShortcut } from '@/hooks/useUndoableHighlightShortcut'
-import { applyHighlightWithUndoPdf } from '@/modules/highlight-actions'
-import { getHighlightsForBook, type HighlightRow, type PdfLocator } from '@/modules/highlight-storage'
+import { applyHighlightWithUndoPdf, deleteHighlightByIdWithUndo } from '@/modules/highlight-actions'
+import { getHighlightsForBook, updateHighlightColor, type HighlightRow, type PdfLocator } from '@/modules/highlight-storage'
 import type { PDFPageProxy } from 'pdfjs-dist'
 import type { HighlightColor } from '@/types/highlight'
+import type { MouseEvent as ReactMouseEvent } from 'react'
 
 // Configure PDF.js worker
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -88,6 +90,12 @@ export function PdfView({
     locator: PdfLocator
     text: string
     anchorPos: { x: number; y: number }
+  } | null>(null)
+  const [inlinePopover, setInlinePopover] = useState<{
+    rowId: string
+    position: { x: number; y: number }
+    currentColor: HighlightColor
+    hasNote: boolean
   } | null>(null)
   const pageInfoRef = useRef<Map<number, { pageEl: HTMLElement; page: PDFPageProxy }>>(new Map())
   const { setLastUndoable } = useUndoableHighlightShortcut()
@@ -650,6 +658,59 @@ export function PdfView({
     }
   }
 
+  const handleHighlightClick = (row: HighlightRow, e: ReactMouseEvent<HTMLDivElement>): void => {
+    setInlinePopover({
+      rowId: row.id,
+      position: { x: e.clientX, y: e.clientY - 8 },
+      currentColor: row.color as HighlightColor,
+      hasNote: row.note.trim().length > 0
+    })
+  }
+
+  const handleInlineColorChange = async (color: HighlightColor): Promise<void> => {
+    if (!inlinePopover) return
+    await updateHighlightColor(inlinePopover.rowId, color)
+    setHighlights((prev) =>
+      prev.map((r) => (r.id === inlinePopover.rowId ? { ...r, color } : r))
+    )
+    setInlinePopover(null)
+  }
+
+  const handleInlineDelete = async (): Promise<void> => {
+    if (!inlinePopover || !book.syncId) return
+    const bookSyncId = book.syncId
+    const row = highlights.find((r) => r.id === inlinePopover.rowId)
+    if (!row) return
+    setInlinePopover(null)
+    const handle = await deleteHighlightByIdWithUndo({
+      target: {
+        applyVisual: async () => {
+          const rows = await getHighlightsForBook(bookSyncId)
+          setHighlights(rows.filter((r) => r.format === 'pdf'))
+        },
+        removeVisual: async () => {
+          // Local removal handled below; the DB delete is performed by the helper.
+        }
+      },
+      rowId: row.id,
+      snapshot: {
+        bookId: row.bookId,
+        format: row.format,
+        cfiRange: row.cfiRange,
+        locator: row.locator,
+        text: row.text,
+        color: row.color,
+        note: row.note,
+        chapter: row.chapter
+      }
+    })
+    setHighlights((prev) => prev.filter((r) => r.id !== row.id))
+    setLastUndoable(handle)
+    toast.success('Highlight removed', {
+      action: { label: 'Undo', onClick: () => void handle.undo() }
+    })
+  }
+
   return (
     <div
       className={cn(
@@ -753,9 +814,7 @@ export function PdfView({
                               pageInfoRef.current.set(num, info)
                             }}
                             highlights={highlights}
-                            onHighlightClick={() => {
-                              /* will be wired in Task 6 */
-                            }}
+                            onHighlightClick={handleHighlightClick}
                           />
                           <div className="group/page absolute bottom-1 left-0 right-0 text-center py-1">
                             <span className="text-xs text-gray-400">
@@ -864,6 +923,18 @@ export function PdfView({
           position={selectionPopover.anchorPos}
           onHighlight={(color) => void handleCreatePdfHighlight(color)}
           onClose={() => setSelectionPopover(null)}
+        />
+      )}
+      {inlinePopover && (
+        <HighlightActionPopover
+          position={inlinePopover.position}
+          currentColor={inlinePopover.currentColor}
+          onSelectColor={(c) => void handleInlineColorChange(c)}
+          onEditNote={() => {
+            /* will be wired in Task 7 */
+          }}
+          onDelete={() => void handleInlineDelete()}
+          onClose={() => setInlinePopover(null)}
         />
       )}
     </div>

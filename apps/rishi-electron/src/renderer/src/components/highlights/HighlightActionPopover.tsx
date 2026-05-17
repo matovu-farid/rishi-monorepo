@@ -50,6 +50,7 @@ export function HighlightActionPopover({
     // TODO(Wave F): clamp x/y to viewport so the popover doesn't get clipped against the right/bottom edges. Same gap exists in SelectionPopover.
     <div
       ref={containerRef}
+      data-testid="highlight-action-popover"
       className="fixed z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-md p-2"
       style={{ left: position.x, top: position.y }}
     >
