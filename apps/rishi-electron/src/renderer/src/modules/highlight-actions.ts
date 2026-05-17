@@ -1,4 +1,4 @@
-import { saveHighlight, deleteHighlight, saveHighlightPdf, deleteHighlightById, type PdfLocator } from '@/modules/highlight-storage'
+import { saveHighlight, deleteHighlight, saveHighlightPdf, deleteHighlightById, type PdfLocator, type HighlightRow } from '@/modules/highlight-storage'
 import { getSyncService } from '@/services'
 import type { HighlightColor } from '@/types/highlight'
 
@@ -99,6 +99,43 @@ export interface DeleteHighlightArgs {
  * its upsert check, so undo inserts a FRESH row; the soft-deleted ghost
  * remains. Sync semantics stay correct (both rows carry `isDirty=1`).
  */
+export interface DeleteHighlightByIdWithUndoArgs {
+  target: HighlightTarget
+  rowId: string
+  snapshot: Pick<HighlightRow, 'bookId' | 'format' | 'cfiRange' | 'locator' | 'text' | 'color' | 'note' | 'chapter'>
+}
+
+export async function deleteHighlightByIdWithUndo(
+  args: DeleteHighlightByIdWithUndoArgs
+): Promise<HighlightHandle> {
+  await args.target.removeVisual()
+  await deleteHighlightById(args.rowId)
+  return {
+    undo: async () => {
+      if (args.snapshot.format === 'pdf' && args.snapshot.locator) {
+        await saveHighlightPdf({
+          bookSyncId: args.snapshot.bookId,
+          locator: JSON.parse(args.snapshot.locator) as PdfLocator,
+          text: args.snapshot.text,
+          color: args.snapshot.color,
+          note: args.snapshot.note,
+          chapter: args.snapshot.chapter
+        })
+      } else if (args.snapshot.format === 'epub' && args.snapshot.cfiRange) {
+        await saveHighlight({
+          bookSyncId: args.snapshot.bookId,
+          cfiRange: args.snapshot.cfiRange,
+          text: args.snapshot.text,
+          color: args.snapshot.color,
+          note: args.snapshot.note,
+          chapter: args.snapshot.chapter ?? undefined
+        })
+      }
+      await args.target.applyVisual()
+    }
+  }
+}
+
 export async function deleteHighlightWithUndo(args: DeleteHighlightArgs): Promise<HighlightHandle> {
   const { target, bookSyncId, cfiRange, text, color, note, chapter } = args
 

@@ -1,7 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/modules/highlight-storage', () => ({
-  saveHighlight: vi.fn().mockResolvedValue('hl-1'),
+  saveHighlight: vi.fn(async (params: { bookSyncId: string; cfiRange: string; text: string; color?: string; note?: string; chapter?: string }) =>
+    window.electron.highlightsSave({
+      format: 'epub',
+      bookSyncId: params.bookSyncId,
+      cfiRange: params.cfiRange,
+      locator: null,
+      text: params.text,
+      color: params.color ?? 'yellow',
+      note: params.note ?? '',
+      chapter: params.chapter ?? null
+    })
+  ),
   deleteHighlight: vi.fn().mockResolvedValue(undefined),
   saveHighlightPdf: vi.fn(async (params: { bookSyncId: string; locator: unknown; text: string; color?: string; note?: string; chapter?: string | null }) =>
     window.electron.highlightsSave({
@@ -24,7 +35,7 @@ vi.mock('@/services', () => ({
 
 import { saveHighlight, deleteHighlight } from '@/modules/highlight-storage'
 import { getSyncService } from '@/services'
-import { applyHighlightWithUndo, deleteHighlightWithUndo, applyHighlightWithUndoPdf } from './highlight-actions'
+import { applyHighlightWithUndo, deleteHighlightWithUndo, applyHighlightWithUndoPdf, deleteHighlightByIdWithUndo } from './highlight-actions'
 
 function makeTarget() {
   return {
@@ -246,5 +257,51 @@ describe('applyHighlightWithUndoPdf', () => {
     await handle.undo()
     expect(removeVisual).toHaveBeenCalledTimes(1)
     expect(deleteMock).toHaveBeenCalledWith('pdf-row-1')
+  })
+})
+
+describe('deleteHighlightByIdWithUndo', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('deletes by id and re-inserts on undo using the row snapshot', async () => {
+    const deleteMock = window.electron.highlightsDeleteById as unknown as ReturnType<typeof vi.fn>
+    deleteMock.mockResolvedValueOnce(undefined)
+    const saveMock = window.electron.highlightsSave as unknown as ReturnType<typeof vi.fn>
+    saveMock.mockResolvedValueOnce('reinserted-1')
+
+    const handle = await deleteHighlightByIdWithUndo({
+      target: { applyVisual: vi.fn(), removeVisual: vi.fn() },
+      rowId: 'r1',
+      snapshot: {
+        bookId: 'b1', format: 'pdf', cfiRange: null,
+        locator: JSON.stringify({ page: 1, rects: [{ x: 0, y: 0, w: 10, h: 10 }] }),
+        text: 'hi', color: 'yellow', note: '', chapter: null
+      }
+    })
+    expect(deleteMock).toHaveBeenCalledWith('r1')
+
+    await handle.undo()
+    expect(saveMock).toHaveBeenCalledTimes(1)
+    expect(saveMock.mock.calls[0][0].format).toBe('pdf')
+  })
+
+  it('uses saveHighlight (EPUB path) on undo when snapshot.format is epub', async () => {
+    const deleteMock = window.electron.highlightsDeleteById as unknown as ReturnType<typeof vi.fn>
+    deleteMock.mockResolvedValueOnce(undefined)
+    const saveMock = window.electron.highlightsSave as unknown as ReturnType<typeof vi.fn>
+    saveMock.mockResolvedValueOnce('reinserted-epub-1')
+
+    const handle = await deleteHighlightByIdWithUndo({
+      target: { applyVisual: vi.fn(), removeVisual: vi.fn() },
+      rowId: 'r2',
+      snapshot: {
+        bookId: 'b1', format: 'epub', cfiRange: 'epubcfi(/6/4!/4/2)', locator: null,
+        text: 't', color: 'yellow', note: '', chapter: null
+      }
+    })
+    await handle.undo()
+    expect(saveMock).toHaveBeenCalledTimes(1)
+    expect(saveMock.mock.calls[0][0].format).toBe('epub')
+    expect(saveMock.mock.calls[0][0].cfiRange).toBe('epubcfi(/6/4!/4/2)')
   })
 })
