@@ -421,7 +421,9 @@ export interface BookmarkRow {
 export interface HighlightRow {
   id: string
   bookId: string
-  cfiRange: string
+  format: 'epub' | 'pdf'
+  cfiRange: string | null
+  locator: string | null
   text: string
   color: string
   note: string

@@ -336,12 +336,15 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     void getHighlightsForBook(syncId).then((highlights) => {
       highlightsByRangeRef.current.clear()
       for (const hl of highlights) {
-        highlightsByRangeRef.current.set(hl.cfiRange, hl)
+        // PDF highlights have no cfiRange — skip them in the EPUB renderer.
+        if (!hl.cfiRange) continue
+        const cfi = hl.cfiRange
+        highlightsByRangeRef.current.set(cfi, hl)
         void highlightRange(
           rendition,
-          hl.cfiRange,
+          cfi,
           {},
-          makeAnnotationClickCb(hl.cfiRange),
+          makeAnnotationClickCb(cfi),
           'epubjs-hl',
           {
             fill: getHighlightHex(hl.color as HighlightColor),
@@ -418,7 +421,9 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           highlightsByRangeRef.current.set(cfiRange, {
             id: '__pending__',
             bookId: bookSyncId,
+            format: 'epub',
             cfiRange,
+            locator: null,
             text,
             color,
             note: '',
@@ -1119,7 +1124,10 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           // Refresh the in-memory map so the popover sees the new note next time.
           if (!bookSyncIdRef.current) return
           const rows = await getHighlightsForBook(bookSyncIdRef.current)
-          highlightsByRangeRef.current = new Map(rows.map((r) => [r.cfiRange, r]))
+          // Filter to EPUB rows only — PDF highlights have no cfiRange.
+          highlightsByRangeRef.current = new Map(
+            rows.filter((r): r is typeof r & { cfiRange: string } => r.cfiRange !== null).map((r) => [r.cfiRange, r])
+          )
         }}
       />
 

@@ -45,7 +45,9 @@ export const chunkData = sqliteTable('chunk_data', {
 export const highlights = sqliteTable('highlights', {
   id: text('id').primaryKey(),
   bookId: text('book_id').notNull(),
-  cfiRange: text('cfi_range').notNull(),
+  format: text('format').notNull().default('epub'),
+  cfiRange: text('cfi_range'),
+  locator: text('locator'),
   text: text('text').notNull().default(''),
   color: text('color').notNull().default('yellow'),
   note: text('note').notNull().default(''),

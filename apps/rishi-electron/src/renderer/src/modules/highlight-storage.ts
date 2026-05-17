@@ -6,7 +6,9 @@
 export interface HighlightRow {
   id: string
   bookId: string
-  cfiRange: string
+  format: 'epub' | 'pdf'
+  cfiRange: string | null
+  locator: string | null
   text: string
   color: string
   note: string
@@ -17,6 +19,11 @@ export interface HighlightRow {
   syncVersion: number
   isDirty: number
   isDeleted: number
+}
+
+export interface PdfLocator {
+  page: number
+  rects: Array<{ x: number; y: number; w: number; h: number }>
 }
 
 /**
@@ -30,7 +37,39 @@ export async function saveHighlight(params: {
   note?: string
   chapter?: string
 }): Promise<string> {
-  return window.electron.highlightsSave(params)
+  return window.electron.highlightsSave({
+    format: 'epub',
+    bookSyncId: params.bookSyncId,
+    cfiRange: params.cfiRange,
+    locator: null,
+    text: params.text,
+    color: params.color,
+    note: params.note,
+    chapter: params.chapter
+  })
+}
+
+/**
+ * Save a new PDF highlight in the SQLite highlights table.
+ */
+export async function saveHighlightPdf(params: {
+  bookSyncId: string
+  locator: PdfLocator
+  text: string
+  color?: string
+  note?: string
+  chapter?: string | null
+}): Promise<string> {
+  return await window.electron.highlightsSave({
+    format: 'pdf',
+    bookSyncId: params.bookSyncId,
+    cfiRange: null,
+    locator: JSON.stringify(params.locator),
+    text: params.text,
+    color: params.color ?? 'yellow',
+    note: params.note ?? '',
+    chapter: params.chapter ?? null
+  })
 }
 
 /**

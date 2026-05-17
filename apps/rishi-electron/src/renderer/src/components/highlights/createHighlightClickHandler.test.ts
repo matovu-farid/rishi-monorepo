@@ -6,7 +6,9 @@ function row(over: Partial<HighlightRow> = {}): HighlightRow {
   return {
     id: 'h1',
     bookId: 'b1',
+    format: 'epub',
     cfiRange: 'cfi:/6/8!/4/2,/1:0,/1:5',
+    locator: null,
     text: 'sample',
     color: 'yellow',
     note: '',
@@ -41,7 +43,7 @@ describe('createHighlightClickHandler', () => {
     const setInlinePopover = vi.fn()
     const map = new Map<string, HighlightRow>()
     const r = row({ color: 'green' })
-    map.set(r.cfiRange, r)
+    map.set(r.cfiRange!, r)
 
     const handler = createHighlightClickHandler({
       highlightsByRangeRef: { current: map },
@@ -50,7 +52,7 @@ describe('createHighlightClickHandler', () => {
       viewport: { innerWidth: 1000, innerHeight: 800 }
     })
 
-    handler(r.cfiRange)(undefined)
+    handler(r.cfiRange!)(undefined)
 
     expect(setInlinePopover).toHaveBeenCalledTimes(1)
     expect(setInlinePopover).toHaveBeenCalledWith({
@@ -78,7 +80,7 @@ describe('createHighlightClickHandler', () => {
     const setInlinePopover = vi.fn()
     const iframe = makeIframe({ left: 40, top: 60 })
     const r = row()
-    const map = new Map([[r.cfiRange, r]])
+    const map = new Map([[r.cfiRange!, r]])
 
     const handler = createHighlightClickHandler({
       highlightsByRangeRef: { current: map },
@@ -94,7 +96,7 @@ describe('createHighlightClickHandler', () => {
       clientY: 90
     } as unknown as MouseEvent
 
-    handler(r.cfiRange)(e)
+    handler(r.cfiRange!)(e)
 
     expect(setInlinePopover).toHaveBeenCalledWith({
       cfiRange: r.cfiRange,
@@ -108,8 +110,8 @@ describe('createHighlightClickHandler', () => {
     const a = row({ id: 'A', cfiRange: 'cfi:A', color: 'blue' })
     const b = row({ id: 'B', cfiRange: 'cfi:B', color: 'pink' })
     const map = new Map<string, HighlightRow>([
-      [a.cfiRange, a],
-      [b.cfiRange, b]
+      [a.cfiRange!, a],
+      [b.cfiRange!, b]
     ])
 
     const handler = createHighlightClickHandler({
@@ -119,12 +121,12 @@ describe('createHighlightClickHandler', () => {
       viewport: { innerWidth: 1000, innerHeight: 800 }
     })
 
-    handler(b.cfiRange)(undefined)
+    handler(b.cfiRange!)(undefined)
     expect(setInlinePopover).toHaveBeenLastCalledWith(
       expect.objectContaining({ cfiRange: 'cfi:B', currentColor: 'pink' })
     )
 
-    handler(a.cfiRange)(undefined)
+    handler(a.cfiRange!)(undefined)
     expect(setInlinePopover).toHaveBeenLastCalledWith(
       expect.objectContaining({ cfiRange: 'cfi:A', currentColor: 'blue' })
     )

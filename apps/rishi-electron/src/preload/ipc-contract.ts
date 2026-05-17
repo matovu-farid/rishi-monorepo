@@ -190,11 +190,13 @@ export type IpcContract = {
     args: [
       params: {
         bookSyncId: string
-        cfiRange: string
+        format?: string
+        cfiRange?: string | null
+        locator?: string | null
         text: string
         color?: string
         note?: string
-        chapter?: string
+        chapter?: string | null
       }
     ]
     returns: string

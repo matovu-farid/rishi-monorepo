@@ -48,6 +48,8 @@ export function HighlightsPanel({
   const handleDelete = useCallback(
     (hl: HighlightRow) => {
       if (!rendition) return
+      // PDF highlights don't have a cfiRange and cannot be undone via the EPUB renderer.
+      if (!hl.cfiRange) return
       const cfiRange = hl.cfiRange
       const color = hl.color as HighlightColor
       const hex = getHighlightHex(color)
@@ -137,7 +139,7 @@ export function HighlightsPanel({
                   style={{
                     borderLeft: `3px solid ${getHighlightHex(hl.color as HighlightColor)}`
                   }}
-                  onClick={() => handleNavigate(hl.cfiRange)}
+                  onClick={() => hl.cfiRange && handleNavigate(hl.cfiRange)}
                   onMouseEnter={() => setHoveredId(hl.id)}
                   onMouseLeave={() => setHoveredId(null)}
                 >
