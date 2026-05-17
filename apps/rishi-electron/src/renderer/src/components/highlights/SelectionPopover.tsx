@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Play } from 'lucide-react'
+import { Pencil, Play, Trash2 } from 'lucide-react'
 import { HIGHLIGHT_COLORS, type HighlightColor } from '@/types/highlight'
 
 interface SelectionPopoverProps {
@@ -9,13 +9,22 @@ interface SelectionPopoverProps {
   onHighlight: (color: HighlightColor) => void
   onClose: () => void
   onReadAloudFrom?: () => void
+  /** When set, the matching swatch is marked active (existing-highlight mode). */
+  currentColor?: HighlightColor
+  /** When set, renders an Edit-note button (existing-highlight mode). */
+  onEditNote?: () => void
+  /** When set, renders a Delete button (existing-highlight mode). */
+  onDelete?: () => void
 }
 
 export function SelectionPopover({
   position,
   onHighlight,
   onClose,
-  onReadAloudFrom
+  onReadAloudFrom,
+  currentColor,
+  onEditNote,
+  onDelete
 }: SelectionPopoverProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -47,13 +56,14 @@ export function SelectionPopover({
   }, [onClose])
 
   return (
+    // TODO(Wave F): clamp x/y to viewport so the popover doesn't get clipped against the right/bottom edges.
     <div
       ref={containerRef}
       className="fixed z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-md p-2"
       style={{ left: position.x, top: position.y }}
     >
       <div className="flex items-center gap-2">
-        {onReadAloudFrom && (
+        {onReadAloudFrom ? (
           <button
             type="button"
             className="rounded-full border border-gray-300/50 flex items-center justify-center transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-100 dark:bg-gray-700"
@@ -67,24 +77,60 @@ export function SelectionPopover({
           >
             <Play size={14} className="text-gray-700 dark:text-gray-200" />
           </button>
-        )}
-        {HIGHLIGHT_COLORS.map((c) => (
+        ) : null}
+        {HIGHLIGHT_COLORS.map((c) => {
+          const isCurrent = currentColor === c.name
+          return (
+            <button
+              key={c.name}
+              type="button"
+              aria-pressed={currentColor ? isCurrent : undefined}
+              className={
+                'rounded-full border border-gray-300/50 transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-blue-500 ' +
+                (isCurrent ? 'ring-2 ring-inset ring-blue-500' : '')
+              }
+              style={{
+                width: 28,
+                height: 28,
+                backgroundColor: c.hex
+              }}
+              aria-label={`Highlight ${c.name}`}
+              title={`Highlight ${c.name}`}
+              onClick={() => {
+                onHighlight(c.name)
+                onClose()
+              }}
+            />
+          )
+        })}
+        {onEditNote ? (
           <button
-            key={c.name}
-            className="rounded-full border border-gray-300/50 transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            style={{
-              width: 28,
-              height: 28,
-              backgroundColor: c.hex
-            }}
-            aria-label={`Highlight ${c.name}`}
-            title={`Highlight ${c.name}`}
+            type="button"
+            aria-label="Edit note"
+            title="Edit note"
+            className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
             onClick={() => {
-              onHighlight(c.name)
+              onEditNote()
               onClose()
             }}
-          />
-        ))}
+          >
+            <Pencil size={16} className="text-gray-700 dark:text-gray-200" />
+          </button>
+        ) : null}
+        {onDelete ? (
+          <button
+            type="button"
+            aria-label="Delete highlight"
+            title="Delete highlight"
+            className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 focus:outline-none focus:ring-2 focus:ring-red-500"
+            onClick={() => {
+              onDelete()
+              onClose()
+            }}
+          >
+            <Trash2 size={16} />
+          </button>
+        ) : null}
       </div>
     </div>
   )

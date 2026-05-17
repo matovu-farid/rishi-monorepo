@@ -29,8 +29,9 @@ import type { Contents } from 'epubjs'
 import type { NavItem } from 'epubjs'
 import { tocToChapters } from './tocToChapters'
 import { SelectionPopover } from '@/components/highlights/SelectionPopover'
-import { HighlightsPanel } from '@/components/highlights/HighlightsPanel'
+import { createHighlightClickHandler } from '@/components/highlights/createHighlightClickHandler'
 import { HighlightActionPopover } from '@/components/highlights/HighlightActionPopover'
+import { HighlightsPanel } from '@/components/highlights/HighlightsPanel'
 import { NoteEditor } from '@/components/highlights/NoteEditor'
 import { ChatPanel } from '@/components/chat/ChatPanel'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
@@ -210,31 +211,36 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     currentColor: HighlightColor
   } | null>(null)
 
+  // Stable highlight context for SelectionPopover's edit/delete buttons.
+  // Decoupled from `inlinePopover` because HighlightActionPopover's outside-
+  // click handler clears `inlinePopover` during the mousedown phase of a
+  // click inside SelectionPopover — if the buttons depended on
+  // `inlinePopover`, they'd unmount before the click resolved (see
+  // popover-race.test.tsx for the regression).
+  const [selectionTargetHighlight, setSelectionTargetHighlight] = useState<{
+    cfiRange: string
+    currentColor: HighlightColor
+  } | null>(null)
+
   const [editingNoteRow, setEditingNoteRow] = useState<HighlightRow | null>(null)
 
   const onHighlightClickRef = useRef<(cfiRange: string) => (e?: MouseEvent) => void>(() => () => {})
 
   useEffect(() => {
-    onHighlightClickRef.current = (cfiRange: string) => (e?: MouseEvent) => {
-      const row = highlightsByRangeRef.current.get(cfiRange)
-      if (!row) return
-      // Translate iframe-local click coords to viewport coords. If the event
-      // is missing (defensive — epubjs always passes one in current versions),
-      // center the popover at the viewport's mid-bottom.
-      let x = window.innerWidth / 2
-      let y = window.innerHeight / 2
-      if (e?.target instanceof Element) {
-        const iframe = e.target.ownerDocument.defaultView?.frameElement as HTMLElement | null
-        const iframeRect = iframe?.getBoundingClientRect()
-        x = (iframeRect?.left ?? 0) + e.clientX
-        y = (iframeRect?.top ?? 0) + e.clientY
+    onHighlightClickRef.current = createHighlightClickHandler({
+      highlightsByRangeRef,
+      renditionRef,
+      setInlinePopover: (state) => {
+        setInlinePopover(state)
+        // Mirror into the stable context so SelectionPopover's edit/delete
+        // survive HighlightActionPopover's outside-click clearing
+        // `inlinePopover`.
+        setSelectionTargetHighlight({
+          cfiRange: state.cfiRange,
+          currentColor: state.currentColor
+        })
       }
-      setInlinePopover({
-        cfiRange,
-        position: { x, y },
-        currentColor: row.color as HighlightColor
-      })
-    }
+    })
   })
 
   const makeAnnotationClickCb = useCallback(
@@ -450,10 +456,16 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     [selectionInfo, rendition, setLastUndoable, bookSyncIdRef, makeAnnotationClickCb]
   )
 
-  const handleInlineColorChange = useCallback(
-    async (newColor: HighlightColor) => {
-      if (!inlinePopover || !rendition || !bookSyncIdRef.current) return
-      const cfiRange = inlinePopover.cfiRange
+  // These handlers accept cfiRange as a parameter rather than reading the
+  // `inlinePopover` state directly. The reason: when an action is invoked
+  // from a sibling popover (SelectionPopover), the mousedown can trigger
+  // HighlightActionPopover's outside-click handler — which clears
+  // `inlinePopover` BEFORE the click resolves. State-derived handlers see
+  // a null `inlinePopover` and abort. Capturing the cfiRange in the lambda
+  // at render time keeps the action atomic.
+  const handleHighlightColorChange = useCallback(
+    async (cfiRange: string, newColor: HighlightColor) => {
+      if (!rendition || !bookSyncIdRef.current) return
       const row = highlightsByRangeRef.current.get(cfiRange)
       if (!row) return
       const newHex = getHighlightHex(newColor)
@@ -476,66 +488,67 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       // Reflect in the map.
       highlightsByRangeRef.current.set(cfiRange, { ...row, color: newColor })
     },
-    [inlinePopover, rendition, bookSyncIdRef, makeAnnotationClickCb]
+    [rendition, bookSyncIdRef, makeAnnotationClickCb]
   )
 
-  const handleInlineDelete = useCallback(() => {
-    if (!inlinePopover || !rendition || !bookSyncIdRef.current) return
-    const cfiRange = inlinePopover.cfiRange
+  const handleHighlightDelete = useCallback(
+    (cfiRange: string) => {
+      if (!rendition || !bookSyncIdRef.current) return
+      const row = highlightsByRangeRef.current.get(cfiRange)
+      if (!row) return
+      const hex = getHighlightHex(row.color as HighlightColor)
+      const bookSyncId = bookSyncIdRef.current
+
+      void deleteHighlightWithUndo({
+        target: {
+          applyVisual: async () => {
+            await highlightRange(
+              rendition,
+              cfiRange,
+              {},
+              makeAnnotationClickCb(cfiRange),
+              'epubjs-hl',
+              { fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': 'multiply' }
+            )
+          },
+          removeVisual: async () => {
+            await removeHighlight(rendition, cfiRange)
+          }
+        },
+        bookSyncId,
+        cfiRange,
+        text: row.text,
+        color: row.color as HighlightColor,
+        note: row.note,
+        chapter: row.chapter ?? undefined
+      })
+        .then((handle) => {
+          highlightsByRangeRef.current.delete(cfiRange)
+          setLastUndoable(handle)
+          toast('Highlight deleted', {
+            action: {
+              label: 'Undo',
+              onClick: () => {
+                void handle.undo().then(() => {
+                  highlightsByRangeRef.current.set(cfiRange, row)
+                })
+              }
+            },
+            duration: 5_000
+          })
+        })
+        .catch((err: unknown) => {
+          console.warn('[highlight] delete failed:', err)
+        })
+    },
+    [rendition, bookSyncIdRef, setLastUndoable, makeAnnotationClickCb]
+  )
+
+  const handleHighlightEditNote = useCallback((cfiRange: string) => {
     const row = highlightsByRangeRef.current.get(cfiRange)
     if (!row) return
-    const hex = getHighlightHex(row.color as HighlightColor)
-    const bookSyncId = bookSyncIdRef.current
-
-    void deleteHighlightWithUndo({
-      target: {
-        applyVisual: async () => {
-          await highlightRange(
-            rendition,
-            cfiRange,
-            {},
-            makeAnnotationClickCb(cfiRange),
-            'epubjs-hl',
-            { fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': 'multiply' }
-          )
-        },
-        removeVisual: async () => {
-          await removeHighlight(rendition, cfiRange)
-        }
-      },
-      bookSyncId,
-      cfiRange,
-      text: row.text,
-      color: row.color as HighlightColor,
-      note: row.note,
-      chapter: row.chapter ?? undefined
-    })
-      .then((handle) => {
-        highlightsByRangeRef.current.delete(cfiRange)
-        setLastUndoable(handle)
-        toast('Highlight deleted', {
-          action: {
-            label: 'Undo',
-            onClick: () => {
-              void handle.undo().then(() => {
-                highlightsByRangeRef.current.set(cfiRange, row)
-              })
-            }
-          },
-          duration: 5_000
-        })
-      })
-      .catch((err: unknown) => {
-        console.warn('[highlight] delete failed:', err)
-      })
-  }, [inlinePopover, rendition, bookSyncIdRef, setLastUndoable, makeAnnotationClickCb])
-
-  const handleInlineEditNote = useCallback(() => {
-    if (!inlinePopover) return
-    const row = highlightsByRangeRef.current.get(inlinePopover.cfiRange)
-    if (!row) return
     setEditingNoteRow(row)
-  }, [inlinePopover])
+  }, [])
 
   const handleReadAloudFrom = useCallback(() => {
     // Resolve selection: prefer the live iframe selection (always fresh,
@@ -1045,16 +1058,39 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         onChatOrbClick={() => setChatPanelOpen((prev) => !prev)}
       />
 
-      {/* Highlight color picker popover */}
+      {/* Selection popover: shows on text selection. When an existing
+          highlight is also focused (inlinePopover set), this popover
+          additionally exposes edit/delete tied to that highlight so users
+          can act on it without reaching for the top-left popover. */}
       {selectionInfo ? (
         <SelectionPopover
           cfiRange={selectionInfo.cfiRange}
           selectedText={selectionInfo.text}
           position={selectionInfo.position}
-          onHighlight={handleHighlightColor}
+          currentColor={selectionTargetHighlight?.currentColor}
+          // Bind to the STABLE `selectionTargetHighlight` (not
+          // `inlinePopover`) so HighlightActionPopover's outside-click
+          // clearing `inlinePopover` on mousedown can't unmount these
+          // buttons before the click fires. See popover-race.test.tsx.
+          onHighlight={
+            selectionTargetHighlight
+              ? (c) => void handleHighlightColorChange(selectionTargetHighlight.cfiRange, c)
+              : handleHighlightColor
+          }
           onReadAloudFrom={handleReadAloudFrom}
+          onEditNote={
+            selectionTargetHighlight
+              ? () => handleHighlightEditNote(selectionTargetHighlight.cfiRange)
+              : undefined
+          }
+          onDelete={
+            selectionTargetHighlight
+              ? () => handleHighlightDelete(selectionTargetHighlight.cfiRange)
+              : undefined
+          }
           onClose={() => {
             setSelectionInfo(null)
+            setSelectionTargetHighlight(null)
             useSelectionStore.getState().clear()
           }}
         />
@@ -1065,10 +1101,10 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           position={inlinePopover.position}
           currentColor={inlinePopover.currentColor}
           onSelectColor={(c) => {
-            void handleInlineColorChange(c)
+            void handleHighlightColorChange(inlinePopover.cfiRange, c)
           }}
-          onEditNote={handleInlineEditNote}
-          onDelete={handleInlineDelete}
+          onEditNote={() => handleHighlightEditNote(inlinePopover.cfiRange)}
+          onDelete={() => handleHighlightDelete(inlinePopover.cfiRange)}
           onClose={() => setInlinePopover(null)}
         />
       ) : null}
