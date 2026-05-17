@@ -28,7 +28,9 @@ function row(over: Partial<HighlightRow> = {}): HighlightRow {
   return {
     id: 'row-1',
     bookId: 'book-1',
+    format: 'epub',
     cfiRange: 'cfi:1',
+    locator: null,
     text: 'sample',
     color: 'none',
     note: '',

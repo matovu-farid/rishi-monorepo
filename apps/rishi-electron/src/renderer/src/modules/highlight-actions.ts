@@ -1,7 +1,10 @@
 import {
   saveHighlight,
   deleteHighlight,
+  saveHighlightPdf,
+  deleteHighlightById,
   getHighlightsForBook,
+  type PdfLocator,
   type HighlightRow
 } from '@/modules/highlight-storage'
 import { getSyncService } from '@/services'
@@ -89,6 +92,32 @@ export async function saveNoteOnly(args: SaveNoteOnlyArgs): Promise<HighlightRow
   return fresh
 }
 
+export interface ApplyHighlightPdfArgs {
+  target: HighlightTarget
+  bookSyncId: string
+  locator: PdfLocator
+  text: string
+  color: HighlightColor
+}
+
+export async function applyHighlightWithUndoPdf(
+  args: ApplyHighlightPdfArgs
+): Promise<HighlightHandle> {
+  await args.target.applyVisual()
+  const id = await saveHighlightPdf({
+    bookSyncId: args.bookSyncId,
+    locator: args.locator,
+    text: args.text,
+    color: args.color
+  })
+  return {
+    undo: async () => {
+      await args.target.removeVisual()
+      await deleteHighlightById(id)
+    }
+  }
+}
+
 export interface DeleteHighlightArgs {
   target: HighlightTarget
   bookSyncId: string
@@ -108,6 +137,43 @@ export interface DeleteHighlightArgs {
  * its upsert check, so undo inserts a FRESH row; the soft-deleted ghost
  * remains. Sync semantics stay correct (both rows carry `isDirty=1`).
  */
+export interface DeleteHighlightByIdWithUndoArgs {
+  target: HighlightTarget
+  rowId: string
+  snapshot: Pick<HighlightRow, 'bookId' | 'format' | 'cfiRange' | 'locator' | 'text' | 'color' | 'note' | 'chapter'>
+}
+
+export async function deleteHighlightByIdWithUndo(
+  args: DeleteHighlightByIdWithUndoArgs
+): Promise<HighlightHandle> {
+  await args.target.removeVisual()
+  await deleteHighlightById(args.rowId)
+  return {
+    undo: async () => {
+      if (args.snapshot.format === 'pdf' && args.snapshot.locator) {
+        await saveHighlightPdf({
+          bookSyncId: args.snapshot.bookId,
+          locator: JSON.parse(args.snapshot.locator) as PdfLocator,
+          text: args.snapshot.text,
+          color: args.snapshot.color,
+          note: args.snapshot.note,
+          chapter: args.snapshot.chapter
+        })
+      } else if (args.snapshot.format === 'epub' && args.snapshot.cfiRange) {
+        await saveHighlight({
+          bookSyncId: args.snapshot.bookId,
+          cfiRange: args.snapshot.cfiRange,
+          text: args.snapshot.text,
+          color: args.snapshot.color,
+          note: args.snapshot.note,
+          chapter: args.snapshot.chapter ?? undefined
+        })
+      }
+      await args.target.applyVisual()
+    }
+  }
+}
+
 export async function deleteHighlightWithUndo(args: DeleteHighlightArgs): Promise<HighlightHandle> {
   const { target, bookSyncId, cfiRange, text, color, note, chapter } = args
 

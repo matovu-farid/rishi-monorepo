@@ -379,7 +379,12 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         }
       })
     }
-    noteIconOverlayRef.current.render(highlightsByRangeRef.current.values())
+    // Filter out null cfiRange (PDF rows that may sneak into the map) so the
+    // overlay's NoteRow contract (`cfiRange: string`) holds.
+    const noteRows = Array.from(highlightsByRangeRef.current.values()).filter(
+      (r): r is typeof r & { cfiRange: string } => r.cfiRange !== null
+    )
+    noteIconOverlayRef.current.render(noteRows)
   }, [])
 
   // Load persisted highlights when rendition is ready
@@ -389,14 +394,17 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     void getHighlightsForBook(syncId).then((highlights) => {
       highlightsByRangeRef.current.clear()
       for (const hl of highlights) {
-        highlightsByRangeRef.current.set(hl.cfiRange, hl)
+        // PDF highlights have no cfiRange — skip them in the EPUB renderer.
+        if (!hl.cfiRange) continue
+        const cfi = hl.cfiRange
+        highlightsByRangeRef.current.set(cfi, hl)
         // Note-only rows have no SVG mark — skip the highlightRange call.
         if (isNoteOnly(hl)) continue
         void highlightRange(
           rendition,
-          hl.cfiRange,
+          cfi,
           {},
-          makeAnnotationClickCb(hl.cfiRange),
+          makeAnnotationClickCb(cfi),
           'epubjs-hl',
           {
             fill: getHighlightHex(hl.color as HighlightColor),
@@ -491,7 +499,9 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           highlightsByRangeRef.current.set(cfiRange, {
             id: '__pending__',
             bookId: bookSyncId,
+            format: 'epub',
             cfiRange,
+            locator: null,
             text,
             color,
             note: '',
@@ -1225,12 +1235,14 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           // row and saved.
           const row = editingNoteRow
           setEditingNoteRow(null)
-          if (!row) return
-          const live = highlightsByRangeRef.current.get(row.cfiRange) ?? row
-          if (isNoteOnly(live) && live.note.trim().length === 0) {
-            void deleteHighlight(live.bookId, live.cfiRange)
+          if (!row || !row.cfiRange) return
+          const cfi = row.cfiRange
+          const live = highlightsByRangeRef.current.get(cfi) ?? row
+          if (isNoteOnly(live) && live.note.trim().length === 0 && live.cfiRange) {
+            const liveCfi = live.cfiRange
+            void deleteHighlight(live.bookId, liveCfi)
               .then(() => {
-                highlightsByRangeRef.current.delete(live.cfiRange)
+                highlightsByRangeRef.current.delete(liveCfi)
                 getSyncService().triggerWrite()
                 refreshNoteIcons()
               })
@@ -1243,7 +1255,12 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           // Refresh the in-memory map so the popover sees the new note next time.
           if (!bookSyncIdRef.current) return
           const rows = await getHighlightsForBook(bookSyncIdRef.current)
-          highlightsByRangeRef.current = new Map(rows.map((r) => [r.cfiRange, r]))
+          // Filter to EPUB rows only — PDF highlights have no cfiRange.
+          highlightsByRangeRef.current = new Map(
+            rows
+              .filter((r): r is typeof r & { cfiRange: string } => r.cfiRange !== null)
+              .map((r) => [r.cfiRange, r])
+          )
           // Reflect note status into the live popover state so the icon
           // swaps to "View note" right after saving without needing a fresh
           // highlight click.

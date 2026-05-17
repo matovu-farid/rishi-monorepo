@@ -34,7 +34,10 @@ export function HighlightsPanel({
   const refreshHighlights = useCallback(async () => {
     if (!bookSyncId) return
     const rows = await getHighlightsForBook(bookSyncId)
-    setHighlights(rows)
+    // Only show EPUB highlights in this panel. PDF highlights will get their
+    // own visualization in a later task; including them here would make the
+    // delete handler fail (PDF rows have no cfiRange for EPUB renderer undo).
+    setHighlights(rows.filter((r) => r.format === 'epub'))
   }, [bookSyncId])
 
   useEffect(() => {
@@ -48,6 +51,9 @@ export function HighlightsPanel({
   const handleDelete = useCallback(
     (hl: HighlightRow) => {
       if (!rendition) return
+      // Invariant: panel only renders EPUB rows (filtered in refreshHighlights),
+      // so cfiRange is always a non-empty string here.
+      if (!hl.cfiRange) return
       const cfiRange = hl.cfiRange
       const color = hl.color as HighlightColor
       const hex = getHighlightHex(color)
@@ -149,7 +155,7 @@ export function HighlightsPanel({
                       ? '3px solid #2563eb'
                       : `3px solid ${getHighlightHex(hl.color as HighlightColor)}`
                   }}
-                  onClick={() => handleNavigate(hl.cfiRange)}
+                  onClick={() => hl.cfiRange && handleNavigate(hl.cfiRange)}
                   onMouseEnter={() => setHoveredId(hl.id)}
                   onMouseLeave={() => setHoveredId(null)}
                 >

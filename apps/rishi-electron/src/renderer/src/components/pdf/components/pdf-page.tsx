@@ -1,9 +1,12 @@
-import { memo, useCallback } from 'react'
+import { memo, useCallback, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { Page } from 'react-pdf'
-import type { PDFDocumentProxy } from 'pdfjs-dist'
+import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist'
 
 import { usePdfStore } from '@/stores/pdfStore'
 import Loader from '@/components/Loader'
+import { HighlightLayer } from '../HighlightLayer'
+import type { HighlightRow } from '@/modules/highlight-storage'
+import type { ViewportLike } from '@/modules/pdf-locator'
 type Transform = [number, number, number, number, number, number]
 
 const PARAGRAPH_INDEX_PER_PAGE = 10000
@@ -15,7 +18,10 @@ function PageComponentInner({
   isDualPage = false,
   bookId,
   onRenderComplete,
-  pdf
+  pdf,
+  onPageReady,
+  highlights,
+  onHighlightClick
 }: {
   thispageNumber: number
   pdfHeight?: number
@@ -27,6 +33,9 @@ function PageComponentInner({
   // PdfView owns the proxy via the warm-restore cache, so we pass it down
   // explicitly here.
   pdf: PDFDocumentProxy
+  onPageReady?: (pageNumber: number, info: { pageEl: HTMLElement; page: PDFPageProxy }) => void
+  highlights?: HighlightRow[]
+  onHighlightClick?: (row: HighlightRow, e: ReactMouseEvent<HTMLDivElement>) => void
 }) {
   // Subscriptions: keep them to scalar values only so unrelated store writes
   // (currentViewParagraphs reference churn during TTS, pageNumber bumps from
@@ -53,6 +62,9 @@ function PageComponentInner({
 
   const setIsPdfRendered = usePdfStore((s) => s.setIsPdfRendered)
   const setPageData = usePdfStore((s) => s.setPageData)
+
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
+  const [pdfPage, setPdfPage] = useState<PDFPageProxy | null>(null)
 
   // Stable text renderer keyed on highlight inputs. react-pdf re-runs the
   // text layer when this prop's identity changes — without useCallback we'd
@@ -89,29 +101,64 @@ function PageComponentInner({
     [pageNumber, setPageData]
   )
 
+  const handleLoadSuccess = useCallback(
+    (page: PDFPageProxy) => {
+      setPdfPage(page)
+      const pageEl =
+        wrapperRef.current?.querySelector<HTMLElement>('.react-pdf__Page') ?? null
+      if (pageEl && onPageReady) onPageReady(pageNumber, { pageEl, page })
+    },
+    [pageNumber, onPageReady]
+  )
+
   return (
-    <Page
-      pdf={pdf}
-      pageNumber={pageNumber}
-      key={pageNumber.toString()}
-      customTextRenderer={customTextRenderer}
-      height={isDualPage ? pdfHeight : undefined}
-      width={isDualPage ? undefined : pdfWidth}
-      className="rounded shadow-lg"
-      renderTextLayer={true}
-      renderAnnotationLayer={true}
-      canvasBackground="white"
-      onGetTextSuccess={handleGetTextSuccess}
-      loading={
-        <div
-          className="bg-white grid place-items-center"
-          style={{ width: pdfWidth, aspectRatio: '8.5 / 11' }}
-        >
-          <Loader />
-        </div>
-      }
-      onRenderSuccess={handleRenderSuccess}
-    />
+    <div ref={wrapperRef} style={{ position: 'relative' }}>
+      <Page
+        pdf={pdf}
+        pageNumber={pageNumber}
+        key={pageNumber.toString()}
+        customTextRenderer={customTextRenderer}
+        height={isDualPage ? pdfHeight : undefined}
+        width={isDualPage ? undefined : pdfWidth}
+        className="rounded shadow-lg"
+        renderTextLayer={true}
+        renderAnnotationLayer={true}
+        canvasBackground="white"
+        onGetTextSuccess={handleGetTextSuccess}
+        loading={
+          <div
+            className="bg-white grid place-items-center"
+            style={{ width: pdfWidth, aspectRatio: '8.5 / 11' }}
+          >
+            <Loader />
+          </div>
+        }
+        onRenderSuccess={handleRenderSuccess}
+        onLoadSuccess={handleLoadSuccess}
+      />
+      {pdfPage && wrapperRef.current && highlights && onHighlightClick && (
+        <HighlightLayer
+          pageNumber={pageNumber}
+          pageEl={
+            wrapperRef.current.querySelector<HTMLElement>('.react-pdf__Page') ?? wrapperRef.current
+          }
+          viewport={
+            pdfPage.getViewport({
+              // pdfjs page.view = [x0, y0, x1, y1]; native width = view[2], native height = view[3].
+              // In dual-page mode the parent passes `height` to <Page> (and width=undefined), so the
+              // rendered scale is height-driven. Match accordingly so HighlightLayer's screen rects
+              // line up with the rendered page in both layouts.
+              scale:
+                isDualPage && pdfHeight
+                  ? pdfHeight / pdfPage.view[3]
+                  : (pdfWidth ?? pdfPage.view[2]) / pdfPage.view[2]
+            }) as unknown as ViewportLike
+          }
+          highlights={highlights}
+          onHighlightClick={onHighlightClick}
+        />
+      )}
+    </div>
   )
 }
 
