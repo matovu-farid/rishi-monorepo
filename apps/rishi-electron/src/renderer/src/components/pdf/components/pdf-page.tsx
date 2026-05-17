@@ -144,7 +144,14 @@ function PageComponentInner({
           }
           viewport={
             pdfPage.getViewport({
-              scale: (pdfWidth ?? pdfPage.view[2]) / pdfPage.view[2]
+              // pdfjs page.view = [x0, y0, x1, y1]; native width = view[2], native height = view[3].
+              // In dual-page mode the parent passes `height` to <Page> (and width=undefined), so the
+              // rendered scale is height-driven. Match accordingly so HighlightLayer's screen rects
+              // line up with the rendered page in both layouts.
+              scale:
+                isDualPage && pdfHeight
+                  ? pdfHeight / pdfPage.view[3]
+                  : (pdfWidth ?? pdfPage.view[2]) / pdfPage.view[2]
             }) as unknown as ViewportLike
           }
           highlights={highlights}

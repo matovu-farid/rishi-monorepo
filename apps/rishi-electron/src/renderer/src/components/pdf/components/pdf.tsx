@@ -96,19 +96,21 @@ export function PdfView({
     rowId: string
     position: { x: number; y: number }
     currentColor: HighlightColor
-    hasNote: boolean
   } | null>(null)
   const [editingNoteRow, setEditingNoteRow] = useState<HighlightRow | null>(null)
 
-  // Bridge the native context-menu "Read Aloud From Here" IPC into a window
-  // CustomEvent so the player can react. EPUB takes the same shape — the
-  // event has CFI-specific consumers there; PDF's paragraph-aware consumer
-  // is a follow-up (v1 ships the channel + selection capture).
+  // Handle the native context-menu "Read Aloud From Here" IPC. EPUB has a
+  // CFI-aware consumer that starts TTS from the matched paragraph; the PDF
+  // equivalent (paragraph-by-position lookup) is a follow-up. For v1 we
+  // surface an honest "not yet supported" toast instead of silently
+  // dropping the action — the menu item remains discoverable.
   useEffect(() => {
     const unsubscribe = window.electron.on('reader:readAloudFromSelection', () => {
       const text = window.getSelection()?.toString()?.trim() ?? ''
       if (!text) return
-      window.dispatchEvent(new CustomEvent('rishi:readAloudFromSelection', { detail: { text } }))
+      toast('Read aloud from selection is not yet supported in PDFs', {
+        description: 'Use the play button to start TTS from the current page.'
+      })
     })
     return unsubscribe
   }, [])
@@ -633,7 +635,7 @@ export function PdfView({
             setHighlights((prev) => [
               ...prev,
               {
-                id: `pending-${Date.now()}`,
+                id: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                 bookId: bookSyncId,
                 format: 'pdf',
                 cfiRange: null,
@@ -669,6 +671,14 @@ export function PdfView({
       })
     } catch (err) {
       console.error('Failed to apply PDF highlight', err)
+      // Pending sentinel may have been inserted by applyVisual before the
+      // save failed; reconcile against DB to drop the ghost row.
+      try {
+        const rows = await getHighlightsForBook(bookSyncId)
+        setHighlights(rows.filter((r) => r.format === 'pdf'))
+      } catch {
+        // Best-effort cleanup; tolerate a follow-up reload restoring truth.
+      }
       toast.error('Could not save highlight')
     }
   }
@@ -677,8 +687,7 @@ export function PdfView({
     setInlinePopover({
       rowId: row.id,
       position: { x: e.clientX, y: e.clientY - 8 },
-      currentColor: row.color as HighlightColor,
-      hasNote: row.note.trim().length > 0
+      currentColor: row.color as HighlightColor
     })
   }
 
