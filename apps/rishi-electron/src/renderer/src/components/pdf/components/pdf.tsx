@@ -52,9 +52,11 @@ import { SelectionPopover } from '@/components/highlights/SelectionPopover'
 import { HighlightActionPopover } from '@/components/highlights/HighlightActionPopover'
 import { NoteEditor } from '@/components/highlights/NoteEditor'
 import { usePdfTextSelection } from '@/hooks/usePdfTextSelection'
+import { usePdfHighlights } from '@/hooks/usePdfHighlights'
+import { usePdfReadAloudFromSelection } from '@/hooks/usePdfReadAloudFromSelection'
 import { useUndoableHighlightShortcut } from '@/hooks/useUndoableHighlightShortcut'
 import { applyHighlightWithUndoPdf, deleteHighlightByIdWithUndo } from '@/modules/highlight-actions'
-import { getHighlightsForBook, updateHighlightColor, type HighlightRow, type PdfLocator } from '@/modules/highlight-storage'
+import { updateHighlightColor, type HighlightRow, type PdfLocator } from '@/modules/highlight-storage'
 import type { PDFPageProxy } from 'pdfjs-dist'
 import type { HighlightColor } from '@/types/highlight'
 import type { MouseEvent as ReactMouseEvent } from 'react'
@@ -86,7 +88,6 @@ export function PdfView({
   const queryClient = useQueryClient()
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)
-  const [highlights, setHighlights] = useState<HighlightRow[]>([])
   const [selectionPopover, setSelectionPopover] = useState<{
     locator: PdfLocator
     text: string
@@ -98,37 +99,18 @@ export function PdfView({
     currentColor: HighlightColor
   } | null>(null)
   const [editingNoteRow, setEditingNoteRow] = useState<HighlightRow | null>(null)
-
-  // Handle the native context-menu "Read Aloud From Here" IPC. EPUB has a
-  // CFI-aware consumer that starts TTS from the matched paragraph; the PDF
-  // equivalent (paragraph-by-position lookup) is a follow-up. For v1 we
-  // surface an honest "not yet supported" toast instead of silently
-  // dropping the action — the menu item remains discoverable.
-  useEffect(() => {
-    const unsubscribe = window.electron.on('reader:readAloudFromSelection', () => {
-      const text = window.getSelection()?.toString()?.trim() ?? ''
-      if (!text) return
-      toast('Read aloud from selection is not yet supported in PDFs', {
-        description: 'Use the play button to start TTS from the current page.'
-      })
-    })
-    return unsubscribe
-  }, [])
   const pageInfoRef = useRef<Map<number, { pageEl: HTMLElement; page: PDFPageProxy }>>(new Map())
   const { setLastUndoable } = useUndoableHighlightShortcut()
-
-  useEffect(() => {
-    let active = true
-    const bookSyncId = book.syncId
-    if (!bookSyncId) return
-    void getHighlightsForBook(bookSyncId).then((rows) => {
-      if (!active) return
-      setHighlights(rows.filter((r) => r.format === 'pdf'))
-    })
-    return () => {
-      active = false
-    }
-  }, [book.syncId])
+  // Highlights are keyed on the IPC-fetched bookSyncId (NOT the book.syncId
+  // prop, which the router may not populate). When that state arrives, the
+  // hook loads + filters PDF rows; subsequent updates flow through setHighlights.
+  const { highlights, setHighlights, refresh: refreshHighlights } = usePdfHighlights(bookSyncId)
+  // useRequireAuth narrows the feature key to PremiumFeature; the read-aloud
+  // hook accepts a plain string for testability. Same widening pattern is used
+  // in EpubView's menu-handler wiring.
+  usePdfReadAloudFromSelection({
+    requireAuth: requireAuth as (feature: string, action: () => void) => void
+  })
 
   usePdfTextSelection({
     containerRef: scrollContainerRef,
@@ -624,8 +606,7 @@ export function PdfView({
   }, [pdfBytes, book.id, book.location])
 
   const handleCreatePdfHighlight = async (color: HighlightColor): Promise<void> => {
-    if (!selectionPopover || !book.syncId) return
-    const bookSyncId = book.syncId
+    if (!selectionPopover || !bookSyncId) return
     const { locator, text } = selectionPopover
     setSelectionPopover(null)
     try {
@@ -654,8 +635,7 @@ export function PdfView({
             ])
           },
           removeVisual: async () => {
-            const rows = await getHighlightsForBook(bookSyncId)
-            setHighlights(rows.filter((r) => r.format === 'pdf'))
+            await refreshHighlights()
           }
         },
         bookSyncId,
@@ -664,8 +644,7 @@ export function PdfView({
         color
       })
       setLastUndoable(handle)
-      const rows = await getHighlightsForBook(bookSyncId)
-      setHighlights(rows.filter((r) => r.format === 'pdf'))
+      await refreshHighlights()
       toast.success('Highlight added', {
         action: { label: 'Undo', onClick: () => void handle.undo() }
       })
@@ -674,8 +653,7 @@ export function PdfView({
       // Pending sentinel may have been inserted by applyVisual before the
       // save failed; reconcile against DB to drop the ghost row.
       try {
-        const rows = await getHighlightsForBook(bookSyncId)
-        setHighlights(rows.filter((r) => r.format === 'pdf'))
+        await refreshHighlights()
       } catch {
         // Best-effort cleanup; tolerate a follow-up reload restoring truth.
       }
@@ -701,16 +679,14 @@ export function PdfView({
   }
 
   const handleInlineDelete = async (): Promise<void> => {
-    if (!inlinePopover || !book.syncId) return
-    const bookSyncId = book.syncId
+    if (!inlinePopover || !bookSyncId) return
     const row = highlights.find((r) => r.id === inlinePopover.rowId)
     if (!row) return
     setInlinePopover(null)
     const handle = await deleteHighlightByIdWithUndo({
       target: {
         applyVisual: async () => {
-          const rows = await getHighlightsForBook(bookSyncId)
-          setHighlights(rows.filter((r) => r.format === 'pdf'))
+          await refreshHighlights()
         },
         removeVisual: async () => {
           // Local removal handled below; the DB delete is performed by the helper.
@@ -970,9 +946,7 @@ export function PdfView({
           if (!open) setEditingNoteRow(null)
         }}
         onSaved={async () => {
-          if (!book.syncId) return
-          const rows = await getHighlightsForBook(book.syncId)
-          setHighlights(rows.filter((r) => r.format === 'pdf'))
+          await refreshHighlights()
         }}
       />
     </div>
