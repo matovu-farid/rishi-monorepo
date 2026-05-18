@@ -32,6 +32,33 @@ function coerceLanguage(raw: string | undefined): string {
   return (ALLOWED_REALTIME_LANGUAGES as readonly string[]).includes(raw) ? raw : 'en'
 }
 
+/**
+ * Build the request body sent to OpenAI's POST /v1/realtime/client_secrets.
+ *
+ * Extracted as a pure function so we can assert on its shape in tests. OpenAI
+ * requires `session.audio.input.transcription.model` whenever the
+ * `transcription` object is present — omitting it produces a 400
+ * `missing_required_parameter` and breaks voice chat activation.
+ */
+export function buildRealtimeClientSecretsBody(language: string) {
+  return {
+    expires_after: {
+      anchor: "created_at",
+      seconds: 600,
+    },
+    session: {
+      type: "realtime",
+      model: "gpt-realtime",
+      instructions: "You are a friendly assistant.",
+      audio: {
+        input: {
+          transcription: { model: "gpt-4o-mini-transcribe", language },
+        },
+      },
+    },
+  } as const
+}
+
 /** Constant-time string comparison to prevent timing attacks. */
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -188,22 +215,7 @@ app.get("/api/realtime/client_secrets", requireAuth, async (c) => {
     const language = coerceLanguage(c.req.query("language"));
     const response = await axios.post(
       "https://api.openai.com/v1/realtime/client_secrets",
-      {
-        expires_after: {
-          anchor: "created_at",
-          seconds: 600,
-        },
-        session: {
-          type: "realtime",
-          model: "gpt-realtime",
-          instructions: "You are a friendly assistant.",
-          audio: {
-            input: {
-              transcription: { language },
-            },
-          },
-        },
-      },
+      buildRealtimeClientSecretsBody(language),
       {
         headers: {
           Authorization: `Bearer ${c.env.OPENAI_API_KEY}`,
@@ -219,8 +231,15 @@ app.get("/api/realtime/client_secrets", requireAuth, async (c) => {
     const parsedResponse = responseSchema.parse(response.data);
     return c.json({ client_secret: { value: parsedResponse.value } });
   } catch (error) {
-    console.error("Failed to get client secrets:", error instanceof Error ? error.message : "unknown");
-    return c.json({ error: "Failed to get client secrets" }, 500);
+    const axiosErr = error as { response?: { status?: number; data?: unknown }; message?: string }
+    const upstreamStatus = axiosErr.response?.status ?? null
+    const upstreamBody = axiosErr.response?.data ?? null
+    const message = error instanceof Error ? error.message : "unknown"
+    console.error("Failed to get client secrets:", { message, upstreamStatus, upstreamBody })
+    return c.json(
+      { error: "Failed to get client secrets", detail: { message, upstreamStatus, upstreamBody } },
+      500
+    );
   }
 });
 

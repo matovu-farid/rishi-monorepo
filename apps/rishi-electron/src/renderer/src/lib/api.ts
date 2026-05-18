@@ -350,7 +350,9 @@ export async function getRealtimeClientSecret(language: string): Promise<string>
   })
 
   if (!response.ok) {
-    throw new Error(`Worker API responded with status ${response.status}`)
+    const bodyText = await response.text().catch(() => '')
+    console.error('[realtime] worker returned non-OK', response.status, bodyText)
+    throw new Error(`Worker API responded with status ${response.status}: ${bodyText}`)
   }
 
   const data = (await response.json()) as { client_secret?: { value?: string } }
