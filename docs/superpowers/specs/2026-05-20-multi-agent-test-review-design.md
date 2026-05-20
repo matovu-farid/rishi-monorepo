@@ -12,7 +12,7 @@ Audit the rishi-electron test suite for (a) parity gaps between format-specific 
 
 - Surface every real bug the tests reveal — without false positives polluting the backlog.
 - Bring format-pair tests to parity where parity makes sense.
-- Raise the average test quality (real DB over mocks, behavior over implementation, etc.) without unrelated rewrites.
+- **Raise the quality of existing tests in-place.** High-impact practice violations (mocked-when-shouldn't, brittle timing, implementation-detail assertions, missing parity coverage) are *fixed in this run*, with their own review loop. Low-impact violations stay documented in `practices-audit.md` for later.
 - Produce a complete paper trail of every claim, review, rebuttal, fix, and verification.
 
 ## Non-Goals
@@ -31,16 +31,17 @@ Two runs, in order:
 
 ## Agent Roles
 
-Five distinct roles (Tester and Reviewer each appear at two stages). Each dispatch is a fresh subagent. No agent communicates with another directly; the orchestrator (main thread) routes work by reading file output and dispatching the next role.
+Six distinct roles (Tester and Reviewer each appear at two stages). Each dispatch is a fresh subagent. No agent communicates with another directly; the **Orchestrator** (itself a dedicated subagent) routes work by reading file output and dispatching the next role. The main thread is reserved for human escalation.
 
 | Role | Subagent type | Job |
 |---|---|---|
+| **Orchestrator** | `general-purpose` | Reads spec + this plan + INDEX.md, dispatches all other roles in wave order, updates INDEX.md, enforces budgets and escalation rules. Returns to main thread only on escalation triggers. |
 | Planner | `team-planner` | Read assigned scope, produce `plan.md` (parity matrix, audit checklist, TDD architecture guidance). |
 | Tester | `team-tester` | Read test files + plan. Identify parity gaps, practice violations, and suspected bugs. Write finding files. |
 | Reviewer-1 | `team-reviewer` **or** `feature-dev:code-reviewer` (alternated across findings to diversify blind spots) | Verify a finding catches a real production bug. Includes flake check: run the failing test ≥3× and confirm deterministic failure. Append CONFIRM / REJECT. |
 | Tester (rebuttal) | `team-tester` | If rejected, ACCEPT-REJECTION or REBUT. One rebuttal max. |
 | Tiebreaker | Whichever of `team-reviewer` / `feature-dev:code-reviewer` *wasn't* used for Reviewer-1 on this finding | Final binding verdict if rebuttal disputes rejection. Guaranteed different agent type than Reviewer-1. |
-| Coder | `team-coder` | For CONFIRMED findings: write red test if missing, implement minimal fix, commit. |
+| Coder | `team-coder` | For CONFIRMED bug findings *and* high-impact practice fixes: implement the change via TDD, commit. |
 | Code-reviewer | `team-reviewer` | Review the coder's diff. Coder gets one rebuttal; deadlock → tiebreaker. |
 
 ## File Layout
@@ -148,15 +149,31 @@ Waves:
 | 3. Reviewer-1 | N parallel (1 per finding) | `team-reviewer` | CONFIRM/REJECT section appended |
 | 4. Rebuttal | parallel (1 per rejected) | `team-tester` | ACCEPT-REJECTION or REBUT section appended |
 | 5. Tiebreaker | parallel (1 per disputed) | `feature-dev:code-reviewer` | Binding verdict appended |
-| 6. Fix | **sequential**, 1 per confirmed | `team-coder` → `team-reviewer` → optional rebuttal → optional tiebreaker | Red test, fix, commit per finding |
-| 7. Mutation check | **sequential**, 1 per fixed finding | `team-tester` | Revert fix commit on a clean working tree, confirm test fails, restore fix, confirm test passes. Sequential because parallel reverts on a shared working tree could interfere. Result appended to finding file. |
-| 8. Summary | 1 | orchestrator | `INDEX.md` finalized; report to user |
+| 6. Fix (bugs) | **sequential**, 1 per confirmed bug | `team-coder` → `team-reviewer` → optional rebuttal → optional tiebreaker | Red test, fix, commit per finding |
+| 7. Mutation check | **sequential**, 1 per fixed bug | `team-tester` | Revert fix commit on a clean working tree, confirm test fails, restore fix, confirm test passes. Sequential because parallel reverts on a shared working tree could interfere. Result appended to finding file. |
+| 8. Test-quality triage | 1 | `team-tester` | Reads `practices-audit.md`. Classifies each violation as **Type A (fix this run)** or **Type B (document only)**. Type A criteria: high reader-confidence risk, scoped to one or two test files, no production-code change needed. Writes back to practices-audit.md with classification. |
+| 9. Test-quality fix | **sequential**, 1 per Type A | `team-coder` → `team-reviewer` → optional rebuttal → optional tiebreaker | Modify the test (not production code). Verify the modified test still passes against current production. Commit. |
+| 10. Summary | 1 | orchestrator | `INDEX.md` finalized; report to main thread |
 
 ### Parallelism rationale
 
 - Triage (wave 2) is read-only — no file conflicts possible — so fully parallel.
 - Reviewer / rebuttal / tiebreaker (waves 3-5) operate on independent finding files — parallel.
 - Fixes (wave 6) write to the codebase and could conflict if two coders touched the same module simultaneously — strictly sequential, one atomic commit per finding.
+
+### Escalation to main thread (human)
+
+The orchestrator returns to the main thread (pauses the run) on any of these triggers:
+
+- A mutation check returns `TEST-INVALID` (test passed without the fix — test is wrong).
+- A finding hits the per-finding dispatch cap of 8.
+- The global dispatch budget is exceeded.
+- A coder reports their fix broke unrelated tests and can't proceed.
+- Any agent reports the plan/finding is incoherent.
+- Workflow health signal: Reviewer-1 outcomes are 100% CONFIRM or 100% REJECT after wave 3 completes (suggests calibration failure).
+- Orchestrator's own context is running low — yields a "checkpoint" return with INDEX.md state intact, main thread re-spawns a fresh orchestrator.
+
+On escalation: the orchestrator writes its current state and the specific question/issue into `.agent-review/pilot/ESCALATION.md` and returns a short message to the main thread. Main thread reads the file, gets human decision, then re-spawns the orchestrator with the resolution.
 
 ### Safety rails
 
