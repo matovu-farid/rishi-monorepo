@@ -87,6 +87,22 @@ export interface MediaPort {
    * Optional so legacy deps still type-check; the activation pipeline guards.
    */
   createMediaRecorder?(stream: MediaStreamLike): MediaRecorderLike | null
+  /**
+   * Clone the audio tracks of `source` into a new MediaStream suitable for
+   * handing to the WebRTC SDK. The cloned tracks MUST start with
+   * `enabled = false` so the realtime peer connection sends silence until the
+   * activation pipeline's VAD gate + buffered-speech replay completes — at
+   * which point `session.mute(false)` flips the cloned tracks live via
+   * `peerConnection.getSenders()`.
+   *
+   * The source stream is left untouched so MediaRecorder (buffered replay)
+   * and local VAD continue to see real audio during the connect window. This
+   * is the fix for the pre-connect-speech race condition where the SDK's
+   * `peerConnection.addTrack(stream.getAudioTracks()[0])` would otherwise
+   * deliver live mic audio to OpenAI as soon as SDP negotiation finishes,
+   * concurrent with the buffered transcript injection.
+   */
+  cloneStreamForWebrtcSend(source: MediaStreamLike): MediaStreamLike
 }
 
 export interface EffectsPort {
@@ -246,6 +262,21 @@ export interface SessionFactoryOpts {
   serverVad: ServerVadConfig
 }
 
+export interface NetworkPort {
+  /**
+   * Warm the DNS + TLS path to OpenAI's realtime API host so that the
+   * subsequent `session.connect()` SDP exchange reuses a pooled HTTP/2
+   * connection instead of paying a cold handshake. Must be cheap and
+   * idempotent — typically a `<link rel="preconnect">` insertion. MUST NOT
+   * make an authenticated request or anything billable.
+   *
+   * Called from `service.preconnect()` (book open) so the warmup is in
+   * flight by the time the user taps voice chat. Best-effort: any failure
+   * is swallowed by the caller.
+   */
+  preconnectOpenAI(): void
+}
+
 export interface VoiceChatServiceDeps {
   rag: RagService
   connectivity: ConnectivityService
@@ -257,6 +288,7 @@ export interface VoiceChatServiceDeps {
   vad: VadPort
   effects: EffectsPort
   clock: ClockPort
+  network: NetworkPort
   config: VoiceChatConfig
   /**
    * Read the user's chosen voice-chat language at activation time. Synchronous

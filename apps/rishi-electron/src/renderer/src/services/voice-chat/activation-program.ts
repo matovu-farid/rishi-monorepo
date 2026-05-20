@@ -192,7 +192,17 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
     mediaStream: MediaStreamLike,
     audioElement: AudioElementLike
   ): BuiltSession {
-    const transport = deps.webrtcFactory({ mediaStream, audioElement })
+    // Clone the mic stream's audio tracks into a dedicated WebRTC-send stream
+    // whose tracks start disabled. The SDK's OpenAIRealtimeWebRTC.connect()
+    // does `peerConnection.addTrack(stream.getAudioTracks()[0])`, and that
+    // track's `enabled` flag controls whether RTP carries voice or silence.
+    // The VAD gate + buffered-speech replay below run while the clone is
+    // hard-muted; `session.mute(false)` flips the cloned sender track live via
+    // `peerConnection.getSenders()` once the gate completes. The source
+    // mediaStream is left untouched so MediaRecorder and local VAD keep seeing
+    // real audio for the buffered-replay window.
+    const webrtcStream = deps.media.cloneStreamForWebrtcSend(mediaStream)
+    const transport = deps.webrtcFactory({ mediaStream: webrtcStream, audioElement })
 
     // Forward captured images into the live session. The session is created
     // below, so we close over a mutable holder that's filled in immediately
@@ -267,6 +277,14 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
     for (const [evt, fn] of listeners) session.on(evt, fn)
     const cleanup = (): void => {
       for (const [evt, fn] of listeners) session.off(evt, fn)
+      // Stop the cloned WebRTC-send tracks. The SDK's `close()` does
+      // `peerConnection.close()` but leaves added tracks `live`, which keeps
+      // the OS mic indicator on and pins the underlying device.
+      try {
+        webrtcStream.getTracks().forEach((t) => t.stop())
+      } catch (err) {
+        captureError(err, { operation: 'voiceChatService', step: 'webrtc_clone_stop' })
+      }
     }
 
     return { session, cleanup }

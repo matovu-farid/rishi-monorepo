@@ -317,6 +317,20 @@ export function getVoiceChatService(): VoiceChatService {
           } catch {
             return null
           }
+        },
+        cloneStreamForWebrtcSend: (source) => {
+          // Independent `enabled` flag from the source's tracks, so the SDK's
+          // `peerConnection.addTrack(stream.getAudioTracks()[0])` adds a track
+          // that is muted at the source until the activation pipeline calls
+          // `session.mute(false)`. Cloning is necessary because muting the
+          // shared track would also kill MediaRecorder + local VAD input.
+          const sourceStream = source as unknown as MediaStream
+          const clonedTracks = sourceStream.getAudioTracks().map((t) => {
+            const clone = t.clone()
+            clone.enabled = false
+            return clone
+          })
+          return new MediaStream(clonedTracks)
         }
       },
       vad: {
@@ -327,6 +341,26 @@ export function getVoiceChatService(): VoiceChatService {
         now: () => Date.now(),
         setTimeout: (fn, ms) => setTimeout(fn, ms),
         clearTimeout: (handle) => clearTimeout(handle)
+      },
+      network: {
+        // Idempotent <link rel="preconnect"> for the OpenAI realtime API host.
+        // Chromium's resource hints pool the resulting HTTP/2 connection for
+        // ~5 min, so the SDP exchange in OpenAIRealtimeWebRTC.connect() can
+        // skip the cold DNS + TCP + TLS handshake (typically 150–300ms).
+        // crossOrigin = 'anonymous' matches the SDK's later cross-origin fetch
+        // — without it Chromium opens a SEPARATE connection for the actual
+        // request and the preconnect is wasted. The link element is left in
+        // place: it's <100 bytes of DOM, and removing it would risk dropping
+        // the warmed connection from the pool before activate() runs.
+        preconnectOpenAI: () => {
+          const href = 'https://api.openai.com'
+          if (document.head.querySelector(`link[rel="preconnect"][href="${href}"]`)) return
+          const link = document.createElement('link')
+          link.rel = 'preconnect'
+          link.href = href
+          link.crossOrigin = 'anonymous'
+          document.head.appendChild(link)
+        }
       },
       config: {
         // Auto-close after 3 minutes of no agent activity. Prevents a user

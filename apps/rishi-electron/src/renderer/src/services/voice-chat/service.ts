@@ -307,12 +307,32 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
     },
 
     preconnect(_bookId, _ctx) {
-      // Intentional no-op. The previous implementation opened a full WebRTC
-      // realtime session and muted it, which still billed audio/transcription
-      // tokens server-side on every book open. The first explicit activate()
-      // pays the cold-path latency; we don't pre-spend money to save it.
+      // Cheap, token-free warmups so the next explicit activate() pays less
+      // cold-path latency. NEITHER step opens a WebRTC session or prompts for
+      // mic — that's the regression fence from b7449976, where the previous
+      // preconnect impl opened (and muted) a full realtime session per book
+      // open and billed audio/transcription tokens server-side.
+      //
+      //   1. TLS/DNS warmup to api.openai.com (typically <link rel="preconnect">).
+      //      The SDP exchange in session.connect() reuses the pooled HTTP/2
+      //      connection instead of paying a cold handshake (~150–300ms saved).
+      //   2. Ephemeral-key prefetch via keyCache. The keyCache de-dupes against
+      //      prewarmKey() and TTL-caches for ~9 min, so the cost is a single
+      //      worker roundtrip per book session at most.
+      //
+      // Both steps are best-effort: any throw/reject is swallowed so warmup
+      // never user-blocks. Args unused — the warmup is per-host, per-session,
+      // not per-book.
       void _bookId
       void _ctx
+      try {
+        deps.network.preconnectOpenAI()
+      } catch (err) {
+        captureError(err, { operation: 'voiceChatService', step: 'preconnect_network' })
+      }
+      void keyCache.get().catch((err: unknown) => {
+        captureError(err, { operation: 'voiceChatService', step: 'preconnect_key_prefetch' })
+      })
       return Promise.resolve()
     },
 

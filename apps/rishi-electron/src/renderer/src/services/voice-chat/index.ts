@@ -12,6 +12,7 @@ export type {
   VoiceError,
   VoiceErrorReason,
   MediaPort,
+  NetworkPort,
   EffectsPort,
   ClockPort,
   AgentFactoryArgs,

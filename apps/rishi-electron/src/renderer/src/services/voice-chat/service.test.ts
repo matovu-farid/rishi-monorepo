@@ -10,6 +10,7 @@ import type {
   LocalVoiceVad,
   MediaPort,
   MediaStreamLike,
+  NetworkPort,
   RealtimeAgentLike,
   RealtimeSessionLike,
   RtcTransportLike,
@@ -215,6 +216,8 @@ export function makeMedia(opts?: {
   stream: MediaStreamLike
   audioElement: AudioElementLike
   lastRecorder: () => FakeRecorder | null
+  lastWebrtcClone: () => MediaStreamLike | null
+  cloneTrackStops: () => Array<ReturnType<typeof vi.fn>>
 } {
   const stream: MediaStreamLike = { getTracks: () => [{ stop: vi.fn() }] }
   const audioElement: AudioElementLike = {
@@ -223,11 +226,24 @@ export function makeMedia(opts?: {
     autoplay: true,
     pause: vi.fn()
   }
+  // Track-stop spies for the webrtc-clone stream so tests can assert the
+  // cloned tracks are stopped on cleanup (mic-indicator hygiene).
+  const cloneTrackStops: Array<ReturnType<typeof vi.fn>> = []
+  let lastClone: MediaStreamLike | null = null
+  const cloneStreamForWebrtcSend = vi.fn().mockImplementation((_source: MediaStreamLike) => {
+    const stop = vi.fn()
+    cloneTrackStops.push(stop)
+    const cloned: MediaStreamLike = { getTracks: () => [{ stop }] }
+    lastClone = cloned
+    return cloned
+  })
   let lastRec: FakeRecorder | null = null
   const port: MediaPort & {
     stream: MediaStreamLike
     audioElement: AudioElementLike
     lastRecorder: () => FakeRecorder | null
+    lastWebrtcClone: () => MediaStreamLike | null
+    cloneTrackStops: () => Array<ReturnType<typeof vi.fn>>
   } = {
     stream,
     audioElement,
@@ -240,7 +256,10 @@ export function makeMedia(opts?: {
       return stream
     }),
     createAudioElement: vi.fn().mockReturnValue(audioElement),
-    lastRecorder: () => lastRec
+    cloneStreamForWebrtcSend,
+    lastRecorder: () => lastRec,
+    lastWebrtcClone: () => lastClone,
+    cloneTrackStops: () => cloneTrackStops
   }
   if (opts?.withRecorder) {
     port.createMediaRecorder = vi.fn().mockImplementation((_s: MediaStreamLike) => {
@@ -445,6 +464,18 @@ export function makeVad(opts?: {
   return { port, vad, lastStream: () => lastStream }
 }
 
+export function makeNetwork(): NetworkPort & {
+  preconnectCalls: () => number
+} {
+  let calls = 0
+  return {
+    preconnectOpenAI: () => {
+      calls++
+    },
+    preconnectCalls: () => calls
+  }
+}
+
 export function makeDeps(overrides?: Partial<VoiceChatServiceDeps>): VoiceChatServiceDeps {
   return {
     rag: makeRag(),
@@ -457,6 +488,7 @@ export function makeDeps(overrides?: Partial<VoiceChatServiceDeps>): VoiceChatSe
     vad: makeVad().port,
     effects: makeEffects(),
     clock: makeClock(),
+    network: makeNetwork(),
     config: makeConfig(),
     getLanguage: () => 'en',
     ...overrides
@@ -682,7 +714,7 @@ describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
     expect(session.connect).toHaveBeenCalledTimes(1)
   })
 
-  it('preconnect never opens a session — always a no-op', async () => {
+  it('preconnect never opens a session or prompts for mic', async () => {
     const session = makeSession()
     const ipc = makeIpc()
     const media = makeMedia()
@@ -695,19 +727,83 @@ describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
 
     const connectCallsBefore = session.connect.mock.calls.length
     const mediaCallsBefore = (media.getUserMedia as ReturnType<typeof vi.fn>).mock.calls.length
-    const keyCallsBefore = (ipc.getRealtimeClientSecret as ReturnType<typeof vi.fn>).mock.calls
-      .length
 
     await svc.preconnect(1, { pageText: 'p' })
 
+    // Critical regression fences from b7449976: no session connect, no mic.
+    // Key prefetch IS allowed — that's the whole point of the warm path —
+    // but the WebRTC track + getUserMedia prompt must wait for explicit activate.
     expect(session.connect.mock.calls.length).toBe(connectCallsBefore)
     expect((media.getUserMedia as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
       mediaCallsBefore
     )
-    expect((ipc.getRealtimeClientSecret as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
-      keyCallsBefore
-    )
     expect(svc.getState()).toBe('idle')
+  })
+
+  it('preconnect() triggers network.preconnectOpenAI for TLS/DNS warmup', async () => {
+    const network = makeNetwork()
+    const svc = createVoiceChatService(makeDeps({ network }))
+
+    await svc.preconnect(1, { pageText: 'p' })
+
+    expect(network.preconnectCalls()).toBe(1)
+  })
+
+  it('preconnect() primes the key cache so the next activate skips the mint roundtrip', async () => {
+    const ipc = makeIpc({ key: 'PRECONNECTED_KEY' })
+    const svc = createVoiceChatService(makeDeps({ ipc }))
+
+    await svc.preconnect(1, { pageText: 'p' })
+    // Microtask flush so the keyCache fetch settles.
+    await new Promise((r) => {
+      setTimeout(r, 0)
+    })
+    expect(ipc.getRealtimeClientSecret).toHaveBeenCalledTimes(1)
+
+    // Cold-path activate would normally mint a key. With preconnect's prefetch
+    // already cached, the activate reuses it — no second mint.
+    await svc.activate(1, { pageText: 'p' })
+    expect(ipc.getRealtimeClientSecret).toHaveBeenCalledTimes(1)
+  })
+
+  it('preconnect() is best-effort: network.preconnectOpenAI throwing does not reject', async () => {
+    const network: NetworkPort = {
+      preconnectOpenAI: () => {
+        throw new Error('link insertion blew up')
+      }
+    }
+    const svc = createVoiceChatService(makeDeps({ network }))
+
+    // Must not throw — preconnect is fire-and-forget warmup, never user-blocking.
+    await expect(svc.preconnect(1, { pageText: 'p' })).resolves.toBeUndefined()
+    expect(svc.getState()).toBe('idle')
+  })
+
+  it('preconnect() is best-effort: key-mint failure does not reject', async () => {
+    const ipc = makeIpc()
+    ;(ipc.getRealtimeClientSecret as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('worker 503')
+    )
+    const svc = createVoiceChatService(makeDeps({ ipc }))
+
+    await expect(svc.preconnect(1, { pageText: 'p' })).resolves.toBeUndefined()
+    expect(svc.getState()).toBe('idle')
+  })
+
+  it('preconnect() called repeatedly while a session is active does not disturb the session', async () => {
+    const session = makeSession()
+    const network = makeNetwork()
+    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory, network }))
+
+    await svc.activate(1, { pageText: 'p' })
+    expect(svc.getState()).toBe('active')
+
+    await svc.preconnect(1, { pageText: 'p' })
+    await svc.preconnect(1, { pageText: 'p' })
+
+    // State unchanged; calls are still recorded but the live session isn't torn down.
+    expect(svc.getState()).toBe('active')
+    expect(session.close).not.toHaveBeenCalled()
   })
 
   it('prewarmKey() fetches the ephemeral key without prompting for mic', async () => {
@@ -1515,6 +1611,104 @@ describe('createVoiceChatService — VAD gating', () => {
 
     svc.deactivate()
     expect(vad!.disposeCalls()).toBe(1)
+  })
+})
+
+// =============================================================================
+// WebRTC send-track gating — clone the mic stream for the SDK so the cloned
+// track can be hard-muted (enabled = false) before connect() and unmuted via
+// session.mute(false) only after the VAD gate + buffered replay completes.
+//
+// Without this, OpenAIRealtimeWebRTC's `peerConnection.addTrack(stream.getAudioTracks()[0])`
+// sends live mic audio the moment SDP negotiation finishes, racing with the
+// buffered-transcript injection and producing duplicate / interleaved turns.
+// =============================================================================
+
+describe('createVoiceChatService — webrtc send-track gating', () => {
+  it('webrtcFactory receives the cloned stream, not the original mic stream', async () => {
+    const media = makeMedia()
+    const webrtc = makeWebrtc()
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({
+        media,
+        webrtcFactory: webrtc.factory,
+        sessionFactory: session.factory
+      })
+    )
+
+    await svc.activate(1, { pageText: 'p' })
+
+    const args = webrtc.lastArgs()
+    expect(args).not.toBeNull()
+    const cloned = media.lastWebrtcClone()
+    expect(cloned).not.toBeNull()
+    // Identity check — the cloned stream from the port, not the getUserMedia stream.
+    expect(args!.mediaStream).toBe(cloned)
+    expect(args!.mediaStream).not.toBe(media.stream)
+  })
+
+  it('cloneStreamForWebrtcSend is called exactly once per cold-path activation', async () => {
+    const media = makeMedia()
+    const session = makeSession()
+    const svc = createVoiceChatService(makeDeps({ media, sessionFactory: session.factory }))
+
+    await svc.activate(1, { pageText: 'p' })
+
+    expect(media.cloneStreamForWebrtcSend).toHaveBeenCalledTimes(1)
+    expect(media.cloneStreamForWebrtcSend).toHaveBeenCalledWith(media.stream)
+  })
+
+  it('cloneStreamForWebrtcSend is NOT re-called on warm-path activate (same bookId)', async () => {
+    const media = makeMedia()
+    const session = makeSession()
+    const svc = createVoiceChatService(makeDeps({ media, sessionFactory: session.factory }))
+
+    await svc.activate(1, { pageText: 'p' })
+    await svc.activate(1, { pageText: 'p2' })
+
+    // Warm-path only refreshes the agent; the WebRTC track + clone are reused.
+    expect(media.cloneStreamForWebrtcSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('deactivate stops the cloned stream tracks (mic-indicator hygiene)', async () => {
+    const media = makeMedia()
+    const session = makeSession()
+    const svc = createVoiceChatService(makeDeps({ media, sessionFactory: session.factory }))
+
+    await svc.activate(1, { pageText: 'p' })
+    const stops = media.cloneTrackStops()
+    expect(stops.length).toBeGreaterThan(0)
+    // Sanity: clone tracks shouldn't be stopped yet while session is live.
+    for (const s of stops) expect(s).not.toHaveBeenCalled()
+
+    svc.deactivate()
+
+    for (const s of stops) expect(s).toHaveBeenCalled()
+  })
+
+  it('connect failure stops the cloned stream tracks (no leak on cold-path error)', async () => {
+    const media = makeMedia()
+    const session = makeSession({ connectFailWith: new Error('boom') })
+    const svc = createVoiceChatService(makeDeps({ media, sessionFactory: session.factory }))
+
+    await svc.activate(1, { pageText: 'p' }).catch(() => undefined)
+
+    const stops = media.cloneTrackStops()
+    expect(stops.length).toBeGreaterThan(0)
+    for (const s of stops) expect(s).toHaveBeenCalled()
+  })
+
+  it('reactivate with different bookId re-clones the new mic stream', async () => {
+    const media = makeMedia()
+    const session = makeSession()
+    const svc = createVoiceChatService(makeDeps({ media, sessionFactory: session.factory }))
+
+    await svc.activate(1, { pageText: 'p' })
+    await svc.activate(2, { pageText: 'q' })
+
+    // BookId change tears down the old session and builds a new one — clone again.
+    expect(media.cloneStreamForWebrtcSend).toHaveBeenCalledTimes(2)
   })
 })
 
