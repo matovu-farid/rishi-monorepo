@@ -326,7 +326,7 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
                   onClick={handleRepeat}
                   disabled={disabled}
                   aria-label="Repeat current paragraph"
-                  className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:scale-105 active:scale-95 overflow-hidden"
+                  className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:scale-105 active:scale-95"
                   style={{ ...glassButton, height: 42 }}
                 >
                   <RotateCcw size={18} className="text-black/60" />
