@@ -3,23 +3,9 @@ import { usePdfStore, BookNavigationState } from './pdfStore'
 
 describe('pdfStore', () => {
   beforeEach(() => {
-    usePdfStore.setState({
-      pageNumber: 0,
-      scrollPageNumber: 0,
-      pageCount: 10,
-      isDualPage: false,
-      thumbnailSidebarOpen: false,
-      books: [],
-      book: null,
-      currentParagraph: { index: '', text: '' },
-      currentViewParagraphs: [],
-      nextViewParagraphs: [],
-      previousViewParagraphs: [],
-      highlightedParagraphIndex: '',
-      isHighlighting: false,
-      bookNavigationState: BookNavigationState.Idle,
-      hasNavigatedToPage: false
-    })
+    // Full replace with the store's initial state so new PdfState fields
+    // cannot silently leak across tests.
+    usePdfStore.setState(usePdfStore.getInitialState(), true)
   })
 
   it('should set page number', () => {
