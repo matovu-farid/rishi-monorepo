@@ -32,11 +32,18 @@ test.describe('MOBI reader', () => {
       title: 'MOBI Render Test'
     })
     const bookPage = await openBook(app.page, book.id)
-    await bookPage.waitForTimeout(3000)
-    await expect(bookPage.locator('a[href="/"]')).toHaveCount(
-      await bookPage.locator('a[href="/"]').count()
-    )
-    await expect(bookPage.locator('body')).not.toBeEmpty()
+    // MOBI is routed to Azw3View (foliate-js) — see books.$id.lazy.tsx; the
+    // legacy MobiView (srcDoc) is dead code. A mounted Azw3View reader serves
+    // each chapter as a `<iframe src=blob:...>`, so asserting blob:-src
+    // positively distinguishes "reader mounted" from "blank page / wrong
+    // route" without relying on the trivial body-not-empty check.
+    const iframe = bookPage.locator('iframe').first()
+    await expect(iframe).toBeVisible({ timeout: 15000 })
+    const src = await iframe.getAttribute('src')
+    const srcdoc = await iframe.getAttribute('srcdoc')
+    expect(src, 'Azw3View renders chapters as src=blob:').not.toBeNull()
+    expect(src ?? '').toMatch(/^blob:/)
+    expect(srcdoc, 'reader must not be the legacy MobiView (srcdoc)').toBeNull()
   })
 
   test('non-existent book id does not crash', async () => {
