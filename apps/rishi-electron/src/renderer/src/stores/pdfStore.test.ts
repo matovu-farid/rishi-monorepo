@@ -104,10 +104,18 @@ describe('pdfStore', () => {
   })
 
   it('should reset paragraph state', () => {
-    usePdfStore.setState({ isDualPage: true, pageCount: 100, highlightedParagraphIndex: 'test' })
+    usePdfStore.setState({
+      isDualPage: true,
+      pageCount: 100,
+      highlightedParagraphIndex: 'test',
+      isHighlighting: true,
+      isRenderedPageState: { 1: true, 2: true }
+    })
     usePdfStore.getState().resetParagraphState()
     expect(usePdfStore.getState().isDualPage).toBe(false)
     expect(usePdfStore.getState().pageCount).toBe(0)
     expect(usePdfStore.getState().highlightedParagraphIndex).toBe('')
+    expect(usePdfStore.getState().isHighlighting).toBe(false)
+    expect(usePdfStore.getState().isRenderedPageState).toEqual({})
   })
 })
