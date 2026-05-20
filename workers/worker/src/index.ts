@@ -2,7 +2,13 @@ import axios from "axios";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
-import { OpenAI } from "openai";
+import { createOpenAI } from "@ai-sdk/openai";
+import {
+  experimental_generateSpeech as generateSpeech,
+  generateText,
+  embedMany,
+  APICallError,
+} from "ai";
 import { z } from "zod";
 import * as Sentry from "@sentry/cloudflare";
 import { Redis } from "@upstash/redis/cloudflare";
@@ -30,6 +36,18 @@ const ALLOWED_REALTIME_LANGUAGES = [
 function coerceLanguage(raw: string | undefined): string {
   if (!raw) return 'en'
   return (ALLOWED_REALTIME_LANGUAGES as readonly string[]).includes(raw) ? raw : 'en'
+}
+
+// Lazily memoize the AI SDK provider so we don't re-allocate it (and any
+// internal state it caches) on every request. The Cloudflare Workers env
+// binding is only available at request time, so we key the cache on apiKey.
+let _openai: ReturnType<typeof createOpenAI> | null = null
+let _openaiApiKey: string | null = null
+function getOpenAI(apiKey: string): ReturnType<typeof createOpenAI> {
+  if (_openai && _openaiApiKey === apiKey) return _openai
+  _openai = createOpenAI({ apiKey })
+  _openaiApiKey = apiKey
+  return _openai
 }
 
 /**
@@ -180,29 +198,27 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
     const allowedVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
     const validVoice = allowedVoices.includes(voice) ? voice : "alloy";
 
-    const openai = new OpenAI({
-      apiKey: c.env.OPENAI_API_KEY,
-    });
+    const openai = getOpenAI(c.env.OPENAI_API_KEY);
 
-    const response = await openai.audio.speech.create({
-      model: "tts-1",
-      input,
+    const speech = await generateSpeech({
+      model: openai.speech("tts-1"),
+      text: input,
       voice: validVoice,
     });
 
-    const arrayBuffer = await response.arrayBuffer();
-    return new Response(arrayBuffer, {
+    const audioBytes = speech.audio.uint8Array;
+    return new Response(audioBytes, {
       headers: {
         "Content-Type": "audio/mpeg",
-        "Content-Length": arrayBuffer.byteLength.toString(),
+        "Content-Length": audioBytes.byteLength.toString(),
       },
     });
   } catch (error) {
-    if (error instanceof OpenAI.APIError) {
-      console.error("OpenAI API error:", error.status, error.message);
+    if (APICallError.isInstance(error)) {
+      console.error("OpenAI API error:", error.statusCode, error.message);
       return c.json(
         { error: "TTS generation failed" },
-        error.status === 429 ? 429 : 502
+        error.statusCode === 429 ? 429 : 502
       );
     }
     console.error("TTS error:", error instanceof Error ? error.message : "unknown");
@@ -250,18 +266,20 @@ app.post("/api/text/completions", requireAuth, async (c) => {
     if (!input || typeof input !== "string" || input.length > 50000) {
       return c.json({ error: "input must be a string under 50000 characters" }, 400);
     }
-    const openai = new OpenAI({
-      apiKey: c.env.OPENAI_API_KEY,
-    });
-    const response = await openai.responses.create({
-      model: "gpt-5-nano",
-      input,
+    const openai = getOpenAI(c.env.OPENAI_API_KEY);
+    const { text } = await generateText({
+      model: openai.responses("gpt-5-nano"),
+      prompt: input,
+      // The AI SDK's OpenAI Responses provider defaults `store: true`, which
+      // tells OpenAI to retain the request/response for later retrieval. We
+      // proxy user book content here — opt out explicitly.
+      providerOptions: { openai: { store: false } },
     });
 
-    return c.json(response.output_text);
+    return c.json(text);
   } catch (error) {
-    if (error instanceof OpenAI.APIError) {
-      return c.json({ error: error.message }, (error.status as 400) || 500);
+    if (APICallError.isInstance(error)) {
+      return c.json({ error: error.message }, (error.statusCode as 400) || 500);
     }
     return c.json({ error: "Internal server error" }, 500);
   }
@@ -289,19 +307,17 @@ app.post("/api/embed", requireAuth, async (c) => {
     }
   }
 
-  const openai = new OpenAI({
-    apiKey: c.env.OPENAI_API_KEY,
-  });
+  const openai = getOpenAI(c.env.OPENAI_API_KEY);
 
-  const response = await openai.embeddings.create({
-    model: "text-embedding-3-small",
-    input: body.texts,
-    dimensions: 384, // Match on-device all-MiniLM-L6-v2 dimensions
+  const { embeddings } = await embedMany({
+    model: openai.embeddingModel("text-embedding-3-small"),
+    values: body.texts,
+    providerOptions: {
+      openai: {
+        dimensions: 384, // Match on-device all-MiniLM-L6-v2 dimensions
+      },
+    },
   });
-
-  const embeddings = response.data
-    .sort((a, b) => a.index - b.index)
-    .map(item => item.embedding);
 
   return c.json({ embeddings });
 });
