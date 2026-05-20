@@ -6,8 +6,6 @@ describe('playerStore', () => {
     usePlayerStore.setState({
       playingState: 'idle',
       activeParagraph: null,
-      endedParagraph: null,
-      lastMove: null,
       errors: [],
       currentParagraphs: [],
       nextPageParagraphs: [],
