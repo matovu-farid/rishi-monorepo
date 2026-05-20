@@ -1,0 +1,5 @@
+# Per-machine settings — don't commit
+settings.local.json
+
+# Ephemeral subagent worktrees — created at runtime, never committed
+worktrees/

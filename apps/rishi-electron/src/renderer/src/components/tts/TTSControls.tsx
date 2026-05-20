@@ -1,4 +1,14 @@
-import { Play, Pause, Square, SkipBack, SkipForward, AlertTriangle, Loader2 } from 'lucide-react'
+import {
+  Play,
+  Pause,
+  Square,
+  SkipBack,
+  SkipForward,
+  AlertTriangle,
+  Loader2,
+  RotateCcw
+} from 'lucide-react'
+import { AnimatePresence, motion } from 'framer-motion'
 import { toast } from 'sonner'
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
@@ -143,6 +153,10 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
     send({ type: 'NEXT' })
   }
 
+  const handleRepeat = () => {
+    send({ type: 'REPEAT' })
+  }
+
   const handleShowErrorDetails = () => {
     toast.info(`Errors: ${errors.join(', ')}`, {
       position: 'top-center',
@@ -161,6 +175,20 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
   }
 
   const isPlaying = playingState === 'playing'
+
+  // Show the Repeat button across a continuous playback session. While
+  // `playingState` briefly drops to `loading` between paragraphs, we keep the
+  // button mounted so the pill doesn't reflow every paragraph boundary.
+  // Initial load (`stopped → loading → playing`) starts hidden because
+  // `showRepeat` is only set true on entering `playing`.
+  const [showRepeat, setShowRepeat] = useState(false)
+  useEffect(() => {
+    if (playingState === 'playing') {
+      setShowRepeat(true)
+    } else if (playingState !== 'loading') {
+      setShowRepeat(false)
+    }
+  }, [playingState])
 
   // --- Waveform bars ---
   // Stable IDs let React reconcile bars across re-renders without
@@ -241,7 +269,7 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
           left: expanded ? '50%' : 'auto',
           transform: expanded ? 'translateX(-50%)' : 'none',
           // Size: explicit values so CSS can interpolate the transition
-          width: expanded ? 240 : 52,
+          width: expanded ? (showRepeat ? 280 : 240) : 52,
           height: expanded ? 66 : 52,
           borderRadius: expanded ? 40 : '50%',
           padding: expanded ? '8px 14px' : 0,
@@ -299,6 +327,27 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
             >
               {getPlayIcon()}
             </button>
+
+            {/* Repeat current paragraph — visible across the playback session,
+                including the brief `loading` between paragraphs. */}
+            <AnimatePresence initial={false}>
+              {showRepeat ? (
+                <motion.button
+                  key="repeat"
+                  initial={{ opacity: 0, width: 0, marginInlineStart: 0, marginInlineEnd: 0 }}
+                  animate={{ opacity: 1, width: 42, marginInlineStart: 0, marginInlineEnd: 0 }}
+                  exit={{ opacity: 0, width: 0, marginInlineStart: 0, marginInlineEnd: 0 }}
+                  transition={{ duration: 0.18, ease: 'easeOut' }}
+                  onClick={handleRepeat}
+                  disabled={disabled}
+                  aria-label="Repeat current paragraph"
+                  className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:scale-105 active:scale-95"
+                  style={{ ...glassButton, height: 42 }}
+                >
+                  <RotateCcw size={18} className="text-black/60" />
+                </motion.button>
+              ) : null}
+            </AnimatePresence>
 
             {/* Next */}
             <button

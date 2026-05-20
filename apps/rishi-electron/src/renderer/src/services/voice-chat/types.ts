@@ -42,6 +42,13 @@ export class OfflineError extends Error {
 
 export interface VoiceChatIpc {
   getRealtimeClientSecret(language: string): Promise<string>
+  /**
+   * STT for audio buffered during the connect window. Required even though
+   * the buffered-replay feature can be disabled — keeping it required forces
+   * future test doubles to acknowledge it exists, avoiding silent regressions
+   * when callers assume it's wired.
+   */
+  transcribeAudio(blob: Blob): Promise<string>
 }
 
 export interface MediaStreamLike {
@@ -55,9 +62,27 @@ export interface AudioElementLike {
   pause(): void
 }
 
+/**
+ * Narrow shape the activation pipeline needs from the platform's
+ * MediaRecorder. Matches the WHATWG API but lets us mock it in tests.
+ */
+export interface MediaRecorderLike {
+  start(timesliceMs?: number): void
+  stop(): void
+  readonly state: 'inactive' | 'recording' | 'paused'
+  ondataavailable: ((event: { data: Blob }) => void) | null
+  onstop: (() => void) | null
+}
+
 export interface MediaPort {
   getUserMedia(constraints: MediaStreamConstraints): Promise<MediaStreamLike>
   createAudioElement(): AudioElementLike
+  /**
+   * Construct a recorder bound to the given mic stream. Returns null if the
+   * platform lacks MediaRecorder support (older Electron, unsupported codec).
+   * Optional so legacy deps still type-check; the activation pipeline guards.
+   */
+  createMediaRecorder?(stream: MediaStreamLike): MediaRecorderLike | null
 }
 
 export interface EffectsPort {
@@ -72,6 +97,24 @@ export interface ClockPort {
   clearTimeout(handle: ReturnType<typeof setTimeout>): void
 }
 
+export interface LocalVadConfig {
+  /** RMS threshold in [0,1]. Speech detected when smoothed RMS exceeds this. */
+  rmsThreshold: number
+  /** ms of sub-threshold audio before end-of-utterance is declared. */
+  hangoverMs: number
+  /** Polling interval for the AnalyserNode. */
+  pollIntervalMs: number
+  /** FFT size for the AnalyserNode (smallest valid power-of-2 is 32). */
+  fftSize: number
+}
+
+export interface ServerVadConfig {
+  /** Maps to config.audio.input.turnDetection.threshold on the OpenAI Realtime session. */
+  threshold: number
+  silenceDurationMs?: number
+  prefixPaddingMs?: number
+}
+
 export interface VoiceChatConfig {
   /**
    * Auto-close the realtime session after this many ms with no agent activity
@@ -82,6 +125,50 @@ export interface VoiceChatConfig {
   inactivityTimeoutMs: number
   connectTimeoutMs: number
   keyTtlMs: number
+  /**
+   * When true, the activation pipeline records mic audio during the connect
+   * window and replays it as a text message once the session is live. When
+   * false (or undefined), the recorder is never started — useful as a kill
+   * switch if the feature misbehaves in production.
+   */
+  bufferedSpeechReplayEnabled?: boolean
+  /** Local energy-based VAD knobs. Required so wiring sites are explicit. */
+  localVad: LocalVadConfig
+  /** Server-side turn_detection knobs. Required so wiring sites are explicit. */
+  serverVad: ServerVadConfig
+}
+
+/**
+ * Local Voice Activity Detector. Listens to a MediaStream via the Web Audio
+ * AnalyserNode + smoothed RMS, and exposes a Promise gate the activation
+ * pipeline awaits before draining the buffered-speech recorder.
+ */
+export interface LocalVoiceVad {
+  /**
+   * True if smoothed RMS has crossed `rmsThreshold` at least once since
+   * construction. Sticky for the instance's lifetime — dispose + reconstruct
+   * to reset.
+   */
+  everSpoke(): boolean
+  /**
+   * Resolves when VAD observes a silence-hangover period after speech, OR
+   * immediately if `everSpoke()` is false (nothing to wait for), OR
+   * immediately if already past the hangover.
+   * Rejects with `VadTimeoutError` if `timeoutMs` elapses first.
+   * Rejects with `VadDisposedError` if `dispose()` is called while waiting.
+   */
+  waitForSpeechEnd(timeoutMs: number): Promise<void>
+  /** Stop polling, close the AudioContext. Idempotent. */
+  dispose(): void
+}
+
+export interface VadPort {
+  /**
+   * Construct a VAD attached to the given stream. Returns `null` when
+   * `AudioContext` is unavailable or its construction fails — the activation
+   * pipeline treats `null` as VAD-disabled and proceeds without gating.
+   */
+  create(stream: MediaStreamLike): LocalVoiceVad | null
 }
 
 // --- session-shape contracts (what the factories must return) ---
@@ -96,6 +183,12 @@ export interface RealtimeSessionLike {
   interrupt(): void
   close(): void
   updateAgent(agent: unknown): Promise<void>
+  /**
+   * Inject a text user message into the live session (creates a
+   * conversation.item and triggers a response). Used to replay speech the
+   * user uttered during the connect window.
+   */
+  sendMessage(message: string): void
   on(event: string, listener: (...args: unknown[]) => void): void
   off(event: string, listener: (...args: unknown[]) => void): void
 }
@@ -123,6 +216,12 @@ export interface WebrtcFactoryArgs {
 export interface SessionFactoryOpts {
   transport: RtcTransportLike
   apiKey: string
+  /**
+   * Server-side turn-detection config. The factory translates this to the
+   * OpenAI Realtime SDK's `config.audio.input.turnDetection` shape so SDK
+   * types don't leak into the public service contract.
+   */
+  serverVad: ServerVadConfig
 }
 
 export interface VoiceChatServiceDeps {
@@ -133,6 +232,7 @@ export interface VoiceChatServiceDeps {
   agentFactory: (args: AgentFactoryArgs) => RealtimeAgentLike
   sessionFactory: (agent: RealtimeAgentLike, opts: SessionFactoryOpts) => RealtimeSessionLike
   media: MediaPort
+  vad: VadPort
   effects: EffectsPort
   clock: ClockPort
   config: VoiceChatConfig

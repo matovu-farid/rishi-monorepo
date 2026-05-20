@@ -51,6 +51,12 @@ vi.mock('@/utils/sentry', () => ({ captureError: vi.fn() }))
 // call resolves to the fakeVoice stub.
 import { useChatStore } from './chatStore'
 
+// chatStore subscribes to onEndedByAgent once at module-import time. Capture
+// the callback now, before any vi.clearAllMocks() wipes the mock's call log.
+const onEndedByAgentHandler = fakeVoice.onEndedByAgent.mock.calls[0]?.[0] as
+  | (() => void)
+  | undefined
+
 describe('chatStore', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -104,5 +110,36 @@ describe('chatStore', () => {
     expect(useChatStore.getState().isChatting).toBe(false)
     expect(useChatStore.getState().chatStatus).toBe('idle')
     expect(fakeVoice.deactivate).toHaveBeenCalledTimes(1)
+  })
+
+  it('setIsChatting(false) sends CHAT_ENDED to the player', () => {
+    useChatStore.setState({ isChatting: true })
+    useChatStore.getState().setIsChatting(false)
+    expect(playerState.send).toHaveBeenCalledWith({ type: 'CHAT_ENDED' })
+  })
+
+  it('stopConversation sends CHAT_ENDED to the player', () => {
+    useChatStore.setState({ isChatting: true, chatStatus: 'speaking' })
+    useChatStore.getState().stopConversation()
+    expect(playerState.send).toHaveBeenCalledWith({ type: 'CHAT_ENDED' })
+  })
+
+  it('voice.onEndedByAgent handler sends CHAT_ENDED to the player', () => {
+    // The chatStore module subscribes once at import time. The handler was
+    // captured at module-init (above the describe block).
+    expect(onEndedByAgentHandler).toBeDefined()
+    useChatStore.setState({ isChatting: true })
+    onEndedByAgentHandler!()
+    expect(playerState.send).toHaveBeenCalledWith({ type: 'CHAT_ENDED' })
+  })
+
+  it('startChat catch block sends CHAT_ENDED when voice.activate rejects', async () => {
+    fakeVoice.activate.mockRejectedValueOnce(new Error('boom'))
+    useChatStore.setState({ isChatting: true })
+    useChatStore.getState().startChat(42)
+    // Flush the rejection microtask and the .catch() body.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(playerState.send).toHaveBeenCalledWith({ type: 'CHAT_ENDED' })
   })
 })

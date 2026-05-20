@@ -67,6 +67,8 @@ import { useUndoableHighlightShortcut } from '@/hooks/useUndoableHighlightShortc
 import { findParagraphForCfi } from '@/modules/cfi-to-paragraph'
 import { resolveLiveSelection } from '@/modules/resolve-live-selection'
 import { buildPartialFirst } from '@/modules/read-aloud-from'
+import { useTtsHighlightReconciler } from '@/hooks/useTtsHighlightReconciler'
+import { createEpubTtsReconciler, type EpubTtsReconciler } from './reconcileTtsHighlight'
 
 function updateTheme(rendition: Rendition, theme: ThemeType) {
   const reditionThemes = rendition.themes
@@ -814,6 +816,42 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     }
   }, [])
 
+  const epubTtsReconcilerRef = useRef<EpubTtsReconciler | null>(null)
+  const [epubContentIframe, setEpubContentIframe] = useState<HTMLIFrameElement | null>(null)
+
+  // Build (or rebuild) the reconciler whenever the rendition instance changes.
+  useEffect(() => {
+    if (!rendition) {
+      epubTtsReconcilerRef.current = null
+      setEpubContentIframe(null)
+      return
+    }
+    epubTtsReconcilerRef.current = createEpubTtsReconciler(rendition)
+
+    // Resolve the epub.js content iframe via the shared helper, which
+    // correctly filters to the currently displayed view. We update the
+    // state on `rendered` so chapter swaps refresh the iframe reference.
+    const resolveIframe = (): void => {
+      const next = getVisibleIframe(rendition) ?? null
+      setEpubContentIframe((prev) => (prev === next ? prev : next))
+    }
+    resolveIframe()
+
+    // epub.js emits 'rendered' when a new view (chapter) is rendered.
+    rendition.on('rendered', resolveIframe)
+
+    return () => {
+      rendition.off('rendered', resolveIframe)
+      epubTtsReconcilerRef.current = null
+    }
+  }, [rendition])
+
+  const reconcileTts = useCallback((desired: string | null) => {
+    epubTtsReconcilerRef.current?.(desired)
+  }, [])
+
+  useTtsHighlightReconciler(reconcileTts, epubContentIframe)
+
   useEffect(() => {
     if (!rendition) return
 
@@ -827,45 +865,8 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       }
     )
 
-    const unsubActive = usePlayerStore.subscribe(
-      (s) => s.activeParagraph,
-      (paragraph) => {
-        if (!paragraph) return
-        void highlightRange(rendition, paragraph.index)
-      }
-    )
-
-    const unsubEnded = usePlayerStore.subscribe(
-      (s) => s.endedParagraph,
-      (paragraph) => {
-        if (!paragraph) return
-        void removeHighlight(rendition, paragraph.index)
-      }
-    )
-
-    const unsubMove = usePlayerStore.subscribe(
-      (s) => s.lastMove,
-      (move) => {
-        if (!move) return
-        void removeHighlight(rendition, move.from.index)
-      }
-    )
-
-    const unsubState = usePlayerStore.subscribe(
-      (s) => s.playingState,
-      (state) => {
-        if (state === 'stopped' || state === 'idle') {
-          void clearAllHighlights()
-        }
-      }
-    )
-
     return () => {
       unsubNavRetry()
-      unsubActive()
-      unsubEnded()
-      unsubMove()
-      unsubState()
     }
   }, [rendition, tryConsumePageRequest, clearAllHighlights])
 

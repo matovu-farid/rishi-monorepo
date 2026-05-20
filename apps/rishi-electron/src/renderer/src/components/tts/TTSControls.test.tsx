@@ -1,48 +1,84 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, act } from '@testing-library/react'
-import { usePlayerStore } from '@/stores/playerStore'
-import { useTutorialStore } from '@/stores/tutorialStore'
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
+import type { PlayerStoreState } from '@/stores/playerStore'
+
+// ---------------------------------------------------------------------------
+// Mocks
+// ---------------------------------------------------------------------------
+
+const sendMock = vi.fn()
+
+// We mock @/stores/playerStore with a factory that builds its own Zustand
+// store, so both suites work: the Repeat-button suite (initial render) and
+// the auto-collapse suite (reactive re-renders via store.setState).
+vi.mock('@/stores/playerStore', async () => {
+  const { create } = await import('zustand')
+  const { subscribeWithSelector } = await import('zustand/middleware')
+
+  type State = { playingState: PlayerStoreState; errors: string[] }
+
+  const store = create<State>()(
+    subscribeWithSelector(() => ({
+      playingState: 'idle' as PlayerStoreState,
+      errors: [] as string[]
+    }))
+  )
+
+  return {
+    usePlayerStore: store
+  }
+})
 
 vi.mock('@/hooks/usePlayerMachine', () => ({
-  usePlayerMachine: () => ({ send: vi.fn() })
+  usePlayerMachine: () => ({ send: sendMock })
 }))
+
 vi.mock('@/hooks/useRequireAuth', () => ({
-  useRequireAuth: () => ({ requireAuth: (_: string, cb: () => void) => cb(), AuthDialog: null })
-}))
-vi.mock('@/components/tutorial/ContextualHint', () => ({
-  ContextualHint: ({ children }: { children: React.ReactNode }) => <>{children}</>
-}))
-
-// Import after mocks so the component picks them up.
-import TTSControls from './TTSControls'
-
-function setPlayingState(state: Partial<ReturnType<typeof usePlayerStore.getState>>) {
-  act(() => {
-    usePlayerStore.setState(state)
+  useRequireAuth: () => ({
+    requireAuth: (_kind: string, fn: () => void) => fn(),
+    AuthDialog: null
   })
+}))
+
+vi.mock('@/components/tutorial/ContextualHint', () => ({
+  ContextualHint: ({ children }: { children: ReactNode }) => <>{children}</>
+}))
+
+// Import the component and store AFTER mocks are declared.
+import TTSControls from './TTSControls'
+import { usePlayerStore } from '@/stores/playerStore'
+
+function expandPill(): void {
+  const orb = screen.getByRole('button', { name: /expand tts controls/i })
+  fireEvent.click(orb)
 }
 
-beforeEach(() => {
-  vi.useFakeTimers()
-  useTutorialStore.setState({ tourActive: false, tourCompleted: true, hintsShown: {} } as never)
-  usePlayerStore.setState({ playingState: 'idle' })
-})
-
-afterEach(() => {
-  vi.useRealTimers()
-})
+// ---------------------------------------------------------------------------
+// Auto-collapse tests (original suite — needs reactive re-renders)
+// ---------------------------------------------------------------------------
 
 describe('TTSControls auto-collapse', () => {
+  beforeEach(() => {
+    sendMock.mockReset()
+    vi.useFakeTimers()
+    usePlayerStore.setState({ playingState: 'idle', errors: [] })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('keeps the pill expanded when player is stuck in loading for longer than the dismiss window', () => {
     render(<TTSControls bookId="b1" />)
 
-    // Expand the pill via the orb.
     act(() => {
       screen.getByRole('button', { name: /expand tts controls/i }).click()
     })
-    setPlayingState({ playingState: 'loading' })
+    act(() => {
+      usePlayerStore.setState({ playingState: 'loading' })
+    })
 
-    // Advance well past the 4s dismiss window.
     act(() => {
       vi.advanceTimersByTime(5_000)
     })
@@ -56,11 +92,11 @@ describe('TTSControls auto-collapse', () => {
       screen.getByRole('button', { name: /expand tts controls/i }).click()
     })
 
-    setPlayingState({ playingState: 'playing' })
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
     act(() => vi.advanceTimersByTime(2_000))
-    setPlayingState({ playingState: 'pageNavigating' })
-    act(() => vi.advanceTimersByTime(5_000)) // > AUTO_DISMISS_MS
-    setPlayingState({ playingState: 'playing' })
+    act(() => usePlayerStore.setState({ playingState: 'pageNavigating' }))
+    act(() => vi.advanceTimersByTime(5_000))
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
 
     expect(screen.getByLabelText('Pause')).toBeInTheDocument()
   })
@@ -71,7 +107,7 @@ describe('TTSControls auto-collapse', () => {
       screen.getByRole('button', { name: /expand tts controls/i }).click()
     })
 
-    setPlayingState({ playingState: 'paused.clean' })
+    act(() => usePlayerStore.setState({ playingState: 'paused.clean' }))
     act(() => vi.advanceTimersByTime(4_000))
 
     expect(screen.queryByLabelText('Pause')).toBeNull()
@@ -88,5 +124,109 @@ describe('TTSControls auto-collapse', () => {
     act(() => vi.advanceTimersByTime(4_000))
 
     expect(screen.getByRole('button', { name: /expand tts controls/i })).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Repeat button tests (new suite)
+// ---------------------------------------------------------------------------
+
+describe('TTSControls — Repeat button', () => {
+  beforeEach(() => {
+    sendMock.mockReset()
+    usePlayerStore.setState({ playingState: 'idle', errors: [] })
+  })
+
+  it('renders the Repeat button when playingState is "playing"', () => {
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
+    render(<TTSControls bookId="book-1" />)
+    act(() => {
+      expandPill()
+    })
+    expect(screen.getByLabelText('Repeat current paragraph')).toBeInTheDocument()
+  })
+
+  it.each<PlayerStoreState>([
+    'idle',
+    'stopped',
+    'loading',
+    'paused.clean',
+    'paused.stale',
+    'waitingForParagraphs',
+    'pageNavigating',
+    'republishingParagraphs',
+    'error'
+  ])('does not render the Repeat button when playingState is "%s"', async (state) => {
+    act(() => usePlayerStore.setState({ playingState: state }))
+    render(<TTSControls bookId="book-1" />)
+    act(() => {
+      expandPill()
+    })
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Repeat current paragraph')).not.toBeInTheDocument()
+    })
+  })
+
+  it('clicking Repeat dispatches { type: "REPEAT" } exactly once', () => {
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
+    render(<TTSControls bookId="book-1" />)
+    act(() => {
+      expandPill()
+    })
+    const repeat = screen.getByLabelText('Repeat current paragraph')
+    fireEvent.click(repeat)
+    expect(sendMock).toHaveBeenCalledTimes(1)
+    expect(sendMock).toHaveBeenCalledWith({ type: 'REPEAT' })
+  })
+
+  it('Repeat sits between Play/Pause and Next in DOM order', () => {
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
+    render(<TTSControls bookId="book-1" />)
+    act(() => {
+      expandPill()
+    })
+    const buttons = screen
+      .getAllByRole('button')
+      .map((b) => b.getAttribute('aria-label'))
+      .filter((label): label is string => label !== null)
+    const playIdx = buttons.indexOf('Pause') // playing → button label is "Pause"
+    const repeatIdx = buttons.indexOf('Repeat current paragraph')
+    const nextIdx = buttons.indexOf('Next')
+    expect(playIdx).toBeGreaterThanOrEqual(0)
+    expect(repeatIdx).toBeGreaterThanOrEqual(0)
+    expect(nextIdx).toBeGreaterThanOrEqual(0)
+    expect(playIdx).toBeLessThan(repeatIdx)
+    expect(repeatIdx).toBeLessThan(nextIdx)
+  })
+
+  it('stays mounted across the playing → loading → playing paragraph transition', async () => {
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
+    render(<TTSControls bookId="book-1" />)
+    act(() => {
+      expandPill()
+    })
+    expect(screen.getByLabelText('Repeat current paragraph')).toBeInTheDocument()
+
+    // Simulate the brief inter-paragraph load: state dips to 'loading'.
+    act(() => usePlayerStore.setState({ playingState: 'loading' }))
+    expect(screen.getByLabelText('Repeat current paragraph')).toBeInTheDocument()
+
+    // And then snaps back to 'playing' for the next paragraph.
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
+    expect(screen.getByLabelText('Repeat current paragraph')).toBeInTheDocument()
+  })
+
+  it('unmounts immediately when the user pauses (no loading bridge)', async () => {
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
+    render(<TTSControls bookId="book-1" />)
+    act(() => {
+      expandPill()
+    })
+    expect(screen.getByLabelText('Repeat current paragraph')).toBeInTheDocument()
+
+    act(() => usePlayerStore.setState({ playingState: 'paused.clean' }))
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Repeat current paragraph')).not.toBeInTheDocument()
+    })
   })
 })

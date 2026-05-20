@@ -257,8 +257,7 @@ export function usePlayerMachine(bookId: string) {
       if (state === 'stopped' && prevState !== 'stopped' && prevState !== 'idle') {
         stopAudio()
         usePlayerStore.setState({
-          activeParagraph: null,
-          endedParagraph: null
+          activeParagraph: null
         })
       }
 
@@ -283,15 +282,13 @@ export function usePlayerMachine(bookId: string) {
       // already curling and another request would double-navigate.
       if (state === 'pageNavigating') {
         stopAudio()
-        usePlayerStore.setState({ activeParagraph: null, endedParagraph: null })
+        usePlayerStore.setState({ activeParagraph: null })
       }
 
       if (state === 'idle' && prevState !== 'idle') {
         cleanupAudio(bookId)
         usePlayerStore.setState({
           activeParagraph: null,
-          endedParagraph: null,
-          lastMove: null,
           errors: [],
           pageRequest: null
         })
@@ -300,42 +297,13 @@ export function usePlayerMachine(bookId: string) {
       prevState = state
     })
 
-    // --- 4. Track NEXT/PREV moves for highlight removal ---
-    const originalSend = actor.send.bind(actor)
-    const wrappedSend: PlayerSend = (event) => {
-      if (event.type === 'NEXT' || event.type === 'PREV') {
-        const ctx = actor.getSnapshot().context
-        const fromParagraph =
-          (ctx.currentParagraphs[ctx.paragraphIndex] as
-            | (typeof ctx.currentParagraphs)[number]
-            | undefined) ?? null
-        originalSend(event)
-        const newCtx = actor.getSnapshot().context
-        const toParagraph =
-          (newCtx.currentParagraphs[newCtx.paragraphIndex] as
-            | (typeof newCtx.currentParagraphs)[number]
-            | undefined) ?? null
-        if (fromParagraph && toParagraph) {
-          usePlayerStore.setState({
-            lastMove: {
-              from: fromParagraph,
-              to: toParagraph,
-              direction: event.type === 'NEXT' ? 'forward' : 'backward'
-            }
-          })
-        }
-        return
-      }
-      originalSend(event)
-    }
-    sendRef.current = wrappedSend
-    usePlayerStore.getState().setSend(wrappedSend)
+    // --- 4. Machine send wiring ---
+    const send: PlayerSend = actor.send
+    sendRef.current = send
+    usePlayerStore.getState().setSend(send)
 
     // --- 5. AudioElement -> machine callbacks ---
     const handleEnded = () => {
-      const ctx = actor.getSnapshot().context
-      const endedParagraph = ctx.currentParagraphs[ctx.paragraphIndex] ?? null
-      usePlayerStore.setState({ endedParagraph })
       actor.send({ type: 'AUDIO_ENDED' })
     }
     const handleError = () => {

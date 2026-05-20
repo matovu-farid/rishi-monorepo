@@ -499,15 +499,6 @@ describe('playerMachine', () => {
     expect(actor.getSnapshot().context.bookId).toBe('')
   })
 
-  it('should stop on CHAT_STARTED from any state', () => {
-    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
-    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
-    actor.send({ type: 'PLAY' })
-    actor.send({ type: 'AUDIO_LOADED' })
-    actor.send({ type: 'CHAT_STARTED' })
-    expect(actor.getSnapshot().value).toBe('stopped')
-  })
-
   it('should recover from error state on PLAY', () => {
     actor.send({ type: 'INITIALIZE', bookId: 'book1' })
     actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
@@ -752,6 +743,160 @@ describe('playerMachine', () => {
     // rendition without firing pageRequest).
     expect(actor.getSnapshot().value).toBe('republishingParagraphs')
   })
+
+  describe('REPEAT', () => {
+    it('transitions playing → loading and keeps paragraphIndex unchanged', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PLAY' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      // Advance to paragraph index 1 so we can prove REPEAT does NOT reset to 0.
+      actor.send({ type: 'NEXT' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      expect(actor.getSnapshot().value).toBe('playing')
+      expect(actor.getSnapshot().context.paragraphIndex).toBe(1)
+
+      actor.send({ type: 'REPEAT' })
+
+      const snap = actor.getSnapshot()
+      expect(snap.value).toBe('loading')
+      expect(snap.context.paragraphIndex).toBe(1)
+    })
+
+    it('clears partialFirstText and partialFirstKey from context', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      // Enter playing via PLAY_FROM with a partial-first override.
+      actor.send({
+        type: 'PLAY_FROM',
+        paragraphIndex: 1,
+        partialFirstText: 'half of the paragraph',
+        partialFirstKey: 'p-1:0,1:21'
+      })
+      actor.send({ type: 'AUDIO_LOADED' })
+      expect(actor.getSnapshot().context.partialFirstText).toBe('half of the paragraph')
+      expect(actor.getSnapshot().context.partialFirstKey).toBe('p-1:0,1:21')
+
+      actor.send({ type: 'REPEAT' })
+
+      const snap = actor.getSnapshot()
+      expect(snap.value).toBe('loading')
+      expect(snap.context.partialFirstText).toBeNull()
+      expect(snap.context.partialFirstKey).toBeNull()
+      expect(snap.context.partialFirstParagraphIndex).toBeNull()
+    })
+
+    it('is a no-op from every non-playing state', () => {
+      const cases: Array<{ name: string; enter: (a: typeof actor) => void }> = [
+        { name: 'idle', enter: () => {} },
+        {
+          name: 'stopped',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+          }
+        },
+        {
+          name: 'loading',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+            a.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+            a.send({ type: 'PLAY' })
+          }
+        },
+        {
+          name: 'paused.clean',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+            a.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+            a.send({ type: 'PLAY' })
+            a.send({ type: 'AUDIO_LOADED' })
+            a.send({ type: 'PAUSE' })
+          }
+        },
+        {
+          name: 'paused.stale',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+            a.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+            a.send({ type: 'PLAY' })
+            a.send({ type: 'AUDIO_LOADED' })
+            a.send({ type: 'PAUSE' })
+            a.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(2) })
+          }
+        },
+        {
+          name: 'waitingForParagraphs',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+            a.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(1) })
+            a.send({ type: 'PLAY' })
+            a.send({ type: 'AUDIO_LOADED' })
+            a.send({ type: 'NEXT' })
+          }
+        },
+        {
+          name: 'pageNavigating',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+            a.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+            a.send({ type: 'PLAY' })
+            a.send({ type: 'AUDIO_LOADED' })
+            a.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+          }
+        },
+        {
+          name: 'republishingParagraphs',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+            a.send({ type: 'PLAY' })
+          }
+        },
+        {
+          name: 'error',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+            a.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+            a.send({ type: 'PLAY' })
+            a.send({ type: 'AUDIO_LOADED' })
+            a.send({ type: 'AUDIO_ERROR', error: 'boom' })
+          }
+        }
+      ]
+
+      for (const c of cases) {
+        const fresh = createActor(playerMachine)
+        fresh.start()
+        c.enter(fresh)
+        const beforeValue = fresh.getSnapshot().value
+        const beforeIndex = fresh.getSnapshot().context.paragraphIndex
+        fresh.send({ type: 'REPEAT' })
+        const afterValue = fresh.getSnapshot().value
+        const afterIndex = fresh.getSnapshot().context.paragraphIndex
+        expect(afterValue, `state should not change from ${c.name}`).toEqual(beforeValue)
+        expect(afterIndex, `paragraphIndex should not change from ${c.name}`).toBe(beforeIndex)
+      }
+    })
+
+    it('after REPEAT, AUDIO_ENDED advances paragraphIndex by 1 as normal', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PLAY' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      actor.send({ type: 'NEXT' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      expect(actor.getSnapshot().context.paragraphIndex).toBe(1)
+
+      actor.send({ type: 'REPEAT' })
+      expect(actor.getSnapshot().value).toBe('loading')
+
+      actor.send({ type: 'AUDIO_LOADED' })
+      expect(actor.getSnapshot().value).toBe('playing')
+
+      actor.send({ type: 'AUDIO_ENDED' })
+      expect(actor.getSnapshot().value).toBe('loading')
+      expect(actor.getSnapshot().context.paragraphIndex).toBe(2)
+    })
+  })
 })
 
 describe('playerMachine - PLAY_FROM', () => {
@@ -897,5 +1042,213 @@ describe('playerMachine - PLAY_FROM', () => {
     actor.send({ type: 'CHAT_STARTED' })
     expect(actor.getSnapshot().context.partialFirstText).toBeNull()
     expect(actor.getSnapshot().context.partialFirstParagraphIndex).toBeNull()
+  })
+})
+
+describe('playerMachine - CHAT_STARTED per-state', () => {
+  function makeP(count: number): ParagraphWithIndex[] {
+    return Array.from({ length: count }, (_, i) => ({
+      index: `p-${i}`,
+      text: `Paragraph ${i}`
+    }))
+  }
+
+  it('CHAT_STARTED from playing transitions to paused.clean and preserves paragraphIndex', () => {
+    const actor = createActor(playerMachine).start()
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeP(3) })
+    actor.send({ type: 'PLAY' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    actor.send({ type: 'NEXT' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    expect(actor.getSnapshot().value).toBe('playing')
+    expect(actor.getSnapshot().context.paragraphIndex).toBe(1)
+
+    actor.send({ type: 'CHAT_STARTED' })
+    const snap = actor.getSnapshot()
+    expect(snap.value).toEqual({ paused: 'clean' })
+    expect(snap.context.paragraphIndex).toBe(1)
+  })
+
+  it('CHAT_STARTED from playing sets wantsAutoResumeAfterChat', () => {
+    const actor = createActor(playerMachine).start()
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeP(3) })
+    actor.send({ type: 'PLAY' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    expect(actor.getSnapshot().value).toBe('playing')
+
+    actor.send({ type: 'CHAT_STARTED' })
+    expect(actor.getSnapshot().context.wantsAutoResumeAfterChat).toBe(true)
+  })
+
+  it('CHAT_STARTED from loading transitions to paused.clean and sets the flag', () => {
+    const actor = createActor(playerMachine).start()
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeP(3) })
+    actor.send({ type: 'PLAY' })
+    expect(actor.getSnapshot().value).toBe('loading')
+
+    actor.send({ type: 'CHAT_STARTED' })
+    const snap = actor.getSnapshot()
+    expect(snap.value).toEqual({ paused: 'clean' })
+    expect(snap.context.wantsAutoResumeAfterChat).toBe(true)
+  })
+
+  it('CHAT_STARTED from waitingForParagraphs transitions to paused.clean and sets the flag', () => {
+    const actor = createActor(playerMachine).start()
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeP(1) })
+    actor.send({ type: 'PLAY' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    actor.send({ type: 'NEXT' })
+    expect(actor.getSnapshot().value).toBe('waitingForParagraphs')
+
+    actor.send({ type: 'CHAT_STARTED' })
+    const snap = actor.getSnapshot()
+    expect(snap.value).toEqual({ paused: 'clean' })
+    expect(snap.context.wantsAutoResumeAfterChat).toBe(true)
+  })
+
+  it('CHAT_STARTED from stopped does not change state and does not set the flag', () => {
+    const actor = createActor(playerMachine).start()
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeP(3) })
+    expect(actor.getSnapshot().value).toBe('stopped')
+
+    actor.send({ type: 'CHAT_STARTED' })
+    const snap = actor.getSnapshot()
+    expect(snap.value).toBe('stopped')
+    expect(snap.context.wantsAutoResumeAfterChat).toBe(false)
+  })
+
+  it('CHAT_STARTED from paused.clean stays in paused.clean and does not set the flag', () => {
+    const actor = createActor(playerMachine).start()
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeP(3) })
+    actor.send({ type: 'PLAY' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    actor.send({ type: 'PAUSE' })
+    expect(actor.getSnapshot().value).toEqual({ paused: 'clean' })
+
+    actor.send({ type: 'CHAT_STARTED' })
+    const snap = actor.getSnapshot()
+    expect(snap.value).toEqual({ paused: 'clean' })
+    expect(snap.context.wantsAutoResumeAfterChat).toBe(false)
+  })
+
+  it('CHAT_STARTED from idle is a no-op for the flag', () => {
+    const actor = createActor(playerMachine).start()
+    expect(actor.getSnapshot().value).toBe('idle')
+
+    actor.send({ type: 'CHAT_STARTED' })
+    const snap = actor.getSnapshot()
+    expect(snap.value).toBe('idle')
+    expect(snap.context.wantsAutoResumeAfterChat).toBe(false)
+  })
+
+  it('CHAT_STARTED from republishingParagraphs clears the flag without setting it', () => {
+    const actor = createActor(playerMachine).start()
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeP(3) })
+    actor.send({ type: 'PLAY' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    actor.send({ type: 'CHAT_STARTED' })
+    expect(actor.getSnapshot().value).toEqual({ paused: 'clean' })
+    expect(actor.getSnapshot().context.wantsAutoResumeAfterChat).toBe(true)
+    actor.send({ type: 'STOP' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: [] })
+    actor.send({ type: 'PLAY' })
+    expect(actor.getSnapshot().value).toBe('republishingParagraphs')
+
+    actor.send({ type: 'CHAT_STARTED' })
+    const snap = actor.getSnapshot()
+    expect(snap.value).toBe('republishingParagraphs')
+    expect(snap.context.wantsAutoResumeAfterChat).toBe(false)
+  })
+
+  it('exiting paused.clean via RESUME clears wantsAutoResumeAfterChat', () => {
+    const actor = createActor(playerMachine).start()
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeP(3) })
+    actor.send({ type: 'PLAY' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    actor.send({ type: 'CHAT_STARTED' })
+    expect(actor.getSnapshot().context.wantsAutoResumeAfterChat).toBe(true)
+
+    actor.send({ type: 'RESUME' })
+    expect(actor.getSnapshot().value).toBe('playing')
+    expect(actor.getSnapshot().context.wantsAutoResumeAfterChat).toBe(false)
+
+    actor.send({ type: 'CHAT_ENDED' })
+    expect(actor.getSnapshot().value).toBe('playing')
+  })
+})
+
+describe('playerMachine - CHAT_ENDED', () => {
+  function makeP(count: number): ParagraphWithIndex[] {
+    return Array.from({ length: count }, (_, i) => ({
+      index: `p-${i}`,
+      text: `Paragraph ${i}`
+    }))
+  }
+
+  it('CHAT_ENDED from paused.clean with flag=true transitions to loading at the same paragraphIndex', () => {
+    const actor = createActor(playerMachine).start()
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeP(3) })
+    actor.send({ type: 'PLAY' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    actor.send({ type: 'NEXT' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    expect(actor.getSnapshot().value).toBe('playing')
+    expect(actor.getSnapshot().context.paragraphIndex).toBe(1)
+
+    actor.send({ type: 'CHAT_STARTED' })
+    expect(actor.getSnapshot().value).toEqual({ paused: 'clean' })
+    expect(actor.getSnapshot().context.wantsAutoResumeAfterChat).toBe(true)
+    expect(actor.getSnapshot().context.paragraphIndex).toBe(1)
+
+    actor.send({ type: 'CHAT_ENDED' })
+    const snap = actor.getSnapshot()
+    expect(snap.value).toBe('loading')
+    expect(snap.context.paragraphIndex).toBe(1)
+  })
+
+  it('CHAT_ENDED from paused.clean with flag=false stays paused', () => {
+    const actor = createActor(playerMachine).start()
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeP(3) })
+    actor.send({ type: 'PLAY' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    actor.send({ type: 'PAUSE' })
+    expect(actor.getSnapshot().value).toEqual({ paused: 'clean' })
+    expect(actor.getSnapshot().context.wantsAutoResumeAfterChat).toBe(false)
+
+    actor.send({ type: 'CHAT_ENDED' })
+    expect(actor.getSnapshot().value).toEqual({ paused: 'clean' })
+  })
+
+  it('CHAT_ENDED from stopped is a no-op', () => {
+    const actor = createActor(playerMachine).start()
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeP(3) })
+    expect(actor.getSnapshot().value).toBe('stopped')
+
+    actor.send({ type: 'CHAT_ENDED' })
+    expect(actor.getSnapshot().value).toBe('stopped')
+  })
+
+  it('CHAT_ENDED always clears wantsAutoResumeAfterChat', () => {
+    const actor = createActor(playerMachine).start()
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeP(3) })
+    actor.send({ type: 'PLAY' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    actor.send({ type: 'CHAT_STARTED' })
+    expect(actor.getSnapshot().context.wantsAutoResumeAfterChat).toBe(true)
+
+    actor.send({ type: 'CHAT_ENDED' })
+    expect(actor.getSnapshot().context.wantsAutoResumeAfterChat).toBe(false)
   })
 })

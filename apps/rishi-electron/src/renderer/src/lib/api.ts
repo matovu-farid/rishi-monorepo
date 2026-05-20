@@ -363,6 +363,43 @@ export async function getRealtimeClientSecret(language: string): Promise<string>
   return secret
 }
 
+/**
+ * Send a recorded audio blob to the worker's Deepgram-backed STT endpoint and
+ * return the transcript. Used to replay speech captured during the voice-chat
+ * connect window as a text message. Throws on transport/auth failure; callers
+ * decide whether to swallow it (best-effort feature).
+ */
+export async function transcribeAudio(blob: Blob): Promise<string> {
+  const authHeaders = await getAuthHeaders()
+  const headers: Record<string, string> = {
+    ...authHeaders,
+    'Content-Type': blob.type || 'audio/webm'
+  }
+
+  if (Object.keys(authHeaders).length === 0) {
+    const devBypass = await api().getDevBypassSecret()
+    if (devBypass) {
+      headers['X-Dev-Bypass'] = devBypass
+    } else {
+      throw new Error('Not authenticated')
+    }
+  }
+
+  const response = await fetch(`${WORKER_URL}/api/audio/transcribe`, {
+    method: 'POST',
+    headers,
+    body: blob
+  })
+
+  if (!response.ok) {
+    const bodyText = await response.text().catch(() => '')
+    throw new Error(`Worker API responded with status ${response.status}: ${bodyText}`)
+  }
+
+  const data = (await response.json()) as { transcript?: string }
+  return data.transcript ?? ''
+}
+
 // ---- Helpers ----
 /**
  * Convert a local file path to a URL that the renderer can load.

@@ -1,10 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import {
-  findParagraphElement,
-  parseParagraphIndex,
-  setActiveClass,
-  TTS_ACTIVE_CLASS
-} from './highlight'
+import { findParagraphElement, parseParagraphIndex } from './highlight'
 
 function docOf(html: string): Document {
   return new DOMParser().parseFromString(`<html><body>${html}</body></html>`, 'text/html')
@@ -44,20 +39,5 @@ describe('findParagraphElement', () => {
   it('returns null for a missing document', () => {
     expect(findParagraphElement(null, 0)).toBeNull()
     expect(findParagraphElement(undefined, 0)).toBeNull()
-  })
-})
-
-describe('setActiveClass', () => {
-  it('adds and removes the highlight class', () => {
-    const doc = docOf(`<p id="t">hi</p>`)
-    const p = doc.getElementById('t')!
-    setActiveClass(p, true)
-    expect(p.classList.contains(TTS_ACTIVE_CLASS)).toBe(true)
-    setActiveClass(p, false)
-    expect(p.classList.contains(TTS_ACTIVE_CLASS)).toBe(false)
-  })
-
-  it('no-ops on null', () => {
-    expect(() => setActiveClass(null, true)).not.toThrow()
   })
 })

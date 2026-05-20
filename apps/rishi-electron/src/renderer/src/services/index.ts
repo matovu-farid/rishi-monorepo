@@ -9,7 +9,14 @@ import {
 } from './book-import'
 import { createConnectivityService, type ConnectivityService } from './connectivity'
 export { useIsOnline } from './connectivity'
-import { createVoiceChatService, type VoiceChatService } from './voice-chat'
+import {
+  createVoiceChatService,
+  createLocalVad,
+  type LocalVadConfig,
+  type MediaRecorderLike,
+  type ServerVadConfig,
+  type VoiceChatService
+} from './voice-chat'
 
 export type { DiscoveredBook, ImportResult, PageDataInsertable, ScanProgress } from './book-import'
 import { createSyncEngine } from '@rishi/shared/sync-engine'
@@ -20,7 +27,7 @@ import { getAuthToken } from '@/modules/auth'
 import { buildRealtimeAgent } from '@/modules/buildRealtimeAgent'
 import { playReadyChime } from '@/modules/readyChime'
 import { startThinkingSound, stopThinkingSound } from '@/modules/thinkingSound'
-import { getRealtimeClientSecret } from '@/lib/api'
+import { getRealtimeClientSecret, transcribeAudio } from '@/lib/api'
 import { RealtimeSession } from '@openai/agents/realtime'
 import { OpenAIRealtimeWebRTC } from '@openai/agents-realtime'
 import config from '@/config.json'
@@ -220,12 +227,27 @@ export function getBookImportService(): BookImportService {
 
 let _voiceChat: VoiceChatService | null = null
 
+// Single source of truth for VAD knobs — the vad port closure and the
+// VoiceChatConfig.localVad/serverVad fields both reference these, so future
+// tuning at one site doesn't silently leave the other stale.
+const VOICE_CHAT_LOCAL_VAD: LocalVadConfig = {
+  rmsThreshold: 0.05,
+  hangoverMs: 700,
+  pollIntervalMs: 50,
+  fftSize: 256
+}
+const VOICE_CHAT_SERVER_VAD: ServerVadConfig = {
+  threshold: 0.7,
+  silenceDurationMs: 700,
+  prefixPaddingMs: 300
+}
+
 export function getVoiceChatService(): VoiceChatService {
   if (!_voiceChat) {
     _voiceChat = createVoiceChatService({
       rag: getRagService(),
       connectivity: getConnectivityService(),
-      ipc: { getRealtimeClientSecret },
+      ipc: { getRealtimeClientSecret, transcribeAudio },
       webrtcFactory: ({ mediaStream, audioElement }) =>
         new OpenAIRealtimeWebRTC({
           mediaStream: mediaStream as unknown as MediaStream,
@@ -252,15 +274,49 @@ export function getVoiceChatService(): VoiceChatService {
       sessionFactory: (agent, opts) =>
         new RealtimeSession(agent as never, {
           transport: opts.transport as never,
-          apiKey: opts.apiKey
-        }) as never,
+          apiKey: opts.apiKey,
+          // GA path: config.audio.input.turnDetection. Raised threshold +
+          // longer silence_duration than OpenAI's defaults so brief sounds,
+          // breaths, and accidental syllables don't trigger turn boundaries.
+          config: {
+            audio: {
+              input: {
+                turnDetection: {
+                  type: 'server_vad',
+                  threshold: opts.serverVad.threshold,
+                  silenceDurationMs: opts.serverVad.silenceDurationMs,
+                  prefixPaddingMs: opts.serverVad.prefixPaddingMs
+                }
+              }
+            }
+          }
+        } as never) as never,
       media: {
         getUserMedia: (constraints) => navigator.mediaDevices.getUserMedia(constraints),
         createAudioElement: () => {
           const a = document.createElement('audio')
           a.autoplay = true
           return a
+        },
+        createMediaRecorder: (stream) => {
+          if (typeof MediaRecorder === 'undefined') return null
+          // Prefer Opus-in-WebM (Deepgram accepts it directly); fall back to
+          // the platform default if the codec isn't supported.
+          const preferred = 'audio/webm;codecs=opus'
+          const options =
+            MediaRecorder.isTypeSupported(preferred) ? { mimeType: preferred } : undefined
+          try {
+            return new MediaRecorder(
+              stream as unknown as MediaStream,
+              options
+            ) as unknown as MediaRecorderLike
+          } catch {
+            return null
+          }
         }
+      },
+      vad: {
+        create: (stream) => createLocalVad(stream, VOICE_CHAT_LOCAL_VAD)
       },
       effects: { playReadyChime, startThinkingSound, stopThinkingSound },
       clock: {
@@ -273,7 +329,16 @@ export function getVoiceChatService(): VoiceChatService {
         // leaving voice chat on from racking up open-ended audio billing.
         inactivityTimeoutMs: 3 * 60 * 1000,
         connectTimeoutMs: 60 * 1000,
-        keyTtlMs: 9 * 60 * 1000
+        keyTtlMs: 9 * 60 * 1000,
+        // Capture speech uttered during the connect window and inject as a
+        // text message once the session is live. Set to false to disable
+        // without a code change if the feature regresses in production.
+        bufferedSpeechReplayEnabled: true,
+        localVad: VOICE_CHAT_LOCAL_VAD,
+        // Raised from OpenAI's default 0.5 → 0.7 to make server-side turn
+        // detection less twitchy. silenceDurationMs/prefixPaddingMs widen the
+        // window so brief mid-sentence pauses don't end turns prematurely.
+        serverVad: VOICE_CHAT_SERVER_VAD
       },
       getLanguage: () => usePrefsStore.getState().voiceChatLanguage
     })

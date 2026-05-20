@@ -38,6 +38,8 @@ export const useChatStore = create<ChatState>()(
       voice.onChatStatus((status) => set({ chatStatus: status }))
       voice.onStateChange((state) => set({ voiceState: state, voiceError: voice.getError() }))
       voice.onEndedByAgent(() => {
+        const send = usePlayerStore.getState().send
+        if (send) send({ type: 'CHAT_ENDED' })
         set({ isChatting: false })
         voice.deactivate()
       })
@@ -50,10 +52,11 @@ export const useChatStore = create<ChatState>()(
 
         setIsChatting: (value) => {
           const newValue = typeof value === 'function' ? value(get().isChatting) : value
+          const send = usePlayerStore.getState().send
           if (newValue) {
-            const send = usePlayerStore.getState().send
             if (send) send({ type: 'CHAT_STARTED' })
           } else {
+            if (send) send({ type: 'CHAT_ENDED' })
             voice.deactivate()
           }
           set({ isChatting: newValue })
@@ -77,11 +80,15 @@ export const useChatStore = create<ChatState>()(
               if (!(err instanceof OfflineError)) {
                 captureError(err, { operation: 'chatStore', step: 'activate' })
               }
+              const send = usePlayerStore.getState().send
+              if (send) send({ type: 'CHAT_ENDED' })
               set({ isChatting: false, chatStatus: 'idle' })
             })
         },
 
         stopConversation: () => {
+          const send = usePlayerStore.getState().send
+          if (send) send({ type: 'CHAT_ENDED' })
           set({ isChatting: false, chatStatus: 'idle' })
           voice.deactivate()
         },

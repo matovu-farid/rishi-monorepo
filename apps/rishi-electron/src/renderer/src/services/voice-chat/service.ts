@@ -11,6 +11,7 @@ import type {
   AudioElementLike,
   ChatStatus,
   ClockPort,
+  LocalVoiceVad,
   MediaStreamLike,
   RealtimeSessionLike,
   VoiceChatContext,
@@ -78,6 +79,7 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
   let currentBookId: number | null = null
   let mediaStream: MediaStreamLike | null = null
   let audioElement: AudioElementLike | null = null
+  let vad: LocalVoiceVad | null = null
   let lastContextFingerprint: string | null = null
   let currentFiber: Fiber.RuntimeFiber<SessionHandle, ActivationError> | null = null
   let inactivityTimer: ReturnType<ClockPort['setTimeout']> | null = null
@@ -128,6 +130,14 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
       } catch (err) {
         captureError(err, { operation: 'voiceChatService', step: 'dispose_close' })
       }
+    }
+    if (vad) {
+      try {
+        vad.dispose()
+      } catch (err) {
+        captureError(err, { operation: 'voiceChatService', step: 'dispose_vad' })
+      }
+      vad = null
     }
     if (mediaStream) {
       mediaStream.getTracks().forEach((t) => t.stop())
@@ -228,6 +238,7 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
       session = handle.session
       mediaStream = handle.mediaStream
       audioElement = handle.audioElement
+      vad = handle.vad
       sessionCleanup = handle.cleanup
       currentBookId = bookId
       lastContextFingerprint = fingerprintContext(ctx)

@@ -42,9 +42,3 @@ export function findParagraphElement(
   }
   return null
 }
-
-/** Toggle the TTS active-paragraph class on a single element. */
-export function setActiveClass(el: Element | null, on: boolean): void {
-  if (!el) return
-  el.classList.toggle(TTS_ACTIVE_CLASS, on)
-}

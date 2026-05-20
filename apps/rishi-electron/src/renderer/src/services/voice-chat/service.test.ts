@@ -7,18 +7,21 @@ import type {
   ChatStatus,
   ClockPort,
   EffectsPort,
+  LocalVoiceVad,
   MediaPort,
   MediaStreamLike,
   RealtimeAgentLike,
   RealtimeSessionLike,
   RtcTransportLike,
   SessionFactoryOpts,
+  VadPort,
   VoiceChatConfig,
   VoiceChatIpc,
   VoiceChatPublicState,
   VoiceChatServiceDeps,
   WebrtcFactoryArgs
 } from './types'
+import { VadTimeoutError, VadDisposedError } from './local-vad'
 import type { RagService } from '@/services/rag'
 import type { ConnectivityService } from '@/services/connectivity'
 
@@ -55,12 +58,22 @@ export function makeConnectivity(opts?: {
   }
 }
 
-export function makeIpc(opts?: { key?: string; failWith?: Error }): VoiceChatIpc {
+export function makeIpc(opts?: {
+  key?: string
+  failWith?: Error
+  transcript?: string
+  transcribeFailWith?: Error
+}): VoiceChatIpc & { transcribeAudio: ReturnType<typeof vi.fn> } {
+  const transcribeAudio = vi.fn().mockImplementation(async (_blob: Blob) => {
+    if (opts?.transcribeFailWith) throw opts.transcribeFailWith
+    return opts?.transcript ?? ''
+  })
   return {
     getRealtimeClientSecret: vi.fn().mockImplementation(async (_language: string) => {
       if (opts?.failWith) throw opts.failWith
       return opts?.key ?? 'test-key'
-    })
+    }),
+    transcribeAudio
   }
 }
 
@@ -108,6 +121,7 @@ export function makeSession(opts?: { connectDelayMs?: number; connectFailWith?: 
   close: ReturnType<typeof vi.fn>
   updateAgent: ReturnType<typeof vi.fn>
   connect: ReturnType<typeof vi.fn>
+  sendMessage: ReturnType<typeof vi.fn>
   fire: (event: string, ...args: unknown[]) => void
   lastConnectOpts: () => { apiKey: string } | null
 } {
@@ -126,12 +140,14 @@ export function makeSession(opts?: { connectDelayMs?: number; connectFailWith?: 
   const interrupt = vi.fn()
   const close = vi.fn()
   const updateAgent = vi.fn().mockResolvedValue(undefined)
+  const sendMessage = vi.fn()
   const session: RealtimeSessionLike = {
     connect,
     mute,
     interrupt,
     close,
     updateAgent,
+    sendMessage,
     on: (ev, l) => {
       if (!handlers.has(ev)) handlers.set(ev, new Set())
       handlers.get(ev)!.add(l)
@@ -148,6 +164,7 @@ export function makeSession(opts?: { connectDelayMs?: number; connectFailWith?: 
     close,
     updateAgent,
     connect,
+    sendMessage,
     fire: (ev, ...args) => {
       const set = handlers.get(ev)
       if (!set) return
@@ -157,9 +174,39 @@ export function makeSession(opts?: { connectDelayMs?: number; connectFailWith?: 
   }
 }
 
-export function makeMedia(opts?: { denyMic?: boolean }): MediaPort & {
+export interface FakeRecorder {
+  start: ReturnType<typeof vi.fn>
+  stop: ReturnType<typeof vi.fn>
+  state: 'inactive' | 'recording' | 'paused'
+  ondataavailable: ((event: { data: Blob }) => void) | null
+  onstop: (() => void) | null
+  /** Pushes a chunk into the recorder buffer (simulates ondataavailable). */
+  emitChunk: (data: Blob) => void
+  /**
+   * Manually fires `onstop`. Only used when `deferOnstop: true` was passed —
+   * lets tests simulate the gap between `stop()` returning and the
+   * `onstop` callback firing, where late `ondataavailable` events can land.
+   */
+  fireOnstop: () => void
+}
+
+export function makeMedia(opts?: {
+  denyMic?: boolean
+  /** Omit to disable MediaRecorder support entirely. */
+  withRecorder?: boolean
+  /** createMediaRecorder throws on construction. */
+  recorderConstructThrows?: boolean
+  /** recorder.stop() throws when called. */
+  recorderStopThrows?: boolean
+  /**
+   * Don't fire `onstop` synchronously inside `stop()`. Tests must call
+   * `lastRecorder().fireOnstop()` to release the awaitStop promise.
+   */
+  deferOnstop?: boolean
+}): MediaPort & {
   stream: MediaStreamLike
   audioElement: AudioElementLike
+  lastRecorder: () => FakeRecorder | null
 } {
   const stream: MediaStreamLike = { getTracks: () => [{ stop: vi.fn() }] }
   const audioElement: AudioElementLike = {
@@ -168,7 +215,12 @@ export function makeMedia(opts?: { denyMic?: boolean }): MediaPort & {
     autoplay: true,
     pause: vi.fn()
   }
-  return {
+  let lastRec: FakeRecorder | null = null
+  const port: MediaPort & {
+    stream: MediaStreamLike
+    audioElement: AudioElementLike
+    lastRecorder: () => FakeRecorder | null
+  } = {
     stream,
     audioElement,
     getUserMedia: vi.fn().mockImplementation(async () => {
@@ -179,8 +231,32 @@ export function makeMedia(opts?: { denyMic?: boolean }): MediaPort & {
       }
       return stream
     }),
-    createAudioElement: vi.fn().mockReturnValue(audioElement)
+    createAudioElement: vi.fn().mockReturnValue(audioElement),
+    lastRecorder: () => lastRec
   }
+  if (opts?.withRecorder) {
+    port.createMediaRecorder = vi.fn().mockImplementation((_s: MediaStreamLike) => {
+      if (opts?.recorderConstructThrows) throw new Error('MediaRecorder construct failed')
+      const rec: FakeRecorder = {
+        start: vi.fn().mockImplementation(() => {
+          rec.state = 'recording'
+        }),
+        stop: vi.fn().mockImplementation(() => {
+          if (opts?.recorderStopThrows) throw new Error('stop failed')
+          rec.state = 'inactive'
+          if (!opts?.deferOnstop) rec.onstop?.()
+        }),
+        state: 'inactive',
+        ondataavailable: null,
+        onstop: null,
+        emitChunk: (data) => rec.ondataavailable?.({ data }),
+        fireOnstop: () => rec.onstop?.()
+      }
+      lastRec = rec
+      return rec
+    })
+  }
+  return port
 }
 
 export function makeEffects(): EffectsPort & {
@@ -246,8 +322,119 @@ export function makeConfig(overrides?: Partial<VoiceChatConfig>): VoiceChatConfi
     inactivityTimeoutMs: 3 * 60 * 1000,
     connectTimeoutMs: 60 * 1000,
     keyTtlMs: 9 * 60 * 1000,
+    bufferedSpeechReplayEnabled: true,
+    localVad: {
+      rmsThreshold: 0.05,
+      hangoverMs: 700,
+      pollIntervalMs: 50,
+      fftSize: 256
+    },
+    serverVad: {
+      threshold: 0.7,
+      silenceDurationMs: 700,
+      prefixPaddingMs: 300
+    },
     ...overrides
   }
+}
+
+/**
+ * Fake VAD with imperative controls. The activation pipeline awaits
+ * `waitForSpeechEnd`; tests drive end-of-utterance via `emitSpeechEnd()`.
+ *
+ * Defaults are tuned for the buffered-speech-replay tests that pre-date this
+ * feature: `everSpoke = true`, `currentlySpeaking = false` so `waitForSpeechEnd`
+ * resolves immediately and existing tests behave as before.
+ */
+export interface FakeVad extends LocalVoiceVad {
+  /** Simulate VAD detecting the start of speech. */
+  emitSpeechStart: () => void
+  /** Simulate the silence-hangover firing; resolves any pending wait. */
+  emitSpeechEnd: () => void
+  /** Override the everSpoke() return value (default: true). */
+  setEverSpoke: (value: boolean) => void
+  /** Track dispose calls. */
+  disposeCalls: () => number
+  /** Track pending waits. */
+  hasPendingWait: () => boolean
+}
+
+export function makeVad(opts?: {
+  initialEverSpoke?: boolean
+  initiallySpeaking?: boolean
+  /** When true, port.create() returns null (simulates AudioContext-unavailable). */
+  unavailable?: boolean
+}): {
+  port: VadPort
+  vad: FakeVad | null
+  lastStream: () => MediaStreamLike | null
+} {
+  let everSpoke = opts?.initialEverSpoke ?? true
+  let speaking = opts?.initiallySpeaking ?? false
+  let disposeCalls = 0
+  let pendingResolve: (() => void) | null = null
+  let pendingReject: ((err: unknown) => void) | null = null
+  let pendingTimeoutId: ReturnType<typeof setTimeout> | null = null
+  let disposed = false
+  let lastStream: MediaStreamLike | null = null
+
+  const vad: FakeVad | null = opts?.unavailable
+    ? null
+    : {
+        everSpoke: () => everSpoke,
+        waitForSpeechEnd: (timeoutMs: number) => {
+          if (disposed) return Promise.reject(new VadDisposedError())
+          if (!everSpoke || !speaking) return Promise.resolve()
+          return new Promise<void>((resolve, reject) => {
+            pendingResolve = resolve
+            pendingReject = reject
+            pendingTimeoutId = setTimeout(() => {
+              pendingResolve = null
+              pendingReject = null
+              pendingTimeoutId = null
+              reject(new VadTimeoutError(timeoutMs))
+            }, timeoutMs)
+          })
+        },
+        dispose: () => {
+          if (disposed) return
+          disposed = true
+          disposeCalls++
+          if (pendingTimeoutId !== null) clearTimeout(pendingTimeoutId)
+          const reject = pendingReject
+          pendingResolve = null
+          pendingReject = null
+          pendingTimeoutId = null
+          if (reject) reject(new VadDisposedError())
+        },
+        emitSpeechStart: () => {
+          speaking = true
+          everSpoke = true
+        },
+        emitSpeechEnd: () => {
+          speaking = false
+          if (pendingTimeoutId !== null) clearTimeout(pendingTimeoutId)
+          const resolve = pendingResolve
+          pendingResolve = null
+          pendingReject = null
+          pendingTimeoutId = null
+          if (resolve) resolve()
+        },
+        setEverSpoke: (value: boolean) => {
+          everSpoke = value
+        },
+        disposeCalls: () => disposeCalls,
+        hasPendingWait: () => pendingResolve !== null
+      }
+
+  const port: VadPort = {
+    create: (stream) => {
+      lastStream = stream
+      return vad
+    }
+  }
+
+  return { port, vad, lastStream: () => lastStream }
 }
 
 export function makeDeps(overrides?: Partial<VoiceChatServiceDeps>): VoiceChatServiceDeps {
@@ -259,6 +446,7 @@ export function makeDeps(overrides?: Partial<VoiceChatServiceDeps>): VoiceChatSe
     agentFactory: makeAgent().factory,
     sessionFactory: makeSession().factory,
     media: makeMedia(),
+    vad: makeVad().port,
     effects: makeEffects(),
     clock: makeClock(),
     config: makeConfig(),
@@ -839,5 +1027,513 @@ describe('createVoiceChatService — RAG passthrough + onEndedByAgent', () => {
 
     expect(spy).toHaveBeenCalledTimes(1)
     expect(spy).toHaveBeenCalledWith('one')
+  })
+})
+
+// =============================================================================
+// Buffered speech replay — capture audio uttered during the connect window
+// (state: 'connecting') and inject it as a text message once the session is
+// live. Best-effort: any failure in the recorder, IPC, or session sendMessage
+// must not undo activation.
+// =============================================================================
+describe('createVoiceChatService — buffered speech replay', () => {
+  it('starts a MediaRecorder during connect when MediaPort supports it', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ media, sessionFactory: session.factory })
+    )
+    await svc.activate(1, { pageText: 'p' })
+
+    const rec = media.lastRecorder()
+    expect(rec).not.toBeNull()
+    expect(rec!.start).toHaveBeenCalled()
+  })
+
+  it('replays buffered audio as a text message after the session becomes active', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'what did you mean by gravitas' })
+    // Hold the connect open so the test can inject a chunk *during* the
+    // connect window — otherwise the mock's connect resolves synchronously
+    // and the recorder is stopped before any audio can land in the buffer.
+    const session = makeSession({ connectDelayMs: 20 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    // Give the Effect fiber time to acquire mic + create recorder before we
+    // simulate the user speaking during connect.
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['fake audio'], { type: 'audio/webm' }))
+    await activation
+    // Replay is fire-and-forget — flush microtasks.
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ipc.transcribeAudio).toHaveBeenCalledTimes(1)
+    expect(session.sendMessage).toHaveBeenCalledWith('what did you mean by gravitas')
+  })
+
+  it('does not call sendMessage when no audio chunks were captured', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'nope' })
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+    await svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ipc.transcribeAudio).not.toHaveBeenCalled()
+    expect(session.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('does not call sendMessage when transcript is empty/whitespace', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: '   ' })
+    const session = makeSession({ connectDelayMs: 20 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['x'], { type: 'audio/webm' }))
+    await activation
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ipc.transcribeAudio).toHaveBeenCalledTimes(1)
+    expect(session.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('transcription failure does not fail activation or close the session', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({
+      key: 'k',
+      transcribeFailWith: new Error('deepgram exploded')
+    })
+    const session = makeSession({ connectDelayMs: 20 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['x'], { type: 'audio/webm' }))
+    await expect(activation).resolves.toBeUndefined()
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(svc.getState()).toBe('active')
+    expect(session.sendMessage).not.toHaveBeenCalled()
+    expect(session.close).not.toHaveBeenCalled()
+  })
+
+  it('feature is skipped silently when MediaPort lacks createMediaRecorder', async () => {
+    const media = makeMedia() // no withRecorder
+    const ipc = makeIpc({ key: 'k', transcript: 'unreachable' })
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+    await svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ipc.transcribeAudio).not.toHaveBeenCalled()
+    expect(session.sendMessage).not.toHaveBeenCalled()
+    expect(svc.getState()).toBe('active')
+  })
+
+  it('stops the recorder if activation fails before connect completes', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const session = makeSession({ connectFailWith: new Error('boom') })
+    const svc = createVoiceChatService(
+      makeDeps({ media, sessionFactory: session.factory })
+    )
+
+    await expect(svc.activate(1, { pageText: 'p' })).rejects.toThrow('boom')
+
+    const rec = media.lastRecorder()
+    expect(rec).not.toBeNull()
+    expect(rec!.stop).toHaveBeenCalled()
+  })
+
+  it('skips the recorder entirely when the feature flag is disabled', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'unreachable' })
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({
+        media,
+        ipc,
+        sessionFactory: session.factory,
+        config: makeConfig({ bufferedSpeechReplayEnabled: false })
+      })
+    )
+
+    await svc.activate(1, { pageText: 'p' })
+
+    expect(media.createMediaRecorder).not.toHaveBeenCalled()
+    expect(media.lastRecorder()).toBeNull()
+    expect(ipc.transcribeAudio).not.toHaveBeenCalled()
+    expect(session.sendMessage).not.toHaveBeenCalled()
+    expect(svc.getState()).toBe('active')
+  })
+
+  it('activation succeeds when createMediaRecorder throws on construction', async () => {
+    const media = makeMedia({ withRecorder: true, recorderConstructThrows: true })
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ media, sessionFactory: session.factory })
+    )
+
+    await svc.activate(1, { pageText: 'p' })
+
+    expect(media.lastRecorder()).toBeNull()
+    expect(session.sendMessage).not.toHaveBeenCalled()
+    expect(svc.getState()).toBe('active')
+  })
+
+  it('activation succeeds when recorder.stop() throws during replay', async () => {
+    const media = makeMedia({ withRecorder: true, recorderStopThrows: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'should not be called' })
+    const session = makeSession({ connectDelayMs: 20 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['x'], { type: 'audio/webm' }))
+    // recorder.stop() throws → we never await onstop → blob never sent. The
+    // activation must still succeed; the failure is captured via Sentry, not
+    // surfaced to the user.
+    await expect(activation).resolves.toBeUndefined()
+
+    expect(svc.getState()).toBe('active')
+    expect(session.close).not.toHaveBeenCalled()
+  })
+
+  it('captures chunks that arrive between stop() and onstop', async () => {
+    // Some browsers fire a final ondataavailable AFTER stop() returns but
+    // BEFORE onstop fires. awaitStop exists to bridge that gap. Verify the
+    // late chunk actually makes it into the transcribed blob.
+    const media = makeMedia({ withRecorder: true, deferOnstop: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'late audio captured' })
+    const session = makeSession({ connectDelayMs: 20 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    const rec = media.lastRecorder()!
+    rec.emitChunk(new Blob(['early'], { type: 'audio/webm' }))
+    // Wait for connect to resolve and replay to call stop() (but not onstop).
+    await new Promise((r) => setTimeout(r, 30))
+    // Now emit the late chunk that landed between stop() and onstop.
+    rec.emitChunk(new Blob(['late'], { type: 'audio/webm' }))
+    // Release the awaitStop promise.
+    rec.fireOnstop()
+    await activation
+
+    expect(ipc.transcribeAudio).toHaveBeenCalledTimes(1)
+    const sentBlob = ipc.transcribeAudio.mock.calls[0][0] as Blob
+    expect(sentBlob.size).toBeGreaterThanOrEqual('earlylate'.length)
+    expect(session.sendMessage).toHaveBeenCalledWith('late audio captured')
+  })
+
+  it('drops oldest chunks once the rolling buffer cap is exceeded', async () => {
+    // The cap is 16 × 500ms = 8s of audio. Emit 20 chunks during a long
+    // connect window; only the last 16 should reach Deepgram.
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'capped' })
+    const session = makeSession({ connectDelayMs: 30 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    const rec = media.lastRecorder()!
+    // 1-byte chunks make the blob.size assertion exact: 16 chunks = 16 bytes.
+    for (let i = 0; i < 20; i++) {
+      rec.emitChunk(new Blob([String.fromCharCode(0x30 + i)], { type: 'audio/webm' }))
+    }
+    await activation
+
+    expect(ipc.transcribeAudio).toHaveBeenCalledTimes(1)
+    const sentBlob = ipc.transcribeAudio.mock.calls[0][0] as Blob
+    expect(sentBlob.size).toBe(16)
+  })
+
+  it('each cold-path activation gets its own buffer (no leak across runs)', async () => {
+    // Two sequential cold-path activations on different bookIds. Each must
+    // create a fresh recorder + chunks array, so chunks from the first run
+    // don't leak into the second's transcribe call.
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'fresh-text' })
+    const session = makeSession({ connectDelayMs: 15 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+
+    // First activation with a chunk.
+    const first = svc.activate(1, { pageText: 'p1' })
+    await new Promise((r) => setTimeout(r, 0))
+    const firstRec = media.lastRecorder()!
+    firstRec.emitChunk(new Blob(['first-chunk'], { type: 'audio/webm' }))
+    await first
+    const firstTranscribeCalls = ipc.transcribeAudio.mock.calls.length
+
+    // Second activation, different book → service tears down + cold-paths
+    // again, creating a fresh recorder.
+    const second = svc.activate(2, { pageText: 'p2' })
+    await new Promise((r) => setTimeout(r, 0))
+    const secondRec = media.lastRecorder()!
+    expect(secondRec).not.toBe(firstRec) // different recorder instance
+    secondRec.emitChunk(new Blob(['second-chunk'], { type: 'audio/webm' }))
+    await second
+
+    expect(ipc.transcribeAudio.mock.calls.length).toBe(firstTranscribeCalls + 1)
+    const secondBlob = ipc.transcribeAudio.mock.calls.at(-1)![0] as Blob
+    expect(secondBlob.size).toBe('second-chunk'.length) // not concatenated with first
+  })
+
+  it('deactivate during in-flight cold path stops the recorder via finalizer', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const session = makeSession({ connectDelayMs: 100 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, sessionFactory: session.factory })
+    )
+
+    const activatePromise = svc.activate(1, { pageText: 'p' })
+    // Wait for the fiber to walk through mic + session build + recorder start.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(svc.getState()).toBe('connecting')
+    const rec = media.lastRecorder()!
+    expect(rec.start).toHaveBeenCalled()
+
+    svc.deactivate()
+    await activatePromise.catch(() => undefined)
+
+    // The acquireRelease finalizer for the recorder should have called stop.
+    expect(rec.stop).toHaveBeenCalled()
+    expect(svc.getState()).toBe('idle')
+  })
+})
+
+// =============================================================================
+// VAD gating — the new feature.
+//
+// The activation pipeline must hold "stop recorder → transcribe → sendMessage
+// → mute(false)" until BOTH connect resolves AND vad.waitForSpeechEnd resolves.
+// =============================================================================
+
+describe('createVoiceChatService — VAD gating', () => {
+  it('user never spoke during connect: no transcribe, no sendMessage, mic opens silent', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'unreachable' })
+    const session = makeSession({ connectDelayMs: 20 })
+    const { port: vadPort, vad } = makeVad({ initialEverSpoke: false })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory, vad: vadPort })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    // No chunk emitted, no emitSpeechStart — user is silent.
+    await activation
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(vad!.everSpoke()).toBe(false)
+    expect(ipc.transcribeAudio).not.toHaveBeenCalled()
+    expect(session.sendMessage).not.toHaveBeenCalled()
+    expect(session.mute).toHaveBeenCalledWith(false)
+    expect(svc.getState()).toBe('active')
+  })
+
+  it('user spoke then stopped BEFORE connect resolves: transcript injected, mic opens after', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'where does the chapter pivot' })
+    const session = makeSession({ connectDelayMs: 30 })
+    // everSpoke true + not currently speaking → waitForSpeechEnd resolves
+    // immediately when called, mimicking the "user already finished" case.
+    const { port: vadPort } = makeVad({ initialEverSpoke: true, initiallySpeaking: false })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory, vad: vadPort })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['fake-audio'], { type: 'audio/webm' }))
+    await activation
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ipc.transcribeAudio).toHaveBeenCalledTimes(1)
+    expect(session.sendMessage).toHaveBeenCalledWith('where does the chapter pivot')
+
+    // sendMessage must precede mute(false) — the agent sees the buffered text
+    // before the live mic opens, so the user's tail-of-sentence (if any)
+    // doesn't create a duplicate turn.
+    const sendOrder = session.sendMessage.mock.invocationCallOrder[0]!
+    const muteOrder = session.mute.mock.invocationCallOrder.find(
+      (n) => session.mute.mock.calls[session.mute.mock.invocationCallOrder.indexOf(n)]?.[0] === false
+    )
+    expect(sendOrder).toBeLessThan(muteOrder!)
+  })
+
+  it('user still speaking when connect resolves: mute(false) is gated on emitSpeechEnd', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'and what about this passage' })
+    const session = makeSession({ connectDelayMs: 10 })
+    const { port: vadPort, vad } = makeVad({
+      initialEverSpoke: true,
+      initiallySpeaking: true
+    })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory, vad: vadPort })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['mid-sentence'], { type: 'audio/webm' }))
+
+    // Connect should resolve well before 100ms, but waitForSpeechEnd should
+    // still be pending because we haven't emitted speech-end.
+    await new Promise((r) => setTimeout(r, 50))
+    expect(vad!.hasPendingWait()).toBe(true)
+    expect(session.mute).not.toHaveBeenCalledWith(false)
+    expect(session.sendMessage).not.toHaveBeenCalled()
+
+    // User finishes speaking.
+    vad!.emitSpeechEnd()
+    await activation
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ipc.transcribeAudio).toHaveBeenCalledTimes(1)
+    expect(session.sendMessage).toHaveBeenCalledWith('and what about this passage')
+    expect(session.mute).toHaveBeenCalledWith(false)
+  })
+
+  it('VAD safety timeout: activation completes even if emitSpeechEnd never fires', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'partial utterance' })
+    const session = makeSession({ connectDelayMs: 5 })
+    const { port: vadPort } = makeVad({
+      initialEverSpoke: true,
+      initiallySpeaking: true
+    })
+    // Tiny connectTimeoutMs so the safety timeout fires quickly in real-time.
+    const config = makeConfig({ connectTimeoutMs: 50 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory, vad: vadPort, config })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['partial'], { type: 'audio/webm' }))
+
+    // Don't emit speech-end. Wait past the safety timeout.
+    await activation
+    await new Promise((r) => setTimeout(r, 0))
+
+    // Pipeline must proceed with the partial.
+    expect(ipc.transcribeAudio).toHaveBeenCalled()
+    expect(session.mute).toHaveBeenCalledWith(false)
+    expect(svc.getState()).toBe('active')
+  })
+
+  it('VadPort returning null degrades to current behavior (no VAD gate)', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'a clear sentence' })
+    const session = makeSession({ connectDelayMs: 10 })
+    const { port: vadPort } = makeVad({ unavailable: true })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory, vad: vadPort })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['x'], { type: 'audio/webm' }))
+    await activation
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ipc.transcribeAudio).toHaveBeenCalledTimes(1)
+    expect(session.sendMessage).toHaveBeenCalledWith('a clear sentence')
+    expect(session.mute).toHaveBeenCalledWith(false)
+  })
+
+  it('deactivate during a pending VAD wait does not stall the fiber', async () => {
+    // Regression: Effect.promise would have been uninterruptible, leaving the
+    // fiber suspended for up to connectTimeoutMs (60s prod) on deactivate.
+    // The Effect.async cleanup disposes the VAD so the pending promise
+    // settles immediately on interrupt.
+    const media = makeMedia({ withRecorder: true })
+    const session = makeSession({ connectDelayMs: 5 })
+    const { port: vadPort, vad } = makeVad({
+      initialEverSpoke: true,
+      initiallySpeaking: true
+    })
+    const config = makeConfig({ connectTimeoutMs: 60_000 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, sessionFactory: session.factory, vad: vadPort, config })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    // Wait for connect to resolve and the pipeline to enter waitForSpeechEnd.
+    await new Promise((r) => setTimeout(r, 20))
+    expect(vad!.hasPendingWait()).toBe(true)
+
+    const before = Date.now()
+    svc.deactivate()
+    await activation.catch(() => undefined)
+    const elapsed = Date.now() - before
+
+    // Must finish in well under a second — the bug would have made it ~60s.
+    expect(elapsed).toBeLessThan(1000)
+    expect(vad!.disposeCalls()).toBeGreaterThanOrEqual(1)
+    expect(svc.getState()).toBe('idle')
+  })
+
+  it('VAD is disposed alongside the session', async () => {
+    const { port: vadPort, vad } = makeVad({ initialEverSpoke: true })
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ sessionFactory: session.factory, vad: vadPort })
+    )
+
+    await svc.activate(1, { pageText: 'p' })
+    expect(vad!.disposeCalls()).toBe(0)
+
+    svc.deactivate()
+    expect(vad!.disposeCalls()).toBe(1)
+  })
+})
+
+// =============================================================================
+// Server-side turn_detection — passes through to sessionFactory.
+// =============================================================================
+
+describe('createVoiceChatService — serverVad wiring', () => {
+  it('passes serverVad config to sessionFactory on cold activate', async () => {
+    let captured: SessionFactoryOpts | null = null
+    const baseFactory = makeSession().factory
+    const sessionFactory: VoiceChatServiceDeps['sessionFactory'] = (agent, opts) => {
+      captured = opts
+      return baseFactory(agent, opts)
+    }
+    const config = makeConfig({
+      serverVad: { threshold: 0.65, silenceDurationMs: 800, prefixPaddingMs: 250 }
+    })
+    const svc = createVoiceChatService(makeDeps({ sessionFactory, config }))
+
+    await svc.activate(1, { pageText: 'p' })
+
+    expect(captured).not.toBeNull()
+    expect(captured!.serverVad).toEqual({
+      threshold: 0.65,
+      silenceDurationMs: 800,
+      prefixPaddingMs: 250
+    })
   })
 })

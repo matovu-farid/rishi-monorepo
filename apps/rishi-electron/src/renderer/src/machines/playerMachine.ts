@@ -18,6 +18,11 @@ export type PlayerMachineContext = {
   // external PAGE_NAVIGATING event. Set when nav fires from an active state
   // (playing/loading/paused); false from stopped/idle (user is silent).
   wantsAutoResume: boolean
+  // True when CHAT_STARTED interrupted active playback (or loading / waiting-
+  // for-paragraphs). On CHAT_ENDED the player auto-resumes from the same
+  // paragraphIndex. Reset on every CHAT_ENDED and on any transition that
+  // represents the user choosing silence (PAUSE, STOP, etc.).
+  wantsAutoResumeAfterChat: boolean
   // Partial-first override: when PLAY_FROM is sent, these fields allow the
   // audio engine to start playback from the middle of a paragraph (e.g. from
   // a user's text selection). partialFirstParagraphIndex tracks WHICH
@@ -43,6 +48,7 @@ export type PlayerMachineEvent =
   | { type: 'NEXT_PARAGRAPHS_UPDATED'; paragraphs: ParagraphWithIndex[] }
   | { type: 'PREV_PARAGRAPHS_UPDATED'; paragraphs: ParagraphWithIndex[] }
   | { type: 'CHAT_STARTED' }
+  | { type: 'CHAT_ENDED' }
   | { type: 'CLEANUP' }
   // External page navigation has started (e.g. user clicked the EPUB next-page
   // arrow). The rendition is curling and PARAGRAPHS_UPDATED will arrive later.
@@ -53,6 +59,7 @@ export type PlayerMachineEvent =
   // an optional override for the first chunk of audio so playback can begin
   // mid-paragraph. Ignored from idle/pageNavigating/republishingParagraphs.
   | { type: 'PLAY_FROM'; paragraphIndex: number; partialFirstText: string; partialFirstKey: string }
+  | { type: 'REPEAT' }
 
 const initialContext: PlayerMachineContext = {
   bookId: '',
@@ -65,6 +72,7 @@ const initialContext: PlayerMachineContext = {
   retryCount: 0,
   timedOut: false,
   wantsAutoResume: false,
+  wantsAutoResumeAfterChat: false,
   partialFirstText: null,
   partialFirstKey: null,
   partialFirstParagraphIndex: null
@@ -81,7 +89,8 @@ export const playerMachine = setup({
       context.paragraphIndex < context.currentParagraphs.length - 1,
     hasRetries: ({ context }) => context.retryCount + 1 < MAX_RETRIES,
     isFirstParagraph: ({ context }) => context.paragraphIndex <= 0,
-    wasTimedOut: ({ context }) => context.timedOut
+    wasTimedOut: ({ context }) => context.timedOut,
+    wantsAutoResumeAfterChat: ({ context }) => context.wantsAutoResumeAfterChat
   },
   actions: {
     storeBookId: assign({
@@ -144,6 +153,8 @@ export const playerMachine = setup({
     clearErrors: assign({ errors: [] as string[] }),
     setWantsAutoResume: assign({ wantsAutoResume: true }),
     clearWantsAutoResume: assign({ wantsAutoResume: false }),
+    setWantsAutoResumeAfterChat: assign({ wantsAutoResumeAfterChat: true }),
+    clearWantsAutoResumeAfterChat: assign({ wantsAutoResumeAfterChat: false }),
     flagTimedOut: assign({ timedOut: true }),
     logLoadingTimeout: assign({
       errors: ({ context }) => {
@@ -191,14 +202,25 @@ export const playerMachine = setup({
   initial: 'idle',
   context: { ...initialContext },
   on: {
-    CHAT_STARTED: {
-      target: '.stopped',
-      actions: ['resetIndex', 'clearPartialFirst']
-    },
     CLEANUP: {
       target: '.idle',
       actions: 'resetAll'
-    }
+    },
+    // Voice chat ended. If we paused playback for the chat (flag set on
+    // CHAT_STARTED from playing/loading/waitingForParagraphs), re-enter loading
+    // at the same paragraphIndex to auto-resume. Otherwise just clear the
+    // flag — the user either wasn't listening or paused intentionally during
+    // the chat. The flag is always cleared on this event.
+    CHAT_ENDED: [
+      {
+        guard: 'wantsAutoResumeAfterChat',
+        target: '.loading',
+        actions: ['clearWantsAutoResumeAfterChat']
+      },
+      {
+        actions: ['clearWantsAutoResumeAfterChat']
+      }
+    ]
   },
   // Note: PAGE_NAVIGATING is handled per-state below (not as a global handler)
   // because behaviour differs:
@@ -216,6 +238,9 @@ export const playerMachine = setup({
         INITIALIZE: {
           target: 'stopped',
           actions: ['storeBookId', 'resetIndex']
+        },
+        CHAT_STARTED: {
+          actions: ['clearWantsAutoResumeAfterChat', 'clearPartialFirst']
         }
       }
     },
@@ -291,6 +316,9 @@ export const playerMachine = setup({
         PLAY_FROM: {
           target: 'loading',
           actions: ['setPartialFirst', 'setParagraphIndexFromEvent']
+        },
+        CHAT_STARTED: {
+          actions: ['clearWantsAutoResumeAfterChat', 'clearPartialFirst']
         }
       }
     },
@@ -351,6 +379,10 @@ export const playerMachine = setup({
           target: 'loading',
           actions: ['setPartialFirst', 'setParagraphIndexFromEvent'],
           reenter: true
+        },
+        CHAT_STARTED: {
+          target: 'paused.clean',
+          actions: ['setWantsAutoResumeAfterChat', 'clearPartialFirst']
         }
       }
     },
@@ -435,6 +467,15 @@ export const playerMachine = setup({
         PLAY_FROM: {
           target: 'loading',
           actions: ['setPartialFirst', 'setParagraphIndexFromEvent']
+        },
+        REPEAT: {
+          target: 'loading',
+          reenter: true,
+          actions: 'clearPartialFirst'
+        },
+        CHAT_STARTED: {
+          target: 'paused.clean',
+          actions: ['setWantsAutoResumeAfterChat', 'clearPartialFirst']
         }
       }
     },
@@ -484,10 +525,22 @@ export const playerMachine = setup({
             'clearCurrentParagraphs',
             'clearPartialFirst'
           ]
+        },
+        // Chat opened while user is already paused. They paused intentionally,
+        // so DO NOT set wantsAutoResumeAfterChat — user remains paused after
+        // chat ends. Just clear any partialFirst override on this paragraph.
+        CHAT_STARTED: {
+          actions: ['clearPartialFirst']
         }
       },
       states: {
         clean: {
+          // wantsAutoResumeAfterChat is meaningful only while we're paused
+          // because of a chat interruption. If the user takes any action that
+          // leaves paused.clean (RESUME via keyboard shortcut, NEXT/PREV,
+          // PARAGRAPHS_UPDATED from a page curl, etc.), that intent supersedes
+          // the auto-resume. Clearing here makes the later CHAT_ENDED a no-op.
+          exit: ['clearWantsAutoResumeAfterChat'],
           on: {
             RESUME: {
               target: '#player.playing'
@@ -553,6 +606,10 @@ export const playerMachine = setup({
         PLAY_FROM: {
           target: 'loading',
           actions: ['setPartialFirst', 'setParagraphIndexFromEvent']
+        },
+        CHAT_STARTED: {
+          target: '#player.paused.clean',
+          actions: ['setWantsAutoResumeAfterChat', 'clearPartialFirst']
         }
       }
     },
@@ -585,6 +642,9 @@ export const playerMachine = setup({
         PAGE_NAVIGATING: {
           target: 'pageNavigating',
           actions: ['setNavDirection', 'clearCurrentParagraphs', 'clearPartialFirst']
+        },
+        CHAT_STARTED: {
+          actions: ['clearWantsAutoResumeAfterChat', 'clearPartialFirst']
         }
       }
     },
@@ -643,6 +703,9 @@ export const playerMachine = setup({
         },
         PREV_PARAGRAPHS_UPDATED: {
           actions: 'storePrevParagraphs'
+        },
+        CHAT_STARTED: {
+          actions: ['clearWantsAutoResumeAfterChat', 'clearPartialFirst']
         }
       }
     },
@@ -692,6 +755,9 @@ export const playerMachine = setup({
         PLAY_FROM: {
           target: 'loading',
           actions: ['clearErrors', 'setPartialFirst', 'setParagraphIndexFromEvent']
+        },
+        CHAT_STARTED: {
+          actions: ['clearWantsAutoResumeAfterChat', 'clearPartialFirst']
         }
       }
     }

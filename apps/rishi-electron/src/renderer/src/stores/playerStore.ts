@@ -11,8 +11,6 @@ export type { ParagraphWithIndex }
  *  but kept as a structural function to avoid a circular import. */
 export type PlayerSend = (event: PlayerMachineEvent) => void
 
-export type Direction = 'forward' | 'backward'
-
 export type PlayerStoreState =
   | 'idle'
   | 'stopped'
@@ -25,18 +23,10 @@ export type PlayerStoreState =
   | 'republishingParagraphs'
   | 'error'
 
-interface PlayerStoreMove {
-  from: ParagraphWithIndex
-  to: ParagraphWithIndex
-  direction: Direction
-}
-
 interface PlayerStore {
   // --- Player-side state (written by machine, read by React) ---
   playingState: PlayerStoreState
   activeParagraph: ParagraphWithIndex | null
-  endedParagraph: ParagraphWithIndex | null
-  lastMove: PlayerStoreMove | null
   errors: string[]
 
   // --- Format-reader-side state (written by readers, read by machine) ---
@@ -66,8 +56,6 @@ export const usePlayerStore = create<PlayerStore>()(
   subscribeWithSelector((set) => ({
     playingState: 'idle',
     activeParagraph: null,
-    endedParagraph: null,
-    lastMove: null,
     errors: [],
 
     currentParagraphs: [],
