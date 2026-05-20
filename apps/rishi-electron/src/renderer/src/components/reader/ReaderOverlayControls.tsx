@@ -3,6 +3,7 @@ import { useChatStore } from '@/stores/chatStore'
 import TTSControls from '@/components/tts/TTSControls'
 import AIChatOrb from '@/components/chat/AIChatOrb'
 import VoiceChatLauncher from '@/components/chat/VoiceChatLauncher'
+import { TTSVisualCue } from './TTSVisualCue'
 
 type ReaderOverlayControlsProps = {
   bookId: string
@@ -40,6 +41,7 @@ export default function ReaderOverlayControls({
       <VoiceChatLauncher />
       <div style={{ display: isChatting ? 'none' : 'contents' }}>
         <TTSControls bookId={bookId} />
+        <TTSVisualCue />
       </div>
     </>
   )
