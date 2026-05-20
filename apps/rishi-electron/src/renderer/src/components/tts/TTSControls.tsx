@@ -176,6 +176,20 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
 
   const isPlaying = playingState === 'playing'
 
+  // Show the Repeat button across a continuous playback session. While
+  // `playingState` briefly drops to `loading` between paragraphs, we keep the
+  // button mounted so the pill doesn't reflow every paragraph boundary.
+  // Initial load (`stopped → loading → playing`) starts hidden because
+  // `showRepeat` is only set true on entering `playing`.
+  const [showRepeat, setShowRepeat] = useState(false)
+  useEffect(() => {
+    if (playingState === 'playing') {
+      setShowRepeat(true)
+    } else if (playingState !== 'loading') {
+      setShowRepeat(false)
+    }
+  }, [playingState])
+
   // --- Waveform bars ---
   // Stable IDs let React reconcile bars across re-renders without
   // falling back to array-index keys (which `react/no-array-index-key`
@@ -255,7 +269,7 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
           left: expanded ? '50%' : 'auto',
           transform: expanded ? 'translateX(-50%)' : 'none',
           // Size: explicit values so CSS can interpolate the transition
-          width: expanded ? (isPlaying ? 280 : 240) : 52,
+          width: expanded ? (showRepeat ? 280 : 240) : 52,
           height: expanded ? 66 : 52,
           borderRadius: expanded ? 40 : '50%',
           padding: expanded ? '8px 14px' : 0,
@@ -314,9 +328,10 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
               {getPlayIcon()}
             </button>
 
-            {/* Repeat current paragraph — mounted only while playing */}
+            {/* Repeat current paragraph — visible across the playback session,
+                including the brief `loading` between paragraphs. */}
             <AnimatePresence initial={false}>
-              {isPlaying ? (
+              {showRepeat ? (
                 <motion.button
                   key="repeat"
                   initial={{ opacity: 0, width: 0, marginInlineStart: 0, marginInlineEnd: 0 }}

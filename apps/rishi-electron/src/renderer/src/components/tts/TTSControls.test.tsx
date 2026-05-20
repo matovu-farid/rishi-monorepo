@@ -198,4 +198,35 @@ describe('TTSControls — Repeat button', () => {
     expect(playIdx).toBeLessThan(repeatIdx)
     expect(repeatIdx).toBeLessThan(nextIdx)
   })
+
+  it('stays mounted across the playing → loading → playing paragraph transition', async () => {
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
+    render(<TTSControls bookId="book-1" />)
+    act(() => {
+      expandPill()
+    })
+    expect(screen.getByLabelText('Repeat current paragraph')).toBeInTheDocument()
+
+    // Simulate the brief inter-paragraph load: state dips to 'loading'.
+    act(() => usePlayerStore.setState({ playingState: 'loading' }))
+    expect(screen.getByLabelText('Repeat current paragraph')).toBeInTheDocument()
+
+    // And then snaps back to 'playing' for the next paragraph.
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
+    expect(screen.getByLabelText('Repeat current paragraph')).toBeInTheDocument()
+  })
+
+  it('unmounts immediately when the user pauses (no loading bridge)', async () => {
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
+    render(<TTSControls bookId="book-1" />)
+    act(() => {
+      expandPill()
+    })
+    expect(screen.getByLabelText('Repeat current paragraph')).toBeInTheDocument()
+
+    act(() => usePlayerStore.setState({ playingState: 'paused.clean' }))
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Repeat current paragraph')).not.toBeInTheDocument()
+    })
+  })
 })
