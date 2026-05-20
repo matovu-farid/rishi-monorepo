@@ -16,6 +16,11 @@ export type ReconcileTtsHighlight = (desiredIndex: string | null) => void
  * The `iframe` argument is optional: pass the reader's content iframe
  * so the reconciler re-runs after chapter swaps. PDF does not use this
  * hook.
+ *
+ * Callers MUST pass a stable `reconcile` (wrap it in `useCallback`).
+ * The hook's effect depends on `reconcile` identity; an unstable
+ * function will tear down and re-bind all four listeners on every
+ * render.
  */
 export function useTtsHighlightReconciler(
   reconcile: ReconcileTtsHighlight,

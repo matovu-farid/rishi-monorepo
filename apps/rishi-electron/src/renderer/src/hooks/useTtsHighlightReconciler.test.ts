@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { usePlayerStore } from '@/stores/playerStore'
 import { useTtsHighlightReconciler } from './useTtsHighlightReconciler'
@@ -11,6 +11,12 @@ function setActive(index: string | null): void {
 
 beforeEach(() => {
   usePlayerStore.setState({ activeParagraph: null })
+})
+
+afterEach(() => {
+  // Restore JSDOM's visibilityState to a known good value so tests that
+  // mutate it via Object.defineProperty cannot leak state across runs.
+  Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
 })
 
 describe('useTtsHighlightReconciler', () => {
