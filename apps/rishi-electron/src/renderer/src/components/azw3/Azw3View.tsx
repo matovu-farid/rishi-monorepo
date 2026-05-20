@@ -34,6 +34,7 @@ import { findParagraphElement, parseParagraphIndex } from './highlight'
 import { computePageStep, formatLocation, measurePageCount, parseLocation } from './pagination'
 import { useTtsHighlightReconciler } from '@/hooks/useTtsHighlightReconciler'
 import { reconcileAzw3TtsHighlight } from './reconcileTtsHighlight'
+import { registerEpubFrame, clearEpubFrame } from '@/modules/pageCapture/epubFrameRegistry'
 
 /** Debounce delay before persisting reading location. Page turns fire often
  *  (one per click + per TTS paragraph advance) so we coalesce updates. */
@@ -150,6 +151,13 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     setBookId(book.id.toString())
   }, [book.id, setBookId])
+
+  // Keep the pageCapture EPUB frame registry up-to-date so that pageCapture
+  // (Task 5) can grab the active iframe via html-to-image on tool-call demand.
+  useEffect(() => {
+    if (iframeEl) registerEpubFrame(iframeEl)
+    return () => clearEpubFrame()
+  }, [iframeEl])
 
   // Mirror reader state (book title, TOC open, TTS playing) into the native menu.
   useReaderMenuSync({ book, tocOpen })

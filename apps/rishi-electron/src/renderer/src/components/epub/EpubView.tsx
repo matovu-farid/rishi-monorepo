@@ -40,6 +40,7 @@ import { getSyncService } from '@/services'
 import { getHighlightHex, isNoteOnly } from '@/types/highlight'
 import type { HighlightColor } from '@/types/highlight'
 import { NoteIconOverlay } from '@/modules/note-icon-overlay'
+import { registerEpubFrame, clearEpubFrame } from '@/modules/pageCapture/epubFrameRegistry'
 import type { Contents } from 'epubjs'
 import type { NavItem } from 'epubjs'
 import { tocToChapters } from './tocToChapters'
@@ -435,6 +436,28 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       noteIconOverlayRef.current = null
     }
   }, [rendition, refreshNoteIcons])
+
+  // Keep the pageCapture EPUB frame registry up-to-date so that pageCapture
+  // (Task 5) can grab the active iframe via html-to-image on tool-call demand.
+  useEffect(() => {
+    if (!rendition) return
+    const sync = (): void => {
+      // epubjs Views exposes `first()` at runtime even though the typings
+      // declare it only as `View[]`. Cast through unknown to access it.
+      const views = rendition.manager?.views as unknown as
+        | { first?: () => { iframe?: HTMLIFrameElement } | undefined }
+        | undefined
+      const iframe = views?.first?.()?.iframe
+      if (iframe) registerEpubFrame(iframe)
+    }
+    rendition.on('rendered', sync)
+    // Run once immediately in case 'rendered' already fired before we hooked up
+    sync()
+    return () => {
+      rendition.off('rendered', sync)
+      clearEpubFrame()
+    }
+  }, [rendition])
 
   // Handle user text selection -- show color picker popover instead of auto-highlight.
   //
