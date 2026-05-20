@@ -828,32 +828,20 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     }
     epubTtsReconcilerRef.current = createEpubTtsReconciler(rendition)
 
-    // Resolve the epub.js content iframe. epub.js exposes its rendered
-    // views via rendition.manager; the active view's `iframe` property
-    // is the underlying HTMLIFrameElement. We update the state on
-    // `rendered` so chapter swaps refresh the iframe reference.
+    // Resolve the epub.js content iframe via the shared helper, which
+    // correctly filters to the currently displayed view. We update the
+    // state on `rendered` so chapter swaps refresh the iframe reference.
     const resolveIframe = (): void => {
-      // Defensive optional-chain — epub.js internals vary in shape.
-      const mgr = (rendition as unknown as {
-        manager?: {
-          views?: () => { first?: () => { iframe?: HTMLIFrameElement } | undefined }
-        }
-      }).manager
-      const view = mgr?.views?.()?.first?.()
-      setEpubContentIframe((prev) => {
-        const next = view?.iframe ?? null
-        return prev === next ? prev : next
-      })
+      const next = getVisibleIframe(rendition) ?? null
+      setEpubContentIframe((prev) => (prev === next ? prev : next))
     }
     resolveIframe()
 
     // epub.js emits 'rendered' when a new view (chapter) is rendered.
-    const off = (rendition as unknown as {
-      on?: (event: string, cb: () => void) => (() => void) | void
-    }).on?.('rendered', resolveIframe)
+    rendition.on('rendered', resolveIframe)
 
     return () => {
-      if (typeof off === 'function') off()
+      rendition.off('rendered', resolveIframe)
       epubTtsReconcilerRef.current = null
     }
   }, [rendition])
