@@ -9,7 +9,11 @@ import {
 } from './book-import'
 import { createConnectivityService, type ConnectivityService } from './connectivity'
 export { useIsOnline } from './connectivity'
-import { createVoiceChatService, type VoiceChatService } from './voice-chat'
+import {
+  createVoiceChatService,
+  type MediaRecorderLike,
+  type VoiceChatService
+} from './voice-chat'
 
 export type { DiscoveredBook, ImportResult, PageDataInsertable, ScanProgress } from './book-import'
 import { createSyncEngine } from '@rishi/shared/sync-engine'
@@ -20,7 +24,7 @@ import { getAuthToken } from '@/modules/auth'
 import { buildRealtimeAgent } from '@/modules/buildRealtimeAgent'
 import { playReadyChime } from '@/modules/readyChime'
 import { startThinkingSound, stopThinkingSound } from '@/modules/thinkingSound'
-import { getRealtimeClientSecret } from '@/lib/api'
+import { getRealtimeClientSecret, transcribeAudio } from '@/lib/api'
 import { RealtimeSession } from '@openai/agents/realtime'
 import { OpenAIRealtimeWebRTC } from '@openai/agents-realtime'
 import config from '@/config.json'
@@ -225,7 +229,7 @@ export function getVoiceChatService(): VoiceChatService {
     _voiceChat = createVoiceChatService({
       rag: getRagService(),
       connectivity: getConnectivityService(),
-      ipc: { getRealtimeClientSecret },
+      ipc: { getRealtimeClientSecret, transcribeAudio },
       webrtcFactory: ({ mediaStream, audioElement }) =>
         new OpenAIRealtimeWebRTC({
           mediaStream: mediaStream as unknown as MediaStream,
@@ -260,6 +264,22 @@ export function getVoiceChatService(): VoiceChatService {
           const a = document.createElement('audio')
           a.autoplay = true
           return a
+        },
+        createMediaRecorder: (stream) => {
+          if (typeof MediaRecorder === 'undefined') return null
+          // Prefer Opus-in-WebM (Deepgram accepts it directly); fall back to
+          // the platform default if the codec isn't supported.
+          const preferred = 'audio/webm;codecs=opus'
+          const options =
+            MediaRecorder.isTypeSupported(preferred) ? { mimeType: preferred } : undefined
+          try {
+            return new MediaRecorder(
+              stream as unknown as MediaStream,
+              options
+            ) as unknown as MediaRecorderLike
+          } catch {
+            return null
+          }
         }
       },
       effects: { playReadyChime, startThinkingSound, stopThinkingSound },
@@ -273,7 +293,11 @@ export function getVoiceChatService(): VoiceChatService {
         // leaving voice chat on from racking up open-ended audio billing.
         inactivityTimeoutMs: 3 * 60 * 1000,
         connectTimeoutMs: 60 * 1000,
-        keyTtlMs: 9 * 60 * 1000
+        keyTtlMs: 9 * 60 * 1000,
+        // Capture speech uttered during the connect window and inject as a
+        // text message once the session is live. Set to false to disable
+        // without a code change if the feature regresses in production.
+        bufferedSpeechReplayEnabled: true
       },
       getLanguage: () => usePrefsStore.getState().voiceChatLanguage
     })

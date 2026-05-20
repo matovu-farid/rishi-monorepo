@@ -42,6 +42,13 @@ export class OfflineError extends Error {
 
 export interface VoiceChatIpc {
   getRealtimeClientSecret(language: string): Promise<string>
+  /**
+   * STT for audio buffered during the connect window. Required even though
+   * the buffered-replay feature can be disabled — keeping it required forces
+   * future test doubles to acknowledge it exists, avoiding silent regressions
+   * when callers assume it's wired.
+   */
+  transcribeAudio(blob: Blob): Promise<string>
 }
 
 export interface MediaStreamLike {
@@ -55,9 +62,27 @@ export interface AudioElementLike {
   pause(): void
 }
 
+/**
+ * Narrow shape the activation pipeline needs from the platform's
+ * MediaRecorder. Matches the WHATWG API but lets us mock it in tests.
+ */
+export interface MediaRecorderLike {
+  start(timesliceMs?: number): void
+  stop(): void
+  readonly state: 'inactive' | 'recording' | 'paused'
+  ondataavailable: ((event: { data: Blob }) => void) | null
+  onstop: (() => void) | null
+}
+
 export interface MediaPort {
   getUserMedia(constraints: MediaStreamConstraints): Promise<MediaStreamLike>
   createAudioElement(): AudioElementLike
+  /**
+   * Construct a recorder bound to the given mic stream. Returns null if the
+   * platform lacks MediaRecorder support (older Electron, unsupported codec).
+   * Optional so legacy deps still type-check; the activation pipeline guards.
+   */
+  createMediaRecorder?(stream: MediaStreamLike): MediaRecorderLike | null
 }
 
 export interface EffectsPort {
@@ -82,6 +107,13 @@ export interface VoiceChatConfig {
   inactivityTimeoutMs: number
   connectTimeoutMs: number
   keyTtlMs: number
+  /**
+   * When true, the activation pipeline records mic audio during the connect
+   * window and replays it as a text message once the session is live. When
+   * false (or undefined), the recorder is never started — useful as a kill
+   * switch if the feature misbehaves in production.
+   */
+  bufferedSpeechReplayEnabled?: boolean
 }
 
 // --- session-shape contracts (what the factories must return) ---
@@ -96,6 +128,12 @@ export interface RealtimeSessionLike {
   interrupt(): void
   close(): void
   updateAgent(agent: unknown): Promise<void>
+  /**
+   * Inject a text user message into the live session (creates a
+   * conversation.item and triggers a response). Used to replay speech the
+   * user uttered during the connect window.
+   */
+  sendMessage(message: string): void
   on(event: string, listener: (...args: unknown[]) => void): void
   off(event: string, listener: (...args: unknown[]) => void): void
 }

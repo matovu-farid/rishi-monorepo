@@ -55,12 +55,22 @@ export function makeConnectivity(opts?: {
   }
 }
 
-export function makeIpc(opts?: { key?: string; failWith?: Error }): VoiceChatIpc {
+export function makeIpc(opts?: {
+  key?: string
+  failWith?: Error
+  transcript?: string
+  transcribeFailWith?: Error
+}): VoiceChatIpc & { transcribeAudio: ReturnType<typeof vi.fn> } {
+  const transcribeAudio = vi.fn().mockImplementation(async (_blob: Blob) => {
+    if (opts?.transcribeFailWith) throw opts.transcribeFailWith
+    return opts?.transcript ?? ''
+  })
   return {
     getRealtimeClientSecret: vi.fn().mockImplementation(async (_language: string) => {
       if (opts?.failWith) throw opts.failWith
       return opts?.key ?? 'test-key'
-    })
+    }),
+    transcribeAudio
   }
 }
 
@@ -108,6 +118,7 @@ export function makeSession(opts?: { connectDelayMs?: number; connectFailWith?: 
   close: ReturnType<typeof vi.fn>
   updateAgent: ReturnType<typeof vi.fn>
   connect: ReturnType<typeof vi.fn>
+  sendMessage: ReturnType<typeof vi.fn>
   fire: (event: string, ...args: unknown[]) => void
   lastConnectOpts: () => { apiKey: string } | null
 } {
@@ -126,12 +137,14 @@ export function makeSession(opts?: { connectDelayMs?: number; connectFailWith?: 
   const interrupt = vi.fn()
   const close = vi.fn()
   const updateAgent = vi.fn().mockResolvedValue(undefined)
+  const sendMessage = vi.fn()
   const session: RealtimeSessionLike = {
     connect,
     mute,
     interrupt,
     close,
     updateAgent,
+    sendMessage,
     on: (ev, l) => {
       if (!handlers.has(ev)) handlers.set(ev, new Set())
       handlers.get(ev)!.add(l)
@@ -148,6 +161,7 @@ export function makeSession(opts?: { connectDelayMs?: number; connectFailWith?: 
     close,
     updateAgent,
     connect,
+    sendMessage,
     fire: (ev, ...args) => {
       const set = handlers.get(ev)
       if (!set) return
@@ -157,9 +171,39 @@ export function makeSession(opts?: { connectDelayMs?: number; connectFailWith?: 
   }
 }
 
-export function makeMedia(opts?: { denyMic?: boolean }): MediaPort & {
+export interface FakeRecorder {
+  start: ReturnType<typeof vi.fn>
+  stop: ReturnType<typeof vi.fn>
+  state: 'inactive' | 'recording' | 'paused'
+  ondataavailable: ((event: { data: Blob }) => void) | null
+  onstop: (() => void) | null
+  /** Pushes a chunk into the recorder buffer (simulates ondataavailable). */
+  emitChunk: (data: Blob) => void
+  /**
+   * Manually fires `onstop`. Only used when `deferOnstop: true` was passed —
+   * lets tests simulate the gap between `stop()` returning and the
+   * `onstop` callback firing, where late `ondataavailable` events can land.
+   */
+  fireOnstop: () => void
+}
+
+export function makeMedia(opts?: {
+  denyMic?: boolean
+  /** Omit to disable MediaRecorder support entirely. */
+  withRecorder?: boolean
+  /** createMediaRecorder throws on construction. */
+  recorderConstructThrows?: boolean
+  /** recorder.stop() throws when called. */
+  recorderStopThrows?: boolean
+  /**
+   * Don't fire `onstop` synchronously inside `stop()`. Tests must call
+   * `lastRecorder().fireOnstop()` to release the awaitStop promise.
+   */
+  deferOnstop?: boolean
+}): MediaPort & {
   stream: MediaStreamLike
   audioElement: AudioElementLike
+  lastRecorder: () => FakeRecorder | null
 } {
   const stream: MediaStreamLike = { getTracks: () => [{ stop: vi.fn() }] }
   const audioElement: AudioElementLike = {
@@ -168,7 +212,12 @@ export function makeMedia(opts?: { denyMic?: boolean }): MediaPort & {
     autoplay: true,
     pause: vi.fn()
   }
-  return {
+  let lastRec: FakeRecorder | null = null
+  const port: MediaPort & {
+    stream: MediaStreamLike
+    audioElement: AudioElementLike
+    lastRecorder: () => FakeRecorder | null
+  } = {
     stream,
     audioElement,
     getUserMedia: vi.fn().mockImplementation(async () => {
@@ -179,8 +228,32 @@ export function makeMedia(opts?: { denyMic?: boolean }): MediaPort & {
       }
       return stream
     }),
-    createAudioElement: vi.fn().mockReturnValue(audioElement)
+    createAudioElement: vi.fn().mockReturnValue(audioElement),
+    lastRecorder: () => lastRec
   }
+  if (opts?.withRecorder) {
+    port.createMediaRecorder = vi.fn().mockImplementation((_s: MediaStreamLike) => {
+      if (opts?.recorderConstructThrows) throw new Error('MediaRecorder construct failed')
+      const rec: FakeRecorder = {
+        start: vi.fn().mockImplementation(() => {
+          rec.state = 'recording'
+        }),
+        stop: vi.fn().mockImplementation(() => {
+          if (opts?.recorderStopThrows) throw new Error('stop failed')
+          rec.state = 'inactive'
+          if (!opts?.deferOnstop) rec.onstop?.()
+        }),
+        state: 'inactive',
+        ondataavailable: null,
+        onstop: null,
+        emitChunk: (data) => rec.ondataavailable?.({ data }),
+        fireOnstop: () => rec.onstop?.()
+      }
+      lastRec = rec
+      return rec
+    })
+  }
+  return port
 }
 
 export function makeEffects(): EffectsPort & {
@@ -246,6 +319,7 @@ export function makeConfig(overrides?: Partial<VoiceChatConfig>): VoiceChatConfi
     inactivityTimeoutMs: 3 * 60 * 1000,
     connectTimeoutMs: 60 * 1000,
     keyTtlMs: 9 * 60 * 1000,
+    bufferedSpeechReplayEnabled: true,
     ...overrides
   }
 }
@@ -839,5 +913,297 @@ describe('createVoiceChatService — RAG passthrough + onEndedByAgent', () => {
 
     expect(spy).toHaveBeenCalledTimes(1)
     expect(spy).toHaveBeenCalledWith('one')
+  })
+})
+
+// =============================================================================
+// Buffered speech replay — capture audio uttered during the connect window
+// (state: 'connecting') and inject it as a text message once the session is
+// live. Best-effort: any failure in the recorder, IPC, or session sendMessage
+// must not undo activation.
+// =============================================================================
+describe('createVoiceChatService — buffered speech replay', () => {
+  it('starts a MediaRecorder during connect when MediaPort supports it', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ media, sessionFactory: session.factory })
+    )
+    await svc.activate(1, { pageText: 'p' })
+
+    const rec = media.lastRecorder()
+    expect(rec).not.toBeNull()
+    expect(rec!.start).toHaveBeenCalled()
+  })
+
+  it('replays buffered audio as a text message after the session becomes active', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'what did you mean by gravitas' })
+    // Hold the connect open so the test can inject a chunk *during* the
+    // connect window — otherwise the mock's connect resolves synchronously
+    // and the recorder is stopped before any audio can land in the buffer.
+    const session = makeSession({ connectDelayMs: 20 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    // Give the Effect fiber time to acquire mic + create recorder before we
+    // simulate the user speaking during connect.
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['fake audio'], { type: 'audio/webm' }))
+    await activation
+    // Replay is fire-and-forget — flush microtasks.
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ipc.transcribeAudio).toHaveBeenCalledTimes(1)
+    expect(session.sendMessage).toHaveBeenCalledWith('what did you mean by gravitas')
+  })
+
+  it('does not call sendMessage when no audio chunks were captured', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'nope' })
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+    await svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ipc.transcribeAudio).not.toHaveBeenCalled()
+    expect(session.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('does not call sendMessage when transcript is empty/whitespace', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: '   ' })
+    const session = makeSession({ connectDelayMs: 20 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['x'], { type: 'audio/webm' }))
+    await activation
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ipc.transcribeAudio).toHaveBeenCalledTimes(1)
+    expect(session.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('transcription failure does not fail activation or close the session', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({
+      key: 'k',
+      transcribeFailWith: new Error('deepgram exploded')
+    })
+    const session = makeSession({ connectDelayMs: 20 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['x'], { type: 'audio/webm' }))
+    await expect(activation).resolves.toBeUndefined()
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(svc.getState()).toBe('active')
+    expect(session.sendMessage).not.toHaveBeenCalled()
+    expect(session.close).not.toHaveBeenCalled()
+  })
+
+  it('feature is skipped silently when MediaPort lacks createMediaRecorder', async () => {
+    const media = makeMedia() // no withRecorder
+    const ipc = makeIpc({ key: 'k', transcript: 'unreachable' })
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+    await svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ipc.transcribeAudio).not.toHaveBeenCalled()
+    expect(session.sendMessage).not.toHaveBeenCalled()
+    expect(svc.getState()).toBe('active')
+  })
+
+  it('stops the recorder if activation fails before connect completes', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const session = makeSession({ connectFailWith: new Error('boom') })
+    const svc = createVoiceChatService(
+      makeDeps({ media, sessionFactory: session.factory })
+    )
+
+    await expect(svc.activate(1, { pageText: 'p' })).rejects.toThrow('boom')
+
+    const rec = media.lastRecorder()
+    expect(rec).not.toBeNull()
+    expect(rec!.stop).toHaveBeenCalled()
+  })
+
+  it('skips the recorder entirely when the feature flag is disabled', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'unreachable' })
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({
+        media,
+        ipc,
+        sessionFactory: session.factory,
+        config: makeConfig({ bufferedSpeechReplayEnabled: false })
+      })
+    )
+
+    await svc.activate(1, { pageText: 'p' })
+
+    expect(media.createMediaRecorder).not.toHaveBeenCalled()
+    expect(media.lastRecorder()).toBeNull()
+    expect(ipc.transcribeAudio).not.toHaveBeenCalled()
+    expect(session.sendMessage).not.toHaveBeenCalled()
+    expect(svc.getState()).toBe('active')
+  })
+
+  it('activation succeeds when createMediaRecorder throws on construction', async () => {
+    const media = makeMedia({ withRecorder: true, recorderConstructThrows: true })
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ media, sessionFactory: session.factory })
+    )
+
+    await svc.activate(1, { pageText: 'p' })
+
+    expect(media.lastRecorder()).toBeNull()
+    expect(session.sendMessage).not.toHaveBeenCalled()
+    expect(svc.getState()).toBe('active')
+  })
+
+  it('activation succeeds when recorder.stop() throws during replay', async () => {
+    const media = makeMedia({ withRecorder: true, recorderStopThrows: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'should not be called' })
+    const session = makeSession({ connectDelayMs: 20 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['x'], { type: 'audio/webm' }))
+    // recorder.stop() throws → we never await onstop → blob never sent. The
+    // activation must still succeed; the failure is captured via Sentry, not
+    // surfaced to the user.
+    await expect(activation).resolves.toBeUndefined()
+
+    expect(svc.getState()).toBe('active')
+    expect(session.close).not.toHaveBeenCalled()
+  })
+
+  it('captures chunks that arrive between stop() and onstop', async () => {
+    // Some browsers fire a final ondataavailable AFTER stop() returns but
+    // BEFORE onstop fires. awaitStop exists to bridge that gap. Verify the
+    // late chunk actually makes it into the transcribed blob.
+    const media = makeMedia({ withRecorder: true, deferOnstop: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'late audio captured' })
+    const session = makeSession({ connectDelayMs: 20 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    const rec = media.lastRecorder()!
+    rec.emitChunk(new Blob(['early'], { type: 'audio/webm' }))
+    // Wait for connect to resolve and replay to call stop() (but not onstop).
+    await new Promise((r) => setTimeout(r, 30))
+    // Now emit the late chunk that landed between stop() and onstop.
+    rec.emitChunk(new Blob(['late'], { type: 'audio/webm' }))
+    // Release the awaitStop promise.
+    rec.fireOnstop()
+    await activation
+
+    expect(ipc.transcribeAudio).toHaveBeenCalledTimes(1)
+    const sentBlob = ipc.transcribeAudio.mock.calls[0][0] as Blob
+    expect(sentBlob.size).toBeGreaterThanOrEqual('earlylate'.length)
+    expect(session.sendMessage).toHaveBeenCalledWith('late audio captured')
+  })
+
+  it('drops oldest chunks once the rolling buffer cap is exceeded', async () => {
+    // The cap is 16 × 500ms = 8s of audio. Emit 20 chunks during a long
+    // connect window; only the last 16 should reach Deepgram.
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'capped' })
+    const session = makeSession({ connectDelayMs: 30 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    const rec = media.lastRecorder()!
+    // 1-byte chunks make the blob.size assertion exact: 16 chunks = 16 bytes.
+    for (let i = 0; i < 20; i++) {
+      rec.emitChunk(new Blob([String.fromCharCode(0x30 + i)], { type: 'audio/webm' }))
+    }
+    await activation
+
+    expect(ipc.transcribeAudio).toHaveBeenCalledTimes(1)
+    const sentBlob = ipc.transcribeAudio.mock.calls[0][0] as Blob
+    expect(sentBlob.size).toBe(16)
+  })
+
+  it('each cold-path activation gets its own buffer (no leak across runs)', async () => {
+    // Two sequential cold-path activations on different bookIds. Each must
+    // create a fresh recorder + chunks array, so chunks from the first run
+    // don't leak into the second's transcribe call.
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'fresh-text' })
+    const session = makeSession({ connectDelayMs: 15 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory })
+    )
+
+    // First activation with a chunk.
+    const first = svc.activate(1, { pageText: 'p1' })
+    await new Promise((r) => setTimeout(r, 0))
+    const firstRec = media.lastRecorder()!
+    firstRec.emitChunk(new Blob(['first-chunk'], { type: 'audio/webm' }))
+    await first
+    const firstTranscribeCalls = ipc.transcribeAudio.mock.calls.length
+
+    // Second activation, different book → service tears down + cold-paths
+    // again, creating a fresh recorder.
+    const second = svc.activate(2, { pageText: 'p2' })
+    await new Promise((r) => setTimeout(r, 0))
+    const secondRec = media.lastRecorder()!
+    expect(secondRec).not.toBe(firstRec) // different recorder instance
+    secondRec.emitChunk(new Blob(['second-chunk'], { type: 'audio/webm' }))
+    await second
+
+    expect(ipc.transcribeAudio.mock.calls.length).toBe(firstTranscribeCalls + 1)
+    const secondBlob = ipc.transcribeAudio.mock.calls.at(-1)![0] as Blob
+    expect(secondBlob.size).toBe('second-chunk'.length) // not concatenated with first
+  })
+
+  it('deactivate during in-flight cold path stops the recorder via finalizer', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const session = makeSession({ connectDelayMs: 100 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, sessionFactory: session.factory })
+    )
+
+    const activatePromise = svc.activate(1, { pageText: 'p' })
+    // Wait for the fiber to walk through mic + session build + recorder start.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(svc.getState()).toBe('connecting')
+    const rec = media.lastRecorder()!
+    expect(rec.start).toHaveBeenCalled()
+
+    svc.deactivate()
+    await activatePromise.catch(() => undefined)
+
+    // The acquireRelease finalizer for the recorder should have called stop.
+    expect(rec.stop).toHaveBeenCalled()
+    expect(svc.getState()).toBe('idle')
   })
 })

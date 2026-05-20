@@ -20,5 +20,6 @@ export type {
   RealtimeSessionLike,
   RtcTransportLike,
   MediaStreamLike,
+  MediaRecorderLike,
   AudioElementLike
 } from './types'
