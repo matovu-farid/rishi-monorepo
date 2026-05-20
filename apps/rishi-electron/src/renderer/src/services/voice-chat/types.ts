@@ -1,6 +1,7 @@
 import type { BookOutline } from '@/lib/api'
 import type { RagService } from '@/services/rag'
 import type { ConnectivityService } from '@/services/connectivity'
+import type { VisualSummary } from '@/lib/visualHeuristic'
 
 /**
  * Public state surface. Same string union as the internal machine, re-named
@@ -29,6 +30,8 @@ export interface VoiceChatContext {
   outline?: BookOutline
   /** The paragraph TTS was on at chat-start, so the model can resolve "this", "what you just read", etc. */
   activeParagraphText?: string
+  /** Counts of visual content (equations/figures/images) on the user's current page. */
+  visualSummary?: VisualSummary
 }
 
 export class OfflineError extends Error {
