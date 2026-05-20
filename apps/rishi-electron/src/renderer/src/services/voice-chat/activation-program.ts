@@ -13,6 +13,7 @@ import {
 import type {
   AudioElementLike,
   ChatStatus,
+  LocalVoiceVad,
   MediaRecorderLike,
   MediaStreamLike,
   RealtimeSessionLike,
@@ -20,6 +21,7 @@ import type {
   VoiceChatIpc,
   VoiceChatServiceDeps
 } from './types'
+import { VadDisposedError, VadTimeoutError } from './local-vad'
 
 /**
  * Bundle returned by the activation program on success. `service.ts` stores
@@ -35,6 +37,8 @@ export interface SessionHandle {
   readonly mediaStream: MediaStreamLike
   readonly audioElement: AudioElementLike
   readonly cleanup: () => void
+  /** Null when AudioContext is unavailable. service.ts disposes alongside the session. */
+  readonly vad: LocalVoiceVad | null
 }
 
 export interface ActivationDeps {
@@ -198,7 +202,11 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
       rag: deps.rag,
       language: deps.getLanguage()
     })
-    const session = deps.sessionFactory(agent, { transport, apiKey: '' })
+    const session = deps.sessionFactory(agent, {
+      transport,
+      apiKey: '',
+      serverVad: deps.config.serverVad
+    })
 
     let hasFiredReadyChime = false
     let isAgentSpeaking = false
@@ -296,6 +304,19 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
             })
         )
 
+        // Local VAD attaches to the same MediaStream as the recorder and the
+        // session transport. Sharing the stream across MediaRecorder +
+        // AudioContext.createMediaStreamSource is a supported Chromium pattern.
+        // VadPort.create() may return null if AudioContext is unavailable; the
+        // pipeline degrades to current behavior (no gating) in that case.
+        const vad = yield* Effect.acquireRelease(
+          Effect.sync(() => deps.vad.create(mediaStream)),
+          (v) =>
+            Effect.sync(() => {
+              if (!success && v) v.dispose()
+            })
+        )
+
         const built = yield* Effect.acquireRelease(
           Effect.sync(() => buildSession(bookId, ctx, mediaStream, audioElement)),
           (h) =>
@@ -374,6 +395,37 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
           })
         )
 
+        // VAD gate: hold here until the user has finished their utterance (or
+        // never spoke). Without this, the buffered recorder gets stopped mid-
+        // sentence and Deepgram returns a partial transcript — the agent
+        // responds to half a thought, then the live mic opens and the user's
+        // tail-of-sentence creates a duplicate turn that interrupts the agent.
+        //
+        // Implemented with Effect.async (not Effect.promise) so a fiber
+        // interrupt during a pending wait runs the cleanup → vad.dispose() →
+        // pending promise rejects with VadDisposedError → Effect.async resumes.
+        // Plain Effect.promise would be uninterruptible and could stall the
+        // fiber up to connectTimeoutMs after the user taps deactivate().
+        // VadTimeoutError / VadDisposedError are swallowed — both mean
+        // "proceed with whatever the buffer holds." The connect timeout
+        // budget is reused as the VAD safety ceiling.
+        if (vad) {
+          const vadRef = vad
+          yield* Effect.async<void, never>((resume) => {
+            vadRef.waitForSpeechEnd(deps.config.connectTimeoutMs).then(
+              () => resume(Effect.void),
+              (err: unknown) => {
+                if (err instanceof VadTimeoutError || err instanceof VadDisposedError) {
+                  resume(Effect.void)
+                } else {
+                  resume(Effect.die(err))
+                }
+              }
+            )
+            return Effect.sync(() => vadRef.dispose())
+          })
+        }
+
         // Replay buffered speech BEFORE unmuting the live mic. If we unmute
         // first and the user is still talking, the same words land at OpenAI
         // twice — once as the buffered transcript, once as live WebRTC audio.
@@ -395,7 +447,8 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
           session: built.session,
           mediaStream,
           audioElement,
-          cleanup: built.cleanup
+          cleanup: built.cleanup,
+          vad
         } satisfies SessionHandle
       })
     )

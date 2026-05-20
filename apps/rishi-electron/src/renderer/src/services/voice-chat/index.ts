@@ -1,4 +1,5 @@
 export { createVoiceChatService } from './service'
+export { createLocalVad, VadTimeoutError, VadDisposedError } from './local-vad'
 export { OfflineError } from './types'
 export type {
   ChatStatus,
@@ -21,5 +22,9 @@ export type {
   RtcTransportLike,
   MediaStreamLike,
   MediaRecorderLike,
-  AudioElementLike
+  AudioElementLike,
+  LocalVadConfig,
+  LocalVoiceVad,
+  ServerVadConfig,
+  VadPort
 } from './types'

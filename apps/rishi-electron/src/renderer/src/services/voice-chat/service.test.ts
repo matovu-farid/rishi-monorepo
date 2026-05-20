@@ -7,18 +7,21 @@ import type {
   ChatStatus,
   ClockPort,
   EffectsPort,
+  LocalVoiceVad,
   MediaPort,
   MediaStreamLike,
   RealtimeAgentLike,
   RealtimeSessionLike,
   RtcTransportLike,
   SessionFactoryOpts,
+  VadPort,
   VoiceChatConfig,
   VoiceChatIpc,
   VoiceChatPublicState,
   VoiceChatServiceDeps,
   WebrtcFactoryArgs
 } from './types'
+import { VadTimeoutError, VadDisposedError } from './local-vad'
 import type { RagService } from '@/services/rag'
 import type { ConnectivityService } from '@/services/connectivity'
 
@@ -320,8 +323,118 @@ export function makeConfig(overrides?: Partial<VoiceChatConfig>): VoiceChatConfi
     connectTimeoutMs: 60 * 1000,
     keyTtlMs: 9 * 60 * 1000,
     bufferedSpeechReplayEnabled: true,
+    localVad: {
+      rmsThreshold: 0.05,
+      hangoverMs: 700,
+      pollIntervalMs: 50,
+      fftSize: 256
+    },
+    serverVad: {
+      threshold: 0.7,
+      silenceDurationMs: 700,
+      prefixPaddingMs: 300
+    },
     ...overrides
   }
+}
+
+/**
+ * Fake VAD with imperative controls. The activation pipeline awaits
+ * `waitForSpeechEnd`; tests drive end-of-utterance via `emitSpeechEnd()`.
+ *
+ * Defaults are tuned for the buffered-speech-replay tests that pre-date this
+ * feature: `everSpoke = true`, `currentlySpeaking = false` so `waitForSpeechEnd`
+ * resolves immediately and existing tests behave as before.
+ */
+export interface FakeVad extends LocalVoiceVad {
+  /** Simulate VAD detecting the start of speech. */
+  emitSpeechStart: () => void
+  /** Simulate the silence-hangover firing; resolves any pending wait. */
+  emitSpeechEnd: () => void
+  /** Override the everSpoke() return value (default: true). */
+  setEverSpoke: (value: boolean) => void
+  /** Track dispose calls. */
+  disposeCalls: () => number
+  /** Track pending waits. */
+  hasPendingWait: () => boolean
+}
+
+export function makeVad(opts?: {
+  initialEverSpoke?: boolean
+  initiallySpeaking?: boolean
+  /** When true, port.create() returns null (simulates AudioContext-unavailable). */
+  unavailable?: boolean
+}): {
+  port: VadPort
+  vad: FakeVad | null
+  lastStream: () => MediaStreamLike | null
+} {
+  let everSpoke = opts?.initialEverSpoke ?? true
+  let speaking = opts?.initiallySpeaking ?? false
+  let disposeCalls = 0
+  let pendingResolve: (() => void) | null = null
+  let pendingReject: ((err: unknown) => void) | null = null
+  let pendingTimeoutId: ReturnType<typeof setTimeout> | null = null
+  let disposed = false
+  let lastStream: MediaStreamLike | null = null
+
+  const vad: FakeVad | null = opts?.unavailable
+    ? null
+    : {
+        everSpoke: () => everSpoke,
+        waitForSpeechEnd: (timeoutMs: number) => {
+          if (disposed) return Promise.reject(new VadDisposedError())
+          if (!everSpoke || !speaking) return Promise.resolve()
+          return new Promise<void>((resolve, reject) => {
+            pendingResolve = resolve
+            pendingReject = reject
+            pendingTimeoutId = setTimeout(() => {
+              pendingResolve = null
+              pendingReject = null
+              pendingTimeoutId = null
+              reject(new VadTimeoutError(timeoutMs))
+            }, timeoutMs)
+          })
+        },
+        dispose: () => {
+          if (disposed) return
+          disposed = true
+          disposeCalls++
+          if (pendingTimeoutId !== null) clearTimeout(pendingTimeoutId)
+          const reject = pendingReject
+          pendingResolve = null
+          pendingReject = null
+          pendingTimeoutId = null
+          if (reject) reject(new VadDisposedError())
+        },
+        emitSpeechStart: () => {
+          speaking = true
+          everSpoke = true
+        },
+        emitSpeechEnd: () => {
+          speaking = false
+          if (pendingTimeoutId !== null) clearTimeout(pendingTimeoutId)
+          const resolve = pendingResolve
+          pendingResolve = null
+          pendingReject = null
+          pendingTimeoutId = null
+          if (resolve) resolve()
+        },
+        setEverSpoke: (value: boolean) => {
+          everSpoke = value
+        },
+        disposeCalls: () => disposeCalls,
+        hasPendingWait: () => pendingResolve !== null
+      }
+
+  const port: VadPort = {
+    create: (stream) => {
+      lastStream = stream
+      return vad
+    }
+  }
+
+  return { port, vad, lastStream: () => lastStream }
 }
 
 export function makeDeps(overrides?: Partial<VoiceChatServiceDeps>): VoiceChatServiceDeps {
@@ -333,6 +446,7 @@ export function makeDeps(overrides?: Partial<VoiceChatServiceDeps>): VoiceChatSe
     agentFactory: makeAgent().factory,
     sessionFactory: makeSession().factory,
     media: makeMedia(),
+    vad: makeVad().port,
     effects: makeEffects(),
     clock: makeClock(),
     config: makeConfig(),
@@ -1205,5 +1319,221 @@ describe('createVoiceChatService — buffered speech replay', () => {
     // The acquireRelease finalizer for the recorder should have called stop.
     expect(rec.stop).toHaveBeenCalled()
     expect(svc.getState()).toBe('idle')
+  })
+})
+
+// =============================================================================
+// VAD gating — the new feature.
+//
+// The activation pipeline must hold "stop recorder → transcribe → sendMessage
+// → mute(false)" until BOTH connect resolves AND vad.waitForSpeechEnd resolves.
+// =============================================================================
+
+describe('createVoiceChatService — VAD gating', () => {
+  it('user never spoke during connect: no transcribe, no sendMessage, mic opens silent', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'unreachable' })
+    const session = makeSession({ connectDelayMs: 20 })
+    const { port: vadPort, vad } = makeVad({ initialEverSpoke: false })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory, vad: vadPort })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    // No chunk emitted, no emitSpeechStart — user is silent.
+    await activation
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(vad!.everSpoke()).toBe(false)
+    expect(ipc.transcribeAudio).not.toHaveBeenCalled()
+    expect(session.sendMessage).not.toHaveBeenCalled()
+    expect(session.mute).toHaveBeenCalledWith(false)
+    expect(svc.getState()).toBe('active')
+  })
+
+  it('user spoke then stopped BEFORE connect resolves: transcript injected, mic opens after', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'where does the chapter pivot' })
+    const session = makeSession({ connectDelayMs: 30 })
+    // everSpoke true + not currently speaking → waitForSpeechEnd resolves
+    // immediately when called, mimicking the "user already finished" case.
+    const { port: vadPort } = makeVad({ initialEverSpoke: true, initiallySpeaking: false })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory, vad: vadPort })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['fake-audio'], { type: 'audio/webm' }))
+    await activation
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ipc.transcribeAudio).toHaveBeenCalledTimes(1)
+    expect(session.sendMessage).toHaveBeenCalledWith('where does the chapter pivot')
+
+    // sendMessage must precede mute(false) — the agent sees the buffered text
+    // before the live mic opens, so the user's tail-of-sentence (if any)
+    // doesn't create a duplicate turn.
+    const sendOrder = session.sendMessage.mock.invocationCallOrder[0]!
+    const muteOrder = session.mute.mock.invocationCallOrder.find(
+      (n) => session.mute.mock.calls[session.mute.mock.invocationCallOrder.indexOf(n)]?.[0] === false
+    )
+    expect(sendOrder).toBeLessThan(muteOrder!)
+  })
+
+  it('user still speaking when connect resolves: mute(false) is gated on emitSpeechEnd', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'and what about this passage' })
+    const session = makeSession({ connectDelayMs: 10 })
+    const { port: vadPort, vad } = makeVad({
+      initialEverSpoke: true,
+      initiallySpeaking: true
+    })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory, vad: vadPort })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['mid-sentence'], { type: 'audio/webm' }))
+
+    // Connect should resolve well before 100ms, but waitForSpeechEnd should
+    // still be pending because we haven't emitted speech-end.
+    await new Promise((r) => setTimeout(r, 50))
+    expect(vad!.hasPendingWait()).toBe(true)
+    expect(session.mute).not.toHaveBeenCalledWith(false)
+    expect(session.sendMessage).not.toHaveBeenCalled()
+
+    // User finishes speaking.
+    vad!.emitSpeechEnd()
+    await activation
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ipc.transcribeAudio).toHaveBeenCalledTimes(1)
+    expect(session.sendMessage).toHaveBeenCalledWith('and what about this passage')
+    expect(session.mute).toHaveBeenCalledWith(false)
+  })
+
+  it('VAD safety timeout: activation completes even if emitSpeechEnd never fires', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'partial utterance' })
+    const session = makeSession({ connectDelayMs: 5 })
+    const { port: vadPort } = makeVad({
+      initialEverSpoke: true,
+      initiallySpeaking: true
+    })
+    // Tiny connectTimeoutMs so the safety timeout fires quickly in real-time.
+    const config = makeConfig({ connectTimeoutMs: 50 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory, vad: vadPort, config })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['partial'], { type: 'audio/webm' }))
+
+    // Don't emit speech-end. Wait past the safety timeout.
+    await activation
+    await new Promise((r) => setTimeout(r, 0))
+
+    // Pipeline must proceed with the partial.
+    expect(ipc.transcribeAudio).toHaveBeenCalled()
+    expect(session.mute).toHaveBeenCalledWith(false)
+    expect(svc.getState()).toBe('active')
+  })
+
+  it('VadPort returning null degrades to current behavior (no VAD gate)', async () => {
+    const media = makeMedia({ withRecorder: true })
+    const ipc = makeIpc({ key: 'k', transcript: 'a clear sentence' })
+    const session = makeSession({ connectDelayMs: 10 })
+    const { port: vadPort } = makeVad({ unavailable: true })
+    const svc = createVoiceChatService(
+      makeDeps({ media, ipc, sessionFactory: session.factory, vad: vadPort })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    await new Promise((r) => setTimeout(r, 0))
+    media.lastRecorder()!.emitChunk(new Blob(['x'], { type: 'audio/webm' }))
+    await activation
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(ipc.transcribeAudio).toHaveBeenCalledTimes(1)
+    expect(session.sendMessage).toHaveBeenCalledWith('a clear sentence')
+    expect(session.mute).toHaveBeenCalledWith(false)
+  })
+
+  it('deactivate during a pending VAD wait does not stall the fiber', async () => {
+    // Regression: Effect.promise would have been uninterruptible, leaving the
+    // fiber suspended for up to connectTimeoutMs (60s prod) on deactivate.
+    // The Effect.async cleanup disposes the VAD so the pending promise
+    // settles immediately on interrupt.
+    const media = makeMedia({ withRecorder: true })
+    const session = makeSession({ connectDelayMs: 5 })
+    const { port: vadPort, vad } = makeVad({
+      initialEverSpoke: true,
+      initiallySpeaking: true
+    })
+    const config = makeConfig({ connectTimeoutMs: 60_000 })
+    const svc = createVoiceChatService(
+      makeDeps({ media, sessionFactory: session.factory, vad: vadPort, config })
+    )
+
+    const activation = svc.activate(1, { pageText: 'p' })
+    // Wait for connect to resolve and the pipeline to enter waitForSpeechEnd.
+    await new Promise((r) => setTimeout(r, 20))
+    expect(vad!.hasPendingWait()).toBe(true)
+
+    const before = Date.now()
+    svc.deactivate()
+    await activation.catch(() => undefined)
+    const elapsed = Date.now() - before
+
+    // Must finish in well under a second — the bug would have made it ~60s.
+    expect(elapsed).toBeLessThan(1000)
+    expect(vad!.disposeCalls()).toBeGreaterThanOrEqual(1)
+    expect(svc.getState()).toBe('idle')
+  })
+
+  it('VAD is disposed alongside the session', async () => {
+    const { port: vadPort, vad } = makeVad({ initialEverSpoke: true })
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ sessionFactory: session.factory, vad: vadPort })
+    )
+
+    await svc.activate(1, { pageText: 'p' })
+    expect(vad!.disposeCalls()).toBe(0)
+
+    svc.deactivate()
+    expect(vad!.disposeCalls()).toBe(1)
+  })
+})
+
+// =============================================================================
+// Server-side turn_detection — passes through to sessionFactory.
+// =============================================================================
+
+describe('createVoiceChatService — serverVad wiring', () => {
+  it('passes serverVad config to sessionFactory on cold activate', async () => {
+    let captured: SessionFactoryOpts | null = null
+    const baseFactory = makeSession().factory
+    const sessionFactory: VoiceChatServiceDeps['sessionFactory'] = (agent, opts) => {
+      captured = opts
+      return baseFactory(agent, opts)
+    }
+    const config = makeConfig({
+      serverVad: { threshold: 0.65, silenceDurationMs: 800, prefixPaddingMs: 250 }
+    })
+    const svc = createVoiceChatService(makeDeps({ sessionFactory, config }))
+
+    await svc.activate(1, { pageText: 'p' })
+
+    expect(captured).not.toBeNull()
+    expect(captured!.serverVad).toEqual({
+      threshold: 0.65,
+      silenceDurationMs: 800,
+      prefixPaddingMs: 250
+    })
   })
 })
