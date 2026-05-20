@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { buildRealtimeAgent } from './buildRealtimeAgent'
+import * as pageCapture from '@/modules/pageCapture'
 
 const searchSemanticMock = vi.fn().mockResolvedValue([{ text: 'stub', vectorId: 1, score: 0.9 }])
 const isIndexingMock = vi.fn().mockReturnValue(false)
@@ -366,6 +367,72 @@ describe('buildRealtimeAgent', () => {
         language: 'en'
       })
       expect(agent.instructions).not.toContain('## Visual context')
+    })
+  })
+
+  describe('inspectCurrentPage tool', () => {
+    it('is registered on the agent', () => {
+      const agent = buildRealtimeAgent({
+        bookId: 1,
+        pageText: 'x',
+        onEndConversation: () => {},
+        language: 'en',
+        visualSummary: { equations: 0, figures: 1, images: 0 }
+      })
+      const names = agent.tools.map((t) => (t as { name: string }).name)
+      expect(names).toContain('inspectCurrentPage')
+    })
+
+    it('executor calls captureCurrentPage with the chosen detail and reports back', async () => {
+      const spy = vi.spyOn(pageCapture, 'captureCurrentPage').mockResolvedValue({
+        dataUrl: 'data:image/webp;base64,AAA',
+        width: 1024,
+        height: 768,
+        bytes: 100
+      })
+      const onImage = vi.fn()
+      const agent = buildRealtimeAgent({
+        bookId: 1,
+        pageText: 'x',
+        onEndConversation: () => {},
+        language: 'en',
+        visualSummary: { equations: 0, figures: 1, images: 0 },
+        onInspectImage: onImage
+      })
+      const t = agent.tools.find(
+        (x) => (x as { name: string }).name === 'inspectCurrentPage'
+      ) as unknown as {
+        execute: (a: { detail: 'low' | 'high' }) => Promise<string>
+      }
+      const result = await t.execute({ detail: 'high' })
+      expect(spy).toHaveBeenCalledWith({ detail: 'high' })
+      expect(onImage).toHaveBeenCalledWith({
+        dataUrl: 'data:image/webp;base64,AAA',
+        width: 1024,
+        height: 768,
+        bytes: 100
+      })
+      expect(result).toMatch(/image/i)
+    })
+
+    it('returns a graceful text fallback on capture failure', async () => {
+      vi.spyOn(pageCapture, 'captureCurrentPage').mockRejectedValue(
+        new pageCapture.PageCaptureError(pageCapture.CaptureError.NotReady, 'no canvas')
+      )
+      const agent = buildRealtimeAgent({
+        bookId: 1,
+        pageText: 'x',
+        onEndConversation: () => {},
+        language: 'en',
+        visualSummary: { equations: 0, figures: 1, images: 0 }
+      })
+      const t = agent.tools.find(
+        (x) => (x as { name: string }).name === 'inspectCurrentPage'
+      ) as unknown as {
+        execute: (a: { detail: 'low' | 'high' }) => Promise<string>
+      }
+      const result = await t.execute({ detail: 'low' })
+      expect(result.toLowerCase()).toContain('unavailable')
     })
   })
 })

@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { Effect } from 'effect'
 import { captureError } from '@/utils/sentry'
 import { LANGUAGE_LABELS, isAllowedLanguage, DEFAULT_LANGUAGE } from '@/lib/languages'
+import { captureCurrentPage, type CaptureResult } from '@/modules/pageCapture'
 
 /**
  * Runs a realtime-agent tool execute under Effect so its outcome is
@@ -102,6 +103,12 @@ export interface BuildAgentOptions {
   rag?: RagService
   /** Optional summary of visual content on the current page. */
   visualSummary?: VisualSummary
+  /**
+   * Called when the inspect tool successfully captures an image. The caller
+   * (service.ts) uses this hook to inject the image into the realtime
+   * conversation via the session transport.
+   */
+  onInspectImage?: (image: CaptureResult) => void
 }
 
 function renderOutlineSection(outline: BookOutline | undefined): string {
@@ -203,7 +210,8 @@ export function buildRealtimeAgent({
   onEndConversation,
   language,
   rag,
-  visualSummary
+  visualSummary,
+  onInspectImage
 }: BuildAgentOptions): RealtimeAgent {
   const ragService: RagService = rag ?? getRagService()
   const bookContextExecute = ({ queryText }: { queryText: string }) =>
@@ -258,10 +266,37 @@ export function buildRealtimeAgent({
     { execute: endConversationExecute }
   )
 
+  const inspectCurrentPageExecute = ({ detail }: { detail: 'low' | 'high' }) =>
+    runToolCall<string>(
+      'inspectCurrentPage',
+      'Page image is currently unavailable; the text context still applies.',
+      async () => {
+        const image = await captureCurrentPage({ detail })
+        onInspectImage?.(image)
+        return `Page image captured at ${image.width}x${image.height} (${detail} detail). Attached to the conversation.`
+      }
+    )
+
+  const inspectCurrentPageTool = Object.assign(
+    tool({
+      name: 'inspectCurrentPage',
+      description:
+        "Capture a screenshot of the page the user is currently looking at. Use 'low' detail by default; use 'high' only when you need to read small text inside the image such as equations, captions, or axis labels.",
+      parameters: z.object({
+        detail: z.enum(['low', 'high']).default('low')
+      }),
+      execute: inspectCurrentPageExecute
+    }),
+    { execute: inspectCurrentPageExecute }
+  )
+
+  const tools: unknown[] = [bookContextTool, endConversationTool]
+  if (visualSummary !== undefined) tools.push(inspectCurrentPageTool)
+
   return new RealtimeAgent({
     name: 'Assistant',
     voice: 'alloy',
     instructions: INSTRUCTIONS_TEMPLATE(pageText, language, outline, activeParagraphText, visualSummary),
-    tools: [bookContextTool, endConversationTool]
+    tools: tools as never
   })
 }
