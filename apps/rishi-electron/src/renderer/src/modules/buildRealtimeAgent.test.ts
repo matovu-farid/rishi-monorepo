@@ -331,4 +331,41 @@ describe('buildRealtimeAgent', () => {
     })
     expect(agent.instructions).toMatch(/Always respond in English/)
   })
+
+  describe('visualSummary rendering', () => {
+    it('renders a Visual context section when summary has content', () => {
+      const agent = buildRealtimeAgent({
+        bookId: 1,
+        pageText: 'hello',
+        onEndConversation: () => {},
+        language: 'en',
+        visualSummary: { equations: 1, figures: 2, images: 0 }
+      })
+      expect(agent.instructions).toContain('## Visual context')
+      expect(agent.instructions).toContain('1 equation')
+      expect(agent.instructions).toContain('2 figures')
+      expect(agent.instructions).toContain('inspectCurrentPage')
+    })
+
+    it('renders "no visual content" when summary is all zeros', () => {
+      const agent = buildRealtimeAgent({
+        bookId: 1,
+        pageText: 'hello',
+        onEndConversation: () => {},
+        language: 'en',
+        visualSummary: { equations: 0, figures: 0, images: 0 }
+      })
+      expect(agent.instructions).toContain('no visual content')
+    })
+
+    it('omits the section entirely when visualSummary is undefined', () => {
+      const agent = buildRealtimeAgent({
+        bookId: 1,
+        pageText: 'hello',
+        onEndConversation: () => {},
+        language: 'en'
+      })
+      expect(agent.instructions).not.toContain('## Visual context')
+    })
+  })
 })

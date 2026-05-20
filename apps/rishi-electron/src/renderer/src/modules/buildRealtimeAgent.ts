@@ -1,5 +1,6 @@
 import { getRagService, getBookImportService } from '@/services'
 import type { BookOutline } from '@/lib/api'
+import type { VisualSummary } from '@/lib/visualHeuristic'
 import type { RagService } from '@/services/rag'
 import { RealtimeAgent, tool } from '@openai/agents/realtime'
 import { z } from 'zod'
@@ -99,6 +100,8 @@ export interface BuildAgentOptions {
    * factory always supplies this dep explicitly.
    */
   rag?: RagService
+  /** Optional summary of visual content on the current page. */
+  visualSummary?: VisualSummary
 }
 
 function renderOutlineSection(outline: BookOutline | undefined): string {
@@ -128,6 +131,25 @@ This is part of the current page above. If they say "this", "that", "what you ju
 `
 }
 
+function renderVisualSection(summary: VisualSummary | undefined): string {
+  if (!summary) return ''
+  const parts: string[] = []
+  if (summary.equations > 0)
+    parts.push(`${summary.equations} ${summary.equations === 1 ? 'equation' : 'equations'}`)
+  if (summary.figures > 0)
+    parts.push(`${summary.figures} ${summary.figures === 1 ? 'figure' : 'figures'}`)
+  if (summary.images > 0)
+    parts.push(`${summary.images} ${summary.images === 1 ? 'image' : 'images'}`)
+  const description = parts.length > 0 ? parts.join(' and ') : 'no visual content (text-only page)'
+
+  return `## Visual context
+The current page contains ${description}.
+
+You have a tool \`inspectCurrentPage({ detail: 'low' | 'high' })\` that returns a screenshot of what the user is looking at right now. Use \`detail: 'low'\` (default) for general layout questions. Use \`detail: 'high'\` only if you need to read small text inside the image (equations, captions, axis labels). Do not call it on every turn — only when the user's question requires visual context.
+
+`
+}
+
 function renderLanguageSection(language: string): string {
   const code = isAllowedLanguage(language) ? language : DEFAULT_LANGUAGE
   const label = LANGUAGE_LABELS[code]
@@ -141,11 +163,12 @@ const INSTRUCTIONS_TEMPLATE = (
   pageText: string,
   language: string,
   outline?: BookOutline,
-  activeParagraphText?: string
+  activeParagraphText?: string,
+  visualSummary?: VisualSummary
 ) => `## Role
 You are a teaching assistant helping the user understand the book they're reading. Make complex ideas accessible and answer questions in a way that aids comprehension.
 
-${renderLanguageSection(language)}${renderOutlineSection(outline)}## Current Page Content
+${renderLanguageSection(language)}${renderOutlineSection(outline)}${renderVisualSection(visualSummary)}## Current Page Content
 """
 ${pageText || '(No page text available)'}
 """
@@ -179,7 +202,8 @@ export function buildRealtimeAgent({
   activeParagraphText,
   onEndConversation,
   language,
-  rag
+  rag,
+  visualSummary
 }: BuildAgentOptions): RealtimeAgent {
   const ragService: RagService = rag ?? getRagService()
   const bookContextExecute = ({ queryText }: { queryText: string }) =>
@@ -237,7 +261,7 @@ export function buildRealtimeAgent({
   return new RealtimeAgent({
     name: 'Assistant',
     voice: 'alloy',
-    instructions: INSTRUCTIONS_TEMPLATE(pageText, language, outline, activeParagraphText),
+    instructions: INSTRUCTIONS_TEMPLATE(pageText, language, outline, activeParagraphText, visualSummary),
     tools: [bookContextTool, endConversationTool]
   })
 }
