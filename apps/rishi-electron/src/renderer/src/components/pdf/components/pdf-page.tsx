@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -10,6 +11,7 @@ import { Page } from 'react-pdf'
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist'
 
 import { usePdfStore } from '@/stores/pdfStore'
+import { registerPdfCanvas, unregisterPdfCanvas } from '@/modules/pageCapture/pdfCanvasRegistry'
 import Loader from '@/components/Loader'
 import { HighlightLayer } from '../HighlightLayer'
 import type { HighlightRow } from '@/modules/highlight-storage'
@@ -110,7 +112,13 @@ function PageComponentInner({
     [highlightedParagraph]
   )
 
+  useEffect(() => () => unregisterPdfCanvas(pageNumber), [pageNumber])
+
   const handleRenderSuccess = useCallback(() => {
+    const canvas = wrapperRef.current?.querySelector('canvas') ?? null
+    if (canvas instanceof HTMLCanvasElement) {
+      registerPdfCanvas(pageNumber, canvas)
+    }
     // Read pageNumber via getState() so we don't subscribe — `pageNumber`
     // changes on every scroll-driven page advance and would otherwise re-
     // render every mounted page.
