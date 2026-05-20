@@ -1,7 +1,14 @@
 export interface PartialFirst {
   /** Text from the sentence-start offset to end of paragraph. */
   partialFirstText: string
-  /** Stable TTS cache key: `${paragraphIndex}#s=${sentenceStartChar}` */
+  /**
+   * Stable TTS cache key. When `sentenceStartChar === 0` (selection lands in
+   * the first sentence, so the partial equals the full paragraph) this is the
+   * bare `paragraphIndex` — matching the key used by normal play/prefetch so
+   * previously-cached audio is reused. Otherwise it is suffixed with
+   * `#s=${sentenceStartChar}` because the audio is a strict subset and needs
+   * its own cache entry.
+   */
   partialFirstKey: string
   /** Char offset of the sentence start. 0 if selection is already at one. */
   sentenceStartChar: number
@@ -50,6 +57,7 @@ export function buildPartialFirst(
 ): PartialFirst {
   const sentenceStartChar = findSentenceStart(paragraphText, selectionStartChar)
   const partialFirstText = paragraphText.slice(sentenceStartChar)
-  const partialFirstKey = `${paragraphIndex}#s=${sentenceStartChar}`
+  const partialFirstKey =
+    sentenceStartChar === 0 ? paragraphIndex : `${paragraphIndex}#s=${sentenceStartChar}`
   return { partialFirstText, partialFirstKey, sentenceStartChar }
 }

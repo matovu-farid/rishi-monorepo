@@ -83,10 +83,12 @@ describe('usePdfReadAloudFromSelection', () => {
     expect(event.type).toBe('PLAY_FROM')
     expect(event.paragraphIndex).toBe(0)
     // partialFirstText should start at or before the matched offset; with sentence
-    // boundary at position 0 of paragraph 0, the whole paragraph is returned.
+    // boundary at position 0 of paragraph 0, the whole paragraph is returned and
+    // the cache key collapses to the bare paragraph index so previously-cached
+    // audio hits.
     expect(typeof event.partialFirstText).toBe('string')
     expect(event.partialFirstText.length).toBeGreaterThan(0)
-    expect(event.partialFirstKey).toMatch(/^10000#s=/)
+    expect(event.partialFirstKey).toBe('10000')
   })
 
   it('bails when player is idle or pageNavigating (mirrors EpubView guard)', () => {

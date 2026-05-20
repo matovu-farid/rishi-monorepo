@@ -38,10 +38,16 @@ describe('findSentenceStart', () => {
 })
 
 describe('buildPartialFirst', () => {
-  it('returns full paragraph text when sentenceStart is 0', () => {
+  it('returns full paragraph text and bare paragraph key when sentenceStart is 0', () => {
+    // When the selection starts within the first sentence the partial is the
+    // whole paragraph. The cache key must equal the paragraph index used by
+    // normal play/prefetch so previously-cached audio hits instead of
+    // triggering a refetch (which manifests as the "stuck in loading" bug
+    // when the user uses "Read aloud from here" on a paragraph they've
+    // already played).
     const result = buildPartialFirst('cfi:1', 'Hello. World.', 0)
     expect(result.partialFirstText).toBe('Hello. World.')
-    expect(result.partialFirstKey).toBe('cfi:1#s=0')
+    expect(result.partialFirstKey).toBe('cfi:1')
     expect(result.sentenceStartChar).toBe(0)
   })
 
@@ -63,6 +69,6 @@ describe('buildPartialFirst', () => {
   it('handles empty paragraph text', () => {
     const result = buildPartialFirst('cfi:p1', '', 0)
     expect(result.partialFirstText).toBe('')
-    expect(result.partialFirstKey).toBe('cfi:p1#s=0')
+    expect(result.partialFirstKey).toBe('cfi:p1')
   })
 })
