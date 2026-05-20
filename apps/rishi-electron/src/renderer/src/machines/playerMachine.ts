@@ -53,6 +53,7 @@ export type PlayerMachineEvent =
   // an optional override for the first chunk of audio so playback can begin
   // mid-paragraph. Ignored from idle/pageNavigating/republishingParagraphs.
   | { type: 'PLAY_FROM'; paragraphIndex: number; partialFirstText: string; partialFirstKey: string }
+  | { type: 'REPEAT' }
 
 const initialContext: PlayerMachineContext = {
   bookId: '',
@@ -435,6 +436,11 @@ export const playerMachine = setup({
         PLAY_FROM: {
           target: 'loading',
           actions: ['setPartialFirst', 'setParagraphIndexFromEvent']
+        },
+        REPEAT: {
+          target: 'loading',
+          reenter: true,
+          actions: 'clearPartialFirst'
         }
       }
     },

@@ -752,6 +752,160 @@ describe('playerMachine', () => {
     // rendition without firing pageRequest).
     expect(actor.getSnapshot().value).toBe('republishingParagraphs')
   })
+
+  describe('REPEAT', () => {
+    it('transitions playing → loading and keeps paragraphIndex unchanged', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PLAY' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      // Advance to paragraph index 1 so we can prove REPEAT does NOT reset to 0.
+      actor.send({ type: 'NEXT' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      expect(actor.getSnapshot().value).toBe('playing')
+      expect(actor.getSnapshot().context.paragraphIndex).toBe(1)
+
+      actor.send({ type: 'REPEAT' })
+
+      const snap = actor.getSnapshot()
+      expect(snap.value).toBe('loading')
+      expect(snap.context.paragraphIndex).toBe(1)
+    })
+
+    it('clears partialFirstText and partialFirstKey from context', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      // Enter playing via PLAY_FROM with a partial-first override.
+      actor.send({
+        type: 'PLAY_FROM',
+        paragraphIndex: 1,
+        partialFirstText: 'half of the paragraph',
+        partialFirstKey: 'p-1:0,1:21'
+      })
+      actor.send({ type: 'AUDIO_LOADED' })
+      expect(actor.getSnapshot().context.partialFirstText).toBe('half of the paragraph')
+      expect(actor.getSnapshot().context.partialFirstKey).toBe('p-1:0,1:21')
+
+      actor.send({ type: 'REPEAT' })
+
+      const snap = actor.getSnapshot()
+      expect(snap.value).toBe('loading')
+      expect(snap.context.partialFirstText).toBeNull()
+      expect(snap.context.partialFirstKey).toBeNull()
+      expect(snap.context.partialFirstParagraphIndex).toBeNull()
+    })
+
+    it('is a no-op from every non-playing state', () => {
+      const cases: Array<{ name: string; enter: (a: typeof actor) => void }> = [
+        { name: 'idle', enter: () => {} },
+        {
+          name: 'stopped',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+          }
+        },
+        {
+          name: 'loading',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+            a.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+            a.send({ type: 'PLAY' })
+          }
+        },
+        {
+          name: 'paused.clean',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+            a.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+            a.send({ type: 'PLAY' })
+            a.send({ type: 'AUDIO_LOADED' })
+            a.send({ type: 'PAUSE' })
+          }
+        },
+        {
+          name: 'paused.stale',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+            a.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+            a.send({ type: 'PLAY' })
+            a.send({ type: 'AUDIO_LOADED' })
+            a.send({ type: 'PAUSE' })
+            a.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(2) })
+          }
+        },
+        {
+          name: 'waitingForParagraphs',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+            a.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(1) })
+            a.send({ type: 'PLAY' })
+            a.send({ type: 'AUDIO_LOADED' })
+            a.send({ type: 'NEXT' })
+          }
+        },
+        {
+          name: 'pageNavigating',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+            a.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+            a.send({ type: 'PLAY' })
+            a.send({ type: 'AUDIO_LOADED' })
+            a.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+          }
+        },
+        {
+          name: 'republishingParagraphs',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+            a.send({ type: 'PLAY' })
+          }
+        },
+        {
+          name: 'error',
+          enter: (a) => {
+            a.send({ type: 'INITIALIZE', bookId: 'book1' })
+            a.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+            a.send({ type: 'PLAY' })
+            a.send({ type: 'AUDIO_LOADED' })
+            a.send({ type: 'AUDIO_ERROR', error: 'boom' })
+          }
+        }
+      ]
+
+      for (const c of cases) {
+        const fresh = createActor(playerMachine)
+        fresh.start()
+        c.enter(fresh)
+        const beforeValue = fresh.getSnapshot().value
+        const beforeIndex = fresh.getSnapshot().context.paragraphIndex
+        fresh.send({ type: 'REPEAT' })
+        const afterValue = fresh.getSnapshot().value
+        const afterIndex = fresh.getSnapshot().context.paragraphIndex
+        expect(afterValue, `state should not change from ${c.name}`).toEqual(beforeValue)
+        expect(afterIndex, `paragraphIndex should not change from ${c.name}`).toBe(beforeIndex)
+      }
+    })
+
+    it('after REPEAT, AUDIO_ENDED advances paragraphIndex by 1 as normal', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PLAY' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      actor.send({ type: 'NEXT' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      expect(actor.getSnapshot().context.paragraphIndex).toBe(1)
+
+      actor.send({ type: 'REPEAT' })
+      expect(actor.getSnapshot().value).toBe('loading')
+
+      actor.send({ type: 'AUDIO_LOADED' })
+      expect(actor.getSnapshot().value).toBe('playing')
+
+      actor.send({ type: 'AUDIO_ENDED' })
+      expect(actor.getSnapshot().value).toBe('loading')
+      expect(actor.getSnapshot().context.paragraphIndex).toBe(2)
+    })
+  })
 })
 
 describe('playerMachine - PLAY_FROM', () => {
