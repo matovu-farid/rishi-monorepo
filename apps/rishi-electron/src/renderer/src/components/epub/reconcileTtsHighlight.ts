@@ -30,7 +30,9 @@ export function createEpubTtsReconciler(rendition: Rendition) {
     // not mark ourselves as owner so we never remove it later.
     if (desiredIndex && currentTtsCfi !== desiredIndex) {
       const hash = encodeURI(desiredIndex + 'highlight')
-      const userOwnsIt = hash in rendition.annotations._annotations
+      const internal = (rendition.annotations as { _annotations?: Record<string, unknown> })
+        ?._annotations
+      const userOwnsIt = internal ? hash in internal : false
       void highlightRange(rendition, desiredIndex)
       if (!userOwnsIt) owned.add(desiredIndex)
       currentTtsCfi = desiredIndex

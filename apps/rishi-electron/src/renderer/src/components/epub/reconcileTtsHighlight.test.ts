@@ -107,4 +107,16 @@ describe('createEpubTtsReconciler', () => {
     expect(removedCfis).not.toContain('cfi-user-A')
     expect(removedCfis).not.toContain('cfi-user-B')
   })
+
+  it('does not throw when rendition.annotations._annotations is undefined', () => {
+    // Simulate early-init Rendition where _annotations has not been populated yet.
+    const r = { annotations: {} } as never
+    const reconcile = createEpubTtsReconciler(r)
+    expect(() => reconcile('cfi-p5')).not.toThrow()
+    // Since we cannot detect prior ownership, we DO add to our owned set.
+    // Transitioning away must then call removeHighlight for that CFI.
+    removeHighlightMock.mockClear()
+    reconcile('cfi-p7')
+    expect(removeHighlightMock).toHaveBeenCalledWith(r, 'cfi-p5')
+  })
 })
