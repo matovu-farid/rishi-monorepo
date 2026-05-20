@@ -50,7 +50,11 @@ test.describe('MOBI reader', () => {
     await app.page.evaluate(() => {
       window.location.hash = '#/books/99999'
     })
-    await app.page.waitForTimeout(1500)
-    await expect(app.page.locator('body')).toBeVisible()
+    // books.$id.lazy.tsx: useQuery's queryFn throws `new Error('Book not
+    // found')` when getBook(id) returns null, and the isError branch renders
+    // `<div>{error.message}</div>`. Asserting on the user-visible error text
+    // positively confirms the error path mounted (no crash, no white-screen)
+    // rather than just that <body> exists.
+    await expect(app.page.getByText('Book not found')).toBeVisible({ timeout: 15000 })
   })
 })
