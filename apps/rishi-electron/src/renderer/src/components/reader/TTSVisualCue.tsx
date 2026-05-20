@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getVisualCueEmitter, type VisualNearbyEvent } from '@/services/tts'
+import { usePrefsStore } from '@/stores/prefsStore'
 
 /**
  * Floating affordance that appears next to the reader when the TTS cursor
@@ -11,6 +12,7 @@ import { getVisualCueEmitter, type VisualNearbyEvent } from '@/services/tts'
  * when the next paragraph has no nearby visuals.
  */
 export function TTSVisualCue(): React.JSX.Element | null {
+  const enabled = usePrefsStore((s) => s.ttsVisualCueEnabled)
   const [event, setEvent] = useState<VisualNearbyEvent | null>(null)
 
   useEffect(() => {
@@ -20,7 +22,7 @@ export function TTSVisualCue(): React.JSX.Element | null {
     return off
   }, [])
 
-  if (!event) return null
+  if (!enabled || !event) return null
 
   const firstHit = event.hits[0]
   const kind = firstHit.kind

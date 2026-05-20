@@ -10,6 +10,10 @@ import {
 
 interface PrefsState {
   voiceChatLanguage: AllowedLanguage
+  /** Expose page screenshots + inspectCurrentPage tool to the voice-chat agent. */
+  voiceChatVisionEnabled: boolean
+  /** Show the "Equation/Figure on page" cue during TTS read-aloud. */
+  ttsVisualCueEnabled: boolean
   /**
    * Read the persisted value from the main-process store. Safe to call
    * multiple times; later calls overwrite the in-memory value.
@@ -24,16 +28,26 @@ interface PrefsState {
    * effect mid-stream.
    */
   setVoiceChatLanguage: (lang: AllowedLanguage) => Promise<void>
+  setVoiceChatVisionEnabled: (enabled: boolean) => Promise<void>
+  setTtsVisualCueEnabled: (enabled: boolean) => Promise<void>
 }
 
 export const usePrefsStore = create<PrefsState>()(
   devtools((set, get) => ({
     voiceChatLanguage: DEFAULT_LANGUAGE,
+    voiceChatVisionEnabled: true,
+    ttsVisualCueEnabled: true,
 
     async hydrate() {
       const raw = await window.electron.getStoreValue('voiceChatLanguage')
       const next: AllowedLanguage = isAllowedLanguage(raw) ? raw : DEFAULT_LANGUAGE
-      set({ voiceChatLanguage: next })
+      const visionRaw = await window.electron.getStoreValue('voiceChatVisionEnabled')
+      const cueRaw = await window.electron.getStoreValue('ttsVisualCueEnabled')
+      set({
+        voiceChatLanguage: next,
+        voiceChatVisionEnabled: typeof visionRaw === 'boolean' ? visionRaw : true,
+        ttsVisualCueEnabled: typeof cueRaw === 'boolean' ? cueRaw : true
+      })
     },
 
     async setVoiceChatLanguage(lang) {
@@ -44,6 +58,18 @@ export const usePrefsStore = create<PrefsState>()(
       // leave the cache in an inconsistent state.
       getVoiceChatService().invalidateKey()
       set({ voiceChatLanguage: lang })
+    },
+
+    async setVoiceChatVisionEnabled(enabled) {
+      if (get().voiceChatVisionEnabled === enabled) return
+      await window.electron.setStoreValue('voiceChatVisionEnabled', enabled)
+      set({ voiceChatVisionEnabled: enabled })
+    },
+
+    async setTtsVisualCueEnabled(enabled) {
+      if (get().ttsVisualCueEnabled === enabled) return
+      await window.electron.setStoreValue('ttsVisualCueEnabled', enabled)
+      set({ ttsVisualCueEnabled: enabled })
     }
   }))
 )

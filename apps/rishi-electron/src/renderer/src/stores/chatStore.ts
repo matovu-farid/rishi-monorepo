@@ -9,6 +9,7 @@ import {
 } from '@/services/voice-chat'
 import { usePlayerStore } from './playerStore'
 import { useEpubStore } from './epubStore'
+import { usePrefsStore } from './prefsStore'
 import { captureError } from '@/utils/sentry'
 import { summarizeCurrentPage } from '@/modules/pageCapture'
 
@@ -75,7 +76,8 @@ export const useChatStore = create<ChatState>()(
           const outline =
             epubState.bookId === String(bookId) ? (epubState.bookOutline ?? undefined) : undefined
 
-          const visualSummary = summarizeCurrentPage()
+          const visionEnabled = usePrefsStore.getState().voiceChatVisionEnabled
+          const visualSummary = visionEnabled ? summarizeCurrentPage() : undefined
 
           voice
             .activate(bookId, { pageText, outline, activeParagraphText, visualSummary })
