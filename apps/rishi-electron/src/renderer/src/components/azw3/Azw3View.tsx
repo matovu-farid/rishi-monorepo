@@ -87,7 +87,17 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   // measured.
   const [chapterPageCounts, setChapterPageCounts] = useState<Record<number, number>>({})
 
-  const iframeRef = useRef<HTMLIFrameElement>(null)
+  const iframeRef = useRef<HTMLIFrameElement | null>(null)
+  // Mirror the iframe element into state so effects that depend on the
+  // DOM node (e.g. useTtsHighlightReconciler's `iframe.load` listener)
+  // actually re-run when React mounts/unmounts the iframe. A bare ref's
+  // `.current` mutation doesn't trigger renders, so consumers would
+  // otherwise see `null` forever. See EpubView for the same pattern.
+  const [iframeEl, setIframeEl] = useState<HTMLIFrameElement | null>(null)
+  const handleIframeRef = useCallback((el: HTMLIFrameElement | null) => {
+    iframeRef.current = el
+    setIframeEl(el)
+  }, [])
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
   const { requireAuth, AuthDialog } = useRequireAuth()
   const { bookSyncId, bookSyncIdRef } = useBookSyncId(book.id)
@@ -453,7 +463,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     },
     [chapterIndex],
   )
-  useTtsHighlightReconciler(reconcileTts, iframeRef.current)
+  useTtsHighlightReconciler(reconcileTts, iframeEl)
 
   // Auto-scroll the active paragraph into view when the player advances.
   // This effect is intentionally scoped to activeParagraph store changes only
@@ -651,7 +661,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
             // prevents stale `contentDocument` reads between src change and
             // load completion.
             key={chapterIndex}
-            ref={iframeRef}
+            ref={handleIframeRef}
             src={chapterUrl}
             onLoad={handleIframeLoad}
             className="w-full h-full border-none"
