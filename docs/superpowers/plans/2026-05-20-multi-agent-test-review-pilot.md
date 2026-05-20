@@ -4,13 +4,75 @@
 
 **Goal:** Execute the pilot phase of the multi-agent test-review workflow on the warm-restore slice. Triage 4 specs + counterparts, produce confirmed findings, fix confirmed bugs via TDD, verify with mutation checks. Validate the workflow before scaling to the full sweep.
 
-**Architecture:** The "implementation" is *orchestration*. The orchestrator (Claude main thread) reads the spec at `docs/superpowers/specs/2026-05-20-multi-agent-test-review-design.md`, dispatches subagents in waves, parses their file output, advances `INDEX.md`, and gates between waves. Each wave is one or more `Agent` tool dispatches. All findings, dialog, fixes, and verifications are persisted under `.agent-review/pilot/`.
+**Architecture:** The "implementation" is *orchestration*. A dedicated **Orchestrator subagent** (`general-purpose` type) runs the pilot. It reads the spec at `docs/superpowers/specs/2026-05-20-multi-agent-test-review-design.md`, dispatches worker subagents in waves, parses their file output, advances `INDEX.md`, and gates between waves. The **main thread** is reserved for human escalation: it boots the orchestrator, handles the issues the orchestrator surfaces, and re-spawns the orchestrator when its context is full. All findings, dialog, fixes, and verifications are persisted under `.agent-review/pilot/` so any future orchestrator dispatch can resume cleanly.
 
 **Tech Stack:** Claude Agent dispatch, Vitest, Playwright, the existing rishi-electron repo. No new dependencies.
 
 **Scope of this plan:** Pilot only. Full sweep is a separate plan written after pilot lessons.
 
 **Spec reference:** `docs/superpowers/specs/2026-05-20-multi-agent-test-review-design.md`
+
+---
+
+## Main Thread Responsibilities
+
+The main thread (the human's Claude session) only does five things during this pilot:
+
+1. **Bootstrap.** Spawn the orchestrator subagent with the prompt in the next section.
+2. **Wait.** Let the orchestrator run. Do not interleave other tool calls that could mutate `.agent-review/` or the working tree.
+3. **Handle escalations.** When the orchestrator returns with an escalation, read `.agent-review/pilot/ESCALATION.md`, gather human input, and re-spawn the orchestrator with the resolution as context.
+4. **Handle context-yield checkpoints.** If the orchestrator says "checkpoint" (its own context is filling), re-spawn a fresh orchestrator with the bootstrap prompt — it picks up from INDEX.md.
+5. **Receive the final report.** When the orchestrator returns "PILOT-COMPLETE", read INDEX.md, surface the summary to the human.
+
+The main thread does NOT dispatch worker subagents directly. The orchestrator owns the dispatch graph.
+
+---
+
+## Orchestrator Bootstrap (Main Thread → Orchestrator)
+
+Main thread dispatches this once to start the pilot, and re-dispatches the same prompt on checkpoint / escalation resumes (the orchestrator self-resumes from INDEX.md).
+
+```
+description: "Run test-review pilot"
+subagent_type: general-purpose
+
+prompt:
+You are the Orchestrator for the multi-agent test-review pilot.
+
+REQUIRED READING (in this order):
+1. /Users/faridmatovu/projects/rishi-monorepo/docs/superpowers/specs/2026-05-20-multi-agent-test-review-design.md
+2. /Users/faridmatovu/projects/rishi-monorepo/docs/superpowers/plans/2026-05-20-multi-agent-test-review-pilot.md
+3. If it exists: /Users/faridmatovu/projects/rishi-monorepo/.agent-review/pilot/INDEX.md
+4. If it exists: /Users/faridmatovu/projects/rishi-monorepo/.agent-review/pilot/ESCALATION.md (read and treat any "RESOLUTION:" line from main thread as binding)
+
+YOUR JOB:
+- Execute the plan's waves in order: Wave 0 → 10.
+- For each wave, follow its task instructions exactly. Dispatch worker subagents per the prompts in the plan.
+- After every worker returns, update INDEX.md (wave status, finding rows, dispatch counts).
+- Enforce safety rails: per-finding cap of 8 dispatches, global cap of 60 dispatches for pilot.
+- Resume cleanly from INDEX.md if waves are partially done.
+
+ESCALATION TRIGGERS — return to main thread immediately if any of these occur:
+- Mutation check returns TEST-INVALID
+- A finding reaches the per-finding cap of 8 dispatches
+- Global dispatch budget exceeded
+- Coder reports their fix broke unrelated tests
+- Any agent reports the plan or a finding is incoherent
+- After wave 3: Reviewer-1 outcomes are 100% CONFIRM or 100% REJECT
+- Your own context is approaching the limit (you judge): write CHECKPOINT to ESCALATION.md and return "CHECKPOINT" to main thread
+
+ESCALATION PROTOCOL:
+1. Write the situation, current state, and the specific question to /Users/faridmatovu/projects/rishi-monorepo/.agent-review/pilot/ESCALATION.md
+2. Return a one-line message to main thread: "ESCALATION: <reason>" or "CHECKPOINT" or "PILOT-COMPLETE"
+3. Do NOT continue working — return control.
+
+FINAL RETURN:
+When wave 10 (Summary) completes, write the final summary into INDEX.md per the plan, then return "PILOT-COMPLETE" with a 1-paragraph summary.
+
+You may dispatch subagents using the Agent tool. You may run shell commands, read/write files, and edit files. Do not modify production code yourself — that is the team-coder's job.
+
+BEGIN.
+```
 
 ---
 
@@ -118,9 +180,11 @@ Write `/Users/faridmatovu/projects/rishi-monorepo/.agent-review/pilot/INDEX.md`:
 | 3. Reviewer-1 | pending | | |
 | 4. Rebuttal | pending | | |
 | 5. Tiebreaker | pending | | |
-| 6. Fix | pending | | |
+| 6. Fix (bugs) | pending | | |
 | 7. Mutation check | pending | | |
-| 8. Summary | pending | | |
+| 8. Test-quality triage | pending | | |
+| 9. Test-quality fix | pending | | |
+| 10. Summary | pending | | |
 
 ## Findings
 
@@ -648,11 +712,146 @@ Do not silently move on from a TEST-INVALID. This means a confirmed bug's fix is
 
 ---
 
-## Wave 8: Summary
+## Wave 8: Test-Quality Triage
 
-### Task 8.1: Finalize and report
+This wave classifies the entries in `practices-audit.md` into Type A (fix this run) vs Type B (document only).
 
-- [ ] **Step 1: Mark wave 8 in-progress**
+### Task 8.1: Dispatch test-quality triager
+
+- [ ] **Step 1: Mark wave 8 in-progress in INDEX.md**
+
+- [ ] **Step 2: Dispatch a single tester to classify**
+
+```
+description: "Triage practices-audit.md for fix-worthy items"
+subagent_type: team-tester
+
+prompt:
+You are the test-quality triager. Classify every entry in practices-audit.md as Type A or Type B.
+
+Read: /Users/faridmatovu/projects/rishi-monorepo/.agent-review/pilot/practices-audit.md
+Read: /Users/faridmatovu/projects/rishi-monorepo/.agent-review/pilot/plan.md
+
+TYPE A (fix this run):
+- Scoped to 1-2 test files
+- No production code change needed (only test refactor)
+- High-impact: real risk of masking a regression, or genuinely brittle (would flake under CI load)
+- Examples: a mocked database in a test that should use a real temp-file SQLite; an assertion on a call count instead of behavior; a `setTimeout(100)` instead of a Playwright `await expect(locator)`.
+
+TYPE B (document only):
+- Spans many files (rewrite would be its own project)
+- Borderline impact (test still works, just not pretty)
+- Would require production code changes to "fix" properly
+- Anything that smells like premature improvement
+
+Rewrite practices-audit.md so each entry has a `**Classification:** Type A | Type B` line and, for Type A, a `**Suggested fix:** <one-paragraph approach>`.
+
+Also produce a numbered list of Type A items at the top of the file under `## Type A Queue` — each gets an ID like Q01, Q02, etc. The orchestrator will iterate this queue in Wave 9.
+
+DO NOT modify any test or production code in this wave. Just classify.
+
+Return: count of Type A and Type B entries.
+```
+
+- [ ] **Step 3: Verify the file now has Type A / Type B classifications**
+
+```bash
+grep -c "Classification:" /Users/faridmatovu/projects/rishi-monorepo/.agent-review/pilot/practices-audit.md
+grep -c "Type A Queue" /Users/faridmatovu/projects/rishi-monorepo/.agent-review/pilot/practices-audit.md
+```
+Expected: classification count = total entries; one `Type A Queue` heading exists.
+
+- [ ] **Step 4: Update INDEX.md wave 8 done; increment dispatch count by 1**
+
+---
+
+## Wave 9: Test-Quality Fix (sequential, Type A items only)
+
+### Task 9.1: For each Type A queue item, run the fix subloop
+
+**Strictly sequential** for the same reason Wave 6 was: parallel writers to test files would conflict, especially if two Type A items touch the same spec.
+
+- [ ] **Step 1: Mark wave 9 in-progress**
+
+- [ ] **Step 2: For each Q-item in the Type A Queue, run the fix subloop**
+
+**Sub-step 9.2.a — Dispatch coder for the test refactor**
+
+```
+description: "Test-quality fix <Q-ID>"
+subagent_type: team-coder
+
+prompt:
+You are improving an existing test. This is NOT a production-code bug fix — you may only modify the test file.
+
+Read the Type A entry for <Q-ID> in: /Users/faridmatovu/projects/rishi-monorepo/.agent-review/pilot/practices-audit.md
+
+PROCESS:
+1. Apply the suggested fix in the test file ONLY.
+2. Run the modified test against unmodified production code. It MUST PASS.
+3. If it fails: revert the test change, append a note explaining why under the entry, and stop. Do NOT modify production code to make the test pass.
+4. Commit. Message: "test(test-review-Q<ID>): <short description>". Body: link to practices-audit.md entry.
+
+Append to the entry in practices-audit.md:
+**Status:** fixed
+**Commit:** <SHA>
+**Notes:** <any caveats>
+
+If you couldn't fix it:
+**Status:** abandoned
+**Reason:** <why>
+
+Return: the commit SHA or "abandoned" + reason.
+```
+
+**Sub-step 9.2.b — Dispatch code-reviewer**
+
+```
+description: "Code review test-quality fix <Q-ID>"
+subagent_type: team-reviewer
+
+prompt:
+Review a test-only refactor for entry <Q-ID> in /Users/faridmatovu/projects/rishi-monorepo/.agent-review/pilot/practices-audit.md.
+
+Commit: <SHA>
+Diff: `git show <SHA>`
+
+CHECKLIST:
+- Is the diff scoped to test files only? (No production code touched.)
+- Does the new test exercise the same behavior the old one was meant to?
+- Are any assertions weaker than before? (Watch for tests that pass more permissively after refactor — a "fix" that loses coverage is a regression.)
+- Does it follow this repo's existing test conventions (Vitest patterns, Playwright auto-waits, etc.)?
+
+Confidence threshold: ≥80%.
+
+Append to the practices-audit.md entry:
+**Code Review:** APPROVE | REQUEST-CHANGES
+**Findings:** <bulleted or "none">
+
+Return: APPROVE or REQUEST-CHANGES.
+```
+
+**Sub-step 9.2.c — Handle review outcome**
+
+Same as Wave 6.3.d: APPROVE → next Q-item. REQUEST-CHANGES → one coder rebuttal; deadlock → `feature-dev:code-reviewer` tiebreaker.
+
+**Sub-step 9.2.d — Sanity check: the test still passes**
+
+```bash
+cd /Users/faridmatovu/projects/rishi-monorepo && pnpm --filter rishi-electron test <unit-path-if-applicable>
+# or playwright for e2e
+```
+Expected: target test passes against current main.
+
+- [ ] **Step 3: After all Type A items processed, mark wave 9 done**
+
+---
+
+## Wave 10: Summary
+
+### Task 10.1: Finalize and report
+
+- [ ] **Step 1: Mark wave 10 in-progress**
 
 - [ ] **Step 2: Finalize INDEX.md**
 
@@ -666,7 +865,7 @@ Update INDEX.md to reflect final state:
 ```markdown
 ## Pilot Outcome (2026-05-20)
 
-**Findings totals:**
+**Bug findings totals:**
 - Filed: N
 - Confirmed by Reviewer-1: N
 - Rejected by Reviewer-1: N
@@ -674,8 +873,13 @@ Update INDEX.md to reflect final state:
 - Fixed + mutation-verified: N
 - Fixed but mutation FAILED (test invalid): N
 
+**Test-quality totals:**
+- Type A items filed: N
+- Type A items fixed: N
+- Type A items abandoned: N
+- Type B items documented (for later): N
+
 **Parity gaps documented:** N
-**Practice violations documented:** N
 
 **Workflow health signals:**
 - Reviewer-1 outcomes split: <Confirm%> / <Reject%>  (expected: not 100%/0% in either direction)
@@ -687,11 +891,11 @@ Update INDEX.md to reflect final state:
 <reasoning>
 ```
 
-- [ ] **Step 4: Report to user**
+- [ ] **Step 4: Return PILOT-COMPLETE to main thread**
 
-Summarize: how many bugs were confirmed and fixed, what parity gaps and practice violations were found, whether the workflow is healthy enough to scale, and any specific findings that need human review (mutation failures, escalations).
+Summarize in the return message: how many bugs were confirmed and fixed, how many Type A test-quality items were fixed, what parity gaps and Type B violations remain documented, whether the workflow is healthy enough to scale, and any specific findings that need human review (mutation failures, escalations).
 
-- [ ] **Step 5: Mark wave 8 done in INDEX.md**
+- [ ] **Step 5: Mark wave 10 done in INDEX.md**
 
 - [ ] **Step 6: Commit the .agent-review artifacts as a single record**
 
