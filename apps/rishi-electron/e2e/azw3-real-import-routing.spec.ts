@@ -21,7 +21,6 @@ import {
 // This test uses the real pipeline (main-process `open-file` → renderer
 // `open-files` IPC → BookImportService.importBatch → dispatch → saveBook).
 test('AZW3 .azw3 file imports with kind=azw3 (not mobi)', async () => {
-  test.setTimeout(60000)
   const launched = await launchApp()
   try {
     const bookId = await importBookViaOpenFile(launched, AZW3_FIXTURE)
