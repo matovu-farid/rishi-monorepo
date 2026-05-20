@@ -61,10 +61,12 @@ describe('epubStore', () => {
   })
 
   it('should reset all state', () => {
+    const stubOutline = [{ id: 'c1', label: 'Chapter 1', href: 'c1.html' }] as any
     useEpubStore.getState().setBookId('42')
     useEpubStore.getState().setCurrentEpubLocation('epubcfi(/6/4)')
     useEpubStore.getState().incrementRenditionCount()
     useEpubStore.getState().setRendition({ display: () => {} } as any)
+    useEpubStore.getState().setBookOutline(stubOutline)
 
     useEpubStore.getState().reset()
 
@@ -73,6 +75,9 @@ describe('epubStore', () => {
     expect(useEpubStore.getState().renditionCount).toBe(0)
     expect(useEpubStore.getState().rendition).toBeNull()
     expect(useEpubStore.getState().paragraphRendition).toBeNull()
+    // reset() deliberately preserves bookOutline; the bookId-change subscription
+    // in initEpubSubscriptions() (epubStore.ts:218-230) is what clears it.
+    expect(useEpubStore.getState().bookOutline).toBe(stubOutline)
   })
 
   it('should allow setting bookId multiple times', () => {
