@@ -6,6 +6,7 @@ import { usePlayerStore } from '@/stores/playerStore'
 import type { ParagraphWithIndex, PlayerStoreState, PlayerSend } from '@/stores/playerStore'
 import { useNavStore } from '@/stores/navStore'
 import { getTtsService } from '@/services'
+import { getVisualCueEmitter, resolveParagraphElement } from '@/services/tts'
 import { usePdfStore } from '@/stores/pdfStore'
 import { publishCurrentEpubParagraphs } from '@/stores/epubStore'
 import isEqual from 'fast-deep-equal'
@@ -62,6 +63,20 @@ export function usePlayerMachine(bookId: string) {
         activeParagraph: nextActive,
         errors: ctx.errors
       })
+
+      if (nextActive) {
+        const currentParagraphs = usePlayerStore.getState().currentParagraphs
+        const idx = currentParagraphs.findIndex((p) => p.index === nextActive!.index)
+        if (idx >= 0) {
+          const element = resolveParagraphElement(idx)
+          if (element) {
+            getVisualCueEmitter().notifyParagraph({
+              paragraphId: nextActive.index,
+              element
+            })
+          }
+        }
+      }
     })
 
     // --- 2. Store -> machine sync (paragraphs) ---
