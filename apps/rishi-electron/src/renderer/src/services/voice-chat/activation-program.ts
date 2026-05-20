@@ -193,12 +193,22 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
     audioElement: AudioElementLike
   ): BuiltSession {
     const transport = deps.webrtcFactory({ mediaStream, audioElement })
+
+    // Forward captured images into the live session. The session is created
+    // below, so we close over a mutable holder that's filled in immediately
+    // after agentFactory returns.
+    let liveSession: RealtimeSessionLike | null = null
+
     const agent = deps.agentFactory({
       bookId,
       pageText: ctx.pageText,
       outline: ctx.outline,
       activeParagraphText: ctx.activeParagraphText,
+      visualSummary: ctx.visualSummary,
       onEndConversation: (reason) => emit.endedByAgent(reason),
+      onInspectImage: (image) => {
+        liveSession?.addImage(image.dataUrl, { triggerResponse: false })
+      },
       rag: deps.rag,
       language: deps.getLanguage()
     })
@@ -207,6 +217,7 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
       apiKey: '',
       serverVad: deps.config.serverVad
     })
+    liveSession = session
 
     let hasFiredReadyChime = false
     let isAgentSpeaking = false

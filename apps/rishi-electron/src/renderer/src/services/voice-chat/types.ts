@@ -2,6 +2,7 @@ import type { BookOutline } from '@/lib/api'
 import type { RagService } from '@/services/rag'
 import type { ConnectivityService } from '@/services/connectivity'
 import type { VisualSummary } from '@/lib/visualHeuristic'
+import type { CaptureResult } from '@/modules/pageCapture'
 
 /**
  * Public state surface. Same string union as the internal machine, re-named
@@ -192,6 +193,13 @@ export interface RealtimeSessionLike {
    * user uttered during the connect window.
    */
   sendMessage(message: string): void
+  /**
+   * Append an image to the conversation history. The SDK's `addImage`
+   * delegates to `transport.addImage` which emits a `conversation.item.create`
+   * carrying an `input_image` content part. Pass `triggerResponse: false`
+   * to keep this a pure history append.
+   */
+  addImage(image: string, opts?: { triggerResponse?: boolean }): void
   on(event: string, listener: (...args: unknown[]) => void): void
   off(event: string, listener: (...args: unknown[]) => void): void
 }
@@ -206,6 +214,17 @@ export interface AgentFactoryArgs {
   outline?: BookOutline
   activeParagraphText?: string
   onEndConversation: (reason: string) => void
+  /**
+   * Forward captured page screenshots into the live realtime session.
+   * Wired by activation-program.ts after the session is created.
+   */
+  onInspectImage?: (image: CaptureResult) => void
+  /**
+   * Counts of visual content on the user's page. When defined, the agent
+   * gains an `inspectCurrentPage` tool and a `Visual context` instructions
+   * section. Undefined = vision feature disabled.
+   */
+  visualSummary?: { equations: number; figures: number; images: number }
   rag: RagService
   /** ISO-639-1 code for the language the agent must respond in. */
   language: string

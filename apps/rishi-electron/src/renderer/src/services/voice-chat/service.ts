@@ -179,12 +179,15 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
       try {
         const fp = fingerprintContext(ctx)
         if (fp !== lastContextFingerprint) {
+          const liveSession = session
           const newAgent = agentFactory({
             bookId,
             pageText: ctx.pageText,
             outline: ctx.outline,
             activeParagraphText: ctx.activeParagraphText,
+            visualSummary: ctx.visualSummary,
             onEndConversation: (reason) => endedByAgentEmitter.emit(reason),
+            onInspectImage: (image) => liveSession.addImage(image.dataUrl, { triggerResponse: false }),
             rag,
             language: getLanguage()
           })

@@ -258,7 +258,9 @@ export function getVoiceChatService(): VoiceChatService {
         pageText,
         outline,
         activeParagraphText,
+        visualSummary,
         onEndConversation,
+        onInspectImage,
         rag,
         language
       }) =>
@@ -267,7 +269,9 @@ export function getVoiceChatService(): VoiceChatService {
           pageText,
           outline,
           activeParagraphText,
+          visualSummary,
           onEndConversation,
+          onInspectImage,
           rag,
           language
         }) as never,

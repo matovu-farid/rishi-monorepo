@@ -99,17 +99,21 @@ export function makeAgent(): {
   factory: (args: AgentFactoryArgs) => RealtimeAgentLike
   lastArgs: () => AgentFactoryArgs | null
   triggerEnd: (reason: string) => void
+  triggerInspectImage: (image: { dataUrl: string; width: number; height: number; bytes: number }) => void
 } {
   let lastArgs: AgentFactoryArgs | null = null
   let lastOnEnd: ((reason: string) => void) | null = null
+  let lastOnInspect: ((image: { dataUrl: string; width: number; height: number; bytes: number }) => void) | null = null
   return {
     factory: (args) => {
       lastArgs = args
       lastOnEnd = args.onEndConversation
+      lastOnInspect = args.onInspectImage ?? null
       return { _agent: {} } as RealtimeAgentLike
     },
     lastArgs: () => lastArgs,
-    triggerEnd: (reason) => lastOnEnd?.(reason)
+    triggerEnd: (reason) => lastOnEnd?.(reason),
+    triggerInspectImage: (image) => lastOnInspect?.(image)
   }
 }
 
@@ -122,6 +126,7 @@ export function makeSession(opts?: { connectDelayMs?: number; connectFailWith?: 
   updateAgent: ReturnType<typeof vi.fn>
   connect: ReturnType<typeof vi.fn>
   sendMessage: ReturnType<typeof vi.fn>
+  addImage: ReturnType<typeof vi.fn>
   fire: (event: string, ...args: unknown[]) => void
   lastConnectOpts: () => { apiKey: string } | null
 } {
@@ -141,6 +146,7 @@ export function makeSession(opts?: { connectDelayMs?: number; connectFailWith?: 
   const close = vi.fn()
   const updateAgent = vi.fn().mockResolvedValue(undefined)
   const sendMessage = vi.fn()
+  const addImage = vi.fn()
   const session: RealtimeSessionLike = {
     connect,
     mute,
@@ -148,6 +154,7 @@ export function makeSession(opts?: { connectDelayMs?: number; connectFailWith?: 
     close,
     updateAgent,
     sendMessage,
+    addImage,
     on: (ev, l) => {
       if (!handlers.has(ev)) handlers.set(ev, new Set())
       handlers.get(ev)!.add(l)
@@ -165,6 +172,7 @@ export function makeSession(opts?: { connectDelayMs?: number; connectFailWith?: 
     updateAgent,
     connect,
     sendMessage,
+    addImage,
     fire: (ev, ...args) => {
       const set = handlers.get(ev)
       if (!set) return
@@ -1534,6 +1542,33 @@ describe('createVoiceChatService — serverVad wiring', () => {
       threshold: 0.65,
       silenceDurationMs: 800,
       prefixPaddingMs: 250
+    })
+  })
+})
+
+// =============================================================================
+// inspectCurrentPage image injection
+// =============================================================================
+
+describe('createVoiceChatService — inspectCurrentPage image injection', () => {
+  it('forwards captured images to session.addImage with triggerResponse: false', async () => {
+    const agent = makeAgent()
+    const session = makeSession()
+    const svc = createVoiceChatService(
+      makeDeps({ agentFactory: agent.factory, sessionFactory: session.factory })
+    )
+    svc.start()
+    await svc.activate(1, { pageText: 'hi' })
+
+    agent.triggerInspectImage({
+      dataUrl: 'data:image/webp;base64,XYZ',
+      width: 800,
+      height: 600,
+      bytes: 100
+    })
+
+    expect(session.addImage).toHaveBeenCalledWith('data:image/webp;base64,XYZ', {
+      triggerResponse: false
     })
   })
 })
