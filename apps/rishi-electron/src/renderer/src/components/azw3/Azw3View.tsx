@@ -30,8 +30,10 @@ import {
   type FoliateSection
 } from './parser'
 import { injectReaderStyles } from './reader-styles'
-import { findParagraphElement, parseParagraphIndex, setActiveClass } from './highlight'
+import { findParagraphElement, parseParagraphIndex } from './highlight'
 import { computePageStep, formatLocation, measurePageCount, parseLocation } from './pagination'
+import { useTtsHighlightReconciler } from '@/hooks/useTtsHighlightReconciler'
+import { reconcileAzw3TtsHighlight } from './reconcileTtsHighlight'
 
 /** Debounce delay before persisting reading location. Page turns fire often
  *  (one per click + per TTS paragraph advance) so we coalesce updates. */
@@ -305,16 +307,6 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
       const desired = pending === 'last' ? total - 1 : (pending ?? pageWithinChapter)
       const applied = applyScrollToPage(doc, iframeWin, desired, total, pageStep)
       if (applied !== pageWithinChapter) setPageWithinChapter(applied)
-
-      // Re-apply the TTS highlight class if we're reading a paragraph in
-      // this chapter (the class is wiped when the doc reloads).
-      const active = usePlayerStore.getState().activeParagraph
-      if (active) {
-        const parsed = parseParagraphIndex(active.index)
-        if (parsed?.chapter === chapterIndex) {
-          setActiveClass(findParagraphElement(doc, parsed.paragraph), true)
-        }
-      }
     }
 
     void measureAndScroll()
@@ -447,81 +439,57 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     pagesInCurrentChapterRef.current = pagesInCurrentChapter
   }, [pagesInCurrentChapter])
 
-  // Toggle the TTS highlight class on the matching iframe element as the
-  // player advances. Only highlights paragraphs belonging to the current
-  // chapter. When the active paragraph is on a different column page,
-  // scroll horizontally to bring it into view.
+  // Reconcile the TTS highlight class on every relevant trigger (store
+  // change, iframe load, focus return, visibility return). Class
+  // management is owned by the reconciler — this hook handles all the
+  // event wiring.
+  const reconcileTts = useCallback(
+    (desired: string | null) => {
+      reconcileAzw3TtsHighlight(
+        iframeRef.current?.contentDocument ?? null,
+        chapterIndex,
+        desired,
+      )
+    },
+    [chapterIndex],
+  )
+  useTtsHighlightReconciler(reconcileTts, iframeRef.current)
+
+  // Auto-scroll the active paragraph into view when the player advances.
+  // This effect is intentionally scoped to activeParagraph store changes only
+  // — focus/iframe-load triggers should NOT re-scroll. Class management is
+  // owned by the reconciler.
   useEffect(() => {
-    const docOf = (): Document | null => iframeRef.current?.contentDocument ?? null
-    const winOf = (): Window | null => iframeRef.current?.contentWindow ?? null
-
-    const apply = (raw: string | undefined, on: boolean): void => {
-      if (!raw) return
-      const parsed = parseParagraphIndex(raw)
-      if (parsed?.chapter !== chapterIndex) return
-      const doc = docOf()
-      const win = winOf()
-      const el = findParagraphElement(doc, parsed.paragraph)
-      setActiveClass(el, on)
-
-      if (on && el && doc && win) {
-        // Bring the active paragraph onto the visible column page. The
-        // element's bounding rect is in iframe-viewport coordinates: if
-        // its left is negative, it's on an earlier column page; if its
-        // right is past the viewport width, it's on a later page.
+    const unsub = usePlayerStore.subscribe(
+      (s) => s.activeParagraph,
+      (paragraph) => {
+        if (!paragraph) return
+        const parsed = parseParagraphIndex(paragraph.index)
+        if (parsed?.chapter !== chapterIndex) return
+        const doc = iframeRef.current?.contentDocument ?? null
+        const win = iframeRef.current?.contentWindow ?? null
+        const el = findParagraphElement(doc, parsed.paragraph)
+        if (!el || !doc || !win) return
         const rect = el.getBoundingClientRect()
         const body = doc.body
         const viewportWidth = win.innerWidth
-        if (rect.left < 0 || rect.right > viewportWidth) {
-          // Read pageStep fresh from computed style — it can change on
-          // resize, and the TTS subscription is registered once per chapter.
-          const cs = win.getComputedStyle(body)
-          const columnGap = parseFloat(cs.columnGap || '0') || 0
-          const paddingLeft = parseFloat(cs.paddingLeft || '0') || 0
-          const paddingRight = parseFloat(cs.paddingRight || '0') || 0
-          const pageStep = computePageStep(body.clientWidth, columnGap, paddingLeft, paddingRight)
-          // Compute the column page that contains this element's left edge.
-          // Snap to the column page boundary using pageStep (not viewport
-          // width) so we don't accumulate the column-gap error every time
-          // TTS scrolls a paragraph into view.
-          const elementLeftFromBodyStart = body.scrollLeft + rect.left
-          // Read the latest measured page count from a ref so this effect
-          // stays subscribed across re-measurements (it's only re-built when
-          // the chapter changes).
-          const totalPages = pagesInCurrentChapterRef.current
-          const targetPage = Math.max(
-            0,
-            Math.min(totalPages - 1, Math.floor(elementLeftFromBodyStart / pageStep))
-          )
-          const applied = applyScrollToPage(doc, win, targetPage, totalPages, pageStep)
-          setPageWithinChapter((prev) => (prev === applied ? prev : applied))
-        }
-      }
-    }
-
-    const unsubActive = usePlayerStore.subscribe(
-      (s) => s.activeParagraph,
-      (paragraph) => {
-        if (paragraph) apply(paragraph.index, true)
-      }
+        if (rect.left >= 0 && rect.right <= viewportWidth) return
+        const cs = win.getComputedStyle(body)
+        const columnGap = parseFloat(cs.columnGap || '0') || 0
+        const paddingLeft = parseFloat(cs.paddingLeft || '0') || 0
+        const paddingRight = parseFloat(cs.paddingRight || '0') || 0
+        const pageStep = computePageStep(body.clientWidth, columnGap, paddingLeft, paddingRight)
+        const elementLeftFromBodyStart = body.scrollLeft + rect.left
+        const totalPages = pagesInCurrentChapterRef.current
+        const targetPage = Math.max(
+          0,
+          Math.min(totalPages - 1, Math.floor(elementLeftFromBodyStart / pageStep)),
+        )
+        const applied = applyScrollToPage(doc, win, targetPage, totalPages, pageStep)
+        setPageWithinChapter((prev) => (prev === applied ? prev : applied))
+      },
     )
-    const unsubEnded = usePlayerStore.subscribe(
-      (s) => s.endedParagraph,
-      (paragraph) => {
-        if (paragraph) apply(paragraph.index, false)
-      }
-    )
-    const unsubMove = usePlayerStore.subscribe(
-      (s) => s.lastMove,
-      (move) => {
-        if (move?.from) apply(move.from.index, false)
-      }
-    )
-    return () => {
-      unsubActive()
-      unsubEnded()
-      unsubMove()
-    }
+    return unsub
   }, [applyScrollToPage, chapterIndex])
 
   // Publish paragraphs to playerStore for TTS. Current chapter immediately,
