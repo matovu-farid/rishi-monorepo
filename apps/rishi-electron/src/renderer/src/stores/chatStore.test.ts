@@ -47,6 +47,11 @@ vi.mock('@/stores/epubStore', () => ({
 
 vi.mock('@/utils/sentry', () => ({ captureError: vi.fn() }))
 
+const { summarizeCurrentPageMock } = vi.hoisted(() => ({
+  summarizeCurrentPageMock: vi.fn().mockReturnValue({ equations: 0, figures: 0, images: 0 })
+}))
+vi.mock('@/modules/pageCapture', () => ({ summarizeCurrentPage: summarizeCurrentPageMock }))
+
 // Import AFTER the mocks above so chatStore's module-scope getVoiceChatService()
 // call resolves to the fakeVoice stub.
 import { useChatStore } from './chatStore'
@@ -85,11 +90,25 @@ describe('chatStore', () => {
     useChatStore.getState().startChat(42)
     // activate is async — await microtask flush
     await Promise.resolve()
-    expect(fakeVoice.activate).toHaveBeenCalledWith(42, {
-      pageText: expect.any(String),
-      outline: undefined,
-      activeParagraphText: undefined
-    })
+    expect(fakeVoice.activate).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({
+        pageText: expect.any(String),
+        outline: undefined,
+        activeParagraphText: undefined
+      })
+    )
+  })
+
+  it('startChat passes visualSummary from pageCapture to voice.activate', async () => {
+    summarizeCurrentPageMock.mockReturnValueOnce({ equations: 2, figures: 1, images: 0 })
+    useChatStore.setState({ isChatting: true })
+    useChatStore.getState().startChat(42)
+    await Promise.resolve()
+    expect(fakeVoice.activate).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ visualSummary: { equations: 2, figures: 1, images: 0 } })
+    )
   })
 
   it('startChat forwards the active paragraph text (what TTS is reading)', async () => {

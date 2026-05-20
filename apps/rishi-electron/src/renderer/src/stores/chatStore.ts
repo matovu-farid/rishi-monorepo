@@ -10,6 +10,7 @@ import {
 import { usePlayerStore } from './playerStore'
 import { useEpubStore } from './epubStore'
 import { captureError } from '@/utils/sentry'
+import { summarizeCurrentPage } from '@/modules/pageCapture'
 
 export type { ChatStatus }
 
@@ -74,8 +75,10 @@ export const useChatStore = create<ChatState>()(
           const outline =
             epubState.bookId === String(bookId) ? (epubState.bookOutline ?? undefined) : undefined
 
+          const visualSummary = summarizeCurrentPage()
+
           voice
-            .activate(bookId, { pageText, outline, activeParagraphText })
+            .activate(bookId, { pageText, outline, activeParagraphText, visualSummary })
             .catch((err: unknown) => {
               if (!(err instanceof OfflineError)) {
                 captureError(err, { operation: 'chatStore', step: 'activate' })
