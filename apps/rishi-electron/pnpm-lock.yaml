@@ -303,6 +303,9 @@ importers:
       vitest:
         specifier: ^4.0.14
         version: 4.1.5(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(happy-dom@20.9.0)(vite@7.3.2(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0))
+      vitest-canvas-mock:
+        specifier: ^1.1.4
+        version: 1.1.4(vitest@4.1.5(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(happy-dom@20.9.0)(vite@7.3.2(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)))
 
   ../../packages/shared:
     dependencies:
@@ -3288,6 +3291,9 @@ packages:
   css.escape@1.5.1:
     resolution: {integrity: sha512-YUifsXXuknHlUsmlgyY0PKzgPOr7/FjCePfHNt0jxm83wHZi44VDMQ7/fGNkjY3/jV1MC+1CmZbaHzugyeRtpg==}
 
+  cssfontparser@1.2.1:
+    resolution: {integrity: sha512-6tun4LoZnj7VN6YeegOVb67KBX/7JJsqvj+pv3ZA7F878/eN33AbGa5b/S/wXxS/tcp8nc40xRUrsPlxIyNUPg==}
+
   csstype@3.2.3:
     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
 
@@ -4731,6 +4737,9 @@ packages:
   module-details-from-path@1.0.4:
     resolution: {integrity: sha512-EGWKgxALGMgzvxYF1UyGTy0HXX/2vHLkw6+NvDKW2jypWbHpjQuj4UMcqQWXHERJhVGKikolT06G3bcKe4fi7w==}
 
+  moo-color@1.0.3:
+    resolution: {integrity: sha512-i/+ZKXMDf6aqYtBhuOcej71YSlbjT3wCO/4H1j8rPvxDJEifdwgg5MaFyu6iYAT8GBZJg2z0dkgK4YMzvURALQ==}
+
   motion-dom@12.38.0:
     resolution: {integrity: sha512-pdkHLD8QYRp8VfiNLb8xIBJis1byQ9gPT3Jnh2jqfFtAsWUA3dEepDlsWe/xMpO8McV+VdpKVcp+E+TGJEtOoA==}
 
@@ -5818,6 +5827,11 @@ packages:
         optional: true
       yaml:
         optional: true
+
+  vitest-canvas-mock@1.1.4:
+    resolution: {integrity: sha512-4boWHY+STwAxGl1+uwakNNoQky5EjPLC8HuponXNoAscYyT1h/F7RUvTkl4IyF/MiWr3V8Q626je3Iel3eArqA==}
+    peerDependencies:
+      vitest: ^3.0.0 || ^4.0.0
 
   vitest@4.1.5:
     resolution: {integrity: sha512-9Xx1v3/ih3m9hN+SbfkUyy0JAs72ap3r7joc87XL6jwF0jGg6mFBvQ1SrwaX+h8BlkX6Hz9shdd1uo6AF+ZGpg==}
@@ -9074,6 +9088,8 @@ snapshots:
 
   css.escape@1.5.1: {}
 
+  cssfontparser@1.2.1: {}
+
   csstype@3.2.3: {}
 
   d@1.0.2:
@@ -10603,6 +10619,10 @@ snapshots:
 
   module-details-from-path@1.0.4: {}
 
+  moo-color@1.0.3:
+    dependencies:
+      color-name: 1.1.4
+
   motion-dom@12.38.0:
     dependencies:
       motion-utils: 12.36.0
@@ -11869,6 +11889,12 @@ snapshots:
       jiti: 2.6.1
       lightningcss: 1.32.0
       tsx: 4.21.0
+
+  vitest-canvas-mock@1.1.4(vitest@4.1.5(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(happy-dom@20.9.0)(vite@7.3.2(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0))):
+    dependencies:
+      cssfontparser: 1.2.1
+      moo-color: 1.0.3
+      vitest: 4.1.5(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(happy-dom@20.9.0)(vite@7.3.2(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0))
 
   vitest@4.1.5(@opentelemetry/api@1.9.1)(@types/node@22.19.17)(happy-dom@20.9.0)(vite@7.3.2(@types/node@22.19.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)):
     dependencies:
