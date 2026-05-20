@@ -298,7 +298,7 @@ export function usePlayerMachine(bookId: string) {
     })
 
     // --- 4. Machine send wiring ---
-    const send: PlayerSend = actor.send.bind(actor)
+    const send: PlayerSend = actor.send
     sendRef.current = send
     usePlayerStore.getState().setSend(send)
 
