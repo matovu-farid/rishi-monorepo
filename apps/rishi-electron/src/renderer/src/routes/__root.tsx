@@ -1,6 +1,6 @@
 import Loader from '../components/Loader'
 import { useQuery } from '@tanstack/react-query'
-import { createRootRoute, Outlet, useNavigate } from '@tanstack/react-router'
+import { createRootRoute, Outlet, useLocation, useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, type JSX, type CSSProperties } from 'react'
 import { getBooks } from '@/lib/api'
 import { getSyncService, getBookImportService } from '@/services'
@@ -33,8 +33,14 @@ function RootComponent(): JSX.Element {
   //   - library window: any legacy `#/books/N` hash spawns a book window and
   //     resets the library hash to `/`.
   //   - book window: forces the URL to `/books/<bookId>` if it isn't already.
-  // Runs once on mount — identity is fixed for the lifetime of the window.
+  // Re-runs on router pathname changes AND raw `hashchange` events. The latter
+  // matters because direct `window.location.hash = '#/books/N'` mutations (e.g.
+  // legacy links, stale deep links) fire `hashchange` but NOT `popstate`, so
+  // TanStack Router's hash history never sees them and `useLocation` stays
+  // stale. Without the hashchange listener these mutations slip past the guard
+  // and reach the books.$id error view (B042).
   const navigate = useNavigate()
+  const location = useLocation()
   useEffect(() => {
     const e = (
       window as unknown as {
@@ -48,26 +54,34 @@ function RootComponent(): JSX.Element {
       }
     ).electron
     const id = e.windowIdentity
-    const path = window.location.hash.replace(/^#/, '')
 
-    if (id?.kind === 'library') {
-      const m = path.match(/^\/books\/(\d+)/)
-      if (m) {
-        void e.openBook(Number(m[1]))
-        void navigate({ to: '/' })
-      }
-    } else if (id?.kind === 'book') {
-      if (!path.startsWith('/books/')) {
-        void navigate({ to: '/books/$id', params: { id: String(id.bookId) } })
-      }
-    } else if (id?.kind === 'settings') {
-      if (path !== '/settings/account') {
-        void navigate({ to: '/settings/account' })
+    const enforce = (): void => {
+      const path =
+        window.location.hash.replace(/^#/, '').replace(/^\/+/, '/') || location.pathname
+
+      if (id?.kind === 'library') {
+        const m = path.match(/^\/books\/(\d+)/)
+        if (m) {
+          void e.openBook(Number(m[1]))
+          void navigate({ to: '/' })
+        }
+      } else if (id?.kind === 'book') {
+        if (!path.startsWith('/books/')) {
+          void navigate({ to: '/books/$id', params: { id: String(id.bookId) } })
+        }
+      } else if (id?.kind === 'settings') {
+        if (path !== '/settings/account') {
+          void navigate({ to: '/settings/account' })
+        }
       }
     }
-    // Intentional: identity is set once at window creation; no need to re-run.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+
+    enforce()
+    window.addEventListener('hashchange', enforce)
+    return () => {
+      window.removeEventListener('hashchange', enforce)
+    }
+  }, [location.pathname, navigate])
 
   // Publish the initial theme to the main process on mount so the View menu's
   // "Switch to Light/Dark Mode" label reflects reality the first time the menu

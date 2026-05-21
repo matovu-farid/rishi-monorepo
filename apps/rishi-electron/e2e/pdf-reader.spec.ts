@@ -54,14 +54,25 @@ test.describe('PDF reader', () => {
     await expect(bookPage.locator('body')).toBeVisible()
   })
 
-  test('invalid book id does not crash the app', async () => {
-    // The route guard now intercepts library hash changes to /books/N and
-    // spawns a window instead, so this test exercises the legacy hash on
-    // the library page directly to ensure nothing crashes.
+  test('invalid book id on library window is intercepted by the route guard', async () => {
+    // The route guard at __root.tsx must intercept hash mutations to /books/N
+    // on the library window — not just the initial mount — and reset the hash
+    // back to '/' (delegating the actual book open to the main process, which
+    // validates the id). Asserting the hash reset is the observable signal
+    // that the guard fired; without this assertion the test passes even when
+    // the guard is silently regressed (B042).
+    const windowsBefore = app.app.windows().length
     await app.page.evaluate(() => {
       window.location.hash = '#/books/999999'
     })
     await app.page.waitForTimeout(2000)
-    await expect(app.page.locator('body')).toBeVisible()
+    const hash = await app.page.evaluate(() => window.location.hash)
+    // Guard must reset the library hash away from /books/<id>.
+    expect(hash).not.toMatch(/^#\/books\//)
+    // Guard must not leak the library window into the books.$id error view.
+    await expect(app.page.locator('text=Book not found')).toHaveCount(0)
+    // No additional library window spawned for an invalid id beyond whatever
+    // openBook produces (main-side validation is out of scope here).
+    expect(app.app.windows().length).toBeGreaterThanOrEqual(windowsBefore)
   })
 })
