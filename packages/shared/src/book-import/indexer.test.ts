@@ -58,16 +58,20 @@ export function makeEmbed(opts?: {
   return {
     isIndexed: vi.fn(async (bookId) => indexed.has(String(bookId))),
     generateChunks: vi.fn(async () => opts?.generatedChunks ?? []),
-    embed: vi.fn(async (params) => {
-      if (failsLeft > 0) {
-        failsLeft -= 1;
-        throw new Error("embed failed");
-      }
-      return params.map((p) => ({
-        embedding: opts?.vectorByText?.[p.text] ?? [0.1, 0.2, 0.3],
-        metadata: p.metadata,
-      }));
-    }),
+    embed: vi.fn(
+      async (
+        params: { text: string; metadata: { id: number; pageNumber: number } }[],
+      ) => {
+        if (failsLeft > 0) {
+          failsLeft -= 1;
+          throw new Error("embed failed");
+        }
+        return params.map((p) => ({
+          embedding: opts?.vectorByText?.[p.text] ?? [0.1, 0.2, 0.3],
+          metadata: p.metadata,
+        }));
+      },
+    ),
   };
 }
 
