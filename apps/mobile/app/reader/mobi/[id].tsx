@@ -17,6 +17,9 @@ import { Book } from '@/types/book'
 import { TTSControls } from '@/components/TTSControls'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
+import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
+import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
+import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 
 /**
@@ -222,6 +225,16 @@ export default function MobiReaderScreen() {
 
   const activeParagraph = usePlayerStore((s) => s.activeParagraph)
 
+  // G14 — chat-resume bridge: when realtime voice-chat starts/ends,
+  // dispatch CHAT_STARTED / CHAT_ENDED into the player so the active
+  // paragraph is preserved across the interruption.
+  const { status: realtimeStatus } = useRealtimeChat(book?.id ?? '')
+  useTtsChatBridge(realtimeStatus)
+
+  // G20 — register the MOBI WebView as the page-capture target.
+  const pageCaptureRef = useRef<View>(null)
+  usePageCaptureRef(pageCaptureRef)
+
   // Load book from DB
   useEffect(() => {
     if (id) {
@@ -391,7 +404,7 @@ export default function MobiReaderScreen() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#fafaf8' }}>
+    <View ref={pageCaptureRef} style={{ flex: 1, backgroundColor: '#fafaf8' }}>
       <WebView
         ref={webViewRef}
         source={{ html: MOBI_PARSER_HTML }}

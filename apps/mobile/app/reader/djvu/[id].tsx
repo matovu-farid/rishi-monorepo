@@ -17,6 +17,9 @@ import { Book } from '@/types/book'
 import { TTSControls } from '@/components/TTSControls'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
+import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
+import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
+import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 
 /**
@@ -160,6 +163,14 @@ export default function DjvuReaderScreen() {
   usePlayerMachine(book?.id ?? '')
   const playingState = usePlayerStore((s) => s.playingState)
   const ttsActive = playingState !== 'idle'
+
+  // G14 — chat-resume bridge for DJVU.
+  const { status: realtimeStatus } = useRealtimeChat(book?.id ?? '')
+  useTtsChatBridge(realtimeStatus)
+
+  // G20 — register the DJVU WebView as the page-capture target.
+  const pageCaptureRef = useRef<View>(null)
+  usePageCaptureRef(pageCaptureRef)
 
   const handleToggleTTS = useCallback(async () => {
     const sendFn = usePlayerStore.getState().send
@@ -318,7 +329,7 @@ export default function DjvuReaderScreen() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#1a1a1a' }}>
+    <View ref={pageCaptureRef} style={{ flex: 1, backgroundColor: '#1a1a1a' }}>
       <WebView
         ref={webViewRef}
         source={{ html: DJVU_VIEWER_HTML }}

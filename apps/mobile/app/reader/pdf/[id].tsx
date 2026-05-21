@@ -50,6 +50,7 @@ import { usePlayerStore } from '@/lib/stores/playerStore'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 import { TTSControls } from '@/components/TTSControls'
 import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
+import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { NoteEditor } from '@/components/NoteEditor'
 import BottomSheet from '@gorhom/bottom-sheet'
@@ -98,6 +99,10 @@ export default function PdfReaderScreen() {
   // preserved (CHAT_STARTED/CHAT_ENDED dispatched into the playerMachine).
   const { status: realtimeStatus } = useRealtimeChat(book?.id ?? '')
   useTtsChatBridge(realtimeStatus)
+
+  // G20 — register the PDF WebView area as the page-capture target.
+  const pageCaptureRef = useRef<View>(null)
+  usePageCaptureRef(pageCaptureRef)
 
   // Subscribe to active-paragraph changes to drive the highlight reconciler.
   const activeParagraph = usePlayerStore((s) => s.activeParagraph)
@@ -370,7 +375,7 @@ export default function PdfReaderScreen() {
   }
 
   return (
-    <View testID="pdf-reader" style={{ flex: 1, backgroundColor: '#000' }}>
+    <View ref={pageCaptureRef} testID="pdf-reader" style={{ flex: 1, backgroundColor: '#000' }}>
       <PdfWebReader
         ref={readerRef}
         fileUri={book.filePath}

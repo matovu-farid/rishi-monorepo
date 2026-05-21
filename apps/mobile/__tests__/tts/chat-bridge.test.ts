@@ -80,6 +80,35 @@ describe('useTtsChatBridge dispatch logic', () => {
 import { createActor } from 'xstate'
 import { playerMachine } from '@rishi/shared/machines/playerMachine'
 
+// ── Reader-screen wiring assertions (G14 closure) ────────────────────────────
+//
+// We assert at the source level that every reader screen imports and invokes
+// `useTtsChatBridge`. Doing this as a string check (rather than a full RN
+// render) avoids pulling in the entire reader-screen native dep tree just to
+// verify two lines of glue per file. If a future refactor moves the wiring,
+// the import location may change but the symbol must still be referenced.
+
+import { readFileSync } from 'fs'
+import { join } from 'path'
+
+const READER_FILES = [
+  'app/reader/[id].tsx', // EPUB + AZW3
+  'app/reader/pdf/[id].tsx',
+  'app/reader/mobi/[id].tsx',
+  'app/reader/djvu/[id].tsx',
+]
+
+describe('useTtsChatBridge wired in every reader screen (G14)', () => {
+  for (const rel of READER_FILES) {
+    it(`${rel} imports and calls useTtsChatBridge`, () => {
+      const abs = join(__dirname, '..', '..', rel)
+      const src = readFileSync(abs, 'utf-8')
+      expect(src).toMatch(/from\s+['"]@\/hooks\/useTtsChatBridge['"]/)
+      expect(src).toMatch(/useTtsChatBridge\s*\(/)
+    })
+  }
+})
+
 describe('CHAT_STARTED / CHAT_ENDED end-to-end through the shared playerMachine', () => {
   // Use jest fake timers so the machine's `after: 10000ms` timers don't
   // keep the test runtime alive past the assertions.

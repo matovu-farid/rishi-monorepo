@@ -25,6 +25,7 @@ import { SearchPanel } from '@/components/epub/SearchPanel'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
+import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { GuardrailWarning } from '@/components/GuardrailWarning'
@@ -129,6 +130,13 @@ function ReaderContent({ book }: { book: Book }) {
   // Realtime voice chat
   const { status: realtimeStatus, showGuardrailWarning, toggle: toggleRealtime, isActive: realtimeActive } = useRealtimeChat(book.id)
   useTtsChatBridge(realtimeStatus)
+
+  // G20 — register the reader's content area with the page-capture
+  // registry so the voice-chat vision tool can screenshot the page.
+  // The ref is attached to the top-level reader View (which wraps the
+  // embedded Reader / epubjs WebView).
+  const pageCaptureRef = useRef<View>(null)
+  usePageCaptureRef(pageCaptureRef)
 
   // Player observability — drive UI from store, not from the old hook.
   const playingState = usePlayerStore((s) => s.playingState)
@@ -484,7 +492,7 @@ function ReaderContent({ book }: { book: Book }) {
   )
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.background }}>
+    <View ref={pageCaptureRef} style={{ flex: 1, backgroundColor: theme.background }}>
       <Reader
         src={book.filePath}
         fileSystem={useFileSystem}
