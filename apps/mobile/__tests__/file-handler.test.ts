@@ -185,4 +185,57 @@ describe('handleIncomingFile (G27)', () => {
     expect(result.ok).toBe(false)
     expect(result.reason).toBe('import-failed')
   })
+
+  // ── H1-02 — dedupe concurrent cold-start + warm-event ──────────────────────
+  //
+  // iOS/Android fire BOTH `Linking.getInitialURL()` and an
+  // `addEventListener('url', …)` event when the app is cold-started by a
+  // share-sheet action. Without an in-flight guard the same file URL is
+  // imported twice with two distinct book ids — a real user-visible bug
+  // (the library shows duplicates).
+  it('dedupes concurrent calls for the same URL (cold-start + warm-event)', async () => {
+    // Hold the first import open so the second call arrives while the
+    // first is still in-flight. We resolve manually after both calls.
+    let resolveFirst: ((value: unknown) => void) | null = null
+    importFromPath.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = (v) => resolve(v)
+        }),
+    )
+    importFromPath.mockResolvedValueOnce({ ok: true, stage: 'done' })
+
+    const { handleIncomingFile } = require('@/lib/file-handler')
+    const url = 'file:///Inbox/dune.epub'
+    const p1 = handleIncomingFile(url)
+    const p2 = handleIncomingFile(url) // arrives while p1 is mid-flight
+
+    const r2 = await p2
+    expect(r2.ok).toBe(false)
+    expect(r2.reason).toBe('duplicate-in-flight')
+
+    // p1 still wins — let it complete.
+    resolveFirst!({ ok: true, stage: 'done' })
+    const r1 = await p1
+    expect(r1.ok).toBe(true)
+
+    // Exactly ONE import was started — the duplicate short-circuited
+    // before generating a fresh book id or calling the import service.
+    expect(createMobileBookImportService).toHaveBeenCalledTimes(1)
+    expect(importFromPath).toHaveBeenCalledTimes(1)
+  })
+
+  // ── H1-02 — once first import completes, re-imports are allowed ────────────
+  //
+  // The dedup is *in-flight only*. After the first import settles the
+  // same URL can be imported again (user genuinely re-shared the file).
+  it('allows re-import of the same URL after the first completes', async () => {
+    const { handleIncomingFile } = require('@/lib/file-handler')
+    const url = 'file:///Inbox/dune.epub'
+    const r1 = await handleIncomingFile(url)
+    expect(r1.ok).toBe(true)
+    const r2 = await handleIncomingFile(url)
+    expect(r2.ok).toBe(true)
+    expect(createMobileBookImportService).toHaveBeenCalledTimes(2)
+  })
 })

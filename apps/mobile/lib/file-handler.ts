@@ -21,7 +21,23 @@ const BOOKS_DIR_NAME = 'books'
 
 export type IncomingFileResult =
   | { ok: true; bookId: string; format: BookFormat }
-  | { ok: false; reason: 'unsupported' | 'import-failed'; error?: string }
+  | {
+      ok: false
+      reason: 'unsupported' | 'import-failed' | 'duplicate-in-flight'
+      error?: string
+    }
+
+// H1-02: in-flight URL deduper. iOS/Android fire BOTH `Linking.getInitialURL()`
+// and an `addEventListener('url', …)` event on cold-start, so a single share-
+// sheet action can call us twice in rapid succession. Without this set we'd
+// generate two distinct book ids and import the same file twice. Entries are
+// dropped after the import promise settles (resolved OR rejected).
+const inFlight = new Set<string>()
+
+/** Test-only: clear the in-flight set between tests. Do not call from app code. */
+export function __resetInFlightForTests(): void {
+  inFlight.clear()
+}
 
 function generateUUID(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -92,6 +108,29 @@ export async function handleIncomingFile(
     return { ok: false, reason: 'unsupported' }
   }
 
+  // H1-02: dedupe back-to-back calls for the same URL. The cold-start path
+  // in `app/_layout.tsx` invokes us from `Linking.getInitialURL()` AND from
+  // the `addEventListener('url')` handler that fires immediately after, so
+  // without this guard a single share-sheet action imports the file twice
+  // with two distinct book ids. Subsequent imports of the same URL after
+  // the first one completes are still allowed (the user genuinely re-shared
+  // the file from another app).
+  if (inFlight.has(url)) {
+    return { ok: false, reason: 'duplicate-in-flight' }
+  }
+  inFlight.add(url)
+
+  try {
+    return await runImport(url, format)
+  } finally {
+    inFlight.delete(url)
+  }
+}
+
+async function runImport(
+  url: string,
+  format: BookFormat,
+): Promise<IncomingFileResult> {
   const title = titleFromUrl(url, format)
   const bookId = generateUUID()
 
