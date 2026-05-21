@@ -16,6 +16,7 @@ import Loader from '@/components/Loader'
 import { HighlightLayer } from '../HighlightLayer'
 import type { HighlightRow } from '@/modules/highlight-storage'
 import type { ViewportLike } from '@/modules/pdf-locator'
+import { navigationHistoryActor } from '@/machines/navigationHistory/navigationHistoryActor'
 type Transform = [number, number, number, number, number, number]
 
 const PARAGRAPH_INDEX_PER_PAGE = 10000
@@ -57,7 +58,8 @@ function PageComponentInner({
   pdf,
   onPageReady,
   highlights,
-  onHighlightClick
+  onHighlightClick,
+  seekTo
 }: {
   thispageNumber: number
   pdfHeight?: number
@@ -72,6 +74,7 @@ function PageComponentInner({
   onPageReady?: (pageNumber: number, info: { pageEl: HTMLElement; page: PDFPageProxy }) => void
   highlights?: HighlightRow[]
   onHighlightClick?: (row: HighlightRow, e: ReactMouseEvent<HTMLDivElement>) => void
+  seekTo?: (page: number) => void
 }) {
   // Subscriptions: keep them to scalar values only so unrelated store writes
   // (currentViewParagraphs reference churn during TTS, pageNumber bumps from
@@ -146,8 +149,43 @@ function PageComponentInner({
     [pageNumber, onPageReady]
   )
 
+  // Intercept react-pdf annotation-layer link clicks before the default handler
+  // fires. The annotation layer renders <a> elements; for internal "go-to-page"
+  // actions, react-pdf / pdf.js sets href to "#page=N". We capture the click,
+  // extract the target page, dispatch JUMP_REQUESTED to the navigation history
+  // machine, and then call seekTo so the reader scrolls to the target.
+  const handleAnnotationClick = useCallback(
+    (e: ReactMouseEvent<HTMLDivElement>): void => {
+      if (!seekTo) return
+      const link = (e.target as HTMLElement).closest('a') as HTMLAnchorElement | null
+      if (!link) return
+      const href = link.getAttribute('href')
+      const targetPageStr =
+        link.getAttribute('data-page-number') ??
+        href?.match(/page=(\d+)/)?.[1] ??
+        null
+      if (!targetPageStr) return
+      const targetPage = Number(targetPageStr)
+      if (!Number.isFinite(targetPage) || targetPage <= 0) return
+      e.preventDefault()
+      const currentPage = usePdfStore.getState().pageNumber
+      navigationHistoryActor.send({
+        type: 'JUMP_REQUESTED',
+        from: { kind: 'pdf', page: currentPage, offset: 0 },
+        fromTts: null,
+        to: { kind: 'pdf', page: targetPage, offset: 0 },
+        source: 'link',
+        fromLabel: `p. ${currentPage}`
+      })
+      seekTo(targetPage)
+    },
+    [seekTo]
+  )
+
   return (
     <div ref={wrapperRef} style={{ position: 'relative' }}>
+      {/* onClickCapture intercepts annotation-layer link clicks before react-pdf's handler */}
+      <div onClickCapture={handleAnnotationClick}>
       <Page
         pdf={pdf}
         pageNumber={pageNumber}
@@ -171,6 +209,7 @@ function PageComponentInner({
         onRenderSuccess={handleRenderSuccess}
         onLoadSuccess={handleLoadSuccess}
       />
+      </div>
       {pdfPage && wrapperRef.current && highlights && onHighlightClick && (
         <HighlightLayer
           pageNumber={pageNumber}

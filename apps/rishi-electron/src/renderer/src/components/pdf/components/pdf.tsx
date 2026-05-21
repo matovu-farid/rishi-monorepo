@@ -16,6 +16,14 @@ import type { DocumentInitParameters } from 'pdfjs-dist/types/src/display/api'
 import { getCachedPdf, setCachedPdf } from '@/services/reader-cache/pdf-cache'
 import { usePlayerStore } from '@/stores/playerStore'
 import { nextPage, previousPage } from '../utils/pageControls'
+import {
+  navigationHistoryActor,
+  onResumeRequested
+} from '@/machines/navigationHistory/navigationHistoryActor'
+import type { PositionDescriptor } from '@/machines/navigationHistory/types'
+import { useEngagementDetector } from '@/hooks/useEngagementDetector'
+import { useNavigationHistoryKeyboard } from '@/hooks/useNavigationHistoryKeyboard'
+import { NavigationHistoryFooter } from '@/components/navigation-history/NavigationHistoryFooter'
 
 import { cn } from '@/lib/utils'
 
@@ -327,6 +335,60 @@ export function PdfView({
   // whose state can't be stomped from outside.
   const pdfReader = usePdfReader(book, virtualizer, scrollContainerRef)
 
+  // Ref for the reader root — used by useEngagementDetector to attach pointer listeners.
+  const readerRootRef = useRef<HTMLDivElement>(null)
+
+  // Read current PDF page reactively from pdfStore (the machine mirrors it there).
+  // usePdfReader does NOT expose currentPage/currentOffset directly on its API.
+  const currentPdfPage = usePdfStore((s) => s.pageNumber)
+
+  // Read activeParagraph reactively for TTS context dispatch.
+  const activeParagraph = usePlayerStore((s) => s.activeParagraph)
+
+  // Helper: build a TtsContext from the current activeParagraph.
+  // ParagraphWithIndex.index is a string; TtsContext.paragraphIndex is a number.
+  const ttsContext = activeParagraph != null ? { paragraphIndex: Number(activeParagraph.index) } : null
+
+  // Navigation history: lifecycle events (BOOK_OPENED / BOOK_CLOSED)
+  useEffect(() => {
+    navigationHistoryActor.send({
+      type: 'BOOK_OPENED',
+      bookId: String(book.id),
+      initialPosition: {
+        kind: 'pdf',
+        page: usePdfStore.getState().pageNumber || 1,
+        offset: 0
+      }
+    })
+    return () => navigationHistoryActor.send({ type: 'BOOK_CLOSED' })
+    // Re-fire if book.id changes (component is mounted with key={book.id} so this
+    // normally only fires once per mount, but kept explicit for correctness).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [book.id])
+
+  // Navigation history: PAGE_VISITED on every page change
+  useEffect(() => {
+    if (currentPdfPage <= 0) return
+    navigationHistoryActor.send({
+      type: 'PAGE_VISITED',
+      position: { kind: 'pdf', page: currentPdfPage, offset: 0 },
+      ttsContext
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPdfPage])
+
+  // Navigation history: RESUME_REQUESTED → seek to saved position
+  useEffect(() => {
+    return onResumeRequested((anchor) => {
+      if (anchor.position.kind !== 'pdf') return
+      pdfReader.seekTo(anchor.position.page)
+    })
+  }, [pdfReader])
+
+  // Engagement + keyboard navigation hooks
+  useEngagementDetector({ targetRef: readerRootRef, enabled: true })
+  useNavigationHistoryKeyboard()
+
   // Wire native-menu commands. Toolbar buttons remain the primary entry
   // point; menu items dispatch the same actions. Setters from useState and
   // store actions read via getState() are stable identities, so this memo
@@ -373,6 +435,19 @@ export function PdfView({
   // ReaderTOC props) keep stable identity across renders.
   const onItemClick = useCallback(
     ({ pageNumber: itemPageNumber }: { pageNumber: number }) => {
+      const fromPage = usePdfStore.getState().pageNumber
+      const fromPosition: PositionDescriptor = { kind: 'pdf', page: fromPage, offset: 0 }
+      const fromTts = usePlayerStore.getState().activeParagraph != null
+        ? { paragraphIndex: Number(usePlayerStore.getState().activeParagraph!.index) }
+        : null
+      navigationHistoryActor.send({
+        type: 'JUMP_REQUESTED',
+        from: fromPosition,
+        fromTts,
+        to: { kind: 'pdf', page: itemPageNumber, offset: 0 },
+        source: 'toc',
+        fromLabel: `p. ${fromPage}`
+      })
       pdfReader.seekTo(itemPageNumber)
       setTocOpen(false)
     },
@@ -713,6 +788,7 @@ export function PdfView({
 
   return (
     <div
+      ref={readerRootRef}
       className={cn(
         'relative h-screen w-full',
         !isDualPage && isFullscreen ? '' : '',
@@ -815,6 +891,7 @@ export function PdfView({
                             }}
                             highlights={highlights}
                             onHighlightClick={handleHighlightClick}
+                            seekTo={pdfReader.seekTo}
                           />
                           <div className="group/page absolute bottom-1 left-0 right-0 text-center py-1">
                             <span className="text-xs text-gray-400">
@@ -949,6 +1026,8 @@ export function PdfView({
           await refreshHighlights()
         }}
       />
+      {/* Navigation history back-pill overlay */}
+      <NavigationHistoryFooter />
     </div>
   )
 }
