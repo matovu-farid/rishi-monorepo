@@ -57,16 +57,26 @@ test('Bookmarks > recent submenu reflects added bookmarks', async () => {
 
     const clicked = await clickMenuItem(launched.app, ['Bookmarks', 'Add Bookmark'])
     expect(clicked).toBe(true)
-    // Allow the add-bookmark IPC roundtrip + the menu publish to complete.
-    await bookPage.waitForTimeout(1500)
 
-    const menu = await getApplicationMenu(launched.app)
-    const bookmarks = findMenuItem(menu, ['Bookmarks'])
-    const labels = (bookmarks?.submenu ?? []).map((m) => m.label).filter((l): l is string => !!l)
-    // At least one real bookmark entry beyond the static items + placeholder.
-    expect(
-      labels.some((l) => l !== 'Add Bookmark' && l !== 'Show All Bookmarks…' && !l.startsWith('('))
-    ).toBe(true)
+    // Poll the published menu until a real bookmark entry appears beyond the
+    // static items + placeholder. The publish path is a 4-hop async pipeline
+    // (menu IPC → bookmarks save → publish → setApplicationMenu) so a fixed
+    // sleep is both flake-prone under CI load and wasteful when fast.
+    await expect
+      .poll(
+        async () => {
+          const m = await getApplicationMenu(launched.app)
+          const bookmarks = findMenuItem(m, ['Bookmarks'])
+          const ls = (bookmarks?.submenu ?? [])
+            .map((entry) => entry.label)
+            .filter((l): l is string => !!l)
+          return ls.some(
+            (l) => l !== 'Add Bookmark' && l !== 'Show All Bookmarks…' && !l.startsWith('(')
+          )
+        },
+        { timeout: 10000 }
+      )
+      .toBe(true)
   } finally {
     await closeApp(launched)
   }

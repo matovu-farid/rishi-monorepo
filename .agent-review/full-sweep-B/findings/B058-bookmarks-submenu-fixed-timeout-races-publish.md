@@ -65,6 +65,16 @@ DB) or fail with no diagnostic pointing at the publish path.
 ## Tiebreaker Verdict: CONFIRM | REJECT
 
 ## Fix Plan
+status: fixed
+commit: 7c77fd32ad041b86a18f26c6e7159a7aa2b83bdd
+notes: Replaced `await bookPage.waitForTimeout(1500)` on L61 with
+`expect.poll(...)` that queries the application menu and waits for a real
+bookmark entry (anything beyond `Add Bookmark`, `Show All Bookmarks…`, and
+parenthesized placeholders) to appear under Bookmarks. Timeout 10s, so a
+publish regression times out with a clear diff against the current submenu
+labels rather than silently passing on stale state. The combined
+`getApplicationMenu + findMenuItem + label` extraction is inlined inside
+the poll closure to keep the assertion site self-contained. Typecheck green.
 
 ## Code Review
 
