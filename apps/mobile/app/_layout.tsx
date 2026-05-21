@@ -1,5 +1,3 @@
-import { ClerkProvider, ClerkLoaded } from '@clerk/expo'
-import { tokenCache } from '@clerk/expo/token-cache'
 import {
   DarkTheme,
   DefaultTheme,
@@ -7,13 +5,16 @@ import {
 } from '@react-navigation/native'
 import { Slot } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
+import * as Linking from 'expo-linking'
 import * as Sentry from '@sentry/react-native'
+import { useEffect } from 'react'
 import { initExecutorch } from 'react-native-executorch'
 import { ExpoResourceFetcher } from 'react-native-executorch-expo-resource-fetcher'
 import 'react-native-reanimated'
 import '../global.css'
 
 import { useColorScheme } from '@/hooks/use-color-scheme'
+import { useAuthStore } from '@/lib/stores/authStore'
 import { initVectorExtension, ensureChunkTables } from '@/lib/rag/vector-store'
 
 export const IS_E2E_TEST = process.env.EXPO_PUBLIC_E2E_TEST === 'true'
@@ -36,14 +37,34 @@ try {
   console.warn('[vector-store] Failed to initialize:', e)
 }
 
-const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!
-
-if (!publishableKey && !IS_E2E_TEST) {
-  throw new Error('EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY is not set. Add it to your .env file.')
-}
-
 function RootLayout() {
   const colorScheme = useColorScheme()
+  const hydrateAuth = useAuthStore((s) => s.hydrateAuth)
+
+  // Run the MMKV hydration once at startup so child layouts know the
+  // last-known welcomeSeen flag + persisted user id before they render.
+  useEffect(() => {
+    hydrateAuth()
+  }, [hydrateAuth])
+
+  // The Better-Auth deep-link round-trip is driven by
+  // `WebBrowser.openAuthSessionAsync` in `lib/auth.signIn()`, which already
+  // resolves with the callback URL — we do NOT need to subscribe to
+  // `Linking.addEventListener('url', …)` for that flow. We DO listen here
+  // so cold-start deep links (app not running when the redirect fires)
+  // can be observed by future features (e.g. share-into-Rishi).
+  useEffect(() => {
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      if (url.startsWith('rishimobile://auth/callback')) {
+        // No-op: openAuthSessionAsync handles in-flight callbacks. This
+        // branch only fires for cold-start callbacks where the browser
+        // was already closed — currently nothing else to do.
+      }
+    })
+    return () => {
+      sub.remove()
+    }
+  }, [])
 
   if (IS_E2E_TEST) {
     return (
@@ -55,14 +76,10 @@ function RootLayout() {
   }
 
   return (
-    <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>
-      <ClerkLoaded>
-        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-          <Slot />
-          <StatusBar style="auto" />
-        </ThemeProvider>
-      </ClerkLoaded>
-    </ClerkProvider>
+    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+      <Slot />
+      <StatusBar style="auto" />
+    </ThemeProvider>
   )
 }
 

@@ -1,80 +1,63 @@
-import { useSignIn } from '@clerk/expo'
-import { useSignInWithGoogle } from '@clerk/expo/google'
+/**
+ * Sign-in screen — Better-Auth deep-link flow (Batch 1C). Replaces the
+ * Clerk-based form.
+ *
+ * UX:
+ *   - Two primary buttons: "Continue with Google" and "Sign in with Email".
+ *     Google opens the in-app browser to the worker /mobile/start
+ *     authUrl; email/password opens the same browser but with
+ *     `provider=password` (the web app handles the email/password form).
+ *   - During the round-trip, the screen shows a spinner driven by
+ *     `authStore.isAuthenticating`.
+ *   - On success, `lib/auth.signIn()` persists the bearer to secure-store
+ *     and pushes the session into `authStore`. The (tabs) layout
+ *     observes `isAuthenticated` and redirects us into the app.
+ */
 import { useRouter, type Href } from 'expo-router'
-import { useState, useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 
+import { signIn, type AuthProvider } from '@/lib/auth'
+import { useAuthStore } from '@/lib/stores/authStore'
+
 export default function SignInScreen() {
-  const { signIn } = useSignIn()
-  const { startGoogleAuthenticationFlow } = useSignInWithGoogle()
   const router = useRouter()
+  const isAuthenticating = useAuthStore((s) => s.isAuthenticating)
+  const setAuthenticating = useAuthStore((s) => s.setAuthenticating)
+  const setSession = useAuthStore((s) => s.setSession)
+  const [error, setError] = useState<string | null>(null)
 
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-
-  const onSignIn = useCallback(async () => {
-    if (!signIn) return
-
-    setLoading(true)
-    setError('')
-
-    try {
-      const { error: signInError } = await signIn.password({
-        emailAddress: email,
-        password,
-      })
-
-      if (signInError) {
-        setError(signInError.longMessage || signInError.message || 'Sign in failed')
-        return
+  const startSignIn = useCallback(
+    async (provider: AuthProvider) => {
+      setError(null)
+      setAuthenticating(true)
+      try {
+        const { session_token, user_id } = await signIn(provider)
+        // lib/auth.ts already persisted the token to expo-secure-store.
+        // Mirror it into the in-memory store so the UI re-renders before
+        // the next hydrateAuth() cycle.
+        setSession(session_token, user_id)
+        router.replace('/' as Href)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        // Cancellations are not user-facing errors.
+        if (!/cancel|dismiss/i.test(msg)) {
+          setError(msg)
+        }
+      } finally {
+        setAuthenticating(false)
       }
-
-      if (signIn.status === 'complete') {
-        await signIn.finalize({
-          navigate: ({ session }) => {
-            if (session?.currentTask) {
-              return
-            }
-            router.replace('/(tabs)' as Href)
-          },
-        })
-      } else {
-        setError('Sign in could not be completed. Please try again.')
-      }
-    } catch (err: any) {
-      const message = err?.errors?.[0]?.longMessage || err?.errors?.[0]?.message || 'Sign in failed'
-      setError(message)
-    } finally {
-      setLoading(false)
-    }
-  }, [signIn, email, password, router])
-
-  const onGoogleSignIn = useCallback(async () => {
-    if (Platform.OS !== 'ios' && Platform.OS !== 'android') return
-
-    try {
-      const { createdSessionId, setActive } = await startGoogleAuthenticationFlow()
-      if (createdSessionId && setActive) {
-        await setActive({ session: createdSessionId })
-        router.replace('/(tabs)' as Href)
-      }
-    } catch (err: any) {
-      if (err.code === 'SIGN_IN_CANCELLED' || err.code === '-5') return
-      const message = err?.errors?.[0]?.longMessage || 'Google sign in failed'
-      setError(message)
-    }
-  }, [startGoogleAuthenticationFlow, router])
+    },
+    [router, setAuthenticating, setSession],
+  )
 
   return (
     <SafeAreaView className="flex-1 bg-white dark:bg-black">
@@ -82,47 +65,34 @@ export default function SignInScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         className="flex-1 justify-center px-6"
       >
-        <Text testID="sign-in-title" className="text-3xl font-bold text-center mb-8 text-gray-900 dark:text-white">
+        <Text
+          testID="sign-in-title"
+          className="text-3xl font-bold text-center mb-2 text-gray-900 dark:text-white"
+        >
           Welcome to Rishi
+        </Text>
+        <Text className="text-center mb-8 text-gray-600 dark:text-gray-400">
+          Sign in to sync your library across devices.
         </Text>
 
         {error ? (
-          <Text className="text-red-500 text-center mb-4">{error}</Text>
+          <Text testID="sign-in-error" className="text-red-500 text-center mb-4">
+            {error}
+          </Text>
         ) : null}
 
-        <TextInput
-          testID="email-input"
-          className="border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-3 mb-4 text-gray-900 dark:text-white bg-white dark:bg-gray-800"
-          placeholder="Email"
-          placeholderTextColor="#9CA3AF"
-          value={email}
-          onChangeText={setEmail}
-          autoCapitalize="none"
-          keyboardType="email-address"
-          autoComplete="email"
-        />
-
-        <TextInput
-          testID="password-input"
-          className="border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-3 mb-6 text-gray-900 dark:text-white bg-white dark:bg-gray-800"
-          placeholder="Password"
-          placeholderTextColor="#9CA3AF"
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-          autoComplete="password"
-        />
-
         <TouchableOpacity
-          testID="sign-in-button"
+          testID="google-sign-in-button"
           className="bg-blue-600 rounded-lg py-3 mb-4"
-          onPress={onSignIn}
-          disabled={loading}
+          onPress={() => startSignIn('google')}
+          disabled={isAuthenticating}
         >
-          {loading ? (
+          {isAuthenticating ? (
             <ActivityIndicator color="white" />
           ) : (
-            <Text className="text-white text-center font-semibold text-lg">Sign In</Text>
+            <Text className="text-white text-center font-semibold text-lg">
+              Continue with Google
+            </Text>
           )}
         </TouchableOpacity>
 
@@ -133,12 +103,13 @@ export default function SignInScreen() {
         </View>
 
         <TouchableOpacity
-          testID="google-sign-in-button"
+          testID="email-sign-in-button"
           className="border border-gray-300 dark:border-gray-600 rounded-lg py-3"
-          onPress={onGoogleSignIn}
+          onPress={() => startSignIn('password')}
+          disabled={isAuthenticating}
         >
           <Text className="text-center font-semibold text-gray-700 dark:text-gray-300">
-            Continue with Google
+            Sign in with Email
           </Text>
         </TouchableOpacity>
       </KeyboardAvoidingView>
