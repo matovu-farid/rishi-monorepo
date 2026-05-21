@@ -46,13 +46,25 @@ export async function embedBook(
     // 3. Store each chunk with its vector
     for (let j = 0; j < batch.length; j++) {
       const chunk = batch[j]
+      const embedding = embeddings[j]
+      // Guard against embedder backends that return fewer vectors than
+      // requested (server truncation, partial on-device failure). Without
+      // this check, sqlite-vec sees `JSON.stringify(undefined)` -> undefined
+      // and rejects the bind with an opaque "wrong number of bindings"
+      // error that leaves the book in a half-indexed state.
+      if (!Array.isArray(embedding) || embedding.length === 0) {
+        console.warn(
+          `[pipeline] Skipping chunk ${chunk.id}: missing or empty embedding (got ${typeof embedding})`
+        )
+        continue
+      }
       insertChunkWithVector(
         chunk.id,
         bookId,
         chunk.chunkIndex,
         chunk.text,
         chunk.chapter,
-        embeddings[j]
+        embedding
       )
     }
 

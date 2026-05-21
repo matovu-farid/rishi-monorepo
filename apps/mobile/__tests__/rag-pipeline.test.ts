@@ -130,6 +130,30 @@ describe('embedBook', () => {
     expect(mockEmbedBatch).not.toHaveBeenCalled()
     expect(onProgress).toHaveBeenCalledWith(1)
   })
+
+  // H3-01: pipeline must skip chunks whose embedding came back undefined
+  // (server returned fewer rows than texts). Without this guard, sqlite
+  // gets passed `JSON.stringify(undefined)` which is undefined itself and
+  // sqlite-vec rejects the bind with an opaque error.
+  it('skips chunks whose embedding is undefined (server returned fewer than requested)', async () => {
+    mockIsBookEmbedded.mockReturnValue(false)
+    const chunks = makeChunks(3)
+    mockGetChunks.mockResolvedValue(chunks)
+    const embedding = new Array(384).fill(0.1)
+    // Server bug: 2 embeddings for 3 texts.
+    mockEmbedBatch.mockResolvedValue([embedding, embedding])
+
+    await embedBook('book-1', '/path/to/book.epub', 'epub')
+
+    // Only the two valid embeddings should be persisted; the third
+    // (undefined) chunk is dropped rather than passed as undefined.
+    expect(mockInsertChunkWithVector).toHaveBeenCalledTimes(2)
+    for (const call of mockInsertChunkWithVector.mock.calls) {
+      // Last param is the embedding — must not be undefined.
+      expect(call[5]).toBeDefined()
+      expect(Array.isArray(call[5])).toBe(true)
+    }
+  })
 })
 
 describe('reembedBook', () => {
