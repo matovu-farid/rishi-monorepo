@@ -12,6 +12,7 @@ vi.mock("next/navigation", () => ({
 }))
 
 import {
+  clearHandoff,
   useDesktopHandoff,
   __resetDesktopHandoffForTests,
 } from "./use-desktop-handoff"
@@ -191,7 +192,6 @@ describe("useDesktopHandoff", () => {
     await vi.waitFor(() => expect(first.result.current.status).toBe("done"))
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
-    const { clearHandoff } = await import("./use-desktop-handoff")
     clearHandoff("66666666-6666-4666-8666-666666666666")
 
     const second = renderHook(() => useDesktopHandoff())
