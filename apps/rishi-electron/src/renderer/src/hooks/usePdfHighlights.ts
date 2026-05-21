@@ -20,17 +20,25 @@ export function usePdfHighlights(bookSyncId: string): UsePdfHighlightsResult {
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!bookSyncId) return
-    const rows = await getHighlightsForBook(bookSyncId)
-    setHighlights(rows.filter((r) => r.format === 'pdf'))
+    try {
+      const rows = await getHighlightsForBook(bookSyncId)
+      setHighlights(rows.filter((r) => r.format === 'pdf'))
+    } catch (err) {
+      console.error('[usePdfHighlights] refresh failed:', err)
+    }
   }, [bookSyncId])
 
   useEffect(() => {
     let active = true
     if (!bookSyncId) return
-    void getHighlightsForBook(bookSyncId).then((rows) => {
-      if (!active) return
-      setHighlights(rows.filter((r) => r.format === 'pdf'))
-    })
+    void getHighlightsForBook(bookSyncId)
+      .then((rows) => {
+        if (!active) return
+        setHighlights(rows.filter((r) => r.format === 'pdf'))
+      })
+      .catch((err: unknown) => {
+        console.error('[usePdfHighlights] load failed:', err)
+      })
     return () => {
       active = false
     }

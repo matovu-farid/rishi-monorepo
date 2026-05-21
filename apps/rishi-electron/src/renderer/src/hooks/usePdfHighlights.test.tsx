@@ -122,23 +122,13 @@ describe('usePdfHighlights', () => {
     })
   })
 
-  it('IPC rejection leaves highlights stable and a subsequent successful refresh() recovers', async () => {
-    // Pins current behaviour: the effect at usePdfHighlights.ts:30 has no
-    // .catch, so a rejected highlightsList surfaces as an unhandled rejection
-    // in the renderer (production defect noted in A033). The hook itself does
-    // NOT throw synchronously and leaves `highlights` as the initial empty
-    // array. We capture unhandledrejection events to keep the test from
-    // failing the suite while the production .catch is missing, and assert
-    // recovery via a successful refresh().
+  it('IPC rejection leaves highlights stable, does not raise unhandledrejection, and a subsequent successful refresh() recovers', async () => {
     const listMock = window.electron.highlightsList as unknown as ReturnType<typeof vi.fn>
+    const unhandled: PromiseRejectionEvent[] = []
     const onUnhandled = (e: PromiseRejectionEvent): void => {
-      e.preventDefault()
-    }
-    const onProcessUnhandled = (): void => {
-      /* swallow — see comment above */
+      unhandled.push(e)
     }
     window.addEventListener('unhandledrejection', onUnhandled)
-    process.on('unhandledRejection', onProcessUnhandled)
 
     try {
       listMock.mockRejectedValueOnce(new Error('IPC down'))
@@ -175,9 +165,11 @@ describe('usePdfHighlights', () => {
         expect(result.current.highlights).toHaveLength(1)
         expect(result.current.highlights[0].id).toBe('r')
       })
+
+      // Hook must catch IPC rejections internally — no unhandled rejection.
+      expect(unhandled).toEqual([])
     } finally {
       window.removeEventListener('unhandledrejection', onUnhandled)
-      process.off('unhandledRejection', onProcessUnhandled)
     }
   })
 })
