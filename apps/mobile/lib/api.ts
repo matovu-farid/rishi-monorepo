@@ -47,8 +47,24 @@ export async function apiClient(
 
   // 401 means the worker rejected the token (revoked / expired). Clear it so
   // the next call forces a fresh sign-in instead of looping with a dead token.
+  //
+  // H1-03: clear both the secure-store bearer AND the in-memory authStore.
+  // `signOut()` alone only wipes secure-store, so the UI would keep showing
+  // the user as signed-in even though every subsequent request now fails
+  // with "no session token". The authStore import is lazy (require inside
+  // the branch) to avoid pulling Zustand into modules that don't need it
+  // and to dodge the test-mock ordering issues that an eager import would
+  // create for callers that mock `@/lib/api`.
   if (response.status === 401) {
     await signOut()
+    try {
+      const { useAuthStore } = require('@/lib/stores/authStore') as {
+        useAuthStore: { getState: () => { clearSession: () => void } }
+      }
+      useAuthStore.getState().clearSession()
+    } catch (err) {
+      console.warn('[api] failed to clear authStore after 401:', err)
+    }
     throw new Error('Session expired (401). User must sign in again.')
   }
 

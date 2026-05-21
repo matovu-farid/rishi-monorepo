@@ -4,6 +4,17 @@ Domain: `apps/mobile/{lib/auth,lib/api,lib/api-dev-bypass,lib/sync,lib/stores/au
 
 ---
 
+## H1-03 — `apiClient` 401 cleared secure-store but left `authStore` showing signed-in
+
+- **Symptom:** When the worker returns 401 on any authenticated request, `apiClient` calls `signOut()` (which wipes `expo-secure-store`) and throws. But the in-memory `authStore` still reports `isAuthenticated: true`, `user: {...}`, `sessionToken: <stale>`. The UI keeps treating the user as signed in until something independently calls `hydrateAuth` — every subsequent request now fails with "no session token" while the app still shows the signed-in chrome.
+- **File:** `apps/mobile/lib/api.ts:50-53` (only secure-store was cleared, not the store).
+- **Root cause:** `signOut()` is a one-liner around `SecureStore.deleteItemAsync` — by design it has no reference to the Zustand store. The 401 branch in `apiClient` must explicitly invoke `useAuthStore.getState().clearSession()` to keep both layers in sync.
+- **Failing test:** `apps/mobile/__tests__/api/api-401.test.ts` → `clears the in-memory authStore on 401 (H1-03)`. Two sibling tests pin the baseline (secure-store cleared) and the negative (200 leaves the store untouched).
+- **Fix:** In the 401 branch, lazily `require('@/lib/stores/authStore').useAuthStore.getState().clearSession()` after `signOut()`. The lazy require avoids pulling Zustand into modules that mock `@/lib/api` (sync, fallback, realtime tests).
+- **Severity:** Medium-high (user-visible auth desync; UI shows signed-in but requests fail silently).
+
+---
+
 ## H1-02 — `handleIncomingFile` imported the same URL twice on cold-start
 
 - **Symptom:** When the app cold-starts via an iOS share-sheet action, BOTH `Linking.getInitialURL()` (called inside the `useEffect` in `_layout.tsx`) AND the subsequent `Linking.addEventListener('url')` event fire with the same URL. Each invocation generates a fresh book id, creates a fresh `books/<id>` dir, and calls `service.importFromPath` — the user sees the same book imported twice with two rows in the library.
