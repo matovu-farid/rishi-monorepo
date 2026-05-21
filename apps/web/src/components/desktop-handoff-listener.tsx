@@ -1,12 +1,7 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
-import { useSearchParams } from "next/navigation"
-import { useSession } from "@/lib/auth-client"
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://api.fidexa.org"
-
-type HandoffStatus = "idle" | "completing" | "done" | "error"
+import { usePathname } from "next/navigation"
+import { useDesktopHandoff } from "@/lib/use-desktop-handoff"
 
 /**
  * When the desktop app sends a user to app.fidexa.org/?login=true&state=...,
@@ -14,51 +9,16 @@ type HandoffStatus = "idle" | "completing" | "done" | "error"
  * worker to write the session into Redis under the state key. The desktop is
  * polling /desktop/poll and will pick it up on its next tick.
  *
- * No deep-link redirect — the desktop is the active poller. Once we've handed
- * off, we render a small "you can return to Rishi" banner.
+ * On /sign-in, the page renders its own full-page handoff card, so the toast
+ * is suppressed to avoid duplicated UI.
  */
 export function DesktopHandoffListener() {
-  const params = useSearchParams()
-  const { data: session, isPending } = useSession()
-  const hasHandedOffRef = useRef(false)
-  const [status, setStatus] = useState<HandoffStatus>("idle")
-  const [errorMsg, setErrorMsg] = useState("")
+  const pathname = usePathname()
+  const { isDesktopFlow, status, errorMsg } = useDesktopHandoff()
 
-  useEffect(() => {
-    if (hasHandedOffRef.current) return
-    if (isPending) return
-
-    const isHandoff = params.get("login") === "true"
-    const state = params.get("state")
-    if (!isHandoff || !state) return
-    if (!session) return // wait for sign-in to complete
-
-    hasHandedOffRef.current = true
-    setStatus("completing")
-
-    void (async () => {
-      try {
-        const res = await fetch(`${API_URL}/desktop/start/complete`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ state }),
-          credentials: "include",
-        })
-        if (!res.ok) {
-          const body = await res.text().catch(() => "")
-          throw new Error(`handoff failed (${res.status}): ${body}`)
-        }
-        setStatus("done")
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : "Unknown error"
-        setErrorMsg(msg)
-        setStatus("error")
-        console.error("[desktop-handoff]", err)
-      }
-    })()
-  }, [session, isPending, params])
-
-  if (status === "idle") return null
+  if (pathname === "/sign-in") return null
+  if (!isDesktopFlow) return null
+  if (status === "inactive" || status === "waiting") return null
 
   return (
     <div className="fixed bottom-4 right-4 z-50 max-w-sm rounded-lg border bg-background p-4 shadow-lg">
