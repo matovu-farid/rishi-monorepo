@@ -62,12 +62,12 @@ export async function getBookForReading(id: string): Promise<Book | null> {
   const hasLocalFile = row.filePath && new File(row.filePath).exists
 
   if (!hasLocalFile && row.fileR2Key) {
-    // Download from R2 -- this updates filePath in DB
-    await downloadBookFile(
-      id,
-      row.fileR2Key,
-      row.format as Book['format']
-    )
+    // Download from R2 -- this updates filePath in DB. R2 stores azw3
+    // files under the 'mobi' format key (same parser), so collapse the
+    // union here before handing off to the download port.
+    const downloadFormat: 'epub' | 'pdf' | 'mobi' | 'djvu' =
+      row.format === 'azw3' ? 'mobi' : (row.format as 'epub' | 'pdf' | 'mobi' | 'djvu')
+    await downloadBookFile(id, row.fileR2Key, downloadFormat)
     // Re-fetch the updated row
     const updated = db
       .select()

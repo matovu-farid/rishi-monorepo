@@ -1,393 +1,272 @@
-import { File, Directory, Paths } from 'expo-file-system'
-import { Book } from '@/types/book'
-import { insertBook } from '@/lib/book-storage'
-import { hashBookFile, uploadBookFile } from '@/lib/sync/file-sync'
-import { db } from '@/lib/db'
-import { books } from '@rishi/shared/schema'
-import { eq } from 'drizzle-orm'
+/**
+ * Mobile file-import — orchestrates EPUB / PDF / MOBI / AZW3 / DJVU
+ * imports + URL imports.
+ *
+ * Architecture: each import wrapper picks (or downloads) the source file,
+ * mints a UUID, then runs the shared `@rishi/shared/book-import` service
+ * through mobile-specific port adapters. The service handles copy + save
+ * + done-event; cover extraction + R2 upload run after `done` as
+ * fire-and-forget side-effects.
+ */
 
-const BOOKS_DIR = new Directory(Paths.document, 'books')
+import { File, Directory, Paths } from "expo-file-system";
+import { Book } from "@/types/book";
+import { createMobileBookImportService } from "@/lib/book-import";
+import { embedBook } from "@/lib/rag/pipeline";
+import type { BookFormat } from "@rishi/shared/book-import";
+
+const BOOKS_DIR = new Directory(Paths.document, "books");
+
+// ────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ────────────────────────────────────────────────────────────────────────────
+
+function generateUUID(): string {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+function titleFromUri(uri: string, extensionRegex: RegExp): string {
+  const parts = uri.split("/");
+  const rawName = decodeURIComponent(parts[parts.length - 1] || "Unknown Book");
+  return rawName.replace(extensionRegex, "");
+}
+
+function ensureBooksDir(): void {
+  if (!BOOKS_DIR.exists) {
+    BOOKS_DIR.create({ intermediates: true });
+  }
+}
+
+/**
+ * Shared importer driver: pick (or accept) a source URI, mint a UUID, run
+ * the shared service, then trigger indexing in the background.
+ */
+async function runImportWithService(opts: {
+  sourceUri: string;
+  format: BookFormat;
+  title: string;
+  author?: string;
+}): Promise<Book | null> {
+  ensureBooksDir();
+  const bookId = generateUUID();
+
+  const service = createMobileBookImportService({
+    bookId,
+    format: opts.format,
+    title: opts.title,
+    author: opts.author,
+  });
+
+  const result = await service.importFromPath(opts.sourceUri);
+  if (!result.ok) {
+    console.warn(
+      `[file-import] ${opts.format} import failed at stage=${result.stage}: ${result.error}`,
+    );
+    return null;
+  }
+
+  const bookPath = `${BOOKS_DIR.uri}/${bookId}/book.${opts.format}`;
+
+  // Indexing runs after the row exists. The shared indexer falls through
+  // to embed.generateChunks (mobile path) when neither caller nor DB has
+  // chunks. We pass (filePath, format) so the indexer takes that branch.
+  //
+  // Indexing is fire-and-forget — same semantics as upload. A failure
+  // leaves the row in place; the next time the book is opened, the
+  // embedder may retry (vector-store.isBookEmbedded gates the work).
+  void service
+    .indexBook(bookId, undefined, bookPath, opts.format)
+    .catch((err) => {
+      console.warn("[file-import] indexBook failed:", err);
+    });
+
+  // Local Book shape — derive from what the service inserted.
+  return {
+    id: bookId,
+    title: opts.title,
+    author: opts.author ?? "Unknown",
+    coverPath: null, // CoverPort will patch this on the row asynchronously.
+    filePath: bookPath,
+    format: opts.format,
+    currentCfi: null,
+    currentPage: opts.format === "pdf" ? 1 : null,
+    createdAt: Date.now(),
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Picker-driven imports
+// ────────────────────────────────────────────────────────────────────────────
 
 export async function importEpubFile(): Promise<Book | null> {
-  const pickedFile = await File.pickFileAsync(undefined, 'application/epub+zip')
-
+  const pickedFile = await File.pickFileAsync(undefined, "application/epub+zip");
   if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
-    return null
+    return null;
   }
-
-  const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile
-
-  const bookId = generateUUID()
-  const bookDir = new Directory(BOOKS_DIR, bookId)
-
-  // Ensure books/bookId directory exists
-  if (!BOOKS_DIR.exists) {
-    BOOKS_DIR.create({ intermediates: true })
-  }
-  bookDir.create({ intermediates: true, idempotent: true })
-
-  // Copy file from picked location to permanent storage
-  const destFile = new File(bookDir, 'book.epub')
-  sourceFile.copy(destFile)
-
-  // Extract title from URI (strip .epub extension)
-  const uriParts = sourceFile.uri.split('/')
-  const rawName = decodeURIComponent(uriParts[uriParts.length - 1] || 'Unknown Book')
-  const title = rawName.replace(/\.epub$/i, '')
-
-  const book: Book = {
-    id: bookId,
-    title,
-    author: 'Unknown',
-    coverPath: null,
-    filePath: destFile.uri,
-    format: 'epub',
-    currentCfi: null,
-    currentPage: null,
-    createdAt: Date.now(),
-  }
-
-  insertBook(book)
-
-  // Hash and upload file to R2 in background (non-blocking)
-  hashBookFile(destFile.uri)
-    .then((fileHash) => {
-      db.update(books)
-        .set({ fileHash, isDirty: true })
-        .where(eq(books.id, bookId))
-        .run()
-
-      uploadBookFile(destFile.uri, fileHash, 'epub')
-        .then(({ r2Key }) => {
-          db.update(books)
-            .set({ fileR2Key: r2Key, isDirty: true })
-            .where(eq(books.id, bookId))
-            .run()
-        })
-        .catch((err) => {
-          console.warn('Book upload failed (will retry on next sync):', err)
-        })
-    })
-    .catch((err) => {
-      console.warn('Book hashing failed:', err)
-    })
-
-  return book
+  const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile;
+  return runImportWithService({
+    sourceUri: sourceFile.uri,
+    format: "epub",
+    title: titleFromUri(sourceFile.uri, /\.epub$/i),
+  });
 }
 
 export async function importPdfFile(): Promise<Book | null> {
-  const pickedFile = await File.pickFileAsync(undefined, 'application/pdf')
-
+  const pickedFile = await File.pickFileAsync(undefined, "application/pdf");
   if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
-    return null
+    return null;
   }
-
-  const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile
-
-  const bookId = generateUUID()
-  const bookDir = new Directory(BOOKS_DIR, bookId)
-
-  // Ensure books/bookId directory exists
-  if (!BOOKS_DIR.exists) {
-    BOOKS_DIR.create({ intermediates: true })
-  }
-  bookDir.create({ intermediates: true, idempotent: true })
-
-  // Copy file from picked location to permanent storage
-  const destFile = new File(bookDir, 'book.pdf')
-  sourceFile.copy(destFile)
-
-  // Extract title from URI (strip .pdf extension)
-  const uriParts = sourceFile.uri.split('/')
-  const rawName = decodeURIComponent(uriParts[uriParts.length - 1] || 'Unknown Book')
-  const title = rawName.replace(/\.pdf$/i, '')
-
-  const book: Book = {
-    id: bookId,
-    title,
-    author: 'Unknown',
-    coverPath: null,
-    filePath: destFile.uri,
-    format: 'pdf',
-    currentCfi: null,
-    currentPage: null,
-    createdAt: Date.now(),
-  }
-
-  insertBook(book)
-
-  // Hash and upload file to R2 in background (non-blocking)
-  hashBookFile(destFile.uri)
-    .then((fileHash) => {
-      db.update(books)
-        .set({ fileHash, isDirty: true })
-        .where(eq(books.id, bookId))
-        .run()
-
-      uploadBookFile(destFile.uri, fileHash, 'pdf')
-        .then(({ r2Key }) => {
-          db.update(books)
-            .set({ fileR2Key: r2Key, isDirty: true })
-            .where(eq(books.id, bookId))
-            .run()
-        })
-        .catch((err) => {
-          console.warn('Book upload failed (will retry on next sync):', err)
-        })
-    })
-    .catch((err) => {
-      console.warn('Book hashing failed:', err)
-    })
-
-  return book
+  const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile;
+  return runImportWithService({
+    sourceUri: sourceFile.uri,
+    format: "pdf",
+    title: titleFromUri(sourceFile.uri, /\.pdf$/i),
+  });
 }
 
 export async function importMobiFile(): Promise<Book | null> {
-  const pickedFile = await File.pickFileAsync(undefined, 'application/x-mobipocket-ebook')
-
+  const pickedFile = await File.pickFileAsync(
+    undefined,
+    "application/x-mobipocket-ebook",
+  );
   if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
-    return null
+    return null;
   }
-
-  const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile
-
-  const bookId = generateUUID()
-  const bookDir = new Directory(BOOKS_DIR, bookId)
-
-  if (!BOOKS_DIR.exists) {
-    BOOKS_DIR.create({ intermediates: true })
-  }
-  bookDir.create({ intermediates: true, idempotent: true })
-
-  // Detect exact extension from picked file
-  const ext = sourceFile.uri.toLowerCase().endsWith('.azw3') ? 'azw3' : 'mobi'
-  const destFile = new File(bookDir, `book.${ext}`)
-  sourceFile.copy(destFile)
-
-  const uriParts = sourceFile.uri.split('/')
-  const rawName = decodeURIComponent(uriParts[uriParts.length - 1] || 'Unknown Book')
-  const title = rawName.replace(/\.(mobi|azw3)$/i, '')
-
-  const book: Book = {
-    id: bookId,
-    title,
-    author: 'Unknown',
-    coverPath: null,
-    filePath: destFile.uri,
-    format: 'mobi',
-    currentCfi: null,
-    currentPage: null,
-    createdAt: Date.now(),
-  }
-
-  insertBook(book)
-
-  hashBookFile(destFile.uri)
-    .then((fileHash) => {
-      db.update(books)
-        .set({ fileHash, isDirty: true })
-        .where(eq(books.id, bookId))
-        .run()
-
-      uploadBookFile(destFile.uri, fileHash, 'mobi')
-        .then(({ r2Key }) => {
-          db.update(books)
-            .set({ fileR2Key: r2Key, isDirty: true })
-            .where(eq(books.id, bookId))
-            .run()
-        })
-        .catch((err) => {
-          console.warn('Book upload failed (will retry on next sync):', err)
-        })
-    })
-    .catch((err) => {
-      console.warn('Book hashing failed:', err)
-    })
-
-  return book
+  const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile;
+  const isAzw3 = sourceFile.uri.toLowerCase().endsWith(".azw3");
+  const format: BookFormat = isAzw3 ? "azw3" : "mobi";
+  return runImportWithService({
+    sourceUri: sourceFile.uri,
+    format,
+    title: titleFromUri(sourceFile.uri, /\.(mobi|azw3)$/i),
+  });
 }
 
 export async function importDjvuFile(): Promise<Book | null> {
-  const pickedFile = await File.pickFileAsync(undefined, 'image/vnd.djvu')
-
+  const pickedFile = await File.pickFileAsync(undefined, "image/vnd.djvu");
   if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
-    return null
+    return null;
   }
-
-  const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile
-
-  const bookId = generateUUID()
-  const bookDir = new Directory(BOOKS_DIR, bookId)
-
-  if (!BOOKS_DIR.exists) {
-    BOOKS_DIR.create({ intermediates: true })
-  }
-  bookDir.create({ intermediates: true, idempotent: true })
-
-  const destFile = new File(bookDir, 'book.djvu')
-  sourceFile.copy(destFile)
-
-  const uriParts = sourceFile.uri.split('/')
-  const rawName = decodeURIComponent(uriParts[uriParts.length - 1] || 'Unknown Book')
-  const title = rawName.replace(/\.djvu$/i, '')
-
-  const book: Book = {
-    id: bookId,
-    title,
-    author: 'Unknown',
-    coverPath: null,
-    filePath: destFile.uri,
-    format: 'djvu',
-    currentCfi: null,
-    currentPage: null,
-    createdAt: Date.now(),
-  }
-
-  insertBook(book)
-
-  hashBookFile(destFile.uri)
-    .then((fileHash) => {
-      db.update(books)
-        .set({ fileHash, isDirty: true })
-        .where(eq(books.id, bookId))
-        .run()
-
-      uploadBookFile(destFile.uri, fileHash, 'djvu')
-        .then(({ r2Key }) => {
-          db.update(books)
-            .set({ fileR2Key: r2Key, isDirty: true })
-            .where(eq(books.id, bookId))
-            .run()
-        })
-        .catch((err) => {
-          console.warn('Book upload failed (will retry on next sync):', err)
-        })
-    })
-    .catch((err) => {
-      console.warn('Book hashing failed:', err)
-    })
-
-  return book
+  const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile;
+  return runImportWithService({
+    sourceUri: sourceFile.uri,
+    format: "djvu",
+    title: titleFromUri(sourceFile.uri, /\.djvu$/i),
+  });
 }
 
-type BookFormat = 'epub' | 'pdf' | 'mobi' | 'djvu'
+// ────────────────────────────────────────────────────────────────────────────
+// URL-driven import
+//
+// We can't drive this through the shared service's FsPort because the source
+// arrives as bytes (HTTP body), not a file path. The URL import path:
+//   1. download to a temp file inside the per-book dir
+//   2. point the shared service at it (so we still get cover + upload +
+//      indexing)
+// ────────────────────────────────────────────────────────────────────────────
 
-function detectFormatFromUrl(url: string): BookFormat | null {
-  const pathname = new URL(url).pathname.toLowerCase()
-  if (pathname.endsWith('.epub')) return 'epub'
-  if (pathname.endsWith('.pdf')) return 'pdf'
-  if (pathname.endsWith('.mobi') || pathname.endsWith('.azw3')) return 'mobi'
-  if (pathname.endsWith('.djvu')) return 'djvu'
-  return null
+type UrlFormat = "epub" | "pdf" | "mobi" | "djvu";
+
+function detectFormatFromUrl(url: string): UrlFormat | null {
+  const pathname = new URL(url).pathname.toLowerCase();
+  if (pathname.endsWith(".epub")) return "epub";
+  if (pathname.endsWith(".pdf")) return "pdf";
+  if (pathname.endsWith(".mobi") || pathname.endsWith(".azw3")) return "mobi";
+  if (pathname.endsWith(".djvu")) return "djvu";
+  return null;
 }
 
-function detectFormatFromContentType(contentType: string | null): BookFormat | null {
-  if (!contentType) return null
-  if (contentType.includes('application/epub+zip')) return 'epub'
-  if (contentType.includes('application/pdf')) return 'pdf'
-  if (contentType.includes('application/x-mobipocket-ebook')) return 'mobi'
-  if (contentType.includes('image/vnd.djvu')) return 'djvu'
-  return null
+function detectFormatFromContentType(
+  contentType: string | null,
+): UrlFormat | null {
+  if (!contentType) return null;
+  if (contentType.includes("application/epub+zip")) return "epub";
+  if (contentType.includes("application/pdf")) return "pdf";
+  if (contentType.includes("application/x-mobipocket-ebook")) return "mobi";
+  if (contentType.includes("image/vnd.djvu")) return "djvu";
+  return null;
 }
 
 function extractTitleFromUrl(url: string): string {
-  const pathname = new URL(url).pathname
-  const filename = decodeURIComponent(pathname.split('/').pop() || 'Unknown Book')
-  return filename.replace(/\.(epub|pdf|mobi|azw3|djvu)$/i, '')
+  const pathname = new URL(url).pathname;
+  const filename = decodeURIComponent(
+    pathname.split("/").pop() || "Unknown Book",
+  );
+  return filename.replace(/\.(epub|pdf|mobi|azw3|djvu)$/i, "");
 }
 
 export async function importBookFromUrl(url: string): Promise<Book> {
-  if (!url.startsWith('http://') && !url.startsWith('https://')) {
-    throw new Error('Invalid URL — must start with http:// or https://')
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    throw new Error("Invalid URL — must start with http:// or https://");
   }
 
-  let format = detectFormatFromUrl(url)
+  let format = detectFormatFromUrl(url);
 
   if (!format) {
     try {
-      const headRes = await fetch(url, { method: 'HEAD' })
-      format = detectFormatFromContentType(headRes.headers.get('content-type'))
+      const headRes = await fetch(url, { method: "HEAD" });
+      format = detectFormatFromContentType(headRes.headers.get("content-type"));
     } catch {
       // HEAD failed, will try download anyway and check content-type there
     }
   }
 
-  const downloadRes = await fetch(url)
+  const downloadRes = await fetch(url);
 
   if (!downloadRes.ok) {
-    throw new Error(`Download failed: ${downloadRes.status} ${downloadRes.statusText}`)
+    throw new Error(
+      `Download failed: ${downloadRes.status} ${downloadRes.statusText}`,
+    );
   }
 
   if (!format) {
-    format = detectFormatFromContentType(downloadRes.headers.get('content-type'))
+    format = detectFormatFromContentType(downloadRes.headers.get("content-type"));
   }
 
   if (!format) {
-    throw new Error('Unsupported format — only EPUB, PDF, MOBI, and DJVU are supported')
+    throw new Error(
+      "Unsupported format — only EPUB, PDF, MOBI, and DJVU are supported",
+    );
   }
 
-  const arrayBuffer = await downloadRes.arrayBuffer()
-  const bytes = new Uint8Array(arrayBuffer)
+  const arrayBuffer = await downloadRes.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
 
-  const bookId = generateUUID()
-  const bookDir = new Directory(BOOKS_DIR, bookId)
+  ensureBooksDir();
+  // Stash the downloaded bytes in a tmp file inside the book dir so the
+  // shared service's FsPort can copy from a real URI.
+  const bookId = generateUUID();
+  const bookDir = new Directory(BOOKS_DIR, bookId);
+  bookDir.create({ intermediates: true, idempotent: true });
+  const tmpFile = new File(bookDir, `tmp.${format}`);
+  tmpFile.write(bytes);
 
-  if (!BOOKS_DIR.exists) {
-    BOOKS_DIR.create({ intermediates: true })
-  }
-  bookDir.create({ intermediates: true, idempotent: true })
-
-  const destFile = new File(bookDir, `book.${format}`)
-  destFile.write(bytes)
-
-  const title = extractTitleFromUrl(url)
-
-  const book: Book = {
-    id: bookId,
-    title,
-    author: 'Unknown',
-    coverPath: null,
-    filePath: destFile.uri,
+  const title = extractTitleFromUrl(url);
+  const result = await runImportWithService({
+    sourceUri: tmpFile.uri,
     format,
-    currentCfi: null,
-    currentPage: null,
-    createdAt: Date.now(),
+    title,
+  });
+
+  // Clean up the tmp file; the service copied it to book.<format>.
+  try {
+    tmpFile.delete();
+  } catch {
+    /* best-effort */
   }
 
-  insertBook(book)
-
-  hashBookFile(destFile.uri)
-    .then((fileHash) => {
-      db.update(books)
-        .set({ fileHash, isDirty: true })
-        .where(eq(books.id, bookId))
-        .run()
-
-      uploadBookFile(destFile.uri, fileHash, format!)
-        .then(({ r2Key }) => {
-          db.update(books)
-            .set({ fileR2Key: r2Key, isDirty: true })
-            .where(eq(books.id, bookId))
-            .run()
-        })
-        .catch((err) => {
-          console.warn('Book upload failed (will retry on next sync):', err)
-        })
-    })
-    .catch((err) => {
-      console.warn('Book hashing failed:', err)
-    })
-
-  return book
-}
-
-function generateUUID(): string {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID()
+  if (!result) {
+    throw new Error("Import failed");
   }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0
-    const v = c === 'x' ? r : (r & 0x3) | 0x8
-    return v.toString(16)
-  })
+  return result;
 }
+
+// Re-export for callers that still rely on the legacy embedding helper.
+export { embedBook };
