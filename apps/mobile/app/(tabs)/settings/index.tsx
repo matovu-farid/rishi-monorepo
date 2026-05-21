@@ -64,6 +64,14 @@ export default function SettingsScreen() {
   const handleSignOut = useCallback(async () => {
     try {
       await signOut()
+    } catch (err) {
+      // PA-01 / H1-01: secure-store can throw on a locked device. We
+      // STILL clear the in-memory session (finally branch below), but
+      // we swallow the rejection here so it doesn't propagate out as
+      // an unhandled promise rejection. The user wanted out — the only
+      // remaining cost is the OS-level credential which the system will
+      // overwrite on the next sign-in attempt.
+      console.warn('[settings] sign-out failed:', err)
     } finally {
       // Clear the in-memory + persisted user id regardless of whether
       // the secure-store delete succeeded — the user wanted out.

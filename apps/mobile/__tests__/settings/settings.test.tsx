@@ -143,18 +143,11 @@ describe('settings screen (G29)', () => {
 
   // ── CG09 — Sign-out failure path (lib/auth.signOut throws) ─────────────────
   //
-  // Skipped: the behaviour we want to pin (clearSession() runs even when
-  // signOut() throws) IS implemented correctly via the try/finally in
-  // handleSignOut. The blocker for green-coverage is a separate
-  // robustness gap: the screen does NOT attach a `.catch` to
-  // `void handleSignOut()`, so when signOut rejects the promise leaks
-  // and trips Jest's unhandled-rejection guard regardless of how we set
-  // up the assertion path.
-  //
-  // See `.parity/PHASE-A-BUGS.md` PA-01 for the recommended fix (catch
-  // the rejection at the onPress call site). Once that lands, this test
-  // can be enabled — the finally-branch behaviour is already correct.
-  it.skip('Sign-out still clears the auth store when lib/auth.signOut throws', async () => {
+  // PA-01 / H1-01: handleSignOut now wraps the signOut() call in
+  // try/catch so a secure-store rejection on a locked device does NOT
+  // bubble out as an unhandled promise rejection. clearSession() still
+  // runs in the finally branch regardless.
+  it('Sign-out still clears the auth store when lib/auth.signOut throws', async () => {
     const TestRenderer = require('react-test-renderer')
     const React = require('react')
     const Settings = require('@/app/(tabs)/settings/index').default
