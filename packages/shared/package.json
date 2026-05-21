@@ -26,19 +26,32 @@
     "./formats/epub-constants": "./src/formats/epub-constants.ts",
     "./formats/bookmark-cfi": "./src/formats/bookmark-cfi.ts",
     "./formats/mobi": "./src/formats/mobi.ts",
+    "./formats/epub-cover": "./src/formats/epub-cover.ts",
     "./indexing/index-program": "./src/indexing/index-program.ts",
+    "./book-import": "./src/book-import/index.ts",
     "./modules/cfi-to-paragraph": "./src/modules/cfi-to-paragraph.ts",
     "./sync/types": "./src/sync/types.ts",
     "./sync/debounce": "./src/sync/debounce.ts",
     "./connectivity/types": "./src/connectivity/types.ts",
     "./auth/pkce": "./src/auth/pkce.ts",
     "./auth/startAuthSession": "./src/auth/startAuthSession.ts",
-    "./auth": "./src/auth/index.ts"
+    "./auth": "./src/auth/index.ts",
+    "./tts": "./src/tts/index.ts",
+    "./tts/cache": "./src/tts/cache.ts",
+    "./tts/program": "./src/tts/program.ts",
+    "./tts/emitter": "./src/tts/emitter.ts",
+    "./tts/errors": "./src/tts/errors.ts",
+    "./tts/types": "./src/tts/types.ts",
+    "./tts/visual-cue-emitter": "./src/tts/visual-cue-emitter.ts",
+    "./tts/resolve-paragraph": "./src/tts/resolve-paragraph.ts",
+    "./machines/playerMachine": "./src/machines/playerMachine.ts"
   },
   "peerDependencies": {
     "drizzle-orm": "^0.44.0",
     "effect": "^3.21.2",
-    "epubjs": "^0.3.93"
+    "epubjs": "^0.3.93",
+    "jszip": "^3.10.1",
+    "xstate": "^5.30.0"
   },
   "peerDependenciesMeta": {
     "effect": {
@@ -46,11 +59,23 @@
     },
     "epubjs": {
       "optional": true
+    },
+    "jszip": {
+      "optional": true
+    },
+    "xstate": {
+      "optional": true
     }
   },
+  "dependencies": {
+    "md5": "^2.3.0"
+  },
   "devDependencies": {
+    "@types/md5": "^2.3.6",
     "effect": "^3.21.2",
     "epubjs": "^0.3.93",
-    "vitest": "^4.1.6"
+    "jszip": "^3.10.1",
+    "vitest": "^4.1.6",
+    "xstate": "^5.30.0"
   }
 }
