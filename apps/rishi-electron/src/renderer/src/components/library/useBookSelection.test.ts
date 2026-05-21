@@ -40,3 +40,27 @@ describe('useBookSelection — base state', () => {
     expect(result.current.selectedIds.size).toBe(0)
   })
 })
+
+describe('useBookSelection — selectAll', () => {
+  it('selects exactly the ids of the given list', () => {
+    const { result } = renderHook(() => useBookSelection())
+    act(() => result.current.selectAll([{ id: 1 }, { id: 2 }, { id: 3 }]))
+    expect(result.current.selectMode).toBe(true)
+    expect([...result.current.selectedIds].sort()).toEqual([1, 2, 3])
+  })
+
+  it('replaces an existing selection rather than merging', () => {
+    const { result } = renderHook(() => useBookSelection())
+    act(() => result.current.toggle(99))
+    act(() => result.current.selectAll([{ id: 1 }, { id: 2 }]))
+    expect([...result.current.selectedIds].sort()).toEqual([1, 2])
+  })
+
+  it('handles empty input (no-op selection, mode preserved)', () => {
+    const { result } = renderHook(() => useBookSelection())
+    act(() => result.current.toggle(5))
+    act(() => result.current.selectAll([]))
+    expect(result.current.selectMode).toBe(true)
+    expect(result.current.selectedIds.size).toBe(0)
+  })
+})

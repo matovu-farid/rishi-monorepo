@@ -4,6 +4,7 @@ export interface BookSelection {
   selectMode: boolean
   selectedIds: Set<number>
   toggle: (id: number) => void
+  selectAll: (books: ReadonlyArray<{ id: number }>) => void
   clear: () => void
   exitSelectMode: () => void
 }
@@ -25,6 +26,11 @@ export function useBookSelection(): BookSelection {
     })
   }, [])
 
+  const selectAll = useCallback((books: ReadonlyArray<{ id: number }>) => {
+    setSelectMode(true)
+    setSelectedIds(new Set(books.map((b) => b.id)))
+  }, [])
+
   const clear = useCallback(() => {
     setSelectedIds(new Set())
   }, [])
@@ -34,5 +40,5 @@ export function useBookSelection(): BookSelection {
     setSelectedIds(new Set())
   }, [])
 
-  return { selectMode, selectedIds, toggle, clear, exitSelectMode }
+  return { selectMode, selectedIds, toggle, selectAll, clear, exitSelectMode }
 }
