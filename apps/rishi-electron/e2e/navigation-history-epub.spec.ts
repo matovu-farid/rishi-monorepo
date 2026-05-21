@@ -224,36 +224,19 @@ test.describe('Navigation history — EPUB', () => {
       return cfis
     }, { from: fromCfi, to: initialCfi })
 
-    // Dispatch JUMP_REQUESTED via the navigationHistoryActor singleton.
-    // Because the actor is a module-level singleton, we can access it via
-    // dynamic import from the same renderer origin.
-    const pillAppeared = await bookPage.evaluate(
-      async (cfis: { from: string; to: string }) => {
-        try {
-          // Dynamic import of the actor module — works in Vite renderer bundles.
-          const mod = await import('/src/machines/navigationHistory/navigationHistoryActor')
-          mod.navigationHistoryActor.send({
-            type: 'JUMP_REQUESTED',
-            from: { kind: 'epub', cfi: cfis.from },
-            fromTts: null,
-            to: { kind: 'epub', cfi: cfis.to },
-            source: 'link',
-            fromLabel: 'previous spot'
-          })
-          return true
-        } catch {
-          return false
-        }
-      },
-      { from: fromCfi, to: initialCfi }
-    )
-
-    if (!pillAppeared) {
-      // Dynamic import failed (production bundle path). Fall back to asserting
-      // via the EPUB's own stores that the machine state is queryable.
-      test.skip(true, 'dynamic import of actor not available in this build — scaffolding only')
-      return
-    }
+    // Dispatch JUMP_REQUESTED via the navigationHistoryActor singleton,
+    // exposed on window.__rishi by testing/expose-stores.ts.
+    await bookPage.evaluate((cfis: { from: string; to: string }) => {
+      // @ts-expect-error — runtime-exposed via testing/expose-stores.ts
+      window.__rishi.navigationHistoryActor.send({
+        type: 'JUMP_REQUESTED',
+        from: { kind: 'epub', cfi: cfis.from },
+        fromTts: null,
+        to: { kind: 'epub', cfi: cfis.to },
+        source: 'link',
+        fromLabel: 'previous spot'
+      })
+    }, { from: fromCfi, to: initialCfi })
 
     // Pill should appear.
     await waitForPill(bookPage)

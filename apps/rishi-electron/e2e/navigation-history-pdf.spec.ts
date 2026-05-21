@@ -154,32 +154,20 @@ test.describe('Navigation history — PDF', () => {
 
     // Dispatch a JUMP_REQUESTED via the actor, simulating a TOC click from
     // page 1 to page 3.  The pill should appear immediately.
-    const dispatched = await bookPage.evaluate(
-      async (pages: { from: number; to: number }) => {
-        try {
-          const mod = await import(
-            '/src/machines/navigationHistory/navigationHistoryActor'
-          )
-          mod.navigationHistoryActor.send({
-            type: 'JUMP_REQUESTED',
-            from: { kind: 'pdf', page: pages.from, offset: 0 },
-            fromTts: null,
-            to: { kind: 'pdf', page: pages.to, offset: 0 },
-            source: 'toc',
-            fromLabel: `p. ${pages.from}`
-          })
-          return true
-        } catch {
-          return false
-        }
+    await bookPage.evaluate(
+      (pages: { from: number; to: number }) => {
+        // @ts-expect-error — runtime-exposed via testing/expose-stores.ts
+        window.__rishi.navigationHistoryActor.send({
+          type: 'JUMP_REQUESTED',
+          from: { kind: 'pdf', page: pages.from, offset: 0 },
+          fromTts: null,
+          to: { kind: 'pdf', page: pages.to, offset: 0 },
+          source: 'toc',
+          fromLabel: `p. ${pages.from}`
+        })
       },
       { from: initialPage, to: Math.min(initialPage + 2, totalPages) }
     )
-
-    if (!dispatched) {
-      test.skip(true, 'dynamic import of actor unavailable in this build — scaffolding only')
-      return
-    }
 
     // Scroll to the target page so the machine's PAGE_VISITED fires for it.
     await scrollPdfToPage(bookPage, Math.min(initialPage + 2, totalPages), totalPages)
@@ -253,45 +241,27 @@ test.describe('Navigation history — PDF', () => {
     // Dispatch ENGAGEMENT_TAP through the actor to ensure the machine
     // records the engagement, even if the useEngagementDetector hook's
     // pointer listener fired it already.
-    await bookPage.evaluate(async () => {
-      try {
-        const mod = await import(
-          '/src/machines/navigationHistory/navigationHistoryActor'
-        )
-        mod.navigationHistoryActor.send({ type: 'ENGAGEMENT_TAP' })
-      } catch {
-        // Ignore — useEngagementDetector may have already dispatched it.
-      }
+    await bookPage.evaluate(() => {
+      // @ts-expect-error — runtime-exposed via testing/expose-stores.ts
+      window.__rishi.navigationHistoryActor.send({ type: 'ENGAGEMENT_TAP' })
     })
 
     // Now navigate forward to page 5 to trigger a JUMP_REQUESTED from the
     // engaged position. We simulate this by dispatching directly.
-    const jumpDispatched = await bookPage.evaluate(
-      async (pages: { from: number; to: number }) => {
-        try {
-          const mod = await import(
-            '/src/machines/navigationHistory/navigationHistoryActor'
-          )
-          mod.navigationHistoryActor.send({
-            type: 'JUMP_REQUESTED',
-            from: { kind: 'pdf', page: pages.from, offset: 0 },
-            fromTts: null,
-            to: { kind: 'pdf', page: pages.to, offset: 0 },
-            source: 'toc',
-            fromLabel: `p. ${pages.from}`
-          })
-          return true
-        } catch {
-          return false
-        }
+    await bookPage.evaluate(
+      (pages: { from: number; to: number }) => {
+        // @ts-expect-error — runtime-exposed via testing/expose-stores.ts
+        window.__rishi.navigationHistoryActor.send({
+          type: 'JUMP_REQUESTED',
+          from: { kind: 'pdf', page: pages.from, offset: 0 },
+          fromTts: null,
+          to: { kind: 'pdf', page: pages.to, offset: 0 },
+          source: 'toc',
+          fromLabel: `p. ${pages.from}`
+        })
       },
       { from: engagedPage, to: 5 }
     )
-
-    if (!jumpDispatched) {
-      test.skip(true, 'dynamic import of actor unavailable — scaffolding only')
-      return
-    }
 
     // Scroll to page 5.
     await scrollPdfToPage(bookPage, 5, totalPages)
