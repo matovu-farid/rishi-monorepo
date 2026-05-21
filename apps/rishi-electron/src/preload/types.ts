@@ -33,6 +33,8 @@ export type ChannelToMethod = {
   'books:getSyncId': 'booksGetSyncId'
   'books:updateFilepath': 'booksUpdateFilepath'
   'books:updateFileHash': 'booksUpdateFileHash'
+  'books:findByHash': 'findBookByHash'
+  'books:getFilepaths': 'getBookFilepaths'
 
   // Chunks
   'chunks:saveMany': 'savePageDataMany'

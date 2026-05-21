@@ -7,7 +7,9 @@ import {
   updateBookCover,
   updateBookLocation,
   hasSavedEpubData,
-  getBookOutline
+  getBookOutline,
+  findBookByHash,
+  getBookFilepaths
 } from '../database/queries.js'
 import { deleteIndex } from '../vectordb/index.js'
 import { handle } from '../../preload/ipc-contract.js'
@@ -83,6 +85,22 @@ export function registerBookHandlers(): void {
       return getBookOutline(bookId)
     } catch (error) {
       throw new Error(`Failed to get book outline: ${errorMessage(error)}`)
+    }
+  })
+
+  handle('books:findByHash', (_event, hash) => {
+    try {
+      return findBookByHash(hash) ?? null
+    } catch (error) {
+      throw new Error(`Failed to find book by hash: ${errorMessage(error)}`)
+    }
+  })
+
+  handle('books:getFilepaths', () => {
+    try {
+      return getBookFilepaths()
+    } catch (error) {
+      throw new Error(`Failed to get book filepaths: ${errorMessage(error)}`)
     }
   })
 }

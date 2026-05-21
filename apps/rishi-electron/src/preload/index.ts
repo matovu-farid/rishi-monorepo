@@ -13,6 +13,8 @@ const electronAPI: ElectronAPI = {
   updateBookLocation: (bookId, location) => invoke('books:updateLocation', bookId, location),
   hasSavedEpubData: (bookId) => invoke('books:hasSavedEpubData', bookId),
   getBookOutline: (bookId) => invoke('books:getOutline', bookId),
+  findBookByHash: (hash) => invoke('books:findByHash', hash),
+  getBookFilepaths: () => invoke('books:getFilepaths'),
 
   // Page/chunk data
   savePageDataMany: (pageData) => invoke('chunks:saveMany', pageData),
