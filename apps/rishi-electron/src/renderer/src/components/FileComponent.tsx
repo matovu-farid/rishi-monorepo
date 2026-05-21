@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import Loader from './Loader'
 import { toast } from 'sonner'
 import { Button } from './ui/Button'
-import { Trash2, Plus, Search, BookOpen } from 'lucide-react'
+import { Trash2, Plus, Search, BookOpen, Check, Square, CheckSquare } from 'lucide-react'
 // chooseFiles moved into BookDiscoveryModal
 import type { Book } from '@/lib/api'
 import { deleteBook, getBooks } from '@/lib/api'
@@ -21,6 +21,8 @@ import { BookDiscoveryModal } from './BookDiscoveryModal'
 import { HelpMenu } from './HelpMenu'
 import { evictPdf } from '@/services/reader-cache/pdf-cache'
 import { evictEpub } from '@/services/reader-cache/epub-cache'
+import { useBookSelection } from './library/useBookSelection'
+import { SelectionActionBar } from './library/SelectionActionBar'
 
 // Module-level caches survive library remounts (e.g., navigating back from a
 // reader). Two pieces are needed to avoid the white flash on re-entry:
@@ -107,6 +109,8 @@ export default function FileComponent(): React.JSX.Element {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; book: Book } | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [lastReadBookId, setLastReadBookId] = useState<string | null>(null)
+
+  const selection = useBookSelection()
 
   const openBookInNewWindow = useCallback((bookId: number) => {
     void (
@@ -291,6 +295,17 @@ export default function FileComponent(): React.JSX.Element {
             Add Book
           </Button>
         </div>
+        <Button
+          variant="ghost"
+          className="cursor-pointer"
+          onClick={() => {
+            if (selection.selectMode) selection.exitSelectMode()
+            else selection.enterSelectMode()
+          }}
+          startIcon={selection.selectMode ? <CheckSquare size={20} /> : <Square size={20} />}
+        >
+          {selection.selectMode ? 'Cancel' : 'Select'}
+        </Button>
         <LoginButton />
         <HelpMenu />
       </div>
@@ -335,26 +350,49 @@ export default function FileComponent(): React.JSX.Element {
           {isDragActive && books.length === 0 ? (
             <p>Drop the files here ...</p>
           ) : filteredBooks.length > 0 ? (
-            filteredBooks.map((book) => (
-              <div
-                key={book.id}
-                className="flex flex-col gap-1 relative transition-transform duration-200 ease-out hover:scale-[1.03]"
-                onContextMenu={(e) => {
-                  e.preventDefault()
-                  setContextMenu({ x: e.clientX, y: e.clientY, book })
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => openBookInNewWindow(book.id)}
-                  className="block bg-transparent w-full p-0 border-0 cursor-pointer"
+            filteredBooks.map((book) => {
+              const isSelected = selection.selectedIds.has(book.id)
+              return (
+                <div
+                  key={book.id}
+                  className={`flex flex-col gap-1 relative transition-transform duration-200 ease-out hover:scale-[1.03] ${
+                    isSelected ? 'ring-2 ring-blue-500 rounded-lg' : ''
+                  }`}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    setContextMenu({ x: e.clientX, y: e.clientY, book })
+                  }}
                 >
-                  <BookCoverImage book={book} />
-                </button>
-                <p className="text-xs font-medium text-gray-900 truncate mt-1">{book.title}</p>
-                <p className="text-xs text-gray-500 truncate">{book.author}</p>
-              </div>
-            ))
+                  <button
+                    type="button"
+                    aria-label={selection.selectMode ? `Select ${book.title}` : undefined}
+                    onClick={(e) => {
+                      if (selection.selectMode) {
+                        e.preventDefault()
+                        selection.toggle(book.id)
+                        return
+                      }
+                      openBookInNewWindow(book.id)
+                    }}
+                    className="block bg-transparent w-full p-0 border-0 cursor-pointer relative"
+                  >
+                    <BookCoverImage book={book} />
+                    {selection.selectMode ? (
+                      <span
+                        className={`absolute top-2 left-2 w-5 h-5 rounded-full flex items-center justify-center ${
+                          isSelected ? 'bg-blue-600 text-white' : 'bg-white/90 border border-gray-300'
+                        }`}
+                        aria-hidden="true"
+                      >
+                        {isSelected ? <Check size={14} strokeWidth={3} /> : null}
+                      </span>
+                    ) : null}
+                  </button>
+                  <p className="text-xs font-medium text-gray-900 truncate mt-1">{book.title}</p>
+                  <p className="text-xs text-gray-500 truncate">{book.author}</p>
+                </div>
+              )
+            })
           ) : (
             <div className="text-center">
               <p className="mb-4">No books yet. Add your first book!</p>
@@ -383,6 +421,14 @@ export default function FileComponent(): React.JSX.Element {
         </div>
       ) : null}
       <BookDiscoveryModal open={discoveryOpen} onClose={() => setDiscoveryOpen(false)} />
+      {selection.selectMode ? (
+        <SelectionActionBar
+          count={selection.selectedIds.size}
+          onSelectAll={() => selection.selectAll(filteredBooks)}
+          onDelete={() => {}}
+          onCancel={() => selection.exitSelectMode()}
+        />
+      ) : null}
     </div>
   )
 }

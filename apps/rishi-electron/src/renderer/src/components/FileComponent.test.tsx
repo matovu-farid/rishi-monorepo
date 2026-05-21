@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Book } from '@/lib/api'
 
@@ -90,6 +90,29 @@ describe('FileComponent — base render', () => {
     renderWithClient(<FileComponent />)
     await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument())
     expect(screen.getByText('Beta')).toBeInTheDocument()
+  })
+})
+
+describe('FileComponent — entering Select mode', () => {
+  it('toolbar Select button enters Select mode and shows the action bar', async () => {
+    renderWithClient(<FileComponent />)
+    await waitFor(() => screen.getByText('Alpha'))
+
+    fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
+
+    expect(screen.getByRole('toolbar', { name: /selection actions/i })).toBeInTheDocument()
+    expect(screen.getByText('0 selected')).toBeInTheDocument()
+  })
+
+  it('clicking a cover in Select mode toggles selection (does not open the book)', async () => {
+    renderWithClient(<FileComponent />)
+    await waitFor(() => screen.getByText('Alpha'))
+    fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
+
+    fireEvent.click(screen.getByLabelText('Select Alpha'))
+
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+    expect(window.electron.openBook).not.toHaveBeenCalled()
   })
 })
 
