@@ -175,6 +175,51 @@ describe('createReaderCache — total-byte budget', () => {
   })
 })
 
+describe('createReaderCache — diagnostic surface', () => {
+  it('has(id) tracks set/evict/replacement', () => {
+    expect(cache.has(1)).toBe(false)
+    cache.set(1, { id: 'a' }, makeBytes(100))
+    expect(cache.has(1)).toBe(true)
+    cache.evict(1)
+    expect(cache.has(1)).toBe(false)
+  })
+
+  it('size() reflects the live entry count', () => {
+    expect(cache.size()).toBe(0)
+    cache.set(1, { id: 'a' }, makeBytes(10))
+    cache.set(2, { id: 'b' }, makeBytes(10))
+    expect(cache.size()).toBe(2)
+    cache.evict(1)
+    expect(cache.size()).toBe(1)
+  })
+
+  it('stats() returns a defensive copy with hit/miss counters', () => {
+    cache.set(1, { id: 'a' }, makeBytes(10))
+    cache.get(1) // hit
+    cache.get(99) // miss
+    cache.get(99) // miss
+
+    const snapshot = cache.stats()
+    expect(snapshot).toEqual({ hits: 1, misses: 2 })
+
+    // Mutating the snapshot must not leak into internal state — the
+    // e2e diagnostic surface relies on this to compare cold/warm runs.
+    snapshot.hits = 999
+    snapshot.misses = 999
+    expect(cache.stats()).toEqual({ hits: 1, misses: 2 })
+  })
+
+  it('resetStats() zeros both counters', () => {
+    cache.set(1, { id: 'a' }, makeBytes(10))
+    cache.get(1)
+    cache.get(99)
+    expect(cache.stats()).toEqual({ hits: 1, misses: 1 })
+
+    cache.resetStats()
+    expect(cache.stats()).toEqual({ hits: 0, misses: 0 })
+  })
+})
+
 describe('createReaderCache — interaction', () => {
   it('count cap and byte cap compose without double-destroying', async () => {
     const docs = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]
