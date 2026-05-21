@@ -94,7 +94,7 @@ test.describe('Read Aloud From Selection', () => {
     })
 
     if (!firstParagraphCfi) {
-      test.skip(true, 'No paragraphs published — fixture issue or renderer not settled')
+      test.fixme(true, 'No paragraphs published — fixture issue or renderer not settled')
       return
     }
 
@@ -162,7 +162,7 @@ test.describe('Read Aloud From Selection', () => {
     })
     // If already idle (INITIALIZE not fired yet), skip — this is a timing issue.
     if (initialState === 'idle') {
-      test.skip(true, 'Player still in idle — INITIALIZE not fired yet')
+      test.fixme(true, 'Player still in idle — INITIALIZE not fired yet')
       return
     }
 
@@ -228,7 +228,7 @@ test.describe('Read Aloud From Selection', () => {
     })
 
     if (!selectionInfo || selectionInfo.selectedText.trim().length === 0) {
-      test.skip(true, 'Could not create iframe selection — fixture/render issue')
+      test.fixme(true, 'Could not create iframe selection — fixture/render issue')
       return
     }
 
