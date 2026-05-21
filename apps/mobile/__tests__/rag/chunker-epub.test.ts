@@ -1,0 +1,165 @@
+/**
+ * EPUB chunker tests (CG17 — corrupt EPUB handling).
+ *
+ * `apps/mobile/lib/rag/chunker.ts::extractEpubText` opens an EPUB with
+ * JSZip, reads `META-INF/container.xml` for the rootfile pointer, then
+ * walks the OPF spine. Three corrupt-file branches log a `console.warn`
+ * and return `[]`:
+ *
+ *   1. Missing `META-INF/container.xml` — early exit.
+ *   2. `container.xml` present but missing a `<rootfile full-path="…">`
+ *      attribute — early exit.
+ *   3. OPF rootfile path present but the referenced file is missing.
+ *
+ * Behaviour today is "warn and degrade" — `getChunks('book.epub', 'epub')`
+ * returns `[]` instead of throwing. These tests pin that contract so a
+ * future refactor doesn't silently switch to throwing (which would
+ * crash the import flow on malformed EPUBs).
+ *
+ * Why JSZip is used directly: the chunker imports the real library at
+ * runtime (`await import('jszip')`). We build a real zip in-memory per
+ * test, base64-encode it, and feed it through the mocked
+ * `expo-file-system.readAsStringAsync`.
+ */
+
+import JSZip from 'jszip'
+
+// ── expo-file-system mock — returns a per-test base64 fixture ───────────────
+const FIXTURE_KEY = '__epub_fixture__'
+
+jest.mock('expo-file-system', () => ({
+  readAsStringAsync: jest.fn(async () => {
+    const fixture = (global as { [k: string]: unknown })[FIXTURE_KEY]
+    if (typeof fixture !== 'string') {
+      throw new Error('No EPUB fixture set; tests must seed __epub_fixture__')
+    }
+    return fixture
+  }),
+  EncodingType: { Base64: 'base64' },
+}))
+
+jest.mock('expo-crypto', () => ({
+  randomUUID: () => 'uuid-not-expected-here',
+}))
+
+import { getChunks, resetExtractors } from '@/lib/rag/chunker'
+
+async function buildEpubBase64(zipBuilder: (zip: JSZip) => void): Promise<string> {
+  const zip = new JSZip()
+  zipBuilder(zip)
+  const bytes = (await zip.generateAsync({ type: 'uint8array' })) as Uint8Array
+  return Buffer.from(bytes).toString('base64')
+}
+
+function silenceWarn(): jest.SpyInstance {
+  return jest.spyOn(console, 'warn').mockImplementation(() => {})
+}
+
+describe('chunker -> EPUB (CG17: corrupt-file branches)', () => {
+  let warnSpy: jest.SpyInstance
+
+  beforeEach(() => {
+    resetExtractors()
+    warnSpy = silenceWarn()
+  })
+
+  afterEach(() => {
+    warnSpy.mockRestore()
+    delete (global as { [k: string]: unknown })[FIXTURE_KEY]
+  })
+
+  it('returns [] for an EPUB missing META-INF/container.xml', async () => {
+    ;(global as { [k: string]: unknown })[FIXTURE_KEY] = await buildEpubBase64(
+      (zip) => {
+        // Bundle real-looking content but DELIBERATELY omit container.xml.
+        zip.file('content.opf', '<package><metadata></metadata></package>')
+      },
+    )
+
+    const chunks = await getChunks('/fake/book.epub', 'epub', 'book-corrupt-1')
+    expect(chunks).toEqual([])
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Missing META-INF/container.xml'),
+    )
+  })
+
+  it('returns [] for an EPUB whose container.xml lacks a rootfile path', async () => {
+    ;(global as { [k: string]: unknown })[FIXTURE_KEY] = await buildEpubBase64(
+      (zip) => {
+        zip.file(
+          'META-INF/container.xml',
+          // Valid XML but with NO rootfile/full-path attribute.
+          '<?xml version="1.0"?><container><rootfiles></rootfiles></container>',
+        )
+      },
+    )
+
+    const chunks = await getChunks('/fake/book.epub', 'epub', 'book-corrupt-2')
+    expect(chunks).toEqual([])
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Could not find rootfile path'),
+    )
+  })
+
+  it('returns [] for an EPUB whose container.xml points at a missing OPF file', async () => {
+    ;(global as { [k: string]: unknown })[FIXTURE_KEY] = await buildEpubBase64(
+      (zip) => {
+        zip.file(
+          'META-INF/container.xml',
+          '<?xml version="1.0"?><container><rootfiles>' +
+            '<rootfile full-path="OEBPS/content.opf"/>' +
+            '</rootfiles></container>',
+        )
+        // No OEBPS/content.opf added.
+      },
+    )
+
+    const chunks = await getChunks('/fake/book.epub', 'epub', 'book-corrupt-3')
+    expect(chunks).toEqual([])
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Could not read OPF file'),
+      expect.anything(),
+    )
+  })
+
+  it('returns chunks for a well-formed EPUB (positive control for the same wiring)', async () => {
+    ;(global as { [k: string]: unknown })[FIXTURE_KEY] = await buildEpubBase64(
+      (zip) => {
+        zip.file(
+          'META-INF/container.xml',
+          '<?xml version="1.0"?><container><rootfiles>' +
+            '<rootfile full-path="OEBPS/content.opf"/>' +
+            '</rootfiles></container>',
+        )
+        zip.file(
+          'OEBPS/content.opf',
+          // Minimum viable OPF: one manifest item, one spine ref.
+          '<?xml version="1.0"?><package>' +
+            '<manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>' +
+            '<spine><itemref idref="c1"/></spine>' +
+            '</package>',
+        )
+        zip.file(
+          'OEBPS/ch1.xhtml',
+          '<html><body><h1>Chapter One</h1>' +
+            '<p>The cat sat on the mat. ' +
+            'It was big and quiet. ' +
+            'It watched the world go by very carefully and patiently.</p>' +
+            '<p>Then the dog ran past. ' +
+            'It looked at the cat. ' +
+            'They stared at each other for a long quiet patient moment.</p>' +
+            '</body></html>',
+        )
+      },
+    )
+
+    const chunks = await getChunks('/fake/book.epub', 'epub', 'book-ok-1')
+    expect(chunks.length).toBeGreaterThan(0)
+    // Chapter label derived from <h1>.
+    expect(chunks[0].chapter).toBe('Chapter One')
+    // The body text reached the output.
+    const joined = chunks.map((c) => c.text).join(' ')
+    expect(joined).toContain('cat sat on the mat')
+    expect(joined).toContain('dog ran past')
+  })
+})
