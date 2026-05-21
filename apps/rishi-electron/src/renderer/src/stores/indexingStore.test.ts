@@ -73,4 +73,35 @@ describe('indexingStore', () => {
     useIndexingStore.getState().advance(7)
     expect(useIndexingStore.getState().progress(7)).toBe(0.25)
   })
+
+  it('reset() clears multiple books at once', () => {
+    useIndexingStore.getState().start(7, 5)
+    useIndexingStore.getState().start(8, 10)
+    useIndexingStore.getState().advance(8)
+    expect(Object.keys(useIndexingStore.getState().byBookId).sort()).toEqual(['7', '8'])
+
+    useIndexingStore.getState().reset()
+    expect(useIndexingStore.getState().byBookId).toEqual({})
+    expect(useIndexingStore.getState().getStatus(7)).toBe('idle')
+    expect(useIndexingStore.getState().getStatus(8)).toBe('idle')
+  })
+
+  it('start() called twice on the same id resets progress to {done: 0, total, status: running}', () => {
+    useIndexingStore.getState().start(7, 5)
+    useIndexingStore.getState().advance(7)
+    useIndexingStore.getState().advance(7)
+    expect(useIndexingStore.getState().byBookId[7]).toEqual({
+      done: 2,
+      total: 5,
+      status: 'running'
+    })
+
+    // Re-start with a different total — progress must reset, not merge.
+    useIndexingStore.getState().start(7, 8)
+    expect(useIndexingStore.getState().byBookId[7]).toEqual({
+      done: 0,
+      total: 8,
+      status: 'running'
+    })
+  })
 })
