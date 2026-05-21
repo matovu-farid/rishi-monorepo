@@ -45,10 +45,26 @@ describe('tutorialStore', () => {
   })
 
   it('should reset tour', () => {
-    useTutorialStore.setState({ tourCompleted: true })
+    useTutorialStore.setState({
+      tourActive: true,
+      tourStep: 2,
+      tourPaused: true,
+      tourCompleted: true,
+      hintsShown: { seen: true }
+    })
+    localStorage.setItem('rishi:tour-completed', '1')
+    localStorage.setItem('rishi:hints-seen', JSON.stringify({ seen: true }))
+
     useTutorialStore.getState().resetTour()
-    expect(useTutorialStore.getState().tourCompleted).toBe(false)
+
+    const state = useTutorialStore.getState()
+    expect(state.tourActive).toBe(false)
+    expect(state.tourStep).toBe(0)
+    expect(state.tourPaused).toBe(false)
+    expect(state.tourCompleted).toBe(false)
+    expect(state.hintsShown).toEqual({})
     expect(localStorage.getItem('rishi:tour-completed')).toBeNull()
+    expect(localStorage.getItem('rishi:hints-seen')).toBeNull()
   })
 
   it('should dismiss hints', () => {
