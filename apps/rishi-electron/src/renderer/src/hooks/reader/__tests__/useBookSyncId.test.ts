@@ -67,6 +67,12 @@ describe('useBookSyncId', () => {
 
   it('does not publish bookmarks when the sync id is null/empty', async () => {
     electron().booksGetSyncId.mockResolvedValue(null)
+    const electronApi = window.electron as unknown as {
+      getBook: ReturnType<typeof vi.fn>
+      saveBook: ReturnType<typeof vi.fn>
+    }
+    // Block the generate-and-persist fallback so this case stays null.
+    electronApi.getBook.mockResolvedValueOnce(null)
     const useBookSyncId = await loadHook()
     const { result } = renderHook(() => useBookSyncId(99))
     // Give the microtask queue a chance to flush.
@@ -75,5 +81,32 @@ describe('useBookSyncId', () => {
     })
     expect(publishBookmarksToMenu).not.toHaveBeenCalled()
     expect(result.current.bookSyncId).toBe('')
+  })
+
+  // B001: freshly imported books (AZW3/MOBI/EPUB) may have syncId === null at
+  // mount time. Before the fix, the ref was cached as null forever and every
+  // bookmark handler short-circuited. The hook must mirror useChat.ts: when
+  // the initial fetch returns null, generate a UUID, persist it via saveBook,
+  // and expose the resolved value to callers.
+  it('generates and persists a syncId when the initial fetch returns null', async () => {
+    electron().booksGetSyncId.mockResolvedValue(null)
+    const electronApi = window.electron as unknown as {
+      getBook: ReturnType<typeof vi.fn>
+      saveBook: ReturnType<typeof vi.fn>
+    }
+    const fakeBook = { id: 55, title: 't', author: 'a', filepath: '/x', isDirty: 0 }
+    electronApi.getBook.mockResolvedValue(fakeBook)
+    electronApi.saveBook.mockResolvedValue({ id: 55 })
+
+    const useBookSyncId = await loadHook()
+    const { result } = renderHook(() => useBookSyncId(55))
+
+    await waitFor(() => {
+      expect(result.current.bookSyncId).not.toBe('')
+    })
+    expect(result.current.bookSyncIdRef.current).toBe(result.current.bookSyncId)
+    expect(electronApi.saveBook).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 55, syncId: result.current.bookSyncId, isDirty: 1 })
+    )
   })
 })

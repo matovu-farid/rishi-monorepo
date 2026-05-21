@@ -23,12 +23,32 @@ export function useBookSyncId(bookId: number): {
   const [bookSyncId, setBookSyncId] = useState<string>('')
 
   useEffect(() => {
-    void window.electron.booksGetSyncId(bookId).then((syncId) => {
+    const state = { cancelled: false }
+    void (async () => {
+      let syncId = await window.electron.booksGetSyncId(bookId)
+      if (state.cancelled) return
+      // B001: freshly imported books may have no syncId yet (the row is
+      // inserted with `syncId: null` and the sync push backfills it later).
+      // Without this fallback the ref stays null for the lifetime of the
+      // reader window and every bookmark handler silently no-ops. Mirror
+      // useChat.ts: generate a UUID and persist it so callers see a stable id.
+      if (!syncId) {
+        const book = await window.electron.getBook(bookId)
+        if (state.cancelled) return
+        if (book) {
+          syncId = crypto.randomUUID()
+          await window.electron.saveBook({ ...book, syncId, isDirty: 1 })
+          if (state.cancelled) return
+        }
+      }
       bookSyncIdRef.current = syncId
       if (syncId) {
         setBookSyncId(syncId)
       }
-    })
+    })()
+    return () => {
+      state.cancelled = true
+    }
   }, [bookId])
 
   useEffect(() => {
