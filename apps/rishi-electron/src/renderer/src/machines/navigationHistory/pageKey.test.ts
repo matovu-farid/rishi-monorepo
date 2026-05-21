@@ -20,9 +20,23 @@ describe('pageKey', () => {
     expect(pageKey({ kind: 'epub', cfi: cfi1 })).not.toBe(pageKey({ kind: 'epub', cfi: cfi2 }))
   })
 
-  it('AZW3 and MOBI share the epub keyspace', () => {
-    const cfi = 'epubcfi(/6/14!/4/2/2,/1:0,/1:100)'
-    expect(pageKey({ kind: 'azw3', cfi })).toBe(pageKey({ kind: 'epub', cfi }))
-    expect(pageKey({ kind: 'mobi', cfi })).toBe(pageKey({ kind: 'epub', cfi }))
+  it('AZW3 uses its own keyspace with the cfi string', () => {
+    expect(pageKey({ kind: 'azw3', cfi: '3:1' })).toBe('azw3:3:1')
+    expect(pageKey({ kind: 'azw3', cfi: '7' })).toBe('azw3:7')
+  })
+
+  it('MOBI uses its own keyspace with the cfi string', () => {
+    expect(pageKey({ kind: 'mobi', cfi: '5' })).toBe('mobi:5')
+    expect(pageKey({ kind: 'mobi', cfi: '0' })).toBe('mobi:0')
+  })
+
+  it('AZW3 and MOBI keys do not collide with each other for the same value', () => {
+    expect(pageKey({ kind: 'azw3', cfi: '3' })).not.toBe(pageKey({ kind: 'mobi', cfi: '3' }))
+  })
+
+  it('AZW3 and MOBI never throw on non-CFI strings', () => {
+    // Regression test: previously pageKey threw because new EpubCFI('3:1') is invalid
+    expect(() => pageKey({ kind: 'azw3', cfi: '3:1' })).not.toThrow()
+    expect(() => pageKey({ kind: 'mobi', cfi: '5' })).not.toThrow()
   })
 })
