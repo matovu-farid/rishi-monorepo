@@ -113,6 +113,11 @@ describe("<SignInPage>", () => {
       screen.queryByRole("heading", { name: /sign in to rishi/i }),
     ).not.toBeInTheDocument()
     expect(mockReplace).not.toHaveBeenCalled()
+    expect(globalThis.fetch).toHaveBeenCalled()
+    expect(
+      ((globalThis.fetch as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as string),
+    ).toMatch(/\/desktop\/start\/complete$/)
   })
 
   it("renders 'Return to the Rishi app' when handoff is done", async () => {
@@ -164,5 +169,34 @@ describe("<SignInPage>", () => {
     expect(
       screen.getByRole("button", { name: /try again/i }),
     ).toBeInTheDocument()
+  })
+
+  it("clicking 'Try again' re-fires the handoff POST", async () => {
+    mockUseSession.mockReturnValue({
+      data: { user: { id: "u_1" } },
+      isPending: false,
+    })
+    mockUseSearchParams.mockReturnValue(
+      paramsFrom({
+        login: "true",
+        state: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      }),
+    )
+    const fetchMock = vi.fn()
+    fetchMock
+      .mockResolvedValueOnce(new Response("bad", { status: 500 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const user = (await import("@testing-library/user-event")).default.setup()
+    render(<SignInPage />)
+
+    const tryAgain = await screen.findByRole("button", { name: /try again/i })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await user.click(tryAgain)
+
+    await screen.findByRole("heading", { name: /you're signed in/i })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })

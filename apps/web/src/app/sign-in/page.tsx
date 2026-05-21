@@ -8,7 +8,6 @@ import {
   useSession,
 } from "@/lib/auth-client"
 import {
-  clearHandoff,
   useDesktopHandoff,
   type HandoffStatus,
 } from "@/lib/use-desktop-handoff"
@@ -22,12 +21,10 @@ function SignInSkeleton() {
 function DesktopReturnPanel({
   status,
   errorMsg,
-  state,
   onRetry,
 }: {
   status: HandoffStatus
   errorMsg: string
-  state: string | null
   onRetry: () => void
 }) {
   return (
@@ -54,14 +51,7 @@ function DesktopReturnPanel({
             Sign-in handoff failed
           </h1>
           <p className="text-muted-foreground mb-6 break-words">{errorMsg}</p>
-          <Button
-            onClick={() => {
-              if (state) clearHandoff(state)
-              onRetry()
-            }}
-          >
-            Try again
-          </Button>
+          <Button onClick={onRetry}>Try again</Button>
         </>
       )}
     </div>
@@ -174,10 +164,8 @@ function SignInPageInner() {
   const params = useSearchParams()
   const provider = params.get("provider")
   const returnTo = params.get("returnTo") ?? "/"
-  const state = params.get("state")
   const { data: session, isPending } = useSession()
   const handoff = useDesktopHandoff()
-  const [retryNonce, setRetryNonce] = useState(0)
 
   // Auto-kick Google OAuth on ?provider=google (unchanged)
   useEffect(() => {
@@ -206,9 +194,7 @@ function SignInPageInner() {
       <DesktopReturnPanel
         status={handoff.status}
         errorMsg={handoff.errorMsg}
-        state={state}
-        onRetry={() => setRetryNonce((n) => n + 1)}
-        key={retryNonce}
+        onRetry={handoff.retry}
       />
     )
   }

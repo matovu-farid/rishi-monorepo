@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useSearchParams } from "next/navigation"
 import { useSession } from "@/lib/auth-client"
 
@@ -17,6 +17,7 @@ export interface HandoffResult {
   isDesktopFlow: boolean
   status: HandoffStatus
   errorMsg: string
+  retry: () => void
 }
 
 const inflight = new Map<string, Promise<void>>()
@@ -44,6 +45,7 @@ export function useDesktopHandoff(): HandoffResult {
 
   const [status, setStatus] = useState<HandoffStatus>("inactive")
   const [errorMsg, setErrorMsg] = useState("")
+  const [retryNonce, setRetryNonce] = useState(0)
 
   useEffect(() => {
     if (!isDesktopFlow || !state) {
@@ -54,6 +56,10 @@ export function useDesktopHandoff(): HandoffResult {
     if (!sessionData) {
       setStatus("waiting")
       return
+    }
+
+    if (retryNonce > 0) {
+      clearHandoff(state)
     }
 
     setStatus("completing")
@@ -90,7 +96,11 @@ export function useDesktopHandoff(): HandoffResult {
     return () => {
       cancelled = true
     }
-  }, [isDesktopFlow, state, isPending, sessionData])
+  }, [isDesktopFlow, state, isPending, sessionData, retryNonce])
 
-  return { isDesktopFlow, status, errorMsg }
+  const retry = useCallback(() => {
+    setRetryNonce((n) => n + 1)
+  }, [])
+
+  return { isDesktopFlow, status, errorMsg, retry }
 }

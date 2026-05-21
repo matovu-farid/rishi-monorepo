@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import { renderHook } from "@testing-library/react"
+import { act, renderHook } from "@testing-library/react"
 
 const mockUseSession = vi.fn()
 const mockUseSearchParams = vi.fn()
@@ -36,11 +36,12 @@ afterEach(() => {
 describe("useDesktopHandoff", () => {
   it("returns inactive when no desktop params are present", () => {
     const { result } = renderHook(() => useDesktopHandoff())
-    expect(result.current).toEqual({
+    expect(result.current).toMatchObject({
       isDesktopFlow: false,
       status: "inactive",
       errorMsg: "",
     })
+    expect(typeof result.current.retry).toBe("function")
   })
 
   it("returns waiting when params are present but session has not arrived", () => {
@@ -196,6 +197,35 @@ describe("useDesktopHandoff", () => {
 
     const second = renderHook(() => useDesktopHandoff())
     await vi.waitFor(() => expect(second.result.current.status).toBe("done"))
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it("retry() callback re-fires the POST within the same mount", async () => {
+    mockUseSearchParams.mockReturnValue(
+      paramsFrom({
+        login: "true",
+        state: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      }),
+    )
+    mockUseSession.mockReturnValue({
+      data: { user: { id: "u_1" } },
+      isPending: false,
+    })
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
+    fetchMock
+      .mockResolvedValueOnce(new Response("first failure", { status: 500 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }))
+
+    const { result } = renderHook(() => useDesktopHandoff())
+
+    await vi.waitFor(() => expect(result.current.status).toBe("error"))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      result.current.retry()
+    })
+
+    await vi.waitFor(() => expect(result.current.status).toBe("done"))
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })
