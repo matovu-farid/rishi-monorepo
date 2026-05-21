@@ -1,12 +1,75 @@
 import * as FileSystem from 'expo-file-system'
-import { randomUUID } from 'expo-crypto'
+import {
+  parseMobiTextParagraphs,
+  parseMobiChapters,
+} from '@rishi/shared/formats/mobi'
+import { stringToNumberID } from '@rishi/shared/lib/stringToNumberID'
 import type { TextChunk } from '@/types/conversation'
 
+// ---------------------------------------------------------------------------
+// Format-specific extractor registry
+//
+// PDF and DJVU text extraction on mobile both run inside a hidden WebView (no
+// reliable in-process pdfjs / djvu.js on RN 0.81). Hosting those WebViews is
+// a React/Native concern, so the chunker exposes an injectable port per
+// format. The book-import flow registers a real extractor at app start; the
+// jest tests register a fake.
+//
+// MOBI/AZW3 don't need this indirection — they're pure PalmDOC parsing and
+// run synchronously via @rishi/shared/formats/mobi.
+// ---------------------------------------------------------------------------
+
+export interface ExtractedPage {
+  pageNumber: number
+  paragraphs: string[]
+}
+
+export type FormatExtractor = (filePath: string) => Promise<ExtractedPage[]>
+
+let _pdfExtractor: FormatExtractor | null = null
+let _djvuExtractor: FormatExtractor | null = null
+
+export function setPdfExtractor(fn: FormatExtractor): void {
+  _pdfExtractor = fn
+}
+
+export function setDjvuExtractor(fn: FormatExtractor): void {
+  _djvuExtractor = fn
+}
+
 /**
- * Extract text content from an EPUB file.
- * Reads the EPUB (ZIP) as base64, parses the OPF spine, and returns
- * an array of { text, chapter } sections in reading order.
+ * Test hook: clear all registered extractors so jest tests start clean.
  */
+export function resetExtractors(): void {
+  _pdfExtractor = null
+  _djvuExtractor = null
+}
+
+// ---------------------------------------------------------------------------
+// Stable chunk IDs
+//
+// Same (bookId, chunkText) -> same id, regardless of platform or run. This
+// matches the parity goal in .parity/GAP-ANALYSIS.md so chunks can be
+// dedup'd across electron + mobile.
+//
+// We use stringToNumberID (also exported by @rishi/shared) because it's the
+// already-shared deterministic hash function. We pair it with bookId and the
+// chunk text so different books with identical text don't collide.
+//
+// Note: electron's PDF pipeline uses a different per-page formula
+// (chunkId(pageNumber, bookId, index) in @rishi/shared/indexing/index-program).
+// That formula needs a numeric bookId; mobile uses string bookIds (UUIDs).
+// See .parity/BATCH-2A-NOTES.md for the deviation.
+// ---------------------------------------------------------------------------
+
+function chunkIdFor(bookId: string, chunkText: string): string {
+  return stringToNumberID(`${bookId}|${chunkText}`).toString()
+}
+
+// ---------------------------------------------------------------------------
+// EPUB extraction (unchanged behavior)
+// ---------------------------------------------------------------------------
+
 export async function extractEpubText(
   filePath: string
 ): Promise<Array<{ text: string; chapter: string | null }>> {
@@ -16,7 +79,6 @@ export async function extractEpubText(
   })
   const zip = await JSZip.loadAsync(base64, { base64: true })
 
-  // Parse container.xml to find the rootfile path
   const containerXml = await zip.file('META-INF/container.xml')?.async('text')
   if (!containerXml) {
     console.warn('[chunker] Missing META-INF/container.xml')
@@ -31,14 +93,12 @@ export async function extractEpubText(
   const opfPath = rootfileMatch[1]
   const opfDir = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1) : ''
 
-  // Parse OPF file
   const opfXml = await zip.file(opfPath)?.async('text')
   if (!opfXml) {
     console.warn('[chunker] Could not read OPF file:', opfPath)
     return []
   }
 
-  // Extract manifest items: map id -> href
   const manifestItems = new Map<string, string>()
   const itemRegex = /<item\s+[^>]*id="([^"]+)"[^>]*href="([^"]+)"[^>]*/g
   let itemMatch: RegExpExecArray | null
@@ -46,7 +106,6 @@ export async function extractEpubText(
     manifestItems.set(itemMatch[1], itemMatch[2])
   }
 
-  // Extract spine order: itemref idref values
   const spineIdrefs: string[] = []
   const spineMatch = opfXml.match(/<spine[^>]*>([\s\S]*?)<\/spine>/)
   if (spineMatch) {
@@ -74,13 +133,11 @@ export async function extractEpubText(
         continue
       }
 
-      // Extract chapter title from h1/h2/h3 before stripping tags
       const headingMatch = xhtml.match(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/)
       const chapter = headingMatch
         ? headingMatch[1].replace(/<[^>]*>/g, '').trim() || idref
         : null
 
-      // Strip HTML tags, collapse whitespace
       const text = xhtml
         .replace(/<[^>]*>/g, ' ')
         .replace(/\s+/g, ' ')
@@ -97,14 +154,14 @@ export async function extractEpubText(
   return sections
 }
 
-/**
- * Split text sections into overlapping chunks respecting sentence boundaries.
- *
- * @param sections - Array of { text, chapter } from extractEpubText
- * @param maxChunkSize - Target max characters per chunk (default 500)
- * @param overlap - Number of overlap characters from previous chunk (default 50)
- * @returns Array of TextChunk objects with sequential chunkIndex
- */
+// ---------------------------------------------------------------------------
+// chunkText: sentence-aware splitter (unchanged signature)
+//
+// Returns chunks with empty id+bookId — the higher-level chunkSections()
+// stamps the deterministic IDs. The existing chunker.test.ts asserts the
+// chunkText contract directly, so we keep its public behavior unchanged.
+// ---------------------------------------------------------------------------
+
 export function chunkText(
   sections: Array<{ text: string; chapter: string | null }>,
   maxChunkSize: number = 500,
@@ -117,24 +174,25 @@ export function chunkText(
     const { text, chapter } = section
     if (!text || text.trim().length === 0) continue
 
-    // Split by sentence boundaries
     const sentences = text.split(/(?<=[.!?])\s+/)
-
     let currentChunk = ''
+
+    const pushChunk = (chunkContent: string) => {
+      const trimmed = chunkContent.trim()
+      if (trimmed.length === 0) return
+      chunks.push({
+        id: '',
+        bookId: '',
+        chunkIndex: chunkIndex++,
+        text: trimmed,
+        chapter,
+        createdAt: Date.now(),
+      })
+    }
 
     for (const sentence of sentences) {
       if (currentChunk.length + sentence.length + 1 > maxChunkSize && currentChunk.length > 0) {
-        // Push current chunk
-        chunks.push({
-          id: randomUUID(),
-          bookId: '',
-          chunkIndex: chunkIndex++,
-          text: currentChunk.trim(),
-          chapter,
-          createdAt: Date.now(),
-        })
-
-        // Start next chunk with overlap from previous
+        pushChunk(currentChunk)
         if (overlap > 0) {
           const overlapText = currentChunk.slice(-overlap)
           currentChunk = overlapText + ' ' + sentence
@@ -146,39 +204,149 @@ export function chunkText(
       }
     }
 
-    // Push remaining text
-    if (currentChunk.trim().length > 0) {
-      chunks.push({
-        id: randomUUID(),
-        bookId: '',
-        chunkIndex: chunkIndex++,
-        text: currentChunk.trim(),
-        chapter,
-        createdAt: Date.now(),
-      })
-    }
+    pushChunk(currentChunk)
   }
 
   return chunks
 }
 
 /**
- * Extract and chunk text from a book file.
- *
- * @param filePath - Path to the book file
- * @param format - Book format ('epub' or 'pdf')
- * @returns Array of TextChunk objects
+ * Like chunkText() but stamps deterministic IDs derived from (bookId, text)
+ * so the same chunk re-imports to the same row.
  */
-export async function getChunks(
-  filePath: string,
-  format: string
-): Promise<TextChunk[]> {
-  if (format === 'epub') {
-    const sections = await extractEpubText(filePath)
-    return chunkText(sections)
+function chunkSections(
+  sections: Array<{ text: string; chapter: string | null }>,
+  bookId: string,
+  maxChunkSize: number = 500,
+  overlap: number = 50
+): TextChunk[] {
+  const raw = chunkText(sections, maxChunkSize, overlap)
+  return raw.map((c) => ({
+    ...c,
+    id: chunkIdFor(bookId, c.text),
+    bookId,
+  }))
+}
+
+// ---------------------------------------------------------------------------
+// MOBI / AZW3 extraction via @rishi/shared/formats/mobi
+//
+// AZW3 uses the same PalmDOC + EXTH layout as MOBI in practice. We call the
+// shared parser, then flatten each chapter's paragraphs into a single section
+// so the sentence-aware chunker can split it normally.
+// ---------------------------------------------------------------------------
+
+async function extractMobiSections(
+  filePath: string
+): Promise<Array<{ text: string; chapter: string | null }>> {
+  const base64 = await FileSystem.readAsStringAsync(filePath, {
+    encoding: FileSystem.EncodingType.Base64,
+  })
+  const bytes = base64ToUint8Array(base64)
+
+  const chaptersOfParagraphs = parseMobiTextParagraphs(bytes)
+  // Fallback when the paragraph-splitter yielded nothing (rare): emit the
+  // raw stripped HTML so chunking still produces output.
+  if (chaptersOfParagraphs.every((chapter) => chapter.length === 0)) {
+    const htmlChapters = parseMobiChapters(bytes)
+    if (htmlChapters.length === 0) return []
+    return htmlChapters
+      .map((html, i) => ({
+        text: html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
+        chapter: `Chapter ${i + 1}`,
+      }))
+      .filter((s) => s.text.length > 0)
   }
 
-  // PDF, MOBI, and DJVU text extraction not yet supported on mobile
-  console.warn(`[chunker] ${format.toUpperCase()} text extraction not yet supported`)
+  return chaptersOfParagraphs
+    .map((paragraphs, i) => ({
+      text: paragraphs.join('\n'),
+      chapter: `Chapter ${i + 1}`,
+    }))
+    .filter((s) => s.text.length > 0)
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function base64ToUint8Array(base64: string): Uint8Array {
+  // Both RN and Node 18+ have atob in globalThis; fall back to node:buffer
+  // for older environments just to be safe.
+  if (typeof atob === 'function') {
+    const binary = atob(base64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    return bytes
+  }
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const nodeBuffer = require('node:buffer') as typeof import('node:buffer')
+  return new Uint8Array(nodeBuffer.Buffer.from(base64, 'base64'))
+}
+
+/**
+ * Convert per-page paragraph output (PDF / DJVU) into sections the
+ * sentence-aware chunker expects. One paragraph -> one section so cross-page
+ * sentence merging doesn't happen accidentally.
+ */
+function pagesToSections(
+  pages: ExtractedPage[]
+): Array<{ text: string; chapter: string | null }> {
+  const sections: Array<{ text: string; chapter: string | null }> = []
+  for (const page of pages) {
+    for (const paragraph of page.paragraphs) {
+      const trimmed = paragraph.trim()
+      if (trimmed.length === 0) continue
+      sections.push({ text: trimmed, chapter: `Page ${page.pageNumber}` })
+    }
+  }
+  return sections
+}
+
+// ---------------------------------------------------------------------------
+// Format dispatch — the single entrypoint the pipeline calls
+// ---------------------------------------------------------------------------
+
+export async function getChunks(
+  filePath: string,
+  format: string,
+  bookId?: string
+): Promise<TextChunk[]> {
+  const id = bookId ?? ''
+  const normalized = format.toLowerCase()
+
+  if (normalized === 'epub') {
+    const sections = await extractEpubText(filePath)
+    return chunkSections(sections, id)
+  }
+
+  if (normalized === 'pdf') {
+    if (!_pdfExtractor) {
+      console.warn(
+        '[chunker] PDF extractor not registered — call setPdfExtractor() at app start'
+      )
+      return []
+    }
+    const pages = await _pdfExtractor(filePath)
+    return chunkSections(pagesToSections(pages), id)
+  }
+
+  if (normalized === 'mobi' || normalized === 'azw3') {
+    const sections = await extractMobiSections(filePath)
+    return chunkSections(sections, id)
+  }
+
+  if (normalized === 'djvu') {
+    if (!_djvuExtractor) {
+      console.warn(
+        '[chunker] DJVU extractor not registered — call setDjvuExtractor() at app start'
+      )
+      return []
+    }
+    const pages = await _djvuExtractor(filePath)
+    return chunkSections(pagesToSections(pages), id)
+  }
+
+  console.warn(`[chunker] Unknown format: ${format}`)
   return []
 }

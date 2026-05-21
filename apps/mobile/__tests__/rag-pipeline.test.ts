@@ -59,13 +59,15 @@ describe('embedBook', () => {
     expect(onProgress).toHaveBeenCalledWith(1)
   })
 
-  it('calls getChunks with filePath and format', async () => {
+  it('calls getChunks with filePath, format, and bookId (for stable IDs)', async () => {
     mockIsBookEmbedded.mockReturnValue(false)
     mockGetChunks.mockResolvedValue([])
 
     await embedBook('book-1', '/path/to/book.epub', 'epub')
 
-    expect(mockGetChunks).toHaveBeenCalledWith('/path/to/book.epub', 'epub')
+    // bookId is now forwarded so chunkIdFor() can derive stable IDs
+    // (see lib/rag/chunker.ts).
+    expect(mockGetChunks).toHaveBeenCalledWith('/path/to/book.epub', 'epub', 'book-1')
   })
 
   it('processes chunks in batches of 10', async () => {

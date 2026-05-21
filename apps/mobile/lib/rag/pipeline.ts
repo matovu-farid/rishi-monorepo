@@ -30,7 +30,9 @@ export async function embedBook(
   }
 
   // 1. Extract text and chunk
-  const chunks = await getChunks(filePath, format)
+  // bookId is passed so chunk IDs are deterministic across imports/platforms
+  // (see lib/rag/chunker.ts -> chunkIdFor()).
+  const chunks = await getChunks(filePath, format, bookId)
   if (chunks.length === 0) {
     onProgress?.(1)
     return
