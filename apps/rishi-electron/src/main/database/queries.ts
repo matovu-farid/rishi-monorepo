@@ -165,6 +165,49 @@ export function getBook(id: number): Book | undefined {
 }
 
 /**
+ * Pure-SQL variant of `findBookByHash` for unit testing. Returns the first
+ * non-deleted book whose `file_hash` matches, or `undefined` if no row matches.
+ * The `IS NOT NULL` guard ensures pre-backfill rows (file_hash IS NULL) are
+ * never returned, so dedup is opt-in per-row.
+ */
+export function _findBookByHashWithDb(db: Database, hash: string): Book | undefined {
+  const row = db
+    .prepare(
+      'SELECT * FROM books WHERE file_hash = ? AND file_hash IS NOT NULL AND COALESCE(is_deleted, 0) = 0 LIMIT 1'
+    )
+    .get(hash)
+  return row ? rowToBook(row as Record<string, unknown>) : undefined
+}
+
+/**
+ * Look up a book by SHA-256 file hash. Returns `undefined` when no row matches
+ * or when the existing rows for that hash are all soft-deleted.
+ */
+export function findBookByHash(hash: string): Book | undefined {
+  return _findBookByHashWithDb(getDb(), hash)
+}
+
+/**
+ * Pure-SQL variant for testing. Returns non-empty filepaths of every
+ * non-deleted book — used by the import wizard to filter discovered books
+ * the user already has.
+ */
+export function _getBookFilepathsWithDb(db: Database): string[] {
+  const rows = db
+    .prepare('SELECT filepath FROM books WHERE COALESCE(is_deleted, 0) = 0')
+    .all() as Array<{ filepath: string | null }>
+  return rows.map((r) => r.filepath ?? '').filter((p) => p.length > 0)
+}
+
+/**
+ * Return filepaths of every non-deleted book. Lightweight (no cover blobs)
+ * — safe to pull across the IPC boundary on wizard open.
+ */
+export function getBookFilepaths(): string[] {
+  return _getBookFilepathsWithDb(getDb())
+}
+
+/**
  * Insert-shape for `saveBook`. Mirrors the IPC `BookInsertable` payload —
  * `id` may be omitted (new book) or supplied (upsert by primary key), and
  * `cover` is the number[] form produced by the renderer (converted to a

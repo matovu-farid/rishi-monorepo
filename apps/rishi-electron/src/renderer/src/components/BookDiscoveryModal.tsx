@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { X, BookOpen, DownloadCloud, FolderOpen, Loader2, FilePlus } from 'lucide-react'
 import { toast } from 'sonner'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/Button'
 import { ClipLoader } from 'react-spinners'
 import { chooseFiles } from '@/modules/chooseFiles'
@@ -9,6 +9,7 @@ import {
   getBookImportService,
   type DiscoveredBook,
   type ImportResult,
+  type ImportSuccess,
   type ScanProgress
 } from '@/services'
 
@@ -76,6 +77,19 @@ function FolderCheckbox({ checked, indeterminate, onChange, label }: FolderCheck
 
 export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
   const queryClient = useQueryClient()
+  const existingPathsQuery = useQuery({
+    queryKey: ['books', 'filepaths'],
+    queryFn: () => window.electron.getBookFilepaths(),
+    enabled: open,
+    staleTime: 30_000
+  })
+  const existingPaths = useMemo(
+    () => new Set(existingPathsQuery.data ?? []),
+    [existingPathsQuery.data]
+  )
+  // Buffer book-found events that arrive before the existing-paths query
+  // resolves, so the filter is never bypassed by a fast scanner.
+  const pendingBooksRef = useRef<DiscoveredBook[]>([])
   const [books, setBooks] = useState<DiscoveredBook[]>([])
   const [filter, setFilter] = useState('')
   const [scanning, setScanning] = useState(false)
@@ -111,6 +125,15 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
     }
   }
 
+  // Keep latest filter readiness / existing-paths in refs so the long-lived
+  // discovery subscription always sees the current value without resubscribing.
+  const filterReadyRef = useRef(false)
+  const existingPathsRef = useRef(existingPaths)
+  useEffect(() => {
+    filterReadyRef.current = existingPathsQuery.isSuccess || existingPathsQuery.isError
+    existingPathsRef.current = existingPaths
+  }, [existingPathsQuery.isSuccess, existingPathsQuery.isError, existingPaths])
+
   useEffect(() => {
     if (!open) return
     const svc = getBookImportService()
@@ -122,10 +145,16 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
     setScanComplete(false)
     setScanning(true)
     setSelectedPaths(new Set())
+    pendingBooksRef.current = []
 
     const unsub = svc.onDiscoveryEvent((event) => {
       if (event.kind === 'book-found') {
-        setBooks((prev) => [...prev, event.book])
+        if (filterReadyRef.current) {
+          if (existingPathsRef.current.has(event.book.filepath)) return
+          setBooks((prev) => [...prev, event.book])
+        } else {
+          pendingBooksRef.current.push(event.book)
+        }
       } else if (event.kind === 'progress') {
         setProgress(event.progress)
       } else if (event.kind === 'complete') {
@@ -145,6 +174,22 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
       void svc.cancelDiscovery()
     }
   }, [open, mode])
+
+  // Drain any buffered book-found events once the existing-paths query lands.
+  useEffect(() => {
+    if (!open) return
+    if (!existingPathsQuery.isSuccess && !existingPathsQuery.isError) return
+    const pending = pendingBooksRef.current
+    if (pending.length === 0) return
+    pendingBooksRef.current = []
+    setBooks((prev) => {
+      const next = [...prev]
+      for (const b of pending) {
+        if (!existingPaths.has(b.filepath)) next.push(b)
+      }
+      return next
+    })
+  }, [open, existingPathsQuery.isSuccess, existingPathsQuery.isError, existingPaths])
 
   const handleModeChange = (newMode: ScanMode) => {
     if (newMode === mode) return
@@ -182,9 +227,10 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
     })
   }
 
-  const performImport = (paths: string[]) => {
+  const performImport = async (paths: string[]) => {
     if (paths.length === 0) return
     const pathSet = new Set(paths)
+    const count = paths.length
 
     setBooks((prev) => prev.filter((b) => !pathSet.has(b.filepath)))
     setSelectedPaths((prev) => {
@@ -194,12 +240,31 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
     })
     setFilter('')
 
-    const count = paths.length
-    toast.promise(runImport(paths), {
+    const importPromise = runImport(paths)
+    toast.promise(importPromise, {
       loading: `Importing ${count} book${count === 1 ? '' : 's'}...`,
       success: (results) => summarizeBatchResults(results).message,
       error: `Failed to import ${count} book${count === 1 ? '' : 's'}`
     })
+
+    let results: ImportResult[] = []
+    try {
+      results = await importPromise
+    } catch (err) {
+      // toast.promise already surfaced the error; nothing else to do here.
+      console.error('[BookDiscoveryModal] import batch rejected:', err)
+    }
+
+    const successes = results.filter((r): r is ImportSuccess => r.ok)
+    if (successes.length === 1) {
+      try {
+        await window.electron.openBook(successes[0].bookId)
+      } catch (err) {
+        console.error('[BookDiscoveryModal] failed to open imported book:', err)
+      }
+    }
+
+    await handleClose()
   }
 
   const handleImportClick = () => {
@@ -208,13 +273,13 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
       setConfirmOpen(true)
       return
     }
-    performImport(Array.from(selectedPaths))
+    void performImport(Array.from(selectedPaths))
   }
 
   const handleConfirmImport = () => {
     const paths = Array.from(selectedPaths)
     setConfirmOpen(false)
-    performImport(paths)
+    void performImport(paths)
   }
 
   const filteredBooks = books.filter((b) => {

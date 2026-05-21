@@ -20,6 +20,7 @@ export function makeDb(opts?: {
   const saveVectorsCalls: SaveVectorsCall[] = []
   const db: BookStoreIpc = {
     saveBook: vi.fn(),
+    findBookByHash: vi.fn(async () => null),
     savePageDataMany: vi.fn(async (rows) => {
       if (opts?.failOn === 'savePageDataMany') throw new Error('savePageDataMany failed')
       savePageDataCalls.push(...rows)

@@ -4,6 +4,7 @@ import type {
   BookStoreIpc,
   FileSyncIpc,
   FsIpc,
+  ImportFailure,
   ImportProgressEvent
 } from './types'
 import type { Book } from '@/lib/api'
@@ -36,11 +37,17 @@ export function makeFs(opts?: {
   return { fs, removeCalls, copyCalls }
 }
 
-export function makeDbForImport(opts?: { savedBook?: Book; failOn?: 'saveBook' }): {
+export function makeDbForImport(opts?: {
+  savedBook?: Book
+  failOn?: 'saveBook'
+  findBookByHashImpl?: (hash: string) => Promise<Book | null>
+}): {
   db: BookStoreIpc
   savedBooks: Book[]
+  findHashCalls: string[]
 } {
   const savedBooks: Book[] = []
+  const findHashCalls: string[] = []
   const fallback: Book = {
     id: 42,
     kind: 'epub',
@@ -64,12 +71,16 @@ export function makeDbForImport(opts?: { savedBook?: Book; failOn?: 'saveBook' }
       savedBooks.push(out)
       return out
     }),
+    findBookByHash: vi.fn(async (hash) => {
+      findHashCalls.push(hash)
+      return opts?.findBookByHashImpl ? opts.findBookByHashImpl(hash) : null
+    }),
     savePageDataMany: vi.fn(),
     getAllPageDataByBookId: vi.fn(async () => []),
     hasSavedEpubData: vi.fn(async () => false),
     saveVectors: vi.fn()
   }
-  return { db, savedBooks }
+  return { db, savedBooks, findHashCalls }
 }
 
 export function makeFileSync(opts?: {
@@ -91,6 +102,7 @@ export function makeFileSync(opts?: {
 
 export const baseConfig: BookImportConfig = {
   copyTimeoutMs: 5_000,
+  hashTimeoutMs: 5_000,
   parseTimeoutMs: 5_000,
   saveTimeoutMs: 5_000,
   embedBatchSize: 2
@@ -121,7 +133,9 @@ describe('runImport — unsupported extension', () => {
     expect(savedBooks).toEqual([])
     // No rollback for unsupported (the file is a normal copy; caller may delete).
     expect(removeCalls).toEqual([])
-    expect(events.map((e) => e.kind)).toEqual(['copying', 'failed'])
+    // Hash + dedup runs after copy (before the extension check), so `hashing`
+    // is emitted before the unsupported failure.
+    expect(events.map((e) => e.kind)).toEqual(['copying', 'hashing', 'failed'])
   })
 })
 
@@ -176,7 +190,7 @@ describe('runImport — parse failure rolls back the copy', () => {
     if (!result.ok) expect(result.stage).toBe('parse')
     expect(removeCalls).toEqual(['/userData/broken.epub'])
     expect(savedBooks).toEqual([])
-    expect(events.map((e) => e.kind)).toEqual(['copying', 'parsing', 'failed'])
+    expect(events.map((e) => e.kind)).toEqual(['copying', 'hashing', 'parsing', 'failed'])
   })
 })
 
@@ -197,7 +211,13 @@ describe('runImport — save failure does NOT roll back copy', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.stage).toBe('save')
     expect(removeCalls).toEqual([])
-    expect(events.map((e) => e.kind)).toEqual(['copying', 'parsing', 'saving', 'failed'])
+    expect(events.map((e) => e.kind)).toEqual([
+      'copying',
+      'hashing',
+      'parsing',
+      'saving',
+      'failed'
+    ])
   })
 })
 
@@ -251,6 +271,143 @@ describe('runImport — happy path EPUB', () => {
     expect(copyCalls).toEqual(['/Downloads/sample.epub'])
     expect(savedBooks).toHaveLength(1)
     expect(savedBooks[0].filepath).toBe('/userData/sample.epub')
-    expect(events.map((e) => e.kind)).toEqual(['copying', 'parsing', 'saving', 'done'])
+    expect(events.map((e) => e.kind)).toEqual([
+      'copying',
+      'hashing',
+      'parsing',
+      'saving',
+      'done'
+    ])
+  })
+})
+
+describe('runImport — hash + dedup stage', () => {
+  it('returns stage: duplicate and rolls back the copy when the hash matches an existing book', async () => {
+    const existing: Book = {
+      id: 7,
+      kind: 'epub',
+      cover: [],
+      title: 'Already here',
+      author: '',
+      publisher: '',
+      filepath: '/userData/already.epub',
+      location: '1',
+      coverKind: 'image/png',
+      version: 0,
+      format: 'epub',
+      syncVersion: 0,
+      isDirty: 0,
+      isDeleted: 0
+    }
+    const { db, findHashCalls } = makeDbForImport({
+      findBookByHashImpl: async () => existing
+    })
+    const { fs, removeCalls } = makeFs()
+    const fileSync = makeFileSync({ hashImpl: async () => 'dupe-hash' })
+    const events: ImportProgressEvent[] = []
+
+    const result = await runImport(
+      { formats: makeFormats().formats, fs, db, fileSync, config: baseConfig },
+      '/external/dupe.epub',
+      (e) => events.push(e)
+    )
+
+    expect(result).toEqual({
+      ok: false,
+      filePath: '/external/dupe.epub',
+      stage: 'duplicate',
+      error: expect.stringMatching(/already in library/i)
+    })
+    expect(findHashCalls).toEqual(['dupe-hash'])
+    // The copied file under /userData was rolled back.
+    expect(removeCalls).toEqual(['/userData/dupe.epub'])
+    // saveBook never ran.
+    expect(db.saveBook).not.toHaveBeenCalled()
+    // We emitted a hashing event and a failed event.
+    expect(events.map((e) => e.kind)).toEqual(['copying', 'hashing', 'failed'])
+  })
+
+  it('passes the computed file hash to saveBook when no duplicate exists', async () => {
+    const { db, savedBooks } = makeDbForImport()
+    const { fs } = makeFs()
+    const fileSync = makeFileSync({ hashImpl: async () => 'new-hash-xyz' })
+
+    const result = await runImport(
+      { formats: makeFormats().formats, fs, db, fileSync, config: baseConfig },
+      '/external/new.epub',
+      () => {}
+    )
+
+    expect(result.ok).toBe(true)
+    expect(savedBooks).toHaveLength(1)
+    expect(savedBooks[0].fileHash).toBe('new-hash-xyz')
+  })
+
+  it('returns stage: hash and rolls back the copy when hashing throws', async () => {
+    const { db } = makeDbForImport()
+    const { fs, removeCalls } = makeFs()
+    const fileSync = makeFileSync({
+      hashImpl: async () => {
+        throw new Error('disk read failed')
+      }
+    })
+
+    const result = await runImport(
+      { formats: makeFormats().formats, fs, db, fileSync, config: baseConfig },
+      '/external/broken.epub',
+      () => {}
+    )
+
+    expect(result).toEqual({
+      ok: false,
+      filePath: '/external/broken.epub',
+      stage: 'hash',
+      error: expect.stringMatching(/disk read failed|hash/i)
+    })
+    expect(removeCalls).toEqual(['/userData/broken.epub'])
+    expect(db.findBookByHash).not.toHaveBeenCalled()
+    expect(db.saveBook).not.toHaveBeenCalled()
+  })
+
+  it('returns stage: hash when hashBookFile exceeds hashTimeoutMs', async () => {
+    const { db } = makeDbForImport()
+    const { fs, removeCalls } = makeFs()
+    const fileSync = makeFileSync({
+      hashImpl: () => new Promise<string>(() => {}) // never resolves
+    })
+    const tightConfig: BookImportConfig = { ...baseConfig, hashTimeoutMs: 10 }
+
+    const result = await runImport(
+      { formats: makeFormats().formats, fs, db, fileSync, config: tightConfig },
+      '/external/slow.epub',
+      () => {}
+    )
+
+    expect(result.ok).toBe(false)
+    expect((result as ImportFailure).stage).toBe('hash')
+    expect((result as ImportFailure).error).toMatch(/timed out|hash/i)
+    expect(removeCalls).toEqual(['/userData/slow.epub'])
+  })
+
+  it('returns stage: hash and rolls back the copy when the dedup lookup throws', async () => {
+    const { db } = makeDbForImport({
+      findBookByHashImpl: async () => {
+        throw new Error('db unavailable')
+      }
+    })
+    const { fs, removeCalls } = makeFs()
+    const fileSync = makeFileSync({ hashImpl: async () => 'ok-hash' })
+
+    const result = await runImport(
+      { formats: makeFormats().formats, fs, db, fileSync, config: baseConfig },
+      '/external/x.epub',
+      () => {}
+    )
+
+    expect(result.ok).toBe(false)
+    expect((result as ImportFailure).stage).toBe('hash')
+    expect((result as ImportFailure).error).toMatch(/db unavailable|Checking library/i)
+    expect(removeCalls).toEqual(['/userData/x.epub'])
+    expect(db.saveBook).not.toHaveBeenCalled()
   })
 })

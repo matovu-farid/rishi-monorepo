@@ -42,15 +42,16 @@ function messageOf(err: unknown, fallback: string): string {
 }
 
 /**
- * Best-effort hash + R2 upload. Failure does not affect the import result;
- * it only emits an `upload-failed` event. Runs asynchronously (microtask), so
- * `done` lands in the event stream before `upload-started`.
+ * Best-effort R2 upload. Failure does not affect the import result; it only
+ * emits an `upload-failed` event. The hash is precomputed in the dedup stage,
+ * so we don't rehash here.
  */
 function runUpload(
   deps: ImporterDeps,
   bookId: number,
   bookPath: string,
   format: 'epub' | 'pdf' | 'mobi' | 'azw3',
+  fileHash: string,
   filePath: string,
   emit: (event: ImportProgressEvent) => void
 ): void {
@@ -62,7 +63,6 @@ function runUpload(
 
   async function uploadInner(): Promise<void> {
     try {
-      const fileHash = await deps.fileSync.hashBookFile(bookPath)
       const { r2Key } = await deps.fileSync.uploadBookFile(bookPath, fileHash, formatForUpload)
       await deps.fileSync.booksUpdateFileHash(bookId, fileHash, r2Key)
     } catch (err) {
@@ -99,6 +99,47 @@ export async function runImport(
     const error = messageOf(err, 'Copy failed')
     emit({ kind: 'failed', filePath, stage: 'copy', error })
     return { ok: false, filePath, stage: 'copy', error }
+  }
+
+  // Stage 1.5: hash + dedup-check. Compute SHA-256 of the copied file, look
+  // up the library by hash. A hit means we've already imported this file;
+  // roll back the copy so we don't orphan bytes in app data. Books missing
+  // a file_hash (pre-backfill rows) are excluded from the comparison by the
+  // query itself — they fall through to parse/save as normal.
+  emit({ kind: 'hashing', filePath })
+  let fileHash: string
+  let existing
+  try {
+    fileHash = await withTimeout(
+      deps.fileSync.hashBookFile(bookPath),
+      deps.config.hashTimeoutMs,
+      'Hashing file'
+    )
+    existing = await withTimeout(
+      deps.db.findBookByHash(fileHash),
+      deps.config.hashTimeoutMs,
+      'Checking library'
+    )
+  } catch (err) {
+    const error = messageOf(err, 'Hash failed')
+    emit({ kind: 'failed', filePath, stage: 'hash', error })
+    try {
+      await deps.fs.removeFile(bookPath)
+    } catch {
+      /* swallow */
+    }
+    return { ok: false, filePath, stage: 'hash', error }
+  }
+
+  if (existing) {
+    const error = 'Already in library'
+    emit({ kind: 'failed', filePath, stage: 'duplicate', error })
+    try {
+      await deps.fs.removeFile(bookPath)
+    } catch {
+      /* swallow */
+    }
+    return { ok: false, filePath, stage: 'duplicate', error }
   }
 
   // Stage 2a: resolve format (extension check) — short-circuit unsupported
@@ -151,7 +192,8 @@ export async function runImport(
         location: format === 'mobi' || format === 'azw3' ? '0' : '1',
         version: 0,
         kind: bookData.kind,
-        cover: bookData.cover
+        cover: bookData.cover,
+        fileHash
       }),
       deps.config.saveTimeoutMs,
       'Saving to library'
@@ -165,8 +207,8 @@ export async function runImport(
   // Done event fires synchronously; upload starts after.
   emit({ kind: 'done', filePath, bookId: book.id, format })
 
-  // Stage 4: fire-and-forget upload.
-  runUpload(deps, book.id, bookPath, format, filePath, emit)
+  // Stage 4: fire-and-forget upload (hash already computed in stage 1.5).
+  runUpload(deps, book.id, bookPath, format, fileHash, filePath, emit)
 
   return { ok: true, bookId: book.id, filePath, format }
 }

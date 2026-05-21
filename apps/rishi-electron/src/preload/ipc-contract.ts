@@ -80,6 +80,8 @@ export type IpcContract = {
     args: [bookId: number, fileHash: string, fileR2Key: string]
     returns: void
   }
+  'books:findByHash': { args: [hash: string]; returns: Book | null }
+  'books:getFilepaths': { args: []; returns: string[] }
 
   // -- Chunks ----------------------------------------------------------
   'chunks:saveMany': { args: [pageData: ChunkDataInsertable[]]; returns: void }

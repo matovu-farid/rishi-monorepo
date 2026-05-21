@@ -126,6 +126,7 @@ describe('BookImportService.importFromPath — happy path', () => {
     })
     expect(events.map((e) => e.kind)).toEqual([
       'copying',
+      'hashing',
       'parsing',
       'saving',
       'done',
@@ -153,6 +154,30 @@ describe('BookImportService.importBatch', () => {
     expect(results[1].ok).toBe(false)
     if (!results[1].ok) expect(results[1].stage).toBe('unsupported')
     expect(results[2].ok).toBe(true)
+  })
+
+  it('flags a same-batch duplicate: second file with identical hash returns stage: duplicate', async () => {
+    // Both files hash to the same value. The first save populates `savedBooks`,
+    // and the stateful findBookByHashImpl reflects that so the second file is
+    // detected as a duplicate within the same importBatch call — proving the
+    // dedup adapter sees writes made earlier in the batch.
+    const { db, savedBooks } = makeDbForImport({
+      findBookByHashImpl: async (hash) =>
+        savedBooks.find((b) => b.fileHash === hash) ?? null
+    })
+    const fileSync = makeFileSync({ hashImpl: async () => 'same-hash' })
+    const service = createBookImportService(makeDeps({ db, fileSync }))
+
+    const results = await service.importBatch(['/external/a.epub', '/external/b.epub'])
+
+    expect(results).toHaveLength(2)
+    expect(results[0].ok).toBe(true)
+    expect(results[1].ok).toBe(false)
+    if (!results[1].ok) {
+      expect(results[1].stage).toBe('duplicate')
+      expect(results[1].filePath).toBe('/external/b.epub')
+      expect(results[1].error).toMatch(/already in library/i)
+    }
   })
 })
 
