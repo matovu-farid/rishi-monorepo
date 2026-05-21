@@ -40,16 +40,16 @@ test.describe('Search', () => {
   })
 
   test('searchBookText IPC accepts a query', async () => {
+    // Let the IPC throw propagate so failures carry the original stack instead
+    // of being reduced to `Expected true / Received false`. The stop-word
+    // 'the' is certain to appear at least once in any English EPUB fixture, so
+    // a silent empty-array return (broken index) fails the length assertion.
     const result = await app.page.evaluate(async (id) => {
       const e = (window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> })
         .electron
-      try {
-        const r = await e.searchBookText('the', id)
-        return Array.isArray(r)
-      } catch {
-        return false
-      }
+      return (await e.searchBookText('the', id)) as unknown
     }, bookId)
-    expect(result).toBe(true)
+    expect(Array.isArray(result)).toBe(true)
+    expect((result as unknown[]).length).toBeGreaterThan(0)
   })
 })

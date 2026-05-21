@@ -60,7 +60,15 @@ Production paths to inspect: `src/main/ipc/search.ts` (or wherever
 <append after wave 5, only if rebutted; binding>
 
 ## Fix Plan
-<append after wave 6 starts; TDD: red -> minimal change -> refactor>
+status: fixed
+commit: <pending>
+notes: Removed the `try/catch` that swallowed IPC throws and replaced the
+tautological `Array.isArray(r) → true|false` post-condition with explicit
+assertions: `Array.isArray(result)` AND `result.length > 0` for token
+`'the'` against the EPUB_FIXTURE. Failures now propagate the original IPC
+stack instead of `Expected true / Received false`, and a silent empty-array
+return from a broken FTS index now fails the length assertion. Test-quality
+only; no production code touched.
 
 ## Code Review
 <append after coder commits; approve / request changes>
