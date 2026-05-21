@@ -30,6 +30,7 @@ import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
 import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
+import { resolveEpubReadFromSelection } from '@/lib/epub/read-aloud-from-selection'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { GuardrailWarning } from '@/components/GuardrailWarning'
 import { TocSheet } from '@/components/TocSheet'
@@ -328,6 +329,54 @@ function ReaderContent({ book }: { book: Book }) {
     [book.id, currentHref, addAnnotation]
   )
 
+  // G17 — "Read from here" handler. Seeds the player from the book's
+  // chunks if not yet seeded, finds the paragraph the selection lives
+  // in, and dispatches PLAY_FROM with the partial-first payload.
+  const handleReadFromSelection = useCallback(
+    async (cfiRange: string, selectionText: string) => {
+      const send = usePlayerStore.getState().send
+      if (!send) return false
+
+      let paragraphs = usePlayerStore.getState().currentParagraphs
+      if (paragraphs.length === 0) {
+        try {
+          const seeded = await seedPlayerParagraphsFromChunks(
+            book.id,
+            book.filePath,
+            book.format,
+          )
+          if (!seeded.seeded) {
+            AccessibilityInfo.announceForAccessibility('No text available for reading')
+            return true
+          }
+          paragraphs = seeded.paragraphs
+        } catch (err) {
+          console.warn('[epub-read-aloud-from] seed failed:', err)
+          return true
+        }
+      }
+
+      const playFrom = resolveEpubReadFromSelection(
+        selectionText,
+        cfiRange,
+        paragraphs,
+      )
+      if (!playFrom) {
+        AccessibilityInfo.announceForAccessibility('Could not find the selected text')
+        return true
+      }
+
+      send({
+        type: 'PLAY_FROM',
+        paragraphIndex: playFrom.paragraphIndex,
+        partialFirstText: playFrom.partialFirstText,
+        partialFirstKey: playFrom.partialFirstKey,
+      })
+      return true
+    },
+    [book.id, book.filePath, book.format],
+  )
+
   // Menu items for text selection context menu
   const menuItems = useMemo(
     () => [
@@ -359,8 +408,16 @@ function ReaderContent({ book }: { book: Book }) {
           return true
         },
       },
+      {
+        label: 'Read from here',
+        action: (cfiRange: string, text: string) => {
+          // Fire-and-forget — dismiss the selection menu immediately.
+          void handleReadFromSelection(cfiRange, text)
+          return true
+        },
+      },
     ],
-    [book.id, currentHref, addAnnotation, handleSelected]
+    [book.id, currentHref, addAnnotation, handleSelected, handleReadFromSelection]
   )
 
   // Tapping an existing annotation shows the popover
