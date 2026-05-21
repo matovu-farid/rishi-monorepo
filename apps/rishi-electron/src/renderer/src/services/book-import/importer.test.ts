@@ -388,4 +388,26 @@ describe('runImport — hash + dedup stage', () => {
     expect((result as ImportFailure).error).toMatch(/timed out|hash/i)
     expect(removeCalls).toEqual(['/userData/slow.epub'])
   })
+
+  it('returns stage: hash and rolls back the copy when the dedup lookup throws', async () => {
+    const { db } = makeDbForImport({
+      findBookByHashImpl: async () => {
+        throw new Error('db unavailable')
+      }
+    })
+    const { fs, removeCalls } = makeFs()
+    const fileSync = makeFileSync({ hashImpl: async () => 'ok-hash' })
+
+    const result = await runImport(
+      { formats: makeFormats().formats, fs, db, fileSync, config: baseConfig },
+      '/external/x.epub',
+      () => {}
+    )
+
+    expect(result.ok).toBe(false)
+    expect((result as ImportFailure).stage).toBe('hash')
+    expect((result as ImportFailure).error).toMatch(/db unavailable|Checking library/i)
+    expect(removeCalls).toEqual(['/userData/x.epub'])
+    expect(db.saveBook).not.toHaveBeenCalled()
+  })
 })

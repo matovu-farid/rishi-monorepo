@@ -108,11 +108,17 @@ export async function runImport(
   // query itself — they fall through to parse/save as normal.
   emit({ kind: 'hashing', filePath })
   let fileHash: string
+  let existing
   try {
     fileHash = await withTimeout(
       deps.fileSync.hashBookFile(bookPath),
       deps.config.hashTimeoutMs,
       'Hashing file'
+    )
+    existing = await withTimeout(
+      deps.db.findBookByHash(fileHash),
+      deps.config.hashTimeoutMs,
+      'Checking library'
     )
   } catch (err) {
     const error = messageOf(err, 'Hash failed')
@@ -125,7 +131,6 @@ export async function runImport(
     return { ok: false, filePath, stage: 'hash', error }
   }
 
-  const existing = await deps.db.findBookByHash(fileHash)
   if (existing) {
     const error = 'Already in library'
     emit({ kind: 'failed', filePath, stage: 'duplicate', error })
