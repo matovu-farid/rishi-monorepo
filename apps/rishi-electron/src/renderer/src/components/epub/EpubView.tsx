@@ -87,7 +87,9 @@ function updateTheme(rendition: Rendition, theme: ThemeType) {
 
 export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme)
-  const [currentLocation, setCurrentLocation] = useState<string>(book.location || '0')
+  const [currentLocation, setCurrentLocation] = useState<string>(
+    book.lastParagraph || book.location || '0'
+  )
   // Sync with book.location when it changes from a refetch (e.g., returning from library).
   // Only sync before the rendition has settled to avoid overriding user navigation.
   const bookLocationRef = useRef(book.location)
