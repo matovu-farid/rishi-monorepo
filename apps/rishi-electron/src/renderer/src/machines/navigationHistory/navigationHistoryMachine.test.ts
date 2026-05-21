@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createActor } from 'xstate'
 import { navigationHistoryMachine } from './navigationHistoryMachine'
 import type { PositionDescriptor } from './types'
-import { STACK_MAX_DEPTH } from './types'
+import { STACK_MAX_DEPTH, DWELL_MS } from './types'
 
 const initialPdfPosition: PositionDescriptor = { kind: 'pdf', page: 1, offset: 0 }
 
@@ -118,5 +118,75 @@ describe('navigationHistoryMachine — stack', () => {
     // oldest entries dropped; first remaining should be from i=5
     expect(snap.context.stack[0].label).toBe('p. 5')
     expect(snap.context.stack[STACK_MAX_DEPTH - 1].label).toBe(`p. ${STACK_MAX_DEPTH + 4}`)
+  })
+})
+
+describe('navigationHistoryMachine — engagement', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  const pos = (page: number): PositionDescriptor => ({ kind: 'pdf', page, offset: 0 })
+
+  function getEngagement(actor: ReturnType<typeof startActor>): string {
+    return (actor.getSnapshot().value as { active: { engagement: string } }).active.engagement
+  }
+
+  it('starts in engagement.idle after BOOK_OPENED', () => {
+    const actor = startActor()
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(1) })
+    expect(getEngagement(actor)).toBe('idle')
+  })
+
+  it('PAGE_VISITED moves engagement to dwelling', () => {
+    const actor = startActor()
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(1) })
+    actor.send({ type: 'PAGE_VISITED', position: pos(2), ttsContext: null })
+    expect(getEngagement(actor)).toBe('dwelling')
+  })
+
+  it('ENGAGEMENT_TAP from idle goes straight to engaged', () => {
+    const actor = startActor()
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(1) })
+    actor.send({ type: 'ENGAGEMENT_TAP' })
+    expect(getEngagement(actor)).toBe('engaged')
+  })
+
+  it('ENGAGEMENT_TTS_PLAYING also reaches engaged', () => {
+    const actor = startActor()
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(1) })
+    actor.send({ type: 'ENGAGEMENT_TTS_PLAYING' })
+    expect(getEngagement(actor)).toBe('engaged')
+  })
+
+  it('after DWELL_MS the dwell timer fires and reaches engaged', () => {
+    const actor = startActor()
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(1) })
+    actor.send({ type: 'PAGE_VISITED', position: pos(2), ttsContext: null })
+    vi.advanceTimersByTime(DWELL_MS)
+    expect(getEngagement(actor)).toBe('engaged')
+  })
+
+  it('VISIBILITY_HIDDEN pauses dwell (enters paused); VISIBILITY_VISIBLE resumes (restarts timer)', () => {
+    const actor = startActor()
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(1) })
+    actor.send({ type: 'PAGE_VISITED', position: pos(2), ttsContext: null })
+    vi.advanceTimersByTime(DWELL_MS - 1000)
+    actor.send({ type: 'VISIBILITY_HIDDEN' })
+    expect(getEngagement(actor)).toBe('paused')
+    vi.advanceTimersByTime(60_000) // hidden window, should NOT trigger engaged
+    expect(getEngagement(actor)).toBe('paused')
+    actor.send({ type: 'VISIBILITY_VISIBLE' })
+    expect(getEngagement(actor)).toBe('dwelling')
+    vi.advanceTimersByTime(DWELL_MS) // timer restarted on re-entry; need full DWELL_MS
+    expect(getEngagement(actor)).toBe('engaged')
+  })
+
+  it('PAGE_VISITED to a different page resets engaged back to dwelling on new page', () => {
+    const actor = startActor()
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(1) })
+    actor.send({ type: 'ENGAGEMENT_TAP' })
+    expect(getEngagement(actor)).toBe('engaged')
+    actor.send({ type: 'PAGE_VISITED', position: pos(2), ttsContext: null })
+    expect(getEngagement(actor)).toBe('dwelling')
   })
 })

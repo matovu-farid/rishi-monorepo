@@ -1,6 +1,6 @@
 import { setup, assign } from 'xstate'
 import type { AnchorPoint, NavigationHistoryContext, NavigationHistoryEvent } from './types'
-import { STACK_MAX_DEPTH } from './types'
+import { STACK_MAX_DEPTH, DWELL_MS } from './types'
 
 const initialContext = (): NavigationHistoryContext => ({
   bookId: null,
@@ -50,6 +50,9 @@ export const navigationHistoryMachine = setup({
   },
   guards: {
     hasStackEntries: ({ context }) => context.stack.length > 0
+  },
+  delays: {
+    DWELL_TIMER: DWELL_MS
   }
 }).createMachine({
   id: 'navigationHistory',
@@ -83,7 +86,40 @@ export const navigationHistoryMachine = setup({
             }
           }
         },
-        engagement: { initial: 'idle', states: { idle: {} } },
+        engagement: {
+          initial: 'idle',
+          states: {
+            idle: {
+              on: {
+                PAGE_VISITED: { target: 'dwelling' },
+                ENGAGEMENT_TAP: { target: 'engaged' },
+                ENGAGEMENT_TTS_PLAYING: { target: 'engaged' }
+              }
+            },
+            dwelling: {
+              after: {
+                DWELL_TIMER: { target: 'engaged' }
+              },
+              on: {
+                PAGE_VISITED: { target: 'dwelling', reenter: true },
+                ENGAGEMENT_TAP: { target: 'engaged' },
+                ENGAGEMENT_TTS_PLAYING: { target: 'engaged' },
+                DWELL_ELAPSED: { target: 'engaged' },
+                VISIBILITY_HIDDEN: { target: 'paused' }
+              }
+            },
+            paused: {
+              on: {
+                VISIBILITY_VISIBLE: { target: 'dwelling', reenter: true }
+              }
+            },
+            engaged: {
+              on: {
+                PAGE_VISITED: { target: 'dwelling' }
+              }
+            }
+          }
+        },
         pill: { initial: 'hidden', states: { hidden: {} } }
       }
     }
