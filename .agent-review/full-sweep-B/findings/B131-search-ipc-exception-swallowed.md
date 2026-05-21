@@ -61,7 +61,7 @@ Production paths to inspect: `src/main/ipc/search.ts` (or wherever
 
 ## Fix Plan
 status: fixed
-commit: <pending>
+commit: b2910cc5
 notes: Removed the `try/catch` that swallowed IPC throws and replaced the
 tautological `Array.isArray(r) → true|false` post-condition with explicit
 assertions: `Array.isArray(result)` AND `result.length > 0` for token

@@ -56,7 +56,7 @@ blind-spot already exercised by the single-book test.
 
 ## Fix Plan
 status: fixed
-commit: <pending>
+commit: 88cdf8bc
 notes: Replaced `recent?.submenu?.some((m) => m.label === 'Recent A')` with
 `recent?.submenu?.filter((m) => m.label === 'Recent A').length === 1`. The
 single-book test now fails (loudly) on any dedup regression that produces

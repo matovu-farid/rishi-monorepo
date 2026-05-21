@@ -73,7 +73,7 @@ floor for a regression test on this feature.
 
 ## Fix Plan
 status: fixed
-commit: <pending>
+commit: 3acdcd2e
 notes: Test 1 (stored selection) now asserts
 `log.some((r) => r.cfiRange === firstParagraphCfi)` — the same CFI we
 pre-populated into the selectionStore. Test 3 (live iframe selection)

@@ -80,7 +80,7 @@ post-window stability check.
 
 ## Fix Plan
 status: fixed
-commit: <pending>
+commit: 7dcdc8b5
 notes: Replaced the three flagged `waitForTimeout` calls in
 `tts-page-navigation.spec.ts` with event-based waits.
 - L646 (bleed window after canplay-gate release): `waitForFunction` polls
