@@ -26,6 +26,7 @@
     "./formats/epub-constants": "./src/formats/epub-constants.ts",
     "./formats/bookmark-cfi": "./src/formats/bookmark-cfi.ts",
     "./formats/mobi": "./src/formats/mobi.ts",
+    "./indexing/index-program": "./src/indexing/index-program.ts",
     "./modules/cfi-to-paragraph": "./src/modules/cfi-to-paragraph.ts",
     "./sync/types": "./src/sync/types.ts",
     "./sync/debounce": "./src/sync/debounce.ts",
@@ -36,14 +37,19 @@
   },
   "peerDependencies": {
     "drizzle-orm": "^0.44.0",
+    "effect": "^3.21.2",
     "epubjs": "^0.3.93"
   },
   "peerDependenciesMeta": {
+    "effect": {
+      "optional": true
+    },
     "epubjs": {
       "optional": true
     }
   },
   "devDependencies": {
+    "effect": "^3.21.2",
     "epubjs": "^0.3.93",
     "vitest": "^4.1.6"
   }
