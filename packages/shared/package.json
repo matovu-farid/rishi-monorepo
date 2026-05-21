@@ -28,7 +28,10 @@
     "./modules/cfi-to-paragraph": "./src/modules/cfi-to-paragraph.ts",
     "./sync/types": "./src/sync/types.ts",
     "./sync/debounce": "./src/sync/debounce.ts",
-    "./connectivity/types": "./src/connectivity/types.ts"
+    "./connectivity/types": "./src/connectivity/types.ts",
+    "./auth/pkce": "./src/auth/pkce.ts",
+    "./auth/startAuthSession": "./src/auth/startAuthSession.ts",
+    "./auth": "./src/auth/index.ts"
   },
   "peerDependencies": {
     "drizzle-orm": "^0.44.0",
