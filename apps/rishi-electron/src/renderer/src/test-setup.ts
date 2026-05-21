@@ -9,6 +9,7 @@ const mockElectronAPI = {
   deleteBook: vi.fn().mockResolvedValue(undefined),
   updateBookCover: vi.fn().mockResolvedValue(undefined),
   updateBookLocation: vi.fn().mockResolvedValue(undefined),
+  updateBookLastParagraph: vi.fn().mockResolvedValue(undefined),
   hasSavedEpubData: vi.fn().mockResolvedValue(false),
   getBookOutline: vi.fn().mockResolvedValue({ title: '', author: null, chapters: [] }),
   savePageDataMany: vi.fn().mockResolvedValue(undefined),
