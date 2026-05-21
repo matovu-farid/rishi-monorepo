@@ -20,5 +20,15 @@
       "drizzle-orm/*": ["./node_modules/drizzle-orm/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "drizzle.config.ts", "../../packages/shared/src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "drizzle.config.ts", "../../packages/shared/src/**/*.ts"],
+  "exclude": [
+    "node_modules",
+    "../../packages/shared/src/tts/**",
+    "../../packages/shared/src/voice-chat/**",
+    "../../packages/shared/src/formats/**",
+    "../../packages/shared/src/machines/**",
+    "../../packages/shared/src/book-import/**",
+    "../../packages/shared/src/indexing/**",
+    "../../packages/shared/src/connectivity/**"
+  ]
 }
