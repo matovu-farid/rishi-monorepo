@@ -178,6 +178,7 @@ export default function FileComponent(): React.JSX.Element {
       const failures: { book: Book; error: unknown }[] = []
       for (const book of toDelete) {
         try {
+          // eslint-disable-next-line no-await-in-loop -- Backpressure: each delete does DB write + HNSW file removal; parallel would saturate disk and SQLite write queue.
           await deleteBook({ bookId: book.id })
           removeBook(book.id)
           revokeCachedCoverUrl(book.id)
@@ -459,7 +460,9 @@ export default function FileComponent(): React.JSX.Element {
                     {selection.selectMode ? (
                       <span
                         className={`absolute top-2 left-2 w-5 h-5 rounded-full flex items-center justify-center ${
-                          isSelected ? 'bg-blue-600 text-white' : 'bg-white/90 border border-gray-300'
+                          isSelected
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-white/90 border border-gray-300'
                         }`}
                         aria-hidden="true"
                       >
@@ -515,7 +518,7 @@ export default function FileComponent(): React.JSX.Element {
         isDeleting={bulkDeleteMutation.isPending}
         onCancel={() => setConfirmOpen(false)}
         onConfirm={() => {
-          const selected = (books ?? []).filter((b) => selection.selectedIds.has(b.id))
+          const selected = books.filter((b) => selection.selectedIds.has(b.id))
           bulkDeleteMutation.mutate(
             { books: selected },
             {
