@@ -42,6 +42,10 @@ Not a parity gap (those are about real-import dispatcher coverage); this is a mi
 ## Tiebreaker Verdict: CONFIRM | REJECT
 
 ## Fix Plan
+**Status:** fixed
+**Commit:** c2bc333d4eb1f8d4438760c93bc9bb6333b808b5
+**Notes:** Replaced the L52-55 `toBeAttached(div.overflow-y-scroll)` + 3s `waitForTimeout` with `toBeVisible(canvas.react-pdf__Page__canvas)` at the same 15s timeout. The canvas is the actual rendered surface emitted by `Page` in `components/pdf/components/pdf-page.tsx`, so a blank-canvas / pdfjs worker failure now fails the test instead of slipping past on shell-mount alone. Brings PDF in line with the EPUB sibling at L65 (`Next page` aria-label visible).
+**E2E mutation check:** env-blocked (sandbox teardown timeout); typecheck passes.
 
 ## Code Review
 

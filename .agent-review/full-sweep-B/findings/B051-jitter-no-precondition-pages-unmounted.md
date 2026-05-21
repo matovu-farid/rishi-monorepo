@@ -57,6 +57,10 @@ no-op the day the implementation changes overscan from ~8 to "all".
 ## Tiebreaker Verdict: CONFIRM | REJECT
 
 ## Fix Plan
+**Status:** fixed
+**Commit:** 78585f44711b69481342e8843ceb09799fd6d691
+**Notes:** Added two preconditions around the existing scroll-up sampling. (1) After `scrollTo({ top: 14000 })`, capture mounted `[data-page-number]` values and assert the lowest mounted page is >1 (overscan really dropped pages above; this is the seam under test). (2) After the scroll-up sampling, assert at least one page whose number is below the prior-lowest is now mounted, proving a remount happened during the scroll-up — exactly the path the original jitter bug lives on. Used page-number set diffs rather than canvas counts to make the assertion direction-aware (remount *above*, not below).
+**E2E mutation check:** env-blocked (sandbox teardown timeout); typecheck passes.
 
 ## Code Review
 

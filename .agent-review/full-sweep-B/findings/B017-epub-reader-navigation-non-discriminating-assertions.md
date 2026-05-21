@@ -54,6 +54,10 @@ green believe about the EPUB navigation path.
 ## Tiebreaker Verdict: CONFIRM | REJECT
 
 ## Fix Plan
+**Status:** fixed
+**Commit:** f9e25b324a835d3e7f0ce1a2fea04c92ced958f4
+**Notes:** Replaced body/button-visibility assertions in `next-page click`, `keyboard arrows`, and `rapid forward navigation` tests with `expect.poll` over `getBookLocation` (IPC-backed persisted CFI). EPUB writes location to the DB via `updateBookLocation` on every `relocated` event, so the persisted value is the discriminating signal — a swallowed-error or unbound handler leaves it stale and now fails the test. The trailing button-visibility check remains as a cheap shell-still-up sanity check. Test names renamed from "does not crash" to "advances/changes the persisted CFI" to reflect the actual contract.
+**E2E mutation check:** env-blocked (pre-existing `launchApp`/`closeApp` teardown timeout in sandbox); typecheck passes.
 
 ## Code Review
 

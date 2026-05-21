@@ -54,6 +54,10 @@ rather than relaxing the bar.
 ## Tiebreaker Verdict: CONFIRM | REJECT
 
 ## Fix Plan
+**Status:** fixed
+**Commit:** df931eced60df21545db267b3ce16a06d8371ed6
+**Notes:** Tightened the back-jump tolerance from 80px to 8px (named `JITTER_TOLERANCE_PX`) with an inline justification — the original bug class was ~200px (h-screen → page-height shrink), so any sub-line-height shift is the user-observable bug. Comment explicitly tells future maintainers to instrument noise sources rather than relax the bound, per tester guidance. Coordinated with B051 (same spec file, separate commits — B051 first, then B053).
+**E2E mutation check:** env-blocked (sandbox teardown timeout); typecheck passes. Tester flagged tightening *might* flake in CI; if it does, the failure surfaces the noise source (which is the explicit accepted trade-off in the finding).
 
 ## Code Review
 

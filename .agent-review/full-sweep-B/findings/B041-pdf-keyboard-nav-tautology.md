@@ -40,6 +40,10 @@ Finding-worthy (not just practice) because:
 ## Tiebreaker Verdict: CONFIRM | REJECT
 
 ## Fix Plan
+**Status:** fixed
+**Commit:** 625a2b6ed7bac23dfe065e26ecd2463212193bc5
+**Notes:** Replaced `locator('body').toBeVisible()` after ArrowRight/ArrowLeft with `expect.poll` over the page index extracted from `getBookLocation` (`page:offset` format). ArrowRight must increase the index; ArrowLeft must decrease it. Imported `getBookLocation` (already used by `pdf-persistence.spec.ts`). The Phase-3 reader-window arrow-handler binding regression class now fails the test instead of slipping past.
+**E2E mutation check:** env-blocked (sandbox teardown timeout); typecheck passes.
 
 ## Code Review
 
