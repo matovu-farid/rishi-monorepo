@@ -33,8 +33,8 @@ jest.mock('react-native', () => {
   }
 })
 
-import React, { useRef } from 'react'
-import TestRenderer, { act } from 'react-test-renderer'
+import React, { useRef, act } from 'react'
+import TestRenderer from 'react-test-renderer'
 import { View } from 'react-native'
 import {
   getActivePageCaptureRef,

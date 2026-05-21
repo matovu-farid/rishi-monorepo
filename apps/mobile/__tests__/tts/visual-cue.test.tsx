@@ -33,8 +33,8 @@ jest.mock('react-native', () => {
   }
 })
 
-import React from 'react'
-import TestRenderer, { act } from 'react-test-renderer'
+import React, { act } from 'react'
+import TestRenderer from 'react-test-renderer'
 import { TTSVisualCue } from '@/components/TTSVisualCue'
 import { useVisualCueStore } from '@/lib/tts/visual-cue'
 import { usePrefsStore } from '@/lib/stores/prefsStore'

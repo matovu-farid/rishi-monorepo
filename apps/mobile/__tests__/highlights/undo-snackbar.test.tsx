@@ -33,8 +33,8 @@ jest.mock('react-native', () => {
 })
 
 import { useUndoSnackbar, UNDO_SNACKBAR_DURATION_MS } from '@/hooks/useUndoSnackbar'
-import React from 'react'
-import TestRenderer, { act } from 'react-test-renderer'
+import React, { act } from 'react'
+import TestRenderer from 'react-test-renderer'
 
 function Harness({ onState }: { onState: (state: ReturnType<typeof useUndoSnackbar>) => void }) {
   const state = useUndoSnackbar()
