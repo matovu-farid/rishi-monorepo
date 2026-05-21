@@ -128,4 +128,58 @@ describe('authStore (mobile)', () => {
     jest.advanceTimersByTime(400)
     expect(startTourSpy).not.toHaveBeenCalled()
   })
+
+  // ── Batch 1C: session-token surface ───────────────────────────────────────
+  it('exposes sessionToken=null and isAuthenticated=false by default', () => {
+    const { useAuthStore } = require('@/lib/stores/authStore')
+    const s = useAuthStore.getState()
+    expect(s.sessionToken).toBeNull()
+    expect(s.isAuthenticated).toBe(false)
+    expect(s.isAuthenticating).toBe(false)
+  })
+
+  it('setSession(token, userId) records the token, user id and flips isAuthenticated', () => {
+    const { useAuthStore } = require('@/lib/stores/authStore')
+    useAuthStore.getState().setSession('tok-1', 'user-1')
+    const s = useAuthStore.getState()
+    expect(s.sessionToken).toBe('tok-1')
+    expect(s.user?.id).toBe('user-1')
+    expect(s.isAuthenticated).toBe(true)
+  })
+
+  it('setSession persists the user id to MMKV (token stays in secure-store)', () => {
+    const { useAuthStore } = require('@/lib/stores/authStore')
+    useAuthStore.getState().setSession('tok-1', 'user-42')
+    expect(backingStore.get('rishi.mobile.auth:user-id')).toBe('user-42')
+    // Token must NOT leak into MMKV — it lives in expo-secure-store only.
+    for (const [k] of backingStore.entries()) {
+      expect(k).not.toMatch(/token|bearer/i)
+    }
+  })
+
+  it('clearSession() resets sessionToken, user and isAuthenticated', () => {
+    const { useAuthStore } = require('@/lib/stores/authStore')
+    useAuthStore.getState().setSession('tok-1', 'user-1')
+    useAuthStore.getState().clearSession()
+    const s = useAuthStore.getState()
+    expect(s.sessionToken).toBeNull()
+    expect(s.user).toBeNull()
+    expect(s.isAuthenticated).toBe(false)
+    expect(backingStore.get('rishi.mobile.auth:user-id')).toBeUndefined()
+  })
+
+  it('setAuthenticating toggles isAuthenticating', () => {
+    const { useAuthStore } = require('@/lib/stores/authStore')
+    useAuthStore.getState().setAuthenticating(true)
+    expect(useAuthStore.getState().isAuthenticating).toBe(true)
+    useAuthStore.getState().setAuthenticating(false)
+    expect(useAuthStore.getState().isAuthenticating).toBe(false)
+  })
+
+  it('hydrateAuth() restores the persisted user id from MMKV', () => {
+    backingStore.set('rishi.mobile.auth:user-id', 'persisted-user')
+    const { useAuthStore } = require('@/lib/stores/authStore')
+    useAuthStore.getState().hydrateAuth()
+    expect(useAuthStore.getState().user?.id).toBe('persisted-user')
+  })
 })
