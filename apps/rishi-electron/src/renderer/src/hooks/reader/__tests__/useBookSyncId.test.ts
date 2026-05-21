@@ -75,12 +75,37 @@ describe('useBookSyncId', () => {
     electronApi.getBook.mockResolvedValueOnce(null)
     const useBookSyncId = await loadHook()
     const { result } = renderHook(() => useBookSyncId(99))
-    // Give the microtask queue a chance to flush.
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0)
+    // Wait on a positive signal (the resolve of booksGetSyncId) instead of a
+    // bare setTimeout(0) — the negative assertion below is only meaningful
+    // once the hook has had a real chance to observe the null result.
+    await waitFor(() => {
+      expect(electron().booksGetSyncId).toHaveBeenCalledWith(99)
+      expect(electronApi.getBook).toHaveBeenCalledWith(99)
     })
     expect(publishBookmarksToMenu).not.toHaveBeenCalled()
     expect(result.current.bookSyncId).toBe('')
+  })
+
+  it('re-fetches and re-publishes when bookId changes between renders', async () => {
+    electron().booksGetSyncId.mockResolvedValueOnce('sync-first')
+    electron().booksGetSyncId.mockResolvedValueOnce('sync-second')
+    const useBookSyncId = await loadHook()
+    const { result, rerender } = renderHook(({ id }: { id: number }) => useBookSyncId(id), {
+      initialProps: { id: 1 }
+    })
+
+    await waitFor(() => {
+      expect(result.current.bookSyncId).toBe('sync-first')
+    })
+    expect(publishBookmarksToMenu).toHaveBeenCalledWith('sync-first')
+
+    rerender({ id: 2 })
+
+    await waitFor(() => {
+      expect(result.current.bookSyncId).toBe('sync-second')
+    })
+    expect(electron().booksGetSyncId).toHaveBeenCalledWith(2)
+    expect(publishBookmarksToMenu).toHaveBeenCalledWith('sync-second')
   })
 
   // B001: freshly imported books (AZW3/MOBI/EPUB) may have syncId === null at
