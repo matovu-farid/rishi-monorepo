@@ -72,6 +72,17 @@ floor for a regression test on this feature.
 ## Tiebreaker Verdict: CONFIRM | REJECT
 
 ## Fix Plan
+status: fixed
+commit: <pending>
+notes: Test 1 (stored selection) now asserts
+`log.some((r) => r.cfiRange === firstParagraphCfi)` — the same CFI we
+pre-populated into the selectionStore. Test 3 (live iframe selection)
+captures the resolver-published CFI from the selectionStore *after* the
+event dispatches (proving the live-selection path wrote it), then asserts
+the TTS log contains that CFI. Both assertions now fail under the
+"requests audio for currentParagraphs[0] regardless of selection" mutation
+the finding called out. No helper changes needed; `readTtsLog` already
+returns `{ cfiRange, text, priority }`. Typecheck green.
 
 ## Code Review
 

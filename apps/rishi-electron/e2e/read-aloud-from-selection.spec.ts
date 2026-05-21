@@ -136,10 +136,12 @@ test.describe('Read Aloud From Selection', () => {
       { timeout: 10000 }
     )
 
-    // The TTS log should contain at least one requestAudio call, confirming
-    // the player machine fetched audio for the selection.
+    // The TTS log must contain a requestAudio call whose CFI matches the
+    // selection we stored. Length-only would pass even if the player fetched
+    // audio for the wrong selection (e.g. currentParagraphs[0] regardless of
+    // the stored selection).
     const log = await readTtsLog(bookPage)
-    expect(log.length).toBeGreaterThan(0)
+    expect(log.some((r) => r.cfiRange === firstParagraphCfi)).toBe(true)
   })
 
   test('dispatching readAloudFromSelection without a stored selection falls back to PLAY', async () => {
@@ -265,7 +267,23 @@ test.describe('Read Aloud From Selection', () => {
       { timeout: 10000 }
     )
 
+    // The resolver computes a CFI from the live iframe selection and writes it
+    // into the selectionStore as part of handleReadAloudFrom. Capture it and
+    // assert the TTS request fired for *that* CFI — length-only would pass
+    // even if the player fetched audio for a stale/wrong selection.
+    const resolvedCfi = await bookPage.evaluate(() => {
+      const w = window as unknown as {
+        __rishi?: {
+          selectionStore: {
+            getState: () => { current: { cfiRange: string } | null }
+          }
+        }
+      }
+      return w.__rishi?.selectionStore.getState().current?.cfiRange ?? null
+    })
+    expect(resolvedCfi).toBeTruthy()
+
     const log = await readTtsLog(bookPage)
-    expect(log.length).toBeGreaterThan(0)
+    expect(log.some((r) => r.cfiRange === resolvedCfi)).toBe(true)
   })
 })
