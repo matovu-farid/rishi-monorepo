@@ -26,6 +26,11 @@ export function createAuth(env: CloudflareBindings) {
         // after signing out of the desktop app — without this, Google silently
         // re-uses whichever account is already signed in to the browser.
         prompt: "select_account",
+        // Refresh name/image from Google on every sign-in. Without this, users
+        // who first signed in via magic-link keep their empty name/null image
+        // even after linking Google — the OAuth callback links the account but
+        // skips the user.update step. See better-auth oauth2/link-account.mjs.
+        overrideUserInfoOnSignIn: true,
       },
     },
     plugins: [
