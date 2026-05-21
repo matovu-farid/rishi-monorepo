@@ -376,3 +376,30 @@ describe('file-import — picker cancellation', () => {
     expect(dbRecord.insertCalls).toEqual([])
   })
 })
+
+// H3-03: the shared book-import service's mobile DbPort never called
+// triggerSyncOnWrite after inserting the book row or after patching the
+// cover. Result: a freshly imported book was marked isDirty=true but the
+// next sync didn't fire until either the app was backgrounded or 5
+// minutes passed. Users importing a book on launch and immediately
+// switching devices saw the book missing on the second device.
+//
+// The legacy code path (lib/book-storage.insertBook) DID call
+// triggerSyncOnWrite, so the divergence was purely between import paths.
+describe('file-import — sync trigger after import', () => {
+  beforeEach(() => resetState())
+
+  it('triggers a sync push after the book row is inserted', async () => {
+    const { triggerSyncOnWrite } = require('@/lib/sync/triggers') as {
+      triggerSyncOnWrite: jest.Mock
+    }
+    pickFileResult = { uri: '/Downloads/syncme.epub' }
+    chunkerReturn = []
+
+    await importEpubFile()
+    await flushAsync(10)
+
+    expect(dbRecord.insertCalls).toHaveLength(1)
+    expect(triggerSyncOnWrite).toHaveBeenCalled()
+  })
+})

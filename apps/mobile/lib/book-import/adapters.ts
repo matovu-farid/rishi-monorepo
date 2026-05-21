@@ -23,6 +23,7 @@ import { extractMobiCover } from "@rishi/shared/formats/mobi";
 import { books } from "@rishi/shared/schema";
 import { db } from "@/lib/db";
 import { hashBookFile, uploadBookFile } from "@/lib/sync/file-sync";
+import { triggerSyncOnWrite } from "@/lib/sync/triggers";
 import { getChunks } from "@/lib/rag/chunker";
 import { embedBatch, isEmbeddingReady } from "@/lib/rag/embedder";
 import { embedTextsOnServer } from "@/lib/rag/server-fallback";
@@ -142,6 +143,11 @@ export function createMobileDbPort(): DbPort<
           isDeleted: false,
         })
         .run();
+      // Without this, the new book row sits with isDirty=true until either
+      // the app is backgrounded or the 5-minute periodic timer fires. The
+      // legacy `book-storage.insertBook` path triggers sync; we must too
+      // so freshly imported books reach D1 promptly. (H3-03)
+      triggerSyncOnWrite();
       // Construct the row shape the service expects (the inserted row).
       return {
         id: insertable.id,
@@ -191,6 +197,9 @@ export function createMobileDbPort(): DbPort<
         .set({ coverPath, updatedAt: Date.now(), isDirty: true })
         .where(eq(books.id, bookId))
         .run();
+      // Same parity reason as saveBook above — cover-only updates must
+      // also nudge the sync engine. (H3-03)
+      triggerSyncOnWrite();
     },
   };
 }
@@ -355,6 +364,8 @@ export function createMobileCoverPort(deps: CoverPortDeps = {}): CoverPort {
         .set({ coverPath, updatedAt: Date.now(), isDirty: true })
         .where(eq(books.id, bookId))
         .run();
+      // Same parity reason as DbPort.updateBookCover above. (H3-03)
+      triggerSyncOnWrite();
     });
 
   return {
