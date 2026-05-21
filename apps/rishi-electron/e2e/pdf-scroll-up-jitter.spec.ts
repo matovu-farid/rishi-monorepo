@@ -46,6 +46,26 @@ test('scrolling up across a page boundary does not jitter', async () => {
     })
     await bookPage.waitForTimeout(2500)
 
+    // Precondition: pages above must actually be unmounted, otherwise the
+    // scroll-up below crosses no remount boundary and the jitter assertion
+    // would pass vacuously (no jitter to detect). Capture the lowest mounted
+    // page number AND the full mounted set so we can verify a remount
+    // actually occurs on scroll-up.
+    const mountedBefore = await bookPage.evaluate(() => {
+      return Array.from(document.querySelectorAll<HTMLElement>('[data-page-number]')).map((n) =>
+        Number(n.getAttribute('data-page-number'))
+      )
+    })
+    const lowestMountedBefore = Math.min(...mountedBefore)
+    // Virtualizer overscan should keep only a window around scrollTop=14000
+    // mounted — page 1 must be off-window. If this fails, overscan grew or
+    // the magic 14000 stopped crossing the unmount horizon, and the seam
+    // under test isn't being exercised.
+    expect(
+      lowestMountedBefore,
+      'precondition: pages above must be unmounted before scrolling up'
+    ).toBeGreaterThan(1)
+
     // Now scroll up by ~600px to cross at least one page boundary upward.
     // The page coming into view from above will need to mount + render.
     const samples = await bookPage.evaluate(async () => {
@@ -65,6 +85,22 @@ test('scrolling up across a page boundary does not jitter', async () => {
       }
       return { target, samples: out }
     })
+
+    // Confirm a remount actually happened during the scroll-up — specifically
+    // a page whose number is below the lowest-mounted-before-scroll, i.e. a
+    // page that was unmounted *above* the prior window. Without this guard,
+    // a future overscan widening would silently make this whole test a no-op
+    // on the jitter-prone path.
+    const mountedAfter = await bookPage.evaluate(() => {
+      return Array.from(document.querySelectorAll<HTMLElement>('[data-page-number]')).map((n) =>
+        Number(n.getAttribute('data-page-number'))
+      )
+    })
+    const remountedAbove = mountedAfter.some((n) => n < lowestMountedBefore)
+    expect(
+      remountedAbove,
+      'a page above the prior mount window must remount during scroll-up'
+    ).toBe(true)
 
     // The user's intent was scrollTop = target. Allow slight settling
     // (virtualizer may end up slightly different due to measurement
