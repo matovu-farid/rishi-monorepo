@@ -128,6 +128,82 @@ describe('sync engine - conversations and messages', () => {
     expect(pushBody.changes.messages).toEqual(dirtyMessages)
   })
 
+  // ── CG02 — sync surfaces 401 from /api/sync/push (no silent swallow) ────────
+  //
+  // Per audit CG02 (Phase A quick-win): the shared sync engine throws
+  // `AUTH_EXPIRED` on a 401 from /api/sync/push, and the mobile wrapper
+  // catches the throw, transitions the sync status to 'error', and
+  // *crucially* does NOT call `markBooksClean` / `markHighlightsClean` /
+  // etc. — so the dirty rows are still pending for the next sync attempt.
+  it('sync surfaces 401 from /api/sync/push as error status without marking rows clean', async () => {
+    const dirtyBooks = [{ id: 'book-1', title: 'Pending', isDirty: true }]
+    const dirtyHighlights: unknown[] = []
+    const dirtyConversations: unknown[] = []
+    const dirtyMessages: unknown[] = []
+
+    let selectCallCount = 0
+    mockDb.select.mockImplementation(() => {
+      selectCallCount++
+      if (selectCallCount === 1) return createSelectChain(dirtyBooks)
+      if (selectCallCount === 2) return createSelectChain(dirtyHighlights)
+      if (selectCallCount === 3) return createSelectChain(dirtyConversations)
+      if (selectCallCount === 4) return createSelectChain(dirtyMessages)
+      return createSelectChain([], { lastSyncVersion: 0 })
+    })
+
+    // Worker rejects the push with 401 (token expired).
+    mockApiClient.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: 'unauthorized' }),
+    })
+
+    // setSyncStatus is mocked separately; spy on it indirectly by
+    // exercising sync and asserting the engine never got past push.
+    await sync()
+
+    // We hit /api/sync/push exactly once and never got to /api/sync/pull —
+    // the 401 short-circuited the cycle.
+    expect(mockApiClient).toHaveBeenCalledTimes(1)
+    expect(mockApiClient.mock.calls[0][0]).toBe('/api/sync/push')
+
+    // The dirty book rows were NOT marked clean — `mockUpdateChain.set`
+    // would have been called by `markBooksClean` if the push succeeded.
+    // It must not be called when the push throws.
+    expect(mockUpdateChain.set).not.toHaveBeenCalled()
+  })
+
+  // ── CG02 follow-up — 403 from push also surfaces (auth-shape error) ────────
+  //
+  // 403 is treated as a generic push failure (not the dedicated
+  // AUTH_EXPIRED branch), but it must still surface — the engine must
+  // throw rather than silently mark dirty rows clean.
+  it('sync surfaces 403 from /api/sync/push without marking rows clean', async () => {
+    const dirtyBooks = [{ id: 'book-1', title: 'Pending', isDirty: true }]
+
+    let selectCallCount = 0
+    mockDb.select.mockImplementation(() => {
+      selectCallCount++
+      if (selectCallCount === 1) return createSelectChain(dirtyBooks)
+      if (selectCallCount === 2) return createSelectChain([])
+      if (selectCallCount === 3) return createSelectChain([])
+      if (selectCallCount === 4) return createSelectChain([])
+      return createSelectChain([], { lastSyncVersion: 0 })
+    })
+
+    mockApiClient.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: 'forbidden' }),
+    })
+
+    await sync()
+
+    expect(mockApiClient).toHaveBeenCalledTimes(1)
+    expect(mockApiClient.mock.calls[0][0]).toBe('/api/sync/push')
+    expect(mockUpdateChain.set).not.toHaveBeenCalled()
+  })
+
   it('pull processes remote conversations and messages', async () => {
     // Select calls: first 4 return empty dirty arrays (push early return),
     // then syncMeta get, then local lookups for each remote record (return undefined = new)

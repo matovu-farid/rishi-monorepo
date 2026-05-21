@@ -58,4 +58,40 @@ describe('classifyParagraphForVisualCue', () => {
       classifyParagraphForVisualCue('A circular figure was lying on the ground.'),
     ).toBeNull()
   })
+
+  // ── CG36 — inline LaTeX surrounded by prose ─────────────────────────────────
+  //
+  // Per audit CG36 (Phase A quick-win): a paragraph whose math is a
+  // single `$x$` inline token in the middle of a longer sentence MUST
+  // still classify as equation. The regex must not require the math
+  // expression to anchor at start/end of paragraph.
+  it('classifies inline LaTeX `$x$` surrounded by prose as equation', () => {
+    // Prose before, math token in the middle, prose after.
+    const result = classifyParagraphForVisualCue(
+      'We consider the case where $x$ continued to grow without bound.',
+    )
+    expect(result?.kind).toBe('equation')
+    expect(result?.label).toBe('Equation on page')
+  })
+
+  it('classifies $...$ math even when it appears at the very end of the paragraph', () => {
+    const result = classifyParagraphForVisualCue(
+      'The integral evaluates to $\\pi/2$',
+    )
+    expect(result?.kind).toBe('equation')
+  })
+
+  it('classifies multiple inline math tokens in one paragraph', () => {
+    const result = classifyParagraphForVisualCue(
+      'For $x>0$ and $y<1$ we have a contradiction in the bound.',
+    )
+    expect(result?.kind).toBe('equation')
+  })
+
+  it('does NOT classify a single bare `$` (price-like) as math', () => {
+    // `$5` is currency, not LaTeX — the inline regex requires a closing
+    // `$` on the same line. This pins the contract so a future
+    // greedier regex doesn't silently flag prose with currency.
+    expect(classifyParagraphForVisualCue('It cost $5 to enter the park.')).toBeNull()
+  })
 })

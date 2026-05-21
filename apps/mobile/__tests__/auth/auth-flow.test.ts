@@ -207,4 +207,55 @@ describe('mobile auth flow (lib/auth.ts)', () => {
     await auth.signOut()
     expect(await auth.isAuthenticated()).toBe(false)
   })
+
+  // ── CG01 — replay-protection: state-mismatch rejection ──────────────────────
+  //
+  // `lib/auth.ts:69-73` refuses to verify a callback whose `state` differs
+  // from the one returned by `/mobile/start`. This is a security-sensitive
+  // branch — a stale deep link from a previous attempt must not be allowed
+  // to swap a valid PKCE verifier onto an attacker-supplied state.
+  it('signIn rejects callback whose state differs from /mobile/start state', async () => {
+    // /mobile/start hands us `state-abc`, but the browser returns with a
+    // *different* state (`state-stale-XYZ`) — likely a stale deep link from
+    // a previous attempt.
+    browserResult = {
+      type: 'success',
+      url: 'rishimobile://auth/callback?state=state-stale-XYZ',
+    }
+
+    const auth = require('@/lib/auth')
+    await expect(auth.signIn('google')).rejects.toThrow(/state mismatch/i)
+
+    // Never reaches /verify — only /mobile/start was called.
+    expect(fetchCalls.length).toBe(1)
+    expect(fetchCalls[0][0]).toMatch(/\/mobile\/start$/)
+
+    // No token persisted.
+    expect(secureStore.get('rishi.bearer')).toBeUndefined()
+  })
+
+  // ── CG09 — /mobile/start non-2xx surfaces before opening browser ────────────
+  //
+  // Per audit CG09 (Phase A quick-win): when the worker rejects the
+  // `/mobile/start` POST (e.g. 500, network 4xx), `signIn` must throw
+  // *before* opening the in-app browser. The user shouldn't be sent to a
+  // sign-in page that will then dead-end.
+  it('signIn rejects when /mobile/start returns 500 and does not open browser', async () => {
+    mobileStartResponse = () =>
+      new Response(JSON.stringify({ error: 'upstream_down' }), { status: 500 })
+
+    const WebBrowser = require('expo-web-browser')
+    const openSpy = WebBrowser.openAuthSessionAsync as jest.Mock
+
+    const auth = require('@/lib/auth')
+    await expect(auth.signIn('google')).rejects.toThrow()
+
+    // /mobile/start was called once; /verify was never reached.
+    expect(fetchCalls.length).toBe(1)
+    expect(fetchCalls[0][0]).toMatch(/\/mobile\/start$/)
+
+    // The browser was never opened — failing fast at the start step.
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(secureStore.get('rishi.bearer')).toBeUndefined()
+  })
 })

@@ -72,4 +72,42 @@ describe('resolveEpubReadFromSelection', () => {
     )
     expect(result).toBeNull()
   })
+
+  // CG21 — cross-paragraph selection. When the user drags a selection that
+  // starts mid-paragraph-A and continues into paragraph-B, the resolver MUST:
+  //   - pick paragraph A (the first paragraph the selection touches),
+  //   - trim partialFirstText to start at the sentence boundary preceding
+  //     the selection start (NOT the entire paragraph),
+  //   - emit a `#s=<offset>` key so audio cache isn't confused with the
+  //     full-paragraph variant.
+  describe('CG21: cross-paragraph selection', () => {
+    it('picks paragraph A and trims partialFirst to the suffix from the sentence boundary preceding the selection start', () => {
+      // Selection starts in paragraph 0's second sentence ("It was big.")
+      // and would (in a real reader) extend into paragraph 1 — but the
+      // text passed to the resolver is the SELECTION START prefix the
+      // PDF resolver uses too. We pass the start-text snippet.
+      const result = resolveEpubReadFromSelection(
+        'It was big',
+        'epubcfi(/6/4!/4/2,/1:24,/1:34)',
+        paragraphs,
+      )
+
+      expect(result).not.toBeNull()
+      // Paragraph A wins — the suffix of paragraph 0 must be selected.
+      expect(result!.paragraphIndex).toBe(0)
+      // The partial-first text is ONLY the suffix from the sentence
+      // boundary — i.e. starting at "It was big." — NOT the full
+      // paragraph (which would include "The cat sat on the mat.").
+      expect(result!.partialFirstText).toBe('It was big.')
+      // And the cache key includes a `#s=` suffix so prefetched
+      // full-paragraph audio is NOT reused for this sentence-anchored
+      // variant.
+      expect(result!.partialFirstKey).toMatch(/#s=\d+$/)
+      // The numeric offset in the key matches the sentence-start char.
+      const offset = Number(result!.partialFirstKey.match(/#s=(\d+)$/)?.[1])
+      expect(offset).toBeGreaterThan(0)
+      // It should sit at the start of "It was big."
+      expect(paragraphs[0].text.slice(offset)).toBe('It was big.')
+    })
+  })
 })

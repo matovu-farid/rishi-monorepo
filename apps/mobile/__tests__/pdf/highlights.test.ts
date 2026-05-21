@@ -64,13 +64,15 @@ jest.mock('@/lib/db', () => {
   }
 })
 
-jest.mock('@/lib/sync/triggers', () => ({ triggerSyncOnWrite: jest.fn() }))
+const mockTriggerSyncOnWrite = jest.fn()
+jest.mock('@/lib/sync/triggers', () => ({ triggerSyncOnWrite: mockTriggerSyncOnWrite }))
 
 import {
   insertPdfHighlight,
   getPdfHighlightsByBookId,
   updateHighlight,
   deleteHighlight,
+  restoreHighlight,
 } from '@/lib/highlight-storage'
 import { db } from '@/lib/db'
 import { decodePdfCfiRange, isPdfCfiRange } from '@rishi/shared/types/pdf-locator'
@@ -167,5 +169,65 @@ describe('PDF highlights via cfiRange pdf: prefix', () => {
       (r) => r.id === h.id
     )
     expect(row?.isDeleted).toBe(true)
+  })
+})
+
+// ── CG12 — triggerSyncOnWrite is called by every PDF highlight write ────────
+//
+// The conversation-storage tests pin this for messages and conversations,
+// but the highlight CRUD path was previously untested for the same wire-up.
+// Each entry point must call `triggerSyncOnWrite` exactly once so the
+// dirty row reaches D1 on the next push cycle.
+describe('CG12 — triggerSyncOnWrite called by PDF highlight CRUD', () => {
+  beforeEach(() => {
+    ;(db as unknown as { __reset(): void }).__reset()
+    mockTriggerSyncOnWrite.mockClear()
+  })
+
+  it('insertPdfHighlight calls triggerSyncOnWrite exactly once', () => {
+    insertPdfHighlight({
+      bookId: 'book-1',
+      locator: SAMPLE_LOCATOR,
+      text: 't',
+      color: 'yellow',
+    })
+    expect(mockTriggerSyncOnWrite).toHaveBeenCalledTimes(1)
+  })
+
+  it('deleteHighlight calls triggerSyncOnWrite exactly once for a PDF row', () => {
+    const h = insertPdfHighlight({
+      bookId: 'book-1',
+      locator: SAMPLE_LOCATOR,
+      text: 't',
+      color: 'yellow',
+    })
+    mockTriggerSyncOnWrite.mockClear()
+    deleteHighlight(h.id)
+    expect(mockTriggerSyncOnWrite).toHaveBeenCalledTimes(1)
+  })
+
+  it('restoreHighlight calls triggerSyncOnWrite exactly once for a PDF row', () => {
+    const h = insertPdfHighlight({
+      bookId: 'book-1',
+      locator: SAMPLE_LOCATOR,
+      text: 't',
+      color: 'yellow',
+    })
+    deleteHighlight(h.id)
+    mockTriggerSyncOnWrite.mockClear()
+    restoreHighlight(h.id)
+    expect(mockTriggerSyncOnWrite).toHaveBeenCalledTimes(1)
+  })
+
+  it('updateHighlight calls triggerSyncOnWrite exactly once for a PDF row', () => {
+    const h = insertPdfHighlight({
+      bookId: 'book-1',
+      locator: SAMPLE_LOCATOR,
+      text: 't',
+      color: 'yellow',
+    })
+    mockTriggerSyncOnWrite.mockClear()
+    updateHighlight(h.id, { color: 'pink' })
+    expect(mockTriggerSyncOnWrite).toHaveBeenCalledTimes(1)
   })
 })
