@@ -75,7 +75,7 @@ export const navigationHistoryMachine = setup({
     hidePillIfStackEmpty: assign(({ context }) => {
       return context.stack.length === 0 ? { pillVisible: false } : {}
     }),
-    emitResume: emit(({ context, event }) => {
+    emitResume: emit(({ context, event }): NavigationHistoryEmitted => {
       if (event.type !== 'PAGE_VISITED') {
         throw new Error('emitResume: expected PAGE_VISITED event')
       }
