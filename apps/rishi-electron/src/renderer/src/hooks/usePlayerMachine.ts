@@ -394,7 +394,9 @@ export function usePlayerMachine(bookId: string) {
 
     // --- Start actor and initialize ---
     actor.start()
-    actor.send({ type: 'INITIALIZE', bookId })
+    // Seeded by routes/books.$id.lazy.tsx before this hook initializes.
+    const resumeParagraphIndex = usePlayerStore.getState().lastPlayedParagraphIndex
+    actor.send({ type: 'INITIALIZE', bookId, resumeParagraphIndex })
 
     // Seed paragraphs from PDF store if available
     const pdfState = usePdfStore.getState()
