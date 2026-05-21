@@ -23,6 +23,7 @@ import { evictPdf } from '@/services/reader-cache/pdf-cache'
 import { evictEpub } from '@/services/reader-cache/epub-cache'
 import { useBookSelection } from './library/useBookSelection'
 import { SelectionActionBar } from './library/SelectionActionBar'
+import { DeleteConfirmDialog } from './library/DeleteConfirmDialog'
 
 // Module-level caches survive library remounts (e.g., navigating back from a
 // reader). Two pieces are needed to avoid the white flash on re-entry:
@@ -111,6 +112,7 @@ export default function FileComponent(): React.JSX.Element {
   const [lastReadBookId, setLastReadBookId] = useState<string | null>(null)
 
   const selection = useBookSelection()
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   const openBookInNewWindow = useCallback((bookId: number) => {
     void (
@@ -167,6 +169,38 @@ export default function FileComponent(): React.JSX.Element {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['books'] })
+    }
+  })
+
+  const bulkDeleteMutation = useMutation({
+    mutationKey: ['bulkDeleteBooks'],
+    mutationFn: async ({ books: toDelete }: { books: Book[] }) => {
+      const failures: { book: Book; error: unknown }[] = []
+      for (const book of toDelete) {
+        try {
+          await deleteBook({ bookId: book.id })
+          removeBook(book.id)
+          revokeCachedCoverUrl(book.id)
+          evictPdf(book.id)
+          evictEpub(book.id)
+        } catch (error) {
+          console.error('Bulk delete failure for book', book.id, error)
+          failures.push({ book, error })
+        }
+      }
+      return { total: toDelete.length, failures }
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['books'] })
+    },
+    onSuccess: ({ total, failures }) => {
+      if (failures.length === 0) {
+        toast.success(`Deleted ${total} book${total === 1 ? '' : 's'}`)
+      } else if (failures.length === total) {
+        toast.error('Failed to delete books')
+      } else {
+        toast.warning(`Deleted ${total - failures.length} of ${total} — ${failures.length} failed`)
+      }
     }
   })
 
@@ -447,11 +481,29 @@ export default function FileComponent(): React.JSX.Element {
         </div>
       ) : null}
       <BookDiscoveryModal open={discoveryOpen} onClose={() => setDiscoveryOpen(false)} />
+      <DeleteConfirmDialog
+        open={confirmOpen}
+        count={selection.selectedIds.size}
+        isDeleting={bulkDeleteMutation.isPending}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={() => {
+          const selected = (books ?? []).filter((b) => selection.selectedIds.has(b.id))
+          bulkDeleteMutation.mutate(
+            { books: selected },
+            {
+              onSettled: () => {
+                setConfirmOpen(false)
+                selection.exitSelectMode()
+              }
+            }
+          )
+        }}
+      />
       {selection.selectMode ? (
         <SelectionActionBar
           count={selection.selectedIds.size}
           onSelectAll={() => selection.selectAll(filteredBooks)}
-          onDelete={() => {}}
+          onDelete={() => setConfirmOpen(true)}
           onCancel={() => selection.exitSelectMode()}
         />
       ) : null}

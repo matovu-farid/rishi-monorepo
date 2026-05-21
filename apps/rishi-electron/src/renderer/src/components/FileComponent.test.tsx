@@ -163,4 +163,50 @@ describe('FileComponent — context menu', () => {
   })
 })
 
+describe('FileComponent — bulk delete', () => {
+  it('confirming bulk delete calls deleteBook per selected id and shows success toast', async () => {
+    const { toast } = await import('sonner')
+    renderWithClient(<FileComponent />)
+    await waitFor(() => screen.getByText('Alpha'))
+    fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
+    fireEvent.click(screen.getByLabelText('Select Alpha'))
+    fireEvent.click(screen.getByLabelText('Select Beta'))
+
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+    // Confirm modal appears
+    expect(screen.getByText('Delete 2 books?')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => {
+      expect(window.electron.deleteBook).toHaveBeenCalledTimes(2)
+    })
+    expect(window.electron.deleteBook).toHaveBeenCalledWith(1)
+    expect(window.electron.deleteBook).toHaveBeenCalledWith(2)
+    expect((toast as unknown as { success: ReturnType<typeof vi.fn> }).success).toHaveBeenCalledWith(
+      'Deleted 2 books'
+    )
+  })
+
+  it('partial failure shows a warning toast with the right counts', async () => {
+    const { toast } = await import('sonner')
+    ;(window.electron.deleteBook as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('boom'))
+
+    renderWithClient(<FileComponent />)
+    await waitFor(() => screen.getByText('Alpha'))
+    fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
+    fireEvent.click(screen.getByLabelText('Select Alpha'))
+    fireEvent.click(screen.getByLabelText('Select Beta'))
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => {
+      expect(
+        (toast as unknown as { warning: ReturnType<typeof vi.fn> }).warning
+      ).toHaveBeenCalledWith('Deleted 1 of 2 — 1 failed')
+    })
+  })
+})
+
 export { renderWithClient, makeBook }
