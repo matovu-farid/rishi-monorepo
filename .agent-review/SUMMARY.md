@@ -102,4 +102,63 @@ Full audit trail under `.agent-review/`:
 - Skipped this run. Phase A+B yielded ~3 bugs from ~63 files; linear scaling suggests Phase C would yield ~4 more bugs. Worth running if budget allows, with the same workflow refinements.
 - Likely-high-yield areas in Phase C: src/main/ipc (where pilot finding 011 originated), components/highlights, services/tts, services/voice-chat (real-time integration likely has races).
 
-**Type A items NOT fixed this run** (would benefit from a focused Wave 9 follow-up): A001, A013, A032, A043, B017, B031, B041, B047, B051, B052 (e2e env blocked), B053, B056, B057, B058, B074, B095, B100, B131.
+**Type A items NOT fixed in main wave** (originally deferred): A001, A013, A032, A043, B017, B031, B041, B047, B051, B052 (e2e env blocked), B053, B056, B057, B058, B074, B095, B100, B131.
+
+---
+
+## Wave 9 Follow-up (2026-05-21, same day)
+
+Four parallel agent teams (Alpha/Beta/Gamma/Delta) ran a follow-up pass on the deferred items + parity gaps.
+
+**Type A items fixed in Wave 9:**
+
+| Item | Commit | Notes |
+|---|---|---|
+| A001 | `f9e25b32` | Production fix bundled with B017's commit by parallel-staging race — content is correct (indexingStore.finish() now clears stale error). Mutation check PASSED. |
+| A013 | `530aba52` | tutorialStore resetTour: pre-seed all 5 state fields + 2 localStorage keys, assert each clears. |
+| A032 | `ea768346` | useMenuCommands: symmetric afterEach restore + handler-throws + dispatch-order tests. |
+| A043 | `f4a6855d` | useBookSyncId: waitFor positive-signal replaces setTimeout(0); re-render-with-new-bookId test added. |
+| B017 | `f9e25b32` | epub-reader navigation: body/button tautologies → expect.poll over persisted CFI. |
+| B031 | `c2bc333d` | pdf-import: scroll-shell attached → canvas visible + removed 3s sleep. |
+| B041 | `625a2b6e` | pdf-reader keyboard nav: body-visible tautology → page-index expect.poll (forward/back). |
+| B047 | `ada3ea26` | pdf-scroll-position restore: assert restored page matches saved page via `[data-page-number]`. |
+| B051 | `78585f44` | pdf jitter: 2 preconditions (lowest-mounted-page > 1, remount-above on scroll-up). |
+| B053 | `df931ece` | pdf jitter: threshold 80px → 8px with named const and justification. |
+| B058 | `2583c56e` | bookmarks-submenu: waitForTimeout(1500) → expect.poll on published submenu. |
+| B074 | `88cdf8bc` | recent: `.some()` predicate → `.filter().length === 1` (catches dedup bug). |
+| B095 | `7dcdc8b5` | tts-page-navigation: 3 arbitrary waitForTimeout calls → waitForFunction event-based waits. |
+| B100 | `3acdcd2e` | read-aloud-from-selection: length > 0 → cfiRange matches expected CFI. |
+| B131 | `b2910cc5` | search: removed try/catch swallow + assert non-empty result for token 'the'. |
+
+**Type A items closed as INVALID (Reviewer-1's verdict on second look):**
+
+| Item | Commit | Notes |
+|---|---|---|
+| B056 | `24ae6e4f` | No-op (Reviewer-1 INVALID). Fix Plan annotated. |
+| B057 | `97441ec7` | No-op (Reviewer-1 INVALID). Fix Plan annotated. |
+
+**Parity gaps closed in Wave 9 (Team Delta):**
+
+| Gap | Commit | New tests |
+|---|---|---|
+| authStore hydrateAuth `'0'`/`null`/catch branches | `b8654525` | +3 |
+| indexingStore multi-book reset + start-twice | `6a2ae243` | +2 |
+| chatStore connecting/thinking transitions + OfflineError branch | `b7b0ff85` | +4 |
+| navStore null-send crash contract | `dee856dd` | +1 |
+
+**Total new tests:** 10 parity-gap tests + ~6 from Type A fixes. Full unit suite now **1170/1170 passing** (was 1109). Typecheck green.
+
+**Parity gaps deferred (with reasons in `parity-gaps.md`):**
+- `playerStore` state transitions — production writes via xstate `setState`, not store actions; belongs in machine integration test.
+- `playerStore.errors[]`, `playerStore.activeParagraph` — needs product/test-design input.
+- `authStore.hydrateAuth` idempotency — pure-read, low value.
+- `pdf-cache.test.ts`/`epub-cache.test.ts` — separately tracked as finding A092.
+- `cache.ts` evictOldest tie-breaking — test-infra backlog (clock injection).
+
+**Type A items still NOT fixed after Wave 9:**
+- B052 (jitter sample window) — e2e env blocked.
+- B018, B103 — deferred for product decision (unchanged).
+
+**E2E mutation checks for Wave 9 e2e fixes:** ENV-BLOCKED. All Wave 9 e2e changes typecheck green; behavioral verification requires unblocking the `launchApp/closeApp` teardown reliability item (#3 in backlog above).
+
+**Workflow lesson added:** Parallel agents staging the same files can interleave commits; A001's production change ended up bundled with B017's commit message. Mitigation for future runs: enforce per-agent file ownership at the planner level, or have agents `git stash` other agents' staged changes before committing.
