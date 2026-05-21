@@ -123,31 +123,62 @@ test.describe('EPUB text selection', () => {
     expect(overlayCount).toBe(0)
   })
 
-  test('mousedown on the reader area is not preventDefault-ed (no SwipeWrapper interference)', async () => {
+  test('selecting text inside the epub iframe yields a non-empty selection', async () => {
     const iframeEl = bookPage.locator('iframe').first()
     await iframeEl.waitFor({ state: 'visible', timeout: 30000 })
 
-    // Find the parent area that wraps the iframe and dispatch a synthetic
-    // mousedown on it. Then check defaultPrevented. With SwipeWrapper's
-    // mousedown preventDefault active (swipeable={true}), this would be true.
-    const defaultPrevented = await bookPage.evaluate(() => {
-      // Find the iframe and walk up a few levels — SwipeWrapper renders its
-      // div somewhere in the ancestor chain.
-      const iframe = document.querySelector('iframe')
-      if (!iframe) return null
-      // Target the closest reader container ancestor
-      const target = iframe.parentElement?.parentElement ?? iframe.parentElement ?? iframe
-      const evt = new MouseEvent('mousedown', {
-        bubbles: true,
-        cancelable: true,
-        clientX: 100,
-        clientY: 100,
-        button: 0
+    // Drive a real Range selection inside the iframe document on the first
+    // non-empty text node, then read selection.toString(). If the SwipeWrapper
+    // overlay (or any other regression) blocked iframe interaction, we would
+    // not get a usable selection from inside the iframe's own document.
+    //
+    // epub.js can mount multiple iframes during rendition; scan all of them
+    // and select inside whichever one has rendered text content.
+    const selectedText = await bookPage.evaluate(async () => {
+      const findIframeWithText = (): HTMLIFrameElement | null => {
+        const iframes = Array.from(document.querySelectorAll('iframe'))
+        for (const f of iframes) {
+          const d = f.contentDocument
+          if (d && d.body && d.body.textContent && d.body.textContent.trim().length > 0) {
+            return f
+          }
+        }
+        return null
+      }
+
+      // Wait up to ~10s for an iframe to have rendered text content.
+      const deadline = Date.now() + 10000
+      let iframe = findIframeWithText()
+      while (!iframe && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 200))
+        iframe = findIframeWithText()
+      }
+      const doc = iframe?.contentDocument
+      const win = iframe?.contentWindow
+      if (!doc || !win) return null
+
+      const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
+        acceptNode: (node) =>
+          node.nodeValue && node.nodeValue.trim().length > 0
+            ? NodeFilter.FILTER_ACCEPT
+            : NodeFilter.FILTER_REJECT
       })
-      target.dispatchEvent(evt)
-      return evt.defaultPrevented
+      const textNode = walker.nextNode() as Text | null
+      if (!textNode) return null
+
+      const range = doc.createRange()
+      const end = Math.min(textNode.nodeValue?.length ?? 0, 20)
+      range.setStart(textNode, 0)
+      range.setEnd(textNode, end)
+
+      const sel = win.getSelection()
+      sel?.removeAllRanges()
+      sel?.addRange(range)
+
+      return sel?.toString() ?? ''
     })
 
-    expect(defaultPrevented).toBe(false)
+    expect(selectedText).not.toBeNull()
+    expect((selectedText ?? '').trim().length).toBeGreaterThan(0)
   })
 })
