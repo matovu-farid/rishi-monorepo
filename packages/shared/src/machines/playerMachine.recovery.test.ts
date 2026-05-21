@@ -26,7 +26,7 @@
 // The "documents-the-bug" assertion below MUST change after the fix.
 
 import { describe, it, expect } from 'vitest'
-import { createActor, getInitialSnapshot, getNextSnapshot } from 'xstate'
+import { createActor } from 'xstate'
 import { playerMachine } from './playerMachine'
 import type { PlayerMachineEvent, PlayerMachineContext } from './playerMachine'
 import type { ParagraphWithIndex } from './playerMachine'
@@ -34,6 +34,41 @@ import type { ParagraphWithIndex } from './playerMachine'
 // --- Helpers --------------------------------------------------------------
 
 type Snapshot = ReturnType<ReturnType<typeof createActor<typeof playerMachine>>['getSnapshot']>
+
+/**
+ * Replacement for the (deprecated) `getInitialSnapshot` xstate v5 helper.
+ * Spins up a started actor and returns its initial snapshot.
+ *
+ * The actor is stopped synchronously so it does not retain references to
+ * jest's fake timers or other test machinery; the snapshot it returns is
+ * a plain value and is safe to keep using after the actor is gone.
+ */
+function getInitialSnapshot(): Snapshot {
+  const actor = createActor(playerMachine)
+  actor.start()
+  const snap = actor.getSnapshot()
+  actor.stop()
+  return snap
+}
+
+/**
+ * Replacement for the (deprecated) `getNextSnapshot(machine, prevSnap, evt)`
+ * xstate v5 helper. Restores a fresh actor at `prevSnap`, sends the event,
+ * and returns the resulting snapshot.
+ *
+ * We use the actor's `start(snapshot)` overload to rehydrate at `prevSnap`
+ * — the documented v5 replacement for the deprecated helpers. The actor
+ * is stopped immediately so it cannot fire async actions that would
+ * leak into the next BFS step.
+ */
+function getNextSnapshotFor(prev: Snapshot, evt: PlayerMachineEvent): Snapshot {
+  const actor = createActor(playerMachine, { snapshot: prev })
+  actor.start()
+  actor.send(evt)
+  const next = actor.getSnapshot()
+  actor.stop()
+  return next
+}
 
 const PARA_A: ParagraphWithIndex = { index: 'cfi-a', text: 'Paragraph A text.' }
 const PARA_B: ParagraphWithIndex = { index: 'cfi-b', text: 'Paragraph B text.' }
@@ -83,21 +118,21 @@ function isRecoveredState(snap: Snapshot): boolean {
 
 /** Build a snapshot in `idle` (the initial state) for use as a BFS root. */
 function getInitial(): Snapshot {
-  return getInitialSnapshot(playerMachine, undefined) as Snapshot
+  return getInitialSnapshot()
 }
 
 /** Build the seed "user just played to page 2" snapshot via getNextSnapshot. */
 function buildSeedSnapshot(): Snapshot {
-  let snap = getNextSnapshot(playerMachine, getInitial(), {
+  let snap = getNextSnapshotFor(getInitial(), {
     type: 'INITIALIZE',
     bookId: 'test-book'
   })
-  snap = getNextSnapshot(playerMachine, snap, {
+  snap = getNextSnapshotFor(snap, {
     type: 'PARAGRAPHS_UPDATED',
     paragraphs: [PARA_A, PARA_B]
   })
-  snap = getNextSnapshot(playerMachine, snap, { type: 'PLAY' })
-  snap = getNextSnapshot(playerMachine, snap, { type: 'AUDIO_LOADED' })
+  snap = getNextSnapshotFor(snap, { type: 'PLAY' })
+  snap = getNextSnapshotFor(snap, { type: 'AUDIO_LOADED' })
   // Now in `playing` on page 1. Simulate moving to "page 2" by a paragraph
   // update so the seed actually represents real mid-book playback.
   return snap
@@ -116,7 +151,7 @@ function findUiRecoveryPath(start: Snapshot, depth = 3): PlayerMachineEvent[] | 
     const { snap, path } = queue.shift() as QItem
     if (path.length >= depth) continue
     for (const evt of UI_EVENTS) {
-      const next = getNextSnapshot(playerMachine, snap, evt)
+      const next = getNextSnapshotFor(snap, evt)
       if (isRecoveredState(next)) return [...path, evt]
       const key = snapshotKey(next)
       if (!visited.has(key)) {
@@ -136,7 +171,7 @@ function exploreReachable(start: Snapshot, maxNodes = 800): Snapshot[] {
   while (queue.length > 0 && visited.size < maxNodes) {
     const snap = queue.shift() as Snapshot
     for (const evt of ALL_BFS_EVENTS) {
-      const next = getNextSnapshot(playerMachine, snap, evt)
+      const next = getNextSnapshotFor(snap, evt)
       const key = snapshotKey(next)
       if (!visited.has(key)) {
         visited.set(key, next)
@@ -246,25 +281,25 @@ describe('playerMachine — BFS recovery proof', () => {
     // changed under us while we were paused (different page or refreshed
     // current page). RESUME must go to `loading`, not `playing`, because
     // the current paragraphIndex/blob may not match the new view.
-    let snap = getNextSnapshot(playerMachine, getInitial(), {
+    let snap = getNextSnapshotFor(getInitial(), {
       type: 'INITIALIZE',
       bookId: 'test-book'
     })
-    snap = getNextSnapshot(playerMachine, snap, {
+    snap = getNextSnapshotFor(snap, {
       type: 'PARAGRAPHS_UPDATED',
       paragraphs: [PARA_A]
     })
-    snap = getNextSnapshot(playerMachine, snap, { type: 'PLAY' })
-    snap = getNextSnapshot(playerMachine, snap, { type: 'AUDIO_LOADED' })
+    snap = getNextSnapshotFor(snap, { type: 'PLAY' })
+    snap = getNextSnapshotFor(snap, { type: 'AUDIO_LOADED' })
     expect(stateValueToString(snap.value)).toBe('playing')
-    snap = getNextSnapshot(playerMachine, snap, { type: 'PAUSE' })
+    snap = getNextSnapshotFor(snap, { type: 'PAUSE' })
     expect(stateValueToString(snap.value)).toBe('paused.clean')
-    snap = getNextSnapshot(playerMachine, snap, {
+    snap = getNextSnapshotFor(snap, {
       type: 'PARAGRAPHS_UPDATED',
       paragraphs: [PARA_NEW]
     })
     expect(stateValueToString(snap.value)).toBe('paused.stale')
-    snap = getNextSnapshot(playerMachine, snap, { type: 'RESUME' })
+    snap = getNextSnapshotFor(snap, { type: 'RESUME' })
     expect(stateValueToString(snap.value)).toBe('loading')
   })
 
@@ -296,20 +331,20 @@ describe('playerMachine — BFS recovery proof', () => {
   //   is re-read, and PARAGRAPHS_UPDATED transitions us to `loading`.
   // -------------------------------------------------------------------
   it('FIXED: pageNavigating timeout → PLAY → republishingParagraphs (no unwanted nav)', () => {
-    let snap = getNextSnapshot(playerMachine, getInitial(), {
+    let snap = getNextSnapshotFor(getInitial(), {
       type: 'INITIALIZE',
       bookId: 'test-book'
     })
-    snap = getNextSnapshot(playerMachine, snap, {
+    snap = getNextSnapshotFor(snap, {
       type: 'PARAGRAPHS_UPDATED',
       paragraphs: [PARA_A, PARA_B]
     })
-    snap = getNextSnapshot(playerMachine, snap, { type: 'PLAY' })
-    snap = getNextSnapshot(playerMachine, snap, { type: 'AUDIO_LOADED' })
+    snap = getNextSnapshotFor(snap, { type: 'PLAY' })
+    snap = getNextSnapshotFor(snap, { type: 'AUDIO_LOADED' })
     expect(stateValueToString(snap.value)).toBe('playing')
 
     // External page nav arrives but PARAGRAPHS_UPDATED never does.
-    snap = getNextSnapshot(playerMachine, snap, {
+    snap = getNextSnapshotFor(snap, {
       type: 'PAGE_NAVIGATING',
       direction: 'forward'
     })
@@ -320,7 +355,7 @@ describe('playerMachine — BFS recovery proof', () => {
     // Simulate the 10s timeout result. The reviewer's stuck loop is independent
     // of `timedOut`: it's the empty-paragraphs PLAY-from-stopped path. STOP
     // produces the same shape for the test.
-    snap = getNextSnapshot(playerMachine, snap, { type: 'STOP' })
+    snap = getNextSnapshotFor(snap, { type: 'STOP' })
     expect(stateValueToString(snap.value)).toBe('stopped')
     expect((snap.context as PlayerMachineContext).currentParagraphs).toEqual([])
 
@@ -329,7 +364,7 @@ describe('playerMachine — BFS recovery proof', () => {
     // rendition is NOT asked to advance. The hook then emits a fresh
     // PARAGRAPHS_UPDATED which transitions us into `loading` on the current
     // visible page.
-    const afterPlay = getNextSnapshot(playerMachine, snap, { type: 'PLAY' })
+    const afterPlay = getNextSnapshotFor(snap, { type: 'PLAY' })
     expect(
       stateValueToString(afterPlay.value),
       'FIXED: PLAY in stopped-with-empty-paragraphs now routes to ' +
@@ -344,21 +379,21 @@ describe('playerMachine — BFS recovery proof', () => {
     // clock. For determinism we instead verify the state-shape parity: STOP
     // from `pageNavigating` produces the same shape (modulo `timedOut`) as
     // the 10s timer.
-    let snap = getNextSnapshot(playerMachine, getInitial(), {
+    let snap = getNextSnapshotFor(getInitial(), {
       type: 'INITIALIZE',
       bookId: 'test-book'
     })
-    snap = getNextSnapshot(playerMachine, snap, {
+    snap = getNextSnapshotFor(snap, {
       type: 'PARAGRAPHS_UPDATED',
       paragraphs: [PARA_A]
     })
-    snap = getNextSnapshot(playerMachine, snap, { type: 'PLAY' })
-    snap = getNextSnapshot(playerMachine, snap, { type: 'AUDIO_LOADED' })
-    snap = getNextSnapshot(playerMachine, snap, {
+    snap = getNextSnapshotFor(snap, { type: 'PLAY' })
+    snap = getNextSnapshotFor(snap, { type: 'AUDIO_LOADED' })
+    snap = getNextSnapshotFor(snap, {
       type: 'PAGE_NAVIGATING',
       direction: 'forward'
     })
-    const fromStop = getNextSnapshot(playerMachine, snap, { type: 'STOP' })
+    const fromStop = getNextSnapshotFor(snap, { type: 'STOP' })
     expect(stateValueToString(fromStop.value)).toBe('stopped')
     expect((fromStop.context as PlayerMachineContext).currentParagraphs).toEqual([])
     // Note: STOP clears wantsAutoResume (line 489) — same as what we expect
