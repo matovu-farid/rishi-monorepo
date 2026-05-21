@@ -1252,3 +1252,27 @@ describe('playerMachine - CHAT_ENDED', () => {
     expect(actor.getSnapshot().context.wantsAutoResumeAfterChat).toBe(false)
   })
 })
+
+describe('resumeParagraphIndex (INITIALIZE option)', () => {
+  let actor: ReturnType<typeof createActor<typeof playerMachine>>
+
+  beforeEach(() => {
+    actor = createActor(playerMachine)
+    actor.start()
+  })
+
+  it('starts with a null resumeParagraphIndex by default', () => {
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    expect(actor.getSnapshot().context.resumeParagraphIndex).toBeNull()
+  })
+
+  it('stores resumeParagraphIndex from INITIALIZE payload', () => {
+    actor.send({ type: 'INITIALIZE', bookId: 'book1', resumeParagraphIndex: 'p-2' })
+    expect(actor.getSnapshot().context.resumeParagraphIndex).toBe('p-2')
+  })
+
+  it('treats an absent resumeParagraphIndex as null (not undefined)', () => {
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    expect(actor.getSnapshot().context.resumeParagraphIndex).toBeNull()
+  })
+})

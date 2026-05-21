@@ -31,10 +31,11 @@ export type PlayerMachineContext = {
   partialFirstText: string | null
   partialFirstKey: string | null
   partialFirstParagraphIndex: number | null
+  resumeParagraphIndex: string | null
 }
 
 export type PlayerMachineEvent =
-  | { type: 'INITIALIZE'; bookId: string }
+  | { type: 'INITIALIZE'; bookId: string; resumeParagraphIndex?: string | null }
   | { type: 'PLAY' }
   | { type: 'PAUSE' }
   | { type: 'RESUME' }
@@ -75,7 +76,8 @@ const initialContext: PlayerMachineContext = {
   wantsAutoResumeAfterChat: false,
   partialFirstText: null,
   partialFirstKey: null,
-  partialFirstParagraphIndex: null
+  partialFirstParagraphIndex: null,
+  resumeParagraphIndex: null
 }
 
 export const playerMachine = setup({
@@ -95,6 +97,10 @@ export const playerMachine = setup({
   actions: {
     storeBookId: assign({
       bookId: ({ event }) => (event.type === 'INITIALIZE' ? event.bookId : '')
+    }),
+    storeResumeIndex: assign({
+      resumeParagraphIndex: ({ event }) =>
+        event.type === 'INITIALIZE' ? (event.resumeParagraphIndex ?? null) : null
     }),
     resetIndex: assign({ paragraphIndex: 0, retryCount: 0, timedOut: false }),
     resetIndexByDirection: assign({
@@ -237,7 +243,7 @@ export const playerMachine = setup({
       on: {
         INITIALIZE: {
           target: 'stopped',
-          actions: ['storeBookId', 'resetIndex']
+          actions: ['storeBookId', 'resetIndex', 'storeResumeIndex']
         },
         CHAT_STARTED: {
           actions: ['clearWantsAutoResumeAfterChat', 'clearPartialFirst']
