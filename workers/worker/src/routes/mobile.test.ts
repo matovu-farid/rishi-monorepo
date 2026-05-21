@@ -127,6 +127,12 @@ function makeVerifier(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")
 }
 
+// z.uuid() in zod v4 only accepts properly-versioned UUIDs (v1-v8), not
+// arbitrary 8-4-4-4-12 hex strings. Use crypto.randomUUID() in tests so the
+// schema validation matches the production path (where state is also minted
+// via crypto.randomUUID()).
+const uuid = () => crypto.randomUUID()
+
 beforeEach(() => {
   redisStore.clear()
   setSession(null)
@@ -199,7 +205,7 @@ describe("GET /mobile/start/complete", () => {
     // Pre-seed Redis with a result record as if the POST /complete had already run.
     const verifier = makeVerifier()
     const challenge = await sha256Base64Url(verifier)
-    const state = "11111111-2222-3333-4444-555555555555"
+    const state = uuid()
     redisStore.set(`mobile:result:${state}`, {
       code_challenge: challenge,
       session_token: "tok_test",
@@ -223,7 +229,7 @@ describe("GET /mobile/start/complete", () => {
   it("400s when state is unknown / expired", async () => {
     const res = await call(
       mobileRoutes,
-      `/start/complete?state=99999999-9999-9999-9999-999999999999`,
+      `/start/complete?state=${uuid()}`,
       { method: "GET", redirect: "manual" }
     )
     expect(res.status).toBe(400)
@@ -243,7 +249,7 @@ describe("POST /mobile/start/complete", () => {
   it("writes a result record when the web session is valid and state exists", async () => {
     const verifier = makeVerifier()
     const challenge = await sha256Base64Url(verifier)
-    const state = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    const state = uuid()
     redisStore.set(`mobile:state:${state}`, {
       code_challenge: challenge,
       provider: "google",
@@ -275,7 +281,7 @@ describe("POST /mobile/start/complete", () => {
     const res = await call(mobileRoutes, "/start/complete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ state: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }),
+      body: JSON.stringify({ state: uuid() }),
     })
     expect(res.status).toBe(401)
   })
@@ -288,7 +294,7 @@ describe("POST /mobile/start/complete", () => {
         "Content-Type": "application/json",
         Cookie: "web-signed-in=1",
       },
-      body: JSON.stringify({ state: "00000000-0000-0000-0000-000000000000" }),
+      body: JSON.stringify({ state: uuid() }),
     })
     expect(res.status).toBe(400)
   })
@@ -299,7 +305,7 @@ describe("POST /mobile/start/verify", () => {
   it("returns { session_token } when verifier matches the stored challenge", async () => {
     const verifier = makeVerifier()
     const challenge = await sha256Base64Url(verifier)
-    const state = "12121212-3434-5656-7878-909090909090"
+    const state = uuid()
     redisStore.set(`mobile:result:${state}`, {
       code_challenge: challenge,
       session_token: "tok_mobile",
@@ -323,7 +329,7 @@ describe("POST /mobile/start/verify", () => {
     const verifier = makeVerifier()
     const challenge = await sha256Base64Url(verifier)
     const otherVerifier = makeVerifier()
-    const state = "13131313-3434-5656-7878-909090909090"
+    const state = uuid()
     redisStore.set(`mobile:result:${state}`, {
       code_challenge: challenge,
       session_token: "tok_mobile",
@@ -347,7 +353,7 @@ describe("POST /mobile/start/verify", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        state: "14141414-3434-5656-7878-909090909090",
+        state: uuid(),
         code_verifier: verifier,
       }),
     })
@@ -369,8 +375,10 @@ describe("State binding", () => {
   it("verify with a different state from start does not return a token", async () => {
     const verifier = makeVerifier()
     const challenge = await sha256Base64Url(verifier)
+    const ownerState = uuid()
+    const attackerState = uuid()
     // Start with one state…
-    redisStore.set(`mobile:result:aaaaaaaa-1111-1111-1111-111111111111`, {
+    redisStore.set(`mobile:result:${ownerState}`, {
       code_challenge: challenge,
       session_token: "tok_owner",
       user_id: "user_owner",
@@ -381,7 +389,7 @@ describe("State binding", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        state: "bbbbbbbb-2222-2222-2222-222222222222",
+        state: attackerState,
         code_verifier: verifier,
       }),
     })
