@@ -125,7 +125,11 @@ export async function extractEpubText(
       continue
     }
 
-    const fullPath = opfDir + href
+    // Some publishers (Sigil, Smashwords) emit hrefs starting with `/`
+    // meaning "root of the zip". Without this branch the join becomes
+    // `OEBPS//ch1.xhtml` and the file lookup fails, returning 0 chunks
+    // for an otherwise valid EPUB. Mirrors epub-cover.ts behavior.
+    const fullPath = href.startsWith('/') ? href.slice(1) : opfDir + href
     try {
       const xhtml = await zip.file(fullPath)?.async('text')
       if (!xhtml) {

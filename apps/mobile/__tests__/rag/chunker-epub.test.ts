@@ -122,6 +122,46 @@ describe('chunker -> EPUB (CG17: corrupt-file branches)', () => {
     )
   })
 
+  // H3-02: some EPUB publishers (Sigil-generated, Smashwords) emit
+  // spine hrefs that begin with `/` to mean "root of the zip". The
+  // shared epub-cover extractor handles this; the chunker did not.
+  // Result: spine items get appended to opfDir, the file lookup fails,
+  // and the entire book yields zero chunks even though the file is
+  // perfectly readable.
+  it('returns chunks for an EPUB whose manifest hrefs are absolute (start with /)', async () => {
+    ;(global as { [k: string]: unknown })[FIXTURE_KEY] = await buildEpubBase64(
+      (zip) => {
+        zip.file(
+          'META-INF/container.xml',
+          '<?xml version="1.0"?><container><rootfiles>' +
+            '<rootfile full-path="OEBPS/content.opf"/>' +
+            '</rootfiles></container>',
+        )
+        zip.file(
+          'OEBPS/content.opf',
+          // Note: href starts with `/` — root of the zip.
+          '<?xml version="1.0"?><package>' +
+            '<manifest><item id="c1" href="/OEBPS/ch1.xhtml" media-type="application/xhtml+xml"/></manifest>' +
+            '<spine><itemref idref="c1"/></spine>' +
+            '</package>',
+        )
+        zip.file(
+          'OEBPS/ch1.xhtml',
+          '<html><body><h1>Absolute Href Chapter</h1>' +
+            '<p>The text inside an absolute-href EPUB must still chunk. ' +
+            'It survives the resolve step because absolute hrefs are root-anchored.</p>' +
+            '</body></html>',
+        )
+      },
+    )
+
+    const chunks = await getChunks('/fake/book.epub', 'epub', 'book-abs-href')
+    expect(chunks.length).toBeGreaterThan(0)
+    expect(chunks[0].chapter).toBe('Absolute Href Chapter')
+    const joined = chunks.map((c) => c.text).join(' ')
+    expect(joined).toContain('absolute-href EPUB')
+  })
+
   it('returns chunks for a well-formed EPUB (positive control for the same wiring)', async () => {
     ;(global as { [k: string]: unknown })[FIXTURE_KEY] = await buildEpubBase64(
       (zip) => {
