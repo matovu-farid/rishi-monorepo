@@ -70,4 +70,15 @@ describe('navStore', () => {
     }
     expect(useNavStore.getState().navState).toBeDefined()
   })
+
+  it('send is null before setSend is called; consumers must null-check before invoking', () => {
+    // Document the contract: callers MUST guard `send` with a truthy check.
+    // Calling `send(...)` directly when null throws a TypeError — there is no
+    // pre-boot no-op fallback in production.
+    const { send } = useNavStore.getState()
+    expect(send).toBeNull()
+    expect(() => (send as unknown as (e: { type: string }) => void)({ type: 'DISPLAY' })).toThrow(
+      TypeError
+    )
+  })
 })
