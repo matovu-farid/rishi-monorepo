@@ -24,7 +24,11 @@
     "./lib/debounce": "./src/lib/debounce.ts",
     "./lib/Mutex": "./src/lib/Mutex.ts",
     "./formats/epub-constants": "./src/formats/epub-constants.ts",
-    "./modules/cfi-to-paragraph": "./src/modules/cfi-to-paragraph.ts"
+    "./formats/bookmark-cfi": "./src/formats/bookmark-cfi.ts",
+    "./modules/cfi-to-paragraph": "./src/modules/cfi-to-paragraph.ts",
+    "./sync/types": "./src/sync/types.ts",
+    "./sync/debounce": "./src/sync/debounce.ts",
+    "./connectivity/types": "./src/connectivity/types.ts"
   },
   "peerDependencies": {
     "drizzle-orm": "^0.44.0",
