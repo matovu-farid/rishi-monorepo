@@ -79,6 +79,23 @@ post-window stability check.
 ## Tiebreaker Verdict: CONFIRM | REJECT
 
 ## Fix Plan
+status: fixed
+commit: <pending>
+notes: Replaced the three flagged `waitForTimeout` calls in
+`tts-page-navigation.spec.ts` with event-based waits.
+- L646 (bleed window after canplay-gate release): `waitForFunction` polls
+  `__rishiPlayLog` and resolves the moment an off-page audio.play() entry
+  appears (300ms timeout — timeout means clean window).
+- L1010 (post-Next settle): `waitForFunction` polls `playingState` until
+  it leaves the transient `loading` / `pageNavigating` set, with an 8s
+  deadline. The downstream "auto-resume vs. recovery click" branching is
+  unchanged.
+- L1194 (no-unwanted-nav window): `waitForFunction` polls
+  `currentParagraphs[0].index` and fails fast on any non-null change from
+  `pageBefore`, with a 2s timeout (timeout means page held steady).
+The `null → non-null` boundary in the L1194 case is treated as
+"page populated", not "navigation", to avoid spurious failures while the
+machine re-publishes paragraphs. Typecheck green; e2e not run per env note.
 
 ## Code Review
 

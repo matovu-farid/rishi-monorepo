@@ -642,8 +642,30 @@ test.describe('TTS state follows EPUB page navigation', () => {
       for (const fn of w.__rishiCanPlayGate.pending.splice(0)) fn()
     })
 
-    // Give the stale loadAndPlayAudio time to (incorrectly) call play.
-    await bookPage.waitForTimeout(300)
+    // Watch the playLog over a short window for any off-page audio.play()
+    // call. waitForFunction resolves *as soon as* a bleed appears (fail-fast
+    // diagnostic); a 300ms timeout with no bleed means the system stayed
+    // clean — which is the post-condition we want.
+    const afterSnap = await readPlayerSnapshot(bookPage)
+    const visibleCfis = afterSnap.paragraphs.map((p) => p.index)
+    const bleedAppeared = await bookPage
+      .waitForFunction(
+        (visible) => {
+          const w = window as unknown as {
+            __rishiPlayLog: Array<{ ts: number; src: string }>
+            __rishiBlobToCfi: Map<string, string>
+          }
+          const visibleSet = new Set(visible)
+          return w.__rishiPlayLog.some((e) => {
+            const cfi = w.__rishiBlobToCfi.get(e.src) ?? null
+            return cfi !== null && !visibleSet.has(cfi)
+          })
+        },
+        visibleCfis,
+        { timeout: 300 }
+      )
+      .then(() => true)
+      .catch(() => false)
 
     const playLog = await bookPage.evaluate(() => {
       const w = window as unknown as {
@@ -656,12 +678,11 @@ test.describe('TTS state follows EPUB page navigation', () => {
       }))
     })
 
-    const afterSnap = await readPlayerSnapshot(bookPage)
-    const visibleCfis = new Set(afterSnap.paragraphs.map((p) => p.index))
-    const bleeds = playLog.filter((e) => e.cfi !== null && !visibleCfis.has(e.cfi))
+    const visibleSet = new Set(visibleCfis)
+    const bleeds = playLog.filter((e) => e.cfi !== null && !visibleSet.has(e.cfi))
     expect(
       bleeds,
-      `audio.play() was called for off-page CFI(s): ${JSON.stringify(bleeds)}. Visible page: ${[...visibleCfis].slice(0, 3).join(', ')}...`
+      `audio.play() was called for off-page CFI(s): ${JSON.stringify(bleeds)}. Visible page: ${visibleCfis.slice(0, 3).join(', ')}... bleedAppeared=${bleedAppeared}`
     ).toEqual([])
 
     await sendPlayerEvent(bookPage, 'STOP')
@@ -1004,10 +1025,23 @@ test.describe('TTS state follows EPUB page navigation', () => {
     // Click the EPUB next-page arrow.
     await bookPage.locator('[aria-label="Next page"]').first().click()
 
-    // Wait 6s — more than the curl animation (~200ms) + a generous buffer.
-    // We deliberately don't wait for a specific state; we want to read
-    // whatever the player landed in.
-    await bookPage.waitForTimeout(6000)
+    // Wait for the player to settle into a non-transient state. If the
+    // auto-resume path works, this lands on `playing`. Otherwise it lands on
+    // a stable resting state (stopped/paused/waitingForParagraphs) and the
+    // recovery branch below kicks in. Polling for stability (instead of a
+    // fixed 6s sleep) makes us fail fast on a regression that hangs in
+    // `loading`/`pageNavigating`, and skips wall-clock waste on a fast pass.
+    await bookPage.waitForFunction(
+      () => {
+        const w = window as unknown as {
+          __rishi: { playerStore: { getState: () => { playingState: string } } }
+        }
+        const s = w.__rishi.playerStore.getState().playingState
+        return s !== 'loading' && s !== 'pageNavigating'
+      },
+      undefined,
+      { timeout: 8000 }
+    )
 
     const stateAfterNav = await bookPage.evaluate(() => {
       const w = window as unknown as {
@@ -1190,8 +1224,30 @@ test.describe('TTS state follows EPUB page navigation', () => {
     // double-nav.
     await sendPlayerEvent(bookPage, 'PLAY')
 
-    // Wait 2s for any unwanted nav to materialize.
-    await bookPage.waitForTimeout(2000)
+    // Watch currentParagraphs[0].index over a 2s window and fail fast on any
+    // change. waitForFunction resolves the moment an unwanted nav appears
+    // (carrying the diff in the error), and a timeout means the page held
+    // steady — which is the post-condition we want.
+    const navObserved = await bookPage
+      .waitForFunction(
+        (before) => {
+          const w = window as unknown as {
+            __rishi: {
+              playerStore: {
+                getState: () => { currentParagraphs: { index: string }[] }
+              }
+            }
+          }
+          const current = w.__rishi.playerStore.getState().currentParagraphs[0]?.index ?? null
+          // Treat null → non-null as "page populated", not "navigation". Only
+          // a different non-null CFI counts as an unwanted nav.
+          return current !== null && current !== before
+        },
+        pageBefore,
+        { timeout: 2000 }
+      )
+      .then(() => true)
+      .catch(() => false)
 
     const pageAfter = await bookPage.evaluate(() => {
       const w = window as unknown as {
@@ -1205,11 +1261,11 @@ test.describe('TTS state follows EPUB page navigation', () => {
     })
 
     expect(
-      pageAfter,
+      navObserved,
       `STUCK LOOP DETECTED: clicking Play after pageNavigating timeout caused ` +
         `an unwanted page advance. Page first-paragraph CFI was ${pageBefore}, now ${pageAfter}. ` +
         `The user's PLAY click was misinterpreted as a request for the next page.`
-    ).toBe(pageBefore)
+    ).toBe(false)
 
     // Teardown
     await sendPlayerEvent(bookPage, 'STOP')
