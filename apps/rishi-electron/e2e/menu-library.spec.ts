@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { launchApp, closeApp, getApplicationMenu, findMenuItem } from './helpers/electron-app'
+import { ACCELERATORS } from '../src/main/menu/accelerators'
 
 test('library window menu has File/Edit/View/Window/Help but no Bookmarks/Reader', async () => {
   const launched = await launchApp()
@@ -11,7 +12,7 @@ test('library window menu has File/Edit/View/Window/Help but no Bookmarks/Reader
     expect(labels).not.toContain('Reader')
 
     expect(findMenuItem(menu, ['File', 'Import Book…'])).toBeDefined()
-    expect(findMenuItem(menu, ['Window', 'Library'])?.accelerator).toMatch(/Cmd|Ctrl/)
+    expect(findMenuItem(menu, ['Window', 'Library'])?.accelerator).toBe(ACCELERATORS.focusLibrary)
   } finally {
     await closeApp(launched)
   }
