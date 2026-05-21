@@ -16,6 +16,7 @@ import '../global.css'
 import { useColorScheme } from '@/hooks/use-color-scheme'
 import { useAuthStore } from '@/lib/stores/authStore'
 import { initVectorExtension, ensureChunkTables } from '@/lib/rag/vector-store'
+import { RagExtractorHost } from '@/components/RagExtractorHost'
 
 export const IS_E2E_TEST = process.env.EXPO_PUBLIC_E2E_TEST === 'true'
 
@@ -70,6 +71,7 @@ function RootLayout() {
     return (
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <Slot />
+        <RagExtractorHost />
         <StatusBar style="auto" />
       </ThemeProvider>
     )
@@ -78,6 +80,13 @@ function RootLayout() {
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <Slot />
+      {/*
+        Hidden host that drives pdfjs / djvu.js text extraction inside
+        WebViews on demand. Mounted at root so import jobs can extract
+        text regardless of which screen the user is on. See
+        lib/rag/extractors/* + lib/rag/chunker.ts for the contract.
+       */}
+      <RagExtractorHost />
       <StatusBar style="auto" />
     </ThemeProvider>
   )
