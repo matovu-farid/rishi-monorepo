@@ -55,7 +55,13 @@ blind-spot already exercised by the single-book test.
 <append after wave 5, only if rebutted; binding>
 
 ## Fix Plan
-<append after wave 6 starts; TDD: red -> minimal change -> refactor>
+status: fixed
+commit: <pending>
+notes: Replaced `recent?.submenu?.some((m) => m.label === 'Recent A')` with
+`recent?.submenu?.filter((m) => m.label === 'Recent A').length === 1`. The
+single-book test now fails (loudly) on any dedup regression that produces
+two or more "Recent A" entries, while still failing on the original
+zero-entries regression. No production code changed. Typecheck green.
 
 ## Code Review
 <append after coder commits; approve / request changes>

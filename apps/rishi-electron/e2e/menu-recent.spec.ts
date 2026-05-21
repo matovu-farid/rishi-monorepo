@@ -43,7 +43,9 @@ test('File > Open Recent lists imported books and opens them', async () => {
 
     const menu = await getApplicationMenu(launched.app)
     const recent = findMenuItem(menu, ['File', 'Open Recent'])
-    expect(recent?.submenu?.some((m) => m.label === 'Recent A')).toBe(true)
+    // Exact-count assertion: a dedup regression (re-import or LRU promote-vs-
+    // append bug) would surface here as length > 1, which `.some()` would miss.
+    expect(recent?.submenu?.filter((m) => m.label === 'Recent A').length).toBe(1)
 
     const before = launched.app.windows().length
     expect(await clickMenuItem(launched.app, ['File', 'Open Recent', 'Recent A'])).toBe(true)
