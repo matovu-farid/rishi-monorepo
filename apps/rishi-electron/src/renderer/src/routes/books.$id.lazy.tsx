@@ -6,6 +6,7 @@ import { usePdfStore, BookNavigationState } from '@/stores/pdfStore'
 import { useEpubStore } from '@/stores/epubStore'
 import { usePageTracker } from '@/modules/epub-page-tracker'
 import { getBook, convertFileSrc } from '@/lib/api'
+import { usePlayerStore } from '@/stores/playerStore'
 
 // Lazy-loaded format viewers. Azw3View handles both kindle formats — foliate-js's
 // MOBI.open() auto-detects KF8 (.azw3) vs MOBI6 (.mobi) and dispatches accordingly,
@@ -47,6 +48,13 @@ function BookView(): React.JSX.Element {
     if (book) setBook(book)
   }, [book, setBook])
 
+  useEffect(() => {
+    if (!book) return
+    usePlayerStore.setState({
+      lastPlayedParagraphIndex: book.lastParagraph ?? null
+    })
+  }, [book])
+
   const setBookNavigationState = usePdfStore((s) => s.setBookNavigationState)
   useEffect(() => {
     return () => {
@@ -54,6 +62,7 @@ function BookView(): React.JSX.Element {
       setBook(null)
       useEpubStore.getState().reset()
       usePageTracker.getState().reset()
+      usePlayerStore.setState({ lastPlayedParagraphIndex: null })
     }
   }, [setBook, setBookNavigationState])
 
