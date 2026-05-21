@@ -1,31 +1,83 @@
 "use client"
 
 import { useState, useEffect, Suspense, type FormEvent } from "react"
-import { useSearchParams } from "next/navigation"
-import { authClient, signIn } from "@/lib/auth-client"
+import { useRouter, useSearchParams } from "next/navigation"
+import {
+  authClient,
+  signIn,
+  useSession,
+} from "@/lib/auth-client"
+import {
+  clearHandoff,
+  useDesktopHandoff,
+  type HandoffStatus,
+} from "@/lib/use-desktop-handoff"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
-function SignInPageInner() {
-  const params = useSearchParams()
-  const provider = params.get("provider")
-  const returnTo = params.get("returnTo") ?? "/"
+function SignInSkeleton() {
+  return <div className="max-w-md mx-auto py-20" data-testid="sign-in-skeleton" />
+}
 
+function DesktopReturnPanel({
+  status,
+  errorMsg,
+  state,
+  onRetry,
+}: {
+  status: HandoffStatus
+  errorMsg: string
+  state: string | null
+  onRetry: () => void
+}) {
+  return (
+    <div className="max-w-md mx-auto py-20 text-center">
+      {status === "completing" && (
+        <>
+          <h1 className="text-2xl font-bold mb-2">Completing sign-in…</h1>
+          <p className="text-muted-foreground">
+            Hang tight — finishing the handshake with the Rishi app.
+          </p>
+        </>
+      )}
+      {status === "done" && (
+        <>
+          <h1 className="text-2xl font-bold mb-2">You&apos;re signed in</h1>
+          <p className="text-muted-foreground">
+            Return to the Rishi app to continue. You can close this tab.
+          </p>
+        </>
+      )}
+      {status === "error" && (
+        <>
+          <h1 className="text-2xl font-bold mb-2 text-destructive">
+            Sign-in handoff failed
+          </h1>
+          <p className="text-muted-foreground mb-6 break-words">{errorMsg}</p>
+          <Button
+            onClick={() => {
+              if (state) clearHandoff(state)
+              onRetry()
+            }}
+          >
+            Try again
+          </Button>
+        </>
+      )}
+    </div>
+  )
+}
+
+function SignInForm({
+  params,
+  returnTo,
+}: {
+  params: URLSearchParams
+  returnTo: string
+}) {
   const [email, setEmail] = useState("")
   const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle")
   const [errorMsg, setErrorMsg] = useState<string>("")
-
-  // If ?provider=google, kick off OAuth immediately
-  useEffect(() => {
-    if (provider === "google") {
-      void signIn.social({
-        provider: "google",
-        callbackURL: typeof window !== "undefined"
-          ? window.location.href.replace("provider=google", "")
-          : "/",
-      })
-    }
-  }, [provider])
 
   async function sendMagicLink(e: FormEvent) {
     e.preventDefault()
@@ -34,7 +86,8 @@ function SignInPageInner() {
     try {
       const callbackURL =
         typeof window !== "undefined"
-          ? window.location.origin + (params.toString() ? "/?" + params.toString() : returnTo)
+          ? window.location.origin +
+            (params.toString() ? "/?" + params.toString() : returnTo)
           : returnTo
       await authClient.signIn.magicLink({ email, callbackURL })
       setStatus("sent")
@@ -116,9 +169,58 @@ function SignInPageInner() {
   )
 }
 
+function SignInPageInner() {
+  const router = useRouter()
+  const params = useSearchParams()
+  const provider = params.get("provider")
+  const returnTo = params.get("returnTo") ?? "/"
+  const state = params.get("state")
+  const { data: session, isPending } = useSession()
+  const handoff = useDesktopHandoff()
+  const [retryNonce, setRetryNonce] = useState(0)
+
+  // Auto-kick Google OAuth on ?provider=google (unchanged)
+  useEffect(() => {
+    if (provider !== "google") return
+    void signIn.social({
+      provider: "google",
+      callbackURL:
+        typeof window !== "undefined"
+          ? window.location.href.replace("provider=google", "")
+          : "/",
+    })
+  }, [provider])
+
+  // Web flow: signed in but not a desktop handoff → bounce home
+  useEffect(() => {
+    if (isPending) return
+    if (!session) return
+    if (handoff.isDesktopFlow) return
+    router.replace(returnTo)
+  }, [isPending, session, handoff.isDesktopFlow, returnTo, router])
+
+  if (isPending) return <SignInSkeleton />
+
+  if (session && handoff.isDesktopFlow) {
+    return (
+      <DesktopReturnPanel
+        status={handoff.status}
+        errorMsg={handoff.errorMsg}
+        state={state}
+        onRetry={() => setRetryNonce((n) => n + 1)}
+        key={retryNonce}
+      />
+    )
+  }
+
+  if (session) return <SignInSkeleton />
+
+  return <SignInForm params={params} returnTo={returnTo} />
+}
+
 export default function SignInPage() {
   return (
-    <Suspense fallback={<div className="max-w-md mx-auto py-20" />}>
+    <Suspense fallback={<SignInSkeleton />}>
       <SignInPageInner />
     </Suspense>
   )
