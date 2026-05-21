@@ -92,7 +92,12 @@ export const playerMachine = setup({
     hasRetries: ({ context }) => context.retryCount + 1 < MAX_RETRIES,
     isFirstParagraph: ({ context }) => context.paragraphIndex <= 0,
     wasTimedOut: ({ context }) => context.timedOut,
-    wantsAutoResumeAfterChat: ({ context }) => context.wantsAutoResumeAfterChat
+    wantsAutoResumeAfterChat: ({ context }) => context.wantsAutoResumeAfterChat,
+    hasUnresolvedResume: ({ context, event }) => {
+      if (context.resumeParagraphIndex === null) return false
+      if (event.type !== 'PARAGRAPHS_UPDATED') return false
+      return event.paragraphs.some((p) => p.index === context.resumeParagraphIndex)
+    }
   },
   actions: {
     storeBookId: assign({
@@ -188,6 +193,14 @@ export const playerMachine = setup({
     // Check BEFORE advanceIndex: if partialFirstParagraphIndex matches the
     // current (pre-advance) paragraphIndex, this is the paragraph the override
     // applied to — clear it. Otherwise leave it in place for a future paragraph.
+    applyResumeIndex: assign({
+      paragraphIndex: ({ context, event }) => {
+        if (event.type !== 'PARAGRAPHS_UPDATED') return context.paragraphIndex
+        const idx = event.paragraphs.findIndex((p) => p.index === context.resumeParagraphIndex)
+        return idx >= 0 ? idx : context.paragraphIndex
+      },
+      resumeParagraphIndex: null
+    }),
     clearPartialFirstIfConsumed: assign({
       partialFirstText: ({ context }) =>
         context.partialFirstParagraphIndex === context.paragraphIndex
@@ -290,10 +303,15 @@ export const playerMachine = setup({
           }
         ],
         PARAGRAPHS_UPDATED: [
+          // wasTimedOut wins to preserve existing recovery behavior
           {
             guard: 'wasTimedOut',
             target: 'loading',
             actions: ['storeParagraphs', 'clearTimedOut', 'resetIndexByDirection']
+          },
+          {
+            guard: 'hasUnresolvedResume',
+            actions: ['storeParagraphs', 'applyResumeIndex']
           },
           {
             actions: ['storeParagraphs']
