@@ -21,12 +21,52 @@ describe('prefsStore', () => {
     expect(usePrefsStore.getState().voiceChatLanguage).toBe('en')
   })
 
-  it('hydrate() reads voiceChatLanguage from the store IPC', async () => {
-    ;(window.electron.getStoreValue as ReturnType<typeof vi.fn>).mockResolvedValue('es')
+  it('hydrate() reads all three pref keys via IPC and writes each into the matching field', async () => {
+    ;(window.electron.getStoreValue as ReturnType<typeof vi.fn>).mockImplementation(
+      (key: string) => {
+        switch (key) {
+          case 'voiceChatLanguage':
+            return Promise.resolve('es')
+          case 'voiceChatVisionEnabled':
+            return Promise.resolve(false)
+          case 'ttsVisualCueEnabled':
+            return Promise.resolve(false)
+          default:
+            return Promise.resolve(undefined)
+        }
+      }
+    )
     const { usePrefsStore } = await import('./prefsStore')
     await usePrefsStore.getState().hydrate()
     expect(window.electron.getStoreValue).toHaveBeenCalledWith('voiceChatLanguage')
-    expect(usePrefsStore.getState().voiceChatLanguage).toBe('es')
+    expect(window.electron.getStoreValue).toHaveBeenCalledWith('voiceChatVisionEnabled')
+    expect(window.electron.getStoreValue).toHaveBeenCalledWith('ttsVisualCueEnabled')
+    const state = usePrefsStore.getState()
+    expect(state.voiceChatLanguage).toBe('es')
+    expect(state.voiceChatVisionEnabled).toBe(false)
+    expect(state.ttsVisualCueEnabled).toBe(false)
+  })
+
+  it('hydrate() falls back to true when vision/cue IPC returns a non-boolean value', async () => {
+    ;(window.electron.getStoreValue as ReturnType<typeof vi.fn>).mockImplementation(
+      (key: string) => {
+        switch (key) {
+          case 'voiceChatLanguage':
+            return Promise.resolve('en')
+          case 'voiceChatVisionEnabled':
+            return Promise.resolve(undefined)
+          case 'ttsVisualCueEnabled':
+            return Promise.resolve(null)
+          default:
+            return Promise.resolve(undefined)
+        }
+      }
+    )
+    const { usePrefsStore } = await import('./prefsStore')
+    await usePrefsStore.getState().hydrate()
+    const state = usePrefsStore.getState()
+    expect(state.voiceChatVisionEnabled).toBe(true)
+    expect(state.ttsVisualCueEnabled).toBe(true)
   })
 
   it('hydrate() falls back to "en" when the IPC returns null', async () => {
