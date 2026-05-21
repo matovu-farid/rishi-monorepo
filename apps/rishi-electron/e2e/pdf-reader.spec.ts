@@ -3,6 +3,7 @@ import {
   PDF_FIXTURE,
   closeApp,
   deleteAllBooks,
+  getBookLocation,
   importBook,
   launchApp,
   openBook,
@@ -46,12 +47,22 @@ test.describe('PDF reader', () => {
     })
   })
 
-  test('keyboard navigation does not crash', async () => {
+  test('keyboard navigation advances and restores the persisted page index', async () => {
+    // Body-visibility was a tautology — it stays true even if Arrow keys are
+    // unbound in the Phase-3 split reader window. Observe the persisted
+    // `page:offset` location instead: ArrowRight must move the page index
+    // forward; ArrowLeft must move it back.
+    const pageOf = (loc: string | undefined): number => Number((loc ?? '0').split(':')[0])
+    const before = pageOf(await getBookLocation(app.page, bookId))
     await bookPage.keyboard.press('ArrowRight')
-    await bookPage.waitForTimeout(300)
+    await expect
+      .poll(async () => pageOf(await getBookLocation(app.page, bookId)), { timeout: 5000 })
+      .toBeGreaterThan(before)
+    const advanced = pageOf(await getBookLocation(app.page, bookId))
     await bookPage.keyboard.press('ArrowLeft')
-    await bookPage.waitForTimeout(300)
-    await expect(bookPage.locator('body')).toBeVisible()
+    await expect
+      .poll(async () => pageOf(await getBookLocation(app.page, bookId)), { timeout: 5000 })
+      .toBeLessThan(advanced)
   })
 
   test('invalid book id on library window is intercepted by the route guard', async () => {
