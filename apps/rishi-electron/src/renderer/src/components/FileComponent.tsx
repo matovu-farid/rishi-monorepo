@@ -492,6 +492,7 @@ export default function FileComponent(): React.JSX.Element {
           style={{ top: contextMenu.y, left: contextMenu.x }}
         >
           <button
+            aria-label="Select book"
             className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 w-full text-left rounded"
             onClick={() => {
               selection.enterSelectMode(contextMenu.book.id)

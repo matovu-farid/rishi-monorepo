@@ -154,11 +154,7 @@ describe('FileComponent — context menu', () => {
     const alphaCard = screen.getByText('Alpha').closest('div')!
     fireEvent.contextMenu(alphaCard)
 
-    // After right-click, two buttons are named exactly "Select":
-    // the toolbar Select button (rendered earlier) and the new context-menu
-    // Select item. Pick the context-menu one (it's the last in document order).
-    const items = screen.getAllByRole('button', { name: 'Select' })
-    fireEvent.click(items[items.length - 1])
+    fireEvent.click(screen.getByRole('button', { name: 'Select book' }))
 
     expect(screen.getByText('1 selected')).toBeInTheDocument()
   })
