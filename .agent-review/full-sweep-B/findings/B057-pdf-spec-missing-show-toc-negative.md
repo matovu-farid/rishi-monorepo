@@ -57,6 +57,12 @@ most opportunity to slip in.
 ## Tiebreaker Verdict: CONFIRM | REJECT
 
 ## Fix Plan
+status: no-op (INVALID)
+commit: n/a
+notes: Reviewer-1 verdict is INVALID with "Suggested fix scope: None — close as
+INVALID." The proposed `toBeUndefined()` for `Show TOC` in PDF context would
+contradict actual menuBuilder behavior, which adds `Show TOC` for any
+`ctx.kind === 'book'` (PDF and EPUB alike). No code change applied.
 
 ## Code Review
 
