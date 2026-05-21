@@ -22,6 +22,14 @@ import { useChapterParagraphPrefetch } from '@/hooks/reader/useChapterParagraphP
 import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
 import ReaderOverlayControls from '@/components/reader/ReaderOverlayControls'
 import { useBookEmbeddings } from '@/hooks/reader/useBookEmbeddings'
+import { usePlayerStore } from '@/stores/playerStore'
+import {
+  navigationHistoryActor,
+  onResumeRequested
+} from '@/machines/navigationHistory/navigationHistoryActor'
+import { useEngagementDetector } from '@/hooks/useEngagementDetector'
+import { useNavigationHistoryKeyboard } from '@/hooks/useNavigationHistoryKeyboard'
+import { NavigationHistoryFooter } from '@/components/navigation-history/NavigationHistoryFooter'
 
 export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme)
@@ -32,6 +40,8 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   })
   const [chapterCount, setChapterCount] = useState(0)
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  // Root ref for engagement detector pointer listeners
+  const readerRootRef = useRef<HTMLDivElement>(null)
   const [chatPanelOpen, setChatPanelOpen] = useState(false)
   const { requireAuth, AuthDialog } = useRequireAuth()
   const { bookSyncId } = useBookSyncId(book.id)
@@ -79,6 +89,48 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
 
   // Mirror reader state (book title, TOC open, TTS playing) into the native menu.
   useReaderMenuSync({ book, tocOpen })
+
+  // Navigation history: lifecycle (BOOK_OPENED / BOOK_CLOSED)
+  useEffect(() => {
+    navigationHistoryActor.send({
+      type: 'BOOK_OPENED',
+      bookId: String(book.id),
+      initialPosition: { kind: 'mobi', cfi: String(chapterIndex) }
+    })
+    return () => navigationHistoryActor.send({ type: 'BOOK_CLOSED' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [book.id])
+
+  // Navigation history: PAGE_VISITED on every chapter change
+  useEffect(() => {
+    const activeParagraph = usePlayerStore.getState().activeParagraph
+    const indexStr = activeParagraph?.index
+    const paragraphIndex = indexStr != null ? Number(indexStr) : null
+    const ttsContext =
+      paragraphIndex != null && Number.isFinite(paragraphIndex) ? { paragraphIndex } : null
+    navigationHistoryActor.send({
+      type: 'PAGE_VISITED',
+      position: { kind: 'mobi', cfi: String(chapterIndex) },
+      ttsContext
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chapterIndex])
+
+  // Navigation history: RESUME_REQUESTED → navigate to the stored chapter
+  useEffect(() => {
+    return onResumeRequested((anchor) => {
+      if (anchor.position.kind !== 'mobi') return
+      const idx = parseInt(anchor.position.cfi, 10)
+      if (Number.isFinite(idx) && idx >= 0) {
+        setChapterIndex(idx)
+      }
+    })
+  }, [])
+
+  // Engagement detector (pointer-based dwell tracking)
+  useEngagementDetector({ targetRef: readerRootRef, enabled: true })
+  // Keyboard back-navigation (Alt+ArrowLeft / mouse button 3)
+  useNavigationHistoryKeyboard()
 
   // Fetch total chapter count on mount
   useEffect(() => {
@@ -233,6 +285,7 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
   }, [chapterHtml, theme, chapterIndex, chapterCount])
 
   return (
+    <div ref={readerRootRef} className="relative h-full">
     <div
       className="relative h-screen flex flex-col"
       style={{ background: themes[theme].background }}
@@ -298,6 +351,23 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
         onBookmarkNavigate={(location) => {
           const idx = parseInt(location, 10)
           if (Number.isFinite(idx) && idx >= 0) {
+            // Dispatch a JUMP_REQUESTED before navigating so the history
+            // machine records the "from" anchor and can offer resume later.
+            const activeParagraph = usePlayerStore.getState().activeParagraph
+            const indexStr = activeParagraph?.index
+            const paragraphIndex = indexStr != null ? Number(indexStr) : null
+            const fromTts =
+              paragraphIndex != null && Number.isFinite(paragraphIndex)
+                ? { paragraphIndex }
+                : null
+            navigationHistoryActor.send({
+              type: 'JUMP_REQUESTED',
+              from: { kind: 'mobi', cfi: String(chapterIndex) },
+              fromTts,
+              to: { kind: 'mobi', cfi: location },
+              source: 'bookmark',
+              fromLabel: 'previous spot'
+            })
             setChapterIndex(idx)
             setTocOpen(false)
           }
@@ -320,6 +390,8 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
         open={chatPanelOpen}
         onOpenChange={setChatPanelOpen}
       />
+    </div>
+    <NavigationHistoryFooter />
     </div>
   )
 }

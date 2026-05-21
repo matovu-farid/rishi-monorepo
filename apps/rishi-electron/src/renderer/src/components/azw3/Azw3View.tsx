@@ -24,6 +24,13 @@ import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscri
 import ReaderOverlayControls from '@/components/reader/ReaderOverlayControls'
 import { useBookEmbeddings } from '@/hooks/reader/useBookEmbeddings'
 import {
+  navigationHistoryActor,
+  onResumeRequested
+} from '@/machines/navigationHistory/navigationHistoryActor'
+import { useEngagementDetector } from '@/hooks/useEngagementDetector'
+import { useNavigationHistoryKeyboard } from '@/hooks/useNavigationHistoryKeyboard'
+import { NavigationHistoryFooter } from '@/components/navigation-history/NavigationHistoryFooter'
+import {
   parseAzw3,
   extractSectionParagraphs,
   stripKindleResourceLinks,
@@ -43,6 +50,11 @@ const LOCATION_PERSIST_DEBOUNCE_MS = 500
 export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   const theme = useEpubStore((s) => s.theme)
   const [tocOpen, setTocOpen] = useState(false)
+  // Root ref for engagement detector pointer listeners
+  const readerRootRef = useRef<HTMLDivElement>(null)
+  // Derive the format kind from book.kind so MOBI books opened via the
+  // shared Azw3View get the correct PositionDescriptor kind.
+  const formatKind = book.kind === 'mobi' ? ('mobi' as const) : ('azw3' as const)
 
   // Persisted reading position is now `<chapter>:<page>`. parseLocation
   // also accepts the legacy bare-integer form so reopening an existing book
@@ -158,6 +170,50 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     if (iframeEl) registerEpubFrame(iframeEl)
     return () => clearEpubFrame()
   }, [iframeEl])
+
+  // Navigation history: lifecycle (BOOK_OPENED / BOOK_CLOSED)
+  useEffect(() => {
+    navigationHistoryActor.send({
+      type: 'BOOK_OPENED',
+      bookId: String(book.id),
+      initialPosition: { kind: formatKind, cfi: formatLocation(chapterIndex, pageWithinChapter) }
+    })
+    return () => navigationHistoryActor.send({ type: 'BOOK_CLOSED' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [book.id])
+
+  // Navigation history: PAGE_VISITED on every location change
+  useEffect(() => {
+    const activeParagraph = usePlayerStore.getState().activeParagraph
+    const indexStr = activeParagraph?.index
+    const paragraphIndex = indexStr != null ? Number(indexStr) : null
+    const ttsContext =
+      paragraphIndex != null && Number.isFinite(paragraphIndex) ? { paragraphIndex } : null
+    navigationHistoryActor.send({
+      type: 'PAGE_VISITED',
+      position: { kind: formatKind, cfi: formatLocation(chapterIndex, pageWithinChapter) },
+      ttsContext
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chapterIndex, pageWithinChapter])
+
+  // Navigation history: RESUME_REQUESTED → navigate to the stored position
+  useEffect(() => {
+    return onResumeRequested((anchor) => {
+      if (anchor.position.kind !== formatKind) return
+      const parsed = parseLocation(anchor.position.cfi)
+      if (parsed.chapter >= 0) {
+        pendingPageAfterLoadRef.current = parsed.page
+        setChapterIndex(parsed.chapter)
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Engagement detector (pointer-based dwell tracking)
+  useEngagementDetector({ targetRef: readerRootRef, enabled: true })
+  // Keyboard back-navigation (Alt+ArrowLeft / mouse button 3)
+  useNavigationHistoryKeyboard()
 
   // Mirror reader state (book title, TOC open, TTS playing) into the native menu.
   useReaderMenuSync({ book, tocOpen })
@@ -653,6 +709,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   }, [chapterPageCounts, chapterCount])
 
   return (
+    <div ref={readerRootRef} className="relative h-full">
     <div className="relative h-screen flex flex-col" style={{ background: themeStyle.background }}>
       <div className="flex-1 overflow-hidden">
         {loading ? (
@@ -747,6 +804,24 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         onBookmarkNavigate={(location) => {
           const parsed = parseLocation(location)
           if (parsed.chapter >= 0) {
+            // Dispatch a JUMP_REQUESTED before navigating so the history
+            // machine records the "from" anchor and can offer resume later.
+            const currentPos = formatLocation(chapterIndex, pageWithinChapter)
+            const activeParagraph = usePlayerStore.getState().activeParagraph
+            const indexStr = activeParagraph?.index
+            const paragraphIndex = indexStr != null ? Number(indexStr) : null
+            const fromTts =
+              paragraphIndex != null && Number.isFinite(paragraphIndex)
+                ? { paragraphIndex }
+                : null
+            navigationHistoryActor.send({
+              type: 'JUMP_REQUESTED',
+              from: { kind: formatKind, cfi: currentPos },
+              fromTts,
+              to: { kind: formatKind, cfi: location },
+              source: 'bookmark',
+              fromLabel: 'previous spot'
+            })
             // Land on the persisted page within the chapter.
             pendingPageAfterLoadRef.current = parsed.page
             setChapterIndex(parsed.chapter)
@@ -770,6 +845,8 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         open={chatPanelOpen}
         onOpenChange={setChatPanelOpen}
       />
+    </div>
+    <NavigationHistoryFooter />
     </div>
   )
 }
