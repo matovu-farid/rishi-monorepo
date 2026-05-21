@@ -11,7 +11,8 @@ describe('playerStore', () => {
       nextPageParagraphs: [],
       prevPageParagraphs: [],
       pageRequest: null,
-      send: null
+      send: null,
+      lastPlayedParagraphIndex: null
     })
   })
 
@@ -60,5 +61,23 @@ describe('playerStore', () => {
     const send = vi.fn()
     usePlayerStore.getState().setSend(send)
     expect(usePlayerStore.getState().send).toBe(send)
+  })
+})
+
+describe('lastPlayedParagraphIndex', () => {
+  beforeEach(() => {
+    usePlayerStore.setState({ lastPlayedParagraphIndex: null })
+  })
+
+  it('starts as null', () => {
+    expect(usePlayerStore.getState().lastPlayedParagraphIndex).toBeNull()
+  })
+
+  it('setLastPlayedParagraphIndex updates the field', () => {
+    usePlayerStore.getState().setLastPlayedParagraphIndex('p-7')
+    expect(usePlayerStore.getState().lastPlayedParagraphIndex).toBe('p-7')
+
+    usePlayerStore.getState().setLastPlayedParagraphIndex(null)
+    expect(usePlayerStore.getState().lastPlayedParagraphIndex).toBeNull()
   })
 })
