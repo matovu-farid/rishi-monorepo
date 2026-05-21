@@ -43,6 +43,7 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { useVirualization } from '../hooks/useVirualization'
 import { PAGE_GAP } from '../utils/constants'
 import { parsePdfLocation } from '@/lib/pdfLocation'
+import { pdfParagraphToPageNumber } from '@/components/pdf/utils/pdfParagraphToPageNumber'
 import { Effect, Fiber } from 'effect'
 import { indexBookProgram } from '@/services/indexing/index-program'
 import { loadPdfDocument, extractPageParagraphs } from '@/services/indexing/text-extraction'
@@ -649,7 +650,10 @@ export function PdfView({
         // their current location immediately. book.location is a string
         // holding the saved page number (or "page:offset"); falls back to 1
         // on fresh opens.
-        const startPage = parsePdfLocation(book.location).page || 1
+        const resumePage = book.lastParagraph
+          ? pdfParagraphToPageNumber(book.lastParagraph)
+          : null
+        const startPage = resumePage ?? (parsePdfLocation(book.location).page || 1)
 
         fiber = Effect.runFork(
           indexBookProgram({
