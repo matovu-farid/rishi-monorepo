@@ -33,6 +33,12 @@ export function __resetDesktopHandoffForTests(): void {
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+// Nonce-tagged so a result from a prior attempt is ignored after retry().
+type AsyncResult =
+  | { nonce: number; kind: "done" }
+  | { nonce: number; kind: "error"; message: string }
+  | null
+
 export function useDesktopHandoff(): HandoffResult {
   const params = useSearchParams()
   const isHandoff = params?.get("login") === "true"
@@ -43,28 +49,18 @@ export function useDesktopHandoff(): HandoffResult {
   const sessionData = session.data
   const isPending = session.isPending
 
-  const [status, setStatus] = useState<HandoffStatus>("inactive")
-  const [errorMsg, setErrorMsg] = useState("")
   const [retryNonce, setRetryNonce] = useState(0)
+  const [asyncResult, setAsyncResult] = useState<AsyncResult>(null)
 
   useEffect(() => {
-    if (!isDesktopFlow || !state) {
-      setStatus("inactive")
-      return
-    }
+    if (!isDesktopFlow || !state) return
     if (isPending) return
-    if (!sessionData) {
-      setStatus("waiting")
-      return
-    }
+    if (!sessionData) return
 
-    if (retryNonce > 0) {
-      clearHandoff(state)
-    }
-
-    setStatus("completing")
+    if (retryNonce > 0) clearHandoff(state)
 
     let cancelled = false
+    const myNonce = retryNonce
     const existing = inflight.get(state)
     const promise =
       existing ??
@@ -84,13 +80,12 @@ export function useDesktopHandoff(): HandoffResult {
 
     promise
       .then(() => {
-        if (!cancelled) setStatus("done")
+        if (!cancelled) setAsyncResult({ nonce: myNonce, kind: "done" })
       })
       .catch((err: unknown) => {
         if (cancelled) return
-        const msg = err instanceof Error ? err.message : "Unknown error"
-        setErrorMsg(msg)
-        setStatus("error")
+        const message = err instanceof Error ? err.message : "Unknown error"
+        setAsyncResult({ nonce: myNonce, kind: "error", message })
       })
 
     return () => {
@@ -101,6 +96,26 @@ export function useDesktopHandoff(): HandoffResult {
   const retry = useCallback(() => {
     setRetryNonce((n) => n + 1)
   }, [])
+
+  // Derive status from inputs + async result. Stale results (nonce mismatch
+  // from a prior attempt) are ignored so retry() correctly falls back to
+  // "completing" until the new POST resolves.
+  let status: HandoffStatus
+  let errorMsg = ""
+  const fresh = asyncResult && asyncResult.nonce === retryNonce ? asyncResult : null
+
+  if (!isDesktopFlow) {
+    status = "inactive"
+  } else if (fresh?.kind === "done") {
+    status = "done"
+  } else if (fresh?.kind === "error") {
+    status = "error"
+    errorMsg = fresh.message
+  } else if (isPending || !sessionData) {
+    status = "waiting"
+  } else {
+    status = "completing"
+  }
 
   return { isDesktopFlow, status, errorMsg, retry }
 }
