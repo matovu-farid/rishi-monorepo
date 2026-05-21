@@ -19,12 +19,24 @@
     "./types/conversation": "./src/types/conversation.ts",
     "./types/paragraph": "./src/types/paragraph.ts",
     "./lib/languages": "./src/lib/languages.ts",
-    "./formats/epub-constants": "./src/formats/epub-constants.ts"
+    "./lib/pdfLocation": "./src/lib/pdfLocation.ts",
+    "./lib/stringToNumberID": "./src/lib/stringToNumberID.ts",
+    "./lib/debounce": "./src/lib/debounce.ts",
+    "./lib/Mutex": "./src/lib/Mutex.ts",
+    "./formats/epub-constants": "./src/formats/epub-constants.ts",
+    "./modules/cfi-to-paragraph": "./src/modules/cfi-to-paragraph.ts"
   },
   "peerDependencies": {
-    "drizzle-orm": "^0.44.0"
+    "drizzle-orm": "^0.44.0",
+    "epubjs": "^0.3.93"
+  },
+  "peerDependenciesMeta": {
+    "epubjs": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "epubjs": "^0.3.93",
     "vitest": "^4.1.6"
   }
 }
