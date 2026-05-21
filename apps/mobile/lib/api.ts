@@ -1,38 +1,28 @@
-import { getWorkerToken, exchangeToken, clearWorkerToken, WORKER_API_URL } from './auth'
-
-type GetClerkToken = () => Promise<string | null>
-
-let _getClerkToken: GetClerkToken | null = null
-
 /**
- * Initialize the API client with the Clerk getToken function.
- * Must be called once from a component that has access to useAuth().
- */
-export function initApiClient(getClerkToken: GetClerkToken) {
-  _getClerkToken = getClerkToken
-}
-
-/**
- * Authenticated fetch wrapper.
+ * Authenticated fetch wrapper for the worker API.
  *
- * 1. Gets Worker JWT from SecureStore
- * 2. If no JWT (or expired), exchanges Clerk token for a new Worker JWT
- * 3. Makes the request with Authorization: Bearer <worker_jwt>
- * 4. On 401 response, clears stored JWT, re-exchanges, and retries ONCE
+ * Post-Batch-1C: the bearer token is the Better-Auth session token persisted
+ * to expo-secure-store by `lib/auth.ts`. There is no longer a Clerk-exchange
+ * step — the token IS the session.
+ *
+ * On 401, we clear the cached bearer and surface the error so the caller can
+ * route to the sign-in screen. Silent re-authentication is not possible
+ * without re-running the deep-link flow.
+ */
+import { getSessionToken, signOut, WORKER_API_URL } from './auth'
+
+/**
+ * Authenticated fetch. Resolves with the raw Response so the caller can
+ * inspect status and body. Throws when no session token is available
+ * (caller should redirect to sign-in).
  */
 export async function apiClient(
   path: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
 ): Promise<Response> {
-  let token = await getWorkerToken()
-
-  // If no valid token, exchange
+  const token = await getSessionToken()
   if (!token) {
-    token = await refreshWorkerToken()
-  }
-
-  if (!token) {
-    throw new Error('Unable to obtain Worker JWT. User may need to re-authenticate.')
+    throw new Error('Unable to obtain Worker session token. User must sign in.')
   }
 
   const url = `${WORKER_API_URL}${path}`
@@ -41,52 +31,32 @@ export async function apiClient(
     headers: {
       'Content-Type': 'application/json',
       ...options.headers,
-      'Authorization': `Bearer ${token}`,
+      Authorization: `Bearer ${token}`,
     },
   })
 
-  // If 401, try refreshing token once
+  // 401 means the worker rejected the token (revoked / expired). Clear it so
+  // the next call forces a fresh sign-in instead of looping with a dead token.
   if (response.status === 401) {
-    await clearWorkerToken()
-    const newToken = await refreshWorkerToken()
-
-    if (!newToken) {
-      throw new Error('Re-authentication failed. User needs to sign in again.')
-    }
-
-    return fetch(url, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-        'Authorization': `Bearer ${newToken}`,
-      },
-    })
+    await signOut()
+    throw new Error('Session expired (401). User must sign in again.')
   }
 
   return response
 }
 
 /**
- * Exchange Clerk session token for a Worker JWT.
- * Uses the getClerkToken function registered via initApiClient.
+ * Compatibility shim — older call sites passed a "getClerkToken" function
+ * here. We no longer need it (the session token lives in secure-store), but
+ * the symbol is kept as a no-op so existing imports don't break until they're
+ * cleaned up in a follow-up refactor.
+ *
+ * @deprecated Remove call sites; the worker session token is fetched directly
+ *   from `getSessionToken()` now.
  */
-async function refreshWorkerToken(): Promise<string | null> {
-  if (!_getClerkToken) {
-    console.error('API client not initialized. Call initApiClient(getToken) first.')
-    return null
-  }
-
-  const clerkToken = await _getClerkToken()
-  if (!clerkToken) {
-    return null
-  }
-
-  try {
-    const result = await exchangeToken(clerkToken)
-    return result.token
-  } catch (error) {
-    console.error('Token exchange failed:', error)
-    return null
-  }
+export function initApiClient(_getToken?: () => Promise<string | null>): void {
+  // Intentionally a no-op. Kept to avoid breaking `app/(tabs)/_layout.tsx`
+  // until that file is updated in the same batch.
 }
+
+export { WORKER_API_URL }
