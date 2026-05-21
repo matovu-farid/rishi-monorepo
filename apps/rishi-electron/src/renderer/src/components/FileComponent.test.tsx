@@ -209,4 +209,24 @@ describe('FileComponent — bulk delete', () => {
   })
 })
 
+describe('FileComponent — Select All scope', () => {
+  it('Select All selects only currently-filtered books (search active)', async () => {
+    ;(window.electron.getBooks as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeBook({ id: 1, title: 'Apple', author: 'A' }),
+      makeBook({ id: 2, title: 'Banana', author: 'A' }),
+      makeBook({ id: 3, title: 'Apricot', author: 'B' })
+    ])
+    renderWithClient(<FileComponent />)
+    await waitFor(() => screen.getByText('Banana'))
+
+    fireEvent.change(screen.getByPlaceholderText(/search library/i), {
+      target: { value: 'Ap' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
+    fireEvent.click(screen.getByRole('button', { name: /select all/i }))
+
+    expect(screen.getByText('2 selected')).toBeInTheDocument()
+  })
+})
+
 export { renderWithClient, makeBook }
