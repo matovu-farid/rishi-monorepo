@@ -7,10 +7,19 @@ export function useEmbeddingModel() {
 
   useEffect(() => {
     if (model.isReady) {
-      // Register the forward function so non-hook code (pipeline) can embed
+      // Register the forward function so non-hook code (pipeline) can embed.
+      //
+      // react-native-executorch returns a `Float32Array` (its type was
+      // widened in a recent release). The downstream contract (lib/rag/
+      // embedder + the worker fallback) is `number[]`, so we materialize
+      // the typed array via `Array.from`. The double-cast through
+      // `unknown` is required because TS sees Float32Array and number[]
+      // as not-sufficiently-overlapping when the runtime gives us the
+      // typed-array branch.
       setEmbeddingForward(async (text: string) => {
-        const result = await model.forward(text)
-        return result as number[]
+        const result = (await model.forward(text)) as unknown
+        if (Array.isArray(result)) return result as number[]
+        return Array.from(result as Float32Array)
       })
     }
   }, [model.isReady, model.forward])

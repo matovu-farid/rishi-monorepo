@@ -93,7 +93,13 @@ export function UrlImportSheet({ visible, onDismiss, onImported }: UrlImportShee
           <TouchableOpacity
             testID="url-download-button"
             className="rounded-lg py-3 items-center bg-[#0a7ea4]"
-            onPress={handleDownload}
+            // `handleDownload` accepts an optional URL override (used by
+            // onSubmitEditing). When wired as an onPress handler we get a
+            // GestureResponderEvent instead — wrap in a no-arg lambda so
+            // the URL falls back to `urlRef.current`.
+            onPress={() => {
+              void handleDownload()
+            }}
             disabled={status === 'downloading'}
           >
             {status === 'downloading' ? (

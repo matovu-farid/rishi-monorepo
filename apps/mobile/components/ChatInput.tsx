@@ -61,7 +61,10 @@ export function ChatInput({
           value={text}
           onChangeText={setText}
           multiline
-          maxNumberOfLines={4}
+          // `numberOfLines` is the supported React Native prop; the
+          // earlier `maxNumberOfLines` typo was rejected by TS strict
+          // mode (no such prop on TextInputProps).
+          numberOfLines={4}
           editable={!disabled && !isRecording}
           accessibilityLabel="Message input"
           accessibilityHint="Type a question about this book"

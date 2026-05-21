@@ -286,9 +286,12 @@ describe('conversation-storage', () => {
         bookId: 'book-1',
         title: 'Test',
       })
-      // Should not have sync columns
-      expect((convs[0] as Record<string, unknown>).isDirty).toBeUndefined()
-      expect((convs[0] as Record<string, unknown>).syncVersion).toBeUndefined()
+      // Should not have sync columns. Conversation (the typed model)
+      // doesn't expose isDirty/syncVersion in its index signature, so we
+      // route through `unknown` first to convince TS strict mode that the
+      // structural lookup is intentional.
+      expect((convs[0] as unknown as Record<string, unknown>).isDirty).toBeUndefined()
+      expect((convs[0] as unknown as Record<string, unknown>).syncVersion).toBeUndefined()
     })
   })
 })
