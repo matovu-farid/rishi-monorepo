@@ -49,7 +49,7 @@ Reviewer-1 should verify whether the route guard exists in production and what i
 
 ## Fix Plan
 **Status:** fixed
-**Commit:** 1b3aa37e
+**Commit:** 9f675273
 **Notes:** Root cause was deeper than the `[]` deps. TanStack Router's hash history only listens for `popstate`; direct `window.location.hash = '#/books/N'` mutations fire `hashchange` but NOT `popstate`, so `useLocation` never updates and a deps array alone won't re-run the guard. Fix attaches a `hashchange` listener in addition to the existing mount-time enforcement and adds `location.pathname` to deps so router-driven navigation also re-checks. Library-window assertion strengthened from tautological `body` visibility to: (a) hash no longer matches `^#/books/`, (b) no `Book not found` text leaks into the library DOM, (c) window count is non-decreasing. Verified by `pnpm test:e2e e2e/pdf-reader.spec.ts -g "invalid book id"` (1.0m, 1 passed) and full unit suite (1109/1109 passing). Renderer rebuild (`pnpm build`) is required before e2e since the test harness loads `out/renderer/...`, not source.
 
 ## Code Review
