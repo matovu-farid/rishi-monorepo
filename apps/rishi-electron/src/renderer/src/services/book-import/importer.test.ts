@@ -36,11 +36,17 @@ export function makeFs(opts?: {
   return { fs, removeCalls, copyCalls }
 }
 
-export function makeDbForImport(opts?: { savedBook?: Book; failOn?: 'saveBook' }): {
+export function makeDbForImport(opts?: {
+  savedBook?: Book
+  failOn?: 'saveBook'
+  findBookByHashImpl?: (hash: string) => Promise<Book | null>
+}): {
   db: BookStoreIpc
   savedBooks: Book[]
+  findHashCalls: string[]
 } {
   const savedBooks: Book[] = []
+  const findHashCalls: string[] = []
   const fallback: Book = {
     id: 42,
     kind: 'epub',
@@ -64,12 +70,16 @@ export function makeDbForImport(opts?: { savedBook?: Book; failOn?: 'saveBook' }
       savedBooks.push(out)
       return out
     }),
+    findBookByHash: vi.fn(async (hash) => {
+      findHashCalls.push(hash)
+      return opts?.findBookByHashImpl ? opts.findBookByHashImpl(hash) : null
+    }),
     savePageDataMany: vi.fn(),
     getAllPageDataByBookId: vi.fn(async () => []),
     hasSavedEpubData: vi.fn(async () => false),
     saveVectors: vi.fn()
   }
-  return { db, savedBooks }
+  return { db, savedBooks, findHashCalls }
 }
 
 export function makeFileSync(opts?: {
@@ -91,6 +101,7 @@ export function makeFileSync(opts?: {
 
 export const baseConfig: BookImportConfig = {
   copyTimeoutMs: 5_000,
+  hashTimeoutMs: 5_000,
   parseTimeoutMs: 5_000,
   saveTimeoutMs: 5_000,
   embedBatchSize: 2

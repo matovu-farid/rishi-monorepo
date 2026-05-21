@@ -195,6 +195,7 @@ export function getBookImportService(): BookImportService {
       },
       db: {
         saveBook: (b) => window.electron.saveBook(b),
+        findBookByHash: (hash) => window.electron.findBookByHash(hash),
         savePageDataMany: (rows) => window.electron.savePageDataMany(rows),
         getAllPageDataByBookId: (bookId) => window.electron.getAllPageDataByBookId(bookId),
         hasSavedEpubData: (bookId) => window.electron.hasSavedEpubData(bookId),
@@ -216,6 +217,7 @@ export function getBookImportService(): BookImportService {
       scanner,
       config: {
         copyTimeoutMs: 2 * 60 * 1000,
+        hashTimeoutMs: 30 * 1000,
         parseTimeoutMs: 60 * 1000,
         saveTimeoutMs: 30 * 1000,
         embedBatchSize: 2
