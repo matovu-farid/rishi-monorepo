@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createActor } from 'xstate'
 import { navigationHistoryMachine } from './navigationHistoryMachine'
 import type { PositionDescriptor } from './types'
+import type { AnchorPoint } from './types'
 import { STACK_MAX_DEPTH, DWELL_MS } from './types'
 
 const initialPdfPosition: PositionDescriptor = { kind: 'pdf', page: 1, offset: 0 }
@@ -250,5 +251,61 @@ describe('navigationHistoryMachine — resume map + pill', () => {
     actor.send({ type: 'POP_BACK' })
     expect(actor.getSnapshot().context.stack).toHaveLength(0)
     expect(actor.getSnapshot().context.pillVisible).toBe(false)
+  })
+})
+
+describe('navigationHistoryMachine — smart resume emission', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  const pos = (page: number, offset = 0): PositionDescriptor => ({ kind: 'pdf', page, offset })
+
+  function captureEmitted(actor: ReturnType<typeof startActor>): AnchorPoint[] {
+    const out: AnchorPoint[] = []
+    actor.on('RESUME_REQUESTED', (e: { type: 'RESUME_REQUESTED'; anchor: AnchorPoint }) => {
+      out.push(e.anchor)
+    })
+    return out
+  }
+
+  it('PAGE_VISITED to a page with stored anchor (while stack.idle) emits RESUME_REQUESTED', () => {
+    const actor = startActor()
+    const emitted = captureEmitted(actor)
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(7, 250) })
+    actor.send({ type: 'PAGE_VISITED', position: pos(7, 250), ttsContext: { paragraphIndex: 3 } })
+    actor.send({ type: 'ENGAGEMENT_TAP' }) // captures anchor at page 7
+    // navigate away
+    actor.send({ type: 'PAGE_VISITED', position: pos(9), ttsContext: null })
+    const beforeReturn = emitted.length
+    // return to page 7 via plain page-flip (no JUMP_REQUESTED — pure PAGE_VISITED)
+    actor.send({ type: 'PAGE_VISITED', position: pos(7, 0), ttsContext: null })
+    expect(emitted.length).toBe(beforeReturn + 1)
+    expect(emitted[emitted.length - 1].position).toEqual(pos(7, 250))
+    expect(emitted[emitted.length - 1].tts).toEqual({ paragraphIndex: 3 })
+  })
+
+  it('PAGE_VISITED arriving during stack.navigating does NOT emit (deliberate jump wins)', () => {
+    const actor = startActor()
+    const emitted = captureEmitted(actor)
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(7, 250) })
+    actor.send({ type: 'PAGE_VISITED', position: pos(7, 250), ttsContext: { paragraphIndex: 3 } })
+    actor.send({ type: 'ENGAGEMENT_TAP' })
+    actor.send({ type: 'PAGE_VISITED', position: pos(9), ttsContext: null })
+    const beforeJump = emitted.length
+    // deliberate jump back to page 7
+    actor.send({
+      type: 'JUMP_REQUESTED',
+      from: pos(9), fromTts: null, to: pos(7, 100), source: 'link', fromLabel: 'p. 9'
+    })
+    actor.send({ type: 'PAGE_VISITED', position: pos(7, 100), ttsContext: null })
+    expect(emitted.length).toBe(beforeJump) // no new emission — deliberate wins
+  })
+
+  it('PAGE_VISITED to a page with no stored anchor does not emit', () => {
+    const actor = startActor()
+    const emitted = captureEmitted(actor)
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(1) })
+    actor.send({ type: 'PAGE_VISITED', position: pos(50), ttsContext: null })
+    expect(emitted).toEqual([])
   })
 })

@@ -1,5 +1,5 @@
-import { setup, assign } from 'xstate'
-import type { AnchorPoint, NavigationHistoryContext, NavigationHistoryEvent } from './types'
+import { setup, assign, emit } from 'xstate'
+import type { AnchorPoint, NavigationHistoryContext, NavigationHistoryEvent, NavigationHistoryEmitted } from './types'
 import { STACK_MAX_DEPTH, DWELL_MS } from './types'
 import { pageKey } from './pageKey'
 
@@ -15,7 +15,8 @@ const initialContext = (): NavigationHistoryContext => ({
 export const navigationHistoryMachine = setup({
   types: {
     context: {} as NavigationHistoryContext,
-    events: {} as NavigationHistoryEvent
+    events: {} as NavigationHistoryEvent,
+    emitted: {} as NavigationHistoryEmitted
   },
   actions: {
     hydrateOnOpen: assign(({ event }) => {
@@ -73,10 +74,24 @@ export const navigationHistoryMachine = setup({
     hidePill: assign({ pillVisible: false }),
     hidePillIfStackEmpty: assign(({ context }) => {
       return context.stack.length === 0 ? { pillVisible: false } : {}
+    }),
+    emitResume: emit(({ context, event }) => {
+      if (event.type !== 'PAGE_VISITED') {
+        throw new Error('emitResume: expected PAGE_VISITED event')
+      }
+      const anchor = context.resumeMap.get(pageKey(event.position))
+      if (!anchor) {
+        throw new Error('emitResume: guard should have prevented this — no anchor')
+      }
+      return { type: 'RESUME_REQUESTED', anchor }
     })
   },
   guards: {
-    hasStackEntries: ({ context }) => context.stack.length > 0
+    hasStackEntries: ({ context }) => context.stack.length > 0,
+    hasResumeAnchor: ({ context, event }) => {
+      if (event.type !== 'PAGE_VISITED') return false
+      return context.resumeMap.has(pageKey(event.position))
+    }
   },
   delays: {
     DWELL_TIMER: DWELL_MS
@@ -103,7 +118,16 @@ export const navigationHistoryMachine = setup({
             idle: {
               on: {
                 JUMP_REQUESTED: { target: 'navigating', actions: 'pushAnchor' },
-                POP_BACK: { target: 'navigating', guard: 'hasStackEntries', actions: ['popAnchor', 'hidePillIfStackEmpty'] }
+                POP_BACK: { target: 'navigating', guard: 'hasStackEntries', actions: ['popAnchor', 'hidePillIfStackEmpty'] },
+                PAGE_VISITED: [
+                  {
+                    guard: 'hasResumeAnchor',
+                    actions: ['recordPageVisit', 'emitResume']
+                  },
+                  {
+                    actions: 'recordPageVisit'
+                  }
+                ]
               }
             },
             navigating: {

@@ -51,5 +51,7 @@ export type NavigationHistoryEvent =
   | { type: 'VISIBILITY_HIDDEN' }
   | { type: 'VISIBILITY_VISIBLE' }
 
+export type NavigationHistoryEmitted = { type: 'RESUME_REQUESTED'; anchor: AnchorPoint }
+
 export const STACK_MAX_DEPTH = 10
 export const DWELL_MS = 20_000
