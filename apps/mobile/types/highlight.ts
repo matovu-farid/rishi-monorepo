@@ -16,8 +16,27 @@
  */
 import {
   HIGHLIGHT_COLORS as SHARED_HIGHLIGHT_COLORS,
+  NOTE_COLOR_NONE as SHARED_NOTE_COLOR_NONE,
   getHighlightHex as sharedGetHighlightHex,
+  isNoteOnly as sharedIsNoteOnly,
 } from '@rishi/shared/types/highlight'
+
+/**
+ * Sentinel value for note-only highlights (no color overlay, just an
+ * anchored note). Surfaces the shared constant for mobile call sites.
+ * The mobile UI palette deliberately doesn't allow constructing a
+ * note-only highlight via the swatch picker — `NOTE_COLOR_NONE` is
+ * for downstream consumers (e.g. sync, future note-first UI).
+ */
+export const NOTE_COLOR_NONE = SHARED_NOTE_COLOR_NONE
+
+/**
+ * True when a row's color field is the note-only sentinel. Mirrors
+ * `@rishi/shared/types/highlight.isNoteOnly`.
+ */
+export function isNoteOnly(row: { color: string }): boolean {
+  return sharedIsNoteOnly(row)
+}
 
 // Mobile UI restricts to the 4-color palette (note-only is not surfaced).
 export type HighlightColor = 'yellow' | 'green' | 'blue' | 'pink'

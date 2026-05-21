@@ -9,7 +9,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { getBookForReading, updateBookCfi } from '@/lib/book-storage'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
-import { insertHighlight, getHighlightsByBookId, updateHighlight, deleteHighlight } from '@/lib/highlight-storage'
+import { insertHighlight, getHighlightsByBookId, updateHighlight, deleteHighlight, restoreHighlight } from '@/lib/highlight-storage'
 import {
   getBookmarksForBook,
   toggleBookmark,
@@ -24,6 +24,8 @@ import { TTSVisualCue } from '@/components/TTSVisualCue'
 import { useVisualCueStore } from '@/lib/tts/visual-cue'
 import { classifyParagraphForVisualCue } from '@/lib/tts/visual-cue-classify'
 import { BookmarksList } from '@/components/epub/BookmarksList'
+import { UndoSnackbar } from '@/components/UndoSnackbar'
+import { useUndoSnackbar } from '@/hooks/useUndoSnackbar'
 import { SearchPanel } from '@/components/epub/SearchPanel'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
@@ -141,6 +143,9 @@ function ReaderContent({ book }: { book: Book }) {
   // embedded Reader / epubjs WebView).
   const pageCaptureRef = useRef<View>(null)
   usePageCaptureRef(pageCaptureRef)
+
+  // G10 — undo snackbar surface (5s window after a destructive action).
+  const undoSnackbar = useUndoSnackbar()
 
   // Player observability — drive UI from store, not from the old hook.
   const playingState = usePlayerStore((s) => s.playingState)
@@ -463,7 +468,9 @@ function ReaderContent({ book }: { book: Book }) {
     [book.id, highlights, addAnnotation, removeAnnotationByCfi]
   )
 
-  // Delete highlight
+  // Delete highlight (with undo). The shared `restoreHighlight` flips
+  // `isDeleted` back to false — the row was soft-deleted, so the undo is
+  // a single DB write that re-paints the annotation.
   const handleDeleteHighlight = useCallback(
     (highlightId: string) => {
       const h = highlights.find((h) => h.id === highlightId)
@@ -471,8 +478,24 @@ function ReaderContent({ book }: { book: Book }) {
       if (h) removeAnnotationByCfi(h.cfiRange)
       setHighlights(getHighlightsByBookId(book.id))
       setPopoverVisible(false)
+
+      // Surface the undo snackbar — repaints the annotation if the user taps it.
+      if (h) {
+        undoSnackbar.show('Highlight deleted', 'Undo', () => {
+          restoreHighlight(highlightId)
+          setHighlights(getHighlightsByBookId(book.id))
+          const hex = HIGHLIGHT_COLORS.find((c) => c.name === h.color)?.hex ?? '#FBBF24'
+          addAnnotation(
+            'highlight',
+            h.cfiRange,
+            { id: h.id },
+            { color: hex, opacity: HIGHLIGHT_OPACITY },
+          )
+          AccessibilityInfo.announceForAccessibility('Highlight restored')
+        })
+      }
     },
-    [book.id, highlights, removeAnnotationByCfi]
+    [book.id, highlights, removeAnnotationByCfi, undoSnackbar, addAnnotation]
   )
 
   // Save note
@@ -699,6 +722,15 @@ function ReaderContent({ book }: { book: Book }) {
           is live whenever something else (e.g. a future MOBI/AZW3
           heuristic) sets a cue. */}
       <TTSVisualCue />
+
+      {/* G10 — undo snackbar (5s window after a destructive action) */}
+      <UndoSnackbar
+        visible={undoSnackbar.visible}
+        message={undoSnackbar.message}
+        actionLabel={undoSnackbar.actionLabel}
+        onAction={undoSnackbar.action}
+        onDismiss={undoSnackbar.dismiss}
+      />
 
       {popoverVisible && selectedHighlight && (
         <AnnotationPopover

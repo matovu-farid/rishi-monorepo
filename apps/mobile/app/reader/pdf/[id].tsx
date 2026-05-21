@@ -41,6 +41,7 @@ import {
   getPdfHighlightsByBookId,
   updateHighlight,
   deleteHighlight,
+  restoreHighlight,
   type PdfHighlight,
 } from '@/lib/highlight-storage'
 import { HIGHLIGHT_COLORS, type HighlightColor } from '@/types/highlight'
@@ -58,6 +59,8 @@ import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { NoteEditor } from '@/components/NoteEditor'
 import { GoToPageModal } from '@/components/pdf/GoToPageModal'
 import { ThumbnailModal } from './thumbnail-modal'
+import { UndoSnackbar } from '@/components/UndoSnackbar'
+import { useUndoSnackbar } from '@/hooks/useUndoSnackbar'
 import BottomSheet from '@gorhom/bottom-sheet'
 
 interface ActiveSelection {
@@ -110,6 +113,9 @@ export default function PdfReaderScreen() {
   // G20 — register the PDF WebView area as the page-capture target.
   const pageCaptureRef = useRef<View>(null)
   usePageCaptureRef(pageCaptureRef)
+
+  // G10 — undo snackbar surface (5s window after a destructive action).
+  const undoSnackbar = useUndoSnackbar()
 
   // Subscribe to active-paragraph changes to drive the highlight reconciler.
   const activeParagraph = usePlayerStore((s) => s.activeParagraph)
@@ -309,12 +315,21 @@ export default function PdfReaderScreen() {
 
   const handleDeleteHighlight = useCallback(() => {
     if (!pickerHighlight) return
-    deleteHighlight(pickerHighlight.id)
-    setHighlights((prev) => prev.filter((h) => h.id !== pickerHighlight.id))
-    readerRef.current?.removeHighlight(pickerHighlight.id)
+    const deleted = pickerHighlight
+    deleteHighlight(deleted.id)
+    setHighlights((prev) => prev.filter((h) => h.id !== deleted.id))
+    readerRef.current?.removeHighlight(deleted.id)
     setPickerHighlight(null)
     setPickerAnchor(null)
-  }, [pickerHighlight])
+
+    // G10 — surface undo snackbar. restoreHighlight flips isDeleted
+    // back; the WebView then re-paints the overlay via addHighlight.
+    undoSnackbar.show('Highlight deleted', 'Undo', () => {
+      restoreHighlight(deleted.id)
+      setHighlights((prev) => [deleted, ...prev])
+      readerRef.current?.addHighlight(deleted.id, deleted.color, deleted.locator)
+    })
+  }, [pickerHighlight, undoSnackbar])
 
   // Open the NoteEditor for the picker-selected highlight. Reuses the
   // existing EPUB editor — Batch 7 widened its prop type to accept any
@@ -600,6 +615,15 @@ export default function PdfReaderScreen() {
           paragraph's text via a lightweight heuristic in
           `lib/tts/visual-cue-classify.ts`. */}
       <TTSVisualCue />
+
+      {/* G10 — undo snackbar after highlight delete */}
+      <UndoSnackbar
+        visible={undoSnackbar.visible}
+        message={undoSnackbar.message}
+        actionLabel={undoSnackbar.actionLabel}
+        onAction={undoSnackbar.action}
+        onDismiss={undoSnackbar.dismiss}
+      />
 
       {/* Note editor sheet (Batch 7 — NoteEditor widened to accept PDF
           highlights via the NoteEditableHighlight type). */}
