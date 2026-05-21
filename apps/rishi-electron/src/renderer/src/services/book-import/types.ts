@@ -41,7 +41,7 @@ export interface ImportFailure {
   ok: false
   filePath: string
   /** Which stage failed. */
-  stage: 'unsupported' | 'copy' | 'parse' | 'save' | 'unknown'
+  stage: 'unsupported' | 'copy' | 'hash' | 'duplicate' | 'parse' | 'save' | 'unknown'
   error: string
 }
 
@@ -50,6 +50,7 @@ export type ImportResult = ImportSuccess | ImportFailure
 /** Per-file pipeline lifecycle event. */
 export type ImportProgressEvent =
   | { kind: 'copying'; filePath: string }
+  | { kind: 'hashing'; filePath: string }
   | { kind: 'parsing'; filePath: string; format: BookFormat }
   | { kind: 'saving'; filePath: string; format: BookFormat }
   | { kind: 'upload-started'; filePath: string; bookId: number }
@@ -94,6 +95,7 @@ export interface FormatsIpc {
 /** Exactly the five DB IPCs the service uses. */
 export interface BookStoreIpc {
   saveBook(book: BookInsertable): Promise<Book>
+  findBookByHash(hash: string): Promise<Book | null>
   savePageDataMany(pageData: ChunkDataInsertable[]): Promise<void>
   getAllPageDataByBookId(bookId: number): Promise<PageData[]>
   hasSavedEpubData(bookId: number): Promise<boolean>
@@ -128,8 +130,9 @@ export interface ScannerPort {
 }
 
 export interface BookImportConfig {
-  /** Per-stage timeouts. Defaults match today: 120_000 / 60_000 / 30_000 ms. */
+  /** Per-stage timeouts. Defaults: copy=120_000, hash=30_000, parse=60_000, save=30_000 ms. */
   copyTimeoutMs: number
+  hashTimeoutMs: number
   parseTimeoutMs: number
   saveTimeoutMs: number
   /** Embedding batch size. Default 2. */
