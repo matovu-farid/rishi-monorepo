@@ -41,4 +41,32 @@ describe("useDesktopHandoff", () => {
       errorMsg: "",
     })
   })
+
+  it("returns waiting when params are present but session has not arrived", () => {
+    mockUseSearchParams.mockReturnValue(
+      paramsFrom({
+        login: "true",
+        state: "11111111-1111-4111-8111-111111111111",
+      }),
+    )
+    mockUseSession.mockReturnValue({ data: null, isPending: false })
+
+    const { result } = renderHook(() => useDesktopHandoff())
+
+    expect(result.current.isDesktopFlow).toBe(true)
+    expect(result.current.status).toBe("waiting")
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  it("treats a malformed state param as not-a-desktop-flow", () => {
+    mockUseSearchParams.mockReturnValue(
+      paramsFrom({ login: "true", state: "not-a-uuid" }),
+    )
+    mockUseSession.mockReturnValue({ data: null, isPending: false })
+
+    const { result } = renderHook(() => useDesktopHandoff())
+
+    expect(result.current.isDesktopFlow).toBe(false)
+    expect(result.current.status).toBe("inactive")
+  })
 })
