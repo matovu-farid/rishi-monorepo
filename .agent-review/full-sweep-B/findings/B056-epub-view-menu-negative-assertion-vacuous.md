@@ -58,6 +58,13 @@ the test, but it directly enables a category of production regressions
 ## Tiebreaker Verdict: CONFIRM | REJECT
 
 ## Fix Plan
+status: no-op (INVALID)
+commit: n/a
+notes: Reviewer-1 verdict is INVALID and suggested fix scope is "No fix needed".
+The negative assertions on L45-46 are not vacuous in practice: the positive
+`Show TOC` assertion on L44 already requires the View submenu to exist and
+contain an EPUB-only item, refuting the "View dropped" regression class.
+No code change applied; finding closed as INVALID.
 
 ## Code Review
 
