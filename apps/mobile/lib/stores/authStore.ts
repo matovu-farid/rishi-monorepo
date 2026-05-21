@@ -25,6 +25,7 @@
 import { create } from 'zustand'
 import { createStorage } from '@/lib/storage/mmkv'
 import { useTutorialStore } from './tutorialStore'
+import { getSessionToken } from '@/lib/auth'
 
 const bucket = createStorage('rishi.mobile.auth')
 const WELCOME_SEEN_KEY = 'welcome-seen'
@@ -54,7 +55,18 @@ interface AuthState {
   // Actions
   setUser: (user: AuthUser | null) => void
   setAuthHydrated: (value: boolean) => void
-  hydrateAuth: () => void
+  /**
+   * H1-04: full cold-start hydration. Reads `welcome-seen` + `user-id` from
+   * MMKV AND the bearer token from expo-secure-store. Sets
+   * `authHydrated: true` unconditionally at the end so route guards in
+   * `(tabs)/_layout.tsx` un-block even when `(auth)/_layout.tsx` never
+   * mounts (the common case for already-signed-in users on cold-start).
+   *
+   * Returns a promise so the root layout can `await` it, but the existing
+   * fire-and-forget call sites still work (the promise just resolves
+   * once the secure-store read completes).
+   */
+  hydrateAuth: () => Promise<void>
   dismissBanner: () => void
   dismissWelcome: () => void
   setWelcomeSeen: () => void
@@ -83,7 +95,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
   openSignIn: () => set({ signInOpen: true }),
   closeSignIn: () => set({ signInOpen: false }),
 
-  hydrateAuth: () => {
+  hydrateAuth: async () => {
     try {
       const value = bucket.getItem(WELCOME_SEEN_KEY)
       set({ welcomeSeen: value === '1' })
@@ -93,16 +105,38 @@ export const useAuthStore = create<AuthState>()((set) => ({
     }
 
     // Restore last-known user id so the UI knows who we were before the
-    // session-token round-trip completes. The token itself is read from
-    // expo-secure-store by `lib/auth.ts` and pushed into the store via
-    // `setSession`.
+    // session-token round-trip completes.
+    let persistedUserId: string | null = null
     try {
       const userId = bucket.getItem(USER_ID_KEY)
       if (userId) {
+        persistedUserId = userId
         set({ user: { id: userId, email: null } })
       }
     } catch (err) {
       console.warn('[authStore] failed to read persisted user id:', err)
+    }
+
+    // H1-04: read the bearer from expo-secure-store ourselves. Previously
+    // this lived in `(auth)/_layout.tsx`'s effect, which never ran for
+    // returning users who landed on `/(tabs)` — leaving `authHydrated`
+    // false forever and `(tabs)/_layout.tsx` showing a blank screen.
+    try {
+      const token = await getSessionToken()
+      if (token && persistedUserId) {
+        set({
+          sessionToken: token,
+          user: { id: persistedUserId, email: null },
+          isAuthenticated: true,
+          isAuthenticating: false,
+        })
+      }
+    } catch (err) {
+      console.warn('[authStore] failed to read session token:', err)
+    } finally {
+      // Whether or not we found a session, the cold-start hydration is
+      // done — route guards can stop blocking on `!authHydrated`.
+      set({ authHydrated: true })
     }
   },
 

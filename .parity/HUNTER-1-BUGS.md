@@ -4,6 +4,17 @@ Domain: `apps/mobile/{lib/auth,lib/api,lib/api-dev-bypass,lib/sync,lib/stores/au
 
 ---
 
+## H1-04 — Returning users hit a blank `/(tabs)` screen because `authHydrated` never flipped
+
+- **Symptom:** A user who cold-starts the app while already signed in (bearer in `expo-secure-store`, user-id in MMKV) sees a blank screen forever. The tabs layout renders `null` because its guard `if (!authHydrated) return null` never un-blocks.
+- **File:** `apps/mobile/lib/stores/authStore.ts:hydrateAuth` (sync, no secure-store read, no `authHydrated` flip), `apps/mobile/app/(auth)/_layout.tsx:18-32` (the secure-store check + `setAuthHydrated(true)` lived here, only runs when `/(auth)/_layout.tsx` mounts).
+- **Root cause:** expo-router only mounts the route group matching the current URL. A returning user cold-starts onto `/` which matches `/(tabs)`, NOT `/(auth)`. The effect in `(auth)/_layout.tsx` that reads `getSessionToken()` and flips `authHydrated: true` never runs, so the tabs guard hangs indefinitely.
+- **Failing tests:** `apps/mobile/__tests__/stores/auth-hydration.test.ts` → four tests covering (a) no-session cold-start, (b) full session restore, (c) MMKV-only orphan user, (d) secure-store rejection still un-blocks the guard.
+- **Fix:** Make `hydrateAuth()` async, have it read the bearer from secure-store itself, and set `authHydrated: true` in a `finally` block so the guard always un-blocks. Drop the duplicate effect from `(auth)/_layout.tsx`. Root `_layout.tsx` keeps calling `hydrateAuth()` once at startup; it now properly resolves the auth state for both fresh and returning users.
+- **Severity:** High (returning users can't open the app — total blocker for shipping).
+
+---
+
 ## H1-03 — `apiClient` 401 cleared secure-store but left `authStore` showing signed-in
 
 - **Symptom:** When the worker returns 401 on any authenticated request, `apiClient` calls `signOut()` (which wipes `expo-secure-store`) and throws. But the in-memory `authStore` still reports `isAuthenticated: true`, `user: {...}`, `sessionToken: <stale>`. The UI keeps treating the user as signed in until something independently calls `hydrateAuth` — every subsequent request now fails with "no session token" while the app still shows the signed-in chrome.

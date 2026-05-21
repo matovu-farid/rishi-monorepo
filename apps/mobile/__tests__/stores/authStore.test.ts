@@ -32,6 +32,13 @@ jest.mock('react-native-mmkv', () => ({
   createMMKV: () => buildFakeMMKV(),
 }))
 
+// authStore.hydrateAuth (H1-04) calls into lib/auth.getSessionToken which
+// pulls expo-crypto/expo-secure-store/expo-web-browser. Mock the surface
+// directly so this test stays focused on store behaviour.
+jest.mock('@/lib/auth', () => ({
+  getSessionToken: jest.fn(async () => null),
+}))
+
 beforeEach(() => {
   jest.resetModules()
   backingStore = new Map<string, string>()

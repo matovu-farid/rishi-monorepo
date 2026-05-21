@@ -43,10 +43,16 @@ function RootLayout() {
   const colorScheme = useColorScheme()
   const hydrateAuth = useAuthStore((s) => s.hydrateAuth)
 
-  // Run the MMKV hydration once at startup so child layouts know the
-  // last-known welcomeSeen flag + persisted user id before they render.
+  // Run the cold-start hydration once at startup so child layouts know
+  // the last-known welcomeSeen flag, persisted user id, AND secure-store
+  // bearer before they render. `authHydrated` flips true at the end
+  // regardless of result, so route guards in `(tabs)/_layout.tsx` un-block
+  // even for users who land directly on `/(tabs)` without ever mounting
+  // `/(auth)/_layout.tsx` (H1-04).
   useEffect(() => {
-    hydrateAuth()
+    void hydrateAuth().catch((err: unknown) => {
+      console.warn('[layout] hydrateAuth threw:', err)
+    })
   }, [hydrateAuth])
 
   // The Better-Auth deep-link round-trip is driven by
