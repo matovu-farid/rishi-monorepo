@@ -22,13 +22,17 @@ vi.mock('@/services', () => ({
   getVoiceChatService: () => fakeVoice
 }))
 
-vi.mock('@/services/voice-chat', () => ({
-  OfflineError: class OfflineError extends Error {
+const { FakeOfflineError } = vi.hoisted(() => ({
+  FakeOfflineError: class OfflineError extends Error {
     constructor() {
       super('offline')
       this.name = 'OfflineError'
     }
   }
+}))
+
+vi.mock('@/services/voice-chat', () => ({
+  OfflineError: FakeOfflineError
 }))
 
 const playerState = {
@@ -45,7 +49,8 @@ vi.mock('@/stores/epubStore', () => ({
   useEpubStore: { getState: () => ({ bookId: '42', bookOutline: null }) }
 }))
 
-vi.mock('@/utils/sentry', () => ({ captureError: vi.fn() }))
+const { captureErrorMock } = vi.hoisted(() => ({ captureErrorMock: vi.fn() }))
+vi.mock('@/utils/sentry', () => ({ captureError: captureErrorMock }))
 
 const { summarizeCurrentPageMock } = vi.hoisted(() => ({
   summarizeCurrentPageMock: vi.fn().mockReturnValue({ equations: 0, figures: 0, images: 0 })
@@ -60,6 +65,10 @@ import { useChatStore } from './chatStore'
 // the callback now, before any vi.clearAllMocks() wipes the mock's call log.
 const onEndedByAgentHandler = fakeVoice.onEndedByAgent.mock.calls[0]?.[0] as
   | (() => void)
+  | undefined
+
+const onChatStatusHandler = fakeVoice.onChatStatus.mock.calls[0]?.[0] as
+  | ((status: 'idle' | 'connecting' | 'thinking' | 'speaking') => void)
   | undefined
 
 describe('chatStore', () => {
@@ -160,5 +169,46 @@ describe('chatStore', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(playerState.send).toHaveBeenCalledWith({ type: 'CHAT_ENDED' })
+  })
+
+  it('setChatStatus moves chatStatus through connecting → thinking', () => {
+    useChatStore.getState().setChatStatus('connecting')
+    expect(useChatStore.getState().chatStatus).toBe('connecting')
+    useChatStore.getState().setChatStatus('thinking')
+    expect(useChatStore.getState().chatStatus).toBe('thinking')
+  })
+
+  it('voice.onChatStatus emit drives chatStatus to "connecting" then "thinking"', () => {
+    expect(onChatStatusHandler).toBeDefined()
+    onChatStatusHandler!('connecting')
+    expect(useChatStore.getState().chatStatus).toBe('connecting')
+    onChatStatusHandler!('thinking')
+    expect(useChatStore.getState().chatStatus).toBe('thinking')
+  })
+
+  it('startChat catch skips Sentry capture for OfflineError', async () => {
+    fakeVoice.activate.mockRejectedValueOnce(new FakeOfflineError())
+    useChatStore.setState({ isChatting: true })
+    useChatStore.getState().startChat(42)
+    await Promise.resolve()
+    await Promise.resolve()
+    // Still tears down the chat session.
+    expect(playerState.send).toHaveBeenCalledWith({ type: 'CHAT_ENDED' })
+    expect(useChatStore.getState().isChatting).toBe(false)
+    expect(useChatStore.getState().chatStatus).toBe('idle')
+    // But does NOT report to Sentry — offline is a user-visible expected error.
+    expect(captureErrorMock).not.toHaveBeenCalled()
+  })
+
+  it('startChat catch reports non-OfflineError to Sentry', async () => {
+    fakeVoice.activate.mockRejectedValueOnce(new Error('boom'))
+    useChatStore.setState({ isChatting: true })
+    useChatStore.getState().startChat(42)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(captureErrorMock).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ operation: 'chatStore', step: 'activate' })
+    )
   })
 })
