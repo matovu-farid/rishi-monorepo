@@ -1,12 +1,14 @@
 import { setup, assign } from 'xstate'
 import type { AnchorPoint, NavigationHistoryContext, NavigationHistoryEvent } from './types'
 import { STACK_MAX_DEPTH, DWELL_MS } from './types'
+import { pageKey } from './pageKey'
 
 const initialContext = (): NavigationHistoryContext => ({
   bookId: null,
   stack: [],
   resumeMap: new Map(),
   currentPage: null,
+  currentTts: null,
   pillVisible: false
 })
 
@@ -21,6 +23,7 @@ export const navigationHistoryMachine = setup({
       return {
         bookId: event.bookId,
         currentPage: event.initialPosition,
+        currentTts: null,
         stack: [],
         resumeMap: new Map(),
         pillVisible: false
@@ -46,6 +49,30 @@ export const navigationHistoryMachine = setup({
     popAnchor: assign(({ context }) => {
       if (context.stack.length === 0) return {}
       return { stack: context.stack.slice(0, -1) }
+    }),
+    recordPageVisit: assign(({ event }) => {
+      if (event.type !== 'PAGE_VISITED') return {}
+      return { currentPage: event.position, currentTts: event.ttsContext }
+    }),
+    captureResumeAnchor: assign(({ context }) => {
+      if (!context.bookId || !context.currentPage) return {}
+      const anchor: AnchorPoint = {
+        id: crypto.randomUUID(),
+        bookId: context.bookId,
+        position: context.currentPage,
+        tts: context.currentTts,
+        label: '',
+        capturedAt: Date.now(),
+        source: 'engagement'
+      }
+      const next = new Map(context.resumeMap)
+      next.set(pageKey(context.currentPage), anchor)
+      return { resumeMap: next }
+    }),
+    showPill: assign({ pillVisible: true }),
+    hidePill: assign({ pillVisible: false }),
+    hidePillIfStackEmpty: assign(({ context }) => {
+      return context.stack.length === 0 ? { pillVisible: false } : {}
     })
   },
   guards: {
@@ -76,12 +103,12 @@ export const navigationHistoryMachine = setup({
             idle: {
               on: {
                 JUMP_REQUESTED: { target: 'navigating', actions: 'pushAnchor' },
-                POP_BACK: { target: 'navigating', guard: 'hasStackEntries', actions: 'popAnchor' }
+                POP_BACK: { target: 'navigating', guard: 'hasStackEntries', actions: ['popAnchor', 'hidePillIfStackEmpty'] }
               }
             },
             navigating: {
               on: {
-                PAGE_VISITED: { target: 'idle' }
+                PAGE_VISITED: { target: 'idle', actions: 'recordPageVisit' }
               }
             }
           }
@@ -91,7 +118,7 @@ export const navigationHistoryMachine = setup({
           states: {
             idle: {
               on: {
-                PAGE_VISITED: { target: 'dwelling' },
+                PAGE_VISITED: { target: 'dwelling', actions: 'recordPageVisit' },
                 ENGAGEMENT_TAP: { target: 'engaged' },
                 ENGAGEMENT_TTS_PLAYING: { target: 'engaged' }
               }
@@ -101,7 +128,7 @@ export const navigationHistoryMachine = setup({
                 DWELL_TIMER: { target: 'engaged' }
               },
               on: {
-                PAGE_VISITED: { target: 'dwelling', reenter: true },
+                PAGE_VISITED: { target: 'dwelling', reenter: true, actions: 'recordPageVisit' },
                 ENGAGEMENT_TAP: { target: 'engaged' },
                 ENGAGEMENT_TTS_PLAYING: { target: 'engaged' },
                 DWELL_ELAPSED: { target: 'engaged' },
@@ -114,13 +141,28 @@ export const navigationHistoryMachine = setup({
               }
             },
             engaged: {
+              entry: ['captureResumeAnchor', 'hidePill'],
               on: {
-                PAGE_VISITED: { target: 'dwelling' }
+                PAGE_VISITED: { target: 'dwelling', actions: 'recordPageVisit' }
               }
             }
           }
         },
-        pill: { initial: 'hidden', states: { hidden: {} } }
+        pill: {
+          initial: 'hidden',
+          states: {
+            hidden: {
+              on: {
+                JUMP_REQUESTED: { target: 'visible', actions: 'showPill' }
+              }
+            },
+            visible: {
+              on: {
+                DISMISS_PILL: { target: 'hidden', actions: 'hidePill' }
+              }
+            }
+          }
+        }
       }
     }
   }

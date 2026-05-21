@@ -190,3 +190,65 @@ describe('navigationHistoryMachine — engagement', () => {
     expect(getEngagement(actor)).toBe('dwelling')
   })
 })
+
+describe('navigationHistoryMachine — resume map + pill', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  const pos = (page: number, offset = 0): PositionDescriptor => ({ kind: 'pdf', page, offset })
+
+  it('entering engaged writes currentPage anchor into resumeMap[pageKey]', () => {
+    const actor = startActor()
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(7, 250) })
+    actor.send({ type: 'PAGE_VISITED', position: pos(7, 250), ttsContext: { paragraphIndex: 3 } })
+    actor.send({ type: 'ENGAGEMENT_TAP' })
+    const snap = actor.getSnapshot()
+    const anchor = snap.context.resumeMap.get('pdf:7')
+    expect(anchor).toBeDefined()
+    expect(anchor!.position).toEqual(pos(7, 250))
+    expect(anchor!.tts).toEqual({ paragraphIndex: 3 })
+    expect(anchor!.source).toBe('engagement')
+  })
+
+  it('JUMP_REQUESTED shows pill; engagement.engaged hides pill', () => {
+    const actor = startActor()
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(1) })
+    expect(actor.getSnapshot().context.pillVisible).toBe(false)
+    actor.send({
+      type: 'JUMP_REQUESTED',
+      from: pos(1), fromTts: null, to: pos(5), source: 'link', fromLabel: 'p. 1'
+    })
+    expect(actor.getSnapshot().context.pillVisible).toBe(true)
+    actor.send({ type: 'PAGE_VISITED', position: pos(5), ttsContext: null })
+    actor.send({ type: 'ENGAGEMENT_TAP' })
+    expect(actor.getSnapshot().context.pillVisible).toBe(false)
+    // stack entry retained
+    expect(actor.getSnapshot().context.stack).toHaveLength(1)
+  })
+
+  it('DISMISS_PILL hides without popping', () => {
+    const actor = startActor()
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(1) })
+    actor.send({
+      type: 'JUMP_REQUESTED',
+      from: pos(1), fromTts: null, to: pos(5), source: 'link', fromLabel: 'p. 1'
+    })
+    actor.send({ type: 'DISMISS_PILL' })
+    expect(actor.getSnapshot().context.pillVisible).toBe(false)
+    expect(actor.getSnapshot().context.stack).toHaveLength(1)
+  })
+
+  it('POP_BACK to empty stack hides the pill', () => {
+    const actor = startActor()
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(1) })
+    actor.send({
+      type: 'JUMP_REQUESTED',
+      from: pos(1), fromTts: null, to: pos(5), source: 'link', fromLabel: 'p. 1'
+    })
+    actor.send({ type: 'PAGE_VISITED', position: pos(5), ttsContext: null })
+    expect(actor.getSnapshot().context.pillVisible).toBe(true)
+    actor.send({ type: 'POP_BACK' })
+    expect(actor.getSnapshot().context.stack).toHaveLength(0)
+    expect(actor.getSnapshot().context.pillVisible).toBe(false)
+  })
+})

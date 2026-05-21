@@ -27,6 +27,7 @@ export type NavigationHistoryContext = {
   stack: AnchorPoint[]
   resumeMap: Map<string, AnchorPoint>
   currentPage: PositionDescriptor | null
+  currentTts: TtsContext
   pillVisible: boolean
 }
 
