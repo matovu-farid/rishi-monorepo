@@ -18,6 +18,7 @@
     "./types/highlight": "./src/types/highlight.ts",
     "./types/conversation": "./src/types/conversation.ts",
     "./types/paragraph": "./src/types/paragraph.ts",
+    "./types/pdf-locator": "./src/types/pdf-locator.ts",
     "./lib/languages": "./src/lib/languages.ts",
     "./lib/pdfLocation": "./src/lib/pdfLocation.ts",
     "./lib/stringToNumberID": "./src/lib/stringToNumberID.ts",
@@ -30,6 +31,7 @@
     "./indexing/index-program": "./src/indexing/index-program.ts",
     "./book-import": "./src/book-import/index.ts",
     "./modules/cfi-to-paragraph": "./src/modules/cfi-to-paragraph.ts",
+    "./modules/read-aloud-from": "./src/modules/read-aloud-from.ts",
     "./sync/types": "./src/sync/types.ts",
     "./sync/debounce": "./src/sync/debounce.ts",
     "./connectivity/types": "./src/connectivity/types.ts",
@@ -44,7 +46,8 @@
     "./tts/types": "./src/tts/types.ts",
     "./tts/visual-cue-emitter": "./src/tts/visual-cue-emitter.ts",
     "./tts/resolve-paragraph": "./src/tts/resolve-paragraph.ts",
-    "./machines/playerMachine": "./src/machines/playerMachine.ts"
+    "./machines/playerMachine": "./src/machines/playerMachine.ts",
+    "./machines/pdfReaderMachine": "./src/machines/pdfReaderMachine.ts"
   },
   "peerDependencies": {
     "drizzle-orm": "^0.44.0",

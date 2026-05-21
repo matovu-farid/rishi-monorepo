@@ -5,4 +5,5 @@ export * from "./sync-engine";
 export * from "./types/highlight";
 export * from "./types/conversation";
 export * from "./types/paragraph";
+export * from "./types/pdf-locator";
 export * from "./lib/languages";
