@@ -49,7 +49,7 @@ export const useIndexingStore = create<IndexingState>()((set, get) => ({
       return {
         byBookId: {
           ...state.byBookId,
-          [bookId]: { ...entry, done: entry.total, status: 'done' }
+          [bookId]: { ...entry, done: entry.total, status: 'done', error: undefined }
         }
       }
     }),

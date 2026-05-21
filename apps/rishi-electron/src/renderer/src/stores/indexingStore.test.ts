@@ -42,6 +42,23 @@ describe('indexingStore', () => {
     expect(entry.error).toBe('embedding failed')
   })
 
+  it('finish() clears any prior error after a retry', () => {
+    const s = useIndexingStore.getState()
+    s.start(7, 3)
+    s.error(7, 'embedding failed')
+    // Retry path: an error is reported, then the same entry recovers and
+    // completes without going back through start() (e.g. a transient embedding
+    // failure was retried internally). finish() must clear the stale error or
+    // consumers reading entry.error independent of entry.status will mis-render.
+    s.advance(7)
+    s.advance(7)
+    s.advance(7)
+    s.finish(7)
+    const entry = useIndexingStore.getState().byBookId[7]
+    expect(entry.status).toBe('done')
+    expect(entry.error).toBeUndefined()
+  })
+
   it('isReady() is false while running, true when done', () => {
     expect(useIndexingStore.getState().isReady(7)).toBe(false)
     useIndexingStore.getState().start(7, 2)
