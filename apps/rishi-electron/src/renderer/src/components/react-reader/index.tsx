@@ -11,6 +11,9 @@ import { ReaderTOC } from '../reader/ReaderTOC'
 import { TocItem } from './TocItem'
 import type { ParagraphWithCFI } from '../../types'
 import { useNavStore } from '../../stores/navStore'
+import { navigationHistoryActor } from '@/machines/navigationHistory/navigationHistoryActor'
+import { useEpubStore } from '@/stores/epubStore'
+import { usePlayerStore } from '@/stores/playerStore'
 
 // Search result object containing location and excerpt
 type SearchResult = { cfi: string; excerpt: string }
@@ -111,7 +114,27 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
     )
   }
 
-  setLocation = (loc: string) => {
+  setLocation = (loc: string, source: 'toc' | 'bookmark' = 'toc') => {
+    // Capture current spot for the back stack before navigating
+    const currentCfi = useEpubStore.getState().currentEpubLocation
+    if (currentCfi && currentCfi !== loc) {
+      const activeParagraph = usePlayerStore.getState().activeParagraph
+      const indexStr = activeParagraph?.index
+      const paragraphIndex = indexStr != null ? Number(indexStr) : null
+      const fromTts =
+        paragraphIndex != null && Number.isFinite(paragraphIndex)
+          ? { paragraphIndex }
+          : null
+      navigationHistoryActor.send({
+        type: 'JUMP_REQUESTED',
+        from: { kind: 'epub', cfi: currentCfi },
+        fromTts,
+        to: { kind: 'epub', cfi: loc },
+        source,
+        fromLabel: 'previous spot'
+      })
+    }
+
     const send = useNavStore.getState().send
     if (send) {
       send({ type: 'DISPLAY', location: loc })
@@ -334,7 +357,7 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
               if (open && !expandedToc) this.toggleToc()
             }}
             bookSyncId={bookSyncId ?? ''}
-            onBookmarkNavigate={(loc) => this.setLocation(loc)}
+            onBookmarkNavigate={(loc) => this.setLocation(loc, 'bookmark')}
             tocContent={
               <div className="overflow-y-auto">
                 {toc.map((item) => (
@@ -344,7 +367,7 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
                     // back to `href` covers malformed TOCs that omit `id`.
                     key={item.id || item.href}
                     data={item}
-                    setLocation={(href: string) => this.setLocation(href)}
+                    setLocation={(href: string) => this.setLocation(href, 'toc')}
                   />
                 ))}
               </div>
