@@ -10,6 +10,7 @@
  * without re-running the deep-link flow.
  */
 import { getSessionToken, signOut, WORKER_API_URL } from './auth'
+import { buildDevBypassHeaders, readDevBypassSecret } from './api-dev-bypass'
 
 /**
  * Authenticated fetch. Resolves with the raw Response so the caller can
@@ -25,6 +26,14 @@ export async function apiClient(
     throw new Error('Unable to obtain Worker session token. User must sign in.')
   }
 
+  // N01 — Mirror electron's X-Dev-Bypass behaviour. In a dev build with a
+  // configured secret, send the header so the worker treats the call as a
+  // dev request (skips premium gating). Production builds never send it.
+  const devBypassHeaders = buildDevBypassHeaders({
+    isDev: typeof __DEV__ !== 'undefined' && __DEV__ === true,
+    secret: readDevBypassSecret(),
+  })
+
   const url = `${WORKER_API_URL}${path}`
   const response = await fetch(url, {
     ...options,
@@ -32,6 +41,7 @@ export async function apiClient(
       'Content-Type': 'application/json',
       ...options.headers,
       Authorization: `Bearer ${token}`,
+      ...devBypassHeaders,
     },
   })
 
