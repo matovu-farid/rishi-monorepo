@@ -13,7 +13,7 @@ export function createAuth(env: CloudflareBindings) {
     database: drizzleAdapter(db, { provider: "sqlite" }),
     secret: env.BETTER_AUTH_SECRET,
     baseURL: env.PUBLIC_API_URL,
-    trustedOrigins: [env.PUBLIC_WEB_URL, "rishi-electron://"],
+    trustedOrigins: [env.PUBLIC_WEB_URL, "rishi-electron://", "rishimobile://"],
     emailAndPassword: { enabled: false },
     user: {
       deleteUser: { enabled: true },

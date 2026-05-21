@@ -15,6 +15,7 @@ import { Redis } from "@upstash/redis/cloudflare";
 import { syncRoutes } from "./routes/sync";
 import { uploadRoutes } from "./routes/upload";
 import { desktopRoutes } from "./routes/desktop";
+import { mobileRoutes } from "./routes/mobile";
 import { createAuth } from "./auth";
 
 // Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
@@ -165,6 +166,7 @@ export async function requireAuth(c: any, next: () => Promise<void>) {
 app.route("/api/sync", syncRoutes);
 app.route("/api/sync", uploadRoutes);
 app.route("/desktop", desktopRoutes);
+app.route("/mobile", mobileRoutes);
 
 // ─── Protected routes ─────────────────────────────────────────────────────────
 app.get("/api/redis-test", requireAuth, async (c) => {
