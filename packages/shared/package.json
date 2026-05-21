@@ -47,7 +47,17 @@
     "./tts/visual-cue-emitter": "./src/tts/visual-cue-emitter.ts",
     "./tts/resolve-paragraph": "./src/tts/resolve-paragraph.ts",
     "./machines/playerMachine": "./src/machines/playerMachine.ts",
-    "./machines/pdfReaderMachine": "./src/machines/pdfReaderMachine.ts"
+    "./machines/pdfReaderMachine": "./src/machines/pdfReaderMachine.ts",
+    "./voice-chat": "./src/voice-chat/index.ts",
+    "./voice-chat/machine": "./src/voice-chat/machine.ts",
+    "./voice-chat/key-cache": "./src/voice-chat/key-cache.ts",
+    "./voice-chat/emitter": "./src/voice-chat/emitter.ts",
+    "./voice-chat/errors": "./src/voice-chat/errors.ts",
+    "./voice-chat/types": "./src/voice-chat/types.ts",
+    "./voice-chat/local-vad": "./src/voice-chat/local-vad.ts",
+    "./voice-chat/activation-program": "./src/voice-chat/activation-program.ts",
+    "./voice-chat/service": "./src/voice-chat/service.ts",
+    "./voice-chat/build-realtime-agent": "./src/voice-chat/build-realtime-agent.ts"
   },
   "peerDependencies": {
     "drizzle-orm": "^0.44.0",
