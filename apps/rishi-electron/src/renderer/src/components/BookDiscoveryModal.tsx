@@ -9,6 +9,7 @@ import {
   getBookImportService,
   type DiscoveredBook,
   type ImportResult,
+  type ImportSuccess,
   type ScanProgress
 } from '@/services'
 
@@ -182,9 +183,10 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
     })
   }
 
-  const performImport = (paths: string[]) => {
+  const performImport = async (paths: string[]) => {
     if (paths.length === 0) return
     const pathSet = new Set(paths)
+    const count = paths.length
 
     setBooks((prev) => prev.filter((b) => !pathSet.has(b.filepath)))
     setSelectedPaths((prev) => {
@@ -194,12 +196,31 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
     })
     setFilter('')
 
-    const count = paths.length
-    toast.promise(runImport(paths), {
+    const importPromise = runImport(paths)
+    toast.promise(importPromise, {
       loading: `Importing ${count} book${count === 1 ? '' : 's'}...`,
       success: (results) => summarizeBatchResults(results).message,
       error: `Failed to import ${count} book${count === 1 ? '' : 's'}`
     })
+
+    let results: ImportResult[] = []
+    try {
+      results = await importPromise
+    } catch (err) {
+      // toast.promise already surfaced the error; nothing else to do here.
+      console.error('[BookDiscoveryModal] import batch rejected:', err)
+    }
+
+    const successes = results.filter((r): r is ImportSuccess => r.ok)
+    if (successes.length === 1) {
+      try {
+        await window.electron.openBook(successes[0].bookId)
+      } catch (err) {
+        console.error('[BookDiscoveryModal] failed to open imported book:', err)
+      }
+    }
+
+    await handleClose()
   }
 
   const handleImportClick = () => {
@@ -208,13 +229,13 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
       setConfirmOpen(true)
       return
     }
-    performImport(Array.from(selectedPaths))
+    void performImport(Array.from(selectedPaths))
   }
 
   const handleConfirmImport = () => {
     const paths = Array.from(selectedPaths)
     setConfirmOpen(false)
-    performImport(paths)
+    void performImport(paths)
   }
 
   const filteredBooks = books.filter((b) => {

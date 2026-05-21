@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, act, within } from '@testing-library/react'
+import { render, screen, fireEvent, act, within, waitFor } from '@testing-library/react'
 import { BookDiscoveryModal } from './BookDiscoveryModal'
 import type { DiscoveredBook, ImportResult } from '@/services'
 import type { DiscoveryEvent } from '@/services/book-import/types'
@@ -9,6 +9,7 @@ const startDiscovery = vi.fn()
 const cancelDiscovery = vi.fn<() => Promise<void>>()
 const onDiscoveryEvent =
   vi.fn<(cb: (event: DiscoveryEvent) => void) => () => void>()
+const openBook = vi.fn<(id: number) => Promise<void>>()
 
 let discoveryListener: ((event: DiscoveryEvent) => void) | null = null
 
@@ -69,6 +70,8 @@ beforeEach(() => {
       discoveryListener = null
     }
   })
+  openBook.mockReset().mockResolvedValue(undefined)
+  ;(window.electron as unknown as { openBook: typeof openBook }).openBook = openBook
 })
 
 describe('BookDiscoveryModal selection behavior', () => {
@@ -200,5 +203,89 @@ describe('BookDiscoveryModal selection behavior', () => {
     expect(screen.getByRole('button', { name: /import selected/i })).toHaveTextContent(
       'Import Selected (30)'
     )
+  })
+})
+
+describe('BookDiscoveryModal post-import behavior', () => {
+  it('closes the wizard after the import resolves (regardless of success)', async () => {
+    const onClose = vi.fn()
+    importBatch.mockResolvedValue([
+      { ok: true, bookId: 1, filePath: '/docs/a.pdf', format: 'pdf' }
+    ])
+    render(<BookDiscoveryModal open={true} onClose={onClose} />)
+    emitBooks([makeBook({ filepath: '/docs/a.pdf', folder: '/docs' })])
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /select a\.pdf/i }))
+    fireEvent.click(screen.getByRole('button', { name: /import selected/i }))
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+  })
+
+  it('auto-opens the book when exactly one import succeeds', async () => {
+    const onClose = vi.fn()
+    importBatch.mockResolvedValue([
+      { ok: true, bookId: 99, filePath: '/docs/a.pdf', format: 'pdf' }
+    ])
+    render(<BookDiscoveryModal open={true} onClose={onClose} />)
+    emitBooks([makeBook({ filepath: '/docs/a.pdf', folder: '/docs' })])
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /select a\.pdf/i }))
+    fireEvent.click(screen.getByRole('button', { name: /import selected/i }))
+
+    await waitFor(() => expect(openBook).toHaveBeenCalledWith(99))
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('does NOT auto-open when more than one book is imported', async () => {
+    const onClose = vi.fn()
+    importBatch.mockResolvedValue([
+      { ok: true, bookId: 1, filePath: '/docs/a.pdf', format: 'pdf' },
+      { ok: true, bookId: 2, filePath: '/docs/b.pdf', format: 'pdf' }
+    ])
+    render(<BookDiscoveryModal open={true} onClose={onClose} />)
+    emitBooks([
+      makeBook({ filepath: '/docs/a.pdf', folder: '/docs' }),
+      makeBook({ filepath: '/docs/b.pdf', folder: '/docs' })
+    ])
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /select all books in \/docs/i }))
+    fireEvent.click(screen.getByRole('button', { name: /import selected/i }))
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(openBook).not.toHaveBeenCalled()
+  })
+
+  it('does NOT auto-open when zero books succeed (all failed)', async () => {
+    const onClose = vi.fn()
+    importBatch.mockResolvedValue([
+      { ok: false, filePath: '/docs/a.pdf', stage: 'parse', error: 'corrupt' }
+    ])
+    render(<BookDiscoveryModal open={true} onClose={onClose} />)
+    emitBooks([makeBook({ filepath: '/docs/a.pdf', folder: '/docs' })])
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /select a\.pdf/i }))
+    fireEvent.click(screen.getByRole('button', { name: /import selected/i }))
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(openBook).not.toHaveBeenCalled()
+  })
+
+  it('auto-opens the single successful book even when other selected imports failed', async () => {
+    const onClose = vi.fn()
+    importBatch.mockResolvedValue([
+      { ok: true, bookId: 5, filePath: '/docs/a.pdf', format: 'pdf' },
+      { ok: false, filePath: '/docs/b.pdf', stage: 'parse', error: 'bad' }
+    ])
+    render(<BookDiscoveryModal open={true} onClose={onClose} />)
+    emitBooks([
+      makeBook({ filepath: '/docs/a.pdf', folder: '/docs' }),
+      makeBook({ filepath: '/docs/b.pdf', folder: '/docs' })
+    ])
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /select all books in \/docs/i }))
+    fireEvent.click(screen.getByRole('button', { name: /import selected/i }))
+
+    await waitFor(() => expect(openBook).toHaveBeenCalledWith(5))
+    expect(onClose).toHaveBeenCalled()
   })
 })
