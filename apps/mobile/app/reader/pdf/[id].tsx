@@ -56,6 +56,8 @@ import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
 import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { NoteEditor } from '@/components/NoteEditor'
+import { GoToPageModal } from '@/components/pdf/GoToPageModal'
+import { ThumbnailModal } from './thumbnail-modal'
 import BottomSheet from '@gorhom/bottom-sheet'
 
 interface ActiveSelection {
@@ -87,6 +89,8 @@ export default function PdfReaderScreen() {
   const [loading, setLoading] = useState(true)
   const [toolbarVisible, setToolbarVisible] = useState(true)
   const [outlineVisible, setOutlineVisible] = useState(false)
+  const [gotoVisible, setGotoVisible] = useState(false)
+  const [thumbnailsVisible, setThumbnailsVisible] = useState(false)
   const [selection, setSelection] = useState<ActiveSelection | null>(null)
   const [pickerHighlight, setPickerHighlight] = useState<PdfHighlight | null>(null)
   const [pickerAnchor, setPickerAnchor] = useState<{ x: number; y: number } | null>(null)
@@ -239,12 +243,26 @@ export default function PdfReaderScreen() {
         String(pageNumber || 1)
       )
     } else {
-      Alert.alert(
-        'Go to Page',
-        `Current page: ${pageNumber} of ${pageCount}\n(Enter via the page indicator)`
-      )
+      // Android — open the custom modal (G09).
+      setGotoVisible(true)
     }
   }, [pageCount, pageNumber, setPageNumberStore])
+
+  const handleGotoFromModal = useCallback(
+    (page: number) => {
+      setPageNumberStore(page)
+      readerRef.current?.goToPage(page)
+    },
+    [setPageNumberStore],
+  )
+
+  const handleSelectThumbnailPage = useCallback(
+    (page: number) => {
+      setPageNumberStore(page)
+      readerRef.current?.goToPage(page)
+    },
+    [setPageNumberStore],
+  )
 
   const handleOpenOutline = useCallback(() => setOutlineVisible(true), [])
   const handleCloseOutline = useCallback(() => setOutlineVisible(false), [])
@@ -444,6 +462,18 @@ export default function PdfReaderScreen() {
               {book.title}
             </Text>
             <TouchableOpacity
+              onPress={() => setThumbnailsVisible(true)}
+              style={styles.iconButton}
+              accessibilityLabel="Open Thumbnails"
+              disabled={pageCount === 0}
+            >
+              <IconSymbol
+                name="square.grid.2x2"
+                size={22}
+                color={pageCount === 0 ? '#666' : '#fff'}
+              />
+            </TouchableOpacity>
+            <TouchableOpacity
               onPress={handleOpenOutline}
               style={styles.iconButton}
               accessibilityLabel="Open Table of Contents"
@@ -583,6 +613,27 @@ export default function PdfReaderScreen() {
           noteEditorSheetRef.current?.close()
         }}
       />
+
+      {/* G09 — Go-to-page modal (Android only — iOS uses Alert.prompt) */}
+      <GoToPageModal
+        visible={gotoVisible}
+        pageCount={pageCount}
+        currentPage={pageNumber || 1}
+        onClose={() => setGotoVisible(false)}
+        onSelectPage={handleGotoFromModal}
+      />
+
+      {/* G09 — Thumbnail grid modal */}
+      {book?.filePath ? (
+        <ThumbnailModal
+          visible={thumbnailsVisible}
+          onClose={() => setThumbnailsVisible(false)}
+          onSelectPage={handleSelectThumbnailPage}
+          filePath={book.filePath}
+          totalPages={pageCount}
+          currentPage={pageNumber || 1}
+        />
+      ) : null}
 
       {/* TOC modal (Phase 4 — G07) */}
       <Modal
