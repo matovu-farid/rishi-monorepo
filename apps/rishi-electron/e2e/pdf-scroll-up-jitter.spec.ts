@@ -104,13 +104,21 @@ test('scrolling up across a page boundary does not jitter', async () => {
 
     // The user's intent was scrollTop = target. Allow slight settling
     // (virtualizer may end up slightly different due to measurement
-    // adjustments), but no individual sample should be more than 80px
-    // BELOW the final settled scrollTop — that would be the visible
-    // back-jump we're guarding against.
+    // adjustments), but no individual sample should backtrack more than a
+    // single line's worth of pixels — the original bug shifted ~200px (an
+    // h-screen → page-height delta), so a sub-line-height bound is the
+    // user-observable definition of "no visible jitter". 80px (the old
+    // bound) silently admitted ~70px residual regressions. If this becomes
+    // flaky, instrument the source of the noise rather than relaxing back —
+    // any visible shift IS the bug class this test guards.
+    const JITTER_TOLERANCE_PX = 8
     const settled = samples.samples[samples.samples.length - 1]
     const lowestSample = Math.min(...samples.samples)
     const backJump = settled - lowestSample
-    expect(backJump, 'no scrollTop sample should snap back more than 80px').toBeLessThan(80)
+    expect(
+      backJump,
+      `no scrollTop sample should snap back more than ${JITTER_TOLERANCE_PX}px`
+    ).toBeLessThan(JITTER_TOLERANCE_PX)
   } finally {
     await closeApp(app)
   }
