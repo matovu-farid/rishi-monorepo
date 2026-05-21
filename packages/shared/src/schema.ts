@@ -64,6 +64,25 @@ export const conversations = sqliteTable("conversations", {
   isDeleted: integer("is_deleted", { mode: "boolean" }).default(false),
 });
 
+// ─── Bookmarks table ─────────────────────────────────────────────────────────
+// Stores EPUB (and future PDF) bookmarks with sync support. Mirrors the
+// `BookmarkRow` shape exported by `@rishi/shared/formats/bookmark-cfi` —
+// adding a typed Drizzle definition so both clients can share the same
+// schema and `db.insert(bookmarks).values(...)` is type-checked.
+export const bookmarks = sqliteTable("bookmarks", {
+  id: text("id").primaryKey(), // UUID, client-generated
+  bookId: text("book_id").notNull(), // FK to books.id
+  userId: text("user_id"), // null on mobile, set by server
+  location: text("location").notNull(), // EPUB CFI / PDF page locator
+  label: text("label").notNull().default(""),
+  pageNumber: integer("page_number"), // optional page hint for PDF parity
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+  syncVersion: integer("sync_version").default(0),
+  isDirty: integer("is_dirty", { mode: "boolean" }).default(true),
+  isDeleted: integer("is_deleted", { mode: "boolean" }).default(false),
+});
+
 // ─── Messages table ──────────────────────────────────────────────────────────
 // Stores individual messages within conversations. Append-only during sync.
 export const messages = sqliteTable("messages", {
@@ -84,6 +103,8 @@ export type Book = typeof books.$inferSelect;
 export type NewBook = typeof books.$inferInsert;
 export type Highlight = typeof highlights.$inferSelect;
 export type NewHighlight = typeof highlights.$inferInsert;
+export type Bookmark = typeof bookmarks.$inferSelect;
+export type NewBookmark = typeof bookmarks.$inferInsert;
 export type ConversationRow = typeof conversations.$inferSelect;
 export type NewConversation = typeof conversations.$inferInsert;
 export type MessageRow = typeof messages.$inferSelect;

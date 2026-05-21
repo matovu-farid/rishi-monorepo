@@ -44,6 +44,14 @@ const MAPPING = {
   'wifi.slash': 'wifi-off',
   'phone.fill': 'phone',
   'waveform': 'graphic-eq',
+  'bookmark': 'bookmark-border',
+  'highlighter': 'edit',
+  'magnifyingglass': 'search',
+  'plus.magnifyingglass': 'zoom-in',
+  'minus.magnifyingglass': 'zoom-out',
+  'list.bullet.rectangle': 'view-list',
+  'xmark': 'close',
+  'info.circle': 'info',
 } as IconMapping;
 
 /**

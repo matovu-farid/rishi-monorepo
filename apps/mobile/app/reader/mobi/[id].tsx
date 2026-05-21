@@ -14,6 +14,10 @@ import { File as ExpoFile } from 'expo-file-system'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { getBookForReading, updateBookPage } from '@/lib/book-storage'
 import { Book } from '@/types/book'
+import { TTSControls } from '@/components/TTSControls'
+import { usePlayerStore } from '@/lib/stores/playerStore'
+import { usePlayerMachine } from '@/hooks/usePlayerMachine'
+import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 
 /**
  * Minimal inline MOBI parser running inside a WebView.
@@ -210,6 +214,14 @@ export default function MobiReaderScreen() {
   const currentChapterRef = useRef(0)
   const toolbarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Mount the player machine for this book — TTS controls (rendered
+  // below) read state from `usePlayerStore`.
+  usePlayerMachine(book?.id ?? '')
+  const playingState = usePlayerStore((s) => s.playingState)
+  const ttsActive = playingState !== 'idle'
+
+  const activeParagraph = usePlayerStore((s) => s.activeParagraph)
+
   // Load book from DB
   useEffect(() => {
     if (id) {
@@ -309,6 +321,58 @@ export default function MobiReaderScreen() {
     }
   }, [chapterCount])
 
+  // ---- TTS: read aloud (Batch 7) ----
+  // Mobi/Azw3 chunks come from the shared mobi extractor — the same one
+  // the chunker uses for RAG. We seed paragraphs once and dispatch PLAY;
+  // the player machine fetches audio via the new TTS service.
+  const handleToggleTTS = useCallback(async () => {
+    const sendFn = usePlayerStore.getState().send
+    if (!sendFn || !book) return
+    if (ttsActive) {
+      sendFn({ type: 'STOP' })
+      return
+    }
+    try {
+      const seeded = await seedPlayerParagraphsFromChunks(
+        book.id,
+        book.filePath,
+        book.format,
+      )
+      if (!seeded.seeded) return
+      sendFn({ type: 'PLAY' })
+    } catch (err) {
+      console.warn('[mobi-tts] seed failed:', err)
+    }
+  }, [book, ttsActive])
+
+  // CSS reconciler: highlight the active paragraph inside the WebView.
+  // Uses a simple data-attribute selector — the parser doesn't emit
+  // paragraph ids so this is best-effort; the active id from the player
+  // is the chunker's stable id which doesn't survive the round-trip
+  // through the chapter-split HTML. We instead apply a global "TTS
+  // active" CSS hint by injecting a stylesheet once the WebView is ready.
+  useEffect(() => {
+    if (!bookLoaded || !webViewRef.current) return
+    if (!activeParagraph) return
+    // Best-effort inline highlight: scroll the WebView to the top of
+    // the active paragraph by id when the WebView can find a matching
+    // element. Most MOBI HTML doesn't carry stable ids, so this is a
+    // no-op in practice — the audio still plays, the visual cue is
+    // simply not present (matches what electron does on AZW3 when the
+    // doc has no paragraph ids).
+    webViewRef.current.injectJavaScript(`
+      try {
+        var el = document.querySelector('[data-paragraph-index="${activeParagraph.index}"]');
+        if (el) {
+          el.scrollIntoView({behavior: 'smooth', block: 'center'});
+          document.querySelectorAll('.rishi-tts-active').forEach(function(n){n.classList.remove('rishi-tts-active')});
+          el.classList.add('rishi-tts-active');
+        }
+      } catch (e) {}
+      true;
+    `)
+  }, [activeParagraph, bookLoaded])
+
   if (loading) {
     return (
       <View style={{ flex: 1, backgroundColor: '#fafaf8', justifyContent: 'center', alignItems: 'center' }}>
@@ -380,6 +444,19 @@ export default function MobiReaderScreen() {
             >
               {book.title}
             </Text>
+
+            <TouchableOpacity
+              onPress={handleToggleTTS}
+              style={{ width: 44, height: 44, justifyContent: 'center', alignItems: 'center' }}
+              accessibilityLabel={ttsActive ? 'Stop reading aloud' : 'Read aloud'}
+              accessibilityRole="button"
+            >
+              <IconSymbol
+                name="speaker.wave.2.fill"
+                size={22}
+                color={ttsActive ? '#0a7ea4' : '#fff'}
+              />
+            </TouchableOpacity>
 
             <Text style={{ color: '#fff', fontSize: 13, minWidth: 70, textAlign: 'right' }}>
               {chapterCount > 0
@@ -460,6 +537,9 @@ export default function MobiReaderScreen() {
           height: '40%',
         }}
       />
+
+      {/* Floating TTS controls */}
+      <TTSControls />
     </View>
   )
 }

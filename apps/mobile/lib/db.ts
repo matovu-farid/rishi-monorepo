@@ -78,6 +78,23 @@ expo.execSync(`
   );
 `)
 
+// ─── Bookmarks table ──────────────────────────────────────────────────────────
+expo.execSync(`
+  CREATE TABLE IF NOT EXISTS bookmarks (
+    id TEXT PRIMARY KEY NOT NULL,
+    book_id TEXT NOT NULL,
+    user_id TEXT,
+    location TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    page_number INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    sync_version INTEGER DEFAULT 0,
+    is_dirty INTEGER DEFAULT 1,
+    is_deleted INTEGER DEFAULT 0
+  );
+`)
+
 // ─── Conversations table ──────────────────────────────────────────────────────
 expo.execSync(`
   CREATE TABLE IF NOT EXISTS conversations (

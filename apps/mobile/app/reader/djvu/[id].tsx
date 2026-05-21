@@ -14,6 +14,10 @@ import { File as ExpoFile } from 'expo-file-system'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { getBookForReading, updateBookPage } from '@/lib/book-storage'
 import { Book } from '@/types/book'
+import { TTSControls } from '@/components/TTSControls'
+import { usePlayerStore } from '@/lib/stores/playerStore'
+import { usePlayerMachine } from '@/hooks/usePlayerMachine'
+import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 
 /**
  * DJVU reader using djvu.js — a pure JavaScript DJVU decoder.
@@ -148,6 +152,37 @@ export default function DjvuReaderScreen() {
   const webViewRef = useRef<WebView>(null)
   const currentPageRef = useRef(1)
   const toolbarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Mount the player machine for TTS read-aloud (Batch 7). The DJVU
+  // extractor (chunker.getChunks for 'djvu') only returns paragraphs if
+  // the DJVU extractor port is registered at app start. If not, the
+  // toggle is a no-op (logged) and the user gets nothing to read.
+  usePlayerMachine(book?.id ?? '')
+  const playingState = usePlayerStore((s) => s.playingState)
+  const ttsActive = playingState !== 'idle'
+
+  const handleToggleTTS = useCallback(async () => {
+    const sendFn = usePlayerStore.getState().send
+    if (!sendFn || !book) return
+    if (ttsActive) {
+      sendFn({ type: 'STOP' })
+      return
+    }
+    try {
+      const seeded = await seedPlayerParagraphsFromChunks(
+        book.id,
+        book.filePath,
+        'djvu',
+      )
+      if (!seeded.seeded) {
+        console.warn('[djvu-tts] no chunks available — DJVU extractor not registered?')
+        return
+      }
+      sendFn({ type: 'PLAY' })
+    } catch (err) {
+      console.warn('[djvu-tts] seed failed:', err)
+    }
+  }, [book, ttsActive])
 
   // Load book from DB
   useEffect(() => {
@@ -348,6 +383,19 @@ export default function DjvuReaderScreen() {
               {book.title}
             </Text>
 
+            <TouchableOpacity
+              onPress={handleToggleTTS}
+              style={{ width: 44, height: 44, justifyContent: 'center', alignItems: 'center' }}
+              accessibilityLabel={ttsActive ? 'Stop reading aloud' : 'Read aloud'}
+              accessibilityRole="button"
+            >
+              <IconSymbol
+                name="speaker.wave.2.fill"
+                size={22}
+                color={ttsActive ? '#0a7ea4' : '#fff'}
+              />
+            </TouchableOpacity>
+
             <Text style={{ color: '#fff', fontSize: 13, minWidth: 70, textAlign: 'right' }}>
               {pageCount > 0
                 ? `Page ${currentPage} / ${pageCount}`
@@ -462,6 +510,9 @@ export default function DjvuReaderScreen() {
           height: '40%',
         }}
       />
+
+      {/* Floating TTS controls */}
+      <TTSControls />
     </View>
   )
 }

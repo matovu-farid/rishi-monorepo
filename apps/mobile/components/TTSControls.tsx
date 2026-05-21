@@ -2,36 +2,53 @@ import { View, TouchableOpacity, ActivityIndicator } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Animated, { SlideInDown, SlideOutDown } from 'react-native-reanimated'
 import { IconSymbol } from '@/components/ui/icon-symbol'
-
-interface TTSControlsProps {
-  status: 'loading' | 'playing' | 'paused'
-  currentChunkIndex: number
-  totalChunks: number
-  onPlay: () => void
-  onPause: () => void
-  onStop: () => void
-  onNext: () => void
-  onPrevious: () => void
-}
+import { usePlayerStore, type PlayerStoreState } from '@/lib/stores/playerStore'
 
 /**
  * Floating bottom bar for TTS playback controls.
- * Shows play/pause, previous, next, stop buttons and a chunk progress bar.
+ *
+ * Refactored in Batch 7 to read from `playerStore.playingState` (the
+ * XState-driven authority) instead of the deprecated `useTTSPlayer` hook.
+ * Buttons dispatch into `playerStore.send` — wired by `usePlayerMachine`.
+ *
+ * Active states (loading, playing, paused, etc.) determine button states
+ * and the progress bar's "playing" indicator pulse. The progress bar tracks
+ * `paragraphIndex / currentParagraphs.length` from the player context.
  */
-export function TTSControls({
-  status,
-  currentChunkIndex,
-  totalChunks,
-  onPlay,
-  onPause,
-  onStop,
-  onNext,
-  onPrevious,
-}: TTSControlsProps) {
+export function TTSControls() {
   const insets = useSafeAreaInsets()
-  const isLoading = status === 'loading'
-  const isPlaying = status === 'playing'
-  const progressPercent = totalChunks > 0 ? ((currentChunkIndex + 1) / totalChunks) * 100 : 0
+  const playingState = usePlayerStore((s) => s.playingState)
+  const send = usePlayerStore((s) => s.send)
+  const activeParagraph = usePlayerStore((s) => s.activeParagraph)
+  const currentParagraphs = usePlayerStore((s) => s.currentParagraphs)
+
+  const isLoading = playingState === 'loading' || playingState === 'waitingForParagraphs' || playingState === 'pageNavigating'
+  const isPlaying = playingState === 'playing'
+  const isPaused = playingState.startsWith('paused')
+  const isVisible = playingState !== 'idle'
+
+  // Compute progress from store
+  const total = currentParagraphs.length
+  const currentIndex = activeParagraph
+    ? Math.max(0, currentParagraphs.findIndex((p) => p.index === activeParagraph.index))
+    : 0
+  const progressPercent = total > 0 ? ((currentIndex + 1) / total) * 100 : 0
+
+  if (!isVisible || !send) return null
+
+  const handlePlay = () => {
+    if (isPlaying) {
+      send({ type: 'PAUSE' })
+    } else if (isPaused) {
+      send({ type: 'RESUME' })
+    } else {
+      send({ type: 'PLAY' })
+    }
+  }
+
+  const handleStop = () => send({ type: 'STOP' })
+  const handleNext = () => send({ type: 'NEXT' })
+  const handlePrev = () => send({ type: 'PREV' })
 
   return (
     <Animated.View
@@ -47,7 +64,7 @@ export function TTSControls({
         backgroundColor: 'rgba(0,0,0,0.8)',
         overflow: 'hidden',
       }}
-      accessibilityLabel={`Reading passage ${currentChunkIndex + 1} of ${totalChunks}`}
+      accessibilityLabel={`Reading passage ${currentIndex + 1} of ${total}`}
     >
       {/* Controls row */}
       <View
@@ -61,7 +78,7 @@ export function TTSControls({
       >
         {/* Previous */}
         <TouchableOpacity
-          onPress={onPrevious}
+          onPress={handlePrev}
           disabled={isLoading}
           style={{
             width: 44,
@@ -78,7 +95,7 @@ export function TTSControls({
 
         {/* Play/Pause */}
         <TouchableOpacity
-          onPress={isPlaying ? onPause : onPlay}
+          onPress={handlePlay}
           disabled={isLoading}
           style={{
             width: 44,
@@ -102,7 +119,7 @@ export function TTSControls({
 
         {/* Next */}
         <TouchableOpacity
-          onPress={onNext}
+          onPress={handleNext}
           disabled={isLoading}
           style={{
             width: 44,
@@ -119,14 +136,12 @@ export function TTSControls({
 
         {/* Stop */}
         <TouchableOpacity
-          onPress={onStop}
-          disabled={isLoading}
+          onPress={handleStop}
           style={{
             width: 44,
             height: 44,
             alignItems: 'center',
             justifyContent: 'center',
-            opacity: isLoading ? 0.3 : 1,
           }}
           accessibilityLabel="Stop reading"
           accessibilityRole="button"
@@ -153,3 +168,6 @@ export function TTSControls({
     </Animated.View>
   )
 }
+
+// Re-export the PlayerStoreState type at the module level for legacy callers.
+export type { PlayerStoreState }

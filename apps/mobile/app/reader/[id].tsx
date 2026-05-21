@@ -10,10 +10,21 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { getBookForReading, updateBookCfi } from '@/lib/book-storage'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
 import { insertHighlight, getHighlightsByBookId, updateHighlight, deleteHighlight } from '@/lib/highlight-storage'
+import {
+  getBookmarksForBook,
+  toggleBookmark,
+  deleteBookmark as deleteBookmarkFromDb,
+  isLocationBookmarked,
+  type Bookmark,
+} from '@/lib/bookmarks/bookmark-storage'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { ReaderToolbar } from '@/components/ReaderToolbar'
 import { TTSControls } from '@/components/TTSControls'
-import { useTTSPlayer } from '@/hooks/useTTSPlayer'
+import { BookmarksList } from '@/components/epub/BookmarksList'
+import { usePlayerStore } from '@/lib/stores/playerStore'
+import { usePlayerMachine } from '@/hooks/usePlayerMachine'
+import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
+import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { GuardrailWarning } from '@/components/GuardrailWarning'
 import { TocSheet } from '@/components/TocSheet'
@@ -92,6 +103,7 @@ function ReaderContent({ book }: { book: Book }) {
   const highlightsSheetRef = useRef<BottomSheet>(null)
   const noteEditorSheetRef = useRef<BottomSheet>(null)
   const searchSheetRef = useRef<BottomSheet>(null)
+  const bookmarksSheetRef = useRef<BottomSheet>(null)
 
   const [settings, setSettings] = useState<ReaderSettings>(loadReaderSettings())
   const [toolbarVisible, setToolbarVisible] = useState(false)
@@ -106,11 +118,21 @@ function ReaderContent({ book }: { book: Book }) {
   const [popoverVisible, setPopoverVisible] = useState(false)
   const [popoverPosition, setPopoverPosition] = useState({ x: 0, y: 0 })
 
-  // TTS playback
-  const tts = useTTSPlayer(book.id, book.filePath, book.format as 'epub' | 'pdf')
+  // Bookmark state
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
+  const [isCurrentBookmarked, setIsCurrentBookmarked] = useState<boolean>(false)
 
+  // Wire the player machine + chat bridge once per book. The machine
+  // listens for PLAY/PAUSE/PLAY_FROM events on `usePlayerStore.send`.
+  usePlayerMachine(book.id)
   // Realtime voice chat
   const { status: realtimeStatus, showGuardrailWarning, toggle: toggleRealtime, isActive: realtimeActive } = useRealtimeChat(book.id)
+  useTtsChatBridge(realtimeStatus)
+
+  // Player observability — drive UI from store, not from the old hook.
+  const playingState = usePlayerStore((s) => s.playingState)
+  const activeParagraph = usePlayerStore((s) => s.activeParagraph)
+  const ttsActive = playingState !== 'idle'
 
   const theme = READER_THEMES[settings.themeName]
 
@@ -118,8 +140,17 @@ function ReaderContent({ book }: { book: Book }) {
   useEffect(() => {
     if (book.id) {
       setHighlights(getHighlightsByBookId(book.id))
+      setBookmarks(getBookmarksForBook(book.id))
     }
   }, [book.id])
+
+  // Reflect bookmark presence at the current CFI in the toolbar icon.
+  useEffect(() => {
+    if (!book.id) return
+    const cfi = currentCfiRef.current
+    setIsCurrentBookmarked(cfi ? isLocationBookmarked(book.id, cfi) : false)
+    // Recompute when bookmarks list changes
+  }, [book.id, bookmarks, currentHref])
 
   // Convert highlights to initialAnnotations for Reader
   const initialAnnotations = useMemo(
@@ -183,14 +214,14 @@ function ReaderContent({ book }: { book: Book }) {
   // Auto-hide toolbar after 3 seconds (disabled when TTS or realtime voice is active)
   const toolbarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    if (toolbarVisible && !tts.isActive && !realtimeActive) {
+    if (toolbarVisible && !ttsActive && !realtimeActive) {
       if (toolbarTimerRef.current) clearTimeout(toolbarTimerRef.current)
       toolbarTimerRef.current = setTimeout(() => setToolbarVisible(false), 3000)
     }
     return () => {
       if (toolbarTimerRef.current) clearTimeout(toolbarTimerRef.current)
     }
-  }, [toolbarVisible, tts.isActive, realtimeActive])
+  }, [toolbarVisible, ttsActive, realtimeActive])
 
   // Theme change
   const handleThemeChange = useCallback(
@@ -394,6 +425,63 @@ function ReaderContent({ book }: { book: Book }) {
     [goToLocation]
   )
 
+  // --- TTS handlers ---
+
+  // Toolbar TTS button. If playback is active → STOP; otherwise seed
+  // paragraphs from the book's chunks and dispatch PLAY.
+  const handleToggleTTS = useCallback(async () => {
+    const sendFn = usePlayerStore.getState().send
+    if (!sendFn) return
+    if (ttsActive) {
+      sendFn({ type: 'STOP' })
+      return
+    }
+    try {
+      const seeded = await seedPlayerParagraphsFromChunks(book.id, book.filePath, book.format)
+      if (!seeded.seeded) {
+        AccessibilityInfo.announceForAccessibility('No text available for reading')
+        return
+      }
+      sendFn({ type: 'PLAY' })
+    } catch (err) {
+      console.warn('[reader-tts] seed failed:', err)
+    }
+  }, [book.id, book.filePath, book.format, ttsActive])
+
+  // --- Bookmark handlers ---
+
+  const handleToggleBookmark = useCallback(() => {
+    const cfi = currentCfiRef.current
+    if (!cfi || !book.id) return
+    const label = currentHref ?? cfi
+    const result = toggleBookmark({ bookId: book.id, location: cfi, label })
+    setBookmarks(getBookmarksForBook(book.id))
+    setIsCurrentBookmarked(result.action === 'created')
+    AccessibilityInfo.announceForAccessibility(
+      result.action === 'created' ? 'Bookmark added' : 'Bookmark removed',
+    )
+  }, [book.id, currentHref])
+
+  const handleDeleteBookmark = useCallback(
+    (bookmarkId: string) => {
+      if (!book.id) return
+      deleteBookmarkFromDb(bookmarkId)
+      const next = getBookmarksForBook(book.id)
+      setBookmarks(next)
+      const cfi = currentCfiRef.current
+      setIsCurrentBookmarked(cfi ? isLocationBookmarked(book.id, cfi) : false)
+    },
+    [book.id]
+  )
+
+  const handleNavigateToBookmark = useCallback(
+    (location: string) => {
+      goToLocation(location)
+      bookmarksSheetRef.current?.close()
+    },
+    [goToLocation]
+  )
+
   return (
     <View style={{ flex: 1, backgroundColor: theme.background }}>
       <Reader
@@ -438,8 +526,14 @@ function ReaderContent({ book }: { book: Book }) {
           setToolbarVisible(false)
         }}
         onChatPress={() => router.push(`/chat/${book.id}`)}
-        onTTSPress={() => tts.isActive ? tts.stop() : tts.play()}
-        ttsActive={tts.isActive}
+        onTTSPress={handleToggleTTS}
+        ttsActive={ttsActive}
+        onBookmarksPress={() => {
+          bookmarksSheetRef.current?.snapToIndex(0)
+          setToolbarVisible(false)
+        }}
+        onBookmarkTogglePress={handleToggleBookmark}
+        isBookmarked={isCurrentBookmarked}
         onRealtimePress={toggleRealtime}
         realtimeStatus={realtimeStatus}
       />
@@ -479,6 +573,14 @@ function ReaderContent({ book }: { book: Book }) {
         theme={theme}
         onSave={handleSaveNote}
         onDiscard={() => noteEditorSheetRef.current?.close()}
+      />
+
+      <BookmarksList
+        sheetRef={bookmarksSheetRef}
+        bookmarks={bookmarks}
+        theme={theme}
+        onNavigate={handleNavigateToBookmark}
+        onDelete={handleDeleteBookmark}
       />
 
       <BottomSheet
@@ -532,18 +634,7 @@ function ReaderContent({ book }: { book: Book }) {
         </View>
       </BottomSheet>
 
-      {tts.isActive && (
-        <TTSControls
-          status={tts.status as 'loading' | 'playing' | 'paused'}
-          currentChunkIndex={tts.currentChunkIndex}
-          totalChunks={tts.totalChunks}
-          onPlay={tts.play}
-          onPause={tts.pause}
-          onStop={tts.stop}
-          onNext={tts.next}
-          onPrevious={tts.previous}
-        />
-      )}
+      <TTSControls />
 
       {popoverVisible && selectedHighlight && (
         <AnnotationPopover

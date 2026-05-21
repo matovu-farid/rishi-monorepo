@@ -46,6 +46,11 @@ import {
 import { HIGHLIGHT_COLORS, type HighlightColor } from '@/types/highlight'
 import type { PdfLocator } from '@rishi/shared/types/pdf-locator'
 import { resolvePlayFromSelection } from '@/lib/pdf/read-aloud-from-selection'
+import { usePlayerStore } from '@/lib/stores/playerStore'
+import { usePlayerMachine } from '@/hooks/usePlayerMachine'
+import { TTSControls } from '@/components/TTSControls'
+import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
+import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 
 interface ActiveSelection {
   pageNumber: number
@@ -67,6 +72,18 @@ export default function PdfReaderScreen() {
   const [pickerHighlight, setPickerHighlight] = useState<PdfHighlight | null>(null)
   const [pickerAnchor, setPickerAnchor] = useState<{ x: number; y: number } | null>(null)
   const [highlights, setHighlights] = useState<PdfHighlight[]>([])
+
+  // Mount the player machine actor for this book. Subsequent reads of
+  // `usePlayerStore` (via `TTSControls`) get the live machine state.
+  usePlayerMachine(book?.id ?? '')
+
+  // Bridge realtime voice-chat status to the player so chat-position is
+  // preserved (CHAT_STARTED/CHAT_ENDED dispatched into the playerMachine).
+  const { status: realtimeStatus } = useRealtimeChat(book?.id ?? '')
+  useTtsChatBridge(realtimeStatus)
+
+  // Subscribe to active-paragraph changes to drive the highlight reconciler.
+  const activeParagraph = usePlayerStore((s) => s.activeParagraph)
 
   const pageNumber = usePdfStore((s) => s.pageNumber)
   const pageCount = usePdfStore((s) => s.pageCount)
@@ -233,18 +250,15 @@ export default function PdfReaderScreen() {
     setPickerAnchor(null)
   }, [pickerHighlight])
 
-  /**
-   * Read-from-selection (G17). Fetches the selected page's paragraphs
-   * from the WebView, resolves to a PLAY_FROM payload via the shared
-   * resolver, then forwards to the player service.
-   *
-   * The player-service wiring is being threaded through the new
-   * service in Batch 3; this screen calls the resolver and surfaces
-   * the result via console+haptic until the player UI lands. The
-   * resolver result is the same shape `playerStore.send({type:
-   * 'PLAY_FROM', ...})` consumes, so when the integration is done it's
-   * a one-line dispatch.
-   */
+  // Read-from-selection (G17). Batch 7 wires this fully to the player
+  // machine via playerStore.send PLAY_FROM:
+  //   1. Fetch the selected page paragraphs from the WebView.
+  //   2. Seed playerStore.currentParagraphs so the machine has the
+  //      list to step through.
+  //   3. Compute the PLAY_FROM payload via the shared resolver.
+  //   4. Dispatch into playerStore.send. The mounted usePlayerMachine
+  //      actor receives the event and fetches audio via the new TTS
+  //      service.
   const handleReadFromSelection = useCallback(async () => {
     if (!selection) return
     try {
@@ -255,19 +269,44 @@ export default function PdfReaderScreen() {
         Alert.alert('Read aloud', 'Could not find the selected text on this page.')
         return
       }
-      // TODO(Batch 5 follow-up): dispatch into the playerStore once the
-      // PDF reader's TTS UI is wired. Logging today proves the resolver
-      // works end-to-end through the WebView bridge.
-      console.log('[pdf-read-aloud-from] PLAY_FROM payload:', playFrom)
-      Alert.alert(
-        'Read aloud',
-        `Will start at paragraph ${playFrom.paragraphIndex} (key ${playFrom.partialFirstKey})`
-      )
+
+      // Seed the page's paragraphs as the player's current list. The shape
+      // { index, text } matches ParagraphWithIndex (Batch 5 already emits
+      // this shape from getPageText).
+      usePlayerStore.setState({ currentParagraphs: paragraphs })
+
+      const send = usePlayerStore.getState().send
+      if (!send) {
+        console.warn('[pdf-read-aloud-from] player machine not mounted yet')
+        return
+      }
+      send({
+        type: 'PLAY_FROM',
+        paragraphIndex: playFrom.paragraphIndex,
+        partialFirstText: playFrom.partialFirstText,
+        partialFirstKey: playFrom.partialFirstKey,
+      })
       setSelection(null)
     } catch (e) {
       console.warn('[pdf-read-aloud-from] failed', e)
     }
   }, [selection])
+
+  // Reconciler: when the active paragraph changes, scroll the WebView to
+  // its page. Mobile PDF doesn't yet have a per-paragraph overlay highlight
+  // bridge command; the page-level follow is enough to keep the user
+  // visually anchored.
+  useEffect(() => {
+    if (!activeParagraph) return
+    // Active paragraph ids from getPageText follow the pattern
+    // pdf-{page}-{paragraphIndex} (see PdfWebReader webview-template).
+    const match = /^pdf-(\d+)-/.exec(activeParagraph.index)
+    if (!match) return
+    const page = Number.parseInt(match[1], 10)
+    if (Number.isFinite(page) && page > 0 && page !== pageNumber) {
+      readerRef.current?.goToPage(page)
+    }
+  }, [activeParagraph, pageNumber])
 
   const handleBack = useCallback(() => {
     if (book?.id && pageNumber > 0) updateBookPage(book.id, pageNumber)
@@ -447,6 +486,9 @@ export default function PdfReaderScreen() {
           </View>
         </View>
       ) : null}
+
+      {/* Floating TTS controls — visible whenever the player isn't idle */}
+      <TTSControls />
 
       {/* TOC modal (Phase 4 — G07) */}
       <Modal

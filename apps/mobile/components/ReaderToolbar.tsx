@@ -14,6 +14,9 @@ interface ReaderToolbarProps {
   onSearchPress?: () => void
   onTocPress: () => void
   onHighlightsPress: () => void
+  onBookmarksPress?: () => void
+  onBookmarkTogglePress?: () => void
+  isBookmarked?: boolean
   onAppearancePress: () => void
   onChatPress?: () => void
   onTTSPress?: () => void
@@ -30,6 +33,9 @@ export function ReaderToolbar({
   onSearchPress,
   onTocPress,
   onHighlightsPress,
+  onBookmarksPress,
+  onBookmarkTogglePress,
+  isBookmarked,
   onAppearancePress,
   onChatPress,
   onTTSPress,
@@ -98,8 +104,32 @@ export function ReaderToolbar({
             accessibilityLabel="Highlights"
             accessibilityRole="button"
           >
-            <IconSymbol name="bookmark.fill" size={22} color={theme.toolbarText} />
+            <IconSymbol name="highlighter" size={22} color={theme.toolbarText} />
           </TouchableOpacity>
+          {onBookmarkTogglePress && (
+            <TouchableOpacity
+              onPress={onBookmarkTogglePress}
+              className="w-11 h-11 items-center justify-center"
+              accessibilityLabel={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}
+              accessibilityRole="button"
+            >
+              <IconSymbol
+                name={isBookmarked ? 'bookmark.fill' : 'bookmark'}
+                size={22}
+                color={isBookmarked ? '#ef4444' : theme.toolbarText}
+              />
+            </TouchableOpacity>
+          )}
+          {onBookmarksPress && (
+            <TouchableOpacity
+              onPress={onBookmarksPress}
+              className="w-11 h-11 items-center justify-center"
+              accessibilityLabel="Open bookmarks list"
+              accessibilityRole="button"
+            >
+              <IconSymbol name="list.bullet.rectangle" size={22} color={theme.toolbarText} />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             onPress={onAppearancePress}
             className="w-11 h-11 items-center justify-center"
