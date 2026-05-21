@@ -342,8 +342,9 @@ function extractMobiContent(
 /**
  * Extract the first image record as a cover image.
  * Returns both the image bytes and the detected MIME type.
+ * Internal helper — public callers use `extractMobiCover(buf)` below.
  */
-function extractMobiCover(
+function extractMobiCover_impl(
   buf: Uint8Array,
   pdbRecords: PdbRecord[],
   header: MobiHeader
@@ -459,9 +460,40 @@ export function parseMobiMetadata(buf: Uint8Array): {
     }
   }
 
-  const { data: cover, mimeType: coverMimeType } = extractMobiCover(buf, records, header)
+  const { data: cover, mimeType: coverMimeType } = extractMobiCover_impl(buf, records, header)
 
   return { title, author, publisher, cover, coverMimeType }
+}
+
+/**
+ * Public cover-extraction shape matching `extractEpubCover` — `mimeType`
+ * plus raw bytes as Uint8Array (vs the internal helper's `number[]`),
+ * so the mobile CoverPort can write the cover file with the same code
+ * path it uses for EPUB.
+ */
+export interface MobiCover {
+  mimeType: string
+  data: Uint8Array
+}
+
+/**
+ * Extract the first image record as a cover. Returns null when the
+ * MOBI has no `firstImageIndex`, the record is too small, or the bytes
+ * don't have a recognised JPEG / PNG / GIF magic.
+ *
+ * This is a thin wrapper around the existing internal extractor — the
+ * public shape matches `extractEpubCover` so both formats plug into
+ * the same `CoverPort` adapter on mobile.
+ */
+export function extractMobiCover(buf: Uint8Array): MobiCover | null {
+  const { records } = parsePdbRecords(buf)
+  if (records.length < 2) return null
+
+  const record0 = buf.subarray(records[0].offset, records[1].offset)
+  const header = parseMobiHeader(record0)
+  const { data, mimeType } = extractMobiCover_impl(buf, records, header)
+  if (data.length === 0 || mimeType === null) return null
+  return { mimeType, data: Uint8Array.from(data) }
 }
 
 /**

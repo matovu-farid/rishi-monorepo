@@ -19,6 +19,7 @@ import type {
   UploadPort,
 } from "@rishi/shared/book-import";
 import { extractEpubCover } from "@rishi/shared/formats/epub-cover";
+import { extractMobiCover } from "@rishi/shared/formats/mobi";
 import { books } from "@rishi/shared/schema";
 import { db } from "@/lib/db";
 import { hashBookFile, uploadBookFile } from "@/lib/sync/file-sync";
@@ -305,14 +306,18 @@ export function createMobileEmbedPort(): EmbedPort {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// CoverPort — EPUB only. Extracts cover, writes to disk, updates row.
+// CoverPort — EPUB + MOBI/AZW3. Extracts cover bytes, writes to disk,
+// updates row. DJVU first-page raster is parked (it's the same trade-off
+// as the PDF cover — needs a WebView round-trip; documented in
+// .parity/BATCH-8-NOTES.md).
 // ────────────────────────────────────────────────────────────────────────────
 
 const COVERS_DIR = new Directory(Paths.document, "covers");
 
 export interface CoverPortDeps {
-  /** Injected for tests. */
-  readEpubBytes?: (bookPath: string) => Promise<Uint8Array>;
+  /** Injected for tests. Renamed from `readEpubBytes` in Batch 8 — the
+   *  reader is now format-agnostic since MOBI/AZW3 also use it. */
+  readBookBytes?: (bookPath: string) => Promise<Uint8Array>;
   /** Injected for tests. */
   writeCoverFile?: (
     bookId: string,
@@ -324,8 +329,8 @@ export interface CoverPortDeps {
 }
 
 export function createMobileCoverPort(deps: CoverPortDeps = {}): CoverPort {
-  const readEpubBytes =
-    deps.readEpubBytes ??
+  const readBookBytes =
+    deps.readBookBytes ??
     (async (bookPath: string): Promise<Uint8Array> => {
       const bytes = await new File(bookPath).bytes();
       return bytes;
@@ -354,17 +359,33 @@ export function createMobileCoverPort(deps: CoverPortDeps = {}): CoverPort {
 
   return {
     async extractAndStore({ bookId, bookPath, format }) {
-      if (format !== "epub") return null;
-
-      let bytes: Uint8Array;
-      try {
-        bytes = await readEpubBytes(bookPath);
-      } catch (err) {
-        console.warn("[book-import] failed to read epub bytes for cover:", err);
+      // Format dispatch: EPUB has its own (jszip) extractor; MOBI/AZW3
+      // share the PalmDOC image-record extractor. PDF/DJVU covers are
+      // deferred (would need a WebView raster round-trip).
+      if (format !== "epub" && format !== "mobi" && format !== "azw3") {
         return null;
       }
 
-      const cover = await extractEpubCover(bytes);
+      let bytes: Uint8Array;
+      try {
+        bytes = await readBookBytes(bookPath);
+      } catch (err) {
+        console.warn("[book-import] failed to read book bytes for cover:", err);
+        return null;
+      }
+
+      let cover: { mimeType: string; data: Uint8Array } | null = null;
+      try {
+        if (format === "epub") {
+          cover = await extractEpubCover(bytes);
+        } else {
+          // MOBI + AZW3 use the same PalmDOC image extractor.
+          cover = extractMobiCover(bytes);
+        }
+      } catch (err) {
+        console.warn(`[book-import] cover extraction failed (${format}):`, err);
+        return null;
+      }
       if (!cover) return null;
 
       try {

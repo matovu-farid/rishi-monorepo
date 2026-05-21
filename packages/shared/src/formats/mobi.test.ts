@@ -4,7 +4,8 @@ import {
   parseMobiChapters,
   parseMobiMetadata,
   parseMobiTextParagraphs,
-  palmdocDecompress
+  palmdocDecompress,
+  extractMobiCover
 } from './mobi'
 
 // ---------------------------------------------------------------------------
@@ -192,6 +193,133 @@ describe('stripHtmlTags', () => {
 // ---------------------------------------------------------------------------
 // parseMobiMetadata
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// extractMobiCover — N08
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a MOBI buffer that includes a fake image record after the
+ * single text record. The exporter sets `firstImageIndex` to point at
+ * that record (index 2 in this fixture). The image data is a tiny JPEG
+ * magic prefix (`FF D8 FF`) followed by a couple of bytes — enough to
+ * pass `extractMobiCover_impl`'s magic-byte check.
+ */
+function buildMobiBufferWithCover(opts: {
+  imageMagic: 'jpg' | 'png' | 'gif' | 'invalid'
+}): Uint8Array {
+  const title = 'With Cover'
+  const content = '<p>text</p>'
+  const contentBytes = utf8Encode(content)
+
+  // Image record bytes
+  let imageBytes: Uint8Array
+  switch (opts.imageMagic) {
+    case 'jpg':
+      imageBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10])
+      break
+    case 'png':
+      imageBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+      break
+    case 'gif':
+      imageBytes = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61])
+      break
+    case 'invalid':
+      imageBytes = new Uint8Array([0xde, 0xad, 0xbe, 0xef])
+      break
+  }
+
+  // Build record 0
+  const mobiHeaderLength = 0xe8
+  const titleBytes = utf8Encode(title)
+  const fullNameOffset = 16 + mobiHeaderLength
+  const record0Size = fullNameOffset + titleBytes.length
+  const record0 = new Uint8Array(record0Size)
+
+  writeUInt16BE(record0, 0, 1) // uncompressed
+  writeUInt32BE(record0, 4, contentBytes.length)
+  writeUInt16BE(record0, 8, 1) // textRecordCount
+  writeUInt16BE(record0, 10, 4096)
+  writeUInt16BE(record0, 12, 0)
+
+  writeAscii(record0, 16, 'MOBI', 4)
+  writeUInt32BE(record0, 0x14, mobiHeaderLength)
+  writeUInt32BE(record0, 0x18, 2)
+  writeUInt32BE(record0, 0x1c, 65001)
+  writeUInt32BE(record0, 0x50, 2)
+  writeUInt32BE(record0, 0x54, fullNameOffset)
+  writeUInt32BE(record0, 0x58, titleBytes.length)
+  writeUInt32BE(record0, 0x6c, 2) // firstImageIndex → record 2
+  writeUInt32BE(record0, 0x80, 0)
+
+  record0.set(titleBytes, fullNameOffset)
+
+  // PDB: 3 records (0=metadata, 1=text, 2=image)
+  const numRecords = 3
+  const pdbHeaderSize = 0x4e + numRecords * 8
+  const record0Offset = pdbHeaderSize
+  const record1Offset = record0Offset + record0Size
+  const record2Offset = record1Offset + contentBytes.length
+  const totalSize = record2Offset + imageBytes.length
+  const buf = new Uint8Array(totalSize)
+
+  writeAscii(buf, 0, title.substring(0, 31), 32)
+  writeUInt16BE(buf, 0x4c, numRecords)
+  writeUInt32BE(buf, 0x4e, record0Offset)
+  writeUInt32BE(buf, 0x4e + 4, 0)
+  writeUInt32BE(buf, 0x4e + 8, record1Offset)
+  writeUInt32BE(buf, 0x4e + 12, 1)
+  writeUInt32BE(buf, 0x4e + 16, record2Offset)
+  writeUInt32BE(buf, 0x4e + 20, 2)
+
+  buf.set(record0, record0Offset)
+  buf.set(contentBytes, record1Offset)
+  buf.set(imageBytes, record2Offset)
+
+  return buf
+}
+
+describe('extractMobiCover', () => {
+  it('returns null for a buffer with no image record', () => {
+    const buf = buildMobiBuffer({ title: 'No Cover' })
+    expect(extractMobiCover(buf)).toBeNull()
+  })
+
+  it('returns null for a buffer that is too small', () => {
+    expect(extractMobiCover(new Uint8Array(10))).toBeNull()
+  })
+
+  it('extracts a JPEG cover', () => {
+    const buf = buildMobiBufferWithCover({ imageMagic: 'jpg' })
+    const cover = extractMobiCover(buf)
+    expect(cover).not.toBeNull()
+    expect(cover!.mimeType).toBe('image/jpeg')
+    expect(cover!.data.length).toBeGreaterThan(0)
+    expect(cover!.data[0]).toBe(0xff)
+    expect(cover!.data[1]).toBe(0xd8)
+  })
+
+  it('extracts a PNG cover', () => {
+    const buf = buildMobiBufferWithCover({ imageMagic: 'png' })
+    const cover = extractMobiCover(buf)
+    expect(cover).not.toBeNull()
+    expect(cover!.mimeType).toBe('image/png')
+    expect(cover!.data[0]).toBe(0x89)
+    expect(cover!.data[1]).toBe(0x50)
+  })
+
+  it('extracts a GIF cover', () => {
+    const buf = buildMobiBufferWithCover({ imageMagic: 'gif' })
+    const cover = extractMobiCover(buf)
+    expect(cover).not.toBeNull()
+    expect(cover!.mimeType).toBe('image/gif')
+  })
+
+  it('returns null when the image record has an unrecognised magic', () => {
+    const buf = buildMobiBufferWithCover({ imageMagic: 'invalid' })
+    expect(extractMobiCover(buf)).toBeNull()
+  })
+})
 
 describe('parseMobiMetadata', () => {
   it('extracts title from the full name field', () => {
