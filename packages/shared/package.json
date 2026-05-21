@@ -25,6 +25,7 @@
     "./lib/Mutex": "./src/lib/Mutex.ts",
     "./formats/epub-constants": "./src/formats/epub-constants.ts",
     "./formats/bookmark-cfi": "./src/formats/bookmark-cfi.ts",
+    "./formats/mobi": "./src/formats/mobi.ts",
     "./modules/cfi-to-paragraph": "./src/modules/cfi-to-paragraph.ts",
     "./sync/types": "./src/sync/types.ts",
     "./sync/debounce": "./src/sync/debounce.ts",
