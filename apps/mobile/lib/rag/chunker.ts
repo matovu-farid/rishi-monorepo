@@ -99,11 +99,20 @@ export async function extractEpubText(
     return []
   }
 
+  // Walk each <item> tag and extract id + href independently. The
+  // earlier regex required `id` to appear BEFORE `href`, but Calibre /
+  // Sigil emit items with arbitrary attribute order, leaving the
+  // manifest map empty and yielding 0 chunks for valid books. (H3-05)
   const manifestItems = new Map<string, string>()
-  const itemRegex = /<item\s+[^>]*id="([^"]+)"[^>]*href="([^"]+)"[^>]*/g
+  const itemTagRegex = /<item\b[^>]*\/?>/gi
   let itemMatch: RegExpExecArray | null
-  while ((itemMatch = itemRegex.exec(opfXml)) !== null) {
-    manifestItems.set(itemMatch[1], itemMatch[2])
+  while ((itemMatch = itemTagRegex.exec(opfXml)) !== null) {
+    const tag = itemMatch[0]
+    const idAttr = tag.match(/\bid="([^"]+)"/)
+    const hrefAttr = tag.match(/\bhref="([^"]+)"/)
+    if (idAttr && hrefAttr) {
+      manifestItems.set(idAttr[1], hrefAttr[1])
+    }
   }
 
   const spineIdrefs: string[] = []

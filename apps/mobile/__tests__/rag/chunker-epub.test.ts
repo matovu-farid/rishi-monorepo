@@ -162,6 +162,46 @@ describe('chunker -> EPUB (CG17: corrupt-file branches)', () => {
     expect(joined).toContain('absolute-href EPUB')
   })
 
+  // H3-05: extractEpubText's manifest regex required `id` to appear
+  // BEFORE `href`. Calibre / Sigil / older editors emit manifest items
+  // with `href` before `id`, which made these items invisible to the
+  // chunker — the spine referenced them but the lookup map was empty,
+  // and `manifestItems.get(idref)` returned undefined for every item.
+  // Result: zero chunks for an otherwise valid book.
+  it('returns chunks when manifest items have href BEFORE id', async () => {
+    ;(global as { [k: string]: unknown })[FIXTURE_KEY] = await buildEpubBase64(
+      (zip) => {
+        zip.file(
+          'META-INF/container.xml',
+          '<?xml version="1.0"?><container><rootfiles>' +
+            '<rootfile full-path="OEBPS/content.opf"/>' +
+            '</rootfiles></container>',
+        )
+        zip.file(
+          'OEBPS/content.opf',
+          // href BEFORE id — order Calibre uses.
+          '<?xml version="1.0"?><package>' +
+            '<manifest><item href="ch1.xhtml" id="c1" media-type="application/xhtml+xml"/></manifest>' +
+            '<spine><itemref idref="c1"/></spine>' +
+            '</package>',
+        )
+        zip.file(
+          'OEBPS/ch1.xhtml',
+          '<html><body><h1>Calibre Ordering</h1>' +
+            '<p>An EPUB whose manifest items put href before id must still chunk. ' +
+            'The OPF spec is order-agnostic — the manifest reader must match it.</p>' +
+            '</body></html>',
+        )
+      },
+    )
+
+    const chunks = await getChunks('/fake/book.epub', 'epub', 'book-href-first')
+    expect(chunks.length).toBeGreaterThan(0)
+    expect(chunks[0].chapter).toBe('Calibre Ordering')
+    const joined = chunks.map((c) => c.text).join(' ')
+    expect(joined).toContain('order-agnostic')
+  })
+
   it('returns chunks for a well-formed EPUB (positive control for the same wiring)', async () => {
     ;(global as { [k: string]: unknown })[FIXTURE_KEY] = await buildEpubBase64(
       (zip) => {
