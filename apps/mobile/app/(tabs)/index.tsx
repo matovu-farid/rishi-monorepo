@@ -11,6 +11,7 @@ import { UrlImportSheet } from '@/components/UrlImportSheet'
 import { getBooks, deleteBook, getLastReadBook } from '@/lib/book-storage'
 import { importEpubFile, importPdfFile, importMobiFile, importDjvuFile } from '@/lib/file-import'
 import { Book } from '@/types/book'
+import { useTourTargetLayout } from '@/lib/onboarding/useTourTarget'
 
 export default function LibraryScreen() {
   const router = useRouter()
@@ -19,6 +20,12 @@ export default function LibraryScreen() {
   const [searchQuery, setSearchQuery] = useState('')
   const [importing, setImporting] = useState(false)
   const [urlSheetVisible, setUrlSheetVisible] = useState(false)
+
+  // Tour targets (G28): the import-books FAB / Import button and the
+  // library grid get registered with `lib/onboarding/registry` so the
+  // first-launch tutorial can spotlight them.
+  const importTarget = useTourTargetLayout('import-books')
+  const gridTarget = useTourTargetLayout('book-grid')
 
   const filteredBooks = useMemo(() => {
     if (!searchQuery.trim()) return books
@@ -124,7 +131,12 @@ export default function LibraryScreen() {
   if (books.length === 0) {
     return (
       <SafeAreaView className="flex-1 bg-white dark:bg-[#151718]">
-        <LibraryEmptyState onImport={handleImport} importing={importing} />
+        <LibraryEmptyState
+          onImport={handleImport}
+          importing={importing}
+          importButtonProps={{ onLayout: importTarget.onLayout }}
+          containerProps={{ onLayout: gridTarget.onLayout }}
+        />
         <UrlImportSheet visible={urlSheetVisible} onDismiss={() => setUrlSheetVisible(false)} onImported={() => loadBooks()} />
       </SafeAreaView>
     )
@@ -174,21 +186,29 @@ export default function LibraryScreen() {
             <IconSymbol name="chevron.right" size={18} color="#9CA3AF" />
           </Pressable>
         )}
-        <FlatList
-          data={filteredBooks}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <BookRow
-              book={item}
-              onPress={handleBookPress}
-              onDelete={handleDelete}
-            />
-          )}
-          contentContainerClassName="pb-24"
-        />
+        <View
+          className="flex-1"
+          ref={gridTarget.ref as never}
+          onLayout={gridTarget.onLayout}
+        >
+          <FlatList
+            data={filteredBooks}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => (
+              <BookRow
+                book={item}
+                onPress={handleBookPress}
+                onDelete={handleDelete}
+              />
+            )}
+            contentContainerClassName="pb-24"
+          />
+        </View>
         {/* FAB for importing when library has books */}
         <TouchableOpacity
           testID="import-book-fab"
+          ref={importTarget.ref as never}
+          onLayout={importTarget.onLayout}
           className="absolute bottom-6 right-6 w-14 h-14 rounded-full bg-[#0a7ea4] items-center justify-center shadow-lg"
           onPress={handleImport}
           disabled={importing}
