@@ -427,6 +427,15 @@ export default function FileComponent(): React.JSX.Element {
           style={{ top: contextMenu.y, left: contextMenu.x }}
         >
           <button
+            className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 w-full text-left rounded"
+            onClick={() => {
+              selection.enterSelectMode(contextMenu.book.id)
+              setContextMenu(null)
+            }}
+          >
+            <CheckSquare size={16} /> Select
+          </button>
+          <button
             className="flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 w-full text-left rounded"
             onClick={() => {
               deleteBookMutation.mutate({ book: contextMenu.book })

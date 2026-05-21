@@ -145,4 +145,22 @@ describe('FileComponent — modifier-click selection', () => {
   })
 })
 
+describe('FileComponent — context menu', () => {
+  it('right-click → Select enters Select mode with that book selected', async () => {
+    renderWithClient(<FileComponent />)
+    await waitFor(() => screen.getByText('Alpha'))
+
+    const alphaCard = screen.getByText('Alpha').closest('div')!
+    fireEvent.contextMenu(alphaCard)
+
+    // After right-click, two buttons are named exactly "Select":
+    // the toolbar Select button (rendered earlier) and the new context-menu
+    // Select item. Pick the context-menu one (it's the last in document order).
+    const items = screen.getAllByRole('button', { name: 'Select' })
+    fireEvent.click(items[items.length - 1])
+
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+  })
+})
+
 export { renderWithClient, makeBook }
