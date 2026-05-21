@@ -105,4 +105,46 @@ describe("useDesktopHandoff", () => {
     await vi.waitFor(() => expect(result.current.status).toBe("done"))
     expect(result.current.errorMsg).toBe("")
   })
+
+  it("transitions to error when POST returns non-2xx", async () => {
+    mockUseSearchParams.mockReturnValue(
+      paramsFrom({
+        login: "true",
+        state: "33333333-3333-4333-8333-333333333333",
+      }),
+    )
+    mockUseSession.mockReturnValue({
+      data: { user: { id: "u_1" } },
+      isPending: false,
+    })
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
+    fetchMock.mockResolvedValue(
+      new Response("nope", { status: 500 }),
+    )
+
+    const { result } = renderHook(() => useDesktopHandoff())
+
+    await vi.waitFor(() => expect(result.current.status).toBe("error"))
+    expect(result.current.errorMsg).toMatch(/handoff failed \(500\): nope/)
+  })
+
+  it("transitions to error when fetch throws", async () => {
+    mockUseSearchParams.mockReturnValue(
+      paramsFrom({
+        login: "true",
+        state: "44444444-4444-4444-8444-444444444444",
+      }),
+    )
+    mockUseSession.mockReturnValue({
+      data: { user: { id: "u_1" } },
+      isPending: false,
+    })
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
+    fetchMock.mockRejectedValue(new Error("boom"))
+
+    const { result } = renderHook(() => useDesktopHandoff())
+
+    await vi.waitFor(() => expect(result.current.status).toBe("error"))
+    expect(result.current.errorMsg).toBe("boom")
+  })
 })
