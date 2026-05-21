@@ -116,4 +116,33 @@ describe('FileComponent — entering Select mode', () => {
   })
 })
 
+describe('FileComponent — modifier-click selection', () => {
+  it('Cmd+click on a cover (not in Select mode) auto-enters Select mode with that book selected', async () => {
+    renderWithClient(<FileComponent />)
+    await waitFor(() => screen.getByText('Alpha'))
+
+    const alpha = screen.getByText('Alpha').closest('div')!.querySelector('button')!
+    fireEvent.click(alpha, { metaKey: true })
+
+    expect(screen.getByText('1 selected')).toBeInTheDocument()
+    expect(window.electron.openBook).not.toHaveBeenCalled()
+  })
+
+  it('Shift+click extends selection across display order', async () => {
+    ;(window.electron.getBooks as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeBook({ id: 10, title: 'Alpha' }),
+      makeBook({ id: 20, title: 'Beta' }),
+      makeBook({ id: 30, title: 'Gamma' })
+    ])
+    renderWithClient(<FileComponent />)
+    await waitFor(() => screen.getByText('Gamma'))
+    fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
+
+    fireEvent.click(screen.getByLabelText('Select Alpha'))
+    fireEvent.click(screen.getByLabelText('Select Gamma'), { shiftKey: true })
+
+    expect(screen.getByText('3 selected')).toBeInTheDocument()
+  })
+})
+
 export { renderWithClient, makeBook }

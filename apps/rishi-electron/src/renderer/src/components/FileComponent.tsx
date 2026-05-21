@@ -367,6 +367,23 @@ export default function FileComponent(): React.JSX.Element {
                     type="button"
                     aria-label={selection.selectMode ? `Select ${book.title}` : undefined}
                     onClick={(e) => {
+                      if (e.shiftKey && selection.selectMode) {
+                        e.preventDefault()
+                        selection.extendTo(
+                          book.id,
+                          filteredBooks.map((b) => b.id)
+                        )
+                        return
+                      }
+                      if (e.metaKey || e.ctrlKey) {
+                        e.preventDefault()
+                        if (!selection.selectMode) {
+                          selection.enterSelectMode(book.id)
+                        } else {
+                          selection.toggle(book.id)
+                        }
+                        return
+                      }
                       if (selection.selectMode) {
                         e.preventDefault()
                         selection.toggle(book.id)
