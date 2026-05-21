@@ -46,13 +46,13 @@ test.describe('Book import & open lifecycle', () => {
     await expect(app.page.locator('[data-tour="book-grid"]')).toBeVisible({ timeout: 10000 })
 
     const bookPage = await openBook(app.page, book.id)
-    // Wait for the PDF scroll container to mount — this is the reader's
-    // unmistakable shell. The native menu is the back path; no in-window
-    // back link to assert against anymore.
-    await expect(bookPage.locator('div.overflow-y-scroll').first()).toBeAttached({
+    // The test name promises "renders pages" — assert on the actual rendered
+    // surface (canvas emitted by react-pdf's Page), not just the scroll shell.
+    // A blank-canvas / pdfjs worker failure would mount the shell but emit no
+    // canvas, which the previous toBeAttached on div.overflow-y-scroll missed.
+    await expect(bookPage.locator('canvas.react-pdf__Page__canvas').first()).toBeVisible({
       timeout: 15000
     })
-    await bookPage.waitForTimeout(3000)
   })
 
   test('EPUB imports and reaches the reader view', async () => {
