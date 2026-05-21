@@ -5,10 +5,15 @@ export function WelcomeModal() {
   const welcomeSeen = useAuthStore((s) => s.welcomeSeen)
   const authHydrated = useAuthStore((s) => s.authHydrated)
   const user = useAuthStore((s) => s.user)
+  const signInOpen = useAuthStore((s) => s.signInOpen)
   const dismissWelcome = useAuthStore((s) => s.dismissWelcome)
   const openSignIn = useAuthStore((s) => s.openSignIn)
 
-  if (welcomeSeen || !authHydrated || user) return null
+  // Step aside when the sign-in modal is open. Both this modal and
+  // <SignInModal> use `fixed inset-0 z-50`, and this one is mounted after
+  // it in __root.tsx — so without this guard we'd stack on top of the
+  // sign-in form and the "Sign in" button would appear to do nothing.
+  if (welcomeSeen || !authHydrated || user || signInOpen) return null
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/50">
