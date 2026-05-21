@@ -364,7 +364,9 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
     },
 
     prewarmKey() {
-      void keyCache.get()
+      void keyCache.get().catch((err: unknown) => {
+        captureError(err, { operation: 'voiceChatService', step: 'prewarm_key' })
+      })
     },
 
     invalidateKey() {

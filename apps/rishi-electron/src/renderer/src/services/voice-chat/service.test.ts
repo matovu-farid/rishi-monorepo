@@ -820,6 +820,31 @@ describe('createVoiceChatService — warm path + preconnect + prewarm', () => {
     expect(media.getUserMedia).not.toHaveBeenCalled()
   })
 
+  it('prewarmKey() swallows key-mint rejections so they never surface as unhandled', async () => {
+    const ipc = makeIpc()
+    ;(ipc.getRealtimeClientSecret as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('Not authenticated')
+    )
+    const svc = createVoiceChatService(makeDeps({ ipc }))
+
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      svc.prewarmKey()
+      await new Promise((r) => {
+        setTimeout(r, 10)
+      })
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+
+    expect(unhandled).toEqual([])
+    expect(svc.getState()).toBe('idle')
+  })
+
   it('invalidateKey() drops the cached ephemeral key so next activate() refetches', async () => {
     const ipc = makeIpc({ key: 'EPHEMERAL' })
     const svc = createVoiceChatService(makeDeps({ ipc }))
