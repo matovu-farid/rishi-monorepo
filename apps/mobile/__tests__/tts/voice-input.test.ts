@@ -33,13 +33,24 @@ let mockRecorderState = {
   uri: 'file://recording.m4a',
 }
 
+// SDK 54 renamed the recording-permission helper from
+// `requestPermissionsAsync` to `requestRecordingPermissionsAsync`. The
+// hook now calls the new name; the test must mock it accordingly.
 jest.mock('expo-audio', () => ({
   useAudioRecorder: jest.fn(() => mockRecorderState),
   RecordingPresets: { HIGH_QUALITY: {} },
-  requestPermissionsAsync: (...args: any[]) => mockRequestPermissions(...args),
+  requestRecordingPermissionsAsync: (...args: any[]) =>
+    mockRequestPermissions(...args),
 }))
 
 // --- Mock expo-file-system ---
+// The hook imports from `expo-file-system/legacy` (SDK 54 moved
+// readAsStringAsync + EncodingType there). Mock both paths.
+jest.mock('expo-file-system/legacy', () => ({
+  readAsStringAsync: jest.fn().mockResolvedValue('aGVsbG8='), // base64 of "hello"
+  deleteAsync: jest.fn().mockResolvedValue(undefined),
+  EncodingType: { Base64: 'base64' },
+}))
 jest.mock('expo-file-system', () => ({
   readAsStringAsync: jest.fn().mockResolvedValue('aGVsbG8='), // base64 of "hello"
   deleteAsync: jest.fn().mockResolvedValue(undefined),
@@ -60,8 +71,11 @@ jest.mock('@/lib/api', () => ({
   apiClient: (...args: any[]) => mockApiClient(...args),
 }))
 
-import { requestPermissionsAsync } from 'expo-audio'
-import * as FileSystem from 'expo-file-system'
+// Imported only for its side-effect / mocked surface; the hook itself
+// uses `requestRecordingPermissionsAsync` now.
+import { requestRecordingPermissionsAsync as _unused } from 'expo-audio'
+void _unused
+import * as FileSystem from 'expo-file-system/legacy'
 
 describe('useVoiceInput', () => {
   beforeEach(() => {

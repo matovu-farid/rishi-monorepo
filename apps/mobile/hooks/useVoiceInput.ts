@@ -1,6 +1,17 @@
 import { useState } from 'react'
-import { useAudioRecorder, RecordingPresets, requestPermissionsAsync } from 'expo-audio'
-import * as FileSystem from 'expo-file-system'
+// expo-audio renamed the recording-permission helper to
+// `requestRecordingPermissionsAsync` in the SDK 54 line — the
+// `requestPermissionsAsync` symbol used by older docs no longer exists.
+// Use the recording-specific helper directly.
+import {
+  useAudioRecorder,
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+} from 'expo-audio'
+// SDK 54 moved `readAsStringAsync` + `EncodingType` to the /legacy subpath;
+// the new File/Paths API doesn't expose a base64 read mode we can plumb
+// through to the worker's audio transcription endpoint.
+import * as FileSystem from 'expo-file-system/legacy'
 import { Platform } from 'react-native'
 import { apiClient } from '@/lib/api'
 
@@ -12,7 +23,7 @@ export function useVoiceInput() {
 
   const startRecording = async () => {
     setError(null)
-    const { granted } = await requestPermissionsAsync()
+    const { granted } = await requestRecordingPermissionsAsync()
     if (!granted) {
       setPermissionDenied(true)
       return
