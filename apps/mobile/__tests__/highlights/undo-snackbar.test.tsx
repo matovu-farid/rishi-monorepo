@@ -124,6 +124,35 @@ describe('useUndoSnackbar', () => {
     expect(undo).not.toHaveBeenCalled()
   })
 
+  // H2-02: timer cleanup on unmount. A `show()` call schedules a 5s
+  // setTimeout that calls setState. If the consumer unmounts before the
+  // timer fires (e.g. the user navigates away), the timer fires against
+  // a stale component and React logs a "Can't perform a React state
+  // update on an unmounted component" warning. The hook MUST clear its
+  // timer on cleanup.
+  it('does not fire its auto-dismiss timer after the host unmounts (H2-02)', () => {
+    let s!: ReturnType<typeof useUndoSnackbar>
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<Harness onState={(state) => (s = state)} />)
+    })
+    act(() => {
+      s.show('msg', 'Undo', jest.fn())
+    })
+    // Spy on setTimeout/clearTimeout call counts before unmount.
+    const pendingTimersBefore = jest.getTimerCount()
+    expect(pendingTimersBefore).toBeGreaterThan(0)
+
+    act(() => {
+      tree.unmount()
+    })
+
+    // After unmount, the auto-dismiss timer should have been cleared.
+    // Without the fix `jest.getTimerCount()` stays > 0 because the
+    // 5s setTimeout still has a pending handle.
+    expect(jest.getTimerCount()).toBe(0)
+  })
+
   it('a second show() replaces the previous action and resets the timer', () => {
     let s!: ReturnType<typeof useUndoSnackbar>
     act(() => {

@@ -11,7 +11,7 @@
  * consumer renders `<UndoSnackbar />` reading from this state and wires
  * the snackbar's button to `action()`.
  */
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 export const UNDO_SNACKBAR_DURATION_MS = 5_000
 
@@ -67,6 +67,20 @@ export function useUndoSnackbar(): UndoSnackbarState {
     setVisible(false)
     handler()
   }, [clearTimer])
+
+  // H2-02: clear the pending auto-dismiss timer on unmount. Without this,
+  // a 5s setTimeout outlives the consuming reader screen and fires
+  // `setVisible(false)` against a stale component (React logs a warning
+  // and the next mount can race with the now-orphaned timer).
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current)
+        timerRef.current = null
+      }
+      handlerRef.current = null
+    }
+  }, [])
 
   return { visible, message, actionLabel, show, action, dismiss }
 }
