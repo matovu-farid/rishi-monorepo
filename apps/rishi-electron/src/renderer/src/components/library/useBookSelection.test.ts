@@ -64,3 +64,51 @@ describe('useBookSelection — selectAll', () => {
     expect(result.current.selectedIds.size).toBe(0)
   })
 })
+
+describe('useBookSelection — enterSelectMode', () => {
+  it('enters Select mode with no id (toolbar Select button)', () => {
+    const { result } = renderHook(() => useBookSelection())
+    act(() => result.current.enterSelectMode())
+    expect(result.current.selectMode).toBe(true)
+    expect(result.current.selectedIds.size).toBe(0)
+  })
+
+  it('enters Select mode pre-seeded with one id (context menu / Cmd+click)', () => {
+    const { result } = renderHook(() => useBookSelection())
+    act(() => result.current.enterSelectMode(42))
+    expect(result.current.selectMode).toBe(true)
+    expect(result.current.selectedIds.has(42)).toBe(true)
+  })
+})
+
+describe('useBookSelection — extendTo (Shift+click range)', () => {
+  const order = [10, 20, 30, 40, 50]
+
+  it('selects an inclusive forward range from the last-toggled id', () => {
+    const { result } = renderHook(() => useBookSelection())
+    act(() => result.current.toggle(20)) // anchor
+    act(() => result.current.extendTo(40, order))
+    expect([...result.current.selectedIds].sort((a, b) => a - b)).toEqual([20, 30, 40])
+  })
+
+  it('selects an inclusive reverse range from the last-toggled id', () => {
+    const { result } = renderHook(() => useBookSelection())
+    act(() => result.current.toggle(40)) // anchor
+    act(() => result.current.extendTo(20, order))
+    expect([...result.current.selectedIds].sort((a, b) => a - b)).toEqual([20, 30, 40])
+  })
+
+  it('falls back to selecting only the target when no anchor exists', () => {
+    const { result } = renderHook(() => useBookSelection())
+    act(() => result.current.extendTo(30, order))
+    expect([...result.current.selectedIds]).toEqual([30])
+  })
+
+  it('preserves existing selection when extending', () => {
+    const { result } = renderHook(() => useBookSelection())
+    act(() => result.current.toggle(50))
+    act(() => result.current.toggle(10)) // newest anchor is 10
+    act(() => result.current.extendTo(30, order))
+    expect([...result.current.selectedIds].sort((a, b) => a - b)).toEqual([10, 20, 30, 50])
+  })
+})
