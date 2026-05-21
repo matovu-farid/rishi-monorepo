@@ -21,6 +21,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol'
 import { ReaderToolbar } from '@/components/ReaderToolbar'
 import { TTSControls } from '@/components/TTSControls'
 import { BookmarksList } from '@/components/epub/BookmarksList'
+import { SearchPanel } from '@/components/epub/SearchPanel'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
@@ -583,56 +584,22 @@ function ReaderContent({ book }: { book: Book }) {
         onDelete={handleDeleteBookmark}
       />
 
-      <BottomSheet
-        ref={searchSheetRef}
-        index={-1}
-        snapPoints={['50%', '90%']}
-        enablePanDownToClose
-        backgroundStyle={{ backgroundColor: theme.background }}
-        handleIndicatorStyle={{ backgroundColor: theme.toolbarText }}
-      >
-        <View style={{ flex: 1, paddingHorizontal: 16 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.name === 'dark' ? '#374151' : '#F3F4F6', borderRadius: 8, paddingHorizontal: 12, marginBottom: 12 }}>
-            <IconSymbol name="magnifyingglass" size={18} color="#9CA3AF" />
-            <TextInput
-              style={{ flex: 1, marginLeft: 8, paddingVertical: 10, fontSize: 16, color: theme.color }}
-              placeholder="Search in book..."
-              placeholderTextColor="#9CA3AF"
-              value={searchQuery}
-              onChangeText={handleSearch}
-              autoCapitalize="none"
-              autoCorrect={false}
-              returnKeyType="search"
-            />
-          </View>
-          {isSearching && (
-            <View style={{ alignItems: 'center', paddingVertical: 16 }}>
-              <ActivityIndicator size="small" />
-              <Text style={{ color: '#9CA3AF', marginTop: 8, fontSize: 14 }}>Searching...</Text>
-            </View>
-          )}
-          {!isSearching && searchResults.results.length > 0 && (
-            <FlatList
-              data={searchResults.results}
-              keyExtractor={(_, idx) => String(idx)}
-              renderItem={({ item }) => (
-                <Pressable
-                  onPress={() => handleSearchResultPress(item.cfi)}
-                  style={{ paddingVertical: 12, paddingHorizontal: 4, borderBottomWidth: 1, borderBottomColor: theme.name === 'dark' ? '#374151' : '#E5E7EB' }}
-                >
-                  <Text style={{ color: theme.color, fontSize: 14 }} numberOfLines={2}>{item.excerpt}</Text>
-                  {item.section?.label && (
-                    <Text style={{ color: '#9CA3AF', fontSize: 12, marginTop: 4 }}>{item.section.label}</Text>
-                  )}
-                </Pressable>
-              )}
-            />
-          )}
-          {!isSearching && searchQuery.length > 1 && searchResults.results.length === 0 && (
-            <Text style={{ color: '#9CA3AF', textAlign: 'center', paddingVertical: 24, fontSize: 14 }}>No results found</Text>
-          )}
-        </View>
-      </BottomSheet>
+      <SearchPanel
+        sheetRef={searchSheetRef}
+        theme={theme}
+        query={searchQuery}
+        results={searchResults.results}
+        isSearching={isSearching}
+        onChangeQuery={handleSearch}
+        onSelectResult={handleSearchResultPress}
+        onChange={(index) => {
+          // Reset query when the sheet closes so reopening starts fresh.
+          if (index === -1 && searchQuery.length > 0) {
+            setSearchQuery('')
+            clearSearchResults()
+          }
+        }}
+      />
 
       <TTSControls />
 

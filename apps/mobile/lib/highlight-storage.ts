@@ -130,6 +130,28 @@ export function deleteHighlight(id: string): void {
 }
 
 /**
+ * Undo a soft-delete by flipping `isDeleted` back to false and bumping
+ * `updatedAt`. Used by the EPUB / PDF reader popover's "Undo" toast.
+ *
+ * Mirrors electron's `restoreHighlight` (apps/rishi-electron/.../modules/
+ * highlight-storage.ts). The row's id is the only identity — color, text,
+ * note, chapter are preserved across the soft-delete cycle because we
+ * never null them out on delete.
+ */
+export function restoreHighlight(id: string): void {
+  db.update(highlights)
+    .set({
+      isDeleted: false,
+      updatedAt: Date.now(),
+      isDirty: true,
+    })
+    .where(eq(highlights.id, id))
+    .run()
+
+  triggerSyncOnWrite()
+}
+
+/**
  * Map a database row to the UI-friendly Highlight type,
  * stripping sync-only columns (userId, syncVersion, isDirty, isDeleted).
  */

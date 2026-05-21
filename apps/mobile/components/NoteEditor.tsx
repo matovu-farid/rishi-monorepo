@@ -2,11 +2,24 @@ import { useEffect, useState } from 'react'
 import { Text, TextInput, TouchableOpacity, View } from 'react-native'
 import BottomSheet from '@gorhom/bottom-sheet'
 import { ReaderTheme } from '@/types/book'
-import { Highlight } from '@/types/highlight'
+
+/**
+ * Generalized highlight shape the NoteEditor needs. Both EPUB
+ * `Highlight` and PDF `PdfHighlight` widen to this — they both carry
+ * `id`, `text`, and `note` columns from the shared `highlights` table.
+ *
+ * Batch 7 (G10 deferral from Batch 5): widening the prop type so the
+ * PDF reader can reuse the same NoteEditor for its highlight popover.
+ */
+export interface NoteEditableHighlight {
+  id: string
+  text: string
+  note: string | null
+}
 
 interface NoteEditorProps {
   sheetRef: React.RefObject<BottomSheet | null>
-  highlight: Highlight | null
+  highlight: NoteEditableHighlight | null
   theme: ReaderTheme
   onSave: (highlightId: string, note: string) => void
   onDiscard: () => void

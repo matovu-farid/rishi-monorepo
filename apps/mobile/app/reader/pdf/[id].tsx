@@ -51,12 +51,27 @@ import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 import { TTSControls } from '@/components/TTSControls'
 import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
+import { NoteEditor } from '@/components/NoteEditor'
+import BottomSheet from '@gorhom/bottom-sheet'
 
 interface ActiveSelection {
   pageNumber: number
   text: string
   locator: PdfLocator
   anchor: { x: number; y: number }
+}
+
+// PDF reader uses a dark scrim everywhere — give the note editor a
+// matching dark theme so the keyboard / inputs read consistently.
+const PDF_NOTE_EDITOR_THEME = {
+  name: 'dark' as const,
+  label: 'Dark',
+  background: '#1c1c1e',
+  color: '#fff',
+  toolbarBg: '#1c1c1e',
+  toolbarText: '#fff',
+  swatchColor: '#1c1c1e',
+  swatchBorder: '#fff',
 }
 
 export default function PdfReaderScreen() {
@@ -72,6 +87,8 @@ export default function PdfReaderScreen() {
   const [pickerHighlight, setPickerHighlight] = useState<PdfHighlight | null>(null)
   const [pickerAnchor, setPickerAnchor] = useState<{ x: number; y: number } | null>(null)
   const [highlights, setHighlights] = useState<PdfHighlight[]>([])
+  const noteEditorSheetRef = useRef<BottomSheet>(null)
+  const [noteTargetHighlight, setNoteTargetHighlight] = useState<PdfHighlight | null>(null)
 
   // Mount the player machine actor for this book. Subsequent reads of
   // `usePlayerStore` (via `TTSControls`) get the live machine state.
@@ -249,6 +266,29 @@ export default function PdfReaderScreen() {
     setPickerHighlight(null)
     setPickerAnchor(null)
   }, [pickerHighlight])
+
+  // Open the NoteEditor for the picker-selected highlight. Reuses the
+  // existing EPUB editor — Batch 7 widened its prop type to accept any
+  // shape with { id, text, note } (see components/NoteEditor.tsx).
+  const handleOpenNoteEditor = useCallback(() => {
+    if (!pickerHighlight) return
+    setNoteTargetHighlight(pickerHighlight)
+    setPickerHighlight(null)
+    setPickerAnchor(null)
+    // small delay so the picker closes cleanly before the sheet opens
+    setTimeout(() => noteEditorSheetRef.current?.snapToIndex(0), 100)
+  }, [pickerHighlight])
+
+  const handleSaveNote = useCallback(
+    (highlightId: string, note: string) => {
+      updateHighlight(highlightId, { note: note || null })
+      setHighlights((prev) =>
+        prev.map((h) => (h.id === highlightId ? { ...h, note: note || null } : h)),
+      )
+      setNoteTargetHighlight(null)
+    },
+    [],
+  )
 
   // Read-from-selection (G17). Batch 7 wires this fully to the player
   // machine via playerStore.send PLAY_FROM:
@@ -471,6 +511,9 @@ export default function PdfReaderScreen() {
                 accessibilityLabel={`Recolor highlight to ${c.name}`}
               />
             ))}
+            <TouchableOpacity onPress={handleOpenNoteEditor} style={styles.selectionAction}>
+              <Text style={styles.selectionActionText}>Note</Text>
+            </TouchableOpacity>
             <TouchableOpacity onPress={handleDeleteHighlight} style={styles.selectionAction}>
               <Text style={[styles.selectionActionText, { color: '#F87171' }]}>Delete</Text>
             </TouchableOpacity>
@@ -489,6 +532,19 @@ export default function PdfReaderScreen() {
 
       {/* Floating TTS controls — visible whenever the player isn't idle */}
       <TTSControls />
+
+      {/* Note editor sheet (Batch 7 — NoteEditor widened to accept PDF
+          highlights via the NoteEditableHighlight type). */}
+      <NoteEditor
+        sheetRef={noteEditorSheetRef}
+        highlight={noteTargetHighlight}
+        theme={PDF_NOTE_EDITOR_THEME}
+        onSave={handleSaveNote}
+        onDiscard={() => {
+          setNoteTargetHighlight(null)
+          noteEditorSheetRef.current?.close()
+        }}
+      />
 
       {/* TOC modal (Phase 4 — G07) */}
       <Modal
