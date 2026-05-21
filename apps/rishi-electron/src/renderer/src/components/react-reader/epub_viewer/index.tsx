@@ -2,6 +2,8 @@
 import React, { Component } from 'react'
 
 import type { NavItem, Contents, Rendition, Location, Book } from 'epubjs'
+import { navigationHistoryActor } from '@/machines/navigationHistory/navigationHistoryActor'
+import { usePlayerStore } from '@/stores/playerStore'
 import { EpubViewStyle as defaultStyles, type IEpubViewStyle } from './style'
 import type { ParagraphWithCFI } from '../../../types'
 import {
@@ -257,6 +259,7 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
         }
 
         this.registerEvents()
+        this.registerBodyLinkInterceptor()
 
         getRendition?.(rendition)
 
@@ -326,6 +329,59 @@ export class EpubView extends Component<IEpubViewProps, IEpubViewState> {
           }
         })
       }
+    }
+  }
+
+  /**
+   * Intercept clicks on internal links (footnotes, cross-references) inside the
+   * rendered book content and push a JUMP_REQUESTED event to the navigation
+   * history machine before displaying the target location.
+   */
+  registerBodyLinkInterceptor() {
+    if (!this.rendition) return
+    this.rendition.hooks.content.register((contents: Contents) => {
+      contents.document.addEventListener('click', (event: Event) => {
+        const target = event.target as HTMLElement | null
+        const anchor = target?.closest('a[href]') as HTMLAnchorElement | null
+        if (!anchor) return
+        const href = anchor.getAttribute('href')
+        if (!href) return
+        // Skip external links — let the browser/Electron handle them
+        if (/^(https?:|mailto:)/i.test(href)) return
+        event.preventDefault()
+        const currentCfi = (this.rendition?.currentLocation() as { cfi?: string } | undefined)?.cfi
+        if (!currentCfi) return
+        const activeParagraph = usePlayerStore.getState().activeParagraph
+        const indexStr = activeParagraph?.index
+        const paragraphIndex = indexStr != null ? Number(indexStr) : null
+        const fromTts =
+          paragraphIndex != null && Number.isFinite(paragraphIndex) ? { paragraphIndex } : null
+        navigationHistoryActor.send({
+          type: 'JUMP_REQUESTED',
+          from: { kind: 'epub', cfi: currentCfi },
+          fromTts,
+          to: { kind: 'epub', cfi: href },
+          source: 'link',
+          fromLabel: this.lookupChapterLabel(currentCfi) ?? 'previous spot'
+        })
+        void this.rendition?.display(href)
+      })
+    })
+  }
+
+  /**
+   * Attempt to resolve a CFI to a chapter label from the book's navigation table.
+   */
+  private lookupChapterLabel(cfi: string): string | null {
+    try {
+      const item = (
+        this.book?.navigation as
+          | { get?: (cfi: string) => { label?: string } | undefined }
+          | undefined
+      )?.get?.(cfi)
+      return item?.label?.trim() ?? null
+    } catch {
+      return null
     }
   }
 

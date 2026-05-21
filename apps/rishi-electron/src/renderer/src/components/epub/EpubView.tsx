@@ -57,6 +57,13 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { usePageTracker } from '@/modules/epub-page-tracker'
 import { dumpError } from '@/utils/errorDump'
 import { getCachedEpub } from '@/services/reader-cache/epub-cache'
+import {
+  navigationHistoryActor,
+  onResumeRequested
+} from '@/machines/navigationHistory/navigationHistoryActor'
+import { useEngagementDetector } from '@/hooks/useEngagementDetector'
+import { useNavigationHistoryKeyboard } from '@/hooks/useNavigationHistoryKeyboard'
+import { NavigationHistoryFooter } from '@/components/navigation-history/NavigationHistoryFooter'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
 import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-storage'
 import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
@@ -95,6 +102,9 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       })
     }
   }, [book.location])
+  // Ref for the reader root — used by useEngagementDetector to attach pointer listeners.
+  const readerRootRef = useRef<HTMLDivElement>(null)
+
   const rendition = useEpubStore((s) => s.rendition)
   const setRendition = useEpubStore((s) => s.setRendition)
   const renditionRef = useRef(rendition)
@@ -938,6 +948,46 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
 
   const setParagraphRendition = useEpubStore((s) => s.setParagraphRendition)
 
+  // Navigation history: lifecycle (BOOK_OPENED / BOOK_CLOSED)
+  useEffect(() => {
+    if (!currentLocation) return
+    navigationHistoryActor.send({
+      type: 'BOOK_OPENED',
+      bookId: String(book.id),
+      initialPosition: { kind: 'epub', cfi: currentLocation }
+    })
+    return () => navigationHistoryActor.send({ type: 'BOOK_CLOSED' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [book.id])
+
+  // Navigation history: PAGE_VISITED on every location change
+  useEffect(() => {
+    if (!currentLocation) return
+    const activeParagraph = usePlayerStore.getState().activeParagraph
+    const indexStr = activeParagraph?.index
+    const paragraphIndex = indexStr != null ? Number(indexStr) : null
+    const ttsContext =
+      paragraphIndex != null && Number.isFinite(paragraphIndex) ? { paragraphIndex } : null
+    navigationHistoryActor.send({
+      type: 'PAGE_VISITED',
+      position: { kind: 'epub', cfi: currentLocation },
+      ttsContext
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentLocation])
+
+  // Navigation history: RESUME_REQUESTED → display the stored CFI
+  useEffect(() => {
+    return onResumeRequested((anchor) => {
+      if (anchor.position.kind !== 'epub') return
+      renditionRef.current?.display(anchor.position.cfi)
+    })
+  }, [])
+
+  // Engagement detector + keyboard back-navigation
+  useEngagementDetector({ targetRef: readerRootRef, enabled: true })
+  useNavigationHistoryKeyboard()
+
   const updateBookLocationMutation = useMutation({
     mutationFn: async ({ bookId, location }: { bookId: string; location: string }) => {
       await updateBookLocation({
@@ -964,7 +1014,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   }
 
   return (
-    <div className="relative">
+    <div ref={readerRootRef} className="relative">
       <div
         style={{ height: '100vh', position: 'relative', overflow: 'hidden', touchAction: 'pan-y' }}
         {...pageCurl.pointerHandlers}
@@ -1323,6 +1373,24 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
             <BookmarksList
               bookSyncId={bookSyncId}
               onNavigate={(location) => {
+                const currentCfi = useEpubStore.getState().currentEpubLocation
+                if (currentCfi) {
+                  const activeParagraph = usePlayerStore.getState().activeParagraph
+                  const indexStr = activeParagraph?.index
+                  const paragraphIndex = indexStr != null ? Number(indexStr) : null
+                  const fromTts =
+                    paragraphIndex != null && Number.isFinite(paragraphIndex)
+                      ? { paragraphIndex }
+                      : null
+                  navigationHistoryActor.send({
+                    type: 'JUMP_REQUESTED',
+                    from: { kind: 'epub', cfi: currentCfi },
+                    fromTts,
+                    to: { kind: 'epub', cfi: location },
+                    source: 'bookmark',
+                    fromLabel: 'previous spot'
+                  })
+                }
                 const send = useNavStore.getState().send
                 if (send) send({ type: 'DISPLAY', location })
                 setBookmarksPanelOpen(false)
@@ -1370,6 +1438,8 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           </span>
         </div>
       ) : null}
+
+      <NavigationHistoryFooter />
     </div>
   )
 }
