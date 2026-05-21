@@ -98,16 +98,25 @@ export async function extractEpubCover(
     else if (hrefBeforeProp) coverHref = hrefBeforeProp[1];
   }
 
-  // Branch C: id contains "cover" + image media-type
+  // Branch C: id contains "cover" + image media-type, attribute order
+  // agnostic. The OPF spec doesn't constrain attribute order, and
+  // Calibre (and several other editors) emit `media-type` before `id`
+  // and `href`. Resolving in two steps -- find the <item> tag whose id
+  // includes "cover" AND whose media-type is image/*, then extract the
+  // href from that tag -- covers every attribute permutation. (H3-04)
   if (!coverHref) {
-    const idBeforeHref = opfContent.match(
-      /<item[^>]+id="[^"]*cover[^"]*"[^>]+href="([^"]+)"[^>]+media-type="image\/[^"]+"/i,
-    );
-    const hrefBeforeId = opfContent.match(
-      /<item[^>]+href="([^"]+)"[^>]+id="[^"]*cover[^"]*"[^>]+media-type="image\/[^"]+"/i,
-    );
-    if (idBeforeHref) coverHref = idBeforeHref[1];
-    else if (hrefBeforeId) coverHref = hrefBeforeId[1];
+    const itemTagRegex = /<item\b[^>]*\/?>/gi;
+    let tagMatch: RegExpExecArray | null;
+    while ((tagMatch = itemTagRegex.exec(opfContent)) !== null) {
+      const tag = tagMatch[0];
+      const idAttr = tag.match(/\bid="([^"]*)"/i);
+      const mediaAttr = tag.match(/\bmedia-type="(image\/[^"]+)"/i);
+      const hrefAttr = tag.match(/\bhref="([^"]+)"/i);
+      if (idAttr && /cover/i.test(idAttr[1]) && mediaAttr && hrefAttr) {
+        coverHref = hrefAttr[1];
+        break;
+      }
+    }
   }
 
   if (!coverHref) return null;

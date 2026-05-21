@@ -151,6 +151,30 @@ describe("extractEpubCover — id contains 'cover' fallback", () => {
 
     expect(cover?.mimeType).toBe("image/png");
   });
+
+  // H3-04: Calibre and several other EPUB editors emit the manifest with
+  // media-type FIRST followed by id and href. The branch-C regex only
+  // searched for media-type AFTER both id and href, so these books fell
+  // through all three branches and yielded `null` even though they have
+  // a perfectly valid cover.
+  it("matches manifest items where media-type appears BEFORE id and href", async () => {
+    const opf = `<?xml version="1.0"?>
+<package>
+  <metadata/>
+  <manifest>
+    <item media-type="image/png" id="cover-img" href="cover.png"/>
+  </manifest>
+</package>`;
+    const epub = await buildEpub({
+      opfContent: opf,
+      files: { "OEBPS/cover.png": pngBytes },
+    });
+
+    const cover = await extractEpubCover(epub);
+
+    expect(cover).not.toBeNull();
+    expect(cover?.mimeType).toBe("image/png");
+  });
 });
 
 describe("extractEpubCover — edge cases", () => {
