@@ -61,6 +61,8 @@ const mockDb = {
 
 jest.mock('@/lib/db', () => ({
   db: mockDb,
+  // engine.ts (post-batch-1B) imports markSyncInProgress alongside db.
+  markSyncInProgress: jest.fn(),
 }))
 
 // ── Mock apiClient ───────────────────────────────────────────────────────────
