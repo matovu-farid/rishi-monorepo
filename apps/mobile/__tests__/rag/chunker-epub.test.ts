@@ -27,6 +27,20 @@ import JSZip from 'jszip'
 // ── expo-file-system mock — returns a per-test base64 fixture ───────────────
 const FIXTURE_KEY = '__epub_fixture__'
 
+// chunker.ts imports from `expo-file-system/legacy` after SDK 54's
+// deprecation; mock both paths so the chunker's import resolves either way.
+// (jest.mock is hoisted to the top of the file, so the factory cannot
+// reference a `const` defined here — each mock spells out its own factory.)
+jest.mock('expo-file-system/legacy', () => ({
+  readAsStringAsync: jest.fn(async () => {
+    const fixture = (global as { [k: string]: unknown })[FIXTURE_KEY]
+    if (typeof fixture !== 'string') {
+      throw new Error('No EPUB fixture set; tests must seed __epub_fixture__')
+    }
+    return fixture
+  }),
+  EncodingType: { Base64: 'base64' },
+}))
 jest.mock('expo-file-system', () => ({
   readAsStringAsync: jest.fn(async () => {
     const fixture = (global as { [k: string]: unknown })[FIXTURE_KEY]

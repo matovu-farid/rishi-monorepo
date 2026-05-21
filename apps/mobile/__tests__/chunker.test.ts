@@ -2,6 +2,14 @@ jest.mock('expo-crypto', () => ({
   randomUUID: () => `uuid-${Math.random().toString(36).slice(2, 10)}`,
 }))
 
+// chunker.ts imports from `expo-file-system/legacy` (SDK 54 deprecated the
+// top-level `readAsStringAsync` + `EncodingType` exports). Mock that path
+// explicitly — the `expo-file-system` mock is kept for any transitive
+// callers that still touch it via the top-level module.
+jest.mock('expo-file-system/legacy', () => ({
+  readAsStringAsync: jest.fn(),
+  EncodingType: { Base64: 'base64' },
+}))
 jest.mock('expo-file-system', () => ({
   readAsStringAsync: jest.fn(),
   EncodingType: { Base64: 'base64' },

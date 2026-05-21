@@ -1,4 +1,11 @@
-import * as FileSystem from 'expo-file-system'
+// expo-file-system v19 (SDK 54) removed the legacy `readAsStringAsync` +
+// `EncodingType` exports from the top-level module — they now live under
+// `expo-file-system/legacy`. The new File/Paths API doesn't expose a
+// base64-as-string read path that we can plumb into jszip / MOBI parsing,
+// so we keep using the legacy surface here and at the use-site mocks.
+// Tracking issue: future migration to `new FileSystem.File(uri).bytes()`
+// when jszip + the MOBI parser accept Uint8Array directly.
+import * as FileSystem from 'expo-file-system/legacy'
 import {
   parseMobiTextParagraphs,
   parseMobiChapters,

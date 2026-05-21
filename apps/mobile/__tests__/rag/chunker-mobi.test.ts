@@ -10,8 +10,15 @@ jest.mock('expo-crypto', () => ({
   randomUUID: () => 'uuid-not-expected-here',
 }))
 
-// FileSystem returns the same fixture every time
+// FileSystem returns the same fixture every time. chunker.ts imports
+// from `expo-file-system/legacy` after SDK 54's deprecation, so we mock
+// both paths. Factories must be inline — jest.mock is hoisted above any
+// local `const`.
 const FIXTURE_KEY = '__mobi_fixture__'
+jest.mock('expo-file-system/legacy', () => ({
+  readAsStringAsync: jest.fn(async () => (global as any)[FIXTURE_KEY]),
+  EncodingType: { Base64: 'base64' },
+}))
 jest.mock('expo-file-system', () => ({
   readAsStringAsync: jest.fn(async () => (global as any)[FIXTURE_KEY]),
   EncodingType: { Base64: 'base64' },

@@ -12,6 +12,15 @@ jest.mock('expo-crypto', () => ({
 }))
 
 const FIXTURE_KEY = '__azw3_fixture__'
+// chunker.ts imports from `expo-file-system/legacy` (SDK 54 moved the
+// `readAsStringAsync` + `EncodingType` symbols there). Mock both paths
+// so the chunker's call returns the per-test fixture regardless of
+// which import the production code uses. The factory must be inline
+// because jest.mock() is hoisted above any local `const`.
+jest.mock('expo-file-system/legacy', () => ({
+  readAsStringAsync: jest.fn(async () => (global as any)[FIXTURE_KEY]),
+  EncodingType: { Base64: 'base64' },
+}))
 jest.mock('expo-file-system', () => ({
   readAsStringAsync: jest.fn(async () => (global as any)[FIXTURE_KEY]),
   EncodingType: { Base64: 'base64' },

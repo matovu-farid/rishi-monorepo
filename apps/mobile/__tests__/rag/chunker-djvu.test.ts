@@ -10,6 +10,12 @@ jest.mock('expo-crypto', () => ({
   randomUUID: () => 'uuid-not-expected-here',
 }))
 
+// chunker.ts imports from `expo-file-system/legacy` after SDK 54's
+// deprecation; mock both paths so the chunker's import resolves either way.
+jest.mock('expo-file-system/legacy', () => ({
+  readAsStringAsync: jest.fn(),
+  EncodingType: { Base64: 'base64' },
+}))
 jest.mock('expo-file-system', () => ({
   readAsStringAsync: jest.fn(),
   EncodingType: { Base64: 'base64' },
