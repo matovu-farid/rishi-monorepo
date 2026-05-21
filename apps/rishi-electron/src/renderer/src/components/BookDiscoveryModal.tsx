@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { X, BookOpen, DownloadCloud, FolderOpen, Loader2, FilePlus } from 'lucide-react'
 import { toast } from 'sonner'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQueryClient, useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/Button'
 import { ClipLoader } from 'react-spinners'
 import { chooseFiles } from '@/modules/chooseFiles'
@@ -77,6 +77,19 @@ function FolderCheckbox({ checked, indeterminate, onChange, label }: FolderCheck
 
 export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
   const queryClient = useQueryClient()
+  const existingPathsQuery = useQuery({
+    queryKey: ['books', 'filepaths'],
+    queryFn: () => window.electron.getBookFilepaths(),
+    enabled: open,
+    staleTime: 30_000
+  })
+  const existingPaths = useMemo(
+    () => new Set(existingPathsQuery.data ?? []),
+    [existingPathsQuery.data]
+  )
+  // Buffer book-found events that arrive before the existing-paths query
+  // resolves, so the filter is never bypassed by a fast scanner.
+  const pendingBooksRef = useRef<DiscoveredBook[]>([])
   const [books, setBooks] = useState<DiscoveredBook[]>([])
   const [filter, setFilter] = useState('')
   const [scanning, setScanning] = useState(false)
@@ -112,6 +125,15 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
     }
   }
 
+  // Keep latest filter readiness / existing-paths in refs so the long-lived
+  // discovery subscription always sees the current value without resubscribing.
+  const filterReadyRef = useRef(false)
+  const existingPathsRef = useRef(existingPaths)
+  useEffect(() => {
+    filterReadyRef.current = existingPathsQuery.isSuccess || existingPathsQuery.isError
+    existingPathsRef.current = existingPaths
+  }, [existingPathsQuery.isSuccess, existingPathsQuery.isError, existingPaths])
+
   useEffect(() => {
     if (!open) return
     const svc = getBookImportService()
@@ -123,10 +145,16 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
     setScanComplete(false)
     setScanning(true)
     setSelectedPaths(new Set())
+    pendingBooksRef.current = []
 
     const unsub = svc.onDiscoveryEvent((event) => {
       if (event.kind === 'book-found') {
-        setBooks((prev) => [...prev, event.book])
+        if (filterReadyRef.current) {
+          if (existingPathsRef.current.has(event.book.filepath)) return
+          setBooks((prev) => [...prev, event.book])
+        } else {
+          pendingBooksRef.current.push(event.book)
+        }
       } else if (event.kind === 'progress') {
         setProgress(event.progress)
       } else if (event.kind === 'complete') {
@@ -146,6 +174,22 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
       void svc.cancelDiscovery()
     }
   }, [open, mode])
+
+  // Drain any buffered book-found events once the existing-paths query lands.
+  useEffect(() => {
+    if (!open) return
+    if (!existingPathsQuery.isSuccess && !existingPathsQuery.isError) return
+    const pending = pendingBooksRef.current
+    if (pending.length === 0) return
+    pendingBooksRef.current = []
+    setBooks((prev) => {
+      const next = [...prev]
+      for (const b of pending) {
+        if (!existingPaths.has(b.filepath)) next.push(b)
+      }
+      return next
+    })
+  }, [open, existingPathsQuery.isSuccess, existingPathsQuery.isError, existingPaths])
 
   const handleModeChange = (newMode: ScanMode) => {
     if (newMode === mode) return
