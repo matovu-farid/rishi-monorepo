@@ -17,6 +17,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme'
 import { useAuthStore } from '@/lib/stores/authStore'
 import { initVectorExtension, ensureChunkTables } from '@/lib/rag/vector-store'
 import { RagExtractorHost } from '@/components/RagExtractorHost'
+import { handleIncomingFile, isFileUrl } from '@/lib/file-handler'
 
 export const IS_E2E_TEST = process.env.EXPO_PUBLIC_E2E_TEST === 'true'
 
@@ -55,11 +56,34 @@ function RootLayout() {
   // so cold-start deep links (app not running when the redirect fires)
   // can be observed by future features (e.g. share-into-Rishi).
   useEffect(() => {
+    // Also handle the cold-start case: if the app was launched *by*
+    // an Open-With share-sheet action (or via a deep link), the URL
+    // arrives via `getInitialURL()` instead of an event.
+    void (async () => {
+      try {
+        const initialUrl = await Linking.getInitialURL()
+        if (initialUrl && isFileUrl(initialUrl)) {
+          await handleIncomingFile(initialUrl)
+        }
+      } catch (err) {
+        console.warn('[layout] failed to handle initial URL:', err)
+      }
+    })()
+
     const sub = Linking.addEventListener('url', ({ url }) => {
       if (url.startsWith('rishimobile://auth/callback')) {
         // No-op: openAuthSessionAsync handles in-flight callbacks. This
         // branch only fires for cold-start callbacks where the browser
         // was already closed — currently nothing else to do.
+        return
+      }
+      if (isFileUrl(url)) {
+        // File-association entry-point (G27): user picked Rishi from
+        // the iOS share sheet or Android intent picker. Fire-and-
+        // forget — errors are logged inside the handler.
+        void handleIncomingFile(url).catch((err: unknown) => {
+          console.warn('[layout] handleIncomingFile threw:', err)
+        })
       }
     })
     return () => {

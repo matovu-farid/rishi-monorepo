@@ -12,7 +12,70 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.rishi.mobile",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Rishi uses your microphone for live voice conversations with AI about your books."
+        "NSMicrophoneUsageDescription": "Rishi uses your microphone for live voice conversations with AI about your books.",
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "UISupportsDocumentBrowser": false,
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "EPUB Book",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": ["org.idpf.epub-container"]
+          },
+          {
+            "CFBundleTypeName": "PDF Document",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": ["com.adobe.pdf"]
+          },
+          {
+            "CFBundleTypeName": "Mobi Book",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": ["com.amazon.mobi8-ebook", "org.rishi.mobile.mobi"]
+          },
+          {
+            "CFBundleTypeName": "Kindle Book",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": ["com.amazon.azw3", "org.rishi.mobile.azw3"]
+          },
+          {
+            "CFBundleTypeName": "DjVu Document",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": ["org.rishi.mobile.djvu"]
+          }
+        ],
+        "UTExportedTypeDeclarations": [
+          {
+            "UTTypeIdentifier": "org.rishi.mobile.mobi",
+            "UTTypeDescription": "Mobipocket eBook",
+            "UTTypeConformsTo": ["public.data", "public.content"],
+            "UTTypeTagSpecification": {
+              "public.filename-extension": ["mobi"],
+              "public.mime-type": ["application/x-mobipocket-ebook"]
+            }
+          },
+          {
+            "UTTypeIdentifier": "org.rishi.mobile.azw3",
+            "UTTypeDescription": "Kindle eBook",
+            "UTTypeConformsTo": ["public.data", "public.content"],
+            "UTTypeTagSpecification": {
+              "public.filename-extension": ["azw3"],
+              "public.mime-type": ["application/vnd.amazon.ebook"]
+            }
+          },
+          {
+            "UTTypeIdentifier": "org.rishi.mobile.djvu",
+            "UTTypeDescription": "DjVu Document",
+            "UTTypeConformsTo": ["public.data", "public.content"],
+            "UTTypeTagSpecification": {
+              "public.filename-extension": ["djvu", "djv"],
+              "public.mime-type": ["image/vnd.djvu"]
+            }
+          }
+        ]
       }
     },
     "android": {
@@ -24,7 +87,41 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "category": ["DEFAULT", "BROWSABLE"],
+          "data": [
+            { "scheme": "file", "mimeType": "application/epub+zip" },
+            { "scheme": "content", "mimeType": "application/epub+zip" },
+            { "scheme": "file", "mimeType": "application/pdf" },
+            { "scheme": "content", "mimeType": "application/pdf" },
+            { "scheme": "file", "mimeType": "application/x-mobipocket-ebook" },
+            { "scheme": "content", "mimeType": "application/x-mobipocket-ebook" },
+            { "scheme": "file", "mimeType": "application/vnd.amazon.ebook" },
+            { "scheme": "content", "mimeType": "application/vnd.amazon.ebook" },
+            { "scheme": "file", "mimeType": "image/vnd.djvu" },
+            { "scheme": "content", "mimeType": "image/vnd.djvu" }
+          ]
+        },
+        {
+          "action": "VIEW",
+          "category": ["DEFAULT", "BROWSABLE"],
+          "data": [
+            { "scheme": "file", "pathPattern": ".*\\.epub" },
+            { "scheme": "file", "pathPattern": ".*\\.pdf" },
+            { "scheme": "file", "pathPattern": ".*\\.mobi" },
+            { "scheme": "file", "pathPattern": ".*\\.azw3" },
+            { "scheme": "file", "pathPattern": ".*\\.djvu" },
+            { "scheme": "content", "pathPattern": ".*\\.epub" },
+            { "scheme": "content", "pathPattern": ".*\\.pdf" },
+            { "scheme": "content", "pathPattern": ".*\\.mobi" },
+            { "scheme": "content", "pathPattern": ".*\\.azw3" },
+            { "scheme": "content", "pathPattern": ".*\\.djvu" }
+          ]
+        }
+      ]
     },
     "web": {
       "bundler": "metro",
