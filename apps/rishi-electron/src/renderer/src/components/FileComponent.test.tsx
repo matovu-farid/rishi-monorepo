@@ -80,8 +80,9 @@ beforeEach(() => {
   ;(window.electron.deleteBook as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
   // openBook is called when a book button is clicked; needed so any effect-time
   // invocations (e.g. auto-open on newBookId) don't throw.
-  ;(window.electron as unknown as Record<string, ReturnType<typeof vi.fn>>).openBook =
-    vi.fn().mockResolvedValue(undefined)
+  ;(window.electron as unknown as Record<string, ReturnType<typeof vi.fn>>).openBook = vi
+    .fn()
+    .mockResolvedValue(undefined)
   localStorage.clear()
 })
 
@@ -182,9 +183,9 @@ describe('FileComponent — bulk delete', () => {
     })
     expect(window.electron.deleteBook).toHaveBeenCalledWith(1)
     expect(window.electron.deleteBook).toHaveBeenCalledWith(2)
-    expect((toast as unknown as { success: ReturnType<typeof vi.fn> }).success).toHaveBeenCalledWith(
-      'Deleted 2 books'
-    )
+    expect(
+      (toast as unknown as { success: ReturnType<typeof vi.fn> }).success
+    ).toHaveBeenCalledWith('Deleted 2 books')
   })
 
   it('partial failure shows a warning toast with the right counts', async () => {

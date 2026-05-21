@@ -5,11 +5,21 @@ import { SelectionActionBar } from './SelectionActionBar'
 describe('SelectionActionBar', () => {
   it('renders the count (singular and plural)', () => {
     const { rerender } = render(
-      <SelectionActionBar count={1} onSelectAll={() => {}} onDelete={() => {}} onCancel={() => {}} />
+      <SelectionActionBar
+        count={1}
+        onSelectAll={() => {}}
+        onDelete={() => {}}
+        onCancel={() => {}}
+      />
     )
     expect(screen.getByText('1 selected')).toBeInTheDocument()
     rerender(
-      <SelectionActionBar count={3} onSelectAll={() => {}} onDelete={() => {}} onCancel={() => {}} />
+      <SelectionActionBar
+        count={3}
+        onSelectAll={() => {}}
+        onDelete={() => {}}
+        onCancel={() => {}}
+      />
     )
     expect(screen.getByText('3 selected')).toBeInTheDocument()
   })
@@ -36,7 +46,12 @@ describe('SelectionActionBar', () => {
 
   it('disables Delete when count is 0', () => {
     render(
-      <SelectionActionBar count={0} onSelectAll={() => {}} onDelete={() => {}} onCancel={() => {}} />
+      <SelectionActionBar
+        count={0}
+        onSelectAll={() => {}}
+        onDelete={() => {}}
+        onCancel={() => {}}
+      />
     )
     expect(screen.getByRole('button', { name: /^delete$/i })).toBeDisabled()
   })

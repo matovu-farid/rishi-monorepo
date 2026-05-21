@@ -46,8 +46,7 @@ export function useBookSelection(): BookSelection {
           next.add(targetId)
           return next
         }
-        const [from, to] =
-          anchorIdx <= targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx]
+        const [from, to] = anchorIdx <= targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx]
         for (let i = from; i <= to; i++) next.add(displayOrder[i])
         return next
       })
