@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { useAuthStore } from './authStore'
 
 describe('authStore', () => {
@@ -32,6 +32,42 @@ describe('authStore', () => {
   it('should default welcomeSeen to false when not in localStorage', () => {
     useAuthStore.getState().hydrateAuth()
     expect(useAuthStore.getState().welcomeSeen).toBe(false)
+  })
+
+  it('hydrateAuth treats stored "0" as not-yet-welcomed (welcomeSeen=false)', () => {
+    localStorage.setItem('rishi:welcome-seen', '0')
+    useAuthStore.getState().hydrateAuth()
+    expect(useAuthStore.getState().welcomeSeen).toBe(false)
+  })
+
+  it('hydrateAuth treats explicit null (missing key) as welcomeSeen=false', () => {
+    // localStorage.clear() in beforeEach guarantees getItem → null
+    expect(localStorage.getItem('rishi:welcome-seen')).toBeNull()
+    useAuthStore.getState().hydrateAuth()
+    expect(useAuthStore.getState().welcomeSeen).toBe(false)
+  })
+
+  describe('hydrateAuth fail-closed semantics', () => {
+    let getItemSpy: ReturnType<typeof vi.spyOn>
+    let warnSpy: ReturnType<typeof vi.spyOn>
+
+    beforeEach(() => {
+      getItemSpy = vi.spyOn(window.localStorage, 'getItem').mockImplementation(() => {
+        throw new Error('localStorage unavailable')
+      })
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    })
+
+    afterEach(() => {
+      getItemSpy.mockRestore()
+      warnSpy.mockRestore()
+    })
+
+    it('fail-closes to welcomeSeen=true when localStorage.getItem throws', () => {
+      useAuthStore.getState().hydrateAuth()
+      expect(useAuthStore.getState().welcomeSeen).toBe(true)
+      expect(warnSpy).toHaveBeenCalled()
+    })
   })
 
   it('should persist welcome seen on dismissWelcome', () => {
