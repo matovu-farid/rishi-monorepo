@@ -126,6 +126,7 @@ describe('BookImportService.importFromPath — happy path', () => {
     })
     expect(events.map((e) => e.kind)).toEqual([
       'copying',
+      'hashing',
       'parsing',
       'saving',
       'done',
