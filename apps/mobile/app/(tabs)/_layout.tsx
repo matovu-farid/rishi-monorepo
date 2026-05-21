@@ -49,10 +49,19 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="settings/index"
+        options={{
+          title: 'Settings',
+          tabBarIcon: ({ color }) => <IconSymbol size={28} name="gearshape.fill" color={color} />,
+        }}
+      />
+      {/* Boilerplate "explore" tab from the Expo template is hidden
+          but kept in the router tree so deep-links/cold-starts don't
+          404 if any persisted state references it. */}
+      <Tabs.Screen
         name="explore"
         options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
+          href: null,
         }}
       />
     </Tabs>

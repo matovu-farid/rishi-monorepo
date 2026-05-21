@@ -69,6 +69,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@testing-library/react-native": "^13.3.3",
     "@types/jest": "^30.0.0",
     "@types/md5": "^2.3.6",
     "@types/react": "~19.1.0",
@@ -77,6 +78,7 @@
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
     "jest": "^30.3.0",
+    "react-test-renderer": "^19.1.0",
     "ts-jest": "^29.4.9",
     "typescript": "~5.8.3"
   },

@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Lower JSX to `React.createElement` calls so Node's VM can execute
+    // the transpiled output. The main `tsconfig.json` uses
+    // `jsx: 'react-native'` which preserves JSX for Metro.
+    "jsx": "react-jsx",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    // Drop the custom conditions so ts-jest picks the regular package
+    // entry points rather than RN-specific ones at type-check time.
+    "customConditions": []
+  }
+}
