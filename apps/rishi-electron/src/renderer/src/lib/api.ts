@@ -164,6 +164,13 @@ function api() {
 export async function getBooks(): Promise<Book[]> {
   return api().getBooks()
 }
+export async function findBookByHash(hash: string): Promise<Book | null> {
+  return api().findBookByHash(hash)
+}
+
+export async function getBookFilepaths(): Promise<string[]> {
+  return api().getBookFilepaths()
+}
 export async function getBook(params: { bookId: number }): Promise<Book | null> {
   return api().getBook(params.bookId)
 }
