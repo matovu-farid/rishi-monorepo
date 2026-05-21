@@ -229,4 +229,49 @@ describe('FileComponent — Select All scope', () => {
   })
 })
 
+describe('FileComponent — keyboard shortcuts', () => {
+  it('Esc exits Select mode and clears selection', async () => {
+    renderWithClient(<FileComponent />)
+    await waitFor(() => screen.getByText('Alpha'))
+    fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
+    fireEvent.click(screen.getByLabelText('Select Alpha'))
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.queryByRole('toolbar', { name: /selection actions/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^select$/i })).toBeInTheDocument()
+  })
+
+  it('Cmd+A in Select mode selects all filtered books', async () => {
+    renderWithClient(<FileComponent />)
+    await waitFor(() => screen.getByText('Alpha'))
+    fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
+
+    fireEvent.keyDown(window, { key: 'a', metaKey: true })
+
+    expect(screen.getByText('2 selected')).toBeInTheDocument()
+  })
+
+  it('Delete in Select mode opens the confirm dialog when at least one is selected', async () => {
+    renderWithClient(<FileComponent />)
+    await waitFor(() => screen.getByText('Alpha'))
+    fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
+    fireEvent.click(screen.getByLabelText('Select Alpha'))
+
+    fireEvent.keyDown(window, { key: 'Delete' })
+
+    expect(screen.getByText('Delete 1 book?')).toBeInTheDocument()
+  })
+
+  it('Delete is a no-op when nothing is selected', async () => {
+    renderWithClient(<FileComponent />)
+    await waitFor(() => screen.getByText('Alpha'))
+    fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
+
+    fireEvent.keyDown(window, { key: 'Delete' })
+
+    expect(screen.queryByText(/^Delete \d+ book/)).not.toBeInTheDocument()
+  })
+})
+
 export { renderWithClient, makeBook }

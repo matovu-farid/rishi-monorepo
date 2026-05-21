@@ -288,6 +288,34 @@ export default function FileComponent(): React.JSX.Element {
     )
   }, [books, searchQuery])
 
+  useEffect(() => {
+    if (!selection.selectMode) return
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return
+
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        selection.exitSelectMode()
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault()
+        selection.selectAll(filteredBooks)
+        return
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selection.selectedIds.size === 0) return
+        e.preventDefault()
+        setConfirmOpen(true)
+        return
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [selection, filteredBooks])
+
   const lastReadBook = useMemo(() => {
     if (!lastReadBookId || !books) return null
     return books.find((b) => b.id.toString() === lastReadBookId) ?? null
