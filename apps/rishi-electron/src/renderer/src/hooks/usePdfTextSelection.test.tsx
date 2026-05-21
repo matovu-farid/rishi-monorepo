@@ -104,6 +104,23 @@ describe('usePdfTextSelection', () => {
     window.getSelection()!.addRange(range)
     act(() => container.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })))
     expect(onSelect).not.toHaveBeenCalled()
+
+    // Positive control: collapse the selection onto page 1 only and re-fire
+    // mouseup. If the previous bail was caused by an unrelated regression
+    // (broken findPageInfo, mismatched getPageElement, null getViewport, or
+    // null locator) rather than the cross-page guard, this single-page
+    // selection would also fail to fire onSelect.
+    const singlePageRange = document.createRange()
+    singlePageRange.setStart(a.text, 0)
+    singlePageRange.setEnd(a.text, 5)
+    Object.defineProperty(singlePageRange, 'getClientRects', { value: () => [
+      { left: 0, top: 0, width: 50, height: 14, right: 50, bottom: 14 }
+    ]})
+    window.getSelection()!.removeAllRanges()
+    window.getSelection()!.addRange(singlePageRange)
+    act(() => container.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })))
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onSelect.mock.calls[0][0].locator.page).toBe(1)
   })
 
   it('fires onClear when selection becomes collapsed', () => {
