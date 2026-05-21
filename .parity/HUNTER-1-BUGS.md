@@ -2,6 +2,30 @@
 
 Domain: `apps/mobile/{lib/auth,lib/api,lib/api-dev-bypass,lib/sync,lib/stores/authStore,app/(auth),app/(tabs)/settings,lib/file-handler}.ts`, plus `packages/shared/src/{auth,sync,connectivity}/**`.
 
+## Summary
+
+- **Bugs found:** 4
+- **Severity distribution:** 1 high, 1 medium-high, 1 medium, 1 low
+- **IDs:**
+  - H1-04 (High) — `authHydrated` never flipped for returning users → blank /(tabs) screen
+  - H1-03 (Medium-high) — `apiClient` 401 left `authStore` showing signed-in while bearer was wiped
+  - H1-02 (Medium) — `handleIncomingFile` imported the same URL twice on cold-start (getInitialURL + addEventListener)
+  - H1-01 (Low) — `handleSignOut` leaked unhandled rejection when secure-store deletion threw
+- **Tests added:** 9 new + 1 unskipped (CG09). All pass.
+- **Mobile test count:** 528 → 534 (+6 new pass; the unskip swap is net 0).
+
+## Areas reviewed without finding bugs
+
+- PKCE state cleanup across cold-start (verifier is closure-scoped → GC'd on background-kill; user must restart sign-in; documented limitation, not a bug).
+- Auth replay protection — `signIn` correctly throws on state mismatch (`lib/auth.ts:69-73`).
+- Token refresh path — no silent refresh; 401 forces re-sign-in (acceptable contract).
+- `api-dev-bypass` production safety — `buildDevBypassHeaders` returns `{}` when `isDev=false` even if the env var is set; verified by `__tests__/api/dev-bypass.test.ts`.
+- Settings sign-out ordering — secure-store cleared before MMKV/in-memory store via `await signOut()` then `finally { clearSession() }`. Both layers safely handle errors.
+- Sync conflict resolution (mobile vs electron) — both skip locally-dirty rows; both apply LWW `updatedAt` guard for highlights + conversations; both skip messages (append-only); both don't apply LWW for books (intentional, server-canonical).
+- Deep-link interception in `_layout.tsx` — `rishimobile://auth/callback` is short-circuited; `isFileUrl` correctly rejects ALL `rishimobile://` URLs.
+- `triggerSyncOnWrite` debouncer — correctly clears `writeDebounce` after firing.
+- Sync engine 401 handling — `AUTH_EXPIRED` propagates correctly; with H1-03 fix the in-memory store also clears.
+
 ---
 
 ## H1-04 — Returning users hit a blank `/(tabs)` screen because `authHydrated` never flipped
