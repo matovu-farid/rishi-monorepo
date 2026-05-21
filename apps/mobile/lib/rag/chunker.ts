@@ -138,9 +138,15 @@ export async function extractEpubText(
     // meaning "root of the zip". Without this branch the join becomes
     // `OEBPS//ch1.xhtml` and the file lookup fails, returning 0 chunks
     // for an otherwise valid EPUB. Mirrors epub-cover.ts behavior.
-    const fullPath = href.startsWith('/') ? href.slice(1) : opfDir + href
+    const joinedPath = href.startsWith('/') ? href.slice(1) : opfDir + href
+    // KF8 / Sigil templates can also produce ../ segments that point at
+    // a sibling directory of the OPF. JSZip doesn't normalize paths, so
+    // we collapse `.` and `..` segments before the lookup. (H3-07)
+    const fullPath = normalizeZipPath(joinedPath)
     try {
-      const xhtml = await zip.file(fullPath)?.async('text')
+      const xhtml =
+        (await zip.file(fullPath)?.async('text')) ??
+        (await zip.file(joinedPath)?.async('text'))
       if (!xhtml) {
         console.warn('[chunker] Could not read spine item:', fullPath)
         continue
@@ -282,6 +288,24 @@ async function extractMobiSections(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Collapse `.` and `..` segments in a zip-relative path so JSZip can
+ * resolve hrefs like `OEBPS/../Text/ch1.xhtml`. (H3-07)
+ */
+function normalizeZipPath(path: string): string {
+  const segments = path.split('/')
+  const out: string[] = []
+  for (const seg of segments) {
+    if (seg === '' || seg === '.') continue
+    if (seg === '..') {
+      out.pop()
+      continue
+    }
+    out.push(seg)
+  }
+  return out.join('/')
+}
 
 function base64ToUint8Array(base64: string): Uint8Array {
   // Both RN and Node 18+ have atob in globalThis; fall back to node:buffer

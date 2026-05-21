@@ -202,6 +202,46 @@ describe('chunker -> EPUB (CG17: corrupt-file branches)', () => {
     expect(joined).toContain('order-agnostic')
   })
 
+  // H3-07: spine items with `../` segments resolved to non-existent
+  // paths under the OPF dir; the chunker silently skipped them and
+  // emitted zero chunks. KF8 conversions and Sigil templates sometimes
+  // place chapters in a sibling directory of the OPF (e.g. OPS dir at
+  // root, references like ../Text/ch1.xhtml).
+  it('returns chunks for an EPUB with parent ../ segments in spine hrefs', async () => {
+    ;(global as { [k: string]: unknown })[FIXTURE_KEY] = await buildEpubBase64(
+      (zip) => {
+        zip.file(
+          'META-INF/container.xml',
+          '<?xml version="1.0"?><container><rootfiles>' +
+            '<rootfile full-path="OEBPS/content.opf"/>' +
+            '</rootfiles></container>',
+        )
+        zip.file(
+          'OEBPS/content.opf',
+          // Chapter sits at Text/ch1.xhtml at the zip root, referenced
+          // with ../Text/ch1.xhtml relative to OEBPS/.
+          '<?xml version="1.0"?><package>' +
+            '<manifest><item id="c1" href="../Text/ch1.xhtml" media-type="application/xhtml+xml"/></manifest>' +
+            '<spine><itemref idref="c1"/></spine>' +
+            '</package>',
+        )
+        zip.file(
+          'Text/ch1.xhtml',
+          '<html><body><h1>Parent Segment Chapter</h1>' +
+            '<p>The chunker must normalize parent segments to find chapters ' +
+            'placed in sibling directories of the OPF.</p>' +
+            '</body></html>',
+        )
+      },
+    )
+
+    const chunks = await getChunks('/fake/book.epub', 'epub', 'book-parent-segments')
+    expect(chunks.length).toBeGreaterThan(0)
+    expect(chunks[0].chapter).toBe('Parent Segment Chapter')
+    const joined = chunks.map((c) => c.text).join(' ')
+    expect(joined).toContain('sibling directories')
+  })
+
   it('returns chunks for a well-formed EPUB (positive control for the same wiring)', async () => {
     ;(global as { [k: string]: unknown })[FIXTURE_KEY] = await buildEpubBase64(
       (zip) => {
