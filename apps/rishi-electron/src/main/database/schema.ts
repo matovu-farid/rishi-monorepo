@@ -24,7 +24,8 @@ export const books = sqliteTable('books', {
   userId: text('user_id'),
   syncVersion: integer('sync_version').notNull().default(0),
   isDirty: integer('is_dirty').notNull().default(1),
-  isDeleted: integer('is_deleted').notNull().default(0)
+  isDeleted: integer('is_deleted').notNull().default(0),
+  lastParagraph: text('last_paragraph')
 })
 
 // ---------------------------------------------------------------------------
