@@ -237,6 +237,35 @@ describe("extractEpubCover — edge cases", () => {
     await expect(extractEpubCover(garbage)).resolves.toBeNull();
   });
 
+  // H3-06: some EPUB sources (e.g. Adobe-Digital-Editions-rebuilt
+  // files, KF8 conversions, certain Sigil templates) emit cover hrefs
+  // with `../` segments to reference a sibling directory of the OPF.
+  // The existing resolver leaves the segment in place, JSZip can't
+  // find the file, and the cover comes back null even though the
+  // image is sitting right there in the zip.
+  it("handles cover href with a parent ../ segment relative to the OPF dir", async () => {
+    const opf = `<?xml version="1.0"?>
+<package>
+  <metadata>
+    <meta name="cover" content="cover-id"/>
+  </metadata>
+  <manifest>
+    <item id="cover-id" href="../images/cover.png" media-type="image/png"/>
+  </manifest>
+</package>`;
+    const epub = await buildEpub({
+      opfPath: "OEBPS/content.opf",
+      opfContent: opf,
+      // The cover sits at root images/cover.png — referenced via ../
+      files: { "images/cover.png": pngBytes },
+    });
+
+    const cover = await extractEpubCover(epub);
+
+    expect(cover).not.toBeNull();
+    expect(cover?.mimeType).toBe("image/png");
+  });
+
   it("handles cover href with a leading slash (absolute-style path)", async () => {
     const opf = `<?xml version="1.0"?>
 <package>

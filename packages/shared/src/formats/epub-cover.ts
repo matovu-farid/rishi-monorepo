@@ -40,6 +40,25 @@ export interface EpubCover {
  * @param epubBlob EPUB file bytes (typically from `expo-file-system`'s
  *   `File.bytes()` on mobile or `fs.readFile()` on Node).
  */
+/**
+ * Collapse `.` and `..` segments in a zip-relative path so JSZip can
+ * resolve hrefs like `OEBPS/../images/cover.png`. Pure string-only;
+ * doesn't touch the filesystem. (H3-06)
+ */
+function normalizeZipPath(path: string): string {
+  const segments = path.split("/");
+  const out: string[] = [];
+  for (const seg of segments) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      out.pop();
+      continue;
+    }
+    out.push(seg);
+  }
+  return out.join("/");
+}
+
 export async function extractEpubCover(
   epubBlob: Uint8Array,
 ): Promise<EpubCover | null> {
@@ -128,7 +147,16 @@ export async function extractEpubCover(
   const resolvedPath = coverHref.startsWith("/")
     ? coverHref.slice(1)
     : opfDir + coverHref;
-  const coverFile = zip.file(resolvedPath) ?? zip.file(coverHref);
+  // Normalize any leftover `./` or `../` segments. KF8 conversions and
+  // some Sigil templates reference sibling directories with `../`, which
+  // JSZip won't resolve on its own; without this normalization we'd
+  // fall through to null even though the image is sitting in the zip.
+  // (H3-06)
+  const normalizedPath = normalizeZipPath(resolvedPath);
+  const coverFile =
+    zip.file(normalizedPath) ??
+    zip.file(resolvedPath) ??
+    zip.file(coverHref);
   if (!coverFile) return null;
 
   const data = await coverFile.async("uint8array");
