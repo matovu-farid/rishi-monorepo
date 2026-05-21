@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { X, BookOpen, Download, DownloadCloud, FolderOpen, Loader2, FilePlus } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { X, BookOpen, DownloadCloud, FolderOpen, Loader2, FilePlus } from 'lucide-react'
 import { toast } from 'sonner'
 import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/Button'
@@ -11,6 +11,10 @@ import {
   type ImportResult,
   type ScanProgress
 } from '@/services'
+
+// Above this many selected books, surface a confirmation step so a stray
+// "select all" can't kick off a 100+ book import without acknowledgement.
+const BULK_CONFIRM_THRESHOLD = 20
 
 function basename(path: string): string {
   const parts = path.split(/[\\/]/)
@@ -46,6 +50,30 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+interface FolderCheckboxProps {
+  checked: boolean
+  indeterminate: boolean
+  onChange: () => void
+  label: string
+}
+
+function FolderCheckbox({ checked, indeterminate, onChange, label }: FolderCheckboxProps) {
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate && !checked
+  }, [indeterminate, checked])
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+      aria-label={label}
+      className="w-4 h-4 accent-gray-700 cursor-pointer"
+    />
+  )
+}
+
 export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
   const queryClient = useQueryClient()
   const [books, setBooks] = useState<DiscoveredBook[]>([])
@@ -54,7 +82,8 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
   const [scanComplete, setScanComplete] = useState(false)
   const [progress, setProgress] = useState<ScanProgress | null>(null)
   const [mode, setMode] = useState<ScanMode>('default')
-  const [importingPaths, setImportingPaths] = useState<Set<string>>(new Set())
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   async function runImport(filePaths: string[]): Promise<ImportResult[]> {
     const results = await getBookImportService().importBatch(filePaths)
@@ -92,6 +121,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
     setProgress(null)
     setScanComplete(false)
     setScanning(true)
+    setSelectedPaths(new Set())
 
     const unsub = svc.onDiscoveryEvent((event) => {
       if (event.kind === 'book-found') {
@@ -118,7 +148,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
 
   const handleModeChange = (newMode: ScanMode) => {
     if (newMode === mode) return
-    setMode(newMode) // useEffect on `mode` will restart discovery
+    setMode(newMode)
   }
 
   const handleClose = async () => {
@@ -128,43 +158,63 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
     setScanning(false)
     setScanComplete(false)
     setProgress(null)
-    setImportingPaths(new Set())
+    setSelectedPaths(new Set())
+    setConfirmOpen(false)
     onClose()
   }
 
-  const handleImport = (book: DiscoveredBook) => {
-    setImportingPaths((prev) => new Set(prev).add(book.filepath))
-    setBooks((prev) => prev.filter((b) => b.filepath !== book.filepath))
-    setFilter('')
-
-    const label = `"${book.title ?? book.filename}"`
-    toast.promise(runImport([book.filepath]), {
-      loading: `Importing ${label}...`,
-      success: (results) => {
-        const r = results[0] as ImportResult | undefined
-        if (!r?.ok) return `Failed to import ${label}`
-        return `Imported ${label}`
-      },
-      error: `Failed to import ${label}`
+  const toggleBookSelected = (filepath: string) => {
+    setSelectedPaths((prev) => {
+      const next = new Set(prev)
+      if (next.has(filepath)) next.delete(filepath)
+      else next.add(filepath)
+      return next
     })
   }
 
-  const handleImportAll = () => {
-    const toImport = filteredBooks
-    if (toImport.length === 0) return
+  const toggleFolderSelected = (folderBooks: DiscoveredBook[]) => {
+    setSelectedPaths((prev) => {
+      const next = new Set(prev)
+      const allSelected = folderBooks.every((b) => next.has(b.filepath))
+      if (allSelected) folderBooks.forEach((b) => next.delete(b.filepath))
+      else folderBooks.forEach((b) => next.add(b.filepath))
+      return next
+    })
+  }
 
-    const newPaths = new Set(importingPaths)
-    toImport.forEach((b) => newPaths.add(b.filepath))
-    setImportingPaths(newPaths)
-    setBooks((prev) => prev.filter((b) => !newPaths.has(b.filepath)))
+  const performImport = (paths: string[]) => {
+    if (paths.length === 0) return
+    const pathSet = new Set(paths)
+
+    setBooks((prev) => prev.filter((b) => !pathSet.has(b.filepath)))
+    setSelectedPaths((prev) => {
+      const next = new Set(prev)
+      paths.forEach((p) => next.delete(p))
+      return next
+    })
     setFilter('')
 
-    const count = toImport.length
-    toast.promise(runImport(toImport.map((b) => b.filepath)), {
+    const count = paths.length
+    toast.promise(runImport(paths), {
       loading: `Importing ${count} book${count === 1 ? '' : 's'}...`,
       success: (results) => summarizeBatchResults(results).message,
       error: `Failed to import ${count} book${count === 1 ? '' : 's'}`
     })
+  }
+
+  const handleImportClick = () => {
+    if (selectedPaths.size === 0) return
+    if (selectedPaths.size > BULK_CONFIRM_THRESHOLD) {
+      setConfirmOpen(true)
+      return
+    }
+    performImport(Array.from(selectedPaths))
+  }
+
+  const handleConfirmImport = () => {
+    const paths = Array.from(selectedPaths)
+    setConfirmOpen(false)
+    performImport(paths)
   }
 
   const filteredBooks = books.filter((b) => {
@@ -177,14 +227,19 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
     )
   })
 
-  const grouped = filteredBooks.reduce<Record<string, DiscoveredBook[]>>((acc, book) => {
-    const bucket = acc[book.folder] as DiscoveredBook[] | undefined
-    if (!bucket) acc[book.folder] = [book]
-    else bucket.push(book)
-    return acc
-  }, {})
+  const grouped = useMemo(() => {
+    return filteredBooks.reduce<Record<string, DiscoveredBook[]>>((acc, book) => {
+      const bucket = acc[book.folder] as DiscoveredBook[] | undefined
+      if (!bucket) acc[book.folder] = [book]
+      else bucket.push(book)
+      return acc
+    }, {})
+  }, [filteredBooks])
 
   if (!open) return null
+
+  const selectedCount = selectedPaths.size
+  const importDisabled = selectedCount === 0
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -293,46 +348,64 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
               <p className="text-sm">No books found</p>
             </div>
           ) : (
-            Object.entries(grouped).map(([folder, folderBooks]) => (
-              <div key={folder} className="mb-5">
-                <div className="flex items-center gap-1.5 mb-2">
-                  <FolderOpen size={14} className="text-gray-400 shrink-0" />
-                  <span className="text-xs text-gray-400 truncate">{folder}</span>
+            Object.entries(grouped).map(([folder, folderBooks]) => {
+              const selectedInFolder = folderBooks.filter((b) =>
+                selectedPaths.has(b.filepath)
+              ).length
+              const allSelected = selectedInFolder === folderBooks.length
+              const someSelected = selectedInFolder > 0 && !allSelected
+              return (
+                <div key={folder} className="mb-5">
+                  <label className="flex items-center gap-2 mb-2 cursor-pointer">
+                    <FolderCheckbox
+                      checked={allSelected}
+                      indeterminate={someSelected}
+                      onChange={() => toggleFolderSelected(folderBooks)}
+                      label={`Select all books in ${folder}`}
+                    />
+                    <FolderOpen size={14} className="text-gray-400 shrink-0" />
+                    <span className="text-xs text-gray-400 truncate">{folder}</span>
+                  </label>
+                  <div className="space-y-1.5">
+                    {folderBooks.map((book) => {
+                      const checked = selectedPaths.has(book.filepath)
+                      return (
+                        <label
+                          key={book.filepath}
+                          className="flex items-center gap-3 bg-gray-50 hover:bg-gray-100 rounded-lg px-3 py-2.5 cursor-pointer transition-colors"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleBookSelected(book.filepath)}
+                            aria-label={`Select ${book.filename}`}
+                            className="w-4 h-4 accent-gray-700 cursor-pointer"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-900 truncate">
+                              {book.title ?? book.filename}
+                            </p>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              {book.author ? (
+                                <span className="text-xs text-gray-500 truncate">
+                                  {book.author}
+                                </span>
+                              ) : null}
+                              <span className="text-xs text-gray-400 uppercase">
+                                {book.format}
+                              </span>
+                              <span className="text-xs text-gray-400">
+                                {formatFileSize(book.fileSize)}
+                              </span>
+                            </div>
+                          </div>
+                        </label>
+                      )
+                    })}
+                  </div>
                 </div>
-                <div className="space-y-1.5">
-                  {folderBooks.map((book) => (
-                    <div
-                      key={book.filepath}
-                      className="flex items-center gap-3 bg-gray-50 hover:bg-gray-100 rounded-lg px-3 py-2.5 group transition-colors"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">
-                          {book.title ?? book.filename}
-                        </p>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          {book.author ? (
-                            <span className="text-xs text-gray-500 truncate">{book.author}</span>
-                          ) : null}
-                          <span className="text-xs text-gray-400 uppercase">{book.format}</span>
-                          <span className="text-xs text-gray-400">
-                            {formatFileSize(book.fileSize)}
-                          </span>
-                        </div>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleImport(book)}
-                        startIcon={<Download size={14} />}
-                        className="shrink-0 text-gray-500 hover:text-gray-700 hover:bg-gray-200 opacity-0 group-hover:opacity-100 transition-opacity"
-                      >
-                        Import
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))
+              )
+            })
           )}
         </div>
 
@@ -351,18 +424,57 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
             <Button variant="ghost" size="sm" onClick={handleClose} className="text-gray-500">
               Cancel
             </Button>
-            {filteredBooks.length > 0 && (
-              <Button
-                variant="default"
-                size="sm"
-                startIcon={<DownloadCloud size={15} />}
-                onClick={handleImportAll}
-              >
-                Import All ({filteredBooks.length})
-              </Button>
-            )}
+            <Button
+              variant="default"
+              size="sm"
+              startIcon={<DownloadCloud size={15} />}
+              onClick={handleImportClick}
+              disabled={importDisabled}
+            >
+              Import Selected ({selectedCount})
+            </Button>
           </div>
         </div>
+
+        {/* Bulk-import confirmation */}
+        {confirmOpen && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Confirm bulk import"
+              className="bg-white rounded-xl shadow-2xl border border-gray-200 max-w-md w-full mx-6 p-5"
+            >
+              <h3 className="text-base font-semibold text-gray-900 mb-2">
+                Import {selectedCount} books?
+              </h3>
+              <p className="text-sm text-gray-600 mb-5">
+                You&apos;re about to import{' '}
+                <span className="font-medium text-gray-900">{selectedCount}</span> books. This may
+                take a while and use significant storage. You can keep editing your selection if
+                that&apos;s not what you meant.
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setConfirmOpen(false)}
+                  className="text-gray-600"
+                >
+                  Keep editing
+                </Button>
+                <Button
+                  variant="default"
+                  size="sm"
+                  startIcon={<DownloadCloud size={15} />}
+                  onClick={handleConfirmImport}
+                >
+                  Import {selectedCount}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
