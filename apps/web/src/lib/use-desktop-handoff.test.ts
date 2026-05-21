@@ -147,4 +147,55 @@ describe("useDesktopHandoff", () => {
     await vi.waitFor(() => expect(result.current.status).toBe("error"))
     expect(result.current.errorMsg).toBe("boom")
   })
+
+  it("POSTs exactly once when two consumers mount with the same state", async () => {
+    mockUseSearchParams.mockReturnValue(
+      paramsFrom({
+        login: "true",
+        state: "55555555-5555-4555-8555-555555555555",
+      }),
+    )
+    mockUseSession.mockReturnValue({
+      data: { user: { id: "u_1" } },
+      isPending: false,
+    })
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
+    fetchMock.mockResolvedValue(new Response("{}", { status: 200 }))
+
+    const a = renderHook(() => useDesktopHandoff())
+    const b = renderHook(() => useDesktopHandoff())
+
+    await vi.waitFor(() => {
+      expect(a.result.current.status).toBe("done")
+      expect(b.result.current.status).toBe("done")
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("re-POSTs after clearHandoff(state) is called", async () => {
+    mockUseSearchParams.mockReturnValue(
+      paramsFrom({
+        login: "true",
+        state: "66666666-6666-4666-8666-666666666666",
+      }),
+    )
+    mockUseSession.mockReturnValue({
+      data: { user: { id: "u_1" } },
+      isPending: false,
+    })
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
+    fetchMock.mockResolvedValue(new Response("{}", { status: 200 }))
+
+    const first = renderHook(() => useDesktopHandoff())
+    await vi.waitFor(() => expect(first.result.current.status).toBe("done"))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const { clearHandoff } = await import("./use-desktop-handoff")
+    clearHandoff("66666666-6666-4666-8666-666666666666")
+
+    const second = renderHook(() => useDesktopHandoff())
+    await vi.waitFor(() => expect(second.result.current.status).toBe("done"))
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
 })
