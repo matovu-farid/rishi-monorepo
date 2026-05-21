@@ -21,7 +21,16 @@ export function LoginButton(): React.JSX.Element {
       <div className="flex gap-2 items-center">
         {/* User avatar — always show for authenticated users */}
         {user.image ? (
-          <img src={user.image} alt={altLabel} className="w-8 h-8 rounded-full object-cover" />
+          // Google's lh3.googleusercontent.com CDN 429s / 403s requests whose
+          // Referer header it doesn't like (e.g. http://localhost:5173 in dev,
+          // http://127.0.0.1:<port> in packaged). Strip Referer to make the
+          // request look like a plain image fetch.
+          <img
+            src={user.image}
+            alt={altLabel}
+            referrerPolicy="no-referrer"
+            className="w-8 h-8 rounded-full object-cover"
+          />
         ) : (
           <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-sm font-medium text-gray-600">
             {initial}

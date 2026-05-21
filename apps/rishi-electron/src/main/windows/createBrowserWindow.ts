@@ -30,7 +30,13 @@ export function makeBrowserWindowFactory(deps: FactoryDeps) {
         sandbox: false,
         contextIsolation: true,
         nodeIntegration: false,
-        webSecurity: false,
+        // epub.js renders book content inside `about:srcdoc` iframes, and
+        // Chromium sandboxes those (blocking script execution + the 'rendered'
+        // event) when webSecurity is enabled. Book windows therefore have to
+        // run with webSecurity off. The library/settings windows don't render
+        // book content, so we keep the default (true) for them — that's what
+        // re-enables CSP enforcement and same-origin policy where it matters.
+        webSecurity: identity.kind === 'book' ? false : true,
         additionalArguments: [`--window-identity=${identityFlag(identity)}`]
       }
     })
