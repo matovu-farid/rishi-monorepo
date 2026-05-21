@@ -7,36 +7,52 @@ Format-pair gaps and missing-counterpart gaps in renderer-core tests. Tracked fo
 - **chatStore.test.ts** — `chatStatus` transitions test covers only `'idle'` and
   `'speaking'`. Missing parity coverage for `'connecting'` and `'listening'`
   branches of the `ChatStatus` union from `@/services/voice-chat`.
+  ✓ closed in b7b0ff85 — note: the production `ChatStatus` union is
+  `'idle' | 'connecting' | 'thinking' | 'speaking'`; `'listening'` was a
+  misnomer in this gap entry. Added tests for `'connecting'` and `'thinking'`
+  via both `setChatStatus` and the `voice.onChatStatus` emit path.
 - **chatStore.test.ts** — `OfflineError` branch of `startChat` (`chatStore.ts:84-87`)
   is mocked but never thrown in any test. The non-OfflineError branch (Sentry
   capture) IS exercised; the OfflineError branch (skip Sentry capture) is not.
+  ✓ closed in b7b0ff85 — added OfflineError-skip-Sentry test plus explicit
+  non-OfflineError capture assertion.
 - **playerStore.test.ts** — `PlayerStoreState` union has 10 states; only `'idle'`
   is asserted. No transition coverage for `'loading' | 'playing' | 'paused.clean'
   | 'paused.stale' | 'waitingForParagraphs' | 'pageNavigating' |
   'republishingParagraphs' | 'error'`. The store is the "player" store with
   no actual play/pause path.
+  deferred — no production setter exists (`usePlayerMachine.ts:62` writes via
+  raw `setState`); pinning transitions belongs in a player-machine integration
+  test, not a store unit test. Reaffirmed as parity-gap.
 - **playerStore.test.ts** — `errors: string[]` field is in the fixture (L11) but
   no push/clear path is exercised. No setter exists in production either —
   suggests `errors` is dead state OR is mutated by external code; both warrant
   follow-up.
+  deferred — explicit "out of scope, needs product input" in Team Delta brief.
 - **playerStore.test.ts** — `activeParagraph` reset to `null` in fixture but
   never asserted, and no setter (`setActiveParagraph`) is exercised. Production
   has no `setActiveParagraph` action — the field is presumably written by the
   xstate machine via direct `setState`; that integration seam is uncovered here.
+  deferred — explicit "out of scope, needs separate test design" in Team Delta brief.
 - **authStore.test.ts** — `hydrateAuth()` only tested for `localStorage` value
   `'1'`. No coverage for `'0'`, `null`, or the catch-branch fail-closed
   semantics (`welcomeSeen=true` on throw at `authStore.ts:44-47`).
+  ✓ closed in b8654525 — added `'0'`, missing-key, and throw-from-getItem cases.
 - **authStore.test.ts** — No idempotency test for `hydrateAuth()` (calling it
   twice should not re-trigger any side effect; today it's pure-read so safe,
   but the contract is unasserted).
+  deferred — pure-read today, low value per Team Delta brief.
 - **indexingStore.test.ts** — Multi-book `reset()` correctness: only id `7` is
   ever used. `reset()` clearing 2+ books is unasserted.
+  ✓ closed in 6a2ae243 — two-book reset() test with `byBookId` full-shape assertion.
 - **indexingStore.test.ts** — `start()` called twice on the same id: does it
   reset progress (current behavior, per L27-33 which always writes
   `{ done: 0, total, status: 'running' }`) or merge? Behavior is implicit;
   add a test to pin it.
+  ✓ closed in 6a2ae243 — pinned reset-on-restart with a different total.
 - **navStore.test.ts** — No coverage for `send` being called when it was never
   set (`send: null`). Consumer crash vs no-op is unspecified.
+  ✓ closed in dee856dd — pinned the TypeError-on-null-invoke contract.
 
 ## Tester T10 (reader-cache, plan-misc-services §2)
 

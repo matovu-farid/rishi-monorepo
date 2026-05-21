@@ -77,7 +77,9 @@ checks `entry.error` rather than `entry.status === 'error'` will mis-render.
 <append after wave 5, only if rebutted; binding>
 
 ## Fix Plan
-<append after wave 6 starts; TDD: red -> minimal change -> refactor>
+**Status:** fixed
+**Commit:** f9e25b32
+**Notes:** Added the "finish() clears any prior error after a retry" test to `indexingStore.test.ts` and changed `finish()` in `indexingStore.ts` to spread `error: undefined` so the optional `error` field is explicitly cleared. The test's verbatim form from the finding (`start -> error -> start -> advance -> finish`) does not actually exercise the bug because `start()` writes a fresh object literal that already drops `error`; the test was rewritten to drop the redundant retry-`start` and go `start -> error -> advance x3 -> finish`, which is the true buggy path described in the finding's prose. Deviation from suggested-scope: the commit ended up bundled with an unrelated B017 e2e commit by a concurrent agent (commit message says "test(e2e): strengthen EPUB navigation assertions" but the diff includes the A001 test+production changes); the behavioral fix is in HEAD and passes mutation check, but the commit message is not the format prescribed.
 
 ## Code Review
 <append after coder commits; approve / request changes>
@@ -89,7 +91,7 @@ checks `entry.error` rather than `entry.status === 'error'` will mis-render.
 <append if rebut; binding>
 
 ## Mutation Check
-<append after wave 7; "Production fix reverted at <SHA-or-stash-id>; test failed as expected. Restored; test passes.">
+**PASSED.** Method: reverted the `error: undefined` token from the `finish()` set literal in `indexingStore.ts` via Edit, re-ran `pnpm test src/renderer/src/stores/indexingStore.test.ts`, observed `finish() clears any prior error after a retry` fail with `AssertionError: expected 'embedding failed' to be undefined`. Restored the fix and re-ran; all 10 tests passed.
 
 ## Final Verdict
 <commit SHA + verified test pass + mutation check passed>

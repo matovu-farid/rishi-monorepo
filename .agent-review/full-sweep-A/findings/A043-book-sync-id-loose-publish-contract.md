@@ -58,6 +58,9 @@ Production file: `apps/rishi-electron/src/renderer/src/hooks/reader/useBookSyncI
 ## Tiebreaker Verdict: CONFIRM | REJECT
 
 ## Fix Plan
+**Status:** fixed
+**Commit:** f4a6855d
+**Notes:** Replaced the `await new Promise(r => setTimeout(r, 0))` flush in the "does not publish bookmarks when the sync id is null/empty" test with `await waitFor(() => { expect(booksGetSyncId).toHaveBeenCalledWith(99); expect(getBook).toHaveBeenCalledWith(99) })` so the negative assertion is only made after the hook has measurably progressed. Added a new "re-fetches and re-publishes when bookId changes between renders" test that drives `renderHook` with `{ initialProps: { id: 1 } }`, awaits first publish, then `rerender({ id: 2 })` and awaits the new sync id state + asserts both `booksGetSyncId(2)` and `publishBookmarksToMenu('sync-second')` ran. Production untouched; suite goes from 5 to 6 tests.
 
 ## Code Review
 
