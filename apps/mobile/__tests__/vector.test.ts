@@ -1,6 +1,16 @@
-const mockExecSync = jest.fn()
-const mockRunSync = jest.fn(() => ({ lastInsertRowId: 42 }))
-const mockGetAllSync = jest.fn(() => [])
+// Type the mocks loosely so the assertion helpers (`.calls[0][0] as string`,
+// `.calls[0][1] as unknown[]`) compile even when jest can't infer arg tuples.
+// The cast funnels them through `unknown` first to satisfy TS's no-overlap
+// rule for unrelated tuple/string conversions.
+const mockExecSync = jest.fn() as unknown as jest.Mock<unknown, unknown[]>
+const mockRunSync = jest.fn(() => ({ lastInsertRowId: 42 })) as unknown as jest.Mock<
+  { lastInsertRowId: number },
+  unknown[]
+>
+const mockGetAllSync = jest.fn(() => [] as unknown[]) as unknown as jest.Mock<
+  unknown[],
+  unknown[]
+>
 
 jest.mock('@/lib/db', () => ({
   rawDb: {
@@ -97,14 +107,23 @@ describe('isBookEmbedded', () => {
 })
 
 describe('deleteBookChunks', () => {
-  it('calls execSync for DELETE on both tables', () => {
+  // deleteBookChunks() uses runSync() with parameterized queries (not
+  // execSync + string interpolation) to prevent SQL injection. See commit
+  // 756a1e2c. The bookId is passed via the second-arg params array, so we
+  // assert against runSync calls and check the params separately.
+  it('calls runSync with parameterized DELETE on both tables', () => {
     deleteBookChunks('book-1')
-    expect(mockExecSync).toHaveBeenCalledTimes(2)
-    const firstCall = mockExecSync.mock.calls[0][0] as string
-    const secondCall = mockExecSync.mock.calls[1][0] as string
-    expect(firstCall).toContain('DELETE FROM chunk_vectors')
-    expect(firstCall).toContain('book-1')
-    expect(secondCall).toContain('DELETE FROM chunks')
-    expect(secondCall).toContain('book-1')
+    expect(mockRunSync).toHaveBeenCalledTimes(2)
+    const firstSql = mockRunSync.mock.calls[0]?.[0] as string
+    const firstParams = mockRunSync.mock.calls[0]?.[1] as unknown[]
+    const secondSql = mockRunSync.mock.calls[1]?.[0] as string
+    const secondParams = mockRunSync.mock.calls[1]?.[1] as unknown[]
+    expect(firstSql).toContain('DELETE FROM chunk_vectors')
+    // bookId must travel as a parameter, NOT be interpolated into the SQL.
+    expect(firstSql).not.toContain('book-1')
+    expect(firstParams).toEqual(['book-1'])
+    expect(secondSql).toContain('DELETE FROM chunks')
+    expect(secondSql).not.toContain('book-1')
+    expect(secondParams).toEqual(['book-1'])
   })
 })
