@@ -341,6 +341,28 @@ export const mobileSessionFactory = (
     },
 
     close() {
+      // H2-01: stop the cloned send-stream tracks BEFORE closing the PC.
+      // `RTCPeerConnection.close()` does not stop the underlying
+      // `MediaStreamTrack`s held by senders, and the cloned tracks in
+      // `transport.sendStream` are independent of the original mic stream
+      // (per WHATWG `MediaStreamTrack.clone()`). Without this, the OS
+      // microphone resource (LED, indicator) can stay live after the user
+      // ends a voice-chat session.
+      try {
+        const stream = transport.sendStream as unknown as {
+          getTracks?: () => Array<{ stop?: () => void }>
+        } | null | undefined
+        const tracks = stream?.getTracks?.() ?? []
+        for (const t of tracks) {
+          try {
+            t.stop?.()
+          } catch {
+            /* per-track best-effort */
+          }
+        }
+      } catch {
+        /* best-effort */
+      }
       try {
         dc.close()
       } catch {

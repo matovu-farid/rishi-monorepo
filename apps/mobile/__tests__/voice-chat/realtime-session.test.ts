@@ -406,4 +406,51 @@ describe('realtime-session (mobile)', () => {
       expect(newInstructions).toMatch(/Spanish/)
     })
   })
+
+  // ── Hunter-2 H2-01: cloned-track mic-release on close() ──────────────────
+  //
+  // Symptom: when the user ends a voice-chat session, the microphone LED
+  // sometimes stays on. The shared service's disposeInternal() stops the
+  // ORIGINAL mediaStream's tracks, but the CLONED tracks (the ones added
+  // to the RTCPeerConnection by mobileWebrtcFactory) are independent
+  // per WHATWG spec: `MediaStreamTrack.clone()` produces a separate track
+  // that does NOT stop when the source is stopped.
+  //
+  // Fix: session.close() must stop the cloned tracks held by the transport
+  // before closing the PC. Otherwise the cloned tracks keep the OS mic
+  // resource alive until the GC frees the PC senders (or never).
+  describe('H2-01: close() must release the cloned mic tracks', () => {
+    it('stops every track on the transport sendStream when close() is called', () => {
+      const clonedTrack = { stop: jest.fn(), kind: 'audio', enabled: true }
+      const sendStream = {
+        getTracks: jest.fn(() => [clonedTrack]),
+      }
+      const transport = mobileWebrtcFactory({
+        mediaStream: sendStream as never,
+        audioElement: { muted: true, srcObject: null, autoplay: true, pause: () => undefined },
+      })
+      const agent = mobileAgentFactory({
+        bookId: 7,
+        pageText: 'p',
+        language: 'en',
+        onEndConversation: jest.fn(),
+        rag: { searchSemantic: jest.fn().mockResolvedValue([]) },
+      })
+      const session = mobileSessionFactory(agent, {
+        transport,
+        apiKey: 'test-key',
+        serverVad: { threshold: 0.7, silenceDurationMs: 700, prefixPaddingMs: 300 },
+      })
+
+      // Reset the call count from any prior internal access during factory setup.
+      clonedTrack.stop.mockClear()
+
+      session.close()
+
+      // Without the fix this assertion FAILS — pc.close() does not stop
+      // the underlying MediaStreamTracks (only the source-side hardware
+      // would be released if and only if no other clones exist).
+      expect(clonedTrack.stop).toHaveBeenCalledTimes(1)
+    })
+  })
 })
