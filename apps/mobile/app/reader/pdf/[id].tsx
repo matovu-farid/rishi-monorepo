@@ -49,6 +49,9 @@ import { resolvePlayFromSelection } from '@/lib/pdf/read-aloud-from-selection'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 import { TTSControls } from '@/components/TTSControls'
+import { TTSVisualCue } from '@/components/TTSVisualCue'
+import { useVisualCueStore } from '@/lib/tts/visual-cue'
+import { classifyParagraphForVisualCue } from '@/lib/tts/visual-cue-classify'
 import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
 import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
@@ -106,6 +109,29 @@ export default function PdfReaderScreen() {
 
   // Subscribe to active-paragraph changes to drive the highlight reconciler.
   const activeParagraph = usePlayerStore((s) => s.activeParagraph)
+
+  // G15 — drive the visual-cue store from the active paragraph's text.
+  // The classifier is a cheap text-based heuristic (LaTeX delimiters,
+  // "Equation 1.2"-style labels) — full DOM scanning would require
+  // injecting code into the PDF WebView, which is overkill for the
+  // first-pass cue.
+  useEffect(() => {
+    const setCue = useVisualCueStore.getState().setVisualCue
+    if (!activeParagraph?.text) {
+      setCue(null)
+      return
+    }
+    const classification = classifyParagraphForVisualCue(activeParagraph.text)
+    if (classification) {
+      setCue({
+        kind: classification.kind,
+        label: classification.label,
+        target: activeParagraph.index,
+      })
+    } else {
+      setCue(null)
+    }
+  }, [activeParagraph])
 
   const pageNumber = usePdfStore((s) => s.pageNumber)
   const pageCount = usePdfStore((s) => s.pageCount)
@@ -537,6 +563,13 @@ export default function PdfReaderScreen() {
 
       {/* Floating TTS controls — visible whenever the player isn't idle */}
       <TTSControls />
+
+      {/* G15 — visual cue badge. Mounted unconditionally; the component
+          gates its own rendering on prefsStore.ttsVisualCueEnabled +
+          visualCueStore.label. We drive setVisualCue from the active
+          paragraph's text via a lightweight heuristic in
+          `lib/tts/visual-cue-classify.ts`. */}
+      <TTSVisualCue />
 
       {/* Note editor sheet (Batch 7 — NoteEditor widened to accept PDF
           highlights via the NoteEditableHighlight type). */}

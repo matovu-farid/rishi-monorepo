@@ -15,6 +15,9 @@ import { IconSymbol } from '@/components/ui/icon-symbol'
 import { getBookForReading, updateBookPage } from '@/lib/book-storage'
 import { Book } from '@/types/book'
 import { TTSControls } from '@/components/TTSControls'
+import { TTSVisualCue } from '@/components/TTSVisualCue'
+import { useVisualCueStore } from '@/lib/tts/visual-cue'
+import { classifyParagraphForVisualCue } from '@/lib/tts/visual-cue-classify'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
@@ -163,6 +166,7 @@ export default function DjvuReaderScreen() {
   usePlayerMachine(book?.id ?? '')
   const playingState = usePlayerStore((s) => s.playingState)
   const ttsActive = playingState !== 'idle'
+  const activeParagraph = usePlayerStore((s) => s.activeParagraph)
 
   // G14 — chat-resume bridge for DJVU.
   const { status: realtimeStatus } = useRealtimeChat(book?.id ?? '')
@@ -171,6 +175,25 @@ export default function DjvuReaderScreen() {
   // G20 — register the DJVU WebView as the page-capture target.
   const pageCaptureRef = useRef<View>(null)
   usePageCaptureRef(pageCaptureRef)
+
+  // G15 — visual-cue driver from active paragraph text.
+  useEffect(() => {
+    const setCue = useVisualCueStore.getState().setVisualCue
+    if (!activeParagraph?.text) {
+      setCue(null)
+      return
+    }
+    const classification = classifyParagraphForVisualCue(activeParagraph.text)
+    if (classification) {
+      setCue({
+        kind: classification.kind,
+        label: classification.label,
+        target: activeParagraph.index,
+      })
+    } else {
+      setCue(null)
+    }
+  }, [activeParagraph])
 
   const handleToggleTTS = useCallback(async () => {
     const sendFn = usePlayerStore.getState().send
@@ -524,6 +547,9 @@ export default function DjvuReaderScreen() {
 
       {/* Floating TTS controls */}
       <TTSControls />
+
+      {/* G15 — visual cue badge */}
+      <TTSVisualCue />
     </View>
   )
 }

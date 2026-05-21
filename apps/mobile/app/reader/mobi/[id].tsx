@@ -15,6 +15,9 @@ import { IconSymbol } from '@/components/ui/icon-symbol'
 import { getBookForReading, updateBookPage } from '@/lib/book-storage'
 import { Book } from '@/types/book'
 import { TTSControls } from '@/components/TTSControls'
+import { TTSVisualCue } from '@/components/TTSVisualCue'
+import { useVisualCueStore } from '@/lib/tts/visual-cue'
+import { classifyParagraphForVisualCue } from '@/lib/tts/visual-cue-classify'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
@@ -386,6 +389,27 @@ export default function MobiReaderScreen() {
     `)
   }, [activeParagraph, bookLoaded])
 
+  // G15 — visual-cue heuristic. MOBI/AZW3 chunks come from the
+  // PalmDOC parser as plain text; the classifier picks up LaTeX and
+  // labelled-figure markers.
+  useEffect(() => {
+    const setCue = useVisualCueStore.getState().setVisualCue
+    if (!activeParagraph?.text) {
+      setCue(null)
+      return
+    }
+    const classification = classifyParagraphForVisualCue(activeParagraph.text)
+    if (classification) {
+      setCue({
+        kind: classification.kind,
+        label: classification.label,
+        target: activeParagraph.index,
+      })
+    } else {
+      setCue(null)
+    }
+  }, [activeParagraph])
+
   if (loading) {
     return (
       <View style={{ flex: 1, backgroundColor: '#fafaf8', justifyContent: 'center', alignItems: 'center' }}>
@@ -553,6 +577,9 @@ export default function MobiReaderScreen() {
 
       {/* Floating TTS controls */}
       <TTSControls />
+
+      {/* G15 — visual cue badge */}
+      <TTSVisualCue />
     </View>
   )
 }

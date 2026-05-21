@@ -20,6 +20,9 @@ import {
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { ReaderToolbar } from '@/components/ReaderToolbar'
 import { TTSControls } from '@/components/TTSControls'
+import { TTSVisualCue } from '@/components/TTSVisualCue'
+import { useVisualCueStore } from '@/lib/tts/visual-cue'
+import { classifyParagraphForVisualCue } from '@/lib/tts/visual-cue-classify'
 import { BookmarksList } from '@/components/epub/BookmarksList'
 import { SearchPanel } from '@/components/epub/SearchPanel'
 import { usePlayerStore } from '@/lib/stores/playerStore'
@@ -142,6 +145,27 @@ function ReaderContent({ book }: { book: Book }) {
   const playingState = usePlayerStore((s) => s.playingState)
   const activeParagraph = usePlayerStore((s) => s.activeParagraph)
   const ttsActive = playingState !== 'idle'
+
+  // G15 — visual-cue driver. Heuristic classifies the active paragraph
+  // text for LaTeX / "Equation N" / "Figure N" markers and writes a cue
+  // into the store; <TTSVisualCue /> renders if prefs allow.
+  useEffect(() => {
+    const setCue = useVisualCueStore.getState().setVisualCue
+    if (!activeParagraph?.text) {
+      setCue(null)
+      return
+    }
+    const classification = classifyParagraphForVisualCue(activeParagraph.text)
+    if (classification) {
+      setCue({
+        kind: classification.kind,
+        label: classification.label,
+        target: activeParagraph.index,
+      })
+    } else {
+      setCue(null)
+    }
+  }, [activeParagraph])
 
   const theme = READER_THEMES[settings.themeName]
 
@@ -610,6 +634,14 @@ function ReaderContent({ book }: { book: Book }) {
       />
 
       <TTSControls />
+
+      {/* G15 — visual cue badge (gated by prefsStore.ttsVisualCueEnabled
+          AND a non-null cue in the visual-cue store). The EPUB WebView
+          would need a postMessage bridge to drive setVisualCue based on
+          DOM scanning; for now the component is mounted so the surface
+          is live whenever something else (e.g. a future MOBI/AZW3
+          heuristic) sets a cue. */}
+      <TTSVisualCue />
 
       {popoverVisible && selectedHighlight && (
         <AnnotationPopover
