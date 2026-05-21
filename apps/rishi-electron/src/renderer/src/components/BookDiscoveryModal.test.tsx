@@ -300,6 +300,24 @@ describe('BookDiscoveryModal post-import behavior', () => {
     expect(openBook).not.toHaveBeenCalled()
   })
 
+  it('closes the wizard and does NOT auto-open when the only book is a duplicate', async () => {
+    const onClose = vi.fn()
+    importBatch.mockResolvedValue([
+      { ok: false, filePath: '/docs/dupe.pdf', stage: 'duplicate', error: 'Already in library' }
+    ])
+    renderWithClient(<BookDiscoveryModal open={true} onClose={onClose} />)
+    await waitFor(() =>
+      expect(window.electron.getBookFilepaths).toHaveBeenCalled()
+    )
+    emitBooks([makeBook({ filepath: '/docs/dupe.pdf', folder: '/docs' })])
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /select dupe\.pdf/i }))
+    fireEvent.click(screen.getByRole('button', { name: /import selected/i }))
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(openBook).not.toHaveBeenCalled()
+  })
+
   it('auto-opens the single successful book even when other selected imports failed', async () => {
     const onClose = vi.fn()
     importBatch.mockResolvedValue([
