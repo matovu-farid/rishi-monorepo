@@ -53,7 +53,21 @@ Fix direction (for Wave 6, not implementation now): either (a) re-run the IPC fe
 <append if rebut; binding>
 
 ## Mutation Check
-<append after wave 7; "Production fix reverted at <SHA-or-stash-id>; test failed as expected. Restored; test passes.">
+**Result:** PASSED
+**Method:** Main thread reverse-applied fix commit `8cada209` to production file only (`useBookSyncId.ts`), kept test file intact, ran `pnpm --filter rishi-electron test useBookSyncId`. Then restored and re-ran.
+**Test failed without fix:** YES — 1/5 failed: "generates and persists a syncId when the initial fetch returns null" (the red-first test)
+**Test passed with fix restored:** YES — 5/5
 
 ## Final Verdict
-<commit SHA + verified test pass + mutation check passed>
+Fix commit: `8cada209`. Test pass: 5/5 unit. Mutation: PASSED.
+**Verdict:** APPROVE
+**Findings:**
+- Scope is minimal: only `useBookSyncId.ts` + its test changed; no unrelated refactors.
+- `cancelled` flag is wired correctly after each `await` (booksGetSyncId, getBook, saveBook) — bookId change or unmount cannot publish a stale syncId to ref/state. Mirrors `useChat.ts:40-61` faithfully.
+- Generated syncId is persisted via `saveBook({...book, syncId, isDirty: 1})` before being written to ref/state, so a window restart will see the same id (no orphan UUIDs held only in memory).
+- All 3 production consumers (`Azw3View.tsx:104`, `EpubView.tsx:192`, `MobiView.tsx:37`) destructure the same shape `{bookSyncId, bookSyncIdRef}` — no breakage. `ChatPanel`/`useChat` is a downstream consumer of `bookSyncId` and benefits from the fix (no longer needs to mint on its own when the reader has already mounted).
+- Tightened "null/empty" test (mocks `getBook` to null) correctly preserves the original "do not publish on a truly absent row" semantics so the new fallback doesn't silently swallow that case.
+- New red-first test (`generates and persists a syncId when the initial fetch returns null`) asserts saveBook is called with `{id, syncId, isDirty: 1}` and that ref === state — would fail against the old single-`then` implementation. 5/5 hook tests pass locally.
+
+Worth checking (low-confidence, do not block):
+- Concurrent-mint race: if two components calling `useBookSyncId(sameBookId)` mount in the same tick before either `saveBook` completes, both will mint different UUIDs and the later write wins; the earlier hook instance keeps the losing UUID in its ref/state and would publish bookmarks under a syncId no longer present in the books row. In practice the only other minting site is `useChat.ts` and `ChatPanel` is mounted lazily (closed by default) and takes `bookSyncId` as a prop, so the window is narrow — but the same race exists across two reader windows opened on the same book back-to-back. Not a regression vs. the prior behavior (which was strictly worse: no bookmarks ever), and matches the existing `useChat` pattern, so acceptable for this fix. If you want to eliminate it later, the minting should move to a single main-process IPC like `books:ensureSyncId(bookId)` that is idempotent under SQLite's row lock.

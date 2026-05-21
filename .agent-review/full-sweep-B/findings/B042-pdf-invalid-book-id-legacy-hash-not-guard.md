@@ -59,5 +59,11 @@ Reviewer-1 should verify whether the route guard exists in production and what i
 ## Code-Review Tiebreaker
 
 ## Mutation Check
+**Result:** PASSED (assertion grounds)
+**Method:** Main thread reverse-applied fix commit `9f675273` to __root.tsx, rebuilt, ran `pnpm test:e2e e2e/pdf-reader.spec.ts -g "invalid book id"`. Test failed (assertions). Restored, rebuilt, re-ran; assertions pass but pre-existing `afterAll(closeApp)` teardown timeout (env issue, not B042-related) still surfaces.
+**Test failed without fix:** YES (assertion failure)
+**Test passed with fix restored:** YES (assertions); known teardown flake unaffected by this fix
+**Follow-up:** pre-existing e2e launchApp/closeApp teardown — test-infra-backlog item.
 
 ## Final Verdict
+Fix commit: `9f675273`. Mutation: PASSED.
