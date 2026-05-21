@@ -79,6 +79,33 @@ test('PDF sub-page scroll position persists across close + reopen', async () => 
       scrollTopBefore - tolerance
     )
     expect(scrollTopAfter).toBeLessThan(scrollTopBefore + tolerance)
+
+    // Page-index assertion: scrollTop alone could match within ±450px for the
+    // wrong page (uniform-height fixture, off-by-one). Each rendered page
+    // exposes `data-page-number` (pdf.tsx:877). The page whose top is at /
+    // just above the viewport's scrollTop is the "displayed" one. Assert it
+    // matches the saved page number from `savedLocation`.
+    const savedPage = Number(savedLocation?.split(':')[0])
+    const displayedPage = await bookPage.evaluate(() => {
+      const scroller = document.querySelector<HTMLElement>('div.overflow-y-scroll')
+      if (!scroller) return -1
+      const scrollerTop = scroller.getBoundingClientRect().top
+      const targetY = scrollerTop + 1
+      const nodes = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-page-number]')
+      )
+      let best: { num: number; dist: number } | null = null
+      for (const node of nodes) {
+        const rect = node.getBoundingClientRect()
+        if (rect.bottom < scrollerTop) continue
+        const dist = Math.abs(rect.top - targetY)
+        const num = Number(node.getAttribute('data-page-number'))
+        if (!Number.isFinite(num)) continue
+        if (best === null || dist < best.dist) best = { num, dist }
+      }
+      return best?.num ?? -1
+    })
+    expect(displayedPage, 'displayed page should match saved page').toBe(savedPage)
   } finally {
     await closeApp(app)
   }
