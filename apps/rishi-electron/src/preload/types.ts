@@ -28,6 +28,7 @@ export type ChannelToMethod = {
   'books:delete': 'deleteBook'
   'books:updateCover': 'updateBookCover'
   'books:updateLocation': 'updateBookLocation'
+  'books:updateLastParagraph': 'updateBookLastParagraph'
   'books:hasSavedEpubData': 'hasSavedEpubData'
   'books:getOutline': 'getBookOutline'
   'books:getSyncId': 'booksGetSyncId'
@@ -316,6 +317,7 @@ export interface Book {
   syncVersion: number
   isDirty: number
   isDeleted: number
+  lastParagraph: string | null
 }
 
 export interface BookInsertable {

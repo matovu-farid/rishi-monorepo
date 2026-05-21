@@ -72,6 +72,10 @@ export type IpcContract = {
   'books:delete': { args: [bookId: number]; returns: void }
   'books:updateCover': { args: [bookId: number, cover: number[]]; returns: void }
   'books:updateLocation': { args: [bookId: number, location: string]; returns: void }
+  'books:updateLastParagraph': {
+    args: [bookId: number, lastParagraph: string | null]
+    returns: void
+  }
   'books:hasSavedEpubData': { args: [bookId: number]; returns: boolean }
   'books:getOutline': { args: [bookId: number]; returns: BookOutline }
   'books:getSyncId': { args: [bookId: number]; returns: string | null }
