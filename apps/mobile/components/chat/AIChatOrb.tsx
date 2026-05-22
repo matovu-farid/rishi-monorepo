@@ -212,7 +212,11 @@ export function AIChatOrb({
       accessibilityLabel={A11Y_LABELS[chatStatus]}
       accessibilityValue={{ text: A11Y_LABELS[chatStatus] }}
       accessibilityHint="Toggle the chat panel"
-      hitSlop={4}
+      // WGT-015 — the connecting-state pulse ring scales to 1.15× a 56pt
+      // base extent, so the visible ring edge sits ~6pt outside the orb's
+      // 52pt Pressable. The previous hitSlop=4 left a dead band; bumping
+      // to 8 makes the tap target match the max ring extent.
+      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       style={style}
     >
       {showRing ? (

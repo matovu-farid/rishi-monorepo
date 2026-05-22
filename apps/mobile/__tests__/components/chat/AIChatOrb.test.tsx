@@ -396,6 +396,43 @@ describe('AIChatOrb (mobile)', () => {
     )
   })
 
+  describe('WGT-015 — hitSlop covers the connecting ring extent', () => {
+    // The pulse ring scales to ~1.15× a 56pt extent (so ~64pt visual
+    // radius from the Pressable's 52pt origin). The previous hitSlop=4
+    // gave us a 60pt tap target — users who tapped the ring edge during
+    // "connecting" got nothing. Bumping hitSlop to ≥8 covers the ring's
+    // max extent.
+    it('Pressable hitSlop is ≥ 8 on every edge', () => {
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(
+          <AIChatOrb chatStatus="connecting" onPress={() => undefined} />,
+        )
+      })
+      const pressable = findFirstPressable(tree)
+      const hitSlop = (
+        pressable.props as {
+          hitSlop?:
+            | number
+            | { top?: number; bottom?: number; left?: number; right?: number }
+        }
+      ).hitSlop
+      // Accept either form — number-shorthand or per-edge object.
+      if (typeof hitSlop === 'number') {
+        expect(hitSlop).toBeGreaterThanOrEqual(8)
+      } else if (hitSlop && typeof hitSlop === 'object') {
+        expect(hitSlop.top ?? 0).toBeGreaterThanOrEqual(8)
+        expect(hitSlop.bottom ?? 0).toBeGreaterThanOrEqual(8)
+        expect(hitSlop.left ?? 0).toBeGreaterThanOrEqual(8)
+        expect(hitSlop.right ?? 0).toBeGreaterThanOrEqual(8)
+      } else {
+        throw new Error(
+          'Expected AIChatOrb Pressable to declare a hitSlop ≥ 8 (number or object).',
+        )
+      }
+    })
+  })
+
   it('honors a custom testID prop (overrides default)', () => {
     let tree!: TestRenderer.ReactTestRenderer
     act(() => {
