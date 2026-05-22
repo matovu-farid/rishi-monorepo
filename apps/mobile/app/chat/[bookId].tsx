@@ -11,7 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated'
 
-import { getBookForReading } from '@/lib/book-storage'
+import { getBookById, getBookForReading } from '@/lib/book-storage'
 import {
   createConversation,
   getConversationsForBook,
@@ -53,6 +53,17 @@ export default function BookChatScreen() {
 
   // Book data
   const [book, setBook] = useState<Book | null>(null)
+  // DAT-018 (#130): tri-state load status for the book row. We can't
+  // use `book === null` as the "deleted" signal because that's also the
+  // initial pre-load state — they look identical until the async
+  // `getBookForReading` resolves. `bookStatus` distinguishes:
+  //   - 'loading' — initial state, waiting on the async DB read.
+  //   - 'present' — found a row.
+  //   - 'missing' — DB returned null (deleted / never existed).
+  // The embedBook effect and the render branch both gate on this.
+  const [bookStatus, setBookStatus] = useState<'loading' | 'present' | 'missing'>(
+    'loading',
+  )
 
   // Embedding model
   const { isReady: modelReady, downloadProgress } = useEmbeddingModel()
@@ -125,12 +136,35 @@ export default function BookChatScreen() {
     }
   }, [voice, requireVoiceInput])
 
-  // Load book (async -- triggers R2 download for synced books)
+  // Load book (async -- triggers R2 download for synced books).
+  //
+  // DAT-018 (#130): if the row is missing the book was deleted (or never
+  // existed). Set `bookStatus = 'missing'` so the render branch shows a
+  // "Book was deleted" screen and the embed effect short-circuits.
   useEffect(() => {
-    if (bookId) {
-      getBookForReading(bookId).then(setBook).catch(err => {
-        console.error('Failed to load book for chat:', err)
+    if (!bookId) return
+    let cancelled = false
+    getBookForReading(bookId)
+      .then((result) => {
+        if (cancelled) return
+        if (result) {
+          setBook(result)
+          setBookStatus('present')
+        } else {
+          setBook(null)
+          setBookStatus('missing')
+        }
       })
+      .catch((err) => {
+        console.error('Failed to load book for chat:', err)
+        if (cancelled) return
+        // Surface a missing-book screen on hard-failure too — the user
+        // can navigate away rather than stare at an empty chat.
+        setBook(null)
+        setBookStatus('missing')
+      })
+    return () => {
+      cancelled = true
     }
   }, [bookId])
 
@@ -170,6 +204,13 @@ export default function BookChatScreen() {
     // P1-AL: gate behind authentication. Signed-out users see the
     // sign-in banner below and can opt in via the ai-chat premium gate.
     if (!isAuthenticated) return
+    // DAT-018 (#130): re-verify the book row right before firing — the
+    // async load races against library bulk-delete. `getBookById` is
+    // synchronous against the local DB so it's cheap to call here.
+    if (getBookById(bookId) == null) {
+      setBookStatus('missing')
+      return
+    }
 
     setIsEmbedding(true)
     setEmbeddingTotal(100)
@@ -362,6 +403,66 @@ export default function BookChatScreen() {
     for (const m of messageList) {
       messageIndexById.set(m.id, m.role === 'user' ? userIdx++ : assistantIdx++)
     }
+  }
+
+  // DAT-018 (#130): book row vanished — render a dedicated error screen
+  // so the user knows the book is gone and can navigate away. We render
+  // BEFORE the main content branch so none of the embedding /
+  // conversation effects produce visible UI.
+  if (bookStatus === 'missing') {
+    return (
+      <SafeAreaView
+        testID="screen-chat-detail"
+        className="flex-1 bg-white dark:bg-[#151718]"
+        edges={['top']}
+      >
+        <View className="flex-row items-center justify-between h-12 px-4 border-b border-gray-200 dark:border-gray-700">
+          <TouchableOpacity
+            onPress={() => safeBack(router)}
+            className="flex-row items-center h-11 pl-1 pr-2"
+            accessibilityLabel={from ? `Back to ${from}` : 'Back'}
+            accessibilityRole="button"
+          >
+            <IconSymbol name="chevron.left" size={22} color="#0a7ea4" />
+            {from ? (
+              <Text
+                testID="chat-detail-back-label"
+                className="text-base text-[#0a7ea4] ml-0.5"
+                numberOfLines={1}
+              >
+                {from}
+              </Text>
+            ) : null}
+          </TouchableOpacity>
+          <Text className="flex-1 text-base font-semibold text-gray-900 dark:text-white text-center mx-2">
+            Chat
+          </Text>
+          <View className="w-11 h-11" />
+        </View>
+        <View
+          testID="chat-deleted-book-error"
+          className="flex-1 items-center justify-center p-8"
+        >
+          <IconSymbol name="exclamationmark.triangle" size={40} color="#9CA3AF" />
+          <Text className="text-base font-semibold text-gray-900 dark:text-white mt-4 text-center">
+            Book was deleted
+          </Text>
+          <Text className="text-sm text-gray-500 dark:text-gray-400 mt-1 text-center">
+            This book is no longer in your library. Start a new chat from another
+            book to continue.
+          </Text>
+          <TouchableOpacity
+            testID="chat-deleted-book-back"
+            onPress={() => safeBack(router)}
+            className="mt-6 px-4 py-2 rounded-md bg-[#0a7ea4]"
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
+            <Text className="text-white font-semibold">Go back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    )
   }
 
   return (
