@@ -1011,9 +1011,11 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   selectionAction: {
-    minHeight: 32,
+    minHeight: 44,
+    minWidth: 44,
     paddingHorizontal: 8,
     justifyContent: 'center',
+    alignItems: 'center',
   },
   selectionActionText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   swatch: {
