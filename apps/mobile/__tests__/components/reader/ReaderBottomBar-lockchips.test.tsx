@@ -20,6 +20,12 @@ jest.mock('react-native', () => {
       hairlineWidth: 0.5,
     },
     Platform: { OS: 'ios', select: (s: any) => s.ios ?? s.default },
+    useWindowDimensions: () => ({
+      width: 414,
+      height: 844,
+      scale: 3,
+      fontScale: 1,
+    }),
     useColorScheme: () => 'light',
     AccessibilityInfo: {
       isReduceMotionEnabled: jest.fn(async () => false),

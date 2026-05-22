@@ -1,5 +1,11 @@
-import React, { useEffect } from 'react'
-import { Text, View, StyleSheet } from 'react-native'
+import React, { useCallback, useEffect, useState } from 'react'
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native'
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -11,6 +17,12 @@ import { Toolbar } from '@/components/ui/Toolbar'
 import { useTheme } from '@/lib/theme'
 import { ReaderProgressPill, type ReaderProgress } from './ReaderProgressPill'
 import type { RealtimeStatus } from '@/lib/realtime/types'
+
+// P1-L — viewports < 380pt (e.g. iPhone SE, mini, small Androids) cannot
+// fit the full 9-icon row without truncation. Collapse the secondary
+// icons (highlights, bookmarks list, search, appearance) into a "More"
+// overflow menu below this breakpoint.
+const OVERFLOW_BREAKPOINT_PT = 380
 
 export interface ReaderBottomBarProps {
   visible: boolean
@@ -61,13 +73,21 @@ export function ReaderBottomBar({
   testID,
 }: ReaderBottomBarProps): React.JSX.Element {
   const { colors, typography, motion, reduceMotion, spacing } = useTheme()
+  const { width: viewportWidth } = useWindowDimensions()
   const opacity = useSharedValue(visible ? 1 : 0)
+  const [moreOpen, setMoreOpen] = useState(false)
 
   useEffect(() => {
     opacity.value = withTiming(visible ? 1 : 0, {
       duration: reduceMotion ? 0 : motion.duration.fast,
     })
   }, [visible, opacity, motion.duration.fast, reduceMotion])
+
+  // When the bar is hidden, the menu must close too — otherwise reopening
+  // the chrome would re-expose the popover at a stale anchor.
+  useEffect(() => {
+    if (!visible) setMoreOpen(false)
+  }, [visible])
 
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
@@ -77,6 +97,26 @@ export function ReaderBottomBar({
 
   const realtimeActive =
     realtimeStatus != null && realtimeStatus !== 'idle'
+
+  // P1-L — secondary actions collapse on narrow viewports.
+  const narrow = viewportWidth < OVERFLOW_BREAKPOINT_PT
+  const hasAnySecondary =
+    onHighlightsPress != null ||
+    onBookmarksPress != null ||
+    onSearchPress != null ||
+    onAppearancePress != null
+  const showMoreButton = narrow && hasAnySecondary
+
+  const closeMore = useCallback(() => setMoreOpen(false), [])
+  const openMore = useCallback(() => setMoreOpen(true), [])
+
+  const handleMenuItem = useCallback(
+    (handler: (() => void) | undefined) => () => {
+      closeMore()
+      handler?.()
+    },
+    [closeMore],
+  )
 
   return (
     <Animated.View
@@ -125,7 +165,7 @@ export function ReaderBottomBar({
                 haptic="light"
               />
             ) : null}
-            {onHighlightsPress ? (
+            {!narrow && onHighlightsPress ? (
               <IconButton
                 name="pencil-outline"
                 onPress={onHighlightsPress}
@@ -133,7 +173,7 @@ export function ReaderBottomBar({
                 haptic="light"
               />
             ) : null}
-            {onBookmarksPress ? (
+            {!narrow && onBookmarksPress ? (
               <IconButton
                 name="list-circle-outline"
                 onPress={onBookmarksPress}
@@ -141,7 +181,7 @@ export function ReaderBottomBar({
                 haptic="light"
               />
             ) : null}
-            {onAppearancePress ? (
+            {!narrow && onAppearancePress ? (
               <IconButton
                 name="text-outline"
                 onPress={onAppearancePress}
@@ -149,7 +189,7 @@ export function ReaderBottomBar({
                 haptic="light"
               />
             ) : null}
-            {onSearchPress ? (
+            {!narrow && onSearchPress ? (
               <IconButton
                 name="search-outline"
                 onPress={onSearchPress}
@@ -213,10 +253,156 @@ export function ReaderBottomBar({
                 ) : null}
               </View>
             ) : null}
+            {showMoreButton ? (
+              <IconButton
+                name="ellipsis-horizontal"
+                onPress={openMore}
+                label="More reader actions"
+                haptic="light"
+                testID="reader-bottom-more"
+              />
+            ) : null}
           </View>
         }
       />
+      {showMoreButton && moreOpen ? (
+        <ReaderBottomMoreMenu
+          testID="reader-bottom-more-sheet"
+          onClose={closeMore}
+          onHighlightsPress={
+            onHighlightsPress ? handleMenuItem(onHighlightsPress) : undefined
+          }
+          onBookmarksPress={
+            onBookmarksPress ? handleMenuItem(onBookmarksPress) : undefined
+          }
+          onSearchPress={
+            onSearchPress ? handleMenuItem(onSearchPress) : undefined
+          }
+          onAppearancePress={
+            onAppearancePress ? handleMenuItem(onAppearancePress) : undefined
+          }
+        />
+      ) : null}
     </Animated.View>
+  )
+}
+
+interface ReaderBottomMoreMenuProps {
+  onClose: () => void
+  onHighlightsPress?: () => void
+  onBookmarksPress?: () => void
+  onSearchPress?: () => void
+  onAppearancePress?: () => void
+  testID?: string
+}
+
+// P1-L — lightweight overflow menu rendered above the bottom bar on narrow
+// viewports. We deliberately use plain RN primitives (Pressable + View)
+// instead of the gorhom BottomSheet so the menu does not depend on a
+// gesture-handler tree being present (and so it remains trivial to render
+// in unit tests). The backdrop fills the screen and closes on press; the
+// menu itself sits flush above the toolbar's right cluster.
+function ReaderBottomMoreMenu({
+  onClose,
+  onHighlightsPress,
+  onBookmarksPress,
+  onSearchPress,
+  onAppearancePress,
+  testID,
+}: ReaderBottomMoreMenuProps): React.JSX.Element {
+  const { colors, spacing, typography } = useTheme()
+  const body = typography.scale.body
+
+  const items: Array<{
+    key: string
+    label: string
+    icon: 'pencil-outline' | 'list-circle-outline' | 'search-outline' | 'text-outline'
+    onPress: () => void
+  }> = []
+  if (onHighlightsPress)
+    items.push({
+      key: 'highlights',
+      label: 'Highlights',
+      icon: 'pencil-outline',
+      onPress: onHighlightsPress,
+    })
+  if (onBookmarksPress)
+    items.push({
+      key: 'bookmarks',
+      label: 'Bookmarks',
+      icon: 'list-circle-outline',
+      onPress: onBookmarksPress,
+    })
+  if (onSearchPress)
+    items.push({
+      key: 'search',
+      label: 'Search',
+      icon: 'search-outline',
+      onPress: onSearchPress,
+    })
+  if (onAppearancePress)
+    items.push({
+      key: 'appearance',
+      label: 'Appearance',
+      icon: 'text-outline',
+      onPress: onAppearancePress,
+    })
+
+  return (
+    <View
+      testID={testID}
+      accessibilityViewIsModal
+      style={styles.moreOverlay}
+      pointerEvents="box-none"
+    >
+      <Pressable
+        testID="reader-bottom-more-backdrop"
+        accessibilityLabel="Dismiss menu"
+        onPress={onClose}
+        style={styles.moreBackdrop}
+      />
+      <View
+        accessibilityRole="menu"
+        style={[
+          styles.moreSheet,
+          {
+            backgroundColor: colors.background.secondary,
+            paddingVertical: spacing.sm,
+            marginHorizontal: spacing.lg,
+            marginBottom: spacing.sm,
+          },
+        ]}
+      >
+        {items.map((item) => (
+          <Pressable
+            key={item.key}
+            testID={`reader-bottom-more-item-${item.key}`}
+            accessibilityRole="menuitem"
+            accessibilityLabel={item.label}
+            onPress={item.onPress}
+            style={({ pressed }) => [
+              styles.moreItem,
+              {
+                paddingVertical: spacing.md,
+                paddingHorizontal: spacing.lg,
+                opacity: pressed ? 0.6 : 1,
+              },
+            ]}
+          >
+            <Text
+              style={{
+                fontSize: body.fontSize,
+                lineHeight: body.lineHeight,
+                fontWeight: body.fontWeight,
+                color: colors.label.primary,
+              }}
+            >
+              {item.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
   )
 }
 
@@ -234,5 +420,27 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: -2,
     right: -2,
+  },
+  // P1-L — overflow menu styles. The overlay anchors the popover above
+  // the toolbar without obscuring it, and the backdrop covers everything
+  // else so taps outside dismiss the menu.
+  moreOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: '100%',
+    top: -9999,
+    justifyContent: 'flex-end',
+  },
+  moreBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  moreSheet: {
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  moreItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
 })
