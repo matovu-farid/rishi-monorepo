@@ -9,8 +9,9 @@ export type EmptyStateProps = {
   icon: keyof typeof Ionicons.glyphMap | React.ReactNode
   title: string
   description?: string
-  action?: { label: string; onPress: () => void }
+  action?: { label: string; onPress: () => void; testID?: string; disabled?: boolean }
   testID?: string
+  titleTestID?: string
 }
 
 export function EmptyState({
@@ -19,6 +20,7 @@ export function EmptyState({
   description,
   action,
   testID,
+  titleTestID,
 }: EmptyStateProps): React.JSX.Element {
   const { colors, spacing, typography, radius } = useTheme()
   const iconNode =
@@ -52,6 +54,7 @@ export function EmptyState({
     >
       <View style={{ marginBottom: spacing.xl }}>{iconNode}</View>
       <Text
+        testID={titleTestID}
         style={[
           styles.center,
           {
@@ -85,6 +88,8 @@ export function EmptyState({
         <PressableScale
           onPress={handleAction}
           accessibilityLabel={action.label}
+          testID={action.testID}
+          disabled={action.disabled}
         >
           <View
             style={{

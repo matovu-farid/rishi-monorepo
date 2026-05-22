@@ -1,5 +1,5 @@
-import { View, Text, TouchableOpacity, ActivityIndicator, type LayoutChangeEvent } from 'react-native'
-import { IconSymbol } from '@/components/ui/icon-symbol'
+import { View, type LayoutChangeEvent } from 'react-native'
+import { EmptyState } from '@/components/ui/EmptyState'
 
 interface LibraryEmptyStateProps {
   onImport: () => void
@@ -13,6 +13,16 @@ interface LibraryEmptyStateProps {
   containerProps?: { onLayout?: (event: LayoutChangeEvent) => void }
 }
 
+/**
+ * Library empty state (P1-U).
+ *
+ * Re-implemented on top of the shared `EmptyState` primitive so the
+ * accent color, pill button radius, and 44pt hit target are sourced
+ * from the design tokens (colors.accent.primary, radius.full). The
+ * wrapping View exists so we can preserve the `library-empty-state`
+ * Detox testID and forward the onboarding tour's `onLayout` callbacks
+ * without modifying the shared primitive.
+ */
 export function LibraryEmptyState({
   onImport,
   importing,
@@ -22,31 +32,28 @@ export function LibraryEmptyState({
   return (
     <View
       testID="library-empty-state"
-      className="flex-1 items-center justify-center px-6"
-      onLayout={containerProps?.onLayout}
+      style={{ flex: 1 }}
+      onLayout={(event) => {
+        containerProps?.onLayout?.(event)
+        // The Import button also wants to be a tour target; forwarding
+        // the container layout is the closest approximation since the
+        // EmptyState primitive owns the button itself.
+        importButtonProps?.onLayout?.(event)
+      }}
     >
-      <IconSymbol name="book.fill" size={48} color="#9BA1A6" />
-      <Text testID="library-empty-title" className="text-xl font-semibold text-gray-900 dark:text-white mt-4">
-        No books yet
-      </Text>
-      <Text className="text-base text-gray-500 dark:text-gray-400 text-center mt-2 mb-6">
-        Import an EPUB or PDF from your device to start reading.
-      </Text>
-      <TouchableOpacity
-        testID="library-empty-import-btn"
-        className="w-full bg-[#0a7ea4] rounded-lg py-3 items-center"
-        onPress={onImport}
-        disabled={importing}
-        accessibilityRole="button"
-        accessibilityLabel="Import Book"
-        onLayout={importButtonProps?.onLayout}
-      >
-        {importing ? (
-          <ActivityIndicator color="#FFFFFF" />
-        ) : (
-          <Text className="text-white font-semibold text-base">Import Book</Text>
-        )}
-      </TouchableOpacity>
+      <EmptyState
+        testID="library-empty-state-inner"
+        titleTestID="library-empty-title"
+        icon="book-outline"
+        title="No books yet"
+        description="Import an EPUB or PDF from your device to start reading."
+        action={{
+          label: 'Import Book',
+          onPress: onImport,
+          testID: 'library-empty-import-btn',
+          disabled: importing,
+        }}
+      />
     </View>
   )
 }
