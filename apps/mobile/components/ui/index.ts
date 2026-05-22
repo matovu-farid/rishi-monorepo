@@ -21,4 +21,5 @@ export {
 export { SearchBar, type SearchBarProps } from './SearchBar'
 export { ListRow, type ListRowProps, type ListRowAccessory } from './ListRow'
 export { EmptyState, type EmptyStateProps } from './EmptyState'
+export { GlassDisk, type GlassDiskProps } from './GlassDisk'
 export { IconSymbol } from './icon-symbol'
