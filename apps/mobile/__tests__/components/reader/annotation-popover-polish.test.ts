@@ -91,4 +91,37 @@ describe('AnnotationPopover — critic-sweep polish', () => {
       expect(block).toMatch(/borderRadius:\s*10/)
     })
   })
+
+  describe('#107 PRF-002 — static styles hoisted to StyleSheet.create', () => {
+    it('imports StyleSheet from react-native', () => {
+      expect(SRC).toMatch(/import\s*\{[^}]*\bStyleSheet\b[^}]*\}\s*from\s*['"]react-native['"]/)
+    })
+
+    it('declares a module-scope StyleSheet.create at the bottom of the file', () => {
+      expect(SRC).toMatch(/StyleSheet\.create\(\{/)
+    })
+
+    it('hoists the popover container static fields (shadow, radius, elevation) into the stylesheet', () => {
+      // The big inline object on Animated.View (shadowColor, shadowOffset,
+      // shadowOpacity, shadowRadius, elevation, borderRadius, zIndex) must
+      // no longer live inline. Verify by scoping the search to the
+      // Animated.View element — everything between `<Animated.View` and
+      // the first `>` that closes its props.
+      const animatedOpen = SRC.match(/<Animated\.View[\s\S]*?>/)
+      expect(animatedOpen).not.toBeNull()
+      const inline = animatedOpen![0]
+      // Inline style on Animated.View should NOT spell out shadow/elevation
+      // literals; those belong in StyleSheet.create.
+      expect(inline).not.toMatch(/shadowColor:/)
+      expect(inline).not.toMatch(/shadowOffset:/)
+      expect(inline).not.toMatch(/elevation:/)
+    })
+
+    it('memoises the dynamic position composition (useMemo on top/left)', () => {
+      expect(SRC).toMatch(/useMemo/)
+      // Position must depend only on position.x / position.y for memo to
+      // skip recomputation when other state (showColors, theme) churns.
+      expect(SRC).toMatch(/\[position\.x,\s*position\.y\]/)
+    })
+  })
 })

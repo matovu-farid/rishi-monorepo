@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Alert,
   Dimensions,
@@ -43,6 +43,20 @@ export function AnnotationPopover({
   // memoises by colour scheme, so the value tracks light/dark automatically.
   const { colors } = useTheme()
 
+  // PRF-002 (#107): only the dynamic position composes per render; the
+  // rest of the container styling is hoisted to StyleSheet.create so
+  // RN's StyleSheet registry can cache the references.
+  const containerPosition = useMemo(
+    () => ({
+      top: position.y - POPOVER_HEIGHT - 10,
+      left: Math.max(
+        16,
+        Math.min(position.x - 140, screenWidth - POPOVER_MAX_WIDTH - 16),
+      ),
+    }),
+    [position.x, position.y],
+  )
+
   if (!visible || !highlight) return null
 
   const handleDelete = () => {
@@ -61,24 +75,15 @@ export function AnnotationPopover({
       entering={FadeIn.duration(150)}
       exiting={FadeOut.duration(150)}
       accessibilityViewIsModal={true}
-      style={{
-        position: 'absolute',
-        top: position.y - POPOVER_HEIGHT - 10,
-        left: Math.max(16, Math.min(position.x - 140, screenWidth - POPOVER_MAX_WIDTH - 16)),
-        maxWidth: POPOVER_MAX_WIDTH,
-        backgroundColor: theme.toolbarBg,
-        borderRadius: 8,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.25,
-        shadowRadius: 3.84,
-        elevation: 5,
-        zIndex: 20,
-      }}
+      style={[
+        styles.container,
+        containerPosition,
+        { backgroundColor: theme.toolbarBg },
+      ]}
     >
       {/* Excerpt */}
       <Text
-        style={{ color: theme.toolbarText, padding: 12 }}
+        style={[styles.excerpt, { color: theme.toolbarText }]}
         className="text-sm"
         numberOfLines={2}
       >
@@ -88,7 +93,7 @@ export function AnnotationPopover({
       {/* Note preview */}
       {highlight.note ? (
         <Text
-          style={{ color: '#687076', fontStyle: 'italic', paddingHorizontal: 12, paddingBottom: 4 }}
+          style={styles.notePreview}
           className="text-sm"
           numberOfLines={1}
         >
@@ -97,13 +102,13 @@ export function AnnotationPopover({
       ) : null}
 
       {/* Separator */}
-      <View style={{ height: 1, backgroundColor: theme.toolbarText, opacity: 0.2 }} />
+      <View style={[styles.separator, { backgroundColor: theme.toolbarText }]} />
 
       {/* Action row */}
-      <View style={{ flexDirection: 'row', justifyContent: 'space-evenly', paddingVertical: 4 }}>
+      <View style={styles.actionRow}>
         <TouchableOpacity
           onPress={() => onEditNote(highlight)}
-          style={{ minHeight: 44, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center' }}
+          style={styles.actionButton}
           accessibilityRole="button"
           accessibilityLabel="Edit Note"
         >
@@ -147,7 +152,7 @@ export function AnnotationPopover({
         ) : (
           <TouchableOpacity
             onPress={() => setShowColors(true)}
-            style={{ minHeight: 44, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center' }}
+            style={styles.actionButton}
             accessibilityRole="button"
             accessibilityLabel="Change Color"
           >
@@ -159,7 +164,7 @@ export function AnnotationPopover({
 
         <TouchableOpacity
           onPress={handleDelete}
-          style={{ minHeight: 44, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center' }}
+          style={styles.actionButton}
           accessibilityRole="button"
           accessibilityLabel="Delete highlight"
         >
@@ -173,7 +178,45 @@ export function AnnotationPopover({
   )
 }
 
+// PRF-002 (#107): static fields hoisted off the render path so React
+// Native's StyleSheet registry can cache the references. Only the
+// dynamic `top`/`left` and themed colours compose per render.
 const styles = StyleSheet.create({
+  container: {
+    position: 'absolute',
+    maxWidth: POPOVER_MAX_WIDTH,
+    borderRadius: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+    zIndex: 20,
+  },
+  excerpt: {
+    padding: 12,
+  },
+  notePreview: {
+    color: '#687076',
+    fontStyle: 'italic',
+    paddingHorizontal: 12,
+    paddingBottom: 4,
+  },
+  separator: {
+    height: 1,
+    opacity: 0.2,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-evenly',
+    paddingVertical: 4,
+  },
+  actionButton: {
+    minHeight: 44,
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   swatchRow: {
     flexDirection: 'row',
     alignItems: 'center',
