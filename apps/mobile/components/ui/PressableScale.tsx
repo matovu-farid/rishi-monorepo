@@ -11,6 +11,7 @@ import { useTheme } from '@/lib/theme'
 export type PressableScaleProps = {
   children: React.ReactNode
   onPress: () => void
+  onLongPress?: () => void
   onPressIn?: () => void
   onPressOut?: () => void
   hitSlop?:
@@ -28,6 +29,7 @@ export type PressableScaleProps = {
 export function PressableScale({
   children,
   onPress,
+  onLongPress,
   onPressIn,
   onPressOut,
   hitSlop,
@@ -75,12 +77,20 @@ export function PressableScale({
     onPress()
   }
 
+  const handleLongPress = onLongPress
+    ? () => {
+        if (disabled) return
+        onLongPress()
+      }
+    : undefined
+
   return (
     // UI-SPEC §7c: do not pass `disabled` to Pressable so VoiceOver still
     // announces the element with `accessibilityState={{ disabled }}` ("dimmed").
     // Press is no-op'd via the early-returns in handlePress* above.
     <Pressable
       onPress={handlePress}
+      onLongPress={handleLongPress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
       hitSlop={hitSlop}

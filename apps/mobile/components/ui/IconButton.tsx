@@ -9,6 +9,12 @@ export type HapticVariant = 'selection' | 'soft' | 'light' | 'medium'
 export type IconButtonProps = {
   name: keyof typeof Ionicons.glyphMap
   onPress: () => void
+  /**
+   * Optional long-press handler. Fires a `medium` haptic by default
+   * (independent of the short-press haptic). Used e.g. for the reader
+   * Back chevron's pin-toggle (P1-E).
+   */
+  onLongPress?: () => void
   size?: number
   color?: string
   label: string
@@ -43,6 +49,7 @@ function fireHaptic(variant: HapticVariant): void {
 export function IconButton({
   name,
   onPress,
+  onLongPress,
   size = 22,
   color,
   label,
@@ -62,9 +69,20 @@ export function IconButton({
     onPress()
   }
 
+  // Long-press fires a stronger (`medium`) haptic so the gesture is
+  // perceptibly different from a tap. Caller still drives behaviour.
+  const handleLongPress = onLongPress
+    ? () => {
+        if (disabled) return
+        fireHaptic('medium')
+        onLongPress()
+      }
+    : undefined
+
   return (
     <PressableScale
       onPress={handlePress}
+      onLongPress={handleLongPress}
       accessibilityLabel={label}
       disabled={disabled}
       hitSlop={hitSlop}

@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react'
-import { Text } from 'react-native'
+import { Text, View } from 'react-native'
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -13,6 +13,16 @@ export interface ReaderTopBarProps {
   visible: boolean
   title: string
   onBack: () => void
+  /**
+   * Optional long-press handler on the Back chevron. Wired by
+   * ReaderShell to flip the persistent `toolbarPinned` flag (P1-E).
+   */
+  onLongPressBack?: () => void
+  /**
+   * Mirrors `prefsStore.toolbarPinned`. Renders a subtle pin cue next
+   * to the Back chevron so the user can tell the auto-hide is bypassed.
+   */
+  pinned?: boolean
   testID?: string
 }
 
@@ -20,6 +30,8 @@ export function ReaderTopBar({
   visible,
   title,
   onBack,
+  onLongPressBack,
+  pinned = false,
   testID,
 }: ReaderTopBarProps): React.JSX.Element {
   const { colors, typography, motion, reduceMotion } = useTheme()
@@ -36,6 +48,43 @@ export function ReaderTopBar({
   }))
 
   const body = typography.scale.body
+
+  // P1-E — when pinned, render a tinted pin glyph next to the Back
+  // chevron. Purely visual; the long-press toggle lives on the chevron
+  // itself. Tinted in the system accent so it's discoverable but quiet.
+  const leftCluster = pinned ? (
+    <View
+      testID="reader-top-bar-pin-cue-container"
+      style={{ flexDirection: 'row', alignItems: 'center' }}
+    >
+      <IconButton
+        name="chevron-back"
+        onPress={onBack}
+        onLongPress={onLongPressBack}
+        label="Back to library"
+        haptic="light"
+      />
+      <View
+        testID="reader-top-bar-pin-cue"
+        accessibilityLabel="Toolbar pinned"
+        style={{
+          marginLeft: 4,
+          width: 6,
+          height: 6,
+          borderRadius: 3,
+          backgroundColor: colors.label.primary,
+        }}
+      />
+    </View>
+  ) : (
+    <IconButton
+      name="chevron-back"
+      onPress={onBack}
+      onLongPress={onLongPressBack}
+      label="Back to library"
+      haptic="light"
+    />
+  )
 
   return (
     <Animated.View
@@ -57,14 +106,7 @@ export function ReaderTopBar({
         blur
         transparent
         hairline
-        left={
-          <IconButton
-            name="chevron-back"
-            onPress={onBack}
-            label="Back to library"
-            haptic="light"
-          />
-        }
+        left={leftCluster}
         center={
           <Text
             numberOfLines={1}

@@ -128,4 +128,47 @@ describe('prefsStore (mobile)', () => {
     expect(backingStore.get('rishi.mobile.prefs:tts-visual-cue-enabled')).toBe('false')
     expect(usePrefsStore.getState().ttsVisualCueEnabled).toBe(false)
   })
+
+  // P1-E — toolbar pinned. Defaults to false (auto-hide is the iOS-Books-y
+  // default). When pinned, ReaderShell's 3s auto-hide timer is bypassed.
+  it('default toolbarPinned is false', () => {
+    const { usePrefsStore } = require('@/lib/stores/prefsStore')
+    expect(usePrefsStore.getState().toolbarPinned).toBe(false)
+  })
+
+  it('hydrate() reads toolbarPinned from MMKV', async () => {
+    backingStore.set('rishi.mobile.prefs:reader-toolbar-pinned', 'true')
+    const { usePrefsStore } = require('@/lib/stores/prefsStore')
+    await usePrefsStore.getState().hydrate()
+    expect(usePrefsStore.getState().toolbarPinned).toBe(true)
+  })
+
+  it('hydrate() falls back to false when toolbarPinned flag is missing', async () => {
+    const { usePrefsStore } = require('@/lib/stores/prefsStore')
+    await usePrefsStore.getState().hydrate()
+    expect(usePrefsStore.getState().toolbarPinned).toBe(false)
+  })
+
+  it('setToolbarPinned persists "true" / "false" and updates state', async () => {
+    const { usePrefsStore } = require('@/lib/stores/prefsStore')
+    await usePrefsStore.getState().setToolbarPinned(true)
+    expect(backingStore.get('rishi.mobile.prefs:reader-toolbar-pinned')).toBe('true')
+    expect(usePrefsStore.getState().toolbarPinned).toBe(true)
+
+    await usePrefsStore.getState().setToolbarPinned(false)
+    expect(backingStore.get('rishi.mobile.prefs:reader-toolbar-pinned')).toBe('false')
+    expect(usePrefsStore.getState().toolbarPinned).toBe(false)
+  })
+
+  it('toolbarPinned survives a store re-mount when value is persisted (cross-mount persistence)', async () => {
+    const { usePrefsStore } = require('@/lib/stores/prefsStore')
+    await usePrefsStore.getState().setToolbarPinned(true)
+
+    // Re-mount: re-require the module so the store is reinitialized and
+    // hydrate() pulls the previously persisted MMKV value back in.
+    jest.resetModules()
+    const reloaded = require('@/lib/stores/prefsStore')
+    await reloaded.usePrefsStore.getState().hydrate()
+    expect(reloaded.usePrefsStore.getState().toolbarPinned).toBe(true)
+  })
 })

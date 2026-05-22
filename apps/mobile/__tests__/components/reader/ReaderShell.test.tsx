@@ -126,6 +126,25 @@ jest.mock('@/lib/stores/authStore', () => ({
     selector({ isAuthenticated: false }),
 }))
 
+// prefsStore is touched by ReaderShell for the `toolbarPinned` flag (P1-E).
+// Expose a mutable value the tests can mutate before render. We mimic the
+// zustand `(selector) => selector(state)` shape so ReaderShell can call
+// `usePrefsStore((s) => s.toolbarPinned)` exactly as in production.
+const prefsState: {
+  toolbarPinned: boolean
+  setToolbarPinned: (next: boolean) => void
+} = {
+  toolbarPinned: false,
+  setToolbarPinned: jest.fn((next: boolean) => {
+    prefsState.toolbarPinned = next
+  }),
+}
+jest.mock('@/lib/stores/prefsStore', () => ({
+  __esModule: true,
+  usePrefsStore: <T,>(selector: (s: typeof prefsState) => T) =>
+    selector(prefsState),
+}))
+
 jest.mock('@expo/vector-icons', () => {
   const React = require('react')
   const Ionicons = (p: any) =>
@@ -311,6 +330,8 @@ const baseProps = {
 beforeEach(() => {
   contextCapture.bottomBarVisible = false
   contextCapture.toggleToolbar = () => undefined
+  prefsState.toolbarPinned = false
+  ;(prefsState.setToolbarPinned as jest.Mock).mockClear()
   jest.useRealTimers()
 })
 
@@ -467,5 +488,95 @@ describe('ReaderShell (mobile)', () => {
     })
     expect(isBarVisible(tree, 'top')).toBe(true)
     expect(isBarVisible(tree, 'bottom')).toBe(true)
+  })
+
+  // ── P1-E: toolbar pinning ──────────────────────────────────────────────────
+  //
+  // Defect: the 3s auto-hide timer always wins, even when the user wants
+  // the toolbar to stay visible. Fix: a persistent `toolbarPinned` flag in
+  // prefsStore. When pinned, the auto-hide timer is bypassed.
+
+  it('does NOT auto-hide when `toolbarPinned=true` in prefsStore (P1-E)', () => {
+    prefsState.toolbarPinned = true
+    jest.useFakeTimers()
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ReaderShell {...baseProps} initialToolbarVisible={true}>
+          <></>
+        </ReaderShell>,
+      )
+    })
+    expect(isBarVisible(tree, 'top')).toBe(true)
+    expect(isBarVisible(tree, 'bottom')).toBe(true)
+    act(() => {
+      jest.advanceTimersByTime(3000)
+    })
+    // Still visible after the auto-hide window — pinning wins.
+    expect(isBarVisible(tree, 'top')).toBe(true)
+    expect(isBarVisible(tree, 'bottom')).toBe(true)
+  })
+
+  it('forwards `onLongPress` on the top bar Back to toggle the pinned flag (P1-E)', () => {
+    // Start unpinned so the long-press transitions false → true.
+    prefsState.toolbarPinned = false
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ReaderShell {...baseProps} initialToolbarVisible={true}>
+          <></>
+        </ReaderShell>,
+      )
+    })
+    {
+      const topBar = findByTestID(tree, 'reader-top-bar')
+      expect(topBar).not.toBeNull()
+      const onLongPressBack = (
+        topBar?.props as { onLongPressBack?: () => void }
+      ).onLongPressBack
+      expect(typeof onLongPressBack).toBe('function')
+      act(() => {
+        onLongPressBack?.()
+      })
+      expect(prefsState.setToolbarPinned).toHaveBeenCalledWith(true)
+    }
+
+    // Now flip the store, re-mount, and verify the second long-press
+    // toggles back off. We re-mount instead of expecting React to react
+    // to the mutable mock — the production store is reactive, but our
+    // jest stub just returns the current value at render time.
+    prefsState.toolbarPinned = true
+    ;(prefsState.setToolbarPinned as jest.Mock).mockClear()
+    let tree2!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree2 = TestRenderer.create(
+        <ReaderShell {...baseProps} initialToolbarVisible={true}>
+          <></>
+        </ReaderShell>,
+      )
+    })
+    const topBar2 = findByTestID(tree2, 'reader-top-bar')
+    const onLongPressBack2 = (
+      topBar2?.props as { onLongPressBack?: () => void }
+    ).onLongPressBack
+    act(() => {
+      onLongPressBack2?.()
+    })
+    expect(prefsState.setToolbarPinned).toHaveBeenCalledWith(false)
+  })
+
+  it('passes the `pinned` flag down to the top bar so it can render a cue (P1-E)', () => {
+    prefsState.toolbarPinned = true
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ReaderShell {...baseProps} initialToolbarVisible={true}>
+          <></>
+        </ReaderShell>,
+      )
+    })
+    const topBar = findByTestID(tree, 'reader-top-bar')
+    expect(topBar).not.toBeNull()
+    expect((topBar?.props as { pinned?: boolean }).pinned).toBe(true)
   })
 })

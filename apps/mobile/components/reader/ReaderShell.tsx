@@ -13,6 +13,7 @@ import { ReaderBottomBar } from '@/components/reader/ReaderBottomBar'
 import { ReaderOverlay } from '@/components/reader/ReaderOverlay'
 import type { ReaderProgress } from '@/components/reader/ReaderProgressPill'
 import { useAuthStore } from '@/lib/stores/authStore'
+import { usePrefsStore } from '@/lib/stores/prefsStore'
 import type { ActivationContext } from '@/lib/stores/chatStore'
 
 import { AppearanceSheet } from '@/components/AppearanceSheet'
@@ -190,6 +191,15 @@ export function ReaderShell({
   // `useRequireAuth`.
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
 
+  // P1-E — toolbar pinning. When `toolbarPinned` is true, the 3s
+  // auto-hide timer is skipped. Toggled by long-pressing the Back
+  // chevron in the top bar.
+  const toolbarPinned = usePrefsStore((s) => s.toolbarPinned)
+  const setToolbarPinned = usePrefsStore((s) => s.setToolbarPinned)
+  const handleLongPressBack = useCallback(() => {
+    setToolbarPinned(!toolbarPinned)
+  }, [setToolbarPinned, toolbarPinned])
+
   const [tocOpen, setTocOpen] = useState(false)
   const [highlightsOpen, setHighlightsOpen] = useState(false)
   const [bookmarksOpen, setBookmarksOpen] = useState(false)
@@ -215,14 +225,21 @@ export function ReaderShell({
     internalNoteEditorOpen
 
   // Auto-hide timer — re-armed on every toolbar-visible transition and
-  // cleared while TTS/voice are running or any sheet is open.
+  // cleared while TTS/voice are running, any sheet is open, or the
+  // toolbar is pinned (P1-E).
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     if (timerRef.current) {
       clearTimeout(timerRef.current)
       timerRef.current = null
     }
-    if (toolbarVisible && !ttsActive && !realtimeActive && !anySheetOpen) {
+    if (
+      toolbarVisible &&
+      !ttsActive &&
+      !realtimeActive &&
+      !anySheetOpen &&
+      !toolbarPinned
+    ) {
       timerRef.current = setTimeout(() => {
         setToolbarVisible(false)
       }, AUTO_HIDE_MS)
@@ -233,7 +250,7 @@ export function ReaderShell({
         timerRef.current = null
       }
     }
-  }, [toolbarVisible, ttsActive, realtimeActive, anySheetOpen])
+  }, [toolbarVisible, ttsActive, realtimeActive, anySheetOpen, toolbarPinned])
 
   const toggleToolbar = useCallback(() => {
     setToolbarVisible((prev) => !prev)
@@ -363,6 +380,8 @@ export function ReaderShell({
           visible={toolbarVisible}
           title={title}
           onBack={onBack}
+          onLongPressBack={handleLongPressBack}
+          pinned={toolbarPinned}
           testID="reader-top-bar"
         />
 
