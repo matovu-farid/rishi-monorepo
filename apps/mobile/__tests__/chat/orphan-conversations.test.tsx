@@ -70,6 +70,25 @@ jest.mock('@/components/auth/useRequireAuth', () => ({
   useRequireAuth: () => (action: () => void) => action(),
 }))
 
+// authStore — chat tab now reads isAuthenticated for the lock chip (P1-T).
+jest.mock('@/lib/stores/authStore', () => ({
+  __esModule: true,
+  useAuthStore: <T,>(selector: (s: { isAuthenticated: boolean }) => T) =>
+    selector({ isAuthenticated: true }),
+}))
+
+// LockChip — stub so this test stays decoupled from @expo/vector-icons.
+jest.mock('@/components/auth/LockChip', () => {
+  const React = require('react')
+  return {
+    __esModule: true,
+    LockChip: (p: any) =>
+      React.createElement('LockChipStub', {
+        testID: p.testID ?? 'lock-chip',
+      }),
+  }
+})
+
 const mockConversations: { id: string; bookId: string; title: string; createdAt: number; updatedAt: number }[] = []
 const mockBooks: { id: string; title: string; format: string; coverPath: string | null }[] = []
 

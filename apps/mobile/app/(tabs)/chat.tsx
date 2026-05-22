@@ -4,7 +4,9 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { ConversationRow } from '@/components/ConversationRow'
+import { LockChip } from '@/components/auth/LockChip'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
+import { useAuthStore } from '@/lib/stores/authStore'
 import {
   getAllConversations,
   getMessages,
@@ -19,6 +21,11 @@ export default function ConversationsScreen() {
   const router = useRouter()
   const [conversations, setConversations] = useState<Conversation[]>([])
   const requireAIChat = useRequireAuth('ai-chat')
+  // P1-T — render a tiny lock chip overlay on the "New conversation" +
+  // button when the user is signed out. The tap itself still fires (it
+  // opens the premium gate via requireAIChat); the chip is purely a
+  // visual affordance.
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
 
   const loadConversations = useCallback(() => {
     setConversations(getAllConversations())
@@ -106,6 +113,14 @@ export default function ConversationsScreen() {
             accessibilityRole="button"
           >
             <IconSymbol name="plus" size={24} color="#0a7ea4" />
+            {!isAuthenticated ? (
+              <View
+                pointerEvents="none"
+                style={{ position: 'absolute', top: 4, right: 4 }}
+              >
+                <LockChip testID="new-conversation-lock-chip" />
+              </View>
+            ) : null}
           </TouchableOpacity>
         </View>
         <View testID="chat-empty-state" className="flex-1 items-center justify-center p-8">
@@ -135,6 +150,14 @@ export default function ConversationsScreen() {
           accessibilityRole="button"
         >
           <IconSymbol name="plus" size={24} color="#0a7ea4" />
+          {!isAuthenticated ? (
+            <View
+              pointerEvents="none"
+              style={{ position: 'absolute', top: 4, right: 4 }}
+            >
+              <LockChip testID="new-conversation-lock-chip" />
+            </View>
+          ) : null}
         </TouchableOpacity>
       </View>
       <FlatList

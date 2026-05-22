@@ -12,6 +12,7 @@ import { ReaderTopBar } from '@/components/reader/ReaderTopBar'
 import { ReaderBottomBar } from '@/components/reader/ReaderBottomBar'
 import { ReaderOverlay } from '@/components/reader/ReaderOverlay'
 import type { ReaderProgress } from '@/components/reader/ReaderProgressPill'
+import { useAuthStore } from '@/lib/stores/authStore'
 import type { ActivationContext } from '@/lib/stores/chatStore'
 
 import { AppearanceSheet } from '@/components/AppearanceSheet'
@@ -182,6 +183,12 @@ export function ReaderShell({
   const [toolbarVisible, setToolbarVisible] = useState<boolean>(
     initialToolbarVisible,
   )
+
+  // P1-T — drive the lock chip overlays on TTS / voice / AI buttons. The
+  // bar receives `showLockChips=!isAuthenticated`; the chip is purely a
+  // visual affordance, taps still fire and the gate opens via
+  // `useRequireAuth`.
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
 
   const [tocOpen, setTocOpen] = useState(false)
   const [highlightsOpen, setHighlightsOpen] = useState(false)
@@ -376,6 +383,7 @@ export function ReaderShell({
           onRealtimePress={onRealtimePress}
           realtimeStatus={realtimeStatus}
           onChatPress={onChatPress}
+          showLockChips={!isAuthenticated}
           testID="reader-bottom-bar"
         />
 

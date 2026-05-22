@@ -104,6 +104,28 @@ jest.mock('@expo/vector-icons/Ionicons', () => {
   return { __esModule: true, default: Ionicons, glyphMap: {} }
 })
 
+// react-native-mmkv is ESM — stub for the node test VM. ReaderShell now
+// reads `isAuthenticated` from authStore (P1-T) which loads MMKV at
+// module-init time.
+jest.mock('react-native-mmkv', () => ({
+  createMMKV: () => ({
+    set: jest.fn(),
+    getString: jest.fn(() => undefined),
+    remove: jest.fn(),
+    getAllKeys: jest.fn(() => []),
+    clearAll: jest.fn(),
+  }),
+}))
+
+// authStore is touched by ReaderShell for the `isAuthenticated` flag.
+// Stub it with a static value — these tests assert ReaderShell wiring,
+// not auth behavior.
+jest.mock('@/lib/stores/authStore', () => ({
+  __esModule: true,
+  useAuthStore: <T,>(selector: (s: { isAuthenticated: boolean }) => T) =>
+    selector({ isAuthenticated: false }),
+}))
+
 jest.mock('@expo/vector-icons', () => {
   const React = require('react')
   const Ionicons = (p: any) =>

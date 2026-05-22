@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { AIChatOrb } from '@/components/chat/AIChatOrb'
 import { VoiceChatLauncher } from '@/components/chat/VoiceChatLauncher'
+import { LockChip } from '@/components/auth/LockChip'
 import { MiniPlayer } from '@/components/player/MiniPlayer'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
 import { useAuthStore } from '@/lib/stores/authStore'
@@ -98,17 +99,38 @@ export function ReaderOverlay({
       ) : null}
 
       {showVoiceLauncher ? (
-        <VoiceChatLauncher
-          isActive={voiceActive}
-          onStart={handleVoiceStart}
-          onStop={stopConversation}
-          style={{
-            position: 'absolute',
-            bottom: insets.bottom + FLOATING_BOTTOM_OFFSET,
-            right: 32,
-            zIndex: 20,
-          }}
-        />
+        <>
+          <VoiceChatLauncher
+            isActive={voiceActive}
+            onStart={handleVoiceStart}
+            onStop={stopConversation}
+            style={{
+              position: 'absolute',
+              bottom: insets.bottom + FLOATING_BOTTOM_OFFSET,
+              right: 32,
+              zIndex: 20,
+            }}
+          />
+          {/*
+            P1-T — tiny lock chip overlaid on the launcher's top-right
+            corner when the user is signed out. 12pt icon (LockChip
+            default), positioned absolutely so the launcher's own
+            dimensions don't shift.
+          */}
+          {!isAuthenticated ? (
+            <View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                bottom: insets.bottom + FLOATING_BOTTOM_OFFSET + 36,
+                right: 28,
+                zIndex: 21,
+              }}
+            >
+              <LockChip testID="voice-chat-lock-chip" />
+            </View>
+          ) : null}
+        </>
       ) : null}
 
       {!isChatting && playingState !== 'idle' ? (

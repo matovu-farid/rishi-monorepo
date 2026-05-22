@@ -174,6 +174,15 @@ jest.mock('@/components/auth/useRequireAuth', () => ({
   useRequireAuth: () => (action: () => void) => action(),
 }))
 
+// @expo/vector-icons/Ionicons — LockChip uses it. ESM import must be
+// stubbed for the node test VM.
+jest.mock('@expo/vector-icons/Ionicons', () => {
+  const React = require('react')
+  const Ionicons = (p: any) =>
+    React.createElement('Ionicons', { testID: `ion-${p.name}`, ...p })
+  return { __esModule: true, default: Ionicons, glyphMap: {} }
+})
+
 // ── authStore selector mock — for P1-R (dismissedFeatures) + P1-T (isAuthenticated). ──
 type AuthShape = {
   isAuthenticated: boolean
@@ -326,6 +335,27 @@ describe('ReaderOverlay (mobile)', () => {
     expect(startChatMock).toHaveBeenCalledTimes(1)
     // second arg must be the gathered context (not an empty object)
     expect(startChatMock.mock.calls[0][1]).toEqual(ctx)
+  })
+
+  it("renders a LockChip next to VoiceChatLauncher when not authenticated (P1-T)", () => {
+    authState.isAuthenticated = false
+    authState.dismissedFeatures = new Set<string>()
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<ReaderOverlay bookId="b1" />)
+    })
+    expect(findByTestID(tree, 'voice-chat-launcher-stub')).not.toBeNull()
+    expect(findByTestID(tree, 'voice-chat-lock-chip')).not.toBeNull()
+  })
+
+  it("does NOT render LockChip next to VoiceChatLauncher when authenticated (P1-T)", () => {
+    authState.isAuthenticated = true
+    authState.dismissedFeatures = new Set<string>()
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<ReaderOverlay bookId="b1" />)
+    })
+    expect(findByTestID(tree, 'voice-chat-lock-chip')).toBeNull()
   })
 
   it("hides VoiceChatLauncher when voice-chat is in authStore.dismissedFeatures (P1-R)", () => {

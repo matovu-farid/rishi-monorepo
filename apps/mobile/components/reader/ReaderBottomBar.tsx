@@ -6,6 +6,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated'
 import { IconButton } from '@/components/ui/IconButton'
+import { LockChip } from '@/components/auth/LockChip'
 import { Toolbar } from '@/components/ui/Toolbar'
 import { useTheme } from '@/lib/theme'
 import { ReaderProgressPill, type ReaderProgress } from './ReaderProgressPill'
@@ -28,6 +29,14 @@ export interface ReaderBottomBarProps {
   onRealtimePress?: () => void
   realtimeStatus?: RealtimeStatus
   onChatPress?: () => void
+  /**
+   * P1-T — when true, render a tiny lock chip next to the TTS, voice
+   * (realtime), and AI-chat icons. Caller is expected to pass
+   * `!isAuthenticated` from the authStore. The chip is purely visual;
+   * the IconButton onPress still fires (which opens the premium gate
+   * via `useRequireAuth`).
+   */
+  showLockChips?: boolean
   testID?: string
 }
 
@@ -48,6 +57,7 @@ export function ReaderBottomBar({
   onRealtimePress,
   realtimeStatus,
   onChatPress,
+  showLockChips = false,
   testID,
 }: ReaderBottomBarProps): React.JSX.Element {
   const { colors, typography, motion, reduceMotion, spacing } = useTheme()
@@ -157,30 +167,51 @@ export function ReaderBottomBar({
               />
             ) : null}
             {onTTSPress ? (
-              <IconButton
-                name="volume-high-outline"
-                onPress={onTTSPress}
-                label={ttsButtonActive ? 'Stop reading aloud' : 'Read aloud'}
-                color={ttsButtonActive ? colors.accent.primary : undefined}
-                haptic="light"
-              />
+              <View style={styles.chipHost}>
+                <IconButton
+                  name="volume-high-outline"
+                  onPress={onTTSPress}
+                  label={ttsButtonActive ? 'Stop reading aloud' : 'Read aloud'}
+                  color={ttsButtonActive ? colors.accent.primary : undefined}
+                  haptic="light"
+                />
+                {showLockChips ? (
+                  <View style={styles.chipOverlay} pointerEvents="none">
+                    <LockChip testID="tts-lock-chip" />
+                  </View>
+                ) : null}
+              </View>
             ) : null}
             {onRealtimePress ? (
-              <IconButton
-                name="mic-outline"
-                onPress={onRealtimePress}
-                label={realtimeActive ? 'End voice chat' : 'Start voice chat'}
-                color={realtimeActive ? colors.accent.primary : undefined}
-                haptic="light"
-              />
+              <View style={styles.chipHost}>
+                <IconButton
+                  name="mic-outline"
+                  onPress={onRealtimePress}
+                  label={realtimeActive ? 'End voice chat' : 'Start voice chat'}
+                  color={realtimeActive ? colors.accent.primary : undefined}
+                  haptic="light"
+                />
+                {showLockChips ? (
+                  <View style={styles.chipOverlay} pointerEvents="none">
+                    <LockChip testID="realtime-lock-chip" />
+                  </View>
+                ) : null}
+              </View>
             ) : null}
             {onChatPress ? (
-              <IconButton
-                name="chatbubble-outline"
-                onPress={onChatPress}
-                label="Ask AI about this book"
-                haptic="light"
-              />
+              <View style={styles.chipHost}>
+                <IconButton
+                  name="chatbubble-outline"
+                  onPress={onChatPress}
+                  label="Ask AI about this book"
+                  haptic="light"
+                />
+                {showLockChips ? (
+                  <View style={styles.chipOverlay} pointerEvents="none">
+                    <LockChip testID="ai-chat-lock-chip" />
+                  </View>
+                ) : null}
+              </View>
             ) : null}
           </View>
         }
@@ -193,5 +224,15 @@ const styles = StyleSheet.create({
   cluster: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  // P1-T — chip host wraps an IconButton so the LockChip can sit
+  // absolutely on its top-right corner without forcing a layout shift.
+  chipHost: {
+    position: 'relative',
+  },
+  chipOverlay: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
   },
 })
