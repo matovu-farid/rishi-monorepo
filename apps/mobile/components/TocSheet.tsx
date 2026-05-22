@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useRef } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef } from 'react'
 import { Text, TouchableOpacity, View } from 'react-native'
 import BottomSheet, { BottomSheetFlatList } from '@gorhom/bottom-sheet'
+import { IconSymbol } from '@/components/ui/icon-symbol'
 import { ReaderTheme } from '@/types/book'
 import { useTheme } from '@/lib/theme'
 
@@ -9,6 +10,36 @@ interface TocItem {
   href: string
   label: string
   subitems?: TocItem[]
+}
+
+/**
+ * RDR-020 — depth-tagged row used by the flattened renderer.
+ *
+ * The TOC API exposes nested `subitems`, but the rendered list is flat so
+ * the BottomSheetFlatList can keyExtract / windowing cleanly. The
+ * `depth` field drives indentation; `hasChildren` drives the chevron.
+ */
+interface FlatTocRow {
+  depth: number
+  hasChildren: boolean
+  item: TocItem
+}
+
+/**
+ * Flatten a nested TOC into a depth-tagged list. Parents come first, then
+ * their children inline — matches the order users expect from Apple
+ * Books / electron.
+ */
+function flattenToc(items: TocItem[], depth = 0): FlatTocRow[] {
+  const out: FlatTocRow[] = []
+  for (const item of items) {
+    const hasChildren = (item.subitems?.length ?? 0) > 0
+    out.push({ depth, hasChildren, item })
+    if (hasChildren) {
+      out.push(...flattenToc(item.subitems ?? [], depth + 1))
+    }
+  }
+  return out
 }
 
 /**
@@ -55,18 +86,37 @@ export function TocSheet({
   const indicatorColor = theme?.color ?? colors.fill.tertiary
   const accent = colors.accent.primary
 
+  // RDR-020 — flatten the nested TOC into a depth-tagged row list. The
+  // `useMemo` keeps the flattener cheap as the user opens / closes the
+  // sheet and re-derives currentHref.
+  const rows = useMemo(() => flattenToc(toc), [toc])
+
   const renderItem = useCallback(
-    ({ item }: { item: TocItem }) => {
+    ({ item: row }: { item: FlatTocRow }) => {
+      const { item, depth, hasChildren } = row
       const isCurrent = currentHref !== null && item.href === currentHref
+      // RDR-020 — indent by 16 + depth * 16 so children visually nest
+      // under their parents; matches the PDF reader's OutlineList.
+      const paddingLeft = 16 + depth * 16
       return (
         <TouchableOpacity
-          className="h-12 flex-row items-center px-4"
-          style={isCurrent ? { borderLeftWidth: 3, borderLeftColor: accent } : undefined}
+          className="h-12 flex-row items-center"
+          style={[
+            { paddingLeft, paddingRight: 16 },
+            isCurrent ? { borderLeftWidth: 3, borderLeftColor: accent } : undefined,
+          ]}
           onPress={() => onSelectChapter(item.href)}
           accessibilityRole="button"
+          accessibilityLabel={item.label}
+          accessibilityHint={hasChildren ? `Parent chapter, depth ${depth}` : undefined}
         >
+          {hasChildren ? (
+            <View style={{ marginRight: 8 }}>
+              <IconSymbol name="chevron.down" size={12} color={textColor} />
+            </View>
+          ) : null}
           <Text
-            style={{ color: textColor }}
+            style={{ color: textColor, flex: 1 }}
             className={`text-base ${isCurrent ? 'font-semibold' : 'font-normal'}`}
             numberOfLines={1}
           >
@@ -96,8 +146,10 @@ export function TocSheet({
         </Text>
       </View>
       <BottomSheetFlatList
-        data={toc}
-        keyExtractor={(item: TocItem) => item.id || item.href}
+        data={rows}
+        keyExtractor={(row: FlatTocRow, i: number) =>
+          row.item.id || `${row.item.href}-${i}`
+        }
         renderItem={renderItem}
       />
     </BottomSheet>
