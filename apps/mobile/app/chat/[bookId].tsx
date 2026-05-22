@@ -29,6 +29,7 @@ import { ModelDownloadCard } from '@/components/ModelDownloadCard'
 import { EmbeddingProgress } from '@/components/EmbeddingProgress'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
+import { resolveReaderRouteForBook } from '@/lib/reader-routes'
 import type { Message, SourceChunk } from '@/types/conversation'
 import type { Book } from '@/types/book'
 
@@ -181,11 +182,13 @@ export default function BookChatScreen() {
 
   const handleSourcePress = useCallback(
     (_source: SourceChunk) => {
-      if (bookId) {
-        router.push(`/reader/${bookId}`)
-      }
+      // P1-A: route to the format-appropriate reader screen. The
+      // previous unconditional `/reader/${bookId}` opened the EPUB
+      // reader for every format and errored out on PDF / MOBI / DJVU.
+      if (!book) return
+      router.push(resolveReaderRouteForBook(book))
     },
-    [bookId, router]
+    [book, router]
   )
 
   // Show model download card if not ready
