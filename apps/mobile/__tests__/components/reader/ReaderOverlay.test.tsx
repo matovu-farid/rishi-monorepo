@@ -174,6 +174,20 @@ jest.mock('@/components/auth/useRequireAuth', () => ({
   useRequireAuth: () => (action: () => void) => action(),
 }))
 
+// ── authStore selector mock — for P1-R (dismissedFeatures) + P1-T (isAuthenticated). ──
+type AuthShape = {
+  isAuthenticated: boolean
+  dismissedFeatures: Set<string>
+}
+let authState: AuthShape = {
+  isAuthenticated: false,
+  dismissedFeatures: new Set<string>(),
+}
+jest.mock('@/lib/stores/authStore', () => ({
+  __esModule: true,
+  useAuthStore: <T,>(selector: (s: AuthShape) => T) => selector(authState),
+}))
+
 import React, { act } from 'react'
 import TestRenderer from 'react-test-renderer'
 import { ReaderOverlay } from '@/components/reader/ReaderOverlay'
@@ -202,6 +216,10 @@ beforeEach(() => {
     playingState: 'idle',
     send: () => undefined,
     repeatMode: 'off',
+  }
+  authState = {
+    isAuthenticated: false,
+    dismissedFeatures: new Set<string>(),
   }
 })
 
@@ -308,6 +326,28 @@ describe('ReaderOverlay (mobile)', () => {
     expect(startChatMock).toHaveBeenCalledTimes(1)
     // second arg must be the gathered context (not an empty object)
     expect(startChatMock.mock.calls[0][1]).toEqual(ctx)
+  })
+
+  it("hides VoiceChatLauncher when voice-chat is in authStore.dismissedFeatures (P1-R)", () => {
+    authState.isAuthenticated = false
+    authState.dismissedFeatures = new Set(['voice-chat'])
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<ReaderOverlay bookId="b1" />)
+    })
+    expect(findByTestID(tree, 'voice-chat-launcher-stub')).toBeNull()
+  })
+
+  it("still renders VoiceChatLauncher when authenticated even if voice-chat is in dismissedFeatures (P1-R)", () => {
+    // The set is only meant to hide the control while signed out. Once
+    // the user signs in, the surface should always render the control.
+    authState.isAuthenticated = true
+    authState.dismissedFeatures = new Set(['voice-chat'])
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<ReaderOverlay bookId="b1" />)
+    })
+    expect(findByTestID(tree, 'voice-chat-launcher-stub')).not.toBeNull()
   })
 
   it('forwards onChatToggle to AIChatOrb as the onPress prop', () => {

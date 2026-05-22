@@ -6,6 +6,7 @@ import { AIChatOrb } from '@/components/chat/AIChatOrb'
 import { VoiceChatLauncher } from '@/components/chat/VoiceChatLauncher'
 import { MiniPlayer } from '@/components/player/MiniPlayer'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
+import { useAuthStore } from '@/lib/stores/authStore'
 import {
   useChatStore,
   type ActivationContext,
@@ -50,6 +51,14 @@ export function ReaderOverlay({
 
   const requireVoiceChat = useRequireAuth('voice-chat')
 
+  // P1-R: hide the launcher once the user has explicitly dismissed the
+  // gate for voice-chat. Signed-in users always see the control.
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
+  const voiceChatDismissed = useAuthStore((s) =>
+    s.dismissedFeatures.has('voice-chat'),
+  )
+  const showVoiceLauncher = isAuthenticated || !voiceChatDismissed
+
   const voiceActive =
     voiceState === 'connecting' ||
     voiceState === 'listening' ||
@@ -88,17 +97,19 @@ export function ReaderOverlay({
         />
       ) : null}
 
-      <VoiceChatLauncher
-        isActive={voiceActive}
-        onStart={handleVoiceStart}
-        onStop={stopConversation}
-        style={{
-          position: 'absolute',
-          bottom: insets.bottom + FLOATING_BOTTOM_OFFSET,
-          right: 32,
-          zIndex: 20,
-        }}
-      />
+      {showVoiceLauncher ? (
+        <VoiceChatLauncher
+          isActive={voiceActive}
+          onStart={handleVoiceStart}
+          onStop={stopConversation}
+          style={{
+            position: 'absolute',
+            bottom: insets.bottom + FLOATING_BOTTOM_OFFSET,
+            right: 32,
+            zIndex: 20,
+          }}
+        />
+      ) : null}
 
       {!isChatting && playingState !== 'idle' ? (
         <MiniPlayer bookId={bookId} variant="reader" />

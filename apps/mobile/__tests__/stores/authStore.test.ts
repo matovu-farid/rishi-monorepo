@@ -248,4 +248,40 @@ describe('authStore (mobile)', () => {
       expect(useAuthStore.getState().pendingAction).toBeNull()
     })
   })
+
+  // P1-R — dismissedFeatures. When the user explicitly dismisses the
+  // premium gate (Maybe later / backdrop tap), the feature they tapped
+  // is recorded in a session-only Set. Surfaces (reader, chat) consult
+  // this set and hide / disable the gated control so the gate cannot be
+  // re-triggered until the next cold start.
+  describe('dismissedFeatures (P1-R)', () => {
+    it('defaults dismissedFeatures to an empty Set', () => {
+      const { useAuthStore } = require('@/lib/stores/authStore')
+      const s = useAuthStore.getState()
+      expect(s.dismissedFeatures).toBeInstanceOf(Set)
+      expect(s.dismissedFeatures.size).toBe(0)
+    })
+
+    it('closePremiumGate() with an active feature adds it to dismissedFeatures', () => {
+      const { useAuthStore } = require('@/lib/stores/authStore')
+      useAuthStore.getState().openPremiumGate('tts')
+      useAuthStore.getState().closePremiumGate()
+      expect(useAuthStore.getState().dismissedFeatures.has('tts')).toBe(true)
+    })
+
+    it('closePremiumGate() with no active feature is a no-op for the set', () => {
+      const { useAuthStore } = require('@/lib/stores/authStore')
+      useAuthStore.getState().closePremiumGate()
+      expect(useAuthStore.getState().dismissedFeatures.size).toBe(0)
+    })
+
+    it('setSession() (successful sign-in) clears dismissedFeatures', () => {
+      const { useAuthStore } = require('@/lib/stores/authStore')
+      useAuthStore.getState().openPremiumGate('tts')
+      useAuthStore.getState().closePremiumGate()
+      expect(useAuthStore.getState().dismissedFeatures.has('tts')).toBe(true)
+      useAuthStore.getState().setSession('tok', 'user-1')
+      expect(useAuthStore.getState().dismissedFeatures.size).toBe(0)
+    })
+  })
 })

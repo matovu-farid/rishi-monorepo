@@ -269,14 +269,34 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
         >
           <Text style={{ color: '#0a7ea4', fontSize: 15 }}>Create account</Text>
         </Pressable>
+        {/*
+          P1-R — renamed "Not now" → "Maybe later" with a subline that
+          explains the dismiss path. The gated control on the calling
+          surface (reader, chat) hides itself for the rest of the session
+          once the feature lands in `dismissedFeatures` (see authStore).
+        */}
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Not now"
-          accessibilityHint="Closes this prompt without signing in."
+          accessibilityLabel="Maybe later"
+          accessibilityHint="Closes this prompt and hides the control for this session."
           onPress={handleDismiss}
-          style={{ height: 44, alignItems: 'center', justifyContent: 'center' }}
+          style={{
+            paddingVertical: 10,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
         >
-          <Text style={{ color: '#0a7ea4', fontSize: 17 }}>Not now</Text>
+          <Text style={{ color: '#0a7ea4', fontSize: 17 }}>Maybe later</Text>
+          <Text
+            style={{
+              color: isDark ? '#8E8E93' : '#6D6D72',
+              fontSize: 12,
+              marginTop: 2,
+              textAlign: 'center',
+            }}
+          >
+            You can sign in any time from Settings.
+          </Text>
         </Pressable>
       </BottomSheetView>
     </BottomSheet>

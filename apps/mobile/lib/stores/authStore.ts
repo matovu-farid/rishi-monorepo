@@ -63,6 +63,13 @@ interface AuthState {
   // `closePremiumGate` (dismiss / "Not now") discards it without invoking.
   pendingAction: (() => void) | null
 
+  // P1-R: session-only set of features the user has explicitly dismissed
+  // via the premium gate sheet's "Maybe later". Surfaces (reader / chat)
+  // check this set to hide or disable the gated control so the gate
+  // cannot be re-triggered. NOT persisted — it resets on cold start so
+  // signed-out users still get a fresh prompt on their next launch.
+  dismissedFeatures: Set<PremiumFeature>
+
   // Actions
   setUser: (user: AuthUser | null) => void
   setAuthHydrated: (value: boolean) => void
@@ -108,6 +115,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   premiumGateOpen: false,
   premiumGateFeature: null,
   pendingAction: null,
+  dismissedFeatures: new Set<PremiumFeature>(),
 
   setUser: (user) => set({ user }),
   setAuthHydrated: (value) => set({ authHydrated: value }),
@@ -199,6 +207,9 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       isAuthenticated: true,
       isAuthenticating: false,
       pendingAction: null,
+      // P1-R: clear dismissed-features on successful sign-in so the user
+      // immediately sees the now-unlocked controls.
+      dismissedFeatures: new Set<PremiumFeature>(),
     })
     try {
       bucket.setItem(USER_ID_KEY, userId)
@@ -238,12 +249,21 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       // should be replayed on sign-in.
       pendingAction: action ?? null,
     }),
-  closePremiumGate: () =>
-    // P0-U: dismissing the gate (e.g. "Not now") discards the pending
+  closePremiumGate: () => {
+    // P0-U: dismissing the gate (e.g. "Maybe later") discards the pending
     // action so it can never be replayed later.
+    // P1-R: also record the dismissed feature so the surface that opened
+    // the gate can hide its gated control until the next cold start.
+    const feature = get().premiumGateFeature
+    const next =
+      feature != null
+        ? new Set<PremiumFeature>(get().dismissedFeatures).add(feature)
+        : get().dismissedFeatures
     set({
       premiumGateOpen: false,
       premiumGateFeature: null,
       pendingAction: null,
-    }),
+      dismissedFeatures: next,
+    })
+  },
 }))

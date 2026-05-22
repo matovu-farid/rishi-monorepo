@@ -321,24 +321,39 @@ describe('PremiumFeatureSheet (mobile)', () => {
     expect(closePremiumGate).toHaveBeenCalledTimes(1)
   })
 
-  it("pressing 'Not now' calls closePremiumGate", () => {
+  it("pressing 'Maybe later' calls closePremiumGate (P1-R renamed from 'Not now')", () => {
     storeState.premiumGateOpen = true
     storeState.premiumGateFeature = 'tts'
     let tree!: TestRenderer.ReactTestRenderer
     act(() => {
       tree = TestRenderer.create(<PremiumFeatureSheet />)
     })
-    // Locate the Pressable whose accessibilityLabel is 'Not now'.
-    const notNow = tree.root.findAll(
+    // Locate the Pressable whose accessibilityLabel is 'Maybe later'.
+    const maybeLater = tree.root.findAll(
       (n) =>
         n.type === Pressable &&
-        (n.props as { accessibilityLabel?: string }).accessibilityLabel === 'Not now',
+        (n.props as { accessibilityLabel?: string }).accessibilityLabel ===
+          'Maybe later',
     )
-    expect(notNow.length).toBeGreaterThan(0)
+    expect(maybeLater.length).toBeGreaterThan(0)
     act(() => {
-      ;(notNow[0].props as { onPress: () => void }).onPress()
+      ;(maybeLater[0].props as { onPress: () => void }).onPress()
     })
     expect(closePremiumGate).toHaveBeenCalledTimes(1)
+  })
+
+  it("renders a subline under 'Maybe later' explaining what dismiss does (P1-R)", () => {
+    storeState.premiumGateOpen = true
+    storeState.premiumGateFeature = 'tts'
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<PremiumFeatureSheet />)
+    })
+    expect(hasText(tree, 'Maybe later')).toBe(true)
+    // Subline copy must hint that the gate goes away for this session.
+    expect(
+      hasText(tree, 'You can sign in any time from Settings.'),
+    ).toBe(true)
   })
 
   it('renders ActivityIndicator (not CTA label text) while isAuthenticating=true', () => {
