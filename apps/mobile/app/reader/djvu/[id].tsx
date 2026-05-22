@@ -45,6 +45,8 @@ import { UndoSnackbar } from '@/components/UndoSnackbar'
 import {
   ReaderShell,
   ReaderShellContext,
+  ReaderErrorScreen,
+  type ReaderErrorCause,
   type ReaderProgress,
   type TocItem,
 } from '@/components/reader'
@@ -174,6 +176,9 @@ export default function DjvuReaderScreen() {
   const [book, setBook] = useState<Book | null>(null)
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
+  // P0-L — track failed-load cause for ReaderErrorScreen.
+  const [errorCause, setErrorCause] = useState<ReaderErrorCause | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [pageCount, setPageCount] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
   const [bookLoaded, setBookLoaded] = useState(false)
@@ -259,6 +264,7 @@ export default function DjvuReaderScreen() {
     if (id) {
       setLoading(true)
       setDownloading(false)
+      setErrorCause(null)
       getBookForReading(id, { onDownloadStart: () => setDownloading(true) })
         .then((loaded) => {
           if (loaded) {
@@ -270,10 +276,15 @@ export default function DjvuReaderScreen() {
             setBookmarks(getBookmarksForBook(loaded.id))
           }
         })
-        .catch((err) => console.error('Failed to load book for reading:', err))
+        .catch((err) => {
+          console.error('Failed to load book for reading:', err)
+          setBook(null)
+          // Only the R2 download path throws — surface as a cloud failure.
+          setErrorCause('cloud-download-failed')
+        })
         .finally(() => setLoading(false))
     }
-  }, [id])
+  }, [id, loadAttempt])
 
   // Send file data to WebView once djvu.js is loaded
   useEffect(() => {
@@ -463,10 +474,17 @@ export default function DjvuReaderScreen() {
   }
 
   if (!book || !book.filePath) {
+    // P0-L — distinguish "cloud download failed" from "local file gone".
+    const resolvedCause: ReaderErrorCause = errorCause ?? 'local-missing'
     return (
-      <View style={{ flex: 1, backgroundColor: '#1a1a1a', justifyContent: 'center', alignItems: 'center' }}>
-        <Text style={{ color: '#aaa', fontSize: 16 }}>Book file not available</Text>
-      </View>
+      <ReaderErrorScreen
+        cause={resolvedCause}
+        onBack={() => {
+          if (router.canGoBack()) router.back()
+          else router.replace('/(tabs)')
+        }}
+        onRetry={() => setLoadAttempt((n) => n + 1)}
+      />
     )
   }
 

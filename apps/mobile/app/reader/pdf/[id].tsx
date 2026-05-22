@@ -72,6 +72,8 @@ import { useUndoSnackbar } from '@/hooks/useUndoSnackbar'
 import {
   ReaderShell,
   ReaderShellContext,
+  ReaderErrorScreen,
+  type ReaderErrorCause,
   type ReaderProgress,
   type TocItem,
 } from '@/components/reader'
@@ -91,6 +93,9 @@ export default function PdfReaderScreen() {
   const [book, setBook] = useState<Book | null>(null)
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
+  // P0-L — track failed-load cause for ReaderErrorScreen.
+  const [errorCause, setErrorCause] = useState<ReaderErrorCause | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [outlineVisible, setOutlineVisible] = useState(false)
   const [gotoVisible, setGotoVisible] = useState(false)
   const [thumbnailsVisible, setThumbnailsVisible] = useState(false)
@@ -175,6 +180,7 @@ export default function PdfReaderScreen() {
     if (!id) return
     setLoading(true)
     setDownloading(false)
+    setErrorCause(null)
     getBookForReading(id, { onDownloadStart: () => setDownloading(true) })
       .then(async (loaded) => {
         if (!loaded) return
@@ -182,9 +188,15 @@ export default function PdfReaderScreen() {
         setHighlights(getPdfHighlightsByBookId(loaded.id))
         setBookmarks(getBookmarksForBook(loaded.id))
       })
-      .catch((err) => console.error('[PdfReaderScreen] load failed:', err))
+      .catch((err) => {
+        console.error('[PdfReaderScreen] load failed:', err)
+        setBook(null)
+        // The loader only throws from the R2 download path — surface
+        // this as a cloud-download failure so Retry is meaningful.
+        setErrorCause('cloud-download-failed')
+      })
       .finally(() => setLoading(false))
-  }, [id])
+  }, [id, loadAttempt])
 
   // ---- Save position on background ----
   useEffect(() => {
@@ -550,10 +562,18 @@ export default function PdfReaderScreen() {
     )
   }
   if (!book || !book.filePath) {
+    // P0-L — resolve cause: cloud failure was set in the catch branch;
+    // otherwise the local file is gone.
+    const resolvedCause: ReaderErrorCause = errorCause ?? 'local-missing'
     return (
-      <View style={styles.full}>
-        <Text style={{ color: '#fff' }}>Book file not available</Text>
-      </View>
+      <ReaderErrorScreen
+        cause={resolvedCause}
+        onBack={() => {
+          if (router.canGoBack()) router.back()
+          else router.replace('/(tabs)')
+        }}
+        onRetry={() => setLoadAttempt((n) => n + 1)}
+      />
     )
   }
 
