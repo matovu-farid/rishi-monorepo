@@ -6,44 +6,77 @@
  *
  * Empty state mirrors electron's "No bookmarks yet" placeholder.
  */
-import { useMemo } from 'react'
+import React, { useEffect, useMemo, useRef } from 'react'
 import { Text, TouchableOpacity, View } from 'react-native'
 import BottomSheet, { BottomSheetFlatList } from '@gorhom/bottom-sheet'
 import { IconSymbol } from '@/components/ui/icon-symbol'
+import { useTheme } from '@/lib/theme'
 import type { ReaderTheme } from '@/types/book'
 import type { Bookmark } from '@/lib/bookmarks/bookmark-storage'
 
+/**
+ * BookmarksList — dual-API during the Phase 3 reader-UI migration.
+ *
+ * Detox testIDs preserved: `bookmarks-empty` on the empty state and
+ * `bookmark-row-${id}` on each row.
+ */
 export interface BookmarksListProps {
-  sheetRef: React.RefObject<BottomSheet | null>
+  // New API
+  isOpen?: boolean
+  onClose?: () => void
+
+  // Legacy API (deprecated)
+  sheetRef?: React.RefObject<BottomSheet | null>
+  theme?: ReaderTheme
+
   bookmarks: Bookmark[]
-  theme: ReaderTheme
   onNavigate: (location: string) => void
   onDelete: (id: string) => void
 }
 
 export function BookmarksList({
-  sheetRef,
-  bookmarks,
+  isOpen,
+  onClose,
+  sheetRef: externalSheetRef,
   theme,
+  bookmarks,
   onNavigate,
   onDelete,
 }: BookmarksListProps) {
+  const { colors } = useTheme()
+  const internalRef = useRef<BottomSheet>(null)
+  const sheetRef = externalSheetRef ?? internalRef
+
+  useEffect(() => {
+    if (typeof isOpen !== 'boolean') return
+    if (isOpen) sheetRef.current?.snapToIndex(0)
+    else sheetRef.current?.close()
+  }, [isOpen, sheetRef])
+
   const sorted = useMemo(
     () => [...bookmarks].sort((a, b) => b.createdAt - a.createdAt),
     [bookmarks],
   )
 
+  const sheetBg = theme?.background ?? colors.background.secondary
+  const textColor = theme?.color ?? colors.label.primary
+  const tertiaryColor = colors.label.tertiary
+  const indicatorColor = theme?.toolbarText ?? theme?.color ?? colors.fill.tertiary
+
   return (
     <BottomSheet
       ref={sheetRef}
-      index={-1}
+      index={typeof isOpen === 'boolean' ? (isOpen ? 0 : -1) : -1}
       snapPoints={['50%', '90%']}
       enablePanDownToClose
-      backgroundStyle={{ backgroundColor: theme.background }}
-      handleIndicatorStyle={{ backgroundColor: theme.toolbarText ?? theme.color }}
+      onChange={(index) => {
+        if (index === -1) onClose?.()
+      }}
+      backgroundStyle={{ backgroundColor: sheetBg }}
+      handleIndicatorStyle={{ backgroundColor: indicatorColor }}
     >
       <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
-        <Text style={{ color: theme.color, fontSize: 18, fontWeight: '600' }}>
+        <Text style={{ color: textColor, fontSize: 18, fontWeight: '600' }}>
           Bookmarks
         </Text>
       </View>
@@ -58,9 +91,9 @@ export function BookmarksList({
           }}
           testID="bookmarks-empty"
         >
-          <IconSymbol name="bookmark" size={32} color="#9CA3AF" />
+          <IconSymbol name="bookmark" size={32} color={tertiaryColor} />
           <Text
-            style={{ color: '#9CA3AF', marginTop: 8, fontSize: 14, textAlign: 'center' }}
+            style={{ color: tertiaryColor, marginTop: 8, fontSize: 14, textAlign: 'center' }}
           >
             No bookmarks yet
           </Text>
@@ -73,7 +106,8 @@ export function BookmarksList({
           renderItem={({ item }: { item: Bookmark }) => (
             <BookmarkRow
               bookmark={item}
-              theme={theme}
+              textColor={textColor}
+              secondaryColor={tertiaryColor}
               onNavigate={onNavigate}
               onDelete={onDelete}
             />
@@ -86,15 +120,22 @@ export function BookmarksList({
 
 interface RowProps {
   bookmark: Bookmark
-  theme: ReaderTheme
+  textColor: string
+  secondaryColor: string
   onNavigate: (location: string) => void
   onDelete: (id: string) => void
 }
 
-function BookmarkRow({ bookmark, theme, onNavigate, onDelete }: RowProps) {
-  const label = bookmark.label && bookmark.label.length > 0
-    ? bookmark.label
-    : bookmark.location
+function BookmarkRow({
+  bookmark,
+  textColor,
+  secondaryColor,
+  onNavigate,
+  onDelete,
+}: RowProps) {
+  const { colors } = useTheme()
+  const label =
+    bookmark.label && bookmark.label.length > 0 ? bookmark.label : bookmark.location
   const date = new Date(bookmark.createdAt).toLocaleDateString()
 
   return (
@@ -115,15 +156,15 @@ function BookmarkRow({ bookmark, theme, onNavigate, onDelete }: RowProps) {
         accessibilityRole="button"
         accessibilityLabel={`Navigate to ${label}`}
       >
-        <IconSymbol name="bookmark.fill" size={16} color="#ef4444" />
+        <IconSymbol name="bookmark.fill" size={16} color={colors.accent.error} />
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text
-            style={{ color: theme.color, fontSize: 14, fontWeight: '500' }}
+            style={{ color: textColor, fontSize: 14, fontWeight: '500' }}
             numberOfLines={1}
           >
             {label}
           </Text>
-          <Text style={{ color: '#9CA3AF', fontSize: 12, marginTop: 2 }}>{date}</Text>
+          <Text style={{ color: secondaryColor, fontSize: 12, marginTop: 2 }}>{date}</Text>
         </View>
       </TouchableOpacity>
       <TouchableOpacity
@@ -132,7 +173,7 @@ function BookmarkRow({ bookmark, theme, onNavigate, onDelete }: RowProps) {
         accessibilityRole="button"
         accessibilityLabel="Delete bookmark"
       >
-        <IconSymbol name="trash" size={16} color="#9CA3AF" />
+        <IconSymbol name="trash" size={16} color={secondaryColor} />
       </TouchableOpacity>
     </View>
   )

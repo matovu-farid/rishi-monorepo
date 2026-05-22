@@ -3,23 +3,20 @@
  * `apps/mobile/app/reader/[id].tsx` (Batch 7 G12) so the reader screen
  * stays manageable and the search UI is reusable. Matches electron's
  * `apps/rishi-electron/src/renderer/src/components/search/SearchPanel.tsx`
- * in UX:
- *
- *   - Auto-focus the input when the sheet opens.
- *   - Live FlatList results with the excerpt + section label.
- *   - Loading spinner while `isSearching`.
- *   - Empty state when query.length > 1 and no results.
- *   - "Search this book" placeholder when query is empty.
- *
- * The component is intentionally render-only: it receives the search
- * primitives (`query`, `results`, `isSearching`) from the parent and
- * exposes `onChangeQuery` + `onSelectResult`. Keeps the epubjs-react-
- * native hook coupling out of this file.
+ * in UX.
  */
-import { useEffect } from 'react'
-import { ActivityIndicator, FlatList, Pressable, Text, TextInput, View } from 'react-native'
+import React, { useEffect, useRef } from 'react'
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  Text,
+  TextInput,
+  View,
+} from 'react-native'
 import BottomSheet from '@gorhom/bottom-sheet'
 import { IconSymbol } from '@/components/ui/icon-symbol'
+import { useTheme } from '@/lib/theme'
 import type { ReaderTheme } from '@/types/book'
 
 export interface SearchResult {
@@ -28,22 +25,33 @@ export interface SearchResult {
   section?: { label?: string } | null
 }
 
+/**
+ * SearchPanel — dual-API during the Phase 3 reader-UI migration.
+ *
+ * Preserves Detox testIDs `search-input`, `search-no-results`, and
+ * `search-prompt`.
+ */
 export interface SearchPanelProps {
-  sheetRef: React.RefObject<BottomSheet | null>
-  theme: ReaderTheme
+  // New API
+  isOpen?: boolean
+  onClose?: () => void
+
+  // Legacy API (deprecated)
+  sheetRef?: React.RefObject<BottomSheet | null>
+  theme?: ReaderTheme
+  onChange?: (index: number) => void
+
   query: string
   results: SearchResult[]
   isSearching: boolean
   onChangeQuery: (value: string) => void
   onSelectResult: (cfi: string) => void
-  /** Optional: called whenever the sheet's snap index changes — the
-   *  parent can clear search state on close. Sheet ref is the source
-   *  of truth otherwise. */
-  onChange?: (index: number) => void
 }
 
 export function SearchPanel({
-  sheetRef,
+  isOpen,
+  onClose,
+  sheetRef: externalSheetRef,
   theme,
   query,
   results,
@@ -52,28 +60,38 @@ export function SearchPanel({
   onSelectResult,
   onChange,
 }: SearchPanelProps) {
-  const dark = theme.name === 'dark'
-  const inputBg = dark ? '#374151' : '#F3F4F6'
-  const dividerBg = dark ? '#374151' : '#E5E7EB'
-
-  // Auto-focus is platform-specific in @gorhom/bottom-sheet and the
-  // existing inline implementation didn't use it — keep the simpler
-  // contract here.
+  const { colors, scheme } = useTheme()
+  const internalRef = useRef<BottomSheet>(null)
+  const sheetRef = externalSheetRef ?? internalRef
 
   useEffect(() => {
-    // No-op effect kept for parity with electron's "auto-focus on open"
-    // intent. RN's BottomSheet handles focus when the input mounts.
-  }, [])
+    if (typeof isOpen !== 'boolean') return
+    if (isOpen) sheetRef.current?.snapToIndex(0)
+    else sheetRef.current?.close()
+  }, [isOpen, sheetRef])
+
+  // Theme-driven palette with legacy override pathway.
+  const sheetBg = theme?.background ?? colors.background.secondary
+  const textColor = theme?.color ?? colors.label.primary
+  const secondaryColor = colors.label.secondary
+  const tertiaryColor = colors.label.tertiary
+  const indicatorColor = theme?.toolbarText ?? theme?.color ?? colors.fill.tertiary
+  const dark = theme ? theme.name === 'dark' : scheme === 'dark'
+  const inputBg = dark ? colors.fill.secondary : colors.fill.tertiary
+  const dividerBg = colors.separator.nonOpaque
 
   return (
     <BottomSheet
       ref={sheetRef}
-      index={-1}
+      index={typeof isOpen === 'boolean' ? (isOpen ? 0 : -1) : -1}
       snapPoints={['50%', '90%']}
       enablePanDownToClose
-      backgroundStyle={{ backgroundColor: theme.background }}
-      handleIndicatorStyle={{ backgroundColor: theme.toolbarText }}
-      onChange={onChange}
+      backgroundStyle={{ backgroundColor: sheetBg }}
+      handleIndicatorStyle={{ backgroundColor: indicatorColor }}
+      onChange={(index) => {
+        onChange?.(index)
+        if (index === -1) onClose?.()
+      }}
     >
       <View style={{ flex: 1, paddingHorizontal: 16 }}>
         <View
@@ -86,7 +104,7 @@ export function SearchPanel({
             marginBottom: 12,
           }}
         >
-          <IconSymbol name="magnifyingglass" size={18} color="#9CA3AF" />
+          <IconSymbol name="magnifyingglass" size={18} color={tertiaryColor} />
           <TextInput
             testID="search-input"
             style={{
@@ -94,10 +112,10 @@ export function SearchPanel({
               marginLeft: 8,
               paddingVertical: 10,
               fontSize: 16,
-              color: theme.color,
+              color: textColor,
             }}
             placeholder="Search in book..."
-            placeholderTextColor="#9CA3AF"
+            placeholderTextColor={tertiaryColor}
             value={query}
             onChangeText={onChangeQuery}
             autoCapitalize="none"
@@ -110,7 +128,7 @@ export function SearchPanel({
         {isSearching ? (
           <View style={{ alignItems: 'center', paddingVertical: 16 }}>
             <ActivityIndicator size="small" />
-            <Text style={{ color: '#9CA3AF', marginTop: 8, fontSize: 14 }}>Searching...</Text>
+            <Text style={{ color: secondaryColor, marginTop: 8, fontSize: 14 }}>Searching...</Text>
           </View>
         ) : null}
 
@@ -130,11 +148,11 @@ export function SearchPanel({
                 accessibilityRole="button"
                 accessibilityLabel={`Jump to ${item.section?.label ?? 'result'}`}
               >
-                <Text style={{ color: theme.color, fontSize: 14 }} numberOfLines={2}>
+                <Text style={{ color: textColor, fontSize: 14 }} numberOfLines={2}>
                   {item.excerpt}
                 </Text>
                 {item.section?.label ? (
-                  <Text style={{ color: '#9CA3AF', fontSize: 12, marginTop: 4 }}>
+                  <Text style={{ color: secondaryColor, fontSize: 12, marginTop: 4 }}>
                     {item.section.label}
                   </Text>
                 ) : null}
@@ -146,7 +164,7 @@ export function SearchPanel({
         {!isSearching && query.length > 1 && results.length === 0 ? (
           <Text
             style={{
-              color: '#9CA3AF',
+              color: secondaryColor,
               textAlign: 'center',
               paddingVertical: 24,
               fontSize: 14,
@@ -162,12 +180,12 @@ export function SearchPanel({
             style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 32 }}
             testID="search-prompt"
           >
-            <Text style={{ color: theme.color, fontSize: 16, fontWeight: '600' }}>
+            <Text style={{ color: textColor, fontSize: 16, fontWeight: '600' }}>
               Search this book
             </Text>
             <Text
               style={{
-                color: '#9CA3AF',
+                color: secondaryColor,
                 marginTop: 4,
                 fontSize: 13,
                 textAlign: 'center',

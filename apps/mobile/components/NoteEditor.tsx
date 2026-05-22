@@ -1,15 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Text, TextInput, TouchableOpacity, View } from 'react-native'
 import BottomSheet from '@gorhom/bottom-sheet'
 import { ReaderTheme } from '@/types/book'
+import { useTheme } from '@/lib/theme'
 
 /**
  * Generalized highlight shape the NoteEditor needs. Both EPUB
  * `Highlight` and PDF `PdfHighlight` widen to this — they both carry
  * `id`, `text`, and `note` columns from the shared `highlights` table.
- *
- * Batch 7 (G10 deferral from Batch 5): widening the prop type so the
- * PDF reader can reuse the same NoteEditor for its highlight popover.
  */
 export interface NoteEditableHighlight {
   id: string
@@ -17,25 +15,60 @@ export interface NoteEditableHighlight {
   note: string | null
 }
 
+/**
+ * NoteEditor — dual-API during the Phase 3 reader-UI migration. New
+ * callers pass {isOpen, onClose}. Legacy callers still use {sheetRef,
+ * theme}. Both flows render the same body.
+ */
 interface NoteEditorProps {
-  sheetRef: React.RefObject<BottomSheet | null>
+  // New API
+  isOpen?: boolean
+  onClose?: () => void
+
+  // Legacy API (deprecated)
+  sheetRef?: React.RefObject<BottomSheet | null>
+  theme?: ReaderTheme
+
   highlight: NoteEditableHighlight | null
-  theme: ReaderTheme
   onSave: (highlightId: string, note: string) => void
   onDiscard: () => void
 }
 
-export function NoteEditor({ sheetRef, highlight, theme, onSave, onDiscard }: NoteEditorProps) {
+export function NoteEditor({
+  isOpen,
+  onClose,
+  sheetRef: externalSheetRef,
+  theme,
+  highlight,
+  onSave,
+  onDiscard,
+}: NoteEditorProps) {
+  const { colors } = useTheme()
+  const internalRef = useRef<BottomSheet>(null)
+  const sheetRef = externalSheetRef ?? internalRef
   const [noteText, setNoteText] = useState('')
 
-  // Reset text when highlight changes
   useEffect(() => {
     setNoteText(highlight?.note ?? '')
   }, [highlight])
 
+  useEffect(() => {
+    if (typeof isOpen !== 'boolean') return
+    if (isOpen) sheetRef.current?.snapToIndex(0)
+    else sheetRef.current?.close()
+  }, [isOpen, sheetRef])
+
   const isEditing = !!(highlight?.note)
   const title = isEditing ? 'Edit Note' : 'Add Note'
   const discardLabel = isEditing ? 'Discard Changes' : 'Discard Note'
+
+  const sheetBg = theme?.background ?? colors.background.secondary
+  const textColor = theme?.color ?? colors.label.primary
+  const secondaryColor = colors.label.secondary
+  const tertiaryColor = colors.label.tertiary
+  const indicatorColor = theme?.color ?? colors.fill.tertiary
+  const inputBorder = colors.separator.opaque
+  const accent = colors.accent.primary
 
   const handleSave = () => {
     if (highlight) {
@@ -52,22 +85,25 @@ export function NoteEditor({ sheetRef, highlight, theme, onSave, onDiscard }: No
   return (
     <BottomSheet
       ref={sheetRef}
-      index={-1}
+      index={typeof isOpen === 'boolean' ? (isOpen ? 0 : -1) : -1}
       snapPoints={[320]}
       enablePanDownToClose
       keyboardBehavior="interactive"
       keyboardBlurBehavior="none"
-      backgroundStyle={{ backgroundColor: theme.background }}
-      handleIndicatorStyle={{ backgroundColor: theme.color, width: 36, height: 4 }}
+      onChange={(index) => {
+        if (index === -1) onClose?.()
+      }}
+      backgroundStyle={{ backgroundColor: sheetBg }}
+      handleIndicatorStyle={{ backgroundColor: indicatorColor, width: 36, height: 4 }}
     >
       <View className="px-4 pt-2 pb-4 flex-1">
-        <Text style={{ color: theme.color }} className="text-lg font-semibold mb-2">
+        <Text style={{ color: textColor }} className="text-lg font-semibold mb-2">
           {title}
         </Text>
 
         {highlight?.text ? (
           <Text
-            style={{ color: '#687076', fontStyle: 'italic' }}
+            style={{ color: secondaryColor, fontStyle: 'italic' }}
             className="text-sm mb-3"
             numberOfLines={2}
           >
@@ -80,11 +116,11 @@ export function NoteEditor({ sheetRef, highlight, theme, onSave, onDiscard }: No
           value={noteText}
           onChangeText={setNoteText}
           placeholder="Add a note about this passage..."
-          placeholderTextColor="#9CA3AF"
+          placeholderTextColor={tertiaryColor}
           style={{
-            color: theme.color,
+            color: textColor,
             borderWidth: 1,
-            borderColor: '#E5E7EB',
+            borderColor: inputBorder,
             borderRadius: 8,
             padding: 12,
             minHeight: 120,
@@ -100,7 +136,7 @@ export function NoteEditor({ sheetRef, highlight, theme, onSave, onDiscard }: No
             accessibilityRole="button"
             accessibilityLabel={discardLabel}
           >
-            <Text style={{ color: '#687076' }} className="text-sm font-semibold">
+            <Text style={{ color: secondaryColor }} className="text-sm font-semibold">
               {discardLabel}
             </Text>
           </TouchableOpacity>
@@ -108,7 +144,7 @@ export function NoteEditor({ sheetRef, highlight, theme, onSave, onDiscard }: No
           <TouchableOpacity
             onPress={handleSave}
             style={{
-              backgroundColor: '#0a7ea4',
+              backgroundColor: accent,
               borderRadius: 8,
               height: 44,
               paddingHorizontal: 24,
