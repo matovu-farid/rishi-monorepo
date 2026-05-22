@@ -717,6 +717,7 @@ export default function PdfReaderScreen() {
                 key={c.name}
                 onPress={() => handleAddHighlight(c.name)}
                 style={[styles.swatch, { backgroundColor: c.hex }]}
+                hitSlop={{ top: 11, bottom: 11, left: 11, right: 11 }}
                 accessibilityLabel={`Highlight in ${c.name}`}
               />
             ))}
@@ -752,6 +753,7 @@ export default function PdfReaderScreen() {
                   { backgroundColor: c.hex },
                   pickerHighlight.color === c.name && styles.swatchActive,
                 ]}
+                hitSlop={{ top: 11, bottom: 11, left: 11, right: 11 }}
                 accessibilityLabel={`Recolor highlight to ${c.name}`}
               />
             ))}
