@@ -72,8 +72,7 @@ Expected: one of these outcomes—
 
 - [ ] **Step 2: Document the finding inline in this plan**
 
-Edit this plan file and replace this line with the actual finding, e.g.:
-> **Finding:** AZW3 routes to `/reader/mobi/[id]` (option A). AZW3 test will reuse `mobi-reader` testID and `reader-position-indicator`.
+> **Finding:** AZW3 routes to `/reader/[id]` (option B — EPUB reader). The only book-format dispatcher is `apps/mobile/app/(tabs)/index.tsx:85-98` (`handleBookPress`), which has explicit branches for `'pdf'`, `'mobi'`, and `'djvu'` and falls through to `router.push(\`/reader/${book.id}\`)` (the EPUB reader) for everything else. Since `lib/file-import.ts:144` stores AZW3 with `format: 'azw3'` and `lib/book-storage.ts:139-151` preserves that format on read (`row.format as Book['format']`), an AZW3 book's `format` value at tap time is `'azw3'`, which does not match any explicit branch and therefore hits the EPUB else-clause. The R2-download adapter at `lib/book-storage.ts:81-82` does collapse `azw3 → mobi` for the download port, but only for the storage bucket key — it does NOT change the in-memory `Book.format`, so it does not affect routing. There is no `app/reader/azw3/` directory and no other dispatcher (`grep -rn "router.push.*reader"` returned only the index.tsx branches plus `app/chat/[bookId].tsx:161` which is the chat→reader return path, not format-aware). The AZW3 Detox test will therefore assert against `reader-epub` testID and `reader-position-indicator`. Note: Task 11 below currently scripts against `mobi-reader` (assuming option A) — update those testIDs when executing Task 11.
 
 If outcome is (C), STOP and surface to the user — Tasks 11 (AZW3 reader test) will need to be re-planned.
 
