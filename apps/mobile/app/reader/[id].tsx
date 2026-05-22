@@ -163,6 +163,12 @@ function ReaderContent({ book }: { book: Book }) {
   const [noteEditorOpen, setNoteEditorOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [currentHref, setCurrentHref] = useState<string | null>(null)
+  // RDR-026 — epubjs's spine parse fires AFTER the outer loading state
+  // flips, so the user briefly stares at a blank theme-coloured screen.
+  // We flip this flag inside `handleLocationChange` (epubjs's first
+  // onRelocated emit) and gate an ActivityIndicator overlay on
+  // `!engineReady` below.
+  const [engineReady, setEngineReady] = useState(false)
   // P1-J — epubjs's `progress` arg (3rd param of onRelocated) is a 0..1
   // float. We mirror it into state so the bottom-bar pill re-renders
   // when the user turns a page. NaN until book.locations is ready.
@@ -296,6 +302,10 @@ function ReaderContent({ book }: { book: Book }) {
       // empty — epubjs sometimes fires onRelocated with just the
       // progress float during book.locations generation.
       setCurrentProgress(progress)
+      // RDR-026 — the first onRelocated emit means epubjs has parsed
+      // the spine and rendered the first page. Drop the engine-loading
+      // overlay.
+      setEngineReady(true)
 
       if (currentLocation?.start?.cfi) {
         currentCfiRef.current = currentLocation.start.cfi
@@ -755,6 +765,33 @@ function ReaderContent({ book }: { book: Book }) {
           popoverVisible={popoverVisible}
           dismissPopover={() => setPopoverVisible(false)}
         />
+
+        {/*
+          RDR-026 — engine-loading overlay covers the blank theme-coloured
+          gap between the outer `loading` flip (DB fetch + R2 download
+          done) and epubjs's first onRelocated emit (spine parsed,
+          first page rendered). `engineReady` flips inside
+          `handleLocationChange` above.
+        */}
+        {!engineReady ? (
+          <View
+            testID="reader-engine-loading"
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: theme.background,
+              justifyContent: 'center',
+              alignItems: 'center',
+              zIndex: 12,
+            }}
+          >
+            <ActivityIndicator size="large" color={theme.color} />
+          </View>
+        ) : null}
 
         <View style={{ position: 'absolute', top: insets.top + 48 + 8, left: 16, right: 16, zIndex: 11 }}>
           <GuardrailWarning visible={showGuardrailWarning} />
