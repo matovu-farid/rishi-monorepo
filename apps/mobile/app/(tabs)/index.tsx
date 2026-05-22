@@ -19,7 +19,13 @@ import { BookRow } from '@/components/BookRow'
 import { LibraryEmptyState } from '@/components/LibraryEmptyState'
 import { UrlImportSheet } from '@/components/UrlImportSheet'
 import { getBooks, deleteBook, getLastReadBook } from '@/lib/book-storage'
-import { importEpubFile, importPdfFile, importMobiFile, importDjvuFile } from '@/lib/file-import'
+import {
+  importEpubFile,
+  importPdfFile,
+  importMobiFile,
+  importDjvuFile,
+  type ImportFailureStage,
+} from '@/lib/file-import'
 import { Book } from '@/types/book'
 import { useTourTargetLayout } from '@/lib/onboarding/useTourTarget'
 import { useTheme } from '@/lib/theme'
@@ -76,26 +82,70 @@ export default function LibraryScreen() {
     }, [loadBooks])
   )
 
+  // P0-K: map an import failure stage to user-facing copy. The
+  // 'picker-cancel' stage is silently swallowed — the user already
+  // knows they backed out of the picker.
+  const importErrorCopy = useCallback(
+    (stage: ImportFailureStage, format: string): string | null => {
+      const fmt = format.toUpperCase()
+      switch (stage) {
+        case 'picker-cancel':
+          return null
+        case 'parse':
+        case 'unsupported':
+          return `This file looks corrupted or isn't a valid ${fmt}. Try a different copy of the book.`
+        case 'storage-full':
+          return 'Your device is out of storage. Free up some space and try again.'
+        case 'permission':
+          return "Rishi doesn't have permission to read that file. Check the app's file-access settings."
+        case 'network':
+          return 'Could not download the book. Check your connection and try again.'
+        case 'duplicate':
+          return 'You already have this book in your library.'
+        case 'copy':
+        case 'save':
+        case 'unknown':
+        default:
+          return `Could not import the ${fmt}. Please try again.`
+      }
+    },
+    [],
+  )
+
   const doImport = useCallback(
     async (format: 'epub' | 'pdf' | 'mobi' | 'djvu') => {
       setImporting(true)
       try {
-        const importFns = { epub: importEpubFile, pdf: importPdfFile, mobi: importMobiFile, djvu: importDjvuFile }
-        const book = await importFns[format]()
-        if (book) {
+        const importFns = {
+          epub: importEpubFile,
+          pdf: importPdfFile,
+          mobi: importMobiFile,
+          djvu: importDjvuFile,
+        }
+        const result = await importFns[format]()
+        if (result.ok) {
           loadBooks()
+        } else {
+          const message = importErrorCopy(result.stage, format)
+          if (message) {
+            Alert.alert('Import Failed', message)
+          }
+          console.warn(
+            `[library] ${format} import failed at stage=${result.stage}: ${result.error}`,
+          )
         }
       } catch (error) {
+        // Unexpected throw (e.g. network for URL imports bubbling up).
         Alert.alert(
           'Import Failed',
-          `Could not import book. The file may be corrupted or not a valid ${format.toUpperCase()}.`
+          `Could not import the ${format.toUpperCase()}. Please try again.`,
         )
         console.error('Import error:', error)
       } finally {
         setImporting(false)
       }
     },
-    [loadBooks]
+    [loadBooks, importErrorCopy],
   )
 
   const handleImport = useCallback(() => {

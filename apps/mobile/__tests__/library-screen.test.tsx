@@ -201,12 +201,13 @@ jest.mock('@/lib/book-storage', () => ({
   deleteBook: jest.fn(),
 }))
 
-jest.mock('@/lib/file-import', () => ({
-  importEpubFile: jest.fn(async () => null),
-  importPdfFile: jest.fn(async () => null),
-  importMobiFile: jest.fn(async () => null),
-  importDjvuFile: jest.fn(async () => null),
-}))
+const fileImportMocks = {
+  importEpubFile: jest.fn(async () => ({ ok: true, book: null })),
+  importPdfFile: jest.fn(async () => ({ ok: true, book: null })),
+  importMobiFile: jest.fn(async () => ({ ok: true, book: null })),
+  importDjvuFile: jest.fn(async () => ({ ok: true, book: null })),
+}
+jest.mock('@/lib/file-import', () => fileImportMocks)
 
 jest.mock('@/lib/onboarding/useTourTarget', () => ({
   useTourTargetLayout: () => ({ ref: { current: null }, onLayout: () => {} }),
@@ -434,5 +435,120 @@ describe('LibraryScreen (P0-J: search empty state)', () => {
         ),
     )
     expect(rows.length).toBe(2)
+  })
+})
+
+/**
+ * P0-K — Stage-specific import error copy.
+ *
+ * The shared service returns `{ok:false, stage, error}` but the mobile
+ * screen previously surfaced a single generic "Could not import book"
+ * message. We now thread the `stage` through the mobile import
+ * wrappers and map it to user-readable copy.
+ *
+ * Stages exercised here:
+ *   - parse          ➜ "looks corrupted or isn't a valid <FMT>"
+ *   - storage-full   ➜ device storage hint
+ *   - permission     ➜ file-access permission hint
+ *
+ * The 'picker-cancel' stage is silently swallowed (no alert).
+ */
+describe('LibraryScreen (P0-K: stage-specific import errors)', () => {
+  const { Alert } = require('react-native') as { Alert: { alert: jest.Mock } }
+
+  beforeEach(() => {
+    mockBooks.length = 0
+    mockLastReadBook = null
+    Alert.alert.mockClear()
+    fileImportMocks.importEpubFile.mockReset()
+    fileImportMocks.importPdfFile.mockReset()
+    fileImportMocks.importMobiFile.mockReset()
+    fileImportMocks.importDjvuFile.mockReset()
+  })
+
+  async function triggerEpubImport(tree: TestRenderer.ReactTestRenderer) {
+    // The empty-state path renders LibraryEmptyState with its own button,
+    // but the header `+` button is always available. We call doImport
+    // via the Alert.alert("Import Book", ..., buttons) flow: capture the
+    // EPUB button and invoke it directly.
+    const headerBtn = tree.root.findAll(
+      (n) =>
+        (n.props as { testID?: string }).testID === 'library-import-button',
+    )[0]
+    await act(async () => {
+      ;(headerBtn.props as { onPress?: () => void }).onPress?.()
+    })
+    const buttons = Alert.alert.mock.calls[0][2] as Array<{
+      text: string
+      onPress?: () => void | Promise<void>
+    }>
+    Alert.alert.mockClear()
+    const epubBtn = buttons.find((b) => b.text === 'EPUB')!
+    await act(async () => {
+      await epubBtn.onPress?.()
+    })
+  }
+
+  it('shows parse-specific copy when stage=parse', async () => {
+    fileImportMocks.importEpubFile.mockResolvedValueOnce({
+      ok: false,
+      stage: 'parse',
+      error: 'zip header corrupt',
+    } as never)
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    await triggerEpubImport(tree)
+    expect(Alert.alert).toHaveBeenCalled()
+    const [, body] = Alert.alert.mock.calls[0]
+    expect(String(body)).toMatch(/corrupt|not a valid|couldn'?t be read/i)
+  })
+
+  it('shows storage-full copy when stage=storage-full', async () => {
+    fileImportMocks.importEpubFile.mockResolvedValueOnce({
+      ok: false,
+      stage: 'storage-full',
+      error: 'ENOSPC',
+    } as never)
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    await triggerEpubImport(tree)
+    expect(Alert.alert).toHaveBeenCalled()
+    const [, body] = Alert.alert.mock.calls[0]
+    expect(String(body)).toMatch(/storage|space|full/i)
+  })
+
+  it('shows permission copy when stage=permission', async () => {
+    fileImportMocks.importEpubFile.mockResolvedValueOnce({
+      ok: false,
+      stage: 'permission',
+      error: 'EACCES',
+    } as never)
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    await triggerEpubImport(tree)
+    expect(Alert.alert).toHaveBeenCalled()
+    const [, body] = Alert.alert.mock.calls[0]
+    expect(String(body)).toMatch(/permission|access/i)
+  })
+
+  it('stays silent when stage=picker-cancel', async () => {
+    fileImportMocks.importEpubFile.mockResolvedValueOnce({
+      ok: false,
+      stage: 'picker-cancel',
+      error: 'user cancelled',
+    } as never)
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    await triggerEpubImport(tree)
+    // Only the initial "Import Book" alert was shown — no failure alert.
+    expect(Alert.alert).not.toHaveBeenCalled()
   })
 })

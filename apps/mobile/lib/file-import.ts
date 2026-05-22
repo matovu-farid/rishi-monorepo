@@ -20,6 +20,66 @@ import { shouldSkipIndexing } from "@/lib/file-import-index-gate";
 
 const BOOKS_DIR = new Directory(Paths.document, "books");
 
+/**
+ * Mobile import-outcome taxonomy (P0-K).
+ *
+ * The shared service returns `{ok:false, stage: 'unsupported' | 'copy' |
+ * 'parse' | 'save' | 'unknown'}`. The mobile wrappers layer additional
+ * UX stages on top (`picker-cancel`, `storage-full`, `permission`,
+ * `network`, `duplicate`) so the library screen can surface
+ * stage-specific copy via Alert.alert.
+ *
+ * Stages:
+ *   - 'picker-cancel'   user dismissed the document picker (no alert)
+ *   - 'parse'           shared service couldn't parse the file
+ *   - 'storage-full'    write failed with ENOSPC
+ *   - 'permission'      filesystem refused access (EACCES / EPERM)
+ *   - 'network'         URL import couldn't fetch the file
+ *   - 'duplicate'       a book with this id / path already exists
+ *   - 'unsupported'     shared service rejected the format
+ *   - 'copy' | 'save'   shared service stages
+ *   - 'unknown'         anything we couldn't classify
+ */
+export type ImportFailureStage =
+  | "picker-cancel"
+  | "parse"
+  | "storage-full"
+  | "permission"
+  | "network"
+  | "duplicate"
+  | "unsupported"
+  | "copy"
+  | "save"
+  | "unknown";
+
+export type ImportOutcome =
+  | { ok: true; book: Book }
+  | { ok: false; stage: ImportFailureStage; error: string };
+
+/**
+ * Classifies a shared-service failure stage + raw error string into one
+ * of our mobile-facing stages. The shared service only knows about
+ * filesystem mechanics; the picker-cancel / storage-full / permission
+ * stages are detected here from the error message.
+ */
+function classifyFailure(
+  sharedStage: "unsupported" | "copy" | "parse" | "save" | "unknown",
+  error: string,
+): ImportFailureStage {
+  const msg = error.toLowerCase();
+  if (msg.includes("enospc") || msg.includes("no space") || msg.includes("disk full")) {
+    return "storage-full";
+  }
+  if (
+    msg.includes("eacces") ||
+    msg.includes("eperm") ||
+    msg.includes("permission")
+  ) {
+    return "permission";
+  }
+  return sharedStage;
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ────────────────────────────────────────────────────────────────────────────
@@ -56,7 +116,7 @@ async function runImportWithService(opts: {
   format: BookFormat;
   title: string;
   author?: string;
-}): Promise<Book | null> {
+}): Promise<ImportOutcome> {
   ensureBooksDir();
   const bookId = generateUUID();
 
@@ -72,7 +132,11 @@ async function runImportWithService(opts: {
     console.warn(
       `[file-import] ${opts.format} import failed at stage=${result.stage}: ${result.error}`,
     );
-    return null;
+    return {
+      ok: false,
+      stage: classifyFailure(result.stage, result.error ?? ""),
+      error: result.error ?? "",
+    };
   }
 
   const bookPath = `${BOOKS_DIR.uri}/${bookId}/book.${opts.format}`;
@@ -101,15 +165,18 @@ async function runImportWithService(opts: {
 
   // Local Book shape — derive from what the service inserted.
   return {
-    id: bookId,
-    title: opts.title,
-    author: opts.author ?? "Unknown",
-    coverPath: null, // CoverPort will patch this on the row asynchronously.
-    filePath: bookPath,
-    format: opts.format,
-    currentCfi: null,
-    currentPage: opts.format === "pdf" ? 1 : null,
-    createdAt: Date.now(),
+    ok: true,
+    book: {
+      id: bookId,
+      title: opts.title,
+      author: opts.author ?? "Unknown",
+      coverPath: null, // CoverPort will patch this on the row asynchronously.
+      filePath: bookPath,
+      format: opts.format,
+      currentCfi: null,
+      currentPage: opts.format === "pdf" ? 1 : null,
+      createdAt: Date.now(),
+    },
   };
 }
 
@@ -117,10 +184,16 @@ async function runImportWithService(opts: {
 // Picker-driven imports
 // ────────────────────────────────────────────────────────────────────────────
 
-export async function importEpubFile(): Promise<Book | null> {
+const PICKER_CANCEL: ImportOutcome = {
+  ok: false,
+  stage: "picker-cancel",
+  error: "User cancelled the document picker",
+};
+
+export async function importEpubFile(): Promise<ImportOutcome> {
   const pickedFile = await File.pickFileAsync(undefined, "application/epub+zip");
   if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
-    return null;
+    return PICKER_CANCEL;
   }
   const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile;
   return runImportWithService({
@@ -130,10 +203,10 @@ export async function importEpubFile(): Promise<Book | null> {
   });
 }
 
-export async function importPdfFile(): Promise<Book | null> {
+export async function importPdfFile(): Promise<ImportOutcome> {
   const pickedFile = await File.pickFileAsync(undefined, "application/pdf");
   if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
-    return null;
+    return PICKER_CANCEL;
   }
   const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile;
   return runImportWithService({
@@ -143,13 +216,13 @@ export async function importPdfFile(): Promise<Book | null> {
   });
 }
 
-export async function importMobiFile(): Promise<Book | null> {
+export async function importMobiFile(): Promise<ImportOutcome> {
   const pickedFile = await File.pickFileAsync(
     undefined,
     "application/x-mobipocket-ebook",
   );
   if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
-    return null;
+    return PICKER_CANCEL;
   }
   const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile;
   const isAzw3 = sourceFile.uri.toLowerCase().endsWith(".azw3");
@@ -161,10 +234,10 @@ export async function importMobiFile(): Promise<Book | null> {
   });
 }
 
-export async function importDjvuFile(): Promise<Book | null> {
+export async function importDjvuFile(): Promise<ImportOutcome> {
   const pickedFile = await File.pickFileAsync(undefined, "image/vnd.djvu");
   if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
-    return null;
+    return PICKER_CANCEL;
   }
   const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile;
   return runImportWithService({
@@ -274,10 +347,10 @@ export async function importBookFromUrl(url: string): Promise<Book> {
     /* best-effort */
   }
 
-  if (!result) {
-    throw new Error("Import failed");
+  if (!result.ok) {
+    throw new Error(`Import failed at stage=${result.stage}: ${result.error}`);
   }
-  return result;
+  return result.book;
 }
 
 // Re-export for callers that still rely on the legacy embedding helper.
