@@ -45,6 +45,31 @@ import type { Highlight, HighlightColor } from '@/types/highlight'
 import { HIGHLIGHT_COLORS, HIGHLIGHT_OPACITY } from '@/types/highlight'
 import type { Annotation } from '@epubjs-react-native/core'
 
+/**
+ * P1-J — map epubjs's onRelocated `progress` arg (a 0..1 float) into the
+ * `ReaderProgress` shape that `ReaderProgressPill` renders as "42 / 100".
+ *
+ * epubjs emits NaN before book.locations have been generated, and may
+ * pass `undefined` if a callsite doesn't forward the param at all. We
+ * return `{ kind: 'none' }` in those cases so the pill renders the "—"
+ * placeholder instead of "NaN / 100".
+ *
+ * Floats are rounded to the nearest whole percent and clamped to
+ * [0, 100] — epubjs occasionally emits values fractionally outside the
+ * range (e.g. 1.0000001) at the very end of the spine.
+ *
+ * Exported so the unit test in
+ * `__tests__/components/reader/reader-epub-progress-pill.test.ts`
+ * can pin the math without mounting the EPUB Reader component.
+ */
+export function computeEpubProgressForShell(progress: number): ReaderProgress {
+  if (typeof progress !== 'number' || Number.isNaN(progress)) {
+    return { kind: 'none' }
+  }
+  const clamped = Math.max(0, Math.min(1, progress))
+  return { kind: 'page', current: Math.round(clamped * 100), total: 100 }
+}
+
 export default function ReaderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
@@ -137,6 +162,10 @@ function ReaderContent({ book }: { book: Book }) {
   const [noteEditorOpen, setNoteEditorOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [currentHref, setCurrentHref] = useState<string | null>(null)
+  // P1-J — epubjs's `progress` arg (3rd param of onRelocated) is a 0..1
+  // float. We mirror it into state so the bottom-bar pill re-renders
+  // when the user turns a page. NaN until book.locations is ready.
+  const [currentProgress, setCurrentProgress] = useState<number>(Number.NaN)
   const currentCfiRef = useRef<string | null>(book.currentCfi)
   const cfiSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -255,9 +284,18 @@ function ReaderContent({ book }: { book: Book }) {
     return () => sub.remove()
   }, [book.id])
 
-  // Debounced CFI save on location change
+  // Debounced CFI save on location change.
+  //
+  // P1-J — the 3rd param (`progress`) is epubjs's 0..1 page-position
+  // float. We mirror it into `currentProgress` so the bottom-bar pill
+  // can show "42 / 100" instead of the chapter label / raw href.
   const handleLocationChange = useCallback(
-    (_totalLocations: number, currentLocation: any, _progress: number) => {
+    (_totalLocations: number, currentLocation: any, progress: number) => {
+      // Always update progress, even when the location payload is
+      // empty — epubjs sometimes fires onRelocated with just the
+      // progress float during book.locations generation.
+      setCurrentProgress(progress)
+
       if (currentLocation?.start?.cfi) {
         currentCfiRef.current = currentLocation.start.cfi
         setCurrentHref(currentLocation.start.href || null)
@@ -599,15 +637,14 @@ function ReaderContent({ book }: { book: Book }) {
     [goToLocation]
   )
 
-  // Derive a progress label for ReaderShell's center pill. EPUB doesn't
-  // expose page totals from the spine cheaply — use the chapter label
-  // when present, otherwise the raw CFI prefix, otherwise no pill.
-  const progressForShell = useMemo<ReaderProgress>(() => {
-    const chapter = toc?.find((t) => t.href === currentHref)?.label
-    if (chapter) return { kind: 'cfi', label: chapter }
-    if (currentHref) return { kind: 'cfi', label: currentHref }
-    return { kind: 'none' }
-  }, [toc, currentHref])
+  // P1-J — drive the bottom-bar pill from epubjs's `progress` float so
+  // users see "42 / 100" instead of the chapter title / raw href. The
+  // chapter label is still computed below for the voice-chat activation
+  // context (2cd13358); don't blow that wiring away.
+  const progressForShell = useMemo<ReaderProgress>(
+    () => computeEpubProgressForShell(currentProgress),
+    [currentProgress],
+  )
 
   const chapterLabel =
     toc?.find((t) => t.href === currentHref)?.label ?? undefined
