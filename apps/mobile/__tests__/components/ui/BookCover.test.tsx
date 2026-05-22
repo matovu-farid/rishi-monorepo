@@ -230,6 +230,56 @@ describe('BookCover (mobile)', () => {
     expect(borderWidths.some((w) => w > 0)).toBe(true)
   })
 
+  it('fallback palette uses saturated jacket colors (VIS-019)', () => {
+    // VIS-019: the prior palette (#8B7355, #5B8B6B, etc.) clustered around
+    // L=50 / low chroma, which made every letter tile read as the same
+    // brown-grey. Apple Books' jackets ship saturated hues — we pin a few
+    // sentinels to lock the new palette away from the muddy mid-greys.
+    const titles = ['Dune', 'Brave New World', 'Anna Karenina', 'Hyperion', 'Foundation']
+    const bgs = new Set<string>()
+    for (const title of titles) {
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(
+          <BookCover uri={undefined} title={title} size="md" />,
+        )
+      })
+      const views = tree.root.findAll(
+        (n) => typeof n.type === 'string' && (n.type as string) === 'View',
+      )
+      for (const v of views) {
+        const style = flattenStyle((v.props as { style?: unknown }).style)
+        const bg = style.backgroundColor
+        if (typeof bg === 'string' && bg.length > 0) {
+          bgs.add(bg)
+          break
+        }
+      }
+    }
+    // The previous palette's worst offenders — none of these should appear
+    // in the new palette.
+    const FORBIDDEN_MUDDY = ['#8B7355', '#5B8B6B', '#6B7B8B', '#8B6B7B', '#7B8B5B', '#6B5B8B', '#8B7B5B', '#5B6B8B']
+    for (const c of bgs) {
+      expect(FORBIDDEN_MUDDY).not.toContain(c)
+    }
+    // Each new palette color must have a chroma range (max - min RGB)
+    // greater than the 48 the muddy palette maxes at (e.g. #8B7355 has
+    // max(0x8B,0x73,0x55) - min(...) = 0x8B - 0x55 = 54). We assert > 64
+    // to push the palette firmly into "saturated" territory.
+    const chroma = (hex: string): number => {
+      const m = hex.match(/^#([0-9A-Fa-f]{6})$/)
+      if (!m) return 0
+      const n = parseInt(m[1], 16)
+      const r = (n >> 16) & 0xff
+      const g = (n >> 8) & 0xff
+      const b = n & 0xff
+      return Math.max(r, g, b) - Math.min(r, g, b)
+    }
+    for (const c of bgs) {
+      expect(chroma(c)).toBeGreaterThan(64)
+    }
+  })
+
   it('exposes accessibilityRole="image" and label includes the title', () => {
     let tree!: TestRenderer.ReactTestRenderer
     act(() => {

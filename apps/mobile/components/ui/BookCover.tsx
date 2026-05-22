@@ -34,16 +34,19 @@ const SIZE_MAP: Record<BookCoverSize, number> = {
   lg: 144,
 }
 
-// Deterministic hash-based palette. Muted tones that work in both light & dark.
+// VIS-019: deterministic hash-based palette. The previous set clustered at
+// L≈50 / chroma≈55 which made every letter tile read brown. Replaced with
+// saturated "book-jacket" hues — covers the hue wheel at higher chroma so
+// adjacent letter tiles on a shelf differentiate at a glance.
 const FALLBACK_PALETTE = [
-  '#8B7355',
-  '#5B8B6B',
-  '#6B7B8B',
-  '#8B6B7B',
-  '#7B8B5B',
-  '#6B5B8B',
-  '#8B7B5B',
-  '#5B6B8B',
+  '#C2185B', // crimson rose
+  '#7B1FA2', // royal purple
+  '#303F9F', // ink blue
+  '#0288D1', // azure
+  '#00796B', // teal
+  '#388E3C', // forest green
+  '#F57C00', // marmalade
+  '#D32F2F', // brick red
 ]
 
 function hashTitle(title: string): number {
