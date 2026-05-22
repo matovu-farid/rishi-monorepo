@@ -70,7 +70,13 @@ let storeState: {
 }
 
 jest.mock('@/lib/stores/authStore', () => ({
-  useAuthStore: <T,>(selector: (s: typeof storeState) => T) => selector(storeState),
+  // CHT-008 (#58): the hook now reads via `useAuthStore.getState()` on
+  // invocation. The mock therefore exposes both the selector-callable
+  // shape AND a `.getState()` accessor that returns the live state object.
+  useAuthStore: Object.assign(
+    <T,>(selector: (s: typeof storeState) => T) => selector(storeState),
+    { getState: () => storeState },
+  ),
 }))
 
 import React, { act } from 'react'
