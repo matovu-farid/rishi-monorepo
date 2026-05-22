@@ -3,6 +3,7 @@ import { useEpubStore } from '@/stores/epubStore'
 import { useNavStore } from '@/stores/navStore'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { useAuthStore } from '@/stores/authStore'
+import { usePdfStore } from '@/stores/pdfStore'
 import { setTestTtsService, getSyncService } from '@/services'
 import { audioElement } from '@/hooks/usePlayerMachine'
 import { navigationHistoryActor } from '@/machines/navigationHistory/navigationHistoryActor'
@@ -17,6 +18,7 @@ declare global {
       navStore: typeof useNavStore
       selectionStore: typeof useSelectionStore
       authStore: typeof useAuthStore
+      pdfStore: typeof usePdfStore
       setTestTtsService: (override: TtsService | null) => void
       audioElement: HTMLAudioElement
       navigationHistoryActor: typeof navigationHistoryActor
@@ -38,6 +40,7 @@ window.__rishi = {
   navStore: useNavStore,
   selectionStore: useSelectionStore,
   authStore: useAuthStore,
+  pdfStore: usePdfStore,
   setTestTtsService,
   audioElement,
   navigationHistoryActor,
