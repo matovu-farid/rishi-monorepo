@@ -10,7 +10,7 @@
  * Replaces the previous react-native-pdf-based reader. See
  * `.parity/BATCH-5-NOTES.md` for the rationale.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   AppState,
@@ -57,31 +57,21 @@ import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
 import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
-import { NoteEditor } from '@/components/NoteEditor'
 import { GoToPageModal } from '@/components/pdf/GoToPageModal'
 import { ThumbnailModal } from '@/components/pdf/thumbnail-modal'
 import { UndoSnackbar } from '@/components/UndoSnackbar'
 import { useUndoSnackbar } from '@/hooks/useUndoSnackbar'
-import BottomSheet from '@gorhom/bottom-sheet'
+import {
+  ReaderShell,
+  ReaderShellContext,
+  type ReaderProgress,
+} from '@/components/reader'
 
 interface ActiveSelection {
   pageNumber: number
   text: string
   locator: PdfLocator
   anchor: { x: number; y: number }
-}
-
-// PDF reader uses a dark scrim everywhere — give the note editor a
-// matching dark theme so the keyboard / inputs read consistently.
-const PDF_NOTE_EDITOR_THEME = {
-  name: 'dark' as const,
-  label: 'Dark',
-  background: '#1c1c1e',
-  color: '#fff',
-  toolbarBg: '#1c1c1e',
-  toolbarText: '#fff',
-  swatchColor: '#1c1c1e',
-  swatchBorder: '#fff',
 }
 
 export default function PdfReaderScreen() {
@@ -92,7 +82,6 @@ export default function PdfReaderScreen() {
   const [book, setBook] = useState<Book | null>(null)
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
-  const [toolbarVisible, setToolbarVisible] = useState(true)
   const [outlineVisible, setOutlineVisible] = useState(false)
   const [gotoVisible, setGotoVisible] = useState(false)
   const [thumbnailsVisible, setThumbnailsVisible] = useState(false)
@@ -100,7 +89,7 @@ export default function PdfReaderScreen() {
   const [pickerHighlight, setPickerHighlight] = useState<PdfHighlight | null>(null)
   const [pickerAnchor, setPickerAnchor] = useState<{ x: number; y: number } | null>(null)
   const [highlights, setHighlights] = useState<PdfHighlight[]>([])
-  const noteEditorSheetRef = useRef<BottomSheet>(null)
+  const [noteEditorOpen, setNoteEditorOpen] = useState(false)
   const [noteTargetHighlight, setNoteTargetHighlight] = useState<PdfHighlight | null>(null)
 
   // Mount the player machine actor for this book. Subsequent reads of
@@ -347,7 +336,7 @@ export default function PdfReaderScreen() {
     setPickerHighlight(null)
     setPickerAnchor(null)
     // small delay so the picker closes cleanly before the sheet opens
-    setTimeout(() => noteEditorSheetRef.current?.snapToIndex(0), 100)
+    setTimeout(() => setNoteEditorOpen(true), 100)
   }, [pickerHighlight])
 
   const handleSaveNote = useCallback(
@@ -444,65 +433,72 @@ export default function PdfReaderScreen() {
     )
   }
 
+  const progressForShell: ReaderProgress =
+    pageCount > 0
+      ? { kind: 'page', current: pageNumber || 1, total: pageCount }
+      : { kind: 'none' }
+
+  const pdfNavCluster = (
+    <PdfNavCluster
+      pageNumber={pageNumber}
+      pageCount={pageCount}
+      onPrev={() => {
+        if (pageNumber > 1) readerRef.current?.goToPage(pageNumber - 1)
+      }}
+      onNext={() => {
+        if (pageNumber < pageCount) readerRef.current?.goToPage(pageNumber + 1)
+      }}
+      onPageIndicatorPress={handleGoToPage}
+    />
+  )
+
   return (
     <View ref={pageCaptureRef} testID="pdf-reader" style={{ flex: 1, backgroundColor: '#000' }}>
-      {/*
-        E2E observability — invisible indicator that exposes the current
-        page as an accessibilityLabel that Detox can read via
-        `by.id('reader-position-indicator')`. Permanently mounted so
-        tests don't need to tap to reveal the toolbar first.
-       */}
-      <View
-        testID="reader-position-indicator"
-        accessible={true}
-        accessibilityLabel={`${pageNumber || 1}/${pageCount || 0}`}
-        style={{ position: 'absolute', width: 0, height: 0 }}
-      />
-      <PdfWebReader
-        ref={readerRef}
-        fileUri={book.filePath}
-        onLoad={handleLoad}
-        onPageChange={handlePageChange}
-        onSelection={handleSelection}
-        onSelectionCleared={handleSelectionCleared}
-        onHighlightTapped={handleHighlightTapped}
-        onError={(msg) => console.warn('[pdf-webview] error:', msg)}
-      />
-
-      {/* Tap target on the page edges to toggle toolbar — keep the
-          WebView touch handlers intact for selection / scrolling.
-          Rendered before the topbar so it sits *underneath* in z-order
-          (otherwise it would occlude the topbar buttons and fail
-          Detox's 100% visibility threshold check). */}
-      <Pressable
-        testID="reader-toggle-toolbar"
-        onPress={() => setToolbarVisible((v) => !v)}
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          height: 48,
-          backgroundColor: 'transparent',
+      <ReaderShell
+        title={book.title}
+        format="pdf"
+        onBack={handleBack}
+        progress={progressForShell}
+        initialToolbarVisible={true}
+        centerOverride={pdfNavCluster}
+        sheets={{ noteEditor: true }}
+        noteEditorHighlight={noteTargetHighlight}
+        noteEditorOpen={noteEditorOpen}
+        onSaveNote={handleSaveNote}
+        onDiscardNote={() => {
+          setNoteTargetHighlight(null)
+          setNoteEditorOpen(false)
         }}
-        accessibilityLabel="Toggle toolbar"
-      />
+      >
+        {/*
+          E2E observability — invisible indicator that exposes the current
+          page as an accessibilityLabel that Detox can read via
+          `by.id('reader-position-indicator')`. Permanently mounted so
+          tests don't need to tap to reveal the toolbar first.
+         */}
+        <View
+          testID="reader-position-indicator"
+          accessible={true}
+          accessibilityLabel={`${pageNumber || 1}/${pageCount || 0}`}
+          style={{ position: 'absolute', width: 0, height: 0 }}
+        />
+        <PdfWebReader
+          ref={readerRef}
+          fileUri={book.filePath}
+          onLoad={handleLoad}
+          onPageChange={handlePageChange}
+          onSelection={handleSelection}
+          onSelectionCleared={handleSelectionCleared}
+          onHighlightTapped={handleHighlightTapped}
+          onError={(msg) => console.warn('[pdf-webview] error:', msg)}
+        />
 
-      {/* Top toolbar */}
-      {toolbarVisible ? (
-        <SafeAreaView edges={['top']} style={styles.topbar}>
-          <View style={styles.topbarInner}>
-            <TouchableOpacity
-              onPress={handleBack}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              style={styles.iconButton}
-              accessibilityLabel="Back"
-            >
-              <IconSymbol name="chevron.left" size={24} color="#fff" />
-            </TouchableOpacity>
-            <Text numberOfLines={1} style={styles.title}>
-              {book.title}
-            </Text>
+        <PressableToggleToolbar />
+
+        {/* Legacy chrome affordances kept above the PDF until Phase 5
+            folds them into the right cluster: outline + thumbnails. */}
+        <SafeAreaView edges={['top']} style={styles.legacyTopRight} pointerEvents="box-none">
+          <View style={styles.legacyTopRightInner} pointerEvents="box-none">
             <TouchableOpacity
               onPress={() => setThumbnailsVisible(true)}
               style={styles.iconButton}
@@ -529,43 +525,8 @@ export default function PdfReaderScreen() {
             </TouchableOpacity>
           </View>
         </SafeAreaView>
-      ) : null}
 
-      {/* Bottom navigation */}
-      {toolbarVisible ? (
-        <SafeAreaView edges={['bottom']} style={styles.bottombar}>
-          <View style={styles.bottombarInner}>
-            <TouchableOpacity
-              onPress={() => {
-                if (pageNumber > 1) readerRef.current?.goToPage(pageNumber - 1)
-              }}
-              disabled={pageNumber <= 1}
-              style={[styles.iconButton, pageNumber <= 1 && { opacity: 0.3 }]}
-            >
-              <IconSymbol name="chevron.left" size={28} color="#fff" />
-            </TouchableOpacity>
-
-            <TouchableOpacity onPress={handleGoToPage}>
-              <Text style={styles.pageIndicator}>
-                {pageNumber || 1} / {pageCount || '?'}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              testID="reader-next-page-btn"
-              onPress={() => {
-                if (pageNumber < pageCount) readerRef.current?.goToPage(pageNumber + 1)
-              }}
-              disabled={pageNumber >= pageCount}
-              style={[styles.iconButton, pageNumber >= pageCount && { opacity: 0.3 }]}
-            >
-              <IconSymbol name="chevron.right" size={28} color="#fff" />
-            </TouchableOpacity>
-          </View>
-        </SafeAreaView>
-      ) : null}
-
-      {/* Selection action bar */}
+        {/* Selection action bar */}
       {selection ? (
         <View
           pointerEvents="box-none"
@@ -634,76 +595,132 @@ export default function PdfReaderScreen() {
         </View>
       ) : null}
 
-      {/* Floating TTS controls — visible whenever the player isn't idle */}
-      <TTSControls />
+        {/* Floating TTS controls — visible whenever the player isn't idle */}
+        <TTSControls />
 
-      {/* G15 — visual cue badge. Mounted unconditionally; the component
-          gates its own rendering on prefsStore.ttsVisualCueEnabled +
-          visualCueStore.label. We drive setVisualCue from the active
-          paragraph's text via a lightweight heuristic in
-          `lib/tts/visual-cue-classify.ts`. */}
-      <TTSVisualCue />
+        {/* G15 — visual cue badge. Mounted unconditionally; the component
+            gates its own rendering on prefsStore.ttsVisualCueEnabled +
+            visualCueStore.label. We drive setVisualCue from the active
+            paragraph's text via a lightweight heuristic in
+            `lib/tts/visual-cue-classify.ts`. */}
+        <TTSVisualCue />
 
-      {/* G10 — undo snackbar after highlight delete */}
-      <UndoSnackbar
-        visible={undoSnackbar.visible}
-        message={undoSnackbar.message}
-        actionLabel={undoSnackbar.actionLabel}
-        onAction={undoSnackbar.action}
-        onDismiss={undoSnackbar.dismiss}
-      />
-
-      {/* Note editor sheet (Batch 7 — NoteEditor widened to accept PDF
-          highlights via the NoteEditableHighlight type). */}
-      <NoteEditor
-        sheetRef={noteEditorSheetRef}
-        highlight={noteTargetHighlight}
-        theme={PDF_NOTE_EDITOR_THEME}
-        onSave={handleSaveNote}
-        onDiscard={() => {
-          setNoteTargetHighlight(null)
-          noteEditorSheetRef.current?.close()
-        }}
-      />
-
-      {/* G09 — Go-to-page modal (Android only — iOS uses Alert.prompt) */}
-      <GoToPageModal
-        visible={gotoVisible}
-        pageCount={pageCount}
-        currentPage={pageNumber || 1}
-        onClose={() => setGotoVisible(false)}
-        onSelectPage={handleGotoFromModal}
-      />
-
-      {/* G09 — Thumbnail grid modal */}
-      {book?.filePath ? (
-        <ThumbnailModal
-          visible={thumbnailsVisible}
-          onClose={() => setThumbnailsVisible(false)}
-          onSelectPage={handleSelectThumbnailPage}
-          filePath={book.filePath}
-          totalPages={pageCount}
-          currentPage={pageNumber || 1}
+        {/* G10 — undo snackbar after highlight delete */}
+        <UndoSnackbar
+          visible={undoSnackbar.visible}
+          message={undoSnackbar.message}
+          actionLabel={undoSnackbar.actionLabel}
+          onAction={undoSnackbar.action}
+          onDismiss={undoSnackbar.dismiss}
         />
-      ) : null}
 
-      {/* TOC modal (Phase 4 — G07) */}
-      <Modal
-        visible={outlineVisible}
-        animationType="slide"
-        onRequestClose={handleCloseOutline}
-        presentationStyle="formSheet"
+        {/* G09 — Go-to-page modal (Android only — iOS uses Alert.prompt) */}
+        <GoToPageModal
+          visible={gotoVisible}
+          pageCount={pageCount}
+          currentPage={pageNumber || 1}
+          onClose={() => setGotoVisible(false)}
+          onSelectPage={handleGotoFromModal}
+        />
+
+        {/* G09 — Thumbnail grid modal */}
+        {book?.filePath ? (
+          <ThumbnailModal
+            visible={thumbnailsVisible}
+            onClose={() => setThumbnailsVisible(false)}
+            onSelectPage={handleSelectThumbnailPage}
+            filePath={book.filePath}
+            totalPages={pageCount}
+            currentPage={pageNumber || 1}
+          />
+        ) : null}
+
+        {/* TOC modal (Phase 4 — G07) */}
+        <Modal
+          visible={outlineVisible}
+          animationType="slide"
+          onRequestClose={handleCloseOutline}
+          presentationStyle="formSheet"
+        >
+          <SafeAreaView style={{ flex: 1, backgroundColor: '#1c1c1e' }}>
+            <View style={styles.outlineHeader}>
+              <Text style={{ color: '#fff', fontSize: 17, fontWeight: '600' }}>Contents</Text>
+              <TouchableOpacity onPress={handleCloseOutline} hitSlop={10}>
+                <IconSymbol name="xmark" size={20} color="#fff" />
+              </TouchableOpacity>
+            </View>
+            <OutlineList outline={outline} currentPage={pageNumber} onTap={handleOutlineTap} />
+          </SafeAreaView>
+        </Modal>
+      </ReaderShell>
+    </View>
+  )
+}
+
+/**
+ * Full-area Pressable for tap-to-toggle. Lives inside ReaderShell so it
+ * can call `toggleToolbar` from context. testID is preserved for Detox.
+ */
+function PressableToggleToolbar(): React.JSX.Element {
+  const { toggleToolbar } = useContext(ReaderShellContext)
+  return (
+    <Pressable
+      testID="reader-toggle-toolbar"
+      onPress={toggleToolbar}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 48,
+        backgroundColor: 'transparent',
+      }}
+      accessibilityLabel="Toggle toolbar"
+    />
+  )
+}
+
+interface PdfNavClusterProps {
+  pageNumber: number
+  pageCount: number
+  onPrev: () => void
+  onNext: () => void
+  onPageIndicatorPress: () => void
+}
+
+function PdfNavCluster({
+  pageNumber,
+  pageCount,
+  onPrev,
+  onNext,
+  onPageIndicatorPress,
+}: PdfNavClusterProps): React.JSX.Element {
+  return (
+    <View style={styles.pdfNavCluster}>
+      <TouchableOpacity
+        onPress={onPrev}
+        disabled={pageNumber <= 1}
+        style={[styles.pdfNavBtn, pageNumber <= 1 && { opacity: 0.3 }]}
+        accessibilityLabel="Previous page"
       >
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#1c1c1e' }}>
-          <View style={styles.outlineHeader}>
-            <Text style={{ color: '#fff', fontSize: 17, fontWeight: '600' }}>Contents</Text>
-            <TouchableOpacity onPress={handleCloseOutline} hitSlop={10}>
-              <IconSymbol name="xmark" size={20} color="#fff" />
-            </TouchableOpacity>
-          </View>
-          <OutlineList outline={outline} currentPage={pageNumber} onTap={handleOutlineTap} />
-        </SafeAreaView>
-      </Modal>
+        <IconSymbol name="chevron.left" size={24} color="#fff" />
+      </TouchableOpacity>
+
+      <TouchableOpacity onPress={onPageIndicatorPress} accessibilityLabel="Go to page">
+        <Text style={styles.pdfNavLabel}>
+          {pageNumber || 1} / {pageCount || '?'}
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        testID="reader-next-page-btn"
+        onPress={onNext}
+        disabled={pageNumber >= pageCount}
+        style={[styles.pdfNavBtn, pageNumber >= pageCount && { opacity: 0.3 }]}
+        accessibilityLabel="Next page"
+      >
+        <IconSymbol name="chevron.right" size={24} color="#fff" />
+      </TouchableOpacity>
     </View>
   )
 }
@@ -767,32 +784,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  topbar: {
+  legacyTopRight: {
     position: 'absolute',
     top: 0,
-    left: 0,
     right: 0,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    zIndex: 11,
   },
-  topbarInner: {
+  legacyTopRightInner: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  bottombar: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-  },
-  bottombarInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 24,
-    paddingVertical: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
   iconButton: {
     width: 44,
@@ -800,15 +801,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  title: {
-    flex: 1,
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-    textAlign: 'center',
-    marginHorizontal: 8,
+  pdfNavCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
   },
-  pageIndicator: { color: '#fff', fontSize: 16, fontWeight: '500' },
+  pdfNavBtn: {
+    width: 36,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pdfNavLabel: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '500',
+    minWidth: 64,
+    textAlign: 'center',
+  },
   selectionBarWrapper: {
     position: 'absolute',
     top: 80,
