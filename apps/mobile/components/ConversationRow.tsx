@@ -47,7 +47,10 @@ export function ConversationRow({
       onLongPress={onLongPress}
       className="flex-row items-center px-4 py-4 active:bg-gray-100 dark:active:bg-gray-800"
       accessibilityRole="button"
-      accessibilityLabel={`Conversation about ${bookTitle}`}
+      // P1-AE: expose the FULL book title via accessibilityLabel so VoiceOver
+      // users hear the untruncated title even when the visible Text below is
+      // truncated to a single line.
+      accessibilityLabel={bookTitle}
     >
       {/* Book cover thumbnail */}
       {bookCoverPath ? (
@@ -66,6 +69,9 @@ export function ConversationRow({
           testID={testID ? `${testID}-title` : undefined}
           className="text-base font-semibold text-gray-900 dark:text-white"
           numberOfLines={1}
+          // P1-AE: explicit tail-ellipsis so truncation rendering is
+          // deterministic across iOS / Android RN runtimes.
+          ellipsizeMode="tail"
         >
           {bookTitle}
         </Text>
