@@ -24,6 +24,7 @@ import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
 import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
+import { resolvePlainTextReadFromSelection } from '@/lib/reader-selection'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
 import { safeBack } from '@/lib/navigation'
@@ -228,6 +229,26 @@ window.addEventListener('message', function(e) {
   if (msg.type === 'load') loadBook(msg.data);
   if (msg.type === 'goto') showChapter(msg.chapter);
 });
+
+// P1-K — Selection bridge: when the user selects text inside the
+// rendered MOBI HTML, post the selection to RN so the reader screen
+// can offer "Read from here". Debounced via a timeout so we don't
+// flood the bridge on every selectionchange tick.
+var __rishiSelectionTimer = null;
+document.addEventListener('selectionchange', function() {
+  if (__rishiSelectionTimer) clearTimeout(__rishiSelectionTimer);
+  __rishiSelectionTimer = setTimeout(function() {
+    try {
+      var sel = (window.getSelection && window.getSelection()) ? window.getSelection().toString() : '';
+      if (sel && sel.trim().length > 0) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'selection',
+          text: sel
+        }));
+      }
+    } catch (e) { /* ignore — selection API unavailable */ }
+  }, 250);
+});
 </script>
 </body>
 </html>`
@@ -250,6 +271,10 @@ export default function MobiReaderScreen() {
   const [isCurrentBookmarked, setIsCurrentBookmarked] = useState<boolean>(false)
   const [settings, setSettings] = useState<ReaderSettings>(loadReaderSettings())
   const [noteEditorOpen, setNoteEditorOpen] = useState(false)
+  // P1-K — last selection text reported by the WebView bridge. We hold
+  // it in state so the floating "Read from here" pill can mount and
+  // dispatch PLAY_FROM on press.
+  const [pendingSelection, setPendingSelection] = useState<string | null>(null)
   const undoSnackbar = useUndoSnackbar()
 
   const webViewRef = useRef<WebView>(null)
@@ -345,6 +370,13 @@ export default function MobiReaderScreen() {
         if (book?.id) {
           updateBookPage(book.id, msg.current)
         }
+      } else if (msg.type === 'selection') {
+        // P1-K — WebView reports the current text selection. We hold it
+        // in state so the floating "Read from here" pill can mount; the
+        // pill's onPress hands it to `resolvePlainTextReadFromSelection`
+        // and dispatches PLAY_FROM into the player.
+        const text = typeof msg.text === 'string' ? msg.text : ''
+        setPendingSelection(text.trim().length > 0 ? text : null)
       }
     },
     [book?.id]
@@ -466,6 +498,47 @@ export default function MobiReaderScreen() {
       )
     }
   }, [chapterCount])
+
+  // P1-K — "Read from here" handler for MOBI selections. Mirrors the
+  // EPUB reader's `handleReadFromSelection`. Gated through `requireTTS`
+  // so signed-out users see the sign-in sheet before PLAY_FROM fires.
+  const handleReadFromSelection = useCallback(
+    (selectionText: string) => {
+      if (!book) return
+      requireTTS(async () => {
+        const send = usePlayerStore.getState().send
+        if (!send) return
+        let paragraphs = usePlayerStore.getState().currentParagraphs
+        if (paragraphs.length === 0) {
+          try {
+            const seeded = await seedPlayerParagraphsFromChunks(
+              book.id,
+              book.filePath,
+              book.format,
+            )
+            if (!seeded.seeded) return
+            paragraphs = seeded.paragraphs
+          } catch (err) {
+            console.warn('[mobi-read-aloud-from] seed failed:', err)
+            return
+          }
+        }
+        const playFrom = resolvePlainTextReadFromSelection(
+          selectionText,
+          paragraphs,
+        )
+        if (!playFrom) return
+        send({
+          type: 'PLAY_FROM',
+          paragraphIndex: playFrom.paragraphIndex,
+          partialFirstText: playFrom.partialFirstText,
+          partialFirstKey: playFrom.partialFirstKey,
+        })
+        setPendingSelection(null)
+      })
+    },
+    [book, requireTTS],
+  )
 
   // ---- TTS: read aloud (Batch 7) ----
   // Mobi/Azw3 chunks come from the shared mobi extractor — the same one
@@ -661,6 +734,23 @@ export default function MobiReaderScreen() {
         {/* G15 — visual cue badge */}
         <TTSVisualCue />
 
+        {/* P1-K — Floating "Read from here" pill. Renders once the
+            WebView reports a non-empty selection. Press dispatches
+            PLAY_FROM via the plain-text selection resolver. */}
+        {pendingSelection && (
+          <View style={styles.readFromPillWrapper} pointerEvents="box-none">
+            <TouchableOpacity
+              testID="reader-read-from-selection-btn"
+              accessibilityLabel="Read from here"
+              onPress={() => handleReadFromSelection(pendingSelection)}
+              style={styles.readFromPill}
+            >
+              <IconSymbol name="play.fill" size={16} color="#fff" />
+              <Text style={styles.readFromPillText}>Read from here</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* G10 — undo snackbar (5s window after a destructive action) */}
         <UndoSnackbar
           visible={undoSnackbar.visible}
@@ -755,5 +845,33 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     minWidth: 72,
     textAlign: 'center',
+  },
+  // P1-K — Floating "Read from here" pill.
+  readFromPillWrapper: {
+    position: 'absolute',
+    bottom: 96,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  readFromPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#0a7ea4',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 22,
+    minHeight: 44,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  readFromPillText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
 })
