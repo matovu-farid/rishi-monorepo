@@ -58,7 +58,7 @@ import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { NoteEditor } from '@/components/NoteEditor'
 import { GoToPageModal } from '@/components/pdf/GoToPageModal'
-import { ThumbnailModal } from './thumbnail-modal'
+import { ThumbnailModal } from '@/components/pdf/thumbnail-modal'
 import { UndoSnackbar } from '@/components/UndoSnackbar'
 import { useUndoSnackbar } from '@/hooks/useUndoSnackbar'
 import BottomSheet from '@gorhom/bottom-sheet'
@@ -90,6 +90,7 @@ export default function PdfReaderScreen() {
   const readerRef = useRef<PdfWebReaderHandle>(null)
   const [book, setBook] = useState<Book | null>(null)
   const [loading, setLoading] = useState(true)
+  const [downloading, setDownloading] = useState(false)
   const [toolbarVisible, setToolbarVisible] = useState(true)
   const [outlineVisible, setOutlineVisible] = useState(false)
   const [gotoVisible, setGotoVisible] = useState(false)
@@ -161,7 +162,8 @@ export default function PdfReaderScreen() {
   useEffect(() => {
     if (!id) return
     setLoading(true)
-    getBookForReading(id)
+    setDownloading(false)
+    getBookForReading(id, { onDownloadStart: () => setDownloading(true) })
       .then(async (loaded) => {
         if (!loaded) return
         setBook(loaded)
@@ -420,8 +422,10 @@ export default function PdfReaderScreen() {
   // ---- Render ----
   if (loading) {
     return (
-      <View style={styles.full}>
-        <Text style={{ color: '#fff' }}>Loading book…</Text>
+      <View testID="reader-loading" style={styles.full}>
+        <Text style={{ color: '#fff' }}>
+          {downloading ? 'Downloading…' : 'Loading book…'}
+        </Text>
       </View>
     )
   }
@@ -435,6 +439,18 @@ export default function PdfReaderScreen() {
 
   return (
     <View ref={pageCaptureRef} testID="pdf-reader" style={{ flex: 1, backgroundColor: '#000' }}>
+      {/*
+        E2E observability — invisible indicator that exposes the current
+        page as an accessibilityLabel that Detox can read via
+        `by.id('reader-position-indicator')`. Permanently mounted so
+        tests don't need to tap to reveal the toolbar first.
+       */}
+      <View
+        testID="reader-position-indicator"
+        accessible={true}
+        accessibilityLabel={`${pageNumber || 1}/${pageCount || 0}`}
+        style={{ position: 'absolute', width: 0, height: 0 }}
+      />
       <PdfWebReader
         ref={readerRef}
         fileUri={book.filePath}
