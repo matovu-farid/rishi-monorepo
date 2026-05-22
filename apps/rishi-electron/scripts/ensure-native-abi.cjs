@@ -50,7 +50,13 @@ function nativeBindingsPresent() {
 
 function rebuild() {
   console.log('[ensure-native-abi] rebuilding native modules against Electron…')
-  execFileSync('pnpm', ['exec', 'electron-rebuild', '-f'], {
+  // Spawn the electron-rebuild CLI directly via node. Going through `pnpm exec`
+  // hits a Windows portability bug: pnpm is a `.cmd` shim there, and
+  // `execFileSync` won't shell-resolve `.cmd` files (throws ENOENT/EINVAL).
+  // Matches the pattern used in ensure-sharp-vendor.cjs.
+  const rebuildMain = require.resolve('@electron/rebuild')
+  const rebuildCli = path.join(path.dirname(rebuildMain), 'cli.js')
+  execFileSync(process.execPath, [rebuildCli, '-f'], {
     cwd: APP_ROOT,
     stdio: 'inherit',
   })
