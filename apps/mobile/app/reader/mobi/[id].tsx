@@ -211,6 +211,7 @@ export default function MobiReaderScreen() {
 
   const [book, setBook] = useState<Book | null>(null)
   const [loading, setLoading] = useState(true)
+  const [downloading, setDownloading] = useState(false)
   const [chapterCount, setChapterCount] = useState(0)
   const [currentChapter, setCurrentChapter] = useState(0)
   const [toolbarVisible, setToolbarVisible] = useState(false)
@@ -242,7 +243,8 @@ export default function MobiReaderScreen() {
   useEffect(() => {
     if (id) {
       setLoading(true)
-      getBookForReading(id)
+      setDownloading(false)
+      getBookForReading(id, { onDownloadStart: () => setDownloading(true) })
         .then((loaded) => {
           if (loaded) {
             setBook(loaded)
@@ -412,9 +414,11 @@ export default function MobiReaderScreen() {
 
   if (loading) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#fafaf8', justifyContent: 'center', alignItems: 'center' }}>
+      <View testID="reader-loading" style={{ flex: 1, backgroundColor: '#fafaf8', justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" />
-        <Text style={{ marginTop: 12, color: '#666' }}>Loading book...</Text>
+        <Text style={{ marginTop: 12, color: '#666' }}>
+          {downloading ? 'Downloading…' : 'Loading book…'}
+        </Text>
       </View>
     )
   }
@@ -428,7 +432,14 @@ export default function MobiReaderScreen() {
   }
 
   return (
-    <View ref={pageCaptureRef} style={{ flex: 1, backgroundColor: '#fafaf8' }}>
+    <View ref={pageCaptureRef} testID="mobi-reader" style={{ flex: 1, backgroundColor: '#fafaf8' }}>
+      {/* E2E observability — see PDF reader for rationale. */}
+      <View
+        testID="reader-position-indicator"
+        accessible={true}
+        accessibilityLabel={`${currentChapter + 1}/${chapterCount || 0}`}
+        style={{ position: 'absolute', width: 0, height: 0 }}
+      />
       <WebView
         ref={webViewRef}
         source={{ html: MOBI_PARSER_HTML }}
@@ -546,6 +557,7 @@ export default function MobiReaderScreen() {
             </Text>
 
             <TouchableOpacity
+              testID="reader-next-page-btn"
               onPress={handleNextChapter}
               style={{
                 width: 44,
