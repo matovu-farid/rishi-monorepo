@@ -53,6 +53,9 @@ export default function LibraryScreen() {
   const [searchQuery, setSearchQuery] = useState('')
   const [importing, setImporting] = useState(false)
   const [urlSheetVisible, setUrlSheetVisible] = useState(false)
+  // P1-AB: gate the empty / populated branches on the first load so we
+  // don't flash "No books yet" while getBooks() is still settling.
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
 
   // Tour targets (G28): the import button and the library grid get
   // registered with `lib/onboarding/registry` so the first-launch
@@ -74,6 +77,7 @@ export default function LibraryScreen() {
     const loaded = getBooks()
     setBooks(loaded)
     setLastReadBook(getLastReadBook())
+    setHasLoadedOnce(true)
   }, [])
 
   useFocusEffect(
@@ -249,6 +253,37 @@ export default function LibraryScreen() {
       </View>
     </View>
   )
+
+  // P1-AB: render the skeleton placeholder until the FIRST load
+  // resolves. This avoids flashing the "No books yet" empty state for
+  // a frame on cold launches.
+  if (!hasLoadedOnce) {
+    const placeholderKeys = ['s0', 's1', 's2', 's3', 's4']
+    return (
+      <SafeAreaView
+        style={{ flex: 1, backgroundColor: colors.background.primary }}
+      >
+        {renderHeader()}
+        <View
+          testID="library-skeleton"
+          style={{ paddingHorizontal: spacing['2xl'], paddingTop: spacing.lg }}
+        >
+          {placeholderKeys.map((key) => (
+            <View
+              key={key}
+              testID={`library-skeleton-row-${key}`}
+              style={{
+                height: 72,
+                marginBottom: spacing.md,
+                borderRadius: radius.md,
+                backgroundColor: colors.fill.tertiary,
+              }}
+            />
+          ))}
+        </View>
+      </SafeAreaView>
+    )
+  }
 
   if (books.length === 0) {
     return (

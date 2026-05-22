@@ -552,3 +552,85 @@ describe('LibraryScreen (P0-K: stage-specific import errors)', () => {
     expect(Alert.alert).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * P1-AB — Loading skeleton on first focus.
+ *
+ * Before the first `useFocusEffect` callback fires + `getBooks()`
+ * settles, the screen used to render the "No books yet" empty state —
+ * which flashes in for one frame even when the user actually has
+ * books. We pin a `library-skeleton` placeholder grid that appears
+ * until the first load completes.
+ */
+describe('LibraryScreen (P1-AB: loading skeleton on first focus)', () => {
+  beforeEach(() => {
+    mockBooks.length = 0
+    mockLastReadBook = null
+  })
+
+  function findAllByID(
+    tree: TestRenderer.ReactTestRenderer,
+    testID: string,
+  ): TestRenderer.ReactTestInstance[] {
+    return tree.root.findAll(
+      (n) => (n.props as { testID?: string }).testID === testID,
+    )
+  }
+
+  it('renders a library-skeleton placeholder before the first load resolves', () => {
+    // Suppress the focus-effect so the initial render is observed
+    // BEFORE getBooks() runs. We restore the original implementation at
+    // the end of the test to keep cross-test isolation.
+    const expoRouter = require('expo-router') as {
+      useFocusEffect: (cb: () => void) => void
+    }
+    const original = expoRouter.useFocusEffect
+    expoRouter.useFocusEffect = () => {
+      /* skip first-focus side-effect */
+    }
+    try {
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<LibraryScreen />)
+      })
+      const skeleton = findAllByID(tree, 'library-skeleton')
+      expect(skeleton.length).toBeGreaterThan(0)
+      // The "No books yet" empty state must NOT be visible while we
+      // haven't confirmed the library is actually empty.
+      const empty = findAllByID(tree, 'library-empty-state')
+      expect(empty.length).toBe(0)
+    } finally {
+      expoRouter.useFocusEffect = original
+    }
+  })
+
+  it('replaces the skeleton with content after the first load resolves', () => {
+    mockBooks.push({
+      id: 'b1',
+      title: 'Crime and Punishment',
+      author: 'Dostoyevsky',
+      format: 'epub',
+      filePath: '/tmp/cp.epub',
+      coverPath: null,
+      currentCfi: null,
+      currentPage: null,
+      createdAt: 0,
+    })
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    // After useFocusEffect fires inside act, the skeleton is gone.
+    const skeleton = findAllByID(tree, 'library-skeleton')
+    expect(skeleton.length).toBe(0)
+    const rows = tree.root.findAll(
+      (n) =>
+        typeof n.type === 'string' &&
+        typeof (n.props as { testID?: string }).testID === 'string' &&
+        (n.props as { testID: string }).testID.startsWith(
+          'library-book-row-',
+        ),
+    )
+    expect(rows.length).toBe(1)
+  })
+})
