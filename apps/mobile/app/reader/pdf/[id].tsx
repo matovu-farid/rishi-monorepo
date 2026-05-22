@@ -493,6 +493,12 @@ export default function PdfReaderScreen() {
           accessibilityLabel={`${pageNumber || 1}/${pageCount || 0}`}
           style={{ position: 'absolute', width: 0, height: 0 }}
         />
+        {/* P0-C — Pressable goes FIRST so it sits behind the WebView.
+            The WebView still receives every gesture; only taps that
+            the WebView doesn't consume fall through to reveal the
+            toolbar. */}
+        <PressableToggleToolbar />
+
         <PdfWebReader
           ref={readerRef}
           fileUri={book.filePath}
@@ -503,8 +509,6 @@ export default function PdfReaderScreen() {
           onHighlightTapped={handleHighlightTapped}
           onError={(msg) => console.warn('[pdf-webview] error:', msg)}
         />
-
-        <PressableToggleToolbar />
 
         {/* Legacy chrome affordances kept above the PDF until Phase 5
             folds them into the right cluster: outline + thumbnails. */}
@@ -668,6 +672,12 @@ export default function PdfReaderScreen() {
 /**
  * Full-area Pressable for tap-to-toggle. Lives inside ReaderShell so it
  * can call `toggleToolbar` from context. testID is preserved for Detox.
+ *
+ * P0-C — uses `StyleSheet.absoluteFill` so the whole page area routes
+ * "missed" taps through to the toggle (was a 48pt top strip). The
+ * Pressable is mounted BEFORE the PdfWebReader in JSX so it sits BEHIND
+ * the WebView; the WebView still receives all gestures, only taps the
+ * WebView doesn't consume fall through.
  */
 function PressableToggleToolbar(): React.JSX.Element {
   const { toggleToolbar } = useContext(ReaderShellContext)
@@ -675,14 +685,7 @@ function PressableToggleToolbar(): React.JSX.Element {
     <Pressable
       testID="reader-toggle-toolbar"
       onPress={toggleToolbar}
-      style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        height: 48,
-        backgroundColor: 'transparent',
-      }}
+      style={StyleSheet.absoluteFill}
       accessibilityLabel="Toggle toolbar"
     />
   )
