@@ -1,29 +1,37 @@
 /**
  * Phase 4 — GlobalMiniPlayer (mobile).
  *
- * A thin wrapper around MiniPlayer mounted at the root layout. Per ARCH §6:
- *   - Returns null when on a `/reader/...` route (reader-mounted instance
- *     takes priority).
- *   - Returns null when `playerStore.playingState === 'idle'`.
- *   - Otherwise renders MiniPlayer with `variant='global'`, default
- *     `tabBarHeight=49`, and `testID='global-mini-player'`.
+ * A thin wrapper around MiniPlayer rendered as a `screenLayout` overlay
+ * inside the Tabs subtree (apps/mobile/app/(tabs)/_layout.tsx). Because it
+ * only mounts when a tab screen is active, it cannot render on stack
+ * routes outside Tabs (`/reader/[id]`, `/chat/[bookId]`) — fixing P0-R.
  *
- * Pinned behaviour (6 tests):
- *   1. `pathname='/reader/abc'` → returns null.
- *   2. `pathname='/reader/some/nested'` → returns null.
- *   3. `pathname='/(tabs)/index'` but `playingState='idle'` → returns null.
- *   4. `pathname='/(tabs)/index'` + `playingState='playing'` → renders MiniPlayer.
- *   5. The mounted MiniPlayer gets `testID='global-mini-player'`.
- *   6. The mounted MiniPlayer gets `variant='global'`.
+ * For the same reason it reads the live tab-bar height via
+ * `useBottomTabBarHeight()` from `@react-navigation/bottom-tabs` rather
+ * than the legacy 49pt hardcode — fixing P0-Q for iPad, AX Large Text,
+ * and iOS 26 Liquid Glass tab bars.
+ *
+ * Pinned behaviour (5 tests):
+ *   1. `playingState='idle'` → returns null.
+ *   2. `playingState='playing'` → renders MiniPlayer.
+ *   3. The mounted MiniPlayer gets `testID='global-mini-player'`.
+ *   4. The mounted MiniPlayer gets `variant='global'`.
+ *   5. The mounted MiniPlayer gets `tabBarHeight` equal to whatever
+ *      `useBottomTabBarHeight()` returns (varies by device — we mock 88).
  *
  * Mock strategy:
  *   - MiniPlayer is stubbed to a host node so we can read the props
  *     GlobalMiniPlayer passed to it.
- *   - expo-router's `usePathname` is mocked with a reassignable module
- *     variable.
+ *   - `@react-navigation/bottom-tabs` is mocked with a reassignable
+ *     `useBottomTabBarHeight()` return value.
  *   - playerStore selector is mocked with a reassignable shape.
  *
- * Red signal: `@/components/player/GlobalMiniPlayer` does not exist yet.
+ * NB: route-based hide logic (`pathname.startsWith('/reader')`) is REMOVED.
+ * The mount location (inside Tabs.screenLayout) already prevents render
+ * on /reader/* and /chat/[bookId] because those are stack routes outside
+ * the Tabs subtree. Asserting absence-of-pathname-check would be brittle;
+ * we instead assert the positive case (renders when off-idle) and the
+ * tab-bar-height plumbing.
  */
 
 jest.mock('react-native', () => {
@@ -60,7 +68,6 @@ jest.mock('react-native-safe-area-context', () => ({
 }))
 
 // Stub MiniPlayer so we can read the props GlobalMiniPlayer passes.
-// Virtual so the mock path resolves even before MiniPlayer lands.
 jest.mock(
   '@/components/player/MiniPlayer',
   () => {
@@ -75,17 +82,11 @@ jest.mock(
   { virtual: true },
 )
 
-// expo-router pathname — reassignable per test.
-let pathnameValue: string = '/(tabs)/index'
-jest.mock('expo-router', () => ({
+// useBottomTabBarHeight — reassignable per test.
+let tabBarHeightValue: number = 49
+jest.mock('@react-navigation/bottom-tabs', () => ({
   __esModule: true,
-  usePathname: () => pathnameValue,
-  useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn() }),
-  Slot: ({ children }: { children: React.ReactNode }) => children,
-  Stack: Object.assign(
-    ({ children }: { children: React.ReactNode }) => children,
-    { Screen: ({ children }: { children: React.ReactNode }) => children ?? null },
-  ),
+  useBottomTabBarHeight: () => tabBarHeightValue,
 }))
 
 // playerStore selector — reassignable shape.
@@ -121,7 +122,7 @@ function findByTestID(
 }
 
 beforeEach(() => {
-  pathnameValue = '/(tabs)/index'
+  tabBarHeightValue = 49
   playerState = {
     playingState: 'idle',
     send: () => undefined,
@@ -130,28 +131,7 @@ beforeEach(() => {
 })
 
 describe('GlobalMiniPlayer (mobile)', () => {
-  it('returns null when pathname starts with /reader (basic /reader/abc)', () => {
-    pathnameValue = '/reader/abc'
-    playerState.playingState = 'playing'
-    let tree!: TestRenderer.ReactTestRenderer
-    act(() => {
-      tree = TestRenderer.create(<GlobalMiniPlayer />)
-    })
-    expect(tree.toJSON()).toBeNull()
-  })
-
-  it('returns null when pathname is /reader/some/nested', () => {
-    pathnameValue = '/reader/some/nested'
-    playerState.playingState = 'playing'
-    let tree!: TestRenderer.ReactTestRenderer
-    act(() => {
-      tree = TestRenderer.create(<GlobalMiniPlayer />)
-    })
-    expect(tree.toJSON()).toBeNull()
-  })
-
-  it('returns null when off-reader but playingState="idle"', () => {
-    pathnameValue = '/(tabs)/index'
+  it('returns null when playingState="idle"', () => {
     playerState.playingState = 'idle'
     let tree!: TestRenderer.ReactTestRenderer
     act(() => {
@@ -160,8 +140,7 @@ describe('GlobalMiniPlayer (mobile)', () => {
     expect(tree.toJSON()).toBeNull()
   })
 
-  it('renders MiniPlayer when off-reader and playingState="playing"', () => {
-    pathnameValue = '/(tabs)/index'
+  it('renders MiniPlayer when playingState="playing"', () => {
     playerState.playingState = 'playing'
     let tree!: TestRenderer.ReactTestRenderer
     act(() => {
@@ -171,7 +150,6 @@ describe('GlobalMiniPlayer (mobile)', () => {
   })
 
   it('passes testID="global-mini-player" to MiniPlayer', () => {
-    pathnameValue = '/(tabs)/index'
     playerState.playingState = 'playing'
     let tree!: TestRenderer.ReactTestRenderer
     act(() => {
@@ -183,7 +161,6 @@ describe('GlobalMiniPlayer (mobile)', () => {
   })
 
   it('passes variant="global" to MiniPlayer', () => {
-    pathnameValue = '/(tabs)/index'
     playerState.playingState = 'playing'
     let tree!: TestRenderer.ReactTestRenderer
     act(() => {
@@ -192,5 +169,19 @@ describe('GlobalMiniPlayer (mobile)', () => {
     const node = findByTestID(tree, 'global-mini-player')
     expect(node).not.toBeNull()
     expect((node!.props as { variant?: string }).variant).toBe('global')
+  })
+
+  it('passes the measured tab-bar height from useBottomTabBarHeight() (P0-Q)', () => {
+    // 88pt is a realistic iPad / AX Large Text tab-bar height; the legacy
+    // 49pt hardcode would render the player floating well above the tab bar.
+    tabBarHeightValue = 88
+    playerState.playingState = 'playing'
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<GlobalMiniPlayer />)
+    })
+    const node = findByTestID(tree, 'global-mini-player')
+    expect(node).not.toBeNull()
+    expect((node!.props as { tabBarHeight?: number }).tabBarHeight).toBe(88)
   })
 })

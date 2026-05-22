@@ -19,7 +19,6 @@ import { useAuthStore } from '@/lib/stores/authStore'
 import { initVectorExtension, ensureChunkTables } from '@/lib/rag/vector-store'
 import { RagExtractorHost } from '@/components/RagExtractorHost'
 import { PremiumFeatureSheet } from '@/components/auth/PremiumFeatureSheet'
-import { GlobalMiniPlayer } from '@/components/player/GlobalMiniPlayer'
 import { handleIncomingFile, isFileUrl } from '@/lib/file-handler'
 
 export const IS_E2E_TEST = process.env.EXPO_PUBLIC_E2E_TEST === 'true'
@@ -200,12 +199,17 @@ function RootLayout() {
     }
   }, [])
 
+  // NB: GlobalMiniPlayer is intentionally NOT mounted here. It now lives
+  // inside the Tabs subtree via `<Tabs screenLayout={…}>` in
+  // `(tabs)/_layout.tsx` so it can (a) read the live tab-bar height via
+  // `useBottomTabBarHeight()` and (b) automatically vanish on stack
+  // routes outside the tabs group (/reader/[id], /chat/[bookId]).
+  // Fixes P0-Q (49pt hardcode) + P0-R (chat-detail bleed-through).
   if (IS_E2E_TEST) {
     return (
       <GestureHandlerRootView style={{ flex: 1 }}>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <Slot />
-          <GlobalMiniPlayer />
           <RagExtractorHost />
           <PremiumFeatureSheet />
           <StatusBar style="auto" />
@@ -218,7 +222,6 @@ function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <Slot />
-        <GlobalMiniPlayer />
         {/*
           Hidden host that drives pdfjs / djvu.js text extraction inside
           WebViews on demand. Mounted at root so import jobs can extract
