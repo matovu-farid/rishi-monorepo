@@ -14,6 +14,9 @@ import { Book } from "@/types/book";
 import { createMobileBookImportService } from "@/lib/book-import";
 import { embedBook } from "@/lib/rag/pipeline";
 import type { BookFormat } from "@rishi/shared/book-import";
+import { IS_E2E_TEST } from "@/app/_layout";
+import { getSessionToken } from "@/lib/auth";
+import { shouldSkipIndexing } from "@/lib/file-import-index-gate";
 
 const BOOKS_DIR = new Directory(Paths.document, "books");
 
@@ -81,11 +84,20 @@ async function runImportWithService(opts: {
   // Indexing is fire-and-forget — same semantics as upload. A failure
   // leaves the row in place; the next time the book is opened, the
   // embedder may retry (vector-store.isBookEmbedded gates the work).
-  void service
-    .indexBook(bookId, undefined, bookPath, opts.format)
-    .catch((err) => {
+  void (async () => {
+    const sessionToken = await getSessionToken().catch(() => null);
+    if (shouldSkipIndexing({ isE2E: IS_E2E_TEST, sessionToken })) {
+      console.info(
+        `[file-import] skipping indexBook for ${bookId} (isE2E=${IS_E2E_TEST}, hasToken=${!!sessionToken})`,
+      );
+      return;
+    }
+    try {
+      await service.indexBook(bookId, undefined, bookPath, opts.format);
+    } catch (err) {
       console.warn("[file-import] indexBook failed:", err);
-    });
+    }
+  })();
 
   // Local Book shape — derive from what the service inserted.
   return {
@@ -270,3 +282,68 @@ export async function importBookFromUrl(url: string): Promise<Book> {
 
 // Re-export for callers that still rely on the legacy embedding helper.
 export { embedBook };
+
+/**
+ * E2E-only entry point: import a book directly from a known file URI,
+ * skipping the document picker. The caller controls the book id so the
+ * seed function can be idempotent across test runs.
+ *
+ * Behaviour matches the picker-driven imports: copy + parse + save row +
+ * fire-and-forget indexing. Returns the resulting Book or null if the
+ * import service rejects the file.
+ */
+export async function importBookFromFile(opts: {
+  sourceUri: string;
+  format: BookFormat;
+  title: string;
+  bookId: string;
+  author?: string;
+}): Promise<Book | null> {
+  ensureBooksDir();
+
+  const service = createMobileBookImportService({
+    bookId: opts.bookId,
+    format: opts.format,
+    title: opts.title,
+    author: opts.author,
+  });
+
+  const result = await service.importFromPath(opts.sourceUri);
+  if (!result.ok) {
+    console.warn(
+      `[file-import] e2e ${opts.format} import failed at stage=${result.stage}: ${result.error}`,
+    );
+    return null;
+  }
+
+  const bookPath = `${BOOKS_DIR.uri}/${opts.bookId}/book.${opts.format}`;
+
+  // RAG indexing is fire-and-forget — reader E2E tests don't need
+  // embeddings to complete before opening the book.
+  void (async () => {
+    const sessionToken = await getSessionToken().catch(() => null);
+    if (shouldSkipIndexing({ isE2E: IS_E2E_TEST, sessionToken })) {
+      console.info(
+        `[file-import] skipping indexBook for ${opts.bookId} (isE2E=${IS_E2E_TEST}, hasToken=${!!sessionToken})`,
+      );
+      return;
+    }
+    try {
+      await service.indexBook(opts.bookId, undefined, bookPath, opts.format);
+    } catch (err) {
+      console.warn("[file-import] e2e indexBook failed:", err);
+    }
+  })();
+
+  return {
+    id: opts.bookId,
+    title: opts.title,
+    author: opts.author ?? "Unknown",
+    coverPath: null,
+    filePath: bookPath,
+    format: opts.format,
+    currentCfi: null,
+    currentPage: opts.format === "pdf" ? 1 : null,
+    createdAt: Date.now(),
+  };
+}
