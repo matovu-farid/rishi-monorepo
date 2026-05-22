@@ -163,8 +163,11 @@ export default function BookChatScreen() {
       const userMsg = addMessage(conversationId, 'user', text)
       setMessageList((prev) => [...prev, userMsg])
 
-      // Build conversation history for RAG
-      const history = messageList.map((m) => ({
+      // Build conversation history for RAG. P0-P: include the
+      // just-typed user turn — the previous `messageList.map(...)`
+      // read the stale closure snapshot, so the LLM was one message
+      // behind. Always synthesise the full transcript at call time.
+      const history = [...messageList, userMsg].map((m) => ({
         role: m.role,
         content: m.content,
       }))
