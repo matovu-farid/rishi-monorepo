@@ -58,7 +58,8 @@
     "./voice-chat/local-vad": "./src/voice-chat/local-vad.ts",
     "./voice-chat/activation-program": "./src/voice-chat/activation-program.ts",
     "./voice-chat/service": "./src/voice-chat/service.ts",
-    "./voice-chat/build-realtime-agent": "./src/voice-chat/build-realtime-agent.ts"
+    "./voice-chat/build-realtime-agent": "./src/voice-chat/build-realtime-agent.ts",
+    "./tokens": "./src/tokens/index.ts"
   },
   "peerDependencies": {
     "drizzle-orm": "^0.44.0",

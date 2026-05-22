@@ -8,3 +8,4 @@ export * from "./types/paragraph";
 export * from "./types/pdf-locator";
 export * from "./lib/languages";
 export * from "./auth-gating/index";
+export * from "./tokens/index";
