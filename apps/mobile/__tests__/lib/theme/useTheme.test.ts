@@ -131,6 +131,40 @@ describe('useTheme (mobile)', () => {
     expect(themes[themes.length - 1].reduceMotion).toBe(true)
   })
 
+  it('boosts shadowOpacity in dark mode for visible elevations (VIS-018)', async () => {
+    // VIS-018: shadow tokens were static `#000` with light-mode opacity,
+    // so dark-mode covers/cards became invisible. The theme should
+    // tune the `low/medium/high` shadow opacities upward when the
+    // active scheme is dark so the elevation cue survives.
+    __scheme = 'light'
+    const lightThemes: Theme[] = []
+    await act(async () => {
+      TestRenderer.create(
+        React.createElement(Harness, { onTheme: (t) => lightThemes.push(t) }),
+      )
+    })
+    const lightTheme = lightThemes[lightThemes.length - 1]
+    __scheme = 'dark'
+    const darkThemes: Theme[] = []
+    await act(async () => {
+      TestRenderer.create(
+        React.createElement(Harness, { onTheme: (t) => darkThemes.push(t) }),
+      )
+    })
+    const darkTheme = darkThemes[darkThemes.length - 1]
+    // `flat` stays zero in both modes — only the visible elevations bump.
+    expect(darkTheme.shadow.flat.shadowOpacity).toBe(0)
+    expect(darkTheme.shadow.low.shadowOpacity).toBeGreaterThan(
+      lightTheme.shadow.low.shadowOpacity,
+    )
+    expect(darkTheme.shadow.medium.shadowOpacity).toBeGreaterThan(
+      lightTheme.shadow.medium.shadowOpacity,
+    )
+    expect(darkTheme.shadow.high.shadowOpacity).toBeGreaterThan(
+      lightTheme.shadow.high.shadowOpacity,
+    )
+  })
+
   it('returns a stable reference across renders when neither scheme nor reduceMotion changed', async () => {
     const themes: Theme[] = []
     let tree!: TestRenderer.ReactTestRenderer
