@@ -22,9 +22,11 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { useRouter } from 'expo-router'
 import { FEATURE_COPY, type PremiumFeature } from '@rishi/shared/auth-gating'
 import { useAuthStore } from '@/lib/stores/authStore'
 import { signIn } from '@/lib/auth'
+import { APPLE_SIGNIN_ENABLED } from '@/lib/feature-flags'
 
 const FEATURE_ICONS: Record<PremiumFeature, keyof typeof Ionicons.glyphMap> = {
   tts: 'headset-outline',
@@ -49,6 +51,7 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
   const isAuthenticating = useAuthStore((s) => s.isAuthenticating)
   const closeGate = useAuthStore((s) => s.closePremiumGate)
 
+  const router = useRouter()
   const sheetRef = useRef<BottomSheet>(null)
   const titleRef = useRef<Text>(null)
   const [error, setError] = useState<string | null>(null)
@@ -81,7 +84,10 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
   const handleSignIn = useCallback(async () => {
     void Haptics.selectionAsync()
     setError(null)
-    const provider = Platform.OS === 'ios' ? 'apple' : 'google'
+    // Apple sign-in is gated by APPLE_SIGNIN_ENABLED until OAuth is
+    // provisioned (P0-V). Until then we ship Google universally.
+    const provider =
+      Platform.OS === 'ios' && APPLE_SIGNIN_ENABLED ? 'apple' : 'google'
     try {
       await signIn(provider)
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
@@ -107,6 +113,12 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
     closeGate()
   }, [closeGate])
 
+  const handleOtherOptions = useCallback(() => {
+    void Haptics.selectionAsync()
+    closeGate()
+    router.push('/(auth)/sign-in')
+  }, [closeGate, router])
+
   const renderBackdrop = useCallback(
     (props: BottomSheetBackdropProps) => (
       <BottomSheetBackdrop
@@ -126,7 +138,10 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
   if (!open || !feature) return null
   const copy = FEATURE_COPY[feature]
   const iconName = FEATURE_ICONS[feature]
-  const ctaLabel = Platform.OS === 'ios' ? 'Continue with Apple' : 'Continue with Google'
+  const ctaLabel =
+    Platform.OS === 'ios' && APPLE_SIGNIN_ENABLED
+      ? 'Continue with Apple'
+      : 'Continue with Google'
   const isDark = scheme === 'dark'
 
   return (
@@ -222,6 +237,15 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
             {error}
           </Text>
         ) : null}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Other sign-in options"
+          accessibilityHint="Opens the sign-in screen with email and other providers."
+          onPress={handleOtherOptions}
+          style={{ height: 44, alignItems: 'center', justifyContent: 'center' }}
+        >
+          <Text style={{ color: '#0a7ea4', fontSize: 15 }}>Other sign-in options</Text>
+        </Pressable>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Not now"

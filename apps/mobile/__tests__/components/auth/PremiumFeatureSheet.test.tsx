@@ -130,6 +130,16 @@ jest.mock('@/lib/auth', () => ({
   signIn: signInMock,
 }))
 
+// ── Mock expo-router — controllable router.push() ────────────────────────────
+const routerPushMock = jest.fn()
+jest.mock('expo-router', () => ({
+  useRouter: () => ({
+    push: routerPushMock,
+    replace: jest.fn(),
+    back: jest.fn(),
+  }),
+}))
+
 // ── Mock authStore — selector-based ──────────────────────────────────────────
 type StoreShape = {
   premiumGateOpen: boolean
@@ -186,6 +196,7 @@ beforeEach(() => {
   signInMock.mockResolvedValue({ session_token: 't', user_id: 'u' })
   closePremiumGate.mockClear()
   setAuthenticating.mockClear()
+  routerPushMock.mockClear()
   __platformOS = 'ios'
   storeState = {
     premiumGateOpen: false,
@@ -222,7 +233,7 @@ describe('PremiumFeatureSheet (mobile)', () => {
     ).toBe(true)
   })
 
-  it("CTA label is 'Continue with Apple' on iOS", () => {
+  it("CTA label is 'Continue with Google' on iOS when Apple sign-in is disabled (P0-V)", () => {
     __platformOS = 'ios'
     storeState.premiumGateOpen = true
     storeState.premiumGateFeature = 'tts'
@@ -230,8 +241,41 @@ describe('PremiumFeatureSheet (mobile)', () => {
     act(() => {
       tree = TestRenderer.create(<PremiumFeatureSheet />)
     })
-    expect(hasText(tree, 'Continue with Apple')).toBe(true)
-    expect(hasText(tree, 'Continue with Google')).toBe(false)
+    expect(hasText(tree, 'Continue with Google')).toBe(true)
+    expect(hasText(tree, 'Continue with Apple')).toBe(false)
+  })
+
+  it("renders a secondary 'Other sign-in options' link on iOS (P0-V)", () => {
+    __platformOS = 'ios'
+    storeState.premiumGateOpen = true
+    storeState.premiumGateFeature = 'tts'
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<PremiumFeatureSheet />)
+    })
+    expect(hasText(tree, 'Other sign-in options')).toBe(true)
+  })
+
+  it("tapping 'Other sign-in options' routes to /(auth)/sign-in and closes the gate (P0-V)", () => {
+    __platformOS = 'ios'
+    storeState.premiumGateOpen = true
+    storeState.premiumGateFeature = 'tts'
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<PremiumFeatureSheet />)
+    })
+    const other = tree.root.findAll(
+      (n) =>
+        n.type === Pressable &&
+        (n.props as { accessibilityLabel?: string }).accessibilityLabel ===
+          'Other sign-in options',
+    )
+    expect(other.length).toBeGreaterThan(0)
+    act(() => {
+      ;(other[0].props as { onPress: () => void }).onPress()
+    })
+    expect(routerPushMock).toHaveBeenCalledWith('/(auth)/sign-in')
+    expect(closePremiumGate).toHaveBeenCalledTimes(1)
   })
 
   it("CTA label is 'Continue with Google' on Android", () => {
@@ -277,7 +321,7 @@ describe('PremiumFeatureSheet (mobile)', () => {
     const spinners = tree.root.findAllByType('ActivityIndicator' as never)
     expect(spinners.length).toBeGreaterThan(0)
     // The CTA label text must NOT be in the tree while the spinner is showing.
-    expect(hasText(tree, 'Continue with Apple')).toBe(false)
+    expect(hasText(tree, 'Continue with Google')).toBe(false)
   })
 
   it('shows the inline error row when signIn rejects with a non-cancel message', async () => {
@@ -293,7 +337,7 @@ describe('PremiumFeatureSheet (mobile)', () => {
     const cta = tree.root.findAll(
       (n) =>
         n.type === Pressable &&
-        (n.props as { accessibilityLabel?: string }).accessibilityLabel === 'Continue with Apple',
+        (n.props as { accessibilityLabel?: string }).accessibilityLabel === 'Continue with Google',
     )
     expect(cta.length).toBeGreaterThan(0)
 
@@ -316,7 +360,7 @@ describe('PremiumFeatureSheet (mobile)', () => {
     const cta = tree.root.findAll(
       (n) =>
         n.type === Pressable &&
-        (n.props as { accessibilityLabel?: string }).accessibilityLabel === 'Continue with Apple',
+        (n.props as { accessibilityLabel?: string }).accessibilityLabel === 'Continue with Google',
     )
     await act(async () => {
       await (cta[0].props as { onPress: () => Promise<void> | void }).onPress()
