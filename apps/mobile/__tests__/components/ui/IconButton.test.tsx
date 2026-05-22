@@ -83,6 +83,7 @@ jest.mock('@expo/vector-icons', () => {
 
 import React, { act } from 'react'
 import TestRenderer from 'react-test-renderer'
+import { Pressable } from 'react-native'
 import { IconButton } from '@/components/ui/IconButton'
 
 beforeEach(() => {
@@ -98,9 +99,7 @@ beforeEach(() => {
 function findFirstPressable(
   tree: TestRenderer.ReactTestRenderer,
 ): TestRenderer.ReactTestInstance {
-  return tree.root.findAll(
-    (n) => typeof n.type === 'string' && n.type === 'Pressable',
-  )[0]
+  return tree.root.findAll((n) => n.type === Pressable)[0]
 }
 
 describe('IconButton (mobile)', () => {

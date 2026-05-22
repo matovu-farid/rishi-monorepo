@@ -91,7 +91,7 @@ describe('BookCover (mobile)', () => {
       )
     })
     const images = tree.root.findAll(
-      (n) => typeof n.type === 'string' && n.type === 'ExpoImage',
+      (n) => typeof n.type === 'string' && (n.type as string) === 'ExpoImage',
     )
     expect(images.length).toBe(1)
   })
@@ -123,7 +123,7 @@ describe('BookCover (mobile)', () => {
       tree: TestRenderer.ReactTestRenderer,
     ): unknown => {
       const views = tree.root.findAll(
-        (n) => typeof n.type === 'string' && n.type === 'View',
+        (n) => typeof n.type === 'string' && (n.type as string) === 'View',
       )
       // The fallback container's style.backgroundColor is the deterministic colour.
       for (const v of views) {
@@ -147,7 +147,7 @@ describe('BookCover (mobile)', () => {
       )
     })
     const views = tree.root.findAll(
-      (n) => typeof n.type === 'string' && n.type === 'View',
+      (n) => typeof n.type === 'string' && (n.type as string) === 'View',
     )
     const widths = views
       .map((v) => flattenStyle((v.props as { style?: unknown }).style).width)
@@ -163,7 +163,7 @@ describe('BookCover (mobile)', () => {
       )
     })
     const views = tree.root.findAll(
-      (n) => typeof n.type === 'string' && n.type === 'View',
+      (n) => typeof n.type === 'string' && (n.type as string) === 'View',
     )
     const widths = views
       .map((v) => flattenStyle((v.props as { style?: unknown }).style).width)
@@ -179,7 +179,7 @@ describe('BookCover (mobile)', () => {
       )
     })
     const views = tree.root.findAll(
-      (n) => typeof n.type === 'string' && n.type === 'View',
+      (n) => typeof n.type === 'string' && (n.type as string) === 'View',
     )
     const widths = views
       .map((v) => flattenStyle((v.props as { style?: unknown }).style).width)

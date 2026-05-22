@@ -63,6 +63,7 @@ jest.mock('expo-haptics', () => ({
 
 import React, { act } from 'react'
 import TestRenderer from 'react-test-renderer'
+import { Pressable } from 'react-native'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
 
 beforeEach(() => {
@@ -128,8 +129,7 @@ describe('SegmentedControl (mobile)', () => {
     // Find a Pressable whose accessibilityLabel matches the unselected option.
     const target = tree.root.findAll(
       (n) =>
-        typeof n.type === 'string' &&
-        n.type === 'Pressable' &&
+        n.type === Pressable &&
         (n.props as { accessibilityLabel?: string }).accessibilityLabel ===
           'Serif',
     )[0]
@@ -156,8 +156,7 @@ describe('SegmentedControl (mobile)', () => {
     })
     const active = tree.root.findAll(
       (n) =>
-        typeof n.type === 'string' &&
-        n.type === 'Pressable' &&
+        n.type === Pressable &&
         (n.props as { accessibilityLabel?: string }).accessibilityLabel === 'Serif',
     )[0]
     expect(
@@ -182,8 +181,7 @@ describe('SegmentedControl (mobile)', () => {
     })
     const inactive = tree.root.findAll(
       (n) =>
-        typeof n.type === 'string' &&
-        n.type === 'Pressable' &&
+        n.type === Pressable &&
         (n.props as { accessibilityLabel?: string }).accessibilityLabel === 'Sans',
     )[0]
     expect(

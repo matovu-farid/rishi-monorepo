@@ -80,6 +80,7 @@ jest.mock('@expo/vector-icons', () => {
 
 import React, { act } from 'react'
 import TestRenderer from 'react-test-renderer'
+import { Pressable } from 'react-native'
 import { ListRow } from '@/components/ui/ListRow'
 
 function findTextNodes(root: TestRenderer.ReactTestRenderer): string[] {
@@ -134,7 +135,7 @@ describe('ListRow (mobile)', () => {
     const chevrons = tree.root.findAll(
       (n) =>
         typeof n.type === 'string' &&
-        n.type === 'Ionicons' &&
+        (n.type as string) === 'Ionicons' &&
         (n.props as { name?: string }).name === 'chevron-forward',
     )
     expect(chevrons.length).toBe(1)
@@ -148,9 +149,7 @@ describe('ListRow (mobile)', () => {
         <ListRow title="Appearance" onPress={onPress} />,
       )
     })
-    const pressables = tree.root.findAll(
-      (n) => typeof n.type === 'string' && n.type === 'Pressable',
-    )
+    const pressables = tree.root.findAll((n) => n.type === Pressable)
     expect(pressables.length).toBeGreaterThan(0)
     act(() => {
       ;(pressables[0].props as { onPress: () => void }).onPress()

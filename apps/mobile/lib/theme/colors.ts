@@ -1,7 +1,51 @@
 // Semantic color tokens matching iOS UIKit semantics.
 // All rgba values are intentional — they composite correctly on tinted surfaces.
 
-export const colorsLight = {
+export type ColorTokens = {
+  background: {
+    primary: string
+    secondary: string
+    tertiary: string
+    grouped: string
+  }
+  label: {
+    primary: string
+    secondary: string
+    tertiary: string
+    quaternary: string
+  }
+  fill: {
+    primary: string
+    secondary: string
+    tertiary: string
+    quaternary: string
+  }
+  separator: {
+    opaque: string
+    nonOpaque: string
+  }
+  accent: {
+    primary: string
+    success: string
+    warning: string
+    error: string
+  }
+  reader: {
+    paper: string
+    ink: string
+    paperPureWhite: string
+    paperSepia: string
+  }
+  highlight: {
+    yellow: string
+    green: string
+    blue: string
+    pink: string
+    purple: string
+  }
+}
+
+export const colorsLight: ColorTokens = {
   background: {
     primary: '#FFFFFF',
     secondary: '#F2F2F7',
@@ -43,9 +87,9 @@ export const colorsLight = {
     pink: 'rgba(255,170,200,0.45)',
     purple: 'rgba(204,178,242,0.45)',
   },
-} as const
+}
 
-export const colorsDark = {
+export const colorsDark: ColorTokens = {
   background: {
     primary: '#000000',
     secondary: '#1C1C1E',
@@ -87,6 +131,4 @@ export const colorsDark = {
     pink: 'rgba(255,170,200,0.32)',
     purple: 'rgba(204,178,242,0.32)',
   },
-} as const
-
-export type ColorTokens = typeof colorsLight
+}
