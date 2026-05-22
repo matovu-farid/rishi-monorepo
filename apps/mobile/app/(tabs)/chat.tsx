@@ -151,7 +151,11 @@ export default function ConversationsScreen() {
               bookTitle={book.title}
               bookCoverPath={book.coverPath ?? null}
               lastMessage={getLastMessage(item.id)}
-              onPress={() => router.push(`/chat/${item.bookId}?cid=${item.id}`)}
+              onPress={() =>
+                router.push(
+                  `/chat/${item.bookId}?cid=${item.id}&from=Conversations`,
+                )
+              }
               onLongPress={() => handleDelete(item.id)}
             />
           )

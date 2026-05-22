@@ -38,7 +38,14 @@ export default function BookChatScreen() {
   // conversations tab — required because a book can have multiple
   // conversations (P0-N). When absent we fall back to the most recent
   // existing conversation, or create a new one if none exist.
-  const { bookId, cid } = useLocalSearchParams<{ bookId: string; cid?: string }>()
+  // `from` provides the previous-screen label shown next to the back
+  // chevron (P1-C) — e.g. "Library" or "Conversations" — matching the
+  // Apple Books pattern. Optional: when absent the chevron renders bare.
+  const { bookId, cid, from } = useLocalSearchParams<{
+    bookId: string
+    cid?: string
+    from?: string
+  }>()
   const router = useRouter()
   const flatListRef = useRef<FlatList>(null)
 
@@ -227,11 +234,20 @@ export default function BookChatScreen() {
         <View className="flex-row items-center justify-between h-12 px-4 border-b border-gray-200 dark:border-gray-700">
           <TouchableOpacity
             onPress={() => router.back()}
-            className="w-11 h-11 items-center justify-center"
-            accessibilityLabel="Back"
+            className="flex-row items-center h-11 pl-1 pr-2"
+            accessibilityLabel={from ? `Back to ${from}` : 'Back'}
             accessibilityRole="button"
           >
-            <IconSymbol name="chevron.left" size={22} color="#687076" />
+            <IconSymbol name="chevron.left" size={22} color="#0a7ea4" />
+            {from ? (
+              <Text
+                testID="chat-detail-back-label"
+                className="text-base text-[#0a7ea4] ml-0.5"
+                numberOfLines={1}
+              >
+                {from}
+              </Text>
+            ) : null}
           </TouchableOpacity>
 
           <Text
