@@ -19,6 +19,7 @@ import { useAuthStore } from '@/lib/stores/authStore'
 import { initVectorExtension, ensureChunkTables } from '@/lib/rag/vector-store'
 import { RagExtractorHost } from '@/components/RagExtractorHost'
 import { PremiumFeatureSheet } from '@/components/auth/PremiumFeatureSheet'
+import { GlobalMiniPlayer } from '@/components/player/GlobalMiniPlayer'
 import { handleIncomingFile, isFileUrl } from '@/lib/file-handler'
 
 export const IS_E2E_TEST = process.env.EXPO_PUBLIC_E2E_TEST === 'true'
@@ -204,6 +205,7 @@ function RootLayout() {
       <GestureHandlerRootView style={{ flex: 1 }}>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <Slot />
+          <GlobalMiniPlayer />
           <RagExtractorHost />
           <PremiumFeatureSheet />
           <StatusBar style="auto" />
@@ -216,6 +218,7 @@ function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <Slot />
+        <GlobalMiniPlayer />
         {/*
           Hidden host that drives pdfjs / djvu.js text extraction inside
           WebViews on demand. Mounted at root so import jobs can extract
