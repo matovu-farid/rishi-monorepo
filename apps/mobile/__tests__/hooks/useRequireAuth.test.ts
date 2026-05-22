@@ -52,20 +52,21 @@ jest.mock('@/lib/auth', () => ({
 
 // ── authStore mock — selector-based to mirror the real Zustand contract ──────
 //
-// The hook reads three slices via selectors:
-//   useAuthStore((s) => s.isAuthenticated)
-//   useAuthStore((s) => s.authHydrated)
-//   useAuthStore((s) => s.openPremiumGate)
-//
-// We expose a mutable state object the tests can prime per-case.
+// The hook reads slices via selectors. After GAT-011 it also reads
+// `user` so it can hand it to the shared `shouldGate` predicate (single
+// source of truth). We expose a mutable state object the tests can
+// prime per-case.
 const openPremiumGate = jest.fn()
+type AuthUser = { id: string; email: string | null } | null
 let storeState: {
   isAuthenticated: boolean
   authHydrated: boolean
+  user: AuthUser
   openPremiumGate: typeof openPremiumGate
 } = {
   isAuthenticated: false,
   authHydrated: true,
+  user: null,
   openPremiumGate,
 }
 
@@ -90,13 +91,19 @@ beforeEach(() => {
   storeState = {
     isAuthenticated: false,
     authHydrated: true,
+    user: null,
     openPremiumGate,
   }
 })
 
 describe('useRequireAuth (mobile)', () => {
   it('runs action immediately when authenticated + hydrated (no gate)', () => {
-    storeState = { isAuthenticated: true, authHydrated: true, openPremiumGate }
+    storeState = {
+      isAuthenticated: true,
+      authHydrated: true,
+      user: { id: 'u-1', email: null },
+      openPremiumGate,
+    }
     const action = jest.fn()
     let gate!: (a: () => void) => void
     act(() => {
@@ -112,7 +119,12 @@ describe('useRequireAuth (mobile)', () => {
   })
 
   it('opens premium gate (and skips action) when signed-out + hydrated', () => {
-    storeState = { isAuthenticated: false, authHydrated: true, openPremiumGate }
+    storeState = {
+      isAuthenticated: false,
+      authHydrated: true,
+      user: null,
+      openPremiumGate,
+    }
     const action = jest.fn()
     let gate!: (a: () => void) => void
     act(() => {
@@ -131,7 +143,12 @@ describe('useRequireAuth (mobile)', () => {
   })
 
   it('cold-start (auth not yet hydrated) defers: does NOT run action and does NOT open gate (P0-T)', () => {
-    storeState = { isAuthenticated: false, authHydrated: false, openPremiumGate }
+    storeState = {
+      isAuthenticated: false,
+      authHydrated: false,
+      user: null,
+      openPremiumGate,
+    }
     const action = jest.fn()
     let gate!: (a: () => void) => void
     act(() => {
@@ -146,8 +163,42 @@ describe('useRequireAuth (mobile)', () => {
     expect(openPremiumGate).not.toHaveBeenCalled()
   })
 
+  it('GAT-011: routes the decision through shared shouldGate(user, feature)', () => {
+    // We can't easily spy through the module-resolution mock above without
+    // unmocking, so instead pin the contract via behaviour:
+    //   - `user: null` AND `isAuthenticated: false` → gated.
+    //   - `user: { id }` (non-null) wins regardless of an out-of-sync
+    //     `isAuthenticated` boolean — the shared predicate uses `user`,
+    //     which is the single source of truth across electron + mobile.
+    // If `useRequireAuth` ever drifts off shouldGate (e.g. starts
+    // trusting only `isAuthenticated`), this test breaks.
+    storeState = {
+      isAuthenticated: false, // boolean intentionally stale
+      authHydrated: true,
+      user: { id: 'u-99', email: null },
+      openPremiumGate,
+    }
+    const action = jest.fn()
+    let gate!: (a: () => void) => void
+    act(() => {
+      TestRenderer.create(
+        React.createElement(Harness, { onReady: (g) => (gate = g) }),
+      )
+    })
+    act(() => {
+      gate(action)
+    })
+    expect(action).toHaveBeenCalledTimes(1)
+    expect(openPremiumGate).not.toHaveBeenCalled()
+  })
+
   it('returns a stable function reference across re-renders when state is unchanged', () => {
-    storeState = { isAuthenticated: true, authHydrated: true, openPremiumGate }
+    storeState = {
+      isAuthenticated: true,
+      authHydrated: true,
+      user: { id: 'u-1', email: null },
+      openPremiumGate,
+    }
     const gates: Array<(a: () => void) => void> = []
     let tree!: TestRenderer.ReactTestRenderer
     act(() => {

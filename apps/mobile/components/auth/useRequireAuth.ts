@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import type { PremiumFeature } from '@rishi/shared/auth-gating'
+import { shouldGate, type PremiumFeature } from '@rishi/shared/auth-gating'
 import { useAuthStore } from '@/lib/stores/authStore'
 
 /**
@@ -14,11 +14,16 @@ import { useAuthStore } from '@/lib/stores/authStore'
  * premium gate never opens (P0-T). We also do not open the gate yet
  * because the user may actually be signed in; we just don't know until
  * hydration completes. The correct behavior is to defer until we know.
+ *
+ * GAT-011: the gating decision is delegated to the shared `shouldGate`
+ * predicate so electron and mobile cannot drift on what "premium ⇔
+ * signed-out" means. The previous implementation hard-coded the check
+ * against the `isAuthenticated` boolean, which let two policies grow.
  */
 export function useRequireAuth(
   feature: PremiumFeature,
 ): (action: () => void) => void {
-  const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
+  const user = useAuthStore((s) => s.user)
   const authHydrated = useAuthStore((s) => s.authHydrated)
   const openPremiumGate = useAuthStore((s) => s.openPremiumGate)
 
@@ -29,15 +34,15 @@ export function useRequireAuth(
         // do not open the gate. The user can retry once hydration lands.
         return
       }
-      if (isAuthenticated) {
-        action()
-      } else {
+      if (shouldGate(user, feature)) {
         // P0-U: forward the action so the store can replay it on
         // successful sign-in. Dismissing the gate ("Not now") discards
         // it via closePremiumGate.
         openPremiumGate(feature, action)
+      } else {
+        action()
       }
     },
-    [authHydrated, isAuthenticated, openPremiumGate, feature],
+    [authHydrated, user, openPremiumGate, feature],
   )
 }
