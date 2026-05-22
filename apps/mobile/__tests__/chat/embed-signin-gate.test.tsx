@@ -1,17 +1,18 @@
 /**
- * RAG history must include the just-typed user turn (P0-P).
+ * P1-AL — Chat embed runs even when signed out and never surfaces failure.
  *
- * Pre-fix, `handleSend` in `app/chat/[bookId].tsx` built the history
- * passed to `askQuestion` from the stale `messageList` closure — i.e.
- * the new user message was appended via `setMessageList((prev) => [...])`
- * but the call to `askQuestion(text, history)` still saw the previous
- * snapshot. As a result the LLM was always one message behind.
+ * Pre-fix, the embedBook effect fired unconditionally on mount, which
+ * meant signed-out users hit the network for chunk uploads / server
+ * fallback and got opaque rejections (or silent no-ops) with no path
+ * to recover.
  *
- * Red signal: `history` captured by `askQuestion` must contain the
- * just-typed user turn AND every prior message.
+ * Red signal: when `useAuthStore.isAuthenticated` is false, the chat
+ * detail screen MUST NOT call `embedBook` and MUST render an inline
+ * sign-in banner with a CTA that funnels through `requireAIChat`. The
+ * input stays disabled while signed out.
  */
 
-// ── react-native primitives (mirror the conversation-routing test) ────────
+// ── react-native primitives ──────────────────────────────────────────────
 jest.mock('react-native', () => {
   const React = require('react')
   const mk = (name: string) =>
@@ -19,13 +20,19 @@ jest.mock('react-native', () => {
       React.createElement(name, { ...p, ref: r }, p.children),
     )
   const FlatList = React.forwardRef((p: any, r: unknown) => {
-    const { data = [], renderItem, keyExtractor } = p
+    const { data = [], renderItem, keyExtractor, ListHeaderComponent, ListFooterComponent, ListEmptyComponent } = p
     const items = (data as unknown[]).map((item, index) => {
       const key = keyExtractor ? keyExtractor(item, index) : String(index)
       const rendered = renderItem ? renderItem({ item, index }) : null
       return React.createElement(React.Fragment, { key }, rendered)
     })
-    return React.createElement('FlatList', { ...p, ref: r }, items)
+    return React.createElement(
+      'FlatList',
+      { ...p, ref: r },
+      ListHeaderComponent ?? null,
+      items.length === 0 ? ListEmptyComponent ?? null : items,
+      ListFooterComponent ?? null,
+    )
   })
   return {
     View: mk('View'),
@@ -110,58 +117,41 @@ jest.mock('@/components/ui/icon-symbol', () => {
   }
 })
 
-jest.mock('@/components/auth/useRequireAuth', () => ({
-  useRequireAuth: () => (action: () => void) => action(),
-}))
-
-// authStore — chat screen reads isAuthenticated for the embed gate (P1-AL).
+// authStore — selector-aware mock so the screen can read both
+// `isAuthenticated` and `authHydrated`.
+const authState: { isAuthenticated: boolean; authHydrated: boolean } = {
+  isAuthenticated: false,
+  authHydrated: true,
+}
 jest.mock('@/lib/stores/authStore', () => ({
   __esModule: true,
-  useAuthStore: <T,>(selector: (s: { isAuthenticated: boolean }) => T) =>
-    selector({ isAuthenticated: true }),
+  useAuthStore: <T,>(selector: (s: typeof authState) => T) => selector(authState),
 }))
 
-// ── Storage mocks — track addMessage so we can return shaped messages ────
-type StoredMsg = {
-  id: string
-  conversationId: string
-  role: 'user' | 'assistant'
-  content: string
-  createdAt: number
-}
-const messagesByConv = new Map<string, StoredMsg[]>()
-let msgCounter = 0
-function pushMessage(
-  conversationId: string,
-  role: 'user' | 'assistant',
-  content: string,
-): StoredMsg {
-  const msg: StoredMsg = {
-    id: `msg-${++msgCounter}`,
-    conversationId,
-    role,
-    content,
-    createdAt: Date.now(),
-  }
-  const list = messagesByConv.get(conversationId) ?? []
-  list.push(msg)
-  messagesByConv.set(conversationId, list)
-  return msg
-}
+// `useRequireAuth` returns a function that — when not authenticated —
+// records the feature it was constructed with. Tapping the sign-in CTA
+// must funnel through the 'ai-chat' gate.
+const requireAuthCalls: Array<{ feature: string; ran: boolean }> = []
+jest.mock('@/components/auth/useRequireAuth', () => ({
+  useRequireAuth: (feature: string) => {
+    return (action: () => void) => {
+      const entry = { feature, ran: false }
+      requireAuthCalls.push(entry)
+      if (authState.isAuthenticated) {
+        entry.ran = true
+        action()
+      }
+    }
+  },
+}))
 
 jest.mock('@/lib/conversation-storage', () => ({
   getAllConversations: () => [],
   getConversationsForBook: (bookId: string) => [
     { id: `conv-${bookId}`, bookId, title: 'T', createdAt: 1, updatedAt: 2 },
   ],
-  // Return a copy so the consumer's setState reference doesn't get
-  // mutated when addMessage pushes new rows into the backing array.
-  getMessages: (id: string) => (messagesByConv.get(id) ?? []).slice(),
-  addMessage: (
-    conversationId: string,
-    role: 'user' | 'assistant',
-    content: string,
-  ) => pushMessage(conversationId, role, content),
+  getMessages: () => [],
+  addMessage: jest.fn(),
   softDeleteConversation: jest.fn(),
   createConversation: jest.fn(),
 }))
@@ -178,22 +168,21 @@ jest.mock('@/lib/book-storage', () => ({
 }))
 
 jest.mock('@/lib/rag/vector-store', () => ({
-  isBookEmbedded: () => true,
+  isBookEmbedded: () => false,
   searchSimilarChunks: jest.fn(),
 }))
+
+const embedBookSpy = jest.fn(async () => undefined)
 jest.mock('@/lib/rag/pipeline', () => ({
-  embedBook: jest.fn(async () => undefined),
+  embedBook: (...args: unknown[]) => embedBookSpy(...args),
 }))
 
-// `askQuestion` spy captures the (text, history) it was called with.
-const askQuestionSpy = jest.fn(async () => ({ answer: 'ok', sources: [] }))
 jest.mock('@/hooks/useRAGQuery', () => ({
   useRAGQuery: () => ({
-    askQuestion: askQuestionSpy,
+    askQuestion: jest.fn(async () => ({ answer: '', sources: [] })),
     isLoading: false,
   }),
 }))
-
 jest.mock('@/hooks/useEmbeddingModel', () => ({
   useEmbeddingModel: () => ({ isReady: true, downloadProgress: 1 }),
 }))
@@ -213,17 +202,12 @@ jest.mock('@/components/ChatMessage', () => {
   return { ChatMessage: (p: any) => React.createElement('ChatMessage', p) }
 })
 
-// ChatInput stub — exposes its `onSend` via a registry keyed by render
-// order so the test can trigger sends imperatively (host elements drop
-// function props in react-test-renderer).
-const chatInputRegistry: { onSend: ((text: string) => void) | null } = {
-  onSend: null,
-}
+const chatInputRegistry: { disabled: boolean | null } = { disabled: null }
 jest.mock('@/components/ChatInput', () => {
   const React = require('react')
   return {
     ChatInput: (p: any) => {
-      chatInputRegistry.onSend = p.onSend
+      chatInputRegistry.disabled = !!p.disabled
       return React.createElement('ChatInput', { testID: 'chat-input' })
     },
   }
@@ -231,75 +215,67 @@ jest.mock('@/components/ChatInput', () => {
 jest.mock('@/components/ModelDownloadCard', () => {
   const React = require('react')
   return {
-    ModelDownloadCard: (p: any) =>
-      React.createElement('ModelDownloadCard', p),
+    ModelDownloadCard: (p: any) => React.createElement('ModelDownloadCard', p),
   }
 })
 jest.mock('@/components/EmbeddingProgress', () => {
   const React = require('react')
   return {
-    EmbeddingProgress: (p: any) =>
-      React.createElement('EmbeddingProgress', p),
+    EmbeddingProgress: (p: any) => React.createElement('EmbeddingProgress', p),
   }
 })
 
 import React, { act } from 'react'
 import TestRenderer from 'react-test-renderer'
 
-describe('RAG history includes the current user turn (P0-P)', () => {
+function findByTestID(
+  tree: TestRenderer.ReactTestRenderer,
+  testID: string,
+): TestRenderer.ReactTestInstance | null {
+  const matches = tree.root.findAll(
+    (n) => (n.props as { testID?: string } | null)?.testID === testID,
+  )
+  return matches[0] ?? null
+}
+
+describe('P1-AL — sign-in gate for chat embedding', () => {
   beforeEach(() => {
-    messagesByConv.clear()
-    msgCounter = 0
-    askQuestionSpy.mockClear()
-    chatInputRegistry.onSend = null
     pushSpy.mockClear()
+    embedBookSpy.mockClear()
+    chatInputRegistry.disabled = null
+    requireAuthCalls.length = 0
+    authState.isAuthenticated = false
+    authState.authHydrated = true
     localParams.current = { bookId: 'book-1' }
   })
 
-  it('captured history contains every prior message AND the just-typed turn', async () => {
-    // Seed prior conversation so messageList is non-empty when typing.
-    pushMessage('conv-book-1', 'user', 'hello')
-    pushMessage('conv-book-1', 'assistant', 'hi')
-
+  it('does not call embedBook when signed out and renders a sign-in banner', async () => {
     const BookChatScreen = require('@/app/chat/[bookId]').default
     let tree!: TestRenderer.ReactTestRenderer
     await act(async () => {
       tree = TestRenderer.create(<BookChatScreen />)
     })
-
-    // Drain effects so the useEffect that hydrates messageList from
-    // getMessages has run.
     await act(async () => {
+      await Promise.resolve()
       await Promise.resolve()
     })
 
-    expect(chatInputRegistry.onSend).toBeTruthy()
+    // embedBook must NOT have been invoked.
+    expect(embedBookSpy).not.toHaveBeenCalled()
 
-    // Send the new turn.
+    // Sign-in banner must be visible with a CTA.
+    const banner = findByTestID(tree, 'chat-signin-gate-banner')
+    expect(banner).not.toBeNull()
+    const cta = findByTestID(tree, 'chat-signin-gate-cta')
+    expect(cta).not.toBeNull()
+
+    // Send must be disabled while signed out.
+    expect(chatInputRegistry.disabled).toBe(true)
+
+    // Tap the sign-in CTA — must route through the ai-chat gate.
     await act(async () => {
-      chatInputRegistry.onSend!('world')
-      await Promise.resolve()
+      ;(cta!.props as { onPress: () => void }).onPress()
     })
-
-    expect(askQuestionSpy).toHaveBeenCalledTimes(1)
-    const [text, history] = askQuestionSpy.mock.calls[0] as [
-      string,
-      Array<{ role: string; content: string }>,
-    ]
-    expect(text).toBe('world')
-    const contents = history.map((m) => m.content)
-    // Prior turns must be present.
-    expect(contents).toContain('hello')
-    expect(contents).toContain('hi')
-    // The just-typed user turn must ALSO be in the history (P0-P).
-    expect(contents).toContain('world')
-    // The last entry should be the current user turn.
-    expect(history[history.length - 1]).toEqual({
-      role: 'user',
-      content: 'world',
-    })
-
-    // Silence unused-tree lint.
-    expect(tree).toBeDefined()
+    expect(requireAuthCalls.some((c) => c.feature === 'ai-chat')).toBe(true)
   })
 })

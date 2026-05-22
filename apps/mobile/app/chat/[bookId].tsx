@@ -29,6 +29,7 @@ import { ModelDownloadCard } from '@/components/ModelDownloadCard'
 import { EmbeddingProgress } from '@/components/EmbeddingProgress'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
+import { useAuthStore } from '@/lib/stores/authStore'
 import { resolveReaderRouteForBook } from '@/lib/reader-routes'
 import { safeBack } from '@/lib/navigation'
 import type { Message, SourceChunk } from '@/types/conversation'
@@ -93,6 +94,12 @@ export default function BookChatScreen() {
   const requireVoiceInput = useRequireAuth('voice-input')
   const requireAIChat = useRequireAuth('ai-chat')
 
+  // P1-AL: signed-out users must NOT trigger the embed pipeline (which
+  // hits the server fallback and fails opaquely). We read auth state
+  // here so the embedBook effect can early-return and the screen can
+  // render an inline sign-in banner instead.
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
+
   const handleMicPress = useCallback(() => {
     if (voice.isRecording) {
       void voice.stopAndTranscribe().then((transcript) => {
@@ -148,6 +155,9 @@ export default function BookChatScreen() {
   useEffect(() => {
     if (!bookId || !book || !book.filePath) return
     if (isBookEmbedded(bookId)) return
+    // P1-AL: gate behind authentication. Signed-out users see the
+    // sign-in banner below and can opt in via the ai-chat premium gate.
+    if (!isAuthenticated) return
 
     setIsEmbedding(true)
     setEmbeddingTotal(100)
@@ -165,7 +175,7 @@ export default function BookChatScreen() {
       setIsEmbedding(false)
       setEmbedError('Could not prepare this book for chat.')
     })
-  }, [bookId, book, embedAttempt])
+  }, [bookId, book, embedAttempt, isAuthenticated])
 
   const handleEmbedRetry = useCallback(() => {
     setEmbedError(null)
@@ -230,8 +240,13 @@ export default function BookChatScreen() {
   // P1-AA: while an embed error is showing, the book isn't prepared —
   // keep send locked until the user retries successfully (or navigates
   // away).
+  // P1-AL: signed-out users also can't send — the embed pipeline never
+  // ran. Keep send locked until they sign in via the inline CTA.
   const chatDisabled =
-    isEmbedding || embedError !== null || !isBookEmbedded(bookId!)
+    !isAuthenticated ||
+    isEmbedding ||
+    embedError !== null ||
+    !isBookEmbedded(bookId!)
 
   // Inverted data for FlatList
   const invertedMessages = [...messageList].reverse()
@@ -367,6 +382,30 @@ export default function BookChatScreen() {
                 ) : null
               }
             />
+
+            {/* P1-AL: signed-out gate. We never fired embedBook, so the
+                book isn't prepared; surface that explicitly with a
+                sign-in CTA that funnels through the ai-chat premium
+                gate (which knows how to replay the action on success). */}
+            {!isAuthenticated && (
+              <View
+                testID="chat-signin-gate-banner"
+                className="mx-4 mb-2 px-4 py-3 rounded-lg bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-900 flex-row items-center justify-between"
+              >
+                <Text className="flex-1 text-sm text-blue-800 dark:text-blue-100 pr-3">
+                  Sign in to prepare this book for chat.
+                </Text>
+                <TouchableOpacity
+                  testID="chat-signin-gate-cta"
+                  onPress={() => requireAIChat(() => {})}
+                  accessibilityRole="button"
+                  accessibilityLabel="Sign in to chat with this book"
+                  className="px-3 py-1.5 rounded-md bg-[#0a7ea4]"
+                >
+                  <Text className="text-sm font-semibold text-white">Sign in</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
             {/* P1-AA: embedding-failure banner with Retry. Rendered above
                 ChatInput so the input remains visible but disabled. */}

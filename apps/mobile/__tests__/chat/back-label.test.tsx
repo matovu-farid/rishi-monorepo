@@ -93,6 +93,13 @@ jest.mock('@/components/auth/useRequireAuth', () => ({
   useRequireAuth: () => (action: () => void) => action(),
 }))
 
+// authStore — chat screen reads isAuthenticated for the embed gate (P1-AL).
+jest.mock('@/lib/stores/authStore', () => ({
+  __esModule: true,
+  useAuthStore: <T,>(selector: (s: { isAuthenticated: boolean }) => T) =>
+    selector({ isAuthenticated: true }),
+}))
+
 jest.mock('@/lib/conversation-storage', () => ({
   getConversationsForBook: () => [],
   getMessages: () => [],
