@@ -134,7 +134,7 @@ export default function ConversationsScreen() {
             No conversations yet
           </Text>
           <Text testID="chat-empty-state-hint" className="text-sm text-gray-500 dark:text-gray-400 mt-1 text-center">
-            Open a book and tap the AI icon to start a conversation.
+            Tap + above to start a conversation about a book in your library.
           </Text>
         </View>
         <NewConversationSheet
