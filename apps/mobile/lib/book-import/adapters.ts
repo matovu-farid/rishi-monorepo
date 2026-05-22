@@ -343,6 +343,18 @@ export function createMobileEmbedPort(): EmbedPort {
 
 const COVERS_DIR = new Directory(Paths.document, "covers");
 
+/**
+ * Sentinel value persisted to the `coverPath` column when cover
+ * extraction fails (P1-AC). `mapRowToBook` in `lib/book-storage.ts`
+ * interprets this as `coverExtractionFailed = true` and normalizes the
+ * exposed `coverPath` to `null`. We use a sentinel string rather than
+ * adding a new schema column to avoid a migration round-trip — the
+ * `coverPath` column is already nullable text, and the sentinel cannot
+ * collide with a real `file://` URI. A future migration can promote
+ * this to a dedicated boolean column.
+ */
+export const COVER_EXTRACTION_FAILED_SENTINEL = "__failed";
+
 export interface CoverPortDeps {
   /** Injected for tests. Renamed from `readEpubBytes` in Batch 8 — the
    *  reader is now format-agnostic since MOBI/AZW3 also use it. */
@@ -415,6 +427,17 @@ export function createMobileCoverPort(deps: CoverPortDeps = {}): CoverPort {
         }
       } catch (err) {
         console.warn(`[book-import] cover extraction failed (${format}):`, err);
+        // P1-AC: persist the failure sentinel so the library UI can offer
+        // a "Retry cover extraction" affordance instead of silently
+        // falling back to the letter-tile.
+        try {
+          await updateBookCover(
+            String(bookId),
+            COVER_EXTRACTION_FAILED_SENTINEL,
+          );
+        } catch {
+          /* best-effort — the import itself still succeeded */
+        }
         return null;
       }
       if (!cover) return null;

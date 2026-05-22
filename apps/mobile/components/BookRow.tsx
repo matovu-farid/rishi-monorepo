@@ -9,6 +9,14 @@ interface BookRowProps {
   book: Book
   onPress: (book: Book) => void
   onDelete: (book: Book) => void
+  /**
+   * P1-AC: invoked on long-press when `book.coverExtractionFailed`
+   * is true. Lets the library screen kick off a retry of the cover
+   * extraction pipeline without exposing a always-visible button.
+   * Omit for books whose cover extracted successfully — the long-press
+   * gesture is then a no-op.
+   */
+  onCoverRetry?: (book: Book) => void
 }
 
 /**
@@ -25,13 +33,21 @@ interface BookRowProps {
  * the parent FlatList doesn't wire up `ItemSeparatorComponent` (that
  * wiring is deferred to the parent screen change-set).
  */
-export function BookRow({ book, onPress, onDelete }: BookRowProps) {
+export function BookRow({ book, onPress, onDelete, onCoverRetry }: BookRowProps) {
   const { colors, spacing, typography } = useTheme()
+  // P1-AC: long-press fires the retry callback only when the cover
+  // actually failed to extract. Otherwise leave the gesture untouched
+  // so other gestures (e.g. system text-selection) aren't swallowed.
+  const handleLongPress =
+    book.coverExtractionFailed && onCoverRetry
+      ? () => onCoverRetry(book)
+      : undefined
   return (
     <View>
       <Pressable
         testID={`library-book-row-${book.id}`}
         onPress={() => onPress(book)}
+        onLongPress={handleLongPress}
         accessibilityRole="button"
         accessibilityLabel={`Open ${book.title} by ${book.author}`}
         style={({ pressed }) => [

@@ -136,16 +136,33 @@ export function getLastReadBook(): Book | null {
   return row ? mapRowToBook(row) : null
 }
 
+/**
+ * Sentinel persisted to `coverPath` when cover extraction failed during
+ * import (P1-AC). Mirrors `COVER_EXTRACTION_FAILED_SENTINEL` in
+ * `lib/book-import/adapters.ts` — duplicated here to avoid the
+ * book-storage module pulling in the heavier book-import deps.
+ *
+ * Kept as a string sentinel rather than a dedicated schema column to
+ * dodge a migration round-trip; a future migration can promote it.
+ */
+const COVER_FAILED_SENTINEL = '__failed'
+
 function mapRowToBook(row: typeof books.$inferSelect): Book {
+  // P1-AC: surface the sentinel as a derived boolean and normalize
+  // `coverPath` to null so existing call sites (image rendering,
+  // letter-tile fallback) keep working unchanged.
+  const failed = row.coverPath === COVER_FAILED_SENTINEL
   return {
     id: row.id,
     title: row.title,
     author: row.author,
-    coverPath: row.coverPath,
+    coverPath: failed ? null : row.coverPath,
     filePath: row.filePath,
     format: row.format as Book['format'],
     currentCfi: row.currentCfi,
     currentPage: row.currentPage,
     createdAt: row.createdAt,
+    // Extra field — typed as optional on the Book interface.
+    coverExtractionFailed: failed,
   }
 }

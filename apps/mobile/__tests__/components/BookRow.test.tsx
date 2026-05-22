@@ -183,3 +183,59 @@ describe('BookRow (P1-V: uses design tokens)', () => {
     expect(onDelete).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('BookRow (P1-AC: cover-extraction retry)', () => {
+  const failedCoverBook: Book = {
+    ...mockBook,
+    id: 'b2',
+    coverExtractionFailed: true,
+  } as unknown as Book
+
+  it('fires onCoverRetry on long-press when the book has coverExtractionFailed=true', () => {
+    const onCoverRetry = jest.fn()
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <BookRow
+          book={failedCoverBook}
+          onPress={() => {}}
+          onDelete={() => {}}
+          onCoverRetry={onCoverRetry}
+        />,
+      )
+    })
+    const pressables = tree.root.findAll(
+      (n) =>
+        (n.props as { testID?: string }).testID === `library-book-row-${failedCoverBook.id}`,
+    )
+    expect(pressables.length).toBeGreaterThan(0)
+    act(() => {
+      ;(pressables[0].props as { onLongPress?: () => void }).onLongPress?.()
+    })
+    expect(onCoverRetry).toHaveBeenCalledTimes(1)
+    expect(onCoverRetry).toHaveBeenCalledWith(failedCoverBook)
+  })
+
+  it('does NOT fire onCoverRetry on long-press when the book has a healthy cover', () => {
+    const onCoverRetry = jest.fn()
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <BookRow
+          book={mockBook}
+          onPress={() => {}}
+          onDelete={() => {}}
+          onCoverRetry={onCoverRetry}
+        />,
+      )
+    })
+    const pressables = tree.root.findAll(
+      (n) =>
+        (n.props as { testID?: string }).testID === `library-book-row-${mockBook.id}`,
+    )
+    act(() => {
+      ;(pressables[0].props as { onLongPress?: () => void } | null)?.onLongPress?.()
+    })
+    expect(onCoverRetry).not.toHaveBeenCalled()
+  })
+})

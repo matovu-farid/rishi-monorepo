@@ -8,6 +8,14 @@ export interface Book {
   currentCfi: string | null // ePubCFI string for EPUB reading position
   currentPage: number | null // Page number for PDF reading position
   createdAt: number // Unix timestamp ms
+  /**
+   * P1-AC: true when cover extraction was attempted at import time and
+   * failed. Derived in `lib/book-storage.mapRowToBook` from the
+   * `coverPath = '__failed'` sentinel persisted by the CoverPort.
+   * The library UI uses this to offer a "Retry cover extraction"
+   * long-press affordance instead of a silent letter-tile fallback.
+   */
+  coverExtractionFailed?: boolean
 }
 
 export type ThemeName = 'white' | 'dark' | 'yellow'
