@@ -1,6 +1,8 @@
-import { View, Text, Pressable, TouchableOpacity, Image } from 'react-native'
+import { View, Text, Pressable, TouchableOpacity } from 'react-native'
 import { Book } from '@/types/book'
 import { IconSymbol } from '@/components/ui/icon-symbol'
+import { BookCover } from '@/components/ui'
+import { spacing } from '@/lib/theme'
 
 interface BookRowProps {
   book: Book
@@ -9,35 +11,22 @@ interface BookRowProps {
 }
 
 export function BookRow({ book, onPress, onDelete }: BookRowProps) {
-  const isPdf = book.format === 'pdf'
-
   return (
     <Pressable
+      testID={`library-book-row-${book.id}`}
       className="flex-row items-center px-4 py-4 active:bg-gray-100 dark:active:bg-gray-800"
       onPress={() => onPress(book)}
       accessibilityRole="button"
       accessibilityLabel={`Open ${book.title} by ${book.author}`}
     >
-      {/* Cover image or format-colored fallback */}
-      {book.coverPath ? (
-        <Image
-          source={{ uri: book.coverPath }}
-          className="w-12 h-16 rounded-md mr-4"
-          resizeMode="cover"
+      <View style={{ marginRight: spacing.lg }}>
+        <BookCover
+          uri={book.coverPath ?? undefined}
+          title={book.title}
+          size="sm"
+          testID={`book-row-cover-${book.id}`}
         />
-      ) : (
-        <View
-          className={`w-12 h-16 rounded-md items-center justify-center mr-4 ${
-            isPdf
-              ? 'bg-red-100 dark:bg-red-900'
-              : 'bg-gray-200 dark:bg-gray-700'
-          }`}
-        >
-          <Text className="text-gray-400 dark:text-gray-500 text-xs">
-            {book.format.toUpperCase()}
-          </Text>
-        </View>
-      )}
+      </View>
       <View className="flex-1">
         <Text
           testID="book-row-title"

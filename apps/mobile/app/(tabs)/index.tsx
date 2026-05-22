@@ -1,9 +1,10 @@
 import { useCallback, useMemo, useState } from 'react'
-import { View, FlatList, TouchableOpacity, Alert, Text, TextInput, Image, Pressable } from 'react-native'
+import { View, FlatList, TouchableOpacity, Alert, Text, TextInput, Pressable } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { Directory, Paths } from 'expo-file-system'
 import { IconSymbol } from '@/components/ui/icon-symbol'
+import { BookCover } from '@/components/ui'
 import { SyncStatusIndicator } from '@/components/SyncStatusIndicator'
 import { BookRow } from '@/components/BookRow'
 import { LibraryEmptyState } from '@/components/LibraryEmptyState'
@@ -171,13 +172,13 @@ export default function LibraryScreen() {
             className="mx-6 mb-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-xl flex-row items-center"
             onPress={() => handleBookPress(lastReadBook)}
           >
-            {lastReadBook.coverPath ? (
-              <Image source={{ uri: lastReadBook.coverPath }} className="w-10 h-14 rounded mr-3" resizeMode="cover" />
-            ) : (
-              <View className="w-10 h-14 rounded mr-3 bg-gray-200 dark:bg-gray-700 items-center justify-center">
-                <Text className="text-gray-400 text-xs">{lastReadBook.format.toUpperCase()}</Text>
-              </View>
-            )}
+            <View style={{ marginRight: 12 }}>
+              <BookCover
+                uri={lastReadBook.coverPath ?? undefined}
+                title={lastReadBook.title}
+                size="sm"
+              />
+            </View>
             <View className="flex-1">
               <Text className="text-xs text-[#0a7ea4] font-semibold mb-0.5">Reading Now</Text>
               <Text className="text-sm font-semibold text-gray-900 dark:text-white" numberOfLines={1}>{lastReadBook.title}</Text>
