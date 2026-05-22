@@ -127,7 +127,7 @@ jest.mock('expo-haptics', () => ({
 // ── Mock lib/auth — controllable signIn() ────────────────────────────────────
 const signInMock = jest.fn(async () => ({ session_token: 't', user_id: 'u' }))
 jest.mock('@/lib/auth', () => ({
-  signIn: (...args: unknown[]) => signInMock(...args),
+  signIn: signInMock,
 }))
 
 // ── Mock authStore — selector-based ──────────────────────────────────────────
@@ -156,6 +156,7 @@ jest.mock('@/lib/stores/authStore', () => ({
 
 import React, { act } from 'react'
 import TestRenderer from 'react-test-renderer'
+import { Pressable } from 'react-native'
 import { PremiumFeatureSheet } from '@/components/auth/PremiumFeatureSheet'
 
 function findTextNodes(root: TestRenderer.ReactTestRenderer): string[] {
@@ -255,7 +256,7 @@ describe('PremiumFeatureSheet (mobile)', () => {
     // Locate the Pressable whose accessibilityLabel is 'Not now'.
     const notNow = tree.root.findAll(
       (n) =>
-        n.type === 'Pressable' &&
+        n.type === Pressable &&
         (n.props as { accessibilityLabel?: string }).accessibilityLabel === 'Not now',
     )
     expect(notNow.length).toBeGreaterThan(0)
@@ -291,7 +292,7 @@ describe('PremiumFeatureSheet (mobile)', () => {
     // Locate the primary CTA Pressable.
     const cta = tree.root.findAll(
       (n) =>
-        n.type === 'Pressable' &&
+        n.type === Pressable &&
         (n.props as { accessibilityLabel?: string }).accessibilityLabel === 'Continue with Apple',
     )
     expect(cta.length).toBeGreaterThan(0)
@@ -314,7 +315,7 @@ describe('PremiumFeatureSheet (mobile)', () => {
     })
     const cta = tree.root.findAll(
       (n) =>
-        n.type === 'Pressable' &&
+        n.type === Pressable &&
         (n.props as { accessibilityLabel?: string }).accessibilityLabel === 'Continue with Apple',
     )
     await act(async () => {
