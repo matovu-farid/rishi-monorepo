@@ -155,12 +155,12 @@ jest.mock('@/lib/conversation-storage', () => ({
 }))
 
 // Book is missing — both lookup paths return null.
-const getBookByIdSpy = jest.fn(() => null)
-const getBookForReadingSpy = jest.fn(async () => null)
+const getBookByIdSpy = jest.fn((_id: string) => null)
+const getBookForReadingSpy = jest.fn(async (_id: string) => null)
 jest.mock('@/lib/book-storage', () => ({
-  getBookById: (...args: unknown[]) => getBookByIdSpy(...args),
+  getBookById: (id: string) => getBookByIdSpy(id),
   getBooks: () => [],
-  getBookForReading: (...args: unknown[]) => getBookForReadingSpy(...args),
+  getBookForReading: (id: string) => getBookForReadingSpy(id),
 }))
 
 jest.mock('@/lib/rag/vector-store', () => ({
@@ -168,9 +168,10 @@ jest.mock('@/lib/rag/vector-store', () => ({
   searchSimilarChunks: jest.fn(),
 }))
 
-const embedBookSpy = jest.fn(async () => undefined)
+const embedBookSpy = jest.fn(async (..._args: unknown[]) => undefined)
 jest.mock('@/lib/rag/pipeline', () => ({
-  embedBook: (...args: unknown[]) => embedBookSpy(...args),
+  embedBook: (bookId: string, filePath: string, format: string, onProgress?: (p: number) => void) =>
+    embedBookSpy(bookId, filePath, format, onProgress),
 }))
 
 jest.mock('@/hooks/useRAGQuery', () => ({
