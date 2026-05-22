@@ -650,9 +650,7 @@ export function PdfView({
         // their current location immediately. book.location is a string
         // holding the saved page number (or "page:offset"); falls back to 1
         // on fresh opens.
-        const resumePage = book.lastParagraph
-          ? pdfParagraphToPageNumber(book.lastParagraph)
-          : null
+        const resumePage = book.lastParagraph ? pdfParagraphToPageNumber(book.lastParagraph) : null
         const startPage = resumePage ?? (parsePdfLocation(book.location).page || 1)
 
         fiber = Effect.runFork(
@@ -682,7 +680,7 @@ export function PdfView({
       if (fiber) Effect.runFork(Fiber.interrupt(fiber))
       if (docHolder.current) void docHolder.current.destroy()
     }
-  }, [pdfBytes, book.id, book.location])
+  }, [pdfBytes, book.id, book.location, book.lastParagraph])
 
   const handleCreatePdfHighlight = async (color: HighlightColor): Promise<void> => {
     if (!selectionPopover || !bookSyncId) return

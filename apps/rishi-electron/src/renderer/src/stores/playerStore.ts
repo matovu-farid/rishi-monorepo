@@ -80,7 +80,6 @@ export const usePlayerStore = create<PlayerStore>()(
     requestPrevPage: () => set({ pageRequest: 'prev' }),
     clearPageRequest: () => set({ pageRequest: null }),
     setSend: (send) => set({ send }),
-    setLastPlayedParagraphIndex: (lastPlayedParagraphIndex) =>
-      set({ lastPlayedParagraphIndex })
+    setLastPlayedParagraphIndex: (lastPlayedParagraphIndex) => set({ lastPlayedParagraphIndex })
   }))
 )
