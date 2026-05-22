@@ -33,6 +33,7 @@ import * as Haptics from 'expo-haptics'
 import { ReaderShellContext } from '@/components/reader/ReaderShell'
 import { shadow, useTheme, zIndex } from '@/lib/theme'
 import { usePlayerStore } from '@/lib/stores/playerStore'
+import { computeMiniPlayerTranslateX } from './miniPlayerMorph'
 
 export interface MiniPlayerProps {
   bookId?: string
@@ -177,10 +178,19 @@ export function MiniPlayer({
       [ORB_RADIUS, PILL_RADIUS],
       Extrapolation.CLAMP,
     )
+    // P1-N — center the expanded pill on the *visible* area (safe area),
+    // not the raw screen. On iPad / landscape, insets.left/right can be
+    // non-zero and `screenWidth / 2` skews the pill against the notch.
+    const targetTx = computeMiniPlayerTranslateX({
+      screenWidth,
+      pillWidth,
+      rightOffset: 16,
+      insets: { left: insets.left, right: insets.right },
+    })
     const tx = interpolate(
       expandedValue.value,
       [0, 1],
-      [0, -(screenWidth / 2 - 16 - pillWidth / 2)],
+      [0, targetTx],
       Extrapolation.CLAMP,
     )
     return {
