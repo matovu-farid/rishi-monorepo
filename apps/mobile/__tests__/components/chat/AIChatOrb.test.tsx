@@ -129,6 +129,16 @@ jest.mock('@rishi/shared/tokens/orb-colors', () => ({
     thinking: 'rgba(251, 191, 36, 0.80)',
     speaking: 'rgba(34, 197, 94, 0.80)',
   },
+  // WGT-013 — the orb now reads its disk tint from the shared scale so
+  // electron + mobile stay in lockstep. The mock exposes a sentinel tint
+  // per status that the "uses shared ORB_DISK_TINTS" assertion below
+  // searches for in the rendered GlassDisk's tintColor.
+  ORB_DISK_TINTS: {
+    idle: 'rgba(88, 86, 214, 0.24)',
+    connecting: 'rgba(59, 130, 246, 0.24)',
+    thinking: 'rgba(251, 191, 36, 0.24)',
+    speaking: 'rgba(34, 197, 94, 0.24)',
+  },
 }))
 
 import React, { act } from 'react'
@@ -349,6 +359,41 @@ describe('AIChatOrb (mobile)', () => {
         AccessibilityInfo.announceForAccessibility,
       ).not.toHaveBeenCalled()
     })
+  })
+
+  describe('WGT-013 — disk tint comes from shared ORB_DISK_TINTS', () => {
+    // The orb's glass disk used to read a locally-duplicated `ORB_TINTS`
+    // constant. After WGT-013 it must read from
+    // `@rishi/shared/tokens/orb-colors` so electron + mobile cannot drift.
+    // We verify by looking at the `tintColor` prop the orb passes to the
+    // mocked GlassDisk for each status — the value must match the
+    // sentinels exposed by the shared-tokens mock above.
+    const SHARED_DISK_TINTS: Record<AIChatOrbStatus, string> = {
+      idle: 'rgba(88, 86, 214, 0.24)',
+      connecting: 'rgba(59, 130, 246, 0.24)',
+      thinking: 'rgba(251, 191, 36, 0.24)',
+      speaking: 'rgba(34, 197, 94, 0.24)',
+    }
+
+    it.each(['idle', 'connecting', 'thinking', 'speaking'] as const)(
+      'passes ORB_DISK_TINTS[%s] as tintColor to the GlassDisk',
+      (status) => {
+        let tree!: TestRenderer.ReactTestRenderer
+        act(() => {
+          tree = TestRenderer.create(
+            <AIChatOrb chatStatus={status} onPress={() => undefined} />,
+          )
+        })
+        const disk = tree.root.findAll(
+          (n) =>
+            (n.props as { testID?: string } | null)?.testID === 'glass-disk',
+        )[0]
+        expect(disk).toBeTruthy()
+        expect(
+          (disk.props as { tintColor?: string }).tintColor,
+        ).toBe(SHARED_DISK_TINTS[status])
+      },
+    )
   })
 
   it('honors a custom testID prop (overrides default)', () => {

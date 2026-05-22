@@ -22,6 +22,7 @@ import { GlassDisk } from '@/components/ui/GlassDisk'
 import { useTheme } from '@/lib/theme'
 import {
   ORB_COLORS,
+  ORB_DISK_TINTS,
   type AIChatOrbStatus,
 } from '@rishi/shared/tokens/orb-colors'
 
@@ -32,12 +33,8 @@ export interface AIChatOrbProps {
   testID?: string
 }
 
-const ORB_TINTS: Record<AIChatOrbStatus, string> = {
-  idle: 'rgba(88,86,214,0.24)',
-  connecting: 'rgba(59,130,246,0.24)',
-  thinking: 'rgba(251,191,36,0.24)',
-  speaking: 'rgba(34,197,94,0.24)',
-}
+// WGT-013 — disk tint comes from the shared scale so electron + mobile cannot
+// drift. The previous local `ORB_TINTS` constant has been removed.
 
 const A11Y_LABELS: Record<AIChatOrbStatus, string> = {
   idle: 'AI chat',
@@ -238,7 +235,7 @@ export function AIChatOrb({
           ]}
         />
       ) : null}
-      <GlassDisk size={ORB_SIZE} tintColor={ORB_TINTS[chatStatus]}>
+      <GlassDisk size={ORB_SIZE} tintColor={ORB_DISK_TINTS[chatStatus]}>
         <View
           style={{
             ...StyleSheet.absoluteFillObject,
