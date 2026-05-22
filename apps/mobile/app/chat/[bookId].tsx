@@ -33,7 +33,11 @@ import type { Message, SourceChunk } from '@/types/conversation'
 import type { Book } from '@/types/book'
 
 export default function BookChatScreen() {
-  const { bookId } = useLocalSearchParams<{ bookId: string }>()
+  // `cid` selects an explicit conversation when navigating from the
+  // conversations tab — required because a book can have multiple
+  // conversations (P0-N). When absent we fall back to the most recent
+  // existing conversation, or create a new one if none exist.
+  const { bookId, cid } = useLocalSearchParams<{ bookId: string; cid?: string }>()
   const router = useRouter()
   const flatListRef = useRef<FlatList>(null)
 
@@ -95,20 +99,28 @@ export default function BookChatScreen() {
     }
   }, [bookId])
 
-  // Load or create conversation
+  // Load or create conversation.
+  //
+  // Priority:
+  //   1. `cid` query param — pick that exact conversation (P0-N).
+  //   2. No cid + at least one existing conversation — pick most recent.
+  //   3. No cid + no existing conversations — create a fresh one.
   useEffect(() => {
     if (!bookId) return
 
     const existing = getConversationsForBook(bookId)
-    if (existing.length > 0) {
-      setConversationId(existing[0].id)
-      setMessageList(getMessages(existing[0].id))
+    const match = cid ? existing.find((c) => c.id === cid) : undefined
+    const target = match ?? existing[0]
+
+    if (target) {
+      setConversationId(target.id)
+      setMessageList(getMessages(target.id))
     } else {
       const conv = createConversation(bookId)
       setConversationId(conv.id)
       setMessageList([])
     }
-  }, [bookId])
+  }, [bookId, cid])
 
   // Start embedding if needed (pipeline handles server fallback internally)
   useEffect(() => {
