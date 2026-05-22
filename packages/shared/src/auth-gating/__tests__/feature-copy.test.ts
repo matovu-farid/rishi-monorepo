@@ -68,4 +68,20 @@ describe('FEATURE_COPY (shared/auth-gating)', () => {
     // Sentinel — catches accidental copy edits.
     expect(FEATURE_COPY.tts.title).toBe('Sign in to listen')
   })
+
+  it("voice-input copy is differentiated from voice-chat (P1-S)", () => {
+    // P1-S: voice-input (dictation into chat) is a distinct feature from
+    // voice-chat (full realtime conversation). Copy must reflect the
+    // difference so signed-out users understand what they are unlocking.
+    expect(FEATURE_COPY['voice-input'].title).not.toBe(
+      FEATURE_COPY['voice-chat'].title,
+    )
+    expect(FEATURE_COPY['voice-input'].body).not.toBe(
+      FEATURE_COPY['voice-chat'].body,
+    )
+  })
+
+  it("voice-input title is the sentinel string 'Sign in to dictate' (P1-S)", () => {
+    expect(FEATURE_COPY['voice-input'].title).toBe('Sign in to dictate')
+  })
 })

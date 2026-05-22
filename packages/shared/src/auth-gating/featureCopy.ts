@@ -12,8 +12,8 @@ export const FEATURE_COPY: Record<PremiumFeature, FeatureCopy> = {
     cta: 'Sign in',
   },
   'voice-input': {
-    title: 'Sign in to talk',
-    body: 'Sign in to ask questions out loud and hear answers back.',
+    title: 'Sign in to dictate',
+    body: 'Sign in to dictate your questions instead of typing.',
     cta: 'Sign in',
   },
   'ai-chat': {
