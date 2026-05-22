@@ -23,6 +23,7 @@
  *   - `isAuthenticating` is a UI flag for the sign-in screen's loading state.
  */
 import { create } from 'zustand'
+import type { PremiumFeature } from '@rishi/shared/auth-gating'
 import { createStorage } from '@/lib/storage/mmkv'
 import { useTutorialStore } from './tutorialStore'
 import { getSessionToken } from '@/lib/auth'
@@ -52,6 +53,10 @@ interface AuthState {
   isAuthenticated: boolean
   isAuthenticating: boolean
 
+  // Phase 1 (mobile parity v2) — premium feature gate sheet.
+  premiumGateOpen: boolean
+  premiumGateFeature: PremiumFeature | null
+
   // Actions
   setUser: (user: AuthUser | null) => void
   setAuthHydrated: (value: boolean) => void
@@ -77,6 +82,10 @@ interface AuthState {
   setSession: (token: string, userId: string, email?: string | null) => void
   clearSession: () => void
   setAuthenticating: (value: boolean) => void
+
+  // Phase 1 — premium gate actions
+  openPremiumGate: (feature: PremiumFeature) => void
+  closePremiumGate: () => void
 }
 
 export const useAuthStore = create<AuthState>()((set) => ({
@@ -89,6 +98,9 @@ export const useAuthStore = create<AuthState>()((set) => ({
   sessionToken: null,
   isAuthenticated: false,
   isAuthenticating: false,
+
+  premiumGateOpen: false,
+  premiumGateFeature: null,
 
   setUser: (user) => set({ user }),
   setAuthHydrated: (value) => set({ authHydrated: value }),
@@ -199,4 +211,9 @@ export const useAuthStore = create<AuthState>()((set) => ({
   },
 
   setAuthenticating: (value) => set({ isAuthenticating: value }),
+
+  openPremiumGate: (feature) =>
+    set({ premiumGateOpen: true, premiumGateFeature: feature }),
+  closePremiumGate: () =>
+    set({ premiumGateOpen: false, premiumGateFeature: null }),
 }))
