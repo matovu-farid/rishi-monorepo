@@ -16,11 +16,30 @@ import type { UploadLimitError } from '@/lib/sync/file-sync'
 
 type UploadErrorCode = UploadLimitError['code']
 
+/**
+ * STA-019: an upload-cap snackbar now offers an actionable next step.
+ * The store carries the kind so the snackbar host can route to the
+ * appropriate destination (settings for storage, library for book count).
+ * The label is kept here (not the component) so copy variants stay in
+ * one place and translations have a single binding point.
+ */
+export type UploadErrorActionKind = 'manage-storage' | 'manage-books'
+
+export interface UploadErrorAction {
+  kind: UploadErrorActionKind
+  label: string
+}
+
 export interface UploadErrorNotice {
   /** Discriminator so the UI can render a single snackbar bar at a time. */
   id: number
   message: string
   code: UploadErrorCode
+  /**
+   * Action surfaced as a button on the snackbar. Null/undefined means the
+   * notice is purely informational (no actionable next step).
+   */
+  action: UploadErrorAction | null
 }
 
 interface UploadErrorState {
@@ -54,6 +73,32 @@ export function formatUploadLimitMessage(err: {
   }
 }
 
+/**
+ * Return the canonical action for an upload-limit error. The action label
+ * doubles as the snackbar CTA copy; `kind` tells the host where to route
+ * the user (storage panel in Settings vs. their book list in the Library).
+ *
+ * Returns null when the error has no actionable destination. Today every
+ * known cap maps to either Settings (storage / file-size) or Library
+ * (book count), so this currently never returns null — kept as a Maybe so
+ * we can drop in new cap kinds without churning the signature.
+ */
+export function formatUploadLimitAction(err: {
+  code: UploadErrorCode
+  limit: number
+  current?: number
+}): UploadErrorAction | null {
+  switch (err.code) {
+    case 'BOOK_LIMIT_REACHED':
+      return { kind: 'manage-books', label: 'Manage Library' }
+    case 'STORAGE_LIMIT_REACHED':
+    case 'FILE_TOO_LARGE':
+      return { kind: 'manage-storage', label: 'Manage Storage' }
+    default:
+      return null
+  }
+}
+
 export const useUploadErrorStore = create<UploadErrorState>((set) => ({
   current: null,
   show: (err) =>
@@ -62,6 +107,7 @@ export const useUploadErrorStore = create<UploadErrorState>((set) => ({
         id: nextId++,
         code: err.code,
         message: formatUploadLimitMessage(err),
+        action: formatUploadLimitAction(err),
       },
     }),
   dismiss: () => set({ current: null }),

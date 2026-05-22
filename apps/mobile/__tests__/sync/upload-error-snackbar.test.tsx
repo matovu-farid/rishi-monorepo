@@ -30,6 +30,12 @@ jest.mock('react-native-reanimated', () => {
   }
 })
 
+// STA-019: UploadErrorSnackbar uses `useRouter` to route the action
+// button. Stub expo-router so the snackbar mounts in node tests.
+jest.mock('expo-router', () => ({
+  useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
+}))
+
 import React, { act } from 'react'
 import TestRenderer from 'react-test-renderer'
 import { UploadErrorSnackbar } from '@/components/UploadErrorSnackbar'
