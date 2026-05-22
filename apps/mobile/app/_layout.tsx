@@ -18,6 +18,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme'
 import { useAuthStore } from '@/lib/stores/authStore'
 import { initVectorExtension, ensureChunkTables } from '@/lib/rag/vector-store'
 import { RagExtractorHost } from '@/components/RagExtractorHost'
+import { PremiumFeatureSheet } from '@/components/auth/PremiumFeatureSheet'
 import { handleIncomingFile, isFileUrl } from '@/lib/file-handler'
 
 export const IS_E2E_TEST = process.env.EXPO_PUBLIC_E2E_TEST === 'true'
@@ -204,6 +205,7 @@ function RootLayout() {
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <Slot />
           <RagExtractorHost />
+          <PremiumFeatureSheet />
           <StatusBar style="auto" />
         </ThemeProvider>
       </GestureHandlerRootView>
@@ -221,6 +223,7 @@ function RootLayout() {
           lib/rag/extractors/* + lib/rag/chunker.ts for the contract.
          */}
         <RagExtractorHost />
+        <PremiumFeatureSheet />
         <StatusBar style="auto" />
       </ThemeProvider>
     </GestureHandlerRootView>

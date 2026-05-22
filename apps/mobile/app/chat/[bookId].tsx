@@ -28,6 +28,7 @@ import { ChatInput } from '@/components/ChatInput'
 import { ModelDownloadCard } from '@/components/ModelDownloadCard'
 import { EmbeddingProgress } from '@/components/EmbeddingProgress'
 import { IconSymbol } from '@/components/ui/icon-symbol'
+import { useRequireAuth } from '@/components/auth/useRequireAuth'
 import type { Message, SourceChunk } from '@/types/conversation'
 import type { Book } from '@/types/book'
 
@@ -64,15 +65,22 @@ export default function BookChatScreen() {
 
   const [voiceText, setVoiceText] = useState<string | null>(null)
 
-  const handleMicPress = useCallback(async () => {
+  // Premium gates — mic + send both require sign-in.
+  const requireVoiceInput = useRequireAuth('voice-input')
+  const requireAIChat = useRequireAuth('ai-chat')
+
+  const handleMicPress = useCallback(() => {
     if (voice.isRecording) {
-      const transcript = await voice.stopAndTranscribe()
-      if (transcript) setVoiceText(transcript)
+      void voice.stopAndTranscribe().then((transcript) => {
+        if (transcript) setVoiceText(transcript)
+      })
     } else {
-      setVoiceText(null)
-      await voice.startRecording()
+      requireVoiceInput(() => {
+        setVoiceText(null)
+        void voice.startRecording()
+      })
     }
-  }, [voice])
+  }, [voice, requireVoiceInput])
 
   // Load book (async -- triggers R2 download for synced books)
   useEffect(() => {
@@ -174,8 +182,23 @@ export default function BookChatScreen() {
   // Inverted data for FlatList
   const invertedMessages = [...messageList].reverse()
 
+  // Per-role 0-based indices keyed by message id. The FlatList renders
+  // messages in reverse, but the indices we expose via testID are
+  // computed against the chronological order (oldest user message is
+  // `chat-message-user-0`, oldest assistant message is
+  // `chat-message-assistant-0`, etc.). This is what the E2E tests
+  // assert against.
+  const messageIndexById = new Map<string, number>()
+  {
+    let userIdx = 0
+    let assistantIdx = 0
+    for (const m of messageList) {
+      messageIndexById.set(m.id, m.role === 'user' ? userIdx++ : assistantIdx++)
+    }
+  }
+
   return (
-    <SafeAreaView testID="chat-screen" className="flex-1 bg-white dark:bg-[#151718]" edges={['top']}>
+    <SafeAreaView testID="screen-chat-detail" className="flex-1 bg-white dark:bg-[#151718]" edges={['top']}>
       <KeyboardAvoidingView
         className="flex-1"
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -212,6 +235,7 @@ export default function BookChatScreen() {
                 <ChatMessage
                   message={item}
                   onSourcePress={handleSourcePress}
+                  testID={`chat-message-${item.role}-${messageIndexById.get(item.id) ?? 0}`}
                 />
               )}
               contentContainerStyle={{ paddingVertical: 8 }}
@@ -278,7 +302,7 @@ export default function BookChatScreen() {
             />
 
             <ChatInput
-              onSend={handleSend}
+              onSend={(text) => requireAIChat(() => void handleSend(text))}
               isLoading={isQuerying}
               disabled={chatDisabled}
               onMicPress={handleMicPress}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, TextInput, FlatList, Pressable, AppState, AppStateStatus, ActivityIndicator, AccessibilityInfo } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Reader, ReaderProvider, useReader } from '@epubjs-react-native/core'
-import { useFileSystem } from '@epubjs-react-native/expo-file-system'
+import { useFileSystem } from '@/lib/epub/file-system-adapter'
 import BottomSheet from '@gorhom/bottom-sheet'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 
@@ -34,6 +34,7 @@ import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 import { resolveEpubReadFromSelection } from '@/lib/epub/read-aloud-from-selection'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
+import { useRequireAuth } from '@/components/auth/useRequireAuth'
 import { GuardrailWarning } from '@/components/GuardrailWarning'
 import { TocSheet } from '@/components/TocSheet'
 import { AppearanceSheet } from '@/components/AppearanceSheet'
@@ -159,6 +160,12 @@ function ReaderContent({ book }: { book: Book }) {
   const activeParagraph = usePlayerStore((s) => s.activeParagraph)
   const ttsActive = playingState !== 'idle'
 
+  // Premium feature gates — show sign-in sheet when signed-out users
+  // tap TTS / AI chat / realtime voice.
+  const requireTTS = useRequireAuth('tts')
+  const requireAIChat = useRequireAuth('ai-chat')
+  const requireVoiceChat = useRequireAuth('voice-chat')
+
   // G15 — visual-cue driver. Heuristic classifies the active paragraph
   // text for LaTeX / "Equation N" / "Figure N" markers and writes a cue
   // into the store; <TTSVisualCue /> renders if prefs allow.
@@ -181,6 +188,14 @@ function ReaderContent({ book }: { book: Book }) {
   }, [activeParagraph])
 
   const theme = READER_THEMES[settings.themeName]
+
+  // `defaultTheme` is read as a useEffect dep inside @epubjs-react-native/core's
+  // <Reader>. Passing a fresh object literal each render re-fires that effect,
+  // which calls setIsLoading/setTemplate → re-render → infinite loop.
+  const readerDefaultTheme = useMemo(
+    () => ({ body: { background: theme.background, color: theme.color } }),
+    [theme.background, theme.color],
+  )
 
   // Load highlights on mount
   useEffect(() => {
@@ -547,26 +562,28 @@ function ReaderContent({ book }: { book: Book }) {
 
   // --- TTS handlers ---
 
-  // Toolbar TTS button. If playback is active → STOP; otherwise seed
-  // paragraphs from the book's chunks and dispatch PLAY.
-  const handleToggleTTS = useCallback(async () => {
+  // Toolbar TTS button. If playback is active → STOP; otherwise gate
+  // on auth, then seed paragraphs from the book's chunks and dispatch PLAY.
+  const handleToggleTTS = useCallback(() => {
     const sendFn = usePlayerStore.getState().send
     if (!sendFn) return
     if (ttsActive) {
       sendFn({ type: 'STOP' })
       return
     }
-    try {
-      const seeded = await seedPlayerParagraphsFromChunks(book.id, book.filePath, book.format)
-      if (!seeded.seeded) {
-        AccessibilityInfo.announceForAccessibility('No text available for reading')
-        return
+    requireTTS(async () => {
+      try {
+        const seeded = await seedPlayerParagraphsFromChunks(book.id, book.filePath, book.format)
+        if (!seeded.seeded) {
+          AccessibilityInfo.announceForAccessibility('No text available for reading')
+          return
+        }
+        sendFn({ type: 'PLAY' })
+      } catch (err) {
+        console.warn('[reader-tts] seed failed:', err)
       }
-      sendFn({ type: 'PLAY' })
-    } catch (err) {
-      console.warn('[reader-tts] seed failed:', err)
-    }
-  }, [book.id, book.filePath, book.format, ttsActive])
+    })
+  }, [book.id, book.filePath, book.format, ttsActive, requireTTS])
 
   // --- Bookmark handlers ---
 
@@ -624,12 +641,7 @@ function ReaderContent({ book }: { book: Book }) {
         enableSwipe={true}
         enableSelection={true}
         initialLocation={book.currentCfi || undefined}
-        defaultTheme={{
-          body: {
-            background: theme.background,
-            color: theme.color,
-          },
-        }}
+        defaultTheme={readerDefaultTheme}
         menuItems={menuItems}
         initialAnnotations={initialAnnotations}
         onLocationChange={handleLocationChange}
@@ -658,7 +670,7 @@ function ReaderContent({ book }: { book: Book }) {
           appearanceSheetRef.current?.snapToIndex(0)
           setToolbarVisible(false)
         }}
-        onChatPress={() => router.push(`/chat/${book.id}`)}
+        onChatPress={() => requireAIChat(() => router.push(`/chat/${book.id}`))}
         onTTSPress={handleToggleTTS}
         ttsActive={ttsActive}
         onBookmarksPress={() => {
@@ -667,7 +679,10 @@ function ReaderContent({ book }: { book: Book }) {
         }}
         onBookmarkTogglePress={handleToggleBookmark}
         isBookmarked={isCurrentBookmarked}
-        onRealtimePress={toggleRealtime}
+        onRealtimePress={() => {
+          if (realtimeActive) toggleRealtime()
+          else requireVoiceChat(toggleRealtime)
+        }}
         realtimeStatus={realtimeStatus}
       />
 

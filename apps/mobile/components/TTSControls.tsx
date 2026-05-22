@@ -3,6 +3,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Animated, { SlideInDown, SlideOutDown } from 'react-native-reanimated'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { usePlayerStore, type PlayerStoreState } from '@/lib/stores/playerStore'
+import { useRequireAuth } from '@/components/auth/useRequireAuth'
 
 /**
  * Floating bottom bar for TTS playback controls.
@@ -21,6 +22,8 @@ export function TTSControls() {
   const send = usePlayerStore((s) => s.send)
   const activeParagraph = usePlayerStore((s) => s.activeParagraph)
   const currentParagraphs = usePlayerStore((s) => s.currentParagraphs)
+
+  const requireTTS = useRequireAuth('tts')
 
   const isLoading = playingState === 'loading' || playingState === 'waitingForParagraphs' || playingState === 'pageNavigating'
   const isPlaying = playingState === 'playing'
@@ -42,7 +45,9 @@ export function TTSControls() {
     } else if (isPaused) {
       send({ type: 'RESUME' })
     } else {
-      send({ type: 'PLAY' })
+      // Initial play is the only branch that crosses the premium gate;
+      // pause/resume on an in-flight session are free.
+      requireTTS(() => send({ type: 'PLAY' }))
     }
   }
 
