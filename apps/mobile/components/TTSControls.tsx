@@ -1,9 +1,15 @@
+import { useContext } from 'react'
 import { View, TouchableOpacity, ActivityIndicator } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Animated, { SlideInDown, SlideOutDown } from 'react-native-reanimated'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { usePlayerStore, type PlayerStoreState } from '@/lib/stores/playerStore'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
+import { ReaderShellContext } from '@/components/reader/ReaderShell'
+
+// Mirror ReaderShell's bottom bar inner-row min-height so the floating
+// TTSControls clears it when the bar is visible.
+const BOTTOM_BAR_HEIGHT = 44
 
 /**
  * Floating bottom bar for TTS playback controls.
@@ -22,6 +28,8 @@ export function TTSControls() {
   const send = usePlayerStore((s) => s.send)
   const activeParagraph = usePlayerStore((s) => s.activeParagraph)
   const currentParagraphs = usePlayerStore((s) => s.currentParagraphs)
+
+  const { bottomBarVisible } = useContext(ReaderShellContext)
 
   const requireTTS = useRequireAuth('tts')
 
@@ -61,7 +69,8 @@ export function TTSControls() {
       exiting={SlideOutDown.duration(200)}
       style={{
         position: 'absolute',
-        bottom: insets.bottom + 16,
+        bottom:
+          insets.bottom + 16 + (bottomBarVisible ? BOTTOM_BAR_HEIGHT : 0),
         left: 16,
         right: 16,
         height: 56,
