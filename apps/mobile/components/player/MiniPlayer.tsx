@@ -26,12 +26,12 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated'
+import { BlurView } from 'expo-blur'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import * as Haptics from 'expo-haptics'
 
-import { GlassDisk } from '@/components/ui/GlassDisk'
 import { ReaderShellContext } from '@/components/reader/ReaderShell'
-import { useTheme } from '@/lib/theme'
+import { shadow, useTheme } from '@/lib/theme'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 
 export interface MiniPlayerProps {
@@ -151,7 +151,14 @@ export function MiniPlayer({
   // Morph: width + translateX so the pill ends centered on screen while the
   // orb remains anchored at right:16. Animating right/left would thrash
   // layout; transform keeps it on the UI thread.
-  const containerStyle = useAnimatedStyle(() => {
+  //
+  // Split into two animated styles so the morph can drive a two-View shadow
+  // pattern (outer wrapper carries shadow + translateX; inner clipped View
+  // carries width/height/borderRadius). Applying width/height/borderRadius
+  // only on the inner View keeps the drop shadow following the morph
+  // because the outer wrapper inherits the same width/height layout but
+  // without `overflow:'hidden'` clipping the shadow.
+  const wrapperStyle = useAnimatedStyle(() => {
     const w = interpolate(
       expandedValue.value,
       [0, 1],
@@ -182,6 +189,16 @@ export function MiniPlayer({
       borderRadius: r,
       transform: [{ translateX: tx }],
     }
+  })
+
+  const radiusStyle = useAnimatedStyle(() => {
+    const r = interpolate(
+      expandedValue.value,
+      [0, 1],
+      [ORB_RADIUS, PILL_RADIUS],
+      Extrapolation.CLAMP,
+    )
+    return { borderRadius: r }
   })
 
   const orbFadeStyle = useAnimatedStyle(() => ({
@@ -293,26 +310,58 @@ export function MiniPlayer({
   const iconColor = scheme === 'dark' ? '#FFFFFF' : '#1C1C1E'
   const barColor =
     scheme === 'dark' ? 'rgba(255,255,255,0.50)' : 'rgba(0,0,0,0.50)'
+  const blurTint = scheme === 'dark' ? 'systemMaterialDark' : 'systemMaterial'
+  const borderColor =
+    scheme === 'dark' ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.45)'
 
+  // Two-View shadow pattern (mirrors GlassDisk): the outer wrapper holds
+  // the shadow + translate so the drop shadow doesn't get clipped by the
+  // inner overflow:'hidden'. The inner View is the morphing glass surface
+  // (BlurView + hairline border + cross-faded contents).
   return (
     <Animated.View
       testID={testID ?? 'mini-player'}
       style={[
+        shadow.medium,
         {
           position: 'absolute',
           bottom: bottomOffset,
           right: 16,
           zIndex: 20,
-          overflow: 'hidden',
         },
-        containerStyle,
+        wrapperStyle,
       ]}
     >
-      <GlassDisk size={ORB_SIZE} style={{ position: 'absolute', top: 0, left: 0 }}>
-        <View style={StyleSheet.absoluteFill} />
-      </GlassDisk>
+      <Animated.View
+        style={[
+          { width: '100%', height: '100%', overflow: 'hidden' },
+          radiusStyle,
+        ]}
+      >
+        <BlurView
+          intensity={80}
+          tint={blurTint}
+          style={StyleSheet.absoluteFill}
+          accessible={false}
+        />
+        <Animated.View
+          style={[
+            {
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor,
+            },
+            radiusStyle,
+          ]}
+          pointerEvents="none"
+          accessible={false}
+        />
 
-      {/* Orb face (collapsed) — Pressable that expands on tap. */}
+        {/* Orb face (collapsed) — Pressable that expands on tap. */}
       <Animated.View
         style={[
           {
@@ -423,6 +472,7 @@ export function MiniPlayer({
           />
         </Animated.View>
       ) : null}
+      </Animated.View>
     </Animated.View>
   )
 }
