@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Alert, Dimensions, Text, TouchableOpacity, View } from 'react-native'
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated'
+import { useTheme } from '@/lib/theme'
 import { ReaderTheme } from '@/types/book'
 import { Highlight, HighlightColor, HIGHLIGHT_COLORS } from '@/types/highlight'
 
@@ -30,6 +31,10 @@ export function AnnotationPopover({
   onDismiss,
 }: AnnotationPopoverProps) {
   const [showColors, setShowColors] = useState(false)
+  // VIS-024 (#84): consume the semantic accent.error token from the app
+  // theme rather than the hardcoded Tailwind red. `useTheme` already
+  // memoises by colour scheme, so the value tracks light/dark automatically.
+  const { colors } = useTheme()
 
   if (!visible || !highlight) return null
 
@@ -142,7 +147,8 @@ export function AnnotationPopover({
           accessibilityRole="button"
           accessibilityLabel="Delete highlight"
         >
-          <Text style={{ color: '#DC2626' }} className="text-sm font-semibold">
+          {/* VIS-024 (#84): semantic error token, light/dark aware. */}
+          <Text style={{ color: colors.accent.error }} className="text-sm font-semibold">
             Delete
           </Text>
         </TouchableOpacity>
