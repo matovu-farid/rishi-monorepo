@@ -67,9 +67,9 @@ describe('colors (light/dark parity)', () => {
       palette: typeof colorsLight | typeof colorsDark,
     ): string[] => {
       const out: string[] = []
-      for (const group of Object.values(palette)) {
+      for (const group of Object.values(palette as Record<string, Record<string, string>>)) {
         for (const value of Object.values(group)) {
-          out.push(value as string)
+          out.push(value)
         }
       }
       return out
@@ -171,11 +171,11 @@ describe('motion vocabulary', () => {
     expect(typeof motion.spring.gentle.mass).toBe('number')
   })
 
-  it('timing.fast lasts 150–200ms (snappy chrome reveal)', () => {
-    // Apple Books-style hairline pops are ≤ 200ms; allow the architect to
-    // pick either 150 (architect's suggestion) or 200 (UI-SPEC §5).
-    // The task prompt pins 150 specifically.
-    expect(motion.duration.fast).toBe(150)
+  it('duration.fast is 200ms (UI-SPEC §5 snappy chrome reveal)', () => {
+    // UI-SPEC §5 fixes `timing.fast.duration = 200ms`. Exposed here as
+    // `motion.duration.fast` so non-Reanimated consumers can read the
+    // raw number without spelunking through a spring config.
+    expect(motion.duration.fast).toBe(200)
   })
 })
 
