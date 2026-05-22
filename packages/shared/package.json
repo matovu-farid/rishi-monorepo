@@ -38,6 +38,7 @@
     "./auth/pkce": "./src/auth/pkce.ts",
     "./auth/startAuthSession": "./src/auth/startAuthSession.ts",
     "./auth": "./src/auth/index.ts",
+    "./auth-gating": "./src/auth-gating/index.ts",
     "./tts": "./src/tts/index.ts",
     "./tts/cache": "./src/tts/cache.ts",
     "./tts/program": "./src/tts/program.ts",
