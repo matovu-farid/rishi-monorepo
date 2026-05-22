@@ -664,6 +664,7 @@ export default function PdfReaderScreen() {
           else requireVoiceChat(toggleRealtime)
         }}
         realtimeStatus={realtimeStatus}
+        onChatPress={() => requireAIChat(() => router.push(`/chat/${book.id}`))}
         onBookmarkTogglePress={handleToggleBookmark}
         isBookmarked={isCurrentBookmarked}
         sheets={{
