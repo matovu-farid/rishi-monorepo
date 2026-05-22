@@ -10,6 +10,11 @@ export type EmptyStateProps = {
   title: string
   description?: string
   action?: { label: string; onPress: () => void; testID?: string; disabled?: boolean }
+  /**
+   * VIS-013: optional override for the icon color. Defaults to
+   * `colors.label.secondary` (HIG empty-state glyph tint).
+   */
+  tint?: string
   testID?: string
   titleTestID?: string
 }
@@ -19,16 +24,20 @@ export function EmptyState({
   title,
   description,
   action,
+  tint,
   testID,
   titleTestID,
 }: EmptyStateProps): React.JSX.Element {
   const { colors, spacing, typography, radius } = useTheme()
+  // VIS-013: Apple empty-state glyphs are 50pt at `label.secondary` (~60%),
+  // not 56pt at `label.tertiary` (~30%). Callers can override via `tint`.
+  const iconColor = tint ?? colors.label.secondary
   const iconNode =
     typeof icon === 'string' ? (
       <Ionicons
         name={icon as keyof typeof Ionicons.glyphMap}
-        size={56}
-        color={colors.label.tertiary}
+        size={50}
+        color={iconColor}
       />
     ) : (
       icon
