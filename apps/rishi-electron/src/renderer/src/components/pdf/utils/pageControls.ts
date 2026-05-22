@@ -8,10 +8,16 @@ import { usePdfStore } from '@/stores/pdfStore'
 //     would always observe `false` and helpfully snap the container back
 //     to the OLD page's highlighted <mark>, undoing the page advance and
 //     producing the "stays on page N" behaviour from issue #30.
-//   - The flag is cleared by `publishParagraphsForPage` in `usePdfReader`
-//     once the new page's paragraphs are actually published — i.e. once
-//     the player is about to highlight a paragraph on the new page and
-//     `useScrolling`'s next pass would scroll to the *correct* mark.
+//   - The flag is cleared by `useScrolling` itself, the moment its 100 ms
+//     debounced effect fires for the first highlight on the new page —
+//     where the suppression is actually needed. Clearing earlier (e.g.
+//     when paragraphs publish, as the first iteration of this fix did)
+//     leaves a race: the highlight assignment happens AFTER paragraphs
+//     publish, so by the time `useScrolling` actually runs its centering
+//     math, the suppression is already gone and the new page's first
+//     paragraph (sitting flush with the viewport top after `align:'start'`)
+//     gets "centered" — i.e. the container scrolls back to the previous
+//     page. That's the refined symptom reported on PR #31.
 export function nextPage() {
   const state = usePdfStore.getState()
   const virtualizer = state.virtualizer

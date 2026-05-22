@@ -77,9 +77,32 @@ export function useScrolling(scrollContainerRef: React.RefObject<HTMLDivElement 
 
       const el = [...container.querySelectorAll<HTMLElement>('mark')].find((mark) => mark.innerText)
       if (!el) return
-      console.log({ el })
+      // Page-advance suppression (issue #30 refined symptom): when
+      // `pageControls.nextPage`/`previousPage` set this flag, the
+      // virtualizer has just scrolled the new page flush with the top
+      // of the viewport via `align: 'start'` (or `'end'`). The first
+      // highlight that lands on the new page (paragraph 0 / last) sits
+      // right at that viewport edge — the centering math below would
+      // scroll *back* toward the previous page to put it in the middle,
+      // producing the "advances, then snaps back" behaviour the user
+      // reported on PR #31. Spend the suppression here: clear the flag
+      // and skip the centering scroll for this single tick. Subsequent
+      // in-page paragraph advances will see flag=false and auto-center
+      // as usual.
+      //
+      // Why not clear the flag in `publishParagraphsForPage` (where it
+      // used to live)? Because paragraphs publish BEFORE the player
+      // resolves the new page's audio and assigns
+      // `highlightedParagraphIndex` — a window where this effect was
+      // idle (no highlighted paragraph matched the new view). By the
+      // time the effect actually fires, the flag has already been
+      // cleared upstream and the suppression is wasted. Clearing here
+      // is the rendezvous: we know the new page is rendered, the
+      // highlight is resolved, and the next effect run will be a
+      // genuine in-page advance.
       const isLookingForNextParagraph = usePdfStore.getState().isLookingForNextParagraph
       if (isLookingForNextParagraph) {
+        usePdfStore.getState().setIsLookingForNextParagraph(false)
         return
       }
 

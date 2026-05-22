@@ -323,15 +323,21 @@ export function publishParagraphsForPage(page: number, pageDataMap: Record<numbe
     usePlayerStore.getState().setPrevPageParagraphs(newPrev)
   }
 
-  // Release the page-advance suppression flag once the new page's paragraphs
-  // are in place (issue #30). `pageControls.nextPage`/`previousPage` set this
-  // BEFORE the virtualizer scroll so `useScrolling`'s 100ms debounced auto-
-  // scroller doesn't snap the container back to the OLD page's still-
-  // highlighted <mark>. Clearing here is the natural rendezvous: by the
-  // time `currentDiffers` is true, the player has the new page's paragraphs
-  // and will publish a paragraph that lives ON THIS page very shortly —
-  // so the next useScrolling tick scrolls to a NEW-page mark, not an old one.
-  if (currentDiffers && pdfState.isLookingForNextParagraph) {
-    pdfState.setIsLookingForNextParagraph(false)
-  }
+  // NOTE on the page-advance suppression flag (issue #30 refined symptom):
+  // We used to clear `isLookingForNextParagraph` here once `currentDiffers`
+  // flipped — i.e. as soon as the new page's paragraphs landed. That
+  // happens BEFORE the player resolves audio for the new page and assigns
+  // a fresh `highlightedParagraphIndex`. The window between this point
+  // and the highlight-assignment was a no-op for `useScrolling` (no
+  // highlighted paragraph matched the new view), so the suppression was
+  // already gone by the time the effect actually ran for the first
+  // new-page highlight. That highlight sat flush with the top of the
+  // viewport (virtualizer scrolled with `align:'start'`), and useScrolling's
+  // centering math scrolled *back* toward the previous page to center it —
+  // exactly the "advances, then snaps back" symptom on PR #31.
+  //
+  // The flag is now spent inside `useScrolling`'s timeout body, at the
+  // point where it would otherwise issue the centering scroll. That's
+  // the rendezvous where we KNOW the new page is rendered, the highlight
+  // is resolved, and the suppression has done its job.
 }
