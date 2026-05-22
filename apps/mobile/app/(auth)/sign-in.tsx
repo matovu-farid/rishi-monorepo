@@ -112,6 +112,25 @@ export default function SignInScreen() {
             Sign in with Email
           </Text>
         </TouchableOpacity>
+
+        {/*
+          P1-D — tertiary escape hatch. Without this, signed-out users who
+          arrive at the sign-in screen (deep link, gate handoff, etc.) have
+          no way back to the local library. Routes to the tabs root.
+        */}
+        <TouchableOpacity
+          testID="skip-for-now-button"
+          accessibilityRole="button"
+          accessibilityLabel="Skip for now"
+          accessibilityHint="Browse your local books without signing in."
+          className="mt-6 py-3"
+          onPress={() => router.replace('/(tabs)' as Href)}
+          disabled={isAuthenticating}
+        >
+          <Text className="text-center text-base text-gray-500 dark:text-gray-400">
+            Skip for now
+          </Text>
+        </TouchableOpacity>
       </KeyboardAvoidingView>
     </SafeAreaView>
   )
