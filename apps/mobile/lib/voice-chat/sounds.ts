@@ -6,20 +6,16 @@
  * Electron's `readyChime` and `thinkingSound` both synthesise tones via
  * the Web Audio API. React Native has no `AudioContext` constructor in
  * Hermes, so we substitute a minimal expo-audio-based fallback for the
- * chime and a no-op for the looping thinking tick (the on-screen status
- * label conveys the same information).
+ * chime and (per P1-AJ) a periodic haptic for the thinking-tick loop.
  *
  * Behavior parity:
  *   - playReadyChime(): plays a short positive cue once. Best-effort —
  *     if expo-audio fails the call is swallowed.
- *   - startThinkingSound() / stopThinkingSound(): no-op on mobile.
- *     Documented in BATCH-4-NOTES.md.
- *
- * If a future batch wants the looping tick, options:
- *   1. Ship a small <600ms `tick.mp3` asset and loop via expo-audio.
- *   2. Upgrade `react-native-worklets` to ≥0.6 and use
- *      `react-native-audio-api`'s OscillatorNode, mirroring electron.
- *   3. Use the native iOS/Android haptic engine for a soft pulse.
+ *   - startThinkingSound() / stopThinkingSound(): drives a recurring
+ *     `Haptics.selectionAsync` pulse at THINKING_TICK_MS cadence so the
+ *     user gets a subtle tactile cue while the model is preparing a
+ *     reply. Idempotent — start can be called repeatedly without
+ *     stacking timers.
  *
  * The chime uses a 700ms tone synthesised at import time so we don't
  * ship an asset for it. We render a small WAV in memory and write it to
@@ -28,6 +24,34 @@
 import { createAudioPlayer } from 'expo-audio'
 import { File, Paths } from 'expo-file-system'
 import type { EffectsPort } from '@rishi/shared/voice-chat'
+
+/**
+ * Cadence between thinking-tick haptics. Tuned conservatively (1.5s) so
+ * the pulse reads as ambient feedback rather than an attention-grabbing
+ * notification. Matches the rough "thinking spinner heartbeat" rate
+ * used by electron's oscillator tick.
+ */
+const THINKING_TICK_MS = 1500
+
+/**
+ * Lazy expo-haptics accessor. Resolved via `require` inside the tick
+ * callback rather than a top-level ESM `import` so untransformed
+ * voice-chat tests that don't exercise the thinking loop (they never
+ * resolve this require) keep working without each having to mock
+ * `expo-haptics` themselves. Tests that DO exercise the loop mock
+ * `expo-haptics` directly via `jest.mock`.
+ */
+function tickHaptic(): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Haptics = require('expo-haptics') as {
+      selectionAsync: () => Promise<unknown>
+    }
+    void Haptics.selectionAsync().catch(() => undefined)
+  } catch {
+    /* best-effort — missing module or platform failure is non-fatal */
+  }
+}
 
 let chimeFileUri: string | null = null
 let chimeWriteInFlight: Promise<string> | null = null
@@ -125,6 +149,11 @@ async function getChimeUri(): Promise<string> {
  * Build the mobile EffectsPort. Best-effort — never throws upward.
  */
 export function createMobileEffectsPort(): EffectsPort {
+  // Scoped to this port instance: a single setInterval handle that ticks
+  // the thinking-state haptic. Held in closure so start/stop can clear
+  // it without leaking timers across calls.
+  let thinkingHandle: ReturnType<typeof setInterval> | null = null
+
   return {
     playReadyChime() {
       // Fire-and-forget.
@@ -149,11 +178,18 @@ export function createMobileEffectsPort(): EffectsPort {
       })()
     },
     startThinkingSound() {
-      // No-op: see file-level docs. The on-screen 'thinking' chat status
-      // label conveys the same information without needing an audio loop.
+      // P1-AJ: subtle haptic pulse while the model is composing a reply.
+      // Idempotent — if a loop is already running, leave it alone so a
+      // second call doesn't stack timers (which would double the
+      // perceived cadence).
+      if (thinkingHandle !== null) return
+      thinkingHandle = setInterval(tickHaptic, THINKING_TICK_MS)
     },
     stopThinkingSound() {
-      // No-op for symmetry.
+      if (thinkingHandle !== null) {
+        clearInterval(thinkingHandle)
+        thinkingHandle = null
+      }
     }
   }
 }
