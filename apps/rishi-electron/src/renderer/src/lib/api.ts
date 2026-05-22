@@ -58,6 +58,7 @@ export interface Book {
   syncVersion: number
   isDirty: number
   isDeleted: number
+  lastParagraph?: string | null
 }
 
 export interface BookInsertable {
@@ -191,6 +192,12 @@ export async function updateBookLocation(params: {
   newLocation: string
 }): Promise<void> {
   return api().updateBookLocation(params.bookId, params.newLocation)
+}
+export async function updateBookLastParagraph(params: {
+  bookId: number
+  lastParagraph: string | null
+}): Promise<void> {
+  return api().updateBookLastParagraph(params.bookId, params.lastParagraph)
 }
 export async function hasSavedEpubData(params: { bookId: number }): Promise<boolean> {
   return api().hasSavedEpubData(params.bookId)

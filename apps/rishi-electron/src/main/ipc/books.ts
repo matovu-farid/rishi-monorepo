@@ -6,6 +6,7 @@ import {
   deleteChunksByBookId,
   updateBookCover,
   updateBookLocation,
+  updateBookLastParagraph,
   hasSavedEpubData,
   getBookOutline,
   findBookByHash,
@@ -69,6 +70,16 @@ export function registerBookHandlers(): void {
       return void updateBookLocation(bookId, location)
     } catch (error) {
       throw new Error(`Failed to update location for book ${bookId}: ${errorMessage(error)}`)
+    }
+  })
+
+  handle('books:updateLastParagraph', (_event, bookId, lastParagraph) => {
+    try {
+      return void updateBookLastParagraph(bookId, lastParagraph)
+    } catch (error) {
+      throw new Error(
+        `Failed to update last paragraph for book ${bookId}: ${errorMessage(error)}`
+      )
     }
   })
 

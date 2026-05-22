@@ -43,6 +43,7 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { useVirualization } from '../hooks/useVirualization'
 import { PAGE_GAP } from '../utils/constants'
 import { parsePdfLocation } from '@/lib/pdfLocation'
+import { pdfParagraphToPageNumber } from '@/components/pdf/utils/pdfParagraphToPageNumber'
 import { Effect, Fiber } from 'effect'
 import { indexBookProgram } from '@/services/indexing/index-program'
 import { loadPdfDocument, extractPageParagraphs } from '@/services/indexing/text-extraction'
@@ -171,14 +172,24 @@ export function PdfView({
     )
 
     const unsubActive = usePlayerStore.subscribe(
-      (s) => s.activeParagraph,
-      (paragraph) => {
-        if (paragraph) {
+      (s) => ({ active: s.activeParagraph, resume: s.lastPlayedParagraphIndex }),
+      ({ active, resume }) => {
+        if (active) {
           usePdfStore.getState().setIsHighlighting(true)
-          usePdfStore.getState().setHighlightedParagraphIndex(paragraph.index)
+          usePdfStore.getState().setHighlightedParagraphIndex(active.index)
+        } else if (resume) {
+          usePdfStore.getState().setHighlightedParagraphIndex(resume)
         }
-      }
+      },
+      { equalityFn: (a, b) => a.active === b.active && a.resume === b.resume }
     )
+
+    {
+      const initial = usePlayerStore.getState()
+      if (!initial.activeParagraph && initial.lastPlayedParagraphIndex) {
+        usePdfStore.getState().setHighlightedParagraphIndex(initial.lastPlayedParagraphIndex)
+      }
+    }
 
     const unsubState = usePlayerStore.subscribe(
       (s) => s.playingState,
@@ -649,7 +660,8 @@ export function PdfView({
         // their current location immediately. book.location is a string
         // holding the saved page number (or "page:offset"); falls back to 1
         // on fresh opens.
-        const startPage = parsePdfLocation(book.location).page || 1
+        const resumePage = book.lastParagraph ? pdfParagraphToPageNumber(book.lastParagraph) : null
+        const startPage = resumePage ?? (parsePdfLocation(book.location).page || 1)
 
         fiber = Effect.runFork(
           indexBookProgram({
@@ -678,7 +690,7 @@ export function PdfView({
       if (fiber) Effect.runFork(Fiber.interrupt(fiber))
       if (docHolder.current) void docHolder.current.destroy()
     }
-  }, [pdfBytes, book.id, book.location])
+  }, [pdfBytes, book.id, book.location, book.lastParagraph])
 
   const handleCreatePdfHighlight = async (color: HighlightColor): Promise<void> => {
     if (!selectionPopover || !bookSyncId) return

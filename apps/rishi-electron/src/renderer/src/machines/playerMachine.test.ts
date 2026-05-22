@@ -1252,3 +1252,76 @@ describe('playerMachine - CHAT_ENDED', () => {
     expect(actor.getSnapshot().context.wantsAutoResumeAfterChat).toBe(false)
   })
 })
+
+describe('resumeParagraphIndex (INITIALIZE option)', () => {
+  let actor: ReturnType<typeof createActor<typeof playerMachine>>
+
+  beforeEach(() => {
+    actor = createActor(playerMachine)
+    actor.start()
+  })
+
+  it('starts with a null resumeParagraphIndex by default', () => {
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    expect(actor.getSnapshot().context.resumeParagraphIndex).toBeNull()
+  })
+
+  it('stores resumeParagraphIndex from INITIALIZE payload', () => {
+    actor.send({ type: 'INITIALIZE', bookId: 'book1', resumeParagraphIndex: 'p-2' })
+    expect(actor.getSnapshot().context.resumeParagraphIndex).toBe('p-2')
+  })
+
+  it('treats an absent resumeParagraphIndex as null (not undefined)', () => {
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    expect(actor.getSnapshot().context.resumeParagraphIndex).toBeNull()
+  })
+})
+
+describe('resume paragraph application', () => {
+  let actor: ReturnType<typeof createActor<typeof playerMachine>>
+
+  beforeEach(() => {
+    actor = createActor(playerMachine)
+    actor.start()
+  })
+
+  it('sets paragraphIndex to the matched paragraph when paragraphs arrive', () => {
+    actor.send({ type: 'INITIALIZE', bookId: 'book1', resumeParagraphIndex: 'p-2' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(5) })
+    const ctx = actor.getSnapshot().context
+    expect(ctx.paragraphIndex).toBe(2)
+    expect(ctx.resumeParagraphIndex).toBeNull()
+    expect(actor.getSnapshot().value).toBe('stopped')
+  })
+
+  it('leaves paragraphIndex at 0 when the resume id is not in the new paragraphs', () => {
+    actor.send({ type: 'INITIALIZE', bookId: 'book1', resumeParagraphIndex: 'p-99' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(5) })
+    const ctx = actor.getSnapshot().context
+    expect(ctx.paragraphIndex).toBe(0)
+    expect(ctx.resumeParagraphIndex).toBe('p-99')
+  })
+
+  it('PLAY after resume applied starts loading from the resumed paragraph', () => {
+    actor.send({ type: 'INITIALIZE', bookId: 'book1', resumeParagraphIndex: 'p-3' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(5) })
+    actor.send({ type: 'PLAY' })
+    const snap = actor.getSnapshot()
+    expect(snap.value).toBe('loading')
+    expect(snap.context.paragraphIndex).toBe(3)
+  })
+
+  it('second PARAGRAPHS_UPDATED after resume applied falls into default branch', () => {
+    actor.send({ type: 'INITIALIZE', bookId: 'book1', resumeParagraphIndex: 'p-2' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(5) })
+    expect(actor.getSnapshot().context.paragraphIndex).toBe(2)
+    // Page navigates; new page's first paragraph also happens to be id p-2.
+    // Since resume already cleared, paragraphIndex must NOT re-set itself.
+    actor.send({
+      type: 'PARAGRAPHS_UPDATED',
+      paragraphs: [{ index: 'p-2', text: 'new page p-2' }, ...makeParagraphs(3)]
+    })
+    expect(actor.getSnapshot().context.paragraphIndex).toBe(2) // unchanged
+    expect(actor.getSnapshot().context.resumeParagraphIndex).toBeNull()
+  })
+})

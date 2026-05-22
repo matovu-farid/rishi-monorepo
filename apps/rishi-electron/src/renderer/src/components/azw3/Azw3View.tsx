@@ -39,6 +39,7 @@ import {
 import { injectReaderStyles } from './reader-styles'
 import { findParagraphElement, parseParagraphIndex } from './highlight'
 import { computePageStep, formatLocation, measurePageCount, parseLocation } from './pagination'
+import { azw3ParagraphToLocation } from './paragraphToLocation'
 import { useTtsHighlightReconciler } from '@/hooks/useTtsHighlightReconciler'
 import { reconcileAzw3TtsHighlight } from './reconcileTtsHighlight'
 import { registerEpubFrame, clearEpubFrame } from '@/modules/pageCapture/epubFrameRegistry'
@@ -59,7 +60,13 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   // Persisted reading position is now `<chapter>:<page>`. parseLocation
   // also accepts the legacy bare-integer form so reopening an existing book
   // doesn't reset the reader to the cover.
-  const initialLocation = useMemo(() => parseLocation(book.location), [book.location])
+  const initialLocation = useMemo(() => {
+    if (book.lastParagraph) {
+      const resume = azw3ParagraphToLocation(book.lastParagraph)
+      if (resume) return resume
+    }
+    return parseLocation(book.location)
+  }, [book.lastParagraph, book.location])
   const [rawChapterIndex, setChapterIndex] = useState(initialLocation.chapter)
   const [pageWithinChapter, setPageWithinChapter] = useState(initialLocation.page)
   const [pagesInCurrentChapter, setPagesInCurrentChapter] = useState(1)

@@ -11,6 +11,8 @@ const electronAPI: ElectronAPI = {
   deleteBook: (bookId) => invoke('books:delete', bookId),
   updateBookCover: (bookId, cover) => invoke('books:updateCover', bookId, cover),
   updateBookLocation: (bookId, location) => invoke('books:updateLocation', bookId, location),
+  updateBookLastParagraph: (bookId, lastParagraph) =>
+    invoke('books:updateLastParagraph', bookId, lastParagraph),
   hasSavedEpubData: (bookId) => invoke('books:hasSavedEpubData', bookId),
   getBookOutline: (bookId) => invoke('books:getOutline', bookId),
   findBookByHash: (hash) => invoke('books:findByHash', hash),

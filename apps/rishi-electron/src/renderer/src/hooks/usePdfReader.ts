@@ -9,6 +9,7 @@ import { usePlayerStore } from '@/stores/playerStore'
 import { updateBookLocation } from '@/lib/api'
 import { formatPdfLocation, parsePdfLocation } from '@/lib/pdfLocation'
 import { pageDataToParagraphs } from '@/components/pdf/utils/getPageParagraphs'
+import { pdfParagraphToPageNumber } from '@/components/pdf/utils/pdfParagraphToPageNumber'
 import type { Book } from '@/lib/api'
 
 /**
@@ -72,8 +73,9 @@ export function usePdfReader(
     if (!virtualizer) return
 
     const { page: parsedPage, offset: parsedOffset } = parsePdfLocation(book.location)
-    const initialPage = parsedPage > 0 ? parsedPage : 1
-    const initialOffset = parsedOffset
+    const resumePage = book.lastParagraph ? pdfParagraphToPageNumber(book.lastParagraph) : null
+    const initialPage = resumePage ?? (parsedPage > 0 ? parsedPage : 1)
+    const initialOffset = resumePage !== null ? 0 : parsedOffset
     const bookId = book.id
 
     const machine = pdfReaderMachine.provide({

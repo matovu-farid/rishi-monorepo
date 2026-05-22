@@ -40,6 +40,11 @@ interface PlayerStore {
   // --- Machine send reference for non-React code ---
   send: PlayerSend | null
 
+  // Hydration hint: the paragraph id we want to highlight when no
+  // activeParagraph is set. Mirrored live from activeParagraph during
+  // playback, and seeded from book.lastParagraph on book open.
+  lastPlayedParagraphIndex: string | null
+
   // --- Actions: format readers call these ---
   setCurrentParagraphs: (p: ParagraphWithIndex[]) => void
   setNextPageParagraphs: (p: ParagraphWithIndex[]) => void
@@ -50,6 +55,7 @@ interface PlayerStore {
   requestPrevPage: () => void
   clearPageRequest: () => void
   setSend: (send: PlayerSend) => void
+  setLastPlayedParagraphIndex: (idx: string | null) => void
 }
 
 export const usePlayerStore = create<PlayerStore>()(
@@ -64,6 +70,7 @@ export const usePlayerStore = create<PlayerStore>()(
 
     pageRequest: null,
     send: null,
+    lastPlayedParagraphIndex: null,
 
     setCurrentParagraphs: (p) => set({ currentParagraphs: p }),
     setNextPageParagraphs: (p) => set({ nextPageParagraphs: p }),
@@ -72,6 +79,7 @@ export const usePlayerStore = create<PlayerStore>()(
     requestNextPage: () => set({ pageRequest: 'next' }),
     requestPrevPage: () => set({ pageRequest: 'prev' }),
     clearPageRequest: () => set({ pageRequest: null }),
-    setSend: (send) => set({ send })
+    setSend: (send) => set({ send }),
+    setLastPlayedParagraphIndex: (lastPlayedParagraphIndex) => set({ lastPlayedParagraphIndex })
   }))
 )

@@ -8,7 +8,12 @@ vi.mock('electron', () => ({
   app: { on: () => {}, getPath: () => '/tmp' }
 }))
 
-import { _findBookByHashWithDb, _getBookFilepathsWithDb } from './queries'
+import {
+  _findBookByHashWithDb,
+  _getBookFilepathsWithDb,
+  _updateBookLastParagraphWithDb,
+  _getBookByIdWithDb
+} from './queries'
 
 const SCHEMA = `
   CREATE TABLE books (
@@ -17,7 +22,8 @@ const SCHEMA = `
     filepath TEXT, location TEXT, cover_kind TEXT, version INTEGER,
     sync_id TEXT, file_hash TEXT, file_r2_key TEXT, cover_r2_key TEXT,
     format TEXT, current_cfi TEXT, current_page INTEGER, user_id TEXT,
-    sync_version INTEGER, is_dirty INTEGER, is_deleted INTEGER DEFAULT 0
+    sync_version INTEGER, is_dirty INTEGER, is_deleted INTEGER DEFAULT 0,
+    last_paragraph TEXT
   )
 `
 
@@ -106,5 +112,55 @@ describe('_getBookFilepathsWithDb', () => {
 
   it('returns an empty array when no books exist', () => {
     expect(_getBookFilepathsWithDb(db)).toEqual([])
+  })
+})
+
+describe('_updateBookLastParagraphWithDb', () => {
+  let db: Database
+  beforeEach(() => {
+    db = makeDb()
+  })
+
+  it('writes the value to the last_paragraph column', () => {
+    const id = insert(db, {})
+    _updateBookLastParagraphWithDb(db, id, 'epubcfi(/6/4!/2)')
+    const row = db.prepare('SELECT last_paragraph FROM books WHERE id = ?').get(id) as {
+      last_paragraph: string | null
+    }
+    expect(row.last_paragraph).toBe('epubcfi(/6/4!/2)')
+  })
+
+  it('accepts null to clear the column', () => {
+    const id = insert(db, {})
+    _updateBookLastParagraphWithDb(db, id, 'pdf-3-7')
+    _updateBookLastParagraphWithDb(db, id, null)
+    const row = db.prepare('SELECT last_paragraph FROM books WHERE id = ?').get(id) as {
+      last_paragraph: string | null
+    }
+    expect(row.last_paragraph).toBeNull()
+  })
+
+  it('is a no-op for a missing book id', () => {
+    expect(() => _updateBookLastParagraphWithDb(db, 999, 'x')).not.toThrow()
+  })
+})
+
+describe('_getBookByIdWithDb', () => {
+  let db: Database
+  beforeEach(() => {
+    db = makeDb()
+  })
+
+  it('returns lastParagraph as null when never set', () => {
+    const id = insert(db, {})
+    const book = _getBookByIdWithDb(db, id)
+    expect(book?.lastParagraph).toBeNull()
+  })
+
+  it('returns lastParagraph after it has been written', () => {
+    const id = insert(db, {})
+    _updateBookLastParagraphWithDb(db, id, 'azw3-2-15')
+    const book = _getBookByIdWithDb(db, id)
+    expect(book?.lastParagraph).toBe('azw3-2-15')
   })
 })

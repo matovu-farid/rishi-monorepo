@@ -5,7 +5,7 @@ import type Database from 'better-sqlite3'
  * Uses user_version pragma to track whether the schema has been created.
  * If the database already exists from a previous version, it is dropped and recreated.
  */
-const CURRENT_VERSION = 2
+const CURRENT_VERSION = 3
 
 export function runMigrations(db: Database.Database): number {
   const version = db.pragma('user_version', { simple: true }) as number
@@ -160,6 +160,11 @@ export function runMigrations(db: Database.Database): number {
     db.exec(`ALTER TABLE highlights ADD COLUMN locator TEXT`)
 
     db.pragma('user_version = 2')
+  }
+
+  if (version < 3) {
+    db.exec(`ALTER TABLE books ADD COLUMN last_paragraph TEXT`)
+    db.pragma('user_version = 3')
   }
 
   return 1

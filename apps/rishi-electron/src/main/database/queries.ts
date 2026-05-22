@@ -27,6 +27,7 @@ export interface Book {
   syncVersion: number
   isDirty: number
   isDeleted: number
+  lastParagraph: string | null
 }
 
 /**
@@ -104,7 +105,8 @@ function rowToBook(row: Record<string, unknown>): Book {
     userId: (row.user_id as string | null) ?? null,
     syncVersion: row.sync_version as number,
     isDirty: row.is_dirty as number,
-    isDeleted: row.is_deleted as number
+    isDeleted: row.is_deleted as number,
+    lastParagraph: (row.last_paragraph as string | null) ?? null
   }
 }
 
@@ -155,13 +157,17 @@ export function listRecentBooks(limit: number): { bookId: number; title: string 
   return _listRecentBooksWithDb(getDb(), limit)
 }
 
+/** Test-injectable variant of `getBook`. */
+export function _getBookByIdWithDb(db: Database, id: number): Book | undefined {
+  const row = db.prepare('SELECT * FROM books WHERE id = ?').get(id)
+  return row ? rowToBook(row as Record<string, unknown>) : undefined
+}
+
 /**
  * Return a single book by id, or `undefined` if not found.
  */
 export function getBook(id: number): Book | undefined {
-  const db = getDb()
-  const row = db.prepare('SELECT * FROM books WHERE id = ?').get(id)
-  return row ? rowToBook(row as Record<string, unknown>) : undefined
+  return _getBookByIdWithDb(getDb(), id)
 }
 
 /**
@@ -387,6 +393,25 @@ export function updateBookLocation(id: number, location: string | number): void 
       id
     )
   }
+}
+
+/**
+ * Test-injectable variant. Updates the `last_paragraph` column for one book.
+ * Pass `null` to clear it. No-op when the id doesn't match a row.
+ */
+export function _updateBookLastParagraphWithDb(
+  db: Database,
+  id: number,
+  lastParagraph: string | null
+): void {
+  db.prepare('UPDATE books SET last_paragraph = ?, is_dirty = 1 WHERE id = ?').run(
+    lastParagraph,
+    id
+  )
+}
+
+export function updateBookLastParagraph(id: number, lastParagraph: string | null): void {
+  _updateBookLastParagraphWithDb(getDb(), id, lastParagraph)
 }
 
 // ---------------------------------------------------------------------------

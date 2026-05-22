@@ -31,10 +31,11 @@ export type PlayerMachineContext = {
   partialFirstText: string | null
   partialFirstKey: string | null
   partialFirstParagraphIndex: number | null
+  resumeParagraphIndex: string | null
 }
 
 export type PlayerMachineEvent =
-  | { type: 'INITIALIZE'; bookId: string }
+  | { type: 'INITIALIZE'; bookId: string; resumeParagraphIndex?: string | null }
   | { type: 'PLAY' }
   | { type: 'PAUSE' }
   | { type: 'RESUME' }
@@ -75,7 +76,8 @@ const initialContext: PlayerMachineContext = {
   wantsAutoResumeAfterChat: false,
   partialFirstText: null,
   partialFirstKey: null,
-  partialFirstParagraphIndex: null
+  partialFirstParagraphIndex: null,
+  resumeParagraphIndex: null
 }
 
 export const playerMachine = setup({
@@ -90,11 +92,20 @@ export const playerMachine = setup({
     hasRetries: ({ context }) => context.retryCount + 1 < MAX_RETRIES,
     isFirstParagraph: ({ context }) => context.paragraphIndex <= 0,
     wasTimedOut: ({ context }) => context.timedOut,
-    wantsAutoResumeAfterChat: ({ context }) => context.wantsAutoResumeAfterChat
+    wantsAutoResumeAfterChat: ({ context }) => context.wantsAutoResumeAfterChat,
+    hasUnresolvedResume: ({ context, event }) => {
+      if (context.resumeParagraphIndex === null) return false
+      if (event.type !== 'PARAGRAPHS_UPDATED') return false
+      return event.paragraphs.some((p) => p.index === context.resumeParagraphIndex)
+    }
   },
   actions: {
     storeBookId: assign({
       bookId: ({ event }) => (event.type === 'INITIALIZE' ? event.bookId : '')
+    }),
+    storeResumeIndex: assign({
+      resumeParagraphIndex: ({ event }) =>
+        event.type === 'INITIALIZE' ? (event.resumeParagraphIndex ?? null) : null
     }),
     resetIndex: assign({ paragraphIndex: 0, retryCount: 0, timedOut: false }),
     resetIndexByDirection: assign({
@@ -182,6 +193,14 @@ export const playerMachine = setup({
     // Check BEFORE advanceIndex: if partialFirstParagraphIndex matches the
     // current (pre-advance) paragraphIndex, this is the paragraph the override
     // applied to — clear it. Otherwise leave it in place for a future paragraph.
+    applyResumeIndex: assign({
+      paragraphIndex: ({ context, event }) => {
+        if (event.type !== 'PARAGRAPHS_UPDATED') return context.paragraphIndex
+        const idx = event.paragraphs.findIndex((p) => p.index === context.resumeParagraphIndex)
+        return idx >= 0 ? idx : context.paragraphIndex
+      },
+      resumeParagraphIndex: null
+    }),
     clearPartialFirstIfConsumed: assign({
       partialFirstText: ({ context }) =>
         context.partialFirstParagraphIndex === context.paragraphIndex
@@ -237,7 +256,7 @@ export const playerMachine = setup({
       on: {
         INITIALIZE: {
           target: 'stopped',
-          actions: ['storeBookId', 'resetIndex']
+          actions: ['storeBookId', 'resetIndex', 'storeResumeIndex']
         },
         CHAT_STARTED: {
           actions: ['clearWantsAutoResumeAfterChat', 'clearPartialFirst']
@@ -284,10 +303,15 @@ export const playerMachine = setup({
           }
         ],
         PARAGRAPHS_UPDATED: [
+          // wasTimedOut wins to preserve existing recovery behavior
           {
             guard: 'wasTimedOut',
             target: 'loading',
             actions: ['storeParagraphs', 'clearTimedOut', 'resetIndexByDirection']
+          },
+          {
+            guard: 'hasUnresolvedResume',
+            actions: ['storeParagraphs', 'applyResumeIndex']
           },
           {
             actions: ['storeParagraphs']

@@ -118,3 +118,43 @@ describe('useTtsHighlightReconciler — integration (the bug class)', () => {
     expect(calls[calls.length - 1]).toBe('p7')
   })
 })
+
+describe('useTtsHighlightReconciler — lastPlayedParagraphIndex fallback', () => {
+  beforeEach(() => {
+    usePlayerStore.setState({
+      activeParagraph: null,
+      lastPlayedParagraphIndex: null
+    })
+  })
+
+  it('uses lastPlayedParagraphIndex when activeParagraph is null', () => {
+    usePlayerStore.setState({ lastPlayedParagraphIndex: 'p-resume' })
+    const reconcile = vi.fn()
+    renderHook(() => useTtsHighlightReconciler(reconcile, null))
+    expect(reconcile).toHaveBeenLastCalledWith('p-resume')
+  })
+
+  it('prefers activeParagraph over lastPlayedParagraphIndex', () => {
+    usePlayerStore.setState({
+      activeParagraph: { index: 'p-active', text: 't' },
+      lastPlayedParagraphIndex: 'p-resume'
+    })
+    const reconcile = vi.fn()
+    renderHook(() => useTtsHighlightReconciler(reconcile, null))
+    expect(reconcile).toHaveBeenLastCalledWith('p-active')
+  })
+
+  it('fires reconcile when lastPlayedParagraphIndex changes', () => {
+    const reconcile = vi.fn()
+    renderHook(() => useTtsHighlightReconciler(reconcile, null))
+    reconcile.mockClear()
+    usePlayerStore.setState({ lastPlayedParagraphIndex: 'p-late' })
+    expect(reconcile).toHaveBeenCalledWith('p-late')
+  })
+
+  it('reconcile sees null when both are null', () => {
+    const reconcile = vi.fn()
+    renderHook(() => useTtsHighlightReconciler(reconcile, null))
+    expect(reconcile).toHaveBeenLastCalledWith(null)
+  })
+})
