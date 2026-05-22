@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   View,
   Text,
@@ -25,10 +25,28 @@ import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
+import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
+import type { ReaderSettings } from '@/types/book'
+import {
+  getHighlightsByBookId,
+  deleteHighlight,
+  restoreHighlight,
+} from '@/lib/highlight-storage'
+import type { Highlight } from '@/types/highlight'
+import {
+  getBookmarksForBook,
+  toggleBookmark,
+  deleteBookmark as deleteBookmarkFromDb,
+  isLocationBookmarked,
+  type Bookmark,
+} from '@/lib/bookmarks/bookmark-storage'
+import { useUndoSnackbar } from '@/hooks/useUndoSnackbar'
+import { UndoSnackbar } from '@/components/UndoSnackbar'
 import {
   ReaderShell,
   ReaderShellContext,
   type ReaderProgress,
+  type TocItem,
 } from '@/components/reader'
 
 /**
@@ -160,6 +178,12 @@ export default function DjvuReaderScreen() {
   const [currentPage, setCurrentPage] = useState(1)
   const [bookLoaded, setBookLoaded] = useState(false)
   const [zoom, setZoom] = useState(100)
+  const [highlights, setHighlights] = useState<Highlight[]>([])
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
+  const [isCurrentBookmarked, setIsCurrentBookmarked] = useState<boolean>(false)
+  const [settings, setSettings] = useState<ReaderSettings>(loadReaderSettings())
+  const [noteEditorOpen, setNoteEditorOpen] = useState(false)
+  const undoSnackbar = useUndoSnackbar()
 
   const webViewRef = useRef<WebView>(null)
   const currentPageRef = useRef(1)
@@ -242,6 +266,8 @@ export default function DjvuReaderScreen() {
             const startPage = loaded.currentPage || 1
             setCurrentPage(startPage)
             currentPageRef.current = startPage
+            setHighlights(getHighlightsByBookId(loaded.id))
+            setBookmarks(getBookmarksForBook(loaded.id))
           }
         })
         .catch((err) => console.error('Failed to load book for reading:', err))
@@ -293,6 +319,95 @@ export default function DjvuReaderScreen() {
     },
     [book?.id]
   )
+
+  // ---- Bookmarks ----
+  useEffect(() => {
+    if (!book?.id) return
+    const loc = `djvu-page:${currentPage}`
+    setIsCurrentBookmarked(isLocationBookmarked(book.id, loc))
+  }, [book?.id, bookmarks, currentPage])
+
+  const handleToggleBookmark = useCallback(() => {
+    if (!book?.id) return
+    const loc = `djvu-page:${currentPage}`
+    const label =
+      pageCount > 0
+        ? `Page ${currentPage} of ${pageCount}`
+        : `Page ${currentPage}`
+    const result = toggleBookmark({ bookId: book.id, location: loc, label })
+    setBookmarks(getBookmarksForBook(book.id))
+    setIsCurrentBookmarked(result.action === 'created')
+  }, [book?.id, currentPage, pageCount])
+
+  const handleDeleteBookmark = useCallback(
+    (bookmarkId: string) => {
+      if (!book?.id) return
+      deleteBookmarkFromDb(bookmarkId)
+      setBookmarks(getBookmarksForBook(book.id))
+    },
+    [book?.id],
+  )
+
+  const handleNavigateToBookmark = useCallback((location: string) => {
+    const m = /^djvu-page:(\d+)$/.exec(location)
+    if (!m) return
+    const page = Number.parseInt(m[1], 10)
+    if (Number.isFinite(page) && page >= 1) {
+      webViewRef.current?.postMessage(
+        JSON.stringify({ type: 'goto', page }),
+      )
+    }
+  }, [])
+
+  // ---- Highlights (read-only listing; djvu canvas can't capture text) ----
+  const handleNavigateToHighlight = useCallback((_cfiRange: string) => {
+    // No structural mapping yet — clicking just closes the sheet.
+  }, [])
+
+  const handleDeleteHighlightById = useCallback(
+    (id: string) => {
+      const target = highlights.find((h) => h.id === id)
+      if (!target) return
+      deleteHighlight(id)
+      setHighlights((prev) => prev.filter((h) => h.id !== id))
+      undoSnackbar.show('Highlight deleted', 'Undo', () => {
+        restoreHighlight(id)
+        setHighlights((prev) => [target, ...prev])
+      })
+    },
+    [highlights, undoSnackbar],
+  )
+
+  // ---- TOC adapter — synthesize one entry per page. ----
+  const tocItems = useMemo<TocItem[]>(() => {
+    if (pageCount === 0) return []
+    return Array.from({ length: pageCount }, (_, i) => ({
+      href: `djvu-page:${i + 1}`,
+      label: `Page ${i + 1}`,
+    }))
+  }, [pageCount])
+
+  const currentTocHref = useMemo(
+    () => `djvu-page:${currentPage}`,
+    [currentPage],
+  )
+
+  const handleSelectChapter = useCallback((href: string) => {
+    const m = /^djvu-page:(\d+)$/.exec(href)
+    if (!m) return
+    const page = Number.parseInt(m[1], 10)
+    if (Number.isFinite(page) && page >= 1) {
+      webViewRef.current?.postMessage(
+        JSON.stringify({ type: 'goto', page }),
+      )
+    }
+  }, [])
+
+  // ---- Appearance ----
+  const handleSettingsChange = useCallback((next: ReaderSettings) => {
+    saveReaderSettings(next)
+    setSettings(next)
+  }, [])
 
   const handleBack = useCallback(() => {
     if (book?.id) {
@@ -388,7 +503,36 @@ export default function DjvuReaderScreen() {
         }
         onTTSPress={handleToggleTTS}
         ttsButtonActive={ttsActive}
-        sheets={{}}
+        onBookmarkTogglePress={handleToggleBookmark}
+        isBookmarked={isCurrentBookmarked}
+        sheets={{
+          toc: true,
+          highlights: true,
+          bookmarks: true,
+          search: true,
+          appearance: true,
+          noteEditor: true,
+        }}
+        toc={tocItems}
+        currentHref={currentTocHref}
+        onSelectChapter={handleSelectChapter}
+        highlights={highlights}
+        onNavigateToHighlight={handleNavigateToHighlight}
+        onDeleteHighlight={handleDeleteHighlightById}
+        bookmarks={bookmarks}
+        onNavigateToBookmark={handleNavigateToBookmark}
+        onDeleteBookmark={handleDeleteBookmark}
+        searchQuery=""
+        searchResults={[]}
+        isSearching={false}
+        onChangeSearchQuery={() => undefined}
+        onSelectSearchResult={() => undefined}
+        settings={settings}
+        onSettingsChange={handleSettingsChange}
+        noteEditorHighlight={null}
+        noteEditorOpen={noteEditorOpen}
+        onSaveNote={() => setNoteEditorOpen(false)}
+        onDiscardNote={() => setNoteEditorOpen(false)}
       >
         {/* E2E observability — see PDF reader for rationale. */}
         <View
@@ -426,6 +570,15 @@ export default function DjvuReaderScreen() {
 
         {/* G15 — visual cue badge */}
         <TTSVisualCue />
+
+        {/* G10 — undo snackbar (5s window after a destructive action) */}
+        <UndoSnackbar
+          visible={undoSnackbar.visible}
+          message={undoSnackbar.message}
+          actionLabel={undoSnackbar.actionLabel}
+          onAction={undoSnackbar.action}
+          onDismiss={undoSnackbar.dismiss}
+        />
       </ReaderShell>
     </View>
   )
