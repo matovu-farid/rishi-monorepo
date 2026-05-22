@@ -22,6 +22,11 @@ export const radius = {
   lg: 14,
   xl: 20,
   full: 9999,
+  // Semantic aliases (P1-Y). Keep t-shirt keys above untouched — these are
+  // additive so existing consumers (e.g. radius.md) stay green.
+  cover: 8, // book cover corner radius
+  card: 12, // card / row container radius
+  sheet: 22, // modal / bottom-sheet top radius (iOS sheet feel)
 } as const
 
 export const motion = {

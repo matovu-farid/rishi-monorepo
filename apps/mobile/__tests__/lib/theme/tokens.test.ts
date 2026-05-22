@@ -136,6 +136,20 @@ describe('radius scale', () => {
     expect(radius.full).toBeGreaterThanOrEqual(9999)
   })
 
+  it('exposes semantic card/sheet/cover radius tokens (P1-Y)', () => {
+    // P1-Y: semantic radii so chrome surfaces stop hardcoding magic numbers.
+    expect(radius.card).toBe(12)
+    expect(radius.sheet).toBe(22)
+    expect(radius.cover).toBe(8)
+  })
+
+  it('preserves the existing t-shirt scale keys', () => {
+    // P1-Y guardrail: don't break consumers that reference the t-shirt keys.
+    for (const key of ['none', 'sm', 'md', 'lg', 'xl', 'full'] as const) {
+      expect(radius).toHaveProperty(key)
+    }
+  })
+
   it('every value is a non-negative number', () => {
     for (const value of Object.values(radius) as number[]) {
       expect(typeof value).toBe('number')
