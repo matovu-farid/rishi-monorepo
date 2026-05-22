@@ -18,6 +18,8 @@
  * "always clear after onSend returns".
  */
 
+const mockOpenSettings = jest.fn()
+
 jest.mock('react-native', () => {
   const React = require('react')
   const mk = (name: string) =>
@@ -33,6 +35,7 @@ jest.mock('react-native', () => {
     StyleSheet: { create: (s: Record<string, unknown>) => s },
     Platform: { OS: 'ios', select: <T,>(spec: Record<string, T>): T | undefined => spec.ios ?? spec.default },
     useColorScheme: () => 'light',
+    Linking: { openSettings: (...args: unknown[]) => mockOpenSettings(...args) },
   }
 })
 
@@ -53,7 +56,7 @@ jest.mock('@/components/VoiceMicButton', () => {
 
 import React, { act } from 'react'
 import TestRenderer from 'react-test-renderer'
-import { TextInput, TouchableOpacity } from 'react-native'
+import { Pressable, TextInput, TouchableOpacity } from 'react-native'
 import { ChatInput } from '@/components/ChatInput'
 
 function findTextInput(tree: TestRenderer.ReactTestRenderer): TestRenderer.ReactTestInstance {
@@ -209,5 +212,95 @@ describe('ChatInput (mobile) — P1-AK clearAfterAccepted', () => {
       ;(findSendButton(tree).props as { onPress: (() => void) | undefined }).onPress?.()
     })
     expect(onSend).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * P1-Z — Voice mic permission denial is silent on iOS.
+ *
+ * iOS only prompts for the microphone permission once. After the user
+ * taps "Don't allow", subsequent calls to
+ * `requestRecordingPermissionsAsync` resolve immediately with
+ * `{ granted: false }` — no system sheet appears. Previously the UI
+ * just showed a red error string and the user had no way out; the only
+ * remediation is the iOS Settings app.
+ *
+ * Fix: when `permissionDenied` is true, ChatInput renders a tappable
+ * "Open Settings" Pressable that calls `Linking.openSettings()`.
+ */
+describe('ChatInput (mobile) — P1-Z mic permission denied → Open Settings', () => {
+  beforeEach(() => {
+    mockOpenSettings.mockReset()
+  })
+
+  it('renders an "Open Settings" pressable when permissionDenied is true', () => {
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ChatInput
+          onSend={jest.fn()}
+          isLoading={false}
+          disabled={false}
+          onMicPress={jest.fn()}
+          permissionDenied
+        />,
+      )
+    })
+
+    const settingsButton = tree.root.findAll(
+      (n) =>
+        n.type === Pressable &&
+        (n.props as { testID?: string }).testID === 'mic-open-settings',
+    )
+    expect(settingsButton.length).toBe(1)
+  })
+
+  it('does NOT render the "Open Settings" pressable when permissionDenied is false', () => {
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ChatInput
+          onSend={jest.fn()}
+          isLoading={false}
+          disabled={false}
+          onMicPress={jest.fn()}
+          permissionDenied={false}
+        />,
+      )
+    })
+
+    const settingsButton = tree.root.findAll(
+      (n) =>
+        n.type === Pressable &&
+        (n.props as { testID?: string }).testID === 'mic-open-settings',
+    )
+    expect(settingsButton.length).toBe(0)
+  })
+
+  it('invokes Linking.openSettings when the "Open Settings" pressable is tapped', () => {
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ChatInput
+          onSend={jest.fn()}
+          isLoading={false}
+          disabled={false}
+          onMicPress={jest.fn()}
+          permissionDenied
+        />,
+      )
+    })
+
+    const settingsButton = tree.root.findAll(
+      (n) =>
+        n.type === Pressable &&
+        (n.props as { testID?: string }).testID === 'mic-open-settings',
+    )[0]
+    expect(settingsButton).toBeTruthy()
+
+    act(() => {
+      ;(settingsButton.props as { onPress: () => void }).onPress()
+    })
+    expect(mockOpenSettings).toHaveBeenCalledTimes(1)
   })
 })

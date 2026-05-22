@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Text, TextInput, TouchableOpacity, View } from 'react-native'
+import { Linking, Pressable, Text, TextInput, TouchableOpacity, View } from 'react-native'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { VoiceMicButton } from '@/components/VoiceMicButton'
 
@@ -132,9 +132,30 @@ export function ChatInput({
       </View>
 
       {permissionDenied && (
-        <Text className="text-sm text-red-500 px-4 pb-1">
-          Microphone access required for voice input
-        </Text>
+        // P1-Z: iOS only shows the mic permission sheet once. Once the
+        // user denies it, `requestRecordingPermissionsAsync` resolves
+        // immediately with `{ granted: false }` — there is no system
+        // prompt to retry. The only remediation is the iOS Settings
+        // app, so we surface a tappable "Open Settings" affordance
+        // instead of leaving the user stuck with a red error string.
+        <View className="flex-row items-center px-4 pb-1">
+          <Text className="text-sm text-red-500 flex-1">
+            Microphone access required for voice input
+          </Text>
+          <Pressable
+            testID="mic-open-settings"
+            onPress={() => {
+              void Linking.openSettings()
+            }}
+            accessibilityLabel="Open Settings"
+            accessibilityRole="button"
+            hitSlop={8}
+          >
+            <Text className="text-sm font-semibold text-[#0a7ea4] ml-2">
+              Open Settings
+            </Text>
+          </Pressable>
+        </View>
       )}
 
       {voiceError && !permissionDenied && (

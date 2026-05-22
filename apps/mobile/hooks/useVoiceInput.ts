@@ -23,6 +23,17 @@ export function useVoiceInput() {
 
   const startRecording = async () => {
     setError(null)
+    // P1-Z: iOS shows the microphone permission sheet exactly once per
+    // install. After the user taps "Don't Allow", every subsequent call
+    // to `requestRecordingPermissionsAsync` resolves IMMEDIATELY with
+    // `{ granted: false }` — the system never re-prompts. The only path
+    // back is for the user to flip the toggle in
+    // Settings → Privacy → Microphone → Rishi. We surface that path via
+    // the "Open Settings" pressable in ChatInput which calls
+    // `Linking.openSettings()`.
+    //
+    // Android shows the system prompt twice; on the third denial the OS
+    // marks the permission as "Don't ask again" and behaves like iOS.
     const { granted } = await requestRecordingPermissionsAsync()
     if (!granted) {
       setPermissionDenied(true)
