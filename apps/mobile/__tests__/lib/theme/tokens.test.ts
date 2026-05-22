@@ -149,6 +149,38 @@ describe('typography (iOS HIG scale)', () => {
     expect(typography.scale['display-large'].fontSize).toBe(34)
   })
 
+  it('display-large weight is 700 — Apple HIG Large Title is Bold', () => {
+    // P1-W: HIG specifies Large Title weight is Bold (700), not Semibold.
+    expect(typography.scale['display-large'].fontWeight).toBe('700')
+  })
+
+  it('exposes a `largeTitle` semantic alias mapping to display-large', () => {
+    // P1-W: HIG-named alias so consumers can write `scale.largeTitle`
+    // alongside the existing `display-large` key.
+    expect(typography.scale).toHaveProperty('largeTitle')
+    expect(typography.scale.largeTitle).toEqual(
+      typography.scale['display-large'],
+    )
+  })
+
+  it('exposes a letterSpacing table per Apple HIG dynamic-type tracking', () => {
+    // P1-W: HIG tracking values for each text style (in points).
+    // Reference: developer.apple.com/design/human-interface-guidelines/typography
+    expect(typography.letterSpacing).toBeDefined()
+    expect(typography.letterSpacing['display-large']).toBeCloseTo(0.37, 2)
+    expect(typography.letterSpacing.largeTitle).toBeCloseTo(0.37, 2)
+    // Title 1 / Title 2 / Title 3 (we map our "display" + "title" tokens).
+    expect(typography.letterSpacing.display).toBeCloseTo(0.36, 2)
+    expect(typography.letterSpacing.title).toBeCloseTo(0.35, 2)
+    // Body / callout / subhead / footnote / caption have negative tracking.
+    expect(typography.letterSpacing.body).toBeCloseTo(-0.41, 2)
+    expect(typography.letterSpacing.callout).toBeCloseTo(-0.32, 2)
+    expect(typography.letterSpacing.subhead).toBeCloseTo(-0.24, 2)
+    expect(typography.letterSpacing.footnote).toBeCloseTo(-0.08, 2)
+    expect(typography.letterSpacing.caption).toBe(0)
+    expect(typography.letterSpacing['caption-small']).toBeCloseTo(0.07, 2)
+  })
+
   it('body size is 17pt', () => {
     expect(typography.scale.body.fontSize).toBe(17)
   })
