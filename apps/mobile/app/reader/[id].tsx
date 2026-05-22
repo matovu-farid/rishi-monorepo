@@ -310,49 +310,55 @@ function ReaderContent({ book }: { book: Book }) {
   // G17 — "Read from here" handler. Seeds the player from the book's
   // chunks if not yet seeded, finds the paragraph the selection lives
   // in, and dispatches PLAY_FROM with the partial-first payload.
+  //
+  // Gated through `requireTTS` so signed-out users see the sign-in sheet
+  // before the player machine receives PLAY_FROM (parity with the toolbar
+  // TTS button — Phase 5 P0-A).
   const handleReadFromSelection = useCallback(
-    async (cfiRange: string, selectionText: string) => {
-      const send = usePlayerStore.getState().send
-      if (!send) return false
+    (cfiRange: string, selectionText: string): boolean => {
+      requireTTS(async () => {
+        const send = usePlayerStore.getState().send
+        if (!send) return
 
-      let paragraphs = usePlayerStore.getState().currentParagraphs
-      if (paragraphs.length === 0) {
-        try {
-          const seeded = await seedPlayerParagraphsFromChunks(
-            book.id,
-            book.filePath,
-            book.format,
-          )
-          if (!seeded.seeded) {
-            AccessibilityInfo.announceForAccessibility('No text available for reading')
-            return true
+        let paragraphs = usePlayerStore.getState().currentParagraphs
+        if (paragraphs.length === 0) {
+          try {
+            const seeded = await seedPlayerParagraphsFromChunks(
+              book.id,
+              book.filePath,
+              book.format,
+            )
+            if (!seeded.seeded) {
+              AccessibilityInfo.announceForAccessibility('No text available for reading')
+              return
+            }
+            paragraphs = seeded.paragraphs
+          } catch (err) {
+            console.warn('[epub-read-aloud-from] seed failed:', err)
+            return
           }
-          paragraphs = seeded.paragraphs
-        } catch (err) {
-          console.warn('[epub-read-aloud-from] seed failed:', err)
-          return true
         }
-      }
 
-      const playFrom = resolveEpubReadFromSelection(
-        selectionText,
-        cfiRange,
-        paragraphs,
-      )
-      if (!playFrom) {
-        AccessibilityInfo.announceForAccessibility('Could not find the selected text')
-        return true
-      }
+        const playFrom = resolveEpubReadFromSelection(
+          selectionText,
+          cfiRange,
+          paragraphs,
+        )
+        if (!playFrom) {
+          AccessibilityInfo.announceForAccessibility('Could not find the selected text')
+          return
+        }
 
-      send({
-        type: 'PLAY_FROM',
-        paragraphIndex: playFrom.paragraphIndex,
-        partialFirstText: playFrom.partialFirstText,
-        partialFirstKey: playFrom.partialFirstKey,
+        send({
+          type: 'PLAY_FROM',
+          paragraphIndex: playFrom.paragraphIndex,
+          partialFirstText: playFrom.partialFirstText,
+          partialFirstKey: playFrom.partialFirstKey,
+        })
       })
       return true
     },
-    [book.id, book.filePath, book.format],
+    [book.id, book.filePath, book.format, requireTTS],
   )
 
   // Menu items for text selection context menu
