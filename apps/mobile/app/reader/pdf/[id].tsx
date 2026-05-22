@@ -35,7 +35,8 @@ import {
 } from '@/components/pdf/pdf-webview-bridge'
 import { usePdfStore, BookNavigationState } from '@/lib/stores/pdfStore'
 import { getBookForReading, updateBookPage } from '@/lib/book-storage'
-import { Book } from '@/types/book'
+import { Book, ReaderSettings } from '@/types/book'
+import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
 import {
   insertPdfHighlight,
   getPdfHighlightsByBookId,
@@ -46,6 +47,14 @@ import {
 } from '@/lib/highlight-storage'
 import { HIGHLIGHT_COLORS, type HighlightColor } from '@/types/highlight'
 import type { PdfLocator } from '@rishi/shared/types/pdf-locator'
+import { decodePdfCfiRange } from '@rishi/shared/types/pdf-locator'
+import {
+  getBookmarksForBook,
+  toggleBookmark,
+  deleteBookmark as deleteBookmarkFromDb,
+  isLocationBookmarked,
+  type Bookmark,
+} from '@/lib/bookmarks/bookmark-storage'
 import { resolvePlayFromSelection } from '@/lib/pdf/read-aloud-from-selection'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
@@ -64,6 +73,7 @@ import {
   ReaderShell,
   ReaderShellContext,
   type ReaderProgress,
+  type TocItem,
 } from '@/components/reader'
 
 interface ActiveSelection {
@@ -90,6 +100,9 @@ export default function PdfReaderScreen() {
   const [highlights, setHighlights] = useState<PdfHighlight[]>([])
   const [noteEditorOpen, setNoteEditorOpen] = useState(false)
   const [noteTargetHighlight, setNoteTargetHighlight] = useState<PdfHighlight | null>(null)
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
+  const [isCurrentBookmarked, setIsCurrentBookmarked] = useState<boolean>(false)
+  const [settings, setSettings] = useState<ReaderSettings>(loadReaderSettings())
 
   // Mount the player machine actor for this book. Subsequent reads of
   // `usePlayerStore` (via `MiniPlayer`) get the live machine state.
@@ -167,6 +180,7 @@ export default function PdfReaderScreen() {
         if (!loaded) return
         setBook(loaded)
         setHighlights(getPdfHighlightsByBookId(loaded.id))
+        setBookmarks(getBookmarksForBook(loaded.id))
       })
       .catch((err) => console.error('[PdfReaderScreen] load failed:', err))
       .finally(() => setLoading(false))
@@ -415,6 +429,111 @@ export default function PdfReaderScreen() {
     }
   }, [activeParagraph, pageNumber])
 
+  // ---- Bookmarks ----
+  // Reflect bookmark presence at the current page (encoded as a pdf:
+  // cfiRange) in the toolbar icon.
+  useEffect(() => {
+    if (!book?.id) return
+    const cfi = `pdf:${JSON.stringify({ page: pageNumber || 1, rects: [] })}`
+    setIsCurrentBookmarked(isLocationBookmarked(book.id, cfi))
+  }, [book?.id, bookmarks, pageNumber])
+
+  const handleToggleBookmark = useCallback(() => {
+    if (!book?.id || !pageNumber) return
+    const cfi = `pdf:${JSON.stringify({ page: pageNumber, rects: [] })}`
+    const label = `Page ${pageNumber}`
+    const result = toggleBookmark({ bookId: book.id, location: cfi, label })
+    setBookmarks(getBookmarksForBook(book.id))
+    setIsCurrentBookmarked(result.action === 'created')
+  }, [book?.id, pageNumber])
+
+  const handleDeleteBookmark = useCallback(
+    (bookmarkId: string) => {
+      if (!book?.id) return
+      deleteBookmarkFromDb(bookmarkId)
+      setBookmarks(getBookmarksForBook(book.id))
+    },
+    [book?.id],
+  )
+
+  const handleNavigateToBookmark = useCallback(
+    (location: string) => {
+      const loc = decodePdfCfiRange(location)
+      const page = loc?.page ?? Number.parseInt(location, 10)
+      if (Number.isFinite(page) && page >= 1) {
+        setPageNumberStore(page)
+        readerRef.current?.goToPage(page)
+      }
+    },
+    [setPageNumberStore],
+  )
+
+  // ---- Highlights navigation ----
+  const handleNavigateToHighlight = useCallback(
+    (cfiRange: string) => {
+      const loc = decodePdfCfiRange(cfiRange)
+      if (loc?.page) {
+        setPageNumberStore(loc.page)
+        readerRef.current?.goToPage(loc.page)
+      }
+    },
+    [setPageNumberStore],
+  )
+
+  const handleDeleteHighlightById = useCallback(
+    (id: string) => {
+      const target = highlights.find((h) => h.id === id)
+      if (!target) return
+      deleteHighlight(id)
+      setHighlights((prev) => prev.filter((h) => h.id !== id))
+      readerRef.current?.removeHighlight(id)
+      undoSnackbar.show('Highlight deleted', 'Undo', () => {
+        restoreHighlight(id)
+        setHighlights((prev) => [target, ...prev])
+        readerRef.current?.addHighlight(target.id, target.color, target.locator)
+      })
+    },
+    [highlights, undoSnackbar],
+  )
+
+  // ---- TOC adapter (PDF outline -> TocItem) ----
+  const tocItems = useMemo<TocItem[]>(() => {
+    const convert = (items: PdfOutlineItem[]): TocItem[] =>
+      items.map((it, idx) => ({
+        href:
+          it.pageNumber != null
+            ? `pdf-page:${it.pageNumber}`
+            : `pdf-page:none:${idx}`,
+        label: it.title,
+        subitems: it.children?.length ? convert(it.children) : undefined,
+      }))
+    return convert(outline)
+  }, [outline])
+
+  const currentTocHref = useMemo(
+    () => (pageNumber > 0 ? `pdf-page:${pageNumber}` : null),
+    [pageNumber],
+  )
+
+  const handleSelectChapter = useCallback(
+    (href: string) => {
+      const m = /^pdf-page:(\d+)$/.exec(href)
+      if (!m) return
+      const page = Number.parseInt(m[1], 10)
+      if (Number.isFinite(page) && page >= 1) {
+        setPageNumberStore(page)
+        readerRef.current?.goToPage(page)
+      }
+    },
+    [setPageNumberStore],
+  )
+
+  // ---- Appearance ----
+  const handleSettingsChange = useCallback((next: ReaderSettings) => {
+    saveReaderSettings(next)
+    setSettings(next)
+  }, [])
+
   const handleBack = useCallback(() => {
     if (book?.id && pageNumber > 0) updateBookPage(book.id, pageNumber)
     router.back()
@@ -472,7 +591,32 @@ export default function PdfReaderScreen() {
         onChatToggle={() =>
           requireAIChat(() => router.push(`/chat/${book.id}`))
         }
-        sheets={{ noteEditor: true }}
+        onBookmarkTogglePress={handleToggleBookmark}
+        isBookmarked={isCurrentBookmarked}
+        sheets={{
+          toc: true,
+          highlights: true,
+          bookmarks: true,
+          search: true,
+          appearance: true,
+          noteEditor: true,
+        }}
+        toc={tocItems}
+        currentHref={currentTocHref}
+        onSelectChapter={handleSelectChapter}
+        highlights={highlights}
+        onNavigateToHighlight={handleNavigateToHighlight}
+        onDeleteHighlight={handleDeleteHighlightById}
+        bookmarks={bookmarks}
+        onNavigateToBookmark={handleNavigateToBookmark}
+        onDeleteBookmark={handleDeleteBookmark}
+        searchQuery=""
+        searchResults={[]}
+        isSearching={false}
+        onChangeSearchQuery={() => undefined}
+        onSelectSearchResult={() => undefined}
+        settings={settings}
+        onSettingsChange={handleSettingsChange}
         noteEditorHighlight={noteTargetHighlight}
         noteEditorOpen={noteEditorOpen}
         onSaveNote={handleSaveNote}
