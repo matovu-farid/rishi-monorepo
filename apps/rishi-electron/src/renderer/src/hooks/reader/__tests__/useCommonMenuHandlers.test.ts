@@ -100,14 +100,14 @@ describe('useCommonMenuHandlers', () => {
     expect(send).toHaveBeenCalledWith({ type: 'PLAY' })
   })
 
-  it('openChat calls requireAuth("chat", ...) and toggles chatPanelOpen', async () => {
+  it('openChat calls requireAuth("ai-chat", ...) and toggles chatPanelOpen', async () => {
     const useCommonMenuHandlers = await loadHook()
     const params = makeParams()
     const { result } = renderHook(() => useCommonMenuHandlers(params))
     act(() => {
       result.current.openChat?.()
     })
-    expect(params.requireAuth).toHaveBeenCalledWith('chat', expect.any(Function))
+    expect(params.requireAuth).toHaveBeenCalledWith('ai-chat', expect.any(Function))
     expect(params.setChatPanelOpen).toHaveBeenCalledTimes(1)
     const updater = (params.setChatPanelOpen as ReturnType<typeof vi.fn>).mock.calls[0][0] as (
       prev: boolean
