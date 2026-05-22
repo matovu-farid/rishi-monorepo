@@ -304,3 +304,109 @@ describe('ChatInput (mobile) — P1-Z mic permission denied → Open Settings', 
     expect(mockOpenSettings).toHaveBeenCalledTimes(1)
   })
 })
+
+/**
+ * P1-AI — ChatInput "stop" button does nothing.
+ *
+ * While `isLoading` is true, the send button morphs into a stop-fill
+ * icon — but the previous implementation set `onPress={undefined}`, so
+ * tapping it was a no-op. The user could not cancel a slow / hung
+ * generation; their only option was to back out of the screen.
+ *
+ * Fix: accept an optional `onAbort` prop. When `isLoading` and
+ * `onAbort` is provided, pressing the stop icon invokes the callback.
+ * Parents wire `onAbort` to an `AbortController.abort()` (matches the
+ * electron `useChat` hook contract).
+ *
+ * Backwards-compat: when `onAbort` is absent the stop icon stays a
+ * no-op (no regression for callers that haven't migrated yet).
+ */
+describe('ChatInput (mobile) — P1-AI stop button → onAbort', () => {
+  function findSendButtonForAbort(
+    tree: TestRenderer.ReactTestRenderer,
+  ): TestRenderer.ReactTestInstance {
+    return tree.root.findAll(
+      (n) =>
+        n.type === TouchableOpacity &&
+        (n.props as { testID?: string }).testID === 'chat-send-btn',
+    )[0]
+  }
+
+  it('calls onAbort when the stop icon is pressed while isLoading', () => {
+    const onAbort = jest.fn()
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ChatInput
+          onSend={jest.fn()}
+          isLoading={true}
+          disabled={false}
+          onAbort={onAbort}
+        />,
+      )
+    })
+
+    const btn = findSendButtonForAbort(tree)
+    expect(btn).toBeTruthy()
+    act(() => {
+      ;(btn.props as { onPress?: () => void }).onPress?.()
+    })
+    expect(onAbort).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the stop icon when isLoading is true', () => {
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ChatInput
+          onSend={jest.fn()}
+          isLoading={true}
+          disabled={false}
+          onAbort={jest.fn()}
+        />,
+      )
+    })
+
+    const stopIcons = tree.root.findAll(
+      (n) =>
+        (n.props as { testID?: string }).testID === 'icon-stop.fill',
+    )
+    expect(stopIcons.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('does NOT invoke onSend when the stop icon is pressed', () => {
+    const onSend = jest.fn()
+    const onAbort = jest.fn()
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ChatInput
+          onSend={onSend}
+          isLoading={true}
+          disabled={false}
+          onAbort={onAbort}
+        />,
+      )
+    })
+    act(() => {
+      ;(findSendButtonForAbort(tree).props as { onPress?: () => void }).onPress?.()
+    })
+    expect(onSend).not.toHaveBeenCalled()
+    expect(onAbort).toHaveBeenCalledTimes(1)
+  })
+
+  it('stop button stays a safe no-op when onAbort is not provided', () => {
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ChatInput onSend={jest.fn()} isLoading={true} disabled={false} />,
+      )
+    })
+    // Tapping must not throw, even though no abort handler is wired up.
+    expect(() => {
+      act(() => {
+        ;(findSendButtonForAbort(tree).props as { onPress?: () => void }).onPress?.()
+      })
+    }).not.toThrow()
+  })
+})

@@ -28,6 +28,18 @@ interface ChatInputProps {
   permissionDenied?: boolean
   /** Text injected from outside (e.g. voice transcription) */
   externalText?: string | null
+  /**
+   * P1-AI: optional abort callback. When `isLoading` is true the send
+   * button morphs into a stop-fill icon; pressing it invokes this
+   * callback so the parent can cancel an in-flight request. Parents
+   * typically wire this to an `AbortController.abort()` to match the
+   * electron `useChat` contract.
+   *
+   * When omitted, the stop icon is rendered for visual consistency but
+   * tapping it is a safe no-op (no regression for callers that haven't
+   * migrated yet).
+   */
+  onAbort?: () => void
 }
 
 export function ChatInput({
@@ -40,6 +52,7 @@ export function ChatInput({
   voiceError,
   permissionDenied,
   externalText,
+  onAbort,
 }: ChatInputProps) {
   const [text, setText] = useState('')
 
@@ -111,8 +124,13 @@ export function ChatInput({
 
         <TouchableOpacity
           testID="chat-send-btn"
-          onPress={showStop ? undefined : handleSend}
-          disabled={!canSend && !showStop}
+          // P1-AI: while isLoading, the send button morphs into a stop
+          // icon. Previously its onPress was `undefined`, so tapping was
+          // a no-op and the user could not cancel a hung generation.
+          // Now we route the press to `onAbort` when provided; absent
+          // that, we keep the no-op for back-compat.
+          onPress={showStop ? onAbort : handleSend}
+          disabled={(!canSend && !showStop) || (showStop && !onAbort)}
           className={`w-10 h-10 rounded-full items-center justify-center ml-2 ${
             showStop
               ? 'bg-[#0a7ea4]'
