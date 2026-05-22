@@ -7,7 +7,7 @@ import { VoiceChatLauncher } from '@/components/chat/VoiceChatLauncher'
 import { LockChip } from '@/components/auth/LockChip'
 import { MiniPlayer } from '@/components/player/MiniPlayer'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
-import { ReaderShellContext } from '@/components/reader/ReaderShell'
+import { ReaderShellContext } from '@/components/reader/ReaderShellContext'
 import { useAuthStore } from '@/lib/stores/authStore'
 import {
   useChatStore,

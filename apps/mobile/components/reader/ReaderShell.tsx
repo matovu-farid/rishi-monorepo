@@ -1,5 +1,4 @@
 import React, {
-  createContext,
   useCallback,
   useEffect,
   useMemo,
@@ -12,6 +11,10 @@ import { ReaderTopBar } from '@/components/reader/ReaderTopBar'
 import { ReaderBottomBar } from '@/components/reader/ReaderBottomBar'
 import { ReaderOverlay } from '@/components/reader/ReaderOverlay'
 import type { ReaderProgress } from '@/components/reader/ReaderProgressPill'
+import {
+  ReaderShellContext,
+  type ReaderShellContextValue,
+} from '@/components/reader/ReaderShellContext'
 import { useAuthStore } from '@/lib/stores/authStore'
 import { usePrefsStore } from '@/lib/stores/prefsStore'
 import type { ActivationContext } from '@/lib/stores/chatStore'
@@ -49,15 +52,9 @@ export interface TocItem {
   subitems?: TocItem[]
 }
 
-export interface ReaderShellContextValue {
-  bottomBarVisible: boolean
-  toggleToolbar: () => void
-}
-
-export const ReaderShellContext = createContext<ReaderShellContextValue>({
-  bottomBarVisible: false,
-  toggleToolbar: () => undefined,
-})
+// ReaderShellContext + ReaderShellContextValue are re-exported above from
+// `./ReaderShellContext` so callers can still import them from this module.
+export { ReaderShellContext, type ReaderShellContextValue }
 
 export interface ReaderShellProps {
   title: string
@@ -185,6 +182,11 @@ export function ReaderShell({
     initialToolbarVisible,
   )
 
+  // RDR-025 — bumped via `interact()` to re-arm the 3s auto-hide effect
+  // without flipping visibility. The effect uses this as a dep so each
+  // interact bump schedules a fresh timeout.
+  const [touchTick, setTouchTick] = useState(0)
+
   // P1-T — drive the lock chip overlays on TTS / voice / AI buttons. The
   // bar receives `showLockChips=!isAuthenticated`; the chip is purely a
   // visual affordance, taps still fire and the gate opens via
@@ -250,18 +252,36 @@ export function ReaderShell({
         timerRef.current = null
       }
     }
-  }, [toolbarVisible, ttsActive, realtimeActive, anySheetOpen, toolbarPinned])
+  }, [
+    toolbarVisible,
+    ttsActive,
+    realtimeActive,
+    anySheetOpen,
+    toolbarPinned,
+    // RDR-025 — bumping touchTick re-runs the effect, which clears and
+    // reschedules the 3s timeout. Without this, the toolbar disappears
+    // even while the user is actively touching it.
+    touchTick,
+  ])
 
   const toggleToolbar = useCallback(() => {
     setToolbarVisible((prev) => !prev)
+  }, [])
+
+  // RDR-025 — user-touch reset. Wired into the bottom bar's
+  // `onTouchStart` so the timer restarts each time the user touches it
+  // without consuming the press.
+  const interact = useCallback(() => {
+    setTouchTick((n) => n + 1)
   }, [])
 
   const contextValue = useMemo<ReaderShellContextValue>(
     () => ({
       bottomBarVisible: toolbarVisible,
       toggleToolbar,
+      interact,
     }),
-    [toolbarVisible, toggleToolbar],
+    [toolbarVisible, toggleToolbar, interact],
   )
 
   // Bottom bar handler wiring: only forward handlers when the

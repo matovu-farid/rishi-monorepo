@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useContext, useEffect, useState } from 'react'
 import {
   Pressable,
   StyleSheet,
@@ -17,6 +17,7 @@ import { Toolbar } from '@/components/ui/Toolbar'
 import { useTheme } from '@/lib/theme'
 import { zIndex } from '@/lib/theme/tokens'
 import { ReaderProgressPill, type ReaderProgress } from './ReaderProgressPill'
+import { ReaderShellContext } from './ReaderShellContext'
 import type { RealtimeStatus } from '@/lib/realtime/types'
 
 // P1-L — viewports < 380pt (e.g. iPhone SE, mini, small Androids) cannot
@@ -78,6 +79,15 @@ export function ReaderBottomBar({
   const opacity = useSharedValue(visible ? 1 : 0)
   const [moreOpen, setMoreOpen] = useState(false)
 
+  // RDR-025 — bumps ReaderShell's touch-tick so the 3s auto-hide timer
+  // restarts each time the user touches the bar. Wired to the wrapper's
+  // `onTouchStart` below so it fires without consuming the press; the
+  // IconButton children still receive their normal onPress callbacks.
+  const { interact } = useContext(ReaderShellContext)
+  const handleTouchStart = useCallback(() => {
+    interact()
+  }, [interact])
+
   useEffect(() => {
     opacity.value = withTiming(visible ? 1 : 0, {
       duration: reduceMotion ? 0 : motion.duration.fast,
@@ -123,6 +133,10 @@ export function ReaderBottomBar({
     <Animated.View
       pointerEvents={visible ? 'auto' : 'none'}
       testID={testID}
+      // RDR-025 — onTouchStart restarts ReaderShell's auto-hide timer
+      // without flipping visibility. The handler doesn't preventDefault
+      // / stopPropagation so child IconButton presses still fire.
+      onTouchStart={handleTouchStart}
       style={[
         {
           position: 'absolute',
