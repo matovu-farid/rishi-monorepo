@@ -2,7 +2,6 @@ import React, {
   useCallback,
   useContext,
   useEffect,
-  useRef,
   useState,
 } from 'react'
 import {
@@ -36,6 +35,7 @@ import { ReaderShellContext } from '@/components/reader/ReaderShell'
 import { shadow, useTheme, zIndex } from '@/lib/theme'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { computeMiniPlayerTranslateX } from './miniPlayerMorph'
+import { useAutoCollapseTimer } from './useAutoCollapseTimer'
 
 export interface MiniPlayerProps {
   bookId?: string
@@ -122,7 +122,6 @@ export function MiniPlayer({
   // are blocked, so a finger drifting across the orb mid-expand cannot
   // accidentally tap a control.
   const [pillInteractive, setPillInteractive] = useState(false)
-  const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const expandedValue = useSharedValue(0)
   const bar0Scale = useSharedValue(1)
@@ -294,26 +293,20 @@ export function MiniPlayer({
     })
   }, [isPlaying, reduceMotion, bar0Scale, bar1Scale, bar2Scale, bar3Scale])
 
-  // Auto-collapse when expanded but not actively playing. Active playback
-  // suppresses the timer so a user pinning the pill open mid-paragraph
-  // doesn't lose it.
-  useEffect(() => {
-    if (collapseTimerRef.current) {
-      clearTimeout(collapseTimerRef.current)
-      collapseTimerRef.current = null
-    }
-    if (expanded && !isPlaying) {
-      collapseTimerRef.current = setTimeout(() => {
-        setExpanded(false)
-      }, AUTO_COLLAPSE_MS)
-    }
-    return () => {
-      if (collapseTimerRef.current) {
-        clearTimeout(collapseTimerRef.current)
-        collapseTimerRef.current = null
-      }
-    }
-  }, [expanded, isPlaying])
+  // WGT-009 — auto-collapse when expanded but not actively playing. Active
+  // playback suppresses the timer so a user pinning the pill open
+  // mid-paragraph doesn't lose it. The reactive arm (effect-driven) and
+  // the imperative re-arm (each control press) both live inside
+  // `useAutoCollapseTimer` so the delay + guard predicate cannot drift.
+  const handleAutoCollapse = useCallback(() => {
+    setExpanded(false)
+  }, [])
+  const { bump: bumpCollapse } = useAutoCollapseTimer({
+    expanded,
+    isPlaying,
+    delayMs: AUTO_COLLAPSE_MS,
+    onCollapse: handleAutoCollapse,
+  })
 
   const handleExpand = useCallback(() => {
     if (!reduceMotion) {
@@ -321,18 +314,6 @@ export function MiniPlayer({
     }
     setExpanded(true)
   }, [reduceMotion])
-
-  const bumpCollapse = useCallback(() => {
-    if (collapseTimerRef.current) {
-      clearTimeout(collapseTimerRef.current)
-      collapseTimerRef.current = null
-    }
-    if (expanded && !isPlaying) {
-      collapseTimerRef.current = setTimeout(() => {
-        setExpanded(false)
-      }, AUTO_COLLAPSE_MS)
-    }
-  }, [expanded, isPlaying])
 
   const dispatch = useCallback(
     (event: { type: 'PAUSE' | 'RESUME' | 'STOP' | 'NEXT' | 'PREV' | 'REPEAT' }) => {
