@@ -554,6 +554,85 @@ describe('LibraryScreen (P0-K: stage-specific import errors)', () => {
 })
 
 /**
+ * P1-AF — Library FlatList virtualization for 1000+ books.
+ *
+ * The screen previously mounted a FlatList with default render windowing
+ * and no `getItemLayout`, which caused dropped frames and unbounded view
+ * recycling on libraries of 1000+ books. We pin the four perf props the
+ * defect ticket calls out:
+ *   - `getItemLayout`         ➜ enables jump-to-index without measuring
+ *   - `removeClippedSubviews` ➜ unmounts off-screen rows
+ *   - `windowSize=10`         ➜ caps off-screen page buffer
+ *   - `initialNumToRender=12` ➜ first paint covers a typical screen
+ */
+describe('LibraryScreen (P1-AF: FlatList virtualization)', () => {
+  beforeEach(() => {
+    mockBooks.length = 0
+    mockLastReadBook = null
+  })
+
+  function findFlatList(
+    tree: TestRenderer.ReactTestRenderer,
+  ): TestRenderer.ReactTestInstance {
+    return tree.root.findByType('FlatList' as never)
+  }
+
+  function seed() {
+    mockBooks.push({
+      id: 'b1',
+      title: 'Crime and Punishment',
+      author: 'Dostoyevsky',
+      format: 'epub',
+      filePath: '/tmp/cp.epub',
+      coverPath: null,
+      currentCfi: null,
+      currentPage: null,
+      createdAt: 0,
+    })
+  }
+
+  it('passes `removeClippedSubviews`, `windowSize=10`, and `initialNumToRender=12`', () => {
+    seed()
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    const list = findFlatList(tree)
+    const props = list.props as {
+      removeClippedSubviews?: boolean
+      windowSize?: number
+      initialNumToRender?: number
+    }
+    expect(props.removeClippedSubviews).toBe(true)
+    expect(props.windowSize).toBe(10)
+    expect(props.initialNumToRender).toBe(12)
+  })
+
+  it('passes a `getItemLayout` that returns a fixed-size layout', () => {
+    seed()
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    const list = findFlatList(tree)
+    const props = list.props as {
+      getItemLayout?: (
+        data: unknown,
+        index: number,
+      ) => { length: number; offset: number; index: number }
+    }
+    expect(typeof props.getItemLayout).toBe('function')
+    const layout0 = props.getItemLayout!(null, 0)
+    const layout3 = props.getItemLayout!(null, 3)
+    expect(layout0.index).toBe(0)
+    expect(layout3.index).toBe(3)
+    expect(layout0.length).toBeGreaterThan(0)
+    // Fixed-size: offset must scale linearly with index.
+    expect(layout3.offset).toBe(layout0.length * 3 + layout0.offset)
+  })
+})
+
+/**
  * P1-AB — Loading skeleton on first focus.
  *
  * Before the first `useFocusEffect` callback fires + `getBooks()`

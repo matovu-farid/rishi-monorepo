@@ -206,6 +206,21 @@ export default function LibraryScreen() {
     [loadBooks]
   )
 
+  // P1-AF — Virtualize the library list for users with 1000+ books.
+  // BookRow is a fixed-height cell: the row body is `delete-button` (44pt)
+  // plus 2 × spacing.lg padding, trailed by a 1pt Hairline. We pin a
+  // single constant so `getItemLayout` can skip the on-mount measurement
+  // pass that was tanking scroll perf in QA.
+  const BOOK_ROW_HEIGHT = 88
+  const getBookRowLayout = useCallback(
+    (_data: ArrayLike<Book> | null | undefined, index: number) => ({
+      length: BOOK_ROW_HEIGHT,
+      offset: BOOK_ROW_HEIGHT * index,
+      index,
+    }),
+    [],
+  )
+
   // Nav-bar `+` action (replaces the Material FAB — P0-I). The button is
   // present in BOTH the empty and populated states so the user has a
   // single, predictable affordance for adding a book.
@@ -422,6 +437,10 @@ export default function LibraryScreen() {
             />
           )}
           contentContainerStyle={{ paddingBottom: spacing['5xl'] }}
+          getItemLayout={getBookRowLayout}
+          removeClippedSubviews
+          windowSize={10}
+          initialNumToRender={12}
           ListEmptyComponent={
             searchQuery.trim() ? (
               <View
