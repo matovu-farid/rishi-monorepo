@@ -29,6 +29,7 @@ import { ModelDownloadCard } from '@/components/ModelDownloadCard'
 import { EmbeddingProgress } from '@/components/EmbeddingProgress'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
+import { useAuthStore } from '@/lib/stores/authStore'
 import type { Message, SourceChunk } from '@/types/conversation'
 import type { Book } from '@/types/book'
 
@@ -68,6 +69,7 @@ export default function BookChatScreen() {
   // Premium gates — mic + send both require sign-in.
   const requireVoiceInput = useRequireAuth('voice-input')
   const requireAIChat = useRequireAuth('ai-chat')
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
 
   const handleMicPress = useCallback(() => {
     if (voice.isRecording) {
@@ -311,6 +313,7 @@ export default function BookChatScreen() {
               voiceError={voice.error}
               permissionDenied={voice.permissionDenied}
               externalText={voiceText}
+              clearOnSend={isAuthenticated}
             />
       </KeyboardAvoidingView>
     </SafeAreaView>

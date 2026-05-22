@@ -14,6 +14,16 @@ interface ChatInputProps {
   permissionDenied?: boolean
   /** Text injected from outside (e.g. voice transcription) */
   externalText?: string | null
+  /**
+   * Clear the input synchronously when the send button is pressed.
+   * When the parent's `onSend` is gated (e.g. via `useRequireAuth` for
+   * signed-out users), the action will not actually run and the text
+   * would otherwise be lost behind the sign-in sheet. Callers should
+   * pass `clearOnSend={isAuthenticated}` so the input only clears when
+   * the message is actually accepted. Defaults to true for backward
+   * compatibility.
+   */
+  clearOnSend?: boolean
 }
 
 export function ChatInput({
@@ -26,6 +36,7 @@ export function ChatInput({
   voiceError,
   permissionDenied,
   externalText,
+  clearOnSend = true,
 }: ChatInputProps) {
   const [text, setText] = useState('')
 
@@ -40,7 +51,7 @@ export function ChatInput({
   const handleSend = () => {
     if (!canSend) return
     const trimmed = text.trim()
-    setText('')
+    if (clearOnSend) setText('')
     onSend(trimmed)
   }
 
