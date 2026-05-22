@@ -192,10 +192,17 @@ function showChapter(index) {
   document.getElementById('content').style.display = 'block';
   document.getElementById('status').style.display = 'none';
   window.scrollTo(0, 0);
+  // RDR-024 — probe once per chapter for [data-paragraph-index] elements
+  // so the RN side can skip the per-TTS-step injectJavaScript hop on
+  // chapters that have no stable ids (the common case for PalmDOC).
+  var hasParagraphIds = !!document
+    .getElementById('content')
+    .querySelector('[data-paragraph-index]');
   window.ReactNativeWebView.postMessage(JSON.stringify({
     type: 'chapter',
     current: currentChapter,
-    total: chapters.length
+    total: chapters.length,
+    hasParagraphIds: hasParagraphIds
   }));
 }
 
@@ -280,6 +287,11 @@ export default function MobiReaderScreen() {
 
   const webViewRef = useRef<WebView>(null)
   const currentChapterRef = useRef(0)
+  // RDR-024 — set by the chapter postMessage from the WebView. Most MOBI
+  // chapters lack `[data-paragraph-index]` ids, so the per-TTS-step
+  // injectJavaScript hop below would always be a no-op. We probe once
+  // per chapter and skip the hop when no ids exist.
+  const hasParagraphIdsRef = useRef(false)
 
   // Mount the player machine for this book — TTS controls (rendered
   // below) read state from `usePlayerStore`.
@@ -368,6 +380,10 @@ export default function MobiReaderScreen() {
       } else if (msg.type === 'chapter') {
         setCurrentChapter(msg.current)
         currentChapterRef.current = msg.current
+        // RDR-024 — cache the probe result so the active-paragraph
+        // reconciler effect can skip its injectJavaScript hop when the
+        // chapter has no `[data-paragraph-index]` ids (the common case).
+        hasParagraphIdsRef.current = msg.hasParagraphIds === true
         if (book?.id) {
           updateBookPage(book.id, msg.current)
         }
@@ -583,6 +599,11 @@ export default function MobiReaderScreen() {
   useEffect(() => {
     if (!bookLoaded || !webViewRef.current) return
     if (!activeParagraph) return
+    // RDR-024 — skip the JNI hop entirely when the chapter probe told
+    // us there are no `[data-paragraph-index]` elements. The audio still
+    // plays; we just don't pay the cross-bridge cost for a guaranteed
+    // no-op querySelector inside the WebView.
+    if (!hasParagraphIdsRef.current) return
     // Best-effort inline highlight: scroll the WebView to the top of
     // the active paragraph by id when the WebView can find a matching
     // element. Most MOBI HTML doesn't carry stable ids, so this is a
