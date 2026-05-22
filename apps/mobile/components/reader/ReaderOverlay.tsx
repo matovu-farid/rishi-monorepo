@@ -32,11 +32,13 @@ export interface ReaderOverlayProps {
 }
 
 const FLOATING_BOTTOM_OFFSET = 112
-// P1-M — height of the reader bottom bar (matches `ReaderBottomBar`'s
-// Toolbar). When the bar is visible the floating widgets must shift up by
-// this amount so they don't sit underneath the toolbar (which renders at
-// `zIndex.toolbar` directly below `zIndex.overlayChrome`).
-const READER_BOTTOM_BAR_HEIGHT = 44
+// P1-M / WGT-016 — minimum height of the reader bottom bar (matches the
+// Toolbar row floor `minHeight: 44`). The REAL visual height is
+// `READER_BOTTOM_BAR_MIN + insets.bottom` because the bottom-variant Toolbar
+// pads its own bottom by insets.bottom (≈34pt on notched iPhones). The
+// floating widgets must lift by that real height when the bar is visible —
+// not the 44pt floor — or they sit underneath the toolbar.
+const READER_BOTTOM_BAR_MIN = 44
 
 /**
  * Pure orchestrator. Reads (isChatting, voiceState, playingState) and
@@ -94,10 +96,13 @@ export function ReaderOverlay({
   // P1-M — single source of truth for floating-widget bottom offset so the
   // orb, launcher, and the lock-chip overlay stay in lockstep when the
   // reader bottom bar comes and goes.
+  // WGT-016 — lift by the bar's REAL height (`min + insets.bottom`) so
+  // the widgets clear the toolbar on notched iPhones, not just the
+  // visible row floor.
   const floatingBottom =
     insets.bottom +
     FLOATING_BOTTOM_OFFSET +
-    (bottomBarVisible ? READER_BOTTOM_BAR_HEIGHT : 0)
+    (bottomBarVisible ? READER_BOTTOM_BAR_MIN + insets.bottom : 0)
 
   return (
     <View

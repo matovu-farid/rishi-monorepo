@@ -52,7 +52,13 @@ const PILL_WIDTH_NO_REPEAT = 240
 const PILL_WIDTH_WITH_REPEAT = 280
 const BAR_HEIGHTS = [8, 14, 20, 12] as const
 const AUTO_COLLAPSE_MS = 4000
-const BOTTOM_BAR_HEIGHT = 44
+// WGT-016 — `BOTTOM_BAR_MIN` is the Toolbar row floor (`minHeight: 44`). The
+// real visual height of the reader bottom bar is `BOTTOM_BAR_MIN +
+// insets.bottom` because the bottom-variant Toolbar adds
+// `paddingBottom: insets.bottom`. The old constant
+// `BOTTOM_BAR_HEIGHT = 44` undercounted the bar by ~34pt on notched iPhones,
+// so the MiniPlayer floated INTO the bar.
+const BOTTOM_BAR_MIN = 44
 
 function PillIconButton({
   iconName,
@@ -146,11 +152,17 @@ export function MiniPlayer({
 
   const resolvedTabBarHeight =
     variant === 'global' ? (tabBarHeight ?? 49) : 0
+  // WGT-016 — the reader bottom bar's real visual height is
+  // `BOTTOM_BAR_MIN + insets.bottom` (the Toolbar pads its own bottom by
+  // insets.bottom on the bottom variant). Use that real height when
+  // pushing the MiniPlayer above the bar so the pill clears the bar on
+  // notched iPhones too.
+  const readerBottomBarHeight = BOTTOM_BAR_MIN + insets.bottom
   const bottomOffset =
     variant === 'reader'
       ? insets.bottom +
         16 +
-        (expanded ? 0 : bottomBarVisible ? BOTTOM_BAR_HEIGHT : 0)
+        (expanded ? 0 : bottomBarVisible ? readerBottomBarHeight : 0)
       : insets.bottom + 16 + resolvedTabBarHeight
 
   const pillWidth =

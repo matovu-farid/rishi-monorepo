@@ -421,6 +421,69 @@ describe('MiniPlayer (mobile)', () => {
     ).toBe('none')
   })
 
+  describe('WGT-016 — reader bottom-bar offset honors safe-area insets', () => {
+    // The reader's Toolbar has `minHeight: 44` (the row floor) plus
+    // `paddingBottom: insets.bottom` on the bottom variant. The previous
+    // constant `BOTTOM_BAR_HEIGHT = 44` undercounted the bar's visual
+    // height by ~insets.bottom (≈34pt on notched iPhones), so the
+    // MiniPlayer floated INTO the bottom bar instead of above it.
+    //
+    // Test the surface that's safely observable: the MiniPlayer's
+    // wrapper `style.bottom` when the reader bar is visible vs hidden.
+    // The delta must equal `44 + insets.bottom`, not just `44`.
+    function getMiniPlayerBottom(
+      bottomBarVisible: boolean,
+    ): number | undefined {
+      // We must re-require ReaderShellContext so we can wrap the tree
+      // in a Provider with the supplied bottomBarVisible — the same
+      // pattern the ReaderOverlay test uses.
+      const ReaderShell = require('@/components/reader/ReaderShell') as {
+        ReaderShellContext: React.Context<{
+          bottomBarVisible: boolean
+          toggleToolbar: () => void
+        }>
+      }
+      const Provider = ReaderShell.ReaderShellContext.Provider
+      playerState.playingState = 'playing'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(
+          <Provider
+            value={{
+              bottomBarVisible,
+              toggleToolbar: () => undefined,
+            }}
+          >
+            <MiniPlayer bookId="b1" variant="reader" />
+          </Provider>,
+        )
+      })
+      const player = findByTestID(tree, 'mini-player')
+      const style = (player!.props as { style?: unknown }).style
+      // The wrapper has an array style: [shadow.medium, {...}, animatedStyle].
+      // Walk it to find the bottom value.
+      const items = Array.isArray(style) ? style : [style]
+      for (const item of items) {
+        if (item && typeof item === 'object' && 'bottom' in item) {
+          return (item as { bottom?: number }).bottom
+        }
+      }
+      return undefined
+    }
+
+    it('bottom offset increase when toolbar shows equals 44 + insets.bottom', () => {
+      // useSafeAreaInsets is mocked to bottom: 34 above.
+      const bottomHidden = getMiniPlayerBottom(false)
+      const bottomVisible = getMiniPlayerBottom(true)
+      expect(typeof bottomHidden).toBe('number')
+      expect(typeof bottomVisible).toBe('number')
+      const delta = (bottomVisible as number) - (bottomHidden as number)
+      // Real bottom-bar visual height = Toolbar.minHeight + insets.bottom
+      // = 44 + 34 = 78. The old code shifted by 44 only.
+      expect(delta).toBe(44 + 34)
+    })
+  })
+
   it('hides repeat button when repeatMode="off", shows it when "one"', () => {
     playerState.playingState = 'playing'
     playerState.repeatMode = 'off'

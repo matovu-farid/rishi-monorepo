@@ -512,6 +512,54 @@ describe('ReaderOverlay (mobile)', () => {
     expect(bottomVisible).toBeGreaterThan(bottomHidden as number)
   })
 
+  it('lifts the launcher by 44 + insets.bottom when toolbar shows (WGT-016)', () => {
+    // The previous constant `READER_BOTTOM_BAR_HEIGHT = 44` undercounted
+    // the bar by `insets.bottom` (≈34pt on notched iPhones) because the
+    // bottom-variant Toolbar pads its own bottom by insets.bottom. The
+    // floating widgets must lift by the REAL height — 44 + insets.bottom
+    // — or they sit underneath the toolbar.
+    // useSafeAreaInsets is mocked above with bottom: 34.
+    const ReaderShell = require('@/components/reader/ReaderShellContext') as {
+      ReaderShellContext: React.Context<{
+        bottomBarVisible: boolean
+        toggleToolbar: () => void
+        interact: () => void
+      }>
+    }
+    const Provider = ReaderShell.ReaderShellContext.Provider
+    chatState.isChatting = false
+
+    let treeHidden!: TestRenderer.ReactTestRenderer
+    act(() => {
+      treeHidden = TestRenderer.create(
+        <Provider value={{ bottomBarVisible: false, toggleToolbar: () => undefined, interact: () => undefined }}>
+          <ReaderOverlay bookId="b1" />
+        </Provider>,
+      )
+    })
+    const bottomHidden = (
+      findByTestID(treeHidden, 'voice-chat-launcher-stub')!.props as {
+        style?: { bottom?: number }
+      }
+    ).style?.bottom as number
+
+    let treeVisible!: TestRenderer.ReactTestRenderer
+    act(() => {
+      treeVisible = TestRenderer.create(
+        <Provider value={{ bottomBarVisible: true, toggleToolbar: () => undefined, interact: () => undefined }}>
+          <ReaderOverlay bookId="b1" />
+        </Provider>,
+      )
+    })
+    const bottomVisible = (
+      findByTestID(treeVisible, 'voice-chat-launcher-stub')!.props as {
+        style?: { bottom?: number }
+      }
+    ).style?.bottom as number
+
+    expect(bottomVisible - bottomHidden).toBe(44 + 34)
+  })
+
   it('forwards onChatToggle to AIChatOrb as the onPress prop', () => {
     chatState.isChatting = true
     const onChatToggle = jest.fn()
