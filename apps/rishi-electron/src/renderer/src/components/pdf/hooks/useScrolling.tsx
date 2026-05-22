@@ -70,24 +70,15 @@ export function useScrolling(scrollContainerRef: React.RefObject<HTMLDivElement 
     }
   }, [scrollContainerRef])
 
-  // Watch the page-advance suppression flag. The moment the flag flips to
-  // `true` (which `pageControls.nextPage`/`previousPage` does just before
-  // asking the virtualizer to scroll to the adjacent page), STOP any
-  // in-flight centering animate. Without this, a centering animate scheduled
-  // for the page-N highlight keeps running for up to 800 ms — past the
-  // moment the virtualizer scrolls to page N+1 — and overwrites
-  // `container.scrollTop` on every rAF tick back toward the page-N target.
-  // That's the user-observable snap-back reported on PR #31 (issue #30):
-  // the reader advances to page N+1 first paragraph, then snaps back to
-  // page N about 500–1500 ms later as the stale animate finishes pulling
-  // scrollTop back.
-  //
-  // The previous fixes (consumer-side flag clear in this hook's timeout
-  // body) addressed the case where the NEXT highlight had not yet been
-  // resolved when the timeout fires. They did NOT cover the case where
-  // a PREVIOUS animate was already running at the moment of the page
-  // advance — `animate(...)` returned controls were never stored, so
-  // there was nothing to stop. This watcher closes that gap.
+  // Primary defence against the #30 snap-back: the moment
+  // `pageControls.nextPage`/`previousPage` flips the suppression flag,
+  // cancel any in-flight centering animate. Otherwise an 800 ms tween
+  // captured for the page-N target keeps writing scrollTop on every rAF
+  // tick after the virtualizer has already moved to page N+1, pulling
+  // the reader back. The flag-read-and-clear inside the centering effect
+  // below is a secondary guard for the edge case where no animate is in
+  // flight at the boundary — without it the first new-page highlight
+  // would still re-center into the previous page by one frame's worth.
   useEffect(() => {
     const unsub = usePdfStore.subscribe(
       (s) => s.isLookingForNextParagraph,

@@ -326,6 +326,68 @@ test('NEXT on last paragraph of page N lands on page N+1 and does not snap back 
     })
     console.log('[diag] requestNextPage dispatched. preBoundary =', JSON.stringify(preBoundary))
 
+    // Once the virtualizer has scrolled to page 2 and its paragraphs have
+    // been published to playerStore.currentParagraphs, advance the player
+    // to the FIRST paragraph of page 2 — what the real playerMachine does
+    // in its `waitingForParagraphs` → PLAY[0] transition after a page
+    // boundary NEXT. Without this step the highlight remains pinned to the
+    // last paragraph of page 1 and the "which paragraph is the reader
+    // reading" assertion below can't witness the snap-back symptom.
+    await bookPage.waitForFunction(
+      () => {
+        const w = window as unknown as {
+          __rishi: {
+            playerStore: {
+              getState: () => { currentParagraphs: { index: string }[] }
+            }
+          }
+        }
+        const ps = w.__rishi.playerStore.getState()
+        // page-2 paragraphs encode as 20000..29999 in pageDataToParagraphs.
+        return ps.currentParagraphs.some((p) => {
+          const n = Number(p.index)
+          return Number.isFinite(n) && n >= 20000 && n < 30000
+        })
+      },
+      undefined,
+      { timeout: 5000 }
+    )
+    const page2Advance = await bookPage.evaluate(() => {
+      const w = window as unknown as {
+        __rishi: {
+          playerStore: {
+            getState: () => {
+              currentParagraphs: { index: string; text: string }[]
+            }
+            setState: (s: Record<string, unknown>) => void
+          }
+          pdfStore: {
+            getState: () => {
+              setHighlightedParagraphIndex: (i: string) => void
+              setIsHighlighting: (v: boolean) => void
+            }
+          }
+        }
+      }
+      const page2Paragraphs = w.__rishi.playerStore
+        .getState()
+        .currentParagraphs.filter((p) => {
+          const n = Number(p.index)
+          return Number.isFinite(n) && n >= 20000 && n < 30000
+        })
+      const first = page2Paragraphs[0]
+      if (!first) throw new Error('page-2 paragraphs not published to playerStore')
+      // Simulate the playerMachine advancing to page 2's first paragraph.
+      w.__rishi.playerStore.setState({
+        activeParagraph: first,
+        lastPlayedParagraphIndex: first.index
+      })
+      w.__rishi.pdfStore.getState().setIsHighlighting(true)
+      w.__rishi.pdfStore.getState().setHighlightedParagraphIndex(first.index)
+      return { firstPage2Index: first.index, page2Count: page2Paragraphs.length }
+    })
+    console.log('[diag] page2Advance:', JSON.stringify(page2Advance))
+
     // Continuously sample so we can see WHEN the snap-back happens.
     const timeline = await bookPage.evaluate(async () => {
       const w = window as unknown as {
@@ -455,6 +517,38 @@ test('NEXT on last paragraph of page N lands on page N+1 and does not snap back 
     expect(
       final.pdfPage,
       `after 2.5s wait, pdfStore.pageNumber must be 2 (was: ${final.pdfPage}); timeline shows the reader snapped back`
+    ).toBeGreaterThanOrEqual(2)
+
+    // Source-of-truth check: the *highlighted paragraph* itself — i.e.
+    // the literal paragraph the reader is currently reading — must live
+    // on page N+1. scrollTop is a defence-in-depth signal for the
+    // virtualizer; the highlight is the user-visible "which paragraph"
+    // signal the user actually asked about. PDF in-app paragraph ids are
+    // numeric strings encoded as `pageNumber * 10000 + idx` by
+    // `pageDataToParagraphs` (apps/rishi-electron/src/renderer/src/
+    // components/pdf/utils/getPageParagraphs.ts:11), so the resolved page
+    // is `floor(index / 10000)`.
+    const paragraphToPage = (idx: string | null | undefined): number | null => {
+      if (!idx) return null
+      const n = Number(idx)
+      if (!Number.isFinite(n) || n < 10000) return null
+      return Math.floor(n / 10000)
+    }
+    const finalHighlightedPage = paragraphToPage(final.highlighted)
+    expect(
+      final.highlighted,
+      `after 2.5s wait, pdfStore.highlightedParagraphIndex must be set (was: ${final.highlighted || '-'})`
+    ).toBeTruthy()
+    expect(
+      finalHighlightedPage,
+      `after 2.5s wait, the highlighted paragraph must resolve to a page ` +
+        `(highlighted='${final.highlighted}', resolved page=${finalHighlightedPage})`
+    ).not.toBeNull()
+    expect(
+      finalHighlightedPage as number,
+      `after 2.5s wait, the highlighted paragraph must live on page >= 2 ` +
+        `(highlighted='${final.highlighted}', resolved page=${finalHighlightedPage}); ` +
+        `a value of 1 means the reader is now highlighting a page-1 paragraph — the snap-back symptom.`
     ).toBeGreaterThanOrEqual(2)
   } finally {
     // closeApp can hang on slow indexing fibers in the main process. Wrap it
