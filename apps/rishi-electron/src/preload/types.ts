@@ -317,7 +317,7 @@ export interface Book {
   syncVersion: number
   isDirty: number
   isDeleted: number
-  lastParagraph: string | null
+  lastParagraph?: string | null
 }
 
 export interface BookInsertable {
