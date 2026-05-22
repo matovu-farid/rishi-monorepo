@@ -182,6 +182,13 @@ export default function BookChatScreen() {
     setEmbedAttempt((n) => n + 1)
   }, [])
 
+  // CHT-006 (#56) / A11Y-006 (#103): an AbortController bound to the
+  // currently in-flight `askQuestion`. ChatInput's stop icon invokes
+  // `handleAbort`, which calls `.abort()` on this controller; the
+  // underlying fetch in `useRAGQuery` rejects with AbortError and the
+  // hook flips `isLoading` back to false via its catch+finally.
+  const abortRef = useRef<AbortController | null>(null)
+
   // Send a message
   const handleSend = useCallback(
     async (text: string) => {
@@ -203,17 +210,42 @@ export default function BookChatScreen() {
         content: m.content,
       }))
 
+      // Fresh controller for THIS turn — abort any prior in-flight
+      // controller before swapping so a quick second send doesn't leave
+      // a dangling abort handle.
+      abortRef.current?.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
+
       try {
-        const { answer, sources } = await askQuestion(text, history)
+        const { answer, sources } = await askQuestion(text, history, controller.signal)
         const assistantMsg = addMessage(conversationId, 'assistant', answer, sources)
         setMessageList((prev) => [...prev, assistantMsg])
-      } catch (_err) {
-        setInlineError('Could not get a response. Check your connection and try again.')
-        setRetryQuestion(text)
+      } catch (err) {
+        // User-initiated abort: don't surface a banner — the message row
+        // already conveys what happened, and the user explicitly asked
+        // to stop. Only show the inline retry banner for real failures.
+        const isAbort =
+          (err instanceof Error && err.name === 'AbortError') ||
+          controller.signal.aborted
+        if (!isAbort) {
+          setInlineError('Could not get a response. Check your connection and try again.')
+          setRetryQuestion(text)
+        }
+      } finally {
+        // Only clear the ref if this is still the active controller —
+        // a follow-up send may have swapped it.
+        if (abortRef.current === controller) {
+          abortRef.current = null
+        }
       }
     },
     [conversationId, bookId, messageList, askQuestion]
   )
+
+  const handleAbort = useCallback(() => {
+    abortRef.current?.abort()
+  }, [])
 
   const handleRetry = useCallback(() => {
     if (retryQuestion) {
@@ -439,6 +471,11 @@ export default function BookChatScreen() {
               voiceError={voice.error}
               permissionDenied={voice.permissionDenied}
               externalText={voiceText}
+              // CHT-006 (#56) / A11Y-006 (#103): wire abort. ChatInput's
+              // send button morphs into a stop-fill icon while
+              // `isLoading` is true; tapping it now calls into our
+              // AbortController and cancels the in-flight LLM fetch.
+              onAbort={handleAbort}
             />
       </KeyboardAvoidingView>
     </SafeAreaView>
