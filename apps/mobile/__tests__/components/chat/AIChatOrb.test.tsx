@@ -48,6 +48,7 @@ jest.mock('react-native', () => {
     AccessibilityInfo: {
       isReduceMotionEnabled: jest.fn(async () => false),
       addEventListener: jest.fn(() => ({ remove: jest.fn() })),
+      announceForAccessibility: jest.fn(),
     },
   }
 })
@@ -132,7 +133,7 @@ jest.mock('@rishi/shared/tokens/orb-colors', () => ({
 
 import React, { act } from 'react'
 import TestRenderer from 'react-test-renderer'
-import { Pressable } from 'react-native'
+import { AccessibilityInfo, Pressable } from 'react-native'
 import { AIChatOrb } from '@/components/chat/AIChatOrb'
 import type { AIChatOrbStatus } from '@rishi/shared/tokens/orb-colors'
 
@@ -242,6 +243,112 @@ describe('AIChatOrb (mobile)', () => {
       (n) => (n.props as { testID?: string } | null)?.testID === 'ai-chat-orb',
     )
     expect(tagged.length).toBeGreaterThan(0)
+  })
+
+  describe('a11y: accessibilityValue + announceForAccessibility (P1-P)', () => {
+    beforeEach(() => {
+      ;(
+        AccessibilityInfo.announceForAccessibility as jest.Mock
+      ).mockClear()
+    })
+
+    it.each(['idle', 'connecting', 'thinking', 'speaking'] as const)(
+      'sets accessibilityValue.text to match the status label for chatStatus=%s',
+      (status) => {
+        let tree!: TestRenderer.ReactTestRenderer
+        act(() => {
+          tree = TestRenderer.create(
+            <AIChatOrb chatStatus={status} onPress={() => undefined} />,
+          )
+        })
+        const valued = tree.root.findAll(
+          (n) =>
+            (n.props as { accessibilityValue?: { text?: string } } | null)
+              ?.accessibilityValue?.text === A11Y_LABELS[status],
+        )
+        expect(valued.length).toBeGreaterThan(0)
+      },
+    )
+
+    it('does NOT announce on initial mount with chatStatus="idle"', () => {
+      act(() => {
+        TestRenderer.create(
+          <AIChatOrb chatStatus="idle" onPress={() => undefined} />,
+        )
+      })
+      expect(
+        AccessibilityInfo.announceForAccessibility,
+      ).not.toHaveBeenCalled()
+    })
+
+    it('announces the new label when chatStatus transitions idle -> connecting', () => {
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(
+          <AIChatOrb chatStatus="idle" onPress={() => undefined} />,
+        )
+      })
+      expect(
+        AccessibilityInfo.announceForAccessibility,
+      ).not.toHaveBeenCalled()
+
+      act(() => {
+        tree.update(
+          <AIChatOrb chatStatus="connecting" onPress={() => undefined} />,
+        )
+      })
+      expect(
+        AccessibilityInfo.announceForAccessibility,
+      ).toHaveBeenCalledTimes(1)
+      expect(
+        AccessibilityInfo.announceForAccessibility,
+      ).toHaveBeenLastCalledWith(A11Y_LABELS.connecting)
+    })
+
+    it('announces again when chatStatus reverts (connecting -> idle)', () => {
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(
+          <AIChatOrb chatStatus="idle" onPress={() => undefined} />,
+        )
+      })
+      act(() => {
+        tree.update(
+          <AIChatOrb chatStatus="connecting" onPress={() => undefined} />,
+        )
+      })
+      act(() => {
+        tree.update(
+          <AIChatOrb chatStatus="idle" onPress={() => undefined} />,
+        )
+      })
+      expect(
+        AccessibilityInfo.announceForAccessibility,
+      ).toHaveBeenCalledTimes(2)
+      expect(
+        AccessibilityInfo.announceForAccessibility,
+      ).toHaveBeenLastCalledWith(A11Y_LABELS.idle)
+    })
+
+    it('does NOT re-announce when chatStatus stays the same across renders', () => {
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(
+          <AIChatOrb chatStatus="thinking" onPress={() => undefined} />,
+        )
+      })
+      ;(
+        AccessibilityInfo.announceForAccessibility as jest.Mock
+      ).mockClear()
+      act(() => {
+        tree.update(
+          <AIChatOrb chatStatus="thinking" onPress={() => undefined} />,
+        )
+      })
+      expect(
+        AccessibilityInfo.announceForAccessibility,
+      ).not.toHaveBeenCalled()
+    })
   })
 
   it('honors a custom testID prop (overrides default)', () => {

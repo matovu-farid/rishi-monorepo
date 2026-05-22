@@ -1,5 +1,6 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useRef } from 'react'
 import {
+  AccessibilityInfo,
   Pressable,
   StyleSheet,
   View,
@@ -63,6 +64,21 @@ export function AIChatOrb({
   const bar3Scale = useSharedValue(1)
   const ringScale = useSharedValue(0.9)
   const ringOpacity = useSharedValue(0)
+
+  // Announce status changes for screen-reader users. We track the
+  // previously-rendered status so that the initial mount does NOT
+  // announce — only true transitions trigger an announcement. This
+  // pairs with `accessibilityValue={{ text }}` on the Pressable so
+  // VoiceOver/TalkBack re-read the orb's state when focus persists
+  // across a status change. (P1-P)
+  const prevStatusRef = useRef<AIChatOrbStatus | null>(null)
+  useEffect(() => {
+    const prev = prevStatusRef.current
+    if (prev !== null && prev !== chatStatus) {
+      AccessibilityInfo.announceForAccessibility(A11Y_LABELS[chatStatus])
+    }
+    prevStatusRef.current = chatStatus
+  }, [chatStatus])
 
   useEffect(() => {
     const bars = [bar0Scale, bar1Scale, bar2Scale, bar3Scale]
@@ -197,6 +213,7 @@ export function AIChatOrb({
       onPress={handlePress}
       accessibilityRole="button"
       accessibilityLabel={A11Y_LABELS[chatStatus]}
+      accessibilityValue={{ text: A11Y_LABELS[chatStatus] }}
       accessibilityHint="Toggle the chat panel"
       hitSlop={4}
       style={style}
