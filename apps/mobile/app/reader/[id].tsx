@@ -16,7 +16,6 @@ import {
   isLocationBookmarked,
   type Bookmark,
 } from '@/lib/bookmarks/bookmark-storage'
-import { TTSControls } from '@/components/TTSControls'
 import { TTSVisualCue } from '@/components/TTSVisualCue'
 import { useVisualCueStore } from '@/lib/tts/visual-cue'
 import { classifyParagraphForVisualCue } from '@/lib/tts/visual-cue-classify'
@@ -667,8 +666,6 @@ function ReaderContent({ book }: { book: Book }) {
         <View style={{ position: 'absolute', top: insets.top + 48 + 8, left: 16, right: 16, zIndex: 11 }}>
           <GuardrailWarning visible={showGuardrailWarning} />
         </View>
-
-        <TTSControls />
 
         {/* G15 — visual cue badge (gated by prefsStore.ttsVisualCueEnabled
             AND a non-null cue in the visual-cue store). The EPUB WebView

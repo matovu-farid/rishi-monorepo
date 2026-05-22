@@ -49,7 +49,6 @@ import type { PdfLocator } from '@rishi/shared/types/pdf-locator'
 import { resolvePlayFromSelection } from '@/lib/pdf/read-aloud-from-selection'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
-import { TTSControls } from '@/components/TTSControls'
 import { TTSVisualCue } from '@/components/TTSVisualCue'
 import { useVisualCueStore } from '@/lib/tts/visual-cue'
 import { classifyParagraphForVisualCue } from '@/lib/tts/visual-cue-classify'
@@ -93,7 +92,7 @@ export default function PdfReaderScreen() {
   const [noteTargetHighlight, setNoteTargetHighlight] = useState<PdfHighlight | null>(null)
 
   // Mount the player machine actor for this book. Subsequent reads of
-  // `usePlayerStore` (via `TTSControls`) get the live machine state.
+  // `usePlayerStore` (via `MiniPlayer`) get the live machine state.
   usePlayerMachine(book?.id ?? '')
 
   // Bridge realtime voice-chat status to the player so chat-position is
@@ -602,9 +601,6 @@ export default function PdfReaderScreen() {
           </View>
         </View>
       ) : null}
-
-        {/* Floating TTS controls — visible whenever the player isn't idle */}
-        <TTSControls />
 
         {/* G15 — visual cue badge. Mounted unconditionally; the component
             gates its own rendering on prefsStore.ttsVisualCueEnabled +

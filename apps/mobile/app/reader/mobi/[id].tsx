@@ -15,7 +15,6 @@ import { File as ExpoFile } from 'expo-file-system'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { getBookForReading, updateBookPage } from '@/lib/book-storage'
 import { Book } from '@/types/book'
-import { TTSControls } from '@/components/TTSControls'
 import { TTSVisualCue } from '@/components/TTSVisualCue'
 import { useVisualCueStore } from '@/lib/tts/visual-cue'
 import { classifyParagraphForVisualCue } from '@/lib/tts/visual-cue-classify'
@@ -487,9 +486,6 @@ export default function MobiReaderScreen() {
         </View>
 
         <PressableToggleToolbar />
-
-        {/* Floating TTS controls */}
-        <TTSControls />
 
         {/* G15 — visual cue badge */}
         <TTSVisualCue />
