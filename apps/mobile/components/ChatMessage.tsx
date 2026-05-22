@@ -40,6 +40,11 @@ export function ChatMessage({ message, onSourcePress, testID }: ChatMessageProps
             isUser ? 'text-white' : 'text-gray-900 dark:text-gray-100'
           }`}
           accessibilityRole="text"
+          // CHT-018: enable native long-press selection / copy on the
+          // message text. Mirrors electron's `<p>` semantics (selectable
+          // by default) and is the only way mobile users can copy a
+          // model answer (or part of one).
+          selectable
         >
           {message.content}
         </Text>
