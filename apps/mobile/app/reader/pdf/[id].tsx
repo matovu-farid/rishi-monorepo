@@ -682,36 +682,19 @@ export default function PdfReaderScreen() {
           onError={(msg) => console.warn('[pdf-webview] error:', msg)}
         />
 
-        {/* Legacy chrome affordances kept above the PDF until Phase 5
-            folds them into the right cluster: outline + thumbnails. */}
-        <SafeAreaView edges={['top']} style={styles.legacyTopRight} pointerEvents="box-none">
-          <View style={styles.legacyTopRightInner} pointerEvents="box-none">
-            <TouchableOpacity
-              onPress={() => setThumbnailsVisible(true)}
-              style={styles.iconButton}
-              accessibilityLabel="Open Thumbnails"
-              disabled={pageCount === 0}
-            >
-              <IconSymbol
-                name="square.grid.2x2"
-                size={22}
-                color={pageCount === 0 ? '#666' : '#fff'}
-              />
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={handleOpenOutline}
-              style={styles.iconButton}
-              accessibilityLabel="Open Table of Contents"
-              disabled={outline.length === 0}
-            >
-              <IconSymbol
-                name="list.bullet"
-                size={22}
-                color={outline.length === 0 ? '#666' : '#fff'}
-              />
-            </TouchableOpacity>
-          </View>
-        </SafeAreaView>
+        {/*
+          RDR-022 — fold the legacy thumbnails + outline cluster into the
+          ReaderShell auto-hide flow. We consume `bottomBarVisible` from
+          ReaderShellContext and drop both opacity and pointerEvents in
+          lockstep with the bottom bar; previously this cluster stayed on
+          screen forever, breaking Apple-Books parity.
+        */}
+        <LegacyPdfTopRightChrome
+          pageCount={pageCount}
+          outlineCount={outline.length}
+          onThumbnailsPress={() => setThumbnailsVisible(true)}
+          onOutlinePress={handleOpenOutline}
+        />
 
         {/* Selection action bar */}
       {selection ? (
@@ -862,6 +845,66 @@ function PressableToggleToolbar(): React.JSX.Element {
       style={StyleSheet.absoluteFill}
       accessibilityLabel="Toggle toolbar"
     />
+  )
+}
+
+interface LegacyPdfTopRightChromeProps {
+  pageCount: number
+  outlineCount: number
+  onThumbnailsPress: () => void
+  onOutlinePress: () => void
+}
+
+/**
+ * RDR-022 — outline + thumbnails buttons rendered above the PDF page,
+ * tied to the same auto-hide flow as the bottom bar. Reads
+ * `bottomBarVisible` from ReaderShellContext and drops opacity and
+ * pointer events together so the buttons can neither be seen nor tapped
+ * while the toolbar is hidden.
+ */
+function LegacyPdfTopRightChrome({
+  pageCount,
+  outlineCount,
+  onThumbnailsPress,
+  onOutlinePress,
+}: LegacyPdfTopRightChromeProps): React.JSX.Element {
+  const { bottomBarVisible } = useContext(ReaderShellContext)
+  return (
+    <SafeAreaView
+      edges={['top']}
+      style={[
+        styles.legacyTopRight,
+        { opacity: bottomBarVisible ? 1 : 0 },
+      ]}
+      pointerEvents={bottomBarVisible ? 'box-none' : 'none'}
+    >
+      <View style={styles.legacyTopRightInner} pointerEvents="box-none">
+        <TouchableOpacity
+          onPress={onThumbnailsPress}
+          style={styles.iconButton}
+          accessibilityLabel="Open Thumbnails"
+          disabled={pageCount === 0}
+        >
+          <IconSymbol
+            name="square.grid.2x2"
+            size={22}
+            color={pageCount === 0 ? '#666' : '#fff'}
+          />
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={onOutlinePress}
+          style={styles.iconButton}
+          accessibilityLabel="Open Table of Contents"
+          disabled={outlineCount === 0}
+        >
+          <IconSymbol
+            name="list.bullet"
+            size={22}
+            color={outlineCount === 0 ? '#666' : '#fff'}
+          />
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
   )
 }
 
