@@ -49,6 +49,39 @@ jest.mock('react-native', () => {
   }
 })
 
+// `@gorhom/bottom-sheet` pulls in `react-native-gesture-handler` which uses
+// untransformed TS in node_modules. Stub the surface used by `Sheet` and the
+// downstream `NewConversationSheet`.
+jest.mock('@gorhom/bottom-sheet', () => {
+  const React = require('react')
+  const BottomSheet = React.forwardRef(
+    (
+      p: {
+        children?: React.ReactNode
+        index?: number
+        backdropComponent?: (props: unknown) => React.ReactElement
+      },
+      _ref: unknown,
+    ) => {
+      const open = (p.index ?? -1) >= 0
+      return React.createElement('BottomSheet', p, open ? p.children : null)
+    },
+  )
+  const BottomSheetView = (p: any) =>
+    React.createElement('BottomSheetView', p, p.children)
+  const BottomSheetScrollView = (p: any) =>
+    React.createElement('BottomSheetScrollView', p, p.children)
+  const BottomSheetBackdrop = (p: any) =>
+    React.createElement('BottomSheetBackdrop', p)
+  return {
+    __esModule: true,
+    default: BottomSheet,
+    BottomSheetView,
+    BottomSheetScrollView,
+    BottomSheetBackdrop,
+  }
+})
+
 jest.mock('react-native-reanimated', () => {
   const React = require('react')
   const View = React.forwardRef((p: any, r: unknown) =>

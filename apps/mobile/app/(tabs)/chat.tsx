@@ -15,11 +15,14 @@ import {
 import { getBookById } from '@/lib/book-storage'
 import { getBooks } from '@/lib/book-storage'
 import { isBookEmbedded } from '@/lib/rag/vector-store'
+import { NewConversationSheet } from '@/components/chat/NewConversationSheet'
+import type { Book } from '@/types/book'
 import type { Conversation } from '@/types/conversation'
 
 export default function ConversationsScreen() {
   const router = useRouter()
   const [conversations, setConversations] = useState<Conversation[]>([])
+  const [isSheetOpen, setSheetOpen] = useState(false)
   const requireAIChat = useRequireAuth('ai-chat')
   // P1-T — render a tiny lock chip overlay on the "New conversation" +
   // button when the user is signed out. The tap itself still fires (it
@@ -46,29 +49,31 @@ export default function ConversationsScreen() {
     }, [loadConversations])
   )
 
+  // P1-AH — open the NewConversationSheet instead of an Alert button list.
+  // Alert capped at 10 buttons on iOS and gave no embed-status signal; the
+  // sheet shows every imported book plus a Ready/Preparing badge so the
+  // user can tell which titles are already chat-ready.
   const handleNewConversation = useCallback(() => {
     requireAIChat(() => {
-      // Get all books that have been embedded
-      const allBooks = getBooks()
-      const embeddedBooks = allBooks.filter(b => isBookEmbedded(b.id))
-
-      if (embeddedBooks.length === 0) {
-        Alert.alert(
-          'No Books Ready',
-          'Open a book first to prepare it for AI conversations.'
-        )
-        return
-      }
-
-      const buttons = embeddedBooks.slice(0, 10).map(book => ({
-        text: book.title,
-        onPress: () => router.push(`/chat/${book.id}`),
-      }))
-      buttons.push({ text: 'Cancel', onPress: () => {} })
-
-      Alert.alert('Start Conversation', 'Choose a book:', buttons)
+      setSheetOpen(true)
     })
-  }, [router, requireAIChat])
+  }, [requireAIChat])
+
+  // Snapshotting the library when the sheet opens keeps the FlatList stable
+  // for the duration of the interaction (and avoids re-querying SQLite on
+  // every render).
+  const libraryBooks = useMemo<Book[]>(
+    () => (isSheetOpen ? getBooks() : []),
+    [isSheetOpen],
+  )
+
+  const handleSelectBookFromSheet = useCallback(
+    (book: Book) => {
+      setSheetOpen(false)
+      router.push(`/chat/${book.id}?from=Conversations`)
+    },
+    [router],
+  )
 
   const handleDelete = useCallback(
     (id: string) => {
@@ -132,6 +137,13 @@ export default function ConversationsScreen() {
             Open a book and tap the AI icon to start a conversation.
           </Text>
         </View>
+        <NewConversationSheet
+          isOpen={isSheetOpen}
+          onClose={() => setSheetOpen(false)}
+          books={libraryBooks}
+          isBookEmbedded={isBookEmbedded}
+          onSelectBook={handleSelectBookFromSheet}
+        />
       </SafeAreaView>
     )
   }
@@ -184,6 +196,13 @@ export default function ConversationsScreen() {
           )
         }}
         contentContainerClassName="pb-24"
+      />
+      <NewConversationSheet
+        isOpen={isSheetOpen}
+        onClose={() => setSheetOpen(false)}
+        books={libraryBooks}
+        isBookEmbedded={isBookEmbedded}
+        onSelectBook={handleSelectBookFromSheet}
       />
     </SafeAreaView>
   )
