@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   View,
   Text,
@@ -25,10 +25,28 @@ import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
+import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
+import type { ReaderSettings } from '@/types/book'
+import {
+  getHighlightsByBookId,
+  deleteHighlight,
+  restoreHighlight,
+} from '@/lib/highlight-storage'
+import type { Highlight } from '@/types/highlight'
+import {
+  getBookmarksForBook,
+  toggleBookmark,
+  deleteBookmark as deleteBookmarkFromDb,
+  isLocationBookmarked,
+  type Bookmark,
+} from '@/lib/bookmarks/bookmark-storage'
+import { useUndoSnackbar } from '@/hooks/useUndoSnackbar'
+import { UndoSnackbar } from '@/components/UndoSnackbar'
 import {
   ReaderShell,
   ReaderShellContext,
   type ReaderProgress,
+  type TocItem,
 } from '@/components/reader'
 
 /**
@@ -221,6 +239,12 @@ export default function MobiReaderScreen() {
   const [chapterCount, setChapterCount] = useState(0)
   const [currentChapter, setCurrentChapter] = useState(0)
   const [bookLoaded, setBookLoaded] = useState(false)
+  const [highlights, setHighlights] = useState<Highlight[]>([])
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
+  const [isCurrentBookmarked, setIsCurrentBookmarked] = useState<boolean>(false)
+  const [settings, setSettings] = useState<ReaderSettings>(loadReaderSettings())
+  const [noteEditorOpen, setNoteEditorOpen] = useState(false)
+  const undoSnackbar = useUndoSnackbar()
 
   const webViewRef = useRef<WebView>(null)
   const currentChapterRef = useRef(0)
@@ -260,6 +284,8 @@ export default function MobiReaderScreen() {
             const startChapter = loaded.currentPage || 0
             setCurrentChapter(startChapter)
             currentChapterRef.current = startChapter
+            setHighlights(getHighlightsByBookId(loaded.id))
+            setBookmarks(getBookmarksForBook(loaded.id))
           }
         })
         .catch((err) => console.error('Failed to load book for reading:', err))
@@ -311,6 +337,96 @@ export default function MobiReaderScreen() {
     },
     [book?.id]
   )
+
+  // ---- Bookmarks ----
+  useEffect(() => {
+    if (!book?.id) return
+    const loc = `mobi-chapter:${currentChapter}`
+    setIsCurrentBookmarked(isLocationBookmarked(book.id, loc))
+  }, [book?.id, bookmarks, currentChapter])
+
+  const handleToggleBookmark = useCallback(() => {
+    if (!book?.id) return
+    const loc = `mobi-chapter:${currentChapter}`
+    const label =
+      chapterCount > 0
+        ? `Chapter ${currentChapter + 1} of ${chapterCount}`
+        : `Chapter ${currentChapter + 1}`
+    const result = toggleBookmark({ bookId: book.id, location: loc, label })
+    setBookmarks(getBookmarksForBook(book.id))
+    setIsCurrentBookmarked(result.action === 'created')
+  }, [book?.id, currentChapter, chapterCount])
+
+  const handleDeleteBookmark = useCallback(
+    (bookmarkId: string) => {
+      if (!book?.id) return
+      deleteBookmarkFromDb(bookmarkId)
+      setBookmarks(getBookmarksForBook(book.id))
+    },
+    [book?.id],
+  )
+
+  const handleNavigateToBookmark = useCallback((location: string) => {
+    const m = /^mobi-chapter:(\d+)$/.exec(location)
+    if (!m) return
+    const chapter = Number.parseInt(m[1], 10)
+    if (Number.isFinite(chapter) && chapter >= 0) {
+      webViewRef.current?.postMessage(
+        JSON.stringify({ type: 'goto', chapter }),
+      )
+    }
+  }, [])
+
+  // ---- Highlights (read-only listing; MOBI doesn't yet capture
+  //      selection highlights, but synced rows still surface here.) ----
+  const handleNavigateToHighlight = useCallback((_cfiRange: string) => {
+    // No structural mapping yet — clicking just closes the sheet.
+  }, [])
+
+  const handleDeleteHighlightById = useCallback(
+    (id: string) => {
+      const target = highlights.find((h) => h.id === id)
+      if (!target) return
+      deleteHighlight(id)
+      setHighlights((prev) => prev.filter((h) => h.id !== id))
+      undoSnackbar.show('Highlight deleted', 'Undo', () => {
+        restoreHighlight(id)
+        setHighlights((prev) => [target, ...prev])
+      })
+    },
+    [highlights, undoSnackbar],
+  )
+
+  // ---- TOC adapter — synthesize one entry per chapter. ----
+  const tocItems = useMemo<TocItem[]>(() => {
+    if (chapterCount === 0) return []
+    return Array.from({ length: chapterCount }, (_, i) => ({
+      href: `mobi-chapter:${i}`,
+      label: `Chapter ${i + 1}`,
+    }))
+  }, [chapterCount])
+
+  const currentTocHref = useMemo(
+    () => `mobi-chapter:${currentChapter}`,
+    [currentChapter],
+  )
+
+  const handleSelectChapter = useCallback((href: string) => {
+    const m = /^mobi-chapter:(\d+)$/.exec(href)
+    if (!m) return
+    const chapter = Number.parseInt(m[1], 10)
+    if (Number.isFinite(chapter) && chapter >= 0) {
+      webViewRef.current?.postMessage(
+        JSON.stringify({ type: 'goto', chapter }),
+      )
+    }
+  }, [])
+
+  // ---- Appearance ----
+  const handleSettingsChange = useCallback((next: ReaderSettings) => {
+    saveReaderSettings(next)
+    setSettings(next)
+  }, [])
 
   const handleBack = useCallback(() => {
     if (book?.id) {
@@ -461,7 +577,36 @@ export default function MobiReaderScreen() {
         }
         onTTSPress={handleToggleTTS}
         ttsButtonActive={ttsActive}
-        sheets={{}}
+        onBookmarkTogglePress={handleToggleBookmark}
+        isBookmarked={isCurrentBookmarked}
+        sheets={{
+          toc: true,
+          highlights: true,
+          bookmarks: true,
+          search: true,
+          appearance: true,
+          noteEditor: true,
+        }}
+        toc={tocItems}
+        currentHref={currentTocHref}
+        onSelectChapter={handleSelectChapter}
+        highlights={highlights}
+        onNavigateToHighlight={handleNavigateToHighlight}
+        onDeleteHighlight={handleDeleteHighlightById}
+        bookmarks={bookmarks}
+        onNavigateToBookmark={handleNavigateToBookmark}
+        onDeleteBookmark={handleDeleteBookmark}
+        searchQuery=""
+        searchResults={[]}
+        isSearching={false}
+        onChangeSearchQuery={() => undefined}
+        onSelectSearchResult={() => undefined}
+        settings={settings}
+        onSettingsChange={handleSettingsChange}
+        noteEditorHighlight={null}
+        noteEditorOpen={noteEditorOpen}
+        onSaveNote={() => setNoteEditorOpen(false)}
+        onDiscardNote={() => setNoteEditorOpen(false)}
       >
         {/* E2E observability — see PDF reader for rationale. */}
         <View
@@ -497,6 +642,15 @@ export default function MobiReaderScreen() {
 
         {/* G15 — visual cue badge */}
         <TTSVisualCue />
+
+        {/* G10 — undo snackbar (5s window after a destructive action) */}
+        <UndoSnackbar
+          visible={undoSnackbar.visible}
+          message={undoSnackbar.message}
+          actionLabel={undoSnackbar.actionLabel}
+          onAction={undoSnackbar.action}
+          onDismiss={undoSnackbar.dismiss}
+        />
       </ReaderShell>
     </View>
   )
