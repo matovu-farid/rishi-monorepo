@@ -29,7 +29,7 @@ import { createMobileConnectivityPort } from '@/lib/connectivity/MobileConnectiv
 import { mobileMediaPort } from './media-port'
 import { mobileVoiceChatIpc } from './ipc'
 import { mobileWebrtcFactory, mobileAgentFactory, mobileSessionFactory } from './realtime-session'
-import { createMobileEffectsPort } from './sounds'
+import { getMobileEffectsPort } from './sounds'
 import { createMobileRagPort } from './rag-port'
 
 const DEFAULT_CONFIG: VoiceChatConfig = {
@@ -90,7 +90,7 @@ export function getVoiceChatService(opts: BuildOpts = {}): VoiceChatService {
     sessionFactory: mobileSessionFactory,
     media: mobileMediaPort,
     vad: mobileVadPort,
-    effects: createMobileEffectsPort(),
+    effects: getMobileEffectsPort(),
     clock: {
       now: () => Date.now(),
       setTimeout: (fn, ms) => setTimeout(fn, ms),
