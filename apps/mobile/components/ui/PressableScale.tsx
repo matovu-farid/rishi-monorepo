@@ -76,12 +76,14 @@ export function PressableScale({
   }
 
   return (
+    // UI-SPEC §7c: do not pass `disabled` to Pressable so VoiceOver still
+    // announces the element with `accessibilityState={{ disabled }}` ("dimmed").
+    // Press is no-op'd via the early-returns in handlePress* above.
     <Pressable
       onPress={handlePress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
       hitSlop={hitSlop}
-      disabled={disabled}
       accessibilityRole={accessibilityRole}
       accessibilityLabel={accessibilityLabel}
       accessibilityHint={accessibilityHint}

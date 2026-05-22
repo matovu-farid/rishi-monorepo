@@ -18,17 +18,20 @@ export function Hairline({
   const { colors } = useTheme()
   const backgroundColor = color ?? colors.separator.nonOpaque
 
+  // `alignSelf: 'stretch'` rather than `width/height: '100%'` so that
+  // `marginLeft`/`marginTop: inset` shrinks the divider into the remaining
+  // axis-cross space instead of overflowing the parent by `inset` pt.
   const baseStyle: ViewStyle =
     orientation === 'horizontal'
       ? {
           height: StyleSheet.hairlineWidth,
-          width: '100%',
+          alignSelf: 'stretch',
           marginLeft: inset,
           backgroundColor,
         }
       : {
           width: StyleSheet.hairlineWidth,
-          height: '100%',
+          alignSelf: 'stretch',
           marginTop: inset,
           backgroundColor,
         }
