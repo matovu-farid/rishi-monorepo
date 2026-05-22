@@ -4,6 +4,7 @@ import { apiClient } from '@/lib/api'
 import { db } from '@/lib/db'
 import { books } from '@rishi/shared/schema'
 import { eq } from 'drizzle-orm'
+import { useDownloadErrorStore } from '@/lib/sync/download-error-store'
 import type {
   UploadUrlRequest,
   UploadUrlResponse,
@@ -177,16 +178,46 @@ export async function downloadBookFile(
     try {
       tmpFile.move(destFile)
     } catch (moveErr) {
-      // Clean up the temp file on failure
-      try { tmpFile.delete() } catch { /* ignore cleanup errors */ }
-      throw new Error(`Failed to move temp file to final path: ${moveErr}`)
+      // DAT-003 recovery:
+      //   - KEEP the tmp file on disk. The bytes are correct (R2 fetch
+      //     succeeded); only the rename failed. A retry should re-attempt
+      //     the move first, not re-pay the R2 download cost.
+      //   - Mark the book row with `fileNeedsRedownload=true` so the UI
+      //     and sync engine can identify it. We deliberately do NOT set
+      //     `filePath` — that would point at a non-existent destination.
+      //   - Push a failure entry into the download-error store so any
+      //     subscribed UI (sync status indicator, library screen) can
+      //     render a retry affordance with the most recent error context.
+      const reason = moveErr instanceof Error ? moveErr.message : String(moveErr)
+      try {
+        db.update(books)
+          .set({ fileNeedsRedownload: true })
+          .where(eq(books.id, bookId))
+          .run()
+      } catch {
+        // If the DB write fails (e.g. column missing on a downgraded build),
+        // we still want the in-memory store to carry the failure so the UI
+        // can offer a retry path. Swallow and continue.
+      }
+      useDownloadErrorStore.getState().recordFailure({
+        bookId,
+        r2Key,
+        format,
+        reason,
+      })
+      throw new Error(`Failed to move temp file to final path: ${reason}`)
     }
 
-    // Step 3: Update DB only after the file is safely in place
+    // Step 3: Update DB only after the file is safely in place. Also clear
+    // the recovery flag in case this download was a successful retry of a
+    // previously-failed move.
     db.update(books)
-      .set({ filePath: destFile.uri })
+      .set({ filePath: destFile.uri, fileNeedsRedownload: false })
       .where(eq(books.id, bookId))
       .run()
+    // Clear any prior failure entry for this book so the UI removes the
+    // retry chip once we succeed.
+    useDownloadErrorStore.getState().clearFailure(bookId)
 
     return destFile.uri
   } catch (error) {

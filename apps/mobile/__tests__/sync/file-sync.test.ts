@@ -6,10 +6,15 @@
  * state (the helper writes no DB rows itself; the assertion is that the
  * surrounding `db` was never called).
  *
- * CG04: `downloadBookFile` atomic-move rollback — when `tmpFile.move()` fails
- * mid-flight, the helper must (a) delete the tmp file (no orphan), (b) throw,
- * and (c) never invoke the DB update that would set `filePath` on the book row
- * (no orphan `localPath`).
+ * CG04 (DAT-003): `downloadBookFile` atomic-move recovery — when
+ * `tmpFile.move()` fails mid-flight, the helper must:
+ *   (a) KEEP the tmp file on disk (no orphaned destination, but the bytes
+ *       are preserved so a retry doesn't pay the R2 download cost again),
+ *   (b) throw with a recovery-friendly message,
+ *   (c) NOT set `filePath` on the book row (we don't point at a non-existent
+ *       destination), and
+ *   (d) flip the `fileNeedsRedownload` DB flag + push the failure into the
+ *       download-error store so the UI has a retry affordance.
  *
  * Native modules (expo-file-system, expo-crypto, drizzle, db, apiClient) are
  * stubbed at the JS boundary so we exercise the real `file-sync.ts` logic.
@@ -20,7 +25,11 @@
 // ────────────────────────────────────────────────────────────────────────────
 
 jest.mock('@rishi/shared/schema', () => ({
-  books: { id: 'id', filePath: 'filePath' },
+  books: {
+    id: 'id',
+    filePath: 'filePath',
+    fileNeedsRedownload: 'fileNeedsRedownload',
+  },
 }))
 
 jest.mock('drizzle-orm', () => ({
@@ -157,6 +166,10 @@ afterAll(() => {
 // ────────────────────────────────────────────────────────────────────────────
 
 import { uploadBookFile, downloadBookFile, UploadLimitError } from '@/lib/sync/file-sync'
+import {
+  useDownloadErrorStore,
+  getFailedDownloads,
+} from '@/lib/sync/download-error-store'
 
 // ────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -186,6 +199,9 @@ function resetAll(): void {
   mockApiClient.mockReset()
   mockFetch.mockReset()
   jest.clearAllMocks()
+  // DAT-003: reset the recovery store between tests so failure entries
+  // from a previous case don't bleed into assertions.
+  useDownloadErrorStore.getState().clear()
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -264,7 +280,7 @@ describe('uploadBookFile — CG03 R2 PUT failure', () => {
 describe('downloadBookFile — CG04 atomic move rollback', () => {
   beforeEach(() => resetAll())
 
-  it('rolls back tmp file and does NOT update DB filePath when move() fails', async () => {
+  it('preserves tmp file, sets fileNeedsRedownload, and pushes failure to recovery store when move() fails', async () => {
     // Worker hands back a presigned download URL.
     mockApiClient.mockResolvedValueOnce(
       jsonResponse({
@@ -295,12 +311,26 @@ describe('downloadBookFile — CG04 atomic move rollback', () => {
     expect(tmpFile.write).toHaveBeenCalledTimes(1)
     // (b) move was attempted and threw.
     expect(tmpFile.move).toHaveBeenCalledTimes(1)
-    // (c) cleanup ran — the orphan tmp was deleted.
-    expect(tmpFile.delete).toHaveBeenCalledTimes(1)
-    // (d) crucially: the DB was NOT updated with a filePath pointing at a
-    //     non-existent destination. No orphan `localPath`.
-    expect(mockDb.update).not.toHaveBeenCalled()
-    expect(dbRecord.updateCalls).toHaveLength(0)
+    // (c) DAT-003 recovery: the tmp file MUST NOT be deleted — keeping it
+    //     means the user's next retry doesn't have to redownload the bytes
+    //     from R2. We only need to retry the move, not the network fetch.
+    expect(tmpFile.delete).not.toHaveBeenCalled()
+    // (d) DB was updated, but ONLY to flip the recovery flag — not to point
+    //     `filePath` at a destination that doesn't exist on disk.
+    expect(mockDb.update).toHaveBeenCalledTimes(1)
+    expect(dbRecord.updateCalls).toHaveLength(1)
+    const updateValues = dbRecord.updateCalls[0].values as Record<string, unknown>
+    expect(updateValues.fileNeedsRedownload).toBe(true)
+    expect(updateValues.filePath).toBeUndefined()
+    // (e) the recovery store has an entry the UI can render as a retry list.
+    const failures = getFailedDownloads()
+    expect(failures).toHaveLength(1)
+    expect(failures[0]).toMatchObject({
+      bookId: 'book-123',
+      r2Key: 'r2/epub/hash',
+      format: 'epub',
+    })
+    expect(failures[0].reason).toMatch(/EBUSY|move/i)
   })
 
   it('throws and writes no DB rows when the presigned download URL call fails', async () => {

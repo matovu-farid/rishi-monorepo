@@ -41,6 +41,10 @@ const columnsToAdd: [string, string][] = [
   ['is_dirty', 'INTEGER DEFAULT 1'],
   ['is_deleted', 'INTEGER DEFAULT 0'],
   ['file_size', 'INTEGER DEFAULT 0'],
+  // DAT-003: mobile-only recovery flag. Flipped to 1 when the post-fetch
+  // atomic `tmpFile.move()` fails in `downloadBookFile`. UI uses it (via
+  // the download-error-store) to surface a retry affordance.
+  ['file_needs_redownload', 'INTEGER DEFAULT 0'],
 ]
 
 for (const [col, type] of columnsToAdd) {
