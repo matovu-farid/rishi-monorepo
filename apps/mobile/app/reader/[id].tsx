@@ -8,6 +8,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { getBookForReading, updateBookCfi } from '@/lib/book-storage'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
+import { safeBack } from '@/lib/navigation'
 import { insertHighlight, getHighlightsByBookId, updateHighlight, deleteHighlight, restoreHighlight } from '@/lib/highlight-storage'
 import {
   getBookmarksForBook,
@@ -100,10 +101,7 @@ export default function ReaderScreen() {
     return (
       <ReaderErrorScreen
         cause={resolvedCause}
-        onBack={() => {
-          if (router.canGoBack()) router.back()
-          else router.replace('/(tabs)')
-        }}
+        onBack={() => safeBack(router)}
         onRetry={() => setLoadAttempt((n) => n + 1)}
       />
     )
@@ -304,12 +302,14 @@ function ReaderContent({ book }: { book: Book }) {
     [goToLocation]
   )
 
-  // Back navigation -- save position before leaving
+  // Back navigation -- save position before leaving.
+  // safeBack guards against deep-link cold-start where the nav stack is
+  // empty (P1-B): we replace to /(tabs) instead of no-op'ing.
   const handleBack = useCallback(() => {
     if (book.id && currentCfiRef.current) {
       updateBookCfi(book.id, currentCfiRef.current)
     }
-    router.back()
+    safeBack(router)
   }, [book.id, router])
 
   // --- Highlight handlers ---

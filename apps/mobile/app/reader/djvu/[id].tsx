@@ -26,6 +26,7 @@ import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
+import { safeBack } from '@/lib/navigation'
 import type { ReaderSettings } from '@/types/book'
 import {
   getHighlightsByBookId,
@@ -420,11 +421,13 @@ export default function DjvuReaderScreen() {
     setSettings(next)
   }, [])
 
+  // safeBack: guards against deep-link cold-start where the nav stack is
+  // empty and a bare router.back() would strand the user (P1-B).
   const handleBack = useCallback(() => {
     if (book?.id) {
       updateBookPage(book.id, currentPageRef.current)
     }
-    router.back()
+    safeBack(router)
   }, [book?.id, router])
 
   const handlePrevPage = useCallback(() => {
@@ -479,10 +482,7 @@ export default function DjvuReaderScreen() {
     return (
       <ReaderErrorScreen
         cause={resolvedCause}
-        onBack={() => {
-          if (router.canGoBack()) router.back()
-          else router.replace('/(tabs)')
-        }}
+        onBack={() => safeBack(router)}
         onRetry={() => setLoadAttempt((n) => n + 1)}
       />
     )

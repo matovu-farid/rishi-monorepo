@@ -37,6 +37,7 @@ import { usePdfStore, BookNavigationState } from '@/lib/stores/pdfStore'
 import { getBookForReading, updateBookPage } from '@/lib/book-storage'
 import { Book, ReaderSettings } from '@/types/book'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
+import { safeBack } from '@/lib/navigation'
 import {
   insertPdfHighlight,
   getPdfHighlightsByBookId,
@@ -546,9 +547,11 @@ export default function PdfReaderScreen() {
     setSettings(next)
   }, [])
 
+  // safeBack: deep-link cold-start has an empty stack, so a bare
+  // router.back() no-ops and strands the user (P1-B).
   const handleBack = useCallback(() => {
     if (book?.id && pageNumber > 0) updateBookPage(book.id, pageNumber)
-    router.back()
+    safeBack(router)
   }, [book?.id, pageNumber, router])
 
   // ---- Render ----
@@ -568,10 +571,7 @@ export default function PdfReaderScreen() {
     return (
       <ReaderErrorScreen
         cause={resolvedCause}
-        onBack={() => {
-          if (router.canGoBack()) router.back()
-          else router.replace('/(tabs)')
-        }}
+        onBack={() => safeBack(router)}
         onRetry={() => setLoadAttempt((n) => n + 1)}
       />
     )

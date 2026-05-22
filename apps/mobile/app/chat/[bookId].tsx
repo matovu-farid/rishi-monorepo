@@ -30,6 +30,7 @@ import { EmbeddingProgress } from '@/components/EmbeddingProgress'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
 import { resolveReaderRouteForBook } from '@/lib/reader-routes'
+import { safeBack } from '@/lib/navigation'
 import type { Message, SourceChunk } from '@/types/conversation'
 import type { Book } from '@/types/book'
 
@@ -236,7 +237,11 @@ export default function BookChatScreen() {
         {/* Header */}
         <View className="flex-row items-center justify-between h-12 px-4 border-b border-gray-200 dark:border-gray-700">
           <TouchableOpacity
-            onPress={() => router.back()}
+            // P1-B: safeBack guards deep-link cold-start where the nav
+            // stack is empty (e.g. opened from a notification or fresh
+            // launch into /chat/<bookId>) — replaces to /(tabs) instead
+            // of no-op'ing.
+            onPress={() => safeBack(router)}
             className="flex-row items-center h-11 pl-1 pr-2"
             accessibilityLabel={from ? `Back to ${from}` : 'Back'}
             accessibilityRole="button"
