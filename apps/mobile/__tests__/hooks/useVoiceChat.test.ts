@@ -109,10 +109,11 @@ jest.mock('@/lib/voice-chat/sounds', () => ({
 import React, { act } from 'react'
 import TestRenderer from 'react-test-renderer'
 import { useVoiceChat } from '@/hooks/useVoiceChat'
+import type { VoiceChatContext } from '@rishi/shared/voice-chat'
 
 interface HarnessProps {
   bookId: string
-  context?: () => { pageText?: string; activeParagraphText?: string; outline?: unknown }
+  context?: () => VoiceChatContext
   onReady?: (api: ReturnType<typeof useVoiceChat>) => void
 }
 
@@ -138,9 +139,13 @@ beforeEach(() => {
 
 describe('useVoiceChat — CHT-002 context wiring', () => {
   it('forwards the lazy context provider payload to svc.activate', async () => {
-    const ctx = {
+    const ctx: VoiceChatContext = {
       pageText: 'Chapter 4: Falling Action',
-      outline: [{ href: 'ch4', label: 'Chapter 4' }],
+      outline: {
+        title: 'Tale of Two Cities',
+        author: 'Dickens',
+        chapters: ['Ch1', 'Ch2', 'Ch3', 'Ch4'],
+      },
       activeParagraphText: 'It was the best of times…',
     }
     const provider = jest.fn(() => ctx)
@@ -189,7 +194,7 @@ describe('useVoiceChat — CHT-002 context wiring', () => {
   })
 
   it('captures the LATEST context at each activation (provider re-read)', async () => {
-    let live = { pageText: 'first', activeParagraphText: 'p1' }
+    const live: VoiceChatContext = { pageText: 'first', activeParagraphText: 'p1' }
     const provider = jest.fn(() => live)
 
     let api!: ReturnType<typeof useVoiceChat>
