@@ -12,6 +12,7 @@
  */
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ActivityIndicator,
   Alert,
   AppState,
   type AppStateStatus,
@@ -566,7 +567,8 @@ export default function PdfReaderScreen() {
   if (loading) {
     return (
       <View testID="reader-loading" style={styles.full}>
-        <Text style={{ color: '#fff' }}>
+        <ActivityIndicator size="large" color="#fff" />
+        <Text style={{ marginTop: 12, color: '#fff' }}>
           {downloading ? 'Downloading…' : 'Loading book…'}
         </Text>
       </View>
