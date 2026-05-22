@@ -52,15 +52,36 @@ describe('reader: MOBI — open from library', () => {
   })
 
   it('tapping next-chapter advances the position indicator', async () => {
-    const before = await readAccessibilityLabel('reader-position-indicator')
+    // The MOBI parser runs inside a WebView and fires its `loaded`
+    // message asynchronously. Until then, `chapterCount` is 0, which
+    // makes the next-chapter button `disabled` (opacity 0.3) — that
+    // fails Detox's 100% visibility threshold check. Poll the
+    // indicator until it reports more than one chapter (single-chapter
+    // books also leave the button disabled).
+    let before: string | null = '0/0'
+    const baselineStartedAt = Date.now()
+    while (Date.now() - baselineStartedAt < 20000) {
+      before = await readAccessibilityLabel('reader-position-indicator')
+      const match = before && before.match(/^\d+\/(\d+)$/)
+      if (match && parseInt(match[1], 10) > 1) break
+      await new Promise((r) => setTimeout(r, 500))
+    }
     expect(before).toMatch(/^\d+\/\d+$/)
+    const beforeMatch = before && before.match(/^\d+\/(\d+)$/)
+    expect(beforeMatch && parseInt(beforeMatch[1], 10) > 1).toBe(true)
 
-    // Reveal the toolbar (single tap on the reader root toggles it).
-    await element(by.id('mobi-reader')).tap()
+    // Reveal the toolbar by tapping the dedicated toolbar-toggle
+    // TouchableOpacity. The mobi-reader container view fails Detox's
+    // 100% visibility check because the WebView occludes most of its
+    // bounds, so we cannot tap or tapAtPoint on it directly.
+    await element(by.id('reader-toggle-toolbar')).tap()
 
-    // Wait briefly for the toolbar animation; toolbar mounts the next
-    // button synchronously once toolbarVisible flips true.
-    await new Promise((r) => setTimeout(r, 500))
+    // Wait for the toolbar mount + iOS Fabric layout/draw commit. The
+    // bottom toolbar SafeAreaView is dynamically inserted above the
+    // WebView when toolbarVisible flips — Detox's 100% visibility
+    // check on the next-page button fails until the new view tree has
+    // fully settled.
+    await new Promise((r) => setTimeout(r, 2000))
 
     await element(by.id('reader-next-page-btn')).tap()
 

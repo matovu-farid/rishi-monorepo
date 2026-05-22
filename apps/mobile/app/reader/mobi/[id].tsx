@@ -440,15 +440,40 @@ export default function MobiReaderScreen() {
         accessibilityLabel={`${currentChapter + 1}/${chapterCount || 0}`}
         style={{ position: 'absolute', width: 0, height: 0 }}
       />
-      <WebView
-        ref={webViewRef}
-        source={{ html: MOBI_PARSER_HTML }}
-        originWhitelist={['*']}
-        onMessage={handleMessage}
-        onLoadEnd={() => setBookLoaded(true)}
-        style={{ flex: 1 }}
-        javaScriptEnabled={true}
-        onShouldStartLoadWithRequest={() => true}
+      {/* Wrap the WebView in a flex container View so it doesn't
+          render as a direct child of the reader root. iOS RN's
+          new-architecture renderer composites WKWebView on its own
+          layer, which can confuse Detox's visibility hit-test for
+          sibling overlays (toolbar buttons). The extra wrapper
+          isolates the WebView's compositor layer. */}
+      <View style={{ flex: 1 }}>
+        <WebView
+          ref={webViewRef}
+          source={{ html: MOBI_PARSER_HTML }}
+          originWhitelist={['*']}
+          onMessage={handleMessage}
+          onLoadEnd={() => setBookLoaded(true)}
+          style={{ flex: 1 }}
+          javaScriptEnabled={true}
+          onShouldStartLoadWithRequest={() => true}
+        />
+      </View>
+
+      {/* Invisible tap target to toggle toolbar. Rendered before the
+          toolbars so it sits *underneath* them in z-order; otherwise it
+          would occlude the toolbar buttons and fail Detox's 100%
+          visibility threshold check. */}
+      <TouchableOpacity
+        testID="reader-toggle-toolbar"
+        activeOpacity={1}
+        onPress={() => setToolbarVisible((prev) => !prev)}
+        style={{
+          position: 'absolute',
+          top: '30%',
+          left: '20%',
+          width: '60%',
+          height: '40%',
+        }}
       />
 
       {/* Top toolbar */}
@@ -461,6 +486,8 @@ export default function MobiReaderScreen() {
             left: 0,
             right: 0,
             backgroundColor: 'rgba(0,0,0,0.7)',
+            zIndex: 10,
+            elevation: 10,
           }}
         >
           <View
@@ -525,6 +552,12 @@ export default function MobiReaderScreen() {
             left: 0,
             right: 0,
             backgroundColor: 'rgba(0,0,0,0.7)',
+            // zIndex forces iOS to composite this layer above the
+            // WKWebView. Without it, Detox's 100% visibility hit-test
+            // sees the WebView "occluding" toolbar buttons even though
+            // they're declared after the WebView in JSX order.
+            zIndex: 10,
+            elevation: 10,
           }}
         >
           <View
@@ -573,19 +606,6 @@ export default function MobiReaderScreen() {
           </View>
         </SafeAreaView>
       )}
-
-      {/* Invisible tap target to toggle toolbar */}
-      <TouchableOpacity
-        activeOpacity={1}
-        onPress={() => setToolbarVisible((prev) => !prev)}
-        style={{
-          position: 'absolute',
-          top: '30%',
-          left: '20%',
-          width: '60%',
-          height: '40%',
-        }}
-      />
 
       {/* Floating TTS controls */}
       <TTSControls />
