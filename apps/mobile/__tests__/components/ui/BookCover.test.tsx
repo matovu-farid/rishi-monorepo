@@ -187,6 +187,49 @@ describe('BookCover (mobile)', () => {
     expect(widths).toContain(144)
   })
 
+  it('omits the hairline border when a real cover image is shown (VIS-008)', () => {
+    // VIS-008: the unconditional hairline draws a visible line around full-bleed
+    // covers. Apple Books only shows that border on placeholder / letter-tile
+    // fallbacks, so when `uri` is provided the cover should float on the shadow
+    // alone (no border).
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <BookCover uri="file:///tmp/c.png" title="Dune" size="md" />,
+      )
+    })
+    const views = tree.root.findAll(
+      (n) => typeof n.type === 'string' && (n.type as string) === 'View',
+    )
+    // No View in the tree should set a non-zero borderWidth when a real
+    // cover is being displayed.
+    for (const v of views) {
+      const style = flattenStyle((v.props as { style?: unknown }).style)
+      if (typeof style.borderWidth === 'number') {
+        expect(style.borderWidth).toBe(0)
+      }
+    }
+  })
+
+  it('keeps the hairline border on letter-tile fallback (VIS-008 inverse)', () => {
+    // VIS-008 inverse: when the cover is a generated fallback we still want a
+    // crisp border so the tile reads as a "cover-shaped" surface.
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <BookCover uri={undefined} title="Dune" size="md" />,
+      )
+    })
+    const views = tree.root.findAll(
+      (n) => typeof n.type === 'string' && (n.type as string) === 'View',
+    )
+    const borderWidths = views
+      .map((v) => flattenStyle((v.props as { style?: unknown }).style).borderWidth)
+      .filter((w): w is number => typeof w === 'number')
+    // At least one wrapping view should request a hairline border in fallback.
+    expect(borderWidths.some((w) => w > 0)).toBe(true)
+  })
+
   it('exposes accessibilityRole="image" and label includes the title', () => {
     let tree!: TestRenderer.ReactTestRenderer
     act(() => {

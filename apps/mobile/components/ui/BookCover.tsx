@@ -81,7 +81,9 @@ export function BookCover({
           width,
           height,
           borderRadius,
-          borderWidth: StyleSheet.hairlineWidth,
+          // VIS-008: only draw a hairline around the letter-tile fallback.
+          // Apple Books lets real cover artwork float on the shadow alone.
+          borderWidth: showFallback ? StyleSheet.hairlineWidth : 0,
           borderColor: colors.separator.nonOpaque,
           overflow: 'hidden',
           backgroundColor: showFallback ? fallbackColor(title) : undefined,
