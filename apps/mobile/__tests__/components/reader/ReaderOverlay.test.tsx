@@ -90,17 +90,30 @@ jest.mock('react-native-reanimated', () => {
 // ── ReaderShellContext — provides `bottomBarVisible` so the overlay can
 //    reflow its floating widgets when the reader bottom bar shows/hides
 //    (P1-M). We expose the real React.Context so tests can wrap the tree
-//    in a Provider to exercise both visibility states. ─────────────────────
-jest.mock('@/components/reader/ReaderShell', () => {
+//    in a Provider to exercise both visibility states.
+//
+//    RDR-025 — the context was lifted into its own module
+//    (`ReaderShellContext.tsx`) so leaf consumers don't pull in the full
+//    reader stack. Mock both module paths so legacy import sites
+//    (ReaderShell re-export) and new consumers (ReaderOverlay) share the
+//    same context value. ───────────────────────────────────────────────────
+const mockShellContextModule = (() => {
   const React = require('react')
-  return {
-    __esModule: true,
-    ReaderShellContext: React.createContext({
-      bottomBarVisible: false,
-      toggleToolbar: () => undefined,
-    }),
-  }
-})
+  const ReaderShellContext = React.createContext({
+    bottomBarVisible: false,
+    toggleToolbar: () => undefined,
+    interact: () => undefined,
+  })
+  return { ReaderShellContext }
+})()
+jest.mock('@/components/reader/ReaderShellContext', () => ({
+  __esModule: true,
+  ...mockShellContextModule,
+}))
+jest.mock('@/components/reader/ReaderShell', () => ({
+  __esModule: true,
+  ...mockShellContextModule,
+}))
 
 // ── Stub the 3 child widgets so we can assert on the props ReaderOverlay
 //    passes them, without re-rendering each widget. Virtual so the mock
@@ -274,6 +287,37 @@ describe('ReaderOverlay (mobile)', () => {
     expect(findByTestID(tree, 'ai-chat-orb-stub')).toBeNull()
   })
 
+  describe('WGT-012 — orb mounts when chatStatus is non-idle even before isChatting flips', () => {
+    // The chatPort can emit `chatStatus = 'connecting'` BEFORE
+    // chatStore.startChat() flips `isChatting = true`. The previous
+    // `isChatting ? <AIChatOrb /> : null` mount condition lost that first
+    // frame; the user briefly saw no orb while the system was actually
+    // already connecting. Mounting when EITHER signal is non-idle closes
+    // the gap.
+    it.each(['connecting', 'thinking', 'speaking'] as const)(
+      'mounts AIChatOrb when isChatting=false but chatStatus="%s"',
+      (status) => {
+        chatState.isChatting = false
+        chatState.chatStatus = status
+        let tree!: TestRenderer.ReactTestRenderer
+        act(() => {
+          tree = TestRenderer.create(<ReaderOverlay bookId="b1" />)
+        })
+        expect(findByTestID(tree, 'ai-chat-orb-stub')).not.toBeNull()
+      },
+    )
+
+    it('does NOT mount AIChatOrb when both isChatting=false and chatStatus="idle"', () => {
+      chatState.isChatting = false
+      chatState.chatStatus = 'idle'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<ReaderOverlay bookId="b1" />)
+      })
+      expect(findByTestID(tree, 'ai-chat-orb-stub')).toBeNull()
+    })
+  })
+
   it('ALWAYS mounts VoiceChatLauncher', () => {
     chatState.isChatting = false
     playerState.playingState = 'idle'
@@ -424,10 +468,13 @@ describe('ReaderOverlay (mobile)', () => {
     // visible — otherwise the bar (zIndex 10) renders directly under the
     // launcher (zIndex 20) and the two overlap visually. We exercise the
     // reflow by toggling the ReaderShellContext value the overlay reads.
-    const ReaderShell = require('@/components/reader/ReaderShell') as {
+    // RDR-025 — read from the lifted ReaderShellContext module. The
+    // mock above re-exports the same Context from both module paths.
+    const ReaderShell = require('@/components/reader/ReaderShellContext') as {
       ReaderShellContext: React.Context<{
         bottomBarVisible: boolean
         toggleToolbar: () => void
+        interact: () => void
       }>
     }
     const Provider = ReaderShell.ReaderShellContext.Provider
@@ -436,7 +483,7 @@ describe('ReaderOverlay (mobile)', () => {
     let treeHidden!: TestRenderer.ReactTestRenderer
     act(() => {
       treeHidden = TestRenderer.create(
-        <Provider value={{ bottomBarVisible: false, toggleToolbar: () => undefined }}>
+        <Provider value={{ bottomBarVisible: false, toggleToolbar: () => undefined, interact: () => undefined }}>
           <ReaderOverlay bookId="b1" />
         </Provider>,
       )
@@ -450,7 +497,7 @@ describe('ReaderOverlay (mobile)', () => {
     let treeVisible!: TestRenderer.ReactTestRenderer
     act(() => {
       treeVisible = TestRenderer.create(
-        <Provider value={{ bottomBarVisible: true, toggleToolbar: () => undefined }}>
+        <Provider value={{ bottomBarVisible: true, toggleToolbar: () => undefined, interact: () => undefined }}>
           <ReaderOverlay bookId="b1" />
         </Provider>,
       )

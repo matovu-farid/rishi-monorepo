@@ -105,7 +105,15 @@ export function ReaderOverlay({
       pointerEvents="box-none"
       style={StyleSheet.absoluteFill}
     >
-      {isChatting ? (
+      {/*
+        WGT-012 — mount the orb whenever the chat lifecycle is live, not
+        just when `isChatting` has flipped true. The chatPort can emit a
+        non-idle `chatStatus` (e.g. 'connecting' on a remote-resumed
+        session) BEFORE the store's `isChatting` follows, and the
+        previous `isChatting ? … : null` gate lost that first frame —
+        the user briefly saw no orb while the system was already busy.
+      */}
+      {isChatting || chatStatus !== 'idle' ? (
         <AIChatOrb
           chatStatus={chatStatus}
           onPress={onChatToggle ?? (() => undefined)}
