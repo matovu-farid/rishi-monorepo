@@ -1,5 +1,12 @@
 import { useState } from 'react'
-import { Alert, Dimensions, Text, TouchableOpacity, View } from 'react-native'
+import {
+  Alert,
+  Dimensions,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native'
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated'
 import { useTheme } from '@/lib/theme'
 import { ReaderTheme } from '@/types/book'
@@ -106,8 +113,14 @@ export function AnnotationPopover({
         </TouchableOpacity>
 
         {showColors ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8 }}>
+          <View style={styles.swatchRow}>
             {HIGHLIGHT_COLORS.map((c) => (
+              // VIS-027 (#87): wrap the 20pt visual circle in a 44×44pt
+              // touch target with the circle centered. The wrapper itself
+              // owns the hit zone, so we DROP hitSlop entirely — slop on
+              // adjacent swatches previously overlapped and created
+              // dead-zones at the boundary. Layout-driven sizing keeps
+              // each target exclusive to its swatch.
               <TouchableOpacity
                 key={c.name}
                 onPress={() => {
@@ -116,16 +129,19 @@ export function AnnotationPopover({
                 }}
                 accessibilityRole="button"
                 accessibilityLabel={`${c.name} highlight`}
-                hitSlop={12}
-                style={{
-                  width: 20,
-                  height: 20,
-                  borderRadius: 10,
-                  backgroundColor: c.hex,
-                  borderWidth: highlight.color === c.name ? 2 : 0,
-                  borderColor: theme.toolbarText,
-                }}
-              />
+                style={styles.swatchWrapper}
+              >
+                <View
+                  style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: 10,
+                    backgroundColor: c.hex,
+                    borderWidth: highlight.color === c.name ? 2 : 0,
+                    borderColor: theme.toolbarText,
+                  }}
+                />
+              </TouchableOpacity>
             ))}
           </View>
         ) : (
@@ -156,3 +172,17 @@ export function AnnotationPopover({
     </Animated.View>
   )
 }
+
+const styles = StyleSheet.create({
+  swatchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+  },
+  swatchWrapper: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+})
