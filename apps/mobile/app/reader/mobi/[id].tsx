@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useRef, useState } from 'react'
 import {
   View,
   Text,
   TouchableOpacity,
+  Pressable,
   AppState,
   AppStateStatus,
   ActivityIndicator,
+  StyleSheet,
 } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { WebView } from 'react-native-webview'
 import { File as ExpoFile } from 'expo-file-system'
@@ -25,6 +26,11 @@ import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
+import {
+  ReaderShell,
+  ReaderShellContext,
+  type ReaderProgress,
+} from '@/components/reader'
 
 /**
  * Minimal inline MOBI parser running inside a WebView.
@@ -215,12 +221,10 @@ export default function MobiReaderScreen() {
   const [downloading, setDownloading] = useState(false)
   const [chapterCount, setChapterCount] = useState(0)
   const [currentChapter, setCurrentChapter] = useState(0)
-  const [toolbarVisible, setToolbarVisible] = useState(false)
   const [bookLoaded, setBookLoaded] = useState(false)
 
   const webViewRef = useRef<WebView>(null)
   const currentChapterRef = useRef(0)
-  const toolbarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Mount the player machine for this book — TTS controls (rendered
   // below) read state from `usePlayerStore`.
@@ -287,17 +291,6 @@ export default function MobiReaderScreen() {
     const sub = AppState.addEventListener('change', handleAppStateChange)
     return () => sub.remove()
   }, [book?.id])
-
-  // Auto-hide toolbar
-  useEffect(() => {
-    if (toolbarVisible) {
-      if (toolbarTimerRef.current) clearTimeout(toolbarTimerRef.current)
-      toolbarTimerRef.current = setTimeout(() => setToolbarVisible(false), 3000)
-    }
-    return () => {
-      if (toolbarTimerRef.current) clearTimeout(toolbarTimerRef.current)
-    }
-  }, [toolbarVisible])
 
   const handleMessage = useCallback(
     (event: { nativeEvent: { data: string } }) => {
@@ -438,187 +431,152 @@ export default function MobiReaderScreen() {
     )
   }
 
+  const progressForShell: ReaderProgress =
+    chapterCount > 0
+      ? { kind: 'chapter', current: currentChapter + 1, total: chapterCount }
+      : { kind: 'none' }
+
+  const mobiNavCluster = (
+    <MobiNavCluster
+      currentChapter={currentChapter}
+      chapterCount={chapterCount}
+      onPrev={handlePrevChapter}
+      onNext={handleNextChapter}
+    />
+  )
+
   return (
     <View ref={pageCaptureRef} testID="mobi-reader" style={{ flex: 1, backgroundColor: '#fafaf8' }}>
-      {/* E2E observability — see PDF reader for rationale. */}
-      <View
-        testID="reader-position-indicator"
-        accessible={true}
-        accessibilityLabel={`${currentChapter + 1}/${chapterCount || 0}`}
-        style={{ position: 'absolute', width: 0, height: 0 }}
-      />
-      {/* Wrap the WebView in a flex container View so it doesn't
-          render as a direct child of the reader root. iOS RN's
-          new-architecture renderer composites WKWebView on its own
-          layer, which can confuse Detox's visibility hit-test for
-          sibling overlays (toolbar buttons). The extra wrapper
-          isolates the WebView's compositor layer. */}
-      <View style={{ flex: 1 }}>
-        <WebView
-          ref={webViewRef}
-          source={{ html: MOBI_PARSER_HTML }}
-          originWhitelist={['*']}
-          onMessage={handleMessage}
-          onLoadEnd={() => setBookLoaded(true)}
-          style={{ flex: 1 }}
-          javaScriptEnabled={true}
-          onShouldStartLoadWithRequest={() => true}
+      <ReaderShell
+        title={book.title}
+        format="mobi"
+        onBack={handleBack}
+        progress={progressForShell}
+        centerOverride={mobiNavCluster}
+        ttsActive={ttsActive}
+        realtimeActive={realtimeStatus !== 'idle'}
+        onTTSPress={handleToggleTTS}
+        ttsButtonActive={ttsActive}
+        sheets={{}}
+      >
+        {/* E2E observability — see PDF reader for rationale. */}
+        <View
+          testID="reader-position-indicator"
+          accessible={true}
+          accessibilityLabel={`${currentChapter + 1}/${chapterCount || 0}`}
+          style={{ position: 'absolute', width: 0, height: 0 }}
         />
-      </View>
+        {/* Wrap the WebView in a flex container View so it doesn't
+            render as a direct child of the reader root. iOS RN's
+            new-architecture renderer composites WKWebView on its own
+            layer, which can confuse Detox's visibility hit-test for
+            sibling overlays (toolbar buttons). The extra wrapper
+            isolates the WebView's compositor layer. */}
+        <View style={{ flex: 1 }}>
+          <WebView
+            ref={webViewRef}
+            source={{ html: MOBI_PARSER_HTML }}
+            originWhitelist={['*']}
+            onMessage={handleMessage}
+            onLoadEnd={() => setBookLoaded(true)}
+            style={{ flex: 1 }}
+            javaScriptEnabled={true}
+            onShouldStartLoadWithRequest={() => true}
+          />
+        </View>
 
-      {/* Invisible tap target to toggle toolbar. Rendered before the
-          toolbars so it sits *underneath* them in z-order; otherwise it
-          would occlude the toolbar buttons and fail Detox's 100%
-          visibility threshold check. */}
-      <TouchableOpacity
-        testID="reader-toggle-toolbar"
-        activeOpacity={1}
-        onPress={() => setToolbarVisible((prev) => !prev)}
-        style={{
-          position: 'absolute',
-          top: '30%',
-          left: '20%',
-          width: '60%',
-          height: '40%',
-        }}
-      />
+        <PressableToggleToolbar />
 
-      {/* Top toolbar */}
-      {toolbarVisible && (
-        <SafeAreaView
-          edges={['top']}
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            backgroundColor: 'rgba(0,0,0,0.7)',
-            zIndex: 10,
-            elevation: 10,
-          }}
-        >
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              paddingHorizontal: 12,
-              paddingVertical: 10,
-            }}
-          >
-            <TouchableOpacity
-              onPress={handleBack}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              style={{ width: 44, height: 44, justifyContent: 'center', alignItems: 'center' }}
-            >
-              <IconSymbol name="chevron.left" size={24} color="#fff" />
-            </TouchableOpacity>
+        {/* Floating TTS controls */}
+        <TTSControls />
 
-            <Text
-              numberOfLines={1}
-              style={{
-                flex: 1,
-                color: '#fff',
-                fontSize: 16,
-                fontWeight: '600',
-                textAlign: 'center',
-                marginHorizontal: 8,
-              }}
-            >
-              {book.title}
-            </Text>
-
-            <TouchableOpacity
-              onPress={handleToggleTTS}
-              style={{ width: 44, height: 44, justifyContent: 'center', alignItems: 'center' }}
-              accessibilityLabel={ttsActive ? 'Stop reading aloud' : 'Read aloud'}
-              accessibilityRole="button"
-            >
-              <IconSymbol
-                name="speaker.wave.2.fill"
-                size={22}
-                color={ttsActive ? '#0a7ea4' : '#fff'}
-              />
-            </TouchableOpacity>
-
-            <Text style={{ color: '#fff', fontSize: 13, minWidth: 70, textAlign: 'right' }}>
-              {chapterCount > 0
-                ? `Ch ${currentChapter + 1} / ${chapterCount}`
-                : '...'}
-            </Text>
-          </View>
-        </SafeAreaView>
-      )}
-
-      {/* Bottom navigation bar */}
-      {toolbarVisible && (
-        <SafeAreaView
-          edges={['bottom']}
-          style={{
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            backgroundColor: 'rgba(0,0,0,0.7)',
-            // zIndex forces iOS to composite this layer above the
-            // WKWebView. Without it, Detox's 100% visibility hit-test
-            // sees the WebView "occluding" toolbar buttons even though
-            // they're declared after the WebView in JSX order.
-            zIndex: 10,
-            elevation: 10,
-          }}
-        >
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              paddingVertical: 10,
-              gap: 24,
-            }}
-          >
-            <TouchableOpacity
-              onPress={handlePrevChapter}
-              style={{
-                width: 44,
-                height: 44,
-                justifyContent: 'center',
-                alignItems: 'center',
-                opacity: currentChapter <= 0 ? 0.3 : 1,
-              }}
-              disabled={currentChapter <= 0}
-            >
-              <IconSymbol name="chevron.left" size={28} color="#fff" />
-            </TouchableOpacity>
-
-            <Text style={{ color: '#fff', fontSize: 16, fontWeight: '500' }}>
-              {chapterCount > 0
-                ? `${currentChapter + 1} / ${chapterCount}`
-                : '...'}
-            </Text>
-
-            <TouchableOpacity
-              testID="reader-next-page-btn"
-              onPress={handleNextChapter}
-              style={{
-                width: 44,
-                height: 44,
-                justifyContent: 'center',
-                alignItems: 'center',
-                opacity: currentChapter >= chapterCount - 1 ? 0.3 : 1,
-              }}
-              disabled={currentChapter >= chapterCount - 1}
-            >
-              <IconSymbol name="chevron.right" size={28} color="#fff" />
-            </TouchableOpacity>
-          </View>
-        </SafeAreaView>
-      )}
-
-      {/* Floating TTS controls */}
-      <TTSControls />
-
-      {/* G15 — visual cue badge */}
-      <TTSVisualCue />
+        {/* G15 — visual cue badge */}
+        <TTSVisualCue />
+      </ReaderShell>
     </View>
   )
 }
+
+/**
+ * Full-area Pressable for tap-to-toggle. Lives inside ReaderShell so it
+ * can call `toggleToolbar` from context. testID is preserved for Detox.
+ */
+function PressableToggleToolbar(): React.JSX.Element {
+  const { toggleToolbar } = useContext(ReaderShellContext)
+  return (
+    <Pressable
+      testID="reader-toggle-toolbar"
+      onPress={toggleToolbar}
+      style={{
+        position: 'absolute',
+        top: '30%',
+        left: '20%',
+        width: '60%',
+        height: '40%',
+      }}
+      accessibilityLabel="Toggle toolbar"
+    />
+  )
+}
+
+interface MobiNavClusterProps {
+  currentChapter: number
+  chapterCount: number
+  onPrev: () => void
+  onNext: () => void
+}
+
+function MobiNavCluster({
+  currentChapter,
+  chapterCount,
+  onPrev,
+  onNext,
+}: MobiNavClusterProps): React.JSX.Element {
+  return (
+    <View style={styles.navCluster}>
+      <TouchableOpacity
+        onPress={onPrev}
+        disabled={currentChapter <= 0}
+        style={[styles.navBtn, currentChapter <= 0 && { opacity: 0.3 }]}
+        accessibilityLabel="Previous chapter"
+      >
+        <IconSymbol name="chevron.left" size={24} color="#fff" />
+      </TouchableOpacity>
+
+      <Text style={styles.navLabel}>
+        {chapterCount > 0 ? `Ch ${currentChapter + 1}/${chapterCount}` : '...'}
+      </Text>
+
+      <TouchableOpacity
+        testID="reader-next-page-btn"
+        onPress={onNext}
+        disabled={currentChapter >= chapterCount - 1}
+        style={[styles.navBtn, currentChapter >= chapterCount - 1 && { opacity: 0.3 }]}
+        accessibilityLabel="Next chapter"
+      >
+        <IconSymbol name="chevron.right" size={24} color="#fff" />
+      </TouchableOpacity>
+    </View>
+  )
+}
+
+const styles = StyleSheet.create({
+  navCluster: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  navBtn: {
+    width: 36,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  navLabel: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '500',
+    minWidth: 72,
+    textAlign: 'center',
+  },
+})
