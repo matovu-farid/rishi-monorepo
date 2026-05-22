@@ -5,9 +5,10 @@
  *   - Authenticated user: runs the action immediately, no gate.
  *   - Signed-out user once auth has hydrated: calls openPremiumGate(feature)
  *     and DOES NOT run the action — the user must sign in first.
- *   - Cold start (auth not yet hydrated): optimistically runs the action.
- *     The reactive 401 handler in `lib/api.ts` is the safety net for the
- *     window where this is wrong.
+ *   - Cold start (auth not yet hydrated): the trigger is a NO-OP. Neither
+ *     the action nor the gate fires — we wait for auth to hydrate before
+ *     deciding (P0-T fix). The previous "optimistic" behavior produced
+ *     raw 401s for signed-out users on cold start.
  *
  * The hook is the only consumer of the auth-gating contract in mobile
  * call sites (TTSControls, RealtimeVoiceButton, ChatInput, etc.).
@@ -127,7 +128,7 @@ describe('useRequireAuth (mobile)', () => {
     expect(openPremiumGate).toHaveBeenCalledWith('tts')
   })
 
-  it('cold-start (auth not yet hydrated) optimistically runs the action', () => {
+  it('cold-start (auth not yet hydrated) defers: does NOT run action and does NOT open gate (P0-T)', () => {
     storeState = { isAuthenticated: false, authHydrated: false, openPremiumGate }
     const action = jest.fn()
     let gate!: (a: () => void) => void
@@ -139,7 +140,7 @@ describe('useRequireAuth (mobile)', () => {
     act(() => {
       gate(action)
     })
-    expect(action).toHaveBeenCalledTimes(1)
+    expect(action).not.toHaveBeenCalled()
     expect(openPremiumGate).not.toHaveBeenCalled()
   })
 

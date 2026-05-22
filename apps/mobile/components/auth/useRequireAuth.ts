@@ -8,10 +8,12 @@ import { useAuthStore } from '@/lib/stores/authStore'
  * Returns a function that runs `action` immediately when the user is
  * authenticated, otherwise opens the premium-feature sheet for `feature`.
  *
- * Cold-start window (auth not yet hydrated): optimistically run the
- * action — the reactive 401 handler in `lib/api.ts` is the safety net
- * for the brief window where this could be wrong. Better to let a
- * signed-in user proceed than to gate them spuriously on launch.
+ * Cold-start window (auth not yet hydrated): the trigger is a no-op.
+ * We MUST NOT optimistically fire the action — when the user is in fact
+ * signed out, that produces raw 401s or silent failures because the
+ * premium gate never opens (P0-T). We also do not open the gate yet
+ * because the user may actually be signed in; we just don't know until
+ * hydration completes. The correct behavior is to defer until we know.
  */
 export function useRequireAuth(
   feature: PremiumFeature,
@@ -22,7 +24,12 @@ export function useRequireAuth(
 
   return useCallback(
     (action) => {
-      if (!authHydrated || isAuthenticated) {
+      if (!authHydrated) {
+        // Auth state not yet known — defer. Do not fire the action and
+        // do not open the gate. The user can retry once hydration lands.
+        return
+      }
+      if (isAuthenticated) {
         action()
       } else {
         openPremiumGate(feature)
