@@ -305,7 +305,8 @@ function publishParagraphsForPage(page: number, pageDataMap: Record<number, Text
   const newPrev = prevData ? pageDataToParagraphs(page - 1, prevData) : []
 
   const pdfState = usePdfStore.getState()
-  if (!isEqual(pdfState.currentViewParagraphs, newCurrent)) {
+  const currentDiffers = !isEqual(pdfState.currentViewParagraphs, newCurrent)
+  if (currentDiffers) {
     pdfState.setCurrentViewParagraphs(newCurrent)
     pdfState.setIsTextGot(true)
     usePlayerStore.getState().setCurrentParagraphs(newCurrent)
@@ -317,5 +318,17 @@ function publishParagraphsForPage(page: number, pageDataMap: Record<number, Text
   if (!isEqual(pdfState.previousViewParagraphs, newPrev)) {
     pdfState.setPreviousViewParagraphs(newPrev)
     usePlayerStore.getState().setPrevPageParagraphs(newPrev)
+  }
+
+  // Release the page-advance suppression flag once the new page's paragraphs
+  // are in place (issue #30). `pageControls.nextPage`/`previousPage` set this
+  // BEFORE the virtualizer scroll so `useScrolling`'s 100ms debounced auto-
+  // scroller doesn't snap the container back to the OLD page's still-
+  // highlighted <mark>. Clearing here is the natural rendezvous: by the
+  // time `currentDiffers` is true, the player has the new page's paragraphs
+  // and will publish a paragraph that lives ON THIS page very shortly —
+  // so the next useScrolling tick scrolls to a NEW-page mark, not an old one.
+  if (currentDiffers && pdfState.isLookingForNextParagraph) {
+    pdfState.setIsLookingForNextParagraph(false)
   }
 }
