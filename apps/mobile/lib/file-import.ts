@@ -287,6 +287,25 @@ function extractTitleFromUrl(url: string): string {
   return filename.replace(/\.(epub|pdf|mobi|azw3|djvu)$/i, "");
 }
 
+/**
+ * Map a non-2xx HTTP status from the download GET to user-facing copy
+ * (P1-AD). Previously we surfaced raw `Download failed: {status} {statusText}`
+ * to the UI; users could not tell whether the file was missing, gated, or
+ * the server was down. The mapping:
+ *   - 404         → "We couldn't find that file"
+ *   - 401 / 403   → "URL requires permission"
+ *   - other       → "Server refused download"
+ */
+export function mapHttpStatusToUserCopy(status: number): string {
+  if (status === 404) {
+    return "We couldn't find that file";
+  }
+  if (status === 401 || status === 403) {
+    return "URL requires permission";
+  }
+  return "Server refused download";
+}
+
 export async function importBookFromUrl(url: string): Promise<Book> {
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
     throw new Error("Invalid URL — must start with http:// or https://");
@@ -306,9 +325,7 @@ export async function importBookFromUrl(url: string): Promise<Book> {
   const downloadRes = await fetch(url);
 
   if (!downloadRes.ok) {
-    throw new Error(
-      `Download failed: ${downloadRes.status} ${downloadRes.statusText}`,
-    );
+    throw new Error(mapHttpStatusToUserCopy(downloadRes.status));
   }
 
   if (!format) {

@@ -85,6 +85,23 @@ jest.mock('@/lib/rag/pipeline', () => ({
   embedBook: jest.fn(),
 }))
 
+// app/_layout transitively pulls in @react-navigation/native which Jest can't
+// parse out of the box. We only need the IS_E2E_TEST flag.
+jest.mock('@/app/_layout', () => ({
+  __esModule: true,
+  IS_E2E_TEST: false,
+}))
+
+jest.mock('@/lib/auth', () => ({
+  __esModule: true,
+  getSessionToken: jest.fn(async () => null),
+}))
+
+jest.mock('@/lib/file-import-index-gate', () => ({
+  __esModule: true,
+  shouldSkipIndexing: jest.fn(() => true),
+}))
+
 // ────────────────────────────────────────────────────────────────────────────
 // Mock the shared book-import service factory.
 // We capture what the URL import passes to `importFromPath` so we can assert
@@ -250,10 +267,10 @@ describe('importBookFromUrl — HEAD-request failure', () => {
   })
 })
 
-describe('importBookFromUrl — non-2xx download', () => {
+describe('importBookFromUrl — non-2xx download (P1-AD)', () => {
   beforeEach(() => resetAll())
 
-  it('throws when the GET returns 404 Not Found', async () => {
+  it('throws "We couldn\'t find that file" when the GET returns 404 Not Found', async () => {
     // Path extension is .epub so HEAD is skipped — go straight to GET.
     mockFetch.mockResolvedValueOnce(
       downloadResponse({ ok: false, status: 404, statusText: 'Not Found' }),
@@ -261,20 +278,56 @@ describe('importBookFromUrl — non-2xx download', () => {
 
     await expect(
       importBookFromUrl('https://example.com/missing.epub'),
-    ).rejects.toThrow(/Download failed: 404 Not Found/)
+    ).rejects.toThrow(/We couldn't find that file/)
 
     // No tmp file was written, no service call.
     expect(serviceCalls.importFromPath).toHaveLength(0)
   })
 
-  it('throws when the GET returns 500 Internal Server Error', async () => {
+  it('throws "URL requires permission" when the GET returns 401 Unauthorized', async () => {
+    mockFetch.mockResolvedValueOnce(
+      downloadResponse({ ok: false, status: 401, statusText: 'Unauthorized' }),
+    )
+
+    await expect(
+      importBookFromUrl('https://example.com/private.epub'),
+    ).rejects.toThrow(/URL requires permission/)
+
+    expect(serviceCalls.importFromPath).toHaveLength(0)
+  })
+
+  it('throws "URL requires permission" when the GET returns 403 Forbidden', async () => {
+    mockFetch.mockResolvedValueOnce(
+      downloadResponse({ ok: false, status: 403, statusText: 'Forbidden' }),
+    )
+
+    await expect(
+      importBookFromUrl('https://example.com/forbidden.epub'),
+    ).rejects.toThrow(/URL requires permission/)
+
+    expect(serviceCalls.importFromPath).toHaveLength(0)
+  })
+
+  it('throws "Server refused download" when the GET returns 500 Internal Server Error', async () => {
     mockFetch.mockResolvedValueOnce(
       downloadResponse({ ok: false, status: 500, statusText: 'Internal Server Error' }),
     )
 
     await expect(
       importBookFromUrl('https://example.com/book.pdf'),
-    ).rejects.toThrow(/Download failed: 500/)
+    ).rejects.toThrow(/Server refused download/)
+
+    expect(serviceCalls.importFromPath).toHaveLength(0)
+  })
+
+  it('throws "Server refused download" on other non-2xx statuses (e.g. 502)', async () => {
+    mockFetch.mockResolvedValueOnce(
+      downloadResponse({ ok: false, status: 502, statusText: 'Bad Gateway' }),
+    )
+
+    await expect(
+      importBookFromUrl('https://example.com/book.pdf'),
+    ).rejects.toThrow(/Server refused download/)
 
     expect(serviceCalls.importFromPath).toHaveLength(0)
   })

@@ -39,8 +39,12 @@ export function UrlImportSheet({ visible, onDismiss, onImported }: UrlImportShee
       onDismiss()
       onImported(book)
     } catch (err: any) {
+      // P1-AD — `importBookFromUrl` maps non-2xx HTTP statuses to
+      // user-facing copy (mapHttpStatusToUserCopy). The fallback covers
+      // network / DNS / parse errors that don't go through that map.
       setStatus('error')
-      setErrorMessage(err.message || 'Could not download file. Check the URL and try again.')
+      const raw = typeof err?.message === 'string' ? err.message : ''
+      setErrorMessage(raw || 'Could not download file. Check the URL and try again.')
     }
   }, [onDismiss, onImported])
 
