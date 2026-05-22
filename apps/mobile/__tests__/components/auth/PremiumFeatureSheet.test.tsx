@@ -232,8 +232,9 @@ describe('PremiumFeatureSheet (mobile)', () => {
       tree = TestRenderer.create(<PremiumFeatureSheet />)
     })
     expect(hasText(tree, 'Sign in to listen')).toBe(true)
+    // GAT-015 — body reads as value prop, no longer parrots "Sign in to …".
     expect(
-      hasText(tree, 'Sign in to hear your books read aloud in expressive voices.'),
+      hasText(tree, 'Hear your books read aloud in expressive voices.'),
     ).toBe(true)
   })
 

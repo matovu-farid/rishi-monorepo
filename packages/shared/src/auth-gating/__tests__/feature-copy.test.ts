@@ -64,6 +64,15 @@ describe('FEATURE_COPY (shared/auth-gating)', () => {
     }
   })
 
+  it("no body starts with 'Sign in to ' (GAT-015 — bodies describe value, not action)", () => {
+    // GAT-015: title already commits the user to the sign-in action.
+    // The body must read as a value proposition (what they get) rather
+    // than restating the same "Sign in to …" verb the title carries.
+    for (const feature of ALL_FEATURES) {
+      expect(FEATURE_COPY[feature].body.startsWith('Sign in to ')).toBe(false)
+    }
+  })
+
   it("tts.title is the sentinel string 'Sign in to listen'", () => {
     // Sentinel — catches accidental copy edits.
     expect(FEATURE_COPY.tts.title).toBe('Sign in to listen')
