@@ -1,5 +1,6 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, AppState, AppStateStatus, ActivityIndicator, AccessibilityInfo } from 'react-native'
+import * as Haptics from 'expo-haptics'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Reader, ReaderProvider, useReader } from '@epubjs-react-native/core'
 import { useFileSystem } from '@/lib/epub/file-system-adapter'
@@ -613,6 +614,13 @@ function ReaderContent({ book }: { book: Book }) {
     const result = toggleBookmark({ bookId: book.id, location: cfi, label })
     setBookmarks(getBookmarksForBook(book.id))
     setIsCurrentBookmarked(result.action === 'created')
+    // RDR-027 — differentiate the add vs remove confirmation haptic. The
+    // existing announceForAccessibility line stays for VoiceOver users.
+    if (result.action === 'created') {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+    } else {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning)
+    }
     AccessibilityInfo.announceForAccessibility(
       result.action === 'created' ? 'Bookmark added' : 'Bookmark removed',
     )

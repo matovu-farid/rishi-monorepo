@@ -25,6 +25,7 @@ import {
   View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import * as Haptics from 'expo-haptics'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 
 import { IconSymbol } from '@/components/ui/icon-symbol'
@@ -458,6 +459,13 @@ export default function PdfReaderScreen() {
     const result = toggleBookmark({ bookId: book.id, location: cfi, label })
     setBookmarks(getBookmarksForBook(book.id))
     setIsCurrentBookmarked(result.action === 'created')
+    // RDR-027 — differentiated confirmation haptic (success on create,
+    // warning on remove). Matches the EPUB reader's bookmark toggle.
+    if (result.action === 'created') {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+    } else {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning)
+    }
   }, [book?.id, pageNumber])
 
   const handleDeleteBookmark = useCallback(

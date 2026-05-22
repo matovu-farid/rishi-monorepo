@@ -45,6 +45,13 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ back: () => {}, replace: () => {}, push: () => {} }),
 }))
 
+// ── Native haptics (RDR-027 imports `expo-haptics` for bookmark feedback;
+//   the package ships ES modules so jest needs a stub) ──────────────────
+jest.mock('expo-haptics', () => ({
+  notificationAsync: jest.fn(),
+  NotificationFeedbackType: { Success: 'success', Warning: 'warning' },
+}))
+
 // ── EPUB engine bridge ──────────────────────────────────────────────────
 jest.mock('@epubjs-react-native/core', () => ({
   Reader: () => null,

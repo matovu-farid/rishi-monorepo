@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   StyleSheet,
 } from 'react-native'
+import * as Haptics from 'expo-haptics'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { WebView } from 'react-native-webview'
 import { File as ExpoFile } from 'expo-file-system'
@@ -174,7 +175,7 @@ window.addEventListener('message', function(e) {
 // <canvas> element, so window.getSelection() over the canvas returns
 // an empty string and this bridge stays inert in practice. We still
 // wire it for two reasons:
-//   1. The reader's `onMessage` handler now branches on `selection`,
+//   1. The reader's 'onMessage' handler now branches on 'selection',
 //      so a future text-layer / OCR phase (Phase 7) can light up the
 //      "Read from here" pill without a code change to the reader.
 //   2. It keeps the MOBI/DJVU wiring symmetric — same bridge, same
@@ -431,6 +432,13 @@ export default function DjvuReaderScreen() {
     const result = toggleBookmark({ bookId: book.id, location: loc, label })
     setBookmarks(getBookmarksForBook(book.id))
     setIsCurrentBookmarked(result.action === 'created')
+    // RDR-027 — differentiated confirmation haptic (success on create,
+    // warning on remove). Matches the EPUB reader's bookmark toggle.
+    if (result.action === 'created') {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+    } else {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning)
+    }
   }, [book?.id, currentPage, pageCount])
 
   const handleDeleteBookmark = useCallback(

@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   StyleSheet,
 } from 'react-native'
+import * as Haptics from 'expo-haptics'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { WebView } from 'react-native-webview'
 import { File as ExpoFile } from 'expo-file-system'
@@ -399,6 +400,13 @@ export default function MobiReaderScreen() {
     const result = toggleBookmark({ bookId: book.id, location: loc, label })
     setBookmarks(getBookmarksForBook(book.id))
     setIsCurrentBookmarked(result.action === 'created')
+    // RDR-027 — differentiated confirmation haptic (success on create,
+    // warning on remove). Matches the EPUB reader's bookmark toggle.
+    if (result.action === 'created') {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+    } else {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning)
+    }
   }, [book?.id, currentChapter, chapterCount])
 
   const handleDeleteBookmark = useCallback(
