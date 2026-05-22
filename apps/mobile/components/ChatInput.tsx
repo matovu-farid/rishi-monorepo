@@ -29,6 +29,20 @@ interface ChatInputProps {
   /** Text injected from outside (e.g. voice transcription) */
   externalText?: string | null
   /**
+   * CHT-021 — monotonically increasing version paired with `externalText`.
+   * The effect that applies `externalText` to the local state depends on
+   * BOTH props; bumping `externalTextVersion` therefore forces the effect
+   * to re-run even when the transcript string is identical to the last.
+   *
+   * Without this, a voice transcript of "play the song" recorded twice in
+   * a row was silently ignored on the second take (the prop reference
+   * was equal, so React skipped the effect).
+   *
+   * Optional for back-compat — when omitted, the effect falls back to
+   * the legacy "fire when the string changes" behaviour.
+   */
+  externalTextVersion?: number
+  /**
    * P1-AI: optional abort callback. When `isLoading` is true the send
    * button morphs into a stop-fill icon; pressing it invokes this
    * callback so the parent can cancel an in-flight request. Parents
@@ -52,14 +66,18 @@ export function ChatInput({
   voiceError,
   permissionDenied,
   externalText,
+  externalTextVersion,
   onAbort,
 }: ChatInputProps) {
   const [text, setText] = useState('')
 
-  // When external text arrives (e.g. from voice transcription), populate input
+  // When external text arrives (e.g. from voice transcription), populate
+  // the input. CHT-021: depend on `externalTextVersion` as well so that
+  // identical-string transcripts still re-apply (the parent bumps the
+  // version on each new transcript even when the text matches the last).
   useEffect(() => {
     if (externalText) setText(externalText)
-  }, [externalText])
+  }, [externalText, externalTextVersion])
 
   const canSend = text.trim().length > 0 && !isLoading && !disabled
   const showStop = isLoading

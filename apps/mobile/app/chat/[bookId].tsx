@@ -85,6 +85,11 @@ export default function BookChatScreen() {
   const voice = useVoiceInput()
 
   const [voiceText, setVoiceText] = useState<string | null>(null)
+  // CHT-021: every accepted transcript bumps this counter so that the
+  // ChatInput effect re-runs even when the user re-records the EXACT same
+  // string (e.g. "play the song" twice). Without it, React skipped the
+  // effect on identical props and the second take was silently ignored.
+  const [voiceTextVersion, setVoiceTextVersion] = useState(0)
 
   // Premium gates — mic + send both require sign-in. The gate hook also
   // owns the "preserve text behind the sheet" behaviour now: it stashes
@@ -103,7 +108,12 @@ export default function BookChatScreen() {
   const handleMicPress = useCallback(() => {
     if (voice.isRecording) {
       void voice.stopAndTranscribe().then((transcript) => {
-        if (transcript) setVoiceText(transcript)
+        if (transcript) {
+          setVoiceText(transcript)
+          // CHT-021: bump the version so ChatInput re-applies even on
+          // an identical transcript string.
+          setVoiceTextVersion((n) => n + 1)
+        }
       })
     } else {
       requireVoiceInput(() => {
@@ -439,6 +449,7 @@ export default function BookChatScreen() {
               voiceError={voice.error}
               permissionDenied={voice.permissionDenied}
               externalText={voiceText}
+              externalTextVersion={voiceTextVersion}
             />
       </KeyboardAvoidingView>
     </SafeAreaView>
