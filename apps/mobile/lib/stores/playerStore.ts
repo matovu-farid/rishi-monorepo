@@ -38,6 +38,8 @@ export type PlayerStoreState =
   | 'republishingParagraphs'
   | 'error'
 
+export type RepeatMode = 'off' | 'one'
+
 interface PlayerStore {
   // --- Player-side state (written by machine, read by React) ---
   playingState: PlayerStoreState
@@ -55,6 +57,9 @@ interface PlayerStore {
   // --- Machine send reference for non-React code ---
   send: PlayerSend | null
 
+  // --- Repeat mode (UI-side toggle; loop wiring lands in a later phase) ---
+  repeatMode: RepeatMode
+
   // --- Actions: format readers call these ---
   setCurrentParagraphs: (p: ParagraphWithIndex[]) => void
   setNextPageParagraphs: (p: ParagraphWithIndex[]) => void
@@ -65,6 +70,7 @@ interface PlayerStore {
   requestPrevPage: () => void
   clearPageRequest: () => void
   setSend: (send: PlayerSend) => void
+  setRepeatMode: (mode: RepeatMode) => void
 }
 
 export const usePlayerStore = create<PlayerStore>()(
@@ -80,6 +86,8 @@ export const usePlayerStore = create<PlayerStore>()(
     pageRequest: null,
     send: null,
 
+    repeatMode: 'off',
+
     setCurrentParagraphs: (p) => set({ currentParagraphs: p }),
     setNextPageParagraphs: (p) => set({ nextPageParagraphs: p }),
     setPrevPageParagraphs: (p) => set({ prevPageParagraphs: p }),
@@ -88,5 +96,6 @@ export const usePlayerStore = create<PlayerStore>()(
     requestPrevPage: () => set({ pageRequest: 'prev' }),
     clearPageRequest: () => set({ pageRequest: null }),
     setSend: (send) => set({ send }),
+    setRepeatMode: (mode) => set({ repeatMode: mode }),
   })),
 )
