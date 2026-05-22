@@ -80,10 +80,11 @@ describe('colors (light/dark parity)', () => {
     }
   })
 
-  it('accent.primary holds the Apple-Books-tuned brand teal in each scheme', () => {
-    // Sentinel — UI-SPEC §1.1/§1.2 fix these so chrome accents stay legible.
-    expect(colorsLight.accent.primary).toBe('#0a7ea4')
-    expect(colorsDark.accent.primary).toBe('#3AB4D6')
+  it('accent.primary matches iOS systemBlue in each scheme', () => {
+    // P1-X: Apple Books / iOS chrome uses systemBlue, not a custom teal.
+    // light = systemBlue (#007AFF), dark = systemBlue (#0A84FF).
+    expect(colorsLight.accent.primary).toBe('#007AFF')
+    expect(colorsDark.accent.primary).toBe('#0A84FF')
   })
 })
 

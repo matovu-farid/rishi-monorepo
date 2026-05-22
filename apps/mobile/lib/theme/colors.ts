@@ -69,7 +69,8 @@ export const colorsLight: ColorTokens = {
     nonOpaque: 'rgba(60,60,67,0.29)',
   },
   accent: {
-    primary: '#0a7ea4',
+    // iOS systemBlue (light). Matches Apple Books / iOS chrome (P1-X).
+    primary: '#007AFF',
     success: '#34C759',
     warning: '#FF9F0A',
     error: '#FF3B30',
@@ -113,7 +114,8 @@ export const colorsDark: ColorTokens = {
     nonOpaque: 'rgba(84,84,88,0.65)',
   },
   accent: {
-    primary: '#3AB4D6',
+    // iOS systemBlue (dark) — lifted blue for dark surfaces (P1-X).
+    primary: '#0A84FF',
     success: '#30D158',
     warning: '#FF9F0A',
     error: '#FF453A',

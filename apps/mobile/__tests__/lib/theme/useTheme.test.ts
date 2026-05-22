@@ -7,8 +7,7 @@
  *
  * Observable behaviour we pin:
  *   1. Scheme drives palette selection (light/dark) — verified via the
- *      `accent.primary` sentinel from UI-SPEC §1.1/§1.2 (`#0a7ea4` vs
- *      `#3AB4D6`).
+ *      `accent.primary` iOS systemBlue sentinel (`#007AFF` vs `#0A84FF`).
  *   2. `reduceMotion` is a boolean (defaults false) — sourced from
  *      `AccessibilityInfo.isReduceMotionEnabled` async + change listener.
  *   3. Hook memoizes its return value across re-renders when neither
@@ -79,8 +78,8 @@ describe('useTheme (mobile)', () => {
     })
     const theme = themes[themes.length - 1]
     expect(theme.scheme).toBe('light')
-    // Sentinel: `#0a7ea4` is the light-mode brand accent (UI-SPEC §1.1).
-    expect(theme.colors.accent.primary).toBe('#0a7ea4')
+    // Sentinel: iOS systemBlue light = `#007AFF` (P1-X).
+    expect(theme.colors.accent.primary).toBe('#007AFF')
   })
 
   it('returns the dark palette when system scheme is dark', async () => {
@@ -93,8 +92,8 @@ describe('useTheme (mobile)', () => {
     })
     const theme = themes[themes.length - 1]
     expect(theme.scheme).toBe('dark')
-    // Sentinel: `#3AB4D6` is the dark-mode lifted brand accent (UI-SPEC §1.2).
-    expect(theme.colors.accent.primary).toBe('#3AB4D6')
+    // Sentinel: iOS systemBlue dark = `#0A84FF` (P1-X).
+    expect(theme.colors.accent.primary).toBe('#0A84FF')
   })
 
   it('exposes reduceMotion as a boolean, default false', async () => {
