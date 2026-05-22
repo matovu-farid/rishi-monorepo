@@ -119,7 +119,13 @@ export default function PdfReaderScreen() {
 
   // Bridge realtime voice-chat status to the player so chat-position is
   // preserved (CHAT_STARTED/CHAT_ENDED dispatched into the playerMachine).
-  const { status: realtimeStatus } = useRealtimeChat(book?.id ?? '')
+  // RDR-035 — `toggle` and `isActive` are surfaced too so the realtime
+  // button in ReaderShell can drive the voice-chat connection.
+  const {
+    status: realtimeStatus,
+    toggle: toggleRealtime,
+    isActive: realtimeActive,
+  } = useRealtimeChat(book?.id ?? '')
   useTtsChatBridge(realtimeStatus)
 
   // G20 — register the PDF WebView area as the page-capture target.
@@ -133,6 +139,7 @@ export default function PdfReaderScreen() {
   // sheet for signed-out users.
   const requireTTS = useRequireAuth('tts')
   const requireAIChat = useRequireAuth('ai-chat')
+  const requireVoiceChat = useRequireAuth('voice-chat')
 
   // Subscribe to active-paragraph changes to drive the highlight reconciler.
   const activeParagraph = usePlayerStore((s) => s.activeParagraph)
@@ -645,13 +652,18 @@ export default function PdfReaderScreen() {
         initialToolbarVisible={true}
         centerOverride={pdfNavCluster}
         ttsActive={ttsActive}
-        realtimeActive={realtimeStatus !== 'idle'}
+        realtimeActive={realtimeActive}
         bookId={book?.id}
         onChatToggle={() =>
           requireAIChat(() => router.push(`/chat/${book.id}`))
         }
         onTTSPress={handleToggleTTS}
         ttsButtonActive={ttsActive}
+        onRealtimePress={() => {
+          if (realtimeActive) toggleRealtime()
+          else requireVoiceChat(toggleRealtime)
+        }}
+        realtimeStatus={realtimeStatus}
         onBookmarkTogglePress={handleToggleBookmark}
         isBookmarked={isCurrentBookmarked}
         sheets={{
