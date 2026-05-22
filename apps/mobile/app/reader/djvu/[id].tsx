@@ -149,6 +149,7 @@ export default function DjvuReaderScreen() {
 
   const [book, setBook] = useState<Book | null>(null)
   const [loading, setLoading] = useState(true)
+  const [downloading, setDownloading] = useState(false)
   const [pageCount, setPageCount] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
   const [toolbarVisible, setToolbarVisible] = useState(false)
@@ -222,7 +223,8 @@ export default function DjvuReaderScreen() {
   useEffect(() => {
     if (id) {
       setLoading(true)
-      getBookForReading(id)
+      setDownloading(false)
+      getBookForReading(id, { onDownloadStart: () => setDownloading(true) })
         .then((loaded) => {
           if (loaded) {
             setBook(loaded)
@@ -336,9 +338,11 @@ export default function DjvuReaderScreen() {
 
   if (loading) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#1a1a1a', justifyContent: 'center', alignItems: 'center' }}>
+      <View testID="reader-loading" style={{ flex: 1, backgroundColor: '#1a1a1a', justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" color="#aaa" />
-        <Text style={{ marginTop: 12, color: '#aaa' }}>Loading book...</Text>
+        <Text style={{ marginTop: 12, color: '#aaa' }}>
+          {downloading ? 'Downloading…' : 'Loading book…'}
+        </Text>
       </View>
     )
   }
@@ -352,7 +356,14 @@ export default function DjvuReaderScreen() {
   }
 
   return (
-    <View ref={pageCaptureRef} style={{ flex: 1, backgroundColor: '#1a1a1a' }}>
+    <View ref={pageCaptureRef} testID="djvu-reader" style={{ flex: 1, backgroundColor: '#1a1a1a' }}>
+      {/* E2E observability — see PDF reader for rationale. */}
+      <View
+        testID="reader-position-indicator"
+        accessible={true}
+        accessibilityLabel={`${currentPage}/${pageCount || 0}`}
+        style={{ position: 'absolute', width: 0, height: 0 }}
+      />
       <WebView
         ref={webViewRef}
         source={{ html: DJVU_VIEWER_HTML }}
@@ -516,6 +527,7 @@ export default function DjvuReaderScreen() {
             </Text>
 
             <TouchableOpacity
+              testID="reader-next-page-btn"
               onPress={handleNextPage}
               style={{
                 width: 44,
