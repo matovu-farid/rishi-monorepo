@@ -29,7 +29,21 @@ jest.mock('react-native', () => {
       React.createElement(name, { ...p, ref: r }, p.children),
     )
   const FlatList = React.forwardRef((p: any, r: unknown) => {
-    const { data = [], renderItem, keyExtractor, ItemSeparatorComponent } = p
+    const {
+      data = [],
+      renderItem,
+      keyExtractor,
+      ItemSeparatorComponent,
+      ListEmptyComponent,
+    } = p
+    if ((data as unknown[]).length === 0 && ListEmptyComponent) {
+      const emptyNode = React.isValidElement(ListEmptyComponent)
+        ? ListEmptyComponent
+        : typeof ListEmptyComponent === 'function'
+          ? React.createElement(ListEmptyComponent)
+          : null
+      return React.createElement('FlatList', { ...p, ref: r }, emptyNode)
+    }
     const items = (data as unknown[]).map((item, index) => {
       const key = keyExtractor ? keyExtractor(item, index) : String(index)
       const rendered = renderItem ? renderItem({ item, index }) : null
@@ -298,6 +312,126 @@ describe('LibraryScreen (P0-I: uses design tokens, removes FAB)', () => {
         typeof n.type === 'string' &&
         typeof (n.props as { testID?: string }).testID === 'string' &&
         (n.props as { testID: string }).testID.startsWith('library-book-row-'),
+    )
+    expect(rows.length).toBe(2)
+  })
+})
+
+/**
+ * P0-J — Search empty state.
+ *
+ * When the user types a query that matches no books, the FlatList
+ * collapses to zero items but the screen previously rendered NOTHING
+ * (no `ListEmptyComponent`, and the top-level `books.length === 0`
+ * branch doesn't fire because the underlying library still has books).
+ *
+ * Fix: render a `library-search-empty` view with "No books match" copy
+ * and a clear-search button (`library-search-clear`) that resets the
+ * query.
+ */
+describe('LibraryScreen (P0-J: search empty state)', () => {
+  beforeEach(() => {
+    mockBooks.length = 0
+    mockLastReadBook = null
+  })
+
+  function findOne(
+    tree: TestRenderer.ReactTestRenderer,
+    testID: string,
+  ): TestRenderer.ReactTestInstance | null {
+    const hits = findAll(
+      tree,
+      (n) => (n.props as { testID?: string }).testID === testID,
+    )
+    return hits[0] ?? null
+  }
+
+  function seedBooks() {
+    mockBooks.push(
+      {
+        id: 'b1',
+        title: 'Crime and Punishment',
+        author: 'Dostoyevsky',
+        format: 'epub',
+        filePath: '/tmp/cp.epub',
+        coverPath: null,
+        currentCfi: null,
+        currentPage: null,
+        createdAt: 0,
+      },
+      {
+        id: 'b2',
+        title: 'War and Peace',
+        author: 'Tolstoy',
+        format: 'epub',
+        filePath: '/tmp/wp.epub',
+        coverPath: null,
+        currentCfi: null,
+        currentPage: null,
+        createdAt: 0,
+      },
+    )
+  }
+
+  it('renders search-empty view when query matches nothing', () => {
+    seedBooks()
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    const search = findOne(tree, 'library-search')
+    expect(search).not.toBeNull()
+    act(() => {
+      ;(search!.props as { onChangeText?: (s: string) => void }).onChangeText?.(
+        'zzzzzz',
+      )
+    })
+    const empty = findOne(tree, 'library-search-empty')
+    expect(empty).not.toBeNull()
+    // Includes the query in the copy.
+    function collectText(node: TestRenderer.ReactTestInstance): string {
+      const childrenText = node.children
+        .map((child) =>
+          typeof child === 'string'
+            ? child
+            : collectText(child as TestRenderer.ReactTestInstance),
+        )
+        .join(' ')
+      return childrenText
+    }
+    const allText = collectText(empty!)
+    expect(allText).toMatch(/No books match/i)
+    expect(allText).toMatch(/zzzzzz/)
+  })
+
+  it('shows a clear-search button that resets the query', () => {
+    seedBooks()
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    const search = findOne(tree, 'library-search')!
+    act(() => {
+      ;(search.props as { onChangeText?: (s: string) => void }).onChangeText?.(
+        'zzzzzz',
+      )
+    })
+    const clearBtn = findOne(tree, 'library-search-clear')
+    expect(clearBtn).not.toBeNull()
+    act(() => {
+      ;(clearBtn!.props as { onPress?: () => void }).onPress?.()
+    })
+    // After clear, both BookRows are visible again and the search-empty
+    // view is gone.
+    expect(findOne(tree, 'library-search-empty')).toBeNull()
+    const rows = findAll(
+      tree,
+      (n) =>
+        typeof n.type === 'string' &&
+        typeof (n.props as { testID?: string }).testID === 'string' &&
+        (n.props as { testID: string }).testID.startsWith(
+          'library-book-row-',
+        ),
     )
     expect(rows.length).toBe(2)
   })

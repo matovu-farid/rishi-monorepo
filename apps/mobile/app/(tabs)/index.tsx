@@ -337,6 +337,55 @@ export default function LibraryScreen() {
             />
           )}
           contentContainerStyle={{ paddingBottom: spacing['5xl'] }}
+          ListEmptyComponent={
+            searchQuery.trim() ? (
+              <View
+                testID="library-search-empty"
+                style={{
+                  paddingHorizontal: spacing['2xl'],
+                  paddingVertical: spacing['2xl'],
+                  alignItems: 'center',
+                }}
+              >
+                <Text
+                  style={{
+                    fontSize: typography.scale.body.fontSize,
+                    lineHeight: typography.scale.body.lineHeight,
+                    color: colors.label.secondary,
+                    textAlign: 'center',
+                    marginBottom: spacing.lg,
+                  }}
+                >
+                  {`No books match "${searchQuery}"`}
+                </Text>
+                <Pressable
+                  testID="library-search-clear"
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear search"
+                  onPress={() => setSearchQuery('')}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={({ pressed }) => ({
+                    paddingHorizontal: spacing.lg,
+                    paddingVertical: spacing.sm,
+                    borderRadius: radius.full,
+                    backgroundColor: colors.fill.tertiary,
+                    opacity: pressed ? 0.6 : 1,
+                  })}
+                >
+                  <Text
+                    style={{
+                      fontSize: typography.scale.body.fontSize,
+                      lineHeight: typography.scale.body.lineHeight,
+                      fontWeight: '600',
+                      color: colors.accent.primary,
+                    }}
+                  >
+                    Clear search
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null
+          }
         />
       </View>
       <UrlImportSheet
