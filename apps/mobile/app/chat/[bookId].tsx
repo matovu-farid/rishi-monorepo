@@ -71,6 +71,18 @@ export default function BookChatScreen() {
   const [inlineError, setInlineError] = useState<string | null>(null)
   const [retryQuestion, setRetryQuestion] = useState<string | null>(null)
 
+  // STA-018 (#94): per-message failure status. When a send rejects, the
+  // user-message row that triggered it lands in this set. The renderer
+  // decorates the row with a tappable "Failed — Tap to retry" badge and
+  // a red outline so the user can recover without scrolling up to a
+  // global banner. Successful retries clear the entry.
+  // We track this in component state rather than the DB row because the
+  // status is an in-flight UI concept — the persisted message is still
+  // a valid record of "what the user typed".
+  const [failedMessageIds, setFailedMessageIds] = useState<Set<string>>(
+    () => new Set<string>(),
+  )
+
   // P1-AA: embedding error state. When non-null, an inline banner renders
   // above ChatInput offering Retry. While set, the chat input stays
   // disabled so the user can't send a question against an unprepared book.
@@ -189,6 +201,75 @@ export default function BookChatScreen() {
   // hook flips `isLoading` back to false via its catch+finally.
   const abortRef = useRef<AbortController | null>(null)
 
+  // Drive a RAG turn for an already-persisted user message. Extracted so
+  // both the initial send and the per-row retry (STA-018 / #94) share the
+  // exact same code path — only the source of the user-message row
+  // differs.
+  const runTurnForUserMessage = useCallback(
+    async (userMsg: Message, currentList: Message[]) => {
+      if (!conversationId) return
+
+      const history = [...currentList, userMsg].map((m) => ({
+        role: m.role,
+        content: m.content,
+      }))
+
+      // Fresh controller for THIS turn — abort any prior in-flight
+      // controller before swapping so a quick second send doesn't leave
+      // a dangling abort handle.
+      abortRef.current?.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
+
+      try {
+        const { answer, sources } = await askQuestion(
+          userMsg.content,
+          history,
+          controller.signal,
+        )
+        const assistantMsg = addMessage(
+          conversationId,
+          'assistant',
+          answer,
+          sources,
+        )
+        setMessageList((prev) => [...prev, assistantMsg])
+        // STA-018 (#94): clear the failed-status if this was a retry.
+        setFailedMessageIds((prev) => {
+          if (!prev.has(userMsg.id)) return prev
+          const next = new Set(prev)
+          next.delete(userMsg.id)
+          return next
+        })
+      } catch (err) {
+        const isAbort =
+          (err instanceof Error && err.name === 'AbortError') ||
+          controller.signal.aborted
+        if (!isAbort) {
+          // STA-018 (#94): mark the offending user message so the row
+          // itself shows a failed indicator. The global banner stays
+          // (for users who don't notice the per-row affordance) but the
+          // row is now the primary recovery surface.
+          setFailedMessageIds((prev) => {
+            if (prev.has(userMsg.id)) return prev
+            const next = new Set(prev)
+            next.add(userMsg.id)
+            return next
+          })
+          setInlineError(
+            'Could not get a response. Check your connection and try again.',
+          )
+          setRetryQuestion(userMsg.content)
+        }
+      } finally {
+        if (abortRef.current === controller) {
+          abortRef.current = null
+        }
+      }
+    },
+    [conversationId, askQuestion],
+  )
+
   // Send a message
   const handleSend = useCallback(
     async (text: string) => {
@@ -205,42 +286,27 @@ export default function BookChatScreen() {
       // just-typed user turn — the previous `messageList.map(...)`
       // read the stale closure snapshot, so the LLM was one message
       // behind. Always synthesise the full transcript at call time.
-      const history = [...messageList, userMsg].map((m) => ({
-        role: m.role,
-        content: m.content,
-      }))
-
-      // Fresh controller for THIS turn — abort any prior in-flight
-      // controller before swapping so a quick second send doesn't leave
-      // a dangling abort handle.
-      abortRef.current?.abort()
-      const controller = new AbortController()
-      abortRef.current = controller
-
-      try {
-        const { answer, sources } = await askQuestion(text, history, controller.signal)
-        const assistantMsg = addMessage(conversationId, 'assistant', answer, sources)
-        setMessageList((prev) => [...prev, assistantMsg])
-      } catch (err) {
-        // User-initiated abort: don't surface a banner — the message row
-        // already conveys what happened, and the user explicitly asked
-        // to stop. Only show the inline retry banner for real failures.
-        const isAbort =
-          (err instanceof Error && err.name === 'AbortError') ||
-          controller.signal.aborted
-        if (!isAbort) {
-          setInlineError('Could not get a response. Check your connection and try again.')
-          setRetryQuestion(text)
-        }
-      } finally {
-        // Only clear the ref if this is still the active controller —
-        // a follow-up send may have swapped it.
-        if (abortRef.current === controller) {
-          abortRef.current = null
-        }
-      }
+      await runTurnForUserMessage(userMsg, messageList)
     },
-    [conversationId, bookId, messageList, askQuestion]
+    [conversationId, bookId, messageList, runTurnForUserMessage]
+  )
+
+  // STA-018 (#94): per-row retry. Re-runs the RAG turn for a previously
+  // failed user message without re-adding it to the conversation.
+  const handleRetryFailedMessage = useCallback(
+    (userMsg: Message) => {
+      // Hide any global banner — the per-row UI is the source of truth
+      // now.
+      setInlineError(null)
+      setRetryQuestion(null)
+      // History is everything BEFORE the failed turn (the failed user
+      // message is appended inside runTurnForUserMessage's history call).
+      const indexInList = messageList.findIndex((m) => m.id === userMsg.id)
+      const historyBefore =
+        indexInList >= 0 ? messageList.slice(0, indexInList) : messageList
+      void runTurnForUserMessage(userMsg, historyBefore)
+    },
+    [messageList, runTurnForUserMessage],
   )
 
   const handleAbort = useCallback(() => {
@@ -345,13 +411,43 @@ export default function BookChatScreen() {
               data={invertedMessages}
               keyExtractor={(item) => item.id}
               inverted
-              renderItem={({ item }) => (
-                <ChatMessage
-                  message={item}
-                  onSourcePress={handleSourcePress}
-                  testID={`chat-message-${item.role}-${messageIndexById.get(item.id) ?? 0}`}
-                />
-              )}
+              renderItem={({ item }) => {
+                const failed =
+                  item.role === 'user' && failedMessageIds.has(item.id)
+                return (
+                  <View testID={failed ? `chat-message-failed-${item.id}` : undefined}>
+                    <ChatMessage
+                      message={item}
+                      onSourcePress={handleSourcePress}
+                      testID={`chat-message-${item.role}-${messageIndexById.get(item.id) ?? 0}`}
+                    />
+                    {failed && (
+                      // STA-018 (#94): per-row failure badge. Red outline +
+                      // tappable "Failed — Tap to retry" affordance lives
+                      // outside ChatMessage to keep that component's
+                      // contract narrow (it owns bubble rendering only).
+                      <View className="items-end px-4 pb-1">
+                        <TouchableOpacity
+                          testID={`chat-message-failed-retry-${item.id}`}
+                          onPress={() => handleRetryFailedMessage(item)}
+                          accessibilityRole="button"
+                          accessibilityLabel="Retry sending this message"
+                          className="flex-row items-center gap-1 px-2 py-1 rounded-md border border-red-400"
+                        >
+                          <IconSymbol
+                            name="exclamationmark.triangle"
+                            size={12}
+                            color="#dc2626"
+                          />
+                          <Text className="text-xs text-red-600 font-medium">
+                            Failed — Tap to retry
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                )
+              }}
               contentContainerStyle={{ paddingVertical: 8 }}
               ListFooterComponent={
                 <>
