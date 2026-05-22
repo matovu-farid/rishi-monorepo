@@ -172,14 +172,24 @@ export function PdfView({
     )
 
     const unsubActive = usePlayerStore.subscribe(
-      (s) => s.activeParagraph,
-      (paragraph) => {
-        if (paragraph) {
+      (s) => ({ active: s.activeParagraph, resume: s.lastPlayedParagraphIndex }),
+      ({ active, resume }) => {
+        if (active) {
           usePdfStore.getState().setIsHighlighting(true)
-          usePdfStore.getState().setHighlightedParagraphIndex(paragraph.index)
+          usePdfStore.getState().setHighlightedParagraphIndex(active.index)
+        } else if (resume) {
+          usePdfStore.getState().setHighlightedParagraphIndex(resume)
         }
-      }
+      },
+      { equalityFn: (a, b) => a.active === b.active && a.resume === b.resume }
     )
+
+    {
+      const initial = usePlayerStore.getState()
+      if (!initial.activeParagraph && initial.lastPlayedParagraphIndex) {
+        usePdfStore.getState().setHighlightedParagraphIndex(initial.lastPlayedParagraphIndex)
+      }
+    }
 
     const unsubState = usePlayerStore.subscribe(
       (s) => s.playingState,
