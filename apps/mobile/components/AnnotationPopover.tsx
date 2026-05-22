@@ -111,6 +111,7 @@ export function AnnotationPopover({
                 }}
                 accessibilityRole="button"
                 accessibilityLabel={`${c.name} highlight`}
+                hitSlop={12}
                 style={{
                   width: 20,
                   height: 20,
