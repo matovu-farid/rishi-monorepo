@@ -80,6 +80,21 @@ describe('colors (light/dark parity)', () => {
     }
   })
 
+  it('light label.primary mirrors UIKit labelColor — not harsh pure black (VIS-015)', () => {
+    // VIS-015: UIKit's `labelColor` light variant is ~rgba(0,0,0,0.85),
+    // not pure #000000. Pure black on white is harsh and inconsistent
+    // with what the rest of the iOS chrome ships. Encode as rgba(0,0,0,0.85)
+    // so transparency composites correctly on tinted surfaces.
+    expect(colorsLight.label.primary).toBe('rgba(0,0,0,0.85)')
+  })
+
+  it('dark label.primary stays pure white (matches UIColor.label dark)', () => {
+    // Counterweight to VIS-015: UIKit's dark variant IS pure white because
+    // the system background it composites against is `#000000`. Only the
+    // light variant was harsh.
+    expect(colorsDark.label.primary).toBe('#FFFFFF')
+  })
+
   it('accent.primary matches iOS systemBlue in each scheme', () => {
     // P1-X: Apple Books / iOS chrome uses systemBlue, not a custom teal.
     // light = systemBlue (#007AFF), dark = systemBlue (#0A84FF).

@@ -53,7 +53,10 @@ export const colorsLight: ColorTokens = {
     grouped: '#F2F2F7',
   },
   label: {
-    primary: '#000000',
+    // VIS-015: UIKit's `labelColor` light variant is ~rgba(0,0,0,0.85), not
+    // pure black. Composites cleanly on tinted surfaces and is gentler on
+    // the eye than #000000 against a white background.
+    primary: 'rgba(0,0,0,0.85)',
     secondary: 'rgba(60,60,67,0.60)',
     tertiary: 'rgba(60,60,67,0.30)',
     quaternary: 'rgba(60,60,67,0.18)',
