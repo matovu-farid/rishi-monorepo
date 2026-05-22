@@ -4,7 +4,21 @@ import { IconSymbol } from '@/components/ui/icon-symbol'
 import { VoiceMicButton } from '@/components/VoiceMicButton'
 
 interface ChatInputProps {
-  onSend: (text: string) => void
+  /**
+   * Called with the trimmed draft when the user presses send.
+   *
+   * May return `void` or a `Promise<void>`. ChatInput clears the local
+   * input state AFTER `onSend` returns successfully — if it throws (sync)
+   * or rejects (async) the draft is preserved so the user can retry
+   * without retyping.
+   *
+   * Note: parents that gate the send behind `useRequireAuth` should NOT
+   * try to preserve text via this component's prop surface. The gated
+   * action's closure already captures the text, and the authStore replays
+   * it on sign-in (see P0-U). ChatInput's contract is simply "clear after
+   * accepted".
+   */
+  onSend: (text: string) => void | Promise<void>
   isLoading: boolean
   disabled: boolean
   onMicPress?: () => void
@@ -14,16 +28,6 @@ interface ChatInputProps {
   permissionDenied?: boolean
   /** Text injected from outside (e.g. voice transcription) */
   externalText?: string | null
-  /**
-   * Clear the input synchronously when the send button is pressed.
-   * When the parent's `onSend` is gated (e.g. via `useRequireAuth` for
-   * signed-out users), the action will not actually run and the text
-   * would otherwise be lost behind the sign-in sheet. Callers should
-   * pass `clearOnSend={isAuthenticated}` so the input only clears when
-   * the message is actually accepted. Defaults to true for backward
-   * compatibility.
-   */
-  clearOnSend?: boolean
 }
 
 export function ChatInput({
@@ -36,7 +40,6 @@ export function ChatInput({
   voiceError,
   permissionDenied,
   externalText,
-  clearOnSend = true,
 }: ChatInputProps) {
   const [text, setText] = useState('')
 
@@ -51,8 +54,22 @@ export function ChatInput({
   const handleSend = () => {
     if (!canSend) return
     const trimmed = text.trim()
-    if (clearOnSend) setText('')
-    onSend(trimmed)
+    // P1-AK: clear ONLY after onSend returns successfully. The closure
+    // captures `trimmed`, so a gated parent (useRequireAuth) can stash
+    // the action and replay it after sign-in even though we've cleared
+    // our local state. A throwing/rejecting `onSend` leaves the draft
+    // in place for retry.
+    const result = onSend(trimmed)
+    if (result && typeof (result as Promise<void>).then === 'function') {
+      ;(result as Promise<void>).then(
+        () => setText(''),
+        () => {
+          /* preserve draft on failure */
+        },
+      )
+    } else {
+      setText('')
+    }
   }
 
   const placeholder = isRecording
