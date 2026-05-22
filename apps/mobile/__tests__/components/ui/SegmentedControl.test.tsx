@@ -165,6 +165,43 @@ describe('SegmentedControl (mobile)', () => {
     ).toBe(true)
   })
 
+  it('inner pill radius is fully capsular for the control height (VIS-016)', () => {
+    // VIS-016: UISegmentedControl's inner pill is fully rounded — the
+    // outer container has a 2pt inset, so the inner pill should be
+    // `(height - 4) / 2`. The old `radius.lg - 2` (12pt) left visible
+    // straight edges at typical 36pt heights.
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <SegmentedControl
+          value="a"
+          onChange={() => undefined}
+          options={[
+            { label: 'A', value: 'a' },
+            { label: 'B', value: 'b' },
+          ]}
+          size="md"
+        />,
+      )
+    })
+    // Find the indicator pill (Animated.View) and read its borderRadius.
+    const pills = tree.root.findAll(
+      (n) => typeof n.type === 'string' && (n.type as string) === 'Animated.View',
+    )
+    const radii: number[] = []
+    for (const p of pills) {
+      const style = (p.props as { style?: unknown }).style
+      const styles = Array.isArray(style) ? style : [style]
+      for (const s of styles) {
+        if (s && typeof (s as Record<string, unknown>).borderRadius === 'number') {
+          radii.push((s as { borderRadius: number }).borderRadius)
+        }
+      }
+    }
+    // size="md" => height 36, inner pill should be (36 - 4) / 2 = 16.
+    expect(radii).toContain(16)
+  })
+
   it('non-selected segment carries accessibilityState.selected=false', () => {
     let tree!: TestRenderer.ReactTestRenderer
     act(() => {

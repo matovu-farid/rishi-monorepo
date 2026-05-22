@@ -45,6 +45,10 @@ export function SegmentedControl<T extends string>({
   const fontStyle = size === 'md' ? typography.scale.subhead : typography.scale.footnote
   const pillBackground =
     scheme === 'dark' ? colors.fill.tertiary : colors.background.primary
+  // VIS-016: UISegmentedControl's inner pill is fully rounded against the
+  // 2pt inset, not `radius.lg - 2`. Derive from height so the pill stays
+  // capsular at any control size.
+  const pillRadius = (height - 4) / 2
 
   const indicatorStyle = useAnimatedStyle(() => ({
     transform: [
@@ -79,7 +83,7 @@ export function SegmentedControl<T extends string>({
             left: 2,
             width: `${100 / options.length}%`,
             backgroundColor: pillBackground,
-            borderRadius: radius.lg - 2,
+            borderRadius: pillRadius,
           },
           shadow.low,
           indicatorStyle,
