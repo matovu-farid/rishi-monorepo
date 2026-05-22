@@ -59,6 +59,7 @@ import {
   type Bookmark,
 } from '@/lib/bookmarks/bookmark-storage'
 import { resolvePlayFromSelection } from '@/lib/pdf/read-aloud-from-selection'
+import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 import { TTSVisualCue } from '@/components/TTSVisualCue'
@@ -384,6 +385,34 @@ export default function PdfReaderScreen() {
     [],
   )
 
+  // ---- TTS: read aloud (RDR-031) ----
+  // Mirror the EPUB/MOBI handleToggleTTS pattern. The shared chunker has
+  // a PDF branch (registered via setPdfExtractor at app start), so the
+  // standard seedPlayerParagraphsFromChunks helper works here too — we
+  // seed the full-book paragraphs and dispatch PLAY. STOP branches use
+  // the same playerStore.send path as the other formats.
+  const handleToggleTTS = useCallback(() => {
+    const sendFn = usePlayerStore.getState().send
+    if (!sendFn || !book) return
+    if (ttsActive) {
+      sendFn({ type: 'STOP' })
+      return
+    }
+    requireTTS(async () => {
+      try {
+        const seeded = await seedPlayerParagraphsFromChunks(
+          book.id,
+          book.filePath,
+          book.format,
+        )
+        if (!seeded.seeded) return
+        sendFn({ type: 'PLAY' })
+      } catch (err) {
+        console.warn('[pdf-tts] seed failed:', err)
+      }
+    })
+  }, [book, ttsActive, requireTTS])
+
   // Read-from-selection (G17). Batch 7 wires this fully to the player
   // machine via playerStore.send PLAY_FROM:
   //   1. Fetch the selected page paragraphs from the WebView.
@@ -621,6 +650,8 @@ export default function PdfReaderScreen() {
         onChatToggle={() =>
           requireAIChat(() => router.push(`/chat/${book.id}`))
         }
+        onTTSPress={handleToggleTTS}
+        ttsButtonActive={ttsActive}
         onBookmarkTogglePress={handleToggleBookmark}
         isBookmarked={isCurrentBookmarked}
         sheets={{
