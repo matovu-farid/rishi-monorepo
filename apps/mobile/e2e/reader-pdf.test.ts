@@ -54,20 +54,18 @@ describe('reader: PDF — open from library', () => {
       .withTimeout(20000)
   })
 
-  it('swiping advances to the next page (position indicator updates)', async () => {
-    // Read the starting position. The indicator's accessibilityLabel
-    // is `"<pageNumber>/<pageCount>"`. We don't assert on a specific
-    // page count because fixture page count is fixture-specific.
+  it('tapping next-page advances the position indicator', async () => {
     const before = await readAccessibilityLabel('reader-position-indicator')
     expect(before).toMatch(/^\d+\/\d+$/)
 
-    // Swipe left on the reader root to advance one page. react-native-pdf
-    // natively handles horizontal swipes for paged navigation.
-    await element(by.id('pdf-reader')).swipe('left', 'fast', 0.8)
+    // The PDF reader's toolbar is initially visible (useState(true)),
+    // so we can tap the next-page button directly. The pdf-reader
+    // container fails Detox's 100% visibility check because the
+    // PdfWebReader WebView occludes most of it — we don't need to
+    // interact with the container; the toolbar button is rendered as
+    // a sibling overlay and is fully visible on its own.
+    await element(by.id('reader-next-page-btn')).tap()
 
-    // The page indicator should update within ~3s. We retry-read it a
-    // few times rather than relying on Detox `waitFor` matchers,
-    // which don't observe accessibilityLabel mutations.
     let after: string | null = before
     const startedAt = Date.now()
     while (Date.now() - startedAt < 5000) {

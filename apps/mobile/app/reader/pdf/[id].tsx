@@ -463,8 +463,12 @@ export default function PdfReaderScreen() {
       />
 
       {/* Tap target on the page edges to toggle toolbar — keep the
-          WebView touch handlers intact for selection / scrolling. */}
+          WebView touch handlers intact for selection / scrolling.
+          Rendered before the topbar so it sits *underneath* in z-order
+          (otherwise it would occlude the topbar buttons and fail
+          Detox's 100% visibility threshold check). */}
       <Pressable
+        testID="reader-toggle-toolbar"
         onPress={() => setToolbarVisible((v) => !v)}
         style={{
           position: 'absolute',
@@ -541,6 +545,7 @@ export default function PdfReaderScreen() {
             </TouchableOpacity>
 
             <TouchableOpacity
+              testID="reader-next-page-btn"
               onPress={() => {
                 if (pageNumber < pageCount) readerRef.current?.goToPage(pageNumber + 1)
               }}
