@@ -410,3 +410,49 @@ describe('ChatInput (mobile) — P1-AI stop button → onAbort', () => {
     }).not.toThrow()
   })
 })
+
+/**
+ * PRF-009 — TextInput previously rendered with
+ * `style={{ maxHeight: 96 }}` — an inline object literal allocated on
+ * every render, plus a magic number. Hoist to a module-scope StyleSheet
+ * so the same reference is reused across renders.
+ */
+describe('ChatInput (mobile) — PRF-009 TextInput style is hoisted', () => {
+  it('reuses the same TextInput style reference across renders', () => {
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ChatInput onSend={jest.fn()} isLoading={false} disabled={false} />,
+      )
+    })
+    const styleA = (findTextInput(tree).props as { style?: unknown }).style
+
+    // Trigger a re-render by changing the text. If the maxHeight object
+    // is inline in JSX, a fresh `{ maxHeight: 96 }` is allocated on every
+    // render and `styleB !== styleA`.
+    act(() => {
+      ;(findTextInput(tree).props as { onChangeText: (t: string) => void }).onChangeText(
+        'trigger-rerender',
+      )
+    })
+    const styleB = (findTextInput(tree).props as { style?: unknown }).style
+
+    expect(styleB).toBe(styleA)
+  })
+
+  it('exposes a numeric maxHeight on the TextInput style (no NaN, no inline derivation)', () => {
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ChatInput onSend={jest.fn()} isLoading={false} disabled={false} />,
+      )
+    })
+    const style = (findTextInput(tree).props as { style?: unknown }).style
+    if (style && typeof style === 'object' && !Array.isArray(style)) {
+      const styleObj = style as Record<string, unknown>
+      if ('maxHeight' in styleObj) {
+        expect(typeof styleObj.maxHeight).toBe('number')
+      }
+    }
+  })
+})

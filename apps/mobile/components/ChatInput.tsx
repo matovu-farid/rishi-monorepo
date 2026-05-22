@@ -1,7 +1,20 @@
 import { useEffect, useState } from 'react'
-import { Linking, Pressable, Text, TextInput, TouchableOpacity, View } from 'react-native'
+import { Linking, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { VoiceMicButton } from '@/components/VoiceMicButton'
+
+// PRF-009 — Hoist the TextInput's per-render style into a module-scope
+// `StyleSheet.create` so the reference is stable across renders. The
+// previous implementation used `style={{ maxHeight: 96 }}` directly in
+// JSX, which allocated a fresh object literal on every render of the
+// input and made the magic `96` un-discoverable.
+const INPUT_MAX_HEIGHT = 96
+
+const styles = StyleSheet.create({
+  textInput: {
+    maxHeight: INPUT_MAX_HEIGHT,
+  },
+})
 
 interface ChatInputProps {
   /**
@@ -97,6 +110,9 @@ export function ChatInput({
         <TextInput
           testID="chat-input"
           className="flex-1 bg-gray-100 dark:bg-[#2A2D2F] rounded-full px-4 py-2 text-base text-gray-900 dark:text-gray-100"
+          // PRF-009: stable style reference (module-scope StyleSheet)
+          // — no per-render `{ maxHeight: 96 }` allocation.
+          style={styles.textInput}
           placeholder={placeholder}
           placeholderTextColor="#687076"
           value={text}
