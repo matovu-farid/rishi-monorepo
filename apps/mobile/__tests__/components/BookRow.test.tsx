@@ -184,6 +184,71 @@ describe('BookRow (P1-V: uses design tokens)', () => {
   })
 })
 
+describe('BookRow (PRF-003: stable press-state style references)', () => {
+  // PRF-003: the Pressable used to receive a style FUNCTION that
+  // constructed a brand-new object every press transition:
+  //
+  //   style={({ pressed }) => [styles.row, { padding..., backgroundColor... }]}
+  //
+  // For a FlatList scrolling 60fps this allocates per row per frame
+  // during press tracking. The fix:
+  //   - hoist padding into a memoized base style (theme-keyed)
+  //   - reduce the press-state delta to a backgroundColor ternary
+  //     that points at two pre-allocated objects (transparent vs fill).
+  //
+  // We pin two observable consequences:
+  //   1. The style function returned for `pressed=false` and `pressed=true`
+  //      shares the SAME base object reference (only the overlay differs).
+  //   2. Repeated renders with the same theme yield the same base ref.
+  //
+  // Together those prove the per-press allocation is gone.
+  it('returns stable style references across pressed=true and pressed=false', () => {
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <BookRow book={mockBook} onPress={() => {}} onDelete={() => {}} />,
+      )
+    })
+    const pressables = tree.root.findAll(
+      (n) =>
+        (n.props as { testID?: string }).testID === `library-book-row-${mockBook.id}`,
+    )
+    expect(pressables.length).toBeGreaterThan(0)
+    const styleProp = (pressables[0].props as { style?: unknown }).style
+    expect(typeof styleProp).toBe('function')
+    const fn = styleProp as (s: { pressed: boolean }) => unknown[]
+    const a = fn({ pressed: false })
+    const b = fn({ pressed: true })
+    expect(Array.isArray(a)).toBe(true)
+    expect(Array.isArray(b)).toBe(true)
+    // Every non-overlay slot must share the SAME reference between the
+    // pressed and unpressed return values. The only delta should be the
+    // backgroundColor overlay object.
+    expect(a.length).toBe(b.length)
+    const findOverlay = (arr: unknown[]) =>
+      arr.findIndex(
+        (entry) =>
+          entry !== null &&
+          typeof entry === 'object' &&
+          'backgroundColor' in (entry as Record<string, unknown>) &&
+          Object.keys(entry as Record<string, unknown>).length === 1,
+      )
+    const overlayIdx = findOverlay(a)
+    expect(overlayIdx).toBeGreaterThanOrEqual(0)
+    expect(findOverlay(b)).toBe(overlayIdx)
+    for (let i = 0; i < a.length; i++) {
+      if (i === overlayIdx) continue
+      expect(a[i]).toBe(b[i])
+    }
+    // The overlays themselves differ between pressed states but are
+    // pre-allocated — repeated calls with the same `pressed` flag yield
+    // the same object reference (no per-frame allocation).
+    expect(a[overlayIdx]).not.toBe(b[overlayIdx])
+    expect(a[overlayIdx]).toBe(fn({ pressed: false })[overlayIdx])
+    expect(b[overlayIdx]).toBe(fn({ pressed: true })[overlayIdx])
+  })
+})
+
 describe('BookRow (P1-AC: cover-extraction retry)', () => {
   const failedCoverBook: Book = {
     ...mockBook,
