@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { animate } from 'framer-motion'
+import { animate, type AnimationPlaybackControls } from 'framer-motion'
 import { usePlayerStore } from '@/stores/playerStore'
 
 import { usePdfStore } from '@/stores/pdfStore'
@@ -15,6 +15,13 @@ export function useScrolling(scrollContainerRef: React.RefObject<HTMLDivElement 
   // Track whether we paused the player due to user scroll
   const pausedByScrollRef = useRef(false)
   const scrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Track the most recent framer-motion `animate(...)` controls so we can
+  // call `.stop()` on it when a page advance happens — otherwise the previous
+  // page's centering animate keeps overwriting `container.scrollTop` on every
+  // rAF tick, fighting the virtualizer's scroll to the new page and
+  // producing the user-visible "advances then snaps back" symptom of #30.
+  const activeAnimateRef = useRef<AnimationPlaybackControls | null>(null)
 
   // Detect user-initiated scroll (wheel/touch) and pause/resume player.
   // We listen for wheel/touchmove rather than the generic "scroll" event so
@@ -62,6 +69,37 @@ export function useScrolling(scrollContainerRef: React.RefObject<HTMLDivElement 
       }
     }
   }, [scrollContainerRef])
+
+  // Watch the page-advance suppression flag. The moment the flag flips to
+  // `true` (which `pageControls.nextPage`/`previousPage` does just before
+  // asking the virtualizer to scroll to the adjacent page), STOP any
+  // in-flight centering animate. Without this, a centering animate scheduled
+  // for the page-N highlight keeps running for up to 800 ms — past the
+  // moment the virtualizer scrolls to page N+1 — and overwrites
+  // `container.scrollTop` on every rAF tick back toward the page-N target.
+  // That's the user-observable snap-back reported on PR #31 (issue #30):
+  // the reader advances to page N+1 first paragraph, then snaps back to
+  // page N about 500–1500 ms later as the stale animate finishes pulling
+  // scrollTop back.
+  //
+  // The previous fixes (consumer-side flag clear in this hook's timeout
+  // body) addressed the case where the NEXT highlight had not yet been
+  // resolved when the timeout fires. They did NOT cover the case where
+  // a PREVIOUS animate was already running at the moment of the page
+  // advance — `animate(...)` returned controls were never stored, so
+  // there was nothing to stop. This watcher closes that gap.
+  useEffect(() => {
+    const unsub = usePdfStore.subscribe(
+      (s) => s.isLookingForNextParagraph,
+      (flag) => {
+        if (flag && activeAnimateRef.current) {
+          activeAnimateRef.current.stop()
+          activeAnimateRef.current = null
+        }
+      }
+    )
+    return unsub
+  }, [])
 
   // Auto-scroll to the highlighted paragraph
   useEffect(() => {
@@ -118,15 +156,34 @@ export function useScrolling(scrollContainerRef: React.RefObject<HTMLDivElement 
       const targetScrollTop =
         elementTopRelativeToContainer - container.clientHeight / 2 + elementRect.height / 2
 
+      // Stop any in-flight animate before starting a new one. framer-motion's
+      // `animate(value, value, opts)` returns controls but does NOT cancel
+      // previous calls — running two animates simultaneously means both
+      // write to `container.scrollTop` on every rAF tick and they fight,
+      // producing the snap-back symptom of #30 when a page advance
+      // happens mid-animate.
+      activeAnimateRef.current?.stop()
+
       // Use framer-motion's animate for smooth scrolling
-      animate(container.scrollTop, targetScrollTop, {
+      activeAnimateRef.current = animate(container.scrollTop, targetScrollTop, {
         duration: 0.8,
         ease: [0.4, 0, 0.2, 1], // Custom easing curve for smoother feel
         onUpdate: (latest) => {
           container.scrollTop = latest
+        },
+        onComplete: () => {
+          // Self-clear so the next effect run doesn't `.stop()` a finished
+          // animation (no-op, but keeps the ref honest).
+          activeAnimateRef.current = null
         }
       })
     }, 100)
-    return () => clearTimeout(timeout)
+    return () => {
+      clearTimeout(timeout)
+      // Cancel any in-flight animate so a stale centering scroll cannot
+      // overwrite scrollTop after this effect's highlight has changed.
+      activeAnimateRef.current?.stop()
+      activeAnimateRef.current = null
+    }
   }, [highlightedParagraph, isRendered, scrollContainerRef])
 }
