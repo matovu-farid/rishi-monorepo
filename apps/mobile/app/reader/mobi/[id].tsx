@@ -470,6 +470,12 @@ export default function MobiReaderScreen() {
           accessibilityLabel={`${currentChapter + 1}/${chapterCount || 0}`}
           style={{ position: 'absolute', width: 0, height: 0 }}
         />
+        {/* P0-B — Pressable goes FIRST so it sits behind the WebView.
+            The WebView still receives every gesture; only taps that
+            land where the WebView doesn't (or that the WebView ignores)
+            fall through to reveal the toolbar. */}
+        <PressableToggleToolbar />
+
         {/* Wrap the WebView in a flex container View so it doesn't
             render as a direct child of the reader root. iOS RN's
             new-architecture renderer composites WKWebView on its own
@@ -489,8 +495,6 @@ export default function MobiReaderScreen() {
           />
         </View>
 
-        <PressableToggleToolbar />
-
         {/* G15 — visual cue badge */}
         <TTSVisualCue />
       </ReaderShell>
@@ -501,6 +505,12 @@ export default function MobiReaderScreen() {
 /**
  * Full-area Pressable for tap-to-toggle. Lives inside ReaderShell so it
  * can call `toggleToolbar` from context. testID is preserved for Detox.
+ *
+ * P0-B — uses `StyleSheet.absoluteFill` so the whole page area routes
+ * "missed" taps through to the toggle. The Pressable is mounted BEFORE
+ * the WebView wrapper so it sits BEHIND the WebView; the WebView still
+ * receives all its scroll / select gestures, and only taps the WebView
+ * doesn't consume (including the edges around its bounds) fall through.
  */
 function PressableToggleToolbar(): React.JSX.Element {
   const { toggleToolbar } = useContext(ReaderShellContext)
@@ -508,13 +518,7 @@ function PressableToggleToolbar(): React.JSX.Element {
     <Pressable
       testID="reader-toggle-toolbar"
       onPress={toggleToolbar}
-      style={{
-        position: 'absolute',
-        top: '30%',
-        left: '20%',
-        width: '60%',
-        height: '40%',
-      }}
+      style={StyleSheet.absoluteFill}
       accessibilityLabel="Toggle toolbar"
     />
   )

@@ -397,6 +397,11 @@ export default function DjvuReaderScreen() {
           accessibilityLabel={`${currentPage}/${pageCount || 0}`}
           style={{ position: 'absolute', width: 0, height: 0 }}
         />
+        {/* P0-B — Pressable goes FIRST so it sits behind the WebView.
+            The WebView still receives every gesture; only taps the
+            WebView doesn't consume fall through to reveal the toolbar. */}
+        <PressableToggleToolbar />
+
         <WebView
           ref={webViewRef}
           source={{ html: DJVU_VIEWER_HTML }}
@@ -419,8 +424,6 @@ export default function DjvuReaderScreen() {
           }}
         />
 
-        <PressableToggleToolbar />
-
         {/* G15 — visual cue badge */}
         <TTSVisualCue />
       </ReaderShell>
@@ -431,6 +434,11 @@ export default function DjvuReaderScreen() {
 /**
  * Full-area Pressable for tap-to-toggle. Lives inside ReaderShell so it
  * can call `toggleToolbar` from context. testID is preserved for Detox.
+ *
+ * P0-B — uses `StyleSheet.absoluteFill` so the whole page area routes
+ * "missed" taps through to the toggle. The Pressable is mounted BEFORE
+ * the WebView in JSX so it sits BEHIND it; the WebView still receives
+ * all gestures, only taps the WebView doesn't consume fall through.
  */
 function PressableToggleToolbar(): React.JSX.Element {
   const { toggleToolbar } = useContext(ReaderShellContext)
@@ -438,13 +446,7 @@ function PressableToggleToolbar(): React.JSX.Element {
     <Pressable
       testID="reader-toggle-toolbar"
       onPress={toggleToolbar}
-      style={{
-        position: 'absolute',
-        top: '30%',
-        left: '20%',
-        width: '60%',
-        height: '40%',
-      }}
+      style={StyleSheet.absoluteFill}
       accessibilityLabel="Toggle toolbar"
     />
   )
