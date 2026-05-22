@@ -65,7 +65,7 @@ export function Toolbar({
       ) : null}
       {position === 'bottom' && hairline ? <Hairline /> : null}
       <View style={styles.row}>
-        <View style={styles.sideSlot}>{left}</View>
+        <View style={[styles.sideSlot, styles.leftSlot]}>{left}</View>
         <View pointerEvents="box-none" style={styles.centerSlot}>
           {center}
         </View>
@@ -85,18 +85,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  // RDR-016 — side slots keep their intrinsic width but never grow, so
+  // the centerSlot's `flex: 1` always wins the remaining space and long
+  // titles / progress pills stop rendering behind the right cluster.
   sideSlot: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexShrink: 0,
+    flexGrow: 0,
     zIndex: 1,
   },
-  rightSlot: {
-    marginLeft: 'auto',
+  leftSlot: {
+    justifyContent: 'flex-start',
   },
+  rightSlot: {
+    justifyContent: 'flex-end',
+  },
+  // RDR-016 — flex: 1 in the row so the center cluster takes whatever
+  // horizontal space is left between the side slots. Previously this used
+  // `position: absolute; left: 0; right: 0` which overlapped the rightSlot.
   centerSlot: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
