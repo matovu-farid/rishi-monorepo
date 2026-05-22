@@ -205,6 +205,67 @@ describe('Sheet (mobile)', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  it('uses an iOS-style 36x5 quaternary-label grabber (VIS-009)', () => {
+    // VIS-009: native iOS grabber is 36pt wide, 5pt tall, painted at
+    // `label.quaternary` (~18% black light / ~18% white dark). Our previous
+    // pass used `fill.tertiary` which is ~12% — too pale to read against
+    // the sheet background.
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <Sheet isOpen={true} onClose={() => undefined} title="Bookmarks">
+          <></>
+        </Sheet>,
+      )
+    })
+    const sheet = tree.root.findAll(
+      (n) => typeof n.type === 'string' && (n.type as string) === 'BottomSheet',
+    )[0]
+    const indicator = (
+      sheet.props as {
+        handleIndicatorStyle?: {
+          width?: number
+          height?: number
+          backgroundColor?: string
+        }
+      }
+    ).handleIndicatorStyle
+    expect(indicator?.width).toBe(36)
+    expect(indicator?.height).toBe(5)
+    // `label.quaternary` is an rgba token — assert by shape, not by literal.
+    expect(typeof indicator?.backgroundColor).toBe('string')
+    expect(indicator?.backgroundColor).toMatch(/^rgba\(/)
+  })
+
+  it('paints the sheet body on background.primary with the sheet radius (VIS-009)', () => {
+    // VIS-009: Apple sheets land on `systemBackground` (white) with
+    // continuous corners at the canonical 22pt sheet radius — not on
+    // grouped grey (`background.secondary`).
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <Sheet isOpen={true} onClose={() => undefined}>
+          <></>
+        </Sheet>,
+      )
+    })
+    const sheet = tree.root.findAll(
+      (n) => typeof n.type === 'string' && (n.type as string) === 'BottomSheet',
+    )[0]
+    const bg = (
+      sheet.props as {
+        backgroundStyle?: {
+          backgroundColor?: string
+          borderTopLeftRadius?: number
+          borderTopRightRadius?: number
+        }
+      }
+    ).backgroundStyle
+    expect(bg?.backgroundColor).toBe('#FFFFFF')
+    expect(bg?.borderTopLeftRadius).toBe(22)
+    expect(bg?.borderTopRightRadius).toBe(22)
+  })
+
   it('renders children inside the sheet body when open', () => {
     let tree!: TestRenderer.ReactTestRenderer
     act(() => {

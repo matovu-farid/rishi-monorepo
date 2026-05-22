@@ -41,7 +41,7 @@ export function Sheet({
   scrollable = false,
   detent,
 }: SheetProps): React.JSX.Element {
-  const { colors, spacing, typography } = useTheme()
+  const { colors, spacing, typography, radius } = useTheme()
   const insets = useSafeAreaInsets()
   const sheetRef = useRef<BottomSheet>(null)
 
@@ -94,10 +94,21 @@ export function Sheet({
       onChange={handleChange}
       backdropComponent={renderBackdrop}
       handleIndicatorStyle={{
-        backgroundColor: colors.fill.tertiary,
+        // VIS-009: native iOS grabber is 36pt × 5pt at quaternaryLabel —
+        // crisper than `fill.tertiary` (~12% gray) and matches UIKit.
+        backgroundColor: colors.label.quaternary,
+        width: 36,
+        height: 5,
         ...(showGrabber ? null : { height: 0, opacity: 0 }),
       }}
-      backgroundStyle={{ backgroundColor: colors.background.secondary }}
+      backgroundStyle={{
+        // VIS-009: Apple sheets land on `systemBackground` (white in light
+        // mode) with the canonical 22pt top corner radius. The previous
+        // value (`background.secondary` ≈ grouped grey) read as a panel.
+        backgroundColor: colors.background.primary,
+        borderTopLeftRadius: radius.sheet,
+        borderTopRightRadius: radius.sheet,
+      }}
       accessibilityLabel={accessibilityLabel ?? title}
       accessibilityViewIsModal
     >
