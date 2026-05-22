@@ -24,6 +24,7 @@ import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
 import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
+import { resolvePlainTextReadFromSelection } from '@/lib/reader-selection'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
 import { safeBack } from '@/lib/navigation'
@@ -166,6 +167,33 @@ window.addEventListener('message', function(e) {
   if (msg.type === 'load') loadBook(msg.data);
   if (msg.type === 'goto') renderPage(msg.page);
 });
+
+// P1-K — Selection bridge.
+//
+// DJVU is canvas-only today: djvu.js rasterizes each page into the
+// <canvas> element, so window.getSelection() over the canvas returns
+// an empty string and this bridge stays inert in practice. We still
+// wire it for two reasons:
+//   1. The reader's `onMessage` handler now branches on `selection`,
+//      so a future text-layer / OCR phase (Phase 7) can light up the
+//      "Read from here" pill without a code change to the reader.
+//   2. It keeps the MOBI/DJVU wiring symmetric — same bridge, same
+//      payload shape, same RN-side handler.
+var __rishiSelectionTimer = null;
+document.addEventListener('selectionchange', function() {
+  if (__rishiSelectionTimer) clearTimeout(__rishiSelectionTimer);
+  __rishiSelectionTimer = setTimeout(function() {
+    try {
+      var sel = (window.getSelection && window.getSelection()) ? window.getSelection().toString() : '';
+      if (sel && sel.trim().length > 0) {
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'selection',
+          text: sel
+        }));
+      }
+    } catch (e) { /* ignore — selection API unavailable */ }
+  }, 250);
+});
 </script>
 </body>
 </html>`
@@ -189,6 +217,11 @@ export default function DjvuReaderScreen() {
   const [isCurrentBookmarked, setIsCurrentBookmarked] = useState<boolean>(false)
   const [settings, setSettings] = useState<ReaderSettings>(loadReaderSettings())
   const [noteEditorOpen, setNoteEditorOpen] = useState(false)
+  // P1-K — last selection text reported by the WebView bridge. DJVU is
+  // canvas-only today so this stays null in practice (window.getSelection
+  // over the canvas returns ''); kept for symmetry with MOBI so a future
+  // text layer / OCR phase can light up the "Read from here" pill.
+  const [pendingSelection, setPendingSelection] = useState<string | null>(null)
   const undoSnackbar = useUndoSnackbar()
 
   const webViewRef = useRef<WebView>(null)
@@ -260,6 +293,48 @@ export default function DjvuReaderScreen() {
     })
   }, [book, ttsActive, requireTTS])
 
+  // P1-K — "Read from here" handler for DJVU selections. DJVU is
+  // canvas-only today so this rarely fires; wired for parity with the
+  // MOBI / EPUB readers so a future text layer / OCR phase can light
+  // up the floating pill without a reader-screen change.
+  const handleReadFromSelection = useCallback(
+    (selectionText: string) => {
+      if (!book) return
+      requireTTS(async () => {
+        const send = usePlayerStore.getState().send
+        if (!send) return
+        let paragraphs = usePlayerStore.getState().currentParagraphs
+        if (paragraphs.length === 0) {
+          try {
+            const seeded = await seedPlayerParagraphsFromChunks(
+              book.id,
+              book.filePath,
+              'djvu',
+            )
+            if (!seeded.seeded) return
+            paragraphs = seeded.paragraphs
+          } catch (err) {
+            console.warn('[djvu-read-aloud-from] seed failed:', err)
+            return
+          }
+        }
+        const playFrom = resolvePlainTextReadFromSelection(
+          selectionText,
+          paragraphs,
+        )
+        if (!playFrom) return
+        send({
+          type: 'PLAY_FROM',
+          paragraphIndex: playFrom.paragraphIndex,
+          partialFirstText: playFrom.partialFirstText,
+          partialFirstKey: playFrom.partialFirstKey,
+        })
+        setPendingSelection(null)
+      })
+    },
+    [book, requireTTS],
+  )
+
   // Load book from DB
   useEffect(() => {
     if (id) {
@@ -327,6 +402,13 @@ export default function DjvuReaderScreen() {
         if (book?.id) {
           updateBookPage(book.id, msg.current)
         }
+      } else if (msg.type === 'selection') {
+        // P1-K — DJVU canvas selection bridge. In practice the canvas
+        // returns an empty selection string and this branch never fires;
+        // wired for future text-layer / OCR support so adding it
+        // doesn't require a reader-screen change.
+        const text = typeof msg.text === 'string' ? msg.text : ''
+        setPendingSelection(text.trim().length > 0 ? text : null)
       }
     },
     [book?.id]
@@ -589,6 +671,25 @@ export default function DjvuReaderScreen() {
         {/* G15 — visual cue badge */}
         <TTSVisualCue />
 
+        {/* P1-K — Floating "Read from here" pill. Renders only when
+            the WebView reports a non-empty selection. For DJVU this
+            is effectively a no-op today (canvas-only, no text layer)
+            but the wiring matches MOBI / EPUB so future text-layer
+            support lights it up automatically. */}
+        {pendingSelection && (
+          <View style={styles.readFromPillWrapper} pointerEvents="box-none">
+            <TouchableOpacity
+              testID="reader-read-from-selection-btn"
+              accessibilityLabel="Read from here"
+              onPress={() => handleReadFromSelection(pendingSelection)}
+              style={styles.readFromPill}
+            >
+              <IconSymbol name="play.fill" size={16} color="#fff" />
+              <Text style={styles.readFromPillText}>Read from here</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* G10 — undo snackbar (5s window after a destructive action) */}
         <UndoSnackbar
           visible={undoSnackbar.visible}
@@ -720,5 +821,33 @@ const styles = StyleSheet.create({
     height: 16,
     backgroundColor: 'rgba(255,255,255,0.3)',
     marginHorizontal: 2,
+  },
+  // P1-K — Floating "Read from here" pill.
+  readFromPillWrapper: {
+    position: 'absolute',
+    bottom: 96,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  readFromPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#0a7ea4',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 22,
+    minHeight: 44,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  readFromPillText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
 })
