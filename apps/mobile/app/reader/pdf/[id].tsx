@@ -115,6 +115,11 @@ export default function PdfReaderScreen() {
   // Subscribe to active-paragraph changes to drive the highlight reconciler.
   const activeParagraph = usePlayerStore((s) => s.activeParagraph)
 
+  // R3 — gate ReaderShell's auto-hide timer on TTS / realtime activity so the
+  // bottom bar stays visible while audio is playing or voice chat is live.
+  const playingState = usePlayerStore((s) => s.playingState)
+  const ttsActive = playingState !== 'idle'
+
   // G15 — drive the visual-cue store from the active paragraph's text.
   // The classifier is a cheap text-based heuristic (LaTeX delimiters,
   // "Equation 1.2"-style labels) — full DOM scanning would require
@@ -461,6 +466,8 @@ export default function PdfReaderScreen() {
         progress={progressForShell}
         initialToolbarVisible={true}
         centerOverride={pdfNavCluster}
+        ttsActive={ttsActive}
+        realtimeActive={realtimeStatus !== 'idle'}
         sheets={{ noteEditor: true }}
         noteEditorHighlight={noteTargetHighlight}
         noteEditorOpen={noteEditorOpen}

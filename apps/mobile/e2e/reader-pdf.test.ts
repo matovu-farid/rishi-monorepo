@@ -58,12 +58,16 @@ describe('reader: PDF — open from library', () => {
     const before = await readAccessibilityLabel('reader-position-indicator')
     expect(before).toMatch(/^\d+\/\d+$/)
 
-    // The PDF reader's toolbar is initially visible (useState(true)),
-    // so we can tap the next-page button directly. The pdf-reader
-    // container fails Detox's 100% visibility check because the
-    // PdfWebReader WebView occludes most of it — we don't need to
-    // interact with the container; the toolbar button is rendered as
-    // a sibling overlay and is fully visible on its own.
+    // Reveal the toolbar before tapping the next-page button. Phase 3
+    // moved the PDF reader onto ReaderShell, whose 3s auto-hide timer
+    // arms at mount (initialToolbarVisible=true, ttsActive=false,
+    // realtimeActive=false). On slow CI runners the simulator pause
+    // before this step can exceed 3s, transitioning the bottom bar to
+    // pointerEvents='none' and silently dropping the tap. The MOBI
+    // spec compensates with the same reveal step.
+    await element(by.id('reader-toggle-toolbar')).tap()
+    await new Promise((r) => setTimeout(r, 2000))
+
     await element(by.id('reader-next-page-btn')).tap()
 
     let after: string | null = before
