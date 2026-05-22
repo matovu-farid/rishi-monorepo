@@ -297,7 +297,11 @@ afterEach(() => {
 })
 
 describe('ReaderShell (mobile)', () => {
-  it('hides the toolbar on initial render (default)', () => {
+  it('shows the toolbar on initial render by default (P0-A — back button must be reachable)', () => {
+    // Regression: previously the default was `false`, leaving the user
+    // stranded with no Back-to-library button until they tapped the
+    // page. Make the default visible; auto-hide still fires after the
+    // first tap (see "auto-hides the toolbar after 3000ms").
     let tree!: TestRenderer.ReactTestRenderer
     act(() => {
       tree = TestRenderer.create(
@@ -306,15 +310,16 @@ describe('ReaderShell (mobile)', () => {
         </ReaderShell>,
       )
     })
-    expect(isBarVisible(tree, 'top')).toBe(false)
-    expect(isBarVisible(tree, 'bottom')).toBe(false)
+    expect(isBarVisible(tree, 'top')).toBe(true)
+    expect(isBarVisible(tree, 'bottom')).toBe(true)
   })
 
   it('shows the toolbar when `toggleToolbar` from context is invoked', () => {
+    // Start from hidden so we can observe the toggle flip to visible.
     let tree!: TestRenderer.ReactTestRenderer
     act(() => {
       tree = TestRenderer.create(
-        <ReaderShell {...baseProps}>
+        <ReaderShell {...baseProps} initialToolbarVisible={false}>
           <ContextProbe />
         </ReaderShell>,
       )
@@ -411,10 +416,11 @@ describe('ReaderShell (mobile)', () => {
   })
 
   it('exposes `bottomBarVisible` via context that mirrors toolbar visibility', () => {
+    // Start from hidden so the toggle exercises the false→true transition.
     let tree!: TestRenderer.ReactTestRenderer
     act(() => {
       tree = TestRenderer.create(
-        <ReaderShell {...baseProps}>
+        <ReaderShell {...baseProps} initialToolbarVisible={false}>
           <ContextProbe />
         </ReaderShell>,
       )

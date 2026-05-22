@@ -134,7 +134,7 @@ export function ReaderShell({
   onBack,
   progress,
   chapterLabel,
-  initialToolbarVisible = false,
+  initialToolbarVisible = true,
   ttsActive = false,
   realtimeActive = false,
   centerOverride,
