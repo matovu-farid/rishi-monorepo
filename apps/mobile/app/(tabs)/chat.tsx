@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { View, FlatList, TouchableOpacity, Alert, Text } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter, useFocusEffect } from 'expo-router'
@@ -23,6 +23,15 @@ export default function ConversationsScreen() {
   const loadConversations = useCallback(() => {
     setConversations(getAllConversations())
   }, [])
+
+  // P0-M: filter out conversations whose underlying book has been deleted.
+  // Otherwise the row renders "Unknown Book" and tap navigates into a
+  // dead chat detail. The cheaper alternative — keeping the row and
+  // showing a CTA — was rejected because the book is gone for good.
+  const visibleConversations = useMemo(
+    () => conversations.filter((c) => getBookById(c.bookId) !== null),
+    [conversations],
+  )
 
   useFocusEffect(
     useCallback(() => {
@@ -82,7 +91,7 @@ export default function ConversationsScreen() {
     return last.content.slice(0, 60)
   }, [])
 
-  if (conversations.length === 0) {
+  if (visibleConversations.length === 0) {
     return (
       <SafeAreaView testID="screen-chat-list" className="flex-1 bg-white dark:bg-[#151718]">
         <View className="px-6 pt-4 pb-2 flex-row items-center justify-between">
@@ -130,16 +139,17 @@ export default function ConversationsScreen() {
       </View>
       <FlatList
         testID="chat-conversation-list"
-        data={conversations}
+        data={visibleConversations}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => {
-          const book = getBookById(item.bookId)
+          // Safe to non-null: visibleConversations is filtered above.
+          const book = getBookById(item.bookId)!
           return (
             <ConversationRow
               testID={`conversation-row-${item.id}`}
               conversation={item}
-              bookTitle={book?.title ?? 'Unknown Book'}
-              bookCoverPath={book?.coverPath ?? null}
+              bookTitle={book.title}
+              bookCoverPath={book.coverPath ?? null}
               lastMessage={getLastMessage(item.id)}
               onPress={() => router.push(`/chat/${item.bookId}?cid=${item.id}`)}
               onLongPress={() => handleDelete(item.id)}
