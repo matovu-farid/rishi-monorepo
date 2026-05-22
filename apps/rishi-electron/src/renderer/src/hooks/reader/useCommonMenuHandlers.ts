@@ -59,7 +59,7 @@ export function useCommonMenuHandlers({
         else if (state.startsWith('paused')) send({ type: 'RESUME' })
         else requireAuthRef.current('tts', () => send({ type: 'PLAY' }))
       },
-      openChat: () => requireAuthRef.current('chat', () => setChatPanelOpenRef.current((v) => !v)),
+      openChat: () => requireAuthRef.current('ai-chat', () => setChatPanelOpenRef.current((v) => !v)),
       voiceChat: () => {
         const { isChatting: chatting, setIsChatting } = useChatStore.getState()
         if (chatting) setIsChatting(false)

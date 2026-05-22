@@ -1,6 +1,8 @@
 import { Volume2, MessageSquare, Mic, Sparkles, type LucideIcon } from 'lucide-react'
+import type { PremiumFeature } from '@rishi/shared/auth-gating'
+import { FEATURE_COPY } from '@rishi/shared/auth-gating'
 
-export type PremiumFeature = 'tts' | 'chat' | 'voice-input' | 'ai-generic'
+export type { PremiumFeature }
 
 export interface PremiumFeatureConfig {
   icon: LucideIcon
@@ -12,35 +14,46 @@ export interface PremiumFeatureConfig {
 export const PREMIUM_FEATURES: Record<PremiumFeature, PremiumFeatureConfig> = {
   tts: {
     icon: Volume2,
-    title: 'Listen to your books',
-    description: 'AI-powered text-to-speech turns any book into an audiobook.',
+    title: FEATURE_COPY.tts.title,
+    description: FEATURE_COPY.tts.body,
     bullets: [
       'Natural, expressive voices',
       'Reads EPUB, PDF, and MOBI',
       'Remembers your spot across devices'
     ]
   },
-  chat: {
+  'ai-chat': {
     icon: MessageSquare,
-    title: 'Chat with your books',
-    description:
-      'Ask questions, get summaries, and explore ideas with an AI that knows your library.',
+    title: FEATURE_COPY['ai-chat'].title,
+    description: FEATURE_COPY['ai-chat'].body,
     bullets: [
       "Cites passages from the book you're reading",
       'Works across your entire library',
       'Remembers context within a conversation'
     ]
   },
+  'voice-chat': {
+    icon: Mic,
+    title: FEATURE_COPY['voice-chat'].title,
+    description: FEATURE_COPY['voice-chat'].body,
+    bullets: ['Natural speech recognition', 'Paired with AI book chat']
+  },
   'voice-input': {
     icon: Mic,
-    title: 'Talk to your books',
-    description: 'Ask questions hands-free with realtime voice conversations.',
+    title: FEATURE_COPY['voice-input'].title,
+    description: FEATURE_COPY['voice-input'].body,
     bullets: ['Natural speech recognition', 'Paired with AI book chat']
+  },
+  sync: {
+    icon: Sparkles,
+    title: FEATURE_COPY.sync.title,
+    description: FEATURE_COPY.sync.body,
+    bullets: []
   },
   'ai-generic': {
     icon: Sparkles,
-    title: 'AI features require an account',
-    description: "Sign in to unlock Rishi's AI-powered reading tools.",
+    title: FEATURE_COPY['ai-generic'].title,
+    description: FEATURE_COPY['ai-generic'].body,
     bullets: []
   }
 }

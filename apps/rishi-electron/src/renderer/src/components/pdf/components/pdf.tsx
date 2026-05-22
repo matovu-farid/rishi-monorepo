@@ -431,7 +431,7 @@ export function PdfView({
         else if (state.startsWith('paused')) send({ type: 'RESUME' })
         else requireAuth('tts', () => send({ type: 'PLAY' }))
       },
-      openChat: () => requireAuth('chat', () => setChatPanelOpen((v) => !v)),
+      openChat: () => requireAuth('ai-chat', () => setChatPanelOpen((v) => !v)),
       voiceChat: () => {
         const { isChatting: chatting, setIsChatting } = useChatStore.getState()
         if (chatting) setIsChatting(false)

@@ -28,7 +28,7 @@ export default function VoiceChatLauncher() {
     if (isChatting) {
       setIsChatting(false)
     } else {
-      requireAuth('voice-input', () => setIsChatting(true))
+      requireAuth('voice-chat', () => setIsChatting(true))
     }
   }
 
