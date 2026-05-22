@@ -167,6 +167,7 @@ jest.mock('@/lib/stores/authStore', () => ({
 import React, { act } from 'react'
 import TestRenderer from 'react-test-renderer'
 import { Pressable } from 'react-native'
+import * as Haptics from 'expo-haptics'
 import { PremiumFeatureSheet } from '@/components/auth/PremiumFeatureSheet'
 
 function findTextNodes(root: TestRenderer.ReactTestRenderer): string[] {
@@ -197,6 +198,9 @@ beforeEach(() => {
   closePremiumGate.mockClear()
   setAuthenticating.mockClear()
   routerPushMock.mockClear()
+  ;(Haptics.selectionAsync as jest.Mock).mockClear()
+  ;(Haptics.impactAsync as jest.Mock).mockClear()
+  ;(Haptics.notificationAsync as jest.Mock).mockClear()
   __platformOS = 'ios'
   storeState = {
     premiumGateOpen: false,
@@ -457,6 +461,62 @@ describe('PremiumFeatureSheet (mobile)', () => {
     it('maps 410 session-expired to "Sign-in expired, please try again."', async () => {
       const tree = await pressCtaWith('POST /mobile/start/verify failed: 410 session expired')
       expect(hasText(tree, 'Sign-in expired, please try again.')).toBe(true)
+    })
+  })
+
+  describe('dismiss haptic differentiation (GAT-014)', () => {
+    function pressMaybeLater(): void {
+      storeState.premiumGateOpen = true
+      storeState.premiumGateFeature = 'tts'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<PremiumFeatureSheet />)
+      })
+      // Clear any open-sheet haptics so we only observe what `handleDismiss`
+      // itself fires.
+      ;(Haptics.selectionAsync as jest.Mock).mockClear()
+      ;(Haptics.impactAsync as jest.Mock).mockClear()
+      ;(Haptics.notificationAsync as jest.Mock).mockClear()
+
+      const maybeLater = tree.root.findAll(
+        (n) =>
+          n.type === Pressable &&
+          (n.props as { accessibilityLabel?: string }).accessibilityLabel ===
+            'Maybe later',
+      )
+      act(() => {
+        ;(maybeLater[0].props as { onPress: () => void }).onPress()
+      })
+    }
+
+    it('does not play a selection haptic on dismiss (was the same as sign-in)', () => {
+      pressMaybeLater()
+      // Dismiss must not trigger `selectionAsync` — that haptic is reserved
+      // for the sign-in CTA tap, where it acknowledges progress towards
+      // authentication. Confusing the two falsely tells the user they
+      // succeeded at signing in.
+      expect(Haptics.selectionAsync).not.toHaveBeenCalled()
+    })
+
+    it('does not play a Success notification haptic on dismiss', () => {
+      pressMaybeLater()
+      // Success notification is reserved for the post-sign-in confirmation.
+      const calls = (Haptics.notificationAsync as jest.Mock).mock.calls
+      for (const call of calls) {
+        expect(call[0]).not.toBe('success')
+      }
+    })
+
+    it('uses no haptic OR Light impact (not Soft) on dismiss', () => {
+      pressMaybeLater()
+      // We allow a faint Light tap so dismiss still feels acknowledged,
+      // but it must be visibly weaker than the Soft impact that opens the
+      // sheet and clearly different from the Success notification on
+      // sign-in.
+      const calls = (Haptics.impactAsync as jest.Mock).mock.calls
+      for (const call of calls) {
+        expect(call[0]).not.toBe('soft')
+      }
     })
   })
 })

@@ -134,7 +134,12 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
   }, [closeGate, shakeX])
 
   const handleDismiss = useCallback(() => {
-    void Haptics.selectionAsync()
+    // GAT-014 — dismiss must NOT share the `selectionAsync` haptic with
+    // `handleSignIn`. The two paths felt identical (same tactile yes)
+    // even though one signed the user in and one bailed. Use a Light
+    // impact so the tap still feels acknowledged but is distinct from
+    // both the Soft sheet-open and the Success post-sign-in haptics.
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
     closeGate()
   }, [closeGate])
 
