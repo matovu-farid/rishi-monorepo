@@ -6,13 +6,24 @@ import { AIChatOrb } from '@/components/chat/AIChatOrb'
 import { VoiceChatLauncher } from '@/components/chat/VoiceChatLauncher'
 import { MiniPlayer } from '@/components/player/MiniPlayer'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
-import { useChatStore } from '@/lib/stores/chatStore'
+import {
+  useChatStore,
+  type ActivationContext,
+} from '@/lib/stores/chatStore'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { stringToNumberID } from '@rishi/shared/lib/stringToNumberID'
 
 export interface ReaderOverlayProps {
   bookId?: string
   onChatToggle?: () => void
+  /**
+   * Lazy provider for the voice-chat activation context (P0-O). Per-format
+   * readers wire this with whatever subset they can compute — chapter
+   * label as `pageText`, the spine outline, the active TTS paragraph,
+   * etc. Called once per launcher tap so the latest reader state is
+   * captured at activation time.
+   */
+  getActivationContext?: () => ActivationContext
   testID?: string
 }
 
@@ -26,6 +37,7 @@ const FLOATING_BOTTOM_OFFSET = 112
 export function ReaderOverlay({
   bookId,
   onChatToggle,
+  getActivationContext,
   testID,
 }: ReaderOverlayProps): React.JSX.Element {
   const insets = useSafeAreaInsets()
@@ -47,10 +59,15 @@ export function ReaderOverlay({
   const handleVoiceStart = useCallback(() => {
     requireVoiceChat(() => {
       if (bookId) {
-        startChat(stringToNumberID(bookId))
+        // Gather reader state lazily so we capture the latest page /
+        // paragraph at activation time (P0-O). When no provider is wired
+        // (e.g. tests, headless screens), pass `undefined` and let
+        // chatStore fall back to an empty context.
+        const ctx = getActivationContext?.()
+        startChat(stringToNumberID(bookId), ctx)
       }
     })
-  }, [requireVoiceChat, startChat, bookId])
+  }, [requireVoiceChat, startChat, bookId, getActivationContext])
 
   return (
     <View

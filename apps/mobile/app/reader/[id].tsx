@@ -34,6 +34,8 @@ import { AnnotationPopover } from '@/components/AnnotationPopover'
 import {
   ReaderShell,
   ReaderShellContext,
+  ReaderErrorScreen,
+  type ReaderErrorCause,
   type ReaderProgress,
 } from '@/components/reader'
 import { READER_THEMES } from '@/constants/reader-themes'
@@ -44,10 +46,17 @@ import type { Annotation } from '@epubjs-react-native/core'
 
 export default function ReaderScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
+  const router = useRouter()
   const [book, setBook] = useState<Book | null>(null)
 
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
+  // P0-L — track the cause of a failed load so ReaderErrorScreen can
+  // pick its copy. `null` means "no error yet"; the post-load gate
+  // below resolves to a concrete cause when `book` is missing.
+  const [errorCause, setErrorCause] = useState<ReaderErrorCause | null>(null)
+  // Bumped on Retry to re-fire the effect.
+  const [loadAttempt, setLoadAttempt] = useState(0)
 
   // Load book from DB (async -- may download file from R2 for synced books).
   // When the lazy-download branch fires, `onDownloadStart` flips the
@@ -57,12 +66,20 @@ export default function ReaderScreen() {
     if (id) {
       setLoading(true)
       setDownloading(false)
+      setErrorCause(null)
       getBookForReading(id, { onDownloadStart: () => setDownloading(true) })
         .then((loaded) => setBook(loaded))
-        .catch((err) => console.error('Failed to load book for reading:', err))
+        .catch((err) => {
+          console.error('Failed to load book for reading:', err)
+          setBook(null)
+          // The loader only throws from the R2 download path — treat any
+          // thrown error as a cloud failure so the user sees a Retry that
+          // means something.
+          setErrorCause('cloud-download-failed')
+        })
         .finally(() => setLoading(false))
     }
-  }, [id])
+  }, [id, loadAttempt])
 
   if (loading) {
     return (
@@ -76,10 +93,19 @@ export default function ReaderScreen() {
   }
 
   if (!book || !book.filePath) {
+    // If the loader didn't throw but we still have no usable book, the
+    // local file is gone (or the row vanished). Cloud failures already
+    // set `errorCause` in the catch branch.
+    const resolvedCause: ReaderErrorCause = errorCause ?? 'local-missing'
     return (
-      <View testID="reader-error" style={{ flex: 1, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center' }}>
-        <Text style={{ color: '#666', fontSize: 16 }}>Book file not available</Text>
-      </View>
+      <ReaderErrorScreen
+        cause={resolvedCause}
+        onBack={() => {
+          if (router.canGoBack()) router.back()
+          else router.replace('/(tabs)')
+        }}
+        onRetry={() => setLoadAttempt((n) => n + 1)}
+      />
     )
   }
 
@@ -586,6 +612,21 @@ function ReaderContent({ book }: { book: Book }) {
   const chapterLabel =
     toc?.find((t) => t.href === currentHref)?.label ?? undefined
 
+  // Voice-chat activation context (P0-O). We pass the chapter label as
+  // the page-text proxy (EPUB doesn't cheaply expose the rendered DOM
+  // text), and the spine outline so the model can resolve "the
+  // previous chapter", etc.
+  const getActivationContext = useCallback(() => {
+    const outline = toc?.map((t) => ({
+      href: t.href,
+      label: t.label,
+    }))
+    return {
+      pageText: chapterLabel ?? '',
+      outline,
+    }
+  }, [toc, chapterLabel])
+
   return (
     <View ref={pageCaptureRef} testID="reader-epub" style={{ flex: 1, backgroundColor: theme.background }}>
       <ReaderShell
@@ -600,6 +641,7 @@ function ReaderContent({ book }: { book: Book }) {
         onChatToggle={() =>
           requireAIChat(() => router.push(`/chat/${book.id}`))
         }
+        getActivationContext={getActivationContext}
         onBookmarkTogglePress={handleToggleBookmark}
         isBookmarked={isCurrentBookmarked}
         onTTSPress={handleToggleTTS}

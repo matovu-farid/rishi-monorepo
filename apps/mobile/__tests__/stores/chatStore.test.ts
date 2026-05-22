@@ -86,6 +86,18 @@ describe('chatStore (mobile)', () => {
     expect(fakeVoice.activate).toHaveBeenCalledWith(42, expect.any(Object))
   })
 
+  it('startChat forwards the activation context to voice.activate (P0-O)', async () => {
+    const ctx = {
+      pageText: 'Chapter 3: The Sound of Thunder',
+      activeParagraphText: 'It was a dark and stormy night.',
+      outline: [{ href: 'ch1.xhtml', label: 'Chapter 1' }],
+    }
+    useChatStore.getState().startChat(42, ctx)
+    await Promise.resolve()
+    expect(fakeVoice.activate).toHaveBeenCalledTimes(1)
+    expect(fakeVoice.activate).toHaveBeenCalledWith(42, ctx)
+  })
+
   it('startChat resets state when voice.activate rejects', async () => {
     fakeVoice.activate.mockRejectedValueOnce(new Error('boom'))
     useChatStore.setState({ isChatting: true, chatStatus: 'connecting' })

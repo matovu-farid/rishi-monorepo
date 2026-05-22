@@ -109,7 +109,7 @@ interface ChatState {
 
   setIsChatting: (value: boolean | ((prev: boolean) => boolean)) => void
   setChatStatus: (status: ChatStatus) => void
-  startChat: (bookId: number) => void
+  startChat: (bookId: number, context?: ActivationContext) => void
   stopConversation: () => void
   dismissVoiceError: () => void
 }
@@ -130,11 +130,13 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   setChatStatus: (status) => set({ chatStatus: status }),
 
-  startChat: (bookId) => {
-    // ActivationContext is intentionally minimal on mobile until the
-    // playerStore / epubStore / pageCapture modules are ported — they
-    // own the data the electron version reads.
-    const ctx: ActivationContext = {}
+  startChat: (bookId, context) => {
+    // Callers (ReaderOverlay / per-format readers) gather what they have
+    // access to — page text, chapter outline, the paragraph TTS is on —
+    // and pass it through. Falling back to {} keeps the store usable in
+    // call sites that don't yet have a reader mounted (e.g. the chat
+    // detail screen activating voice without a current page).
+    const ctx: ActivationContext = context ?? {}
     port.activate(bookId, ctx).catch(() => {
       set({ isChatting: false, chatStatus: 'idle' })
     })

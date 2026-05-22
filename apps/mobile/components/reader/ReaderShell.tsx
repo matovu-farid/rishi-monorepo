@@ -12,6 +12,7 @@ import { ReaderTopBar } from '@/components/reader/ReaderTopBar'
 import { ReaderBottomBar } from '@/components/reader/ReaderBottomBar'
 import { ReaderOverlay } from '@/components/reader/ReaderOverlay'
 import type { ReaderProgress } from '@/components/reader/ReaderProgressPill'
+import type { ActivationContext } from '@/lib/stores/chatStore'
 
 import { AppearanceSheet } from '@/components/AppearanceSheet'
 import { TocSheet } from '@/components/TocSheet'
@@ -71,6 +72,12 @@ export interface ReaderShellProps {
   // Floating-widget context (Phase 4)
   bookId?: string
   onChatToggle?: () => void
+  /**
+   * Lazy provider for the voice-chat activation context (P0-O). Per-format
+   * readers supply page text, chapter label, the active TTS paragraph,
+   * etc. Threaded straight through to `ReaderOverlay`.
+   */
+  getActivationContext?: () => ActivationContext
 
   // Action cluster
   onBookmarkTogglePress?: () => void
@@ -140,6 +147,7 @@ export function ReaderShell({
   centerOverride,
   bookId,
   onChatToggle,
+  getActivationContext,
   onBookmarkTogglePress,
   isBookmarked,
   onTTSPress,
@@ -371,7 +379,11 @@ export function ReaderShell({
           testID="reader-bottom-bar"
         />
 
-        <ReaderOverlay bookId={bookId} onChatToggle={onChatToggle} />
+        <ReaderOverlay
+          bookId={bookId}
+          onChatToggle={onChatToggle}
+          getActivationContext={getActivationContext}
+        />
 
         {sheets?.toc ? (
           <TocSheet

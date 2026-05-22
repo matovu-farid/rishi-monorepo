@@ -280,6 +280,36 @@ describe('ReaderOverlay (mobile)', () => {
     expect(findByTestID(tree, 'mini-player-stub')).toBeNull()
   })
 
+  it('passes the activation context from getActivationContext into startChat (P0-O)', () => {
+    chatState.isChatting = false
+    const ctx = {
+      pageText: 'Chapter 1',
+      activeParagraphText: 'Some paragraph.',
+      outline: [{ href: 'ch1', label: 'Chapter 1' }],
+    }
+    const getActivationContext = jest.fn(() => ctx)
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ReaderOverlay
+          bookId="b1"
+          getActivationContext={getActivationContext}
+        />,
+      )
+    })
+    const launcher = findByTestID(tree, 'voice-chat-launcher-stub')
+    expect(launcher).not.toBeNull()
+    const onStart = (launcher!.props as { onStart?: () => void }).onStart
+    expect(typeof onStart).toBe('function')
+    act(() => {
+      onStart!()
+    })
+    expect(getActivationContext).toHaveBeenCalledTimes(1)
+    expect(startChatMock).toHaveBeenCalledTimes(1)
+    // second arg must be the gathered context (not an empty object)
+    expect(startChatMock.mock.calls[0][1]).toEqual(ctx)
+  })
+
   it('forwards onChatToggle to AIChatOrb as the onPress prop', () => {
     chatState.isChatting = true
     const onChatToggle = jest.fn()
