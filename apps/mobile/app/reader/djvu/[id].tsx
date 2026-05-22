@@ -24,6 +24,7 @@ import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
 import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
+import { useRequireAuth } from '@/components/auth/useRequireAuth'
 
 /**
  * DJVU reader using djvu.js — a pure JavaScript DJVU decoder.
@@ -177,6 +178,10 @@ export default function DjvuReaderScreen() {
   const pageCaptureRef = useRef<View>(null)
   usePageCaptureRef(pageCaptureRef)
 
+  // Premium feature gate — initial TTS start path must show the sign-in
+  // sheet for signed-out users.
+  const requireTTS = useRequireAuth('tts')
+
   // G15 — visual-cue driver from active paragraph text.
   useEffect(() => {
     const setCue = useVisualCueStore.getState().setVisualCue
@@ -196,28 +201,30 @@ export default function DjvuReaderScreen() {
     }
   }, [activeParagraph])
 
-  const handleToggleTTS = useCallback(async () => {
+  const handleToggleTTS = useCallback(() => {
     const sendFn = usePlayerStore.getState().send
     if (!sendFn || !book) return
     if (ttsActive) {
       sendFn({ type: 'STOP' })
       return
     }
-    try {
-      const seeded = await seedPlayerParagraphsFromChunks(
-        book.id,
-        book.filePath,
-        'djvu',
-      )
-      if (!seeded.seeded) {
-        console.warn('[djvu-tts] no chunks available — DJVU extractor not registered?')
-        return
+    requireTTS(async () => {
+      try {
+        const seeded = await seedPlayerParagraphsFromChunks(
+          book.id,
+          book.filePath,
+          'djvu',
+        )
+        if (!seeded.seeded) {
+          console.warn('[djvu-tts] no chunks available — DJVU extractor not registered?')
+          return
+        }
+        sendFn({ type: 'PLAY' })
+      } catch (err) {
+        console.warn('[djvu-tts] seed failed:', err)
       }
-      sendFn({ type: 'PLAY' })
-    } catch (err) {
-      console.warn('[djvu-tts] seed failed:', err)
-    }
-  }, [book, ttsActive])
+    })
+  }, [book, ttsActive, requireTTS])
 
   // Load book from DB
   useEffect(() => {

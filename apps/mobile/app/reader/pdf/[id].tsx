@@ -56,6 +56,7 @@ import { classifyParagraphForVisualCue } from '@/lib/tts/visual-cue-classify'
 import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
 import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
+import { useRequireAuth } from '@/components/auth/useRequireAuth'
 import { NoteEditor } from '@/components/NoteEditor'
 import { GoToPageModal } from '@/components/pdf/GoToPageModal'
 import { ThumbnailModal } from '@/components/pdf/thumbnail-modal'
@@ -117,6 +118,10 @@ export default function PdfReaderScreen() {
 
   // G10 — undo snackbar surface (5s window after a destructive action).
   const undoSnackbar = useUndoSnackbar()
+
+  // Premium feature gate — initial TTS start path must show the sign-in
+  // sheet for signed-out users.
+  const requireTTS = useRequireAuth('tts')
 
   // Subscribe to active-paragraph changes to drive the highlight reconciler.
   const activeParagraph = usePlayerStore((s) => s.activeParagraph)
@@ -365,38 +370,40 @@ export default function PdfReaderScreen() {
   //   4. Dispatch into playerStore.send. The mounted usePlayerMachine
   //      actor receives the event and fetches audio via the new TTS
   //      service.
-  const handleReadFromSelection = useCallback(async () => {
+  const handleReadFromSelection = useCallback(() => {
     if (!selection) return
-    try {
-      const paragraphs = await readerRef.current?.getPageText(selection.pageNumber)
-      if (!paragraphs) return
-      const playFrom = resolvePlayFromSelection(selection.text, paragraphs)
-      if (!playFrom) {
-        Alert.alert('Read aloud', 'Could not find the selected text on this page.')
-        return
-      }
+    requireTTS(async () => {
+      try {
+        const paragraphs = await readerRef.current?.getPageText(selection.pageNumber)
+        if (!paragraphs) return
+        const playFrom = resolvePlayFromSelection(selection.text, paragraphs)
+        if (!playFrom) {
+          Alert.alert('Read aloud', 'Could not find the selected text on this page.')
+          return
+        }
 
-      // Seed the page's paragraphs as the player's current list. The shape
-      // { index, text } matches ParagraphWithIndex (Batch 5 already emits
-      // this shape from getPageText).
-      usePlayerStore.setState({ currentParagraphs: paragraphs })
+        // Seed the page's paragraphs as the player's current list. The shape
+        // { index, text } matches ParagraphWithIndex (Batch 5 already emits
+        // this shape from getPageText).
+        usePlayerStore.setState({ currentParagraphs: paragraphs })
 
-      const send = usePlayerStore.getState().send
-      if (!send) {
-        console.warn('[pdf-read-aloud-from] player machine not mounted yet')
-        return
+        const send = usePlayerStore.getState().send
+        if (!send) {
+          console.warn('[pdf-read-aloud-from] player machine not mounted yet')
+          return
+        }
+        send({
+          type: 'PLAY_FROM',
+          paragraphIndex: playFrom.paragraphIndex,
+          partialFirstText: playFrom.partialFirstText,
+          partialFirstKey: playFrom.partialFirstKey,
+        })
+        setSelection(null)
+      } catch (e) {
+        console.warn('[pdf-read-aloud-from] failed', e)
       }
-      send({
-        type: 'PLAY_FROM',
-        paragraphIndex: playFrom.paragraphIndex,
-        partialFirstText: playFrom.partialFirstText,
-        partialFirstKey: playFrom.partialFirstKey,
-      })
-      setSelection(null)
-    } catch (e) {
-      console.warn('[pdf-read-aloud-from] failed', e)
-    }
-  }, [selection])
+    })
+  }, [selection, requireTTS])
 
   // Reconciler: when the active paragraph changes, scroll the WebView to
   // its page. Mobile PDF doesn't yet have a per-paragraph overlay highlight

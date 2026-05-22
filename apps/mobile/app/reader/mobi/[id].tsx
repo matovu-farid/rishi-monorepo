@@ -24,6 +24,7 @@ import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
 import { usePageCaptureRef } from '@/hooks/usePageCaptureRef'
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
+import { useRequireAuth } from '@/components/auth/useRequireAuth'
 
 /**
  * Minimal inline MOBI parser running inside a WebView.
@@ -239,6 +240,10 @@ export default function MobiReaderScreen() {
   const pageCaptureRef = useRef<View>(null)
   usePageCaptureRef(pageCaptureRef)
 
+  // Premium feature gate — initial TTS start path must show the sign-in
+  // sheet for signed-out users.
+  const requireTTS = useRequireAuth('tts')
+
   // Load book from DB
   useEffect(() => {
     if (id) {
@@ -343,25 +348,27 @@ export default function MobiReaderScreen() {
   // Mobi/Azw3 chunks come from the shared mobi extractor — the same one
   // the chunker uses for RAG. We seed paragraphs once and dispatch PLAY;
   // the player machine fetches audio via the new TTS service.
-  const handleToggleTTS = useCallback(async () => {
+  const handleToggleTTS = useCallback(() => {
     const sendFn = usePlayerStore.getState().send
     if (!sendFn || !book) return
     if (ttsActive) {
       sendFn({ type: 'STOP' })
       return
     }
-    try {
-      const seeded = await seedPlayerParagraphsFromChunks(
-        book.id,
-        book.filePath,
-        book.format,
-      )
-      if (!seeded.seeded) return
-      sendFn({ type: 'PLAY' })
-    } catch (err) {
-      console.warn('[mobi-tts] seed failed:', err)
-    }
-  }, [book, ttsActive])
+    requireTTS(async () => {
+      try {
+        const seeded = await seedPlayerParagraphsFromChunks(
+          book.id,
+          book.filePath,
+          book.format,
+        )
+        if (!seeded.seeded) return
+        sendFn({ type: 'PLAY' })
+      } catch (err) {
+        console.warn('[mobi-tts] seed failed:', err)
+      }
+    })
+  }, [book, ttsActive, requireTTS])
 
   // CSS reconciler: highlight the active paragraph inside the WebView.
   // Uses a simple data-attribute selector — the parser doesn't emit
