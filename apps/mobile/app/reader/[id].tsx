@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { View, Text, TextInput, FlatList, Pressable, AppState, AppStateStatus, ActivityIndicator, AccessibilityInfo } from 'react-native'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { View, Text, AppState, AppStateStatus, ActivityIndicator, AccessibilityInfo } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Reader, ReaderProvider, useReader } from '@epubjs-react-native/core'
 import { useFileSystem } from '@/lib/epub/file-system-adapter'
-import BottomSheet from '@gorhom/bottom-sheet'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -17,16 +16,12 @@ import {
   isLocationBookmarked,
   type Bookmark,
 } from '@/lib/bookmarks/bookmark-storage'
-import { IconSymbol } from '@/components/ui/icon-symbol'
-import { ReaderToolbar } from '@/components/ReaderToolbar'
 import { TTSControls } from '@/components/TTSControls'
 import { TTSVisualCue } from '@/components/TTSVisualCue'
 import { useVisualCueStore } from '@/lib/tts/visual-cue'
 import { classifyParagraphForVisualCue } from '@/lib/tts/visual-cue-classify'
-import { BookmarksList } from '@/components/epub/BookmarksList'
 import { UndoSnackbar } from '@/components/UndoSnackbar'
 import { useUndoSnackbar } from '@/hooks/useUndoSnackbar'
-import { SearchPanel } from '@/components/epub/SearchPanel'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 import { useTtsChatBridge } from '@/hooks/useTtsChatBridge'
@@ -36,13 +31,14 @@ import { resolveEpubReadFromSelection } from '@/lib/epub/read-aloud-from-selecti
 import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
 import { GuardrailWarning } from '@/components/GuardrailWarning'
-import { TocSheet } from '@/components/TocSheet'
-import { AppearanceSheet } from '@/components/AppearanceSheet'
-import { HighlightsSheet } from '@/components/HighlightsSheet'
-import { NoteEditor } from '@/components/NoteEditor'
 import { AnnotationPopover } from '@/components/AnnotationPopover'
+import {
+  ReaderShell,
+  ReaderShellContext,
+  type ReaderProgress,
+} from '@/components/reader'
 import { READER_THEMES } from '@/constants/reader-themes'
-import { Book, ReaderSettings, ThemeName } from '@/types/book'
+import { Book, ReaderSettings } from '@/types/book'
 import type { Highlight, HighlightColor } from '@/types/highlight'
 import { HIGHLIGHT_COLORS, HIGHLIGHT_OPACITY } from '@/types/highlight'
 import type { Annotation } from '@epubjs-react-native/core'
@@ -114,15 +110,8 @@ function ReaderContent({ book }: { book: Book }) {
     isSearching,
   } = useReader()
 
-  const tocSheetRef = useRef<BottomSheet>(null)
-  const appearanceSheetRef = useRef<BottomSheet>(null)
-  const highlightsSheetRef = useRef<BottomSheet>(null)
-  const noteEditorSheetRef = useRef<BottomSheet>(null)
-  const searchSheetRef = useRef<BottomSheet>(null)
-  const bookmarksSheetRef = useRef<BottomSheet>(null)
-
   const [settings, setSettings] = useState<ReaderSettings>(loadReaderSettings())
-  const [toolbarVisible, setToolbarVisible] = useState(false)
+  const [noteEditorOpen, setNoteEditorOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [currentHref, setCurrentHref] = useState<string | null>(null)
   const currentCfiRef = useRef<string | null>(book.currentCfi)
@@ -263,66 +252,29 @@ function ReaderContent({ book }: { book: Book }) {
     [book.id]
   )
 
-  // Toolbar toggle on tap (dismiss popover if visible)
-  const handleTap = useCallback(() => {
-    if (popoverVisible) {
-      setPopoverVisible(false)
-      return
-    }
-    setToolbarVisible((prev) => !prev)
-  }, [popoverVisible])
-
-  // Auto-hide toolbar after 3 seconds (disabled when TTS or realtime voice is active)
-  const toolbarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => {
-    if (toolbarVisible && !ttsActive && !realtimeActive) {
-      if (toolbarTimerRef.current) clearTimeout(toolbarTimerRef.current)
-      toolbarTimerRef.current = setTimeout(() => setToolbarVisible(false), 3000)
-    }
-    return () => {
-      if (toolbarTimerRef.current) clearTimeout(toolbarTimerRef.current)
-    }
-  }, [toolbarVisible, ttsActive, realtimeActive])
-
-  // Theme change
-  const handleThemeChange = useCallback(
-    (name: ThemeName) => {
-      const newTheme = READER_THEMES[name]
-      const newSettings = { ...settings, themeName: name }
-      setSettings(newSettings)
-      saveReaderSettings(newSettings)
-      changeTheme({ body: { background: newTheme.background, color: newTheme.color } })
+  // Combined settings handler — branches on which field actually changed.
+  const handleSettingsChange = useCallback(
+    (next: ReaderSettings) => {
+      saveReaderSettings(next)
+      if (next.themeName !== settings.themeName) {
+        const newTheme = READER_THEMES[next.themeName]
+        changeTheme({ body: { background: newTheme.background, color: newTheme.color } })
+      }
+      if (next.fontSize !== settings.fontSize) {
+        changeFontSize(`${next.fontSize}%`)
+      }
+      if (next.fontFamily !== settings.fontFamily) {
+        changeFontFamily(next.fontFamily)
+      }
+      setSettings(next)
     },
-    [settings, changeTheme]
-  )
-
-  // Font size change
-  const handleFontSizeChange = useCallback(
-    (size: number) => {
-      const newSettings = { ...settings, fontSize: size }
-      setSettings(newSettings)
-      saveReaderSettings(newSettings)
-      changeFontSize(`${size}%`)
-    },
-    [settings, changeFontSize]
-  )
-
-  // Font family change
-  const handleFontFamilyChange = useCallback(
-    (family: 'serif' | 'sans-serif') => {
-      const newSettings = { ...settings, fontFamily: family }
-      setSettings(newSettings)
-      saveReaderSettings(newSettings)
-      changeFontFamily(family)
-    },
-    [settings, changeFontFamily]
+    [settings, changeTheme, changeFontSize, changeFontFamily],
   )
 
   // TOC chapter selection
   const handleSelectChapter = useCallback(
     (href: string) => {
       goToLocation(href)
-      tocSheetRef.current?.close()
     },
     [goToLocation]
   )
@@ -431,7 +383,7 @@ function ReaderContent({ book }: { book: Book }) {
           setSelectedHighlight(h)
           AccessibilityInfo.announceForAccessibility('Highlight created')
           // Open note editor after a brief delay to let state settle
-          setTimeout(() => noteEditorSheetRef.current?.snapToIndex(0), 100)
+          setTimeout(() => setNoteEditorOpen(true), 100)
           return true
         },
       },
@@ -469,7 +421,7 @@ function ReaderContent({ book }: { book: Book }) {
   const handleEditNote = useCallback((highlight: Highlight) => {
     setPopoverVisible(false)
     setSelectedHighlight(highlight)
-    noteEditorSheetRef.current?.snapToIndex(0)
+    setNoteEditorOpen(true)
   }, [])
 
   // Annotation popover: change color
@@ -525,7 +477,7 @@ function ReaderContent({ book }: { book: Book }) {
     (highlightId: string, note: string) => {
       updateHighlight(highlightId, { note: note || null })
       setHighlights(getHighlightsByBookId(book.id))
-      noteEditorSheetRef.current?.close()
+      setNoteEditorOpen(false)
     },
     [book.id]
   )
@@ -534,7 +486,6 @@ function ReaderContent({ book }: { book: Book }) {
   const handleNavigateToHighlight = useCallback(
     (cfiRange: string) => {
       goToLocation(cfiRange)
-      highlightsSheetRef.current?.close()
     },
     [goToLocation]
   )
@@ -555,7 +506,6 @@ function ReaderContent({ book }: { book: Book }) {
   const handleSearchResultPress = useCallback(
     (cfi: string) => {
       goToLocation(cfi)
-      searchSheetRef.current?.close()
     },
     [goToLocation]
   )
@@ -614,171 +564,195 @@ function ReaderContent({ book }: { book: Book }) {
   const handleNavigateToBookmark = useCallback(
     (location: string) => {
       goToLocation(location)
-      bookmarksSheetRef.current?.close()
     },
     [goToLocation]
   )
 
+  // Derive a progress label for ReaderShell's center pill. EPUB doesn't
+  // expose page totals from the spine cheaply — use the chapter label
+  // when present, otherwise the raw CFI prefix, otherwise no pill.
+  const progressForShell = useMemo<ReaderProgress>(() => {
+    const chapter = toc?.find((t) => t.href === currentHref)?.label
+    if (chapter) return { kind: 'cfi', label: chapter }
+    if (currentHref) return { kind: 'cfi', label: currentHref }
+    return { kind: 'none' }
+  }, [toc, currentHref])
+
+  const chapterLabel =
+    toc?.find((t) => t.href === currentHref)?.label ?? undefined
+
   return (
     <View ref={pageCaptureRef} testID="reader-epub" style={{ flex: 1, backgroundColor: theme.background }}>
-      {/*
-        E2E observability — exposes the current CFI as
-        accessibilityLabel. The CFI string mutates on every page turn
-        (epubjs assigns it from the spine + character offset), so
-        Detox can detect navigation by reading two snapshots and
-        comparing.
-       */}
-      <View
-        testID="reader-position-indicator"
-        accessible={true}
-        accessibilityLabel={currentHref ?? currentCfiRef.current ?? 'unknown'}
-        style={{ position: 'absolute', width: 0, height: 0 }}
-      />
-      <Reader
-        src={book.filePath}
-        fileSystem={useFileSystem}
-        flow="paginated"
-        enableSwipe={true}
-        enableSelection={true}
-        initialLocation={book.currentCfi || undefined}
-        defaultTheme={readerDefaultTheme}
-        menuItems={menuItems}
-        initialAnnotations={initialAnnotations}
-        onLocationChange={handleLocationChange}
-        onSingleTap={handleTap}
-        onPressAnnotation={handlePressAnnotation}
-      />
-
-      <ReaderToolbar
-        visible={toolbarVisible}
+      <ReaderShell
         title={book.title}
-        theme={theme}
+        format="epub"
         onBack={handleBack}
-        onSearchPress={() => {
-          searchSheetRef.current?.snapToIndex(0)
-          setToolbarVisible(false)
-        }}
-        onTocPress={() => {
-          tocSheetRef.current?.snapToIndex(0)
-          setToolbarVisible(false)
-        }}
-        onHighlightsPress={() => {
-          highlightsSheetRef.current?.snapToIndex(0)
-          setToolbarVisible(false)
-        }}
-        onAppearancePress={() => {
-          appearanceSheetRef.current?.snapToIndex(0)
-          setToolbarVisible(false)
-        }}
-        onChatPress={() => requireAIChat(() => router.push(`/chat/${book.id}`))}
-        onTTSPress={handleToggleTTS}
+        progress={progressForShell}
+        chapterLabel={chapterLabel}
         ttsActive={ttsActive}
-        onBookmarksPress={() => {
-          bookmarksSheetRef.current?.snapToIndex(0)
-          setToolbarVisible(false)
-        }}
+        realtimeActive={realtimeActive}
         onBookmarkTogglePress={handleToggleBookmark}
         isBookmarked={isCurrentBookmarked}
+        onTTSPress={handleToggleTTS}
+        ttsButtonActive={ttsActive}
         onRealtimePress={() => {
           if (realtimeActive) toggleRealtime()
           else requireVoiceChat(toggleRealtime)
         }}
         realtimeStatus={realtimeStatus}
-      />
-
-      <View style={{ position: 'absolute', top: insets.top + 48 + 8, left: 16, right: 16, zIndex: 11 }}>
-        <GuardrailWarning visible={showGuardrailWarning} />
-      </View>
-
-      <TocSheet
-        sheetRef={tocSheetRef}
-        toc={toc || []}
+        onChatPress={() => requireAIChat(() => router.push(`/chat/${book.id}`))}
+        sheets={{
+          toc: true,
+          highlights: true,
+          bookmarks: true,
+          search: true,
+          appearance: true,
+          noteEditor: true,
+        }}
+        toc={toc ?? []}
         currentHref={currentHref}
-        theme={theme}
         onSelectChapter={handleSelectChapter}
-      />
-
-      <AppearanceSheet
-        sheetRef={appearanceSheetRef}
-        settings={settings}
-        theme={theme}
-        onThemeChange={handleThemeChange}
-        onFontSizeChange={handleFontSizeChange}
-        onFontFamilyChange={handleFontFamilyChange}
-      />
-
-      <HighlightsSheet
-        sheetRef={highlightsSheetRef}
         highlights={highlights}
-        theme={theme}
         onNavigateToHighlight={handleNavigateToHighlight}
         onDeleteHighlight={handleDeleteHighlight}
-      />
-
-      <NoteEditor
-        sheetRef={noteEditorSheetRef}
-        highlight={selectedHighlight}
-        theme={theme}
-        onSave={handleSaveNote}
-        onDiscard={() => noteEditorSheetRef.current?.close()}
-      />
-
-      <BookmarksList
-        sheetRef={bookmarksSheetRef}
         bookmarks={bookmarks}
-        theme={theme}
-        onNavigate={handleNavigateToBookmark}
-        onDelete={handleDeleteBookmark}
-      />
-
-      <SearchPanel
-        sheetRef={searchSheetRef}
-        theme={theme}
-        query={searchQuery}
-        results={searchResults.results}
+        onNavigateToBookmark={handleNavigateToBookmark}
+        onDeleteBookmark={handleDeleteBookmark}
+        searchQuery={searchQuery}
+        searchResults={searchResults.results}
         isSearching={isSearching}
-        onChangeQuery={handleSearch}
-        onSelectResult={handleSearchResultPress}
-        onChange={(index) => {
-          // Reset query when the sheet closes so reopening starts fresh.
-          if (index === -1 && searchQuery.length > 0) {
+        onChangeSearchQuery={handleSearch}
+        onSelectSearchResult={handleSearchResultPress}
+        onSearchSheetClose={() => {
+          if (searchQuery.length > 0) {
             setSearchQuery('')
             clearSearchResults()
           }
         }}
-      />
-
-      <TTSControls />
-
-      {/* G15 — visual cue badge (gated by prefsStore.ttsVisualCueEnabled
-          AND a non-null cue in the visual-cue store). The EPUB WebView
-          would need a postMessage bridge to drive setVisualCue based on
-          DOM scanning; for now the component is mounted so the surface
-          is live whenever something else (e.g. a future MOBI/AZW3
-          heuristic) sets a cue. */}
-      <TTSVisualCue />
-
-      {/* G10 — undo snackbar (5s window after a destructive action) */}
-      <UndoSnackbar
-        visible={undoSnackbar.visible}
-        message={undoSnackbar.message}
-        actionLabel={undoSnackbar.actionLabel}
-        onAction={undoSnackbar.action}
-        onDismiss={undoSnackbar.dismiss}
-      />
-
-      {popoverVisible && selectedHighlight && (
-        <AnnotationPopover
-          visible={popoverVisible}
-          highlight={selectedHighlight}
-          position={popoverPosition}
-          theme={theme}
-          onEditNote={handleEditNote}
-          onChangeColor={handleChangeColor}
-          onDelete={handleDeleteHighlight}
-          onDismiss={() => setPopoverVisible(false)}
+        settings={settings}
+        onSettingsChange={handleSettingsChange}
+        noteEditorHighlight={selectedHighlight}
+        noteEditorOpen={noteEditorOpen}
+        onSaveNote={handleSaveNote}
+        onDiscardNote={() => setNoteEditorOpen(false)}
+      >
+        {/*
+          E2E observability — exposes the current CFI as
+          accessibilityLabel. The CFI string mutates on every page turn
+          (epubjs assigns it from the spine + character offset), so
+          Detox can detect navigation by reading two snapshots and
+          comparing.
+         */}
+        <View
+          testID="reader-position-indicator"
+          accessible={true}
+          accessibilityLabel={currentHref ?? currentCfiRef.current ?? 'unknown'}
+          style={{ position: 'absolute', width: 0, height: 0 }}
         />
-      )}
+        <ReaderEngine
+          book={book}
+          readerDefaultTheme={readerDefaultTheme}
+          menuItems={menuItems}
+          initialAnnotations={initialAnnotations}
+          onLocationChange={handleLocationChange}
+          onPressAnnotation={handlePressAnnotation}
+          popoverVisible={popoverVisible}
+          dismissPopover={() => setPopoverVisible(false)}
+        />
+
+        <View style={{ position: 'absolute', top: insets.top + 48 + 8, left: 16, right: 16, zIndex: 11 }}>
+          <GuardrailWarning visible={showGuardrailWarning} />
+        </View>
+
+        <TTSControls />
+
+        {/* G15 — visual cue badge (gated by prefsStore.ttsVisualCueEnabled
+            AND a non-null cue in the visual-cue store). The EPUB WebView
+            would need a postMessage bridge to drive setVisualCue based on
+            DOM scanning; for now the component is mounted so the surface
+            is live whenever something else (e.g. a future MOBI/AZW3
+            heuristic) sets a cue. */}
+        <TTSVisualCue />
+
+        {/* G10 — undo snackbar (5s window after a destructive action) */}
+        <UndoSnackbar
+          visible={undoSnackbar.visible}
+          message={undoSnackbar.message}
+          actionLabel={undoSnackbar.actionLabel}
+          onAction={undoSnackbar.action}
+          onDismiss={undoSnackbar.dismiss}
+        />
+
+        {popoverVisible && selectedHighlight && (
+          <AnnotationPopover
+            visible={popoverVisible}
+            highlight={selectedHighlight}
+            position={popoverPosition}
+            theme={theme}
+            onEditNote={handleEditNote}
+            onChangeColor={handleChangeColor}
+            onDelete={handleDeleteHighlight}
+            onDismiss={() => setPopoverVisible(false)}
+          />
+        )}
+      </ReaderShell>
     </View>
+  )
+}
+
+/**
+ * Inner engine component — sits inside ReaderShell so it can consume
+ * `ReaderShellContext.toggleToolbar` for the single-tap gesture.
+ * Dismissing the annotation popover takes precedence over toggling.
+ */
+interface ReaderEngineProps {
+  book: Book
+  readerDefaultTheme: { body: { background: string; color: string } }
+  menuItems: { label: string; action: (cfi: string, text: string) => boolean }[]
+  initialAnnotations: ReturnType<typeof useMemo<Annotation[]>>
+  onLocationChange: (
+    totalLocations: number,
+    currentLocation: { start?: { cfi?: string; href?: string } } | undefined,
+    progress: number,
+  ) => void
+  onPressAnnotation: (annotation: Annotation) => void
+  popoverVisible: boolean
+  dismissPopover: () => void
+}
+
+function ReaderEngine({
+  book,
+  readerDefaultTheme,
+  menuItems,
+  initialAnnotations,
+  onLocationChange,
+  onPressAnnotation,
+  popoverVisible,
+  dismissPopover,
+}: ReaderEngineProps) {
+  const { toggleToolbar } = useContext(ReaderShellContext)
+  const handleTap = useCallback(() => {
+    if (popoverVisible) {
+      dismissPopover()
+      return
+    }
+    toggleToolbar()
+  }, [popoverVisible, dismissPopover, toggleToolbar])
+
+  return (
+    <Reader
+      src={book.filePath}
+      fileSystem={useFileSystem}
+      flow="paginated"
+      enableSwipe={true}
+      enableSelection={true}
+      initialLocation={book.currentCfi || undefined}
+      defaultTheme={readerDefaultTheme}
+      menuItems={menuItems}
+      initialAnnotations={initialAnnotations}
+      onLocationChange={onLocationChange}
+      onSingleTap={handleTap}
+      onPressAnnotation={onPressAnnotation}
+    />
   )
 }
