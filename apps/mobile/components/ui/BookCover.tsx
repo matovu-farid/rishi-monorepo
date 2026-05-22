@@ -15,6 +15,16 @@ export type BookCoverProps = {
   elevation?: BookCoverElevation
   style?: ViewStyle
   testID?: string
+  /**
+   * STA-021: when true AND `uri` is absent, render a dashed-border
+   * placeholder instead of the hash-tinted letter tile. The library
+   * "Reading Now" card and BookRow use this to distinguish "cover
+   * extraction is deferred" (PDF/DJVU on import) from "the book truly
+   * has no cover and we're falling back to a letter."
+   *
+   * Has no effect when a real `uri` is provided.
+   */
+  pending?: boolean
 }
 
 // UI-SPEC §7f size map. Height derives from aspectRatio (default 2/3 book ratio).
@@ -61,6 +71,7 @@ export function BookCover({
   elevation = 'low',
   style,
   testID,
+  pending = false,
 }: BookCoverProps): React.JSX.Element {
   const { colors, radius, shadow } = useTheme()
   const [hasError, setHasError] = useState(false)
@@ -69,12 +80,22 @@ export function BookCover({
   const borderRadius = radius[rounded]
   const elevationStyle = shadow[elevation]
 
-  const showFallback = !uri || hasError
+  // STA-021: a real `uri` always wins (even with pending=true) so the
+  // moment the cover lands the placeholder swaps out cleanly. Only fall
+  // into pending when we have NO image and the caller signalled the
+  // cover is still being prepared.
+  const showImage = Boolean(uri) && !hasError
+  const showPending = !showImage && pending
+  const showFallback = !showImage && !showPending
+
+  const accessibilityLabel = showPending
+    ? `Preparing cover for ${title}`
+    : `Cover of ${title}`
 
   return (
     <View
       accessibilityRole="image"
-      accessibilityLabel={`Cover of ${title}`}
+      accessibilityLabel={accessibilityLabel}
       testID={testID}
       style={[
         {
@@ -83,10 +104,22 @@ export function BookCover({
           borderRadius,
           // VIS-008: only draw a hairline around the letter-tile fallback.
           // Apple Books lets real cover artwork float on the shadow alone.
-          borderWidth: showFallback ? StyleSheet.hairlineWidth : 0,
+          // STA-021: the pending placeholder swaps to a 1pt dashed border
+          // so the "cover hasn't loaded yet" cue is distinct from the
+          // solid-hairline letter tile.
+          borderWidth: showPending
+            ? 1
+            : showFallback
+              ? StyleSheet.hairlineWidth
+              : 0,
+          borderStyle: showPending ? 'dashed' : 'solid',
           borderColor: colors.separator.nonOpaque,
           overflow: 'hidden',
-          backgroundColor: showFallback ? fallbackColor(title) : undefined,
+          backgroundColor: showFallback
+            ? fallbackColor(title)
+            : showPending
+              ? colors.fill.tertiary
+              : undefined,
           alignItems: 'center',
           justifyContent: 'center',
         },
@@ -94,7 +127,24 @@ export function BookCover({
         style,
       ]}
     >
-      {showFallback ? (
+      {showImage ? (
+        <Image
+          source={{ uri: uri ?? undefined }}
+          style={{ width, height, borderRadius }}
+          contentFit="cover"
+          onError={() => setHasError(true)}
+        />
+      ) : showPending ? (
+        // No glyph — the dashed border + tinted surface is the cue. We
+        // mark the node with a testID so callers/tests can assert on the
+        // pending branch without colour matching.
+        <View
+          testID="book-cover-pending"
+          style={{ width, height }}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        />
+      ) : (
         <Text
           style={{
             color: '#FFFFFF',
@@ -104,13 +154,6 @@ export function BookCover({
         >
           {title.charAt(0).toUpperCase()}
         </Text>
-      ) : (
-        <Image
-          source={{ uri: uri ?? undefined }}
-          style={{ width, height, borderRadius }}
-          contentFit="cover"
-          onError={() => setHasError(true)}
-        />
       )}
     </View>
   )

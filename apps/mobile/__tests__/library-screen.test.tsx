@@ -713,3 +713,144 @@ describe('LibraryScreen (P1-AB: loading skeleton on first focus)', () => {
     expect(rows.length).toBe(1)
   })
 })
+
+/**
+ * STA-021 — Reading Now card should distinguish a deferred cover from a
+ * genuine letter-tile fallback.
+ *
+ * PDF/DJVU import returns `coverPath = null` because cover extraction is
+ * deferred. We pin that the Reading Now BookCover receives `pending: true`
+ * in that case (so it renders the dashed placeholder), while an EPUB
+ * without a cover (truly missing — extraction was attempted) stays on the
+ * letter tile.
+ */
+describe('LibraryScreen (STA-021: Reading Now pending vs letter tile)', () => {
+  beforeEach(() => {
+    mockBooks.length = 0
+    mockLastReadBook = null
+  })
+
+  function findReadingNowCover(
+    tree: TestRenderer.ReactTestRenderer,
+  ): TestRenderer.ReactTestInstance | null {
+    // The (tabs)/index Reading Now card uses BookCover without a testID;
+    // it's the FIRST BookCover in the tree (BookRow covers follow). Match
+    // on the host node our mock emits (`BookCover`).
+    const covers = tree.root.findAll(
+      (n) => typeof n.type === 'string' && (n.type as string) === 'BookCover',
+    )
+    return covers[0] ?? null
+  }
+
+  it('passes pending=true when lastReadBook is a PDF without a cover', () => {
+    mockLastReadBook = {
+      id: 'b-pdf',
+      title: 'Programming Pearls',
+      author: 'Bentley',
+      format: 'pdf',
+      filePath: '/tmp/pp.pdf',
+      coverPath: null,
+      coverExtractionFailed: false,
+      currentCfi: null,
+      currentPage: null,
+      createdAt: 0,
+    }
+    mockBooks.push(mockLastReadBook)
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    const cover = findReadingNowCover(tree)
+    expect(cover).not.toBeNull()
+    expect((cover!.props as { pending?: boolean }).pending).toBe(true)
+  })
+
+  it('passes pending=true when lastReadBook is a DJVU without a cover', () => {
+    mockLastReadBook = {
+      id: 'b-djvu',
+      title: 'Old Atlas',
+      author: 'Unknown',
+      format: 'djvu',
+      filePath: '/tmp/atlas.djvu',
+      coverPath: null,
+      coverExtractionFailed: false,
+      currentCfi: null,
+      currentPage: null,
+      createdAt: 0,
+    }
+    mockBooks.push(mockLastReadBook)
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    const cover = findReadingNowCover(tree)
+    expect((cover!.props as { pending?: boolean }).pending).toBe(true)
+  })
+
+  it('does NOT pass pending when lastReadBook is an EPUB without a cover (letter tile is correct)', () => {
+    mockLastReadBook = {
+      id: 'b-epub',
+      title: 'Crime and Punishment',
+      author: 'Dostoyevsky',
+      format: 'epub',
+      filePath: '/tmp/cp.epub',
+      coverPath: null,
+      coverExtractionFailed: false,
+      currentCfi: null,
+      currentPage: null,
+      createdAt: 0,
+    }
+    mockBooks.push(mockLastReadBook)
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    const cover = findReadingNowCover(tree)
+    // The prop is forwarded as undefined or false — both are "not pending".
+    expect((cover!.props as { pending?: boolean }).pending ?? false).toBe(false)
+  })
+
+  it('does NOT pass pending when PDF cover extraction has failed (letter tile is the correct signal)', () => {
+    mockLastReadBook = {
+      id: 'b-pdf-failed',
+      title: 'Lost Cover',
+      author: 'Unknown',
+      format: 'pdf',
+      filePath: '/tmp/lost.pdf',
+      coverPath: null,
+      coverExtractionFailed: true,
+      currentCfi: null,
+      currentPage: null,
+      createdAt: 0,
+    }
+    mockBooks.push(mockLastReadBook)
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    const cover = findReadingNowCover(tree)
+    expect((cover!.props as { pending?: boolean }).pending ?? false).toBe(false)
+  })
+
+  it('does NOT pass pending when a real coverPath is set', () => {
+    mockLastReadBook = {
+      id: 'b-pdf-cover',
+      title: 'With Cover',
+      author: 'Author',
+      format: 'pdf',
+      filePath: '/tmp/wc.pdf',
+      coverPath: 'file:///tmp/covers/b.png',
+      coverExtractionFailed: false,
+      currentCfi: null,
+      currentPage: null,
+      createdAt: 0,
+    }
+    mockBooks.push(mockLastReadBook)
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    const cover = findReadingNowCover(tree)
+    expect((cover!.props as { pending?: boolean }).pending ?? false).toBe(false)
+  })
+})

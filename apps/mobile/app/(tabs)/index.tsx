@@ -378,6 +378,16 @@ export default function LibraryScreen() {
               uri={lastReadBook.coverPath ?? undefined}
               title={lastReadBook.title}
               size="sm"
+              // STA-021: PDF/DJVU covers are extracted lazily (see
+              // `lib/book-import/adapters.ts:407-410`). Until that lands,
+              // signal "preparing" with the pending placeholder so the
+              // most prominent CTA on the screen doesn't reduce to a
+              // hash-tinted letter for a freshly synced PDF.
+              pending={
+                !lastReadBook.coverPath &&
+                !lastReadBook.coverExtractionFailed &&
+                (lastReadBook.format === 'pdf' || lastReadBook.format === 'djvu')
+              }
             />
           </View>
           <View style={{ flex: 1 }}>
