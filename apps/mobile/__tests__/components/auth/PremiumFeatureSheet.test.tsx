@@ -371,7 +371,8 @@ describe('PremiumFeatureSheet (mobile)', () => {
   })
 
   it('shows the inline error row when signIn rejects with a non-cancel message', async () => {
-    signInMock.mockRejectedValueOnce(new Error('network down'))
+    // GAT-008 — unknown error shape falls through to the generic default.
+    signInMock.mockRejectedValueOnce(new Error('something exploded'))
     storeState.premiumGateOpen = true
     storeState.premiumGateFeature = 'tts'
 
@@ -413,5 +414,49 @@ describe('PremiumFeatureSheet (mobile)', () => {
     })
 
     expect(hasText(tree, "Couldn't sign in. Try again.")).toBe(false)
+  })
+
+  describe('error copy mapping (GAT-008)', () => {
+    async function pressCtaWith(errMsg: string): Promise<TestRenderer.ReactTestRenderer> {
+      signInMock.mockRejectedValueOnce(new Error(errMsg))
+      storeState.premiumGateOpen = true
+      storeState.premiumGateFeature = 'tts'
+      let tree!: TestRenderer.ReactTestRenderer
+      await act(async () => {
+        tree = TestRenderer.create(<PremiumFeatureSheet />)
+      })
+      const cta = tree.root.findAll(
+        (n) =>
+          n.type === Pressable &&
+          (n.props as { accessibilityLabel?: string }).accessibilityLabel ===
+            'Continue with Google',
+      )
+      await act(async () => {
+        await (cta[0].props as { onPress: () => Promise<void> | void }).onPress()
+      })
+      return tree
+    }
+
+    it('maps network/fetch failures to "Check your connection and try again."', async () => {
+      const tree = await pressCtaWith('Network request failed')
+      expect(hasText(tree, 'Check your connection and try again.')).toBe(true)
+      expect(hasText(tree, "Couldn't sign in. Try again.")).toBe(false)
+    })
+
+    it('maps "fetch failed" wrapping (worker /mobile/start) to the network copy', async () => {
+      const tree = await pressCtaWith('POST /mobile/start failed: fetch failed')
+      expect(hasText(tree, 'Check your connection and try again.')).toBe(true)
+    })
+
+    it('maps PKCE 403 mismatch to "Sign-in expired, please try again."', async () => {
+      const tree = await pressCtaWith('PKCE pkce_mismatch (403)')
+      expect(hasText(tree, 'Sign-in expired, please try again.')).toBe(true)
+      expect(hasText(tree, "Couldn't sign in. Try again.")).toBe(false)
+    })
+
+    it('maps 410 session-expired to "Sign-in expired, please try again."', async () => {
+      const tree = await pressCtaWith('POST /mobile/start/verify failed: 410 session expired')
+      expect(hasText(tree, 'Sign-in expired, please try again.')).toBe(true)
+    })
   })
 })

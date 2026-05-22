@@ -38,6 +38,31 @@ const FEATURE_ICONS: Record<PremiumFeature, keyof typeof Ionicons.glyphMap> = {
 }
 
 /**
+ * GAT-008 — map known sign-in error shapes onto user-facing copy.
+ *
+ * The raw error from `lib/auth.signIn()` can be one of:
+ *   - "Network request failed" (RN fetch when offline / DNS fails)
+ *   - "POST /mobile/start failed: fetch failed" (worker call failed)
+ *   - "PKCE pkce_mismatch (403)" (state replay / browser bounce)
+ *   - "POST /mobile/start/verify failed: 410 ..." (session expired)
+ *   - anything else → generic fallback
+ *
+ * Cancellation messages are filtered upstream of this helper.
+ */
+function mapSignInError(msg: string): string {
+  if (/\b403\b|pkce_mismatch/i.test(msg)) {
+    return 'Sign-in expired, please try again.'
+  }
+  if (/\b410\b|session expired/i.test(msg)) {
+    return 'Sign-in expired, please try again.'
+  }
+  if (/network|fetch|offline|timeout|enotfound|econnrefused/i.test(msg)) {
+    return 'Check your connection and try again.'
+  }
+  return "Couldn't sign in. Try again."
+}
+
+/**
  * Single-snap bottom sheet that prompts a signed-out user to sign in
  * when they tap a premium control (TTS, voice chat, AI chat, sync).
  *
@@ -96,7 +121,7 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
       const msg = err instanceof Error ? err.message : String(err)
       if (!/cancel|dismiss/i.test(msg)) {
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)
-        setError("Couldn't sign in. Try again.")
+        setError(mapSignInError(msg))
         shakeX.value = withSequence(
           withTiming(6, { duration: 60 }),
           withTiming(-6, { duration: 60 }),
