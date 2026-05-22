@@ -10,6 +10,7 @@ import { View } from 'react-native'
 
 import { ReaderTopBar } from '@/components/reader/ReaderTopBar'
 import { ReaderBottomBar } from '@/components/reader/ReaderBottomBar'
+import { ReaderOverlay } from '@/components/reader/ReaderOverlay'
 import type { ReaderProgress } from '@/components/reader/ReaderProgressPill'
 
 import { AppearanceSheet } from '@/components/AppearanceSheet'
@@ -66,6 +67,10 @@ export interface ReaderShellProps {
   ttsActive?: boolean
   realtimeActive?: boolean
   centerOverride?: React.ReactNode
+
+  // Floating-widget context (Phase 4)
+  bookId?: string
+  onChatToggle?: () => void
 
   // Action cluster
   onBookmarkTogglePress?: () => void
@@ -133,6 +138,8 @@ export function ReaderShell({
   ttsActive = false,
   realtimeActive = false,
   centerOverride,
+  bookId,
+  onChatToggle,
   onBookmarkTogglePress,
   isBookmarked,
   onTTSPress,
@@ -363,6 +370,8 @@ export function ReaderShell({
           onChatPress={onChatPress}
           testID="reader-bottom-bar"
         />
+
+        <ReaderOverlay bookId={bookId} onChatToggle={onChatToggle} />
 
         {sheets?.toc ? (
           <TocSheet

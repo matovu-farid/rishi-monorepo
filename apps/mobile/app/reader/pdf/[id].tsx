@@ -468,6 +468,7 @@ export default function PdfReaderScreen() {
         centerOverride={pdfNavCluster}
         ttsActive={ttsActive}
         realtimeActive={realtimeStatus !== 'idle'}
+        bookId={book?.id}
         sheets={{ noteEditor: true }}
         noteEditorHighlight={noteTargetHighlight}
         noteEditorOpen={noteEditorOpen}

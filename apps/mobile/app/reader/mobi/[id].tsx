@@ -455,6 +455,7 @@ export default function MobiReaderScreen() {
         centerOverride={mobiNavCluster}
         ttsActive={ttsActive}
         realtimeActive={realtimeStatus !== 'idle'}
+        bookId={book.id}
         onTTSPress={handleToggleTTS}
         ttsButtonActive={ttsActive}
         sheets={{}}

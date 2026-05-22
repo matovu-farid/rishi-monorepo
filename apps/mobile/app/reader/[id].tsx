@@ -591,6 +591,10 @@ function ReaderContent({ book }: { book: Book }) {
         chapterLabel={chapterLabel}
         ttsActive={ttsActive}
         realtimeActive={realtimeActive}
+        bookId={book.id}
+        onChatToggle={() =>
+          requireAIChat(() => router.push(`/chat/${book.id}`))
+        }
         onBookmarkTogglePress={handleToggleBookmark}
         isBookmarked={isCurrentBookmarked}
         onTTSPress={handleToggleTTS}

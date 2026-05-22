@@ -205,6 +205,20 @@ jest.mock('@/components/NoteEditor', () => ({
   NoteEditor: makeSheetMock('note-editor-sheet-open'),
 }))
 
+// ReaderOverlay (Phase 4) — stub to a host node so the suite doesn't pull
+// expo-blur / Reanimated / chatStore / playerStore into this test.
+jest.mock('@/components/reader/ReaderOverlay', () => {
+  const React = require('react')
+  return {
+    __esModule: true,
+    ReaderOverlay: (p: { bookId?: string; onChatToggle?: () => void }) =>
+      React.createElement('ReaderOverlayStub', {
+        testID: 'reader-overlay-stub',
+        ...p,
+      }),
+  }
+})
+
 import React, { act, useContext } from 'react'
 import TestRenderer from 'react-test-renderer'
 import {

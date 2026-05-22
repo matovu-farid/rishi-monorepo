@@ -382,6 +382,7 @@ export default function DjvuReaderScreen() {
         centerOverride={djvuNavCluster}
         ttsActive={ttsActive}
         realtimeActive={realtimeStatus !== 'idle'}
+        bookId={book.id}
         onTTSPress={handleToggleTTS}
         ttsButtonActive={ttsActive}
         sheets={{}}
