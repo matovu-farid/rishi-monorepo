@@ -82,7 +82,6 @@ jest.mock('react-native-reanimated', () => {
 // We expose the latest `onChange` callback on a captured ref so tests can
 // simulate the sheet collapsing to index -1 and check that `onClose` fires.
 let __lastOnChange: ((index: number) => void) | null = null
-let __backdropPress: (() => void) | null = null
 
 jest.mock('@gorhom/bottom-sheet', () => {
   const React = require('react')
@@ -115,14 +114,10 @@ jest.mock('@gorhom/bottom-sheet', () => {
     React.createElement('BottomSheetView', p, p.children)
   const BottomSheetScrollView = (p: any) =>
     React.createElement('BottomSheetScrollView', p, p.children)
-  // Backdrop stub — captures the close-on-press handler so we can fire it.
   const BottomSheetBackdrop = (p: {
     pressBehavior?: string
     onPress?: () => void
-  }) => {
-    __backdropPress = p.onPress ?? null
-    return React.createElement('BottomSheetBackdrop', p)
-  }
+  }) => React.createElement('BottomSheetBackdrop', p)
   return {
     __esModule: true,
     default: BottomSheet,
@@ -138,7 +133,6 @@ import { Sheet } from '@/components/ui/Sheet'
 
 beforeEach(() => {
   __lastOnChange = null
-  __backdropPress = null
 })
 
 function findTextNodes(root: TestRenderer.ReactTestRenderer): string[] {
