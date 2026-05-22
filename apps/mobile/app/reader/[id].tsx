@@ -51,12 +51,17 @@ export default function ReaderScreen() {
   const [book, setBook] = useState<Book | null>(null)
 
   const [loading, setLoading] = useState(true)
+  const [downloading, setDownloading] = useState(false)
 
-  // Load book from DB (async -- may download file from R2 for synced books)
+  // Load book from DB (async -- may download file from R2 for synced books).
+  // When the lazy-download branch fires, `onDownloadStart` flips the
+  // downloading flag so the loading screen renders "Downloading..." copy
+  // instead of the fast-path "Loading book..." copy.
   useEffect(() => {
     if (id) {
       setLoading(true)
-      getBookForReading(id)
+      setDownloading(false)
+      getBookForReading(id, { onDownloadStart: () => setDownloading(true) })
         .then((loaded) => setBook(loaded))
         .catch((err) => console.error('Failed to load book for reading:', err))
         .finally(() => setLoading(false))
@@ -67,7 +72,9 @@ export default function ReaderScreen() {
     return (
       <View testID="reader-loading" style={{ flex: 1, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" />
-        <Text style={{ marginTop: 12, color: '#666' }}>Loading book...</Text>
+        <Text style={{ marginTop: 12, color: '#666' }}>
+          {downloading ? 'Downloading…' : 'Loading book…'}
+        </Text>
       </View>
     )
   }
@@ -596,7 +603,20 @@ function ReaderContent({ book }: { book: Book }) {
   )
 
   return (
-    <View ref={pageCaptureRef} style={{ flex: 1, backgroundColor: theme.background }}>
+    <View ref={pageCaptureRef} testID="reader-epub" style={{ flex: 1, backgroundColor: theme.background }}>
+      {/*
+        E2E observability — exposes the current CFI as
+        accessibilityLabel. The CFI string mutates on every page turn
+        (epubjs assigns it from the spine + character offset), so
+        Detox can detect navigation by reading two snapshots and
+        comparing.
+       */}
+      <View
+        testID="reader-position-indicator"
+        accessible={true}
+        accessibilityLabel={currentHref ?? currentCfiRef.current ?? 'unknown'}
+        style={{ position: 'absolute', width: 0, height: 0 }}
+      />
       <Reader
         src={book.filePath}
         fileSystem={useFileSystem}
