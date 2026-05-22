@@ -48,22 +48,69 @@ describe('pageControls.nextPage — page-boundary advance (issue #30)', () => {
 
   it('does NOT scroll past the last page of the document (issue #30 edge case)', () => {
     const { virtualizer, scrollToIndex } = makeStubVirtualizer()
-    // On the last page (pageNumber === pageCount). The reader must NOT wrap
-    // back to a same-page scroll or scroll out of bounds; it should leave the
-    // virtualizer alone (no advance attempt).
+    // On the last page (pageNumber === pageCount). The reader must NOT call
+    // scrollToIndex at all — there is no virtual index >= pageCount to scroll
+    // to (the virtualizer is 0..pageCount-1), and asking it to scroll past the
+    // end leaves the suppression flag stuck `true` for the rest of the session
+    // (PR #31 review: pullrequestreview-4348558706). "Past last page"
+    // semantics: nextPage() is a no-op when already on the final page.
     usePdfStore.setState({ pageNumber: 10, pageCount: 10, virtualizer })
 
     nextPage()
 
-    // Either the function bails out OR it scrolls to the current page — what
-    // it MUST NOT do is scroll to a smaller index (i.e. wrap to a previous
-    // page). Specifically, it must not call scrollToIndex with `pageNumber-1`
-    // (== 9), which would land on the current page in 0-based terms.
-    if (scrollToIndex.mock.calls.length > 0) {
-      const [target] = scrollToIndex.mock.calls[0]
-      expect(target).toBeGreaterThanOrEqual(10)
-      expect(target).toBeLessThanOrEqual(10)
-    }
+    expect(scrollToIndex).not.toHaveBeenCalled()
+  })
+
+  it('does NOT scroll before the first page of the document (symmetry with last-page guard)', () => {
+    const { virtualizer, scrollToIndex } = makeStubVirtualizer()
+    // On the first page. previousPage() must be a no-op so it can't set the
+    // flag and then ask the virtualizer to scroll to virtual index -1, which
+    // would also leave the suppression flag stuck `true`.
+    usePdfStore.setState({ pageNumber: 1, pageCount: 10, virtualizer })
+
+    previousPage()
+
+    expect(scrollToIndex).not.toHaveBeenCalled()
+  })
+
+  it('does NOT leave isLookingForNextParagraph stuck true when nextPage is called on the last page (PR #31 review)', () => {
+    // Bug surface (review pullrequestreview-4348558706): when the player
+    // reaches the last paragraph of the last page it still emits
+    // `pageRequest: 'next'` (usePlayerMachine:328-334). pageControls.nextPage
+    // had no bounds check, so it set the flag `true`, called scrollToIndex
+    // with an out-of-bounds index, no page render happened, `currentDiffers`
+    // never flipped, and the flag stayed `true` for the rest of the session —
+    // silently denying auto-scroll for every subsequent highlight.
+    const { virtualizer, scrollToIndex } = makeStubVirtualizer()
+    usePdfStore.setState({
+      pageNumber: 10,
+      pageCount: 10,
+      virtualizer,
+      isLookingForNextParagraph: false
+    })
+
+    nextPage()
+
+    // No out-of-bounds scroll attempted...
+    expect(scrollToIndex).not.toHaveBeenCalled()
+    // ...and the suppression flag must NOT have been flipped, because nothing
+    // is ever going to clear it (no new page will render).
+    expect(usePdfStore.getState().isLookingForNextParagraph).toBe(false)
+  })
+
+  it('does NOT leave isLookingForNextParagraph stuck true when previousPage is called on the first page', () => {
+    const { virtualizer, scrollToIndex } = makeStubVirtualizer()
+    usePdfStore.setState({
+      pageNumber: 1,
+      pageCount: 10,
+      virtualizer,
+      isLookingForNextParagraph: false
+    })
+
+    previousPage()
+
+    expect(scrollToIndex).not.toHaveBeenCalled()
+    expect(usePdfStore.getState().isLookingForNextParagraph).toBe(false)
   })
 
   it('previousPage: regression sanity — page 5 -> virtual index 3 (page 4)', () => {

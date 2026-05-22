@@ -16,6 +16,15 @@ export function nextPage() {
   const state = usePdfStore.getState()
   const virtualizer = state.virtualizer
   if (!virtualizer) return
+  // Bounds check (PR #31 review pullrequestreview-4348558706): the player
+  // emits `pageRequest: 'next'` even when the last paragraph of the last page
+  // finishes (usePlayerMachine ~L328). Without this guard we would set
+  // `isLookingForNextParagraph = true`, ask the virtualizer to scroll to an
+  // out-of-bounds index, no page would render, `currentDiffers` would never
+  // flip in publishParagraphsForPage, and the flag would stay `true` for the
+  // rest of the session — silently denying auto-scroll for every subsequent
+  // highlight. Make nextPage a no-op when already on the last page.
+  if (state.pageCount > 0 && state.pageNumber >= state.pageCount) return
   usePdfStore.getState().setIsLookingForNextParagraph(true)
   const pageIndex = state.pageNumber - 1
   virtualizer.scrollToIndex(pageIndex + 1, {
@@ -27,6 +36,10 @@ export function previousPage() {
   const state = usePdfStore.getState()
   const virtualizer = state.virtualizer
   if (!virtualizer) return
+  // Symmetric guard: never scroll to virtual index -1 from the first page,
+  // which would leave the suppression flag stuck `true` for the rest of the
+  // session (same failure mode as the nextPage last-page case above).
+  if (state.pageNumber <= 1) return
 
   usePdfStore.getState().setIsLookingForNextParagraph(true)
   const pageIndex = state.pageNumber - 1
