@@ -70,6 +70,13 @@ export default function BookChatScreen() {
   const [inlineError, setInlineError] = useState<string | null>(null)
   const [retryQuestion, setRetryQuestion] = useState<string | null>(null)
 
+  // P1-AA: embedding error state. When non-null, an inline banner renders
+  // above ChatInput offering Retry. While set, the chat input stays
+  // disabled so the user can't send a question against an unprepared book.
+  const [embedError, setEmbedError] = useState<string | null>(null)
+  // Counter that the retry handler bumps to re-run the embedBook effect.
+  const [embedAttempt, setEmbedAttempt] = useState(0)
+
   // RAG query
   const { askQuestion, isLoading: isQuerying } = useRAGQuery(bookId!)
 
@@ -132,6 +139,12 @@ export default function BookChatScreen() {
   }, [bookId, cid])
 
   // Start embedding if needed (pipeline handles server fallback internally)
+  //
+  // P1-AA: surface rejections via `embedError` so the user gets a banner
+  // with a Retry control. The retry handler bumps `embedAttempt`, which
+  // re-runs this effect. We clear `embedError` at the start of each
+  // attempt so a successful retry hides the banner without an extra
+  // round-trip.
   useEffect(() => {
     if (!bookId || !book || !book.filePath) return
     if (isBookEmbedded(bookId)) return
@@ -139,6 +152,7 @@ export default function BookChatScreen() {
     setIsEmbedding(true)
     setEmbeddingTotal(100)
     setEmbeddingProcessed(0)
+    setEmbedError(null)
 
     embedBook(bookId, book.filePath, book.format, (progress) => {
       setEmbeddingProgress(progress)
@@ -149,8 +163,14 @@ export default function BookChatScreen() {
     }).catch((err) => {
       console.error('Embedding failed:', err)
       setIsEmbedding(false)
+      setEmbedError('Could not prepare this book for chat.')
     })
-  }, [bookId, book])
+  }, [bookId, book, embedAttempt])
+
+  const handleEmbedRetry = useCallback(() => {
+    setEmbedError(null)
+    setEmbedAttempt((n) => n + 1)
+  }, [])
 
   // Send a message
   const handleSend = useCallback(
@@ -206,8 +226,12 @@ export default function BookChatScreen() {
   const showModelDownload = !modelReady && downloadProgress < 1
   const isModelDownloading = !modelReady && downloadProgress > 0
 
-  // Determine if chat input should be disabled
-  const chatDisabled = isEmbedding || !isBookEmbedded(bookId!)
+  // Determine if chat input should be disabled.
+  // P1-AA: while an embed error is showing, the book isn't prepared —
+  // keep send locked until the user retries successfully (or navigates
+  // away).
+  const chatDisabled =
+    isEmbedding || embedError !== null || !isBookEmbedded(bookId!)
 
   // Inverted data for FlatList
   const invertedMessages = [...messageList].reverse()
@@ -343,6 +367,28 @@ export default function BookChatScreen() {
                 ) : null
               }
             />
+
+            {/* P1-AA: embedding-failure banner with Retry. Rendered above
+                ChatInput so the input remains visible but disabled. */}
+            {embedError && (
+              <View
+                testID="chat-embed-error-banner"
+                className="mx-4 mb-2 px-4 py-3 rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-900 flex-row items-center justify-between"
+              >
+                <Text className="flex-1 text-sm text-red-700 dark:text-red-200 pr-3">
+                  Could not prepare this book — {embedError}
+                </Text>
+                <TouchableOpacity
+                  testID="chat-embed-error-retry"
+                  onPress={handleEmbedRetry}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry preparing this book"
+                  className="px-3 py-1.5 rounded-md bg-red-600"
+                >
+                  <Text className="text-sm font-semibold text-white">Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
             <ChatInput
               onSend={(text) => requireAIChat(() => void handleSend(text))}
