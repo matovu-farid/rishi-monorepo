@@ -77,8 +77,9 @@ async function handleE2ESeedLink(url: string): Promise<void> {
       | 'epub'
       | 'pdf'
       | 'mobi'
+      | 'azw3'
       | 'djvu'
-    if (!['epub', 'pdf', 'mobi', 'djvu'].includes(format)) {
+    if (!['epub', 'pdf', 'mobi', 'azw3', 'djvu'].includes(format)) {
       console.warn(`[e2e-seed] unknown format: ${format}`)
       return
     }
