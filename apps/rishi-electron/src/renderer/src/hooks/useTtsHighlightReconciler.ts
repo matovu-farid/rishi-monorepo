@@ -9,6 +9,10 @@ export type ReconcileTtsHighlight = (desiredIndex: string | null) => void
  * desired paragraph index. The reconciler is responsible for making the
  * DOM (or annotation store) converge to that state.
  *
+ * When activeParagraph is null, the hook falls back to
+ * lastPlayedParagraphIndex so the resume position is highlighted on
+ * load before playback resumes.
+ *
  * Idempotency of `reconcile` is required — this hook fires on multiple
  * trigger types that can overlap (focus + visibilitychange in sequence
  * on macOS Space return).
@@ -28,14 +32,17 @@ export function useTtsHighlightReconciler(
 ): void {
   useEffect(() => {
     const run = (): void => {
-      reconcile(usePlayerStore.getState().activeParagraph?.index ?? null)
+      const state = usePlayerStore.getState()
+      const desired = state.activeParagraph?.index ?? state.lastPlayedParagraphIndex ?? null
+      reconcile(desired)
     }
 
     run()
 
     const unsubStore = usePlayerStore.subscribe(
-      (s) => s.activeParagraph,
+      (s) => ({ active: s.activeParagraph, resume: s.lastPlayedParagraphIndex }),
       () => run(),
+      { equalityFn: (a, b) => a.active === b.active && a.resume === b.resume },
     )
 
     const onVisibility = (): void => {
