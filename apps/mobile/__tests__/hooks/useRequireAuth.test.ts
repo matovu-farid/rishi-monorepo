@@ -125,7 +125,9 @@ describe('useRequireAuth (mobile)', () => {
     })
     expect(action).not.toHaveBeenCalled()
     expect(openPremiumGate).toHaveBeenCalledTimes(1)
-    expect(openPremiumGate).toHaveBeenCalledWith('tts')
+    // P0-U: the would-be action is forwarded into openPremiumGate so the
+    // store can replay it after sign-in.
+    expect(openPremiumGate).toHaveBeenCalledWith('tts', action)
   })
 
   it('cold-start (auth not yet hydrated) defers: does NOT run action and does NOT open gate (P0-T)', () => {

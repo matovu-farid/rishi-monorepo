@@ -57,6 +57,12 @@ interface AuthState {
   premiumGateOpen: boolean
   premiumGateFeature: PremiumFeature | null
 
+  // P0-U: deferred action to replay after the gated user signs in.
+  // When `openPremiumGate(feature, action)` is called, `action` is stashed
+  // here. `setSession` invokes it on successful sign-in and clears it.
+  // `closePremiumGate` (dismiss / "Not now") discards it without invoking.
+  pendingAction: (() => void) | null
+
   // Actions
   setUser: (user: AuthUser | null) => void
   setAuthHydrated: (value: boolean) => void
@@ -84,11 +90,11 @@ interface AuthState {
   setAuthenticating: (value: boolean) => void
 
   // Phase 1 — premium gate actions
-  openPremiumGate: (feature: PremiumFeature) => void
+  openPremiumGate: (feature: PremiumFeature, action?: () => void) => void
   closePremiumGate: () => void
 }
 
-export const useAuthStore = create<AuthState>()((set) => ({
+export const useAuthStore = create<AuthState>()((set, get) => ({
   user: null,
   authHydrated: false,
   welcomeSeen: false,
@@ -101,6 +107,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
 
   premiumGateOpen: false,
   premiumGateFeature: null,
+  pendingAction: null,
 
   setUser: (user) => set({ user }),
   setAuthHydrated: (value) => set({ authHydrated: value }),
@@ -183,16 +190,27 @@ export const useAuthStore = create<AuthState>()((set) => ({
   },
 
   setSession: (token, userId, email = null) => {
+    // P0-U: snapshot any pending gated action BEFORE flipping state so the
+    // closure observes the post-sign-in store on replay.
+    const pending = get().pendingAction
     set({
       sessionToken: token,
       user: { id: userId, email },
       isAuthenticated: true,
       isAuthenticating: false,
+      pendingAction: null,
     })
     try {
       bucket.setItem(USER_ID_KEY, userId)
     } catch (err) {
       console.warn('[authStore] failed to persist user id:', err)
+    }
+    if (pending) {
+      try {
+        pending()
+      } catch (err) {
+        console.warn('[authStore] pendingAction replay failed:', err)
+      }
     }
   },
 
@@ -212,8 +230,20 @@ export const useAuthStore = create<AuthState>()((set) => ({
 
   setAuthenticating: (value) => set({ isAuthenticating: value }),
 
-  openPremiumGate: (feature) =>
-    set({ premiumGateOpen: true, premiumGateFeature: feature }),
+  openPremiumGate: (feature, action) =>
+    set({
+      premiumGateOpen: true,
+      premiumGateFeature: feature,
+      // Replace any prior pending action — only the latest gated tap
+      // should be replayed on sign-in.
+      pendingAction: action ?? null,
+    }),
   closePremiumGate: () =>
-    set({ premiumGateOpen: false, premiumGateFeature: null }),
+    // P0-U: dismissing the gate (e.g. "Not now") discards the pending
+    // action so it can never be replayed later.
+    set({
+      premiumGateOpen: false,
+      premiumGateFeature: null,
+      pendingAction: null,
+    }),
 }))

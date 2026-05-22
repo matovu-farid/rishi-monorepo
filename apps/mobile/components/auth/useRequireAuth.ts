@@ -32,7 +32,10 @@ export function useRequireAuth(
       if (isAuthenticated) {
         action()
       } else {
-        openPremiumGate(feature)
+        // P0-U: forward the action so the store can replay it on
+        // successful sign-in. Dismissing the gate ("Not now") discards
+        // it via closePremiumGate.
+        openPremiumGate(feature, action)
       }
     },
     [authHydrated, isAuthenticated, openPremiumGate, feature],

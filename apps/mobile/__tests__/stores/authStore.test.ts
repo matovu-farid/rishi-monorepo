@@ -189,4 +189,63 @@ describe('authStore (mobile)', () => {
     useAuthStore.getState().hydrateAuth()
     expect(useAuthStore.getState().user?.id).toBe('persisted-user')
   })
+
+  // ── P0-U: gated-action replay on sign-in ──────────────────────────────────
+  //
+  // When a signed-out user taps a gated control (e.g. send in chat), the
+  // caller passes the would-be action into `openPremiumGate(feature, action)`.
+  // The store stashes the action; on successful sign-in (`setSession`) the
+  // store replays the action and clears the slot. If the user dismisses
+  // the gate first (`closePremiumGate`), the action is discarded WITHOUT
+  // being invoked.
+  describe('pendingAction (P0-U)', () => {
+    it('defaults pendingAction to null', () => {
+      const { useAuthStore } = require('@/lib/stores/authStore')
+      expect(useAuthStore.getState().pendingAction).toBeNull()
+    })
+
+    it('openPremiumGate(feature, action) stashes the action without invoking it', () => {
+      const { useAuthStore } = require('@/lib/stores/authStore')
+      const action = jest.fn()
+      useAuthStore.getState().openPremiumGate('ai-chat', action)
+      expect(useAuthStore.getState().pendingAction).toBe(action)
+      expect(action).not.toHaveBeenCalled()
+      expect(useAuthStore.getState().premiumGateOpen).toBe(true)
+      expect(useAuthStore.getState().premiumGateFeature).toBe('ai-chat')
+    })
+
+    it('openPremiumGate(feature) (no action) still opens the gate', () => {
+      const { useAuthStore } = require('@/lib/stores/authStore')
+      useAuthStore.getState().openPremiumGate('tts')
+      expect(useAuthStore.getState().premiumGateOpen).toBe(true)
+      expect(useAuthStore.getState().pendingAction).toBeNull()
+    })
+
+    it('setSession() replays the stashed action and clears it', () => {
+      const { useAuthStore } = require('@/lib/stores/authStore')
+      const action = jest.fn()
+      useAuthStore.getState().openPremiumGate('ai-chat', action)
+      useAuthStore.getState().setSession('tok', 'user-1')
+      expect(action).toHaveBeenCalledTimes(1)
+      expect(useAuthStore.getState().pendingAction).toBeNull()
+    })
+
+    it('closePremiumGate() discards the stashed action WITHOUT invoking it', () => {
+      const { useAuthStore } = require('@/lib/stores/authStore')
+      const action = jest.fn()
+      useAuthStore.getState().openPremiumGate('ai-chat', action)
+      useAuthStore.getState().closePremiumGate()
+      expect(action).not.toHaveBeenCalled()
+      expect(useAuthStore.getState().pendingAction).toBeNull()
+      expect(useAuthStore.getState().premiumGateOpen).toBe(false)
+    })
+
+    it('setSession() with no pendingAction is a no-op for the slot', () => {
+      const { useAuthStore } = require('@/lib/stores/authStore')
+      expect(() => {
+        useAuthStore.getState().setSession('tok', 'user-1')
+      }).not.toThrow()
+      expect(useAuthStore.getState().pendingAction).toBeNull()
+    })
+  })
 })
