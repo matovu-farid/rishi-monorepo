@@ -14,7 +14,7 @@
  * the WebView will show an error / blank — both of which are
  * out-of-scope for this test until empirical verification lands.
  */
-import { describe, it, beforeAll, expect } from '@jest/globals'
+import { describe, it, beforeAll } from '@jest/globals'
 import { seedBook, fixtureBookRowTestID } from './helpers/seed-book'
 
 describe('reader: AZW3 — open from library', () => {
