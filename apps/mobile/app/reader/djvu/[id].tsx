@@ -697,8 +697,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   navBtn: {
-    width: 32,
-    height: 32,
+    width: 44,
+    height: 44,
     justifyContent: 'center',
     alignItems: 'center',
   },

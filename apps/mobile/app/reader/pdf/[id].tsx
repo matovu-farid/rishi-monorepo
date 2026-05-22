@@ -982,8 +982,8 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   pdfNavBtn: {
-    width: 36,
-    height: 36,
+    width: 44,
+    height: 44,
     justifyContent: 'center',
     alignItems: 'center',
   },
