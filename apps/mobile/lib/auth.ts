@@ -101,6 +101,31 @@ export async function isAuthenticated(): Promise<boolean> {
   return t != null && t.length > 0
 }
 
+/**
+ * E2E-only: persist a worker-issued session token and hydrate the auth store.
+ *
+ * Used by the `e2e-action=set-session` deep-link bridge in `app/_layout.tsx`
+ * so the cross-platform sync test can sign the app in as a worker-created
+ * test user without going through the in-app browser OAuth dance.
+ *
+ * This mirrors the tail of `signIn()` (secure-store write + zustand
+ * `setSession` call) but skips the PKCE handshake.
+ *
+ * Gated on `IS_E2E_TEST` at the caller — this function itself does NOT check
+ * the flag because the production bundle never reaches the bridge.
+ */
+export async function setSessionForE2E(params: {
+  token: string
+  userId: string
+  email: string | null
+}): Promise<void> {
+  await SecureStore.setItemAsync(BEARER_KEY, params.token)
+  // Dynamic import to keep this module's import graph free of the zustand
+  // store (which pulls in MMKV — slow on cold-start for the OAuth path).
+  const { useAuthStore } = await import('@/lib/stores/authStore')
+  useAuthStore.getState().setSession(params.token, params.userId, params.email)
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 function parseStateFromCallback(url: string): string | null {
   // Manual parse — `URL` exists in modern RN and Node test envs, but the

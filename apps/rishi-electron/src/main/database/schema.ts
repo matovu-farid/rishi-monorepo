@@ -18,6 +18,7 @@ export const books = sqliteTable('books', {
   fileHash: text('file_hash'),
   fileR2Key: text('file_r2_key'),
   coverR2Key: text('cover_r2_key'),
+  fileSize: integer('file_size').notNull().default(0),
   format: text('format').notNull().default('epub'),
   currentCfi: text('current_cfi'),
   currentPage: integer('current_page'),

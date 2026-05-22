@@ -115,9 +115,16 @@ export interface FileSyncIpc {
   uploadBookFile(
     filePath: string,
     hash: string,
-    format: 'epub' | 'pdf' | 'mobi'
+    format: 'epub' | 'pdf' | 'mobi',
+    fileSize: number
   ): Promise<{ r2Key: string }>
   booksUpdateFileHash(bookId: number, hash: string, r2Key: string): Promise<void>
+  /**
+   * Stat the on-disk file and return its size in bytes. The size is sent to
+   * the worker in /upload-url requests and persisted on the local book row
+   * so it can ride the regular sync push up to the cloud.
+   */
+  getFileSize(filePath: string): Promise<number>
 }
 
 /** Scanner port — wraps `window.electron.scanForBooks` + the three IPC events. */

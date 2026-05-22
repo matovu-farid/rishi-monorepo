@@ -21,17 +21,19 @@ export function LibraryEmptyState({
 }: LibraryEmptyStateProps) {
   return (
     <View
+      testID="library-empty-state"
       className="flex-1 items-center justify-center px-6"
       onLayout={containerProps?.onLayout}
     >
       <IconSymbol name="book.fill" size={48} color="#9BA1A6" />
-      <Text className="text-xl font-semibold text-gray-900 dark:text-white mt-4">
+      <Text testID="library-empty-title" className="text-xl font-semibold text-gray-900 dark:text-white mt-4">
         No books yet
       </Text>
       <Text className="text-base text-gray-500 dark:text-gray-400 text-center mt-2 mb-6">
         Import an EPUB or PDF from your device to start reading.
       </Text>
       <TouchableOpacity
+        testID="library-empty-import-btn"
         className="w-full bg-[#0a7ea4] rounded-lg py-3 items-center"
         onPress={onImport}
         disabled={importing}

@@ -8,6 +8,12 @@ interface ConversationRowProps {
   lastMessage?: string
   onPress: () => void
   onLongPress: () => void
+  /**
+   * Optional testID forwarded to the outer `Pressable`. Used by E2E
+   * tests to target a specific conversation row by id without relying
+   * on its rendered text content.
+   */
+  testID?: string
 }
 
 function getRelativeTime(timestamp: number): string {
@@ -32,9 +38,11 @@ export function ConversationRow({
   lastMessage,
   onPress,
   onLongPress,
+  testID,
 }: ConversationRowProps) {
   return (
     <Pressable
+      testID={testID}
       onPress={onPress}
       onLongPress={onLongPress}
       className="flex-row items-center px-4 py-4 active:bg-gray-100 dark:active:bg-gray-800"
@@ -55,6 +63,7 @@ export function ConversationRow({
       {/* Text content */}
       <View className="flex-1">
         <Text
+          testID={testID ? `${testID}-title` : undefined}
           className="text-base font-semibold text-gray-900 dark:text-white"
           numberOfLines={1}
         >
@@ -62,6 +71,7 @@ export function ConversationRow({
         </Text>
         {lastMessage ? (
           <Text
+            testID={testID ? `${testID}-last-message` : undefined}
             className="text-sm text-gray-500 dark:text-gray-400 mt-0.5"
             numberOfLines={1}
           >

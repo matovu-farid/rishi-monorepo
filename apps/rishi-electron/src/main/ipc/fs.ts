@@ -43,6 +43,18 @@ export function registerFsHandlers(): void {
     }
   })
 
+  // Plain byte-count of a file. Separate from `fs:checkFileSize` so callers
+  // that need to forward the raw size (e.g. the worker's /upload-url cap
+  // enforcement) don't have to reverse-engineer it from a coarse verdict.
+  handle('fs:getFileSize', async (_event, filePath) => {
+    try {
+      const stat = await fs.stat(filePath)
+      return stat.size
+    } catch (error) {
+      throw new Error(`Failed to stat file "${filePath}": ${errorMessage(error)}`)
+    }
+  })
+
   handle('fs:unzip', async (_event, filePath, outDir) => {
     try {
       const data = await fs.readFile(filePath)

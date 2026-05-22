@@ -64,6 +64,7 @@ export type ChannelToMethod = {
 
   // FS
   'fs:checkFileSize': 'checkFileSize'
+  'fs:getFileSize': 'getFileSize'
   'fs:unzip': 'unzip'
   'fs:copyFile': 'copyFile'
   'fs:getAppDataPath': 'getAppDataPath'
@@ -310,6 +311,7 @@ export interface Book {
   fileHash?: string | null
   fileR2Key?: string | null
   coverR2Key?: string | null
+  fileSize?: number | null
   format: string
   currentCfi?: string | null
   currentPage?: number | null
@@ -335,6 +337,7 @@ export interface BookInsertable {
   fileHash?: string | null
   fileR2Key?: string | null
   coverR2Key?: string | null
+  fileSize?: number | null
   format?: string | null
   currentCfi?: string | null
   currentPage?: number | null

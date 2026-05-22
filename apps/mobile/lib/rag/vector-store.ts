@@ -1,11 +1,19 @@
+import * as SQLite from 'expo-sqlite'
 import { rawDb } from '@/lib/db'
 
 /**
  * Load the sqlite-vec extension.
- * Requires withSQLiteVecExtension: true in app.json expo-sqlite plugin config.
+ * Requires withSQLiteVecExtension: true in app.json expo-sqlite plugin config
+ * AND a native rebuild (EAS or local) so the bundled framework ships in the app.
  */
 export function initVectorExtension(): void {
-  rawDb.loadExtensionSync('vec0')
+  const ext = SQLite.bundledExtensions['sqlite-vec']
+  if (!ext?.libPath) {
+    throw new Error(
+      'sqlite-vec extension not bundled. Ensure app.json has withSQLiteVecExtension: true and the dev client was rebuilt after that change.'
+    )
+  }
+  rawDb.loadExtensionSync(ext.libPath, ext.entryPoint)
 }
 
 /**

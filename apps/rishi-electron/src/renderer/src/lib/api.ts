@@ -4,6 +4,7 @@
  */
 
 import { getAuthToken } from '@/modules/auth'
+import { WORKER_URL } from '@/config/worker-url'
 
 // Re-export types that match the original generated types
 
@@ -51,6 +52,7 @@ export interface Book {
   fileHash?: string | null
   fileR2Key?: string | null
   coverR2Key?: string | null
+  fileSize?: number | null
   format: string
   currentCfi?: string | null
   currentPage?: number | null
@@ -76,6 +78,7 @@ export interface BookInsertable {
   fileHash?: string | null
   fileR2Key?: string | null
   coverR2Key?: string | null
+  fileSize?: number | null
   format?: string | null
   currentCfi?: string | null
   currentPage?: number | null
@@ -340,7 +343,6 @@ export async function isDev(): Promise<boolean> {
 export async function getDevBypassSecret(): Promise<string | null> {
   return api().getDevBypassSecret()
 }
-const WORKER_URL = 'https://api.fidexa.org'
 
 export async function getRealtimeClientSecret(language: string): Promise<string> {
   const authHeaders = await getAuthHeaders()

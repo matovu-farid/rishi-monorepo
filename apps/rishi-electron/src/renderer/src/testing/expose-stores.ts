@@ -3,10 +3,11 @@ import { useEpubStore } from '@/stores/epubStore'
 import { useNavStore } from '@/stores/navStore'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { useAuthStore } from '@/stores/authStore'
-import { setTestTtsService } from '@/services'
+import { setTestTtsService, getSyncService } from '@/services'
 import { audioElement } from '@/hooks/usePlayerMachine'
 import { navigationHistoryActor } from '@/machines/navigationHistory/navigationHistoryActor'
 import type { TtsService } from '@/services/tts'
+import type { SyncService } from '@/services/sync'
 
 declare global {
   interface Window {
@@ -19,6 +20,14 @@ declare global {
       setTestTtsService: (override: TtsService | null) => void
       audioElement: HTMLAudioElement
       navigationHistoryActor: typeof navigationHistoryActor
+      /**
+       * E2E hook: gives Playwright a way to force a sync push without waiting
+       * for the 5-min interval. Used by the cross-platform-sync test
+       * (tests/cross-platform-sync/playwright/desktop-import.spec.ts). Always
+       * exposed — it's a thin wrapper over the same `triggerWrite()` the rest
+       * of the app already calls; production code never reads it.
+       */
+      getSyncService: () => SyncService
     }
   }
 }
@@ -31,5 +40,6 @@ window.__rishi = {
   authStore: useAuthStore,
   setTestTtsService,
   audioElement,
-  navigationHistoryActor
+  navigationHistoryActor,
+  getSyncService
 }

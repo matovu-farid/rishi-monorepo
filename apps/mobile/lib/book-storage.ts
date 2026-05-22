@@ -46,10 +46,23 @@ export function getBookById(id: string): Book | null {
 }
 
 /**
+ * Optional hooks for `getBookForReading`. Callers can pass `onDownloadStart`
+ * to flip a "Downloading..." UI state the moment the lazy R2 fetch begins —
+ * this fires BEFORE the network call so the reader screen can paint the
+ * download copy before the await resolves.
+ */
+export interface GetBookForReadingOptions {
+  onDownloadStart?: () => void
+}
+
+/**
  * Get a book ready for reading. If the book was synced from another device
  * and has no local file, download it from R2 on-demand.
  */
-export async function getBookForReading(id: string): Promise<Book | null> {
+export async function getBookForReading(
+  id: string,
+  opts: GetBookForReadingOptions = {},
+): Promise<Book | null> {
   const row = db
     .select()
     .from(books)
@@ -67,6 +80,9 @@ export async function getBookForReading(id: string): Promise<Book | null> {
     // union here before handing off to the download port.
     const downloadFormat: 'epub' | 'pdf' | 'mobi' | 'djvu' =
       row.format === 'azw3' ? 'mobi' : (row.format as 'epub' | 'pdf' | 'mobi' | 'djvu')
+    // Signal "we're about to download" BEFORE the await so the consumer
+    // can flip its "Downloading..." UI state synchronously.
+    opts.onDownloadStart?.()
     await downloadBookFile(id, row.fileR2Key, downloadFormat)
     // Re-fetch the updated row
     const updated = db

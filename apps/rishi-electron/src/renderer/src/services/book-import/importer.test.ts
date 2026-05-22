@@ -87,6 +87,7 @@ export function makeFileSync(opts?: {
   hashImpl?: (path: string) => Promise<string>
   uploadImpl?: () => Promise<{ r2Key: string }>
   throwOn?: 'upload' | 'updateHash'
+  fileSize?: number
 }): FileSyncIpc {
   return {
     hashBookFile: vi.fn(async (path: string) => (opts?.hashImpl ? opts.hashImpl(path) : 'abc123')),
@@ -96,7 +97,8 @@ export function makeFileSync(opts?: {
     }),
     booksUpdateFileHash: vi.fn(async () => {
       if (opts?.throwOn === 'updateHash') throw new Error('updateHash failed')
-    })
+    }),
+    getFileSize: vi.fn(async () => opts?.fileSize ?? 1024)
   }
 }
 

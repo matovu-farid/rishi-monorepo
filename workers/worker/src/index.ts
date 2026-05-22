@@ -16,6 +16,7 @@ import { syncRoutes } from "./routes/sync";
 import { uploadRoutes } from "./routes/upload";
 import { desktopRoutes } from "./routes/desktop";
 import { mobileRoutes } from "./routes/mobile";
+import { testAuthRoutes } from "./routes/test-auth";
 import { createAuth } from "./auth";
 
 // Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
@@ -106,6 +107,16 @@ export interface CloudflareBindings {
   R2_ACCESS_KEY_ID: string;
   R2_SECRET_ACCESS_KEY: string;
   CLOUDFLARE_ACCOUNT_ID: string;
+  // Storage caps for /api/sync/upload-url. wrangler passes numeric vars as
+  // strings — parse with Number(...) || DEFAULT in the consuming code.
+  BOOK_MAX_FILE_BYTES?: string;
+  BOOK_MAX_PER_USER?: string;
+  BOOK_MAX_USER_BYTES?: string;
+  // Test-only auth routes. All three gates (env=true, header matches secret,
+  // var present) must pass or /test/* returns 404 — strangers see "no such
+  // endpoint".
+  ENABLE_TEST_AUTH?: string;
+  TEST_AUTH_SECRET?: string;
 }
 
 const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string } }>();
@@ -167,6 +178,10 @@ app.route("/api/sync", syncRoutes);
 app.route("/api/sync", uploadRoutes);
 app.route("/desktop", desktopRoutes);
 app.route("/mobile", mobileRoutes);
+// ─── Test-only routes (hard-gated by ENABLE_TEST_AUTH + TEST_AUTH_SECRET) ────
+// All endpoints under /test/* return 404 unless three checks pass — see
+// src/routes/test-auth.ts. Production keeps both env vars unset.
+app.route("/test", testAuthRoutes);
 
 // ─── Protected routes ─────────────────────────────────────────────────────────
 app.get("/api/redis-test", requireAuth, async (c) => {

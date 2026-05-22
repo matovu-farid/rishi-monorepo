@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { createRootRoute, Outlet, useLocation, useNavigate } from '@tanstack/react-router'
 import { useEffect, useMemo, type JSX, type CSSProperties } from 'react'
 import { getBooks } from '@/lib/api'
-import { getSyncService, getBookImportService } from '@/services'
+import { getSyncService } from '@/services'
 import { SyncStatusIndicator } from '../components/SyncStatusIndicator'
 import { IndexingStatusIndicator } from '../components/IndexingStatusIndicator'
 import { NetworkBanner } from '../components/NetworkBanner'
@@ -13,6 +13,7 @@ import SignInModal from '@/components/auth/SignInModal'
 import { TourProvider } from '@/components/tutorial/TourProvider'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { useHydrateAuth } from '@/hooks/useHydrateAuth'
+import { usePostImportSync } from '@/hooks/usePostImportSync'
 import { useStartupUpdateCheck } from '@/hooks/useStartupUpdateCheck'
 import { useFileOpenHandler } from '@/hooks/useFileOpenHandler'
 import { useMenuCommands } from '@/hooks/useMenuCommands'
@@ -144,16 +145,9 @@ function RootComponent(): JSX.Element {
     }
   }, [])
 
-  // After a successful import, ask main to rebuild the menu so File > Open
-  // Recent reflects the new book without waiting for a window focus event.
-  useEffect(() => {
-    return getBookImportService().onImportProgress((event) => {
-      if (event.kind === 'done') {
-        const e = (window as unknown as { electron?: { refreshMenu?(): void } }).electron
-        e?.refreshMenu?.()
-      }
-    })
-  }, [])
+  // Wire post-import side effects: rebuild native menu + trigger sync push on
+  // `done`, toast on `upload-failed`. See usePostImportSync for the why.
+  usePostImportSync()
 
   const { isPending, error, isError } = useQuery({
     queryKey: ['books'],

@@ -6,13 +6,21 @@ import type { Message, SourceChunk } from '@/types/conversation'
 interface ChatMessageProps {
   message: Message
   onSourcePress?: (source: SourceChunk) => void
+  /**
+   * Optional testID forwarded to the outer message bubble container.
+   * Source-reference chips are auto-suffixed (`<testID>-source-<i>`)
+   * so E2E tests can address an individual citation without knowing
+   * its chunkId.
+   */
+  testID?: string
 }
 
-export function ChatMessage({ message, onSourcePress }: ChatMessageProps) {
+export function ChatMessage({ message, onSourcePress, testID }: ChatMessageProps) {
   const isUser = message.role === 'user'
 
   return (
     <Animated.View
+      testID={testID}
       entering={isUser
         ? FadeIn.duration(200).withInitialValues({ opacity: 0 })
         : FadeIn.duration(200).withInitialValues({ opacity: 0 })
@@ -27,6 +35,7 @@ export function ChatMessage({ message, onSourcePress }: ChatMessageProps) {
         }`}
       >
         <Text
+          testID={testID ? `${testID}-text` : undefined}
           className={`text-base ${
             isUser ? 'text-white' : 'text-gray-900 dark:text-gray-100'
           }`}
@@ -49,6 +58,7 @@ export function ChatMessage({ message, onSourcePress }: ChatMessageProps) {
               key={source.chunkId || `source-${index}`}
               source={source}
               onPress={() => onSourcePress?.(source)}
+              testID={`source-reference-${index}`}
             />
           ))}
         </ScrollView>

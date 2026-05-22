@@ -1,0 +1,75 @@
+# EAS uploads from the git repo root for monorepos.
+# When .easignore exists, it fully replaces .gitignore for upload determination,
+# so we need to list everything that should be excluded.
+
+# Dependencies — EAS reinstalls these server-side
+node_modules/
+**/node_modules/
+
+# Build artifacts
+**/dist/
+**/build/
+**/.next/
+**/web-build/
+**/.expo/
+**/.expo-shared/
+**/.turbo/
+**/.vercel/
+**/.cargo/
+**/target/
+
+# Native build outputs (Xcode + Gradle)
+**/ios/build/
+**/ios/Pods/
+**/ios/DerivedData/
+**/ios/.xcode.env.local
+**/ios/*.xcworkspace/xcuserdata/
+**/ios/*.xcodeproj/xcuserdata/
+**/ios/*.xcodeproj/project.xcworkspace/xcuserdata/
+**/android/build/
+**/android/app/build/
+**/android/.gradle/
+**/android/.idea/
+**/android/local.properties
+
+# Other Rishi apps not needed for the mobile build
+apps/web/
+apps/rishi-electron/
+crates/
+workers/
+
+# Agent / scratch dirs — these get huge (28GB+ of git worktrees)
+.claude/
+.agent-review/
+.parity/
+.planning/
+.superpowers/
+.worktrees/
+.canary-verdict.md
+
+# Editor / OS / misc
+.DS_Store
+**/.DS_Store
+.vscode/
+.idea/
+*.log
+**/logs/
+**/test-recordings/
+**/.maestro/
+**/__tests__/
+**/e2e/
+
+# Secrets
+*.p12
+*.cer
+*.pem
+*.key
+*.jks
+*.p8
+*.mobileprovision
+.env
+.env.*
+
+# Metro / tooling
+**/.metro-health-check*
+**/*.tsbuildinfo

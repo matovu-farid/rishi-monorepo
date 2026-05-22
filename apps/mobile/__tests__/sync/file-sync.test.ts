@@ -156,7 +156,7 @@ afterAll(() => {
 // Imports — after mocks
 // ────────────────────────────────────────────────────────────────────────────
 
-import { uploadBookFile, downloadBookFile } from '@/lib/sync/file-sync'
+import { uploadBookFile, downloadBookFile, UploadLimitError } from '@/lib/sync/file-sync'
 
 // ────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -210,9 +210,9 @@ describe('uploadBookFile — CG03 R2 PUT failure', () => {
       bytesResponse({ ok: false, status: 503, statusText: 'Service Unavailable' }),
     )
 
-    await expect(uploadBookFile('/docs/books/b1/book.epub', 'fake-hash', 'epub')).rejects.toThrow(
-      /R2 upload failed: 503/,
-    )
+    await expect(
+      uploadBookFile('/docs/books/b1/book.epub', 'fake-hash', 'epub', 1024),
+    ).rejects.toThrow(/R2 upload failed: 503/)
 
     // The R2 PUT was attempted exactly once via the presigned URL.
     expect(mockFetch).toHaveBeenCalledTimes(1)
@@ -231,9 +231,9 @@ describe('uploadBookFile — CG03 R2 PUT failure', () => {
       jsonResponse(null, { ok: false, status: 500, statusText: 'Internal Server Error' }),
     )
 
-    await expect(uploadBookFile('/docs/books/b1/book.pdf', 'fake-hash', 'pdf')).rejects.toThrow(
-      /Upload URL request failed: 500/,
-    )
+    await expect(
+      uploadBookFile('/docs/books/b1/book.pdf', 'fake-hash', 'pdf', 1024),
+    ).rejects.toThrow(/Upload URL request failed: 500/)
 
     // R2 was never reached — only the upload-url call happened.
     expect(mockFetch).not.toHaveBeenCalled()
@@ -249,7 +249,7 @@ describe('uploadBookFile — CG03 R2 PUT failure', () => {
       }),
     )
 
-    const result = await uploadBookFile('/docs/books/b1/book.epub', 'fake-hash', 'epub')
+    const result = await uploadBookFile('/docs/books/b1/book.epub', 'fake-hash', 'epub', 1024)
 
     expect(result.r2Key).toBe('r2/epub/already-there')
     expect(mockFetch).not.toHaveBeenCalled()
@@ -355,5 +355,120 @@ describe('downloadBookFile — CG04 atomic move rollback', () => {
     expect((dbRecord.updateCalls[0].values as { filePath: string }).filePath).toMatch(
       /book\.epub$/,
     )
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────────────
+// fileSize wiring + storage-cap error mapping
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('uploadBookFile — fileSize in request body', () => {
+  beforeEach(() => resetAll())
+
+  it('includes the explicit fileSize argument in the POST body', async () => {
+    mockApiClient.mockResolvedValueOnce(
+      jsonResponse({
+        exists: false,
+        uploadUrl: 'https://r2.example.com/upload?sig=ok',
+        r2Key: 'r2/epub/sized',
+      }),
+    )
+    mockFetch.mockResolvedValueOnce(bytesResponse())
+
+    await uploadBookFile('/docs/books/b1/book.epub', 'fake-hash', 'epub', 12345)
+
+    expect(mockApiClient).toHaveBeenCalledTimes(1)
+    const [path, init] = mockApiClient.mock.calls[0] as [string, RequestInit]
+    expect(path).toBe('/api/sync/upload-url')
+    expect(init.method).toBe('POST')
+    const parsed = JSON.parse(init.body as string) as Record<string, unknown>
+    expect(parsed.fileHash).toBe('fake-hash')
+    expect(parsed.contentType).toBe('application/epub+zip')
+    expect(parsed.fileSize).toBe(12345)
+  })
+})
+
+describe('uploadBookFile — storage-cap error mapping', () => {
+  beforeEach(() => resetAll())
+
+  it('throws UploadLimitError with code FILE_TOO_LARGE on 413', async () => {
+    mockApiClient.mockResolvedValueOnce({
+      ok: false,
+      status: 413,
+      statusText: 'Payload Too Large',
+      json: async () => ({
+        error: 'File exceeds 800 MB cap',
+        code: 'FILE_TOO_LARGE',
+        limit: 800 * 1024 * 1024,
+      }),
+    } as unknown as Response)
+
+    let caught: unknown = null
+    try {
+      await uploadBookFile('/docs/books/b1/book.epub', 'fake-hash', 'epub', 900 * 1024 * 1024)
+    } catch (e) {
+      caught = e
+    }
+
+    expect(caught).toBeInstanceOf(UploadLimitError)
+    const err = caught as UploadLimitError
+    expect(err.code).toBe('FILE_TOO_LARGE')
+    expect(err.limit).toBe(800 * 1024 * 1024)
+    expect(err.status).toBe(413)
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('throws UploadLimitError with code BOOK_LIMIT_REACHED on 507 book cap', async () => {
+    mockApiClient.mockResolvedValueOnce({
+      ok: false,
+      status: 507,
+      statusText: 'Insufficient Storage',
+      json: async () => ({
+        error: 'Book count exceeds limit',
+        code: 'BOOK_LIMIT_REACHED',
+        limit: 500,
+        current: 500,
+      }),
+    } as unknown as Response)
+
+    let caught: unknown = null
+    try {
+      await uploadBookFile('/docs/books/b1/book.epub', 'fake-hash', 'epub', 1024)
+    } catch (e) {
+      caught = e
+    }
+
+    expect(caught).toBeInstanceOf(UploadLimitError)
+    const err = caught as UploadLimitError
+    expect(err.code).toBe('BOOK_LIMIT_REACHED')
+    expect(err.limit).toBe(500)
+    expect(err.current).toBe(500)
+    expect(err.status).toBe(507)
+  })
+
+  it('throws UploadLimitError with code STORAGE_LIMIT_REACHED on 507 storage cap', async () => {
+    mockApiClient.mockResolvedValueOnce({
+      ok: false,
+      status: 507,
+      statusText: 'Insufficient Storage',
+      json: async () => ({
+        error: 'Total storage exceeded',
+        code: 'STORAGE_LIMIT_REACHED',
+        limit: 10 * 1024 * 1024 * 1024,
+        current: 9.5 * 1024 * 1024 * 1024,
+      }),
+    } as unknown as Response)
+
+    let caught: unknown = null
+    try {
+      await uploadBookFile('/docs/books/b1/book.epub', 'fake-hash', 'epub', 1024 * 1024)
+    } catch (e) {
+      caught = e
+    }
+
+    expect(caught).toBeInstanceOf(UploadLimitError)
+    const err = caught as UploadLimitError
+    expect(err.code).toBe('STORAGE_LIMIT_REACHED')
+    expect(err.limit).toBe(10 * 1024 * 1024 * 1024)
   })
 })

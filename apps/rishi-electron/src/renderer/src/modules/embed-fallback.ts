@@ -8,8 +8,7 @@
 
 import type { EmbedParam, EmbedResult } from '@/lib/api'
 import { getAuthToken } from './auth'
-
-const WORKER_URL = 'https://api.fidexa.org'
+import { WORKER_URL } from '@/config/worker-url'
 
 /**
  * Send texts to the server for embedding when on-device fails.

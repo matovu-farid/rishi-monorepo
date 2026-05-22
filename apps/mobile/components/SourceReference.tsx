@@ -15,14 +15,17 @@ export { formatSourceLabel, formatSourceHint }
 interface SourceReferenceProps {
   source: SourceChunk
   onPress: () => void
+  /** Optional testID for E2E tests (`source-reference-<index>`). */
+  testID?: string
 }
 
-export function SourceReference({ source, onPress }: SourceReferenceProps) {
+export function SourceReference({ source, onPress, testID }: SourceReferenceProps) {
   const label = formatSourceLabel(source)
   const hint = formatSourceHint(source)
 
   return (
     <Pressable
+      testID={testID}
       onPress={onPress}
       className="flex-row items-center bg-gray-200 dark:bg-gray-700 rounded-full px-2 py-1"
       style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
@@ -31,7 +34,7 @@ export function SourceReference({ source, onPress }: SourceReferenceProps) {
       accessibilityRole="button"
     >
       <IconSymbol name="book.fill" size={12} color="#687076" />
-      <Text className="text-xs text-gray-700 dark:text-gray-300 ml-1">{label}</Text>
+      <Text testID={testID ? `${testID}-label` : undefined} className="text-xs text-gray-700 dark:text-gray-300 ml-1">{label}</Text>
     </Pressable>
   )
 }

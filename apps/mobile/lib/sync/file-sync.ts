@@ -7,9 +7,34 @@ import { eq } from 'drizzle-orm'
 import type {
   UploadUrlRequest,
   UploadUrlResponse,
+  UploadUrlError,
   DownloadUrlRequest,
   DownloadUrlResponse,
 } from '@rishi/shared/sync-types'
+
+/**
+ * Typed error thrown when the worker rejects an /upload-url request because
+ * the user would exceed a storage cap. Consumers should pattern-match on
+ * `.code` to surface a localized message. The worker returns:
+ *   - 413 FILE_TOO_LARGE        — single file > 800 MB
+ *   - 507 BOOK_LIMIT_REACHED    — per-user book count cap hit
+ *   - 507 STORAGE_LIMIT_REACHED — per-user total bytes cap hit
+ */
+export class UploadLimitError extends Error {
+  readonly code: UploadUrlError['code']
+  readonly limit: number
+  readonly current?: number
+  readonly status: number
+
+  constructor(payload: UploadUrlError, status: number) {
+    super(payload.error)
+    this.name = 'UploadLimitError'
+    this.code = payload.code
+    this.limit = payload.limit
+    this.current = payload.current
+    this.status = status
+  }
+}
 
 /**
  * Compute SHA-256 hash of a book file.
@@ -33,12 +58,19 @@ export async function hashBookFile(filePath: string): Promise<string> {
 /**
  * Upload a book file to R2 via presigned URL.
  * Performs dedup check: if the same fileHash already exists in R2, skips upload.
+ *
+ * `fileSize` is required by the worker (post storage-cap update) so it can
+ * enforce per-file (800 MB) and per-user (10 GB / 500-book) limits BEFORE
+ * handing back a presigned URL. When the worker rejects with 413 or 507,
+ * this throws `UploadLimitError` so callers can switch on `.code`.
+ *
  * Returns the R2 key for storing in the book record.
  */
 export async function uploadBookFile(
   filePath: string,
   fileHash: string,
-  format: 'epub' | 'pdf' | 'mobi' | 'djvu'
+  format: 'epub' | 'pdf' | 'mobi' | 'djvu',
+  fileSize: number,
 ): Promise<{ r2Key: string }> {
   const contentTypes: Record<string, string> = {
     epub: 'application/epub+zip',
@@ -48,42 +80,53 @@ export async function uploadBookFile(
   }
   const contentType = contentTypes[format] ?? 'application/octet-stream'
 
-  try {
-    // Request presigned upload URL from Worker
-    const res = await apiClient('/api/sync/upload-url', {
-      method: 'POST',
-      body: JSON.stringify({ fileHash, contentType } satisfies UploadUrlRequest),
-    })
+  // Request presigned upload URL from Worker
+  const res = await apiClient('/api/sync/upload-url', {
+    method: 'POST',
+    body: JSON.stringify({ fileHash, contentType, fileSize } satisfies UploadUrlRequest),
+  })
 
-    if (!res.ok) {
-      throw new Error(`Upload URL request failed: ${res.status} ${res.statusText}`)
+  if (!res.ok) {
+    // Storage-cap rejection: try to decode the typed UploadUrlError payload.
+    // The worker uses 413 for per-file overage and 507 for both per-user
+    // count + per-user bytes caps. Anything else is an unexpected failure
+    // and is rethrown as a plain Error.
+    if (res.status === 413 || res.status === 507) {
+      let payload: UploadUrlError | null = null
+      try {
+        payload = (await res.json()) as UploadUrlError
+      } catch {
+        payload = null
+      }
+      if (payload && typeof payload.code === 'string') {
+        throw new UploadLimitError(payload, res.status)
+      }
     }
-
-    const data: UploadUrlResponse = await res.json()
-
-    // Dedup: file already exists in R2
-    if (data.exists) {
-      return { r2Key: data.r2Key }
-    }
-
-    // Upload file to R2 via presigned URL (direct to R2, NOT via apiClient)
-    const file = new File(filePath)
-    const bytes = await file.bytes()
-
-    const uploadRes = await fetch(data.uploadUrl!, {
-      method: 'PUT',
-      body: bytes,
-      headers: { 'Content-Type': contentType },
-    })
-
-    if (!uploadRes.ok) {
-      throw new Error(`R2 upload failed: ${uploadRes.status} ${uploadRes.statusText}`)
-    }
-
-    return { r2Key: data.r2Key }
-  } catch (error) {
-    throw new Error(`Failed to upload book file: ${error}`)
+    throw new Error(`Upload URL request failed: ${res.status} ${res.statusText}`)
   }
+
+  const data: UploadUrlResponse = await res.json()
+
+  // Dedup: file already exists in R2
+  if (data.exists) {
+    return { r2Key: data.r2Key }
+  }
+
+  // Upload file to R2 via presigned URL (direct to R2, NOT via apiClient)
+  const file = new File(filePath)
+  const bytes = await file.bytes()
+
+  const uploadRes = await fetch(data.uploadUrl!, {
+    method: 'PUT',
+    body: bytes,
+    headers: { 'Content-Type': contentType },
+  })
+
+  if (!uploadRes.ok) {
+    throw new Error(`R2 upload failed: ${uploadRes.status} ${uploadRes.statusText}`)
+  }
+
+  return { r2Key: data.r2Key }
 }
 
 /**

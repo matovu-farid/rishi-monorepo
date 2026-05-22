@@ -17,6 +17,7 @@ export const books = sqliteTable("books", {
   fileHash: text("file_hash"), // SHA-256 for R2 dedup
   fileR2Key: text("file_r2_key"), // R2 object key for book file
   coverR2Key: text("cover_r2_key"), // R2 object key for cover image
+  fileSize: integer("file_size").default(0), // bytes — populated by client on push; used for per-user storage cap
   createdAt: integer("created_at").notNull(), // Unix timestamp ms
   updatedAt: integer("updated_at").notNull(), // Unix timestamp ms
   syncVersion: integer("sync_version").default(0), // server-assigned monotonic counter

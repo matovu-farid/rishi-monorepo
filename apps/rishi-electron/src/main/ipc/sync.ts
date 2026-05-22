@@ -180,6 +180,7 @@ export function registerSyncHandlers(): void {
           fileHash: (remote.fileHash as string | null) ?? null,
           fileR2Key: (remote.fileR2Key as string | null) ?? null,
           coverR2Key: (remote.coverR2Key as string | null) ?? null,
+          fileSize: (remote.fileSize as number | null) ?? local.fileSize,
           syncVersion: (remote.syncVersion as number | null) ?? 0,
           isDirty: 0,
           isDeleted: (remote.isDeleted as boolean) ? 1 : 0
@@ -210,6 +211,7 @@ export function registerSyncHandlers(): void {
           fileHash: (remote.fileHash as string | null) ?? null,
           fileR2Key: (remote.fileR2Key as string | null) ?? null,
           coverR2Key: (remote.coverR2Key as string | null) ?? null,
+          fileSize: (remote.fileSize as number | null) ?? 0,
           syncVersion: (remote.syncVersion as number | null) ?? 0,
           isDirty: 0,
           isDeleted: (remote.isDeleted as boolean) ? 1 : 0

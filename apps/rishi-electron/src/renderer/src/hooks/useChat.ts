@@ -1,9 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { getRagService, getSyncService } from '@/services'
 import { getAuthToken } from '@/modules/auth'
+import { WORKER_URL } from '@/config/worker-url'
 import type { Message, SourceChunk } from '@/types/conversation'
-
-const WORKER_URL = 'https://api.fidexa.org'
 
 interface UseChatReturn {
   messages: Message[]

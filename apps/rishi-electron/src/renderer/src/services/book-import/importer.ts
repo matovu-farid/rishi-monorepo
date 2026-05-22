@@ -52,6 +52,7 @@ function runUpload(
   bookPath: string,
   format: 'epub' | 'pdf' | 'mobi' | 'azw3',
   fileHash: string,
+  fileSize: number,
   filePath: string,
   emit: (event: ImportProgressEvent) => void
 ): void {
@@ -63,7 +64,12 @@ function runUpload(
 
   async function uploadInner(): Promise<void> {
     try {
-      const { r2Key } = await deps.fileSync.uploadBookFile(bookPath, fileHash, formatForUpload)
+      const { r2Key } = await deps.fileSync.uploadBookFile(
+        bookPath,
+        fileHash,
+        formatForUpload,
+        fileSize
+      )
       await deps.fileSync.booksUpdateFileHash(bookId, fileHash, r2Key)
     } catch (err) {
       emit({
@@ -108,12 +114,20 @@ export async function runImport(
   // query itself — they fall through to parse/save as normal.
   emit({ kind: 'hashing', filePath })
   let fileHash: string
+  let fileSize: number
   let existing
   try {
     fileHash = await withTimeout(
       deps.fileSync.hashBookFile(bookPath),
       deps.config.hashTimeoutMs,
       'Hashing file'
+    )
+    // Worker's /upload-url requires fileSize for storage-cap enforcement;
+    // we also persist it on the local row so the size flows up via sync.
+    fileSize = await withTimeout(
+      deps.fileSync.getFileSize(bookPath),
+      deps.config.hashTimeoutMs,
+      'Reading file size'
     )
     existing = await withTimeout(
       deps.db.findBookByHash(fileHash),
@@ -193,7 +207,8 @@ export async function runImport(
         version: 0,
         kind: bookData.kind,
         cover: bookData.cover,
-        fileHash
+        fileHash,
+        fileSize
       }),
       deps.config.saveTimeoutMs,
       'Saving to library'
@@ -208,7 +223,7 @@ export async function runImport(
   emit({ kind: 'done', filePath, bookId: book.id, format })
 
   // Stage 4: fire-and-forget upload (hash already computed in stage 1.5).
-  runUpload(deps, book.id, bookPath, format, fileHash, filePath, emit)
+  runUpload(deps, book.id, bookPath, format, fileHash, fileSize, filePath, emit)
 
   return { ok: true, bookId: book.id, filePath, format }
 }

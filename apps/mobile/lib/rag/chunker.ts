@@ -315,17 +315,10 @@ function normalizeZipPath(path: string): string {
 }
 
 function base64ToUint8Array(base64: string): Uint8Array {
-  // Both RN and Node 18+ have atob in globalThis; fall back to node:buffer
-  // for older environments just to be safe.
-  if (typeof atob === 'function') {
-    const binary = atob(base64)
-    const bytes = new Uint8Array(binary.length)
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-    return bytes
-  }
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const nodeBuffer = require('node:buffer') as typeof import('node:buffer')
-  return new Uint8Array(nodeBuffer.Buffer.from(base64, 'base64'))
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
 }
 
 /**

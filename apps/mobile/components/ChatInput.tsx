@@ -82,7 +82,7 @@ export function ChatInput({
         )}
 
         <TouchableOpacity
-          testID="chat-send-button"
+          testID="chat-send-btn"
           onPress={showStop ? undefined : handleSend}
           disabled={!canSend && !showStop}
           className={`w-10 h-10 rounded-full items-center justify-center ml-2 ${

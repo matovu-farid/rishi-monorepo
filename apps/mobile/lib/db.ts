@@ -21,11 +21,17 @@ expo.execSync(`
   );
 `)
 
-// Migration: add columns introduced in earlier phases
-try { expo.execSync('ALTER TABLE books ADD COLUMN current_page INTEGER') } catch { /* already exists */ }
+// Migration: add columns introduced in earlier phases. Gate on PRAGMA
+// rather than try/catch — expo-sqlite logs every thrown ALTER as a scary
+// 🟠 FunctionCallException at the native layer even when JS swallows it.
+const existingBookCols = new Set(
+  expo
+    .getAllSync<{ name: string }>('PRAGMA table_info(books)')
+    .map((r) => r.name)
+)
 
-// Migration: add sync columns
-const syncColumns: [string, string][] = [
+const columnsToAdd: [string, string][] = [
+  ['current_page', 'INTEGER'],
   ['file_hash', 'TEXT'],
   ['file_r2_key', 'TEXT'],
   ['cover_r2_key', 'TEXT'],
@@ -34,14 +40,13 @@ const syncColumns: [string, string][] = [
   ['sync_version', 'INTEGER DEFAULT 0'],
   ['is_dirty', 'INTEGER DEFAULT 1'],
   ['is_deleted', 'INTEGER DEFAULT 0'],
+  ['file_size', 'INTEGER DEFAULT 0'],
 ]
 
-for (const [col, type] of syncColumns) {
-  try {
-    expo.execSync(`ALTER TABLE books ADD COLUMN ${col} ${type}`)
-  } catch {
-    // Column already exists -- safe to ignore
-  }
+for (const [col, type] of columnsToAdd) {
+  if (existingBookCols.has(col)) continue
+  const sql = 'ALTER TABLE books ADD COLUMN ' + col + ' ' + type
+  expo.execSync(sql)
 }
 
 // Back-fill: set updated_at from created_at where it was defaulted to 0

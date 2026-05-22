@@ -5,7 +5,7 @@ import type Database from 'better-sqlite3'
  * Uses user_version pragma to track whether the schema has been created.
  * If the database already exists from a previous version, it is dropped and recreated.
  */
-const CURRENT_VERSION = 3
+const CURRENT_VERSION = 4
 
 export function runMigrations(db: Database.Database): number {
   const version = db.pragma('user_version', { simple: true }) as number
@@ -42,6 +42,7 @@ export function runMigrations(db: Database.Database): number {
         file_hash TEXT,
         file_r2_key TEXT,
         cover_r2_key TEXT,
+        file_size INTEGER NOT NULL DEFAULT 0,
         format TEXT NOT NULL DEFAULT 'epub',
         current_cfi TEXT,
         current_page INTEGER,
@@ -165,6 +166,14 @@ export function runMigrations(db: Database.Database): number {
   if (version < 3) {
     db.exec(`ALTER TABLE books ADD COLUMN last_paragraph TEXT`)
     db.pragma('user_version = 3')
+  }
+
+  if (version < 4) {
+    // v4: track on-disk file size per book so it can ride the sync push up
+    // to the cloud. The worker enforces per-user storage + per-file caps on
+    // /upload-url; the cloud books.file_size column mirrors this one.
+    db.exec('ALTER TABLE books ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0')
+    db.pragma('user_version = 4')
   }
 
   return 1

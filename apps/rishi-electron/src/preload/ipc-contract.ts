@@ -120,6 +120,7 @@ export type IpcContract = {
 
   // -- File system -----------------------------------------------------
   'fs:checkFileSize': { args: [path: string, format: string]; returns: FileSizeCheck }
+  'fs:getFileSize': { args: [path: string]; returns: number }
   'fs:unzip': { args: [filePath: string, outDir: string]; returns: string }
   'fs:copyFile': { args: [src: string, dest: string]; returns: void }
   'fs:getAppDataPath': { args: []; returns: string }

@@ -10,6 +10,7 @@ import { useTutorialStore } from '@/lib/stores/tutorialStore'
 import { startSyncTriggers, stopSyncTriggers } from '@/lib/sync/triggers'
 import { IS_E2E_TEST } from '@/app/_layout'
 import { TourProvider } from '@/components/onboarding/TourProvider'
+import { UploadErrorSnackbar } from '@/components/UploadErrorSnackbar'
 
 export default function TabLayout() {
   const colorScheme = useColorScheme()
@@ -57,6 +58,7 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'Library',
+          tabBarButtonTestID: 'tab-library',
           tabBarIcon: ({ color }) => <IconSymbol size={28} name="book.fill" color={color} />,
         }}
       />
@@ -64,6 +66,7 @@ export default function TabLayout() {
         name="chat"
         options={{
           title: 'Chat',
+          tabBarButtonTestID: 'tab-chat',
           tabBarIcon: ({ color }) => <IconSymbol size={28} name="message.fill" color={color} />,
         }}
       />
@@ -71,6 +74,7 @@ export default function TabLayout() {
         name="settings/index"
         options={{
           title: 'Settings',
+          tabBarButtonTestID: 'tab-settings',
           tabBarIcon: ({ color }) => <IconSymbol size={28} name="gearshape.fill" color={color} />,
         }}
       />
@@ -85,6 +89,7 @@ export default function TabLayout() {
       />
     </Tabs>
     <TourProvider />
+    <UploadErrorSnackbar />
     </>
   )
 }

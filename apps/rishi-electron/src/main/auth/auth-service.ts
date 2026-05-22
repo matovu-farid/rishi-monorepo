@@ -28,6 +28,16 @@ class AuthService {
   private listeners: Set<(user: User | null) => void> = new Set()
 
   async hydrate(): Promise<void> {
+    // E2E-only short-circuit: cross-platform-sync test injects a worker-issued
+    // session token via env so Playwright can sign the app in without driving
+    // the OAuth browser dance. Gated on the env var being present — production
+    // builds never see it. Mirror of the worker's `ENABLE_TEST_AUTH` gate and
+    // mobile's `setSessionForE2E` (lib/auth.ts).
+    const e2eToken = process.env.RISHI_E2E_SESSION_TOKEN
+    if (e2eToken && e2eToken.length > 0) {
+      await writeSession(e2eToken)
+    }
+
     const token = await readSession()
     if (!token) return
     this.currentUser = await this.fetchUser(token)

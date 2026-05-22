@@ -28,7 +28,20 @@
  *     that does not exist yet.
  */
 import { describe, it, beforeAll, expect } from '@jest/globals'
+import { execFile as execFileCb } from 'child_process'
+import { promisify } from 'util'
+import * as fs from 'fs'
 import { seedBook, fixtureBookRowTestID } from './helpers/seed-book'
+
+const execFile = promisify(execFileCb)
+const SCREENSHOT_DIR = '/tmp/rishi-epub-debug'
+
+async function captureScreenshot(name: string): Promise<string> {
+  if (!fs.existsSync(SCREENSHOT_DIR)) fs.mkdirSync(SCREENSHOT_DIR, { recursive: true })
+  const dest = `${SCREENSHOT_DIR}/${name}.png`
+  await execFile('xcrun', ['simctl', 'io', 'booted', 'screenshot', dest])
+  return dest
+}
 
 /**
  * Read the accessibilityLabel of a testID-matched element. Detox does
@@ -68,19 +81,26 @@ describe('reader: EPUB — open from library', () => {
       .withTimeout(20000)
   })
 
-  // Skipped: the EPUB reader component (`ReaderContent` in
-  // `app/reader/[id].tsx`) thrashes in an infinite render loop on
-  // mount — ~270 renders per second — which prevents epubjs's
-  // embedded WebView from ever firing onStarted, onReady, or
-  // onLocationChange. As a result, the position indicator never
-  // transitions away from its 'unknown' fallback, making this test
-  // unrunnable until the upstream render loop is fixed.
-  //
-  // Reproduce: add `console.warn('[epub-e2e] render')` at the top of
-  // ReaderContent and tail simulator logs; the log fires ~9000 times
-  // in 30s during a single book open. The root cause is somewhere in
-  // the parent component's state graph (useReader / annotations /
-  // store hooks) — not introduced by the Detox-coverage plan.
+  // Regression guard: prior to memoizing `defaultTheme` (and similar
+  // unstable prop refs) in `ReaderContent`, the epubjs Reader entered
+  // an infinite render loop on mount and never fired onLocationChange.
+  // The position indicator stayed at its fallback 'unknown'.
+  it('EPUB content renders (position indicator transitions away from "unknown")', async () => {
+    let label: string | null = 'unknown'
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < 30000) {
+      label = await readAccessibilityLabel('reader-position-indicator')
+      if (label && label !== 'unknown') break
+      await new Promise((r) => setTimeout(r, 500))
+    }
+    const shot = await captureScreenshot('epub-loaded')
+    console.log(`[reader-epub] screenshot: ${shot}, label: ${String(label)}`)
+    expect(label).not.toBeNull()
+    expect(label).not.toBe('unknown')
+  })
+
+  // Skipped (separate concern): asserting swipe advances the CFI is a
+  // followup once the WebView gesture bridge is stable.
   it.skip('swiping advances to the next page (CFI indicator updates)', async () => {
     let before: string | null = 'unknown'
     const baselineStartedAt = Date.now()

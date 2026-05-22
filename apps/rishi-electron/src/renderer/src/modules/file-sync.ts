@@ -3,14 +3,14 @@
  * Ported from Tauri version, adapted for Electron IPC.
  */
 import { getAuthToken } from './auth'
+import { WORKER_URL } from '@/config/worker-url'
 import type {
   UploadUrlRequest,
   UploadUrlResponse,
   DownloadUrlRequest,
-  DownloadUrlResponse
+  DownloadUrlResponse,
+  UploadUrlError
 } from '@rishi/shared/sync-types'
-
-const WORKER_URL = 'https://api.fidexa.org'
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const token = await getAuthToken()
@@ -32,14 +32,124 @@ export async function hashBookFile(filepath: string): Promise<string> {
 }
 
 /**
+ * Resolve the on-disk size in bytes of a book file. Uses the main process
+ * `fs:getFileSize` IPC (a thin wrapper over `fs.stat`) rather than reading
+ * the whole file just to count bytes. Returns 0 if the IPC fails — callers
+ * pass the value to the worker which treats 0 as "too small to matter" for
+ * its per-file cap, so a failure here doesn't block the upload entirely.
+ */
+export async function getFileSize(filepath: string): Promise<number> {
+  try {
+    return await window.electron.getFileSize(filepath)
+  } catch (err) {
+    console.warn('[file-sync] getFileSize failed', err)
+    return 0
+  }
+}
+
+/**
+ * Thrown when `/api/sync/upload-url` rejects the request because the user
+ * would exceed a server-enforced storage cap. Carries the worker's typed
+ * error shape so the UI layer can render a localized message without
+ * re-parsing the response.
+ *
+ * The worker uses three distinct codes:
+ *   - FILE_TOO_LARGE       (HTTP 413) — single file exceeds per-file cap
+ *   - BOOK_LIMIT_REACHED   (HTTP 507) — user already at max book count
+ *   - STORAGE_LIMIT_REACHED (HTTP 507) — total user storage exhausted
+ */
+export class UploadLimitError extends Error {
+  readonly code: UploadUrlError['code']
+  readonly limit: number
+  readonly current?: number
+
+  constructor(payload: UploadUrlError) {
+    super(formatUploadLimitMessage(payload))
+    this.name = 'UploadLimitError'
+    this.code = payload.code
+    this.limit = payload.limit
+    this.current = payload.current
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
+  }
+  if (bytes >= 1024 * 1024) {
+    return `${Math.round(bytes / (1024 * 1024))} MB`
+  }
+  if (bytes >= 1024) {
+    return `${Math.round(bytes / 1024)} KB`
+  }
+  return `${bytes} B`
+}
+
+/**
+ * Build the user-facing message for an upload-limit rejection. Centralised so
+ * both the thrown Error and any consumer that wants to render a toast can
+ * agree on phrasing.
+ */
+export function formatUploadLimitMessage(payload: UploadUrlError): string {
+  switch (payload.code) {
+    case 'FILE_TOO_LARGE':
+      return `This file is too large to sync. Per-file limit is ${formatBytes(payload.limit)}.`
+    case 'BOOK_LIMIT_REACHED': {
+      const current = payload.current != null ? ` (you're at ${payload.current})` : ''
+      return `You've reached the ${payload.limit}-book sync limit${current}. Remove a book and try again.`
+    }
+    case 'STORAGE_LIMIT_REACHED': {
+      const current = payload.current != null ? ` (${formatBytes(payload.current)} used)` : ''
+      return `Cloud storage is full${current}. Limit is ${formatBytes(payload.limit)}. Remove a book and try again.`
+    }
+    default:
+      return payload.error || 'Upload limit reached'
+  }
+}
+
+/**
+ * Best-effort parser for the worker's typed UploadUrlError body. Returns
+ * null when the response is not the documented shape — callers should then
+ * fall back to a generic HTTP-status error.
+ */
+async function parseUploadLimitError(res: Response): Promise<UploadUrlError | null> {
+  try {
+    const data = (await res.clone().json()) as Partial<UploadUrlError>
+    if (
+      typeof data.code === 'string' &&
+      (data.code === 'FILE_TOO_LARGE' ||
+        data.code === 'BOOK_LIMIT_REACHED' ||
+        data.code === 'STORAGE_LIMIT_REACHED') &&
+      typeof data.limit === 'number'
+    ) {
+      return {
+        error: typeof data.error === 'string' ? data.error : '',
+        code: data.code,
+        limit: data.limit,
+        current: typeof data.current === 'number' ? data.current : undefined
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
  * Upload a book file to R2 via presigned URL.
  * Dedup: if fileHash already in R2, skips upload.
  * Returns the R2 key for storing in the book record.
+ *
+ * The `fileSize` argument is REQUIRED — the worker rejects requests without
+ * it as `FILE_TOO_LARGE`. Callers pass the local-file size in bytes; this
+ * value is also persisted on the book row so it can flow up to the cloud
+ * book record via the normal sync push.
  */
 export async function uploadBookFile(
   filePath: string,
   fileHash: string,
-  format: 'epub' | 'pdf' | 'mobi'
+  format: 'epub' | 'pdf' | 'mobi',
+  fileSize: number
 ): Promise<{ r2Key: string }> {
   const contentTypes: Record<string, string> = {
     epub: 'application/epub+zip',
@@ -57,7 +167,7 @@ export async function uploadBookFile(
     res = await fetch(`${WORKER_URL}/api/sync/upload-url`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ fileHash, contentType } satisfies UploadUrlRequest),
+      body: JSON.stringify({ fileHash, contentType, fileSize } satisfies UploadUrlRequest),
       signal: uploadUrlController.signal
     })
   } catch (err) {
@@ -70,6 +180,13 @@ export async function uploadBookFile(
   }
 
   if (!res.ok) {
+    // 413 (per-file cap) and 507 (per-user storage / book-count cap) carry
+    // the structured UploadUrlError payload. Surface as a typed error so
+    // callers can render code-aware copy without re-parsing the response.
+    if (res.status === 413 || res.status === 507) {
+      const limitErr = await parseUploadLimitError(res)
+      if (limitErr) throw new UploadLimitError(limitErr)
+    }
     throw new Error(`Upload URL request failed: ${res.status} ${res.statusText}`)
   }
 

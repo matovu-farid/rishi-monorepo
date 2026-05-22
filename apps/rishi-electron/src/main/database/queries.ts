@@ -20,6 +20,7 @@ export interface Book {
   fileHash: string | null
   fileR2Key: string | null
   coverR2Key: string | null
+  fileSize: number
   format: string
   currentCfi: string | null
   currentPage: number | null
@@ -99,6 +100,7 @@ function rowToBook(row: Record<string, unknown>): Book {
     fileHash: (row.file_hash as string | null) ?? null,
     fileR2Key: (row.file_r2_key as string | null) ?? null,
     coverR2Key: (row.cover_r2_key as string | null) ?? null,
+    fileSize: (row.file_size as number | null) ?? 0,
     format: row.format as string,
     currentCfi: (row.current_cfi as string | null) ?? null,
     currentPage: (row.current_page as number | null) ?? null,
@@ -234,6 +236,7 @@ export interface BookSaveInput {
   fileHash?: string | null
   fileR2Key?: string | null
   coverR2Key?: string | null
+  fileSize?: number | null
   format?: string | null
   currentCfi?: string | null
   currentPage?: number | null
@@ -273,6 +276,7 @@ export function saveBook(input: BookSaveInput): Book {
     fileHash: input.fileHash ?? null,
     fileR2Key: input.fileR2Key ?? null,
     coverR2Key: input.coverR2Key ?? null,
+    fileSize: input.fileSize ?? 0,
     format,
     currentCfi: input.currentCfi ?? null,
     currentPage: input.currentPage ?? null,
@@ -292,7 +296,7 @@ export function saveBook(input: BookSaveInput): Book {
         publisher = @publisher, filepath = @filepath, location = @location,
         cover_kind = @coverKind, version = @version, sync_id = @syncId,
         file_hash = @fileHash, file_r2_key = @fileR2Key, cover_r2_key = @coverR2Key,
-        format = @format, current_cfi = @currentCfi, current_page = @currentPage,
+        file_size = @fileSize, format = @format, current_cfi = @currentCfi, current_page = @currentPage,
         user_id = @userId, sync_version = @syncVersion, is_dirty = @isDirty,
         is_deleted = @isDeleted
       WHERE id = @id
@@ -311,12 +315,12 @@ export function saveBook(input: BookSaveInput): Book {
     INSERT INTO books (
       kind, cover, title, author, publisher, filepath, location,
       cover_kind, version, sync_id, file_hash, file_r2_key,
-      cover_r2_key, format, current_cfi, current_page, user_id,
+      cover_r2_key, file_size, format, current_cfi, current_page, user_id,
       sync_version, is_dirty, is_deleted
     ) VALUES (
       @kind, @cover, @title, @author, @publisher, @filepath, @location,
       @coverKind, @version, @syncId, @fileHash, @fileR2Key,
-      @coverR2Key, @format, @currentCfi, @currentPage, @userId,
+      @coverR2Key, @fileSize, @format, @currentCfi, @currentPage, @userId,
       @syncVersion, @isDirty, @isDeleted
     )
   `

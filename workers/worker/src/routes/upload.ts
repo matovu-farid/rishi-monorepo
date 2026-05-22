@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, and } from "drizzle-orm";
+import { eq, and, count, sum } from "drizzle-orm";
 import { AwsClient } from "aws4fetch";
 import type { CloudflareBindings } from "../index";
 import { requireAuth } from "../index";
@@ -8,9 +8,26 @@ import { books } from "@rishi/shared/schema";
 import type {
   UploadUrlRequest,
   UploadUrlResponse,
+  UploadUrlError,
   DownloadUrlRequest,
   DownloadUrlResponse,
 } from "@rishi/shared/sync-types";
+
+// Defaults applied when the corresponding wrangler var is unset.
+const DEFAULT_BOOK_MAX_FILE_BYTES = 838_860_800; // 800 MB
+const DEFAULT_BOOK_MAX_PER_USER = 500;
+const DEFAULT_BOOK_MAX_USER_BYTES = 10_737_418_240; // 10 GB
+
+function getLimits(env: CloudflareBindings) {
+  return {
+    perFile:
+      Number(env.BOOK_MAX_FILE_BYTES) || DEFAULT_BOOK_MAX_FILE_BYTES,
+    perUserCount:
+      Number(env.BOOK_MAX_PER_USER) || DEFAULT_BOOK_MAX_PER_USER,
+    perUserBytes:
+      Number(env.BOOK_MAX_USER_BYTES) || DEFAULT_BOOK_MAX_USER_BYTES,
+  };
+}
 
 export const uploadRoutes = new Hono<{
   Bindings: CloudflareBindings;
@@ -59,6 +76,26 @@ uploadRoutes.post("/upload-url", requireAuth, async (c) => {
     return c.json({ error: "Invalid fileHash format" }, 400);
   }
 
+  const limits = getLimits(c.env);
+
+  // ─── 1. Per-file size cap ────────────────────────────────────────────────
+  // Enforced even on the dedup path: the client could be lying about the file
+  // backing this hash, and we don't want oversized blobs taking up R2 quota
+  // for any user.
+  if (
+    typeof body.fileSize !== "number" ||
+    !Number.isFinite(body.fileSize) ||
+    body.fileSize <= 0 ||
+    body.fileSize > limits.perFile
+  ) {
+    const err: UploadUrlError = {
+      error: `File exceeds per-file size limit of ${limits.perFile} bytes`,
+      code: "FILE_TOO_LARGE",
+      limit: limits.perFile,
+    };
+    return c.json(err, 413);
+  }
+
   const userId = c.get("userId");
   const db = createDb(c.env.DB);
 
@@ -70,11 +107,47 @@ uploadRoutes.post("/upload-url", requireAuth, async (c) => {
     .get();
 
   if (existing?.fileR2Key) {
+    // Dedup hit — the user already has this file. We skip the count + storage
+    // checks because the upload is a no-op (no new R2 object will be written).
     const response: UploadUrlResponse = {
       exists: true,
       r2Key: existing.fileR2Key,
     };
     return c.json(response);
+  }
+
+  // ─── 2. Per-user book count cap ─────────────────────────────────────────
+  const countResult = await db
+    .select({ n: count() })
+    .from(books)
+    .where(and(eq(books.userId, userId), eq(books.isDeleted, false)))
+    .get();
+  const currentCount = Number(countResult?.n ?? 0);
+  if (currentCount >= limits.perUserCount) {
+    const err: UploadUrlError = {
+      error: `User has reached the maximum number of books (${limits.perUserCount})`,
+      code: "BOOK_LIMIT_REACHED",
+      limit: limits.perUserCount,
+      current: currentCount,
+    };
+    return c.json(err, 507);
+  }
+
+  // ─── 3. Per-user storage bytes cap ──────────────────────────────────────
+  const sumResult = await db
+    .select({ total: sum(books.fileSize) })
+    .from(books)
+    .where(and(eq(books.userId, userId), eq(books.isDeleted, false)))
+    .get();
+  const currentBytes = Number(sumResult?.total ?? 0);
+  if (currentBytes + body.fileSize > limits.perUserBytes) {
+    const err: UploadUrlError = {
+      error: `User would exceed storage limit of ${limits.perUserBytes} bytes`,
+      code: "STORAGE_LIMIT_REACHED",
+      limit: limits.perUserBytes,
+      current: currentBytes,
+    };
+    return c.json(err, 507);
   }
 
   // Generate R2 key and presigned PUT URL

@@ -1,0 +1,118 @@
+11:52:05.658 detox[75050] B jest --config e2e/jest.config.js e2e/reader-epub.test.ts e2e/reader-pdf.test.ts e2e/reader-mobi.test.ts
+11:52:05.660 detox[75050] i (node:75050) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+11:52:12.847 detox[75052] i reader-mobi.test.ts is assigned to D9652BCD-7467-4C8B-A2B1-C9CE67870F40 (iPhone 17)
+11:52:14.387 detox[75052] i com.rishi.mobile launched. To watch simulator logs, run:
+        /usr/bin/xcrun simctl spawn D9652BCD-7467-4C8B-A2B1-C9CE67870F40 log stream --level debug --style compact --predicate 'process == "rishimobile"'
+11:52:17.773 detox[75052] i com.rishi.mobile launched. To watch simulator logs, run:
+        /usr/bin/xcrun simctl spawn D9652BCD-7467-4C8B-A2B1-C9CE67870F40 log stream --level debug --style compact --predicate 'process == "rishimobile"'
+11:52:24.264 detox[75052] i reader: MOBI — open from library: seeded MOBI appears as a BookRow in the library
+11:52:24.348 detox[75052] i reader: MOBI — open from library: seeded MOBI appears as a BookRow in the library [OK]
+11:52:24.349 detox[75052] i reader: MOBI — open from library: tapping the BookRow navigates into the MOBI reader route
+11:52:24.651 detox[75052] i reader: MOBI — open from library: tapping the BookRow navigates into the MOBI reader route [OK]
+11:52:24.652 detox[75052] i reader: MOBI — open from library: tapping next-chapter advances the position indicator
+11:52:24.797 detox[75052] i reader: MOBI — open from library: tapping next-chapter advances the position indicator [FAIL]
+
+FAIL e2e/reader-mobi.test.ts (18.46 s)
+  reader: MOBI — open from library
+    ✓ seeded MOBI appears as a BookRow in the library (82 ms)
+    ✓ tapping the BookRow navigates into the MOBI reader route (302 ms)
+    ✕ tapping next-chapter advances the position indicator (144 ms)
+
+  ● reader: MOBI — open from library › tapping next-chapter advances the position indicator
+
+    Test Failed: View is not hittable at its visible point. Error: View is not visible around point.
+    - view point: {201, 437}
+    - visible bounds: {{0, 0}, {402, 874}}
+    - view bounds: {{0, 0}, {402, 874}}
+    ---
+    Error: Error Domain=DetoxErrorDomain Code=0 "View “<RCTViewComponentView: 0x10799ece0>” is not visible: View does not pass visibility percent threshold (100)" UserInfo={NSLocalizedDescription=View “<RCTViewComponentView: 0x10799ece0>” is not visible: View does not pass visibility percent threshold (100)}
+
+      57 |
+      58 |     // Reveal the toolbar (single tap on the reader root toggles it).
+    > 59 |     await element(by.id('mobi-reader')).tap()
+         |                                         ^
+      60 |
+      61 |     // Wait briefly for the toolbar animation; toolbar mounts the next
+      62 |     // button synchronously once toolbarVisible flips true.
+
+      at Object.<anonymous> (e2e/reader-mobi.test.ts:59:41)
+
+11:52:28.121 detox[75052] i reader-pdf.test.ts is assigned to D9652BCD-7467-4C8B-A2B1-C9CE67870F40 (iPhone 17)
+11:52:29.651 detox[75052] i com.rishi.mobile launched. To watch simulator logs, run:
+        /usr/bin/xcrun simctl spawn D9652BCD-7467-4C8B-A2B1-C9CE67870F40 log stream --level debug --style compact --predicate 'process == "rishimobile"'
+11:52:33.047 detox[75052] i com.rishi.mobile launched. To watch simulator logs, run:
+        /usr/bin/xcrun simctl spawn D9652BCD-7467-4C8B-A2B1-C9CE67870F40 log stream --level debug --style compact --predicate 'process == "rishimobile"'
+11:52:39.490 detox[75052] i reader: PDF — open from library: seeded PDF appears as a BookRow in the library
+11:52:39.569 detox[75052] i reader: PDF — open from library: seeded PDF appears as a BookRow in the library [OK]
+11:52:39.570 detox[75052] i reader: PDF — open from library: tapping the BookRow navigates into the PDF reader route
+11:52:39.888 detox[75052] i reader: PDF — open from library: tapping the BookRow navigates into the PDF reader route [OK]
+11:52:39.889 detox[75052] i reader: PDF — open from library: swiping advances to the next page (position indicator updates)
+11:52:39.992 detox[75052] i reader: PDF — open from library: swiping advances to the next page (position indicator updates) [FAIL]
+
+FAIL e2e/reader-pdf.test.ts (15.164 s)
+  reader: PDF — open from library
+    ✓ seeded PDF appears as a BookRow in the library (78 ms)
+    ✓ tapping the BookRow navigates into the PDF reader route (317 ms)
+    ✕ swiping advances to the next page (position indicator updates) (103 ms)
+
+  ● reader: PDF — open from library › swiping advances to the next page (position indicator updates)
+
+    Test Failed: View is not hittable at its visible point. Error: View is not visible around point.
+    - view point: {361.80000000000001, 451}
+    - visible bounds: {{0, 0}, {402, 874}}
+    - view bounds: {{0, 0}, {402, 874}}
+    ---
+    Error: Error Domain=DetoxErrorDomain Code=0 "View “<RCTViewComponentView: 0x10967d4c0>” is not visible: View does not pass visibility percent threshold (100)" UserInfo={NSLocalizedDescription=View “<RCTViewComponentView: 0x10967d4c0>” is not visible: View does not pass visibility percent threshold (100)}
+
+      64 |     // Swipe left on the reader root to advance one page. react-native-pdf
+      65 |     // natively handles horizontal swipes for paged navigation.
+    > 66 |     await element(by.id('pdf-reader')).swipe('left', 'fast', 0.8)
+         |                                        ^
+      67 |
+      68 |     // The page indicator should update within ~3s. We retry-read it a
+      69 |     // few times rather than relying on Detox `waitFor` matchers,
+
+      at Object.<anonymous> (e2e/reader-pdf.test.ts:66:40)
+
+11:52:43.284 detox[75052] i reader-epub.test.ts is assigned to D9652BCD-7467-4C8B-A2B1-C9CE67870F40 (iPhone 17)
+11:52:44.828 detox[75052] i com.rishi.mobile launched. To watch simulator logs, run:
+        /usr/bin/xcrun simctl spawn D9652BCD-7467-4C8B-A2B1-C9CE67870F40 log stream --level debug --style compact --predicate 'process == "rishimobile"'
+11:52:48.205 detox[75052] i com.rishi.mobile launched. To watch simulator logs, run:
+        /usr/bin/xcrun simctl spawn D9652BCD-7467-4C8B-A2B1-C9CE67870F40 log stream --level debug --style compact --predicate 'process == "rishimobile"'
+11:52:54.669 detox[75052] i reader: EPUB — open from library: seeded EPUB appears as a BookRow in the library
+11:52:54.746 detox[75052] i reader: EPUB — open from library: seeded EPUB appears as a BookRow in the library [OK]
+11:52:54.747 detox[75052] i reader: EPUB — open from library: tapping the BookRow navigates into the reader route
+11:52:55.287 detox[75052] i reader: EPUB — open from library: tapping the BookRow navigates into the reader route [OK]
+11:52:55.287 detox[75052] i reader: EPUB — open from library: swiping advances to the next page (CFI indicator updates)
+11:52:55.306 detox[75052] i reader: EPUB — open from library: swiping advances to the next page (CFI indicator updates) [FAIL]
+
+FAIL e2e/reader-epub.test.ts (15.307 s)
+  reader: EPUB — open from library
+    ✓ seeded EPUB appears as a BookRow in the library (77 ms)
+    ✓ tapping the BookRow navigates into the reader route (539 ms)
+    ✕ swiping advances to the next page (CFI indicator updates) (18 ms)
+
+  ● reader: EPUB — open from library › swiping advances to the next page (CFI indicator updates)
+
+    expect(received).not.toBe(expected) // Object.is equality
+
+    Expected: not "unknown"
+
+      75 |     const before = await readAccessibilityLabel('reader-position-indicator')
+      76 |     expect(before).not.toBeNull()
+    > 77 |     expect(before).not.toBe('unknown')
+         |                        ^
+      78 |
+      79 |     await element(by.id('reader-epub')).swipe('left', 'fast', 0.8)
+      80 |
+
+      at Object.<anonymous> (e2e/reader-epub.test.ts:77:24)
+
+Test Suites: 3 failed, 3 total
+Tests:       3 failed, 6 passed, 9 total
+Snapshots:   0 total
+Time:        49.057 s, estimated 50 s
+Ran all test suites matching e2e/reader-epub.test.ts|e2e/reader-pdf.test.ts|e2e/reader-mobi.test.ts.
+11:52:55.467 detox[75050] E Command failed with exit code = 1:
+jest --config e2e/jest.config.js e2e/reader-epub.test.ts e2e/reader-pdf.test.ts e2e/reader-mobi.test.ts

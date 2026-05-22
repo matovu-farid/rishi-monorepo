@@ -21,7 +21,7 @@ import {
 export type { DiscoveredBook, ImportResult, ImportSuccess, PageDataInsertable, ScanProgress } from './book-import'
 import { createSyncEngine } from '@rishi/shared/sync-engine'
 import { embedSingleText, embedWithFallback } from '@/modules/embed-fallback'
-import { hashBookFile, uploadBookFile } from '@/modules/file-sync'
+import { hashBookFile, uploadBookFile, getFileSize } from '@/modules/file-sync'
 import { copyBookToAppData } from '@/modules/books'
 import { getAuthToken } from '@/modules/auth'
 import { buildRealtimeAgent } from '@/modules/buildRealtimeAgent'
@@ -32,6 +32,7 @@ import { RealtimeSession } from '@openai/agents/realtime'
 import { OpenAIRealtimeWebRTC } from '@openai/agents-realtime'
 import config from '@/config.json'
 import { usePrefsStore } from '@/stores/prefsStore'
+import { WORKER_URL } from '@/config/worker-url'
 
 let _connectivity: ConnectivityService | null = null
 let _connectivityOverride: ConnectivityService | null = null
@@ -163,7 +164,7 @@ export function getSyncService(): SyncService {
       dispatchEvent: (event) => window.dispatchEvent(event)
     },
     config: {
-      workerUrl: 'https://api.fidexa.org',
+      workerUrl: WORKER_URL,
       intervalMs: 5 * 60 * 1000,
       debounceMs: 2000,
       requestTimeoutMs: 30_000
@@ -210,7 +211,8 @@ export function getBookImportService(): BookImportService {
         hashBookFile,
         uploadBookFile,
         booksUpdateFileHash: (bookId, hash, r2Key) =>
-          window.electron.booksUpdateFileHash(bookId, hash, r2Key)
+          window.electron.booksUpdateFileHash(bookId, hash, r2Key),
+        getFileSize
       },
       rag: getRagService(),
       embed: embedWithFallback,

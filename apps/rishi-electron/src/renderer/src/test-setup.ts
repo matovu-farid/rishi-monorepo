@@ -27,6 +27,7 @@ const mockElectronAPI = {
   getMobiChapterCount: vi.fn().mockResolvedValue(0),
   getMobiText: vi.fn().mockResolvedValue([]),
   checkFileSize: vi.fn().mockResolvedValue('ok'),
+  getFileSize: vi.fn().mockResolvedValue(0),
   unzip: vi.fn().mockResolvedValue(''),
   copyFile: vi.fn().mockResolvedValue(undefined),
   getAppDataPath: vi.fn().mockResolvedValue('/tmp/test-app-data'),

@@ -26,6 +26,10 @@ export interface PullResponse {
 export interface UploadUrlRequest {
   fileHash: string;
   contentType: string;
+  // Size in bytes of the file the client intends to upload. Required so the
+  // worker can enforce per-file and per-user storage caps before issuing a
+  // presigned PUT URL.
+  fileSize: number;
 }
 
 export interface UploadUrlResponse {
@@ -33,6 +37,16 @@ export interface UploadUrlResponse {
   r2Key: string;
   exists: boolean;
   expiresIn?: number;
+}
+
+// Typed error shape the worker returns when /upload-url denies the request
+// because the user is over (or would go over) one of the storage caps.
+// Clients should switch on `code` to render a localized message.
+export interface UploadUrlError {
+  error: string;
+  code: 'FILE_TOO_LARGE' | 'BOOK_LIMIT_REACHED' | 'STORAGE_LIMIT_REACHED';
+  limit: number;
+  current?: number;
 }
 
 export interface DownloadUrlRequest {

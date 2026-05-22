@@ -1,0 +1,4 @@
+node_modules/
+.last-user.json
+test-results/
+playwright-report/

@@ -14,7 +14,9 @@ export function createAuth(env: CloudflareBindings) {
     secret: env.BETTER_AUTH_SECRET,
     baseURL: env.PUBLIC_API_URL,
     trustedOrigins: [env.PUBLIC_WEB_URL, "rishi-electron://", "rishimobile://"],
-    emailAndPassword: { enabled: false },
+    // Email/password is only used by the /test/sign-in route, gated on
+    // ENABLE_TEST_AUTH (dev/staging only). Production keeps OAuth-only.
+    emailAndPassword: { enabled: env.ENABLE_TEST_AUTH === "true" },
     user: {
       deleteUser: { enabled: true },
     },

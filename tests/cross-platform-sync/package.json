@@ -1,0 +1,23 @@
+{
+  "name": "rishi-cross-platform-sync-tests",
+  "version": "0.0.0",
+  "private": true,
+  "description": "End-to-end cross-platform sync test: proves a book imported on Electron shows up on Mobile after both sign in as the same user.",
+  "scripts": {
+    "run": "tsx src/run.ts",
+    "run:desktop-only": "tsx src/run.ts --skip-mobile",
+    "run:mobile-only": "tsx src/run.ts --skip-desktop",
+    "playwright": "playwright test --config=playwright/playwright.config.ts",
+    "detox:build": "cd ../../apps/mobile && EXPO_PUBLIC_E2E_TEST=true EXPO_PUBLIC_WORKER_URL=$EXPO_PUBLIC_WORKER_URL pnpm e2e:build",
+    "detox:test": "cd ../../apps/mobile && pnpm exec detox test --configuration ios.sim.debug ../../tests/cross-platform-sync/detox/mobile-sync.test.ts"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.59.1",
+    "nanoid": "^5.0.0",
+    "tsx": "^4.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  }
+}

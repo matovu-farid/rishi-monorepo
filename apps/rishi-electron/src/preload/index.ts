@@ -44,6 +44,7 @@ const electronAPI: ElectronAPI = {
 
   // File system
   checkFileSize: (path, format) => invoke('fs:checkFileSize', path, format),
+  getFileSize: (path) => invoke('fs:getFileSize', path),
   unzip: (filePath, outDir) => invoke('fs:unzip', filePath, outDir),
   copyFile: (src, dest) => invoke('fs:copyFile', src, dest),
   getAppDataPath: () => invoke('fs:getAppDataPath'),

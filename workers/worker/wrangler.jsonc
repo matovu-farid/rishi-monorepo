@@ -33,7 +33,16 @@
   ],
   "vars": {
     "PUBLIC_API_URL": "https://api.fidexa.org",
-    "PUBLIC_WEB_URL": "https://rishi.fidexa.org"
+    "PUBLIC_WEB_URL": "https://rishi.fidexa.org",
+    // ─── /api/sync/upload-url storage caps ───────────────────────────────
+    // wrangler passes numeric vars as strings; defaults in upload.ts kick in
+    // if these are unset. Override per-environment as needed.
+    "BOOK_MAX_FILE_BYTES": "838860800",   // 800 MB per uploaded file
+    "BOOK_MAX_PER_USER": "500",            // count of non-deleted books / user
+    "BOOK_MAX_USER_BYTES": "10737418240"   // 10 GB total per user (sum of fileSize)
+    // ENABLE_TEST_AUTH + TEST_AUTH_SECRET are intentionally NOT defined here.
+    // Set them ONLY in dev/staging via `wrangler secret put` to keep prod
+    // hard-gated by absence.
   },
   "routes": [
     { "pattern": "api.fidexa.org", "custom_domain": true }

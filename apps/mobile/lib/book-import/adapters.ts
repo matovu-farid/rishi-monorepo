@@ -22,7 +22,8 @@ import { extractEpubCover } from "@rishi/shared/formats/epub-cover";
 import { extractMobiCover } from "@rishi/shared/formats/mobi";
 import { books } from "@rishi/shared/schema";
 import { db } from "@/lib/db";
-import { hashBookFile, uploadBookFile } from "@/lib/sync/file-sync";
+import { hashBookFile, uploadBookFile, UploadLimitError } from "@/lib/sync/file-sync";
+import { useUploadErrorStore } from "@/lib/sync/upload-error-store";
 import { triggerSyncOnWrite } from "@/lib/sync/triggers";
 import { getChunks } from "@/lib/rag/chunker";
 import { embedBatch, isEmbeddingReady } from "@/lib/rag/embedder";
@@ -215,15 +216,34 @@ export function createMobileUploadPort(): UploadPort<string> {
       const r2Format: "epub" | "pdf" | "mobi" | "djvu" =
         format === "azw3" ? "mobi" : (format as "epub" | "pdf" | "mobi" | "djvu");
       const fileHash = await hashBookFile(bookPath);
+      // Compute file size in bytes — required by the worker for storage-cap
+      // enforcement (per-file 800 MB, per-user 10 GB / 500 books). Persist
+      // onto the local row so it pushes to D1 via the next sync window.
+      const fileSize = new File(bookPath).size ?? 0;
       db.update(books)
-        .set({ fileHash, isDirty: true })
+        .set({ fileHash, fileSize, isDirty: true })
         .where(eq(books.id, bookId))
         .run();
-      const { r2Key } = await uploadBookFile(bookPath, fileHash, r2Format);
-      db.update(books)
-        .set({ fileR2Key: r2Key, isDirty: true })
-        .where(eq(books.id, bookId))
-        .run();
+      try {
+        const { r2Key } = await uploadBookFile(bookPath, fileHash, r2Format, fileSize);
+        db.update(books)
+          .set({ fileR2Key: r2Key, isDirty: true })
+          .where(eq(books.id, bookId))
+          .run();
+      } catch (err) {
+        // Storage-cap rejection — surface the typed error to the UI via the
+        // global upload-error store so the snackbar can render. The book row
+        // still exists locally (the user can read it on this device); we
+        // simply leave fileR2Key unset so sync won't try to round-trip it.
+        if (err instanceof UploadLimitError) {
+          useUploadErrorStore.getState().show({
+            code: err.code,
+            limit: err.limit,
+            current: err.current,
+          });
+        }
+        throw err;
+      }
     },
   };
 }
