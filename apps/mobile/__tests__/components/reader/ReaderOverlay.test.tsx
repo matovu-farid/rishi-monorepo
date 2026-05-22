@@ -87,6 +87,21 @@ jest.mock('react-native-reanimated', () => {
   }
 })
 
+// ── ReaderShellContext — provides `bottomBarVisible` so the overlay can
+//    reflow its floating widgets when the reader bottom bar shows/hides
+//    (P1-M). We expose the real React.Context so tests can wrap the tree
+//    in a Provider to exercise both visibility states. ─────────────────────
+jest.mock('@/components/reader/ReaderShell', () => {
+  const React = require('react')
+  return {
+    __esModule: true,
+    ReaderShellContext: React.createContext({
+      bottomBarVisible: false,
+      toggleToolbar: () => undefined,
+    }),
+  }
+})
+
 // ── Stub the 3 child widgets so we can assert on the props ReaderOverlay
 //    passes them, without re-rendering each widget. Virtual so the mock
 //    path works even before the source modules land. ────────────────────────
@@ -378,6 +393,76 @@ describe('ReaderOverlay (mobile)', () => {
       tree = TestRenderer.create(<ReaderOverlay bookId="b1" />)
     })
     expect(findByTestID(tree, 'voice-chat-launcher-stub')).not.toBeNull()
+  })
+
+  it('uses tokens.zIndex.overlayChrome for AIChatOrb and VoiceChatLauncher (P1-M)', () => {
+    // P1-M: floating widgets must not hardcode z-index values; they should
+    // pull from the shared scale so they always stay above the toolbar
+    // (zIndex.toolbar=10) and below sheets (zIndex.sheet=30).
+    const { zIndex } = require('@/lib/theme/tokens') as {
+      zIndex: { toolbar: number; overlayChrome: number; sheet: number }
+    }
+    chatState.isChatting = true
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<ReaderOverlay bookId="b1" />)
+    })
+    const orb = findByTestID(tree, 'ai-chat-orb-stub')
+    expect(orb).not.toBeNull()
+    expect((orb!.props as { style?: { zIndex?: number } }).style?.zIndex).toBe(
+      zIndex.overlayChrome,
+    )
+    const launcher = findByTestID(tree, 'voice-chat-launcher-stub')
+    expect(launcher).not.toBeNull()
+    expect(
+      (launcher!.props as { style?: { zIndex?: number } }).style?.zIndex,
+    ).toBe(zIndex.overlayChrome)
+  })
+
+  it('reflows VoiceChatLauncher offset against bottomBarVisible (P1-M)', () => {
+    // P1-M: the launcher must move up when the reader bottom bar is
+    // visible — otherwise the bar (zIndex 10) renders directly under the
+    // launcher (zIndex 20) and the two overlap visually. We exercise the
+    // reflow by toggling the ReaderShellContext value the overlay reads.
+    const ReaderShell = require('@/components/reader/ReaderShell') as {
+      ReaderShellContext: React.Context<{
+        bottomBarVisible: boolean
+        toggleToolbar: () => void
+      }>
+    }
+    const Provider = ReaderShell.ReaderShellContext.Provider
+    chatState.isChatting = false
+
+    let treeHidden!: TestRenderer.ReactTestRenderer
+    act(() => {
+      treeHidden = TestRenderer.create(
+        <Provider value={{ bottomBarVisible: false, toggleToolbar: () => undefined }}>
+          <ReaderOverlay bookId="b1" />
+        </Provider>,
+      )
+    })
+    const launcherHidden = findByTestID(treeHidden, 'voice-chat-launcher-stub')
+    const bottomHidden = (
+      launcherHidden!.props as { style?: { bottom?: number } }
+    ).style?.bottom
+    expect(typeof bottomHidden).toBe('number')
+
+    let treeVisible!: TestRenderer.ReactTestRenderer
+    act(() => {
+      treeVisible = TestRenderer.create(
+        <Provider value={{ bottomBarVisible: true, toggleToolbar: () => undefined }}>
+          <ReaderOverlay bookId="b1" />
+        </Provider>,
+      )
+    })
+    const launcherVisible = findByTestID(treeVisible, 'voice-chat-launcher-stub')
+    const bottomVisible = (
+      launcherVisible!.props as { style?: { bottom?: number } }
+    ).style?.bottom
+    expect(typeof bottomVisible).toBe('number')
+    // When the bar is visible, the launcher must sit higher (larger bottom
+    // offset) so it doesn't sit underneath the toolbar.
+    expect(bottomVisible).toBeGreaterThan(bottomHidden as number)
   })
 
   it('forwards onChatToggle to AIChatOrb as the onPress prop', () => {

@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react'
+import React, { useCallback, useContext } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
@@ -7,12 +7,14 @@ import { VoiceChatLauncher } from '@/components/chat/VoiceChatLauncher'
 import { LockChip } from '@/components/auth/LockChip'
 import { MiniPlayer } from '@/components/player/MiniPlayer'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
+import { ReaderShellContext } from '@/components/reader/ReaderShell'
 import { useAuthStore } from '@/lib/stores/authStore'
 import {
   useChatStore,
   type ActivationContext,
 } from '@/lib/stores/chatStore'
 import { usePlayerStore } from '@/lib/stores/playerStore'
+import { zIndex } from '@/lib/theme/tokens'
 import { stringToNumberID } from '@rishi/shared/lib/stringToNumberID'
 
 export interface ReaderOverlayProps {
@@ -30,6 +32,11 @@ export interface ReaderOverlayProps {
 }
 
 const FLOATING_BOTTOM_OFFSET = 112
+// P1-M — height of the reader bottom bar (matches `ReaderBottomBar`'s
+// Toolbar). When the bar is visible the floating widgets must shift up by
+// this amount so they don't sit underneath the toolbar (which renders at
+// `zIndex.toolbar` directly below `zIndex.overlayChrome`).
+const READER_BOTTOM_BAR_HEIGHT = 44
 
 /**
  * Pure orchestrator. Reads (isChatting, voiceState, playingState) and
@@ -43,6 +50,11 @@ export function ReaderOverlay({
   testID,
 }: ReaderOverlayProps): React.JSX.Element {
   const insets = useSafeAreaInsets()
+  // P1-M — reflow against the reader's bottom bar so the orb + launcher
+  // never overlap the toolbar. MiniPlayer already consumes this; we extend
+  // the pattern to the chat orb and voice launcher.
+  const shellContext = useContext(ReaderShellContext)
+  const bottomBarVisible = shellContext?.bottomBarVisible ?? false
   const isChatting = useChatStore((s) => s.isChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
   const voiceState = useChatStore((s) => s.voiceState)
@@ -79,6 +91,14 @@ export function ReaderOverlay({
     })
   }, [requireVoiceChat, startChat, bookId, getActivationContext])
 
+  // P1-M — single source of truth for floating-widget bottom offset so the
+  // orb, launcher, and the lock-chip overlay stay in lockstep when the
+  // reader bottom bar comes and goes.
+  const floatingBottom =
+    insets.bottom +
+    FLOATING_BOTTOM_OFFSET +
+    (bottomBarVisible ? READER_BOTTOM_BAR_HEIGHT : 0)
+
   return (
     <View
       testID={testID ?? 'reader-overlay'}
@@ -91,9 +111,9 @@ export function ReaderOverlay({
           onPress={onChatToggle ?? (() => undefined)}
           style={{
             position: 'absolute',
-            bottom: insets.bottom + FLOATING_BOTTOM_OFFSET,
+            bottom: floatingBottom,
             left: 32,
-            zIndex: 20,
+            zIndex: zIndex.overlayChrome,
           }}
         />
       ) : null}
@@ -106,9 +126,9 @@ export function ReaderOverlay({
             onStop={stopConversation}
             style={{
               position: 'absolute',
-              bottom: insets.bottom + FLOATING_BOTTOM_OFFSET,
+              bottom: floatingBottom,
               right: 32,
-              zIndex: 20,
+              zIndex: zIndex.overlayChrome,
             }}
           />
           {/*
@@ -122,9 +142,9 @@ export function ReaderOverlay({
               pointerEvents="none"
               style={{
                 position: 'absolute',
-                bottom: insets.bottom + FLOATING_BOTTOM_OFFSET + 36,
+                bottom: floatingBottom + 36,
                 right: 28,
-                zIndex: 21,
+                zIndex: zIndex.overlayChrome + 1,
               }}
             >
               <LockChip testID="voice-chat-lock-chip" />

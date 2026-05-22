@@ -10,10 +10,13 @@ export {
   radius,
   motion,
   shadow,
+  zIndex,
   type Spacing,
   type Radius,
   type Motion,
   type Shadow,
+  type ZIndex,
   type SpacingKey,
   type RadiusKey,
+  type ZIndexKey,
 } from './tokens'

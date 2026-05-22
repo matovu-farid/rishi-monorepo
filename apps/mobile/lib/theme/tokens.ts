@@ -44,6 +44,16 @@ export const motion = {
   },
 } as const
 
+// P1-M — shared z-index scale for the reader chrome stack. Inline values
+// drifted across files (orb/launcher at 20, bottom bar at 10, sheets ad-hoc)
+// and produced overlap regressions. Consumers must pull from this scale so
+// the layering invariant `toolbar < overlayChrome < sheet` holds globally.
+export const zIndex = {
+  toolbar: 10,
+  overlayChrome: 20,
+  sheet: 30,
+} as const
+
 export const shadow = {
   flat: {
     shadowColor: '#000',
@@ -79,5 +89,7 @@ export type Spacing = typeof spacing
 export type Radius = typeof radius
 export type Motion = typeof motion
 export type Shadow = typeof shadow
+export type ZIndex = typeof zIndex
 export type SpacingKey = keyof Spacing
 export type RadiusKey = keyof Radius
+export type ZIndexKey = keyof ZIndex

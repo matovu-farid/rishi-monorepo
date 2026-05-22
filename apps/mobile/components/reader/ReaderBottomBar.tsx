@@ -15,6 +15,7 @@ import { IconButton } from '@/components/ui/IconButton'
 import { LockChip } from '@/components/auth/LockChip'
 import { Toolbar } from '@/components/ui/Toolbar'
 import { useTheme } from '@/lib/theme'
+import { zIndex } from '@/lib/theme/tokens'
 import { ReaderProgressPill, type ReaderProgress } from './ReaderProgressPill'
 import type { RealtimeStatus } from '@/lib/realtime/types'
 
@@ -128,7 +129,8 @@ export function ReaderBottomBar({
           bottom: 0,
           left: 0,
           right: 0,
-          zIndex: 10,
+          // P1-M — shared token; toolbar must stay below overlayChrome (20).
+          zIndex: zIndex.toolbar,
         },
         animatedStyle,
       ]}

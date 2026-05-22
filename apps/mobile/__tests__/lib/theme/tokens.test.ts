@@ -28,7 +28,7 @@ jest.mock('react-native', () => ({
 }))
 
 import { colorsLight, colorsDark } from '@/lib/theme/colors'
-import { spacing, radius, motion, shadow } from '@/lib/theme/tokens'
+import { spacing, radius, motion, shadow, zIndex } from '@/lib/theme/tokens'
 import { typography } from '@/lib/theme/typography'
 
 describe('colors (light/dark parity)', () => {
@@ -223,6 +223,29 @@ describe('motion vocabulary', () => {
     // `motion.duration.fast` so non-Reanimated consumers can read the
     // raw number without spelunking through a spring config.
     expect(motion.duration.fast).toBe(200)
+  })
+})
+
+describe('zIndex tokens (P1-M — floating-widget layering)', () => {
+  // P1-M: orb + voice launcher (overlayChrome) and reader bottom bar
+  // (toolbar) had inline z-index values that drifted. The shared scale
+  // pins them so reader chrome layers cleanly:
+  //   toolbar (10) < overlayChrome (20) < sheet (30)
+  it('exposes toolbar, overlayChrome, and sheet keys', () => {
+    expect(zIndex).toHaveProperty('toolbar')
+    expect(zIndex).toHaveProperty('overlayChrome')
+    expect(zIndex).toHaveProperty('sheet')
+  })
+
+  it('uses the documented numeric layering', () => {
+    expect(zIndex.toolbar).toBe(10)
+    expect(zIndex.overlayChrome).toBe(20)
+    expect(zIndex.sheet).toBe(30)
+  })
+
+  it('is monotonically increasing toolbar < overlayChrome < sheet', () => {
+    expect(zIndex.toolbar).toBeLessThan(zIndex.overlayChrome)
+    expect(zIndex.overlayChrome).toBeLessThan(zIndex.sheet)
   })
 })
 

@@ -31,7 +31,7 @@ import Ionicons from '@expo/vector-icons/Ionicons'
 import * as Haptics from 'expo-haptics'
 
 import { ReaderShellContext } from '@/components/reader/ReaderShell'
-import { shadow, useTheme } from '@/lib/theme'
+import { shadow, useTheme, zIndex } from '@/lib/theme'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 
 export interface MiniPlayerProps {
@@ -327,7 +327,8 @@ export function MiniPlayer({
           position: 'absolute',
           bottom: bottomOffset,
           right: 16,
-          zIndex: 20,
+          // P1-M — shared scale; floats above toolbar (10), below sheets (30).
+          zIndex: zIndex.overlayChrome,
         },
         wrapperStyle,
       ]}
