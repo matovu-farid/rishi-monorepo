@@ -119,6 +119,15 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
     router.push('/(auth)/sign-in')
   }, [closeGate, router])
 
+  const handleCreateAccount = useCallback(() => {
+    // P1-Q — route to the sign-in screen with ?signup=1 so the destination
+    // can pre-select the registration form. We close the gate first so it
+    // doesn't pop again over the sign-in screen.
+    void Haptics.selectionAsync()
+    closeGate()
+    router.push('/(auth)/sign-in?signup=1')
+  }, [closeGate, router])
+
   const renderBackdrop = useCallback(
     (props: BottomSheetBackdropProps) => (
       <BottomSheetBackdrop
@@ -245,6 +254,20 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
           style={{ height: 44, alignItems: 'center', justifyContent: 'center' }}
         >
           <Text style={{ color: '#0a7ea4', fontSize: 15 }}>Other sign-in options</Text>
+        </Pressable>
+        {/*
+          P1-Q — secondary "Create account" link. Without this, the sheet's
+          only sign-in path is the OAuth CTA; users who want to register a
+          brand-new account had no obvious affordance.
+        */}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Create account"
+          accessibilityHint="Opens the sign-in screen pre-set to register a new account."
+          onPress={handleCreateAccount}
+          style={{ height: 44, alignItems: 'center', justifyContent: 'center' }}
+        >
+          <Text style={{ color: '#0a7ea4', fontSize: 15 }}>Create account</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"

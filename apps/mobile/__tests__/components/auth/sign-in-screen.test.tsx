@@ -143,7 +143,7 @@ describe('SignInScreen (mobile) — P1-D skip-for-now', () => {
   })
 })
 
-describe.skip('SignInScreen (mobile) — P1-Q create-account CTA', () => {
+describe('SignInScreen (mobile) — P1-Q create-account CTA', () => {
   it('renders a "Create account" CTA', () => {
     let tree!: TestRenderer.ReactTestRenderer
     act(() => {

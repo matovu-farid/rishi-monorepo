@@ -114,6 +114,26 @@ export default function SignInScreen() {
         </TouchableOpacity>
 
         {/*
+          P1-Q — Create-account CTA. Without this, brand-new users have no
+          obvious path to register from the sign-in screen. We re-use the
+          existing sign-in flow with provider='signup', which the worker
+          routes to the registration form.
+        */}
+        <TouchableOpacity
+          testID="create-account-button"
+          accessibilityRole="button"
+          accessibilityLabel="Create account"
+          accessibilityHint="Opens a secure browser to register a new Rishi account."
+          className="mt-4 py-3"
+          onPress={() => startSignIn('signup')}
+          disabled={isAuthenticating}
+        >
+          <Text className="text-center text-base font-semibold text-blue-600 dark:text-blue-400">
+            Create account
+          </Text>
+        </TouchableOpacity>
+
+        {/*
           P1-D — tertiary escape hatch. Without this, signed-out users who
           arrive at the sign-in screen (deep link, gate handoff, etc.) have
           no way back to the local library. Routes to the tabs root.
@@ -123,7 +143,7 @@ export default function SignInScreen() {
           accessibilityRole="button"
           accessibilityLabel="Skip for now"
           accessibilityHint="Browse your local books without signing in."
-          className="mt-6 py-3"
+          className="mt-2 py-3"
           onPress={() => router.replace('/(tabs)' as Href)}
           disabled={isAuthenticating}
         >

@@ -290,6 +290,37 @@ describe('PremiumFeatureSheet (mobile)', () => {
     expect(hasText(tree, 'Continue with Apple')).toBe(false)
   })
 
+  it("renders a 'Create account' secondary link (P1-Q)", () => {
+    storeState.premiumGateOpen = true
+    storeState.premiumGateFeature = 'tts'
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<PremiumFeatureSheet />)
+    })
+    expect(hasText(tree, 'Create account')).toBe(true)
+  })
+
+  it("tapping 'Create account' routes to sign-in screen and closes the gate (P1-Q)", () => {
+    storeState.premiumGateOpen = true
+    storeState.premiumGateFeature = 'tts'
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<PremiumFeatureSheet />)
+    })
+    const matches = tree.root.findAll(
+      (n) =>
+        n.type === Pressable &&
+        (n.props as { accessibilityLabel?: string }).accessibilityLabel ===
+          'Create account',
+    )
+    expect(matches.length).toBeGreaterThan(0)
+    act(() => {
+      ;(matches[0].props as { onPress: () => void }).onPress()
+    })
+    expect(routerPushMock).toHaveBeenCalledWith('/(auth)/sign-in?signup=1')
+    expect(closePremiumGate).toHaveBeenCalledTimes(1)
+  })
+
   it("pressing 'Not now' calls closePremiumGate", () => {
     storeState.premiumGateOpen = true
     storeState.premiumGateFeature = 'tts'

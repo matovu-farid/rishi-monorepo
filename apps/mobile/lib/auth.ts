@@ -35,7 +35,10 @@ const REDIRECT_URI = 'rishimobile://auth/callback'
 export const WORKER_API_URL =
   process.env.EXPO_PUBLIC_WORKER_URL || 'https://rishi-worker.fidexa.workers.dev'
 
-export type AuthProvider = 'google' | 'apple' | 'password'
+// `signup` is a synthetic provider that routes the in-app browser to the
+// worker's start endpoint with `?signup=1`, which the web app then uses to
+// pre-select the registration form instead of the sign-in form (P1-Q).
+export type AuthProvider = 'google' | 'apple' | 'password' | 'signup'
 
 export interface SignInResult {
   session_token: string
