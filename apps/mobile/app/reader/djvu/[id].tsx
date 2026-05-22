@@ -184,6 +184,7 @@ export default function DjvuReaderScreen() {
   // Premium feature gate — initial TTS start path must show the sign-in
   // sheet for signed-out users.
   const requireTTS = useRequireAuth('tts')
+  const requireAIChat = useRequireAuth('ai-chat')
 
   // G15 — visual-cue driver from active paragraph text.
   useEffect(() => {
@@ -382,6 +383,9 @@ export default function DjvuReaderScreen() {
         ttsActive={ttsActive}
         realtimeActive={realtimeStatus !== 'idle'}
         bookId={book.id}
+        onChatToggle={() =>
+          requireAIChat(() => router.push(`/chat/${book.id}`))
+        }
         onTTSPress={handleToggleTTS}
         ttsButtonActive={ttsActive}
         sheets={{}}

@@ -246,6 +246,7 @@ export default function MobiReaderScreen() {
   // Premium feature gate — initial TTS start path must show the sign-in
   // sheet for signed-out users.
   const requireTTS = useRequireAuth('tts')
+  const requireAIChat = useRequireAuth('ai-chat')
 
   // Load book from DB
   useEffect(() => {
@@ -455,6 +456,9 @@ export default function MobiReaderScreen() {
         ttsActive={ttsActive}
         realtimeActive={realtimeStatus !== 'idle'}
         bookId={book.id}
+        onChatToggle={() =>
+          requireAIChat(() => router.push(`/chat/${book.id}`))
+        }
         onTTSPress={handleToggleTTS}
         ttsButtonActive={ttsActive}
         sheets={{}}

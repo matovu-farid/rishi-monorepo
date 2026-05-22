@@ -110,6 +110,7 @@ export default function PdfReaderScreen() {
   // Premium feature gate — initial TTS start path must show the sign-in
   // sheet for signed-out users.
   const requireTTS = useRequireAuth('tts')
+  const requireAIChat = useRequireAuth('ai-chat')
 
   // Subscribe to active-paragraph changes to drive the highlight reconciler.
   const activeParagraph = usePlayerStore((s) => s.activeParagraph)
@@ -468,6 +469,9 @@ export default function PdfReaderScreen() {
         ttsActive={ttsActive}
         realtimeActive={realtimeStatus !== 'idle'}
         bookId={book?.id}
+        onChatToggle={() =>
+          requireAIChat(() => router.push(`/chat/${book.id}`))
+        }
         sheets={{ noteEditor: true }}
         noteEditorHighlight={noteTargetHighlight}
         noteEditorOpen={noteEditorOpen}
