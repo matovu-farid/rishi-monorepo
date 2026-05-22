@@ -98,6 +98,11 @@ jest.mock('react-native-reanimated', () => {
     },
     interpolate: (v: number) => v,
     Extrapolation: { CLAMP: 'clamp' },
+    // P1-O — pillInteractive gate uses these. In tests we keep them inert
+    // so the gate never opens, which is the contract we want to pin
+    // (touches blocked during the morph).
+    useAnimatedReaction: jest.fn(),
+    runOnJS: (fn: unknown) => fn,
     FadeIn: { duration: () => ({ build: () => ({}) }) },
     FadeOut: { duration: () => ({ build: () => ({}) }) },
     SlideInDown: { duration: () => ({ build: () => ({}) }) },
@@ -386,6 +391,34 @@ describe('MiniPlayer (mobile)', () => {
         (n.props as { testID?: string } | null)?.testID === 'activity-indicator',
     )
     expect(spinners.length).toBeGreaterThan(0)
+  })
+
+  it('gates pill pointerEvents to "none" during the expand morph (P1-O)', () => {
+    // P1-O: while the wrapper width is animating 52 → 240pt the pill
+    // controls already exist in the tree but the surface they sit on
+    // is still mid-morph. Allowing touches during that window means a
+    // user dragging their finger across the orb can land a stray tap on
+    // a pill button before the morph settles. The fix: keep the pill at
+    // `pointerEvents="none"` until the shared expandedValue crosses
+    // 0.85 (driven by `useAnimatedReaction`).
+    //
+    // Under the test renderer Reanimated is mocked, so the shared value
+    // never advances — the pill stays gated, which is exactly what we
+    // want to assert.
+    playerState.playingState = 'playing'
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<MiniPlayer bookId="b1" />)
+    })
+    const orb = findByTestID(tree, 'mini-player-orb')
+    act(() => {
+      ;(orb!.props as { onPress: () => void }).onPress()
+    })
+    const pill = findByTestID(tree, 'mini-player-pill')
+    expect(pill).not.toBeNull()
+    expect(
+      (pill!.props as { pointerEvents?: 'auto' | 'none' }).pointerEvents,
+    ).toBe('none')
   })
 
   it('hides repeat button when repeatMode="off", shows it when "one"', () => {

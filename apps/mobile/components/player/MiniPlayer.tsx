@@ -18,6 +18,8 @@ import Animated, {
   Extrapolation,
   cancelAnimation,
   interpolate,
+  runOnJS,
+  useAnimatedReaction,
   useAnimatedStyle,
   useSharedValue,
   withDelay,
@@ -109,6 +111,11 @@ export function MiniPlayer({
   const bottomBarVisible = shellContext?.bottomBarVisible ?? false
 
   const [expanded, setExpanded] = useState(false)
+  // P1-O — `pillInteractive` is the JS-side mirror of "the morph has
+  // crossed 0.85". While it's false the pill renders but its touches
+  // are blocked, so a finger drifting across the orb mid-expand cannot
+  // accidentally tap a control.
+  const [pillInteractive, setPillInteractive] = useState(false)
   const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const expandedValue = useSharedValue(0)
@@ -227,6 +234,25 @@ export function MiniPlayer({
       expandedValue.value = withSpring(expanded ? 1 : 0, motion.spring.snappy)
     }
   }, [expanded, reduceMotion, expandedValue, motion])
+
+  // P1-O — block pill taps until the morph crosses 0.85 (i.e. the
+  // wrapper width has nearly reached its expanded size). `useAnimatedReaction`
+  // runs on the UI thread; we hop back to JS via `runOnJS` to flip a
+  // React state that drives `pointerEvents` on the pill. Collapsing
+  // (expanded → false) immediately re-arms the gate so the next expand
+  // starts blocked.
+  useAnimatedReaction(
+    () => expandedValue.value > 0.85,
+    (open, prev) => {
+      if (open !== prev) {
+        runOnJS(setPillInteractive)(open)
+      }
+    },
+    [],
+  )
+  useEffect(() => {
+    if (!expanded) setPillInteractive(false)
+  }, [expanded])
 
   // Bar animation while playing. Half-period 150ms, stagger 100ms — slower
   // than AIChatOrb so it reads as "audio playback" not "thinking AI".
@@ -441,7 +467,7 @@ export function MiniPlayer({
             },
             pillFadeStyle,
           ]}
-          pointerEvents="auto"
+          pointerEvents={pillInteractive ? 'auto' : 'none'}
         >
           <PillIconButton
             iconName="play-skip-back"
