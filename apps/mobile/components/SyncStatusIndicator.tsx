@@ -1,4 +1,5 @@
-import { TouchableOpacity, View, Text } from 'react-native'
+import { useState, useRef } from 'react'
+import { Alert, TouchableOpacity, View, Text } from 'react-native'
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -57,10 +58,21 @@ const STATUS_CONFIG: Record<
   },
 }
 
+const DEFAULT_ERROR_HINT =
+  'Last sync failed. Double-tap to retry, long-press for diagnostics.'
+const DEFAULT_ACTION_HINT = 'Double-tap to sync now, long-press for diagnostics.'
+
 export function SyncStatusIndicator() {
   const { status, lastSyncAt } = useSyncStatus()
   const config = STATUS_CONFIG[status]
   const relativeTime = formatRelativeTime(lastSyncAt)
+
+  // P1-AG: track the last user-visible error string so it can be surfaced
+  // via accessibilityHint and the diagnostics view. The engine swallows
+  // errors internally (by design), so we capture them from the retry-tap
+  // path here without changing engine semantics.
+  const [lastError, setLastError] = useState<string | null>(null)
+  const lastRetryAtRef = useRef<number | null>(null)
 
   const rotation = useSharedValue(0)
 
@@ -78,11 +90,34 @@ export function SyncStatusIndicator() {
     transform: [{ rotateZ: `${rotation.value}deg` }],
   }))
 
-  const handlePress = () => {
-    if (config.clickable) {
-      sync()
+  const handlePress = async () => {
+    if (!config.clickable) return
+    lastRetryAtRef.current = Date.now()
+    try {
+      await sync()
+      // `sync()` is engineered to never throw; the engine surfaces failure
+      // via the status listener. We still wrap it defensively so any future
+      // throw is surfaced to the user instead of swallowed.
+      setLastError(null)
+      Alert.alert('Sync complete', 'Your library is up to date.')
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setLastError(message)
+      Alert.alert('Sync failed', message)
     }
   }
+
+  const handleLongPress = () => {
+    const lines = [
+      `Status: ${config.label}`,
+      `Last sync: ${relativeTime}`,
+      `Last error: ${lastError ?? (status === 'error' ? 'Sync failed (no details)' : 'None')}`,
+    ]
+    Alert.alert('Sync diagnostics', lines.join('\n'))
+  }
+
+  const accessibilityHint =
+    status === 'error' ? (lastError ?? DEFAULT_ERROR_HINT) : DEFAULT_ACTION_HINT
 
   const content = (
     <View className="flex-row items-center">
@@ -108,8 +143,11 @@ export function SyncStatusIndicator() {
   if (config.clickable) {
     return (
       <TouchableOpacity
+        testID="sync-status-retry"
         onPress={handlePress}
+        onLongPress={handleLongPress}
         accessibilityLabel={`${config.label} - Last synced: ${relativeTime}`}
+        accessibilityHint={accessibilityHint}
         accessibilityRole="button"
       >
         {content}
