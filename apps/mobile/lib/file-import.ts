@@ -10,7 +10,7 @@
  */
 
 import { File, Directory, Paths } from "expo-file-system";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { Book } from "@/types/book";
 import { createMobileBookImportService } from "@/lib/book-import";
 // Type-only import so file-import.ts does NOT pull adapters.ts's runtime
@@ -223,10 +223,14 @@ async function findDuplicateByHash(
   if (!fileHash) return null;
 
   try {
+    // Soft-deleted rows must NOT block re-imports. Without the
+    // `isDeleted = false` predicate, deleting a book and trying to
+    // re-import the same file fails permanently as a duplicate with no
+    // recovery short of manual SQL. See PR #207 review.
     const existing = db
       .select()
       .from(books)
-      .where(eq(books.fileHash, fileHash))
+      .where(and(eq(books.fileHash, fileHash), eq(books.isDeleted, false)))
       .get();
     if (existing && existing.id) {
       return { existingBookId: String(existing.id), fileHash };

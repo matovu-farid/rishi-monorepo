@@ -121,21 +121,40 @@ const dbState = {
   hashLookups: 0,
 }
 
+type EqClause = { col: string; val: unknown }
+type AndClause = { and: Array<EqClause | AndClause> }
+
+function flattenEqs(clause: unknown): EqClause[] {
+  if (!clause || typeof clause !== 'object') return []
+  if ('and' in (clause as Record<string, unknown>)) {
+    return (clause as AndClause).and.flatMap(flattenEqs)
+  }
+  if ('col' in (clause as Record<string, unknown>)) {
+    return [clause as EqClause]
+  }
+  return []
+}
+
 function makeSelectStub(matchValue: unknown): {
   get: () => Record<string, unknown> | undefined
   all: () => Array<Record<string, unknown>>
 } {
   dbState.hashLookups += 1
-  // The where clause's value travels through our drizzle-orm `eq` mock,
-  // which packages it as { col, val }. The file-import code calls
-  // `.get()` so we only need to return the first match (or undefined).
-  const hashStr =
-    matchValue && typeof matchValue === 'object' && 'val' in (matchValue as object)
-      ? String((matchValue as { val: unknown }).val)
-      : ''
-  const rows = Array.from(dbState.rows.values()).filter(
-    (r) => String(r.fileHash) === hashStr,
-  )
+  // The where clause may be a single `eq(...)` or an `and(eq(...), eq(...))`.
+  // Flatten both shapes into a list of {col, val} predicates and apply them
+  // all so soft-deleted rows can be filtered out (DAT-002: soft-delete +
+  // re-import regression).
+  const predicates = flattenEqs(matchValue)
+  let rows = Array.from(dbState.rows.values())
+  for (const p of predicates) {
+    rows = rows.filter((r) => {
+      const left = r[String(p.col)]
+      // Allow the soft-delete filter to match rows that don't carry an
+      // explicit `isDeleted` field by treating "undefined" as "false".
+      if (left === undefined && p.col === 'isDeleted') return p.val === false
+      return left === p.val
+    })
+  }
   return {
     get: () => rows[0],
     all: () => rows,
@@ -143,7 +162,7 @@ function makeSelectStub(matchValue: unknown): {
 }
 
 jest.mock('@rishi/shared/schema', () => ({
-  books: { id: 'id', fileHash: 'fileHash' },
+  books: { id: 'id', fileHash: 'fileHash', isDeleted: 'isDeleted' },
 }))
 
 jest.mock('drizzle-orm', () => ({
@@ -307,6 +326,66 @@ describe('DAT-002 — URL import rejects duplicates by file hash', () => {
     ).rejects.toThrow(/duplicate|already/i)
 
     // The shared service was never invoked.
+    expect(serviceCalls.importFromPath).toHaveLength(0)
+  })
+})
+
+// ────────────────────────────────────────────────────────────────────────────
+// DAT-002 follow-up: soft-deleted books MUST be re-importable.
+//
+// PR #207 review (https://github.com/matovu-farid/rishi-monorepo/pull/207#pullrequestreview-4350414906)
+// caught that the original duplicate gate matched on `fileHash` only, with
+// no `isDeleted` predicate. Soft-deleting a book and then re-importing the
+// same file got permanently rejected as a duplicate — no recovery short of
+// manual SQL. The fix adds `AND isDeleted = false` to the SELECT so a
+// soft-deleted row no longer blocks a fresh import.
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('DAT-002 — soft-deleted books are re-importable', () => {
+  beforeEach(resetAll)
+
+  it('allows re-import when the matching-hash row is soft-deleted', async () => {
+    // A previous import wrote this row and it was later soft-deleted.
+    dbState.rows.set('soft-deleted-1', {
+      id: 'soft-deleted-1',
+      title: 'Removed from library',
+      fileHash: 'duplicate-hash',
+      isDeleted: true,
+    })
+
+    pickFileResult = { uri: '/Downloads/coming-back.epub' }
+
+    const outcome = await importEpubFile()
+
+    // The duplicate gate must NOT short-circuit when the only matching
+    // row is soft-deleted; the import must proceed all the way through
+    // the shared service.
+    expect(outcome.ok).toBe(true)
+    expect(serviceCalls.importFromPath).toHaveLength(1)
+  })
+
+  it('still rejects when a live (non-deleted) row exists alongside a soft-deleted one', async () => {
+    dbState.rows.set('soft-deleted-2', {
+      id: 'soft-deleted-2',
+      title: 'Older removed copy',
+      fileHash: 'duplicate-hash',
+      isDeleted: true,
+    })
+    dbState.rows.set('live-2', {
+      id: 'live-2',
+      title: 'Current copy',
+      fileHash: 'duplicate-hash',
+      isDeleted: false,
+    })
+
+    pickFileResult = { uri: '/Downloads/coming-back.epub' }
+
+    const outcome = await importEpubFile()
+
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok === false) {
+      expect(outcome.stage).toBe('duplicate')
+    }
     expect(serviceCalls.importFromPath).toHaveLength(0)
   })
 })
