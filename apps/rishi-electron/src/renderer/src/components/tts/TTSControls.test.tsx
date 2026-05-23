@@ -83,7 +83,11 @@ describe('TTSControls auto-collapse', () => {
       vi.advanceTimersByTime(5_000)
     })
 
-    expect(screen.getByLabelText('Play')).toBeInTheDocument()
+    // After #232: cold-start (idle → loading) shows spinner immediately, so
+    // the play-button accessible name is "Loading" (not "Play"). The intent
+    // of this test is that the pill is still expanded — the Play/Pause/Loading
+    // button being present at all proves that.
+    expect(screen.getByLabelText('Loading')).toBeInTheDocument()
   })
 
   it('keeps the pill expanded across playing → pageNavigating → playing', () => {
