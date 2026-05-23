@@ -7,6 +7,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated'
 import { IconSymbol } from '@/components/ui/icon-symbol'
+import { motion } from '@/lib/theme/tokens'
 
 interface VoiceMicButtonProps {
   isRecording: boolean
@@ -28,12 +29,12 @@ export function VoiceMicButton({
   useEffect(() => {
     if (isRecording) {
       pulseOpacity.value = withRepeat(
-        withTiming(0.6, { duration: 800 }),
+        withTiming(0.6, { duration: motion.duration.pulse }),
         -1,
         true
       )
     } else {
-      pulseOpacity.value = withTiming(1, { duration: 200 })
+      pulseOpacity.value = withTiming(1, { duration: motion.duration.fast })
     }
   }, [isRecording, pulseOpacity])
 
