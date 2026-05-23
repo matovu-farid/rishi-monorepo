@@ -134,8 +134,8 @@ describe('buildFooterMask', () => {
     }
   })
 
-  it('does NOT mask items above the bottom 15% band', () => {
-    // bottomBandPct=0.15, viewportHeight=600 => bottom band is y in [0, 90].
+  it('does NOT mask items above the bottom band', () => {
+    // bottomBandPct=0.25, viewportHeight=600 => bottom band is y in [0, 150].
     // y=300 is well above the band.
     const pages: PageScanInput[] = []
     for (let p = 1; p <= 10; p++) {
@@ -245,10 +245,9 @@ describe('buildFooterMask', () => {
     expect(maskedLine4).toBeGreaterThanOrEqual(8)
   })
 
-  it('does NOT mask a single repeating bottom-band string longer than maxCharsPerLine (>80 chars)', () => {
-    const longString =
-      'This is a sentence that just happens to be very long and lives in the bottom band of every page in the document.'
-    expect(longString.length).toBeGreaterThan(80)
+  it('does NOT mask a repeating bottom-band string longer than maxCharsPerLine', () => {
+    const longString = 'x'.repeat(300)
+    expect(longString.length).toBeGreaterThan(DEFAULT_FOOTER_MASK_OPTIONS.maxCharsPerLine)
     const pages: PageScanInput[] = []
     for (let p = 1; p <= 10; p++) {
       pages.push(
@@ -346,9 +345,9 @@ describe('buildFooterMask', () => {
 
   it('exposes sensible defaults via DEFAULT_FOOTER_MASK_OPTIONS', () => {
     expect(DEFAULT_FOOTER_MASK_OPTIONS.minPages).toBe(8)
-    expect(DEFAULT_FOOTER_MASK_OPTIONS.bottomBandPct).toBeCloseTo(0.15)
-    expect(DEFAULT_FOOTER_MASK_OPTIONS.maxFooterLines).toBe(3)
-    expect(DEFAULT_FOOTER_MASK_OPTIONS.maxCharsPerLine).toBe(80)
+    expect(DEFAULT_FOOTER_MASK_OPTIONS.bottomBandPct).toBeCloseTo(0.25)
+    expect(DEFAULT_FOOTER_MASK_OPTIONS.maxFooterLines).toBe(5)
+    expect(DEFAULT_FOOTER_MASK_OPTIONS.maxCharsPerLine).toBe(250)
     expect(DEFAULT_FOOTER_MASK_OPTIONS.repetitionThreshold).toBeCloseTo(0.3)
     expect(DEFAULT_FOOTER_MASK_OPTIONS.yBinPct).toBeCloseTo(0.02)
   })
