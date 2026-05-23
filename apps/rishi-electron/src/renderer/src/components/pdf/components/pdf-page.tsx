@@ -3,7 +3,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type MouseEvent as ReactMouseEvent
 } from 'react'
@@ -17,36 +16,9 @@ import { HighlightLayer } from '../HighlightLayer'
 import type { HighlightRow } from '@/modules/highlight-storage'
 import type { ViewportLike } from '@/modules/pdf-locator'
 import { navigationHistoryActor } from '@/machines/navigationHistory/navigationHistoryActor'
-type Transform = [number, number, number, number, number, number]
+import { makeCustomTextRenderer } from './makeCustomTextRenderer'
 
 const PARAGRAPH_INDEX_PER_PAGE = 10000
-
-/**
- * Pure factory for the PDF text-layer renderer. Extracted from the component
- * closure so the declarative TTS-highlight behavior can be unit-tested
- * without standing up a full `<PdfPage>` (which needs a real pdf.js page).
- *
- * Contract:
- *  - If `highlightedParagraph` is null, returns plain text for every item.
- *  - If `highlightedParagraph` is set and the text item's y-coordinate (the
- *    6th entry of the transform matrix) falls within
- *    `[dimensions.bottom, dimensions.top]`, wraps the text in `<mark>`.
- *  - Items without a transform always pass through as plain text.
- */
-export function makeCustomTextRenderer(
-  highlightedParagraph: { dimensions: { top: number; bottom: number } } | null
-) {
-  return ({ str, transform }: { str: string; transform: number[] | undefined }): string => {
-    if (!highlightedParagraph || !transform) return str
-    const t = transform as Transform
-    const isBelowOrEqualTop = t[5] <= highlightedParagraph.dimensions.top
-    const isAboveOrEqualBottom = t[5] >= highlightedParagraph.dimensions.bottom
-    if (isBelowOrEqualTop && isAboveOrEqualBottom) {
-      return `<mark style="background-color: rgb(255,255,204);">${str}</mark>`
-    }
-    return str
-  }
-}
 
 function PageComponentInner({
   thispageNumber: pageNumber,
@@ -102,7 +74,13 @@ function PageComponentInner({
   const setIsPdfRendered = usePdfStore((s) => s.setIsPdfRendered)
   const setPageData = usePdfStore((s) => s.setPageData)
 
-  const wrapperRef = useRef<HTMLDivElement | null>(null)
+  // Callback-ref-as-state: tracking the wrapper as state (set via the JSX
+  // ref={setWrapper} callback) lets us read it during render to derive
+  // HighlightLayer's `pageEl` prop. A `useRef` would force us to read
+  // `wrapperRef.current` during render, which the new
+  // `react-hooks/refs` rule flags because React Compiler can't prove the
+  // ref's commit-time value is the one we'll see at the next render.
+  const [wrapper, setWrapper] = useState<HTMLDivElement | null>(null)
   const [pdfPage, setPdfPage] = useState<PDFPageProxy | null>(null)
 
   // Stable text renderer keyed on highlight inputs. react-pdf re-runs the
@@ -118,7 +96,7 @@ function PageComponentInner({
   useEffect(() => () => unregisterPdfCanvas(pageNumber), [pageNumber])
 
   const handleRenderSuccess = useCallback(() => {
-    const canvas = wrapperRef.current?.querySelector('canvas') ?? null
+    const canvas = wrapper?.querySelector('canvas') ?? null
     if (canvas instanceof HTMLCanvasElement) {
       registerPdfCanvas(pageNumber, canvas)
     }
@@ -130,7 +108,7 @@ function PageComponentInner({
       setIsPdfRendered(bookId, true)
     }
     onRenderComplete?.()
-  }, [pageNumber, bookId, setIsPdfRendered, onRenderComplete])
+  }, [pageNumber, bookId, setIsPdfRendered, onRenderComplete, wrapper])
 
   const handleGetTextSuccess = useCallback(
     (data: Parameters<NonNullable<Parameters<typeof Page>[0]['onGetTextSuccess']>>[0]) => {
@@ -142,10 +120,10 @@ function PageComponentInner({
   const handleLoadSuccess = useCallback(
     (page: PDFPageProxy) => {
       setPdfPage(page)
-      const pageEl = wrapperRef.current?.querySelector<HTMLElement>('.react-pdf__Page') ?? null
+      const pageEl = wrapper?.querySelector<HTMLElement>('.react-pdf__Page') ?? null
       if (pageEl && onPageReady) onPageReady(pageNumber, { pageEl, page })
     },
-    [pageNumber, onPageReady]
+    [pageNumber, onPageReady, wrapper]
   )
 
   // Intercept react-pdf annotation-layer link clicks before the default handler
@@ -180,7 +158,7 @@ function PageComponentInner({
   )
 
   return (
-    <div ref={wrapperRef} style={{ position: 'relative' }}>
+    <div ref={setWrapper} style={{ position: 'relative' }}>
       {/* onClickCapture intercepts annotation-layer link clicks before react-pdf's handler */}
       <div onClickCapture={handleAnnotationClick}>
         <Page
@@ -207,12 +185,10 @@ function PageComponentInner({
           onLoadSuccess={handleLoadSuccess}
         />
       </div>
-      {pdfPage && wrapperRef.current && highlights && onHighlightClick ? (
+      {pdfPage && wrapper && highlights && onHighlightClick ? (
         <HighlightLayer
           pageNumber={pageNumber}
-          pageEl={
-            wrapperRef.current.querySelector<HTMLElement>('.react-pdf__Page') ?? wrapperRef.current
-          }
+          pageEl={wrapper.querySelector<HTMLElement>('.react-pdf__Page') ?? wrapper}
           viewport={
             pdfPage.getViewport({
               // pdfjs page.view = [x0, y0, x1, y1]; native width = view[2], native height = view[3].

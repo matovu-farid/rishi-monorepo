@@ -375,7 +375,7 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
               if (!recorder) return null
               const chunks: Blob[] = []
               recorder.ondataavailable = (e) => {
-                if (!e.data || e.data.size === 0) return
+                if (e.data.size === 0) return
                 chunks.push(e.data)
                 // Rolling cap: drop oldest chunks so long connect windows
                 // don't accumulate megabytes of audio.

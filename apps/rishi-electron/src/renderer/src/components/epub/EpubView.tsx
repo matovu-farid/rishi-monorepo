@@ -76,6 +76,7 @@ import { findParagraphForCfi } from '@/modules/cfi-to-paragraph'
 import { resolveLiveSelection } from '@/modules/resolve-live-selection'
 import { buildPartialFirst } from '@/modules/read-aloud-from'
 import { useTtsHighlightReconciler } from '@/hooks/useTtsHighlightReconciler'
+import { useVisibleEpubIframe } from '@/hooks/reader/useVisibleEpubIframe'
 import { createEpubTtsReconciler, type EpubTtsReconciler } from './reconcileTtsHighlight'
 
 function updateTheme(rendition: Rendition, theme: ThemeType) {
@@ -91,7 +92,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   // a stale id from a different format would otherwise be handed to epubjs,
   // which silently ignores it and opens at the start of the book.
   const resumeCfi = book.lastParagraph?.startsWith('epubcfi(') ? book.lastParagraph : null
-  const [currentLocation, setCurrentLocation] = useState<string>(resumeCfi ?? book.location ?? '0')
+  const [currentLocation, setCurrentLocation] = useState<string>(resumeCfi ?? book.location)
   // Sync with book.location when it changes from a refetch (e.g., returning from library).
   // Only sync before the rendition has settled to avoid overriding user navigation.
   const bookLocationRef = useRef(book.location)
@@ -451,7 +452,11 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     const sync = (): void => {
       // epubjs Views exposes `first()` at runtime even though the typings
       // declare it only as `View[]`. Cast through unknown to access it.
-      const views = rendition.manager?.views as unknown as
+      // `manager` is not on the public Rendition type — go through unknown so
+      // we can probe defensively at runtime without TS treating the chain as
+      // always-defined.
+      const manager = (rendition as unknown as { manager?: { views?: unknown } }).manager
+      const views = manager?.views as
         | { first?: () => { iframe?: HTMLIFrameElement } | undefined }
         | undefined
       const iframe = views?.first?.()?.iframe
@@ -847,31 +852,25 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   }, [])
 
   const epubTtsReconcilerRef = useRef<EpubTtsReconciler | null>(null)
-  const [epubContentIframe, setEpubContentIframe] = useState<HTMLIFrameElement | null>(null)
+
+  // Track the currently visible content iframe declaratively via
+  // useSyncExternalStore. Previously this was a setState-in-effect cascade
+  // (flagged by react-hooks/set-state-in-effect); the hook now produces the
+  // value during render and re-subscribes only when the rendition identity
+  // changes.
+  const epubContentIframe = useVisibleEpubIframe(rendition)
 
   // Build (or rebuild) the reconciler whenever the rendition instance changes.
+  // Kept in its own effect (separate concern from iframe tracking) — refs are
+  // fine inside effects, and there's no setState here so the React 19 rule
+  // doesn't apply.
   useEffect(() => {
     if (!rendition) {
       epubTtsReconcilerRef.current = null
-      setEpubContentIframe(null)
       return
     }
     epubTtsReconcilerRef.current = createEpubTtsReconciler(rendition)
-
-    // Resolve the epub.js content iframe via the shared helper, which
-    // correctly filters to the currently displayed view. We update the
-    // state on `rendered` so chapter swaps refresh the iframe reference.
-    const resolveIframe = (): void => {
-      const next = getVisibleIframe(rendition) ?? null
-      setEpubContentIframe((prev) => (prev === next ? prev : next))
-    }
-    resolveIframe()
-
-    // epub.js emits 'rendered' when a new view (chapter) is rendered.
-    rendition.on('rendered', resolveIframe)
-
     return () => {
-      rendition.off('rendered', resolveIframe)
       epubTtsReconcilerRef.current = null
     }
   }, [rendition])

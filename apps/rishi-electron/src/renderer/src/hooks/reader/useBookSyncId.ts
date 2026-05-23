@@ -23,10 +23,15 @@ export function useBookSyncId(bookId: number): {
   const [bookSyncId, setBookSyncId] = useState<string>('')
 
   useEffect(() => {
-    const state = { cancelled: false }
+    // Use a getter so each read crosses a function boundary that defeats TS's
+    // narrowing of `cancelled` to literal `false` (the previous shape
+    // `{ cancelled: boolean }` was correct but the IIFE's first
+    // `if (state.cancelled) return` then narrowed every later read to `false`).
+    let cancelled = false
+    const isCancelled = (): boolean => cancelled
     void (async () => {
       let syncId = await window.electron.booksGetSyncId(bookId)
-      if (state.cancelled) return
+      if (isCancelled()) return
       // B001: freshly imported books may have no syncId yet (the row is
       // inserted with `syncId: null` and the sync push backfills it later).
       // Without this fallback the ref stays null for the lifetime of the
@@ -34,11 +39,11 @@ export function useBookSyncId(bookId: number): {
       // useChat.ts: generate a UUID and persist it so callers see a stable id.
       if (!syncId) {
         const book = await window.electron.getBook(bookId)
-        if (state.cancelled) return
+        if (isCancelled()) return
         if (book) {
           syncId = crypto.randomUUID()
           await window.electron.saveBook({ ...book, syncId, isDirty: 1 })
-          if (state.cancelled) return
+          if (isCancelled()) return
         }
       }
       bookSyncIdRef.current = syncId
@@ -47,7 +52,7 @@ export function useBookSyncId(bookId: number): {
       }
     })()
     return () => {
-      state.cancelled = true
+      cancelled = true
     }
   }, [bookId])
 

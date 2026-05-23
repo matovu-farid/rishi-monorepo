@@ -180,15 +180,19 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
   // `playingState` briefly drops to `loading` between paragraphs, we keep the
   // button mounted so the pill doesn't reflow every paragraph boundary.
   // Initial load (`stopped → loading → playing`) starts hidden because
-  // `showRepeat` is only set true on entering `playing`.
-  const [showRepeat, setShowRepeat] = useState(false)
-  useEffect(() => {
-    if (playingState === 'playing') {
-      setShowRepeat(true)
-    } else if (playingState !== 'loading') {
-      setShowRepeat(false)
-    }
-  }, [playingState])
+  // `showRepeat` is only true while the last non-`loading` state was `playing`.
+  //
+  // Implementation: track the most recent non-loading state and derive
+  // `showRepeat` from it during render. This is the React docs "adjust state
+  // when props change" pattern (https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes)
+  // — setting state during render with a guard is React's bail-out path and
+  // doesn't trigger the cascading-renders warning that the equivalent
+  // `useEffect` shape did.
+  const [lastNonLoadingState, setLastNonLoadingState] = useState<PlayerStoreState>(playingState)
+  if (playingState !== 'loading' && playingState !== lastNonLoadingState) {
+    setLastNonLoadingState(playingState)
+  }
+  const showRepeat = lastNonLoadingState === 'playing'
 
   // --- Waveform bars ---
   // Stable IDs let React reconcile bars across re-renders without

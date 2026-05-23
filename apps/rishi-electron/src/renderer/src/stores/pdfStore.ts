@@ -54,8 +54,10 @@ interface PdfState {
   isRenderedPageState: Record<number, boolean>
   hasNavigatedToPage: boolean
   isLookingForNextParagraph: boolean
-  /** Per-book running-footer detection result (#142). In-memory only. */
-  footerMaskByBookId: Record<number, FooterMask>
+  /** Per-book running-footer detection result (#142). In-memory only.
+   *  `Partial<Record>` so indexing an unknown bookId is typed as
+   *  `FooterMask | undefined` and callers must guard before use. */
+  footerMaskByBookId: Partial<Record<number, FooterMask>>
 
   setPageNumber: (n: number) => void
   setScrollPageNumber: (n: number) => void
