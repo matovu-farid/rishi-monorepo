@@ -91,7 +91,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   // a stale id from a different format would otherwise be handed to epubjs,
   // which silently ignores it and opens at the start of the book.
   const resumeCfi = book.lastParagraph?.startsWith('epubcfi(') ? book.lastParagraph : null
-  const [currentLocation, setCurrentLocation] = useState<string>(resumeCfi ?? book.location ?? '0')
+  const [currentLocation, setCurrentLocation] = useState<string>(resumeCfi ?? book.location)
   // Sync with book.location when it changes from a refetch (e.g., returning from library).
   // Only sync before the rendition has settled to avoid overriding user navigation.
   const bookLocationRef = useRef(book.location)
@@ -451,7 +451,11 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     const sync = (): void => {
       // epubjs Views exposes `first()` at runtime even though the typings
       // declare it only as `View[]`. Cast through unknown to access it.
-      const views = rendition.manager?.views as unknown as
+      // `manager` is not on the public Rendition type — go through unknown so
+      // we can probe defensively at runtime without TS treating the chain as
+      // always-defined.
+      const manager = (rendition as unknown as { manager?: { views?: unknown } }).manager
+      const views = manager?.views as
         | { first?: () => { iframe?: HTMLIFrameElement } | undefined }
         | undefined
       const iframe = views?.first?.()?.iframe

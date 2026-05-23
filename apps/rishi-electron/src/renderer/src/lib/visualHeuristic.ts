@@ -111,7 +111,10 @@ function scanElement(el: Element, hits: VisualHit[]): void {
   // parent's textContent, so if a child owns the equation we don't also
   // attribute it to the parent.
   if (direct?.kind !== 'equation' && !childHasEquation) {
-    if (hasLatexEquation(el.textContent ?? '')) {
+    // `Element.textContent` is `string` (never null) — only `Document` /
+    // `DocumentType` nodes return null per the DOM spec, and we narrow to
+    // Element via the Node.ELEMENT_NODE check at the entry point.
+    if (hasLatexEquation(el.textContent)) {
       hits.push({ kind: 'equation', element: el, label: 'equation' })
     }
   }
@@ -168,9 +171,13 @@ export function summarizeVisuals(root: Element): VisualSummary {
     if (hit) {
       // Fix C: branch on hit.kind so SVG figures (and other non-<figure>-tag
       // elements that classifyElement returns as 'figure') are counted correctly.
+      // Note: `classifyElement` never returns `kind: 'image'` — large standalone
+      // <img> elements come back as `'figure'` and the inner branch reroutes
+      // them to `images++` when they aren't inside a <figure>.
       if (hit.kind === 'equation') {
         equations++
-      } else if (hit.kind === 'figure') {
+      } else {
+        // hit.kind === 'figure' (only remaining case)
         if (tag === 'img') {
           // A large <img> is a figure only when NOT inside a <figure> element;
           // when it IS inside <figure>, the parent already counted it.
@@ -181,8 +188,6 @@ export function summarizeVisuals(root: Element): VisualSummary {
         } else {
           figures++
         }
-      } else if (hit.kind === 'image') {
-        images++
       }
     }
     node = walker.nextNode() as Element | null
@@ -196,7 +201,8 @@ export function summarizeVisuals(root: Element): VisualSummary {
   )) {
     mathEl.parentNode?.removeChild(mathEl)
   }
-  const text = rootClone.textContent ?? ''
+  // `Element.textContent` is `string` (never null). See line 114 for rationale.
+  const text = rootClone.textContent
   for (const re of LATEX_DELIMS) {
     re.lastIndex = 0
     let m: RegExpExecArray | null

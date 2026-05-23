@@ -50,8 +50,12 @@ export function usePdfTextSelection(params: UsePdfTextSelectionParams): void {
       if (!viewport) return
       const locator = selectionToPdfLocator(range, startInfo.el, viewport, startInfo.pageNumber)
       if (!locator) return
+      // `.at(0)` returns `DOMRect | undefined` regardless of the project's
+      // `noUncheckedIndexedAccess` setting — that's what lets the guard below
+      // be meaningful (plain `rects[0]` would be typed as `DOMRect` and the
+      // guard would be dead).
       const rects = Array.from(range.getClientRects())
-      const first = rects[0]
+      const first = rects.at(0)
       if (!first) return
       onSelect({
         locator,
