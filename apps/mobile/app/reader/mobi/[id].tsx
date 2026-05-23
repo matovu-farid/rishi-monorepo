@@ -28,6 +28,8 @@ import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 import { resolvePlainTextReadFromSelection } from '@/lib/reader-selection'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
+import { buildReaderThemeInjection } from '@/lib/reader-theme-css'
+import { READER_THEMES } from '@/constants/reader-themes'
 import { safeBack } from '@/lib/navigation'
 import type { ReaderSettings } from '@/types/book'
 import {
@@ -512,6 +514,16 @@ export default function MobiReaderScreen() {
     saveReaderSettings(next)
     setSettings(next)
   }, [])
+
+  // Issue #47 — forward the active theme into the WebView whenever it
+  // changes. Without this hop the AppearanceSheet persists `themeName`
+  // but the rendered HTML keeps its initial (white) stylesheet, so
+  // dark-mode users see white pages.
+  useEffect(() => {
+    if (!bookLoaded || !webViewRef.current) return
+    const theme = READER_THEMES[settings.themeName]
+    webViewRef.current.injectJavaScript(buildReaderThemeInjection(theme))
+  }, [bookLoaded, settings.themeName])
 
   // safeBack: guards against deep-link cold-start where the nav stack is
   // empty and a bare router.back() would strand the user (P1-B).

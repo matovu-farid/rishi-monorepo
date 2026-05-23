@@ -29,7 +29,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 
 import { READER_THEMES } from '../../../constants/reader-themes'
-import type { ThemeName } from '../../../types/book'
+import type { ReaderTheme, ThemeName } from '../../../types/book'
 
 const MOBILE_ROOT = join(__dirname, '..', '..', '..')
 
@@ -43,10 +43,7 @@ function readReader(format: 'mobi' | 'djvu' | 'pdf'): string {
 const THEME_NAMES: ThemeName[] = ['white', 'dark', 'yellow']
 
 describe('Issue #47 — readers inject theme CSS into the WebView', () => {
-  describe.each([
-    ['mobi', 'webViewRef.current?.injectJavaScript'],
-    ['djvu', 'webViewRef.current?.injectJavaScript'],
-  ] as const)('%s reader', (format, injectCall) => {
+  describe.each(['mobi', 'djvu'] as const)('%s reader', (format) => {
     const src = readReader(format)
 
     it('has a useEffect that depends on settings.themeName', () => {
@@ -69,21 +66,20 @@ describe('Issue #47 — readers inject theme CSS into the WebView', () => {
       // The MOBI / DJVU readers own the WebView directly, so the theme
       // effect must reach into the ref and inject JS that touches the
       // document — anything weaker (e.g. only persisting to settings)
-      // is the bug this issue tracks.
-      expect(src).toContain(injectCall)
+      // is the bug this issue tracks. We accept both the optional and
+      // non-optional chaining forms; the effect guards against a null
+      // ref above the call, so the literal form is implementation
+      // freedom.
+      expect(src).toMatch(/webViewRef\.current\??\.injectJavaScript/)
     })
 
-    it.each(THEME_NAMES)(
-      'references the %s theme background color literal',
-      (name) => {
-        const bg = READER_THEMES[name].background
-        // The background literal must appear in the source so the theme
-        // effect can hand WebView CSS that visibly differs between
-        // themes. Pinning the literals catches the failure mode in the
-        // issue (theme persisted but never forwarded).
-        expect(src).toContain(bg)
-      },
-    )
+    it('hands the active theme into a theme-CSS builder', () => {
+      // The shared helper carries the per-theme literals so we don't
+      // have to repeat them at every call site. Pin the call shape so
+      // a future refactor that drops the helper can't quietly inject a
+      // static stylesheet.
+      expect(src).toMatch(/buildReaderThemeInjection\s*\(/)
+    })
   })
 
   describe('pdf reader', () => {
@@ -108,14 +104,6 @@ describe('Issue #47 — readers inject theme CSS into the WebView', () => {
       // weaker (e.g. only persisting to settings) is the bug.
       expect(src).toMatch(/readerRef\.current\??\.setTheme/)
     })
-
-    it.each(THEME_NAMES)(
-      'references the %s theme background color literal',
-      (name) => {
-        const bg = READER_THEMES[name].background
-        expect(src).toContain(bg)
-      },
-    )
   })
 
   describe('PdfWebReader exposes a setTheme on its imperative handle', () => {
@@ -135,6 +123,51 @@ describe('Issue #47 — readers inject theme CSS into the WebView', () => {
       // The setTheme implementation must reach into the WebView ref
       // and inject CSS — otherwise the theme is silently dropped.
       expect(src).toMatch(/injectJavaScript/)
+    })
+  })
+
+  describe('shared reader-theme CSS helper', () => {
+    // The helper is plain TypeScript, so we exercise it directly to
+    // satisfy acceptance bullet 2 (theme-specific CSS). For each
+    // ThemeName, the injected snippet must contain the matching
+    // background colour literal — proving that a theme toggle yields
+    // CSS that visibly differs between themes.
+    let buildReaderThemeInjection: (theme: ReaderTheme) => string
+
+    beforeAll(async () => {
+      const mod = await import('../../../lib/reader-theme-css')
+      buildReaderThemeInjection = mod.buildReaderThemeInjection
+    })
+
+    it.each(THEME_NAMES)(
+      'embeds the %s theme background literal in the injected JS',
+      (name) => {
+        const theme = READER_THEMES[name]
+        const snippet = buildReaderThemeInjection(theme)
+        expect(snippet).toContain(theme.background)
+        expect(snippet).toContain(theme.color)
+      },
+    )
+
+    it('produces different output when the theme toggles', () => {
+      // Snapshot-style assertion for acceptance bullet 2: toggling
+      // theme must yield distinct injected CSS. We compare the white
+      // → dark transition specifically because dark mode is the
+      // failure mode called out in the issue.
+      const light = buildReaderThemeInjection(READER_THEMES.white)
+      const dark = buildReaderThemeInjection(READER_THEMES.dark)
+      expect(light).not.toEqual(dark)
+      expect(dark).toContain(READER_THEMES.dark.background)
+      expect(dark).not.toContain(READER_THEMES.white.background)
+    })
+
+    it('ends with a trailing `true;` expression', () => {
+      // react-native-webview's injectJavaScript requires the snippet
+      // to end with a JS expression; omitting it triggers an iOS
+      // runtime warning. Pin the contract so the helper can't quietly
+      // drop the sentinel during a refactor.
+      const snippet = buildReaderThemeInjection(READER_THEMES.white)
+      expect(snippet.trim().endsWith('true;')).toBe(true)
     })
   })
 })
