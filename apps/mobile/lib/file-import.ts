@@ -367,18 +367,65 @@ export function mapHttpStatusToUserCopy(status: number): string {
   return "Server refused download";
 }
 
+/**
+ * DAT-012 (#124): hard cap on URL-import size. Reading a 2 GB body
+ * straight into `arrayBuffer()` OOMs the JS VM on Android (heap cap is
+ * ~512 MB on most devices). 500 MB is comfortably below the cap and
+ * still leaves headroom for the existing book covers + chunker
+ * allocations.
+ *
+ * Exported for tests; not part of the public API surface.
+ */
+export const URL_IMPORT_MAX_BYTES = 500 * 1024 * 1024;
+
+function parseContentLengthOrNull(header: string | null): number | null {
+  if (!header) return null;
+  // `Number()` is too lenient ("" → 0, " 12 " → 12). We want a strict
+  // base-10 integer; anything else is treated as "unknown size".
+  if (!/^\d+$/.test(header.trim())) return null;
+  const n = Number(header.trim());
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function formatBytesAsMB(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))} MB`;
+}
+
 export async function importBookFromUrl(url: string): Promise<Book> {
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
     throw new Error("Invalid URL — must start with http:// or https://");
   }
 
   let format = detectFormatFromUrl(url);
+  // DAT-012 (#124): track the advertised size from whichever response
+  // first reveals it (HEAD or the GET body). A `content-length` over
+  // the cap aborts the import BEFORE we materialise the body.
+  let advertisedSize: number | null = null;
 
   if (!format) {
     try {
       const headRes = await fetch(url, { method: "HEAD" });
       format = detectFormatFromContentType(headRes.headers.get("content-type"));
-    } catch {
+      const headSize = parseContentLengthOrNull(
+        headRes.headers.get("content-length"),
+      );
+      if (headSize != null) {
+        if (headSize > URL_IMPORT_MAX_BYTES) {
+          throw new Error(
+            `File is too large to download (${formatBytesAsMB(headSize)}). Size limit is ${formatBytesAsMB(URL_IMPORT_MAX_BYTES)}.`,
+          );
+        }
+        advertisedSize = headSize;
+      }
+    } catch (err) {
+      // Re-throw size-limit rejections; swallow only the network /
+      // DNS / CORS failures we expected to be tolerant of here.
+      if (
+        err instanceof Error &&
+        /too large/i.test(err.message)
+      ) {
+        throw err;
+      }
       // HEAD failed, will try download anyway and check content-type there
     }
   }
@@ -387,6 +434,19 @@ export async function importBookFromUrl(url: string): Promise<Book> {
 
   if (!downloadRes.ok) {
     throw new Error(mapHttpStatusToUserCopy(downloadRes.status));
+  }
+
+  // DAT-012 (#124): re-check size from the GET response itself; servers
+  // sometimes omit Content-Length on HEAD but include it on GET.
+  if (advertisedSize == null) {
+    const getSize = parseContentLengthOrNull(
+      downloadRes.headers.get("content-length"),
+    );
+    if (getSize != null && getSize > URL_IMPORT_MAX_BYTES) {
+      throw new Error(
+        `File is too large to download (${formatBytesAsMB(getSize)}). Size limit is ${formatBytesAsMB(URL_IMPORT_MAX_BYTES)}.`,
+      );
+    }
   }
 
   if (!format) {
