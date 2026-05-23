@@ -177,11 +177,12 @@ export function runMigrations(db: Database.Database): number {
   }
 
   if (version < 5) {
-    // v5 (#142): invalidate existing chunk_data so the footer-detection
-    // heuristic gets a chance to rewrite cached paragraphs. The indexer
-    // will repopulate on next open.
-    db.exec("DELETE FROM chunk_data")
-    db.exec("INSERT INTO chunk_data_fts(chunk_data_fts) VALUES('rebuild')")
+    // v5 (#142): reserved version slot. An earlier draft wiped
+    // chunk_data so footer-aware re-extraction could happen — but
+    // that paralyzed library-level TTS prefetch (ttsPrefetch.ts gates
+    // on hasSavedEpubData, which queries chunk_data). Existing chunks
+    // keep their pre-heuristic content; only pages not yet in
+    // chunk_data get extracted with the footer mask applied.
     db.pragma('user_version = 5')
   }
 
