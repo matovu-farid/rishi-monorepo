@@ -385,9 +385,19 @@ export default function LibraryScreen() {
         >
           <View style={{ marginRight: spacing.md }}>
             <BookCover
+              testID="reading-now-cover"
               uri={lastReadBook.coverPath ?? undefined}
               title={lastReadBook.title}
               size="sm"
+              // #96 / STA-021 — when the book's cover hasn't been
+              // extracted yet (coverPath null) AND extraction has not
+              // been attempted-and-failed, render the dashed "pending"
+              // placeholder instead of the hash-based letter tile so
+              // the user can tell "cover loading" from "no cover".
+              loading={
+                lastReadBook.coverPath == null &&
+                lastReadBook.coverExtractionFailed !== true
+              }
             />
           </View>
           <View style={{ flex: 1 }}>
