@@ -417,10 +417,27 @@ function formatBytesAsMB(bytes: number): string {
   return `${Math.round(bytes / (1024 * 1024))} MB`;
 }
 
-export async function importBookFromUrl(url: string): Promise<Book> {
+/**
+ * DAT-017 (#129): caller-controllable cancellation. `UrlImportSheet`
+ * holds an `AbortController` for the lifetime of the sheet and aborts
+ * it on dismiss so a large download stops buffering immediately
+ * instead of stranded in the background. The signal is forwarded to
+ * both the HEAD probe and the GET; an aborted signal short-circuits
+ * with a standard `AbortError` from `fetch`.
+ */
+export interface ImportBookFromUrlOptions {
+  signal?: AbortSignal;
+}
+
+export async function importBookFromUrl(
+  url: string,
+  options: ImportBookFromUrlOptions = {},
+): Promise<Book> {
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
     throw new Error("Invalid URL — must start with http:// or https://");
   }
+
+  const { signal } = options;
 
   let format = detectFormatFromUrl(url);
   // DAT-012 (#124): track the advertised size from whichever response
@@ -430,7 +447,7 @@ export async function importBookFromUrl(url: string): Promise<Book> {
 
   if (!format) {
     try {
-      const headRes = await fetch(url, { method: "HEAD" });
+      const headRes = await fetch(url, { method: "HEAD", signal });
       format = detectFormatFromContentType(headRes.headers.get("content-type"));
       const headSize = parseContentLengthOrNull(
         headRes.headers.get("content-length"),
@@ -444,11 +461,13 @@ export async function importBookFromUrl(url: string): Promise<Book> {
         advertisedSize = headSize;
       }
     } catch (err) {
-      // Re-throw size-limit rejections; swallow only the network /
-      // DNS / CORS failures we expected to be tolerant of here.
+      // Re-throw size-limit rejections AND abort errors; swallow only
+      // the network / DNS / CORS failures we expected to be tolerant
+      // of here. AbortError must propagate so the caller can switch
+      // its UI back to idle.
       if (
         err instanceof Error &&
-        /too large/i.test(err.message)
+        (err.name === "AbortError" || /too large/i.test(err.message))
       ) {
         throw err;
       }
@@ -456,7 +475,7 @@ export async function importBookFromUrl(url: string): Promise<Book> {
     }
   }
 
-  const downloadRes = await fetch(url);
+  const downloadRes = await fetch(url, signal ? { signal } : undefined);
 
   if (!downloadRes.ok) {
     throw new Error(mapHttpStatusToUserCopy(downloadRes.status));
