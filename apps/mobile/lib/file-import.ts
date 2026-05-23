@@ -207,8 +207,11 @@ function ensureBooksDir(): void {
  * is treated as a confirmed duplicate.
  *
  * Returns the matching book id on hit; null otherwise.
+ *
+ * Exported so the share-sheet handler (`lib/file-handler.ts`) can reuse
+ * the same gate; #115 originally wired only the picker + URL paths.
  */
-async function findDuplicateByHash(
+export async function findDuplicateByHash(
   sourceUri: string,
 ): Promise<{ existingBookId: string; fileHash: string } | null> {
   let fileHash: string;

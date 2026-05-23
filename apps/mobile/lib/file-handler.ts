@@ -15,6 +15,7 @@
  */
 import { Directory, Paths, File } from 'expo-file-system'
 import { createMobileBookImportService } from '@/lib/book-import'
+import { findDuplicateByHash } from '@/lib/file-import'
 import type { BookFormat } from '@rishi/shared/book-import'
 
 const BOOKS_DIR_NAME = 'books'
@@ -23,7 +24,11 @@ export type IncomingFileResult =
   | { ok: true; bookId: string; format: BookFormat }
   | {
       ok: false
-      reason: 'unsupported' | 'import-failed' | 'duplicate-in-flight'
+      reason:
+        | 'unsupported'
+        | 'import-failed'
+        | 'duplicate-in-flight'
+        | 'duplicate'
       error?: string
     }
 
@@ -141,6 +146,21 @@ export async function handleIncomingFile(
   inFlight.add(url)
 
   try {
+    // DAT-002 (#115): the picker + URL paths already short-circuit on a
+    // matching file-hash; share-sheet was the only surface that still
+    // slipped through, so the library could grow a second row when the
+    // user shared the same file twice from another app. Reuse the same
+    // gate here so all three import surfaces have identical semantics.
+    // PR #207 review caught the gap.
+    const duplicate = await findDuplicateByHash(url)
+    if (duplicate) {
+      return {
+        ok: false,
+        reason: 'duplicate',
+        error: `This book is already in your library (id=${duplicate.existingBookId}).`,
+      }
+    }
+
     return await runImport(url, format)
   } finally {
     inFlight.delete(url)
