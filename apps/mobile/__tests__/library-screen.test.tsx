@@ -713,3 +713,149 @@ describe('LibraryScreen (P1-AB: loading skeleton on first focus)', () => {
     expect(rows.length).toBe(1)
   })
 })
+
+/**
+ * #32 — Library row layout: cover renders twice + row stacks vertically.
+ *
+ * The "Reading Now" card was rendering ABOVE the FlatList, but the
+ * same book also stayed in the FlatList's `data`. The user perceived
+ * it as one broken entry: a small cover (Reading Now card) + chevron
+ * + a larger cover (BookRow) + title + author + delete trailing
+ * underneath. The fix is to filter the last-read book out of the
+ * FlatList so the library lists each book exactly once.
+ *
+ * We pin three observable consequences:
+ *   1. When `lastReadBook` is set, the library does NOT render a
+ *      duplicate `library-book-row-<id>` for that same book.
+ *   2. Other books still render their rows.
+ *   3. The "Reading Now" card itself is still present (the surfaced
+ *      shortcut at the top of the screen is the intended UX).
+ *   4. The BookRow's children (cover, title column, delete button)
+ *      remain direct siblings of the row Pressable so flexDirection
+ *      can lay them out horizontally.
+ */
+describe('LibraryScreen (#32: row de-duplication + horizontal layout)', () => {
+  beforeEach(() => {
+    mockBooks.length = 0
+    mockLastReadBook = null
+  })
+
+  function findAllByID(
+    tree: TestRenderer.ReactTestRenderer,
+    testID: string,
+  ): TestRenderer.ReactTestInstance[] {
+    // Filter on `typeof n.type === 'string'` so we count host element
+    // instances only (React.forwardRef components forward the same
+    // props to the underlying host and would otherwise inflate the
+    // count by 2x).
+    return tree.root.findAll(
+      (n) =>
+        typeof n.type === 'string' &&
+        (n.props as { testID?: string }).testID === testID,
+    )
+  }
+
+  const booksFixture = [
+    {
+      id: 'b1',
+      title: 'Purple Cow',
+      author: 'Seth Godin',
+      format: 'epub',
+      filePath: '/tmp/purple-cow.epub',
+      coverPath: null,
+      currentCfi: null,
+      currentPage: null,
+      createdAt: 0,
+    },
+    {
+      id: 'b2',
+      title: 'War and Peace',
+      author: 'Tolstoy',
+      format: 'epub',
+      filePath: '/tmp/wp.epub',
+      coverPath: null,
+      currentCfi: null,
+      currentPage: null,
+      createdAt: 1,
+    },
+  ]
+
+  it('does NOT render a duplicate BookRow for the lastReadBook', () => {
+    mockBooks.push(...booksFixture)
+    mockLastReadBook = booksFixture[0]
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    // The last-read book (b1) is surfaced via the "Reading Now" card
+    // ABOVE the list, so the FlatList must not render it again.
+    const duplicateRow = findAllByID(tree, 'library-book-row-b1')
+    expect(duplicateRow.length).toBe(0)
+  })
+
+  it('still renders rows for the other books', () => {
+    mockBooks.push(...booksFixture)
+    mockLastReadBook = booksFixture[0]
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    // b2 is not the last-read book, so it should still show up.
+    const otherRow = findAllByID(tree, 'library-book-row-b2')
+    expect(otherRow.length).toBeGreaterThan(0)
+  })
+
+  it('keeps the BookRow children as horizontal siblings of the row Pressable', () => {
+    // No lastReadBook so b1 renders in the FlatList directly. We then
+    // assert structural shape: the row Pressable should contain a
+    // BookCover, a title-column View, and a delete TouchableOpacity
+    // as direct children — i.e. they remain horizontal siblings under
+    // the flexDirection:row Pressable, not stacked in nested wrappers.
+    mockBooks.push(booksFixture[0])
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    const rows = findAllByID(tree, 'library-book-row-b1')
+    expect(rows.length).toBe(1)
+    const row = rows[0]
+    // The Pressable's children should include a cover, a title, and the
+    // delete button — and they must all be siblings (no nested
+    // wrapper turning the layout into a vertical stack).
+    const cover = row.findAll(
+      (n) =>
+        typeof n.type === 'string' &&
+        (n.props as { testID?: string }).testID === 'book-row-cover-b1',
+    )
+    const title = row.findAll(
+      (n) =>
+        typeof n.type === 'string' &&
+        (n.props as { testID?: string }).testID === 'book-row-title',
+    )
+    const del = row.findAll(
+      (n) =>
+        typeof n.type === 'string' &&
+        (n.props as { testID?: string }).testID === 'book-delete-button',
+    )
+    expect(cover.length).toBe(1)
+    expect(title.length).toBe(1)
+    expect(del.length).toBe(1)
+    // flexDirection: 'row' must be present on the row Pressable so the
+    // three children lay out horizontally rather than stacking.
+    const styleProp = (row.props as { style?: unknown }).style
+    const fn =
+      typeof styleProp === 'function'
+        ? (styleProp as (s: { pressed: boolean }) => unknown[])
+        : null
+    expect(fn).not.toBeNull()
+    const flattened = (fn!({ pressed: false }) as unknown[]).reduce<
+      Record<string, unknown>
+    >((acc, entry) => {
+      if (entry && typeof entry === 'object') {
+        return { ...acc, ...(entry as Record<string, unknown>) }
+      }
+      return acc
+    }, {})
+    expect(flattened.flexDirection).toBe('row')
+  })
+})

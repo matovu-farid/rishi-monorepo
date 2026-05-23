@@ -63,15 +63,26 @@ export default function LibraryScreen() {
   const importTarget = useTourTargetLayout('import-books')
   const gridTarget = useTourTargetLayout('book-grid')
 
+  // #32 — When a "Reading Now" card is surfaced above the list we
+  // must NOT also render the same book as a FlatList row, otherwise
+  // the user sees a small cover + chevron (the card) directly above a
+  // larger cover + title + delete row (the list cell) and reads it as
+  // one broken entry whose cover is duplicated. We always drop the
+  // last-read book from the list — the Reading Now card is its single
+  // surface. If a search query is active, scoring still happens over
+  // the de-duplicated set so the card+row pair never reappears.
   const filteredBooks = useMemo(() => {
-    if (!searchQuery.trim()) return books
+    const base = lastReadBook
+      ? books.filter((book) => book.id !== lastReadBook.id)
+      : books
+    if (!searchQuery.trim()) return base
     const query = searchQuery.toLowerCase()
-    return books.filter(
+    return base.filter(
       (book) =>
         book.title.toLowerCase().includes(query) ||
         (book.author && book.author.toLowerCase().includes(query))
     )
-  }, [books, searchQuery])
+  }, [books, lastReadBook, searchQuery])
 
   const loadBooks = useCallback(() => {
     const loaded = getBooks()
