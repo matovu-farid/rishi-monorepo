@@ -39,6 +39,7 @@ import { usePdfStore, BookNavigationState } from '@/lib/stores/pdfStore'
 import { getBookForReading, updateBookPage } from '@/lib/book-storage'
 import { Book, ReaderSettings } from '@/types/book'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
+import { READER_THEMES } from '@/constants/reader-themes'
 import { safeBack } from '@/lib/navigation'
 import {
   insertPdfHighlight,
@@ -591,6 +592,18 @@ export default function PdfReaderScreen() {
     saveReaderSettings(next)
     setSettings(next)
   }, [])
+
+  // Issue #47 — forward the active theme into the pdfjs WebView. We
+  // gate on `pageCount > 0` so the first call runs after pdfjs has
+  // parsed the document and the viewer DOM exists; the readerRef's
+  // setTheme is idempotent so re-runs on subsequent renders are
+  // cheap. Without this hop the AppearanceSheet's theme picker is a
+  // no-op for PDF users.
+  useEffect(() => {
+    if (pageCount <= 0) return
+    const theme = READER_THEMES[settings.themeName]
+    readerRef.current?.setTheme(theme)
+  }, [pageCount, settings.themeName])
 
   // safeBack: deep-link cold-start has an empty stack, so a bare
   // router.back() no-ops and strands the user (P1-B).

@@ -28,6 +28,8 @@ import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 import { resolvePlainTextReadFromSelection } from '@/lib/reader-selection'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
+import { buildReaderThemeInjection } from '@/lib/reader-theme-css'
+import { READER_THEMES } from '@/constants/reader-themes'
 import { safeBack } from '@/lib/navigation'
 import type { ReaderSettings } from '@/types/book'
 import {
@@ -529,6 +531,16 @@ export default function DjvuReaderScreen() {
     saveReaderSettings(next)
     setSettings(next)
   }, [])
+
+  // Issue #47 — forward the active theme into the WebView whenever it
+  // changes. DJVU is canvas-only today so the perceived effect is the
+  // body background swap behind the canvas; without the hop, the
+  // AppearanceSheet's theme picker is a no-op for DJVU users.
+  useEffect(() => {
+    if (!bookLoaded || !webViewRef.current) return
+    const theme = READER_THEMES[settings.themeName]
+    webViewRef.current.injectJavaScript(buildReaderThemeInjection(theme))
+  }, [bookLoaded, settings.themeName])
 
   // safeBack: guards against deep-link cold-start where the nav stack is
   // empty and a bare router.back() would strand the user (P1-B).
