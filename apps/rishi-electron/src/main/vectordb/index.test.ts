@@ -72,7 +72,9 @@ class FakeHNSW {
     // No-op — we don't actually need bytes on disk for tests.
   }
 
-  setEf(_ef: number): void {}
+  setEf(_ef: number): void {
+    // No-op — HNSW search-time tuning is irrelevant for the fake.
+  }
 
   resizeIndex(n: number): void {
     this.maxElements = n
