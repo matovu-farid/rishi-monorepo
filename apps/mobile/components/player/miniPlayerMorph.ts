@@ -8,7 +8,10 @@
  * `(screenWidth - insets.left - insets.right) / 2 + insets.left`, NOT
  * `screenWidth / 2`.
  *
- * Pure module — no React, no Reanimated. Importable from tests directly.
+ * Pure module — no React, no Reanimated state. The `'worklet'` directive
+ * on `computeMiniPlayerTranslateX` makes it callable from inside a
+ * Reanimated worklet (e.g. `useAnimatedStyle`); the function itself is
+ * still importable from JS for tests.
  */
 
 export interface MiniPlayerMorphArgs {
@@ -37,6 +40,7 @@ export function computeMiniPlayerTranslateX({
   rightOffset,
   insets,
 }: MiniPlayerMorphArgs): number {
+  'worklet'
   const visibleCenter =
     (screenWidth - insets.left - insets.right) / 2 + insets.left
   const pillCenterAtRest = screenWidth - rightOffset - pillWidth / 2
