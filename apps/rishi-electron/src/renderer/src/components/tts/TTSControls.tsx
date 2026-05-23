@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { toast } from 'sonner'
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from 'react'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 import { usePlayerStore, type PlayerStoreState } from '@/stores/playerStore'
@@ -24,6 +24,33 @@ interface TTSControlsProps {
 /** Duration before the expanded pill auto-collapses (ms). */
 const AUTO_DISMISS_MS = 4_000
 
+/**
+ * `prefers-reduced-motion` user-preference subscription (#201 / VIS-008).
+ *
+ * The morph transition between orb and pill ships `transitionDuration` as an
+ * inline style, so the global `@media (prefers-reduced-motion: reduce)` rule
+ * in globals.css cannot override it (inline wins). This hook reads the live
+ * media-query value via `matchMedia` + `useSyncExternalStore` so the inline
+ * style can collapse to `0ms` when the user opts out of animation.
+ *
+ * Runs in Electron's bundled Chromium — modern matchMedia + EventTarget
+ * MediaQueryList semantics are guaranteed, so no Safari < 14 fallback is
+ * needed. The third `getServerSnapshot` argument is the useSyncExternalStore
+ * contract for the (unused) SSR path.
+ */
+function usePrefersReducedMotion(): boolean {
+  return useSyncExternalStore(
+    (notify) => {
+      const mql = window.matchMedia('(prefers-reduced-motion: reduce)')
+      const handler = (): void => notify()
+      mql.addEventListener('change', handler)
+      return () => mql.removeEventListener('change', handler)
+    },
+    () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    () => false // SSR / non-browser fallback (unreachable in Electron renderer)
+  )
+}
+
 /** Player states that represent an active playback session — the pill must
  *  not auto-collapse while in any of these. Idle / stopped / paused / error
  *  still auto-collapse (intentional). */
@@ -36,6 +63,7 @@ const ACTIVE_PLAYBACK_STATES: ReadonlySet<PlayerStoreState> = new Set([
 ])
 
 export default function TTSControls({ bookId, disabled = false }: TTSControlsProps) {
+  const prefersReducedMotion = usePrefersReducedMotion()
   const [showError, setShowError] = useState(false)
   const error = usePlayerStore((s) => s.errors).join('\n')
   const errors = usePlayerStore((s) => s.errors)
@@ -279,10 +307,12 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
           padding: expanded ? '8px 14px' : 0,
           gap: expanded ? 6 : 0,
           cursor: expanded ? 'default' : 'pointer',
-          // Morph animation
+          // Morph animation — honors `prefers-reduced-motion: reduce` by
+          // collapsing the duration to 0 so the orb ↔ pill swap is instant
+          // for users who opt out of animation (#201 / VIS-008).
           transitionProperty:
             'width, height, border-radius, padding, gap, bottom, right, left, transform',
-          transitionDuration: expanded ? '250ms' : '200ms',
+          transitionDuration: prefersReducedMotion ? '0ms' : expanded ? '250ms' : '200ms',
           transitionTimingFunction: expanded ? 'cubic-bezier(0.34, 1.56, 0.64, 1)' : 'ease-in-out'
         }}
       >
@@ -298,9 +328,10 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
                   borderRadius: 1.5,
                   backgroundColor: 'rgba(0,0,0,0.50)',
                   transformOrigin: 'center',
-                  animation: isPlaying
-                    ? `tts-waveform 0.8s ease-in-out ${i * 0.15}s infinite`
-                    : 'none'
+                  animation:
+                    isPlaying && !prefersReducedMotion
+                      ? `tts-waveform 0.8s ease-in-out ${i * 0.15}s infinite`
+                      : 'none'
                 }}
               />
             ))}

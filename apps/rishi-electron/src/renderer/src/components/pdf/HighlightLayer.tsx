@@ -2,7 +2,15 @@ import { useMemo, type MouseEvent as ReactMouseEvent } from 'react'
 import type { JSX } from 'react'
 import { pdfLocatorToScreenRects, type ViewportLike } from '@/modules/pdf-locator'
 import type { HighlightRow, PdfLocator } from '@/modules/highlight-storage'
-import { getHighlightHex, type HighlightColor } from '@/types/highlight'
+import { getHighlightHexForTheme, type HighlightColor } from '@/types/highlight'
+
+// Dark-mode-aware hex picker so PDF highlight overlays remain visible
+// against dark page chrome (#198). PDF pages themselves are rasterized
+// so we can't blend-mode them — we just pick a brighter swatch.
+function currentMode(): 'light' | 'dark' {
+  if (typeof document === 'undefined') return 'light'
+  return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+}
 
 interface HighlightLayerProps {
   pageNumber: number
@@ -72,7 +80,10 @@ export function HighlightLayer({
             top: rect.top,
             width: rect.width,
             height: rect.height,
-            backgroundColor: hexWithAlpha(getHighlightHex(row.color as HighlightColor), 0.35),
+            backgroundColor: hexWithAlpha(
+              getHighlightHexForTheme(row.color as HighlightColor, currentMode()),
+              0.35
+            ),
             pointerEvents: 'auto',
             cursor: 'pointer'
           }}
