@@ -1,11 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { usePdfStore, BookNavigationState } from './pdfStore'
+import { usePrefsStore } from './prefsStore'
 
 describe('pdfStore', () => {
   beforeEach(() => {
     // Full replace with the store's initial state so new PdfState fields
     // cannot silently leak across tests.
     usePdfStore.setState(usePdfStore.getInitialState(), true)
+    // pdfFooterDetection is read by getFooterMaskForPage — keep it on by
+    // default so existing tests aren't surprised by the gate.
+    usePrefsStore.setState({ pdfFooterDetection: true })
   })
 
   it('should set page number', () => {
@@ -103,5 +107,39 @@ describe('pdfStore', () => {
     expect(usePdfStore.getState().highlightedParagraphIndex).toBe('')
     expect(usePdfStore.getState().isHighlighting).toBe(false)
     expect(usePdfStore.getState().isRenderedPageState).toEqual({})
+  })
+
+  // --- #142 footer-mask plumbing -------------------------------------------
+
+  it('getFooterMaskForPage returns undefined when pdfFooterDetection is off', () => {
+    const mask = new Map<number, Set<number>>([[5, new Set([2, 3])]])
+    usePdfStore.getState().setFooterMask(1, mask)
+
+    // Sanity: with the pref ON, the mask is returned.
+    usePrefsStore.setState({ pdfFooterDetection: true })
+    expect(usePdfStore.getState().getFooterMaskForPage(1, 5)).toEqual(new Set([2, 3]))
+
+    // With the pref OFF, the store treats the mask as if it weren't there.
+    usePrefsStore.setState({ pdfFooterDetection: false })
+    expect(usePdfStore.getState().getFooterMaskForPage(1, 5)).toBeUndefined()
+
+    // Underlying map is untouched — the gate is purely on the read path.
+    expect(usePdfStore.getState().footerMaskByBookId[1]).toBe(mask)
+  })
+
+  it('removeBook drops the footer mask entry for that book', () => {
+    const mask = new Map<number, Set<number>>([[5, new Set([2, 3])]])
+    usePdfStore.getState().addBook(1)
+    usePdfStore.getState().setFooterMask(1, mask)
+    expect(
+      Object.prototype.hasOwnProperty.call(usePdfStore.getState().footerMaskByBookId, 1)
+    ).toBe(true)
+
+    usePdfStore.getState().removeBook(1)
+
+    expect(
+      Object.prototype.hasOwnProperty.call(usePdfStore.getState().footerMaskByBookId, 1)
+    ).toBe(false)
+    expect(usePdfStore.getState().footerMaskByBookId[1]).toBeUndefined()
   })
 })
