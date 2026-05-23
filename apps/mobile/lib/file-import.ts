@@ -662,6 +662,16 @@ export async function importBookFromUrl(
     safeDeleteDirectory(bookDir);
     throw new Error(`Import failed at stage=${result.stage}: ${result.error}`);
   }
+
+  // PR #207 review: even on success the URL scratch dir must be
+  // cleaned up. `bookDir` here was created against `urlScratchUuid`
+  // purely to host `tmp.<format>`; `runImportWithService` minted a
+  // DIFFERENT UUID for the actual book and the shared service's FsPort
+  // copied the file into `books/<realBookId>/book.<format>`. Leaving
+  // `books/<urlScratchUuid>/` behind on success leaks an empty
+  // directory whose name looks like a real book id and would confuse
+  // any future janitor walking `/books/`.
+  safeDeleteDirectory(bookDir);
   return result.book;
 }
 

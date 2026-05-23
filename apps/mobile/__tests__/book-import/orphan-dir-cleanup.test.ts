@@ -109,15 +109,30 @@ jest.mock('@/lib/file-import-index-gate', () => ({
 }))
 
 jest.mock('@rishi/shared/schema', () => ({
-  books: { id: 'id', fileHash: 'fileHash' },
+  books: { id: 'id', fileHash: 'fileHash', isDeleted: 'isDeleted' },
 }))
 
 jest.mock('drizzle-orm', () => ({
   eq: jest.fn((col, val) => ({ col, val })),
+  and: jest.fn((...args) => ({ and: args })),
 }))
 
 const dbState = {
   rows: new Map<string, Record<string, unknown>>(),
+}
+
+type EqClause = { col: string; val: unknown }
+type AndClause = { and: Array<EqClause | AndClause> }
+
+function flattenEqs(clause: unknown): EqClause[] {
+  if (!clause || typeof clause !== 'object') return []
+  if ('and' in (clause as Record<string, unknown>)) {
+    return (clause as AndClause).and.flatMap(flattenEqs)
+  }
+  if ('col' in (clause as Record<string, unknown>)) {
+    return [clause as EqClause]
+  }
+  return []
 }
 
 jest.mock('@/lib/db', () => ({
@@ -125,13 +140,22 @@ jest.mock('@/lib/db', () => ({
     select: () => ({
       from: () => ({
         where: (w: unknown) => {
-          const hashStr =
-            w && typeof w === 'object' && 'val' in (w as object)
-              ? String((w as { val: unknown }).val)
-              : ''
-          const matches = Array.from(dbState.rows.values()).filter(
-            (r) => String(r.fileHash) === hashStr,
-          )
+          // The where clause may be a single `eq(...)` or an
+          // `and(eq(...), eq(...))`. Flatten and apply all predicates so
+          // the soft-delete filter on the duplicate gate is honoured.
+          const predicates = flattenEqs(w)
+          let matches = Array.from(dbState.rows.values())
+          for (const p of predicates) {
+            matches = matches.filter((r) => {
+              const left = r[String(p.col)]
+              // Treat missing `isDeleted` as `false` so rows without
+              // the field still satisfy a `isDeleted = false` filter.
+              if (left === undefined && p.col === 'isDeleted') {
+                return p.val === false
+              }
+              return left === p.val
+            })
+          }
           return {
             get: () => matches[0],
             all: () => matches,
@@ -262,6 +286,12 @@ function findBookDir(): FakeDir | undefined {
   )
 }
 
+function findAllBookDirs(): FakeDir[] {
+  return Array.from(fakeDirs.values()).filter(
+    (d) => d.uri.startsWith('/docs/books/') && d.uri !== '/docs/books',
+  )
+}
+
 // ── FsPort cleanup test (picker path) ──────────────────────────────────────
 //
 // The picker path drives `createMobileFsPort.copyBookToAppData` directly via
@@ -352,15 +382,30 @@ describe('DAT-011 — URL import cleans up the per-book directory on failure', (
     expect(bookDir!.delete).toHaveBeenCalledTimes(1)
   })
 
-  it('does NOT delete the bookDir on a successful import (sanity)', async () => {
+  // DAT-011 follow-up (PR #207 review): the URL wrapper creates
+  // `books/<scratchUuid>/` to stash the downloaded tmp file, then
+  // `runImportWithService` mints a DIFFERENT UUID and the shared
+  // service's FsPort writes the real book into
+  // `books/<realBookId>/book.<format>`. The tmp file used to be deleted
+  // on success but the scratch dir was never removed, leaking an empty
+  // directory with a UUID-looking name into `books/` that any future
+  // janitor walking the dir would treat as a real book id.
+  //
+  // After the fix the scratch dir is cleaned up on success too.
+  it('removes the scratch dir on a successful URL import (#123 follow-up)', async () => {
     mockFetch.mockResolvedValueOnce(
       downloadResponse({ contentType: 'application/epub+zip' }),
     )
 
     await importBookFromUrl('https://example.com/lib/good.epub')
 
-    const bookDir = findBookDir()
-    expect(bookDir).toBeDefined()
-    expect(bookDir!.delete).not.toHaveBeenCalled()
+    // In this test the shared service is mocked and doesn't create its
+    // own per-book dir, so the only `/docs/books/<uuid>/` entry in the
+    // fake fs IS the scratch dir we expect cleaned up.
+    const scratchDirs = findAllBookDirs()
+    expect(scratchDirs.length).toBeGreaterThan(0)
+    for (const dir of scratchDirs) {
+      expect(dir.delete).toHaveBeenCalledTimes(1)
+    }
   })
 })
