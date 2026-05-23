@@ -233,7 +233,7 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
               backgroundColor: isDark ? 'rgba(10,126,164,0.18)' : 'rgba(10,126,164,0.10)',
             }}
           >
-            <Ionicons name={iconName} size={28} color="#0a7ea4" />
+            <Ionicons name={iconName} size={28} color={colors.accent.primary} />
           </View>
         </View>
         <Text
@@ -274,7 +274,7 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
               borderRadius: 12,
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: '#0a7ea4',
+              backgroundColor: colors.accent.primary,
               opacity: pressed ? 0.85 : 1,
               marginBottom: 8,
             })}
@@ -307,7 +307,7 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
           onPress={handleOtherOptions}
           style={{ height: 44, alignItems: 'center', justifyContent: 'center' }}
         >
-          <Text style={{ color: '#0a7ea4', fontSize: 15 }}>Other sign-in options</Text>
+          <Text style={{ color: colors.accent.primary, fontSize: 15 }}>Other sign-in options</Text>
         </Pressable>
         {/*
           P1-Q — secondary "Create account" link. Without this, the sheet's
@@ -321,7 +321,7 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
           onPress={handleCreateAccount}
           style={{ height: 44, alignItems: 'center', justifyContent: 'center' }}
         >
-          <Text style={{ color: '#0a7ea4', fontSize: 15 }}>Create account</Text>
+          <Text style={{ color: colors.accent.primary, fontSize: 15 }}>Create account</Text>
         </Pressable>
         {/*
           P1-R — renamed "Not now" → "Maybe later" with a subline that
@@ -340,7 +340,7 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
             justifyContent: 'center',
           }}
         >
-          <Text style={{ color: '#0a7ea4', fontSize: 17 }}>Maybe later</Text>
+          <Text style={{ color: colors.accent.primary, fontSize: 17 }}>Maybe later</Text>
           <Text
             style={{
               color: isDark ? '#8E8E93' : '#6D6D72',

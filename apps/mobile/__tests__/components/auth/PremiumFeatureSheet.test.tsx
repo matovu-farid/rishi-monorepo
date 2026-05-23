@@ -498,6 +498,67 @@ describe('PremiumFeatureSheet (mobile)', () => {
     })
   })
 
+  describe('theme tint (VIS-021)', () => {
+    function findCta(tree: TestRenderer.ReactTestRenderer): TestRenderer.ReactTestInstance | undefined {
+      return tree.root.findAll(
+        (n) =>
+          n.type === Pressable &&
+          (n.props as { accessibilityLabel?: string }).accessibilityLabel ===
+            'Continue with Google',
+      )[0]
+    }
+
+    it('CTA backgroundColor uses colors.accent.primary (systemBlue light), not legacy #0a7ea4', () => {
+      storeState.premiumGateOpen = true
+      storeState.premiumGateFeature = 'tts'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<PremiumFeatureSheet />)
+      })
+      const cta = findCta(tree)
+      expect(cta).toBeDefined()
+      // `style` is a function: ({pressed}) => ({...}). Invoke it to read the static bg color.
+      const styleFn = (cta!.props as { style: (s: { pressed: boolean }) => Record<string, string> })
+        .style
+      const resolved = styleFn({ pressed: false })
+      expect(resolved.backgroundColor).toBe('#007AFF')
+      expect(resolved.backgroundColor).not.toBe('#0a7ea4')
+    })
+
+    it('every "Maybe later" / "Other sign-in options" / "Create account" link uses colors.accent.primary', () => {
+      storeState.premiumGateOpen = true
+      storeState.premiumGateFeature = 'tts'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<PremiumFeatureSheet />)
+      })
+      // Locate every Text node whose stringified rendered children are one
+      // of the link labels, then assert their `color` is the systemBlue
+      // light token (#007AFF) rather than the legacy #0a7ea4 brand hex.
+      const linkLabels = ['Other sign-in options', 'Create account', 'Maybe later']
+      const json = tree.toJSON()
+      let matched = 0
+      const visit = (n: TestRenderer.ReactTestRendererJSON | string | null): void => {
+        if (!n || typeof n === 'string') return
+        if (n.type === 'Text' && Array.isArray(n.children)) {
+          const direct = n.children.find((c): c is string => typeof c === 'string')
+          if (direct && linkLabels.includes(direct)) {
+            const style = (n.props as { style?: { color?: string } }).style
+            expect(style?.color).toBe('#007AFF')
+            expect(style?.color).not.toBe('#0a7ea4')
+            matched += 1
+          }
+        }
+        if (Array.isArray(n.children)) {
+          for (const c of n.children) visit(c as TestRenderer.ReactTestRendererJSON | string)
+        }
+      }
+      if (Array.isArray(json)) for (const j of json) visit(j)
+      else visit(json)
+      expect(matched).toBe(3)
+    })
+  })
+
   describe('theme tokens (VIS-028)', () => {
     it('handle indicator backgroundColor is sourced from colors.label.quaternary, not hardcoded', () => {
       // VIS-028 — the previous hardcoded {dark:#48484A, light:#C7C7CC}
