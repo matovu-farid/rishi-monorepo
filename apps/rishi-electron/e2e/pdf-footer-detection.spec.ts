@@ -5,8 +5,9 @@
  *   1. `buildFooterMask` produces a FooterMask attached to `usePdfStore`,
  *      reachable via `window.__rishi.getFooterMask(bookId)`.
  *   2. The mask flags items in the bottom band of the page.
- *   3. Paragraph indices in `pdfStore.paragraphs` retain GAPS at the masked
- *      positions — i.e. resume bookmarks remain stable across builds.
+ *   3. Paragraph indices published into `pdfStore.currentViewParagraphs`
+ *      retain GAPS at the masked positions — i.e. resume bookmarks remain
+ *      stable across builds.
  *
  * Fixture: e2e/fixtures/test-book.pdf (Sipser, 481pp) has confirmed
  * running headers + page numbers + multi-line copyright footer.
@@ -31,8 +32,17 @@ declare global {
         getState: () => {
           pageCount: number
           pageNumber: number
-          paragraphs: Record<number, Array<{ index: string; text: string }>>
+          /**
+           * The reader publishes one page's paragraphs at a time through
+           * `currentViewParagraphs` (flat array). Each paragraph's `.index`
+           * encodes `pageNumber * 10000 + originalIdx` as a string — when
+           * the heuristic masks one out, its slot is reserved (the next
+           * surviving paragraph's originalIdx is `prev+2` or more), which
+           * is exactly the "gap" we assert on.
+           */
+          currentViewParagraphs: Array<{ index: string; text: string }>
           pageNumberToPageData: Record<number, unknown>
+          virtualizer: unknown | null
         }
       }
       /** Added in this branch: read the per-book footer mask after detection. */
@@ -109,59 +119,124 @@ test('paragraph indices stay stable when the heuristic engages (gaps preserved)'
     const bookPage = await openBook(app.page, book.id)
     await bookPage.waitForTimeout(3500)
 
-    // Wait for both: footer mask present AND at least one non-cover page's
-    // paragraphs are computed.
+    // Phase 1: wait for the footer mask to populate.
     await bookPage.waitForFunction(
       (bookId: number) => {
         const w = window as Window
         if (!w.__rishi?.getFooterMask) return false
         const mask = w.__rishi.getFooterMask(bookId)
         if (!mask || mask.size === 0) return false
-        const paragraphs = w.__rishi.pdfStore.getState().paragraphs
-        // Need at least one page beyond the cover that has paragraphs computed.
-        return Object.keys(paragraphs).some((k) => Number(k) >= 2 && paragraphs[Number(k)].length > 0)
+        // Need at least one non-cover page whose mask is non-empty —
+        // otherwise there's nothing to assert a gap against.
+        for (const [p, set] of mask) {
+          if (p >= 2 && set.size > 0) return true
+        }
+        return false
       },
       book.id,
       { timeout: 60000 }
     )
 
-    const probe = await bookPage.evaluate((bookId: number) => {
+    // Phase 2: find a page that has both a non-empty mask AND is rendered
+    // (so its TextContent is in pageNumberToPageData) so we can scroll to it
+    // and have `currentViewParagraphs` published for that page.
+    const targetPage = await bookPage.evaluate((bookId: number) => {
       const w = window as Window
       const mask = w.__rishi!.getFooterMask!(bookId)!
-      const paragraphs = w.__rishi!.pdfStore.getState().paragraphs
-
-      // Find a page that BOTH has paragraphs computed AND has a non-empty mask entry.
-      let chosenPage = -1
-      for (const k of Object.keys(paragraphs)) {
-        const p = Number(k)
+      const pageData = w.__rishi!.pdfStore.getState().pageNumberToPageData
+      for (const [p, set] of mask) {
         if (p < 2) continue
-        if ((paragraphs[p]?.length ?? 0) === 0) continue
-        const set = mask.get(p)
-        if (set && set.size > 0) {
-          chosenPage = p
-          break
-        }
+        if (set.size === 0) continue
+        if (pageData[p]) return p
       }
-      if (chosenPage < 0) return { chosenPage, hasGap: false, indices: [] as number[] }
-      const indices = paragraphs[chosenPage].map((p) => Number(p.index)).sort((a, b) => a - b)
-
-      // Look for at least one "gap" — i.e. some index whose +1 neighbour is
-      // missing AND a higher index still exists. That gap is the reserved
-      // slot where the masked paragraph used to live.
-      let hasGap = false
-      for (let i = 0; i < indices.length - 1; i++) {
-        if (indices[i + 1] !== indices[i] + 1) {
-          hasGap = true
-          break
-        }
+      // Fall back to the first non-cover page with a non-empty mask, even
+      // if we haven't rendered it yet — we'll scroll there next and the
+      // virtualizer will render-on-demand.
+      for (const [p, set] of mask) {
+        if (p >= 2 && set.size > 0) return p
       }
-      return { chosenPage, hasGap, indices }
+      return -1
     }, book.id)
+    expect(
+      targetPage,
+      'expected to find at least one non-cover page with a non-empty footer mask'
+    ).toBeGreaterThanOrEqual(2)
 
-    expect(probe.chosenPage).toBeGreaterThanOrEqual(2)
+    // Phase 3: scroll the reader to the target page (mirrors the pattern in
+    // pdf-next-paragraph-snap-back.spec.ts) so the virtualizer renders that
+    // page, its TextContent lands in pageNumberToPageData, and
+    // usePdfReader publishes paragraphs into currentViewParagraphs.
+    await bookPage.evaluate((page: number) => {
+      const w = window as unknown as {
+        __rishi: {
+          pdfStore: {
+            getState: () => {
+              virtualizer: {
+                scrollToIndex: (idx: number, opts: { align: 'start' }) => void
+              } | null
+            }
+          }
+        }
+      }
+      const v = w.__rishi.pdfStore.getState().virtualizer
+      if (v) v.scrollToIndex(page - 1, { align: 'start' })
+    }, targetPage)
+
+    await bookPage.waitForFunction(
+      (page: number) => {
+        const w = window as Window
+        const s = w.__rishi!.pdfStore.getState()
+        // Wait until `currentViewParagraphs` actually contains paragraphs
+        // FROM the target page (encoded as `page * 10000 + originalIdx`).
+        if (s.currentViewParagraphs.length === 0) return false
+        const min = page * 10000
+        const max = (page + 1) * 10000
+        return s.currentViewParagraphs.some((p) => {
+          const n = Number(p.index)
+          return Number.isFinite(n) && n >= min && n < max
+        })
+      },
+      targetPage,
+      { timeout: 30000 }
+    )
+
+    // Phase 4: read currentViewParagraphs, decode the per-page originalIdx
+    // sequence, and assert at least one gap (originalIdx jumps by 2+).
+    const probe = await bookPage.evaluate(
+      ({ bookId, page }: { bookId: number; page: number }) => {
+        const w = window as Window
+        const mask = w.__rishi!.getFooterMask!(bookId)!
+        const maskSet = mask.get(page) ?? new Set<number>()
+        const paragraphs = w.__rishi!.pdfStore.getState().currentViewParagraphs
+        const min = page * 10000
+        const max = (page + 1) * 10000
+        const originalIndices = paragraphs
+          .map((p) => Number(p.index))
+          .filter((n) => Number.isFinite(n) && n >= min && n < max)
+          .map((n) => n - min)
+          .sort((a, b) => a - b)
+        let hasGap = false
+        for (let i = 0; i < originalIndices.length - 1; i++) {
+          if (originalIndices[i + 1] - originalIndices[i] >= 2) {
+            hasGap = true
+            break
+          }
+        }
+        return {
+          page,
+          maskSize: maskSet.size,
+          originalIndices,
+          hasGap
+        }
+      },
+      { bookId: book.id, page: targetPage }
+    )
+
+    expect(probe.maskSize, 'expected non-empty mask on the chosen page').toBeGreaterThan(0)
     expect(
       probe.hasGap,
-      `expected at least one gap in paragraph indices on page ${probe.chosenPage}, got: ${probe.indices.join(',')}`
+      `expected at least one gap in per-page originalIdx sequence on page ${probe.page} ` +
+        `(mask size=${probe.maskSize}, originalIndices=${probe.originalIndices.join(',')})`
     ).toBe(true)
   } finally {
     await Promise.race([
