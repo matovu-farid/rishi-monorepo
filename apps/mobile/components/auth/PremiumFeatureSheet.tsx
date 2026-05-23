@@ -40,6 +40,30 @@ const FEATURE_ICONS: Record<PremiumFeature, keyof typeof Ionicons.glyphMap> = {
 }
 
 /**
+ * GAT-104 — focus-restore handle.
+ *
+ * VoiceOver users lose their place when the premium gate steals focus to
+ * the sheet title and then closes without returning focus to the triggering
+ * control. We can't grab the previously-focused node from React Native
+ * directly, so callers stash the trigger's nodeHandle here before opening
+ * the gate; the sheet replays it via `AccessibilityInfo.setAccessibilityFocus`
+ * when it closes.
+ *
+ * Trigger sites can call `setPremiumGateFocusTrigger(findNodeHandle(ref))`
+ * immediately before `openPremiumGate(...)` and the sheet will restore
+ * focus on dismiss. If no handle is registered the restore step is skipped
+ * (no regression vs. previous behaviour).
+ */
+let pendingFocusRestoreHandle: number | null = null
+export function setPremiumGateFocusTrigger(handle: number | null): void {
+  pendingFocusRestoreHandle = handle
+}
+/** Internal — used by tests; not part of the public API. */
+export function __getPremiumGateFocusTrigger(): number | null {
+  return pendingFocusRestoreHandle
+}
+
+/**
  * GAT-008 — map known sign-in error shapes onto user-facing copy.
  *
  * The raw error from `lib/auth.signIn()` can be one of:
@@ -114,6 +138,19 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
       return () => clearTimeout(t)
     } else {
       sheetRef.current?.close()
+      // GAT-104 — restore VoiceOver focus to the triggering control when the
+      // gate dismisses. If no handle was registered (callers haven't been
+      // updated yet), this is a no-op and behaviour matches the previous
+      // implementation. The restore is scheduled on the next tick so the
+      // sheet's own close animation has cleared the focus stack first.
+      const handle = pendingFocusRestoreHandle
+      if (handle != null && handle !== 0) {
+        const t = setTimeout(() => {
+          AccessibilityInfo.setAccessibilityFocus(handle)
+          pendingFocusRestoreHandle = null
+        }, 50)
+        return () => clearTimeout(t)
+      }
       return undefined
     }
   }, [open])

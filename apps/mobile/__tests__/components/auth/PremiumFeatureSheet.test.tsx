@@ -181,9 +181,13 @@ jest.mock('@/lib/stores/authStore', () => ({
 
 import React, { act } from 'react'
 import TestRenderer from 'react-test-renderer'
-import { Pressable } from 'react-native'
+import { Pressable, AccessibilityInfo } from 'react-native'
 import * as Haptics from 'expo-haptics'
-import { PremiumFeatureSheet } from '@/components/auth/PremiumFeatureSheet'
+import {
+  PremiumFeatureSheet,
+  setPremiumGateFocusTrigger,
+  __getPremiumGateFocusTrigger,
+} from '@/components/auth/PremiumFeatureSheet'
 
 function findTextNodes(root: TestRenderer.ReactTestRenderer): string[] {
   const out: string[] = []
@@ -216,7 +220,11 @@ beforeEach(() => {
   ;(Haptics.selectionAsync as jest.Mock).mockClear()
   ;(Haptics.impactAsync as jest.Mock).mockClear()
   ;(Haptics.notificationAsync as jest.Mock).mockClear()
+  ;(AccessibilityInfo.setAccessibilityFocus as jest.Mock).mockClear()
   withTimingMock.mockClear()
+  // GAT-104 — every test starts with a clean focus-restore handle so prior
+  // tests don't bleed state through the module-level ref.
+  setPremiumGateFocusTrigger(null)
   __platformOS = 'ios'
   storeState = {
     premiumGateOpen: false,
@@ -578,6 +586,78 @@ describe('PremiumFeatureSheet (mobile)', () => {
       // Make sure we didn't regress to the legacy hex codes.
       expect(handleStyle?.backgroundColor).not.toBe('#48484A')
       expect(handleStyle?.backgroundColor).not.toBe('#C7C7CC')
+    })
+  })
+
+  describe('focus restoration on dismiss (GAT-104)', () => {
+    it('exposes a setPremiumGateFocusTrigger helper that stashes a nodeHandle', () => {
+      // The helper is the wire callers use to tell the sheet what to focus
+      // on close. It must round-trip the handle and accept null to clear it.
+      setPremiumGateFocusTrigger(4242)
+      expect(__getPremiumGateFocusTrigger()).toBe(4242)
+      setPremiumGateFocusTrigger(null)
+      expect(__getPremiumGateFocusTrigger()).toBeNull()
+    })
+
+    it('restores VoiceOver focus to the registered trigger when the gate closes', () => {
+      jest.useFakeTimers()
+      // Register the trigger BEFORE mounting in the open state. This
+      // mirrors a real call site: tap a gated control → record its handle
+      // → openPremiumGate(...).
+      setPremiumGateFocusTrigger(9001)
+      storeState.premiumGateOpen = true
+      storeState.premiumGateFeature = 'tts'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<PremiumFeatureSheet />)
+      })
+      // Sanity: opening fires setAccessibilityFocus on the title after
+      // 350ms; clear so we only observe the restore call.
+      act(() => {
+        jest.advanceTimersByTime(400)
+      })
+      ;(AccessibilityInfo.setAccessibilityFocus as jest.Mock).mockClear()
+
+      // Flip the gate to closed and re-render — this triggers the
+      // restoration branch of the effect.
+      storeState.premiumGateOpen = false
+      act(() => {
+        tree.update(<PremiumFeatureSheet />)
+      })
+      act(() => {
+        jest.advanceTimersByTime(100)
+      })
+
+      expect(AccessibilityInfo.setAccessibilityFocus).toHaveBeenCalledWith(9001)
+      // The handle must clear so it can't replay on the next unrelated close.
+      expect(__getPremiumGateFocusTrigger()).toBeNull()
+      jest.useRealTimers()
+    })
+
+    it('is a no-op when no focus trigger is registered (backwards-compatible)', () => {
+      jest.useFakeTimers()
+      storeState.premiumGateOpen = true
+      storeState.premiumGateFeature = 'tts'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<PremiumFeatureSheet />)
+      })
+      act(() => {
+        jest.advanceTimersByTime(400)
+      })
+      ;(AccessibilityInfo.setAccessibilityFocus as jest.Mock).mockClear()
+      storeState.premiumGateOpen = false
+      act(() => {
+        tree.update(<PremiumFeatureSheet />)
+      })
+      act(() => {
+        jest.advanceTimersByTime(100)
+      })
+      // No registered handle → no restore call. The component matches the
+      // pre-GAT-104 behavior in this case, so call sites that haven't been
+      // updated yet keep working.
+      expect(AccessibilityInfo.setAccessibilityFocus).not.toHaveBeenCalled()
+      jest.useRealTimers()
     })
   })
 
