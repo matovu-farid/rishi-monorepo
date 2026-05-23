@@ -452,6 +452,27 @@ const COVERS_DIR = new Directory(Paths.document, "covers");
  */
 export const COVER_EXTRACTION_FAILED_SENTINEL = "__failed";
 
+/**
+ * DAT-010 (#122): typed reason for cover-extraction failure. The
+ * persisted sentinel `__failed` (above) is opaque to callers and the
+ * UI — there is no way to distinguish "we couldn't read the file" from
+ * "the extractor crashed" from "the format has no cover extractor at
+ * all". This discriminated union surfaces the actual reason at the
+ * port boundary so adapters in `index.ts` (and any test harness) can
+ * react with the right copy ("Retry", "Format not supported",
+ * "Storage error") even before the schema gains a dedicated column.
+ *
+ * NB: the persisted DB value stays `__failed` to preserve backward
+ * compatibility with `book-storage.mapRowToBook`. A future migration
+ * can replace the sentinel + this `kind` with a structured column.
+ */
+export type CoverExtractionFailureReason =
+  | { kind: "read-error"; format: BookFormat; cause: unknown }
+  | { kind: "parse-error"; format: BookFormat; cause: unknown }
+  | { kind: "write-error"; format: BookFormat; cause: unknown }
+  | { kind: "no-cover-found"; format: BookFormat }
+  | { kind: "format-unsupported"; format: BookFormat };
+
 export interface CoverPortDeps {
   /** Injected for tests. Renamed from `readEpubBytes` in Batch 8 — the
    *  reader is now format-agnostic since MOBI/AZW3 also use it. */
@@ -464,6 +485,17 @@ export interface CoverPortDeps {
   ) => Promise<string>;
   /** Injected for tests. */
   updateBookCover?: (bookId: string, coverPath: string) => Promise<void>;
+  /**
+   * DAT-010 (#122): typed failure callback. Invoked with the structured
+   * reason BEFORE the sentinel is persisted (or instead of, for the
+   * non-failure-state kinds like `no-cover-found` / `format-unsupported`).
+   * Best-effort — exceptions thrown by the callback are swallowed so
+   * the import pipeline is never blocked by an observer.
+   */
+  onExtractionFailure?: (
+    bookId: string,
+    reason: CoverExtractionFailureReason,
+  ) => void;
 }
 
 export function createMobileCoverPort(deps: CoverPortDeps = {}): CoverPort {
@@ -497,12 +529,33 @@ export function createMobileCoverPort(deps: CoverPortDeps = {}): CoverPort {
       triggerSyncOnWrite();
     });
 
+  // DAT-010 (#122): swallow callback errors so an upstream observer
+  // can never block the import pipeline.
+  const reportFailure = (
+    bookId: string,
+    reason: CoverExtractionFailureReason,
+  ) => {
+    try {
+      deps.onExtractionFailure?.(bookId, reason);
+    } catch {
+      /* best-effort */
+    }
+  };
+
   return {
     async extractAndStore({ bookId, bookPath, format }) {
       // Format dispatch: EPUB has its own (jszip) extractor; MOBI/AZW3
       // share the PalmDOC image-record extractor. PDF/DJVU covers are
       // deferred (would need a WebView raster round-trip).
       if (format !== "epub" && format !== "mobi" && format !== "azw3") {
+        // DAT-010 (#122): emit the typed reason so callers can
+        // distinguish "no extractor" from "extractor failed". This is
+        // NOT persisted to coverPath (book-storage's sentinel mapper
+        // expects either a real path or null for these formats).
+        reportFailure(String(bookId), {
+          kind: "format-unsupported",
+          format,
+        });
         return null;
       }
 
@@ -511,6 +564,11 @@ export function createMobileCoverPort(deps: CoverPortDeps = {}): CoverPort {
         bytes = await readBookBytes(bookPath);
       } catch (err) {
         console.warn("[book-import] failed to read book bytes for cover:", err);
+        reportFailure(String(bookId), {
+          kind: "read-error",
+          format,
+          cause: err,
+        });
         return null;
       }
 
@@ -524,6 +582,11 @@ export function createMobileCoverPort(deps: CoverPortDeps = {}): CoverPort {
         }
       } catch (err) {
         console.warn(`[book-import] cover extraction failed (${format}):`, err);
+        reportFailure(String(bookId), {
+          kind: "parse-error",
+          format,
+          cause: err,
+        });
         // P1-AC: persist the failure sentinel so the library UI can offer
         // a "Retry cover extraction" affordance instead of silently
         // falling back to the letter-tile.
@@ -537,7 +600,16 @@ export function createMobileCoverPort(deps: CoverPortDeps = {}): CoverPort {
         }
         return null;
       }
-      if (!cover) return null;
+      if (!cover) {
+        // DAT-010 (#122): "no cover" is distinct from "extractor crashed".
+        // We don't persist the sentinel here — a book legitimately may
+        // have no cover, and the existing letter-tile is the right UI.
+        reportFailure(String(bookId), {
+          kind: "no-cover-found",
+          format,
+        });
+        return null;
+      }
 
       try {
         const path = await writeCoverFile(
@@ -549,6 +621,11 @@ export function createMobileCoverPort(deps: CoverPortDeps = {}): CoverPort {
         return path;
       } catch (err) {
         console.warn("[book-import] failed to write cover:", err);
+        reportFailure(String(bookId), {
+          kind: "write-error",
+          format,
+          cause: err,
+        });
         return null;
       }
     },
