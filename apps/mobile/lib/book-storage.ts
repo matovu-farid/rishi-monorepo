@@ -5,6 +5,7 @@ import { books } from '@rishi/shared/schema'
 import { eq, and, or, desc, isNotNull } from 'drizzle-orm'
 import { triggerSyncOnWrite } from '@/lib/sync/triggers'
 import { downloadBookFile } from '@/lib/sync/file-sync'
+import { deleteBookChunks } from '@/lib/rag/vector-store'
 
 export function insertBook(book: Book): void {
   db.insert(books)
@@ -113,6 +114,26 @@ export function updateBookPage(id: string, page: number): void {
 }
 
 export function deleteBook(id: string): void {
+  // DAT-008 (#121): cascade vector deletion. Previously `deleteBook` only
+  // soft-deleted the row, leaving the `chunks` + `chunk_vectors` rows on
+  // disk forever. That meant:
+  //   - disk usage grew on every delete (vec0 vectors are ~1.5 KB each, a
+  //     400-page book is ~2000 chunks → ~3 MB of cruft per delete);
+  //   - if the same bookId was re-imported, stale RAG context leaked into
+  //     chat answers.
+  // Run the cascade FIRST so a transient sqlite-vec failure (e.g. extension
+  // not loaded on this device) doesn't abort the row-level soft-delete —
+  // the row flip is the user-visible action ("the book disappeared from
+  // the library"); the chunk cleanup is best-effort housekeeping that we
+  // log and continue.
+  try {
+    deleteBookChunks(id)
+  } catch (err) {
+    // Best-effort: stale chunks are cheaper than failing the user's tap.
+    // Surface in the dev error dump so we can spot a pattern of failures.
+    console.warn('[book-storage] deleteBookChunks failed during deleteBook:', err)
+  }
+
   db.update(books)
     .set({ isDeleted: true, updatedAt: Date.now(), isDirty: true })
     .where(eq(books.id, id))
