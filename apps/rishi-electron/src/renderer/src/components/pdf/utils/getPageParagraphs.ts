@@ -9,40 +9,42 @@ import { getParagraphThreshold } from '../utils/getParagraphThreshold'
 const MIN_PARAGRAPH_LENGTH = 50
 
 const PARAGRAPH_INDEX_PER_PAGE = 10000
-// export function getPageParagraphs(pageNumber: number): Paragraph[] {
-//   const pageData = useAtomValue(pageNumberToPageDataAtom);
-//   return pageDataToParagraphs(pageNumber, pageData[pageNumber]);
-// }
 
-export function pageDataToParagraphs(
+export interface ParagraphWithItemIndices {
+  paragraph: Paragraph
+  itemIndices: number[]
+}
+
+function isTextItem(item: TextItem | TextMarkedContent): item is TextItem {
+  return 'str' in item
+}
+
+/**
+ * Raw paragraph assembly: walks `pageData.items` and groups them into
+ * paragraphs using the vertical-spacing / line-count heuristic. Returns the
+ * unfiltered slots plus the contributing item indices in parallel — both the
+ * mask-aware paragraph filter and the suffix-matcher footer detector consume
+ * the same assembled output, so we keep this one canonical implementation.
+ */
+function assembleRawParagraphs(
   pageNumber: number,
-  pageData: TextContent,
-  maskedItemIndices?: ReadonlySet<number>
-): Paragraph[] {
+  pageData: TextContent
+): ParagraphWithItemIndices[] {
   const defaultDimensions = {
     bottom: Number.MAX_SAFE_INTEGER,
     top: Number.MIN_SAFE_INTEGER
   }
-  let paragraphsSoFarArray: Paragraph[] = []
-  // Parallel array tracking which raw item indices contributed to each
-  // paragraph slot, so the optional mask can drop whole paragraphs whose
-  // constituent items are ALL masked. Index alignment with
-  // `paragraphsSoFarArray` is maintained throughout the loop.
+  const paragraphsSoFarArray: Paragraph[] = []
   const paragraphItemIndices: number[][] = []
   let currentParagraphItems: number[] = []
 
-  // Reset arrays for this page parse
-  let paragraghSoFar = {
+  let paragraghSoFar: Paragraph = {
     index: '',
     text: '',
     dimensions: defaultDimensions
   }
 
   const items = pageData.items
-  function isTextItem(item: TextItem | TextMarkedContent): item is TextItem {
-    return 'str' in item
-  }
-
   let previousItem: TextItem | null = null
   let lineCount = 0
   for (let itemIdx = 0; itemIdx < items.length; itemIdx++) {
@@ -103,6 +105,35 @@ export function pageDataToParagraphs(
 
   paragraphsSoFarArray.push(paragraghSoFar)
   paragraphItemIndices.push(currentParagraphItems)
+
+  const out: ParagraphWithItemIndices[] = []
+  for (let i = 0; i < paragraphsSoFarArray.length; i++) {
+    out.push({ paragraph: paragraphsSoFarArray[i], itemIndices: paragraphItemIndices[i] })
+  }
+  return out
+}
+
+/**
+ * Public sibling of `pageDataToParagraphs` that exposes the per-paragraph
+ * item-index ranges BEFORE mask filtering and post-filters run. Consumed by
+ * the suffix-matcher footer detector, which needs spatial + item-index info
+ * on the raw layout.
+ */
+export function pageDataToParagraphsWithItemIndices(
+  pageNumber: number,
+  pageData: TextContent
+): ParagraphWithItemIndices[] {
+  return assembleRawParagraphs(pageNumber, pageData)
+}
+
+export function pageDataToParagraphs(
+  pageNumber: number,
+  pageData: TextContent,
+  maskedItemIndices?: ReadonlySet<number>
+): Paragraph[] {
+  const assembled = assembleRawParagraphs(pageNumber, pageData)
+  let paragraphsSoFarArray: Paragraph[] = assembled.map((a) => a.paragraph)
+  const paragraphItemIndices: number[][] = assembled.map((a) => a.itemIndices)
 
   // Mask filter: drop paragraphs whose items are ALL in the mask while
   // KEEPING the slot — survivors retain their original index strings so
