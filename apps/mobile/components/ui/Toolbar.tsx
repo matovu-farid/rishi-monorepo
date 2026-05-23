@@ -45,15 +45,17 @@ export function Toolbar({
         if (!cancelled) setHighContrast(v)
       })
     }
-    const sub = AccessibilityInfo.addEventListener(
-      // RN's `highTextContrastChanged` event is Android-only; on iOS
-      // the listener is a no-op which is fine — we just stay on the
-      // default translucent fallback.
-      'highTextContrastChanged' as Parameters<
-        typeof AccessibilityInfo.addEventListener
-      >[0],
-      (v: boolean) => setHighContrast(v),
-    )
+    // RN's `highTextContrastChanged` event is Android-only; on iOS the
+    // listener is a no-op which is fine — we just stay on the default
+    // translucent fallback. Cast the event name to keep this resilient
+    // to RN type-narrowing changes across versions.
+    const addListener = AccessibilityInfo.addEventListener as unknown as (
+      event: string,
+      cb: (value: boolean) => void,
+    ) => { remove: () => void }
+    const sub = addListener('highTextContrastChanged', (v) => {
+      setHighContrast(v)
+    })
     return () => {
       cancelled = true
       sub.remove()
