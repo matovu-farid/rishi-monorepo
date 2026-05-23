@@ -28,6 +28,7 @@ import { FEATURE_COPY, type PremiumFeature } from '@rishi/shared/auth-gating'
 import { useAuthStore } from '@/lib/stores/authStore'
 import { signIn } from '@/lib/auth'
 import { APPLE_SIGNIN_ENABLED } from '@/lib/feature-flags'
+import { useTheme } from '@/lib/theme'
 
 const FEATURE_ICONS: Record<PremiumFeature, keyof typeof Ionicons.glyphMap> = {
   tts: 'headset-outline',
@@ -96,6 +97,7 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
   }))
   const scheme = useColorScheme()
   const insets = useSafeAreaInsets()
+  const { colors } = useTheme()
 
   useEffect(() => {
     if (open) {
@@ -209,7 +211,11 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
       enablePanDownToClose
       onClose={closeGate}
       backdropComponent={renderBackdrop}
-      handleIndicatorStyle={{ backgroundColor: isDark ? '#48484A' : '#C7C7CC' }}
+      // VIS-028 — tokenize the handle indicator. The previous hardcoded pair
+      // (#48484A / #C7C7CC) bypassed the design tokens and drifted from the
+      // rest of the sheet's surface treatment in dark mode. label.quaternary
+      // matches the iOS UIKit handle-grab opacity for both schemes.
+      handleIndicatorStyle={{ backgroundColor: colors.label.quaternary }}
       backgroundStyle={{ backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF' }}
       accessibilityViewIsModal
     >

@@ -498,6 +498,28 @@ describe('PremiumFeatureSheet (mobile)', () => {
     })
   })
 
+  describe('theme tokens (VIS-028)', () => {
+    it('handle indicator backgroundColor is sourced from colors.label.quaternary, not hardcoded', () => {
+      // VIS-028 — the previous hardcoded {dark:#48484A, light:#C7C7CC}
+      // pair bypassed design tokens. The semantic light token is
+      // 'rgba(60,60,67,0.18)'.
+      storeState.premiumGateOpen = true
+      storeState.premiumGateFeature = 'tts'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<PremiumFeatureSheet />)
+      })
+      const sheets = tree.root.findAllByType('BottomSheet' as never)
+      expect(sheets.length).toBeGreaterThan(0)
+      const handleStyle = (sheets[0].props as { handleIndicatorStyle?: { backgroundColor?: string } })
+        .handleIndicatorStyle
+      expect(handleStyle?.backgroundColor).toBe('rgba(60,60,67,0.18)')
+      // Make sure we didn't regress to the legacy hex codes.
+      expect(handleStyle?.backgroundColor).not.toBe('#48484A')
+      expect(handleStyle?.backgroundColor).not.toBe('#C7C7CC')
+    })
+  })
+
   describe('shake animation easing (VIS-029)', () => {
     it('passes Easing.out(Easing.cubic) to every shake step instead of linear default', async () => {
       signInMock.mockRejectedValueOnce(new Error('something exploded'))
