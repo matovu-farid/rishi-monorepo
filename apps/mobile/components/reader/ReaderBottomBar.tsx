@@ -329,9 +329,14 @@ function ReaderBottomMoreMenu({
   const { colors, spacing, typography } = useTheme()
   const body = typography.scale.body
 
+  // A11Y-009 (#106) — every overflow item carries a consistent
+  // role/label/hint triple. Hints describe the outcome of the action
+  // so VoiceOver / TalkBack can announce "Highlights — opens the list
+  // of highlights" instead of just "Highlights".
   const items: Array<{
     key: string
     label: string
+    hint: string
     icon: 'pencil-outline' | 'list-circle-outline' | 'search-outline' | 'text-outline'
     onPress: () => void
   }> = []
@@ -339,6 +344,7 @@ function ReaderBottomMoreMenu({
     items.push({
       key: 'highlights',
       label: 'Highlights',
+      hint: 'Opens the list of saved highlights',
       icon: 'pencil-outline',
       onPress: onHighlightsPress,
     })
@@ -346,6 +352,7 @@ function ReaderBottomMoreMenu({
     items.push({
       key: 'bookmarks',
       label: 'Bookmarks',
+      hint: 'Opens the list of bookmarks',
       icon: 'list-circle-outline',
       onPress: onBookmarksPress,
     })
@@ -353,6 +360,7 @@ function ReaderBottomMoreMenu({
     items.push({
       key: 'search',
       label: 'Search',
+      hint: 'Opens search within the book',
       icon: 'search-outline',
       onPress: onSearchPress,
     })
@@ -360,6 +368,7 @@ function ReaderBottomMoreMenu({
     items.push({
       key: 'appearance',
       label: 'Appearance',
+      hint: 'Opens appearance and font size settings',
       icon: 'text-outline',
       onPress: onAppearancePress,
     })
@@ -367,18 +376,21 @@ function ReaderBottomMoreMenu({
   return (
     <View
       testID={testID}
-      accessibilityViewIsModal
+      accessibilityViewIsModal={true}
       style={styles.moreOverlay}
       pointerEvents="box-none"
     >
       <Pressable
         testID="reader-bottom-more-backdrop"
+        accessibilityRole="button"
         accessibilityLabel="Dismiss menu"
+        accessibilityHint="Closes the reader actions menu"
         onPress={onClose}
         style={styles.moreBackdrop}
       />
       <View
         accessibilityRole="menu"
+        accessibilityViewIsModal={true}
         style={[
           styles.moreSheet,
           {
@@ -395,6 +407,7 @@ function ReaderBottomMoreMenu({
             testID={`reader-bottom-more-item-${item.key}`}
             accessibilityRole="menuitem"
             accessibilityLabel={item.label}
+            accessibilityHint={item.hint}
             onPress={item.onPress}
             style={({ pressed }) => [
               styles.moreItem,
