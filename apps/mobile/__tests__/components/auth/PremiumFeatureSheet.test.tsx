@@ -63,6 +63,10 @@ jest.mock('react-native-mmkv', () => ({
 }))
 
 // ── Mock Reanimated (sheet uses withSequence for the error shake) ────────────
+// `withTiming` is wrapped so tests can introspect that the caller passed an
+// easing config — VIS-029 requires Easing.out(Easing.cubic), no longer the
+// linear default.
+const withTimingMock = jest.fn((v: unknown, cfg?: unknown) => ({ __value: v, __cfg: cfg }))
 jest.mock('react-native-reanimated', () => {
   const React = require('react')
   const View = React.forwardRef((p: any, r: unknown) =>
@@ -75,9 +79,14 @@ jest.mock('react-native-reanimated', () => {
     useSharedValue: (v: unknown) => ({ value: v }),
     useAnimatedStyle: () => ({}),
     withSequence: (...vs: unknown[]) => vs,
-    withTiming: (v: unknown) => v,
+    withTiming: withTimingMock,
     withSpring: (v: unknown) => v,
-    Easing: { out: () => null, quad: null, inOut: () => null },
+    Easing: {
+      out: (fn: unknown) => ({ __easing: 'out', inner: fn }),
+      cubic: { __easing: 'cubic' },
+      quad: { __easing: 'quad' },
+      inOut: (fn: unknown) => ({ __easing: 'inOut', inner: fn }),
+    },
   }
 })
 
@@ -201,6 +210,7 @@ beforeEach(() => {
   ;(Haptics.selectionAsync as jest.Mock).mockClear()
   ;(Haptics.impactAsync as jest.Mock).mockClear()
   ;(Haptics.notificationAsync as jest.Mock).mockClear()
+  withTimingMock.mockClear()
   __platformOS = 'ios'
   storeState = {
     premiumGateOpen: false,
@@ -479,6 +489,40 @@ describe('PremiumFeatureSheet (mobile)', () => {
       // misleading.
       const tree = await pressCtaWith('POST /mobile/start failed: 403 provider not configured')
       expect(hasText(tree, 'This sign-in method is not available yet.')).toBe(true)
+    })
+  })
+
+  describe('shake animation easing (VIS-029)', () => {
+    it('passes Easing.out(Easing.cubic) to every shake step instead of linear default', async () => {
+      signInMock.mockRejectedValueOnce(new Error('something exploded'))
+      storeState.premiumGateOpen = true
+      storeState.premiumGateFeature = 'tts'
+
+      let tree!: TestRenderer.ReactTestRenderer
+      await act(async () => {
+        tree = TestRenderer.create(<PremiumFeatureSheet />)
+      })
+      const cta = tree.root.findAll(
+        (n) =>
+          n.type === Pressable &&
+          (n.props as { accessibilityLabel?: string }).accessibilityLabel ===
+            'Continue with Google',
+      )
+      withTimingMock.mockClear()
+      await act(async () => {
+        await (cta[0].props as { onPress: () => Promise<void> | void }).onPress()
+      })
+
+      // Five steps in the shake sequence; every step must carry an easing
+      // config — VIS-029 forbids the linear default.
+      expect(withTimingMock).toHaveBeenCalledTimes(5)
+      for (const call of withTimingMock.mock.calls) {
+        const cfg = call[1] as { easing?: { __easing?: string; inner?: { __easing?: string } } }
+        expect(cfg).toBeDefined()
+        expect(cfg.easing).toBeDefined()
+        expect(cfg.easing?.__easing).toBe('out')
+        expect(cfg.easing?.inner?.__easing).toBe('cubic')
+      }
     })
   })
 

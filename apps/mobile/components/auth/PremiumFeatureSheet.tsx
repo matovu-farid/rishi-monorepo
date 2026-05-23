@@ -20,6 +20,7 @@ import Animated, {
   useAnimatedStyle,
   withSequence,
   withTiming,
+  Easing,
 } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
@@ -131,12 +132,16 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
       if (!/cancel|dismiss/i.test(msg)) {
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)
         setError(mapSignInError(msg))
+        // VIS-029 — ease each shake step out of cubic so the wobble decays
+        // organically rather than the harsh linear default. The 60ms duration
+        // is preserved; only the easing curve changes.
+        const shakeEasing = Easing.out(Easing.cubic)
         shakeX.value = withSequence(
-          withTiming(6, { duration: 60 }),
-          withTiming(-6, { duration: 60 }),
-          withTiming(4, { duration: 60 }),
-          withTiming(-4, { duration: 60 }),
-          withTiming(0, { duration: 60 }),
+          withTiming(6, { duration: 60, easing: shakeEasing }),
+          withTiming(-6, { duration: 60, easing: shakeEasing }),
+          withTiming(4, { duration: 60, easing: shakeEasing }),
+          withTiming(-4, { duration: 60, easing: shakeEasing }),
+          withTiming(0, { duration: 60, easing: shakeEasing }),
         )
       }
     }
