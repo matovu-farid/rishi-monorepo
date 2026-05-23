@@ -119,6 +119,9 @@ const mockDb = {
 
 jest.mock('@/lib/db', () => ({
   db: mockDb,
+  // DAT-015 (#127): book-storage now stamps writes via the monotonic
+  // helper from db.ts; the test mock must export it too.
+  nextLocalTimestamp: jest.fn(() => Date.now()),
 }))
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -148,6 +148,28 @@ expo.execSync("INSERT OR IGNORE INTO sync_state (id, in_progress) VALUES ('defau
 export const db = drizzle(expo, { schema })
 export type AppDb = typeof db
 
+// ─── Monotonic local timestamp ───────────────────────────────────────────────
+//
+// DAT-015 (#127): the sync engine's conflict resolution compares
+// `updatedAt` integers — equal stamps fall through and the remote write
+// wins, silently overwriting the local edit. Two writes generated in the
+// same JS millisecond (a RAG answer + auto-title, two debounced reading-
+// progress saves, etc.) are the most common failure mode.
+//
+// `nextLocalTimestamp()` returns a strictly-monotonic integer. It is
+// initialized to `Date.now()` and clamped to `max(Date.now(), last + 1)`
+// on every call so consecutive writes are always orderable on the same
+// device. Across devices this does NOT provide a tiebreaker (each device
+// has its own counter) — that requires a server-side revision id in a
+// future migration; this fix removes the within-device portion of the
+// failure mode without a schema bump.
+let lastLocalTimestamp = 0
+export function nextLocalTimestamp(): number {
+  const now = Date.now()
+  lastLocalTimestamp = now > lastLocalTimestamp ? now : lastLocalTimestamp + 1
+  return lastLocalTimestamp
+}
+
 // ─── Sync marker helpers ─────────────────────────────────────────────────────
 export function markSyncInProgress(inProgress: boolean): void {
   expo.execSync(

@@ -1,6 +1,6 @@
 import { File } from 'expo-file-system'
 import { Book } from '@/types/book'
-import { db } from '@/lib/db'
+import { db, nextLocalTimestamp } from '@/lib/db'
 import { books } from '@rishi/shared/schema'
 import { eq, and, or, desc, isNotNull } from 'drizzle-orm'
 import { triggerSyncOnWrite } from '@/lib/sync/triggers'
@@ -19,7 +19,8 @@ export function insertBook(book: Book): void {
       currentCfi: book.currentCfi,
       currentPage: book.currentPage,
       createdAt: book.createdAt,
-      updatedAt: Date.now(),
+      // DAT-015 (#127): monotonic timestamp tiebreaker — see lib/db.ts.
+      updatedAt: nextLocalTimestamp(),
       isDirty: true,
       isDeleted: false,
     })
@@ -99,7 +100,8 @@ export async function getBookForReading(
 
 export function updateBookCfi(id: string, cfi: string): void {
   db.update(books)
-    .set({ currentCfi: cfi, updatedAt: Date.now(), isDirty: true })
+    // DAT-015 (#127): monotonic timestamp tiebreaker — see lib/db.ts.
+    .set({ currentCfi: cfi, updatedAt: nextLocalTimestamp(), isDirty: true })
     .where(eq(books.id, id))
     .run()
   triggerSyncOnWrite()
@@ -107,7 +109,8 @@ export function updateBookCfi(id: string, cfi: string): void {
 
 export function updateBookPage(id: string, page: number): void {
   db.update(books)
-    .set({ currentPage: page, updatedAt: Date.now(), isDirty: true })
+    // DAT-015 (#127): monotonic timestamp tiebreaker — see lib/db.ts.
+    .set({ currentPage: page, updatedAt: nextLocalTimestamp(), isDirty: true })
     .where(eq(books.id, id))
     .run()
   triggerSyncOnWrite()
@@ -135,7 +138,8 @@ export function deleteBook(id: string): void {
   }
 
   db.update(books)
-    .set({ isDeleted: true, updatedAt: Date.now(), isDirty: true })
+    // DAT-015 (#127): monotonic timestamp tiebreaker — see lib/db.ts.
+    .set({ isDeleted: true, updatedAt: nextLocalTimestamp(), isDirty: true })
     .where(eq(books.id, id))
     .run()
   triggerSyncOnWrite()
