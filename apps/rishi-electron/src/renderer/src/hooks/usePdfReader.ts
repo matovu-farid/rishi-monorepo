@@ -295,7 +295,10 @@ export function usePdfReader(
   return apiRef.current
 }
 
-function publishParagraphsForPage(page: number, pageDataMap: Record<number, TextContent>): void {
+// Exported for the issue-#30 snap-back test (useScrolling.test.tsx) so the
+// flag-lifecycle contract can be exercised end-to-end at the unit-test
+// level. Production consumers stay inside usePdfReader's effect.
+export function publishParagraphsForPage(page: number, pageDataMap: Record<number, TextContent>): void {
   const data = pageDataMap[page] as TextContent | undefined
   if (!data) return
   const newCurrent = pageDataToParagraphs(page, data)
@@ -305,7 +308,8 @@ function publishParagraphsForPage(page: number, pageDataMap: Record<number, Text
   const newPrev = prevData ? pageDataToParagraphs(page - 1, prevData) : []
 
   const pdfState = usePdfStore.getState()
-  if (!isEqual(pdfState.currentViewParagraphs, newCurrent)) {
+  const currentDiffers = !isEqual(pdfState.currentViewParagraphs, newCurrent)
+  if (currentDiffers) {
     pdfState.setCurrentViewParagraphs(newCurrent)
     pdfState.setIsTextGot(true)
     usePlayerStore.getState().setCurrentParagraphs(newCurrent)
@@ -318,4 +322,22 @@ function publishParagraphsForPage(page: number, pageDataMap: Record<number, Text
     pdfState.setPreviousViewParagraphs(newPrev)
     usePlayerStore.getState().setPrevPageParagraphs(newPrev)
   }
+
+  // NOTE on the page-advance suppression flag (issue #30 refined symptom):
+  // We used to clear `isLookingForNextParagraph` here once `currentDiffers`
+  // flipped — i.e. as soon as the new page's paragraphs landed. That
+  // happens BEFORE the player resolves audio for the new page and assigns
+  // a fresh `highlightedParagraphIndex`. The window between this point
+  // and the highlight-assignment was a no-op for `useScrolling` (no
+  // highlighted paragraph matched the new view), so the suppression was
+  // already gone by the time the effect actually ran for the first
+  // new-page highlight. That highlight sat flush with the top of the
+  // viewport (virtualizer scrolled with `align:'start'`), and useScrolling's
+  // centering math scrolled *back* toward the previous page to center it —
+  // exactly the "advances, then snaps back" symptom on PR #31.
+  //
+  // The flag is now spent inside `useScrolling`'s timeout body, at the
+  // point where it would otherwise issue the centering scroll. That's
+  // the rendezvous where we KNOW the new page is rendered, the highlight
+  // is resolved, and the suppression has done its job.
 }
