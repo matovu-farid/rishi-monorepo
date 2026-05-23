@@ -33,6 +33,8 @@
  * Red signal: `@/components/player/MiniPlayer` does not exist yet.
  */
 
+const keyboardDismissMock = jest.fn()
+
 jest.mock('react-native', () => {
   const React = require('react')
   const mk = (name: string) =>
@@ -62,6 +64,12 @@ jest.mock('react-native', () => {
     AccessibilityInfo: {
       isReduceMotionEnabled: jest.fn(async () => false),
       addEventListener: jest.fn(() => ({ remove: jest.fn() })),
+    },
+    // WGT-020 / #73 — MiniPlayer should call Keyboard.dismiss() when it
+    // expands or routes a control event, so a keyboard left up from a
+    // chat-input swipe-over is dropped before the pill animates in.
+    Keyboard: {
+      dismiss: keyboardDismissMock,
     },
   }
 })
@@ -246,6 +254,7 @@ function pressByTestID(
 
 beforeEach(() => {
   sendMock.mockClear()
+  keyboardDismissMock.mockClear()
   playerState = {
     playingState: 'idle',
     send: sendMock,
@@ -493,6 +502,42 @@ describe('MiniPlayer (mobile)', () => {
       // Real bottom-bar visual height = Toolbar.minHeight + insets.bottom
       // = 44 + 34 = 78. The old code shifted by 44 only.
       expect(delta).toBe(44 + 34)
+    })
+  })
+
+  describe('WGT-020 / #73 — keyboard dismiss', () => {
+    // Repro: chat → focus the input (keyboard up) → swipe to library →
+    // tap MiniPlayer. Without an explicit Keyboard.dismiss() in the
+    // expand handler / event dispatcher the keyboard stays floating over
+    // the pill. Both entry points must call Keyboard.dismiss().
+
+    it('dismisses the keyboard when tapping the orb to expand', () => {
+      playerState.playingState = 'playing'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<MiniPlayer bookId="b1" />)
+      })
+      const orb = findByTestID(tree, 'mini-player-orb')
+      act(() => {
+        ;(orb!.props as { onPress: () => void }).onPress()
+      })
+      expect(keyboardDismissMock).toHaveBeenCalled()
+    })
+
+    it('dismisses the keyboard when a pill control dispatches an event', () => {
+      playerState.playingState = 'playing'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<MiniPlayer bookId="b1" />)
+      })
+      // Expand so the pill is mounted.
+      const orb = findByTestID(tree, 'mini-player-orb')
+      act(() => {
+        ;(orb!.props as { onPress: () => void }).onPress()
+      })
+      keyboardDismissMock.mockClear()
+      pressByTestID(tree, 'mini-player-play-pause')
+      expect(keyboardDismissMock).toHaveBeenCalled()
     })
   })
 

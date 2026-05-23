@@ -6,6 +6,7 @@ import React, {
 } from 'react'
 import {
   ActivityIndicator,
+  Keyboard,
   Pressable,
   StyleSheet,
   View,
@@ -325,6 +326,10 @@ export function MiniPlayer({
   })
 
   const handleExpand = useCallback(() => {
+    // WGT-020 / #73 — drop any keyboard left up from another screen
+    // (e.g. chat input) before the pill animates in, otherwise it
+    // floats over the controls. Safe no-op when no keyboard is visible.
+    Keyboard.dismiss()
     if (!reduceMotion) {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Soft)
     }
@@ -333,6 +338,9 @@ export function MiniPlayer({
 
   const dispatch = useCallback(
     (event: { type: 'PAUSE' | 'RESUME' | 'STOP' | 'NEXT' | 'PREV' | 'REPEAT' }) => {
+      // WGT-020 / #73 — also dismiss on every control press so any
+      // keyboard that came up between the expand and the tap is dropped.
+      Keyboard.dismiss()
       if (!reduceMotion) {
         void Haptics.selectionAsync()
       }
