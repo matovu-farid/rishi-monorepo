@@ -752,7 +752,7 @@ export function PdfView({
     try {
       const handle = await applyHighlightWithUndoPdf({
         target: {
-          applyVisual: async () => {
+          applyVisual: () => {
             setHighlights((prev) => [
               ...prev,
               {

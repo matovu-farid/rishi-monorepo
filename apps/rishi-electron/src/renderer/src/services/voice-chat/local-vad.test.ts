@@ -14,16 +14,20 @@ class FakeAnalyser {
   // amplitude that the test sets via FakeAudioContext.setAmplitude(). RMS of
   // a constant-amplitude buffer is just |amp|.
   amp = 0
-  connect(): void {}
-  disconnect(): void {}
+  // The production code calls .connect() / .disconnect() on the analyser for
+  // side-effect parity with the real Web Audio graph. vi.fn() satisfies the
+  // contract AND lets any future test assert call counts without rewriting
+  // the fake.
+  connect = vi.fn<(dest?: unknown) => void>()
+  disconnect = vi.fn<() => void>()
   getFloatTimeDomainData(out: Float32Array): void {
     out.fill(this.amp)
   }
 }
 
 class FakeStreamSource {
-  connect(_dest: unknown): void {}
-  disconnect(): void {}
+  connect = vi.fn<(dest: unknown) => void>()
+  disconnect = vi.fn<() => void>()
 }
 
 class FakeAudioContext {
