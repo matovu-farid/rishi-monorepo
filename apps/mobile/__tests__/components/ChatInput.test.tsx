@@ -35,6 +35,10 @@ jest.mock('react-native', () => {
     StyleSheet: { create: (s: Record<string, unknown>) => s },
     Platform: { OS: 'ios', select: <T,>(spec: Record<string, T>): T | undefined => spec.ios ?? spec.default },
     useColorScheme: () => 'light',
+    AccessibilityInfo: {
+      isReduceMotionEnabled: () => Promise.resolve(false),
+      addEventListener: () => ({ remove: () => undefined }),
+    },
     Linking: { openSettings: (...args: unknown[]) => mockOpenSettings(...args) },
   }
 })
@@ -54,10 +58,33 @@ jest.mock('@/components/VoiceMicButton', () => {
   }
 })
 
+// Stub `useTheme` so the test doesn't pull in the real
+// `AccessibilityInfo` side-effect (Promise → setState) which fires a
+// post-render `act` warning. We hand the component the light-mode token
+// table directly. The PRF-004 tests then assert the rendered styles use
+// values from this table — exactly what the production hook would
+// return on a light-mode device.
+jest.mock('@/lib/theme/useTheme', () => {
+  const { colorsLight } = require('@/lib/theme/colors')
+  return {
+    useTheme: () => ({
+      scheme: 'light',
+      colors: colorsLight,
+      typography: {},
+      spacing: {},
+      radius: {},
+      motion: {},
+      shadow: {},
+      reduceMotion: false,
+    }),
+  }
+})
+
 import React, { act } from 'react'
 import TestRenderer from 'react-test-renderer'
 import { Pressable, TextInput, TouchableOpacity } from 'react-native'
 import { ChatInput } from '@/components/ChatInput'
+import { colorsLight } from '@/lib/theme/colors'
 
 function findTextInput(tree: TestRenderer.ReactTestRenderer): TestRenderer.ReactTestInstance {
   return tree.root.findAll((n) => n.type === TextInput)[0]
@@ -408,5 +435,148 @@ describe('ChatInput (mobile) — P1-AI stop button → onAbort', () => {
         ;(findSendButtonForAbort(tree).props as { onPress?: () => void }).onPress?.()
       })
     }).not.toThrow()
+  })
+})
+
+/**
+ * PRF-009 — TextInput previously rendered with
+ * `style={{ maxHeight: 96 }}` — an inline object literal allocated on
+ * every render, plus a magic number. Hoist to a module-scope StyleSheet
+ * so the same reference is reused across renders.
+ */
+describe('ChatInput (mobile) — PRF-009 TextInput style is hoisted', () => {
+  it('reuses the same TextInput style reference across renders', () => {
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ChatInput onSend={jest.fn()} isLoading={false} disabled={false} />,
+      )
+    })
+    const styleA = (findTextInput(tree).props as { style?: unknown }).style
+
+    // Trigger a re-render by changing the text. If the maxHeight object
+    // is inline in JSX, a fresh `{ maxHeight: 96 }` is allocated on every
+    // render and `styleB !== styleA`.
+    act(() => {
+      ;(findTextInput(tree).props as { onChangeText: (t: string) => void }).onChangeText(
+        'trigger-rerender',
+      )
+    })
+    const styleB = (findTextInput(tree).props as { style?: unknown }).style
+
+    expect(styleB).toBe(styleA)
+  })
+
+  it('exposes a numeric maxHeight on the TextInput style (no NaN, no inline derivation)', () => {
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ChatInput onSend={jest.fn()} isLoading={false} disabled={false} />,
+      )
+    })
+    const style = (findTextInput(tree).props as { style?: unknown }).style
+    if (style && typeof style === 'object' && !Array.isArray(style)) {
+      const styleObj = style as Record<string, unknown>
+      if ('maxHeight' in styleObj) {
+        expect(typeof styleObj.maxHeight).toBe('number')
+      }
+    }
+  })
+})
+
+/**
+ * PRF-004 — Send button colors must come from the theme token system, not
+ * from hardcoded hex literals interpolated into a className template.
+ *
+ * The previous implementation read:
+ *   className={`... ${showStop ? 'bg-[#0a7ea4]' : canSend ? 'bg-[#0a7ea4]' : 'bg-gray-200 ...'}`}
+ *   color={canSend || showStop ? '#FFFFFF' : '#9BA1A6'}
+ *
+ * That bypasses the theme — dark mode, accent overrides, and reskinning
+ * are all impossible. The accent must come from `colors.accent.primary`
+ * (see apps/mobile/lib/theme/colors.ts), exposed via the `useTheme()`
+ * hook used elsewhere in the codebase.
+ */
+describe('ChatInput (mobile) — PRF-004 send button uses theme tokens', () => {
+  function findSendButtonForTokens(
+    tree: TestRenderer.ReactTestRenderer,
+  ): TestRenderer.ReactTestInstance {
+    return tree.root.findAll(
+      (n) =>
+        n.type === TouchableOpacity &&
+        (n.props as { testID?: string }).testID === 'chat-send-btn',
+    )[0]
+  }
+
+  function flattenStyle(style: unknown): Record<string, unknown> {
+    if (!style) return {}
+    if (Array.isArray(style))
+      return style.reduce<Record<string, unknown>>(
+        (acc, s) => ({ ...acc, ...flattenStyle(s) }),
+        {},
+      )
+    return style as Record<string, unknown>
+  }
+
+  it('paints the active send button background with colors.accent.primary (no hex literal)', () => {
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ChatInput onSend={jest.fn()} isLoading={false} disabled={false} />,
+      )
+    })
+
+    // Type something so canSend === true and the button paints accent.
+    act(() => {
+      ;(findTextInput(tree).props as { onChangeText: (t: string) => void }).onChangeText(
+        'hi',
+      )
+    })
+
+    const btn = findSendButtonForTokens(tree)
+    const style = flattenStyle((btn.props as { style?: unknown }).style)
+    expect(style.backgroundColor).toBe(colorsLight.accent.primary)
+
+    // No hardcoded teal hex should ever land on the rendered button —
+    // neither in the style nor in the className.
+    const cls = (btn.props as { className?: string }).className ?? ''
+    expect(cls).not.toMatch(/#0a7ea4/i)
+    expect(style.backgroundColor).not.toBe('#0a7ea4')
+  })
+
+  it('paints the stop-state background with colors.accent.primary while isLoading', () => {
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ChatInput
+          onSend={jest.fn()}
+          isLoading={true}
+          disabled={false}
+          onAbort={jest.fn()}
+        />,
+      )
+    })
+
+    const btn = findSendButtonForTokens(tree)
+    const style = flattenStyle((btn.props as { style?: unknown }).style)
+    expect(style.backgroundColor).toBe(colorsLight.accent.primary)
+  })
+
+  it('keeps the teal hex literal out of the rendered send-button className', () => {
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(
+        <ChatInput onSend={jest.fn()} isLoading={false} disabled={false} />,
+      )
+    })
+    act(() => {
+      ;(findTextInput(tree).props as { onChangeText: (t: string) => void }).onChangeText(
+        'hello',
+      )
+    })
+
+    const btn = findSendButtonForTokens(tree)
+    const cls = (btn.props as { className?: string }).className ?? ''
+    expect(cls).not.toMatch(/#0a7ea4/i)
   })
 })

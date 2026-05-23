@@ -1,7 +1,26 @@
-import { useEffect, useState } from 'react'
-import { Linking, Pressable, Text, TextInput, TouchableOpacity, View } from 'react-native'
+import { useEffect, useMemo, useState } from 'react'
+import { Linking, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { VoiceMicButton } from '@/components/VoiceMicButton'
+import { useTheme } from '@/lib/theme/useTheme'
+
+// PRF-009 — Hoist the TextInput's per-render style into a module-scope
+// `StyleSheet.create` so the reference is stable across renders. The
+// previous implementation used `style={{ maxHeight: 96 }}` directly in
+// JSX, which allocated a fresh object literal on every render of the
+// input and made the magic `96` un-discoverable.
+const INPUT_MAX_HEIGHT = 96
+// PRF-004: disabled-state glyph tint. The active glyph is `#FFFFFF`
+// (on-accent label), the disabled tint is a neutral grey — there's no
+// semantic token for "glyph on neutral fill" yet, so we keep the
+// literal but name it.
+const INPUT_DISABLED_ICON_COLOR = '#9BA1A6'
+
+const styles = StyleSheet.create({
+  textInput: {
+    maxHeight: INPUT_MAX_HEIGHT,
+  },
+})
 
 interface ChatInputProps {
   /**
@@ -55,6 +74,18 @@ export function ChatInput({
   onAbort,
 }: ChatInputProps) {
   const [text, setText] = useState('')
+  const { colors } = useTheme()
+
+  // PRF-004: per-state backgrounds pulled from theme tokens. Memoised so
+  // re-renders don't churn the style object reference.
+  const accentBackground = useMemo(
+    () => ({ backgroundColor: colors.accent.primary }),
+    [colors.accent.primary],
+  )
+  const idleBackground = useMemo(
+    () => ({ backgroundColor: colors.fill.tertiary }),
+    [colors.fill.tertiary],
+  )
 
   // When external text arrives (e.g. from voice transcription), populate input
   useEffect(() => {
@@ -97,6 +128,9 @@ export function ChatInput({
         <TextInput
           testID="chat-input"
           className="flex-1 bg-gray-100 dark:bg-[#2A2D2F] rounded-full px-4 py-2 text-base text-gray-900 dark:text-gray-100"
+          // PRF-009: stable style reference (module-scope StyleSheet)
+          // — no per-render `{ maxHeight: 96 }` allocation.
+          style={styles.textInput}
           placeholder={placeholder}
           placeholderTextColor="#687076"
           value={text}
@@ -131,20 +165,21 @@ export function ChatInput({
           // that, we keep the no-op for back-compat.
           onPress={showStop ? onAbort : handleSend}
           disabled={(!canSend && !showStop) || (showStop && !onAbort)}
-          className={`w-10 h-10 rounded-full items-center justify-center ml-2 ${
-            showStop
-              ? 'bg-[#0a7ea4]'
-              : canSend
-                ? 'bg-[#0a7ea4]'
-                : 'bg-gray-200 dark:bg-gray-700'
-          }`}
+          // PRF-004: background comes from theme tokens (accent.primary
+          // / fill.tertiary) instead of a hardcoded `#0a7ea4` baked into
+          // a Tailwind template literal. Dark mode + future reskins are
+          // honoured.
+          style={canSend || showStop ? accentBackground : idleBackground}
+          className="w-10 h-10 rounded-full items-center justify-center ml-2"
           accessibilityLabel={showStop ? 'Stop generating' : 'Send message'}
           accessibilityRole="button"
         >
           <IconSymbol
             name={showStop ? 'stop.fill' : 'arrow.up'}
             size={20}
-            color={canSend || showStop ? '#FFFFFF' : '#9BA1A6'}
+            // PRF-004: active icon stays `#FFFFFF` (on-accent label).
+            // Disabled tint hoisted to a named constant.
+            color={canSend || showStop ? '#FFFFFF' : INPUT_DISABLED_ICON_COLOR}
           />
         </TouchableOpacity>
       </View>
@@ -169,7 +204,11 @@ export function ChatInput({
             accessibilityRole="button"
             hitSlop={8}
           >
-            <Text className="text-sm font-semibold text-[#0a7ea4] ml-2">
+            {/* PRF-004: link colour pulled from theme accent token. */}
+            <Text
+              className="text-sm font-semibold ml-2"
+              style={{ color: colors.accent.primary }}
+            >
               Open Settings
             </Text>
           </Pressable>
