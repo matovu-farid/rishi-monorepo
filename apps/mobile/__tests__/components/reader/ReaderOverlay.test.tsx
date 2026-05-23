@@ -439,6 +439,37 @@ describe('ReaderOverlay (mobile)', () => {
     expect(findByTestID(tree, 'voice-chat-launcher-stub')).not.toBeNull()
   })
 
+  it('keeps every floating widget above the toolbar zIndex (#69 / WGT-016)', () => {
+    // Regression guard. The floating widgets (orb, launcher, lock chip)
+    // and the MiniPlayer must always render above the reader toolbar so
+    // a visible bar can never occlude them. The chrome stack is defined
+    // by `tokens.zIndex.toolbar < tokens.zIndex.overlayChrome`. If a
+    // future edit hardcodes a smaller zIndex or omits one, this test
+    // fails before it ships.
+    const { zIndex } = require('@/lib/theme/tokens') as {
+      zIndex: { toolbar: number; overlayChrome: number; sheet: number }
+    }
+    chatState.isChatting = true
+    playerState.playingState = 'playing'
+    authState.isAuthenticated = false
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<ReaderOverlay bookId="b1" />)
+    })
+    for (const id of [
+      'ai-chat-orb-stub',
+      'voice-chat-launcher-stub',
+      // MiniPlayer is not mounted when chatting=true; verify chrome here
+      // and rely on the dedicated MiniPlayer test for its own z-index.
+    ]) {
+      const node = findByTestID(tree, id)
+      expect(node).not.toBeNull()
+      const z = (node!.props as { style?: { zIndex?: number } }).style?.zIndex
+      expect(typeof z).toBe('number')
+      expect(z!).toBeGreaterThan(zIndex.toolbar)
+    }
+  })
+
   it('uses tokens.zIndex.overlayChrome for AIChatOrb and VoiceChatLauncher (P1-M)', () => {
     // P1-M: floating widgets must not hardcode z-index values; they should
     // pull from the shared scale so they always stay above the toolbar
