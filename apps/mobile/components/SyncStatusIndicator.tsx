@@ -14,6 +14,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol'
 import type { SyncStatus } from '@/lib/sync/status'
 import { useDownloadErrorStore } from '@/lib/sync/download-error-store'
 import { downloadBookFile } from '@/lib/sync/file-sync'
+import { motion } from '@/lib/theme/tokens'
 
 function formatRelativeTime(timestamp: number | null): string {
   if (!timestamp) return 'Never synced'
@@ -85,7 +86,11 @@ export function SyncStatusIndicator() {
   useEffect(() => {
     if (status === 'syncing') {
       rotation.value = 0
-      rotation.value = withRepeat(withTiming(360, { duration: 1000 }), -1, false)
+      rotation.value = withRepeat(
+        withTiming(360, { duration: motion.duration.rotate }),
+        -1,
+        false,
+      )
     } else {
       cancelAnimation(rotation)
       rotation.value = 0
