@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { View, Text, Pressable, TouchableOpacity, StyleSheet } from 'react-native'
 import { Book } from '@/types/book'
 import { IconSymbol } from '@/components/ui/icon-symbol'
@@ -42,6 +43,33 @@ export function BookRow({ book, onPress, onDelete, onCoverRetry }: BookRowProps)
     book.coverExtractionFailed && onCoverRetry
       ? () => onCoverRetry(book)
       : undefined
+
+  // PRF-003: hoist the row's padding into a theme-keyed memo and
+  // pre-allocate the two press-state backgroundColor overlays. The
+  // Pressable `style` function then becomes a pure ternary lookup —
+  // no object literals constructed per press transition, so FlatList
+  // press-tracking no longer allocates per row per frame.
+  const rowStyles = useMemo(() => {
+    const base = {
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.lg,
+    } as const
+    return {
+      base,
+      pressed: { backgroundColor: colors.fill.quaternary } as const,
+      idle: { backgroundColor: 'transparent' } as const,
+    }
+  }, [spacing.lg, colors.fill.quaternary])
+  const pressableStyle = useMemo(
+    () =>
+      ({ pressed }: { pressed: boolean }) => [
+        styles.row,
+        rowStyles.base,
+        pressed ? rowStyles.pressed : rowStyles.idle,
+      ],
+    [rowStyles],
+  )
+
   return (
     <View>
       <Pressable
@@ -50,14 +78,7 @@ export function BookRow({ book, onPress, onDelete, onCoverRetry }: BookRowProps)
         onLongPress={handleLongPress}
         accessibilityRole="button"
         accessibilityLabel={`Open ${book.title} by ${book.author}`}
-        style={({ pressed }) => [
-          styles.row,
-          {
-            paddingHorizontal: spacing.lg,
-            paddingVertical: spacing.lg,
-            backgroundColor: pressed ? colors.fill.quaternary : 'transparent',
-          },
-        ]}
+        style={pressableStyle}
       >
         <View style={{ marginRight: spacing.lg }}>
           <BookCover
