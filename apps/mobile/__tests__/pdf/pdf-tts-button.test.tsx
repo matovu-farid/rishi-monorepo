@@ -41,8 +41,12 @@ describe('RDR-031 — PDF reader TTS button', () => {
   })
 
   it('handleToggleTTS seeds paragraphs from chunks and dispatches PLAY', () => {
+    // The post-seed branch grew when STA-017 (#93) added a non-blocking
+    // toast + a11y announcement for the "no chunks" path before the PLAY
+    // dispatch. Window widened from 400 → 1200 to accommodate the
+    // user-feedback affordance.
     expect(src).toMatch(
-      /handleToggleTTS\s*=\s*useCallback\([\s\S]{0,1200}seedPlayerParagraphsFromChunks\([\s\S]{0,400}PLAY/,
+      /handleToggleTTS\s*=\s*useCallback\([\s\S]{0,1200}seedPlayerParagraphsFromChunks\([\s\S]{0,1200}PLAY/,
     )
   })
 
