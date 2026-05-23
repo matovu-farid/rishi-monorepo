@@ -7,6 +7,7 @@ import type { ParagraphWithIndex } from '@/models/player_control'
 import type { Book } from '@/lib/api'
 import type { FooterMask } from '@/components/pdf/utils/buildFooterMask'
 import { usePrefsStore } from '@/stores/prefsStore'
+import { useChatStore } from '@/stores/chatStore'
 
 /** PDF view uses `Virtualizer<HTMLDivElement, Element>` — the second arg is
  *  the item element type, which @tanstack/react-virtual leaves as Element
@@ -234,5 +235,25 @@ usePdfStore.subscribe(
     if (usePdfStore.getState().bookNavigationState !== BookNavigationState.Navigating) {
       usePdfStore.setState({ pageNumber: scrollPageNumber })
     }
+  }
+)
+
+// Side effect (#233): when isChatting turns on and a PDF book is loaded, start
+// the realtime voice-chat session. This mirrors the EPUB-side subscription in
+// epubStore.ts (initEpubSubscriptions → useChatStore.subscribe on isChatting).
+// Without this, VoiceChatLauncher in the PDF reader only flips the UI flag and
+// never calls voice.activate(), so the launcher appears to do nothing.
+//
+// Guard on book.kind === 'pdf' is critical: routes/books.$id.lazy.tsx sets
+// pdfStore.book for ALL book kinds (PDF, EPUB, MOBI, AZW3), so without this
+// guard the subscription would double-fire alongside epubStore's subscription
+// for EPUBs.
+useChatStore.subscribe(
+  (state) => state.isChatting,
+  (isChatting) => {
+    if (!isChatting) return
+    const book = usePdfStore.getState().book
+    if (!book || book.kind !== 'pdf') return
+    useChatStore.getState().startChat(book.id)
   }
 )
