@@ -672,6 +672,21 @@ export default function MobiReaderScreen() {
       ? { kind: 'chapter', current: currentChapter + 1, total: chapterCount }
       : { kind: 'none' }
 
+  // CHT-002 — voice-chat activation context. MOBI doesn't cheaply expose
+  // the rendered DOM text (the parser ships HTML into the WebView and
+  // doesn't pipe it back), so we use the synthesised chapter label as
+  // `pageText` and pass the active TTS paragraph when one is live. Outline
+  // = the per-chapter TocItem list so the agent can resolve "previous
+  // chapter" etc.
+  const getActivationContext = useCallback(() => {
+    const outline = tocItems.map((t) => ({ href: t.href, label: t.label }))
+    return {
+      pageText: `Chapter ${currentChapter + 1}`,
+      outline,
+      activeParagraphText: activeParagraph?.text ?? undefined,
+    }
+  }, [tocItems, currentChapter, activeParagraph])
+
   const mobiNavCluster = (
     <MobiNavCluster
       currentChapter={currentChapter}
@@ -695,6 +710,7 @@ export default function MobiReaderScreen() {
         onChatToggle={() =>
           requireAIChat(() => router.push(`/chat/${book.id}`))
         }
+        getActivationContext={getActivationContext}
         onTTSPress={handleToggleTTS}
         ttsButtonActive={ttsActive}
         onBookmarkTogglePress={handleToggleBookmark}

@@ -146,7 +146,41 @@ async function getChimeUri(): Promise<string> {
 }
 
 /**
+ * Module-level singleton effects port. Both the shared voice-chat service
+ * (which fires startThinkingSound on `agent_tool_start`) AND the
+ * `useVoiceChat` hook (which fires it on the broader `chatStatus === 'thinking'`
+ * transition — CHT-007) need to drive the same interval handle. If each
+ * caller built its own port they'd stack timers and double-haptic the user.
+ */
+let _singletonPort: EffectsPort | null = null
+
+/**
+ * Returns the process-wide mobile EffectsPort. Constructed lazily on the
+ * first call. Subsequent calls return the SAME instance so service + hook
+ * share the start/stop interval handle.
+ */
+export function getMobileEffectsPort(): EffectsPort {
+  if (!_singletonPort) {
+    _singletonPort = createMobileEffectsPort()
+  }
+  return _singletonPort
+}
+
+/**
+ * Reset the singleton — test-only hook. Allows each test to re-mock the
+ * underlying haptics module and re-construct the port without bleed.
+ */
+export function _resetMobileEffectsPortForTests(): void {
+  _singletonPort = null
+}
+
+/**
  * Build the mobile EffectsPort. Best-effort — never throws upward.
+ *
+ * Most call sites should prefer `getMobileEffectsPort()` so the
+ * thinking-haptic loop's interval handle is shared between the shared
+ * voice-chat service and the `useVoiceChat` hook (CHT-007). This factory
+ * is retained for tests that want a fresh instance.
  */
 export function createMobileEffectsPort(): EffectsPort {
   // Scoped to this port instance: a single setInterval handle that ticks

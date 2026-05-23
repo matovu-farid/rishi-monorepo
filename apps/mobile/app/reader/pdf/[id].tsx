@@ -599,6 +599,24 @@ export default function PdfReaderScreen() {
     safeBack(router)
   }, [book?.id, pageNumber, router])
 
+  // CHT-002 — voice-chat activation context. PDF doesn't ship rendered
+  // page text back across the WebView bridge synchronously, so we use a
+  // "Page N of M" label as the page-text proxy and pass the outline so
+  // the agent can resolve "next chapter" etc. The active TTS paragraph
+  // (when playback is live) gives the agent the actual sentence the user
+  // is currently listening to.
+  const getActivationContext = useCallback(() => {
+    const outline = tocItems.map((t) => ({ href: t.href, label: t.label }))
+    const pageText = pageCount > 0
+      ? `Page ${pageNumber || 1} of ${pageCount}`
+      : `Page ${pageNumber || 1}`
+    return {
+      pageText,
+      outline,
+      activeParagraphText: activeParagraph?.text ?? undefined,
+    }
+  }, [tocItems, pageNumber, pageCount, activeParagraph])
+
   // ---- Render ----
   if (loading) {
     return (
@@ -665,6 +683,7 @@ export default function PdfReaderScreen() {
         }}
         realtimeStatus={realtimeStatus}
         onChatPress={() => requireAIChat(() => router.push(`/chat/${book.id}`))}
+        getActivationContext={getActivationContext}
         onBookmarkTogglePress={handleToggleBookmark}
         isBookmarked={isCurrentBookmarked}
         sheets={{

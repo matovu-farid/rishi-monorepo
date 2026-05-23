@@ -583,6 +583,23 @@ export default function DjvuReaderScreen() {
       ? { kind: 'page', current: currentPage, total: pageCount }
       : { kind: 'none' }
 
+  // CHT-002 — voice-chat activation context. DJVU is canvas-only (no text
+  // layer that survives the WebView round-trip), so the best we can do is
+  // pass a "Page N of M" page-text proxy plus the synthesised per-page
+  // outline. When TTS is active, forward the active paragraph too — the
+  // shared extractor can light this up if the DJVU has an OCR layer.
+  const getActivationContext = useCallback(() => {
+    const outline = tocItems.map((t) => ({ href: t.href, label: t.label }))
+    const pageText = pageCount > 0
+      ? `Page ${currentPage} of ${pageCount}`
+      : `Page ${currentPage}`
+    return {
+      pageText,
+      outline,
+      activeParagraphText: activeParagraph?.text ?? undefined,
+    }
+  }, [tocItems, currentPage, pageCount, activeParagraph])
+
   const djvuNavCluster = (
     <DjvuNavCluster
       currentPage={currentPage}
@@ -609,6 +626,7 @@ export default function DjvuReaderScreen() {
         onChatToggle={() =>
           requireAIChat(() => router.push(`/chat/${book.id}`))
         }
+        getActivationContext={getActivationContext}
         onTTSPress={handleToggleTTS}
         ttsButtonActive={ttsActive}
         onBookmarkTogglePress={handleToggleBookmark}

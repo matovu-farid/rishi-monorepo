@@ -21,6 +21,7 @@ import type {
 } from '@rishi/shared/voice-chat'
 import { stringToNumberID } from '@rishi/shared/lib/stringToNumberID'
 import { getVoiceChatService } from '@/lib/voice-chat/service'
+import { getMobileEffectsPort } from '@/lib/voice-chat/sounds'
 import type { RealtimeStatus } from '@/lib/realtime/types'
 
 /**
@@ -75,6 +76,33 @@ export function useVoiceChat(
       offChat()
     }
   }, [svc])
+
+  // CHT-007 — fire the mobile EffectsPort's haptic loop while the model is
+  // composing a reply. The shared activation-program already calls
+  // `startThinkingSound` on `agent_tool_start`, but the broader
+  // `chatStatus === 'thinking'` transition (from `agent_start`) does NOT
+  // touch the effects port — so users got no feedback during the most
+  // common "model is thinking" window. Mirror it here so any path that
+  // lands `chatStatus` on thinking while the service is active drives
+  // the haptic loop.
+  //
+  // The port is a process-wide singleton (see `getMobileEffectsPort`) so
+  // we share the interval handle with the service — start/stop are
+  // idempotent and won't double-tick.
+  useEffect(() => {
+    const effects = getMobileEffectsPort()
+    if (publicState === 'active' && chatStatus === 'thinking') {
+      effects.startThinkingSound()
+      return () => {
+        effects.stopThinkingSound()
+      }
+    }
+    // Defensive: ensure the loop is stopped on every non-thinking
+    // transition so a missed `agent_tool_end` (or any future code path
+    // that leaves the loop running) can't strand a recurring haptic.
+    effects.stopThinkingSound()
+    return undefined
+  }, [publicState, chatStatus])
 
   const start = useCallback(async () => {
     if (publicState !== 'idle' && publicState !== 'paused' && publicState !== 'error') return
