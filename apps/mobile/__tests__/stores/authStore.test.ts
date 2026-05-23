@@ -283,5 +283,54 @@ describe('authStore (mobile)', () => {
       useAuthStore.getState().setSession('tok', 'user-1')
       expect(useAuthStore.getState().dismissedFeatures.size).toBe(0)
     })
+
+    // GAT-101 (#74) — explicit sign-out must wipe dismissedFeatures so that
+    // a subsequent sign-in as a different user does not inherit the previous
+    // user's session dismissals.
+    it('clearSession() (explicit sign-out) clears dismissedFeatures (#74)', () => {
+      const { useAuthStore } = require('@/lib/stores/authStore')
+      // Seed an authenticated session and a dismissed feature.
+      useAuthStore.getState().setSession('tok-1', 'user-a')
+      useAuthStore.getState().openPremiumGate('tts')
+      useAuthStore.getState().closePremiumGate()
+      expect(useAuthStore.getState().dismissedFeatures.has('tts')).toBe(true)
+
+      // User signs out explicitly.
+      useAuthStore.getState().clearSession()
+
+      const s = useAuthStore.getState()
+      expect(s.dismissedFeatures).toBeInstanceOf(Set)
+      expect(s.dismissedFeatures.size).toBe(0)
+      // Re-tapping a previously-dismissed feature should reopen the gate.
+      useAuthStore.getState().openPremiumGate('tts')
+      expect(useAuthStore.getState().premiumGateOpen).toBe(true)
+    })
+
+    // GAT-102 (#75) — the 401 forced sign-out path goes through
+    // clearSession() (see lib/api.ts), so the same invariant must hold when
+    // clearSession is invoked imperatively (as the 401 handler does).
+    it('clearSession() (401 forced sign-out path) clears dismissedFeatures (#75)', () => {
+      const { useAuthStore } = require('@/lib/stores/authStore')
+      // Simulate the seeded "currently signed-in user with a dismissed gate"
+      // state that the 401 handler would walk into.
+      useAuthStore.setState({
+        user: { id: 'u-pre-401', email: 'pre@example.com' },
+        isAuthenticated: true,
+        sessionToken: 'expired-token',
+      })
+      useAuthStore.getState().openPremiumGate('ai-chat')
+      useAuthStore.getState().closePremiumGate()
+      expect(useAuthStore.getState().dismissedFeatures.has('ai-chat')).toBe(true)
+
+      // This is exactly what apps/mobile/lib/api.ts does after a 401:
+      //   useAuthStore.getState().clearSession()
+      useAuthStore.getState().clearSession()
+
+      const s = useAuthStore.getState()
+      expect(s.isAuthenticated).toBe(false)
+      expect(s.user).toBeNull()
+      expect(s.sessionToken).toBeNull()
+      expect(s.dismissedFeatures.size).toBe(0)
+    })
   })
 })

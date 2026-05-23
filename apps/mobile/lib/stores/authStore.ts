@@ -17,8 +17,10 @@
  *     MMKV, and flips `isAuthenticated` to true. It does NOT persist the
  *     token itself — `lib/auth.signIn()` writes to secure-store before
  *     calling this.
- *   - `clearSession()` wipes both the in-memory + persisted user id and flips
- *     `isAuthenticated` to false. `lib/auth.signOut()` calls
+ *   - `clearSession()` wipes both the in-memory + persisted user id, flips
+ *     `isAuthenticated` to false, and clears `dismissedFeatures` /
+ *     `pendingAction` so a re-auth (or different user) starts from a clean
+ *     gate state (GAT-101 / GAT-102). `lib/auth.signOut()` calls
  *     `SecureStore.deleteItemAsync` to remove the actual bearer.
  *   - `isAuthenticating` is a UI flag for the sign-in screen's loading state.
  */
@@ -226,11 +228,22 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   },
 
   clearSession: () => {
+    // GAT-101 / GAT-102 (#74 / #75): sign-out — whether explicit ("Sign out"
+    // button) or forced (apiClient 401 handler) — must wipe the session-only
+    // `dismissedFeatures` set. Otherwise the next user to sign in on this
+    // device (account-switch on a shared phone, re-auth after a 401, etc.)
+    // inherits the previous user's premium-gate dismissals and the
+    // surfaces stay hidden until the next cold start.
+    //
+    // Also clear `pendingAction` so a stashed gated-tap from before the
+    // sign-out cannot replay against the next session.
     set({
       sessionToken: null,
       user: null,
       isAuthenticated: false,
       isAuthenticating: false,
+      pendingAction: null,
+      dismissedFeatures: new Set<PremiumFeature>(),
     })
     try {
       bucket.removeItem(USER_ID_KEY)
