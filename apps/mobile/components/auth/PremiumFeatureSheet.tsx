@@ -148,12 +148,16 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
   }, [closeGate, shakeX])
 
   const handleDismiss = useCallback(() => {
-    // GAT-014 — dismiss must NOT share the `selectionAsync` haptic with
-    // `handleSignIn`. The two paths felt identical (same tactile yes)
-    // even though one signed the user in and one bailed. Use a Light
-    // impact so the tap still feels acknowledged but is distinct from
-    // both the Soft sheet-open and the Success post-sign-in haptics.
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    // GAT-014 + GAT-108 — dismiss must feel different from both the
+    // selectionAsync of `handleSignIn` (yes, going forward) AND the
+    // Light impact previously used here, which still tested too close
+    // to the Success notification on a real device.
+    //
+    // Rigid feedback (iOS UIImpactFeedbackStyleRigid) delivers a crisper
+    // single tap that reads as a "stop / back out" gesture — clearly
+    // distinct from the soft sheet-open tap and the Success cascade
+    // after sign-in.
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid)
     closeGate()
   }, [closeGate])
 

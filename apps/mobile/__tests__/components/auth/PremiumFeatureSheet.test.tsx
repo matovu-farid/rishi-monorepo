@@ -129,7 +129,13 @@ jest.mock('expo-haptics', () => ({
   impactAsync: jest.fn(),
   selectionAsync: jest.fn(),
   notificationAsync: jest.fn(),
-  ImpactFeedbackStyle: { Soft: 'soft', Light: 'light' },
+  ImpactFeedbackStyle: {
+    Soft: 'soft',
+    Light: 'light',
+    Medium: 'medium',
+    Heavy: 'heavy',
+    Rigid: 'rigid',
+  },
   NotificationFeedbackType: { Success: 'success', Error: 'error' },
 }))
 
@@ -569,15 +575,17 @@ describe('PremiumFeatureSheet (mobile)', () => {
       }
     })
 
-    it('uses no haptic OR Light impact (not Soft) on dismiss', () => {
+    it('uses a Rigid (or Heavy) impact on dismiss — never Soft or Light (GAT-108)', () => {
       pressMaybeLater()
-      // We allow a faint Light tap so dismiss still feels acknowledged,
-      // but it must be visibly weaker than the Soft impact that opens the
-      // sheet and clearly different from the Success notification on
-      // sign-in.
+      // GAT-108 — Light still tested too close to Success on real devices,
+      // so dismiss now uses Rigid (or Heavy) for a crisp, distinct tap.
+      // Soft is reserved for the sheet-open feel.
       const calls = (Haptics.impactAsync as jest.Mock).mock.calls
+      expect(calls.length).toBe(1)
       for (const call of calls) {
         expect(call[0]).not.toBe('soft')
+        expect(call[0]).not.toBe('light')
+        expect(['rigid', 'heavy']).toContain(call[0])
       }
     })
   })
