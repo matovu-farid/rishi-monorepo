@@ -230,3 +230,124 @@ describe('TTSControls — Repeat button', () => {
     })
   })
 })
+
+// ---------------------------------------------------------------------------
+// Play-button spinner debounce (#232)
+//
+// The TTS player dips through `loading` at every paragraph boundary even when
+// the next paragraph's audio is already cached. Showing the spinner during
+// these sub-200ms dips makes the play-button icon flicker. The fix is an
+// asymmetric debounce: delay the spinner ~200ms when arriving from an active
+// playback state, hide immediately, and never delay on cold-start /
+// pause→resume.
+// ---------------------------------------------------------------------------
+
+describe('TTSControls — play spinner debounce (#232)', () => {
+  beforeEach(() => {
+    sendMock.mockReset()
+    vi.useFakeTimers()
+    usePlayerStore.setState({ playingState: 'idle', errors: [] })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('does not show the spinner during a cached playing → loading → playing transition', () => {
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
+    const { container } = render(<TTSControls bookId="book-1" />)
+    act(() => {
+      expandPill()
+    })
+
+    // Cached-paragraph dip: ~50ms in 'loading' before snapping back.
+    act(() => usePlayerStore.setState({ playingState: 'loading' }))
+    expect(screen.queryByLabelText('Loading')).toBeNull()
+    expect(container.querySelector('.animate-spin')).toBeNull()
+
+    act(() => vi.advanceTimersByTime(50))
+    expect(screen.queryByLabelText('Loading')).toBeNull()
+    expect(container.querySelector('.animate-spin')).toBeNull()
+
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
+    expect(screen.queryByLabelText('Loading')).toBeNull()
+    expect(container.querySelector('.animate-spin')).toBeNull()
+
+    // Pause icon should remain steady throughout.
+    expect(screen.getByLabelText('Pause')).toBeInTheDocument()
+  })
+
+  it('shows the spinner after the debounce window when load genuinely stalls', () => {
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
+    const { container } = render(<TTSControls bookId="book-1" />)
+    act(() => {
+      expandPill()
+    })
+
+    act(() => usePlayerStore.setState({ playingState: 'loading' }))
+    // Before debounce fires: still steady.
+    act(() => vi.advanceTimersByTime(150))
+    expect(container.querySelector('.animate-spin')).toBeNull()
+
+    // After debounce fires: spinner appears.
+    act(() => vi.advanceTimersByTime(150))
+    expect(container.querySelector('.animate-spin')).not.toBeNull()
+    expect(screen.getByLabelText('Loading')).toBeInTheDocument()
+  })
+
+  it('shows the spinner immediately on cold-start (idle → loading, no debounce)', () => {
+    const { container } = render(<TTSControls bookId="book-1" />)
+    act(() => {
+      expandPill()
+    })
+
+    act(() => usePlayerStore.setState({ playingState: 'loading' }))
+    // No timer advance — spinner should be visible right away because the
+    // predecessor (`idle`) is NOT an active-playback state.
+    expect(container.querySelector('.animate-spin')).not.toBeNull()
+    expect(screen.getByLabelText('Loading')).toBeInTheDocument()
+  })
+
+  it('shows the spinner immediately on pause → resume (paused.clean → loading, no debounce)', () => {
+    act(() => usePlayerStore.setState({ playingState: 'paused.clean' }))
+    const { container } = render(<TTSControls bookId="book-1" />)
+    act(() => {
+      expandPill()
+    })
+
+    act(() => usePlayerStore.setState({ playingState: 'loading' }))
+    // Predecessor `paused.clean` is not active playback — spinner is immediate.
+    expect(container.querySelector('.animate-spin')).not.toBeNull()
+    expect(screen.getByLabelText('Loading')).toBeInTheDocument()
+  })
+
+  it('hides the spinner immediately when loading ends after the debounce fired', () => {
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
+    const { container } = render(<TTSControls bookId="book-1" />)
+    act(() => {
+      expandPill()
+    })
+
+    act(() => usePlayerStore.setState({ playingState: 'loading' }))
+    act(() => vi.advanceTimersByTime(300))
+    expect(container.querySelector('.animate-spin')).not.toBeNull()
+
+    // When loading completes, hide is immediate — no delay-hide.
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
+    expect(container.querySelector('.animate-spin')).toBeNull()
+  })
+
+  it('keeps Prev/Next disabled while raw playingState === "loading" (independent of spinner debounce)', () => {
+    act(() => usePlayerStore.setState({ playingState: 'playing' }))
+    render(<TTSControls bookId="book-1" />)
+    act(() => {
+      expandPill()
+    })
+
+    act(() => usePlayerStore.setState({ playingState: 'loading' }))
+    // Even though the spinner is suppressed, the Prev/Next gates must still
+    // honour the raw loading state (real races, e.g. mid-load nav).
+    expect(screen.getByLabelText('Previous')).toBeDisabled()
+    expect(screen.getByLabelText('Next')).toBeDisabled()
+  })
+})
