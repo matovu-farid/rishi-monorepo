@@ -102,6 +102,35 @@ jest.mock('@/lib/file-import-index-gate', () => ({
   shouldSkipIndexing: jest.fn(() => true),
 }))
 
+// DAT-002 (#115): file-import now queries the books table for a
+// matching file hash before delegating to the shared service. Stub the
+// DB + drizzle helpers so the query returns "no match" by default.
+jest.mock('@rishi/shared/schema', () => ({
+  books: { id: 'id', fileHash: 'fileHash' },
+}))
+
+jest.mock('drizzle-orm', () => ({
+  eq: jest.fn((col, val) => ({ col, val })),
+}))
+
+jest.mock('@/lib/db', () => ({
+  db: {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          get: () => undefined,
+          all: () => [],
+        }),
+      }),
+    }),
+  },
+}))
+
+jest.mock('@/lib/sync/file-sync', () => ({
+  __esModule: true,
+  hashBookFile: jest.fn(async () => 'fresh-hash'),
+}))
+
 // ────────────────────────────────────────────────────────────────────────────
 // Mock the shared book-import service factory.
 // We capture what the URL import passes to `importFromPath` so we can assert

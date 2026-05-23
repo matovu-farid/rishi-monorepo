@@ -10,6 +10,7 @@
  */
 
 import { File, Directory, Paths } from "expo-file-system";
+import { eq } from "drizzle-orm";
 import { Book } from "@/types/book";
 import { createMobileBookImportService } from "@/lib/book-import";
 import { embedBook } from "@/lib/rag/pipeline";
@@ -17,6 +18,9 @@ import type { BookFormat } from "@rishi/shared/book-import";
 import { IS_E2E_TEST } from "@/app/_layout";
 import { getSessionToken } from "@/lib/auth";
 import { shouldSkipIndexing } from "@/lib/file-import-index-gate";
+import { db } from "@/lib/db";
+import { books } from "@rishi/shared/schema";
+import { hashBookFile } from "@/lib/sync/file-sync";
 
 const BOOKS_DIR = new Directory(Paths.document, "books");
 
@@ -108,6 +112,50 @@ function ensureBooksDir(): void {
 }
 
 /**
+ * DAT-002 (#115): duplicate-by-content guard. Every import path (picker
+ * + URL + share sheet) used to mint a brand-new UUID and insert a fresh
+ * row even when the user re-imported the same file, leaving the library
+ * with two rows pointing at byte-identical content.
+ *
+ * Hash the source bytes BEFORE creating the per-book directory or
+ * inserting the row. If a non-deleted books row already carries that
+ * hash, short-circuit to `stage: 'duplicate'`. Hash collisions across
+ * different files are vanishingly unlikely (SHA-256), so a positive hit
+ * is treated as a confirmed duplicate.
+ *
+ * Returns the matching book id on hit; null otherwise.
+ */
+async function findDuplicateByHash(
+  sourceUri: string,
+): Promise<{ existingBookId: string; fileHash: string } | null> {
+  let fileHash: string;
+  try {
+    fileHash = await hashBookFile(sourceUri);
+  } catch {
+    // Hashing failure must NOT block the import — if the bytes can't be
+    // read here, the shared service's copy step will fail anyway with a
+    // more accurate stage. Skip the duplicate check and let it through.
+    return null;
+  }
+  if (!fileHash) return null;
+
+  try {
+    const existing = db
+      .select()
+      .from(books)
+      .where(eq(books.fileHash, fileHash))
+      .get();
+    if (existing && existing.id) {
+      return { existingBookId: String(existing.id), fileHash };
+    }
+  } catch {
+    // Best-effort. A DB error here is non-fatal; the worst case is a
+    // duplicate row slips through, which the user can delete manually.
+  }
+  return null;
+}
+
+/**
  * Shared importer driver: pick (or accept) a source URI, mint a UUID, run
  * the shared service, then trigger indexing in the background.
  */
@@ -118,6 +166,19 @@ async function runImportWithService(opts: {
   author?: string;
 }): Promise<ImportOutcome> {
   ensureBooksDir();
+
+  // DAT-002 (#115): duplicate-by-content gate. Runs BEFORE we mint a
+  // UUID or touch the filesystem so a duplicate import is a clean no-op
+  // (no orphan dir, no Drizzle row attempt).
+  const dup = await findDuplicateByHash(opts.sourceUri);
+  if (dup) {
+    return {
+      ok: false,
+      stage: "duplicate",
+      error: `This book is already in your library (id=${dup.existingBookId}).`,
+    };
+  }
+
   const bookId = generateUUID();
 
   const service = createMobileBookImportService({
@@ -351,11 +412,19 @@ export async function importBookFromUrl(url: string): Promise<Book> {
   tmpFile.write(bytes);
 
   const title = extractTitleFromUrl(url);
-  const result = await runImportWithService({
-    sourceUri: tmpFile.uri,
-    format,
-    title,
-  });
+  let result: ImportOutcome;
+  try {
+    result = await runImportWithService({
+      sourceUri: tmpFile.uri,
+      format,
+      title,
+    });
+  } catch (err) {
+    // DAT-011 (#123): unexpected throws from the shared service must
+    // not leave the tmp dir orphaned on disk.
+    safeDeleteDirectory(bookDir);
+    throw err;
+  }
 
   // Clean up the tmp file; the service copied it to book.<format>.
   try {
@@ -365,9 +434,31 @@ export async function importBookFromUrl(url: string): Promise<Book> {
   }
 
   if (!result.ok) {
+    // DAT-011 (#123) + DAT-002 (#115): on any failure (including
+    // duplicate detection), remove the per-book dir we just created so
+    // we don't leave an empty `books/<uuid>/` behind. The shared
+    // service's own copy step already drops `book.<format>` on success;
+    // we only need to clean up when nothing was committed.
+    safeDeleteDirectory(bookDir);
     throw new Error(`Import failed at stage=${result.stage}: ${result.error}`);
   }
   return result.book;
+}
+
+/**
+ * DAT-011 (#123): best-effort recursive delete of an import-time
+ * scratch directory. Swallows errors because callers are always in an
+ * error-handling branch — surfacing a cleanup failure on top of the
+ * original error would only make the user-visible message noisier.
+ */
+function safeDeleteDirectory(dir: Directory): void {
+  try {
+    if (dir.exists) {
+      dir.delete();
+    }
+  } catch {
+    /* best-effort */
+  }
 }
 
 // Re-export for callers that still rely on the legacy embedding helper.
