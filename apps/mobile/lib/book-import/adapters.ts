@@ -107,7 +107,24 @@ export function createMobileFsPort(opts: {
       // Source may be a file:// URI or a content:// URI handed back by
       // expo-file-system's picker.
       const sourceFile = new File(filePath);
-      sourceFile.copy(destFile);
+      try {
+        sourceFile.copy(destFile);
+      } catch (err) {
+        // DAT-011 (#123): if the copy step blows up (ENOSPC, EACCES,
+        // truncated source, etc.) the per-book dir we just created is
+        // empty — leaving it on disk would litter the app sandbox with
+        // dead `books/<uuid>/` entries for every failed picker import.
+        // Roll back the dir before re-throwing so the upstream
+        // classifyFailure() still sees the original error.
+        try {
+          if (bookDir.exists) {
+            bookDir.delete();
+          }
+        } catch {
+          /* best-effort */
+        }
+        throw err;
+      }
       return destFile.uri;
     },
 
