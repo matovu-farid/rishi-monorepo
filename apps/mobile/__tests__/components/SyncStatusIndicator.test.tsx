@@ -28,6 +28,7 @@ jest.mock('react-native', () => {
     Pressable: mk('Pressable'),
     StyleSheet: { create: (s: Record<string, unknown>) => s },
     Alert: { alert: jest.fn() },
+    AccessibilityInfo: { announceForAccessibility: jest.fn() },
   }
 })
 
