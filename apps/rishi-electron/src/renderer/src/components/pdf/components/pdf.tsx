@@ -133,22 +133,39 @@ export function PdfView({
     requireAuth: requireAuth as (feature: string, action: () => void) => void
   })
 
+  // Memoize the selection-hook callbacks so usePdfTextSelection's effect
+  // doesn't rebind document/container listeners on every PdfView render. The
+  // hook now lists these in its dep array (rather than reading from a
+  // render-time ref), so unstable identities here would cause the listeners
+  // to detach and reattach on every parent render — wasteful, plus the
+  // mouseup listener is briefly missing in the window between cleanup and
+  // re-attach.
+  const getSelectionPageElement = useCallback(
+    (n: number) => pageInfoRef.current.get(n)?.pageEl ?? null,
+    []
+  )
+  const getSelectionViewport = useCallback((n: number): ViewportLike | null => {
+    const info = pageInfoRef.current.get(n)
+    if (!info) return null
+    const scale = info.pageEl.getBoundingClientRect().width / info.page.view[2]
+    // pdfjs-dist types return `any[]` from convertToViewportPoint; cast via
+    // unknown to the structural ViewportLike which expects [number, number].
+    return info.page.getViewport({
+      scale
+    }) as unknown as ViewportLike
+  }, [])
+  const handleSelectionSelect = useCallback(
+    (sel: { locator: PdfLocator; text: string; anchorPos: { x: number; y: number } }) =>
+      setSelectionPopover({ locator: sel.locator, text: sel.text, anchorPos: sel.anchorPos }),
+    []
+  )
+  const handleSelectionClear = useCallback(() => setSelectionPopover(null), [])
   usePdfTextSelection({
     containerRef: scrollContainerRef,
-    getPageElement: (n) => pageInfoRef.current.get(n)?.pageEl ?? null,
-    getViewport: (n) => {
-      const info = pageInfoRef.current.get(n)
-      if (!info) return null
-      const scale = info.pageEl.getBoundingClientRect().width / info.page.view[2]
-      // pdfjs-dist types return `any[]` from convertToViewportPoint; cast via
-      // unknown to the structural ViewportLike which expects [number, number].
-      return info.page.getViewport({
-        scale
-      }) as unknown as ViewportLike
-    },
-    onSelect: (sel) =>
-      setSelectionPopover({ locator: sel.locator, text: sel.text, anchorPos: sel.anchorPos }),
-    onClear: () => setSelectionPopover(null)
+    getPageElement: getSelectionPageElement,
+    getViewport: getSelectionViewport,
+    onSelect: handleSelectionSelect,
+    onClear: handleSelectionClear
   })
 
   useScrolling(scrollContainerRef)

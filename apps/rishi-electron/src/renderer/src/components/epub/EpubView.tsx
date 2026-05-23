@@ -76,6 +76,7 @@ import { findParagraphForCfi } from '@/modules/cfi-to-paragraph'
 import { resolveLiveSelection } from '@/modules/resolve-live-selection'
 import { buildPartialFirst } from '@/modules/read-aloud-from'
 import { useTtsHighlightReconciler } from '@/hooks/useTtsHighlightReconciler'
+import { useVisibleEpubIframe } from '@/hooks/reader/useVisibleEpubIframe'
 import { createEpubTtsReconciler, type EpubTtsReconciler } from './reconcileTtsHighlight'
 
 function updateTheme(rendition: Rendition, theme: ThemeType) {
@@ -851,31 +852,25 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   }, [])
 
   const epubTtsReconcilerRef = useRef<EpubTtsReconciler | null>(null)
-  const [epubContentIframe, setEpubContentIframe] = useState<HTMLIFrameElement | null>(null)
+
+  // Track the currently visible content iframe declaratively via
+  // useSyncExternalStore. Previously this was a setState-in-effect cascade
+  // (flagged by react-hooks/set-state-in-effect); the hook now produces the
+  // value during render and re-subscribes only when the rendition identity
+  // changes.
+  const epubContentIframe = useVisibleEpubIframe(rendition)
 
   // Build (or rebuild) the reconciler whenever the rendition instance changes.
+  // Kept in its own effect (separate concern from iframe tracking) — refs are
+  // fine inside effects, and there's no setState here so the React 19 rule
+  // doesn't apply.
   useEffect(() => {
     if (!rendition) {
       epubTtsReconcilerRef.current = null
-      setEpubContentIframe(null)
       return
     }
     epubTtsReconcilerRef.current = createEpubTtsReconciler(rendition)
-
-    // Resolve the epub.js content iframe via the shared helper, which
-    // correctly filters to the currently displayed view. We update the
-    // state on `rendered` so chapter swaps refresh the iframe reference.
-    const resolveIframe = (): void => {
-      const next = getVisibleIframe(rendition) ?? null
-      setEpubContentIframe((prev) => (prev === next ? prev : next))
-    }
-    resolveIframe()
-
-    // epub.js emits 'rendered' when a new view (chapter) is rendered.
-    rendition.on('rendered', resolveIframe)
-
     return () => {
-      rendition.off('rendered', resolveIframe)
       epubTtsReconcilerRef.current = null
     }
   }, [rendition])
