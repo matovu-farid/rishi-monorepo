@@ -14,12 +14,22 @@ const PARAGRAPH_INDEX_PER_PAGE = 10000
 //   return pageDataToParagraphs(pageNumber, pageData[pageNumber]);
 // }
 
-export function pageDataToParagraphs(pageNumber: number, pageData: TextContent): Paragraph[] {
+export function pageDataToParagraphs(
+  pageNumber: number,
+  pageData: TextContent,
+  maskedItemIndices?: ReadonlySet<number>
+): Paragraph[] {
   const defaultDimensions = {
     bottom: Number.MAX_SAFE_INTEGER,
     top: Number.MIN_SAFE_INTEGER
   }
   let paragraphsSoFarArray: Paragraph[] = []
+  // Parallel array tracking which raw item indices contributed to each
+  // paragraph slot, so the optional mask can drop whole paragraphs whose
+  // constituent items are ALL masked. Index alignment with
+  // `paragraphsSoFarArray` is maintained throughout the loop.
+  const paragraphItemIndices: number[][] = []
+  let currentParagraphItems: number[] = []
 
   // Reset arrays for this page parse
   let paragraghSoFar = {
@@ -35,7 +45,8 @@ export function pageDataToParagraphs(pageNumber: number, pageData: TextContent):
 
   let previousItem: TextItem | null = null
   let lineCount = 0
-  for (const item of items) {
+  for (let itemIdx = 0; itemIdx < items.length; itemIdx++) {
+    const item = items[itemIdx]
     if (!isTextItem(item)) continue
 
     const text = item.str
@@ -54,6 +65,8 @@ export function pageDataToParagraphs(pageNumber: number, pageData: TextContent):
         lineCount = 0
       }
       paragraphsSoFarArray.push(paragraghSoFar)
+      paragraphItemIndices.push(currentParagraphItems)
+      currentParagraphItems = []
       // Calculate index AFTER push, so it's incremented correctly
       const currentIdx = paragraphsSoFarArray.length
       const pargraphIdx = (pageNumber * PARAGRAPH_INDEX_PER_PAGE + currentIdx).toString()
@@ -82,12 +95,29 @@ export function pageDataToParagraphs(pageNumber: number, pageData: TextContent):
         )
       }
     }
+    currentParagraphItems.push(itemIdx)
     if (item.hasEOL) {
       lineCount++
     }
   }
 
   paragraphsSoFarArray.push(paragraghSoFar)
+  paragraphItemIndices.push(currentParagraphItems)
+
+  // Mask filter: drop paragraphs whose items are ALL in the mask while
+  // KEEPING the slot — survivors retain their original index strings so
+  // resume bookmarks stay stable across runs with/without detection.
+  if (maskedItemIndices && maskedItemIndices.size > 0) {
+    const kept: Paragraph[] = []
+    for (let i = 0; i < paragraphsSoFarArray.length; i++) {
+      const idxs = paragraphItemIndices[i]
+      if (idxs.length > 0 && idxs.every((ix) => maskedItemIndices.has(ix))) {
+        continue
+      }
+      kept.push(paragraphsSoFarArray[i])
+    }
+    paragraphsSoFarArray = kept
+  }
 
   paragraphsSoFarArray = paragraphsSoFarArray
     .filter((paragraph) => paragraph.text.trim().length > 0)

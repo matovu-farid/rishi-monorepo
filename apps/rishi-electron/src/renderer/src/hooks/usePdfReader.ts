@@ -301,11 +301,14 @@ export function usePdfReader(
 export function publishParagraphsForPage(page: number, pageDataMap: Record<number, TextContent>): void {
   const data = pageDataMap[page] as TextContent | undefined
   if (!data) return
-  const newCurrent = pageDataToParagraphs(page, data)
+  const bookId = usePdfStore.getState().book?.id
+  const maskFor = (p: number): ReadonlySet<number> | undefined =>
+    bookId != null ? usePdfStore.getState().getFooterMaskForPage(bookId, p) : undefined
+  const newCurrent = pageDataToParagraphs(page, data, maskFor(page))
   const nextData = pageDataMap[page + 1] as TextContent | undefined
-  const newNext = nextData ? pageDataToParagraphs(page + 1, nextData) : []
+  const newNext = nextData ? pageDataToParagraphs(page + 1, nextData, maskFor(page + 1)) : []
   const prevData = pageDataMap[page - 1] as TextContent | undefined
-  const newPrev = prevData ? pageDataToParagraphs(page - 1, prevData) : []
+  const newPrev = prevData ? pageDataToParagraphs(page - 1, prevData, maskFor(page - 1)) : []
 
   const pdfState = usePdfStore.getState()
   const currentDiffers = !isEqual(pdfState.currentViewParagraphs, newCurrent)
