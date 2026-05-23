@@ -105,9 +105,9 @@ test.describe('Navigation history — EPUB', () => {
     const tocVisible = await tocPanel.isVisible({ timeout: 5000 }).catch(() => false)
     if (!tocVisible) {
       // Try the sheet-based ReaderTOC (used in EPUB via ReactReader).
-      await expect(
-        bookPage.locator('text=Table of Contents').first()
-      ).toBeVisible({ timeout: 5000 })
+      await expect(bookPage.locator('text=Table of Contents').first()).toBeVisible({
+        timeout: 5000
+      })
     }
 
     // Click the first TOC entry button.
@@ -197,46 +197,52 @@ test.describe('Navigation history — EPUB', () => {
 
     // Dispatch JUMP_REQUESTED as if an internal link was clicked: from the
     // current page back to the initial CFI.
-    await bookPage.evaluate((cfis) => {
-      // Import via the module's singleton. The actor is a module-level const
-      // so it is reachable at runtime via the store exposed on __rishi.
-      // We reach it by dynamically importing from the renderer's module graph.
-      // Simpler: dispatch through the window event that triggers the same path.
-      const w = window as unknown as {
-        __rishi?: {
-          epubStore: { getState: () => { currentEpubLocation: string } }
+    await bookPage.evaluate(
+      (cfis) => {
+        // Import via the module's singleton. The actor is a module-level const
+        // so it is reachable at runtime via the store exposed on __rishi.
+        // We reach it by dynamically importing from the renderer's module graph.
+        // Simpler: dispatch through the window event that triggers the same path.
+        const w = window as unknown as {
+          __rishi?: {
+            epubStore: { getState: () => { currentEpubLocation: string } }
+          }
         }
-      }
-      if (!w.__rishi) throw new Error('window.__rishi not exposed')
+        if (!w.__rishi) throw new Error('window.__rishi not exposed')
 
-      // The navigation history actor is a singleton imported by EpubView.
-      // We can't import ES modules at page.evaluate time, so we dispatch a
-      // synthetic CustomEvent that EpubView doesn't listen to. Instead, we
-      // reach the actor via a globally-accessible reference that EpubView
-      // attaches during its effect.
-      //
-      // Fallback: import the actor from the module bundle via window.__rishiNavActor
-      // if it was exposed. Since it isn't, we trigger the same DOM codepath by
-      // synthesising a click on an anchor inside the epub iframe.
-      //
-      // This evaluate just captures the CFIs we need; the actual dispatch
-      // happens in the next evaluate block.
-      return cfis
-    }, { from: fromCfi, to: initialCfi })
+        // The navigation history actor is a singleton imported by EpubView.
+        // We can't import ES modules at page.evaluate time, so we dispatch a
+        // synthetic CustomEvent that EpubView doesn't listen to. Instead, we
+        // reach the actor via a globally-accessible reference that EpubView
+        // attaches during its effect.
+        //
+        // Fallback: import the actor from the module bundle via window.__rishiNavActor
+        // if it was exposed. Since it isn't, we trigger the same DOM codepath by
+        // synthesising a click on an anchor inside the epub iframe.
+        //
+        // This evaluate just captures the CFIs we need; the actual dispatch
+        // happens in the next evaluate block.
+        return cfis
+      },
+      { from: fromCfi, to: initialCfi }
+    )
 
     // Dispatch JUMP_REQUESTED via the navigationHistoryActor singleton,
     // exposed on window.__rishi by testing/expose-stores.ts.
-    await bookPage.evaluate((cfis: { from: string; to: string }) => {
-      // @ts-expect-error — runtime-exposed via testing/expose-stores.ts
-      window.__rishi.navigationHistoryActor.send({
-        type: 'JUMP_REQUESTED',
-        from: { kind: 'epub', cfi: cfis.from },
-        fromTts: null,
-        to: { kind: 'epub', cfi: cfis.to },
-        source: 'link',
-        fromLabel: 'previous spot'
-      })
-    }, { from: fromCfi, to: initialCfi })
+    await bookPage.evaluate(
+      (cfis: { from: string; to: string }) => {
+        // @ts-expect-error — runtime-exposed via testing/expose-stores.ts
+        window.__rishi.navigationHistoryActor.send({
+          type: 'JUMP_REQUESTED',
+          from: { kind: 'epub', cfi: cfis.from },
+          fromTts: null,
+          to: { kind: 'epub', cfi: cfis.to },
+          source: 'link',
+          fromLabel: 'previous spot'
+        })
+      },
+      { from: fromCfi, to: initialCfi }
+    )
 
     // Pill should appear.
     await waitForPill(bookPage)
@@ -291,6 +297,9 @@ test.describe('Navigation history — EPUB', () => {
     await bookPage.waitForTimeout(500)
 
     // Assert the pill is NOT present — page-flips are not jumps.
-    await expect(bookPage.locator('[data-testid="nav-history-back-label"]'), 'pill must not appear on sequential page-flips').toHaveCount(0)
+    await expect(
+      bookPage.locator('[data-testid="nav-history-back-label"]'),
+      'pill must not appear on sequential page-flips'
+    ).toHaveCount(0)
   })
 })

@@ -28,7 +28,7 @@ export type ReconcileTtsHighlight = (desiredIndex: string | null) => void
  */
 export function useTtsHighlightReconciler(
   reconcile: ReconcileTtsHighlight,
-  iframe: HTMLIFrameElement | null,
+  iframe: HTMLIFrameElement | null
 ): void {
   useEffect(() => {
     const run = (): void => {
@@ -42,7 +42,7 @@ export function useTtsHighlightReconciler(
     const unsubStore = usePlayerStore.subscribe(
       (s) => ({ active: s.activeParagraph, resume: s.lastPlayedParagraphIndex }),
       () => run(),
-      { equalityFn: (a, b) => a.active === b.active && a.resume === b.resume },
+      { equalityFn: (a, b) => a.active === b.active && a.resume === b.resume }
     )
 
     const onVisibility = (): void => {

@@ -30,7 +30,7 @@ const SCHEMA = `
 function makeDb(): Database {
   const db = new BetterSqlite3(':memory:')
   // better-sqlite3 multi-statement DDL goes through Database#exec.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   ;(db as any).exec(SCHEMA)
   return db
 }

@@ -131,15 +131,15 @@ describe('pdfStore', () => {
     const mask = new Map<number, Set<number>>([[5, new Set([2, 3])]])
     usePdfStore.getState().addBook(1)
     usePdfStore.getState().setFooterMask(1, mask)
-    expect(
-      Object.prototype.hasOwnProperty.call(usePdfStore.getState().footerMaskByBookId, 1)
-    ).toBe(true)
+    expect(Object.prototype.hasOwnProperty.call(usePdfStore.getState().footerMaskByBookId, 1)).toBe(
+      true
+    )
 
     usePdfStore.getState().removeBook(1)
 
-    expect(
-      Object.prototype.hasOwnProperty.call(usePdfStore.getState().footerMaskByBookId, 1)
-    ).toBe(false)
+    expect(Object.prototype.hasOwnProperty.call(usePdfStore.getState().footerMaskByBookId, 1)).toBe(
+      false
+    )
     expect(usePdfStore.getState().footerMaskByBookId[1]).toBeUndefined()
   })
 })

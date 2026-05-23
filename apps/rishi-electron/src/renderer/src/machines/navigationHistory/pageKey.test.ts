@@ -9,14 +9,14 @@ describe('pageKey', () => {
 
   it('EPUB key reflects spine index only', () => {
     // CFI format: epubcfi(/6/<spinePos*2+2>!/...)
-    const cfiA = 'epubcfi(/6/14!/4/2/2,/1:0,/1:100)'  // spinePos 6
-    const cfiB = 'epubcfi(/6/14!/4/4/2,/1:0,/1:100)'  // same spinePos 6, different intra-spine
+    const cfiA = 'epubcfi(/6/14!/4/2/2,/1:0,/1:100)' // spinePos 6
+    const cfiB = 'epubcfi(/6/14!/4/4/2,/1:0,/1:100)' // same spinePos 6, different intra-spine
     expect(pageKey({ kind: 'epub', cfi: cfiA })).toBe(pageKey({ kind: 'epub', cfi: cfiB }))
   })
 
   it('different spine indices yield different keys', () => {
-    const cfi1 = 'epubcfi(/6/4!/4/2/2,/1:0,/1:100)'   // spinePos 1
-    const cfi2 = 'epubcfi(/6/14!/4/2/2,/1:0,/1:100)'  // spinePos 6
+    const cfi1 = 'epubcfi(/6/4!/4/2/2,/1:0,/1:100)' // spinePos 1
+    const cfi2 = 'epubcfi(/6/14!/4/2/2,/1:0,/1:100)' // spinePos 6
     expect(pageKey({ kind: 'epub', cfi: cfi1 })).not.toBe(pageKey({ kind: 'epub', cfi: cfi2 }))
   })
 

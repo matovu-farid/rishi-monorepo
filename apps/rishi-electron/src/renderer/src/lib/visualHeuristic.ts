@@ -110,7 +110,7 @@ function scanElement(el: Element, hits: VisualHit[]): void {
   // double-counting: a katex/math child's text is already included in the
   // parent's textContent, so if a child owns the equation we don't also
   // attribute it to the parent.
-  if ((direct === null || direct.kind !== 'equation') && !childHasEquation) {
+  if (direct?.kind !== 'equation' && !childHasEquation) {
     if (hasLatexEquation(el.textContent ?? '')) {
       hits.push({ kind: 'equation', element: el, label: 'equation' })
     }
@@ -160,7 +160,7 @@ export function summarizeVisuals(root: Element): VisualSummary {
   let figures = 0
   let images = 0
 
-  const walker = root.ownerDocument!.createTreeWalker(root, NodeFilter.SHOW_ELEMENT)
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_ELEMENT)
   let node = walker.currentNode as Element | null
   while (node) {
     const tag = node.tagName.toLowerCase()

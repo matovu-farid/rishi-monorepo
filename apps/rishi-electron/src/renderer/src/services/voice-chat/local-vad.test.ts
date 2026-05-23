@@ -220,9 +220,10 @@ describe('createLocalVad — waitForSpeechEnd', () => {
     await advance(baseConfig.pollIntervalMs)
 
     const settled = vi.fn()
-    const waitPromise = vad
-      .waitForSpeechEnd(300)
-      .then(() => settled('ok'), (e: unknown) => settled(e))
+    const waitPromise = vad.waitForSpeechEnd(300).then(
+      () => settled('ok'),
+      (e: unknown) => settled(e)
+    )
 
     await advance(400)
     await waitPromise
@@ -240,9 +241,10 @@ describe('createLocalVad — waitForSpeechEnd', () => {
     await advance(baseConfig.pollIntervalMs)
 
     const settled = vi.fn()
-    const waitPromise = vad
-      .waitForSpeechEnd(10_000)
-      .then(() => settled('ok'), (e: unknown) => settled(e))
+    const waitPromise = vad.waitForSpeechEnd(10_000).then(
+      () => settled('ok'),
+      (e: unknown) => settled(e)
+    )
 
     vad.dispose()
     await advance(0)

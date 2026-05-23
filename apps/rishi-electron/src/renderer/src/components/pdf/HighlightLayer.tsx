@@ -32,7 +32,11 @@ function hexWithAlpha(hex: string, alpha: number): string {
 }
 
 export function HighlightLayer({
-  pageNumber, pageEl, viewport, highlights, onHighlightClick
+  pageNumber,
+  pageEl,
+  viewport,
+  highlights,
+  onHighlightClick
 }: HighlightLayerProps): JSX.Element {
   const rendered = useMemo(() => {
     const items: Array<{
@@ -42,7 +46,7 @@ export function HighlightLayer({
     }> = []
     for (const row of highlights) {
       const loc = parseLocator(row.locator)
-      if (!loc || loc.page !== pageNumber) continue
+      if (loc?.page !== pageNumber) continue
       const screenRects = pdfLocatorToScreenRects(loc, pageEl, viewport)
       screenRects.forEach((rect, idx) => {
         items.push({ key: `${row.id}:${idx}`, row, rect })
@@ -64,7 +68,10 @@ export function HighlightLayer({
           onClick={(e) => onHighlightClick(row, e)}
           style={{
             position: 'absolute',
-            left: rect.left, top: rect.top, width: rect.width, height: rect.height,
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
             backgroundColor: hexWithAlpha(getHighlightHex(row.color as HighlightColor), 0.35),
             pointerEvents: 'auto',
             cursor: 'pointer'

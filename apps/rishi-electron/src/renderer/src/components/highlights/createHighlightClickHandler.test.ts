@@ -32,9 +32,7 @@ function makeIframe(rect: Partial<DOMRect>): HTMLElement {
 
 function makeView(iframe: HTMLElement | null) {
   return {
-    element: iframe
-      ? ({ querySelector: () => iframe } as unknown as HTMLDivElement)
-      : undefined
+    element: iframe ? ({ querySelector: () => iframe } as unknown as HTMLDivElement) : undefined
   }
 }
 
