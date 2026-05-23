@@ -253,7 +253,7 @@ useChatStore.subscribe(
   (isChatting) => {
     if (!isChatting) return
     const book = usePdfStore.getState().book
-    if (!book || book.kind !== 'pdf') return
+    if (book?.kind !== 'pdf') return
     useChatStore.getState().startChat(book.id)
   }
 )
