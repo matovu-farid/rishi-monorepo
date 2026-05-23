@@ -18,6 +18,12 @@ export const books = sqliteTable("books", {
   fileR2Key: text("file_r2_key"), // R2 object key for book file
   coverR2Key: text("cover_r2_key"), // R2 object key for cover image
   fileSize: integer("file_size").default(0), // bytes — populated by client on push; used for per-user storage cap
+  // DAT-003: mobile-only recovery flag. Set to true when an R2 download
+  // succeeded but the atomic `tmpFile.move()` into the final destination
+  // failed. The temp file is kept on disk so a retry doesn't have to
+  // re-fetch bytes; UI surfaces these via the download-error-store.
+  // Never synced to D1.
+  fileNeedsRedownload: integer("file_needs_redownload", { mode: "boolean" }).default(false),
   createdAt: integer("created_at").notNull(), // Unix timestamp ms
   updatedAt: integer("updated_at").notNull(), // Unix timestamp ms
   syncVersion: integer("sync_version").default(0), // server-assigned monotonic counter

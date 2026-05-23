@@ -12,6 +12,8 @@ import { useSyncStatus } from '@/hooks/useSyncStatus'
 import { sync } from '@/lib/sync/engine'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import type { SyncStatus } from '@/lib/sync/status'
+import { useDownloadErrorStore } from '@/lib/sync/download-error-store'
+import { downloadBookFile } from '@/lib/sync/file-sync'
 
 function formatRelativeTime(timestamp: number | null): string {
   if (!timestamp) return 'Never synced'
@@ -64,6 +66,10 @@ const DEFAULT_ACTION_HINT = 'Double-tap to sync now, long-press for diagnostics.
 
 export function SyncStatusIndicator() {
   const { status, lastSyncAt } = useSyncStatus()
+  // DAT-003: subscribe to the failed-download list so the long-press
+  // diagnostics surface a retry affordance for books whose atomic move
+  // failed (presigned-URL fetch succeeded, on-device rename did not).
+  const failedDownloads = useDownloadErrorStore((s) => s.failures)
   const config = STATUS_CONFIG[status]
   const relativeTime = formatRelativeTime(lastSyncAt)
 
@@ -107,12 +113,51 @@ export function SyncStatusIndicator() {
     }
   }
 
+  const retryFailedDownloads = async () => {
+    // Retry each failed download in series. Each call to `downloadBookFile`
+    // will clear its own entry from the store on success; we don't need
+    // to manage that here. We surface a single Alert at the end so the
+    // user sees one outcome rather than a cascade of toasts.
+    const targets = [...failedDownloads]
+    const errors: string[] = []
+    for (const failure of targets) {
+      try {
+        await downloadBookFile(failure.bookId, failure.r2Key, failure.format)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        errors.push(`${failure.bookId}: ${message}`)
+      }
+    }
+    if (errors.length === 0) {
+      Alert.alert(
+        'Retry complete',
+        `Re-downloaded ${targets.length} book${targets.length === 1 ? '' : 's'}.`,
+      )
+    } else {
+      Alert.alert(
+        'Retry partially failed',
+        `${targets.length - errors.length} of ${targets.length} succeeded.\n\n${errors.join('\n')}`,
+      )
+    }
+  }
+
   const handleLongPress = () => {
     const lines = [
       `Status: ${config.label}`,
       `Last sync: ${relativeTime}`,
       `Last error: ${lastError ?? (status === 'error' ? 'Sync failed (no details)' : 'None')}`,
     ]
+    if (failedDownloads.length > 0) {
+      lines.push('')
+      lines.push(
+        `Failed downloads: ${failedDownloads.length} (tap "Retry downloads")`,
+      )
+      Alert.alert('Sync diagnostics', lines.join('\n'), [
+        { text: 'Close', style: 'cancel' },
+        { text: 'Retry downloads', onPress: () => void retryFailedDownloads() },
+      ])
+      return
+    }
     Alert.alert('Sync diagnostics', lines.join('\n'))
   }
 

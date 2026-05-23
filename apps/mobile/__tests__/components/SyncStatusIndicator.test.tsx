@@ -60,6 +60,14 @@ jest.mock('@/lib/sync/engine', () => ({
   sync: () => mockSync(),
 }))
 
+// DAT-003: stub the file-sync module so the SyncStatusIndicator import
+// chain does not pull in expo-crypto / expo-file-system (native modules
+// the node jest preset cannot transform).
+const mockDownloadBookFile = jest.fn()
+jest.mock('@/lib/sync/file-sync', () => ({
+  downloadBookFile: (...args: unknown[]) => mockDownloadBookFile(...args),
+}))
+
 let currentStatus: 'not-synced' | 'syncing' | 'synced' | 'error' | 'offline' =
   'not-synced'
 let currentLastSyncAt: number | null = null
@@ -163,5 +171,45 @@ describe('SyncStatusIndicator (P1-AG: actionable error feedback)', () => {
     expect(Alert.alert).toHaveBeenCalledTimes(1)
     const [title, body] = (Alert.alert as jest.Mock).mock.calls[0]
     expect(`${title} ${body}`).toMatch(/fail|error/i)
+  })
+
+  // DAT-003: failed-download recovery flow — when downloadBookFile flagged
+  // a book for redownload, the long-press diagnostics must surface a
+  // "Retry downloads" action that re-invokes downloadBookFile.
+  it('long-press offers a Retry downloads action when failed downloads exist', () => {
+    // Import the store from the same module the component subscribes to;
+    // require() inline so the mock-hoist ordering above isn't disturbed.
+    const {
+      useDownloadErrorStore,
+    } = require('@/lib/sync/download-error-store') as typeof import('@/lib/sync/download-error-store')
+    useDownloadErrorStore.getState().clear()
+    useDownloadErrorStore.getState().recordFailure({
+      bookId: 'book-broken',
+      r2Key: 'r2/epub/hash',
+      format: 'epub',
+      reason: 'EBUSY',
+    })
+
+    currentStatus = 'error'
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<SyncStatusIndicator />)
+    })
+    const retry = findRetryPressable(tree)
+    act(() => {
+      ;(retry.props as { onLongPress?: () => void }).onLongPress?.()
+    })
+
+    expect(Alert.alert).toHaveBeenCalledTimes(1)
+    const [title, body, buttons] = (Alert.alert as jest.Mock).mock.calls[0]
+    expect(title).toMatch(/diagnostics/i)
+    expect(body).toMatch(/failed downloads/i)
+    // The action button must exist and call downloadBookFile when fired.
+    expect(Array.isArray(buttons)).toBe(true)
+    const retryButton = (buttons as Array<{ text: string; onPress?: () => void }>).find(
+      (b) => /retry/i.test(b.text),
+    )
+    expect(retryButton).toBeDefined()
+    useDownloadErrorStore.getState().clear()
   })
 })
