@@ -150,20 +150,32 @@ jest.mock(
   { virtual: true },
 )
 
-// ReaderShellContext — the real one is exported by ReaderShell; we provide
-// a default-value context with `bottomBarVisible: false`. MiniPlayer reads
-// this via `useContext`. Stub the source module so we don't drag the full
-// ReaderShell + sheet dependency chain into the suite.
-jest.mock('@/components/reader/ReaderShell', () => {
+// ReaderShellContext — the real one lives in its own leaf module so that
+// MiniPlayer can consume it without dragging in the full ReaderShell +
+// sheet dependency chain (this also breaks a require cycle that crashed
+// the EPUB reader on iOS — issue #33).
+//
+// Both stubs return the SAME context object so:
+//   - production code (MiniPlayer) reading the leaf path
+//   - test code (WGT-016 Provider wrapper) reading the legacy
+//     `ReaderShell` re-export path
+// see the same value.
+const _sharedReaderShellContext = (() => {
   const React = require('react')
-  return {
-    __esModule: true,
-    ReaderShellContext: React.createContext({
-      bottomBarVisible: false,
-      toggleToolbar: () => undefined,
-    }),
-  }
-})
+  return React.createContext({
+    bottomBarVisible: false,
+    toggleToolbar: () => undefined,
+    interact: () => undefined,
+  })
+})()
+jest.mock('@/components/reader/ReaderShellContext', () => ({
+  __esModule: true,
+  ReaderShellContext: _sharedReaderShellContext,
+}))
+jest.mock('@/components/reader/ReaderShell', () => ({
+  __esModule: true,
+  ReaderShellContext: _sharedReaderShellContext,
+}))
 
 // ── playerStore selector mock (reassignable per test) ────────────────────────
 type Send = (event: { type: string }) => void

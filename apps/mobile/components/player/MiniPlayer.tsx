@@ -31,7 +31,14 @@ import { BlurView } from 'expo-blur'
 import Ionicons from '@expo/vector-icons/Ionicons'
 import * as Haptics from 'expo-haptics'
 
-import { ReaderShellContext } from '@/components/reader/ReaderShell'
+// Issue #33 — import the context from the leaf module, NOT from
+// `@/components/reader/ReaderShell`. Going through ReaderShell creates
+// a hot require cycle (MiniPlayer → ReaderShell → ReaderOverlay →
+// MiniPlayer) that leaves `ReaderShellContext` undefined under Hermes
+// when MiniPlayer happens to evaluate first — `useContext(undefined)`
+// then force-closes iOS at reader mount. The leaf module exists for
+// exactly this purpose; see its file header.
+import { ReaderShellContext } from '@/components/reader/ReaderShellContext'
 import { shadow, useTheme, zIndex } from '@/lib/theme'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { computeMiniPlayerTranslateX } from './miniPlayerMorph'
