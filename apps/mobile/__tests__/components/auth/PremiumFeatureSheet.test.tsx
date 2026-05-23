@@ -462,6 +462,24 @@ describe('PremiumFeatureSheet (mobile)', () => {
       const tree = await pressCtaWith('POST /mobile/start/verify failed: 410 session expired')
       expect(hasText(tree, 'Sign-in expired, please try again.')).toBe(true)
     })
+
+    it('maps "Apple provider not configured" to the unavailable-provider copy (GAT-106)', async () => {
+      // GAT-106 — provider-not-configured must be classified BEFORE the
+      // 403/410 buckets, otherwise the user sees "Sign-in expired" copy
+      // even though the worker rejected with provider misconfiguration.
+      const tree = await pressCtaWith('Apple provider not configured')
+      expect(hasText(tree, 'This sign-in method is not available yet.')).toBe(true)
+      expect(hasText(tree, 'Sign-in expired, please try again.')).toBe(false)
+      expect(hasText(tree, "Couldn't sign in. Try again.")).toBe(false)
+    })
+
+    it('still maps Apple provider error wrapped in a 403 response to the unavailable copy (GAT-106)', async () => {
+      // The worker can return 403 alongside the provider-not-configured
+      // text; the new bucket must win because the 403 reading would be
+      // misleading.
+      const tree = await pressCtaWith('POST /mobile/start failed: 403 provider not configured')
+      expect(hasText(tree, 'This sign-in method is not available yet.')).toBe(true)
+    })
   })
 
   describe('dismiss haptic differentiation (GAT-014)', () => {

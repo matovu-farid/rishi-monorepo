@@ -43,6 +43,7 @@ const FEATURE_ICONS: Record<PremiumFeature, keyof typeof Ionicons.glyphMap> = {
  * The raw error from `lib/auth.signIn()` can be one of:
  *   - "Network request failed" (RN fetch when offline / DNS fails)
  *   - "POST /mobile/start failed: fetch failed" (worker call failed)
+ *   - "Apple provider not configured" (OAuth provider not enabled yet — GAT-106)
  *   - "PKCE pkce_mismatch (403)" (state replay / browser bounce)
  *   - "POST /mobile/start/verify failed: 410 ..." (session expired)
  *   - anything else → generic fallback
@@ -50,6 +51,14 @@ const FEATURE_ICONS: Record<PremiumFeature, keyof typeof Ionicons.glyphMap> = {
  * Cancellation messages are filtered upstream of this helper.
  */
 function mapSignInError(msg: string): string {
+  // GAT-106 — provider-not-configured must classify BEFORE the 403/410
+  // buckets. The worker can return 403 alongside "provider not configured"
+  // text when an OAuth provider isn't enabled yet; reading that as a PKCE
+  // mismatch would tell the user to retry, which never works because the
+  // provider literally isn't wired up. Match the more-specific signal first.
+  if (/provider|not configured|apple/i.test(msg)) {
+    return 'This sign-in method is not available yet.'
+  }
   if (/\b403\b|pkce_mismatch/i.test(msg)) {
     return 'Sign-in expired, please try again.'
   }
