@@ -23,6 +23,12 @@
  *   - DAT-005 (#118): every bucket carries a `__schema_version__` sentinel
  *     so future key-shape changes can run a migration via the optional
  *     `migrate(from, to, bucket)` hook on createStorage.
+ *   - DAT-020 (#132): `clear()` is two-phase. We write a
+ *     `__clear_in_progress__` sentinel BEFORE removing user keys; if the
+ *     process dies mid-loop, the next `createStorage()` call detects the
+ *     sentinel and finishes the clear. `_clearAll()` (full backend wipe)
+ *     uses MMKV's native `clearAll()` so the whole file is reset
+ *     atomically by the binding.
  */
 import { createMMKV } from 'react-native-mmkv'
 
@@ -91,8 +97,9 @@ try {
  */
 export const CURRENT_SCHEMA_VERSION = 1
 
-/** Reserved internal key — must NOT collide with user-defined keys. */
+/** Reserved internal keys — must NOT collide with user-defined keys. */
 const SCHEMA_VERSION_KEY = '__schema_version__'
+const CLEAR_IN_PROGRESS_KEY = '__clear_in_progress__'
 
 export interface StorageBucket {
   getItem(key: string): string | null
@@ -116,11 +123,34 @@ export interface CreateStorageOptions {
   migrate?: (fromVersion: number, toVersion: number, bucket: StorageBucket) => void
 }
 
+function isInternalKey(suffix: string): boolean {
+  return suffix === SCHEMA_VERSION_KEY || suffix === CLEAR_IN_PROGRESS_KEY
+}
+
 export function createStorage(
   bucketId: string,
   opts: CreateStorageOptions = {},
 ): StorageBucket {
   const prefix = `${bucketId}:`
+
+  // ── Helper: scoped remove for every user key under this prefix.
+  // Used by both bucket.clear() and the interrupted-clear recovery path.
+  const wipeUserKeys = (): void => {
+    for (const k of backend.getAllKeys()) {
+      if (!k.startsWith(prefix)) continue
+      const suffix = k.slice(prefix.length)
+      if (isInternalKey(suffix)) continue
+      backend.remove(k)
+    }
+  }
+
+  // DAT-020 (#132): if a previous clear() crashed mid-iteration, finish it
+  // BEFORE the consumer can observe stale keys. This is the recovery half of
+  // the two-phase clear protocol.
+  if (backend.getString(prefix + CLEAR_IN_PROGRESS_KEY) != null) {
+    wipeUserKeys()
+    backend.remove(prefix + CLEAR_IN_PROGRESS_KEY)
+  }
 
   // DAT-005 (#118): read schema-version sentinel, run migrator if outdated.
   const storedRaw = backend.getString(prefix + SCHEMA_VERSION_KEY)
@@ -139,13 +169,16 @@ export function createStorage(
       backend.remove(prefix + key)
     },
     clear() {
-      // The `__schema_version__` key is intentionally preserved — clear()
+      // DAT-020 (#132): two-phase clear so a process crash mid-iteration
+      // can be detected and finished by the next createStorage() call.
+      //   Phase 1: write the in-progress sentinel.
+      //   Phase 2: remove every user key under this prefix.
+      //   Phase 3: clear the sentinel.
+      // The __schema_version__ key is intentionally preserved — clear()
       // is a data wipe, not a schema rollback.
-      for (const k of backend.getAllKeys()) {
-        if (!k.startsWith(prefix)) continue
-        if (k === prefix + SCHEMA_VERSION_KEY) continue
-        backend.remove(k)
-      }
+      backend.set(prefix + CLEAR_IN_PROGRESS_KEY, '1')
+      wipeUserKeys()
+      backend.remove(prefix + CLEAR_IN_PROGRESS_KEY)
     },
     getSchemaVersion() {
       const v = backend.getString(prefix + SCHEMA_VERSION_KEY)
@@ -185,6 +218,10 @@ export const persistMMKV = {
  * Test helper: drop every key the storage has written. Production code
  * should not call this — use the `clear()` method on a bucket returned
  * from `createStorage()` for scoped wipes.
+ *
+ * DAT-020 (#132): uses the binding's native `clearAll()` (one atomic
+ * call) so a crash cannot leave a half-wiped backend. Per-bucket scoped
+ * clears use the two-phase protocol in `bucket.clear()`.
  *
  * @internal
  */

@@ -227,4 +227,85 @@ describe('mmkv storage adapter', () => {
       )
     })
   })
+
+  // DAT-020 (#132): `clear()` previously iterated `getAllKeys()` and called
+  // `remove()` per match. A crash mid-iteration (process kill, JS exception
+  // from a side-effect listener, OOM) left partial state — half the bucket
+  // gone, half still present. Sign-out then re-sign-in races and stale prefs
+  // leaked across user accounts. The fix uses MMKV's native `clearAll()` for
+  // full-backend wipes (`_clearAll`) and a two-phase delete with a sentinel
+  // for scoped bucket clears so an interrupted clear can be detected and
+  // completed on the next bucket construction.
+  describe('DAT-020 — bucket clear() atomicity', () => {
+    it('_clearAll() prefers the binding\'s native clearAll() over a per-key loop', () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { _clearAll } = require('@/lib/storage/mmkv')
+      const clearAllSpy = jest.spyOn(currentFake, 'clearAll')
+      const removeSpy = jest.spyOn(currentFake, 'remove')
+
+      _clearAll()
+
+      // Native clearAll() is one atomic call — no per-key remove loop.
+      expect(clearAllSpy).toHaveBeenCalledTimes(1)
+      expect(removeSpy).not.toHaveBeenCalled()
+    })
+
+    it('writes the in-progress sentinel before scoped clear and removes it after', () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { createStorage } = require('@/lib/storage/mmkv')
+      const bucket = createStorage('atomic-bucket')
+      bucket.setItem('k1', 'v1')
+      bucket.setItem('k2', 'v2')
+
+      // Capture sentinel + user-key operation order. Wrap set() and remove()
+      // to record the call sequence so we can assert "sentinel set BEFORE
+      // any user-key removal".
+      const setOrder: string[] = []
+      const origSet = currentFake.set
+      currentFake.set = (k: string, v: string | number | boolean | ArrayBuffer) => {
+        setOrder.push(`set:${k}=${String(v)}`)
+        origSet(k, v)
+      }
+      const removeOrder: string[] = []
+      const origRemove = currentFake.remove
+      currentFake.remove = (k: string) => {
+        removeOrder.push(`remove:${k}`)
+        return origRemove(k)
+      }
+
+      bucket.clear()
+
+      const sentinelSet = setOrder.findIndex((e) =>
+        e.includes('atomic-bucket:__clear_in_progress__'),
+      )
+      const firstUserRemove = removeOrder.findIndex(
+        (e) => e === 'remove:atomic-bucket:k1' || e === 'remove:atomic-bucket:k2',
+      )
+      expect(sentinelSet).toBeGreaterThanOrEqual(0)
+      expect(firstUserRemove).toBeGreaterThanOrEqual(0)
+      // After clear completes, the sentinel must be gone — no zombie marker.
+      expect(currentFake.getString('atomic-bucket:__clear_in_progress__')).toBeUndefined()
+    })
+
+    it('completes a previously-interrupted clear on next bucket construction', () => {
+      // Simulate: clear() started, sentinel written, then process died with
+      // user keys still on disk.
+      currentFake.set('crashed-bucket:__clear_in_progress__', '1')
+      currentFake.set('crashed-bucket:k1', 'v1')
+      currentFake.set('crashed-bucket:k2', 'v2')
+      // Schema-version sentinel survives (clear is a data wipe).
+      currentFake.set('crashed-bucket:__schema_version__', '1')
+
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { createStorage } = require('@/lib/storage/mmkv')
+      const bucket = createStorage('crashed-bucket')
+
+      // On construction, the partial clear should be detected and finished.
+      expect(bucket.getItem('k1')).toBeNull()
+      expect(bucket.getItem('k2')).toBeNull()
+      expect(currentFake.getString('crashed-bucket:__clear_in_progress__')).toBeUndefined()
+      // Schema-version preserved.
+      expect(currentFake.getString('crashed-bucket:__schema_version__')).toBe('1')
+    })
+  })
 })
