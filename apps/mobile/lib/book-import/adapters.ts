@@ -496,6 +496,13 @@ export interface CoverPortDeps {
     bookId: string,
     reason: CoverExtractionFailureReason,
   ) => void;
+  /**
+   * DAT-019 (#131): success callback. Invoked with the persisted
+   * cover file URI AFTER `updateBookCover` returns. Lets the file-import
+   * layer surface `coverState='ready'` without having to hijack the
+   * row-update path. Best-effort — exceptions are swallowed.
+   */
+  onExtractionSuccess?: (bookId: string, coverPath: string) => void;
 }
 
 export function createMobileCoverPort(deps: CoverPortDeps = {}): CoverPort {
@@ -618,6 +625,14 @@ export function createMobileCoverPort(deps: CoverPortDeps = {}): CoverPort {
           cover.data,
         );
         await updateBookCover(String(bookId), path);
+        // DAT-019 (#131): notify the success channel AFTER both write
+        // + DB update succeed, so observers only see a ready state
+        // when both halves of the operation landed.
+        try {
+          deps.onExtractionSuccess?.(String(bookId), path);
+        } catch {
+          /* best-effort */
+        }
         return path;
       } catch (err) {
         console.warn("[book-import] failed to write cover:", err);

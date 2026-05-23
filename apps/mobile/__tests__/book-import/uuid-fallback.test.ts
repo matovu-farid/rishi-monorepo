@@ -132,11 +132,13 @@ jest.mock('@/lib/book-import', () => ({
 const realCrypto = globalThis.crypto
 
 beforeEach(() => {
-  // @ts-expect-error — deleting a global for the duration of the test.
-  globalThis.crypto = {
+  // Replace crypto.randomUUID for the duration of the test to force the
+  // fallback branch. We assign through `unknown` to bypass the readonly
+  // randomUUID typing.
+  ;(globalThis as { crypto: unknown }).crypto = {
     ...realCrypto,
     randomUUID: undefined,
-  }
+  } as unknown as Crypto
 })
 
 afterEach(() => {

@@ -13,6 +13,10 @@ import { File, Directory, Paths } from "expo-file-system";
 import { eq } from "drizzle-orm";
 import { Book } from "@/types/book";
 import { createMobileBookImportService } from "@/lib/book-import";
+// Type-only import so file-import.ts does NOT pull adapters.ts's runtime
+// graph (jszip, mobi extractor, vector-store) into modules that mock
+// only the file-import surface.
+import type { CoverExtractionFailureReason } from "@/lib/book-import/adapters";
 import { embedBook } from "@/lib/rag/pipeline";
 import type { BookFormat } from "@rishi/shared/book-import";
 import { IS_E2E_TEST } from "@/app/_layout";
@@ -56,8 +60,37 @@ export type ImportFailureStage =
   | "save"
   | "unknown";
 
+/**
+ * DAT-019 (#131): explicit cover-extraction completion state surfaced
+ * to callers. The shared `book-import` service kicks off cover
+ * extraction via `setTimeout(…, 0)` after the `done` event, so when
+ * `runImportWithService` resolves the cover state is still pending —
+ * the library UI used to render a stale letter-tile with no signal
+ * whether the cover would arrive, never arrive, or was simply
+ * unsupported for the format. `coverPromise` resolves with the
+ * eventual state and `coverState` is the initial `'pending'` until
+ * then. Callers that don't care can ignore both fields.
+ */
+export type CoverState =
+  | { status: "pending" }
+  | { status: "ready"; coverPath: string }
+  | { status: "unavailable"; reason: CoverExtractionFailureReason }
+  | { status: "unsupported"; format: BookFormat };
+
+export interface ImportSuccess {
+  ok: true;
+  book: Book;
+  /**
+   * Resolves to the final cover state once the shared importer's
+   * fire-and-forget post-save pipeline finishes. May resolve to
+   * `unavailable` (extractor failed; sentinel persisted) or
+   * `unsupported` (PDF / DJVU have no extractor). Never rejects.
+   */
+  coverPromise: Promise<CoverState>;
+}
+
 export type ImportOutcome =
-  | { ok: true; book: Book }
+  | ImportSuccess
   | { ok: false; stage: ImportFailureStage; error: string };
 
 /**
@@ -87,6 +120,30 @@ function classifyFailure(
 // ────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * DAT-019 (#131): tiny deferred primitive. Reach for this instead of
+ * pulling in a Promise/utility package — we need exactly one
+ * "produce-promise-now, settle-later" handoff (the cover lifecycle).
+ */
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (v: T) => void;
+} {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  let settled = false;
+  return {
+    promise,
+    resolve: (v: T) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+    },
+  };
+}
 
 /**
  * DAT-013 (#125): module-level counter folded into the fallback UUID
@@ -207,11 +264,51 @@ async function runImportWithService(opts: {
 
   const bookId = generateUUID();
 
+  // DAT-019 (#131): track cover-extraction lifecycle so callers can
+  // distinguish pending / ready / unavailable / unsupported instead of
+  // treating every cover-less book identically. We use a deferred
+  // because the shared importer kicks off cover extraction via
+  // setTimeout AFTER `importFromPath` resolves; the resolver fires from
+  // either `coverPortDeps.updateBookCover` (success or sentinel) or
+  // `coverPortDeps.onExtractionFailure` (typed reason), whichever
+  // happens first.
+  const coverDeferred = createDeferred<CoverState>();
+  // Format-level short-circuit: PDF + DJVU have no extractor at all,
+  // so the cover port emits `format-unsupported` synchronously. Pin
+  // the initial expected status here so the test surface stays stable
+  // even if the cover port's call ordering changes.
+  const unsupportedFormat =
+    opts.format !== "epub" &&
+    opts.format !== "mobi" &&
+    opts.format !== "azw3";
+
   const service = createMobileBookImportService({
     bookId,
     format: opts.format,
     title: opts.title,
     author: opts.author,
+    coverPortDeps: {
+      onExtractionFailure: (id, reason) => {
+        if (String(id) !== bookId) return;
+        if (reason.kind === "format-unsupported") {
+          coverDeferred.resolve({
+            status: "unsupported",
+            format: reason.format,
+          });
+        } else {
+          // 'no-cover-found' and the genuine failure kinds all surface
+          // as 'unavailable' so the UI doesn't have to know which
+          // discriminator is which to render the letter-tile. The
+          // reason itself is carried through so a future "retry"
+          // affordance can branch on it.
+          coverDeferred.resolve({ status: "unavailable", reason });
+        }
+      },
+      onExtractionSuccess: (id, coverPath) => {
+        if (String(id) !== bookId) return;
+        coverDeferred.resolve({ status: "ready", coverPath });
+      },
+    },
   });
 
   const result = await service.importFromPath(opts.sourceUri);
@@ -250,6 +347,16 @@ async function runImportWithService(opts: {
     }
   })();
 
+  // DAT-019 (#131): if the format has no extractor and the shared
+  // importer never wires the cover port (because it short-circuits on
+  // formats without a known kind), make sure the deferred still
+  // resolves — otherwise callers awaiting `coverPromise` would hang
+  // forever. The cover port itself emits `format-unsupported`
+  // synchronously for these formats, so this is a defensive fallback.
+  if (unsupportedFormat) {
+    coverDeferred.resolve({ status: "unsupported", format: opts.format });
+  }
+
   // Local Book shape — derive from what the service inserted.
   return {
     ok: true,
@@ -264,6 +371,7 @@ async function runImportWithService(opts: {
       currentPage: opts.format === "pdf" ? 1 : null,
       createdAt: Date.now(),
     },
+    coverPromise: coverDeferred.promise,
   };
 }
 
