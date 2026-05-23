@@ -76,6 +76,24 @@ describe('normalizeFooterToken', () => {
   it('is whitespace- and case-insensitive', () => {
     expect(normalizeFooterToken('  Hello World  ')).toBe(normalizeFooterToken('hello world'))
   })
+
+  it('collapses embedded digit runs so "Page 47" == "Page 48" == "Page 350"', () => {
+    const a = normalizeFooterToken('Page 47')
+    const b = normalizeFooterToken('Page 48')
+    const c = normalizeFooterToken('Page 350')
+    expect(a).toBe(b)
+    expect(b).toBe(c)
+    expect(a).toBe('page __NUM__')
+  })
+
+  it('collapses multiple embedded numbers ("47 of 350" == "48 of 350")', () => {
+    expect(normalizeFooterToken('47 of 350')).toBe(normalizeFooterToken('48 of 350'))
+  })
+
+  it('does NOT collapse digits that are joined to letters without a word break', () => {
+    // "chapter3" has no word boundary between "r" and "3" — leave it alone.
+    expect(normalizeFooterToken('chapter3')).toBe('chapter3')
+  })
 })
 
 describe('buildFooterMask', () => {
@@ -194,16 +212,16 @@ describe('buildFooterMask', () => {
     }
   })
 
-  it('masks a multi-line footer up to maxFooterLines=3, but not a 4th repeating line', () => {
+  it('masks the bottom-most 3 lines when 4 footer lines all repeat', () => {
     const pages: PageScanInput[] = []
     for (let p = 1; p <= 10; p++) {
       pages.push(
         makePage(p, [
           { str: 'Body of page ' + p, y: 500 },
-          { str: 'Copyright 2024 Foo Corp', y: 70 }, // line 1 (highest in band)
+          { str: 'Copyright 2024 Foo Corp', y: 70 }, // line 1 (highest of 4 — dropped by cap)
           { str: 'All rights reserved', y: 55 }, // line 2
           { str: 'See foo.com/terms', y: 40 }, // line 3
-          { str: 'Page ' + p, y: 25 } // line 4 — also bottom-band & repeats (digit class)
+          { str: 'Page ' + p, y: 25 } // line 4 (lowest)
         ])
       )
     }
@@ -220,10 +238,11 @@ describe('buildFooterMask', () => {
       if (set.has(3)) maskedLine3++
       if (set.has(4)) maskedLine4++
     }
-    expect(maskedLine1).toBeGreaterThanOrEqual(8)
+    // Cap kicks in: keep the bottom-most 3 (lines 2, 3, 4); drop line 1.
+    expect(maskedLine1).toBe(0)
     expect(maskedLine2).toBeGreaterThanOrEqual(8)
     expect(maskedLine3).toBeGreaterThanOrEqual(8)
-    expect(maskedLine4).toBe(0)
+    expect(maskedLine4).toBeGreaterThanOrEqual(8)
   })
 
   it('does NOT mask a single repeating bottom-band string longer than maxCharsPerLine (>80 chars)', () => {
