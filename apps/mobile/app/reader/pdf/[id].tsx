@@ -447,10 +447,23 @@ export default function PdfReaderScreen() {
     requireTTS(async () => {
       try {
         const paragraphs = await readerRef.current?.getPageText(selection.pageNumber)
-        if (!paragraphs) return
+        if (!paragraphs) {
+          // STA-024 — getPageText returned nothing for the selected page;
+          // surface a toast + a11y announcement instead of silent return.
+          AccessibilityInfo.announceForAccessibility('No text available on this page')
+          undoSnackbar.show('No text available on this page', 'Dismiss', () => undefined)
+          return
+        }
         const playFrom = resolvePlayFromSelection(selection.text, paragraphs)
         if (!playFrom) {
-          Alert.alert('Read aloud', 'Could not find the selected text on this page.')
+          // STA-024 — keep the toast (non-blocking, parity with MOBI/DJVU)
+          // and announce for VoiceOver. Drops the blocking Alert.
+          AccessibilityInfo.announceForAccessibility('Could not find the selected text')
+          undoSnackbar.show(
+            'Could not find selected text on this page.',
+            'Dismiss',
+            () => undefined,
+          )
           return
         }
 
@@ -462,6 +475,8 @@ export default function PdfReaderScreen() {
         const send = usePlayerStore.getState().send
         if (!send) {
           console.warn('[pdf-read-aloud-from] player machine not mounted yet')
+          AccessibilityInfo.announceForAccessibility('Read-aloud unavailable right now')
+          undoSnackbar.show('Read-aloud unavailable right now', 'Dismiss', () => undefined)
           return
         }
         send({
@@ -472,10 +487,14 @@ export default function PdfReaderScreen() {
         })
         setSelection(null)
       } catch (e) {
+        // STA-024 — selection TTS threw. Announce + show a toast so the
+        // user knows the action didn't take effect; parity with EPUB.
         console.warn('[pdf-read-aloud-from] failed', e)
+        AccessibilityInfo.announceForAccessibility('Could not read selection')
+        undoSnackbar.show('Could not read selection', 'Dismiss', () => undefined)
       }
     })
-  }, [selection, requireTTS])
+  }, [selection, requireTTS, undoSnackbar])
 
   // Reconciler: when the active paragraph changes, scroll the WebView to
   // its page. Mobile PDF doesn't yet have a per-paragraph overlay highlight

@@ -313,7 +313,12 @@ export default function DjvuReaderScreen() {
       if (!book) return
       requireTTS(async () => {
         const send = usePlayerStore.getState().send
-        if (!send) return
+        if (!send) {
+          // STA-024 — player machine not mounted yet; announce + toast.
+          AccessibilityInfo.announceForAccessibility('Read-aloud unavailable right now')
+          undoSnackbar.show('Read-aloud unavailable right now', 'Dismiss', () => undefined)
+          return
+        }
         let paragraphs = usePlayerStore.getState().currentParagraphs
         if (paragraphs.length === 0) {
           try {
@@ -322,10 +327,19 @@ export default function DjvuReaderScreen() {
               book.filePath,
               'djvu',
             )
-            if (!seeded.seeded) return
+            if (!seeded.seeded) {
+              // STA-024 — DJVU often returns no chunks (no OCR layer).
+              // Announce + toast for parity with EPUB.
+              AccessibilityInfo.announceForAccessibility('No text available for reading')
+              undoSnackbar.show('No text available for reading', 'Dismiss', () => undefined)
+              return
+            }
             paragraphs = seeded.paragraphs
           } catch (err) {
+            // STA-024 — seed threw. Announce + show a toast.
             console.warn('[djvu-read-aloud-from] seed failed:', err)
+            AccessibilityInfo.announceForAccessibility('Could not start read-aloud')
+            undoSnackbar.show('Could not start read-aloud', 'Dismiss', () => undefined)
             return
           }
         }
@@ -333,7 +347,16 @@ export default function DjvuReaderScreen() {
           selectionText,
           paragraphs,
         )
-        if (!playFrom) return
+        if (!playFrom) {
+          // STA-024 — resolver couldn't locate the selection. Parity with EPUB.
+          AccessibilityInfo.announceForAccessibility('Could not find the selected text')
+          undoSnackbar.show(
+            'Could not find selected text on this page.',
+            'Dismiss',
+            () => undefined,
+          )
+          return
+        }
         send({
           type: 'PLAY_FROM',
           paragraphIndex: playFrom.paragraphIndex,
@@ -343,7 +366,7 @@ export default function DjvuReaderScreen() {
         setPendingSelection(null)
       })
     },
-    [book, requireTTS],
+    [book, requireTTS, undoSnackbar],
   )
 
   // Load book from DB
