@@ -261,7 +261,7 @@ export default function LibraryScreen() {
           onPress={handleImport}
           disabled={importing}
           accessibilityRole="button"
-          accessibilityLabel="Import Book"
+          accessibilityLabel="Add book"
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           style={({ pressed }) => ({
             marginLeft: spacing.md,
