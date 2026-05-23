@@ -123,6 +123,17 @@ describe('mmkv storage adapter', () => {
   })
 
   describe('in-memory fallback', () => {
+    afterEach(() => {
+      // `jest.doMock(..., throw)` persists across tests, so without an
+      // explicit restore the next suite's `createMMKV()` call would also
+      // throw and silently drop to the in-memory fallback. Restore the
+      // top-of-file mock that returns `currentFake`.
+      jest.resetModules()
+      jest.doMock('react-native-mmkv', () => ({
+        createMMKV: (_config: unknown) => currentFake,
+      }))
+    })
+
     it('falls back to an in-memory Map when MMKV creation throws', () => {
       jest.resetModules()
       // Force the next createMMKV() call to throw — simulates Node / unsupported env
@@ -138,6 +149,82 @@ describe('mmkv storage adapter', () => {
       expect(storage.getItem('k')).toBe('v')
       storage.removeItem('k')
       expect(storage.getItem('k')).toBeNull()
+    })
+  })
+
+  // DAT-005 (#118): every bucket must carry a `schemaVersion` sentinel so
+  // future key-shape changes don't silently corrupt stored state. A bucket
+  // built without a recorded version writes the current default on first
+  // touch; a bucket that finds an older version on disk should be able to
+  // run a migrator before the consumer sees the data.
+  describe('DAT-005 — bucket schema-version sentinel', () => {
+    it('writes the schemaVersion sentinel on first construction', () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { createStorage, CURRENT_SCHEMA_VERSION } = require('@/lib/storage/mmkv')
+      createStorage('versioned-bucket')
+      // Sentinel persists under the bucket prefix with a reserved key.
+      expect(currentFake.getString('versioned-bucket:__schema_version__')).toBe(
+        String(CURRENT_SCHEMA_VERSION),
+      )
+    })
+
+    it('exposes the recorded schemaVersion via getSchemaVersion()', () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { createStorage, CURRENT_SCHEMA_VERSION } = require('@/lib/storage/mmkv')
+      const bucket = createStorage('versioned-bucket-2')
+      expect(typeof bucket.getSchemaVersion).toBe('function')
+      expect(bucket.getSchemaVersion()).toBe(CURRENT_SCHEMA_VERSION)
+    })
+
+    it('runs the provided migrator when the on-disk version is older', () => {
+      // Pre-seed an older version sentinel BEFORE the module loads so the
+      // captured backend sees the legacy data.
+      currentFake.set('migrate-bucket:__schema_version__', '0')
+      currentFake.set('migrate-bucket:legacy-key', 'legacy-value')
+
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { createStorage, CURRENT_SCHEMA_VERSION } = require('@/lib/storage/mmkv')
+      const migrate = jest.fn((_from: number, _to: number, _bucket: unknown) => {
+        // A real migrator would rewrite legacy keys. We just observe call.
+      })
+      const bucket = createStorage('migrate-bucket', { migrate })
+      expect(migrate).toHaveBeenCalledTimes(1)
+      expect(migrate).toHaveBeenCalledWith(0, CURRENT_SCHEMA_VERSION, bucket)
+      // After migration the sentinel is bumped to the current version.
+      expect(currentFake.getString('migrate-bucket:__schema_version__')).toBe(
+        String(CURRENT_SCHEMA_VERSION),
+      )
+    })
+
+    it('does NOT run the migrator when the on-disk version matches', () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { createStorage, CURRENT_SCHEMA_VERSION } = require('@/lib/storage/mmkv')
+      // Pre-seed the current version. Module is already loaded but
+      // createStorage reads on every call.
+      currentFake.set(
+        'same-bucket:__schema_version__',
+        String(CURRENT_SCHEMA_VERSION),
+      )
+      const migrate = jest.fn()
+      createStorage('same-bucket', { migrate })
+      expect(migrate).not.toHaveBeenCalled()
+    })
+
+    it('preserves the sentinel across bucket.clear() (clear() is a data wipe, not a schema rollback)', () => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { createStorage, CURRENT_SCHEMA_VERSION } = require('@/lib/storage/mmkv')
+      const bucket = createStorage('cleared-bucket')
+      bucket.setItem('a', '1')
+      bucket.setItem('b', '2')
+      bucket.clear()
+      // User data gone…
+      expect(bucket.getItem('a')).toBeNull()
+      expect(bucket.getItem('b')).toBeNull()
+      // …but the schema version stays so re-population doesn't trigger a
+      // ghost migration on the next bucket construction.
+      expect(currentFake.getString('cleared-bucket:__schema_version__')).toBe(
+        String(CURRENT_SCHEMA_VERSION),
+      )
     })
   })
 })
