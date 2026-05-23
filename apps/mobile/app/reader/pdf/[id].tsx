@@ -12,6 +12,7 @@
  */
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ActivityIndicator,
   Alert,
   AppState,
   type AppStateStatus,
@@ -58,6 +59,7 @@ import {
   type Bookmark,
 } from '@/lib/bookmarks/bookmark-storage'
 import { resolvePlayFromSelection } from '@/lib/pdf/read-aloud-from-selection'
+import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 import { usePlayerStore } from '@/lib/stores/playerStore'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 import { TTSVisualCue } from '@/components/TTSVisualCue'
@@ -117,7 +119,13 @@ export default function PdfReaderScreen() {
 
   // Bridge realtime voice-chat status to the player so chat-position is
   // preserved (CHAT_STARTED/CHAT_ENDED dispatched into the playerMachine).
-  const { status: realtimeStatus } = useRealtimeChat(book?.id ?? '')
+  // RDR-035 — `toggle` and `isActive` are surfaced too so the realtime
+  // button in ReaderShell can drive the voice-chat connection.
+  const {
+    status: realtimeStatus,
+    toggle: toggleRealtime,
+    isActive: realtimeActive,
+  } = useRealtimeChat(book?.id ?? '')
   useTtsChatBridge(realtimeStatus)
 
   // G20 — register the PDF WebView area as the page-capture target.
@@ -131,6 +139,7 @@ export default function PdfReaderScreen() {
   // sheet for signed-out users.
   const requireTTS = useRequireAuth('tts')
   const requireAIChat = useRequireAuth('ai-chat')
+  const requireVoiceChat = useRequireAuth('voice-chat')
 
   // Subscribe to active-paragraph changes to drive the highlight reconciler.
   const activeParagraph = usePlayerStore((s) => s.activeParagraph)
@@ -383,6 +392,34 @@ export default function PdfReaderScreen() {
     [],
   )
 
+  // ---- TTS: read aloud (RDR-031) ----
+  // Mirror the EPUB/MOBI handleToggleTTS pattern. The shared chunker has
+  // a PDF branch (registered via setPdfExtractor at app start), so the
+  // standard seedPlayerParagraphsFromChunks helper works here too — we
+  // seed the full-book paragraphs and dispatch PLAY. STOP branches use
+  // the same playerStore.send path as the other formats.
+  const handleToggleTTS = useCallback(() => {
+    const sendFn = usePlayerStore.getState().send
+    if (!sendFn || !book) return
+    if (ttsActive) {
+      sendFn({ type: 'STOP' })
+      return
+    }
+    requireTTS(async () => {
+      try {
+        const seeded = await seedPlayerParagraphsFromChunks(
+          book.id,
+          book.filePath,
+          book.format,
+        )
+        if (!seeded.seeded) return
+        sendFn({ type: 'PLAY' })
+      } catch (err) {
+        console.warn('[pdf-tts] seed failed:', err)
+      }
+    })
+  }, [book, ttsActive, requireTTS])
+
   // Read-from-selection (G17). Batch 7 wires this fully to the player
   // machine via playerStore.send PLAY_FROM:
   //   1. Fetch the selected page paragraphs from the WebView.
@@ -566,7 +603,8 @@ export default function PdfReaderScreen() {
   if (loading) {
     return (
       <View testID="reader-loading" style={styles.full}>
-        <Text style={{ color: '#fff' }}>
+        <ActivityIndicator size="large" color="#fff" />
+        <Text style={{ marginTop: 12, color: '#fff' }}>
           {downloading ? 'Downloading…' : 'Loading book…'}
         </Text>
       </View>
@@ -614,11 +652,19 @@ export default function PdfReaderScreen() {
         initialToolbarVisible={true}
         centerOverride={pdfNavCluster}
         ttsActive={ttsActive}
-        realtimeActive={realtimeStatus !== 'idle'}
+        realtimeActive={realtimeActive}
         bookId={book?.id}
         onChatToggle={() =>
           requireAIChat(() => router.push(`/chat/${book.id}`))
         }
+        onTTSPress={handleToggleTTS}
+        ttsButtonActive={ttsActive}
+        onRealtimePress={() => {
+          if (realtimeActive) toggleRealtime()
+          else requireVoiceChat(toggleRealtime)
+        }}
+        realtimeStatus={realtimeStatus}
+        onChatPress={() => requireAIChat(() => router.push(`/chat/${book.id}`))}
         onBookmarkTogglePress={handleToggleBookmark}
         isBookmarked={isCurrentBookmarked}
         sheets={{
