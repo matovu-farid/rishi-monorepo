@@ -14,6 +14,8 @@ interface PrefsState {
   voiceChatVisionEnabled: boolean
   /** Show the "Equation/Figure on page" cue during TTS read-aloud. */
   ttsVisualCueEnabled: boolean
+  /** Detect and hide running-footer chrome on PDFs (#142). */
+  pdfFooterDetection: boolean
   /**
    * Read the persisted value from the main-process store. Safe to call
    * multiple times; later calls overwrite the in-memory value.
@@ -30,6 +32,7 @@ interface PrefsState {
   setVoiceChatLanguage: (lang: AllowedLanguage) => Promise<void>
   setVoiceChatVisionEnabled: (enabled: boolean) => Promise<void>
   setTtsVisualCueEnabled: (enabled: boolean) => Promise<void>
+  setPdfFooterDetection: (enabled: boolean) => Promise<void>
 }
 
 export const usePrefsStore = create<PrefsState>()(
@@ -37,16 +40,19 @@ export const usePrefsStore = create<PrefsState>()(
     voiceChatLanguage: DEFAULT_LANGUAGE,
     voiceChatVisionEnabled: true,
     ttsVisualCueEnabled: true,
+    pdfFooterDetection: true,
 
     async hydrate() {
       const raw = await window.electron.getStoreValue('voiceChatLanguage')
       const next: AllowedLanguage = isAllowedLanguage(raw) ? raw : DEFAULT_LANGUAGE
       const visionRaw = await window.electron.getStoreValue('voiceChatVisionEnabled')
       const cueRaw = await window.electron.getStoreValue('ttsVisualCueEnabled')
+      const footerRaw = await window.electron.getStoreValue('pdfFooterDetection')
       set({
         voiceChatLanguage: next,
         voiceChatVisionEnabled: typeof visionRaw === 'boolean' ? visionRaw : true,
-        ttsVisualCueEnabled: typeof cueRaw === 'boolean' ? cueRaw : true
+        ttsVisualCueEnabled: typeof cueRaw === 'boolean' ? cueRaw : true,
+        pdfFooterDetection: typeof footerRaw === 'boolean' ? footerRaw : true
       })
     },
 
@@ -70,6 +76,12 @@ export const usePrefsStore = create<PrefsState>()(
       if (get().ttsVisualCueEnabled === enabled) return
       await window.electron.setStoreValue('ttsVisualCueEnabled', enabled)
       set({ ttsVisualCueEnabled: enabled })
+    },
+
+    async setPdfFooterDetection(enabled) {
+      if (get().pdfFooterDetection === enabled) return
+      await window.electron.setStoreValue('pdfFooterDetection', enabled)
+      set({ pdfFooterDetection: enabled })
     }
   }))
 )

@@ -37,7 +37,8 @@ export async function loadPdfDocument(bytes: Uint8Array): Promise<PDFDocumentPro
 
 export async function extractPageParagraphs(
   doc: PDFDocumentProxy,
-  pageNumber: number
+  pageNumber: number,
+  maskedItemIndices?: ReadonlySet<number>
 ): Promise<string[]> {
   if (pageNumber < 1 || pageNumber > doc.numPages) return []
 
@@ -48,7 +49,7 @@ export async function extractPageParagraphs(
     // (Y-coordinate gaps + hasEOL + 5-line floor + short-paragraph merge).
     // Indexer and reader chunking stay consistent — same paragraph the user
     // sees is the same chunk stored for RAG.
-    return pageDataToParagraphs(pageNumber, content).map((p) => p.text.trim())
+    return pageDataToParagraphs(pageNumber, content, maskedItemIndices).map((p) => p.text.trim())
   } finally {
     page.cleanup()
   }

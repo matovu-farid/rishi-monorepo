@@ -47,6 +47,13 @@ import { pdfParagraphToPageNumber } from '@/components/pdf/utils/pdfParagraphToP
 import { Effect, Fiber } from 'effect'
 import { indexBookProgram } from '@/services/indexing/index-program'
 import { loadPdfDocument, extractPageParagraphs } from '@/services/indexing/text-extraction'
+import {
+  buildFooterMask,
+  MIN_PAGES_FOR_DETECTION,
+  type PageScanInput
+} from '../utils/buildFooterMask'
+import { findRepeatingPageSuffix } from '../utils/findRepeatingPageSuffix'
+import { usePrefsStore } from '@/stores/prefsStore'
 import { useIndexingStore } from '@/stores/indexingStore'
 import { usePdfReader } from '@/hooks/usePdfReader'
 import type { Book } from '@/lib/api'
@@ -642,6 +649,41 @@ export function PdfView({
         if (isCancelled()) return
         const skipPages = new Set(indexedPages)
 
+        // Footer-detection pass (#142): walk every page, sample TextContent
+        // for the bottom band, build the FooterMask. Skipped when the pref
+        // is off OR the book is too short for the heuristic to be reliable.
+        // Mask lives in-memory only; clearing/toggling the pref doesn't
+        // re-scan — selector consults the pref at read time.
+        if (!usePrefsStore.getState().pdfFooterDetection || numPages < MIN_PAGES_FOR_DETECTION) {
+          usePdfStore.getState().setFooterMask(book.id, new Map())
+        } else {
+          const scans: PageScanInput[] = []
+          for (let n = 1; n <= numPages; n++) {
+            if (isCancelled()) return
+            const page = await loadedDoc.getPage(n)
+            try {
+              const content = await page.getTextContent()
+              const view = page.view
+              const viewportHeight = view[3] - view[1]
+              scans.push({ pageNumber: n, content, viewportHeight })
+            } finally {
+              page.cleanup()
+            }
+          }
+          if (isCancelled()) return
+          const mask = buildFooterMask(scans)
+          const suffixMask = findRepeatingPageSuffix(scans)
+          for (const [pageNumber, itemSet] of suffixMask) {
+            let target = mask.get(pageNumber)
+            if (!target) {
+              target = new Set<number>()
+              mask.set(pageNumber, target)
+            }
+            for (const ix of itemSet) target.add(ix)
+          }
+          usePdfStore.getState().setFooterMask(book.id, mask)
+        }
+
         // Short-circuit if the whole book is already indexed.
         if (skipPages.size >= numPages) {
           useIndexingStore.getState().start(book.id, numPages)
@@ -669,7 +711,10 @@ export function PdfView({
             numPages,
             startPage,
             skipPages,
-            extract: (pageNumber) => extractPageParagraphs(loadedDoc, pageNumber),
+            extract: (pageNumber) => {
+              const m = usePdfStore.getState().getFooterMaskForPage(book.id, pageNumber)
+              return extractPageParagraphs(loadedDoc, pageNumber, m)
+            },
             saveChunks: (chunks) => window.electron.savePageDataMany(chunks),
             processJob: (pageNumber, items) =>
               window.electron.processJob(pageNumber, book.id, items),

@@ -5,6 +5,8 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import type { ParagraphWithIndex } from '@/models/player_control'
 import type { Book } from '@/lib/api'
+import type { FooterMask } from '@/components/pdf/utils/buildFooterMask'
+import { usePrefsStore } from '@/stores/prefsStore'
 
 /** PDF view uses `Virtualizer<HTMLDivElement, Element>` — the second arg is
  *  the item element type, which @tanstack/react-virtual leaves as Element
@@ -52,6 +54,8 @@ interface PdfState {
   isRenderedPageState: Record<number, boolean>
   hasNavigatedToPage: boolean
   isLookingForNextParagraph: boolean
+  /** Per-book running-footer detection result (#142). In-memory only. */
+  footerMaskByBookId: Record<number, FooterMask>
 
   setPageNumber: (n: number) => void
   setScrollPageNumber: (n: number) => void
@@ -81,6 +85,9 @@ interface PdfState {
   addBook: (id: number) => void
   removeBook: (id: number) => void
   setAllBooks: (ids: number[]) => void
+  setFooterMask: (bookId: number, mask: FooterMask) => void
+  clearFooterMask: (bookId: number) => void
+  getFooterMaskForPage: (bookId: number, pageNumber: number) => ReadonlySet<number> | undefined
 }
 
 export const usePdfStore = create<PdfState>()(
@@ -108,6 +115,7 @@ export const usePdfStore = create<PdfState>()(
       isRenderedPageState: {},
       hasNavigatedToPage: false,
       isLookingForNextParagraph: false,
+      footerMaskByBookId: {},
 
       setPageNumber: (n) => {
         const state = get()
@@ -180,7 +188,12 @@ export const usePdfStore = create<PdfState>()(
       removeBook: (id) => {
         const s = get()
         const { [id]: _, ...rest } = s.pdfsRendered
-        set({ books: s.books.filter((b) => b !== id), pdfsRendered: rest })
+        const { [id]: __, ...restMasks } = s.footerMaskByBookId
+        set({
+          books: s.books.filter((b) => b !== id),
+          pdfsRendered: rest,
+          footerMaskByBookId: restMasks
+        })
       },
       setAllBooks: (ids) => {
         const s = get()
@@ -191,6 +204,21 @@ export const usePdfStore = create<PdfState>()(
             : false
         }
         set({ books: ids, pdfsRendered: newRendered })
+      },
+      setFooterMask: (bookId, mask) =>
+        set((state) => ({
+          footerMaskByBookId: { ...state.footerMaskByBookId, [bookId]: mask }
+        })),
+      clearFooterMask: (bookId) =>
+        set((state) => {
+          const { [bookId]: _, ...rest } = state.footerMaskByBookId
+          return { footerMaskByBookId: rest }
+        }),
+      getFooterMaskForPage: (bookId, pageNumber) => {
+        if (!usePrefsStore.getState().pdfFooterDetection) return undefined
+        const mask = get().footerMaskByBookId[bookId]
+        if (!mask) return undefined
+        return mask.get(pageNumber)
       }
     })),
     { name: 'pdf-store' }

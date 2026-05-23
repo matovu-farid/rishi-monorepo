@@ -9,6 +9,7 @@ import { audioElement } from '@/hooks/usePlayerMachine'
 import { navigationHistoryActor } from '@/machines/navigationHistory/navigationHistoryActor'
 import type { TtsService } from '@/services/tts'
 import type { SyncService } from '@/services/sync'
+import type { FooterMask } from '@/components/pdf/utils/buildFooterMask'
 
 declare global {
   interface Window {
@@ -30,6 +31,8 @@ declare global {
        * of the app already calls; production code never reads it.
        */
       getSyncService: () => SyncService
+      /** E2E hook for #142: read the raw FooterMask without the pref short-circuit. */
+      getFooterMask: (bookId: number) => FooterMask | undefined
     }
   }
 }
@@ -44,5 +47,6 @@ window.__rishi = {
   setTestTtsService,
   audioElement,
   navigationHistoryActor,
-  getSyncService
+  getSyncService,
+  getFooterMask: (bookId: number) => usePdfStore.getState().footerMaskByBookId[bookId]
 }
