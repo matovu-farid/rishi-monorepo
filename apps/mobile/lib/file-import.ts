@@ -88,12 +88,38 @@ function classifyFailure(
 // Helpers
 // ────────────────────────────────────────────────────────────────────────────
 
+/**
+ * DAT-013 (#125): module-level counter folded into the fallback UUID
+ * generator so two rapid calls cannot collide even if Math.random()
+ * returns the same value back-to-back (observed on some cold-started
+ * RN runtimes). The host's `crypto.randomUUID` is already collision-safe
+ * and is preferred when available.
+ */
+let fallbackUuidCounter = 0;
+
 function generateUUID(): string {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
     return crypto.randomUUID();
   }
+  // Increment first so two simultaneous calls observe distinct values
+  // even before the template string is built.
+  fallbackUuidCounter = (fallbackUuidCounter + 1) & 0xffffffff;
+  const counter = fallbackUuidCounter;
+  // Mix the counter nibble-by-nibble into the template positions. We
+  // walk a 32-bit counter across 8 nibbles (xxxxxxxx prefix), then fall
+  // through to Math.random() for the rest so the output is still
+  // RFC-4122-ish (version 4, variant 1).
+  let counterNibblesConsumed = 0;
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
+    let r: number;
+    if (c === "x" && counterNibblesConsumed < 8) {
+      // Pull the next nibble from the counter, MSB first.
+      const shift = (7 - counterNibblesConsumed) * 4;
+      r = (counter >>> shift) & 0xf;
+      counterNibblesConsumed += 1;
+    } else {
+      r = (Math.random() * 16) | 0;
+    }
     const v = c === "x" ? r : (r & 0x3) | 0x8;
     return v.toString(16);
   });
