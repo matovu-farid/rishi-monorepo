@@ -193,15 +193,42 @@ function mapRowToConversation(row: typeof conversations.$inferSelect): Conversat
 
 function mapRowToMessage(row: typeof messages.$inferSelect): Message {
   let parsed: SourceChunk[] | null = null
+  let corrupted = false
   if (row.sourceChunks) {
     try {
       parsed = JSON.parse(row.sourceChunks) as SourceChunk[]
-    } catch {
+    } catch (err) {
+      // DAT-016 (#128): the previous behaviour was a silent fall-through to
+      // `parsed = null`. That hides corruption from the dev error dump AND
+      // from the user, who sees an assistant message with no citations
+      // and assumes the model just didn't ground its answer. We now:
+      //   - log the message id + a payload snippet so the dev error dump
+      //     surfaces a pattern of corruption (e.g. a buggy embedder
+      //     truncating writes);
+      //   - set a `sourceChunksCorrupted` flag on the returned object so a
+      //     UI can render a "Source data corrupted" badge.
+      // The `parsed` value remains null so the rest of the surface keeps
+      // working — corruption MUST NOT prevent the row from rendering.
+      const snippet =
+        row.sourceChunks.length > 60
+          ? row.sourceChunks.slice(0, 60) + '…'
+          : row.sourceChunks
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[conversation-storage] failed to parse sourceChunks for message ${row.id}; ` +
+          `length=${row.sourceChunks.length}, snippet=${snippet}`,
+        err,
+      )
       parsed = null
+      corrupted = true
     }
   }
 
-  return {
+  // We attach `sourceChunksCorrupted` as a runtime-only extension to the
+  // returned Message. The base Message type in `types/conversation.ts` is
+  // owned by a sibling slot and we don't extend it here; consumers that
+  // care (chat row UI) read the property via duck typing.
+  const out: Message & { sourceChunksCorrupted?: boolean } = {
     id: row.id,
     conversationId: row.conversationId,
     role: row.role as 'user' | 'assistant',
@@ -210,4 +237,6 @@ function mapRowToMessage(row: typeof messages.$inferSelect): Message {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }
+  if (corrupted) out.sourceChunksCorrupted = true
+  return out
 }
