@@ -12,7 +12,9 @@ import {
   _findBookByHashWithDb,
   _getBookFilepathsWithDb,
   _updateBookLastParagraphWithDb,
-  _getBookByIdWithDb
+  _getBookByIdWithDb,
+  _getAllBooksWithDb,
+  _getCoverWithDb
 } from './queries'
 
 const SCHEMA = `
@@ -21,6 +23,7 @@ const SCHEMA = `
     kind TEXT, cover BLOB, title TEXT, author TEXT, publisher TEXT,
     filepath TEXT, location TEXT, cover_kind TEXT, version INTEGER,
     sync_id TEXT, file_hash TEXT, file_r2_key TEXT, cover_r2_key TEXT,
+    file_size INTEGER DEFAULT 0,
     format TEXT, current_cfi TEXT, current_page INTEGER, user_id TEXT,
     sync_version INTEGER, is_dirty INTEGER, is_deleted INTEGER DEFAULT 0,
     last_paragraph TEXT
@@ -162,5 +165,91 @@ describe('_getBookByIdWithDb', () => {
     _updateBookLastParagraphWithDb(db, id, 'azw3-2-15')
     const book = _getBookByIdWithDb(db, id)
     expect(book?.lastParagraph).toBe('azw3-2-15')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Cover BLOB is now lazy-loaded — `_getAllBooksWithDb` must NOT pull the
+// raw `cover` column over IPC, and `_getCoverWithDb` exposes the BLOB on
+// demand. See issue #190.
+// ---------------------------------------------------------------------------
+
+/** Insert a row with a known cover BLOB so we can assert lazy-load behavior. */
+function insertWithCover(db: Database, cover: Buffer, title = 'Cover Book'): number {
+  const info = db
+    .prepare(
+      `INSERT INTO books (filepath, file_hash, is_deleted, title, kind, cover, author,
+       publisher, location, cover_kind, version, format, sync_version, is_dirty)
+     VALUES (@filepath, @file_hash, @is_deleted, @title, 'epub', @cover, '', '', '1', 'png',
+       0, 'epub', 0, 0)`
+    )
+    .run({
+      filepath: '/books/cover.epub',
+      file_hash: null,
+      is_deleted: 0,
+      title,
+      cover
+    })
+  return Number(info.lastInsertRowid)
+}
+
+describe('_getAllBooksWithDb', () => {
+  let db: Database
+  beforeEach(() => {
+    db = makeDb()
+  })
+
+  it('returns books with an empty cover array — the BLOB is lazy-loaded via getCover', () => {
+    insertWithCover(db, Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]), 'A')
+    insertWithCover(db, Buffer.from([0xff, 0xd8, 0xff, 0xe0]), 'B')
+
+    const books = _getAllBooksWithDb(db)
+    expect(books.length).toBe(2)
+    for (const book of books) {
+      expect(Array.isArray(book.cover)).toBe(true)
+      expect(book.cover.length).toBe(0)
+    }
+  })
+
+  it('still populates all non-cover metadata (title, author, coverKind, etc.)', () => {
+    const id = insertWithCover(db, Buffer.from([1, 2, 3]), 'Metadata Check')
+    const books = _getAllBooksWithDb(db)
+    const found = books.find((b) => b.id === id)
+    expect(found?.title).toBe('Metadata Check')
+    expect(found?.coverKind).toBe('png')
+    expect(found?.format).toBe('epub')
+  })
+
+  it('skips soft-deleted books (parity with the old getAllBooks)', () => {
+    insertWithCover(db, Buffer.alloc(0), 'Visible')
+    insert(db, { is_deleted: 1, title: 'Hidden' })
+    const books = _getAllBooksWithDb(db)
+    expect(books.map((b) => b.title)).toEqual(['Visible'])
+  })
+})
+
+describe('_getCoverWithDb', () => {
+  let db: Database
+  beforeEach(() => {
+    db = makeDb()
+  })
+
+  it('returns the raw cover bytes for a known book id', () => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const id = insertWithCover(db, bytes)
+    const cover = _getCoverWithDb(db, id)
+    expect(cover).not.toBeNull()
+    expect(Array.from(cover!)).toEqual(Array.from(bytes))
+  })
+
+  it('returns null for an unknown book id', () => {
+    expect(_getCoverWithDb(db, 9999)).toBeNull()
+  })
+
+  it('returns an empty array (not null) when the book has no cover stored', () => {
+    const id = insertWithCover(db, Buffer.alloc(0))
+    const cover = _getCoverWithDb(db, id)
+    expect(cover).not.toBeNull()
+    expect(cover!.length).toBe(0)
   })
 })
