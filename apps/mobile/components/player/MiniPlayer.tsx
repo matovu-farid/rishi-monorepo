@@ -308,6 +308,15 @@ export function MiniPlayer({
   const handleAutoCollapse = useCallback(() => {
     setExpanded(false)
   }, [])
+  // WGT-019 / #72 — `bumpCollapse` is the IMPERATIVE re-arm of the
+  // auto-collapse timer. It is called from `dispatch` (i.e. every pill
+  // control press) so a user tapping controls in rapid succession does
+  // not see the pill collapse out from under them mid-tap. Each press
+  // resets the 4s idle clock; the reactive arm inside the hook handles
+  // the inactivity timeout. This re-arm-on-every-press is INTENTIONAL —
+  // it is not the React anti-pattern of restarting an effect on every
+  // render. The hook's `bump()` is referentially stable across renders
+  // because `useAutoCollapseTimer` memoises its internals.
   const { bump: bumpCollapse } = useAutoCollapseTimer({
     expanded,
     isPlaying,
