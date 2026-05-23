@@ -94,6 +94,7 @@ import { buildPartialFirst } from '@/modules/read-aloud-from'
 import { useTtsHighlightReconciler } from '@/hooks/useTtsHighlightReconciler'
 import { useVisibleEpubIframe } from '@/hooks/reader/useVisibleEpubIframe'
 import { createEpubTtsReconciler, type EpubTtsReconciler } from './reconcileTtsHighlight'
+import { useDebouncedLocationSave } from './useDebouncedLocationSave'
 
 function updateTheme(rendition: Rendition, theme: ThemeType) {
   const reditionThemes = rendition.themes
@@ -1019,6 +1020,24 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       toast.error('Can not change book page')
     }
   })
+  // Debounce per-page-turn location saves so rapid page-turns (page-curl
+  // animation + rendition.next() resolve + TTS paragraph advance can all
+  // emit `relocated` within ~100ms) coalesce into a single SQLite write.
+  // The hook flushes the latest pending CFI on unmount so closing the book
+  // never loses the user's last position. The mutate call drives both the
+  // DB write and the cloud-sync trigger. See RDR-003.
+  // Destructure `mutate` from the mutation result so the useCallback dep
+  // identity is referentially stable (the mutation result object itself is
+  // intentionally not — @tanstack/query/no-unstable-deps gates on this).
+  const { mutate: mutateLocation } = updateBookLocationMutation
+  const persistLocation = useCallback(
+    (cfi: string) => {
+      mutateLocation({ bookId: book.id.toString(), location: cfi })
+      getSyncService().triggerWrite()
+    },
+    [mutateLocation, book.id]
+  )
+  const debouncedLocationSave = useDebouncedLocationSave(persistLocation)
   // Update rendition state when ref becomes available
 
   // Show loading state while EPUB data is being fetched
@@ -1075,14 +1094,19 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
             // relocateds can fire at a column-start CFI that differs from the
             // saved one; without the userNav gate they would silently
             // overwrite the correct saved CFI on reopen.
+            //
+            // Per-relocate writes are debounced (RDR-003): page-curl + nav.next
+            // + TTS paragraph advance can emit `relocated` several times within
+            // ~100ms. We coalesce into one SQLite write per 300ms window. The
+            // hook flushes the latest pending CFI on unmount so the user's
+            // last position is preserved on book close / route change.
             if (settledRef.current && userNavHappenedRef.current) {
-              updateBookLocationMutation.mutate({
-                bookId: book.id.toString(),
-                location: epubcfi
-              })
-              getSyncService().triggerWrite()
+              debouncedLocationSave.save(epubcfi)
               // Record the latest CFI so the window-close flush has a value
-              // to write even if the mutation above hasn't completed yet.
+              // to write even if the debounced mutation hasn't fired yet.
+              // The window-close handler bypasses the mutation queue and
+              // writes directly via IPC; lastSavedCfiRef is its source of
+              // truth when the live rendition CFI isn't available.
               // eslint-disable-next-line react-hooks/immutability -- Refs are mutable by design; the lint rule misfires on this standard pattern.
               lastSavedCfiRef.current = epubcfi
             }
