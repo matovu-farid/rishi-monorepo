@@ -28,7 +28,11 @@ import { triggerSyncOnWrite } from "@/lib/sync/triggers";
 import { getChunks } from "@/lib/rag/chunker";
 import { embedBatch, isEmbeddingReady } from "@/lib/rag/embedder";
 import { embedTextsOnServer } from "@/lib/rag/server-fallback";
-import { insertChunkWithVector, isBookEmbedded } from "@/lib/rag/vector-store";
+import {
+  deleteBookChunks,
+  insertChunkWithVector,
+  isBookEmbedded,
+} from "@/lib/rag/vector-store";
 
 /**
  * Mobile-specific Book row shape used by the shared service. Mirrors
@@ -128,6 +132,17 @@ export function createMobileDbPort(): DbPort<
 > {
   return {
     async saveBook(insertable) {
+      // DAT-001 (#114): atomic insert. If anything between the row write
+      // and returning the row shape throws (e.g. triggerSyncOnWrite blows
+      // up on the sync engine, or row-shape construction fails), we MUST
+      // roll back the just-inserted row. Otherwise the books table keeps
+      // a row pointing at a copied file whose post-save pipeline never
+      // completed, and the user sees a permanently broken entry.
+      //
+      // The shared importer already runs copy BEFORE save (see
+      // packages/shared/src/book-import/importer.ts), so a copy failure
+      // never reaches this path. This guard covers the other half of the
+      // window: failures DURING save itself.
       db.insert(books)
         .values({
           id: insertable.id,
@@ -144,23 +159,36 @@ export function createMobileDbPort(): DbPort<
           isDeleted: false,
         })
         .run();
-      // Without this, the new book row sits with isDirty=true until either
-      // the app is backgrounded or the 5-minute periodic timer fires. The
-      // legacy `book-storage.insertBook` path triggers sync; we must too
-      // so freshly imported books reach D1 promptly. (H3-03)
-      triggerSyncOnWrite();
-      // Construct the row shape the service expects (the inserted row).
-      return {
-        id: insertable.id,
-        title: insertable.title,
-        author: insertable.author,
-        coverPath: insertable.coverPath,
-        filePath: insertable.filePath,
-        format: insertable.format,
-        currentCfi: insertable.currentCfi,
-        currentPage: insertable.currentPage,
-        createdAt: insertable.createdAt,
-      };
+      try {
+        // Without this, the new book row sits with isDirty=true until either
+        // the app is backgrounded or the 5-minute periodic timer fires. The
+        // legacy `book-storage.insertBook` path triggers sync; we must too
+        // so freshly imported books reach D1 promptly. (H3-03)
+        triggerSyncOnWrite();
+        // Construct the row shape the service expects (the inserted row).
+        return {
+          id: insertable.id,
+          title: insertable.title,
+          author: insertable.author,
+          coverPath: insertable.coverPath,
+          filePath: insertable.filePath,
+          format: insertable.format,
+          currentCfi: insertable.currentCfi,
+          currentPage: insertable.currentPage,
+          createdAt: insertable.createdAt,
+        };
+      } catch (err) {
+        // Roll back the orphan row before rethrowing so the import surface
+        // sees a clean "save failed" outcome (no row, no file ownership).
+        try {
+          db.delete(books).where(eq(books.id, insertable.id)).run();
+        } catch {
+          /* best-effort; the row may still be there if delete itself
+             failed, but rethrowing the original error is more useful to
+             the caller than masking it. */
+        }
+        throw err;
+      }
     },
 
     async savePageDataMany(_pageData) {
@@ -270,55 +298,107 @@ export function createMobileUploadPort(): UploadPort<string> {
  * still useful for the regression-recovery branch on electron, so we keep
  * it.
  */
+/**
+ * DAT-007 (#120): module-level in-flight lock. Concurrent
+ * `generateChunks(bookId)` calls must coalesce onto the same Promise so
+ * we never run two embed loops for the same book. Previously, two
+ * callers (e.g. file-import.runImportWithService's fire-and-forget
+ * indexBook AND a user-initiated reindex from the chat screen) could
+ * both win the `isBookEmbedded` check before either had written its
+ * first chunk, then race each other into duplicate vectors.
+ *
+ * Keyed on String(bookId); the entry is deleted in a finally block so
+ * the lock releases on both success and failure, allowing genuine
+ * retries to proceed.
+ */
+const inFlightEmbedByBookId = new Map<
+  string,
+  Promise<PageDataInsertable<string>[]>
+>();
+
+async function runEmbedPipeline(
+  bookId: string,
+  filePath: string,
+  format: BookFormat,
+): Promise<PageDataInsertable<string>[]> {
+  if (isBookEmbedded(bookId)) return [];
+
+  const chunks = await getChunks(filePath, format, bookId);
+  if (chunks.length === 0) return [];
+
+  const BATCH_SIZE = 10;
+  try {
+    for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+      const batch = chunks.slice(i, i + BATCH_SIZE);
+      const texts = batch.map((c) => c.text);
+
+      let embeddings: number[][];
+      if (isEmbeddingReady()) {
+        try {
+          embeddings = await embedBatch(texts);
+        } catch (err) {
+          console.warn(
+            "[book-import] on-device embed failed, falling back to server:",
+            err,
+          );
+          embeddings = await embedTextsOnServer(texts);
+        }
+      } else {
+        embeddings = await embedTextsOnServer(texts);
+      }
+
+      for (let j = 0; j < batch.length; j++) {
+        const chunk = batch[j];
+        insertChunkWithVector(
+          chunk.id,
+          bookId,
+          chunk.chunkIndex,
+          chunk.text,
+          chunk.chapter,
+          embeddings[j],
+        );
+      }
+    }
+  } catch (err) {
+    // DAT-004 (#117): mid-batch failure must NOT leave the book
+    // half-indexed. `isBookEmbedded` returns true as soon as ≥1 chunk
+    // is in sqlite, so without this rollback the book would be stuck
+    // in a "partially indexed, will never re-index" state. Delete
+    // every chunk we wrote for this book before re-throwing so a
+    // retry sees a clean slate.
+    try {
+      deleteBookChunks(bookId);
+    } catch (cleanupErr) {
+      console.warn(
+        "[book-import] failed to roll back partial chunks after embed error:",
+        cleanupErr,
+      );
+    }
+    throw err;
+  }
+
+  // Sentinel: signal "chunks exist now" without re-emitting them so the
+  // shared indexer's savePageDataMany branch becomes a no-op on mobile.
+  return chunks.map((c, idx) => ({
+    id: idx,
+    pageNumber: idx,
+    bookId,
+    data: c.text,
+  }));
+}
+
 export function createMobileEmbedPort(): EmbedPort {
   return {
     async generateChunks({ bookId, filePath, format }) {
-      if (isBookEmbedded(String(bookId))) return [];
+      const key = String(bookId);
+      const existing = inFlightEmbedByBookId.get(key);
+      if (existing) return existing;
 
-      const chunks = await getChunks(filePath, format, String(bookId));
-      if (chunks.length === 0) return [];
-
-      const BATCH_SIZE = 10;
-      for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
-        const batch = chunks.slice(i, i + BATCH_SIZE);
-        const texts = batch.map((c) => c.text);
-
-        let embeddings: number[][];
-        if (isEmbeddingReady()) {
-          try {
-            embeddings = await embedBatch(texts);
-          } catch (err) {
-            console.warn(
-              "[book-import] on-device embed failed, falling back to server:",
-              err,
-            );
-            embeddings = await embedTextsOnServer(texts);
-          }
-        } else {
-          embeddings = await embedTextsOnServer(texts);
-        }
-
-        for (let j = 0; j < batch.length; j++) {
-          const chunk = batch[j];
-          insertChunkWithVector(
-            chunk.id,
-            String(bookId),
-            chunk.chunkIndex,
-            chunk.text,
-            chunk.chapter,
-            embeddings[j],
-          );
-        }
-      }
-
-      // Sentinel: signal "chunks exist now" without re-emitting them so the
-      // shared indexer's savePageDataMany branch becomes a no-op on mobile.
-      return chunks.map((c, idx) => ({
-        id: idx,
-        pageNumber: idx,
-        bookId: String(bookId),
-        data: c.text,
-      }));
+      const promise = runEmbedPipeline(key, filePath, format).finally(() => {
+        inFlightEmbedByBookId.delete(key);
+      });
+      inFlightEmbedByBookId.set(key, promise);
+      return promise;
     },
 
     async embed(_params) {
