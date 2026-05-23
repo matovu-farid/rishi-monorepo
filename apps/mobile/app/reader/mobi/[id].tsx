@@ -1,5 +1,6 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AccessibilityInfo,
   View,
   Text,
   TouchableOpacity,
@@ -582,13 +583,23 @@ export default function MobiReaderScreen() {
           book.filePath,
           book.format,
         )
-        if (!seeded.seeded) return
+        if (!seeded.seeded) {
+          // STA-017 — surface a toast + a11y announcement so the user
+          // sees why nothing happened. Parity with EPUB.
+          AccessibilityInfo.announceForAccessibility('No text available for reading')
+          undoSnackbar.show('No text available for reading', 'Dismiss', () => undefined)
+          return
+        }
         sendFn({ type: 'PLAY' })
       } catch (err) {
+        // STA-017 — TTS seed threw (extractor failed, file unreadable,
+        // etc.). Surface a non-blocking toast; toolbar button stays usable.
         console.warn('[mobi-tts] seed failed:', err)
+        AccessibilityInfo.announceForAccessibility('Could not start read-aloud')
+        undoSnackbar.show('Could not start read-aloud', 'Dismiss', () => undefined)
       }
     })
-  }, [book, ttsActive, requireTTS])
+  }, [book, ttsActive, requireTTS, undoSnackbar])
 
   // CSS reconciler: highlight the active paragraph inside the WebView.
   // Uses a simple data-attribute selector — the parser doesn't emit

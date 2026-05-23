@@ -1,5 +1,6 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AccessibilityInfo,
   View,
   Text,
   TouchableOpacity,
@@ -284,15 +285,24 @@ export default function DjvuReaderScreen() {
           'djvu',
         )
         if (!seeded.seeded) {
+          // STA-017 — DJVU extractor often returns no chunks (canvas-only
+          // documents with no OCR layer). Surface a toast + a11y
+          // announcement instead of a silent console.warn.
           console.warn('[djvu-tts] no chunks available — DJVU extractor not registered?')
+          AccessibilityInfo.announceForAccessibility('No text available for reading')
+          undoSnackbar.show('No text available for reading', 'Dismiss', () => undefined)
           return
         }
         sendFn({ type: 'PLAY' })
       } catch (err) {
+        // STA-017 — DJVU seed threw. Surface a non-blocking toast; the
+        // toolbar button stays usable.
         console.warn('[djvu-tts] seed failed:', err)
+        AccessibilityInfo.announceForAccessibility('Could not start read-aloud')
+        undoSnackbar.show('Could not start read-aloud', 'Dismiss', () => undefined)
       }
     })
-  }, [book, ttsActive, requireTTS])
+  }, [book, ttsActive, requireTTS, undoSnackbar])
 
   // P1-K — "Read from here" handler for DJVU selections. DJVU is
   // canvas-only today so this rarely fires; wired for parity with the

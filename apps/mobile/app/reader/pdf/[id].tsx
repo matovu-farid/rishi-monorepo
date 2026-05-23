@@ -12,6 +12,7 @@
  */
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
   AppState,
@@ -412,13 +413,25 @@ export default function PdfReaderScreen() {
           book.filePath,
           book.format,
         )
-        if (!seeded.seeded) return
+        if (!seeded.seeded) {
+          // STA-017 — surface a toast + a11y announcement so the user
+          // sees why nothing happened. Parity with the EPUB reader's
+          // handleToggleTTS branch.
+          AccessibilityInfo.announceForAccessibility('No text available for reading')
+          undoSnackbar.show('No text available for reading', 'Dismiss', () => undefined)
+          return
+        }
         sendFn({ type: 'PLAY' })
       } catch (err) {
+        // STA-017 — TTS seed threw (file unreadable, extractor failed,
+        // etc.). Surface a non-blocking toast so the user knows playback
+        // didn't start; the toolbar button stays usable.
         console.warn('[pdf-tts] seed failed:', err)
+        AccessibilityInfo.announceForAccessibility('Could not start read-aloud')
+        undoSnackbar.show('Could not start read-aloud', 'Dismiss', () => undefined)
       }
     })
-  }, [book, ttsActive, requireTTS])
+  }, [book, ttsActive, requireTTS, undoSnackbar])
 
   // Read-from-selection (G17). Batch 7 wires this fully to the player
   // machine via playerStore.send PLAY_FROM:
