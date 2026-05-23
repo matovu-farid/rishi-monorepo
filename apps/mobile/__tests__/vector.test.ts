@@ -12,6 +12,18 @@ const mockGetAllSync = jest.fn(() => [] as unknown[]) as unknown as jest.Mock<
   unknown[]
 >
 
+// expo-sqlite is shipped as ESM and tsc-jest can't parse the published
+// `export * from …` source. Stub the module before any source-of-truth
+// import pulls it transitively (vector-store imports it for the bundled
+// extensions surface). This mirrors how other __tests__ stub native
+// boundary modules.
+jest.mock('expo-sqlite', () => ({
+  bundledExtensions: {
+    'sqlite-vec': { libPath: '/fake/path/libsqlite-vec.dylib', entryPoint: 'sqlite3_vec_init' },
+  },
+  openDatabaseSync: jest.fn(),
+}))
+
 jest.mock('@/lib/db', () => ({
   rawDb: {
     loadExtensionSync: jest.fn(),
@@ -75,6 +87,48 @@ describe('insertChunkWithVector', () => {
     expect(mockRunSync.mock.calls[1][1]).toEqual(
       expect.arrayContaining([42])
     )
+  })
+
+  // DAT-006 (#119): vector tables are created with `vec0(embedding float[384])`.
+  // If upstream embedder ever returns a wrong-dimensioned vector (e.g. server
+  // upgrades to 768-dim, a 0-dim sentinel slips through, NaN entries arrive),
+  // sqlite-vec stores garbage and the KNN search silently degrades. We enforce
+  // the dimension AND the value shape at the JS boundary so the throw is
+  // catchable before persisting either row.
+  describe('DAT-006 — wrong-dimension input is rejected', () => {
+    it('throws when embedding length is 768 (server upgraded to a different model)', () => {
+      const embedding = new Array(768).fill(0.1)
+      expect(() =>
+        insertChunkWithVector('chunk-x', 'book-1', 0, 'hello', null, embedding),
+      ).toThrow(/dimension/i)
+      // No partial writes — neither the chunks row nor the vector row should
+      // have been inserted.
+      expect(mockRunSync).not.toHaveBeenCalled()
+    })
+
+    it('throws when embedding length is 0', () => {
+      expect(() =>
+        insertChunkWithVector('chunk-x', 'book-1', 0, 'hello', null, []),
+      ).toThrow(/dimension/i)
+      expect(mockRunSync).not.toHaveBeenCalled()
+    })
+
+    it('throws when embedding length is 383 (off-by-one)', () => {
+      const embedding = new Array(383).fill(0.1)
+      expect(() =>
+        insertChunkWithVector('chunk-x', 'book-1', 0, 'hello', null, embedding),
+      ).toThrow(/dimension/i)
+      expect(mockRunSync).not.toHaveBeenCalled()
+    })
+
+    it('throws when embedding contains NaN', () => {
+      const embedding = new Array(384).fill(0.1)
+      embedding[10] = Number.NaN
+      expect(() =>
+        insertChunkWithVector('chunk-x', 'book-1', 0, 'hello', null, embedding),
+      ).toThrow(/finite|NaN/i)
+      expect(mockRunSync).not.toHaveBeenCalled()
+    })
   })
 })
 
