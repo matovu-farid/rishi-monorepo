@@ -38,7 +38,12 @@ export function useRAGQuery(bookId: string) {
 
   const askQuestion = useCallback(async (
     question: string,
-    conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>
+    conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }>,
+    // CHT-006 (#56): an optional AbortSignal threaded by the caller so
+    // tapping the stop button mid-generation can cancel the in-flight
+    // Worker LLM fetch. When omitted the call proceeds uncancellable
+    // (back-compat for any caller that hasn't migrated yet).
+    signal?: AbortSignal,
   ): Promise<{ answer: string; sources: SourceChunk[] }> => {
     setIsLoading(true)
     setError(null)
@@ -77,10 +82,12 @@ export function useRAGQuery(bookId: string) {
         }
       ]
 
-      // 5. Call Worker LLM
+      // 5. Call Worker LLM. Forward the abort signal so a tap on the
+      // stop icon cancels the underlying fetch (CHT-006 / #56).
       const response = await apiClient('/api/text/completions', {
         method: 'POST',
         body: JSON.stringify({ input }),
+        signal,
       })
 
       if (!response.ok) {

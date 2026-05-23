@@ -11,7 +11,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated'
 
-import { getBookForReading } from '@/lib/book-storage'
+import { getBookById, getBookForReading } from '@/lib/book-storage'
 import {
   createConversation,
   getConversationsForBook,
@@ -53,6 +53,17 @@ export default function BookChatScreen() {
 
   // Book data
   const [book, setBook] = useState<Book | null>(null)
+  // DAT-018 (#130): tri-state load status for the book row. We can't
+  // use `book === null` as the "deleted" signal because that's also the
+  // initial pre-load state — they look identical until the async
+  // `getBookForReading` resolves. `bookStatus` distinguishes:
+  //   - 'loading' — initial state, waiting on the async DB read.
+  //   - 'present' — found a row.
+  //   - 'missing' — DB returned null (deleted / never existed).
+  // The embedBook effect and the render branch both gate on this.
+  const [bookStatus, setBookStatus] = useState<'loading' | 'present' | 'missing'>(
+    'loading',
+  )
 
   // Embedding model
   const { isReady: modelReady, downloadProgress } = useEmbeddingModel()
@@ -70,6 +81,18 @@ export default function BookChatScreen() {
   // Error state
   const [inlineError, setInlineError] = useState<string | null>(null)
   const [retryQuestion, setRetryQuestion] = useState<string | null>(null)
+
+  // STA-018 (#94): per-message failure status. When a send rejects, the
+  // user-message row that triggered it lands in this set. The renderer
+  // decorates the row with a tappable "Failed — Tap to retry" badge and
+  // a red outline so the user can recover without scrolling up to a
+  // global banner. Successful retries clear the entry.
+  // We track this in component state rather than the DB row because the
+  // status is an in-flight UI concept — the persisted message is still
+  // a valid record of "what the user typed".
+  const [failedMessageIds, setFailedMessageIds] = useState<Set<string>>(
+    () => new Set<string>(),
+  )
 
   // P1-AA: embedding error state. When non-null, an inline banner renders
   // above ChatInput offering Retry. While set, the chat input stays
@@ -113,12 +136,35 @@ export default function BookChatScreen() {
     }
   }, [voice, requireVoiceInput])
 
-  // Load book (async -- triggers R2 download for synced books)
+  // Load book (async -- triggers R2 download for synced books).
+  //
+  // DAT-018 (#130): if the row is missing the book was deleted (or never
+  // existed). Set `bookStatus = 'missing'` so the render branch shows a
+  // "Book was deleted" screen and the embed effect short-circuits.
   useEffect(() => {
-    if (bookId) {
-      getBookForReading(bookId).then(setBook).catch(err => {
-        console.error('Failed to load book for chat:', err)
+    if (!bookId) return
+    let cancelled = false
+    getBookForReading(bookId)
+      .then((result) => {
+        if (cancelled) return
+        if (result) {
+          setBook(result)
+          setBookStatus('present')
+        } else {
+          setBook(null)
+          setBookStatus('missing')
+        }
       })
+      .catch((err) => {
+        console.error('Failed to load book for chat:', err)
+        if (cancelled) return
+        // Surface a missing-book screen on hard-failure too — the user
+        // can navigate away rather than stare at an empty chat.
+        setBook(null)
+        setBookStatus('missing')
+      })
+    return () => {
+      cancelled = true
     }
   }, [bookId])
 
@@ -158,6 +204,13 @@ export default function BookChatScreen() {
     // P1-AL: gate behind authentication. Signed-out users see the
     // sign-in banner below and can opt in via the ai-chat premium gate.
     if (!isAuthenticated) return
+    // DAT-018 (#130): re-verify the book row right before firing — the
+    // async load races against library bulk-delete. `getBookById` is
+    // synchronous against the local DB so it's cheap to call here.
+    if (getBookById(bookId) == null) {
+      setBookStatus('missing')
+      return
+    }
 
     setIsEmbedding(true)
     setEmbeddingTotal(100)
@@ -182,6 +235,82 @@ export default function BookChatScreen() {
     setEmbedAttempt((n) => n + 1)
   }, [])
 
+  // CHT-006 (#56) / A11Y-006 (#103): an AbortController bound to the
+  // currently in-flight `askQuestion`. ChatInput's stop icon invokes
+  // `handleAbort`, which calls `.abort()` on this controller; the
+  // underlying fetch in `useRAGQuery` rejects with AbortError and the
+  // hook flips `isLoading` back to false via its catch+finally.
+  const abortRef = useRef<AbortController | null>(null)
+
+  // Drive a RAG turn for an already-persisted user message. Extracted so
+  // both the initial send and the per-row retry (STA-018 / #94) share the
+  // exact same code path — only the source of the user-message row
+  // differs.
+  const runTurnForUserMessage = useCallback(
+    async (userMsg: Message, currentList: Message[]) => {
+      if (!conversationId) return
+
+      const history = [...currentList, userMsg].map((m) => ({
+        role: m.role,
+        content: m.content,
+      }))
+
+      // Fresh controller for THIS turn — abort any prior in-flight
+      // controller before swapping so a quick second send doesn't leave
+      // a dangling abort handle.
+      abortRef.current?.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
+
+      try {
+        const { answer, sources } = await askQuestion(
+          userMsg.content,
+          history,
+          controller.signal,
+        )
+        const assistantMsg = addMessage(
+          conversationId,
+          'assistant',
+          answer,
+          sources,
+        )
+        setMessageList((prev) => [...prev, assistantMsg])
+        // STA-018 (#94): clear the failed-status if this was a retry.
+        setFailedMessageIds((prev) => {
+          if (!prev.has(userMsg.id)) return prev
+          const next = new Set(prev)
+          next.delete(userMsg.id)
+          return next
+        })
+      } catch (err) {
+        const isAbort =
+          (err instanceof Error && err.name === 'AbortError') ||
+          controller.signal.aborted
+        if (!isAbort) {
+          // STA-018 (#94): mark the offending user message so the row
+          // itself shows a failed indicator. The global banner stays
+          // (for users who don't notice the per-row affordance) but the
+          // row is now the primary recovery surface.
+          setFailedMessageIds((prev) => {
+            if (prev.has(userMsg.id)) return prev
+            const next = new Set(prev)
+            next.add(userMsg.id)
+            return next
+          })
+          setInlineError(
+            'Could not get a response. Check your connection and try again.',
+          )
+          setRetryQuestion(userMsg.content)
+        }
+      } finally {
+        if (abortRef.current === controller) {
+          abortRef.current = null
+        }
+      }
+    },
+    [conversationId, askQuestion],
+  )
+
   // Send a message
   const handleSend = useCallback(
     async (text: string) => {
@@ -198,22 +327,32 @@ export default function BookChatScreen() {
       // just-typed user turn — the previous `messageList.map(...)`
       // read the stale closure snapshot, so the LLM was one message
       // behind. Always synthesise the full transcript at call time.
-      const history = [...messageList, userMsg].map((m) => ({
-        role: m.role,
-        content: m.content,
-      }))
-
-      try {
-        const { answer, sources } = await askQuestion(text, history)
-        const assistantMsg = addMessage(conversationId, 'assistant', answer, sources)
-        setMessageList((prev) => [...prev, assistantMsg])
-      } catch (_err) {
-        setInlineError('Could not get a response. Check your connection and try again.')
-        setRetryQuestion(text)
-      }
+      await runTurnForUserMessage(userMsg, messageList)
     },
-    [conversationId, bookId, messageList, askQuestion]
+    [conversationId, bookId, messageList, runTurnForUserMessage]
   )
+
+  // STA-018 (#94): per-row retry. Re-runs the RAG turn for a previously
+  // failed user message without re-adding it to the conversation.
+  const handleRetryFailedMessage = useCallback(
+    (userMsg: Message) => {
+      // Hide any global banner — the per-row UI is the source of truth
+      // now.
+      setInlineError(null)
+      setRetryQuestion(null)
+      // History is everything BEFORE the failed turn (the failed user
+      // message is appended inside runTurnForUserMessage's history call).
+      const indexInList = messageList.findIndex((m) => m.id === userMsg.id)
+      const historyBefore =
+        indexInList >= 0 ? messageList.slice(0, indexInList) : messageList
+      void runTurnForUserMessage(userMsg, historyBefore)
+    },
+    [messageList, runTurnForUserMessage],
+  )
+
+  const handleAbort = useCallback(() => {
+    abortRef.current?.abort()
+  }, [])
 
   const handleRetry = useCallback(() => {
     if (retryQuestion) {
@@ -266,6 +405,66 @@ export default function BookChatScreen() {
     }
   }
 
+  // DAT-018 (#130): book row vanished — render a dedicated error screen
+  // so the user knows the book is gone and can navigate away. We render
+  // BEFORE the main content branch so none of the embedding /
+  // conversation effects produce visible UI.
+  if (bookStatus === 'missing') {
+    return (
+      <SafeAreaView
+        testID="screen-chat-detail"
+        className="flex-1 bg-white dark:bg-[#151718]"
+        edges={['top']}
+      >
+        <View className="flex-row items-center justify-between h-12 px-4 border-b border-gray-200 dark:border-gray-700">
+          <TouchableOpacity
+            onPress={() => safeBack(router)}
+            className="flex-row items-center h-11 pl-1 pr-2"
+            accessibilityLabel={from ? `Back to ${from}` : 'Back'}
+            accessibilityRole="button"
+          >
+            <IconSymbol name="chevron.left" size={22} color="#0a7ea4" />
+            {from ? (
+              <Text
+                testID="chat-detail-back-label"
+                className="text-base text-[#0a7ea4] ml-0.5"
+                numberOfLines={1}
+              >
+                {from}
+              </Text>
+            ) : null}
+          </TouchableOpacity>
+          <Text className="flex-1 text-base font-semibold text-gray-900 dark:text-white text-center mx-2">
+            Chat
+          </Text>
+          <View className="w-11 h-11" />
+        </View>
+        <View
+          testID="chat-deleted-book-error"
+          className="flex-1 items-center justify-center p-8"
+        >
+          <IconSymbol name="exclamationmark.triangle" size={40} color="#9CA3AF" />
+          <Text className="text-base font-semibold text-gray-900 dark:text-white mt-4 text-center">
+            Book was deleted
+          </Text>
+          <Text className="text-sm text-gray-500 dark:text-gray-400 mt-1 text-center">
+            This book is no longer in your library. Start a new chat from another
+            book to continue.
+          </Text>
+          <TouchableOpacity
+            testID="chat-deleted-book-back"
+            onPress={() => safeBack(router)}
+            className="mt-6 px-4 py-2 rounded-md bg-[#0a7ea4]"
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
+            <Text className="text-white font-semibold">Go back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    )
+  }
+
   return (
     <SafeAreaView testID="screen-chat-detail" className="flex-1 bg-white dark:bg-[#151718]" edges={['top']}>
       <KeyboardAvoidingView
@@ -313,13 +512,43 @@ export default function BookChatScreen() {
               data={invertedMessages}
               keyExtractor={(item) => item.id}
               inverted
-              renderItem={({ item }) => (
-                <ChatMessage
-                  message={item}
-                  onSourcePress={handleSourcePress}
-                  testID={`chat-message-${item.role}-${messageIndexById.get(item.id) ?? 0}`}
-                />
-              )}
+              renderItem={({ item }) => {
+                const failed =
+                  item.role === 'user' && failedMessageIds.has(item.id)
+                return (
+                  <View testID={failed ? `chat-message-failed-${item.id}` : undefined}>
+                    <ChatMessage
+                      message={item}
+                      onSourcePress={handleSourcePress}
+                      testID={`chat-message-${item.role}-${messageIndexById.get(item.id) ?? 0}`}
+                    />
+                    {failed && (
+                      // STA-018 (#94): per-row failure badge. Red outline +
+                      // tappable "Failed — Tap to retry" affordance lives
+                      // outside ChatMessage to keep that component's
+                      // contract narrow (it owns bubble rendering only).
+                      <View className="items-end px-4 pb-1">
+                        <TouchableOpacity
+                          testID={`chat-message-failed-retry-${item.id}`}
+                          onPress={() => handleRetryFailedMessage(item)}
+                          accessibilityRole="button"
+                          accessibilityLabel="Retry sending this message"
+                          className="flex-row items-center gap-1 px-2 py-1 rounded-md border border-red-400"
+                        >
+                          <IconSymbol
+                            name="exclamationmark.triangle"
+                            size={12}
+                            color="#dc2626"
+                          />
+                          <Text className="text-xs text-red-600 font-medium">
+                            Failed — Tap to retry
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                )
+              }}
               contentContainerStyle={{ paddingVertical: 8 }}
               ListFooterComponent={
                 <>
@@ -439,6 +668,11 @@ export default function BookChatScreen() {
               voiceError={voice.error}
               permissionDenied={voice.permissionDenied}
               externalText={voiceText}
+              // CHT-006 (#56) / A11Y-006 (#103): wire abort. ChatInput's
+              // send button morphs into a stop-fill icon while
+              // `isLoading` is true; tapping it now calls into our
+              // AbortController and cancels the in-flight LLM fetch.
+              onAbort={handleAbort}
             />
       </KeyboardAvoidingView>
     </SafeAreaView>
