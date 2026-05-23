@@ -51,8 +51,16 @@ export async function encodeCanvasToWebp(
 
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
-    reader.onerror = () => reject(reader.error)
-    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () =>
+      reject(reader.error instanceof Error ? reader.error : new Error('FileReader: unknown error'))
+    reader.onload = () => {
+      const result = reader.result
+      if (typeof result === 'string') {
+        resolve(result)
+      } else {
+        reject(new Error('FileReader: expected string data URL, got non-string result'))
+      }
+    }
     reader.readAsDataURL(blob)
   })
 

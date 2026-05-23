@@ -23,7 +23,7 @@
  */
 export const WORKER_URL: string =
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- import.meta.env shape is augmented in vite-env.d.ts; cast keeps this file framework-agnostic for vitest.
-  ((import.meta as any)?.env?.VITE_WORKER_URL as string | undefined) || 'https://api.fidexa.org'
+  ((import.meta as any)?.env?.VITE_WORKER_URL as string | undefined) ?? 'https://api.fidexa.org'
 
 // Side-effect: expose to the window for E2E assertions. Guarded so this module
 // stays importable in node-side vitest contexts where `window` is undefined.

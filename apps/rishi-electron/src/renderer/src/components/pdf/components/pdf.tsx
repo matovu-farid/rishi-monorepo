@@ -43,6 +43,7 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { useVirualization } from '../hooks/useVirualization'
 import { PAGE_GAP } from '../utils/constants'
 import { parsePdfLocation } from '@/lib/pdfLocation'
+import type { ViewportLike } from '@/modules/pdf-locator'
 import { pdfParagraphToPageNumber } from '@/components/pdf/utils/pdfParagraphToPageNumber'
 import { Effect, Fiber } from 'effect'
 import { indexBookProgram } from '@/services/indexing/index-program'
@@ -143,7 +144,7 @@ export function PdfView({
       // unknown to the structural ViewportLike which expects [number, number].
       return info.page.getViewport({
         scale
-      }) as unknown as import('@/modules/pdf-locator').ViewportLike
+      }) as unknown as ViewportLike
     },
     onSelect: (sel) =>
       setSelectionPopover({ locator: sel.locator, text: sel.text, anchorPos: sel.anchorPos }),

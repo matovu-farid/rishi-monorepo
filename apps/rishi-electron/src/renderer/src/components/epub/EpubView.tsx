@@ -91,7 +91,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   // a stale id from a different format would otherwise be handed to epubjs,
   // which silently ignores it and opens at the start of the book.
   const resumeCfi = book.lastParagraph?.startsWith('epubcfi(') ? book.lastParagraph : null
-  const [currentLocation, setCurrentLocation] = useState<string>(resumeCfi || book.location || '0')
+  const [currentLocation, setCurrentLocation] = useState<string>(resumeCfi ?? book.location ?? '0')
   // Sync with book.location when it changes from a refetch (e.g., returning from library).
   // Only sync before the rendition has settled to avoid overriding user navigation.
   const bookLocationRef = useRef(book.location)
@@ -976,7 +976,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     return onResumeRequested((anchor) => {
       if (anchor.position.kind !== 'epub') return
-      renditionRef.current?.display(anchor.position.cfi)
+      void renditionRef.current?.display(anchor.position.cfi)
     })
   }, [])
 

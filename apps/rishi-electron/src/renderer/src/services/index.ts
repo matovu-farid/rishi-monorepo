@@ -398,7 +398,7 @@ export function getVoiceChatService(): VoiceChatService {
     void usePrefsStore
       .getState()
       .hydrate()
-      .catch((err) => {
+      .catch((err: unknown) => {
         console.warn('[prefs] hydrate failed', err)
       })
   }
