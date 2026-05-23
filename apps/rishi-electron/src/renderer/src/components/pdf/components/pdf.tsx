@@ -72,7 +72,11 @@ import { usePdfHighlights } from '@/hooks/usePdfHighlights'
 import { usePdfReadAloudFromSelection } from '@/hooks/usePdfReadAloudFromSelection'
 import { useUndoableHighlightShortcut } from '@/hooks/useUndoableHighlightShortcut'
 import { applyHighlightWithUndoPdf, deleteHighlightByIdWithUndo } from '@/modules/highlight-actions'
-import { updateHighlightColor, type HighlightRow, type PdfLocator } from '@/modules/highlight-storage'
+import {
+  updateHighlightColor,
+  type HighlightRow,
+  type PdfLocator
+} from '@/modules/highlight-storage'
 import type { PDFPageProxy } from 'pdfjs-dist'
 import type { HighlightColor } from '@/types/highlight'
 import type { MouseEvent as ReactMouseEvent } from 'react'
@@ -137,7 +141,9 @@ export function PdfView({
       const scale = info.pageEl.getBoundingClientRect().width / info.page.view[2]
       // pdfjs-dist types return `any[]` from convertToViewportPoint; cast via
       // unknown to the structural ViewportLike which expects [number, number].
-      return info.page.getViewport({ scale }) as unknown as import('@/modules/pdf-locator').ViewportLike
+      return info.page.getViewport({
+        scale
+      }) as unknown as import('@/modules/pdf-locator').ViewportLike
     },
     onSelect: (sel) =>
       setSelectionPopover({ locator: sel.locator, text: sel.text, anchorPos: sel.anchorPos }),
@@ -365,7 +371,8 @@ export function PdfView({
 
   // Helper: build a TtsContext from the current activeParagraph.
   // ParagraphWithIndex.index is a string; TtsContext.paragraphIndex is a number.
-  const ttsContext = activeParagraph != null ? { paragraphIndex: Number(activeParagraph.index) } : null
+  const ttsContext =
+    activeParagraph != null ? { paragraphIndex: Number(activeParagraph.index) } : null
 
   // Navigation history: lifecycle events (BOOK_OPENED / BOOK_CLOSED)
   useEffect(() => {
@@ -381,7 +388,6 @@ export function PdfView({
     return () => navigationHistoryActor.send({ type: 'BOOK_CLOSED' })
     // Re-fire if book.id changes (component is mounted with key={book.id} so this
     // normally only fires once per mount, but kept explicit for correctness).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [book.id])
 
   // Navigation history: PAGE_VISITED on every page change
@@ -455,9 +461,10 @@ export function PdfView({
     ({ pageNumber: itemPageNumber }: { pageNumber: number }) => {
       const fromPage = usePdfStore.getState().pageNumber
       const fromPosition: PositionDescriptor = { kind: 'pdf', page: fromPage, offset: 0 }
-      const fromTts = usePlayerStore.getState().activeParagraph != null
-        ? { paragraphIndex: Number(usePlayerStore.getState().activeParagraph!.index) }
-        : null
+      const fromTts =
+        usePlayerStore.getState().activeParagraph != null
+          ? { paragraphIndex: Number(usePlayerStore.getState().activeParagraph!.index) }
+          : null
       navigationHistoryActor.send({
         type: 'JUMP_REQUESTED',
         from: fromPosition,
@@ -804,9 +811,7 @@ export function PdfView({
   const handleInlineColorChange = async (color: HighlightColor): Promise<void> => {
     if (!inlinePopover) return
     await updateHighlightColor(inlinePopover.rowId, color)
-    setHighlights((prev) =>
-      prev.map((r) => (r.id === inlinePopover.rowId ? { ...r, color } : r))
-    )
+    setHighlights((prev) => prev.map((r) => (r.id === inlinePopover.rowId ? { ...r, color } : r)))
     setInlinePopover(null)
   }
 
@@ -1050,7 +1055,7 @@ export function PdfView({
           </div>
         </SheetContent>
       </Sheet>
-      {selectionPopover && (
+      {selectionPopover ? (
         <SelectionPopover
           cfiRange={''}
           selectedText={selectionPopover.text}
@@ -1058,8 +1063,8 @@ export function PdfView({
           onHighlight={(color) => void handleCreatePdfHighlight(color)}
           onClose={() => setSelectionPopover(null)}
         />
-      )}
-      {inlinePopover && (
+      ) : null}
+      {inlinePopover ? (
         <HighlightActionPopover
           position={inlinePopover.position}
           currentColor={inlinePopover.currentColor}
@@ -1072,7 +1077,7 @@ export function PdfView({
           onDelete={() => void handleInlineDelete()}
           onClose={() => setInlinePopover(null)}
         />
-      )}
+      ) : null}
       <NoteEditor
         highlight={editingNoteRow}
         open={editingNoteRow !== null}

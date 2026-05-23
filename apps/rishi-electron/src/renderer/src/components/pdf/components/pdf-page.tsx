@@ -142,8 +142,7 @@ function PageComponentInner({
   const handleLoadSuccess = useCallback(
     (page: PDFPageProxy) => {
       setPdfPage(page)
-      const pageEl =
-        wrapperRef.current?.querySelector<HTMLElement>('.react-pdf__Page') ?? null
+      const pageEl = wrapperRef.current?.querySelector<HTMLElement>('.react-pdf__Page') ?? null
       if (pageEl && onPageReady) onPageReady(pageNumber, { pageEl, page })
     },
     [pageNumber, onPageReady]
@@ -157,13 +156,11 @@ function PageComponentInner({
   const handleAnnotationClick = useCallback(
     (e: ReactMouseEvent<HTMLDivElement>): void => {
       if (!seekTo) return
-      const link = (e.target as HTMLElement).closest('a') as HTMLAnchorElement | null
+      const link = (e.target as HTMLElement).closest('a')
       if (!link) return
       const href = link.getAttribute('href')
       const targetPageStr =
-        link.getAttribute('data-page-number') ??
-        href?.match(/page=(\d+)/)?.[1] ??
-        null
+        link.getAttribute('data-page-number') ?? href?.match(/page=(\d+)/)?.[1] ?? null
       if (!targetPageStr) return
       const targetPage = Number(targetPageStr)
       if (!Number.isFinite(targetPage) || targetPage <= 0) return
@@ -186,31 +183,31 @@ function PageComponentInner({
     <div ref={wrapperRef} style={{ position: 'relative' }}>
       {/* onClickCapture intercepts annotation-layer link clicks before react-pdf's handler */}
       <div onClickCapture={handleAnnotationClick}>
-      <Page
-        pdf={pdf}
-        pageNumber={pageNumber}
-        key={pageNumber.toString()}
-        customTextRenderer={customTextRenderer}
-        height={isDualPage ? pdfHeight : undefined}
-        width={isDualPage ? undefined : pdfWidth}
-        className="rounded shadow-lg"
-        renderTextLayer={true}
-        renderAnnotationLayer={true}
-        canvasBackground="white"
-        onGetTextSuccess={handleGetTextSuccess}
-        loading={
-          <div
-            className="bg-white grid place-items-center"
-            style={{ width: pdfWidth, aspectRatio: '8.5 / 11' }}
-          >
-            <Loader />
-          </div>
-        }
-        onRenderSuccess={handleRenderSuccess}
-        onLoadSuccess={handleLoadSuccess}
-      />
+        <Page
+          pdf={pdf}
+          pageNumber={pageNumber}
+          key={pageNumber.toString()}
+          customTextRenderer={customTextRenderer}
+          height={isDualPage ? pdfHeight : undefined}
+          width={isDualPage ? undefined : pdfWidth}
+          className="rounded shadow-lg"
+          renderTextLayer={true}
+          renderAnnotationLayer={true}
+          canvasBackground="white"
+          onGetTextSuccess={handleGetTextSuccess}
+          loading={
+            <div
+              className="bg-white grid place-items-center"
+              style={{ width: pdfWidth, aspectRatio: '8.5 / 11' }}
+            >
+              <Loader />
+            </div>
+          }
+          onRenderSuccess={handleRenderSuccess}
+          onLoadSuccess={handleLoadSuccess}
+        />
       </div>
-      {pdfPage && wrapperRef.current && highlights && onHighlightClick && (
+      {pdfPage && wrapperRef.current && highlights && onHighlightClick ? (
         <HighlightLayer
           pageNumber={pageNumber}
           pageEl={
@@ -231,7 +228,7 @@ function PageComponentInner({
           highlights={highlights}
           onHighlightClick={onHighlightClick}
         />
-      )}
+      ) : null}
     </div>
   )
 }

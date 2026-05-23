@@ -456,9 +456,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
                                   {book.author}
                                 </span>
                               ) : null}
-                              <span className="text-xs text-gray-400 uppercase">
-                                {book.format}
-                              </span>
+                              <span className="text-xs text-gray-400 uppercase">{book.format}</span>
                               <span className="text-xs text-gray-400">
                                 {formatFileSize(book.fileSize)}
                               </span>
@@ -502,7 +500,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
         </div>
 
         {/* Bulk-import confirmation */}
-        {confirmOpen && (
+        {confirmOpen ? (
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40">
             <div
               role="dialog"
@@ -539,7 +537,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
               </div>
             </div>
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   )

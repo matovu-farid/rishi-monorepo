@@ -140,7 +140,10 @@ export interface DeleteHighlightArgs {
 export interface DeleteHighlightByIdWithUndoArgs {
   target: HighlightTarget
   rowId: string
-  snapshot: Pick<HighlightRow, 'bookId' | 'format' | 'cfiRange' | 'locator' | 'text' | 'color' | 'note' | 'chapter'>
+  snapshot: Pick<
+    HighlightRow,
+    'bookId' | 'format' | 'cfiRange' | 'locator' | 'text' | 'color' | 'note' | 'chapter'
+  >
 }
 
 export async function deleteHighlightByIdWithUndo(

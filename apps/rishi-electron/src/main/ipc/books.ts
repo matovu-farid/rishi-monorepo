@@ -77,9 +77,7 @@ export function registerBookHandlers(): void {
     try {
       return void updateBookLastParagraph(bookId, lastParagraph)
     } catch (error) {
-      throw new Error(
-        `Failed to update last paragraph for book ${bookId}: ${errorMessage(error)}`
-      )
+      throw new Error(`Failed to update last paragraph for book ${bookId}: ${errorMessage(error)}`)
     }
   })
 

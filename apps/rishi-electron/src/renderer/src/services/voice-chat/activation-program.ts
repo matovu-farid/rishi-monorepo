@@ -396,7 +396,7 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
               // On activation failure: stop the recorder so its hooks detach
               // and the buffer is dropped. On success: replayBufferedSpeech
               // owns the stop.
-              if (!success && b && b.recorder.state === 'recording') {
+              if (!success && b?.recorder.state === 'recording') {
                 try {
                   b.recorder.stop()
                 } catch (err) {

@@ -91,9 +91,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   // a stale id from a different format would otherwise be handed to epubjs,
   // which silently ignores it and opens at the start of the book.
   const resumeCfi = book.lastParagraph?.startsWith('epubcfi(') ? book.lastParagraph : null
-  const [currentLocation, setCurrentLocation] = useState<string>(
-    resumeCfi || book.location || '0'
-  )
+  const [currentLocation, setCurrentLocation] = useState<string>(resumeCfi || book.location || '0')
   // Sync with book.location when it changes from a refetch (e.g., returning from library).
   // Only sync before the rendition has settled to avoid overriding user navigation.
   const bookLocationRef = useRef(book.location)
@@ -382,7 +380,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     if (!iframeDoc) return
     // Re-create the overlay if the iframe doc changed (page reflow can
     // swap iframes). Cheap to construct; no state inside.
-    if (!noteIconOverlayRef.current || noteIconOverlayRef.current.iframeDoc !== iframeDoc) {
+    if (noteIconOverlayRef.current?.iframeDoc !== iframeDoc) {
       noteIconOverlayRef.current?.destroy()
       noteIconOverlayRef.current = new NoteIconOverlay({
         iframeDoc,
@@ -419,18 +417,11 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         highlightsByRangeRef.current.set(cfi, hl)
         // Note-only rows have no SVG mark — skip the highlightRange call.
         if (isNoteOnly(hl)) continue
-        void highlightRange(
-          rendition,
-          cfi,
-          {},
-          makeAnnotationClickCb(cfi),
-          'epubjs-hl',
-          {
-            fill: getHighlightHex(hl.color as HighlightColor),
-            'fill-opacity': '0.3',
-            'mix-blend-mode': 'multiply'
-          }
-        )
+        void highlightRange(rendition, cfi, {}, makeAnnotationClickCb(cfi), 'epubjs-hl', {
+          fill: getHighlightHex(hl.color as HighlightColor),
+          'fill-opacity': '0.3',
+          'mix-blend-mode': 'multiply'
+        })
       }
       refreshNoteIcons()
     })
@@ -979,7 +970,6 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       position: { kind: 'epub', cfi: currentLocation },
       ttsContext
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentLocation])
 
   // Navigation history: RESUME_REQUESTED → display the stored CFI
@@ -1315,7 +1305,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           // row and saved.
           const row = editingNoteRow
           setEditingNoteRow(null)
-          if (!row || !row.cfiRange) return
+          if (!row?.cfiRange) return
           const cfi = row.cfiRange
           const live = highlightsByRangeRef.current.get(cfi) ?? row
           if (isNoteOnly(live) && live.note.trim().length === 0 && live.cfiRange) {
@@ -1326,9 +1316,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
                 getSyncService().triggerWrite()
                 refreshNoteIcons()
               })
-              .catch((err: unknown) =>
-                console.warn('[note] orphan cleanup failed:', err)
-              )
+              .catch((err: unknown) => console.warn('[note] orphan cleanup failed:', err))
           }
         }}
         onSaved={async () => {
@@ -1349,9 +1337,9 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           const fresh = highlightsByRangeRef.current.get(editedCfi)
           if (!fresh) return
           const hasNote = fresh.note.trim().length > 0
-          setInlinePopover((prev) => (prev && prev.cfiRange === editedCfi ? { ...prev, hasNote } : prev))
+          setInlinePopover((prev) => (prev?.cfiRange === editedCfi ? { ...prev, hasNote } : prev))
           setSelectionTargetHighlight((prev) =>
-            prev && prev.cfiRange === editedCfi ? { ...prev, hasNote } : prev
+            prev?.cfiRange === editedCfi ? { ...prev, hasNote } : prev
           )
           // Re-paint the in-iframe icons so a freshly-added note surfaces
           // its marker immediately, and one that was cleared disappears.

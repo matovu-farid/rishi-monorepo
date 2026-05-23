@@ -43,7 +43,7 @@ export function usePdfTextSelection(params: UsePdfTextSelectionParams): void {
       const range = sel.getRangeAt(0)
       const startInfo = findPageInfo(range.startContainer)
       const endInfo = findPageInfo(range.endContainer)
-      if (!startInfo || !endInfo || startInfo.el !== endInfo.el) return
+      if (!startInfo || startInfo.el !== endInfo?.el) return
       const expectedEl = getPageElement(startInfo.pageNumber)
       if (expectedEl !== startInfo.el) return
       const viewport = getViewport(startInfo.pageNumber)

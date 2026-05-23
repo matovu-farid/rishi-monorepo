@@ -18,7 +18,13 @@ import {
   type VoiceChatService
 } from './voice-chat'
 
-export type { DiscoveredBook, ImportResult, ImportSuccess, PageDataInsertable, ScanProgress } from './book-import'
+export type {
+  DiscoveredBook,
+  ImportResult,
+  ImportSuccess,
+  PageDataInsertable,
+  ScanProgress
+} from './book-import'
 import { createSyncEngine } from '@rishi/shared/sync-engine'
 import { embedSingleText, embedWithFallback } from '@/modules/embed-fallback'
 import { hashBookFile, uploadBookFile, getFileSize } from '@/modules/file-sync'
@@ -298,7 +304,7 @@ export function getVoiceChatService(): VoiceChatService {
               }
             }
           }
-        } as never) as never,
+        }) as never,
       media: {
         getUserMedia: (constraints) => navigator.mediaDevices.getUserMedia(constraints),
         createAudioElement: () => {
@@ -311,8 +317,9 @@ export function getVoiceChatService(): VoiceChatService {
           // Prefer Opus-in-WebM (Deepgram accepts it directly); fall back to
           // the platform default if the codec isn't supported.
           const preferred = 'audio/webm;codecs=opus'
-          const options =
-            MediaRecorder.isTypeSupported(preferred) ? { mimeType: preferred } : undefined
+          const options = MediaRecorder.isTypeSupported(preferred)
+            ? { mimeType: preferred }
+            : undefined
           try {
             return new MediaRecorder(
               stream as unknown as MediaStream,
