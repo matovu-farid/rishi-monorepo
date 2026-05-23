@@ -1,6 +1,71 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+// Mock the voice-chat service before importing the stores so chatStore's
+// module-scope getVoiceChatService() call resolves to a spy. Same pattern as
+// chatStore.test.ts.
+const { fakeVoice } = vi.hoisted(() => ({
+  fakeVoice: {
+    start: vi.fn(),
+    stop: vi.fn(),
+    activate: vi.fn().mockResolvedValue(undefined),
+    preconnect: vi.fn().mockResolvedValue(undefined),
+    deactivate: vi.fn(),
+    dispose: vi.fn(),
+    prewarmKey: vi.fn(),
+    getState: vi.fn().mockReturnValue('idle' as const),
+    getError: vi.fn().mockReturnValue(null),
+    dismissError: vi.fn(),
+    onStateChange: vi.fn().mockReturnValue(() => {}),
+    onChatStatus: vi.fn().mockReturnValue(() => {}),
+    onEndedByAgent: vi.fn().mockReturnValue(() => {})
+  }
+}))
+
+vi.mock('@/services', () => ({
+  getVoiceChatService: () => fakeVoice
+}))
+
+const { FakeOfflineError } = vi.hoisted(() => ({
+  FakeOfflineError: class OfflineError extends Error {
+    constructor() {
+      super('offline')
+      this.name = 'OfflineError'
+    }
+  }
+}))
+
+vi.mock('@/services/voice-chat', () => ({
+  OfflineError: FakeOfflineError
+}))
+
+vi.mock('@/utils/sentry', () => ({ captureError: vi.fn() }))
+
+vi.mock('@/modules/pageCapture', () => ({
+  summarizeCurrentPage: vi.fn().mockReturnValue({ equations: 0, figures: 0, images: 0 })
+}))
+
+import type { Book } from '@/lib/api'
 import { usePdfStore, BookNavigationState } from './pdfStore'
 import { usePrefsStore } from './prefsStore'
+import { useChatStore } from './chatStore'
+
+const makeBook = (overrides: Partial<Book> = {}): Book => ({
+  id: 42,
+  kind: 'pdf',
+  cover: [],
+  title: 'Test',
+  author: 'Test Author',
+  publisher: '',
+  filepath: '/tmp/test.pdf',
+  location: '1',
+  coverKind: '',
+  version: 0,
+  format: 'pdf',
+  syncVersion: 0,
+  isDirty: 0,
+  isDeleted: 0,
+  ...overrides
+})
 
 describe('pdfStore', () => {
   beforeEach(() => {
@@ -10,6 +75,11 @@ describe('pdfStore', () => {
     // pdfFooterDetection is read by getFooterMaskForPage — keep it on by
     // default so existing tests aren't surprised by the gate.
     usePrefsStore.setState({ pdfFooterDetection: true })
+    // chatStore is a module-scope singleton — reset its mutable state and
+    // the voice-service spies so subscription tests can observe a clean
+    // false→true transition.
+    useChatStore.setState({ isChatting: false, chatStatus: 'idle' })
+    vi.clearAllMocks()
   })
 
   it('should set page number', () => {
@@ -141,5 +211,50 @@ describe('pdfStore', () => {
       false
     )
     expect(usePdfStore.getState().footerMaskByBookId[1]).toBeUndefined()
+  })
+
+  // --- #233 PDF voice-chat activation ---------------------------------------
+  // The EPUB reader gets voice-chat activation via a useChatStore.subscribe in
+  // epubStore.ts:251 that calls chatStore.startChat(bookId) on false→true.
+  // The PDF reader has no equivalent subscription, so flipping isChatting in
+  // the launcher only flips the UI flag and never opens a realtime session.
+  // pdfStore.ts must register a parallel subscription, guarded by
+  // book.kind === 'pdf' so it doesn't double-fire alongside the EPUB
+  // subscription for EPUBs (the route stuffs the loaded Book into
+  // pdfStore.book for every kind — see routes/books.$id.lazy.tsx:48).
+
+  describe('voice chat activation (#233)', () => {
+    it('startChat is called with the PDF book id when isChatting flips true', async () => {
+      usePdfStore.getState().setBook(makeBook({ id: 42, kind: 'pdf' }))
+
+      useChatStore.getState().setIsChatting(true)
+
+      // startChat → voice.activate is async; flush the microtask.
+      await Promise.resolve()
+
+      expect(fakeVoice.activate).toHaveBeenCalledTimes(1)
+      expect(fakeVoice.activate).toHaveBeenCalledWith(42, expect.any(Object))
+    })
+
+    it('does NOT call startChat when book.kind === "epub" (avoids double-fire with epubStore)', async () => {
+      // Simulate the route having stuffed an EPUB into pdfStore.book.
+      usePdfStore.getState().setBook(makeBook({ id: 7, kind: 'epub' }))
+
+      useChatStore.getState().setIsChatting(true)
+
+      await Promise.resolve()
+
+      expect(fakeVoice.activate).not.toHaveBeenCalled()
+    })
+
+    it('does NOT call startChat when book is null', async () => {
+      usePdfStore.getState().setBook(null)
+
+      useChatStore.getState().setIsChatting(true)
+
+      await Promise.resolve()
+
+      expect(fakeVoice.activate).not.toHaveBeenCalled()
+    })
   })
 })

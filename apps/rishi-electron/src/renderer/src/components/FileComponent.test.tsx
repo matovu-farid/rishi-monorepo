@@ -15,10 +15,24 @@ vi.mock('@/modules/ttsPrefetch', () => ({
   prefetchTTSForBooks: vi.fn(async () => {})
 }))
 
-// Stub services used in useEffect side-effects
+// Stub services used in useEffect side-effects. pdfStore now eagerly imports
+// chatStore (#233), so the voice-chat stub must cover the lifecycle methods
+// chatStore wires at module init (onChatStatus, onStateChange, onEndedByAgent,
+// getState, getError).
 vi.mock('@/services', () => ({
   getBookImportService: () => ({ importBatch: vi.fn(async () => []) }),
-  getVoiceChatService: () => ({ prewarmKey: vi.fn() })
+  getVoiceChatService: () => ({
+    prewarmKey: vi.fn(),
+    activate: vi.fn().mockResolvedValue(undefined),
+    deactivate: vi.fn(),
+    dispose: vi.fn(),
+    getState: vi.fn().mockReturnValue('idle' as const),
+    getError: vi.fn().mockReturnValue(null),
+    dismissError: vi.fn(),
+    onStateChange: vi.fn().mockReturnValue(() => {}),
+    onChatStatus: vi.fn().mockReturnValue(() => {}),
+    onEndedByAgent: vi.fn().mockReturnValue(() => {})
+  })
 }))
 
 // Stub reader caches (their internals require a Worker setup)
