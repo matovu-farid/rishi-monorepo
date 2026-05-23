@@ -37,8 +37,24 @@ import {
   saveNoteOnly
 } from '@/modules/highlight-actions'
 import { getSyncService } from '@/services'
-import { getHighlightHex, isNoteOnly } from '@/types/highlight'
+import { getHighlightHexForTheme, isNoteOnly } from '@/types/highlight'
 import type { HighlightColor } from '@/types/highlight'
+
+// Resolve the active app theme at the moment a highlight is drawn. The DOM
+// dark class is the source of truth (see __root.tsx). We don't subscribe to
+// changes here — highlights re-paint on the next rendition lifecycle event.
+function currentMode(): 'light' | 'dark' {
+  if (typeof document === 'undefined') return 'light'
+  return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+}
+
+// `multiply` darkens the page on light backgrounds; on dark backgrounds it
+// makes the highlight nearly invisible. `screen` does the opposite, so we
+// swap per theme — both keep the underlying text readable while making the
+// mark visible (#198).
+function currentBlendMode(): 'multiply' | 'screen' {
+  return currentMode() === 'dark' ? 'screen' : 'multiply'
+}
 import { NoteIconOverlay } from '@/modules/note-icon-overlay'
 import { registerEpubFrame, clearEpubFrame } from '@/modules/pageCapture/epubFrameRegistry'
 import type { Contents } from 'epubjs'
@@ -419,9 +435,9 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         // Note-only rows have no SVG mark — skip the highlightRange call.
         if (isNoteOnly(hl)) continue
         void highlightRange(rendition, cfi, {}, makeAnnotationClickCb(cfi), 'epubjs-hl', {
-          fill: getHighlightHex(hl.color as HighlightColor),
+          fill: getHighlightHexForTheme(hl.color as HighlightColor, currentMode()),
           'fill-opacity': '0.3',
-          'mix-blend-mode': 'multiply'
+          'mix-blend-mode': currentBlendMode()
         })
       }
       refreshNoteIcons()
@@ -503,7 +519,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   const handleHighlightColor = useCallback(
     (color: HighlightColor) => {
       if (!selectionInfo || !rendition || !bookSyncIdRef.current) return
-      const hex = getHighlightHex(color)
+      const hex = getHighlightHexForTheme(color, currentMode())
       const cfiRange = selectionInfo.cfiRange
       const text = selectionInfo.text
       const bookSyncId = bookSyncIdRef.current
@@ -517,7 +533,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               {},
               makeAnnotationClickCb(cfiRange),
               'epubjs-hl',
-              { fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': 'multiply' }
+              { fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': currentBlendMode() }
             )
           },
           removeVisual: async () => {
@@ -610,14 +626,14 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       if (!rendition || !bookSyncIdRef.current) return
       const row = highlightsByRangeRef.current.get(cfiRange)
       if (!row) return
-      const newHex = getHighlightHex(newColor)
+      const newHex = getHighlightHexForTheme(newColor, currentMode())
 
       // Visual swap: remove old, re-draw with new color and the same click cb.
       await removeHighlight(rendition, cfiRange)
       await highlightRange(rendition, cfiRange, {}, makeAnnotationClickCb(cfiRange), 'epubjs-hl', {
         fill: newHex,
         'fill-opacity': '0.3',
-        'mix-blend-mode': 'multiply'
+        'mix-blend-mode': currentBlendMode()
       })
 
       try {
@@ -638,7 +654,13 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       if (!rendition || !bookSyncIdRef.current) return
       const row = highlightsByRangeRef.current.get(cfiRange)
       if (!row) return
-      const hex = getHighlightHex(row.color as HighlightColor)
+      // Match the other three EPUB highlight draw paths (initial render,
+      // new highlight, color swap): theme-aware hex + dynamic blend mode.
+      // Using the legacy plain getHighlightHex + 'multiply' here regresses
+      // the dark-mode fix (VIS-010 / #198) — the restored highlight after
+      // undo paints with light-mode hex and 'multiply' blend, which is
+      // effectively invisible against the dark-mode background.
+      const hex = getHighlightHexForTheme(row.color as HighlightColor, currentMode())
       const bookSyncId = bookSyncIdRef.current
       const noteOnly = isNoteOnly(row)
 
@@ -652,7 +674,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               {},
               makeAnnotationClickCb(cfiRange),
               'epubjs-hl',
-              { fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': 'multiply' }
+              { fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': currentBlendMode() }
             )
           },
           removeVisual: async () => {

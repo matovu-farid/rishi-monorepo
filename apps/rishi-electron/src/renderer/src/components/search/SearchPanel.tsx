@@ -152,7 +152,7 @@ function SearchResultItem({
     >
       {sanitizedHtml ? (
         <p
-          className="text-sm line-clamp-3 [&_mark]:bg-yellow-500/30 [&_mark]:text-yellow-200 [&_mark]:rounded-sm"
+          className="text-sm line-clamp-3 [&_mark]:bg-amber-300 [&_mark]:text-amber-900 dark:[&_mark]:bg-amber-500/40 dark:[&_mark]:text-amber-100 [&_mark]:rounded-sm [&_mark]:px-0.5"
           dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
         />
       ) : (

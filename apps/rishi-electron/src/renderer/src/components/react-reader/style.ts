@@ -35,8 +35,13 @@ export const ReactReaderStyle: IReactReaderStyle = {
     zIndex: 1,
     height: '100%',
     width: '100%',
-    backgroundColor: '#fff',
-    transition: 'all .3s ease'
+    // Default to app background so the bare reader (no reader-theme override)
+    // tracks dark mode. Per-theme overrides in `createIReactReaderTheme` win.
+    backgroundColor: 'var(--background)',
+    // `prefers-reduced-motion` users get an instant swap instead of a
+    // 300ms cross-fade.
+    transition: 'background-color .3s ease',
+    transitionDuration: 'var(--motion-duration, .3s)'
   },
   containerExpanded: {
     transform: 'translateX(256px)'
@@ -47,7 +52,7 @@ export const ReactReaderStyle: IReactReaderStyle = {
     left: 120,
     right: 220,
     textAlign: 'center',
-    color: '#999',
+    color: 'var(--muted-foreground)',
     fontSize: 14,
     fontWeight: 500,
     whiteSpace: 'nowrap' as const,
@@ -78,7 +83,9 @@ export const ReactReaderStyle: IReactReaderStyle = {
     right: 1
   },
   arrow: {
-    outline: 'none',
+    // No `outline: 'none'` here — keyboard focus ring is added on the
+    // consuming `TocToggleButton` / `NavigationArrows` components via
+    // `:focus-visible` styles so a11y contract (WCAG 2.4.7) is preserved.
     border: 'none',
     background: 'none',
     position: 'fixed',
@@ -86,7 +93,9 @@ export const ReactReaderStyle: IReactReaderStyle = {
     marginTop: -32,
     fontSize: 64,
     padding: '0 40px',
-    color: '#E2E2E2',
+    // `--muted-foreground` adapts to the active theme; reader-theme wrappers
+    // (createIReactReaderTheme) still override with theme.arrowColor.
+    color: 'var(--muted-foreground)',
     fontFamily: 'arial, sans-serif',
     cursor: 'pointer',
     userSelect: 'none',
@@ -94,7 +103,7 @@ export const ReactReaderStyle: IReactReaderStyle = {
     fontWeight: 'normal'
   },
   arrowHover: {
-    color: '#777'
+    color: 'var(--foreground)'
   },
   toc: {},
   tocBackground: {
@@ -114,7 +123,7 @@ export const ReactReaderStyle: IReactReaderStyle = {
     width: 256,
     overflowY: 'auto',
     WebkitOverflowScrolling: 'touch',
-    background: '#f2f2f2',
+    background: 'var(--muted)',
     padding: '10px 0'
   },
   tocAreaButton: {
@@ -128,9 +137,11 @@ export const ReactReaderStyle: IReactReaderStyle = {
     fontSize: '.9em',
     textAlign: 'left',
     padding: '.9em 1em',
-    borderBottom: '1px solid #ddd',
-    color: '#aaa',
+    borderBottom: '1px solid var(--border)',
+    color: 'var(--muted-foreground)',
     boxSizing: 'border-box',
+    // Outline removed because the consuming component adds a
+    // `:focus-visible` ring via inline focus handlers below.
     outline: 'none',
     cursor: 'pointer'
   },
@@ -143,21 +154,24 @@ export const ReactReaderStyle: IReactReaderStyle = {
     top: 8,
     left: 78,
     borderRadius: 2,
-    outline: 'none',
-    cursor: 'pointer'
+    // Focus ring is added on TocToggleButton via `onFocus`/`onBlur` handlers
+    // (see TocToggleButton.tsx) — outline omitted here so the ring style we
+    // apply there is the only painted outline.
+    cursor: 'pointer',
+    color: 'var(--foreground)'
   },
   tocButtonExpanded: {
-    background: '#f2f2f2'
+    background: 'var(--muted)'
   },
   tocButtonBar: {
     position: 'absolute',
     width: '60%',
-    background: '#ccc',
+    background: 'var(--foreground)',
     height: 2,
     left: '50%',
     margin: '-1px -30%',
     top: '50%',
-    transition: 'all .5s ease'
+    transition: 'all var(--motion-duration, .5s) ease'
   },
   tocButtonBarTop: {
     top: '35%'
@@ -170,7 +184,7 @@ export const ReactReaderStyle: IReactReaderStyle = {
     top: '50%',
     left: '10%',
     right: '10%',
-    color: '#ccc',
+    color: 'var(--muted-foreground)',
     textAlign: 'center',
     marginTop: '-.5em'
   },
@@ -179,7 +193,7 @@ export const ReactReaderStyle: IReactReaderStyle = {
     top: '50%',
     left: '10%',
     right: '10%',
-    color: '#c00',
+    color: 'var(--destructive)',
     textAlign: 'center',
     marginTop: '-.5em'
   }
