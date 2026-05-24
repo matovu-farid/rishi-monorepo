@@ -1,5 +1,15 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { View, Text, AppState, AppStateStatus, ActivityIndicator, AccessibilityInfo } from 'react-native'
+import {
+  View,
+  Text,
+  AppState,
+  AppStateStatus,
+  ActivityIndicator,
+  AccessibilityInfo,
+  Linking,
+  Pressable,
+  StyleSheet,
+} from 'react-native'
 import * as Haptics from 'expo-haptics'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { Reader, ReaderProvider, useReader } from '@epubjs-react-native/core'
@@ -193,8 +203,21 @@ function ReaderContent({ book }: { book: Book }) {
   // Wire the player machine + chat bridge once per book. The machine
   // listens for PLAY/PAUSE/PLAY_FROM events on `usePlayerStore.send`.
   usePlayerMachine(book.id)
-  // Realtime voice chat
-  const { status: realtimeStatus, showGuardrailWarning, toggle: toggleRealtime, isActive: realtimeActive } = useRealtimeChat(book.id)
+  // Realtime voice chat — `voiceError` / `isMicPermissionError` /
+  // `retryStart` / `dismissError` are forwarded from `useVoiceChat`
+  // (CHT-016 / #63) so a snackbar can surface activation failures
+  // (mic denied, network drop, etc.) that previously triggered a
+  // blocking modal Alert.
+  const {
+    status: realtimeStatus,
+    showGuardrailWarning,
+    toggle: toggleRealtime,
+    isActive: realtimeActive,
+    voiceError,
+    isMicPermissionError,
+    retryStart,
+    dismissError,
+  } = useRealtimeChat(book.id)
   useTtsChatBridge(realtimeStatus)
 
   // G20 — register the reader's content area with the page-capture
@@ -825,6 +848,76 @@ function ReaderContent({ book }: { book: Book }) {
           onDismiss={undoSnackbar.dismiss}
         />
 
+        {/*
+          CHT-016 (#63) — Voice-chat activation error surface. The
+          underlying `useVoiceChat` hook stores activation failures
+          (mic denied, network drop, etc.) on `voiceError` and
+          classifies mic-permission denials via `isMicPermissionError`
+          so this surface can swap the primary action between Retry
+          (re-invoke `retryStart`) and Open Settings (which is the
+          only remediation on iOS after the OS denies the prompt — it
+          stops showing the system permission dialog). Dismiss simply
+          clears the error without re-activating.
+        */}
+        {voiceError ? (
+          <View
+            testID="voice-error-snackbar"
+            pointerEvents="box-none"
+            style={voiceErrorStyles.container}
+          >
+            <View style={voiceErrorStyles.bar}>
+              <Text
+                style={voiceErrorStyles.message}
+                numberOfLines={3}
+                accessibilityLiveRegion="polite"
+              >
+                {voiceError}
+              </Text>
+              {isMicPermissionError ? (
+                <Pressable
+                  testID="voice-error-snackbar-settings"
+                  onPress={() => {
+                    void Linking.openSettings()
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open Settings"
+                  style={({ pressed }) => [
+                    voiceErrorStyles.button,
+                    pressed && voiceErrorStyles.buttonPressed,
+                  ]}
+                >
+                  <Text style={voiceErrorStyles.buttonText}>Open Settings</Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  testID="voice-error-snackbar-retry"
+                  onPress={() => {
+                    void retryStart()
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry"
+                  style={({ pressed }) => [
+                    voiceErrorStyles.button,
+                    pressed && voiceErrorStyles.buttonPressed,
+                  ]}
+                >
+                  <Text style={voiceErrorStyles.buttonText}>Retry</Text>
+                </Pressable>
+              )}
+              <Pressable
+                testID="voice-error-snackbar-dismiss"
+                onPress={dismissError}
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss"
+                style={voiceErrorStyles.dismiss}
+                hitSlop={8}
+              >
+                <Text style={voiceErrorStyles.dismissText}>✕</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
         {popoverVisible && selectedHighlight && (
           <AnnotationPopover
             visible={popoverVisible}
@@ -861,6 +954,69 @@ interface ReaderEngineProps {
   popoverVisible: boolean
   dismissPopover: () => void
 }
+
+/**
+ * CHT-016 (#63) — Snackbar styles for the voice-chat activation-error
+ * surface. Sits slightly above the standard UndoSnackbar (which the
+ * highlight-delete flow owns) so the two surfaces don't stack on top of
+ * each other if the user manages to delete a highlight in the same window
+ * a voice-chat retry resolves.
+ */
+const voiceErrorStyles = StyleSheet.create({
+  container: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 152,
+    alignItems: 'center',
+    zIndex: 31,
+  },
+  bar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(28,28,30,0.97)',
+    borderRadius: 10,
+    paddingLeft: 16,
+    paddingRight: 8,
+    paddingVertical: 8,
+    gap: 12,
+    minHeight: 48,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
+  },
+  message: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 14,
+  },
+  button: {
+    paddingHorizontal: 12,
+    minHeight: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  buttonPressed: {
+    opacity: 0.7,
+  },
+  buttonText: {
+    color: '#60A5FA',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  dismiss: {
+    width: 32,
+    height: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  dismissText: {
+    color: '#aaa',
+    fontSize: 16,
+  },
+})
 
 function ReaderEngine({
   book,
