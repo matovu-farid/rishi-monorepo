@@ -5,7 +5,7 @@ const removeHighlightMock = vi.fn().mockResolvedValue(true)
 
 vi.mock('@/modules/epubwrapper', () => ({
   highlightRange: (...args: unknown[]) => highlightRangeMock(...args),
-  removeHighlight: (...args: unknown[]) => removeHighlightMock(...args),
+  removeHighlight: (...args: unknown[]) => removeHighlightMock(...args)
 }))
 
 import { createEpubTtsReconciler } from './reconcileTtsHighlight'

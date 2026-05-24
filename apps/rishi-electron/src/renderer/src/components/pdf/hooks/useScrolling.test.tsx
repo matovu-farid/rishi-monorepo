@@ -59,14 +59,34 @@ function setupContainerWithMark(): {
     configurable: true
   })
   container.getBoundingClientRect = (): DOMRect =>
-    ({ top: 0, left: 0, right: 0, bottom: 800, width: 0, height: 800, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    ({
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 800,
+      width: 0,
+      height: 800,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    }) as DOMRect
 
   const mark = document.createElement('mark')
   mark.textContent = 'first paragraph of newly-landed page N+1'
   // Mark is at viewport top — same geometry as just after
   // `virtualizer.scrollToIndex(N, { align: 'start' })`.
   mark.getBoundingClientRect = (): DOMRect =>
-    ({ top: 0, left: 0, right: 0, bottom: 24, width: 0, height: 24, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    ({
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 24,
+      width: 0,
+      height: 24,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    }) as DOMRect
   // happy-dom's `innerText` falls back to `textContent`, which is what
   // useScrolling's `.find((m) => m.innerText)` actually reads.
   container.appendChild(mark)
@@ -163,7 +183,10 @@ describe('useScrolling — page-advance snap-back race (issue #30 refined sympto
     // no longer clears it). With the original buggy code the flag is
     // already `false` at this point.
     const publishedParagraphs = usePdfStore.getState().currentViewParagraphs
-    expect(publishedParagraphs.length, 'publishParagraphsForPage produced at least one paragraph').toBeGreaterThan(0)
+    expect(
+      publishedParagraphs.length,
+      'publishParagraphsForPage produced at least one paragraph'
+    ).toBeGreaterThan(0)
 
     renderUseScrolling(container)
 

@@ -91,9 +91,7 @@ test('PDF sub-page scroll position persists across close + reopen', async () => 
       if (!scroller) return -1
       const scrollerTop = scroller.getBoundingClientRect().top
       const targetY = scrollerTop + 1
-      const nodes = Array.from(
-        document.querySelectorAll<HTMLElement>('[data-page-number]')
-      )
+      const nodes = Array.from(document.querySelectorAll<HTMLElement>('[data-page-number]'))
       let best: { num: number; dist: number } | null = null
       for (const node of nodes) {
         const rect = node.getBoundingClientRect()

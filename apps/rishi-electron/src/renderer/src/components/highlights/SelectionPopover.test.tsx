@@ -49,8 +49,9 @@ describe('SelectionPopover', () => {
     it('color swatches remain visible in fresh-selection mode alongside the Add note button', () => {
       render(<SelectionPopover {...baseProps} onAddNote={vi.fn()} />)
       for (const c of HIGHLIGHT_COLORS) {
-        expect(screen.getByRole('button', { name: new RegExp(`highlight.*${c.name}`, 'i') }))
-          .toBeInTheDocument()
+        expect(
+          screen.getByRole('button', { name: new RegExp(`highlight.*${c.name}`, 'i') })
+        ).toBeInTheDocument()
       }
     })
 
@@ -88,9 +89,7 @@ describe('SelectionPopover', () => {
     })
 
     it('renders note and Delete buttons when handlers are provided', () => {
-      render(
-        <SelectionPopover {...baseProps} onEditNote={vi.fn()} onDelete={vi.fn()} />
-      )
+      render(<SelectionPopover {...baseProps} onEditNote={vi.fn()} onDelete={vi.fn()} />)
       expect(screen.getByRole('button', { name: /add note/i })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /delete highlight/i })).toBeInTheDocument()
     })
@@ -127,7 +126,7 @@ describe('SelectionPopover', () => {
       expect(onClose).toHaveBeenCalledTimes(1)
     })
 
-    it('onDelete must work even when the caller-supplied handler captures its target via closure (regression: parent inlinePopover state may be cleared by a sibling popover\'s outside-click race before the click fires)', () => {
+    it("onDelete must work even when the caller-supplied handler captures its target via closure (regression: parent inlinePopover state may be cleared by a sibling popover's outside-click race before the click fires)", () => {
       // Simulate: parent renders SelectionPopover with onDelete that
       // captures a cfiRange in a closure (not derived from live state).
       // After render, the parent's state is wiped — yet the captured
@@ -135,9 +134,7 @@ describe('SelectionPopover', () => {
       const deletedCfis: string[] = []
       const capturedCfi = 'cfi:captured'
       const onDelete = () => deletedCfis.push(capturedCfi)
-      render(
-        <SelectionPopover {...baseProps} onEditNote={vi.fn()} onDelete={onDelete} />
-      )
+      render(<SelectionPopover {...baseProps} onEditNote={vi.fn()} onDelete={onDelete} />)
       fireEvent.click(screen.getByRole('button', { name: /delete highlight/i }))
       expect(deletedCfis).toEqual([capturedCfi])
     })
@@ -149,9 +146,7 @@ describe('SelectionPopover', () => {
     })
 
     it('note button is labelled "View note" when hasNote is true (visual indicator that a note exists)', () => {
-      render(
-        <SelectionPopover {...baseProps} onEditNote={vi.fn()} onDelete={vi.fn()} hasNote />
-      )
+      render(<SelectionPopover {...baseProps} onEditNote={vi.fn()} onDelete={vi.fn()} hasNote />)
       expect(screen.getByRole('button', { name: /view note/i })).toBeInTheDocument()
       expect(screen.queryByRole('button', { name: /^add note/i })).toBeNull()
     })

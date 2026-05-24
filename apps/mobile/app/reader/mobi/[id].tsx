@@ -15,7 +15,11 @@ import { useLocalSearchParams, useRouter } from 'expo-router'
 import { WebView } from 'react-native-webview'
 import { File as ExpoFile } from 'expo-file-system'
 import { IconSymbol } from '@/components/ui/icon-symbol'
-import { getBookForReading, updateBookPage } from '@/lib/book-storage'
+import {
+  getBookForReading,
+  updateBookPage,
+  updateBookProgress,
+} from '@/lib/book-storage'
 import { Book } from '@/types/book'
 import { TTSVisualCue } from '@/components/TTSVisualCue'
 import { useVisualCueStore } from '@/lib/tts/visual-cue'
@@ -29,6 +33,8 @@ import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 import { resolvePlainTextReadFromSelection } from '@/lib/reader-selection'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
+import { buildReaderThemeInjection } from '@/lib/reader-theme-css'
+import { READER_THEMES } from '@/constants/reader-themes'
 import { safeBack } from '@/lib/navigation'
 import type { ReaderSettings } from '@/types/book'
 import {
@@ -288,6 +294,10 @@ export default function MobiReaderScreen() {
 
   const webViewRef = useRef<WebView>(null)
   const currentChapterRef = useRef(0)
+  // #41 — Mirrors `chapterCount` state so the bridged-message handler
+  // (which can be invoked before React re-renders with the latest
+  // count) can compute `current / total` for `updateBookProgress`.
+  const chapterCountRef = useRef(0)
   // RDR-024 — set by the chapter postMessage from the WebView. Most MOBI
   // chapters lack `[data-paragraph-index]` ids, so the per-TTS-step
   // injectJavaScript hop below would always be a no-op. We probe once
@@ -362,6 +372,19 @@ export default function MobiReaderScreen() {
       if (nextState === 'background' || nextState === 'inactive') {
         if (book?.id) {
           updateBookPage(book.id, currentChapterRef.current)
+          // #41 — Mirror progress for the library "Reading Now" pill.
+          // MOBI uses chapters as its progress denominator (the format
+          // has no global page count); the pill renders the result as
+          // "X%".
+          const total = chapterCountRef.current
+          if (total > 0) {
+            // currentChapter is 0-indexed; add 1 so a reader who has
+            // started the last chapter shows 100% rather than (N-1)/N.
+            updateBookProgress(
+              book.id,
+              Math.min(1, (currentChapterRef.current + 1) / total),
+            )
+          }
         }
       }
     }
@@ -374,6 +397,10 @@ export default function MobiReaderScreen() {
       const msg = JSON.parse(event.nativeEvent.data)
       if (msg.type === 'loaded') {
         setChapterCount(msg.total)
+        // #41 — mirror into the ref so handleMessage can compute
+        // progress on the next 'chapter' event without waiting for
+        // React to re-render with the new state.
+        chapterCountRef.current = typeof msg.total === 'number' ? msg.total : 0
         // Navigate to saved chapter
         webViewRef.current?.postMessage(
           JSON.stringify({ type: 'goto', chapter: currentChapterRef.current })
@@ -387,6 +414,15 @@ export default function MobiReaderScreen() {
         hasParagraphIdsRef.current = msg.hasParagraphIds === true
         if (book?.id) {
           updateBookPage(book.id, msg.current)
+          // #41 — Persist progress so the library pill subline can
+          // render "X%" after the reader closes.
+          const total = chapterCountRef.current
+          if (total > 0) {
+            updateBookProgress(
+              book.id,
+              Math.min(1, (msg.current + 1) / total),
+            )
+          }
         }
       } else if (msg.type === 'selection') {
         // P1-K — WebView reports the current text selection. We hold it
@@ -475,6 +511,23 @@ export default function MobiReaderScreen() {
     }))
   }, [chapterCount])
 
+  // CHT-002 — voice-chat activation context. MOBI doesn't cheaply expose
+  // the rendered DOM text (the parser ships HTML into the WebView and
+  // doesn't pipe it back), so we use the synthesised chapter label as
+  // `pageText` and pass the active TTS paragraph when one is live. Outline
+  // = the per-chapter TocItem list so the agent can resolve "previous
+  // chapter" etc.
+  // Declared above the loading/error early-returns so the hook order stays
+  // stable across renders (react-hooks/rules-of-hooks).
+  const getActivationContext = useCallback(() => {
+    const outline = tocItems.map((t) => ({ href: t.href, label: t.label }))
+    return {
+      pageText: `Chapter ${currentChapter + 1}`,
+      outline,
+      activeParagraphText: activeParagraph?.text ?? undefined,
+    }
+  }, [tocItems, currentChapter, activeParagraph])
+
   const currentTocHref = useMemo(
     () => `mobi-chapter:${currentChapter}`,
     [currentChapter],
@@ -497,11 +550,29 @@ export default function MobiReaderScreen() {
     setSettings(next)
   }, [])
 
+  // Issue #47 — forward the active theme into the WebView whenever it
+  // changes. Without this hop the AppearanceSheet persists `themeName`
+  // but the rendered HTML keeps its initial (white) stylesheet, so
+  // dark-mode users see white pages.
+  useEffect(() => {
+    if (!bookLoaded || !webViewRef.current) return
+    const theme = READER_THEMES[settings.themeName]
+    webViewRef.current.injectJavaScript(buildReaderThemeInjection(theme))
+  }, [bookLoaded, settings.themeName])
+
   // safeBack: guards against deep-link cold-start where the nav stack is
   // empty and a bare router.back() would strand the user (P1-B).
   const handleBack = useCallback(() => {
     if (book?.id) {
       updateBookPage(book.id, currentChapterRef.current)
+      // #41 — Persist progress (see handleMessage / handleAppStateChange).
+      const total = chapterCountRef.current
+      if (total > 0) {
+        updateBookProgress(
+          book.id,
+          Math.min(1, (currentChapterRef.current + 1) / total),
+        )
+      }
     }
     safeBack(router)
   }, [book?.id, router])
@@ -706,21 +777,6 @@ export default function MobiReaderScreen() {
     chapterCount > 0
       ? { kind: 'chapter', current: currentChapter + 1, total: chapterCount }
       : { kind: 'none' }
-
-  // CHT-002 — voice-chat activation context. MOBI doesn't cheaply expose
-  // the rendered DOM text (the parser ships HTML into the WebView and
-  // doesn't pipe it back), so we use the synthesised chapter label as
-  // `pageText` and pass the active TTS paragraph when one is live. Outline
-  // = the per-chapter TocItem list so the agent can resolve "previous
-  // chapter" etc.
-  const getActivationContext = useCallback(() => {
-    const outline = tocItems.map((t) => ({ href: t.href, label: t.label }))
-    return {
-      pageText: `Chapter ${currentChapter + 1}`,
-      outline,
-      activeParagraphText: activeParagraph?.text ?? undefined,
-    }
-  }, [tocItems, currentChapter, activeParagraph])
 
   const mobiNavCluster = (
     <MobiNavCluster

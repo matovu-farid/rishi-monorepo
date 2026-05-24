@@ -5,7 +5,7 @@ import type Database from 'better-sqlite3'
  * Uses user_version pragma to track whether the schema has been created.
  * If the database already exists from a previous version, it is dropped and recreated.
  */
-const CURRENT_VERSION = 4
+const CURRENT_VERSION = 5
 
 export function runMigrations(db: Database.Database): number {
   const version = db.pragma('user_version', { simple: true }) as number
@@ -174,6 +174,16 @@ export function runMigrations(db: Database.Database): number {
     // /upload-url; the cloud books.file_size column mirrors this one.
     db.exec('ALTER TABLE books ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0')
     db.pragma('user_version = 4')
+  }
+
+  if (version < 5) {
+    // v5 (#142): reserved version slot. An earlier draft wiped
+    // chunk_data so footer-aware re-extraction could happen — but
+    // that paralyzed library-level TTS prefetch (ttsPrefetch.ts gates
+    // on hasSavedEpubData, which queries chunk_data). Existing chunks
+    // keep their pre-heuristic content; only pages not yet in
+    // chunk_data get extracted with the footer mask applied.
+    db.pragma('user_version = 5')
   }
 
   return 1

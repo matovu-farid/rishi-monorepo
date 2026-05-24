@@ -1,10 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { MessageSquarePlus, MessageSquareText, Trash2 } from 'lucide-react'
-import {
-  HIGHLIGHT_COLORS,
-  NOTE_COLOR_NONE,
-  type HighlightColor
-} from '@/types/highlight'
+import { HIGHLIGHT_COLORS, NOTE_COLOR_NONE, type HighlightColor } from '@/types/highlight'
 
 export interface HighlightActionPopoverProps {
   position: { x: number; y: number }
@@ -62,31 +58,32 @@ export function HighlightActionPopover({
       style={{ left: position.x, top: position.y }}
     >
       <div className="flex items-center gap-2">
-        {currentColor !== NOTE_COLOR_NONE && HIGHLIGHT_COLORS.map((c) => {
-          const isCurrent = c.name === currentColor
-          return (
-            <button
-              key={c.name}
-              type="button"
-              aria-pressed={isCurrent}
-              aria-label={`Change to ${c.name}`}
-              title={`Change to ${c.name}`}
-              className={
-                'rounded-full border border-gray-300/50 transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-blue-500 ' +
-                (isCurrent ? 'ring-2 ring-inset ring-blue-500' : '')
-              }
-              style={{
-                width: 28,
-                height: 28,
-                backgroundColor: c.hex
-              }}
-              onClick={() => {
-                onSelectColor(c.name)
-                onClose()
-              }}
-            />
-          )
-        })}
+        {currentColor !== NOTE_COLOR_NONE &&
+          HIGHLIGHT_COLORS.map((c) => {
+            const isCurrent = c.name === currentColor
+            return (
+              <button
+                key={c.name}
+                type="button"
+                aria-pressed={isCurrent}
+                aria-label={`Change to ${c.name}`}
+                title={`Change to ${c.name}`}
+                className={
+                  'rounded-full border border-gray-300/50 transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-blue-500 ' +
+                  (isCurrent ? 'ring-2 ring-inset ring-blue-500' : '')
+                }
+                style={{
+                  width: 28,
+                  height: 28,
+                  backgroundColor: c.hex
+                }}
+                onClick={() => {
+                  onSelectColor(c.name)
+                  onClose()
+                }}
+              />
+            )
+          })}
 
         <button
           type="button"
@@ -103,7 +100,11 @@ export function HighlightActionPopover({
             onClose()
           }}
         >
-          {hasNote ? <MessageSquareText size={16} /> : <MessageSquarePlus size={16} className="text-gray-700 dark:text-gray-200" />}
+          {hasNote ? (
+            <MessageSquareText size={16} />
+          ) : (
+            <MessageSquarePlus size={16} className="text-gray-700 dark:text-gray-200" />
+          )}
         </button>
 
         <button

@@ -1,30 +1,46 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/modules/highlight-storage', () => ({
-  saveHighlight: vi.fn(async (params: { bookSyncId: string; cfiRange: string; text: string; color?: string; note?: string; chapter?: string }) =>
-    window.electron.highlightsSave({
-      format: 'epub',
-      bookSyncId: params.bookSyncId,
-      cfiRange: params.cfiRange,
-      locator: null,
-      text: params.text,
-      color: params.color ?? 'yellow',
-      note: params.note ?? '',
-      chapter: params.chapter ?? null
-    })
+  saveHighlight: vi.fn(
+    async (params: {
+      bookSyncId: string
+      cfiRange: string
+      text: string
+      color?: string
+      note?: string
+      chapter?: string
+    }) =>
+      window.electron.highlightsSave({
+        format: 'epub',
+        bookSyncId: params.bookSyncId,
+        cfiRange: params.cfiRange,
+        locator: null,
+        text: params.text,
+        color: params.color ?? 'yellow',
+        note: params.note ?? '',
+        chapter: params.chapter ?? null
+      })
   ),
   deleteHighlight: vi.fn().mockResolvedValue(undefined),
-  saveHighlightPdf: vi.fn(async (params: { bookSyncId: string; locator: unknown; text: string; color?: string; note?: string; chapter?: string | null }) =>
-    window.electron.highlightsSave({
-      format: 'pdf',
-      bookSyncId: params.bookSyncId,
-      cfiRange: null,
-      locator: JSON.stringify(params.locator),
-      text: params.text,
-      color: params.color ?? 'yellow',
-      note: params.note ?? '',
-      chapter: params.chapter ?? null
-    })
+  saveHighlightPdf: vi.fn(
+    async (params: {
+      bookSyncId: string
+      locator: unknown
+      text: string
+      color?: string
+      note?: string
+      chapter?: string | null
+    }) =>
+      window.electron.highlightsSave({
+        format: 'pdf',
+        bookSyncId: params.bookSyncId,
+        cfiRange: null,
+        locator: JSON.stringify(params.locator),
+        text: params.text,
+        color: params.color ?? 'yellow',
+        note: params.note ?? '',
+        chapter: params.chapter ?? null
+      })
   ),
   deleteHighlightById: vi.fn(async (id: string) => window.electron.highlightsDeleteById(id)),
   getHighlightsForBook: vi.fn().mockResolvedValue([])
@@ -364,9 +380,14 @@ describe('deleteHighlightByIdWithUndo', () => {
       target: { applyVisual: vi.fn(), removeVisual: vi.fn() },
       rowId: 'r1',
       snapshot: {
-        bookId: 'b1', format: 'pdf', cfiRange: null,
+        bookId: 'b1',
+        format: 'pdf',
+        cfiRange: null,
         locator: JSON.stringify({ page: 1, rects: [{ x: 0, y: 0, w: 10, h: 10 }] }),
-        text: 'hi', color: 'yellow', note: '', chapter: null
+        text: 'hi',
+        color: 'yellow',
+        note: '',
+        chapter: null
       }
     })
     expect(deleteMock).toHaveBeenCalledWith('r1')
@@ -386,8 +407,14 @@ describe('deleteHighlightByIdWithUndo', () => {
       target: { applyVisual: vi.fn(), removeVisual: vi.fn() },
       rowId: 'r2',
       snapshot: {
-        bookId: 'b1', format: 'epub', cfiRange: 'epubcfi(/6/4!/4/2)', locator: null,
-        text: 't', color: 'yellow', note: '', chapter: null
+        bookId: 'b1',
+        format: 'epub',
+        cfiRange: 'epubcfi(/6/4!/4/2)',
+        locator: null,
+        text: 't',
+        color: 'yellow',
+        note: '',
+        chapter: null
       }
     })
     await handle.undo()

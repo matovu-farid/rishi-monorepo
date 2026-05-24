@@ -115,7 +115,7 @@ export function usePlayerMachine(bookId: string) {
 
       if (nextActive) {
         const currentParagraphs = usePlayerStore.getState().currentParagraphs
-        const idx = currentParagraphs.findIndex((p) => p.index === nextActive!.index)
+        const idx = currentParagraphs.findIndex((p) => p.index === nextActive.index)
         if (idx >= 0) {
           const element = resolveParagraphElement(idx)
           if (element) {

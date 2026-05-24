@@ -375,7 +375,7 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
               if (!recorder) return null
               const chunks: Blob[] = []
               recorder.ondataavailable = (e) => {
-                if (!e.data || e.data.size === 0) return
+                if (e.data.size === 0) return
                 chunks.push(e.data)
                 // Rolling cap: drop oldest chunks so long connect windows
                 // don't accumulate megabytes of audio.
@@ -396,7 +396,7 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
               // On activation failure: stop the recorder so its hooks detach
               // and the buffer is dropped. On success: replayBufferedSpeech
               // owns the stop.
-              if (!success && b && b.recorder.state === 'recording') {
+              if (!success && b?.recorder.state === 'recording') {
                 try {
                   b.recorder.stop()
                 } catch (err) {

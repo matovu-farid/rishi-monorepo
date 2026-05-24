@@ -38,6 +38,8 @@ import {
   type PdfWebViewIncomingMessage,
   type PdfWebViewOutgoingMessage,
 } from './pdf-webview-bridge'
+import { buildReaderThemeInjection } from '@/lib/reader-theme-css'
+import type { ReaderTheme } from '@/types/book'
 import type { PdfLocator } from '@rishi/shared/types/pdf-locator'
 
 export interface PdfWebReaderHandle {
@@ -58,6 +60,11 @@ export interface PdfWebReaderHandle {
    * WebView responds with the matching `requestId`. Times out after 5s.
    */
   getPageText(pageNumber: number): Promise<Array<{ index: string; text: string }>>
+  /**
+   * Issue #47 — swap the active reader theme inside the pdfjs WebView.
+   * Idempotent: repeated calls replace the previous stylesheet.
+   */
+  setTheme(theme: ReaderTheme): void
 }
 
 export interface PdfWebReaderProps {
@@ -210,6 +217,14 @@ export const PdfWebReader = forwardRef<PdfWebReaderHandle, PdfWebReaderProps>(
             pageTextWaitersRef.current.set(requestId, { resolve, reject, timer })
             sendToWebView({ type: 'getPageText', requestId, pageNumber })
           })
+        },
+        setTheme(theme) {
+          // Issue #47 — fire-and-forget JS injection. Goes through the
+          // raw `injectJavaScript` API (not the postMessage bridge)
+          // because the WebView template owns the stylesheet, not the
+          // pdfjs viewer code path — there's nothing the bridge needs
+          // to mediate.
+          webViewRef.current?.injectJavaScript(buildReaderThemeInjection(theme))
         },
       }),
       [sendToWebView]

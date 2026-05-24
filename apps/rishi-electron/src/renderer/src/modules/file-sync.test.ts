@@ -38,9 +38,7 @@ describe('uploadBookFile — request body', () => {
     const fetchSpy = vi
       .fn()
       // First call: /upload-url -> dedup hit so we never touch the PUT URL
-      .mockResolvedValueOnce(
-        uploadUrlResponse({ r2Key: 'r2/abc', exists: true })
-      )
+      .mockResolvedValueOnce(uploadUrlResponse({ r2Key: 'r2/abc', exists: true }))
     global.fetch = fetchSpy as unknown as typeof fetch
 
     await uploadBookFile('/tmp/book.epub', 'hash-abc', 'epub', 12345)
@@ -193,7 +191,9 @@ describe('uploadBookFile — size-limit error responses', () => {
   it('still throws a generic Error when the response is not a size-limit shape', async () => {
     global.fetch = vi
       .fn()
-      .mockResolvedValueOnce(new Response('', { status: 500, statusText: 'boom' })) as unknown as typeof fetch
+      .mockResolvedValueOnce(
+        new Response('', { status: 500, statusText: 'boom' })
+      ) as unknown as typeof fetch
 
     let caught: unknown
     try {
