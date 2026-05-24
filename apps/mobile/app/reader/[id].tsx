@@ -86,7 +86,17 @@ export function computeEpubProgressForShell(progress: number): ReaderProgress {
 }
 
 export default function ReaderScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>()
+  // #68 — `cfi` and `chapter` are forwarded by chat citation taps via
+  // `resolveSourceLocationParams`. `cfi` (when populated by a future
+  // RAG-pipeline pass that captures it) is the authoritative jump
+  // target; `chapter` is a best-effort heading-label match against the
+  // EPUB's TOC. We thread both into <ReaderContent /> so the inner
+  // hooks can substitute them ahead of `book.currentCfi`.
+  const { id, cfi: cfiParam, chapter: chapterParam } = useLocalSearchParams<{
+    id: string
+    cfi?: string
+    chapter?: string
+  }>()
   const router = useRouter()
   const [book, setBook] = useState<Book | null>(null)
 
@@ -150,13 +160,25 @@ export default function ReaderScreen() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ReaderProvider>
-        <ReaderContent book={book} />
+        <ReaderContent
+          book={book}
+          initialCfiOverride={cfiParam ?? null}
+          chapterLabelOverride={chapterParam ?? null}
+        />
       </ReaderProvider>
     </GestureHandlerRootView>
   )
 }
 
-function ReaderContent({ book }: { book: Book }) {
+function ReaderContent({
+  book,
+  initialCfiOverride,
+  chapterLabelOverride,
+}: {
+  book: Book
+  initialCfiOverride: string | null
+  chapterLabelOverride: string | null
+}) {
   const router = useRouter()
   const insets = useSafeAreaInsets()
   const {
@@ -279,6 +301,31 @@ function ReaderContent({ book }: { book: Book }) {
       setBookmarks(getBookmarksForBook(book.id))
     }
   }, [book.id])
+
+  // #68 — when the reader is opened from a chat citation tap with a
+  // `?chapter=<heading>` query param (no CFI was available on the
+  // chunk), best-effort match the heading against the TOC and jump to
+  // the corresponding spine entry. `cfi` takes precedence — it's wired
+  // through `initialCfiOverride` into the engine's `initialLocation`,
+  // so we skip this branch when a CFI was provided.
+  //
+  // The ref guard ensures the jump fires exactly once per mount —
+  // subsequent TOC updates (e.g. font-resize re-parse) must not yank
+  // the user back to the cited chapter.
+  const chapterJumpFiredRef = useRef(false)
+  useEffect(() => {
+    if (initialCfiOverride) return
+    if (!chapterLabelOverride) return
+    if (chapterJumpFiredRef.current) return
+    if (!toc || toc.length === 0) return
+    const match = toc.find(
+      (t) => t.label?.trim() === chapterLabelOverride.trim(),
+    )
+    if (match) {
+      chapterJumpFiredRef.current = true
+      goToLocation(match.href)
+    }
+  }, [toc, chapterLabelOverride, initialCfiOverride, goToLocation])
 
   // Reflect bookmark presence at the current CFI in the toolbar icon.
   useEffect(() => {
@@ -798,6 +845,7 @@ function ReaderContent({ book }: { book: Book }) {
           onPressAnnotation={handlePressAnnotation}
           popoverVisible={popoverVisible}
           dismissPopover={() => setPopoverVisible(false)}
+          initialCfiOverride={initialCfiOverride}
         />
 
         {/*
@@ -953,6 +1001,10 @@ interface ReaderEngineProps {
   onPressAnnotation: (annotation: Annotation) => void
   popoverVisible: boolean
   dismissPopover: () => void
+  // #68 — when set, overrides the saved `book.currentCfi` on mount so a
+  // chat citation tap lands on the cited passage instead of the
+  // reader's last-known position.
+  initialCfiOverride: string | null
 }
 
 /**
@@ -1027,6 +1079,7 @@ function ReaderEngine({
   onPressAnnotation,
   popoverVisible,
   dismissPopover,
+  initialCfiOverride,
 }: ReaderEngineProps) {
   const { toggleToolbar } = useContext(ReaderShellContext)
   const handleTap = useCallback(() => {
@@ -1037,6 +1090,11 @@ function ReaderEngine({
     toggleToolbar()
   }, [popoverVisible, dismissPopover, toggleToolbar])
 
+  // #68 — citation tap wins over the saved position; otherwise fall back
+  // to `book.currentCfi` so a normal open still resumes the reader at
+  // its last spot.
+  const initialLocation = initialCfiOverride || book.currentCfi || undefined
+
   return (
     <Reader
       src={book.filePath}
@@ -1044,7 +1102,7 @@ function ReaderEngine({
       flow="paginated"
       enableSwipe={true}
       enableSelection={true}
-      initialLocation={book.currentCfi || undefined}
+      initialLocation={initialLocation}
       defaultTheme={readerDefaultTheme}
       menuItems={menuItems}
       initialAnnotations={initialAnnotations}

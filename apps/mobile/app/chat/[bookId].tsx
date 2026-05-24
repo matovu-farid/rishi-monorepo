@@ -30,7 +30,10 @@ import { EmbeddingProgress } from '@/components/EmbeddingProgress'
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
 import { useAuthStore } from '@/lib/stores/authStore'
-import { resolveReaderRouteForBook } from '@/lib/reader-routes'
+import {
+  resolveReaderPathnameForBook,
+  resolveSourceLocationParams,
+} from '@/lib/chat/source-location'
 import { safeBack } from '@/lib/navigation'
 import type { Message, SourceChunk } from '@/types/conversation'
 import type { Book } from '@/types/book'
@@ -361,12 +364,23 @@ export default function BookChatScreen() {
   }, [retryQuestion, handleSend])
 
   const handleSourcePress = useCallback(
-    (_source: SourceChunk) => {
+    (source: SourceChunk) => {
       // P1-A: route to the format-appropriate reader screen. The
       // previous unconditional `/reader/${bookId}` opened the EPUB
       // reader for every format and errored out on PDF / MOBI / DJVU.
+      //
+      // #68: thread the chunk's location into the router push so the
+      // reader can scroll to the cited passage on mount. Pre-fix the
+      // chip discarded `source.chunkId` / `source.chapter`, so the
+      // citation was non-actionable. `resolveSourceLocationParams`
+      // parses the chunker's per-format chapter labels back into the
+      // query params each reader honors (`?page=` for PDF/DJVU,
+      // `?chapter=` for MOBI/AZW3, `?cfi=` for EPUB when available).
       if (!book) return
-      router.push(resolveReaderRouteForBook(book))
+      router.push({
+        pathname: resolveReaderPathnameForBook(book.format),
+        params: resolveSourceLocationParams(book, source),
+      })
     },
     [book, router]
   )

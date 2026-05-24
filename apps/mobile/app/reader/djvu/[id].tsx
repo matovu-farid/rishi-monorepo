@@ -207,7 +207,14 @@ document.addEventListener('selectionchange', function() {
 </html>`
 
 export default function DjvuReaderScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>()
+  // #68 — `page` is forwarded by chat citation taps via
+  // `resolveSourceLocationParams`. When present, it overrides the saved
+  // `book.currentPage` for this mount so the WebView opens at the
+  // cited page.
+  const { id, page: pageParam } = useLocalSearchParams<{
+    id: string
+    page?: string
+  }>()
   const router = useRouter()
 
   const [book, setBook] = useState<Book | null>(null)
@@ -389,7 +396,17 @@ export default function DjvuReaderScreen() {
         .then((loaded) => {
           if (loaded) {
             setBook(loaded)
-            const startPage = loaded.currentPage || 1
+            // #68 — honor `pageParam` from chat citation taps ahead of
+            // the saved `loaded.currentPage` so the WebView lands on
+            // the cited page on mount. The next 'page' postMessage
+            // persists the new index via `handleMessage`.
+            const fromCitation = pageParam
+              ? Number.parseInt(pageParam, 10)
+              : NaN
+            const startPage =
+              Number.isFinite(fromCitation) && fromCitation >= 1
+                ? fromCitation
+                : loaded.currentPage || 1
             setCurrentPage(startPage)
             currentPageRef.current = startPage
             setHighlights(getHighlightsByBookId(loaded.id))
@@ -404,7 +421,7 @@ export default function DjvuReaderScreen() {
         })
         .finally(() => setLoading(false))
     }
-  }, [id, loadAttempt])
+  }, [id, loadAttempt, pageParam])
 
   // Send file data to WebView once djvu.js is loaded
   useEffect(() => {
