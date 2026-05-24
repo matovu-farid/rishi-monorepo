@@ -26,6 +26,7 @@ import {
   type VadPort
 } from '@rishi/shared/voice-chat'
 import { createMobileConnectivityPort } from '@/lib/connectivity/MobileConnectivityPort'
+import { usePrefsStore } from '@/lib/stores/prefsStore'
 import { mobileMediaPort } from './media-port'
 import { mobileVoiceChatIpc } from './ipc'
 import { mobileWebrtcFactory, mobileAgentFactory, mobileSessionFactory } from './realtime-session'
@@ -77,6 +78,16 @@ export interface BuildOpts {
 /**
  * Construct (or return the existing) voice-chat service.
  * Idempotent.
+ *
+ * CHT-024 — the default `getLanguage` reads `voiceChatLanguage` from the
+ * live `prefsStore` at every call (and the shared service calls it inside
+ * both cold-activate and warm-reactivate, see
+ * packages/shared/src/voice-chat/service.ts:69 + :188). This means
+ * changing the language in the Settings screen mid-session takes effect
+ * on the next session activation WITHOUT remounting the reader — the
+ * previous implementation cached `() => 'en'` (or the first explicit
+ * override) inside the singleton's closure, so settings changes silently
+ * dropped on the floor until the screen was unmounted and remounted.
  */
 export function getVoiceChatService(opts: BuildOpts = {}): VoiceChatService {
   if (_service) return _service
@@ -103,7 +114,8 @@ export function getVoiceChatService(opts: BuildOpts = {}): VoiceChatService {
       }
     },
     config: { ...DEFAULT_CONFIG, ...opts.config },
-    getLanguage: opts.getLanguage ?? (() => 'en')
+    getLanguage:
+      opts.getLanguage ?? (() => usePrefsStore.getState().voiceChatLanguage)
   })
 
   return _service

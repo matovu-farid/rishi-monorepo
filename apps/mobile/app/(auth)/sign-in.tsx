@@ -28,6 +28,37 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { signIn, type AuthProvider } from '@/lib/auth'
 import { useAuthStore } from '@/lib/stores/authStore'
 
+/**
+ * STA-020 — Map raw provider errors onto user-facing copy.
+ *
+ * The previous behaviour piped messages like "Sign-in callback URL is
+ * missing the required `state` parameter" or "PKCE pkce_mismatch (403)"
+ * straight into the visible error label — useful for the dev team,
+ * confusing for the user.
+ *
+ * Patterns kept parallel with `components/auth/PremiumFeatureSheet.tsx`'s
+ * `mapSignInError` so the two surfaces stay consistent. We can't import
+ * that helper directly today (it's module-private inside the sheet and
+ * the sheet is owned by a parallel PR); when one of these lands first
+ * we'll dedupe via `lib/auth/messages.ts` in a follow-up.
+ *
+ * Cancellations are filtered upstream of this helper.
+ */
+export function mapSignInError(msg: string): string {
+  if (/state.{0,4}parameter|pkce_mismatch|\b403\b/i.test(msg)) {
+    return 'Something went wrong with sign-in. Please try again.'
+  }
+  if (/\b410\b|session expired/i.test(msg)) {
+    return 'Sign-in expired. Please try again.'
+  }
+  if (
+    /network|fetch|offline|timeout|enotfound|econnrefused/i.test(msg)
+  ) {
+    return 'Check your connection and try again.'
+  }
+  return "Couldn't sign in. Please try again."
+}
+
 export default function SignInScreen() {
   const router = useRouter()
   const isAuthenticating = useAuthStore((s) => s.isAuthenticating)
@@ -50,7 +81,8 @@ export default function SignInScreen() {
         const msg = err instanceof Error ? err.message : String(err)
         // Cancellations are not user-facing errors.
         if (!/cancel|dismiss/i.test(msg)) {
-          setError(msg)
+          // STA-020 — never display the raw provider error.
+          setError(mapSignInError(msg))
         }
       } finally {
         setAuthenticating(false)

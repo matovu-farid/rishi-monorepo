@@ -13,7 +13,6 @@
  * player pauses/resumes around chat sessions (G14).
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Alert } from 'react-native'
 import type {
   ChatStatus,
   VoiceChatContext,
@@ -23,6 +22,23 @@ import { stringToNumberID } from '@rishi/shared/lib/stringToNumberID'
 import { getVoiceChatService } from '@/lib/voice-chat/service'
 import { getMobileEffectsPort } from '@/lib/voice-chat/sounds'
 import type { RealtimeStatus } from '@/lib/realtime/types'
+
+/**
+ * CHT-016 — classify an activation error as a mic-permission failure so
+ * consumers can show an "Open Settings" CTA on the snackbar/banner.
+ * The shared activation pipeline rejects with a message containing
+ * "Microphone permission" / "getUserMedia" / "NotAllowedError" when the
+ * OS denies the prompt.
+ */
+function isMicPermissionMessage(msg: string): boolean {
+  return /microphone permission|getusermedia|notallowederror|permission denied/i.test(
+    msg
+  )
+}
+
+function friendlyMicPermissionMessage(): string {
+  return 'Microphone permission is required for voice chat. Open Settings to enable it.'
+}
 
 /**
  * Map the shared `VoiceChatPublicState` + `ChatStatus` to the
@@ -55,6 +71,17 @@ export interface UseVoiceChatResult {
   stop: () => void
   toggle: () => Promise<void>
   isActive: boolean
+  /**
+   * CHT-016 — Last activation error, surfaced for non-blocking
+   * snackbar / banner UI. Null when no error is pending.
+   */
+  voiceError: string | null
+  /** True when `voiceError` is a mic-permission denial — show "Open Settings". */
+  isMicPermissionError: boolean
+  /** Retry the most recent activation with the same context. */
+  retryStart: () => Promise<void>
+  /** Clear `voiceError` without re-activating (snackbar dismiss). */
+  dismissError: () => void
 }
 
 export function useVoiceChat(
@@ -64,6 +91,9 @@ export function useVoiceChat(
   const svc = getVoiceChatService({ getLanguage: opts.getLanguage })
   const [publicState, setPublicState] = useState<VoiceChatPublicState>(svc.getState())
   const [chatStatus, setChatStatus] = useState<ChatStatus>('idle')
+  // CHT-016 — local error state for non-blocking snackbar/banner.
+  const [voiceError, setVoiceError] = useState<string | null>(null)
+  const [isMicPermissionError, setIsMicPermissionError] = useState(false)
   const contextRef = useRef(opts.context)
   contextRef.current = opts.context
 
@@ -104,23 +134,57 @@ export function useVoiceChat(
     return undefined
   }, [publicState, chatStatus])
 
+  // CHT-016 — Hold the context that the most recent activation used so
+  // `retryStart()` can re-invoke `svc.activate` with the same payload
+  // even if the consumer's context provider has changed by the time the
+  // user taps "Retry" on the snackbar.
+  const lastActivationContextRef = useRef<VoiceChatContext | null>(null)
+
+  const doActivate = useCallback(
+    async (ctx: VoiceChatContext) => {
+      try {
+        const numericBookId = stringToNumberID(bookId)
+        lastActivationContextRef.current = ctx
+        await svc.activate(numericBookId, ctx)
+        // On success, clear any lingering banner from a previous attempt.
+        setVoiceError(null)
+        setIsMicPermissionError(false)
+      } catch (err) {
+        const rawMsg =
+          err instanceof Error
+            ? err.message
+            : 'Could not start voice chat. Check your internet connection and try again.'
+        const isPerm = isMicPermissionMessage(rawMsg)
+        setIsMicPermissionError(isPerm)
+        setVoiceError(isPerm ? friendlyMicPermissionMessage() : rawMsg)
+      }
+    },
+    [bookId, svc]
+  )
+
   const start = useCallback(async () => {
-    if (publicState !== 'idle' && publicState !== 'paused' && publicState !== 'error') return
+    if (
+      publicState !== 'idle' &&
+      publicState !== 'paused' &&
+      publicState !== 'error'
+    )
+      return
     const ctx = contextRef.current?.() ?? { pageText: '' }
-    try {
-      // The shared service expects a numeric bookId. Hash strings to a
-      // stable number to match the rest of the mobile pipeline.
-      const numericBookId = stringToNumberID(bookId)
-      await svc.activate(numericBookId, ctx)
-    } catch (err) {
-      Alert.alert(
-        'Voice Chat Error',
-        err instanceof Error
-          ? err.message
-          : 'Could not start voice chat. Check your internet connection and try again.'
-      )
-    }
-  }, [bookId, publicState, svc])
+    await doActivate(ctx)
+  }, [doActivate, publicState])
+
+  const retryStart = useCallback(async () => {
+    // Reuse the context the failed attempt used. Falls back to the live
+    // provider (or empty pageText) if no prior activation has run yet.
+    const ctx =
+      lastActivationContextRef.current ?? contextRef.current?.() ?? { pageText: '' }
+    await doActivate(ctx)
+  }, [doActivate])
+
+  const dismissError = useCallback(() => {
+    setVoiceError(null)
+    setIsMicPermissionError(false)
+  }, [])
 
   const stop = useCallback(() => {
     svc.deactivate()
@@ -143,7 +207,11 @@ export function useVoiceChat(
     start,
     stop,
     toggle,
-    isActive: publicState === 'active'
+    isActive: publicState === 'active',
+    voiceError,
+    isMicPermissionError,
+    retryStart,
+    dismissError
   }
 }
 
