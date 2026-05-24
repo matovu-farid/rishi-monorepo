@@ -63,6 +63,16 @@ export function buildReaderThemeCss(theme: ReaderTheme): string {
     `html, body { background: ${bg} !important; color: ${fg} !important; }`,
     // pdfjs viewer chrome — keep page chrome consistent with body.
     `#viewerContainer, .pdfViewer { background: ${bg} !important; }`,
+    // Issue #231 — the custom PDF WebView template (components/pdf/
+    // webview-template.ts) renders each pdfjs page inside a
+    // `.page-wrapper` div. Its inline stylesheet previously hardcoded
+    // `background: #fff`, leaving a bright rectangle around every page
+    // in Dark / Sepia mode. Routing the wrapper background through the
+    // active theme keeps the page surround consistent with the body.
+    // pdfjs paints the actual page content onto a canvas, so the
+    // wrapper colour only shows in the gutters and before-render
+    // moments — exactly the surface that needs to follow the theme.
+    `.page-wrapper { background: ${bg} !important; }`,
     // MOBI parser content wrapper.
     `#content, #content * { color: ${fg} !important; }`,
     `#content a { color: ${fg} !important; }`,
