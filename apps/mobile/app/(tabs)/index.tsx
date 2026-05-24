@@ -232,6 +232,25 @@ export default function LibraryScreen() {
     [],
   )
 
+  // #112 / PRF-008 — keep `keyExtractor` and `renderItem` identities
+  // stable across parent re-renders. The search input drives a
+  // setState on every keystroke; if these callbacks were inline they
+  // would be fresh closures each frame and React Native's
+  // VirtualizedList would treat that as a cell-shape change and
+  // remount every BookRow. Stable identities ➜ the only thing that
+  // changes is `data`, so unaffected cells stay mounted.
+  const bookKeyExtractor = useCallback((item: Book) => item.id, [])
+  const renderBookRow = useCallback(
+    ({ item }: { item: Book }) => (
+      <BookRow
+        book={item}
+        onPress={handleBookPress}
+        onDelete={handleDelete}
+      />
+    ),
+    [handleBookPress, handleDelete],
+  )
+
   // Nav-bar `+` action (replaces the Material FAB — P0-I). The button is
   // present in BOTH the empty and populated states so the user has a
   // single, predictable affordance for adding a book.
@@ -262,7 +281,7 @@ export default function LibraryScreen() {
           onPress={handleImport}
           disabled={importing}
           accessibilityRole="button"
-          accessibilityLabel="Import Book"
+          accessibilityLabel="Add book"
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           style={({ pressed }) => ({
             marginLeft: spacing.md,
@@ -386,9 +405,19 @@ export default function LibraryScreen() {
         >
           <View style={{ marginRight: spacing.md }}>
             <BookCover
+              testID="reading-now-cover"
               uri={lastReadBook.coverPath ?? undefined}
               title={lastReadBook.title}
               size="sm"
+              // #96 / STA-021 — when the book's cover hasn't been
+              // extracted yet (coverPath null) AND extraction has not
+              // been attempted-and-failed, render the dashed "pending"
+              // placeholder instead of the hash-based letter tile so
+              // the user can tell "cover loading" from "no cover".
+              loading={
+                lastReadBook.coverPath == null &&
+                lastReadBook.coverExtractionFailed !== true
+              }
             />
           </View>
           <View style={{ flex: 1 }}>
@@ -466,14 +495,8 @@ export default function LibraryScreen() {
       >
         <FlatList
           data={filteredBooks}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <BookRow
-              book={item}
-              onPress={handleBookPress}
-              onDelete={handleDelete}
-            />
-          )}
+          keyExtractor={bookKeyExtractor}
+          renderItem={renderBookRow}
           contentContainerStyle={{ paddingBottom: spacing['5xl'] }}
           getItemLayout={getBookRowLayout}
           removeClippedSubviews
