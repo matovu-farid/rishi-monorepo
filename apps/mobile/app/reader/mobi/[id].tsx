@@ -382,7 +382,15 @@ document.addEventListener('selectionchange', function() {
 </html>`
 
 export default function MobiReaderScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>()
+  // #68 — `chapter` is forwarded by chat citation taps via
+  // `resolveSourceLocationParams` (0-indexed to match the reader's
+  // internal counter). When present, it overrides the saved
+  // `book.currentPage` (which stores the chapter index for MOBI) for
+  // this mount so the WebView opens at the cited chapter.
+  const { id, chapter: chapterParam } = useLocalSearchParams<{
+    id: string
+    chapter?: string
+  }>()
   const router = useRouter()
 
   const [book, setBook] = useState<Book | null>(null)
@@ -450,7 +458,18 @@ export default function MobiReaderScreen() {
         .then((loaded) => {
           if (loaded) {
             setBook(loaded)
-            const startChapter = loaded.currentPage || 0
+            // #68 — `chapterParam` is the 0-indexed chapter target
+            // forwarded from a chat citation tap. Honor it ahead of
+            // the saved `loaded.currentPage` so the WebView lands on
+            // the cited chapter on mount. The next 'chapter'
+            // postMessage persists the new index via `handleMessage`.
+            const fromCitation = chapterParam
+              ? Number.parseInt(chapterParam, 10)
+              : NaN
+            const startChapter =
+              Number.isFinite(fromCitation) && fromCitation >= 0
+                ? fromCitation
+                : loaded.currentPage || 0
             setCurrentChapter(startChapter)
             currentChapterRef.current = startChapter
             setHighlights(getHighlightsByBookId(loaded.id))
@@ -465,7 +484,7 @@ export default function MobiReaderScreen() {
         })
         .finally(() => setLoading(false))
     }
-  }, [id, loadAttempt])
+  }, [id, loadAttempt, chapterParam])
 
   // Send file data to WebView once loaded.
   //

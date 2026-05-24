@@ -255,7 +255,12 @@ describe('Chat detail — source-press routes per format (P1-A)', () => {
       chatMessageRegistry.onSourcePress!({ chunkId: 'x', chapter: null, text: '' })
     })
     expect(pushSpy).toHaveBeenCalledTimes(1)
-    expect(pushSpy).toHaveBeenCalledWith('/reader/pdf/b1')
+    // Updated for #68: the chunkId always rides along even when no
+    // positional information can be parsed from the chapter label.
+    expect(pushSpy).toHaveBeenCalledWith({
+      pathname: '/reader/pdf/[id]',
+      params: { id: 'b1', chunkId: 'x' },
+    })
   })
 
   it('handleSourcePress (MOBI) → /reader/mobi/<id>', async () => {
@@ -276,7 +281,12 @@ describe('Chat detail — source-press routes per format (P1-A)', () => {
     act(() => {
       chatMessageRegistry.onSourcePress!({ chunkId: 'x', chapter: null, text: '' })
     })
-    expect(pushSpy).toHaveBeenCalledWith('/reader/mobi/b1')
+    // Updated for #68: object-form push so the chunkId / chapter can
+    // ride along as query params for the reader to honor on mount.
+    expect(pushSpy).toHaveBeenCalledWith({
+      pathname: '/reader/mobi/[id]',
+      params: { id: 'b1', chunkId: 'x' },
+    })
   })
 
   it('handleSourcePress (EPUB) still routes to /reader/<id>', async () => {
@@ -297,6 +307,105 @@ describe('Chat detail — source-press routes per format (P1-A)', () => {
     act(() => {
       chatMessageRegistry.onSourcePress!({ chunkId: 'x', chapter: null, text: '' })
     })
-    expect(pushSpy).toHaveBeenCalledWith('/reader/b1')
+    // The chunkId always rides along (#68) even when no positional
+    // information is available, so a downstream highlight-on-jump pass
+    // can still resolve the citation.
+    expect(pushSpy).toHaveBeenCalledWith({
+      pathname: '/reader/[id]',
+      params: { id: 'b1', chunkId: 'x' },
+    })
+  })
+
+  // #68 — `handleSourcePress` MUST thread the chunk's location into the
+  // router push so the reader can scroll to the cited passage on mount.
+  // Pre-fix, the chip discarded `source.chunkId` / `source.chapter` and
+  // pushed to the reader root.
+  describe('source chunk location → reader query params (#68)', () => {
+    it('PDF citation with "Page N" chapter → ?page=N', async () => {
+      mockBooks.push(makeBook('pdf'))
+      mockConversations.push({
+        id: 'c1', bookId: 'b1', title: 't', createdAt: 0, updatedAt: 0,
+      })
+      const convStorage = require('@/lib/conversation-storage')
+      convStorage.getMessages = jest.fn(() => [
+        { id: 'm1', conversationId: 'c1', role: 'assistant', content: 'hi', sourceChunks: null, createdAt: 0, updatedAt: 0 },
+      ])
+
+      const BookChatScreen = require('@/app/chat/[bookId]').default
+      await act(async () => { TestRenderer.create(<BookChatScreen />) })
+      await act(async () => { await Promise.resolve() })
+
+      act(() => {
+        chatMessageRegistry.onSourcePress!({
+          chunkId: 'cid-1',
+          chapter: 'Page 12',
+          text: '',
+        })
+      })
+      expect(pushSpy).toHaveBeenCalledTimes(1)
+      expect(pushSpy).toHaveBeenCalledWith({
+        pathname: '/reader/pdf/[id]',
+        params: { id: 'b1', chunkId: 'cid-1', page: '12' },
+      })
+    })
+
+    it('EPUB citation with cfiRange → ?cfi=<cfi>', async () => {
+      mockBooks.push(makeBook('epub'))
+      mockConversations.push({
+        id: 'c1', bookId: 'b1', title: 't', createdAt: 0, updatedAt: 0,
+      })
+      const convStorage = require('@/lib/conversation-storage')
+      convStorage.getMessages = jest.fn(() => [
+        { id: 'm1', conversationId: 'c1', role: 'assistant', content: 'hi', sourceChunks: null, createdAt: 0, updatedAt: 0 },
+      ])
+
+      const BookChatScreen = require('@/app/chat/[bookId]').default
+      await act(async () => { TestRenderer.create(<BookChatScreen />) })
+      await act(async () => { await Promise.resolve() })
+
+      act(() => {
+        chatMessageRegistry.onSourcePress!({
+          chunkId: 'cid-2',
+          chapter: 'Heading 1',
+          cfiRange: 'epubcfi(/6/4!/4/2/1:0)',
+          text: '',
+        })
+      })
+      expect(pushSpy).toHaveBeenCalledWith({
+        pathname: '/reader/[id]',
+        params: {
+          id: 'b1',
+          chunkId: 'cid-2',
+          cfi: 'epubcfi(/6/4!/4/2/1:0)',
+        },
+      })
+    })
+
+    it('MOBI citation with "Chapter N" → ?chapter=<N-1> (0-indexed)', async () => {
+      mockBooks.push(makeBook('mobi'))
+      mockConversations.push({
+        id: 'c1', bookId: 'b1', title: 't', createdAt: 0, updatedAt: 0,
+      })
+      const convStorage = require('@/lib/conversation-storage')
+      convStorage.getMessages = jest.fn(() => [
+        { id: 'm1', conversationId: 'c1', role: 'assistant', content: 'hi', sourceChunks: null, createdAt: 0, updatedAt: 0 },
+      ])
+
+      const BookChatScreen = require('@/app/chat/[bookId]').default
+      await act(async () => { TestRenderer.create(<BookChatScreen />) })
+      await act(async () => { await Promise.resolve() })
+
+      act(() => {
+        chatMessageRegistry.onSourcePress!({
+          chunkId: 'cid-3',
+          chapter: 'Chapter 4',
+          text: '',
+        })
+      })
+      expect(pushSpy).toHaveBeenCalledWith({
+        pathname: '/reader/mobi/[id]',
+        params: { id: 'b1', chunkId: 'cid-3', chapter: '3' },
+      })
+    })
   })
 })

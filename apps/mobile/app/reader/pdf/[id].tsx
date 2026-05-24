@@ -96,7 +96,14 @@ interface ActiveSelection {
 }
 
 export default function PdfReaderScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>()
+  // #68 — `page` is forwarded by chat citation taps via
+  // `resolveSourceLocationParams`. When present, it overrides the saved
+  // `book.currentPage` for this mount so the reader lands on the cited
+  // passage. The next page-change persists the new position normally.
+  const { id, page: pageParam } = useLocalSearchParams<{
+    id: string
+    page?: string
+  }>()
   const router = useRouter()
 
   const readerRef = useRef<PdfWebReaderHandle>(null)
@@ -246,11 +253,22 @@ export default function PdfReaderScreen() {
         )
       }
       // Restore reading position.
-      const initial = book?.currentPage ?? 1
+      //
+      // #68 — when the user arrives from a chat citation tap, `pageParam`
+      // is the chunk's page number. Honor it ahead of the saved
+      // `book.currentPage` so the reader scrolls to the cited passage
+      // on mount. The next page-change persists the new position via
+      // `handlePageChange` below, so the override doesn't re-fire on
+      // subsequent navigations within the book.
+      const fromCitation = pageParam ? Number.parseInt(pageParam, 10) : NaN
+      const initial =
+        Number.isFinite(fromCitation) && fromCitation >= 1
+          ? fromCitation
+          : book?.currentPage ?? 1
       if (initial > 1) readerRef.current?.goToPage(initial)
       setBookNavigationState(BookNavigationState.Idle)
     },
-    [book?.currentPage, highlights, setPageCount, setOutlineStore, setBookNavigationState]
+    [book?.currentPage, pageParam, highlights, setPageCount, setOutlineStore, setBookNavigationState]
   )
 
   const handlePageChange = useCallback(

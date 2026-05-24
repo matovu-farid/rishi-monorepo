@@ -59,7 +59,10 @@ describe('STA-027 — cold-start reader-load failure recovery affordance', () =>
       const src = read(reader)
       // The useEffect for loading must include `loadAttempt` in its dep
       // array — otherwise tapping Retry bumps the counter to no effect.
-      expect(src).toMatch(/\[\s*id\s*,\s*loadAttempt\s*\]/)
+      // Trailing deps are allowed (e.g. #68 added `pageParam` /
+      // `chapterParam` to the MOBI / DJVU loaders so a citation tap
+      // re-fires the loader with the new override).
+      expect(src).toMatch(/\[\s*id\s*,\s*loadAttempt\b/)
     })
 
     it(`${reader.label}: thrown load → falls through to ReaderErrorScreen instead of an infinite spinner`, () => {
