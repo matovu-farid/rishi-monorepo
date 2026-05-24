@@ -1,5 +1,6 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AccessibilityInfo,
   View,
   Text,
   TouchableOpacity,
@@ -602,7 +603,13 @@ export default function MobiReaderScreen() {
       if (!book) return
       requireTTS(async () => {
         const send = usePlayerStore.getState().send
-        if (!send) return
+        if (!send) {
+          // STA-024 — surface non-blocking feedback for VoiceOver +
+          // sighted users when the player machine isn't ready.
+          AccessibilityInfo.announceForAccessibility('Read-aloud unavailable right now')
+          undoSnackbar.show('Read-aloud unavailable right now', 'Dismiss', () => undefined)
+          return
+        }
         let paragraphs = usePlayerStore.getState().currentParagraphs
         if (paragraphs.length === 0) {
           try {
@@ -611,10 +618,18 @@ export default function MobiReaderScreen() {
               book.filePath,
               book.format,
             )
-            if (!seeded.seeded) return
+            if (!seeded.seeded) {
+              // STA-024 — extractor produced no chunks. Parity with EPUB.
+              AccessibilityInfo.announceForAccessibility('No text available for reading')
+              undoSnackbar.show('No text available for reading', 'Dismiss', () => undefined)
+              return
+            }
             paragraphs = seeded.paragraphs
           } catch (err) {
+            // STA-024 — seed threw. Announce + show a toast (was silent).
             console.warn('[mobi-read-aloud-from] seed failed:', err)
+            AccessibilityInfo.announceForAccessibility('Could not start read-aloud')
+            undoSnackbar.show('Could not start read-aloud', 'Dismiss', () => undefined)
             return
           }
         }
@@ -622,7 +637,17 @@ export default function MobiReaderScreen() {
           selectionText,
           paragraphs,
         )
-        if (!playFrom) return
+        if (!playFrom) {
+          // STA-024 — resolver couldn't locate the selection in the
+          // current paragraph list. Parity with EPUB (was silent).
+          AccessibilityInfo.announceForAccessibility('Could not find the selected text')
+          undoSnackbar.show(
+            'Could not find selected text on this page.',
+            'Dismiss',
+            () => undefined,
+          )
+          return
+        }
         send({
           type: 'PLAY_FROM',
           paragraphIndex: playFrom.paragraphIndex,
@@ -632,7 +657,7 @@ export default function MobiReaderScreen() {
         setPendingSelection(null)
       })
     },
-    [book, requireTTS],
+    [book, requireTTS, undoSnackbar],
   )
 
   // ---- TTS: read aloud (Batch 7) ----
@@ -653,13 +678,23 @@ export default function MobiReaderScreen() {
           book.filePath,
           book.format,
         )
-        if (!seeded.seeded) return
+        if (!seeded.seeded) {
+          // STA-017 — surface a toast + a11y announcement so the user
+          // sees why nothing happened. Parity with EPUB.
+          AccessibilityInfo.announceForAccessibility('No text available for reading')
+          undoSnackbar.show('No text available for reading', 'Dismiss', () => undefined)
+          return
+        }
         sendFn({ type: 'PLAY' })
       } catch (err) {
+        // STA-017 — TTS seed threw (extractor failed, file unreadable,
+        // etc.). Surface a non-blocking toast; toolbar button stays usable.
         console.warn('[mobi-tts] seed failed:', err)
+        AccessibilityInfo.announceForAccessibility('Could not start read-aloud')
+        undoSnackbar.show('Could not start read-aloud', 'Dismiss', () => undefined)
       }
     })
-  }, [book, ttsActive, requireTTS])
+  }, [book, ttsActive, requireTTS, undoSnackbar])
 
   // CSS reconciler: highlight the active paragraph inside the WebView.
   // Uses a simple data-attribute selector — the parser doesn't emit
