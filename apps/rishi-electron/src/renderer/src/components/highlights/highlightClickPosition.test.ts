@@ -47,7 +47,9 @@ describe('computeHighlightClickPosition', () => {
 
   it('returns mid-viewport when clientX/Y are not numeric', () => {
     const iframe = makeIframe({ left: 50, top: 30 })
-    const target = { ownerDocument: { defaultView: { frameElement: iframe } } } as unknown as Element
+    const target = {
+      ownerDocument: { defaultView: { frameElement: iframe } }
+    } as unknown as Element
     const e = { target } as unknown as MouseEvent
     expect(computeHighlightClickPosition(e, null, viewport)).toEqual({ x: 500, y: 400 })
   })

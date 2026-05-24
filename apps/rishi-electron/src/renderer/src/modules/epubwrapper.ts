@@ -234,7 +234,13 @@ export function resolveCfiToRange(rendition: Rendition, cfiRange: string): Range
  * regardless of how many views the manager currently has mounted.
  */
 export function getVisibleIframe(rendition: Rendition): HTMLIFrameElement | null {
-  const view = rendition.manager.visible()[0]
+  // `manager` / `visible()` aren't on epubjs's public Rendition type. Type the
+  // boundary explicitly so the array-element narrows to `View | undefined`
+  // (rather than `any`), which is what allows the runtime guard to be
+  // recognised by no-unnecessary-condition.
+  const manager = (rendition as unknown as { manager?: { visible?: () => View[] | undefined } })
+    .manager
+  const view: View | undefined = manager?.visible?.()?.[0]
   if (!view?.element) return null
   return view.element.querySelector('iframe')
 }

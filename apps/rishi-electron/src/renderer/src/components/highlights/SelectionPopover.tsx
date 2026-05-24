@@ -130,7 +130,11 @@ export function SelectionPopover({
               onClose()
             }}
           >
-            {hasNote ? <MessageSquareText size={16} /> : <MessageSquarePlus size={16} className="text-gray-700 dark:text-gray-200" />}
+            {hasNote ? (
+              <MessageSquareText size={16} />
+            ) : (
+              <MessageSquarePlus size={16} className="text-gray-700 dark:text-gray-200" />
+            )}
           </button>
         ) : null}
         {onDelete ? (

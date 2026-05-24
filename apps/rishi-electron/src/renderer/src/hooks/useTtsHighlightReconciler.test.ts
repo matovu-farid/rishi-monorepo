@@ -5,7 +5,7 @@ import { useTtsHighlightReconciler } from './useTtsHighlightReconciler'
 
 function setActive(index: string | null): void {
   usePlayerStore.setState({
-    activeParagraph: index ? ({ index, key: index, text: '' } as never) : null,
+    activeParagraph: index ? ({ index, key: index, text: '' } as never) : null
   })
 }
 
@@ -97,7 +97,9 @@ describe('useTtsHighlightReconciler — integration (the bug class)', () => {
   it('sweeps stale state on focus return even when activeParagraph did not change', () => {
     setActive('p5')
     let lastSeen: string | null | undefined
-    const reconcile = vi.fn((d: string | null) => { lastSeen = d })
+    const reconcile = vi.fn((d: string | null) => {
+      lastSeen = d
+    })
     renderHook(() => useTtsHighlightReconciler(reconcile, null))
     window.dispatchEvent(new Event('blur'))
     reconcile.mockClear()
@@ -108,7 +110,9 @@ describe('useTtsHighlightReconciler — integration (the bug class)', () => {
 
   it('full cycle: activeParagraph p5 → blur → focus → advance to p7', () => {
     const calls: Array<string | null> = []
-    const reconcile = vi.fn((d: string | null) => { calls.push(d) })
+    const reconcile = vi.fn((d: string | null) => {
+      calls.push(d)
+    })
     renderHook(() => useTtsHighlightReconciler(reconcile, null))
     act(() => setActive('p5'))
     window.dispatchEvent(new Event('focus'))

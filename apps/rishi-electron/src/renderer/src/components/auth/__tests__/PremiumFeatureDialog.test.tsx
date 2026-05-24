@@ -33,9 +33,7 @@ describe('PremiumFeatureDialog (consumes shared FEATURE_COPY)', () => {
   })
 
   it("renders the shared FEATURE_COPY body as the dialog description for 'ai-chat'", () => {
-    render(
-      <PremiumFeatureDialog open={true} onOpenChange={() => {}} feature="ai-chat" />,
-    )
+    render(<PremiumFeatureDialog open={true} onOpenChange={() => {}} feature="ai-chat" />)
     expect(screen.getByText(FEATURE_COPY['ai-chat'].body)).toBeInTheDocument()
   })
 
@@ -52,9 +50,7 @@ describe('PremiumFeatureDialog (consumes shared FEATURE_COPY)', () => {
 
   it("calls onOpenChange(false) when 'Maybe later' is clicked", () => {
     const onOpenChange = vi.fn()
-    render(
-      <PremiumFeatureDialog open={true} onOpenChange={onOpenChange} feature="tts" />,
-    )
+    render(<PremiumFeatureDialog open={true} onOpenChange={onOpenChange} feature="tts" />)
     fireEvent.click(screen.getByText('Maybe later'))
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })

@@ -7,6 +7,16 @@ export interface Book {
   format: 'epub' | 'pdf' | 'mobi' | 'azw3' | 'djvu'
   currentCfi: string | null // ePubCFI string for EPUB reading position
   currentPage: number | null // Page number for PDF reading position
+  /**
+   * #41 — Persisted format-honest progress, a 0..1 float, used to render
+   * the "Reading Now" pill subline on the library tab AFTER the reader
+   * has been closed. EPUB sources this from epubjs's onRelocated progress
+   * arg; PDF/DJVU compute `currentPage / total`; MOBI/AZW3 compute
+   * `currentChapter / chapterCount`. `null` for legacy rows that haven't
+   * been opened post-migration — the pill omits the subline in that case
+   * rather than showing a stale or "0%" label.
+   */
+  lastProgressPercent: number | null
   createdAt: number // Unix timestamp ms
   /**
    * P1-AC: true when cover extraction was attempted at import time and

@@ -113,18 +113,38 @@ describe('highlight-storage — PDF support', () => {
     const listMock = window.electron.highlightsList as unknown as ReturnType<typeof vi.fn>
     listMock.mockResolvedValueOnce([
       {
-        id: 'r1', bookId: 'b1',
-        format: 'epub', cfiRange: 'epubcfi(/6/4!/4/2)', locator: null,
-        text: 't', color: 'yellow', note: '', chapter: null,
-        createdAt: '2026-05-17T00:00:00.000Z', updatedAt: null,
-        syncId: null, syncVersion: 0, isDirty: 0, isDeleted: 0
+        id: 'r1',
+        bookId: 'b1',
+        format: 'epub',
+        cfiRange: 'epubcfi(/6/4!/4/2)',
+        locator: null,
+        text: 't',
+        color: 'yellow',
+        note: '',
+        chapter: null,
+        createdAt: '2026-05-17T00:00:00.000Z',
+        updatedAt: null,
+        syncId: null,
+        syncVersion: 0,
+        isDirty: 0,
+        isDeleted: 0
       },
       {
-        id: 'r2', bookId: 'b1',
-        format: 'pdf', cfiRange: null, locator: JSON.stringify({ page: 1, rects: [] }),
-        text: 't2', color: 'green', note: '', chapter: null,
-        createdAt: '2026-05-17T00:00:00.000Z', updatedAt: null,
-        syncId: null, syncVersion: 0, isDirty: 0, isDeleted: 0
+        id: 'r2',
+        bookId: 'b1',
+        format: 'pdf',
+        cfiRange: null,
+        locator: JSON.stringify({ page: 1, rects: [] }),
+        text: 't2',
+        color: 'green',
+        note: '',
+        chapter: null,
+        createdAt: '2026-05-17T00:00:00.000Z',
+        updatedAt: null,
+        syncId: null,
+        syncVersion: 0,
+        isDirty: 0,
+        isDeleted: 0
       }
     ])
 
@@ -141,11 +161,21 @@ describe('highlight-storage — PDF support', () => {
     const listMock = window.electron.highlightsList as unknown as ReturnType<typeof vi.fn>
     listMock.mockResolvedValueOnce([
       {
-        id: 'pdf-1', bookId: 'b1',
-        format: 'pdf', cfiRange: null, locator: JSON.stringify({ page: 2, rects: [{ x: 0, y: 0, w: 50, h: 10 }] }),
-        text: 'pdf text', color: 'blue', note: '', chapter: null,
-        createdAt: '2026-05-17T00:00:00.000Z', updatedAt: null,
-        syncId: null, syncVersion: 0, isDirty: 0, isDeleted: 0
+        id: 'pdf-1',
+        bookId: 'b1',
+        format: 'pdf',
+        cfiRange: null,
+        locator: JSON.stringify({ page: 2, rects: [{ x: 0, y: 0, w: 50, h: 10 }] }),
+        text: 'pdf text',
+        color: 'blue',
+        note: '',
+        chapter: null,
+        createdAt: '2026-05-17T00:00:00.000Z',
+        updatedAt: null,
+        syncId: null,
+        syncVersion: 0,
+        isDirty: 0,
+        isDeleted: 0
       }
     ])
 
