@@ -86,6 +86,7 @@ import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
 import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
 import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
+import { useEpubNavHistoryLifecycle } from '@/hooks/reader/useEpubNavHistoryLifecycle'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { useUndoableHighlightShortcut } from '@/hooks/useUndoableHighlightShortcut'
 import { findParagraphForCfi } from '@/modules/cfi-to-paragraph'
@@ -967,17 +968,11 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
 
   const setParagraphRendition = useEpubStore((s) => s.setParagraphRendition)
 
-  // Navigation history: lifecycle (BOOK_OPENED / BOOK_CLOSED)
-  useEffect(() => {
-    if (!currentLocation) return
-    navigationHistoryActor.send({
-      type: 'BOOK_OPENED',
-      bookId: String(book.id),
-      initialPosition: { kind: 'epub', cfi: currentLocation }
-    })
-    return () => navigationHistoryActor.send({ type: 'BOOK_CLOSED' })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [book.id])
+  // Navigation history: lifecycle (BOOK_OPENED / BOOK_CLOSED).
+  // Extracted to a hook so the ref-guarded re-fire on first-CFI-arrival
+  // (the fix for #226 — freshly-imported books mount with location = '')
+  // can be unit-tested without booting the whole reader.
+  useEpubNavHistoryLifecycle({ bookId: String(book.id), currentLocation })
 
   // Navigation history: PAGE_VISITED on every location change
   useEffect(() => {
