@@ -135,6 +135,22 @@ export function createMobileFsPort(opts: {
         // best-effort
       }
     },
+
+    async removeBookDir(_path: string): Promise<void> {
+      // #209: the importer hands us the path to `book.<ext>` *inside* the
+      // per-book dir. The dir we created in copyBookToAppData is
+      // `<BOOKS_DIR>/<opts.bookId>`. Delete that (and the file inside)
+      // wholesale rather than fishing the bookId out of the path string —
+      // (bookId, format) is already baked into this port.
+      const bookDir = new Directory(BOOKS_DIR, opts.bookId);
+      try {
+        if (bookDir.exists) {
+          bookDir.delete();
+        }
+      } catch {
+        // best-effort — caller has the original parse / save error.
+      }
+    },
   };
 }
 

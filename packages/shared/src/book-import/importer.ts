@@ -60,6 +60,29 @@ function messageOf(err: unknown, fallback: string): string {
 }
 
 /**
+ * Best-effort cleanup of the per-book directory (or just the file, when the
+ * platform stores books flat). See `FsPort.removeBookDir` for the contract.
+ *
+ * Issue #209: failures here MUST NOT replace the original parse / save error
+ * — the caller has already classified the failure stage and we want the
+ * original message to surface unchanged.
+ */
+async function rollbackCopy(
+  fs: FsPort,
+  bookPath: string,
+): Promise<void> {
+  try {
+    if (fs.removeBookDir) {
+      await fs.removeBookDir(bookPath);
+    } else {
+      await fs.removeFile(bookPath);
+    }
+  } catch {
+    /* swallow */
+  }
+}
+
+/**
  * Best-effort cover extraction + R2 upload. Failures emit upload-failed
  * but never block the result. Runs asynchronously (microtask) so `done`
  * lands first.
@@ -110,8 +133,8 @@ function runPostSave<BookId, Book, BookInsertable>(
 
 /**
  * Single-file import pipeline. Sequential stages with per-stage timeouts.
- * Returns a discriminated ImportResult. Rolls back the copy on parse failure;
- * leaves the copied file on save failure (caller can retry).
+ * Returns a discriminated ImportResult. Rolls back the copied book (file +
+ * per-book dir on mobile) on parse OR save failure — see #209.
  */
 export async function runImport<BookId, Book, BookInsertable>(
   deps: ImporterDeps<BookId, Book, BookInsertable>,
@@ -171,11 +194,10 @@ export async function runImport<BookId, Book, BookInsertable>(
   } catch (err) {
     const error = messageOf(err, "Parse failed");
     emit({ kind: "failed", filePath, stage: "parse", error });
-    try {
-      await deps.fs.removeFile(bookPath);
-    } catch {
-      /* swallow */
-    }
+    // #209: clean up the orphan per-book dir on mobile (or just the copied
+    // file on electron). Best-effort — failures here do not replace the
+    // parse error.
+    await rollbackCopy(deps.fs, bookPath);
     return { ok: false, filePath, stage: "parse", error };
   }
 
@@ -193,6 +215,10 @@ export async function runImport<BookId, Book, BookInsertable>(
   } catch (err) {
     const error = messageOf(err, "Save failed");
     emit({ kind: "failed", filePath, stage: "save", error });
+    // #209: mirror the parse-fail cleanup — the DB insert never persisted a
+    // row, so leaving the copied file (and on mobile, the per-book dir)
+    // around is a pure leak. Best-effort.
+    await rollbackCopy(deps.fs, bookPath);
     return { ok: false, filePath, stage: "save", error };
   }
 

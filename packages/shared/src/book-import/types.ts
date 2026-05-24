@@ -127,6 +127,21 @@ export interface DbPort<BookId, Book, BookInsertable> {
 export interface FsPort {
   copyBookToAppData(filePath: string): Promise<string>;
   removeFile(path: string): Promise<void>;
+  /**
+   * Remove the per-book directory that contains `bookPath` (issue #209).
+   *
+   * Mobile mints `books/<bookId>/book.<ext>` and the orphan directory leaks
+   * on parse / save failure if only the file is removed. Implementations
+   * that own a per-book directory should delete the whole dir here;
+   * implementations that don't (electron writes a flat
+   * `userData/<filename>`) can omit this and the importer falls back to
+   * `removeFile`.
+   *
+   * Best-effort: implementations MUST NOT throw on a missing dir, and the
+   * importer treats any rejection as non-fatal (the original parse / save
+   * error is the one propagated to the caller).
+   */
+  removeBookDir?(bookPath: string): Promise<void>;
 }
 
 /** R2 upload port. */
