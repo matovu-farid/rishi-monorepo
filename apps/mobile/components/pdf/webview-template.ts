@@ -30,8 +30,13 @@ export const PDF_READER_HTML = `<!DOCTYPE html>
     -webkit-user-select: text; -webkit-touch-callout: default; }
   #status { padding: 12px; font-size: 13px; }
   #pages { padding: 8px 0 64px 0; }
+  /* Issue #231 — wrapper background is themed at runtime via
+     buildReaderThemeCss / buildReaderThemeInjection. Leaving a static
+     #fff here reintroduces the bright rectangle in Dark/Sepia mode
+     because the inline rule would shadow the injected one on the
+     initial load. */
   .page-wrapper { position: relative; margin: 8px auto;
-    background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,0.6); }
+    box-shadow: 0 1px 6px rgba(0,0,0,0.6); }
   .page-canvas { display: block; width: 100%; height: auto; }
   .text-layer { position: absolute; inset: 0; line-height: 1;
     overflow: hidden; pointer-events: auto; }
