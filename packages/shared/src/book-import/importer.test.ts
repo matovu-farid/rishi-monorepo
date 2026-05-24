@@ -25,9 +25,18 @@ type TestBookId = string;
 export function makeFs(opts?: {
   copyImpl?: (path: string) => Promise<string>;
   removeImpl?: (path: string) => Promise<void>;
-}): { fs: FsPort; removeCalls: string[]; copyCalls: string[] } {
+  removeBookDirImpl?: (path: string) => Promise<void>;
+  /** When true, the FsPort does NOT define `removeBookDir`. */
+  noRemoveBookDir?: boolean;
+}): {
+  fs: FsPort;
+  removeCalls: string[];
+  copyCalls: string[];
+  removeBookDirCalls: string[];
+} {
   const removeCalls: string[] = [];
   const copyCalls: string[] = [];
+  const removeBookDirCalls: string[] = [];
   const fs: FsPort = {
     copyBookToAppData: vi.fn(async (path: string) => {
       copyCalls.push(path);
@@ -40,7 +49,13 @@ export function makeFs(opts?: {
       if (opts?.removeImpl) return opts.removeImpl(path);
     }),
   };
-  return { fs, removeCalls, copyCalls };
+  if (!opts?.noRemoveBookDir) {
+    fs.removeBookDir = vi.fn(async (path: string) => {
+      removeBookDirCalls.push(path);
+      if (opts?.removeBookDirImpl) return opts.removeBookDirImpl(path);
+    });
+  }
+  return { fs, removeCalls, copyCalls, removeBookDirCalls };
 }
 
 export function makeDbForImport(opts?: {
@@ -179,8 +194,8 @@ describe("runImport — copy failure", () => {
   });
 });
 
-describe("runImport — parse failure rolls back the copy", () => {
-  it("removes the copied file and returns stage: parse", async () => {
+describe("runImport — parse failure rolls back the copy (#209)", () => {
+  it("removes the bookDir when removeBookDir is defined", async () => {
     const failingFormats = {
       getBookData: vi.fn(async () => {
         throw new Error("bad zip");
@@ -189,7 +204,7 @@ describe("runImport — parse failure rolls back the copy", () => {
       getMobiData: vi.fn(),
       getAzw3Data: vi.fn(),
     };
-    const { fs, removeCalls } = makeFs();
+    const { fs, removeCalls, removeBookDirCalls } = makeFs();
     const { db, savedBooks } = makeDbForImport();
     const events: ImportProgressEvent<TestBookId>[] = [];
 
@@ -201,7 +216,10 @@ describe("runImport — parse failure rolls back the copy", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.stage).toBe("parse");
-    expect(removeCalls).toEqual(["/userData/broken.epub"]);
+    // Prefer removeBookDir over removeFile so the orphan per-book dir
+    // (the partition mobile owns) is torn down, not just the file inside it.
+    expect(removeBookDirCalls).toEqual(["/userData/broken.epub"]);
+    expect(removeCalls).toEqual([]);
     expect(savedBooks).toEqual([]);
     expect(events.map((e) => e.kind)).toEqual([
       "copying",
@@ -209,12 +227,67 @@ describe("runImport — parse failure rolls back the copy", () => {
       "failed",
     ]);
   });
+
+  it("falls back to removeFile when removeBookDir is NOT defined (electron shape)", async () => {
+    const failingFormats = {
+      getBookData: vi.fn(async () => {
+        throw new Error("bad zip");
+      }),
+      getPdfData: vi.fn(),
+      getMobiData: vi.fn(),
+      getAzw3Data: vi.fn(),
+    };
+    const { fs, removeCalls, removeBookDirCalls } = makeFs({
+      noRemoveBookDir: true,
+    });
+    const events: ImportProgressEvent<TestBookId>[] = [];
+
+    const result = await runImport(
+      makeImporterDeps({ formats: failingFormats, fs }),
+      "/Downloads/broken.epub",
+      (e) => events.push(e),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(removeCalls).toEqual(["/userData/broken.epub"]);
+    expect(removeBookDirCalls).toEqual([]);
+  });
+
+  it("still returns the parse error when cleanup itself throws", async () => {
+    const failingFormats = {
+      getBookData: vi.fn(async () => {
+        throw new Error("bad zip");
+      }),
+      getPdfData: vi.fn(),
+      getMobiData: vi.fn(),
+      getAzw3Data: vi.fn(),
+    };
+    const { fs } = makeFs({
+      removeBookDirImpl: async () => {
+        throw new Error("rm failed");
+      },
+    });
+    const events: ImportProgressEvent<TestBookId>[] = [];
+
+    const result = await runImport(
+      makeImporterDeps({ formats: failingFormats, fs }),
+      "/Downloads/broken.epub",
+      (e) => events.push(e),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.stage).toBe("parse");
+      // The cleanup branch must NOT swallow / replace the original error.
+      expect(result.error).toBe("bad zip");
+    }
+  });
 });
 
-describe("runImport — save failure does NOT roll back copy", () => {
-  it("returns stage: save and leaves the copied file on disk", async () => {
+describe("runImport — save failure rolls back the copy (#209)", () => {
+  it("removes the bookDir when DB save throws", async () => {
     const { formats } = makeFormats();
-    const { fs, removeCalls } = makeFs();
+    const { fs, removeCalls, removeBookDirCalls } = makeFs();
     const { db } = makeDbForImport({ failOn: "saveBook" });
     const events: ImportProgressEvent<TestBookId>[] = [];
 
@@ -226,6 +299,7 @@ describe("runImport — save failure does NOT roll back copy", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.stage).toBe("save");
+    expect(removeBookDirCalls).toEqual(["/userData/book.epub"]);
     expect(removeCalls).toEqual([]);
     expect(events.map((e) => e.kind)).toEqual([
       "copying",
@@ -233,6 +307,49 @@ describe("runImport — save failure does NOT roll back copy", () => {
       "saving",
       "failed",
     ]);
+  });
+
+  it("falls back to removeFile when removeBookDir is NOT defined", async () => {
+    const { formats } = makeFormats();
+    const { fs, removeCalls, removeBookDirCalls } = makeFs({
+      noRemoveBookDir: true,
+    });
+    const { db } = makeDbForImport({ failOn: "saveBook" });
+    const events: ImportProgressEvent<TestBookId>[] = [];
+
+    const result = await runImport(
+      makeImporterDeps({ formats, fs, db }),
+      "/Downloads/book.epub",
+      (e) => events.push(e),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(removeCalls).toEqual(["/userData/book.epub"]);
+    expect(removeBookDirCalls).toEqual([]);
+  });
+
+  it("still returns the save error when cleanup itself throws", async () => {
+    const { formats } = makeFormats();
+    const { fs } = makeFs({
+      removeBookDirImpl: async () => {
+        throw new Error("rm failed");
+      },
+    });
+    const { db } = makeDbForImport({ failOn: "saveBook" });
+    const events: ImportProgressEvent<TestBookId>[] = [];
+
+    const result = await runImport(
+      makeImporterDeps({ formats, fs, db }),
+      "/Downloads/book.epub",
+      (e) => events.push(e),
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.stage).toBe("save");
+      // The cleanup branch must NOT swallow / replace the original error.
+      expect(result.error).toBe("saveBook failed");
+    }
   });
 });
 
