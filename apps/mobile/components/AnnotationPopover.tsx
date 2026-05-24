@@ -57,6 +57,44 @@ export function AnnotationPopover({
     [position.x, position.y],
   )
 
+  // PRF-006 (#111): memoise the swatch row so JSX `.map(...)` doesn't
+  // allocate a fresh array of React elements every render. Re-runs
+  // only when the currently-selected colour, the theme border colour,
+  // the highlight id, or the onChangeColor callback changes — none of
+  // which flip on a typical re-render of the parent reader screen.
+  const swatchElements = useMemo(() => {
+    if (!highlight) return null
+    return HIGHLIGHT_COLORS.map((c) => (
+      // VIS-027 (#87): wrap the 20pt visual circle in a 44×44pt touch
+      // target with the circle centered. The wrapper itself owns the
+      // hit zone, so we DROP hitSlop entirely — slop on adjacent
+      // swatches previously overlapped and created dead-zones at the
+      // boundary. Layout-driven sizing keeps each target exclusive
+      // to its swatch.
+      <TouchableOpacity
+        key={c.name}
+        onPress={() => {
+          onChangeColor(highlight.id, c.name)
+          setShowColors(false)
+        }}
+        accessibilityRole="button"
+        accessibilityLabel={`${c.name} highlight`}
+        style={styles.swatchWrapper}
+      >
+        <View
+          style={{
+            width: 20,
+            height: 20,
+            borderRadius: 10,
+            backgroundColor: c.hex,
+            borderWidth: highlight.color === c.name ? 2 : 0,
+            borderColor: theme.toolbarText,
+          }}
+        />
+      </TouchableOpacity>
+    ))
+  }, [highlight, onChangeColor, theme.toolbarText])
+
   if (!visible || !highlight) return null
 
   const handleDelete = () => {
@@ -118,37 +156,7 @@ export function AnnotationPopover({
         </TouchableOpacity>
 
         {showColors ? (
-          <View style={styles.swatchRow}>
-            {HIGHLIGHT_COLORS.map((c) => (
-              // VIS-027 (#87): wrap the 20pt visual circle in a 44×44pt
-              // touch target with the circle centered. The wrapper itself
-              // owns the hit zone, so we DROP hitSlop entirely — slop on
-              // adjacent swatches previously overlapped and created
-              // dead-zones at the boundary. Layout-driven sizing keeps
-              // each target exclusive to its swatch.
-              <TouchableOpacity
-                key={c.name}
-                onPress={() => {
-                  onChangeColor(highlight.id, c.name)
-                  setShowColors(false)
-                }}
-                accessibilityRole="button"
-                accessibilityLabel={`${c.name} highlight`}
-                style={styles.swatchWrapper}
-              >
-                <View
-                  style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: 10,
-                    backgroundColor: c.hex,
-                    borderWidth: highlight.color === c.name ? 2 : 0,
-                    borderColor: theme.toolbarText,
-                  }}
-                />
-              </TouchableOpacity>
-            ))}
-          </View>
+          <View style={styles.swatchRow}>{swatchElements}</View>
         ) : (
           <TouchableOpacity
             onPress={() => setShowColors(true)}

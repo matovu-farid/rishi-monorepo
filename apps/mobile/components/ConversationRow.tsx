@@ -1,5 +1,7 @@
-import { Image, Pressable, Text, View } from 'react-native'
+import { useCallback } from 'react'
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native'
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable'
+import { useTheme } from '@/lib/theme'
 import type { Conversation } from '@/types/conversation'
 
 interface ConversationRowProps {
@@ -54,12 +56,26 @@ export function ConversationRow({
   onSwipeDelete,
   testID,
 }: ConversationRowProps) {
+  const { colors } = useTheme()
+  // PRF-005 (#110): press feedback was previously driven by NativeWind's
+  // `active:bg-gray-100 dark:active:bg-gray-800` className, which forces
+  // a className re-parse on every press / theme change. Switch to a
+  // StyleSheet-backed `style={({ pressed }) => [...]}` callback so the
+  // pressed background is a static reference + a tinted overlay sourced
+  // from the theme.
+  const pressStyle = useCallback(
+    ({ pressed }: { pressed: boolean }) => [
+      styles.row,
+      pressed ? { backgroundColor: colors.fill.tertiary } : null,
+    ],
+    [colors.fill.tertiary],
+  )
   const row = (
     <Pressable
       testID={testID}
       onPress={onPress}
       onLongPress={onLongPress}
-      className="flex-row items-center bg-white dark:bg-[#151718] px-4 py-4 active:bg-gray-100 dark:active:bg-gray-800"
+      style={pressStyle}
       accessibilityRole="button"
       // P1-AE: expose the FULL book title via accessibilityLabel so VoiceOver
       // users hear the untruncated title even when the visible Text below is
@@ -139,3 +155,16 @@ export function ConversationRow({
     </ReanimatedSwipeable>
   )
 }
+
+// PRF-005 (#110): static layout pulled into StyleSheet so the press
+// callback only composes the pressed-state background. The earlier
+// `flex-row items-center px-4 py-4` className is preserved here as
+// equivalent inline RN values so the row keeps its original spacing.
+const styles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+  },
+})

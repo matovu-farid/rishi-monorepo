@@ -14,6 +14,21 @@
  *      so screen readers announce the full (non-truncated) title.
  */
 
+// PRF-005 (#110): ConversationRow now uses useTheme to source its
+// press-feedback tint, so the test must provide a theme stub.
+jest.mock('@/lib/theme', () => ({
+  useTheme: () => ({
+    colors: {
+      fill: {
+        primary: 'rgba(120,120,128,0.20)',
+        secondary: 'rgba(120,120,128,0.16)',
+        tertiary: 'rgba(118,118,128,0.12)',
+        quaternary: 'rgba(116,116,128,0.08)',
+      },
+    },
+  }),
+}))
+
 jest.mock('react-native', () => {
   const React = require('react')
   const mk = (name: string) =>
