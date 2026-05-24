@@ -38,14 +38,31 @@ export function ensureChunkTables(): void {
 }
 
 /**
+ * Expected embedding dimension. The `chunk_vectors` virtual table is
+ * created with `vec0(embedding float[EMBEDDING_DIM])`; inserting a
+ * wrong-dim vector is silently lossy at the sqlite-vec layer (KNN
+ * results degrade without an error). We enforce the contract in JS so
+ * the caller gets a catchable error instead.
+ */
+export const EMBEDDING_DIM = 384
+
+/**
  * Insert a text chunk and its embedding vector.
+ *
+ * DAT-006 (#119): the embedding MUST be exactly {@link EMBEDDING_DIM}
+ * floats and every entry must be finite. If the upstream embedder ever
+ * returns a different shape (server upgraded to a different model,
+ * 0-dim sentinel, NaN in the array) we throw before any row is
+ * written so neither the `chunks` row nor the `chunk_vectors` row
+ * becomes corrupt.
  *
  * @param chunkId - UUID for the chunk
  * @param bookId - Book this chunk belongs to
  * @param chunkIndex - Sequential position in the book
  * @param text - Chunk text content
  * @param chapter - Chapter label or null
- * @param embedding - 384-dimensional float vector
+ * @param embedding - {@link EMBEDDING_DIM}-dimensional float vector
+ * @throws Error if `embedding.length !== EMBEDDING_DIM` or any entry is non-finite.
  */
 export function insertChunkWithVector(
   chunkId: string,
@@ -55,6 +72,21 @@ export function insertChunkWithVector(
   chapter: string | null,
   embedding: number[]
 ): void {
+  if (!Array.isArray(embedding) || embedding.length !== EMBEDDING_DIM) {
+    throw new Error(
+      `[vector-store] embedding dimension mismatch: expected ${EMBEDDING_DIM}, received ${
+        Array.isArray(embedding) ? embedding.length : typeof embedding
+      } (chunkId=${chunkId})`
+    )
+  }
+  for (let i = 0; i < embedding.length; i++) {
+    if (!Number.isFinite(embedding[i])) {
+      throw new Error(
+        `[vector-store] embedding contains non-finite value at index ${i} (chunkId=${chunkId})`
+      )
+    }
+  }
+
   const result = rawDb.runSync(
     'INSERT INTO chunks (id, book_id, chunk_index, text, chapter, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     [chunkId, bookId, chunkIndex, text, chapter, Date.now()]

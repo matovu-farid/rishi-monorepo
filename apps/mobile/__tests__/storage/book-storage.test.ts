@@ -25,6 +25,13 @@ jest.mock('@rishi/shared/schema', () => ({
   },
 }))
 
+// DAT-008 (#121): deleteBook MUST cascade vector deletion. The mock lets us
+// observe whether `deleteBookChunks(bookId)` is invoked from `deleteBook`.
+const deleteBookChunksMock = jest.fn()
+jest.mock('@/lib/rag/vector-store', () => ({
+  deleteBookChunks: (...args: unknown[]) => deleteBookChunksMock(...args),
+}))
+
 jest.mock('drizzle-orm', () => ({
   eq: jest.fn((_col, _val) => ({ eq: [_col, _val] })),
   and: jest.fn((...args: unknown[]) => ({ and: args })),
@@ -112,13 +119,16 @@ const mockDb = {
 
 jest.mock('@/lib/db', () => ({
   db: mockDb,
+  // DAT-015 (#127): book-storage now stamps writes via the monotonic
+  // helper from db.ts; the test mock must export it too.
+  nextLocalTimestamp: jest.fn(() => Date.now()),
 }))
 
 // ────────────────────────────────────────────────────────────────────────────
 // Imports — after mocks
 // ────────────────────────────────────────────────────────────────────────────
 
-import { getBookForReading } from '@/lib/book-storage'
+import { getBookForReading, deleteBook } from '@/lib/book-storage'
 
 // ────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -158,6 +168,8 @@ function resetAll(): void {
   getResults.length = 0
   downloadBookFile.mockClear()
   mockDb.select.mockClear()
+  mockDb.update.mockClear()
+  deleteBookChunksMock.mockClear()
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -285,5 +297,31 @@ describe('getBookForReading — lazy R2 download', () => {
     await getBookForReading('book-local-cb', { onDownloadStart })
 
     expect(onDownloadStart).not.toHaveBeenCalled()
+  })
+})
+
+// DAT-008 (#121): deleteBook used to flip `isDeleted` on the row only — chunks
+// + their vec0 vectors stayed in the DB indefinitely. If the book got
+// re-imported with the same id, the stale RAG context would surface in chat;
+// at minimum disk grows on every delete. `deleteBook` must cascade into
+// `deleteBookChunks(id)` from the same call site.
+describe('deleteBook — cascade chunks/vectors', () => {
+  beforeEach(() => resetAll())
+
+  it('calls deleteBookChunks with the same bookId when soft-deleting a book', () => {
+    deleteBook('book-1')
+    expect(deleteBookChunksMock).toHaveBeenCalledTimes(1)
+    expect(deleteBookChunksMock).toHaveBeenCalledWith('book-1')
+  })
+
+  it('still soft-deletes the row even if vector deletion throws', () => {
+    deleteBookChunksMock.mockImplementationOnce(() => {
+      throw new Error('vec0 not loaded')
+    })
+    // Should not throw — the row-level soft-delete must still proceed so
+    // the user's "delete book" tap doesn't appear to fail.
+    expect(() => deleteBook('book-2')).not.toThrow()
+    // The drizzle update chain was still called for the books row.
+    expect(mockDb.update).toHaveBeenCalled()
   })
 })

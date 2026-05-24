@@ -153,6 +153,108 @@ expo.execSync("INSERT OR IGNORE INTO sync_state (id, in_progress) VALUES ('defau
 export const db = drizzle(expo, { schema })
 export type AppDb = typeof db
 
+// ─── Schema-migration runner ─────────────────────────────────────────────────
+//
+// DAT-014 (#126): the bootstrap above is a fixed sequence of CREATE TABLE
+// IF NOT EXISTS + ALTER TABLE statements that always runs every module
+// load. There was no PRAGMA user_version check, so a future "drop column",
+// "rename table", or "rewrite key shape" couldn't run conditionally.
+// Authors would have to hand-edit the bootstrap and there'd be no record
+// of which devices had already executed which migration.
+//
+// runMigrations(db, target, migrations) is the minimal forward-only
+// runner that future schema bumps should use:
+//   1. Read PRAGMA user_version. If it equals target, no-op.
+//   2. If it is GREATER than target, refuse — downgrades are unsafe.
+//   3. Run every migration whose version is greater than the stored
+//      user_version, in ascending order. Errors propagate (better to
+//      crash than persist a half-migrated DB; next launch re-runs from
+//      the failed step because user_version was NOT bumped).
+//   4. After all migrations succeed, write
+//      `PRAGMA user_version = <target>`.
+//
+// Migration policy:
+//   - Migrations are forward-only. To revert, ship a NEW migration that
+//     undoes the change with a higher version number.
+//   - The current bootstrap above is the implicit "v0" state. New
+//     schema work should add a Migration{ version: 1, run } entry and
+//     call runMigrations(rawDb, 1, [...]) at the end of this file.
+//   - The runner deliberately does NOT wrap migrations in a single
+//     transaction — expo-sqlite's ALTER TABLE statements are auto-
+//     committed individually, and we want partial progress to survive a
+//     crash so the next launch picks up where we stopped.
+export interface Migration {
+  /** Strictly positive monotonic version number. */
+  version: number
+  /** Idempotent migration body. Receives the raw expo-sqlite database. */
+  run: (db: MigrationDb) => void
+}
+
+interface MigrationDb {
+  // eslint-disable-next-line @typescript-eslint/method-signature-style
+  execSync(sql: string): void
+  // eslint-disable-next-line @typescript-eslint/method-signature-style
+  getFirstSync<T = unknown>(sql: string): T | undefined
+}
+
+export function runMigrations(
+  database: MigrationDb,
+  targetVersion: number,
+  migrations: Migration[],
+): void {
+  const row = database.getFirstSync<{ user_version: number }>('PRAGMA user_version')
+  const storedVersion = row?.user_version ?? 0
+
+  if (storedVersion === targetVersion) return
+  if (storedVersion > targetVersion) {
+    throw new Error(
+      `[db] refusing to downgrade schema: stored user_version=${storedVersion} > target=${targetVersion}`,
+    )
+  }
+
+  // Sort ascending by version so we always migrate older->newer regardless
+  // of caller-provided order.
+  const sorted = [...migrations].sort((a, b) => a.version - b.version)
+
+  // Sanity: the highest migration version must match the target so callers
+  // can't silently skip a step.
+  const highest = sorted.length > 0 ? sorted[sorted.length - 1].version : 0
+  if (highest !== targetVersion) {
+    throw new Error(
+      `[db] missing migration: target=${targetVersion} but highest provided version=${highest}`,
+    )
+  }
+
+  for (const m of sorted) {
+    if (m.version <= storedVersion) continue
+    m.run(database) // run() may throw; intentionally propagate.
+  }
+
+  database.execSync(`PRAGMA user_version = ${targetVersion}`)
+}
+
+// ─── Monotonic local timestamp ───────────────────────────────────────────────
+//
+// DAT-015 (#127): the sync engine's conflict resolution compares
+// `updatedAt` integers — equal stamps fall through and the remote write
+// wins, silently overwriting the local edit. Two writes generated in the
+// same JS millisecond (a RAG answer + auto-title, two debounced reading-
+// progress saves, etc.) are the most common failure mode.
+//
+// `nextLocalTimestamp()` returns a strictly-monotonic integer. It is
+// initialized to `Date.now()` and clamped to `max(Date.now(), last + 1)`
+// on every call so consecutive writes are always orderable on the same
+// device. Across devices this does NOT provide a tiebreaker (each device
+// has its own counter) — that requires a server-side revision id in a
+// future migration; this fix removes the within-device portion of the
+// failure mode without a schema bump.
+let lastLocalTimestamp = 0
+export function nextLocalTimestamp(): number {
+  const now = Date.now()
+  lastLocalTimestamp = now > lastLocalTimestamp ? now : lastLocalTimestamp + 1
+  return lastLocalTimestamp
+}
+
 // ─── Sync marker helpers ─────────────────────────────────────────────────────
 export function markSyncInProgress(inProgress: boolean): void {
   expo.execSync(
