@@ -156,8 +156,7 @@ describe('findRepeatingPageSuffix', () => {
       // Other pages use the random alphabetic suffix to ensure normalization
       // doesn't collapse them onto each other (digit-replace would).
       const uniqueSuffix = `closing remark ${String.fromCharCode(64 + p)}${String.fromCharCode(96 + p)} subject`
-      const bottomText =
-        p <= 2 ? 'Shared closing remark only on two pages' : uniqueSuffix
+      const bottomText = p <= 2 ? 'Shared closing remark only on two pages' : uniqueSuffix
       pages.push(
         makePage(p, [
           { str: `Distinct body topic ${String.fromCharCode(64 + p)} for page ${p}`, y: 700 },

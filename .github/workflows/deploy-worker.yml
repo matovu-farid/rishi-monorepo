@@ -25,7 +25,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2  # 0c5077e51419868618aeaa5fe8019c62421857d6
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # pinned-by-SHA + explicit bun-version skips the GitHub tags-API resolve that returns 401 (#221)
+        with:
+          bun-version: 1.1.42
 
       - uses: actions/cache@v4
         with:

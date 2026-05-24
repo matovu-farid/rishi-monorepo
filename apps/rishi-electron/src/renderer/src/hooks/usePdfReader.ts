@@ -324,7 +324,10 @@ export function usePdfReader(
 // Exported for the issue-#30 snap-back test (useScrolling.test.tsx) so the
 // flag-lifecycle contract can be exercised end-to-end at the unit-test
 // level. Production consumers stay inside usePdfReader's effect.
-export function publishParagraphsForPage(page: number, pageDataMap: Record<number, TextContent>): void {
+export function publishParagraphsForPage(
+  page: number,
+  pageDataMap: Record<number, TextContent>
+): void {
   const data = pageDataMap[page] as TextContent | undefined
   if (!data) return
   const bookId = usePdfStore.getState().book?.id

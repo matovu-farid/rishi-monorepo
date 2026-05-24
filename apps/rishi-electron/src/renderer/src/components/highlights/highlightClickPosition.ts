@@ -18,9 +18,9 @@ export function computeHighlightClickPosition(
 ): { x: number; y: number } {
   const target = e?.target as Element | null | undefined
   const eventIframe =
-    (target?.ownerDocument?.defaultView?.frameElement as HTMLElement | null) ?? null
+    (target?.ownerDocument.defaultView?.frameElement as HTMLElement | null) ?? null
   const iframeEl = eventIframe ?? fallbackIframe ?? null
-  const rect = iframeEl?.getBoundingClientRect?.()
+  const rect = iframeEl?.getBoundingClientRect()
   if (rect && e && typeof e.clientX === 'number' && typeof e.clientY === 'number') {
     return { x: rect.left + e.clientX, y: rect.top + e.clientY }
   }

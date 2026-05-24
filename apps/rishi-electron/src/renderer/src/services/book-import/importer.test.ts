@@ -213,13 +213,7 @@ describe('runImport — save failure does NOT roll back copy', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.stage).toBe('save')
     expect(removeCalls).toEqual([])
-    expect(events.map((e) => e.kind)).toEqual([
-      'copying',
-      'hashing',
-      'parsing',
-      'saving',
-      'failed'
-    ])
+    expect(events.map((e) => e.kind)).toEqual(['copying', 'hashing', 'parsing', 'saving', 'failed'])
   })
 })
 
@@ -273,13 +267,7 @@ describe('runImport — happy path EPUB', () => {
     expect(copyCalls).toEqual(['/Downloads/sample.epub'])
     expect(savedBooks).toHaveLength(1)
     expect(savedBooks[0].filepath).toBe('/userData/sample.epub')
-    expect(events.map((e) => e.kind)).toEqual([
-      'copying',
-      'hashing',
-      'parsing',
-      'saving',
-      'done'
-    ])
+    expect(events.map((e) => e.kind)).toEqual(['copying', 'hashing', 'parsing', 'saving', 'done'])
   })
 })
 

@@ -1,5 +1,10 @@
 import { setup, assign, emit } from 'xstate'
-import type { AnchorPoint, NavigationHistoryContext, NavigationHistoryEvent, NavigationHistoryEmitted } from './types'
+import type {
+  AnchorPoint,
+  NavigationHistoryContext,
+  NavigationHistoryEvent,
+  NavigationHistoryEmitted
+} from './types'
 import { STACK_MAX_DEPTH, DWELL_MS } from './types'
 import { pageKey } from './pageKey'
 
@@ -118,7 +123,11 @@ export const navigationHistoryMachine = setup({
             idle: {
               on: {
                 JUMP_REQUESTED: { target: 'navigating', actions: 'pushAnchor' },
-                POP_BACK: { target: 'navigating', guard: 'hasStackEntries', actions: ['popAnchor', 'hidePillIfStackEmpty'] },
+                POP_BACK: {
+                  target: 'navigating',
+                  guard: 'hasStackEntries',
+                  actions: ['popAnchor', 'hidePillIfStackEmpty']
+                },
                 PAGE_VISITED: [
                   {
                     guard: 'hasResumeAnchor',

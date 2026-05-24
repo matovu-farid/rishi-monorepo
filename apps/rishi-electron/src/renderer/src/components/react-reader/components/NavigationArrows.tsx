@@ -14,6 +14,14 @@ export type NavigationArrowsProps = {
  * NavigationArrows Component
  * Renders semi-transparent left/right arrow buttons overlaid on the reader edges.
  * Becomes more visible on hover.
+ *
+ * Theme contract:
+ *   - Arrow color uses `text-muted-foreground` / `hover:text-foreground` so
+ *     contrast tracks the active app theme (light/dark). Reader-theme pages
+ *     that change background should override via wrapping color.
+ *   - `motion-reduce:transition-none` honors `prefers-reduced-motion`.
+ *   - `focus-visible:ring-2 focus-visible:ring-ring` gives keyboard users a
+ *     visible focus indicator.
  */
 export const NavigationArrows = ({
   onPrev,
@@ -23,9 +31,10 @@ export const NavigationArrows = ({
 }: NavigationArrowsProps) => {
   const buttonClass =
     'absolute top-1/2 -translate-y-1/2 z-10 flex items-center justify-center ' +
-    'w-12 h-24 text-gray-300 hover:text-gray-600 ' +
-    'opacity-40 hover:opacity-100 transition-opacity duration-200 ' +
-    'cursor-pointer select-none bg-transparent border-none outline-none'
+    'w-12 h-24 text-muted-foreground hover:text-foreground ' +
+    'opacity-40 hover:opacity-100 transition-opacity duration-200 motion-reduce:transition-none ' +
+    'cursor-pointer select-none bg-transparent border-none ' +
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:rounded-md'
 
   return (
     <>

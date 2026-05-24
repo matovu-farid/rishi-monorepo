@@ -18,7 +18,10 @@ interface AudioCtxLike {
   state: 'suspended' | 'running' | 'closed'
   resume(): Promise<void>
   close(): Promise<void>
-  createMediaStreamSource(stream: MediaStreamLike): { connect(dest: unknown): void; disconnect(): void }
+  createMediaStreamSource(stream: MediaStreamLike): {
+    connect(dest: unknown): void
+    disconnect(): void
+  }
   createAnalyser(): AnalyserLike
 }
 
@@ -39,7 +42,7 @@ function readGlobalAudioContext(): (new () => AudioCtxLike) | null {
 function computeRms(samples: Float32Array): number {
   let sumSq = 0
   for (let i = 0; i < samples.length; i++) {
-    const s = samples[i]!
+    const s = samples[i]
     sumSq += s * s
   }
   return Math.sqrt(sumSq / samples.length)

@@ -74,9 +74,28 @@ export interface ChunkText {
 // Row ↔ Object mapping helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Explicit column list for list-shaped book queries — everything from the
+ * `books` table EXCEPT `cover`. Covers are now lazy-loaded via `getCover(id)`
+ * so list queries don't pull N × cover-size of BLOB data over IPC. See #190.
+ *
+ * Kept in sync with `schema.ts` — any new non-cover column added to `books`
+ * must be appended here too, or `getAllBooks` will silently stop returning it.
+ */
+const BOOK_LIST_COLUMNS = `
+  id, kind, title, author, publisher, filepath, location, cover_kind,
+  version, sync_id, file_hash, file_r2_key, cover_r2_key, file_size,
+  format, current_cfi, current_page, user_id, sync_version, is_dirty,
+  is_deleted, last_paragraph
+`
+
 /** Map a raw DB row (snake_case) to a Book object (camelCase). */
 function rowToBook(row: Record<string, unknown>): Book {
-  // Convert cover from SQLite Buffer/Uint8Array to number[] for IPC serialization
+  // Convert cover from SQLite Buffer/Uint8Array to number[] for IPC serialization.
+  // List queries (getAllBooks) omit `cover` from the SELECT, so `rawCover` is
+  // undefined on those rows — we surface that as an empty array so the type
+  // contract stays a number[], and the renderer's BookCoverImage falls back
+  // to a lazy `getCover(id)` fetch.
   const rawCover = row.cover
   const cover =
     rawCover instanceof Buffer
@@ -117,12 +136,57 @@ function rowToBook(row: Record<string, unknown>): Book {
 // ---------------------------------------------------------------------------
 
 /**
- * Return all non-deleted books.
+ * Pure-SQL variant of `getAllBooks` for unit testing without `getDb()`.
+ *
+ * Selects an explicit column list excluding the `cover` BLOB — covers are
+ * loaded on demand via {@link _getCoverWithDb}/{@link getCover}. For a
+ * library of N books at ~50 KB each, dropping the BLOB from list queries
+ * saves N × 50 KB of memory + IPC payload on every library refresh.
+ *
+ * See #190.
+ */
+export function _getAllBooksWithDb(db: Database): Book[] {
+  const rows = db
+    .prepare(`SELECT ${BOOK_LIST_COLUMNS} FROM books WHERE is_deleted = 0`)
+    .all() as Array<Record<string, unknown>>
+  return rows.map((row) => rowToBook(row))
+}
+
+/**
+ * Return all non-deleted books. The `cover` field on each row is an empty
+ * array — fetch the BLOB on demand via {@link getCover} when rendering a
+ * cover image.
  */
 export function getAllBooks(): Book[] {
-  const db = getDb()
-  const rows = db.prepare('SELECT * FROM books WHERE is_deleted = 0').all()
-  return rows.map((row) => rowToBook(row as Record<string, unknown>))
+  return _getAllBooksWithDb(getDb())
+}
+
+/**
+ * Pure-SQL variant of `getCover` for unit testing without `getDb()`.
+ *
+ * Returns the raw cover bytes as a Buffer when the book exists (possibly an
+ * empty Buffer if no cover was ever stored), or `null` when the id doesn't
+ * match any row. Keeping the "row missing" vs "row exists, no cover" cases
+ * distinct lets callers tell a stale id from a coverless book.
+ */
+export function _getCoverWithDb(db: Database, bookId: number): Buffer | null {
+  const row = db.prepare('SELECT cover FROM books WHERE id = ?').get(bookId) as
+    | { cover: Buffer | Uint8Array | null }
+    | undefined
+  if (!row) return null
+  const raw = row.cover
+  if (raw == null) return Buffer.alloc(0)
+  if (raw instanceof Buffer) return raw
+  return Buffer.from(raw)
+}
+
+/**
+ * Return the cover BLOB for a single book, or `null` if the book id doesn't
+ * exist. Wired through the IPC contract as `books:getCover` for renderer
+ * use (BookCoverImage lazily fetches when it needs to paint a cover).
+ */
+export function getCover(bookId: number): Buffer | null {
+  return _getCoverWithDb(getDb(), bookId)
 }
 
 /**

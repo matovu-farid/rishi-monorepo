@@ -20,6 +20,7 @@ function bookFromFormat(format: Book['format']): Book {
     format,
     currentCfi: null,
     currentPage: null,
+    lastProgressPercent: null,
     createdAt: 0,
   }
 }

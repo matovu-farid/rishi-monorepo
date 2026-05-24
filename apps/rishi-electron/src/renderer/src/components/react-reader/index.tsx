@@ -122,9 +122,7 @@ export class ReactReader extends PureComponent<IReactReaderProps, IReactReaderSt
       const indexStr = activeParagraph?.index
       const paragraphIndex = indexStr != null ? Number(indexStr) : null
       const fromTts =
-        paragraphIndex != null && Number.isFinite(paragraphIndex)
-          ? { paragraphIndex }
-          : null
+        paragraphIndex != null && Number.isFinite(paragraphIndex) ? { paragraphIndex } : null
       navigationHistoryActor.send({
         type: 'JUMP_REQUESTED',
         from: { kind: 'epub', cfi: currentCfi },
