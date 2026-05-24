@@ -22,6 +22,11 @@ export function UrlImportSheet({ visible, onDismiss, onImported }: UrlImportShee
   const inputRef = useRef<TextInput>(null)
   // Track URL in both ref (for native input) and state (for user typing)
   const urlRef = useRef('')
+  // DAT-017 (#129): controller for the in-flight download so the user
+  // can cancel by dismissing the sheet. Stored in a ref so that
+  // unmount / dismiss callbacks reach the live controller rather than
+  // capturing a stale one across renders.
+  const abortRef = useRef<AbortController | null>(null)
 
   const handleDownload = useCallback(async (textOverride?: string) => {
     const trimmed = (textOverride ?? urlRef.current).trim()
@@ -31,31 +36,62 @@ export function UrlImportSheet({ visible, onDismiss, onImported }: UrlImportShee
     setStatus('downloading')
     setErrorMessage('')
 
+    // DAT-017 (#129): mint a fresh controller per download. If the user
+    // taps Download twice (after an error) we want the new attempt to
+    // start with a clean signal — the previous one was already
+    // settled (resolved or rejected).
+    const controller = new AbortController()
+    abortRef.current = controller
+
     try {
-      const book = await importBookFromUrl(trimmed)
+      const book = await importBookFromUrl(trimmed, { signal: controller.signal })
+      // If the request completed but the user has since aborted (e.g.
+      // dismissed the sheet right before fetch resolved), suppress
+      // the success path so we don't update state on a detached
+      // component or call onImported for a cancelled session.
+      if (controller.signal.aborted) return
       urlRef.current = ''
       inputRef.current?.clear()
       setStatus('idle')
       onDismiss()
       onImported(book)
     } catch (err: any) {
+      // DAT-017 (#129): user-initiated abort is not a user-facing
+      // error — the sheet is already closing (handleClose triggered
+      // the abort). Skip the error banner.
+      if (
+        controller.signal.aborted ||
+        err?.name === 'AbortError'
+      ) {
+        return
+      }
       // P1-AD — `importBookFromUrl` maps non-2xx HTTP statuses to
       // user-facing copy (mapHttpStatusToUserCopy). The fallback covers
       // network / DNS / parse errors that don't go through that map.
       setStatus('error')
       const raw = typeof err?.message === 'string' ? err.message : ''
       setErrorMessage(raw || 'Could not download file. Check the URL and try again.')
+    } finally {
+      if (abortRef.current === controller) {
+        abortRef.current = null
+      }
     }
   }, [onDismiss, onImported])
 
   const handleClose = useCallback(() => {
-    if (status === 'downloading') return
+    // DAT-017 (#129): the original guard returned early while a
+    // download was in flight, leaving the user with no way to cancel.
+    // Now we abort the in-flight request and tear down the sheet.
+    if (abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
+    }
     urlRef.current = ''
     inputRef.current?.clear()
     setStatus('idle')
     setErrorMessage('')
     onDismiss()
-  }, [status, onDismiss])
+  }, [onDismiss])
 
   if (!visible) return null
 

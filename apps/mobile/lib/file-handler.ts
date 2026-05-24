@@ -15,6 +15,7 @@
  */
 import { Directory, Paths, File } from 'expo-file-system'
 import { createMobileBookImportService } from '@/lib/book-import'
+import { findDuplicateByHash } from '@/lib/file-import'
 import type { BookFormat } from '@rishi/shared/book-import'
 
 const BOOKS_DIR_NAME = 'books'
@@ -23,7 +24,11 @@ export type IncomingFileResult =
   | { ok: true; bookId: string; format: BookFormat }
   | {
       ok: false
-      reason: 'unsupported' | 'import-failed' | 'duplicate-in-flight'
+      reason:
+        | 'unsupported'
+        | 'import-failed'
+        | 'duplicate-in-flight'
+        | 'duplicate'
       error?: string
     }
 
@@ -39,12 +44,32 @@ export function __resetInFlightForTests(): void {
   inFlight.clear()
 }
 
+/**
+ * DAT-013 (#125): module-level counter folded into the fallback UUID
+ * generator so two rapid incoming-file callbacks (iOS share sheet can
+ * fire `getInitialURL` + `addEventListener('url')` within microseconds
+ * of each other) cannot collide even if Math.random() returns the same
+ * value back-to-back. The host's `crypto.randomUUID` is already
+ * collision-safe and is preferred when available.
+ */
+let fallbackUuidCounter = 0
+
 function generateUUID(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID()
   }
+  fallbackUuidCounter = (fallbackUuidCounter + 1) & 0xffffffff
+  const counter = fallbackUuidCounter
+  let counterNibblesConsumed = 0
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0
+    let r: number
+    if (c === 'x' && counterNibblesConsumed < 8) {
+      const shift = (7 - counterNibblesConsumed) * 4
+      r = (counter >>> shift) & 0xf
+      counterNibblesConsumed += 1
+    } else {
+      r = (Math.random() * 16) | 0
+    }
     const v = c === 'x' ? r : (r & 0x3) | 0x8
     return v.toString(16)
   })
@@ -121,6 +146,21 @@ export async function handleIncomingFile(
   inFlight.add(url)
 
   try {
+    // DAT-002 (#115): the picker + URL paths already short-circuit on a
+    // matching file-hash; share-sheet was the only surface that still
+    // slipped through, so the library could grow a second row when the
+    // user shared the same file twice from another app. Reuse the same
+    // gate here so all three import surfaces have identical semantics.
+    // PR #207 review caught the gap.
+    const duplicate = await findDuplicateByHash(url)
+    if (duplicate) {
+      return {
+        ok: false,
+        reason: 'duplicate',
+        error: `This book is already in your library (id=${duplicate.existingBookId}).`,
+      }
+    }
+
     return await runImport(url, format)
   } finally {
     inFlight.delete(url)

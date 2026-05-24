@@ -84,6 +84,15 @@ jest.mock('@/lib/book-import', () => ({
   createMobileBookImportService,
 }))
 
+// ── DAT-002 (#115) — share-sheet must also gate via findDuplicateByHash ─────
+// PR #207 review caught that share-sheet imports bypassed the duplicate
+// gate entirely. We mock `findDuplicateByHash` so a test can flip the
+// return value between "duplicate exists" and "fresh import".
+const findDuplicateByHash = jest.fn().mockResolvedValue(null)
+jest.mock('@/lib/file-import', () => ({
+  findDuplicateByHash,
+}))
+
 beforeEach(() => {
   jest.resetModules()
   backingStore = new Map<string, string>()
@@ -91,6 +100,8 @@ beforeEach(() => {
   indexBook.mockClear()
   createMobileBookImportService.mockClear()
   fileFromBytesMock.mockClear()
+  findDuplicateByHash.mockReset()
+  findDuplicateByHash.mockResolvedValue(null)
 })
 
 describe('handleIncomingFile (G27)', () => {
@@ -237,5 +248,43 @@ describe('handleIncomingFile (G27)', () => {
     const r2 = await handleIncomingFile(url)
     expect(r2.ok).toBe(true)
     expect(createMobileBookImportService).toHaveBeenCalledTimes(2)
+  })
+
+  // ── DAT-002 (#115) — share-sheet must check findDuplicateByHash ────────────
+  //
+  // PR #207 review found that #115 only wired the duplicate gate on the
+  // picker + URL paths. iOS/Android share-sheet imports still slipped
+  // through and created a second library row when the user shared the
+  // same file twice from another app. The handler must call the same
+  // `findDuplicateByHash` gate before invoking the shared import service.
+  it('rejects share-sheet imports when an existing book has the same content hash', async () => {
+    findDuplicateByHash.mockResolvedValueOnce({
+      existingBookId: 'existing-book-1',
+      fileHash: 'duplicate-hash',
+    })
+
+    const { handleIncomingFile } = require('@/lib/file-handler')
+    const result = await handleIncomingFile('file:///Inbox/shared-twice.epub')
+
+    expect(result.ok).toBe(false)
+    expect(result.reason).toBe('duplicate')
+    // The shared import service must NOT run — no copy, no row write.
+    expect(createMobileBookImportService).not.toHaveBeenCalled()
+    expect(importFromPath).not.toHaveBeenCalled()
+    // The gate received the URI the share-sheet handed us.
+    expect(findDuplicateByHash).toHaveBeenCalledWith(
+      'file:///Inbox/shared-twice.epub',
+    )
+  })
+
+  it('still imports share-sheet files when no duplicate row exists', async () => {
+    findDuplicateByHash.mockResolvedValueOnce(null)
+
+    const { handleIncomingFile } = require('@/lib/file-handler')
+    const result = await handleIncomingFile('file:///Inbox/fresh-share.epub')
+
+    expect(result.ok).toBe(true)
+    expect(createMobileBookImportService).toHaveBeenCalledTimes(1)
+    expect(findDuplicateByHash).toHaveBeenCalledTimes(1)
   })
 })

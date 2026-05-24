@@ -10,13 +10,21 @@
  */
 
 import { File, Directory, Paths } from "expo-file-system";
+import { and, eq } from "drizzle-orm";
 import { Book } from "@/types/book";
 import { createMobileBookImportService } from "@/lib/book-import";
+// Type-only import so file-import.ts does NOT pull adapters.ts's runtime
+// graph (jszip, mobi extractor, vector-store) into modules that mock
+// only the file-import surface.
+import type { CoverExtractionFailureReason } from "@/lib/book-import/adapters";
 import { embedBook } from "@/lib/rag/pipeline";
 import type { BookFormat } from "@rishi/shared/book-import";
 import { IS_E2E_TEST } from "@/app/_layout";
 import { getSessionToken } from "@/lib/auth";
 import { shouldSkipIndexing } from "@/lib/file-import-index-gate";
+import { db } from "@/lib/db";
+import { books } from "@rishi/shared/schema";
+import { hashBookFile } from "@/lib/sync/file-sync";
 
 const BOOKS_DIR = new Directory(Paths.document, "books");
 
@@ -52,8 +60,37 @@ export type ImportFailureStage =
   | "save"
   | "unknown";
 
+/**
+ * DAT-019 (#131): explicit cover-extraction completion state surfaced
+ * to callers. The shared `book-import` service kicks off cover
+ * extraction via `setTimeout(…, 0)` after the `done` event, so when
+ * `runImportWithService` resolves the cover state is still pending —
+ * the library UI used to render a stale letter-tile with no signal
+ * whether the cover would arrive, never arrive, or was simply
+ * unsupported for the format. `coverPromise` resolves with the
+ * eventual state and `coverState` is the initial `'pending'` until
+ * then. Callers that don't care can ignore both fields.
+ */
+export type CoverState =
+  | { status: "pending" }
+  | { status: "ready"; coverPath: string }
+  | { status: "unavailable"; reason: CoverExtractionFailureReason }
+  | { status: "unsupported"; format: BookFormat };
+
+export interface ImportSuccess {
+  ok: true;
+  book: Book;
+  /**
+   * Resolves to the final cover state once the shared importer's
+   * fire-and-forget post-save pipeline finishes. May resolve to
+   * `unavailable` (extractor failed; sentinel persisted) or
+   * `unsupported` (PDF / DJVU have no extractor). Never rejects.
+   */
+  coverPromise: Promise<CoverState>;
+}
+
 export type ImportOutcome =
-  | { ok: true; book: Book }
+  | ImportSuccess
   | { ok: false; stage: ImportFailureStage; error: string };
 
 /**
@@ -84,12 +121,62 @@ function classifyFailure(
 // Helpers
 // ────────────────────────────────────────────────────────────────────────────
 
+/**
+ * DAT-019 (#131): tiny deferred primitive. Reach for this instead of
+ * pulling in a Promise/utility package — we need exactly one
+ * "produce-promise-now, settle-later" handoff (the cover lifecycle).
+ */
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (v: T) => void;
+} {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  let settled = false;
+  return {
+    promise,
+    resolve: (v: T) => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+    },
+  };
+}
+
+/**
+ * DAT-013 (#125): module-level counter folded into the fallback UUID
+ * generator so two rapid calls cannot collide even if Math.random()
+ * returns the same value back-to-back (observed on some cold-started
+ * RN runtimes). The host's `crypto.randomUUID` is already collision-safe
+ * and is preferred when available.
+ */
+let fallbackUuidCounter = 0;
+
 function generateUUID(): string {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
     return crypto.randomUUID();
   }
+  // Increment first so two simultaneous calls observe distinct values
+  // even before the template string is built.
+  fallbackUuidCounter = (fallbackUuidCounter + 1) & 0xffffffff;
+  const counter = fallbackUuidCounter;
+  // Mix the counter nibble-by-nibble into the template positions. We
+  // walk a 32-bit counter across 8 nibbles (xxxxxxxx prefix), then fall
+  // through to Math.random() for the rest so the output is still
+  // RFC-4122-ish (version 4, variant 1).
+  let counterNibblesConsumed = 0;
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
+    let r: number;
+    if (c === "x" && counterNibblesConsumed < 8) {
+      // Pull the next nibble from the counter, MSB first.
+      const shift = (7 - counterNibblesConsumed) * 4;
+      r = (counter >>> shift) & 0xf;
+      counterNibblesConsumed += 1;
+    } else {
+      r = (Math.random() * 16) | 0;
+    }
     const v = c === "x" ? r : (r & 0x3) | 0x8;
     return v.toString(16);
   });
@@ -108,6 +195,57 @@ function ensureBooksDir(): void {
 }
 
 /**
+ * DAT-002 (#115): duplicate-by-content guard. Every import path (picker
+ * + URL + share sheet) used to mint a brand-new UUID and insert a fresh
+ * row even when the user re-imported the same file, leaving the library
+ * with two rows pointing at byte-identical content.
+ *
+ * Hash the source bytes BEFORE creating the per-book directory or
+ * inserting the row. If a non-deleted books row already carries that
+ * hash, short-circuit to `stage: 'duplicate'`. Hash collisions across
+ * different files are vanishingly unlikely (SHA-256), so a positive hit
+ * is treated as a confirmed duplicate.
+ *
+ * Returns the matching book id on hit; null otherwise.
+ *
+ * Exported so the share-sheet handler (`lib/file-handler.ts`) can reuse
+ * the same gate; #115 originally wired only the picker + URL paths.
+ */
+export async function findDuplicateByHash(
+  sourceUri: string,
+): Promise<{ existingBookId: string; fileHash: string } | null> {
+  let fileHash: string;
+  try {
+    fileHash = await hashBookFile(sourceUri);
+  } catch {
+    // Hashing failure must NOT block the import — if the bytes can't be
+    // read here, the shared service's copy step will fail anyway with a
+    // more accurate stage. Skip the duplicate check and let it through.
+    return null;
+  }
+  if (!fileHash) return null;
+
+  try {
+    // Soft-deleted rows must NOT block re-imports. Without the
+    // `isDeleted = false` predicate, deleting a book and trying to
+    // re-import the same file fails permanently as a duplicate with no
+    // recovery short of manual SQL. See PR #207 review.
+    const existing = db
+      .select()
+      .from(books)
+      .where(and(eq(books.fileHash, fileHash), eq(books.isDeleted, false)))
+      .get();
+    if (existing && existing.id) {
+      return { existingBookId: String(existing.id), fileHash };
+    }
+  } catch {
+    // Best-effort. A DB error here is non-fatal; the worst case is a
+    // duplicate row slips through, which the user can delete manually.
+  }
+  return null;
+}
+
+/**
  * Shared importer driver: pick (or accept) a source URI, mint a UUID, run
  * the shared service, then trigger indexing in the background.
  */
@@ -118,13 +256,66 @@ async function runImportWithService(opts: {
   author?: string;
 }): Promise<ImportOutcome> {
   ensureBooksDir();
+
+  // DAT-002 (#115): duplicate-by-content gate. Runs BEFORE we mint a
+  // UUID or touch the filesystem so a duplicate import is a clean no-op
+  // (no orphan dir, no Drizzle row attempt).
+  const dup = await findDuplicateByHash(opts.sourceUri);
+  if (dup) {
+    return {
+      ok: false,
+      stage: "duplicate",
+      error: `This book is already in your library (id=${dup.existingBookId}).`,
+    };
+  }
+
   const bookId = generateUUID();
+
+  // DAT-019 (#131): track cover-extraction lifecycle so callers can
+  // distinguish pending / ready / unavailable / unsupported instead of
+  // treating every cover-less book identically. We use a deferred
+  // because the shared importer kicks off cover extraction via
+  // setTimeout AFTER `importFromPath` resolves; the resolver fires from
+  // either `coverPortDeps.updateBookCover` (success or sentinel) or
+  // `coverPortDeps.onExtractionFailure` (typed reason), whichever
+  // happens first.
+  const coverDeferred = createDeferred<CoverState>();
+  // Format-level short-circuit: PDF + DJVU have no extractor at all,
+  // so the cover port emits `format-unsupported` synchronously. Pin
+  // the initial expected status here so the test surface stays stable
+  // even if the cover port's call ordering changes.
+  const unsupportedFormat =
+    opts.format !== "epub" &&
+    opts.format !== "mobi" &&
+    opts.format !== "azw3";
 
   const service = createMobileBookImportService({
     bookId,
     format: opts.format,
     title: opts.title,
     author: opts.author,
+    coverPortDeps: {
+      onExtractionFailure: (id, reason) => {
+        if (String(id) !== bookId) return;
+        if (reason.kind === "format-unsupported") {
+          coverDeferred.resolve({
+            status: "unsupported",
+            format: reason.format,
+          });
+        } else {
+          // 'no-cover-found' and the genuine failure kinds all surface
+          // as 'unavailable' so the UI doesn't have to know which
+          // discriminator is which to render the letter-tile. The
+          // reason itself is carried through so a future "retry"
+          // affordance can branch on it.
+          coverDeferred.resolve({ status: "unavailable", reason });
+        }
+      },
+      onExtractionSuccess: (id, coverPath) => {
+        if (String(id) !== bookId) return;
+        coverDeferred.resolve({ status: "ready", coverPath });
+      },
+    },
   });
 
   const result = await service.importFromPath(opts.sourceUri);
@@ -163,6 +354,16 @@ async function runImportWithService(opts: {
     }
   })();
 
+  // DAT-019 (#131): if the format has no extractor and the shared
+  // importer never wires the cover port (because it short-circuits on
+  // formats without a known kind), make sure the deferred still
+  // resolves — otherwise callers awaiting `coverPromise` would hang
+  // forever. The cover port itself emits `format-unsupported`
+  // synchronously for these formats, so this is a defensive fallback.
+  if (unsupportedFormat) {
+    coverDeferred.resolve({ status: "unsupported", format: opts.format });
+  }
+
   // Local Book shape — derive from what the service inserted.
   return {
     ok: true,
@@ -178,6 +379,7 @@ async function runImportWithService(opts: {
       lastProgressPercent: null,
       createdAt: Date.now(),
     },
+    coverPromise: coverDeferred.promise,
   };
 }
 
@@ -307,26 +509,105 @@ export function mapHttpStatusToUserCopy(status: number): string {
   return "Server refused download";
 }
 
-export async function importBookFromUrl(url: string): Promise<Book> {
+/**
+ * DAT-012 (#124): hard cap on URL-import size. Reading a 2 GB body
+ * straight into `arrayBuffer()` OOMs the JS VM on Android (heap cap is
+ * ~512 MB on most devices). 500 MB is comfortably below the cap and
+ * still leaves headroom for the existing book covers + chunker
+ * allocations.
+ *
+ * Exported for tests; not part of the public API surface.
+ */
+export const URL_IMPORT_MAX_BYTES = 500 * 1024 * 1024;
+
+function parseContentLengthOrNull(header: string | null): number | null {
+  if (!header) return null;
+  // `Number()` is too lenient ("" → 0, " 12 " → 12). We want a strict
+  // base-10 integer; anything else is treated as "unknown size".
+  if (!/^\d+$/.test(header.trim())) return null;
+  const n = Number(header.trim());
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function formatBytesAsMB(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))} MB`;
+}
+
+/**
+ * DAT-017 (#129): caller-controllable cancellation. `UrlImportSheet`
+ * holds an `AbortController` for the lifetime of the sheet and aborts
+ * it on dismiss so a large download stops buffering immediately
+ * instead of stranded in the background. The signal is forwarded to
+ * both the HEAD probe and the GET; an aborted signal short-circuits
+ * with a standard `AbortError` from `fetch`.
+ */
+export interface ImportBookFromUrlOptions {
+  signal?: AbortSignal;
+}
+
+export async function importBookFromUrl(
+  url: string,
+  options: ImportBookFromUrlOptions = {},
+): Promise<Book> {
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
     throw new Error("Invalid URL — must start with http:// or https://");
   }
 
+  const { signal } = options;
+
   let format = detectFormatFromUrl(url);
+  // DAT-012 (#124): track the advertised size from whichever response
+  // first reveals it (HEAD or the GET body). A `content-length` over
+  // the cap aborts the import BEFORE we materialise the body.
+  let advertisedSize: number | null = null;
 
   if (!format) {
     try {
-      const headRes = await fetch(url, { method: "HEAD" });
+      const headRes = await fetch(url, { method: "HEAD", signal });
       format = detectFormatFromContentType(headRes.headers.get("content-type"));
-    } catch {
+      const headSize = parseContentLengthOrNull(
+        headRes.headers.get("content-length"),
+      );
+      if (headSize != null) {
+        if (headSize > URL_IMPORT_MAX_BYTES) {
+          throw new Error(
+            `File is too large to download (${formatBytesAsMB(headSize)}). Size limit is ${formatBytesAsMB(URL_IMPORT_MAX_BYTES)}.`,
+          );
+        }
+        advertisedSize = headSize;
+      }
+    } catch (err) {
+      // Re-throw size-limit rejections AND abort errors; swallow only
+      // the network / DNS / CORS failures we expected to be tolerant
+      // of here. AbortError must propagate so the caller can switch
+      // its UI back to idle.
+      if (
+        err instanceof Error &&
+        (err.name === "AbortError" || /too large/i.test(err.message))
+      ) {
+        throw err;
+      }
       // HEAD failed, will try download anyway and check content-type there
     }
   }
 
-  const downloadRes = await fetch(url);
+  const downloadRes = await fetch(url, signal ? { signal } : undefined);
 
   if (!downloadRes.ok) {
     throw new Error(mapHttpStatusToUserCopy(downloadRes.status));
+  }
+
+  // DAT-012 (#124): re-check size from the GET response itself; servers
+  // sometimes omit Content-Length on HEAD but include it on GET.
+  if (advertisedSize == null) {
+    const getSize = parseContentLengthOrNull(
+      downloadRes.headers.get("content-length"),
+    );
+    if (getSize != null && getSize > URL_IMPORT_MAX_BYTES) {
+      throw new Error(
+        `File is too large to download (${formatBytesAsMB(getSize)}). Size limit is ${formatBytesAsMB(URL_IMPORT_MAX_BYTES)}.`,
+      );
+    }
   }
 
   if (!format) {
@@ -352,11 +633,19 @@ export async function importBookFromUrl(url: string): Promise<Book> {
   tmpFile.write(bytes);
 
   const title = extractTitleFromUrl(url);
-  const result = await runImportWithService({
-    sourceUri: tmpFile.uri,
-    format,
-    title,
-  });
+  let result: ImportOutcome;
+  try {
+    result = await runImportWithService({
+      sourceUri: tmpFile.uri,
+      format,
+      title,
+    });
+  } catch (err) {
+    // DAT-011 (#123): unexpected throws from the shared service must
+    // not leave the tmp dir orphaned on disk.
+    safeDeleteDirectory(bookDir);
+    throw err;
+  }
 
   // Clean up the tmp file; the service copied it to book.<format>.
   try {
@@ -366,9 +655,41 @@ export async function importBookFromUrl(url: string): Promise<Book> {
   }
 
   if (!result.ok) {
+    // DAT-011 (#123) + DAT-002 (#115): on any failure (including
+    // duplicate detection), remove the per-book dir we just created so
+    // we don't leave an empty `books/<uuid>/` behind. The shared
+    // service's own copy step already drops `book.<format>` on success;
+    // we only need to clean up when nothing was committed.
+    safeDeleteDirectory(bookDir);
     throw new Error(`Import failed at stage=${result.stage}: ${result.error}`);
   }
+
+  // PR #207 review: even on success the URL scratch dir must be
+  // cleaned up. `bookDir` here was created against `urlScratchUuid`
+  // purely to host `tmp.<format>`; `runImportWithService` minted a
+  // DIFFERENT UUID for the actual book and the shared service's FsPort
+  // copied the file into `books/<realBookId>/book.<format>`. Leaving
+  // `books/<urlScratchUuid>/` behind on success leaks an empty
+  // directory whose name looks like a real book id and would confuse
+  // any future janitor walking `/books/`.
+  safeDeleteDirectory(bookDir);
   return result.book;
+}
+
+/**
+ * DAT-011 (#123): best-effort recursive delete of an import-time
+ * scratch directory. Swallows errors because callers are always in an
+ * error-handling branch — surfacing a cleanup failure on top of the
+ * original error would only make the user-visible message noisier.
+ */
+function safeDeleteDirectory(dir: Directory): void {
+  try {
+    if (dir.exists) {
+      dir.delete();
+    }
+  } catch {
+    /* best-effort */
+  }
 }
 
 // Re-export for callers that still rely on the legacy embedding helper.
