@@ -92,15 +92,6 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <IconSymbol size={28} name="gearshape.fill" color={color} />,
         }}
       />
-      {/* Boilerplate "explore" tab from the Expo template is hidden
-          but kept in the router tree so deep-links/cold-starts don't
-          404 if any persisted state references it. */}
-      <Tabs.Screen
-        name="explore"
-        options={{
-          href: null,
-        }}
-      />
     </Tabs>
     <TourProvider />
     <UploadErrorSnackbar />
