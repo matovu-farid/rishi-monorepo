@@ -15,10 +15,30 @@ export interface UseRealtimeChatResult {
   showGuardrailWarning: boolean
   toggle: () => void
   isActive: boolean
+  /**
+   * CHT-016 (#63) — Activation-error fields forwarded from the
+   * underlying `useVoiceChat` hook. Reader screens read these to
+   * render a non-blocking snackbar when voice-chat activation fails
+   * (mic denied, network drop, etc.). Prior to this wiring the shim
+   * silently swallowed the fields, regressing the user-facing AC of
+   * issue #63 from a modal Alert to a silent no-op.
+   */
+  voiceError: string | null
+  isMicPermissionError: boolean
+  retryStart: () => Promise<void>
+  dismissError: () => void
 }
 
 export function useRealtimeChat(bookId: string): UseRealtimeChatResult {
-  const { status, toggle, isActive } = useVoiceChat(bookId)
+  const {
+    status,
+    toggle,
+    isActive,
+    voiceError,
+    isMicPermissionError,
+    retryStart,
+    dismissError,
+  } = useVoiceChat(bookId)
   // Guardrail UI was wired into the old hook via a callback fired by
   // the off-topic classifier. Batch 4 keeps the classifier
   // (`lib/realtime/guardrails.ts`) but moves the "show banner"
@@ -34,6 +54,10 @@ export function useRealtimeChat(bookId: string): UseRealtimeChatResult {
     toggle: () => {
       void toggle()
     },
-    isActive
+    isActive,
+    voiceError,
+    isMicPermissionError,
+    retryStart,
+    dismissError,
   }
 }
