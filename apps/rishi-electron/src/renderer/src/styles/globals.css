@@ -1,5 +1,5 @@
-@import "tailwindcss";
-@import "tw-animate-css";
+@import 'tailwindcss';
+@import 'tw-animate-css';
 
 *[data-electron-drag-region] {
   -webkit-app-region: drag;
@@ -142,5 +142,37 @@ a {
   .no-scrollbar {
     -ms-overflow-style: none; /* IE and Edge */
     scrollbar-width: none; /* Firefox */
+  }
+}
+
+/*
+ * Honor `prefers-reduced-motion` globally (#201 / VIS-008).
+ *
+ * Strategy:
+ *   1. Expose `--motion-duration` as a CSS variable so inline-styled
+ *      components (react-reader/style.ts, TTSControls) can opt-in by reading
+ *      it instead of hardcoding `.3s`. Default = `.3s`; reduced = `0s`.
+ *   2. As a backstop, drop every transition/animation duration to ~0 so any
+ *      component that hasn't migrated still respects the user preference.
+ *
+ * `0.01ms` (rather than `0s`) is the WAI-recommended value — keeps frame
+ * callbacks firing so transitionend / animationend listeners don't hang.
+ */
+:root {
+  --motion-duration: 0.3s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-duration: 0s;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

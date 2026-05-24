@@ -49,7 +49,9 @@ describe('usePdfReadAloudFromSelection', () => {
   }
 
   it('registers the IPC listener on mount and unsubscribes on unmount', () => {
-    const { unmount } = renderHook(() => usePdfReadAloudFromSelection({ requireAuth: (_f, run) => run() }))
+    const { unmount } = renderHook(() =>
+      usePdfReadAloudFromSelection({ requireAuth: (_f, run) => run() })
+    )
     expect(onSpy).toHaveBeenCalledWith('reader:readAloudFromSelection', expect.any(Function))
     unmount()
     expect(unsubscribeSpy).toHaveBeenCalledTimes(1)

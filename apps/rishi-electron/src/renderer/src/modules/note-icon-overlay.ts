@@ -53,7 +53,7 @@ export class NoteIconOverlay {
       const range = this.resolveRange(row.cfiRange)
       if (!range) continue
       const rects = range.getClientRects()
-      if (!rects || rects.length === 0) continue
+      if (rects.length === 0) continue
       // Anchor to the LAST rect — for multi-line ranges this is the bottom
       // line, mirroring Apple Books' end-of-text anchor.
       const rect = rects[rects.length - 1]

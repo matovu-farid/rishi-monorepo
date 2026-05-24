@@ -135,9 +135,9 @@ test.describe('Navigation history — PDF', () => {
     await bookPage.waitForTimeout(3000)
 
     // Confirm the reader mounted.
-    await expect(
-      bookPage.locator('[data-testid="pdf-scroll-container"]').first()
-    ).toBeVisible({ timeout: 15000 })
+    await expect(bookPage.locator('[data-testid="pdf-scroll-container"]').first()).toBeVisible({
+      timeout: 15000
+    })
 
     // Read total pages (from any rendered data-page-number attribute).
     const totalPages = await bookPage.evaluate(() => {
@@ -215,9 +215,9 @@ test.describe('Navigation history — PDF', () => {
     const bookPage = await openBook(app.page, book.id)
     await bookPage.waitForTimeout(3000)
 
-    await expect(
-      bookPage.locator('[data-testid="pdf-scroll-container"]').first()
-    ).toBeVisible({ timeout: 15000 })
+    await expect(bookPage.locator('[data-testid="pdf-scroll-container"]').first()).toBeVisible({
+      timeout: 15000
+    })
 
     const totalPages = await bookPage.evaluate(() => {
       const all = Array.from(document.querySelectorAll('[data-page-number]'))

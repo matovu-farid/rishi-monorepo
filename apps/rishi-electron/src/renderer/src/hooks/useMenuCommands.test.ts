@@ -8,8 +8,7 @@ let listener: Listener | null = null
 // Restore window.electron to whatever test-setup.ts installed at file load so
 // per-test stubs in this file cannot leak into other tests in the same file
 // (or, if Vitest isolation is ever disabled, into other files).
-const originalElectron = (globalThis as unknown as { window: { electron: object } }).window
-  .electron
+const originalElectron = (globalThis as unknown as { window: { electron: object } }).window.electron
 
 beforeEach(() => {
   listener = null

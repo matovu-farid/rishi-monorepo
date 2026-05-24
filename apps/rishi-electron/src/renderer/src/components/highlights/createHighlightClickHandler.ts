@@ -33,7 +33,13 @@ export function createHighlightClickHandler(
   return (cfiRange: string) => (e?: MouseEvent) => {
     const row = highlightsByRangeRef.current.get(cfiRange)
     if (!row) return
-    const view = renditionRef.current?.manager?.visible?.()?.[0]
+    // `manager` / `visible` aren't on epubjs's public Rendition type — go
+    // through unknown so each step is properly typed as possibly-undefined
+    // instead of `any` (which makes the no-unnecessary-condition rule blind).
+    const rendition = renditionRef.current as unknown as
+      | { manager?: { visible?: () => { element?: Element }[] | undefined } }
+      | null
+    const view = rendition?.manager?.visible?.()?.[0]
     const fallbackIframe = (view?.element?.querySelector('iframe') as HTMLElement | null) ?? null
     const { x, y } = computeHighlightClickPosition(e, fallbackIframe, viewport)
     setInlinePopover({

@@ -35,7 +35,7 @@ asarUnpack:
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
-    - NSMicrophoneUsageDescription: "Rishi needs microphone access for voice chat features."
+    - NSMicrophoneUsageDescription: 'Rishi needs microphone access for voice chat features.'
   notarize: true
   target:
     - target: dmg
@@ -57,7 +57,7 @@ win:
       arch:
         - x64
 nsis:
-  artifactName: "Rishi-${version}-setup.${ext}"
+  artifactName: 'Rishi-${version}-setup.${ext}'
 linux:
   target:
     - target: AppImage

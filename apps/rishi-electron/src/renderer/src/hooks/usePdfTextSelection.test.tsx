@@ -3,16 +3,26 @@ import { renderHook, act } from '@testing-library/react'
 import { usePdfTextSelection, type PdfSelectionEvent } from './usePdfTextSelection'
 import type { ViewportLike } from '@/modules/pdf-locator'
 
-function setupPage(opts: { pageNumber: number; rect: { left: number; top: number; width: number; height: number } }) {
+function setupPage(opts: {
+  pageNumber: number
+  rect: { left: number; top: number; width: number; height: number }
+}) {
   const page = document.createElement('div')
   page.className = 'react-pdf__Page'
   page.setAttribute('data-page-number', String(opts.pageNumber))
   Object.defineProperty(page, 'getBoundingClientRect', {
     value: () => ({
-      left: opts.rect.left, top: opts.rect.top,
-      right: opts.rect.left + opts.rect.width, bottom: opts.rect.top + opts.rect.height,
-      width: opts.rect.width, height: opts.rect.height, x: opts.rect.left, y: opts.rect.top,
-      toJSON() { return this }
+      left: opts.rect.left,
+      top: opts.rect.top,
+      right: opts.rect.left + opts.rect.width,
+      bottom: opts.rect.top + opts.rect.height,
+      width: opts.rect.width,
+      height: opts.rect.height,
+      x: opts.rect.left,
+      y: opts.rect.top,
+      toJSON() {
+        return this
+      }
     })
   })
   const text = document.createTextNode('hello world')
@@ -22,9 +32,15 @@ function setupPage(opts: { pageNumber: number; rect: { left: number; top: number
 
 function makeViewport(scale = 1): ViewportLike {
   return {
-    width: 400 * scale, height: 600 * scale, scale,
-    convertToViewportPoint(x, y) { return [x * scale, (600 - y) * scale] },
-    convertToPdfPoint(x, y) { return [x / scale, 600 - y / scale] }
+    width: 400 * scale,
+    height: 600 * scale,
+    scale,
+    convertToViewportPoint(x, y) {
+      return [x * scale, (600 - y) * scale]
+    },
+    convertToPdfPoint(x, y) {
+      return [x / scale, 600 - y / scale]
+    }
   }
 }
 
@@ -32,9 +48,9 @@ describe('usePdfTextSelection', () => {
   let container: HTMLDivElement
   let containerRef: { current: HTMLDivElement | null }
   // Typed as the actual callback shapes so TypeScript is satisfied at call sites.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   let onSelect: ((sel: PdfSelectionEvent) => void) & { mock: any }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   let onClear: (() => void) & { mock: any }
 
   beforeEach(() => {
@@ -51,7 +67,10 @@ describe('usePdfTextSelection', () => {
   })
 
   it('fires onSelect with locator and anchorPos when mouseup completes a non-collapsed selection on a single page', () => {
-    const { page, text } = setupPage({ pageNumber: 4, rect: { left: 0, top: 0, width: 400, height: 600 } })
+    const { page, text } = setupPage({
+      pageNumber: 4,
+      rect: { left: 0, top: 0, width: 400, height: 600 }
+    })
     container.appendChild(page)
 
     renderHook(() =>
@@ -59,7 +78,8 @@ describe('usePdfTextSelection', () => {
         containerRef,
         getPageElement: (n) => (n === 4 ? page : null),
         getViewport: () => makeViewport(1),
-        onSelect, onClear
+        onSelect,
+        onClear
       })
     )
 
@@ -74,7 +94,9 @@ describe('usePdfTextSelection', () => {
     sel.addRange(range)
 
     act(() => {
-      container.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 30, clientY: 20 }))
+      container.dispatchEvent(
+        new MouseEvent('mouseup', { bubbles: true, clientX: 30, clientY: 20 })
+      )
     })
 
     expect(onSelect).toHaveBeenCalledTimes(1)
@@ -87,19 +109,23 @@ describe('usePdfTextSelection', () => {
   it('ignores cross-page selections', () => {
     const a = setupPage({ pageNumber: 1, rect: { left: 0, top: 0, width: 400, height: 600 } })
     const b = setupPage({ pageNumber: 2, rect: { left: 0, top: 700, width: 400, height: 600 } })
-    container.appendChild(a.page); container.appendChild(b.page)
-    renderHook(() => usePdfTextSelection({
-      containerRef,
-      getPageElement: (n) => (n === 1 ? a.page : b.page),
-      getViewport: () => makeViewport(1),
-      onSelect, onClear
-    }))
+    container.appendChild(a.page)
+    container.appendChild(b.page)
+    renderHook(() =>
+      usePdfTextSelection({
+        containerRef,
+        getPageElement: (n) => (n === 1 ? a.page : b.page),
+        getViewport: () => makeViewport(1),
+        onSelect,
+        onClear
+      })
+    )
     const range = document.createRange()
     range.setStart(a.text, 0)
     range.setEnd(b.text, 5)
-    Object.defineProperty(range, 'getClientRects', { value: () => [
-      { left: 0, top: 0, width: 50, height: 14, right: 50, bottom: 14 }
-    ]})
+    Object.defineProperty(range, 'getClientRects', {
+      value: () => [{ left: 0, top: 0, width: 50, height: 14, right: 50, bottom: 14 }]
+    })
     window.getSelection()!.removeAllRanges()
     window.getSelection()!.addRange(range)
     act(() => container.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })))
@@ -113,9 +139,9 @@ describe('usePdfTextSelection', () => {
     const singlePageRange = document.createRange()
     singlePageRange.setStart(a.text, 0)
     singlePageRange.setEnd(a.text, 5)
-    Object.defineProperty(singlePageRange, 'getClientRects', { value: () => [
-      { left: 0, top: 0, width: 50, height: 14, right: 50, bottom: 14 }
-    ]})
+    Object.defineProperty(singlePageRange, 'getClientRects', {
+      value: () => [{ left: 0, top: 0, width: 50, height: 14, right: 50, bottom: 14 }]
+    })
     window.getSelection()!.removeAllRanges()
     window.getSelection()!.addRange(singlePageRange)
     act(() => container.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })))
@@ -124,11 +150,15 @@ describe('usePdfTextSelection', () => {
   })
 
   it('fires onClear when selection becomes collapsed', () => {
-    renderHook(() => usePdfTextSelection({
-      containerRef,
-      getPageElement: () => null, getViewport: () => null,
-      onSelect, onClear
-    }))
+    renderHook(() =>
+      usePdfTextSelection({
+        containerRef,
+        getPageElement: () => null,
+        getViewport: () => null,
+        onSelect,
+        onClear
+      })
+    )
     act(() => {
       window.getSelection()!.removeAllRanges()
       document.dispatchEvent(new Event('selectionchange'))

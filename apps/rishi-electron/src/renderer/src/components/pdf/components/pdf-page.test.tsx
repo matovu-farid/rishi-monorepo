@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 
-import { makeCustomTextRenderer } from './pdf-page'
+import { makeCustomTextRenderer } from './makeCustomTextRenderer'
 import { usePdfStore } from '@/stores/pdfStore'
 
 // Regression: the PDF reader was migrated to a declarative TTS-highlight

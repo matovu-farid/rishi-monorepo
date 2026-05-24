@@ -100,11 +100,18 @@ export function makeAgent(): {
   factory: (args: AgentFactoryArgs) => RealtimeAgentLike
   lastArgs: () => AgentFactoryArgs | null
   triggerEnd: (reason: string) => void
-  triggerInspectImage: (image: { dataUrl: string; width: number; height: number; bytes: number }) => void
+  triggerInspectImage: (image: {
+    dataUrl: string
+    width: number
+    height: number
+    bytes: number
+  }) => void
 } {
   let lastArgs: AgentFactoryArgs | null = null
   let lastOnEnd: ((reason: string) => void) | null = null
-  let lastOnInspect: ((image: { dataUrl: string; width: number; height: number; bytes: number }) => void) | null = null
+  let lastOnInspect:
+    | ((image: { dataUrl: string; width: number; height: number; bytes: number }) => void)
+    | null = null
   return {
     factory: (args) => {
       lastArgs = args
@@ -1169,9 +1176,7 @@ describe('createVoiceChatService — buffered speech replay', () => {
   it('starts a MediaRecorder during connect when MediaPort supports it', async () => {
     const media = makeMedia({ withRecorder: true })
     const session = makeSession()
-    const svc = createVoiceChatService(
-      makeDeps({ media, sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ media, sessionFactory: session.factory }))
     await svc.activate(1, { pageText: 'p' })
 
     const rec = media.lastRecorder()
@@ -1186,9 +1191,7 @@ describe('createVoiceChatService — buffered speech replay', () => {
     // connect window — otherwise the mock's connect resolves synchronously
     // and the recorder is stopped before any audio can land in the buffer.
     const session = makeSession({ connectDelayMs: 20 })
-    const svc = createVoiceChatService(
-      makeDeps({ media, ipc, sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ media, ipc, sessionFactory: session.factory }))
 
     const activation = svc.activate(1, { pageText: 'p' })
     // Give the Effect fiber time to acquire mic + create recorder before we
@@ -1207,9 +1210,7 @@ describe('createVoiceChatService — buffered speech replay', () => {
     const media = makeMedia({ withRecorder: true })
     const ipc = makeIpc({ key: 'k', transcript: 'nope' })
     const session = makeSession()
-    const svc = createVoiceChatService(
-      makeDeps({ media, ipc, sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ media, ipc, sessionFactory: session.factory }))
     await svc.activate(1, { pageText: 'p' })
     await new Promise((r) => setTimeout(r, 0))
 
@@ -1221,9 +1222,7 @@ describe('createVoiceChatService — buffered speech replay', () => {
     const media = makeMedia({ withRecorder: true })
     const ipc = makeIpc({ key: 'k', transcript: '   ' })
     const session = makeSession({ connectDelayMs: 20 })
-    const svc = createVoiceChatService(
-      makeDeps({ media, ipc, sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ media, ipc, sessionFactory: session.factory }))
 
     const activation = svc.activate(1, { pageText: 'p' })
     await new Promise((r) => setTimeout(r, 0))
@@ -1242,9 +1241,7 @@ describe('createVoiceChatService — buffered speech replay', () => {
       transcribeFailWith: new Error('deepgram exploded')
     })
     const session = makeSession({ connectDelayMs: 20 })
-    const svc = createVoiceChatService(
-      makeDeps({ media, ipc, sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ media, ipc, sessionFactory: session.factory }))
 
     const activation = svc.activate(1, { pageText: 'p' })
     await new Promise((r) => setTimeout(r, 0))
@@ -1261,9 +1258,7 @@ describe('createVoiceChatService — buffered speech replay', () => {
     const media = makeMedia() // no withRecorder
     const ipc = makeIpc({ key: 'k', transcript: 'unreachable' })
     const session = makeSession()
-    const svc = createVoiceChatService(
-      makeDeps({ media, ipc, sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ media, ipc, sessionFactory: session.factory }))
     await svc.activate(1, { pageText: 'p' })
     await new Promise((r) => setTimeout(r, 0))
 
@@ -1275,9 +1270,7 @@ describe('createVoiceChatService — buffered speech replay', () => {
   it('stops the recorder if activation fails before connect completes', async () => {
     const media = makeMedia({ withRecorder: true })
     const session = makeSession({ connectFailWith: new Error('boom') })
-    const svc = createVoiceChatService(
-      makeDeps({ media, sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ media, sessionFactory: session.factory }))
 
     await expect(svc.activate(1, { pageText: 'p' })).rejects.toThrow('boom')
 
@@ -1311,9 +1304,7 @@ describe('createVoiceChatService — buffered speech replay', () => {
   it('activation succeeds when createMediaRecorder throws on construction', async () => {
     const media = makeMedia({ withRecorder: true, recorderConstructThrows: true })
     const session = makeSession()
-    const svc = createVoiceChatService(
-      makeDeps({ media, sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ media, sessionFactory: session.factory }))
 
     await svc.activate(1, { pageText: 'p' })
 
@@ -1326,9 +1317,7 @@ describe('createVoiceChatService — buffered speech replay', () => {
     const media = makeMedia({ withRecorder: true, recorderStopThrows: true })
     const ipc = makeIpc({ key: 'k', transcript: 'should not be called' })
     const session = makeSession({ connectDelayMs: 20 })
-    const svc = createVoiceChatService(
-      makeDeps({ media, ipc, sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ media, ipc, sessionFactory: session.factory }))
 
     const activation = svc.activate(1, { pageText: 'p' })
     await new Promise((r) => setTimeout(r, 0))
@@ -1349,9 +1338,7 @@ describe('createVoiceChatService — buffered speech replay', () => {
     const media = makeMedia({ withRecorder: true, deferOnstop: true })
     const ipc = makeIpc({ key: 'k', transcript: 'late audio captured' })
     const session = makeSession({ connectDelayMs: 20 })
-    const svc = createVoiceChatService(
-      makeDeps({ media, ipc, sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ media, ipc, sessionFactory: session.factory }))
 
     const activation = svc.activate(1, { pageText: 'p' })
     await new Promise((r) => setTimeout(r, 0))
@@ -1377,9 +1364,7 @@ describe('createVoiceChatService — buffered speech replay', () => {
     const media = makeMedia({ withRecorder: true })
     const ipc = makeIpc({ key: 'k', transcript: 'capped' })
     const session = makeSession({ connectDelayMs: 30 })
-    const svc = createVoiceChatService(
-      makeDeps({ media, ipc, sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ media, ipc, sessionFactory: session.factory }))
 
     const activation = svc.activate(1, { pageText: 'p' })
     await new Promise((r) => setTimeout(r, 0))
@@ -1402,9 +1387,7 @@ describe('createVoiceChatService — buffered speech replay', () => {
     const media = makeMedia({ withRecorder: true })
     const ipc = makeIpc({ key: 'k', transcript: 'fresh-text' })
     const session = makeSession({ connectDelayMs: 15 })
-    const svc = createVoiceChatService(
-      makeDeps({ media, ipc, sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ media, ipc, sessionFactory: session.factory }))
 
     // First activation with a chunk.
     const first = svc.activate(1, { pageText: 'p1' })
@@ -1431,9 +1414,7 @@ describe('createVoiceChatService — buffered speech replay', () => {
   it('deactivate during in-flight cold path stops the recorder via finalizer', async () => {
     const media = makeMedia({ withRecorder: true })
     const session = makeSession({ connectDelayMs: 100 })
-    const svc = createVoiceChatService(
-      makeDeps({ media, sessionFactory: session.factory })
-    )
+    const svc = createVoiceChatService(makeDeps({ media, sessionFactory: session.factory }))
 
     const activatePromise = svc.activate(1, { pageText: 'p' })
     // Wait for the fiber to walk through mic + session build + recorder start.
@@ -1506,7 +1487,8 @@ describe('createVoiceChatService — VAD gating', () => {
     // doesn't create a duplicate turn.
     const sendOrder = session.sendMessage.mock.invocationCallOrder[0]!
     const muteOrder = session.mute.mock.invocationCallOrder.find(
-      (n) => session.mute.mock.calls[session.mute.mock.invocationCallOrder.indexOf(n)]?.[0] === false
+      (n) =>
+        session.mute.mock.calls[session.mute.mock.invocationCallOrder.indexOf(n)]?.[0] === false
     )
     expect(sendOrder).toBeLessThan(muteOrder!)
   })
@@ -1627,9 +1609,7 @@ describe('createVoiceChatService — VAD gating', () => {
   it('VAD is disposed alongside the session', async () => {
     const { port: vadPort, vad } = makeVad({ initialEverSpoke: true })
     const session = makeSession()
-    const svc = createVoiceChatService(
-      makeDeps({ sessionFactory: session.factory, vad: vadPort })
-    )
+    const svc = createVoiceChatService(makeDeps({ sessionFactory: session.factory, vad: vadPort }))
 
     await svc.activate(1, { pageText: 'p' })
     expect(vad!.disposeCalls()).toBe(0)

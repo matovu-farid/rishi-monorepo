@@ -14,14 +14,14 @@ import { findParagraphElement, parseParagraphIndex, TTS_ACTIVE_CLASS } from './h
 export function reconcileAzw3TtsHighlight(
   iframeDoc: Document | null,
   currentChapterIndex: number,
-  desiredIndex: string | null,
+  desiredIndex: string | null
 ): void {
   if (!iframeDoc) return
 
   let desiredEl: Element | null = null
   if (desiredIndex) {
     const parsed = parseParagraphIndex(desiredIndex)
-    if (parsed && parsed.chapter === currentChapterIndex) {
+    if (parsed?.chapter === currentChapterIndex) {
       desiredEl = findParagraphElement(iframeDoc, parsed.paragraph)
     }
   }
