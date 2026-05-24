@@ -697,7 +697,7 @@ function TypingIndicator() {
   )
 }
 
-function PulsingDot({ delay }: { delay: number }) {
+export function PulsingDot({ delay }: { delay: number }) {
   const [opacity, setOpacity] = useState(0.3)
 
   useEffect(() => {
