@@ -2,6 +2,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from 'react'
 import {
@@ -41,7 +42,7 @@ import * as Haptics from 'expo-haptics'
 // exactly this purpose; see its file header.
 import { ReaderShellContext } from '@/components/reader/ReaderShellContext'
 import { shadow, useTheme, zIndex } from '@/lib/theme'
-import { usePlayerStore } from '@/lib/stores/playerStore'
+import { usePlayerStore, type PlayerStoreState } from '@/lib/stores/playerStore'
 import { computeMiniPlayerTranslateX } from './miniPlayerMorph'
 import { useAutoCollapseTimer } from './useAutoCollapseTimer'
 
@@ -67,6 +68,33 @@ const AUTO_COLLAPSE_MS = 4000
 // `BOTTOM_BAR_HEIGHT = 44` undercounted the bar by ~34pt on notched iPhones,
 // so the MiniPlayer floated INTO the bar.
 const BOTTOM_BAR_MIN = 44
+
+// --- Play-spinner debounce (#236) — mirror of electron #232 ----------------
+//
+// `playerMachine` dips through `'loading'` (and the broader
+// `'waitingForParagraphs'` / `'pageNavigating'` / `'republishingParagraphs'`)
+// at every paragraph boundary — even when the next paragraph's audio is
+// already cached and plays immediately. The raw signal would flicker the
+// play-button <ActivityIndicator> on every boundary.
+//
+// Asymmetric debounce: when arriving in a loading-like state FROM an
+// active-playback state, delay showing the spinner by SPINNER_DEBOUNCE_MS.
+// Hide is always immediate. Cold-start (idle → loading) and pause→resume
+// (paused.* → loading) must show the spinner immediately so users get
+// feedback that their explicit action registered.
+const SPINNER_DEBOUNCE_MS = 200
+const ACTIVE_PLAYBACK_STATES: ReadonlySet<PlayerStoreState> = new Set([
+  'loading',
+  'playing',
+  'waitingForParagraphs',
+  'pageNavigating',
+  'republishingParagraphs',
+])
+const LOADING_LIKE_STATES: ReadonlySet<PlayerStoreState> = new Set([
+  'loading',
+  'waitingForParagraphs',
+  'pageNavigating',
+])
 
 function PillIconButton({
   iconName,
@@ -152,10 +180,107 @@ export function MiniPlayer({
   const isPlaying = playingState === 'playing'
   const isPaused =
     playingState === 'paused.clean' || playingState === 'paused.stale'
-  const isLoading =
-    playingState === 'loading' ||
-    playingState === 'waitingForParagraphs' ||
-    playingState === 'pageNavigating'
+
+  // --- Play-spinner debounce (#236) ----------------------------------------
+  //
+  // Latch the last steady (non-loading-like) state so we can ask, when we
+  // arrive in a loading-like state: "did we just come from active playback?"
+  // If yes, this is most likely an inter-paragraph cache hit and we should
+  // delay-show the spinner; if no (idle / paused.*), the user explicitly
+  // started playback and deserves immediate feedback.
+  //
+  // Seed initializer to `'idle'` (NOT `playingState`) so cold-start
+  // (mount directly in 'loading' — see MiniPlayer.test.tsx:388) lands with
+  // `lastNonLoadingState === 'idle'` → `cameFromActivePlayback === false`
+  // → spinner shown immediately. Without this seed the new debounce would
+  // gate the spinner under cold-start and break that test.
+  //
+  // Widen the latch predicate to `!LOADING_LIKE_STATES.has(...)` (not just
+  // `!== 'loading'`) so the latch isn't polluted by a transient
+  // `waitingForParagraphs` predecessor leaking through as "active playback".
+  const [lastNonLoadingState, setLastNonLoadingState] =
+    useState<PlayerStoreState>('idle')
+  if (
+    !LOADING_LIKE_STATES.has(playingState) &&
+    playingState !== lastNonLoadingState
+  ) {
+    // Render-set-state with guard: cheap, doesn't loop, runs once per
+    // distinct steady state. Avoids a useEffect cascade that would lag the
+    // derived `cameFromActivePlayback` by one render.
+    setLastNonLoadingState(playingState)
+  }
+  const cameFromActivePlayback =
+    ACTIVE_PLAYBACK_STATES.has(lastNonLoadingState)
+
+  // `debounceElapsed` flips true SPINNER_DEBOUNCE_MS after we entered a
+  // loading-like state from an active-playback predecessor. Reset eagerly
+  // via the same render-set-state-with-guard pattern when we leave the
+  // loading-like window.
+  const [debounceElapsed, setDebounceElapsed] = useState(false)
+  const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  if (!LOADING_LIKE_STATES.has(playingState) && debounceElapsed) {
+    setDebounceElapsed(false)
+  }
+
+  const showSpinner =
+    LOADING_LIKE_STATES.has(playingState) &&
+    (!cameFromActivePlayback || debounceElapsed)
+
+  useEffect(() => {
+    // Only arm the debounce on the cached-dip path. Cold-start /
+    // pause→resume show the spinner immediately via `showSpinner` derived
+    // above — no timer needed.
+    if (!LOADING_LIKE_STATES.has(playingState) || !cameFromActivePlayback) {
+      return
+    }
+    spinnerTimerRef.current = setTimeout(() => {
+      spinnerTimerRef.current = null
+      setDebounceElapsed(true)
+    }, SPINNER_DEBOUNCE_MS)
+    return () => {
+      if (spinnerTimerRef.current !== null) {
+        clearTimeout(spinnerTimerRef.current)
+        spinnerTimerRef.current = null
+      }
+    }
+  }, [playingState, cameFromActivePlayback])
+
+  // Unmount cleanup belt-and-braces (the effect cleanup above already covers
+  // re-renders, but unmount mid-debounce must not leak a timer).
+  useEffect(() => {
+    return () => {
+      if (spinnerTimerRef.current !== null) {
+        clearTimeout(spinnerTimerRef.current)
+        spinnerTimerRef.current = null
+      }
+    }
+  }, [])
+
+  // `effectiveState` drives BOTH the visible icon AND the accessibilityLabel
+  // so VoiceOver / TalkBack stay coupled to the rendered icon. While a
+  // loading dip is being suppressed, the play button continues to advertise
+  // the last steady state (Pause / Play) instead of flipping to "Loading".
+  // Prev/Next/Stop gates intentionally read raw `playingState` — they don't
+  // accept `disabled` today, so this is moot for now; the rule is preserved
+  // for the day we add real gating (ship condition #9).
+  const effectiveState: PlayerStoreState =
+    LOADING_LIKE_STATES.has(playingState) && !showSpinner
+      ? lastNonLoadingState
+      : playingState
+
+  // `playButtonLabel` derives from `effectiveState` (not raw `isPlaying`) so
+  // the screen-reader name matches what's drawn. Adds a "Loading" branch —
+  // a strict a11y improvement over the previous Play/Pause spam on every
+  // paragraph dip (ship condition #7).
+  const playButtonLabel =
+    effectiveState === 'loading' ||
+    effectiveState === 'waitingForParagraphs' ||
+    effectiveState === 'pageNavigating' ||
+    effectiveState === 'republishingParagraphs'
+      ? 'Loading'
+      : effectiveState === 'playing'
+        ? 'Pause'
+        : 'Play'
 
   const resolvedTabBarHeight =
     variant === 'global' ? (tabBarHeight ?? 49) : 0
@@ -494,10 +619,10 @@ export function MiniPlayer({
             onPress={() => dispatch({ type: 'PREV' })}
           />
           <PillIconButton
-            iconName={isPlaying ? 'pause' : 'play'}
-            label={isPlaying ? 'Pause' : 'Play'}
+            iconName={effectiveState === 'playing' ? 'pause' : 'play'}
+            label={playButtonLabel}
             color={iconColor}
-            loading={isLoading}
+            loading={showSpinner}
             testID="mini-player-play-pause"
             onPress={handlePlayPause}
           />

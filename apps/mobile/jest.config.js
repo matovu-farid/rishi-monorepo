@@ -2,7 +2,10 @@
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  roots: ['<rootDir>/__tests__'],
+  // `__mocks__` is in roots so Jest auto-loads the node-module stubs that
+  // live there (#60 added one for `react-native-reanimated` — see
+  // `__mocks__/react-native-reanimated.js` for the rationale).
+  roots: ['<rootDir>/__tests__', '<rootDir>/__mocks__'],
   setupFiles: ['<rootDir>/jest.setup.ts'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/$1',

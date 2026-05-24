@@ -1,8 +1,8 @@
-import { app, BrowserWindow, shell, protocol, net, ipcMain, Menu } from 'electron'
+import { app, BrowserWindow, shell, protocol, net, ipcMain, Menu, dialog } from 'electron'
 import { join, extname } from 'path'
 import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { initMainSentry } from './utils/sentry.js'
+import { initMainSentry, captureError } from './utils/sentry.js'
 import { startRendererServer, stopRendererServer } from './utils/rendererServer.js'
 import { registerAllIpcHandlers } from './ipc/index.js'
 import { initDatabase } from './database/index.js'
@@ -146,6 +146,126 @@ function libraryWindowFromManager(): BrowserWindow | null {
   return (w as unknown as BrowserWindow | null) ?? null
 }
 
+// Crash-loop guard for `render-process-gone`. We keep a rolling list of recent
+// crash timestamps per window (keyed by webContents.id); if the window crashes
+// more than `CRASH_LOOP_THRESHOLD` times inside `CRASH_LOOP_WINDOW_MS` we stop
+// auto-reloading and offer a "persistent crash" dialog so the user can attach
+// logs / quit rather than being trapped in a reload→crash loop.
+const CRASH_LOOP_WINDOW_MS = 60_000
+const CRASH_LOOP_THRESHOLD = 3
+const recentCrashes = new Map<number, number[]>()
+
+function recordCrash(webContentsId: number): number {
+  const now = Date.now()
+  const cutoff = now - CRASH_LOOP_WINDOW_MS
+  const prior = recentCrashes.get(webContentsId) ?? []
+  const recent = prior.filter((t) => t >= cutoff)
+  recent.push(now)
+  recentCrashes.set(webContentsId, recent)
+  return recent.length
+}
+
+/**
+ * Handle a renderer crash on the library window. Logs the structured crash
+ * details, reports to Sentry, and either auto-reloads (dev) or prompts the
+ * user (prod). If the window has crashed repeatedly inside a short window we
+ * stop trying to reload and surface a persistent-crash dialog instead so the
+ * user can capture logs.
+ *
+ * Tracked via #164 (WIN-014): previously `render-process-gone` was only
+ * observed in `RISHI_DEBUG=1` builds, leaving production users with a silent
+ * blank window.
+ */
+function handleRenderProcessGone(
+  win: BrowserWindow,
+  label: string,
+  details: Electron.RenderProcessGoneDetails
+): void {
+  const webContentsId = win.webContents.id
+  const count = recordCrash(webContentsId)
+  const payload = {
+    label,
+    reason: details.reason,
+    exitCode: details.exitCode,
+    crashCountInWindow: count,
+    windowMs: CRASH_LOOP_WINDOW_MS
+  }
+  console.error('[main] render-process-gone', payload)
+  captureError(new Error(`render-process-gone:${details.reason}`), {
+    operation: 'render-process-gone',
+    ...payload
+  })
+
+  // `launch-failed` cannot be recovered by `reload()` — abort fast.
+  if (details.reason === 'launch-failed') {
+    if (!app.isPackaged) return
+    void dialog
+      .showMessageBox(win, {
+        type: 'error',
+        buttons: ['Quit'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'Rishi failed to start',
+        message: 'The application window failed to launch.',
+        detail: `Reason: ${details.reason}\nExit code: ${details.exitCode}\n\nPlease reinstall Rishi or contact support.`
+      })
+      .finally(() => app.quit())
+    return
+  }
+
+  // Dev: HMR sometimes pushes a broken bundle. Reload silently.
+  if (!app.isPackaged) {
+    if (!win.isDestroyed()) win.reload()
+    return
+  }
+
+  // Prod: prompt. Switch copy if the window is crash-looping so users aren't
+  // stuck mashing Reload.
+  const isCrashLoop = count > CRASH_LOOP_THRESHOLD
+  const opts: Electron.MessageBoxOptions = isCrashLoop
+    ? {
+        type: 'error',
+        buttons: ['Quit'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'Rishi keeps crashing',
+        message: 'The window has crashed repeatedly.',
+        detail: `Reason: ${details.reason}\nExit code: ${details.exitCode}\nCrashes in the last 60s: ${count}\n\nReloading is unlikely to help. Please quit Rishi, then attach the logs from Help → Report a problem when contacting support.`
+      }
+    : {
+        type: 'error',
+        buttons: ['Reload', 'Quit'],
+        defaultId: 0,
+        cancelId: 1,
+        title: 'Rishi window crashed',
+        message: 'The window stopped responding.',
+        detail: `Reason: ${details.reason}\nExit code: ${details.exitCode}\n\nReload to continue, or Quit to close Rishi.`
+      }
+
+  // Prefer attaching the modal to the crashed window; fall back to any focused
+  // window if that one is already gone, and finally to a parentless dialog.
+  const parent = !win.isDestroyed() ? win : BrowserWindow.getFocusedWindow()
+  const dialogPromise = parent
+    ? dialog.showMessageBox(parent, opts)
+    : dialog.showMessageBox(opts)
+  void dialogPromise
+    .then((result) => {
+      if (isCrashLoop) {
+        app.quit()
+        return
+      }
+      if (result.response === 0) {
+        if (!win.isDestroyed()) win.reload()
+      } else {
+        app.quit()
+      }
+    })
+    .catch((err: unknown) => {
+      console.error('[main] render-process-gone dialog failed', err)
+      app.quit()
+    })
+}
+
 function attachLibraryWindowSideEffects(win: BrowserWindow): void {
   // Drain buffered open-file paths after the renderer finishes loading.
   win.webContents.once('did-finish-load', () => {
@@ -154,6 +274,19 @@ function attachLibraryWindowSideEffects(win: BrowserWindow): void {
       const paths = pendingOpenFiles.splice(0)
       win.webContents.send('open-files', paths)
     }
+  })
+
+  // Recover from renderer crashes — see #164. The debug build also logs this
+  // via attachDebugInstrumentation, but that listener only attaches when
+  // RISHI_DEBUG=1, so prod users previously had no recovery path.
+  win.webContents.on('render-process-gone', (_e, details) => {
+    handleRenderProcessGone(win, 'main', details)
+  })
+
+  // Snapshot the id now because `webContents.id` throws once destroyed.
+  const wcId = win.webContents.id
+  win.once('closed', () => {
+    recentCrashes.delete(wcId)
   })
 
   attachDebugInstrumentation(win, 'main')

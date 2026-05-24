@@ -19,14 +19,26 @@ function makeViewport(opts: { width: number; height: number; scale: number }) {
   } as const
 }
 
-function makePageEl(rect: { left: number; top: number; width: number; height: number }): HTMLElement {
+function makePageEl(rect: {
+  left: number
+  top: number
+  width: number
+  height: number
+}): HTMLElement {
   const div = document.createElement('div')
   Object.defineProperty(div, 'getBoundingClientRect', {
     value: () => ({
-      left: rect.left, top: rect.top,
-      right: rect.left + rect.width, bottom: rect.top + rect.height,
-      width: rect.width, height: rect.height, x: rect.left, y: rect.top,
-      toJSON() { return this }
+      left: rect.left,
+      top: rect.top,
+      right: rect.left + rect.width,
+      bottom: rect.top + rect.height,
+      width: rect.width,
+      height: rect.height,
+      x: rect.left,
+      y: rect.top,
+      toJSON() {
+        return this
+      }
     })
   })
   return div
@@ -48,9 +60,11 @@ describe('pdf-locator', () => {
       pageB.className = 'react-pdf__Page'
       const t1 = document.createTextNode('hello')
       const t2 = document.createTextNode('world')
-      pageA.appendChild(t1); pageB.appendChild(t2)
+      pageA.appendChild(t1)
+      pageB.appendChild(t2)
       const range = document.createRange()
-      range.setStart(t1, 0); range.setEnd(t2, 5)
+      range.setStart(t1, 0)
+      range.setEnd(t2, 5)
       const viewport = makeViewport({ width: 400, height: 600, scale: 1 })
       expect(selectionToPdfLocator(range, pageA, viewport as never, 1)).toBeNull()
     })
@@ -62,7 +76,8 @@ describe('pdf-locator', () => {
       const range = document.createRange()
       const text = document.createTextNode('xyz')
       pageEl.appendChild(text)
-      range.setStart(text, 0); range.setEnd(text, 3)
+      range.setStart(text, 0)
+      range.setEnd(text, 3)
       Object.defineProperty(range, 'getClientRects', {
         value: () => [{ left: 60, top: 120, width: 100, height: 15, right: 160, bottom: 135 }]
       })
@@ -85,7 +100,8 @@ describe('pdf-locator', () => {
       const range = document.createRange()
       const t = document.createTextNode('abcdef')
       pageEl1.appendChild(t)
-      range.setStart(t, 0); range.setEnd(t, 3)
+      range.setStart(t, 0)
+      range.setEnd(t, 3)
       Object.defineProperty(range, 'getClientRects', {
         value: () => [{ left: 0, top: 0, width: 50, height: 12, right: 50, bottom: 12 }]
       })
@@ -104,12 +120,13 @@ describe('pdf-locator', () => {
       const text = document.createTextNode('xyz')
       pageEl.appendChild(text)
       const range = document.createRange()
-      range.setStart(text, 0); range.setEnd(text, 3)
+      range.setStart(text, 0)
+      range.setEnd(text, 3)
       Object.defineProperty(range, 'getClientRects', {
         value: () => [
-          { left: 0, top: 0, width: 0, height: 10, right: 0, bottom: 10 },     // zero width
-          { left: 0, top: 0, width: 10, height: 0, right: 10, bottom: 0 },     // zero height
-          { left: 0, top: 0, width: 10, height: 10, right: 10, bottom: 10 }    // valid
+          { left: 0, top: 0, width: 0, height: 10, right: 0, bottom: 10 }, // zero width
+          { left: 0, top: 0, width: 10, height: 0, right: 10, bottom: 0 }, // zero height
+          { left: 0, top: 0, width: 10, height: 10, right: 10, bottom: 10 } // valid
         ]
       })
       const result = selectionToPdfLocator(range, pageEl, viewport as never, 1)
@@ -123,7 +140,8 @@ describe('pdf-locator', () => {
       const vp = makeViewport({ width: 400, height: 600, scale: 1 })
       const screen = pdfLocatorToScreenRects(
         { page: 1, rects: [{ x: 10, y: 565, w: 100, h: 15 }] },
-        pageEl, vp as never
+        pageEl,
+        vp as never
       )
       expect(screen).toEqual([{ left: 10, top: 20, width: 100, height: 15 }])
     })

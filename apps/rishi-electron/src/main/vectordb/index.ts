@@ -31,6 +31,13 @@ let storageDir = ''
 /** In-memory cache of loaded HNSW indices, keyed by name. */
 const indices = new Map<string, IndexEntry>()
 
+/**
+ * Names of indices currently being rebuilt in the background. Search calls
+ * can consult `isIndexRebuilding(name)` to surface a "ready in a moment"
+ * UX instead of returning empty results that look like a missing book.
+ */
+const rebuilding = new Set<string>()
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -85,8 +92,35 @@ function createIndex(dim: number, maxElements: number): InstanceType<Hierarchica
 }
 
 /**
+ * Best-effort unlink of a corrupted / mismatched index artifact. Swallows
+ * ENOENT and logs any other error so caller code can continue with a fresh
+ * in-memory index even when the disk is in a weird state (FIO-005).
+ */
+function unlinkBrokenIndex(name: string, reason: string): void {
+  const filePath = indexPath(name)
+  try {
+    if (existsSync(filePath)) {
+      unlinkSync(filePath)
+      console.warn(
+        `[vectordb] removed broken index file for "${name}" (${reason}); ` +
+          `it will be rebuilt from chunk_data on next indexer pass.`
+      )
+    }
+  } catch (err) {
+    console.error(
+      `[vectordb] failed to unlink broken index "${name}" (${reason}): ${errorMessage(err)}`
+    )
+  }
+}
+
+/**
  * Load an existing index from disk, or return `undefined` if the file does
- * not exist.
+ * not exist, is corrupted, or has a dimension that doesn't match the
+ * embedder the caller is using.
+ *
+ * On corruption / dim mismatch the broken file is unlinked so the next
+ * write produces a clean artifact. Callers may then trigger a background
+ * `rebuildIndexFromChunks` to repopulate from the SQLite chunk corpus.
  */
 function loadIndexFromDisk(name: string, dim: number): IndexEntry | undefined {
   const filePath = indexPath(name)
@@ -94,9 +128,38 @@ function loadIndexFromDisk(name: string, dim: number): IndexEntry | undefined {
 
   const HNSW = requireHnsw()
   const index = new HNSW('cosine', dim)
-  // 2nd arg `allowReplaceDeleted` must match what createIndex sets so
-  // addPoint(..., replaceDeleted=true) works for indices loaded from disk.
-  index.readIndexSync(filePath, true)
+
+  try {
+    // 2nd arg `allowReplaceDeleted` must match what createIndex sets so
+    // addPoint(..., replaceDeleted=true) works for indices loaded from disk.
+    index.readIndexSync(filePath, true)
+  } catch (err) {
+    // Truncated, partial write (disk full at last save), bit-rotted file,
+    // schema bump in hnswlib, etc. Treat as unrecoverable: drop the file
+    // and signal "no existing index" so the caller starts fresh.
+    unlinkBrokenIndex(name, `load failed: ${errorMessage(err)}`)
+    return undefined
+  }
+
+  // Dimension mismatch: the embedder model was swapped (e.g. MiniLM-L6
+  // 384-dim -> MiniLM-L12 768-dim) since this file was written. The old
+  // vectors are meaningless against the new model; rebuild from source
+  // chunks instead of crashing on the first addPoint/searchKnn call.
+  let storedDim = dim
+  try {
+    storedDim = index.getNumDimensions()
+  } catch {
+    // Older hnswlib builds may not expose getNumDimensions; trust the
+    // ctor dim and let downstream addPoint surface a clean error.
+  }
+  if (storedDim !== dim) {
+    unlinkBrokenIndex(
+      name,
+      `dim mismatch: stored=${storedDim} live=${dim} (embedder model changed)`
+    )
+    return undefined
+  }
+
   index.setEf(DEFAULT_EF_SEARCH)
 
   const count = index.getCurrentCount()
@@ -107,7 +170,8 @@ function loadIndexFromDisk(name: string, dim: number): IndexEntry | undefined {
 
 /**
  * Retrieve an IndexEntry from the in-memory cache, loading from disk when
- * necessary. Returns `undefined` when no persisted index exists.
+ * necessary. Returns `undefined` when no persisted index exists (or the
+ * persisted index was corrupted / dim-mismatched and got unlinked).
  */
 function getOrLoadIndex(name: string, dim: number): IndexEntry | undefined {
   const cached = indices.get(name)
@@ -141,6 +205,15 @@ export function hasVectorsForBook(bookId: number): boolean {
   const name = `${bookId}-vectordb`
   if (indices.has(name)) return true
   return existsSync(indexPath(name))
+}
+
+/**
+ * Returns true when a background rebuild is in progress for `name`. The
+ * renderer can surface a "search is warming up" hint instead of treating
+ * the empty-result window as "this book has no content".
+ */
+export function isIndexRebuilding(name: string): boolean {
+  return rebuilding.has(name)
 }
 
 /**
@@ -199,8 +272,9 @@ export function saveVectors(
  * `query`.
  *
  * @returns An array of results sorted by ascending distance (best match
- *          first). Returns an empty array when the index does not exist or
- *          contains no vectors.
+ *          first). Returns an empty array when the index does not exist,
+ *          could not be loaded (corruption / dim mismatch — recovery path
+ *          kicks in), or contains no vectors.
  */
 export function searchVectors(
   name: string,
@@ -208,6 +282,10 @@ export function searchVectors(
   dim: number = DEFAULT_DIM,
   k: number = 5
 ): Array<{ id: number; distance: number }> {
+  // getOrLoadIndex performs corruption/dim-mismatch recovery: a returned
+  // `undefined` here means "no usable index right now" rather than an
+  // unhandled crash. The renderer treats that as an empty result set,
+  // and the next indexBook pass will repopulate vectors lazily.
   const entry = getOrLoadIndex(name, dim)
   if (!entry || entry.count === 0) return []
 
@@ -237,6 +315,50 @@ export function searchVectors(
 }
 
 /**
+ * Rebuild an index `name` from its source chunks. Used after corruption or
+ * a dim-mismatch wipe to repopulate from SQLite `chunk_data`.
+ *
+ * The caller supplies:
+ *   - `loadChunks`: an async function that returns the chunk corpus
+ *     (typically `getAllPageDataByBookId(bookId)` from the queries module).
+ *   - `embed`: an async function that maps chunks -> `{id, vector}` pairs
+ *     (typically `generateEmbeddings(...).map(...)`).
+ *
+ * While the rebuild runs the index is flagged via `isIndexRebuilding`, so
+ * the renderer can show a "warming up" hint instead of an empty result.
+ * Failures are logged and surfaced as a rejected promise; the partial
+ * index (if any) remains in memory so concurrent searches don't crash.
+ */
+export async function rebuildIndexFromChunks<C extends { id: number; text: string }>(
+  name: string,
+  dim: number,
+  loadChunks: () => Promise<C[]>,
+  embed: (chunks: C[]) => Promise<Array<{ id: number; vector: number[] }>>
+): Promise<void> {
+  // Drop any in-memory copy plus the on-disk artifact before rebuilding.
+  // saveVectors will recreate both lazily as embeddings arrive.
+  indices.delete(name)
+  unlinkBrokenIndex(name, 'rebuilding from source chunks')
+
+  rebuilding.add(name)
+  try {
+    const chunks = await loadChunks()
+    if (chunks.length === 0) return
+
+    // Batch the embed call. We pass the whole list to the supplied
+    // embedder which is expected to handle its own batching (see
+    // generateEmbeddings: BATCH_SIZE = 32). This keeps the surface area
+    // small and matches how the indexer already calls embed today.
+    const vectors = await embed(chunks)
+    if (vectors.length > 0) {
+      saveVectors(name, dim, vectors)
+    }
+  } finally {
+    rebuilding.delete(name)
+  }
+}
+
+/**
  * Delete the index for `name`, removing both the in-memory cache and the
  * persisted file on disk.
  */
@@ -257,9 +379,32 @@ export async function embedText(text: string): Promise<number[]> {
 
 export function deleteIndex(name: string): void {
   indices.delete(name)
+  rebuilding.delete(name)
 
   const filePath = indexPath(name)
   if (existsSync(filePath)) {
     unlinkSync(filePath)
   }
+}
+
+/**
+ * Reset all module state. Test-only — used by `_resetForTesting` in
+ * `index.test.ts` so each test starts from a clean slate without having
+ * to reload the module via vi.resetModules().
+ */
+export function _resetForTesting(): void {
+  indices.clear()
+  rebuilding.clear()
+  storageDir = ''
+  HierarchicalNSW = null
+}
+
+/**
+ * Test-only: inject a mock HierarchicalNSW constructor so unit tests can
+ * exercise the recovery paths without the native `hnswlib-node` binding
+ * being installed for the current Node ABI. The renderer + main process
+ * still call `requireHnsw()` in production.
+ */
+export function _setHnswForTesting(ctor: HierarchicalNSWType | null): void {
+  HierarchicalNSW = ctor
 }

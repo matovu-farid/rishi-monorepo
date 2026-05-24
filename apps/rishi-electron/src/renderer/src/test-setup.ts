@@ -73,6 +73,7 @@ const mockElectronAPI = {
   booksUpdateFileHash: vi.fn().mockResolvedValue(undefined),
   findBookByHash: vi.fn().mockResolvedValue(null),
   getBookFilepaths: vi.fn().mockResolvedValue([]),
+  getCover: vi.fn().mockResolvedValue([]),
   openBook: vi.fn().mockResolvedValue(undefined),
   conversationsFindForBook: vi.fn().mockResolvedValue(null),
   conversationsCreate: vi.fn().mockResolvedValue(undefined),

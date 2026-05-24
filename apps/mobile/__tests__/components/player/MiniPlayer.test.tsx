@@ -614,3 +614,195 @@ describe('MiniPlayer (mobile)', () => {
     expect(findByTestID(treeOn, 'mini-player-repeat')).not.toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Play-spinner debounce (#236) — mobile mirror of electron PR #235 (#232).
+//
+// `playerMachine` dips through 'loading' (and the broader
+// 'waitingForParagraphs' / 'pageNavigating' / 'republishingParagraphs')
+// at every paragraph boundary even when the next paragraph's audio is
+// already cached. The raw signal flickers the ActivityIndicator on every
+// boundary. The fix is an asymmetric debounce: delay-show the spinner by
+// `SPINNER_DEBOUNCE_MS` (200ms) ONLY when the predecessor was an
+// active-playback state; cold-start (idle → loading) and pause→resume
+// (paused → loading) MUST show the spinner immediately so users get
+// feedback that their explicit action registered. Hide is always immediate.
+//
+// Asserts via `accessibilityLabel` + ActivityIndicator testID — no
+// snapshots, no internal-state probes.
+// ---------------------------------------------------------------------------
+
+describe('MiniPlayer — play spinner debounce (#236)', () => {
+  beforeEach(() => {
+    jest.useFakeTimers()
+  })
+  afterEach(() => {
+    jest.useRealTimers()
+  })
+
+  function spinnerCount(tree: TestRenderer.ReactTestRenderer): number {
+    return tree.root.findAll(
+      (n) =>
+        (n.props as { testID?: string } | null)?.testID === 'activity-indicator',
+    ).length
+  }
+
+  function playPauseLabel(
+    tree: TestRenderer.ReactTestRenderer,
+  ): string | undefined {
+    // The play-pause testID is passed through PillIconButton (the React
+    // component) to its inner <Pressable> host element — so TestRenderer
+    // returns BOTH matches. The component-level match exposes
+    // `label` (the PillIconButton prop name), the host match exposes
+    // `accessibilityLabel`. We want the host-level a11y prop, which is
+    // what VoiceOver/TalkBack actually reads in production.
+    const matches = tree.root.findAll(
+      (n) => (n.props as { testID?: string } | null)?.testID === 'mini-player-play-pause',
+    )
+    for (const node of matches) {
+      const label = (node.props as { accessibilityLabel?: string } | null)
+        ?.accessibilityLabel
+      if (typeof label === 'string') return label
+    }
+    return undefined
+  }
+
+  function mountAndExpand(): TestRenderer.ReactTestRenderer {
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<MiniPlayer bookId="b1" />)
+    })
+    const orb = findByTestID(tree, 'mini-player-orb')
+    if (orb) {
+      act(() => {
+        ;(orb.props as { onPress: () => void }).onPress()
+      })
+    }
+    return tree
+  }
+
+  it('does not flicker the spinner on a cached playing → loading → playing transition', () => {
+    playerState.playingState = 'playing'
+    const tree = mountAndExpand()
+    expect(spinnerCount(tree)).toBe(0)
+
+    // Cached inter-paragraph dip: ~50ms in 'loading' before snapping back.
+    playerState.playingState = 'loading'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    expect(spinnerCount(tree)).toBe(0)
+    expect(playPauseLabel(tree)).not.toBe('Loading')
+
+    act(() => {
+      jest.advanceTimersByTime(50)
+    })
+    expect(spinnerCount(tree)).toBe(0)
+    expect(playPauseLabel(tree)).not.toBe('Loading')
+
+    playerState.playingState = 'playing'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    expect(spinnerCount(tree)).toBe(0)
+    // Pause icon (since we're playing) should remain the accessible label.
+    expect(playPauseLabel(tree)).toBe('Pause')
+  })
+
+  it('shows the spinner after the debounce window when load genuinely stalls', () => {
+    playerState.playingState = 'playing'
+    const tree = mountAndExpand()
+
+    playerState.playingState = 'loading'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    // Below the debounce window: still no spinner.
+    act(() => {
+      jest.advanceTimersByTime(150)
+    })
+    expect(spinnerCount(tree)).toBe(0)
+    expect(playPauseLabel(tree)).not.toBe('Loading')
+
+    // Cross the debounce threshold: spinner appears and label flips.
+    act(() => {
+      jest.advanceTimersByTime(100)
+    })
+    expect(spinnerCount(tree)).toBeGreaterThan(0)
+    expect(playPauseLabel(tree)).toBe('Loading')
+  })
+
+  it('shows the spinner immediately on cold-start (idle → loading, no debounce)', () => {
+    // The component renders null while idle, so mount directly in loading —
+    // mirrors the existing `playingState="loading"` test at L388. Per ship
+    // condition #4, seeding `lastNonLoadingState` to `'idle'` (not
+    // `playingState`) keeps cold-start cameFromActivePlayback === false.
+    playerState.playingState = 'loading'
+    const tree = mountAndExpand()
+    // No timer advance.
+    expect(spinnerCount(tree)).toBeGreaterThan(0)
+    expect(playPauseLabel(tree)).toBe('Loading')
+  })
+
+  it('shows the spinner immediately on pause → resume (paused.clean → loading, no debounce)', () => {
+    playerState.playingState = 'paused.clean'
+    const tree = mountAndExpand()
+
+    playerState.playingState = 'loading'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    // Predecessor `paused.clean` is not in ACTIVE_PLAYBACK_STATES — spinner
+    // is immediate.
+    expect(spinnerCount(tree)).toBeGreaterThan(0)
+    expect(playPauseLabel(tree)).toBe('Loading')
+  })
+
+  it('hides the spinner immediately when loading ends after the debounce fired', () => {
+    playerState.playingState = 'playing'
+    const tree = mountAndExpand()
+
+    playerState.playingState = 'loading'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    act(() => {
+      jest.advanceTimersByTime(300)
+    })
+    expect(spinnerCount(tree)).toBeGreaterThan(0)
+
+    // Hide is immediate — no delay-hide.
+    playerState.playingState = 'playing'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    expect(spinnerCount(tree)).toBe(0)
+    expect(playPauseLabel(tree)).toBe('Pause')
+  })
+
+  it('suppresses the spinner across a cached playing → waitingForParagraphs → playing dip', () => {
+    // `waitingForParagraphs` is one of the loading-like states the latch
+    // must treat as "loading" (otherwise the predecessor on a subsequent
+    // 'loading' would leak the wrong value). Mobile inherits the same
+    // shared playerMachine state list, including `waitingForParagraphs`
+    // and `pageNavigating`.
+    playerState.playingState = 'playing'
+    const tree = mountAndExpand()
+
+    playerState.playingState = 'waitingForParagraphs'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    act(() => {
+      jest.advanceTimersByTime(50)
+    })
+    expect(spinnerCount(tree)).toBe(0)
+
+    playerState.playingState = 'playing'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    expect(spinnerCount(tree)).toBe(0)
+    expect(playPauseLabel(tree)).toBe('Pause')
+  })
+})
