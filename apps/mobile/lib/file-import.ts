@@ -175,6 +175,7 @@ async function runImportWithService(opts: {
       format: opts.format,
       currentCfi: null,
       currentPage: opts.format === "pdf" ? 1 : null,
+      lastProgressPercent: null,
       createdAt: Date.now(),
     },
   };
@@ -434,6 +435,7 @@ export async function importBookFromFile(opts: {
     format: opts.format,
     currentCfi: null,
     currentPage: opts.format === "pdf" ? 1 : null,
+    lastProgressPercent: null,
     createdAt: Date.now(),
   };
 }

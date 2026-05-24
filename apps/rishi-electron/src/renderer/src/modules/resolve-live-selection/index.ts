@@ -50,7 +50,7 @@ export function resolveLiveSelection(
     if (!sel || sel.rangeCount === 0) return
     const text = sel.toString()
     if (!text.trim()) return
-    const cfiFn = contents?.cfiFromRange
+    const cfiFn = contents.cfiFromRange
     if (typeof cfiFn !== 'function') return
     try {
       const range = sel.getRangeAt(0)

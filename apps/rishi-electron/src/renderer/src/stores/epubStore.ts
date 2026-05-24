@@ -11,7 +11,7 @@ import {
 import { usePlayerStore } from '@/stores/playerStore'
 import type { BookOutline } from '@/lib/api'
 import { getBookImportService } from '@/services'
-import { useChatStore } from './chatStore'
+import { initBookChatSubscription } from './initBookChatSubscription'
 import { getVoiceChatService } from '@/services'
 import { captureError } from '@/utils/sentry'
 
@@ -247,17 +247,16 @@ export function initEpubSubscriptions(): (() => void)[] {
     )
   )
 
-  // Side effect: when isChatting turns on and bookId exists, start realtime session
+  // Side effect: when isChatting turns on and bookId exists, start realtime session.
+  // Extracted into the shared initBookChatSubscription helper (#237) so this
+  // call site stays in lock-step with Azw3View and pdfStore — those three
+  // reader paths used to copy-paste this same subscription block and drift
+  // (mobile parity: apps/mobile/components/reader/ReaderOverlay.tsx:60-94).
   unsubs.push(
-    useChatStore.subscribe(
-      (state) => state.isChatting,
-      (isChatting) => {
-        const bookId = useEpubStore.getState().bookId
-        if (isChatting && bookId) {
-          useChatStore.getState().startChat(Number(bookId))
-        }
-      }
-    )
+    initBookChatSubscription(() => {
+      const bookId = useEpubStore.getState().bookId
+      return bookId || null
+    })
   )
 
   // Track in module-level array for cleanupEpubSubscriptions()

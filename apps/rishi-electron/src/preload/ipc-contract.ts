@@ -86,6 +86,13 @@ export type IpcContract = {
   }
   'books:findByHash': { args: [hash: string]; returns: Book | null }
   'books:getFilepaths': { args: []; returns: string[] }
+  /**
+   * Lazy-load a single book's cover BLOB by id. Returns the bytes (possibly
+   * an empty array if no cover was ever stored) or `null` if the book id
+   * doesn't exist. Used by the renderer's book-card component since
+   * `books:getAll` no longer ships covers inline — see #190.
+   */
+  'books:getCover': { args: [bookId: number]; returns: number[] | null }
 
   // -- Chunks ----------------------------------------------------------
   'chunks:saveMany': { args: [pageData: ChunkDataInsertable[]]; returns: void }

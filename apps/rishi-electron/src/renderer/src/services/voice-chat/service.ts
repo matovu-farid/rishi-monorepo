@@ -187,7 +187,8 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
             activeParagraphText: ctx.activeParagraphText,
             visualSummary: ctx.visualSummary,
             onEndConversation: (reason) => endedByAgentEmitter.emit(reason),
-            onInspectImage: (image) => liveSession.addImage(image.dataUrl, { triggerResponse: false }),
+            onInspectImage: (image) =>
+              liveSession.addImage(image.dataUrl, { triggerResponse: false }),
             rag,
             language: getLanguage()
           })

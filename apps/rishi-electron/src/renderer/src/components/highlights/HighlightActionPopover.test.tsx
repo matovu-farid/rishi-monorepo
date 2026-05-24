@@ -18,8 +18,9 @@ describe('HighlightActionPopover', () => {
   it('renders a swatch per HIGHLIGHT_COLORS entry, plus a note button and Delete button', () => {
     render(<HighlightActionPopover {...baseProps()} />)
     for (const c of HIGHLIGHT_COLORS) {
-      expect(screen.getByRole('button', { name: new RegExp(`change.*${c.name}`, 'i') }))
-        .toBeInTheDocument()
+      expect(
+        screen.getByRole('button', { name: new RegExp(`change.*${c.name}`, 'i') })
+      ).toBeInTheDocument()
     }
     expect(screen.getByRole('button', { name: /add note/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /delete highlight/i })).toBeInTheDocument()
@@ -88,8 +89,9 @@ describe('HighlightActionPopover', () => {
     it("does not render color swatches when currentColor is 'none'", () => {
       render(<HighlightActionPopover {...baseProps()} currentColor={'none' as never} />)
       for (const c of HIGHLIGHT_COLORS) {
-        expect(screen.queryByRole('button', { name: new RegExp(`change.*${c.name}`, 'i') }))
-          .toBeNull()
+        expect(
+          screen.queryByRole('button', { name: new RegExp(`change.*${c.name}`, 'i') })
+        ).toBeNull()
       }
     })
 
@@ -99,7 +101,7 @@ describe('HighlightActionPopover', () => {
       expect(screen.getByRole('button', { name: /delete highlight/i })).toBeInTheDocument()
     })
 
-    it("fires onEditNote when the note button is clicked on a note-only popover", () => {
+    it('fires onEditNote when the note button is clicked on a note-only popover', () => {
       const props = baseProps()
       render(<HighlightActionPopover {...props} currentColor={'none' as never} />)
       fireEvent.click(screen.getByRole('button', { name: /add note/i }))

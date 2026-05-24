@@ -98,4 +98,37 @@ describe('prefsStore', () => {
     expect(invalidateKeyMock).not.toHaveBeenCalled()
     expect(usePrefsStore.getState().voiceChatLanguage).toBe('en')
   })
+
+  // -------------------------------------------------------------------------
+  // pdfFooterDetection — sibling of ttsVisualCueEnabled
+  // -------------------------------------------------------------------------
+
+  it('pdfFooterDetection defaults to true', async () => {
+    const { usePrefsStore } = await import('./prefsStore')
+    expect(usePrefsStore.getState().pdfFooterDetection).toBe(true)
+  })
+
+  it('setPdfFooterDetection persists via window.electron.setStoreValue', async () => {
+    const { usePrefsStore } = await import('./prefsStore')
+    await usePrefsStore.getState().setPdfFooterDetection(false)
+    expect(window.electron.setStoreValue).toHaveBeenCalledWith('pdfFooterDetection', false)
+    expect(usePrefsStore.getState().pdfFooterDetection).toBe(false)
+  })
+
+  it('pdfFooterDetection hydrates from window.electron.getStoreValue on init', async () => {
+    ;(window.electron.getStoreValue as ReturnType<typeof vi.fn>).mockImplementation(
+      (key: string) => {
+        switch (key) {
+          case 'pdfFooterDetection':
+            return Promise.resolve(false)
+          default:
+            return Promise.resolve(undefined)
+        }
+      }
+    )
+    const { usePrefsStore } = await import('./prefsStore')
+    await usePrefsStore.getState().hydrate()
+    expect(window.electron.getStoreValue).toHaveBeenCalledWith('pdfFooterDetection')
+    expect(usePrefsStore.getState().pdfFooterDetection).toBe(false)
+  })
 })

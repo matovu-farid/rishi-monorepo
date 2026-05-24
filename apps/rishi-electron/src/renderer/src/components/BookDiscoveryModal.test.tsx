@@ -16,8 +16,7 @@ function renderWithClient(ui: React.ReactElement) {
 const importBatch = vi.fn<(paths: string[]) => Promise<ImportResult[]>>()
 const startDiscovery = vi.fn()
 const cancelDiscovery = vi.fn<() => Promise<void>>()
-const onDiscoveryEvent =
-  vi.fn<(cb: (event: DiscoveryEvent) => void) => () => void>()
+const onDiscoveryEvent = vi.fn<(cb: (event: DiscoveryEvent) => void) => () => void>()
 const openBook = vi.fn<(id: number) => Promise<void>>()
 
 let discoveryListener: ((event: DiscoveryEvent) => void) | null = null
@@ -34,9 +33,8 @@ vi.mock('@/services', async () => {
 })
 
 vi.mock('@tanstack/react-query', async () => {
-  const actual = await vi.importActual<typeof import('@tanstack/react-query')>(
-    '@tanstack/react-query'
-  )
+  const actual =
+    await vi.importActual<typeof import('@tanstack/react-query')>('@tanstack/react-query')
   return {
     ...actual,
     useQueryClient: () => ({ invalidateQueries: vi.fn().mockResolvedValue(undefined) })
@@ -87,9 +85,7 @@ beforeEach(() => {
   })
   openBook.mockReset().mockResolvedValue(undefined)
   ;(window.electron as unknown as { openBook: typeof openBook }).openBook = openBook
-  ;(window.electron.getBookFilepaths as ReturnType<typeof vi.fn>) = vi
-    .fn()
-    .mockResolvedValue([])
+  ;(window.electron.getBookFilepaths as ReturnType<typeof vi.fn>) = vi.fn().mockResolvedValue([])
 })
 
 describe('BookDiscoveryModal selection behavior', () => {
@@ -235,9 +231,7 @@ describe('BookDiscoveryModal selection behavior', () => {
 describe('BookDiscoveryModal post-import behavior', () => {
   it('closes the wizard after the import resolves (regardless of success)', async () => {
     const onClose = vi.fn()
-    importBatch.mockResolvedValue([
-      { ok: true, bookId: 1, filePath: '/docs/a.pdf', format: 'pdf' }
-    ])
+    importBatch.mockResolvedValue([{ ok: true, bookId: 1, filePath: '/docs/a.pdf', format: 'pdf' }])
     renderWithClient(<BookDiscoveryModal open={true} onClose={onClose} />)
     await waitFor(() => expect(window.electron.getBookFilepaths).toHaveBeenCalled())
     emitBooks([makeBook({ filepath: '/docs/a.pdf', folder: '/docs' })])
@@ -306,9 +300,7 @@ describe('BookDiscoveryModal post-import behavior', () => {
       { ok: false, filePath: '/docs/dupe.pdf', stage: 'duplicate', error: 'Already in library' }
     ])
     renderWithClient(<BookDiscoveryModal open={true} onClose={onClose} />)
-    await waitFor(() =>
-      expect(window.electron.getBookFilepaths).toHaveBeenCalled()
-    )
+    await waitFor(() => expect(window.electron.getBookFilepaths).toHaveBeenCalled())
     emitBooks([makeBook({ filepath: '/docs/dupe.pdf', folder: '/docs' })])
 
     fireEvent.click(screen.getByRole('checkbox', { name: /select dupe\.pdf/i }))
@@ -341,9 +333,7 @@ describe('BookDiscoveryModal post-import behavior', () => {
 
 describe('BookDiscoveryModal discovery filter', () => {
   beforeEach(() => {
-    ;(window.electron.getBookFilepaths as ReturnType<typeof vi.fn>) = vi
-      .fn()
-      .mockResolvedValue([])
+    ;(window.electron.getBookFilepaths as ReturnType<typeof vi.fn>) = vi.fn().mockResolvedValue([])
   })
 
   it('hides discovered books whose filepath is already in the library', async () => {
@@ -355,9 +345,7 @@ describe('BookDiscoveryModal discovery filter', () => {
 
     // Wait for the filepath query to resolve before emitting books — the
     // wizard buffers book-found events until the existing-paths query is ready.
-    await waitFor(() =>
-      expect(window.electron.getBookFilepaths).toHaveBeenCalled()
-    )
+    await waitFor(() => expect(window.electron.getBookFilepaths).toHaveBeenCalled())
 
     emitBooks([
       makeBook({ filepath: '/docs/already.pdf', folder: '/docs' }),
@@ -375,9 +363,7 @@ describe('BookDiscoveryModal discovery filter', () => {
 
     renderWithClient(<BookDiscoveryModal open={true} onClose={vi.fn()} />)
 
-    await waitFor(() =>
-      expect(window.electron.getBookFilepaths).toHaveBeenCalled()
-    )
+    await waitFor(() => expect(window.electron.getBookFilepaths).toHaveBeenCalled())
 
     emitBooks([
       makeBook({ filepath: '/docs/a.pdf', folder: '/docs' }),

@@ -69,9 +69,9 @@ test('NEXT on last paragraph of page N lands on page N+1 and does not snap back 
 
     // Confirm the reader mounted and at least two pages of paragraphs are
     // available — the bug only manifests when crossing a page boundary.
-    await expect(
-      bookPage.locator('[data-testid="pdf-scroll-container"]').first()
-    ).toBeVisible({ timeout: 15000 })
+    await expect(bookPage.locator('[data-testid="pdf-scroll-container"]').first()).toBeVisible({
+      timeout: 15000
+    })
 
     // Wait until pdfStore has paragraphs for page 1 (the source page). Page 2's
     // text is rendered lazily by the virtualizer once we scroll there, so we
@@ -93,11 +93,7 @@ test('NEXT on last paragraph of page N lands on page N+1 and does not snap back 
         }
         const s = w.__rishi?.pdfStore.getState()
         if (!s) return false
-        return (
-          s.pageCount >= 2 &&
-          !!s.pageNumberToPageData[1] &&
-          s.currentViewParagraphs.length > 0
-        )
+        return s.pageCount >= 2 && !!s.pageNumberToPageData[1] && s.currentViewParagraphs.length > 0
       },
       undefined,
       { timeout: 30000 }
@@ -131,8 +127,7 @@ test('NEXT on last paragraph of page N lands on page N+1 and does not snap back 
       for (let i = 0; i < dataSize; i++) u8[44 + i] = 0x80
       const noop = (): void => {}
       w.__rishi.setTestTtsService({
-        requestAudio: async () =>
-          URL.createObjectURL(new Blob([u8], { type: 'audio/wav' })),
+        requestAudio: async () => URL.createObjectURL(new Blob([u8], { type: 'audio/wav' })),
         cancelRequest: () => true,
         cancelBookRequests: noop,
         clearBookCache: async () => {},
@@ -158,7 +153,8 @@ test('NEXT on last paragraph of page N lands on page N+1 and does not snap back 
       return {
         pageNumber: s.pageNumber,
         paragraphCount: s.currentViewParagraphs.length,
-        lastParagraphIndex: s.currentViewParagraphs[s.currentViewParagraphs.length - 1]?.index ?? null
+        lastParagraphIndex:
+          s.currentViewParagraphs[s.currentViewParagraphs.length - 1]?.index ?? null
       }
     })
     console.log('[diag] startState:', JSON.stringify(startState))
@@ -284,10 +280,9 @@ test('NEXT on last paragraph of page N lands on page N+1 and does not snap back 
     expect(before.viewIndexes, 'before-click: page-1 paragraph indexes').toContain(
       advanceResult.lastIndex
     )
-    expect(
-      before.activeIndex,
-      'before-click: active paragraph is last paragraph of page 1'
-    ).toBe(advanceResult.lastIndex)
+    expect(before.activeIndex, 'before-click: active paragraph is last paragraph of page 1').toBe(
+      advanceResult.lastIndex
+    )
 
     // ===== THE ACTION: NEXT on last paragraph of page 1 =====
     // This is exactly what the user does ("click next paragraph"). When the
@@ -369,12 +364,10 @@ test('NEXT on last paragraph of page N lands on page N+1 and does not snap back 
           }
         }
       }
-      const page2Paragraphs = w.__rishi.playerStore
-        .getState()
-        .currentParagraphs.filter((p) => {
-          const n = Number(p.index)
-          return Number.isFinite(n) && n >= 20000 && n < 30000
-        })
+      const page2Paragraphs = w.__rishi.playerStore.getState().currentParagraphs.filter((p) => {
+        const n = Number(p.index)
+        return Number.isFinite(n) && n >= 20000 && n < 30000
+      })
       const first = page2Paragraphs[0]
       if (!first) throw new Error('page-2 paragraphs not published to playerStore')
       // Simulate the playerMachine advancing to page 2's first paragraph.
@@ -424,9 +417,7 @@ test('NEXT on last paragraph of page N lands on page N+1 and does not snap back 
         playerState: string
         flag: boolean
       }> = []
-      const container = document.querySelector<HTMLElement>(
-        '[data-testid="pdf-scroll-container"]'
-      )
+      const container = document.querySelector<HTMLElement>('[data-testid="pdf-scroll-container"]')
       while (performance.now() - start < 3000) {
         const pdf = w.__rishi.pdfStore.getState()
         const player = w.__rishi.playerStore.getState()

@@ -264,6 +264,31 @@ export function usePdfReader(
       }
     )
 
+    // --- Re-publish paragraphs when the footer mask for THIS book arrives.
+    // The eager footer-mask scan runs asynchronously after open — typically
+    // 1–3s later. The two subscriptions above only fire on paragraph /
+    // page-data changes, so without this hook the player keeps reading the
+    // first page's footer chrome until the next page change shakes the
+    // pipeline. Re-fire `publishParagraphsForPage` for the current page
+    // when the mask reference for this book actually CHANGES (the selector
+    // uses reference equality — `setFooterMask` always allocates a new
+    // outer object so we won't loop on no-op updates).
+    const footerMaskUnsub = usePdfStore.subscribe(
+      (s) => s.footerMaskByBookId[bookId],
+      (mask, prevMask) => {
+        if (mask === prevMask) return
+        const page = actor.getSnapshot().context.currentPage
+        const pageDataMap = usePdfStore.getState().pageNumberToPageData
+        if (!(pageDataMap[page] as TextContent | undefined)) return
+        // Reset our "last published" guard so the upcoming re-publish
+        // isn't suppressed — we WANT it to overwrite the (now stale,
+        // chrome-included) paragraphs that were published before the
+        // mask arrived.
+        lastPublishedPage = -1
+        publishParagraphsForPage(page, pageDataMap)
+      }
+    )
+
     actor.start()
 
     return () => {
@@ -280,6 +305,7 @@ export function usePdfReader(
       baselineUnsub.unsubscribe()
       paragraphUnsub.unsubscribe()
       pageDataUnsub()
+      footerMaskUnsub()
       apiRef.current = {
         sendDocLoaded: () => {},
         seekTo: () => {},
@@ -298,14 +324,20 @@ export function usePdfReader(
 // Exported for the issue-#30 snap-back test (useScrolling.test.tsx) so the
 // flag-lifecycle contract can be exercised end-to-end at the unit-test
 // level. Production consumers stay inside usePdfReader's effect.
-export function publishParagraphsForPage(page: number, pageDataMap: Record<number, TextContent>): void {
+export function publishParagraphsForPage(
+  page: number,
+  pageDataMap: Record<number, TextContent>
+): void {
   const data = pageDataMap[page] as TextContent | undefined
   if (!data) return
-  const newCurrent = pageDataToParagraphs(page, data)
+  const bookId = usePdfStore.getState().book?.id
+  const maskFor = (p: number): ReadonlySet<number> | undefined =>
+    bookId != null ? usePdfStore.getState().getFooterMaskForPage(bookId, p) : undefined
+  const newCurrent = pageDataToParagraphs(page, data, maskFor(page))
   const nextData = pageDataMap[page + 1] as TextContent | undefined
-  const newNext = nextData ? pageDataToParagraphs(page + 1, nextData) : []
+  const newNext = nextData ? pageDataToParagraphs(page + 1, nextData, maskFor(page + 1)) : []
   const prevData = pageDataMap[page - 1] as TextContent | undefined
-  const newPrev = prevData ? pageDataToParagraphs(page - 1, prevData) : []
+  const newPrev = prevData ? pageDataToParagraphs(page - 1, prevData, maskFor(page - 1)) : []
 
   const pdfState = usePdfStore.getState()
   const currentDiffers = !isEqual(pdfState.currentViewParagraphs, newCurrent)

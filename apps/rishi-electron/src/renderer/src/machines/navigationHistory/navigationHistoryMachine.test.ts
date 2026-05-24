@@ -72,7 +72,11 @@ describe('navigationHistoryMachine — stack', () => {
     actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(10) })
     actor.send({
       type: 'JUMP_REQUESTED',
-      from: pos(10), fromTts: null, to: pos(50), source: 'link', fromLabel: 'p. 10'
+      from: pos(10),
+      fromTts: null,
+      to: pos(50),
+      source: 'link',
+      fromLabel: 'p. 10'
     })
     actor.send({ type: 'PAGE_VISITED', position: pos(50), ttsContext: null })
     expect((actor.getSnapshot().value as { active: { stack: string } }).active.stack).toBe('idle')
@@ -83,7 +87,11 @@ describe('navigationHistoryMachine — stack', () => {
     actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(10) })
     actor.send({
       type: 'JUMP_REQUESTED',
-      from: pos(10), fromTts: null, to: pos(50), source: 'link', fromLabel: 'p. 10'
+      from: pos(10),
+      fromTts: null,
+      to: pos(50),
+      source: 'link',
+      fromLabel: 'p. 10'
     })
     actor.send({ type: 'PAGE_VISITED', position: pos(50), ttsContext: null })
     actor.send({ type: 'POP_BACK' })
@@ -217,7 +225,11 @@ describe('navigationHistoryMachine — resume map + pill', () => {
     expect(actor.getSnapshot().context.pillVisible).toBe(false)
     actor.send({
       type: 'JUMP_REQUESTED',
-      from: pos(1), fromTts: null, to: pos(5), source: 'link', fromLabel: 'p. 1'
+      from: pos(1),
+      fromTts: null,
+      to: pos(5),
+      source: 'link',
+      fromLabel: 'p. 1'
     })
     expect(actor.getSnapshot().context.pillVisible).toBe(true)
     actor.send({ type: 'PAGE_VISITED', position: pos(5), ttsContext: null })
@@ -232,7 +244,11 @@ describe('navigationHistoryMachine — resume map + pill', () => {
     actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(1) })
     actor.send({
       type: 'JUMP_REQUESTED',
-      from: pos(1), fromTts: null, to: pos(5), source: 'link', fromLabel: 'p. 1'
+      from: pos(1),
+      fromTts: null,
+      to: pos(5),
+      source: 'link',
+      fromLabel: 'p. 1'
     })
     actor.send({ type: 'DISMISS_PILL' })
     expect(actor.getSnapshot().context.pillVisible).toBe(false)
@@ -244,7 +260,11 @@ describe('navigationHistoryMachine — resume map + pill', () => {
     actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(1) })
     actor.send({
       type: 'JUMP_REQUESTED',
-      from: pos(1), fromTts: null, to: pos(5), source: 'link', fromLabel: 'p. 1'
+      from: pos(1),
+      fromTts: null,
+      to: pos(5),
+      source: 'link',
+      fromLabel: 'p. 1'
     })
     actor.send({ type: 'PAGE_VISITED', position: pos(5), ttsContext: null })
     expect(actor.getSnapshot().context.pillVisible).toBe(true)
@@ -295,7 +315,11 @@ describe('navigationHistoryMachine — smart resume emission', () => {
     // deliberate jump back to page 7
     actor.send({
       type: 'JUMP_REQUESTED',
-      from: pos(9), fromTts: null, to: pos(7, 100), source: 'link', fromLabel: 'p. 9'
+      from: pos(9),
+      fromTts: null,
+      to: pos(7, 100),
+      source: 'link',
+      fromLabel: 'p. 9'
     })
     actor.send({ type: 'PAGE_VISITED', position: pos(7, 100), ttsContext: null })
     expect(emitted.length).toBe(beforeJump) // no new emission — deliberate wins

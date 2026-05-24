@@ -10,6 +10,13 @@ interface UseChatReturn {
   error: string | null
   sendMessage: (text: string) => Promise<void>
   conversationId: string | null
+  /**
+   * True once the async conversation init has completed and `conversationId`
+   * is set. Consumers (chat input, send button) must gate user-initiated
+   * sends on this flag — otherwise messages submitted during the init window
+   * are silently dropped (see CHT-012).
+   */
+  isReady: boolean
 }
 
 export function useChat(bookId: number, bookSyncId: string, bookTitle?: string): UseChatReturn {
@@ -255,5 +262,10 @@ export function useChat(bookId: number, bookSyncId: string, bookTitle?: string):
     [conversationId, bookId, messages]
   )
 
-  return { messages, isLoading, error, sendMessage, conversationId }
+  // Readiness is derived from conversationId being set. Exposing it
+  // explicitly (rather than asking callers to check conversationId)
+  // keeps the contract clear: this is the gate for sending messages.
+  const isReady = conversationId !== null
+
+  return { messages, isLoading, error, sendMessage, conversationId, isReady }
 }

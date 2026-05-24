@@ -43,10 +43,18 @@ import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { useVirualization } from '../hooks/useVirualization'
 import { PAGE_GAP } from '../utils/constants'
 import { parsePdfLocation } from '@/lib/pdfLocation'
+import type { ViewportLike } from '@/modules/pdf-locator'
 import { pdfParagraphToPageNumber } from '@/components/pdf/utils/pdfParagraphToPageNumber'
 import { Effect, Fiber } from 'effect'
 import { indexBookProgram } from '@/services/indexing/index-program'
 import { loadPdfDocument, extractPageParagraphs } from '@/services/indexing/text-extraction'
+import {
+  buildFooterMask,
+  MIN_PAGES_FOR_DETECTION,
+  type PageScanInput
+} from '../utils/buildFooterMask'
+import { findRepeatingPageSuffix } from '../utils/findRepeatingPageSuffix'
+import { usePrefsStore } from '@/stores/prefsStore'
 import { useIndexingStore } from '@/stores/indexingStore'
 import { usePdfReader } from '@/hooks/usePdfReader'
 import type { Book } from '@/lib/api'
@@ -65,7 +73,11 @@ import { usePdfHighlights } from '@/hooks/usePdfHighlights'
 import { usePdfReadAloudFromSelection } from '@/hooks/usePdfReadAloudFromSelection'
 import { useUndoableHighlightShortcut } from '@/hooks/useUndoableHighlightShortcut'
 import { applyHighlightWithUndoPdf, deleteHighlightByIdWithUndo } from '@/modules/highlight-actions'
-import { updateHighlightColor, type HighlightRow, type PdfLocator } from '@/modules/highlight-storage'
+import {
+  updateHighlightColor,
+  type HighlightRow,
+  type PdfLocator
+} from '@/modules/highlight-storage'
 import type { PDFPageProxy } from 'pdfjs-dist'
 import type { HighlightColor } from '@/types/highlight'
 import type { MouseEvent as ReactMouseEvent } from 'react'
@@ -121,20 +133,39 @@ export function PdfView({
     requireAuth: requireAuth as (feature: string, action: () => void) => void
   })
 
+  // Memoize the selection-hook callbacks so usePdfTextSelection's effect
+  // doesn't rebind document/container listeners on every PdfView render. The
+  // hook now lists these in its dep array (rather than reading from a
+  // render-time ref), so unstable identities here would cause the listeners
+  // to detach and reattach on every parent render — wasteful, plus the
+  // mouseup listener is briefly missing in the window between cleanup and
+  // re-attach.
+  const getSelectionPageElement = useCallback(
+    (n: number) => pageInfoRef.current.get(n)?.pageEl ?? null,
+    []
+  )
+  const getSelectionViewport = useCallback((n: number): ViewportLike | null => {
+    const info = pageInfoRef.current.get(n)
+    if (!info) return null
+    const scale = info.pageEl.getBoundingClientRect().width / info.page.view[2]
+    // pdfjs-dist types return `any[]` from convertToViewportPoint; cast via
+    // unknown to the structural ViewportLike which expects [number, number].
+    return info.page.getViewport({
+      scale
+    }) as unknown as ViewportLike
+  }, [])
+  const handleSelectionSelect = useCallback(
+    (sel: { locator: PdfLocator; text: string; anchorPos: { x: number; y: number } }) =>
+      setSelectionPopover({ locator: sel.locator, text: sel.text, anchorPos: sel.anchorPos }),
+    []
+  )
+  const handleSelectionClear = useCallback(() => setSelectionPopover(null), [])
   usePdfTextSelection({
     containerRef: scrollContainerRef,
-    getPageElement: (n) => pageInfoRef.current.get(n)?.pageEl ?? null,
-    getViewport: (n) => {
-      const info = pageInfoRef.current.get(n)
-      if (!info) return null
-      const scale = info.pageEl.getBoundingClientRect().width / info.page.view[2]
-      // pdfjs-dist types return `any[]` from convertToViewportPoint; cast via
-      // unknown to the structural ViewportLike which expects [number, number].
-      return info.page.getViewport({ scale }) as unknown as import('@/modules/pdf-locator').ViewportLike
-    },
-    onSelect: (sel) =>
-      setSelectionPopover({ locator: sel.locator, text: sel.text, anchorPos: sel.anchorPos }),
-    onClear: () => setSelectionPopover(null)
+    getPageElement: getSelectionPageElement,
+    getViewport: getSelectionViewport,
+    onSelect: handleSelectionSelect,
+    onClear: handleSelectionClear
   })
 
   useScrolling(scrollContainerRef)
@@ -358,7 +389,8 @@ export function PdfView({
 
   // Helper: build a TtsContext from the current activeParagraph.
   // ParagraphWithIndex.index is a string; TtsContext.paragraphIndex is a number.
-  const ttsContext = activeParagraph != null ? { paragraphIndex: Number(activeParagraph.index) } : null
+  const ttsContext =
+    activeParagraph != null ? { paragraphIndex: Number(activeParagraph.index) } : null
 
   // Navigation history: lifecycle events (BOOK_OPENED / BOOK_CLOSED)
   useEffect(() => {
@@ -374,7 +406,6 @@ export function PdfView({
     return () => navigationHistoryActor.send({ type: 'BOOK_CLOSED' })
     // Re-fire if book.id changes (component is mounted with key={book.id} so this
     // normally only fires once per mount, but kept explicit for correctness).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [book.id])
 
   // Navigation history: PAGE_VISITED on every page change
@@ -448,9 +479,10 @@ export function PdfView({
     ({ pageNumber: itemPageNumber }: { pageNumber: number }) => {
       const fromPage = usePdfStore.getState().pageNumber
       const fromPosition: PositionDescriptor = { kind: 'pdf', page: fromPage, offset: 0 }
-      const fromTts = usePlayerStore.getState().activeParagraph != null
-        ? { paragraphIndex: Number(usePlayerStore.getState().activeParagraph!.index) }
-        : null
+      const fromTts =
+        usePlayerStore.getState().activeParagraph != null
+          ? { paragraphIndex: Number(usePlayerStore.getState().activeParagraph!.index) }
+          : null
       navigationHistoryActor.send({
         type: 'JUMP_REQUESTED',
         from: fromPosition,
@@ -642,6 +674,41 @@ export function PdfView({
         if (isCancelled()) return
         const skipPages = new Set(indexedPages)
 
+        // Footer-detection pass (#142): walk every page, sample TextContent
+        // for the bottom band, build the FooterMask. Skipped when the pref
+        // is off OR the book is too short for the heuristic to be reliable.
+        // Mask lives in-memory only; clearing/toggling the pref doesn't
+        // re-scan — selector consults the pref at read time.
+        if (!usePrefsStore.getState().pdfFooterDetection || numPages < MIN_PAGES_FOR_DETECTION) {
+          usePdfStore.getState().setFooterMask(book.id, new Map())
+        } else {
+          const scans: PageScanInput[] = []
+          for (let n = 1; n <= numPages; n++) {
+            if (isCancelled()) return
+            const page = await loadedDoc.getPage(n)
+            try {
+              const content = await page.getTextContent()
+              const view = page.view
+              const viewportHeight = view[3] - view[1]
+              scans.push({ pageNumber: n, content, viewportHeight })
+            } finally {
+              page.cleanup()
+            }
+          }
+          if (isCancelled()) return
+          const mask = buildFooterMask(scans)
+          const suffixMask = findRepeatingPageSuffix(scans)
+          for (const [pageNumber, itemSet] of suffixMask) {
+            let target = mask.get(pageNumber)
+            if (!target) {
+              target = new Set<number>()
+              mask.set(pageNumber, target)
+            }
+            for (const ix of itemSet) target.add(ix)
+          }
+          usePdfStore.getState().setFooterMask(book.id, mask)
+        }
+
         // Short-circuit if the whole book is already indexed.
         if (skipPages.size >= numPages) {
           useIndexingStore.getState().start(book.id, numPages)
@@ -669,7 +736,10 @@ export function PdfView({
             numPages,
             startPage,
             skipPages,
-            extract: (pageNumber) => extractPageParagraphs(loadedDoc, pageNumber),
+            extract: (pageNumber) => {
+              const m = usePdfStore.getState().getFooterMaskForPage(book.id, pageNumber)
+              return extractPageParagraphs(loadedDoc, pageNumber, m)
+            },
             saveChunks: (chunks) => window.electron.savePageDataMany(chunks),
             processJob: (pageNumber, items) =>
               window.electron.processJob(pageNumber, book.id, items),
@@ -699,7 +769,7 @@ export function PdfView({
     try {
       const handle = await applyHighlightWithUndoPdf({
         target: {
-          applyVisual: async () => {
+          applyVisual: () => {
             setHighlights((prev) => [
               ...prev,
               {
@@ -759,9 +829,7 @@ export function PdfView({
   const handleInlineColorChange = async (color: HighlightColor): Promise<void> => {
     if (!inlinePopover) return
     await updateHighlightColor(inlinePopover.rowId, color)
-    setHighlights((prev) =>
-      prev.map((r) => (r.id === inlinePopover.rowId ? { ...r, color } : r))
-    )
+    setHighlights((prev) => prev.map((r) => (r.id === inlinePopover.rowId ? { ...r, color } : r)))
     setInlinePopover(null)
   }
 
@@ -1005,7 +1073,7 @@ export function PdfView({
           </div>
         </SheetContent>
       </Sheet>
-      {selectionPopover && (
+      {selectionPopover ? (
         <SelectionPopover
           cfiRange={''}
           selectedText={selectionPopover.text}
@@ -1013,8 +1081,8 @@ export function PdfView({
           onHighlight={(color) => void handleCreatePdfHighlight(color)}
           onClose={() => setSelectionPopover(null)}
         />
-      )}
-      {inlinePopover && (
+      ) : null}
+      {inlinePopover ? (
         <HighlightActionPopover
           position={inlinePopover.position}
           currentColor={inlinePopover.currentColor}
@@ -1027,7 +1095,7 @@ export function PdfView({
           onDelete={() => void handleInlineDelete()}
           onClose={() => setInlinePopover(null)}
         />
-      )}
+      ) : null}
       <NoteEditor
         highlight={editingNoteRow}
         open={editingNoteRow !== null}

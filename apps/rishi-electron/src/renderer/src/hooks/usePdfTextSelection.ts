@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { selectionToPdfLocator, type ViewportLike } from '@/modules/pdf-locator'
 import type { PdfLocator } from '@/modules/highlight-storage'
 
@@ -29,29 +29,36 @@ function findPageInfo(node: Node | null): { el: HTMLElement; pageNumber: number 
 }
 
 export function usePdfTextSelection(params: UsePdfTextSelectionParams): void {
-  const paramsRef = useRef(params)
-  paramsRef.current = params
+  // Destructure once so the effect deps are the individual callbacks rather
+  // than the `params` object identity (which would churn every render). Call
+  // sites are expected to pass stable callbacks via `useCallback`; passing
+  // fresh closures here just rebinds the listeners on each render, which is
+  // safe but wasteful.
+  const { containerRef, onSelect, onClear, getPageElement, getViewport } = params
 
   useEffect(() => {
-    const container = params.containerRef.current
+    const container = containerRef.current
     if (!container) return
 
     const handleMouseUp = (): void => {
-      const { onSelect, getPageElement, getViewport } = paramsRef.current
       const sel = window.getSelection()
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return
       const range = sel.getRangeAt(0)
       const startInfo = findPageInfo(range.startContainer)
       const endInfo = findPageInfo(range.endContainer)
-      if (!startInfo || !endInfo || startInfo.el !== endInfo.el) return
+      if (!startInfo || startInfo.el !== endInfo?.el) return
       const expectedEl = getPageElement(startInfo.pageNumber)
       if (expectedEl !== startInfo.el) return
       const viewport = getViewport(startInfo.pageNumber)
       if (!viewport) return
       const locator = selectionToPdfLocator(range, startInfo.el, viewport, startInfo.pageNumber)
       if (!locator) return
+      // `.at(0)` returns `DOMRect | undefined` regardless of the project's
+      // `noUncheckedIndexedAccess` setting — that's what lets the guard below
+      // be meaningful (plain `rects[0]` would be typed as `DOMRect` and the
+      // guard would be dead).
       const rects = Array.from(range.getClientRects())
-      const first = rects[0]
+      const first = rects.at(0)
       if (!first) return
       onSelect({
         locator,
@@ -63,7 +70,7 @@ export function usePdfTextSelection(params: UsePdfTextSelectionParams): void {
     const handleSelectionChange = (): void => {
       const sel = window.getSelection()
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
-        paramsRef.current.onClear()
+        onClear()
       }
     }
 
@@ -73,5 +80,5 @@ export function usePdfTextSelection(params: UsePdfTextSelectionParams): void {
       container.removeEventListener('mouseup', handleMouseUp)
       document.removeEventListener('selectionchange', handleSelectionChange)
     }
-  }, [params.containerRef])
+  }, [containerRef, onSelect, onClear, getPageElement, getViewport])
 }
