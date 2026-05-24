@@ -11,6 +11,7 @@ interface PollHandle {
   state: string
   code_verifier: string
   startedAt: number
+  abort: AbortController
   cancel: () => void
 }
 
@@ -120,19 +121,35 @@ class AuthService {
    * one succeeds and triggers a global session-changed event.
    */
   private startPolling(state: string, code_verifier: string): void {
-    let cancelled = false
+    const abort = new AbortController()
     const handle: PollHandle = {
       state,
       code_verifier,
       startedAt: Date.now(),
+      abort,
       cancel: () => {
-        cancelled = true
+        abort.abort()
       }
     }
     this.polls.set(state, handle)
 
+    // Read the abort flag through a function call rather than a direct
+    // property read on the signal: TS's control-flow analysis narrows
+    // `signal.aborted` to `false` once any earlier check has run, but in
+    // reality `abort.abort()` is invoked externally via `handle.cancel`
+    // (a closure TS can't trace) AND can fire during any `await` window.
+    // A function call defeats the narrowing because TS treats the return
+    // type as `boolean` at every call site. The `while (true)` form is
+    // explicitly permitted by `allowConstantLoopConditions` in
+    // eslint.config.mjs.
+    const isAborted = (): boolean => abort.signal.aborted
     void (async () => {
-      while (!cancelled) {
+      while (true) {
+        if (isAborted()) {
+          // External abort (signOut/cancelAllPolls) — exit cleanly without
+          // re-emitting the delete (already done by cancelAllPolls).
+          return
+        }
         if (Date.now() - handle.startedAt > POLL_TIMEOUT_MS) {
           console.warn('[auth] poll timeout for state', state)
           this.polls.delete(state)
@@ -145,14 +162,27 @@ class AuthService {
           res = await fetch(`${API_URL}/desktop/poll`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ state, code_verifier })
+            body: JSON.stringify({ state, code_verifier }),
+            signal: abort.signal
           })
         } catch (err) {
+          if (isAborted()) {
+            // signOut/cancelAllPolls aborted us mid-flight — exit cleanly.
+            this.polls.delete(state)
+            return
+          }
           // Transient network error — log and try again next tick
           console.warn('[auth] poll fetch failed (will retry)', err)
           // eslint-disable-next-line no-await-in-loop -- Polling loop: backoff between retries.
           await sleep(POLL_INTERVAL_MS)
           continue
+        }
+
+        // Re-check after every await — a signOut that races with a successful
+        // /desktop/poll response must NOT result in a writeSession.
+        if (isAborted()) {
+          this.polls.delete(state)
+          return
         }
 
         if (res.status === 204) {
@@ -165,6 +195,12 @@ class AuthService {
         if (res.status === 200) {
           // eslint-disable-next-line no-await-in-loop -- Polling loop: parse session_token before persisting and exiting.
           const { session_token } = (await res.json()) as { session_token: string }
+          // Double-check post-await: signOut may have aborted while we were
+          // parsing JSON. If so, do NOT persist — that would un-sign-out.
+          if (isAborted()) {
+            this.polls.delete(state)
+            return
+          }
           this.polls.delete(state)
           // A successful sign-in supersedes any other in-flight attempts
           this.cancelAllPolls()
@@ -192,6 +228,13 @@ class AuthService {
   }
 
   async signOut(): Promise<void> {
+    // ORDERING IS LOAD-BEARING: we abort the in-flight poll's AbortController
+    // synchronously, *before* clearing the session store. If we cleared first,
+    // a poll whose 200 response was already in flight could land its
+    // writeSession AFTER the clear and un-sign-out the user. Cancelling first
+    // ensures the poll callback short-circuits on its post-await
+    // `abort.signal.aborted` check.
+    //
     // Capture in-flight poll states before cancelling so we can clean them up
     // server-side too — otherwise stale state/result records sit in Redis until
     // their TTL expires, and a races-with-old-attempt scenario can hand the

@@ -1,5 +1,6 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AccessibilityInfo,
   View,
   Text,
   TouchableOpacity,
@@ -14,7 +15,11 @@ import { useLocalSearchParams, useRouter } from 'expo-router'
 import { WebView } from 'react-native-webview'
 import { File as ExpoFile } from 'expo-file-system'
 import { IconSymbol } from '@/components/ui/icon-symbol'
-import { getBookForReading, updateBookPage } from '@/lib/book-storage'
+import {
+  getBookForReading,
+  updateBookPage,
+  updateBookProgress,
+} from '@/lib/book-storage'
 import { Book } from '@/types/book'
 import { TTSVisualCue } from '@/components/TTSVisualCue'
 import { useVisualCueStore } from '@/lib/tts/visual-cue'
@@ -28,6 +33,8 @@ import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 import { resolvePlainTextReadFromSelection } from '@/lib/reader-selection'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
+import { buildReaderThemeInjection } from '@/lib/reader-theme-css'
+import { READER_THEMES } from '@/constants/reader-themes'
 import { safeBack } from '@/lib/navigation'
 import type { ReaderSettings } from '@/types/book'
 import {
@@ -227,6 +234,10 @@ export default function DjvuReaderScreen() {
 
   const webViewRef = useRef<WebView>(null)
   const currentPageRef = useRef(1)
+  // #41 — Mirrors `pageCount` so the bridged-message handler can
+  // compute `current / total` for `updateBookProgress` without
+  // waiting for React to re-render with the new state.
+  const pageCountRef = useRef(0)
 
   // Mount the player machine for TTS read-aloud (Batch 7). The DJVU
   // extractor (chunker.getChunks for 'djvu') only returns paragraphs if
@@ -284,15 +295,24 @@ export default function DjvuReaderScreen() {
           'djvu',
         )
         if (!seeded.seeded) {
+          // STA-017 — DJVU extractor often returns no chunks (canvas-only
+          // documents with no OCR layer). Surface a toast + a11y
+          // announcement instead of a silent console.warn.
           console.warn('[djvu-tts] no chunks available — DJVU extractor not registered?')
+          AccessibilityInfo.announceForAccessibility('No text available for reading')
+          undoSnackbar.show('No text available for reading', 'Dismiss', () => undefined)
           return
         }
         sendFn({ type: 'PLAY' })
       } catch (err) {
+        // STA-017 — DJVU seed threw. Surface a non-blocking toast; the
+        // toolbar button stays usable.
         console.warn('[djvu-tts] seed failed:', err)
+        AccessibilityInfo.announceForAccessibility('Could not start read-aloud')
+        undoSnackbar.show('Could not start read-aloud', 'Dismiss', () => undefined)
       }
     })
-  }, [book, ttsActive, requireTTS])
+  }, [book, ttsActive, requireTTS, undoSnackbar])
 
   // P1-K — "Read from here" handler for DJVU selections. DJVU is
   // canvas-only today so this rarely fires; wired for parity with the
@@ -303,7 +323,12 @@ export default function DjvuReaderScreen() {
       if (!book) return
       requireTTS(async () => {
         const send = usePlayerStore.getState().send
-        if (!send) return
+        if (!send) {
+          // STA-024 — player machine not mounted yet; announce + toast.
+          AccessibilityInfo.announceForAccessibility('Read-aloud unavailable right now')
+          undoSnackbar.show('Read-aloud unavailable right now', 'Dismiss', () => undefined)
+          return
+        }
         let paragraphs = usePlayerStore.getState().currentParagraphs
         if (paragraphs.length === 0) {
           try {
@@ -312,10 +337,19 @@ export default function DjvuReaderScreen() {
               book.filePath,
               'djvu',
             )
-            if (!seeded.seeded) return
+            if (!seeded.seeded) {
+              // STA-024 — DJVU often returns no chunks (no OCR layer).
+              // Announce + toast for parity with EPUB.
+              AccessibilityInfo.announceForAccessibility('No text available for reading')
+              undoSnackbar.show('No text available for reading', 'Dismiss', () => undefined)
+              return
+            }
             paragraphs = seeded.paragraphs
           } catch (err) {
+            // STA-024 — seed threw. Announce + show a toast.
             console.warn('[djvu-read-aloud-from] seed failed:', err)
+            AccessibilityInfo.announceForAccessibility('Could not start read-aloud')
+            undoSnackbar.show('Could not start read-aloud', 'Dismiss', () => undefined)
             return
           }
         }
@@ -323,7 +357,16 @@ export default function DjvuReaderScreen() {
           selectionText,
           paragraphs,
         )
-        if (!playFrom) return
+        if (!playFrom) {
+          // STA-024 — resolver couldn't locate the selection. Parity with EPUB.
+          AccessibilityInfo.announceForAccessibility('Could not find the selected text')
+          undoSnackbar.show(
+            'Could not find selected text on this page.',
+            'Dismiss',
+            () => undefined,
+          )
+          return
+        }
         send({
           type: 'PLAY_FROM',
           paragraphIndex: playFrom.paragraphIndex,
@@ -333,7 +376,7 @@ export default function DjvuReaderScreen() {
         setPendingSelection(null)
       })
     },
-    [book, requireTTS],
+    [book, requireTTS, undoSnackbar],
   )
 
   // Load book from DB
@@ -381,6 +424,12 @@ export default function DjvuReaderScreen() {
       if (nextState === 'background' || nextState === 'inactive') {
         if (book?.id) {
           updateBookPage(book.id, currentPageRef.current)
+          // #41 — Mirror progress for the library "Reading Now" pill
+          // ("Page X of Y").
+          const total = pageCountRef.current
+          if (total > 0) {
+            updateBookProgress(book.id, currentPageRef.current / total)
+          }
         }
       }
     }
@@ -393,6 +442,10 @@ export default function DjvuReaderScreen() {
       const msg = JSON.parse(event.nativeEvent.data)
       if (msg.type === 'loaded') {
         setPageCount(msg.total)
+        // #41 — Mirror into the ref so handleMessage's subsequent
+        // 'page' events can compute progress without waiting for
+        // React to re-render with the new state.
+        pageCountRef.current = typeof msg.total === 'number' ? msg.total : 0
         // Render the saved page
         webViewRef.current?.postMessage(
           JSON.stringify({ type: 'goto', page: currentPageRef.current })
@@ -402,6 +455,12 @@ export default function DjvuReaderScreen() {
         currentPageRef.current = msg.current
         if (book?.id) {
           updateBookPage(book.id, msg.current)
+          // #41 — Persist progress so the library pill subline can
+          // render "Page X of Y" after the reader closes.
+          const total = pageCountRef.current
+          if (total > 0) {
+            updateBookProgress(book.id, msg.current / total)
+          }
         }
       } else if (msg.type === 'selection') {
         // P1-K — DJVU canvas selection bridge. In practice the canvas
@@ -489,6 +548,25 @@ export default function DjvuReaderScreen() {
     }))
   }, [pageCount])
 
+  // CHT-002 — voice-chat activation context. DJVU is canvas-only (no text
+  // layer that survives the WebView round-trip), so the best we can do is
+  // pass a "Page N of M" page-text proxy plus the synthesised per-page
+  // outline. When TTS is active, forward the active paragraph too — the
+  // shared extractor can light this up if the DJVU has an OCR layer.
+  // Declared above the loading/error early-returns so the hook order stays
+  // stable across renders (react-hooks/rules-of-hooks).
+  const getActivationContext = useCallback(() => {
+    const outline = tocItems.map((t) => ({ href: t.href, label: t.label }))
+    const pageText = pageCount > 0
+      ? `Page ${currentPage} of ${pageCount}`
+      : `Page ${currentPage}`
+    return {
+      pageText,
+      outline,
+      activeParagraphText: activeParagraph?.text ?? undefined,
+    }
+  }, [tocItems, currentPage, pageCount, activeParagraph])
+
   const currentTocHref = useMemo(
     () => `djvu-page:${currentPage}`,
     [currentPage],
@@ -511,11 +589,26 @@ export default function DjvuReaderScreen() {
     setSettings(next)
   }, [])
 
+  // Issue #47 — forward the active theme into the WebView whenever it
+  // changes. DJVU is canvas-only today so the perceived effect is the
+  // body background swap behind the canvas; without the hop, the
+  // AppearanceSheet's theme picker is a no-op for DJVU users.
+  useEffect(() => {
+    if (!bookLoaded || !webViewRef.current) return
+    const theme = READER_THEMES[settings.themeName]
+    webViewRef.current.injectJavaScript(buildReaderThemeInjection(theme))
+  }, [bookLoaded, settings.themeName])
+
   // safeBack: guards against deep-link cold-start where the nav stack is
   // empty and a bare router.back() would strand the user (P1-B).
   const handleBack = useCallback(() => {
     if (book?.id) {
       updateBookPage(book.id, currentPageRef.current)
+      // #41 — Persist progress (see handleMessage / handleAppStateChange).
+      const total = pageCountRef.current
+      if (total > 0) {
+        updateBookProgress(book.id, currentPageRef.current / total)
+      }
     }
     safeBack(router)
   }, [book?.id, router])
@@ -582,23 +675,6 @@ export default function DjvuReaderScreen() {
     pageCount > 0
       ? { kind: 'page', current: currentPage, total: pageCount }
       : { kind: 'none' }
-
-  // CHT-002 — voice-chat activation context. DJVU is canvas-only (no text
-  // layer that survives the WebView round-trip), so the best we can do is
-  // pass a "Page N of M" page-text proxy plus the synthesised per-page
-  // outline. When TTS is active, forward the active paragraph too — the
-  // shared extractor can light this up if the DJVU has an OCR layer.
-  const getActivationContext = useCallback(() => {
-    const outline = tocItems.map((t) => ({ href: t.href, label: t.label }))
-    const pageText = pageCount > 0
-      ? `Page ${currentPage} of ${pageCount}`
-      : `Page ${currentPage}`
-    return {
-      pageText,
-      outline,
-      activeParagraphText: activeParagraph?.text ?? undefined,
-    }
-  }, [tocItems, currentPage, pageCount, activeParagraph])
 
   const djvuNavCluster = (
     <DjvuNavCluster

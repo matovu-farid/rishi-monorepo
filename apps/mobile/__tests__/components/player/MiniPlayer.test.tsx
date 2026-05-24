@@ -33,6 +33,8 @@
  * Red signal: `@/components/player/MiniPlayer` does not exist yet.
  */
 
+const keyboardDismissMock = jest.fn()
+
 jest.mock('react-native', () => {
   const React = require('react')
   const mk = (name: string) =>
@@ -62,6 +64,12 @@ jest.mock('react-native', () => {
     AccessibilityInfo: {
       isReduceMotionEnabled: jest.fn(async () => false),
       addEventListener: jest.fn(() => ({ remove: jest.fn() })),
+    },
+    // WGT-020 / #73 — MiniPlayer should call Keyboard.dismiss() when it
+    // expands or routes a control event, so a keyboard left up from a
+    // chat-input swipe-over is dropped before the pill animates in.
+    Keyboard: {
+      dismiss: keyboardDismissMock,
     },
   }
 })
@@ -246,6 +254,7 @@ function pressByTestID(
 
 beforeEach(() => {
   sendMock.mockClear()
+  keyboardDismissMock.mockClear()
   playerState = {
     playingState: 'idle',
     send: sendMock,
@@ -496,6 +505,87 @@ describe('MiniPlayer (mobile)', () => {
     })
   })
 
+  describe('WGT-020 / #73 — keyboard dismiss', () => {
+    // Repro: chat → focus the input (keyboard up) → swipe to library →
+    // tap MiniPlayer. Without an explicit Keyboard.dismiss() in the
+    // expand handler / event dispatcher the keyboard stays floating over
+    // the pill. Both entry points must call Keyboard.dismiss().
+
+    it('dismisses the keyboard when tapping the orb to expand', () => {
+      playerState.playingState = 'playing'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<MiniPlayer bookId="b1" />)
+      })
+      const orb = findByTestID(tree, 'mini-player-orb')
+      act(() => {
+        ;(orb!.props as { onPress: () => void }).onPress()
+      })
+      expect(keyboardDismissMock).toHaveBeenCalled()
+    })
+
+    it('dismisses the keyboard when a pill control dispatches an event', () => {
+      playerState.playingState = 'playing'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<MiniPlayer bookId="b1" />)
+      })
+      // Expand so the pill is mounted.
+      const orb = findByTestID(tree, 'mini-player-orb')
+      act(() => {
+        ;(orb!.props as { onPress: () => void }).onPress()
+      })
+      keyboardDismissMock.mockClear()
+      pressByTestID(tree, 'mini-player-play-pause')
+      expect(keyboardDismissMock).toHaveBeenCalled()
+    })
+  })
+
+  describe('WGT-019 / #72 — auto-collapse re-arm on rapid presses', () => {
+    // The bump() returned from useAutoCollapseTimer is the imperative
+    // re-arm; each control press should reset the 4s timer. We verify
+    // that 4 rapid presses inside the 4s window do NOT collapse the
+    // pill — the timer must re-arm on every press.
+    beforeEach(() => {
+      jest.useFakeTimers()
+    })
+    afterEach(() => {
+      jest.useRealTimers()
+    })
+
+    it('does not collapse mid-tap when controls are pressed every <4s', () => {
+      // Paused state — the auto-collapse only arms when expanded &&
+      // !isPlaying. We stay paused.clean so the timer is live.
+      playerState.playingState = 'paused.clean'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<MiniPlayer bookId="b1" />)
+      })
+      const orb = findByTestID(tree, 'mini-player-orb')
+      act(() => {
+        ;(orb!.props as { onPress: () => void }).onPress()
+      })
+      // Pill is mounted. We bypass the pillInteractive gate by reaching
+      // for the underlying onPress prop directly — the pointerEvents
+      // toggle is only enforced at the host-platform layer.
+      const stopPress = (findByTestID(tree, 'mini-player-stop')!.props as {
+        onPress: () => void
+      }).onPress
+      // 4 rapid presses, each within the 4s window.
+      for (let i = 0; i < 4; i++) {
+        act(() => {
+          jest.advanceTimersByTime(1500)
+        })
+        act(() => {
+          stopPress()
+        })
+      }
+      // Pill must still be mounted — the timer was re-armed on every
+      // press, so the auto-collapse never fired.
+      expect(findByTestID(tree, 'mini-player-pill')).not.toBeNull()
+    })
+  })
+
   it('hides repeat button when repeatMode="off", shows it when "one"', () => {
     playerState.playingState = 'playing'
     playerState.repeatMode = 'off'
@@ -522,5 +612,197 @@ describe('MiniPlayer (mobile)', () => {
       }).onPress()
     })
     expect(findByTestID(treeOn, 'mini-player-repeat')).not.toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Play-spinner debounce (#236) — mobile mirror of electron PR #235 (#232).
+//
+// `playerMachine` dips through 'loading' (and the broader
+// 'waitingForParagraphs' / 'pageNavigating' / 'republishingParagraphs')
+// at every paragraph boundary even when the next paragraph's audio is
+// already cached. The raw signal flickers the ActivityIndicator on every
+// boundary. The fix is an asymmetric debounce: delay-show the spinner by
+// `SPINNER_DEBOUNCE_MS` (200ms) ONLY when the predecessor was an
+// active-playback state; cold-start (idle → loading) and pause→resume
+// (paused → loading) MUST show the spinner immediately so users get
+// feedback that their explicit action registered. Hide is always immediate.
+//
+// Asserts via `accessibilityLabel` + ActivityIndicator testID — no
+// snapshots, no internal-state probes.
+// ---------------------------------------------------------------------------
+
+describe('MiniPlayer — play spinner debounce (#236)', () => {
+  beforeEach(() => {
+    jest.useFakeTimers()
+  })
+  afterEach(() => {
+    jest.useRealTimers()
+  })
+
+  function spinnerCount(tree: TestRenderer.ReactTestRenderer): number {
+    return tree.root.findAll(
+      (n) =>
+        (n.props as { testID?: string } | null)?.testID === 'activity-indicator',
+    ).length
+  }
+
+  function playPauseLabel(
+    tree: TestRenderer.ReactTestRenderer,
+  ): string | undefined {
+    // The play-pause testID is passed through PillIconButton (the React
+    // component) to its inner <Pressable> host element — so TestRenderer
+    // returns BOTH matches. The component-level match exposes
+    // `label` (the PillIconButton prop name), the host match exposes
+    // `accessibilityLabel`. We want the host-level a11y prop, which is
+    // what VoiceOver/TalkBack actually reads in production.
+    const matches = tree.root.findAll(
+      (n) => (n.props as { testID?: string } | null)?.testID === 'mini-player-play-pause',
+    )
+    for (const node of matches) {
+      const label = (node.props as { accessibilityLabel?: string } | null)
+        ?.accessibilityLabel
+      if (typeof label === 'string') return label
+    }
+    return undefined
+  }
+
+  function mountAndExpand(): TestRenderer.ReactTestRenderer {
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<MiniPlayer bookId="b1" />)
+    })
+    const orb = findByTestID(tree, 'mini-player-orb')
+    if (orb) {
+      act(() => {
+        ;(orb.props as { onPress: () => void }).onPress()
+      })
+    }
+    return tree
+  }
+
+  it('does not flicker the spinner on a cached playing → loading → playing transition', () => {
+    playerState.playingState = 'playing'
+    const tree = mountAndExpand()
+    expect(spinnerCount(tree)).toBe(0)
+
+    // Cached inter-paragraph dip: ~50ms in 'loading' before snapping back.
+    playerState.playingState = 'loading'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    expect(spinnerCount(tree)).toBe(0)
+    expect(playPauseLabel(tree)).not.toBe('Loading')
+
+    act(() => {
+      jest.advanceTimersByTime(50)
+    })
+    expect(spinnerCount(tree)).toBe(0)
+    expect(playPauseLabel(tree)).not.toBe('Loading')
+
+    playerState.playingState = 'playing'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    expect(spinnerCount(tree)).toBe(0)
+    // Pause icon (since we're playing) should remain the accessible label.
+    expect(playPauseLabel(tree)).toBe('Pause')
+  })
+
+  it('shows the spinner after the debounce window when load genuinely stalls', () => {
+    playerState.playingState = 'playing'
+    const tree = mountAndExpand()
+
+    playerState.playingState = 'loading'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    // Below the debounce window: still no spinner.
+    act(() => {
+      jest.advanceTimersByTime(150)
+    })
+    expect(spinnerCount(tree)).toBe(0)
+    expect(playPauseLabel(tree)).not.toBe('Loading')
+
+    // Cross the debounce threshold: spinner appears and label flips.
+    act(() => {
+      jest.advanceTimersByTime(100)
+    })
+    expect(spinnerCount(tree)).toBeGreaterThan(0)
+    expect(playPauseLabel(tree)).toBe('Loading')
+  })
+
+  it('shows the spinner immediately on cold-start (idle → loading, no debounce)', () => {
+    // The component renders null while idle, so mount directly in loading —
+    // mirrors the existing `playingState="loading"` test at L388. Per ship
+    // condition #4, seeding `lastNonLoadingState` to `'idle'` (not
+    // `playingState`) keeps cold-start cameFromActivePlayback === false.
+    playerState.playingState = 'loading'
+    const tree = mountAndExpand()
+    // No timer advance.
+    expect(spinnerCount(tree)).toBeGreaterThan(0)
+    expect(playPauseLabel(tree)).toBe('Loading')
+  })
+
+  it('shows the spinner immediately on pause → resume (paused.clean → loading, no debounce)', () => {
+    playerState.playingState = 'paused.clean'
+    const tree = mountAndExpand()
+
+    playerState.playingState = 'loading'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    // Predecessor `paused.clean` is not in ACTIVE_PLAYBACK_STATES — spinner
+    // is immediate.
+    expect(spinnerCount(tree)).toBeGreaterThan(0)
+    expect(playPauseLabel(tree)).toBe('Loading')
+  })
+
+  it('hides the spinner immediately when loading ends after the debounce fired', () => {
+    playerState.playingState = 'playing'
+    const tree = mountAndExpand()
+
+    playerState.playingState = 'loading'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    act(() => {
+      jest.advanceTimersByTime(300)
+    })
+    expect(spinnerCount(tree)).toBeGreaterThan(0)
+
+    // Hide is immediate — no delay-hide.
+    playerState.playingState = 'playing'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    expect(spinnerCount(tree)).toBe(0)
+    expect(playPauseLabel(tree)).toBe('Pause')
+  })
+
+  it('suppresses the spinner across a cached playing → waitingForParagraphs → playing dip', () => {
+    // `waitingForParagraphs` is one of the loading-like states the latch
+    // must treat as "loading" (otherwise the predecessor on a subsequent
+    // 'loading' would leak the wrong value). Mobile inherits the same
+    // shared playerMachine state list, including `waitingForParagraphs`
+    // and `pageNavigating`.
+    playerState.playingState = 'playing'
+    const tree = mountAndExpand()
+
+    playerState.playingState = 'waitingForParagraphs'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    act(() => {
+      jest.advanceTimersByTime(50)
+    })
+    expect(spinnerCount(tree)).toBe(0)
+
+    playerState.playingState = 'playing'
+    act(() => {
+      tree.update(<MiniPlayer bookId="b1" />)
+    })
+    expect(spinnerCount(tree)).toBe(0)
+    expect(playPauseLabel(tree)).toBe('Pause')
   })
 })

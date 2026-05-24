@@ -1,6 +1,7 @@
 import type React from 'react'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
+import { Z_INDEX } from '@/styles/zIndex'
 
 interface MenuProps {
   children: React.ReactNode
@@ -156,11 +157,17 @@ export const Menu: React.FC<MenuProps> = ({
         ? createPortal(
             <div
               ref={setMenuRef}
-              className="fixed z-[9999] border border-gray-200 rounded-md shadow-lg py-1 min-w-[160px] max-h-[300px] overflow-y-auto"
+              // z-index lifted into a shared scale so Menu doesn't trump
+              // Modals. See styles/zIndex.ts.
+              className="fixed border border-border rounded-md shadow-lg py-1 min-w-[160px] max-h-[300px] overflow-y-auto bg-popover text-popover-foreground"
               style={{
-                backgroundColor: theme?.background ?? '#ffffff',
-                color: theme?.color ?? '#000000',
-                borderColor: theme?.color ? `${theme.color}20` : '#e5e7eb'
+                zIndex: Z_INDEX.MENU,
+                // Explicit reader-theme overrides still win over CSS-var
+                // defaults so the in-book menu stays in the reader palette.
+                ...(theme?.background ? { backgroundColor: theme.background } : {}),
+                ...(theme?.color
+                  ? { color: theme.color, borderColor: `${theme.color}20` }
+                  : {})
               }}
             >
               {children}

@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native'
+import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable'
 import { useTheme } from '@/lib/theme'
 import type { Conversation } from '@/types/conversation'
 
@@ -10,6 +11,18 @@ interface ConversationRowProps {
   lastMessage?: string
   onPress: () => void
   onLongPress: () => void
+  /**
+   * #60 — visible delete affordance. When provided, the row is wrapped
+   * in a swipe-to-reveal destructive action. Tapping the action invokes
+   * this callback. The existing `onLongPress` is preserved as a
+   * power-user shortcut so the gesture isn't a regression for muscle
+   * memory; the swipe is the discoverable path.
+   *
+   * Why this prop is OPTIONAL rather than reusing onLongPress: callers
+   * that pass only onLongPress (e.g. tests, future surfaces) should not
+   * get the swipe UI implicitly. The screen-level wiring is explicit.
+   */
+  onSwipeDelete?: () => void
   /**
    * Optional testID forwarded to the outer `Pressable`. Used by E2E
    * tests to target a specific conversation row by id without relying
@@ -40,6 +53,7 @@ export function ConversationRow({
   lastMessage,
   onPress,
   onLongPress,
+  onSwipeDelete,
   testID,
 }: ConversationRowProps) {
   const { colors } = useTheme()
@@ -56,7 +70,7 @@ export function ConversationRow({
     ],
     [colors.fill.tertiary],
   )
-  return (
+  const row = (
     <Pressable
       testID={testID}
       onPress={onPress}
@@ -105,6 +119,40 @@ export function ConversationRow({
         </Text>
       </View>
     </Pressable>
+  )
+
+  if (!onSwipeDelete) {
+    return row
+  }
+
+  // #60 — wrap the row in ReanimatedSwipeable so the destructive action
+  // is discoverable via the standard iOS / Material swipe-to-delete
+  // gesture. We use the Reanimated variant because the legacy `Swipeable`
+  // export is `@deprecated` in react-native-gesture-handler 2.28.
+  const renderRightActions = () => (
+    <Pressable
+      testID={testID ? `${testID}-delete-action` : undefined}
+      onPress={onSwipeDelete}
+      className="bg-red-600 justify-center items-center px-6 active:bg-red-700"
+      accessibilityRole="button"
+      accessibilityLabel="Delete conversation"
+      accessibilityHint="Removes the conversation permanently"
+    >
+      <Text className="text-white font-semibold">Delete</Text>
+    </Pressable>
+  )
+
+  return (
+    <ReanimatedSwipeable
+      renderRightActions={renderRightActions}
+      // Match the iOS-Mail feel: a small drag offset prevents accidental
+      // reveal during vertical scrolls; the threshold is half-width by
+      // default which is fine for a row this height.
+      friction={2}
+      rightThreshold={40}
+    >
+      {row}
+    </ReanimatedSwipeable>
   )
 }
 

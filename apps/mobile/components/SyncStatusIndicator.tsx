@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { Alert, TouchableOpacity, View, Text } from 'react-native'
+import { AccessibilityInfo, Alert, TouchableOpacity, View, Text } from 'react-native'
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -14,6 +14,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol'
 import type { SyncStatus } from '@/lib/sync/status'
 import { useDownloadErrorStore } from '@/lib/sync/download-error-store'
 import { downloadBookFile } from '@/lib/sync/file-sync'
+import { motion } from '@/lib/theme/tokens'
 
 function formatRelativeTime(timestamp: number | null): string {
   if (!timestamp) return 'Never synced'
@@ -79,13 +80,30 @@ export function SyncStatusIndicator() {
   // path here without changing engine semantics.
   const [lastError, setLastError] = useState<string | null>(null)
   const lastRetryAtRef = useRef<number | null>(null)
+  // A11Y-004: announce the *transition* into an error state to screen
+  // reader users. The component otherwise relies on the user landing
+  // focus on the indicator to hear the change — too easy to miss.
+  const lastAnnouncedStatusRef = useRef<SyncStatus | null>(null)
 
   const rotation = useSharedValue(0)
 
   useEffect(() => {
+    if (status === 'error' && lastAnnouncedStatusRef.current !== 'error') {
+      AccessibilityInfo.announceForAccessibility(
+        config.label + ' - Last sync failed. Double-tap to retry.',
+      )
+    }
+    lastAnnouncedStatusRef.current = status
+  }, [status, config.label])
+
+  useEffect(() => {
     if (status === 'syncing') {
       rotation.value = 0
-      rotation.value = withRepeat(withTiming(360, { duration: 1000 }), -1, false)
+      rotation.value = withRepeat(
+        withTiming(360, { duration: motion.duration.rotate }),
+        -1,
+        false,
+      )
     } else {
       cancelAnimation(rotation)
       rotation.value = 0
@@ -185,6 +203,12 @@ export function SyncStatusIndicator() {
     </View>
   )
 
+  // A11Y-004: TalkBack re-reads the labelled view automatically when it
+  // is marked as a polite live region, so an error state that appears
+  // while focus is elsewhere is still surfaced. Non-error states leave
+  // the region as "none" to avoid chatter on every status flip.
+  const liveRegion: 'polite' | 'none' = status === 'error' ? 'polite' : 'none'
+
   if (config.clickable) {
     return (
       <TouchableOpacity
@@ -194,6 +218,7 @@ export function SyncStatusIndicator() {
         accessibilityLabel={`${config.label} - Last synced: ${relativeTime}`}
         accessibilityHint={accessibilityHint}
         accessibilityRole="button"
+        accessibilityLiveRegion={liveRegion}
       >
         {content}
       </TouchableOpacity>
@@ -203,6 +228,7 @@ export function SyncStatusIndicator() {
   return (
     <View
       accessibilityLabel={`${config.label} - Last synced: ${relativeTime}`}
+      accessibilityLiveRegion={liveRegion}
     >
       {content}
     </View>

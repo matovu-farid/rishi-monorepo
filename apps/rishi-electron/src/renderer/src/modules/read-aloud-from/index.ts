@@ -43,7 +43,9 @@ export function findSentenceStart(text: string, charOffset: number): number {
   // Fallback via matchAll iteration (no .exec calls).
   let lastStart = 0
   for (const m of text.matchAll(/[.!?]+\s+/g)) {
-    const candidate = (m.index ?? 0) + m[0].length
+    // `m.index` from a global `matchAll` regex is typed as `number` (the
+    // `undefined` arm only applies to `RegExp.exec` results without /g).
+    const candidate = m.index + m[0].length
     if (candidate > clamped) break
     lastStart = candidate
   }

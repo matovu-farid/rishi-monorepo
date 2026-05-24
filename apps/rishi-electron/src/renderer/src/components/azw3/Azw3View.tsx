@@ -1,6 +1,7 @@
 import type React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useEpubStore } from '@/stores/epubStore'
+import { initBookChatSubscription } from '@/stores/initBookChatSubscription'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
@@ -170,6 +171,22 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     setBookId(book.id.toString())
   }, [book.id, setBookId])
+
+  // Manage the chat-activation subscription lifecycle — install on mount,
+  // tear down on unmount. The shared helper (#237) is the single source of
+  // truth for the false→true edge that flips into a startChat call; EpubView
+  // and pdfStore use it too so the three reader paths can't drift.
+  //
+  // Use a component-local ref so rapid navigation doesn't cause the cleanup
+  // to wipe the new subscription. Mirrors the pattern at EpubView.tsx:867-875.
+  const chatUnsubsRef = useRef<(() => void)[]>([])
+  useEffect(() => {
+    chatUnsubsRef.current = [initBookChatSubscription(() => book.id)]
+    return () => {
+      chatUnsubsRef.current.forEach((fn) => fn())
+      chatUnsubsRef.current = []
+    }
+  }, [book.id])
 
   // Keep the pageCapture EPUB frame registry up-to-date so that pageCapture
   // (Task 5) can grab the active iframe via html-to-image on tool-call demand.
@@ -526,13 +543,9 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   // event wiring.
   const reconcileTts = useCallback(
     (desired: string | null) => {
-      reconcileAzw3TtsHighlight(
-        iframeRef.current?.contentDocument ?? null,
-        chapterIndex,
-        desired,
-      )
+      reconcileAzw3TtsHighlight(iframeRef.current?.contentDocument ?? null, chapterIndex, desired)
     },
-    [chapterIndex],
+    [chapterIndex]
   )
   useTtsHighlightReconciler(reconcileTts, iframeEl)
 
@@ -564,11 +577,11 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         const totalPages = pagesInCurrentChapterRef.current
         const targetPage = Math.max(
           0,
-          Math.min(totalPages - 1, Math.floor(elementLeftFromBodyStart / pageStep)),
+          Math.min(totalPages - 1, Math.floor(elementLeftFromBodyStart / pageStep))
         )
         const applied = applyScrollToPage(doc, win, targetPage, totalPages, pageStep)
         setPageWithinChapter((prev) => (prev === applied ? prev : applied))
-      },
+      }
     )
     return unsub
   }, [applyScrollToPage, chapterIndex])
@@ -717,48 +730,51 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
 
   return (
     <div ref={readerRootRef} className="relative h-full">
-    <div className="relative h-screen flex flex-col" style={{ background: themeStyle.background }}>
-      <div className="flex-1 overflow-hidden">
-        {loading ? (
-          <div className="flex items-center justify-center h-full">
-            <div
-              className="animate-spin rounded-full h-8 w-8 border-2 border-current border-t-transparent"
-              style={{ color: themeStyle.color }}
+      <div
+        className="relative h-screen flex flex-col"
+        style={{ background: themeStyle.background }}
+      >
+        <div className="flex-1 overflow-hidden">
+          {loading ? (
+            <div className="flex items-center justify-center h-full">
+              <div
+                className="animate-spin rounded-full h-8 w-8 border-2 border-current border-t-transparent"
+                style={{ color: themeStyle.color }}
+              />
+            </div>
+          ) : chapterUrl ? (
+            <iframe
+              // Force a fresh DOM node per chapter so React tears down and
+              // recreates the iframe — guarantees a clean onLoad fires and
+              // prevents stale `contentDocument` reads between src change and
+              // load completion.
+              key={chapterIndex}
+              ref={handleIframeRef}
+              src={chapterUrl}
+              onLoad={handleIframeLoad}
+              className="w-full h-full border-none"
+              title={book.title}
+              // `allow-scripts` is required so that KF8 books containing inline
+              // scripts or `<iframe srcdoc=...>` subframes can finish laying
+              // out — without it, real publisher AZW3s render blank ("Blocked
+              // script execution in 'about:srcdoc'"). Matches what foliate-js's
+              // own paginator uses on its iframes (see paginator.js).
+              sandbox="allow-same-origin allow-scripts"
+              style={{ background: themeStyle.background }}
             />
-          </div>
-        ) : chapterUrl ? (
-          <iframe
-            // Force a fresh DOM node per chapter so React tears down and
-            // recreates the iframe — guarantees a clean onLoad fires and
-            // prevents stale `contentDocument` reads between src change and
-            // load completion.
-            key={chapterIndex}
-            ref={handleIframeRef}
-            src={chapterUrl}
-            onLoad={handleIframeLoad}
-            className="w-full h-full border-none"
-            title={book.title}
-            // `allow-scripts` is required so that KF8 books containing inline
-            // scripts or `<iframe srcdoc=...>` subframes can finish laying
-            // out — without it, real publisher AZW3s render blank ("Blocked
-            // script execution in 'about:srcdoc'"). Matches what foliate-js's
-            // own paginator uses on its iframes (see paginator.js).
-            sandbox="allow-same-origin allow-scripts"
-            style={{ background: themeStyle.background }}
-          />
-        ) : null}
-      </div>
+          ) : null}
+        </div>
 
-      {/* Side-edge navigation arrows — same component the EPUB reader uses
+        {/* Side-edge navigation arrows — same component the EPUB reader uses
           so the two readers share the same UX. */}
-      <NavigationArrows
-        onPrev={goPrevPage}
-        onNext={goNextPage}
-        hidePrev={atFirstPage}
-        hideNext={atLastPage}
-      />
+        <NavigationArrows
+          onPrev={goPrevPage}
+          onNext={goNextPage}
+          hidePrev={atFirstPage}
+          hideNext={atLastPage}
+        />
 
-      {/* Subtle bottom page counter — "X" by default, "X of Y" on hover.
+        {/* Subtle bottom page counter — "X" by default, "X of Y" on hover.
           Values are global page numbers (summed across all measured
           chapters) so the counter advances monotonically across chapter
           boundaries instead of resetting to 1. Until a chapter is
@@ -766,94 +782,94 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
           the visible "of N" falls back to '?' before any chapters are
           measured. Tests rely on data-current / data-total so they don't
           depend on hover-state text. */}
-      {chapterCount > 0 && (
-        <div
-          data-testid="azw3-page-counter"
-          data-current={globalCurrent}
-          data-total={globalTotal || globalCurrent}
-          className="group/page"
-          style={{
-            position: 'fixed',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            textAlign: 'center',
-            zIndex: 5,
-            padding: '8px 0',
-            pointerEvents: 'none'
-          }}
-        >
-          <span
+        {chapterCount > 0 && (
+          <div
+            data-testid="azw3-page-counter"
+            data-current={globalCurrent}
+            data-total={globalTotal || globalCurrent}
+            className="group/page"
             style={{
-              fontSize: 12,
-              color: themeStyle.color,
-              opacity: 0.4
+              position: 'fixed',
+              bottom: 0,
+              left: 0,
+              right: 0,
+              textAlign: 'center',
+              zIndex: 5,
+              padding: '8px 0',
+              pointerEvents: 'none'
             }}
           >
-            <span>{globalCurrent}</span>
-            <span className="hidden group-hover/page:inline"> of {globalTotal || '?'}</span>
-          </span>
-        </div>
-      )}
-
-      {/* AI chat orb, voice chat launcher, and TTS controls */}
-      <ReaderOverlayControls
-        bookId={book.id.toString()}
-        chatPanelOpen={chatPanelOpen}
-        onChatOrbClick={() => setChatPanelOpen((prev) => !prev)}
-      />
-
-      <ReaderTOC
-        open={tocOpen}
-        onOpenChange={setTocOpen}
-        title="Navigation"
-        bookSyncId={bookSyncId}
-        onBookmarkNavigate={(location) => {
-          const parsed = parseLocation(location)
-          if (parsed.chapter >= 0) {
-            // Dispatch a JUMP_REQUESTED before navigating so the history
-            // machine records the "from" anchor and can offer resume later.
-            const currentPos = formatLocation(chapterIndex, pageWithinChapter)
-            const activeParagraph = usePlayerStore.getState().activeParagraph
-            const indexStr = activeParagraph?.index
-            const paragraphIndex = indexStr != null ? Number(indexStr) : null
-            const fromTts =
-              paragraphIndex != null && Number.isFinite(paragraphIndex)
-                ? { paragraphIndex }
-                : null
-            navigationHistoryActor.send({
-              type: 'JUMP_REQUESTED',
-              from: { kind: formatKind, cfi: currentPos },
-              fromTts,
-              to: { kind: formatKind, cfi: location },
-              source: 'bookmark',
-              fromLabel: 'previous spot'
-            })
-            // Land on the persisted page within the chapter.
-            pendingPageAfterLoadRef.current = parsed.page
-            setChapterIndex(parsed.chapter)
-            setTocOpen(false)
-          }
-        }}
-        tocContent={
-          <div className="p-4 text-gray-400 text-sm text-center">
-            Chapter {chapterIndex + 1} of {chapterCount}
+            <span
+              style={{
+                fontSize: 12,
+                color: themeStyle.color,
+                opacity: 0.4
+              }}
+            >
+              <span>{globalCurrent}</span>
+              <span className="hidden group-hover/page:inline"> of {globalTotal || '?'}</span>
+            </span>
           </div>
-        }
-      />
+        )}
 
-      {AuthDialog}
+        {/* AI chat orb, voice chat launcher, and TTS controls */}
+        <ReaderOverlayControls
+          bookId={book.id.toString()}
+          chatPanelOpen={chatPanelOpen}
+          onChatOrbClick={() => setChatPanelOpen((prev) => !prev)}
+        />
 
-      <ChatPanel
-        bookId={book.id}
-        bookSyncId={bookSyncId}
-        bookTitle={book.title}
-        rendition={null}
-        open={chatPanelOpen}
-        onOpenChange={setChatPanelOpen}
-      />
-    </div>
-    <NavigationHistoryFooter />
+        <ReaderTOC
+          open={tocOpen}
+          onOpenChange={setTocOpen}
+          title="Navigation"
+          bookSyncId={bookSyncId}
+          onBookmarkNavigate={(location) => {
+            const parsed = parseLocation(location)
+            if (parsed.chapter >= 0) {
+              // Dispatch a JUMP_REQUESTED before navigating so the history
+              // machine records the "from" anchor and can offer resume later.
+              const currentPos = formatLocation(chapterIndex, pageWithinChapter)
+              const activeParagraph = usePlayerStore.getState().activeParagraph
+              const indexStr = activeParagraph?.index
+              const paragraphIndex = indexStr != null ? Number(indexStr) : null
+              const fromTts =
+                paragraphIndex != null && Number.isFinite(paragraphIndex)
+                  ? { paragraphIndex }
+                  : null
+              navigationHistoryActor.send({
+                type: 'JUMP_REQUESTED',
+                from: { kind: formatKind, cfi: currentPos },
+                fromTts,
+                to: { kind: formatKind, cfi: location },
+                source: 'bookmark',
+                fromLabel: 'previous spot'
+              })
+              // Land on the persisted page within the chapter.
+              pendingPageAfterLoadRef.current = parsed.page
+              setChapterIndex(parsed.chapter)
+              setTocOpen(false)
+            }
+          }}
+          tocContent={
+            <div className="p-4 text-gray-400 text-sm text-center">
+              Chapter {chapterIndex + 1} of {chapterCount}
+            </div>
+          }
+        />
+
+        {AuthDialog}
+
+        <ChatPanel
+          bookId={book.id}
+          bookSyncId={bookSyncId}
+          bookTitle={book.title}
+          rendition={null}
+          open={chatPanelOpen}
+          onOpenChange={setChatPanelOpen}
+        />
+      </div>
+      <NavigationHistoryFooter />
     </div>
   )
 }

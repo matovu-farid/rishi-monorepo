@@ -27,7 +27,7 @@ export function usePdfReadAloudFromSelection(params: UsePdfReadAloudFromSelectio
 
   useEffect(() => {
     const unsubscribe = window.electron.on('reader:readAloudFromSelection', () => {
-      const text = window.getSelection()?.toString()?.trim() ?? ''
+      const text = window.getSelection()?.toString().trim() ?? ''
       if (!text) return
 
       const playingState = usePlayerStore.getState().playingState

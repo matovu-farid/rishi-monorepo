@@ -12,6 +12,7 @@
  */
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
   AppState,
@@ -36,9 +37,14 @@ import {
   type PdfOutlineItem,
 } from '@/components/pdf/pdf-webview-bridge'
 import { usePdfStore, BookNavigationState } from '@/lib/stores/pdfStore'
-import { getBookForReading, updateBookPage } from '@/lib/book-storage'
+import {
+  getBookForReading,
+  updateBookPage,
+  updateBookProgress,
+} from '@/lib/book-storage'
 import { Book, ReaderSettings } from '@/types/book'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
+import { READER_THEMES } from '@/constants/reader-themes'
 import { safeBack } from '@/lib/navigation'
 import {
   insertPdfHighlight,
@@ -214,11 +220,19 @@ export default function PdfReaderScreen() {
     const handler = (next: AppStateStatus) => {
       if ((next === 'background' || next === 'inactive') && book?.id && pageNumber > 0) {
         updateBookPage(book.id, pageNumber)
+        // #41 — Mirror the page save with a progress percent so the
+        // library "Reading Now" pill subline can render "Page X of Y"
+        // post-close. `pageCount` may be 0 during a backgrounding
+        // race before the WebView finished `handleLoad`; the guard
+        // keeps us from poisoning the column with NaN.
+        if (pageCount > 0) {
+          updateBookProgress(book.id, pageNumber / pageCount)
+        }
       }
     }
     const sub = AppState.addEventListener('change', handler)
     return () => sub.remove()
-  }, [book?.id, pageNumber])
+  }, [book?.id, pageNumber, pageCount])
 
   // ---- WebView events ----
   const handleLoad = useCallback(
@@ -244,9 +258,18 @@ export default function PdfReaderScreen() {
       setScrollPageNumber(page)
       // Persist with a soft debounce — we save on background change too, so
       // this just makes scrolling-then-killing-the-app safe.
-      if (book?.id) updateBookPage(book.id, page)
+      if (book?.id) {
+        updateBookPage(book.id, page)
+        // #41 — Persist progress so the library pill subline can show
+        // "Page X of Y". `pageCount` is set in `handleLoad` from
+        // `pdfjs.numPages` before the first user-driven page change,
+        // but we guard for the cold-start race anyway.
+        if (pageCount > 0) {
+          updateBookProgress(book.id, page / pageCount)
+        }
+      }
     },
-    [book?.id, setScrollPageNumber]
+    [book?.id, pageCount, setScrollPageNumber]
   )
 
   const handleSelection = useCallback(
@@ -412,13 +435,25 @@ export default function PdfReaderScreen() {
           book.filePath,
           book.format,
         )
-        if (!seeded.seeded) return
+        if (!seeded.seeded) {
+          // STA-017 — surface a toast + a11y announcement so the user
+          // sees why nothing happened. Parity with the EPUB reader's
+          // handleToggleTTS branch.
+          AccessibilityInfo.announceForAccessibility('No text available for reading')
+          undoSnackbar.show('No text available for reading', 'Dismiss', () => undefined)
+          return
+        }
         sendFn({ type: 'PLAY' })
       } catch (err) {
+        // STA-017 — TTS seed threw (file unreadable, extractor failed,
+        // etc.). Surface a non-blocking toast so the user knows playback
+        // didn't start; the toolbar button stays usable.
         console.warn('[pdf-tts] seed failed:', err)
+        AccessibilityInfo.announceForAccessibility('Could not start read-aloud')
+        undoSnackbar.show('Could not start read-aloud', 'Dismiss', () => undefined)
       }
     })
-  }, [book, ttsActive, requireTTS])
+  }, [book, ttsActive, requireTTS, undoSnackbar])
 
   // Read-from-selection (G17). Batch 7 wires this fully to the player
   // machine via playerStore.send PLAY_FROM:
@@ -434,10 +469,23 @@ export default function PdfReaderScreen() {
     requireTTS(async () => {
       try {
         const paragraphs = await readerRef.current?.getPageText(selection.pageNumber)
-        if (!paragraphs) return
+        if (!paragraphs) {
+          // STA-024 — getPageText returned nothing for the selected page;
+          // surface a toast + a11y announcement instead of silent return.
+          AccessibilityInfo.announceForAccessibility('No text available on this page')
+          undoSnackbar.show('No text available on this page', 'Dismiss', () => undefined)
+          return
+        }
         const playFrom = resolvePlayFromSelection(selection.text, paragraphs)
         if (!playFrom) {
-          Alert.alert('Read aloud', 'Could not find the selected text on this page.')
+          // STA-024 — keep the toast (non-blocking, parity with MOBI/DJVU)
+          // and announce for VoiceOver. Drops the blocking Alert.
+          AccessibilityInfo.announceForAccessibility('Could not find the selected text')
+          undoSnackbar.show(
+            'Could not find selected text on this page.',
+            'Dismiss',
+            () => undefined,
+          )
           return
         }
 
@@ -449,6 +497,8 @@ export default function PdfReaderScreen() {
         const send = usePlayerStore.getState().send
         if (!send) {
           console.warn('[pdf-read-aloud-from] player machine not mounted yet')
+          AccessibilityInfo.announceForAccessibility('Read-aloud unavailable right now')
+          undoSnackbar.show('Read-aloud unavailable right now', 'Dismiss', () => undefined)
           return
         }
         send({
@@ -459,10 +509,14 @@ export default function PdfReaderScreen() {
         })
         setSelection(null)
       } catch (e) {
+        // STA-024 — selection TTS threw. Announce + show a toast so the
+        // user knows the action didn't take effect; parity with EPUB.
         console.warn('[pdf-read-aloud-from] failed', e)
+        AccessibilityInfo.announceForAccessibility('Could not read selection')
+        undoSnackbar.show('Could not read selection', 'Dismiss', () => undefined)
       }
     })
-  }, [selection, requireTTS])
+  }, [selection, requireTTS, undoSnackbar])
 
   // Reconciler: when the active paragraph changes, scroll the WebView to
   // its page. Mobile PDF doesn't yet have a per-paragraph overlay highlight
@@ -592,12 +646,30 @@ export default function PdfReaderScreen() {
     setSettings(next)
   }, [])
 
+  // Issue #47 — forward the active theme into the pdfjs WebView. We
+  // gate on `pageCount > 0` so the first call runs after pdfjs has
+  // parsed the document and the viewer DOM exists; the readerRef's
+  // setTheme is idempotent so re-runs on subsequent renders are
+  // cheap. Without this hop the AppearanceSheet's theme picker is a
+  // no-op for PDF users.
+  useEffect(() => {
+    if (pageCount <= 0) return
+    const theme = READER_THEMES[settings.themeName]
+    readerRef.current?.setTheme(theme)
+  }, [pageCount, settings.themeName])
+
   // safeBack: deep-link cold-start has an empty stack, so a bare
   // router.back() no-ops and strands the user (P1-B).
   const handleBack = useCallback(() => {
-    if (book?.id && pageNumber > 0) updateBookPage(book.id, pageNumber)
+    if (book?.id && pageNumber > 0) {
+      updateBookPage(book.id, pageNumber)
+      // #41 — Mirror progress for the library pill (see handlePageChange).
+      if (pageCount > 0) {
+        updateBookProgress(book.id, pageNumber / pageCount)
+      }
+    }
     safeBack(router)
-  }, [book?.id, pageNumber, router])
+  }, [book?.id, pageNumber, pageCount, router])
 
   // CHT-002 — voice-chat activation context. PDF doesn't ship rendered
   // page text back across the WebView bridge synchronously, so we use a

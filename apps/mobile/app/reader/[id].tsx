@@ -7,7 +7,11 @@ import { useFileSystem } from '@/lib/epub/file-system-adapter'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { getBookForReading, updateBookCfi } from '@/lib/book-storage'
+import {
+  getBookForReading,
+  updateBookCfi,
+  updateBookProgress,
+} from '@/lib/book-storage'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
 import { safeBack } from '@/lib/navigation'
 import { insertHighlight, getHighlightsByBookId, updateHighlight, deleteHighlight, restoreHighlight } from '@/lib/highlight-storage'
@@ -317,6 +321,13 @@ function ReaderContent({ book }: { book: Book }) {
         cfiSaveTimeoutRef.current = setTimeout(() => {
           if (book.id && currentCfiRef.current) {
             updateBookCfi(book.id, currentCfiRef.current)
+            // #41 — Persist progress alongside CFI so the library
+            // "Reading Now" pill subline can render "X%" once the
+            // reader closes. epubjs's progress arg is a 0..1 float
+            // already — `updateBookProgress` clamps + NaN-guards.
+            if (Number.isFinite(progress)) {
+              updateBookProgress(book.id, progress)
+            }
           }
         }, 500)
       }

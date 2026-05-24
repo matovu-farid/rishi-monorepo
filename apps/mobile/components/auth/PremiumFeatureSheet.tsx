@@ -20,6 +20,7 @@ import Animated, {
   useAnimatedStyle,
   withSequence,
   withTiming,
+  Easing,
 } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
@@ -27,6 +28,7 @@ import { FEATURE_COPY, type PremiumFeature } from '@rishi/shared/auth-gating'
 import { useAuthStore } from '@/lib/stores/authStore'
 import { signIn } from '@/lib/auth'
 import { APPLE_SIGNIN_ENABLED } from '@/lib/feature-flags'
+import { useTheme } from '@/lib/theme'
 
 const FEATURE_ICONS: Record<PremiumFeature, keyof typeof Ionicons.glyphMap> = {
   tts: 'headset-outline',
@@ -38,11 +40,36 @@ const FEATURE_ICONS: Record<PremiumFeature, keyof typeof Ionicons.glyphMap> = {
 }
 
 /**
+ * GAT-104 — focus-restore handle.
+ *
+ * VoiceOver users lose their place when the premium gate steals focus to
+ * the sheet title and then closes without returning focus to the triggering
+ * control. We can't grab the previously-focused node from React Native
+ * directly, so callers stash the trigger's nodeHandle here before opening
+ * the gate; the sheet replays it via `AccessibilityInfo.setAccessibilityFocus`
+ * when it closes.
+ *
+ * Trigger sites can call `setPremiumGateFocusTrigger(findNodeHandle(ref))`
+ * immediately before `openPremiumGate(...)` and the sheet will restore
+ * focus on dismiss. If no handle is registered the restore step is skipped
+ * (no regression vs. previous behaviour).
+ */
+let pendingFocusRestoreHandle: number | null = null
+export function setPremiumGateFocusTrigger(handle: number | null): void {
+  pendingFocusRestoreHandle = handle
+}
+/** Internal — used by tests; not part of the public API. */
+export function __getPremiumGateFocusTrigger(): number | null {
+  return pendingFocusRestoreHandle
+}
+
+/**
  * GAT-008 — map known sign-in error shapes onto user-facing copy.
  *
  * The raw error from `lib/auth.signIn()` can be one of:
  *   - "Network request failed" (RN fetch when offline / DNS fails)
  *   - "POST /mobile/start failed: fetch failed" (worker call failed)
+ *   - "Apple provider not configured" (OAuth provider not enabled yet — GAT-106)
  *   - "PKCE pkce_mismatch (403)" (state replay / browser bounce)
  *   - "POST /mobile/start/verify failed: 410 ..." (session expired)
  *   - anything else → generic fallback
@@ -50,6 +77,14 @@ const FEATURE_ICONS: Record<PremiumFeature, keyof typeof Ionicons.glyphMap> = {
  * Cancellation messages are filtered upstream of this helper.
  */
 function mapSignInError(msg: string): string {
+  // GAT-106 — provider-not-configured must classify BEFORE the 403/410
+  // buckets. The worker can return 403 alongside "provider not configured"
+  // text when an OAuth provider isn't enabled yet; reading that as a PKCE
+  // mismatch would tell the user to retry, which never works because the
+  // provider literally isn't wired up. Match the more-specific signal first.
+  if (/provider|not configured|apple/i.test(msg)) {
+    return 'This sign-in method is not available yet.'
+  }
   if (/\b403\b|pkce_mismatch/i.test(msg)) {
     return 'Sign-in expired, please try again.'
   }
@@ -86,6 +121,7 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
   }))
   const scheme = useColorScheme()
   const insets = useSafeAreaInsets()
+  const { colors } = useTheme()
 
   useEffect(() => {
     if (open) {
@@ -102,6 +138,19 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
       return () => clearTimeout(t)
     } else {
       sheetRef.current?.close()
+      // GAT-104 — restore VoiceOver focus to the triggering control when the
+      // gate dismisses. If no handle was registered (callers haven't been
+      // updated yet), this is a no-op and behaviour matches the previous
+      // implementation. The restore is scheduled on the next tick so the
+      // sheet's own close animation has cleared the focus stack first.
+      const handle = pendingFocusRestoreHandle
+      if (handle != null && handle !== 0) {
+        const t = setTimeout(() => {
+          AccessibilityInfo.setAccessibilityFocus(handle)
+          pendingFocusRestoreHandle = null
+        }, 50)
+        return () => clearTimeout(t)
+      }
       return undefined
     }
   }, [open])
@@ -122,24 +171,32 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
       if (!/cancel|dismiss/i.test(msg)) {
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)
         setError(mapSignInError(msg))
+        // VIS-029 — ease each shake step out of cubic so the wobble decays
+        // organically rather than the harsh linear default. The 60ms duration
+        // is preserved; only the easing curve changes.
+        const shakeEasing = Easing.out(Easing.cubic)
         shakeX.value = withSequence(
-          withTiming(6, { duration: 60 }),
-          withTiming(-6, { duration: 60 }),
-          withTiming(4, { duration: 60 }),
-          withTiming(-4, { duration: 60 }),
-          withTiming(0, { duration: 60 }),
+          withTiming(6, { duration: 60, easing: shakeEasing }),
+          withTiming(-6, { duration: 60, easing: shakeEasing }),
+          withTiming(4, { duration: 60, easing: shakeEasing }),
+          withTiming(-4, { duration: 60, easing: shakeEasing }),
+          withTiming(0, { duration: 60, easing: shakeEasing }),
         )
       }
     }
   }, [closeGate, shakeX])
 
   const handleDismiss = useCallback(() => {
-    // GAT-014 — dismiss must NOT share the `selectionAsync` haptic with
-    // `handleSignIn`. The two paths felt identical (same tactile yes)
-    // even though one signed the user in and one bailed. Use a Light
-    // impact so the tap still feels acknowledged but is distinct from
-    // both the Soft sheet-open and the Success post-sign-in haptics.
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    // GAT-014 + GAT-108 — dismiss must feel different from both the
+    // selectionAsync of `handleSignIn` (yes, going forward) AND the
+    // Light impact previously used here, which still tested too close
+    // to the Success notification on a real device.
+    //
+    // Rigid feedback (iOS UIImpactFeedbackStyleRigid) delivers a crisper
+    // single tap that reads as a "stop / back out" gesture — clearly
+    // distinct from the soft sheet-open tap and the Success cascade
+    // after sign-in.
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid)
     closeGate()
   }, [closeGate])
 
@@ -191,7 +248,11 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
       enablePanDownToClose
       onClose={closeGate}
       backdropComponent={renderBackdrop}
-      handleIndicatorStyle={{ backgroundColor: isDark ? '#48484A' : '#C7C7CC' }}
+      // VIS-028 — tokenize the handle indicator. The previous hardcoded pair
+      // (#48484A / #C7C7CC) bypassed the design tokens and drifted from the
+      // rest of the sheet's surface treatment in dark mode. label.quaternary
+      // matches the iOS UIKit handle-grab opacity for both schemes.
+      handleIndicatorStyle={{ backgroundColor: colors.label.quaternary }}
       backgroundStyle={{ backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF' }}
       accessibilityViewIsModal
     >
@@ -209,7 +270,7 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
               backgroundColor: isDark ? 'rgba(10,126,164,0.18)' : 'rgba(10,126,164,0.10)',
             }}
           >
-            <Ionicons name={iconName} size={28} color="#0a7ea4" />
+            <Ionicons name={iconName} size={28} color={colors.accent.primary} />
           </View>
         </View>
         <Text
@@ -250,7 +311,7 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
               borderRadius: 12,
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: '#0a7ea4',
+              backgroundColor: colors.accent.primary,
               opacity: pressed ? 0.85 : 1,
               marginBottom: 8,
             })}
@@ -283,7 +344,7 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
           onPress={handleOtherOptions}
           style={{ height: 44, alignItems: 'center', justifyContent: 'center' }}
         >
-          <Text style={{ color: '#0a7ea4', fontSize: 15 }}>Other sign-in options</Text>
+          <Text style={{ color: colors.accent.primary, fontSize: 15 }}>Other sign-in options</Text>
         </Pressable>
         {/*
           P1-Q — secondary "Create account" link. Without this, the sheet's
@@ -297,7 +358,7 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
           onPress={handleCreateAccount}
           style={{ height: 44, alignItems: 'center', justifyContent: 'center' }}
         >
-          <Text style={{ color: '#0a7ea4', fontSize: 15 }}>Create account</Text>
+          <Text style={{ color: colors.accent.primary, fontSize: 15 }}>Create account</Text>
         </Pressable>
         {/*
           P1-R — renamed "Not now" → "Maybe later" with a subline that
@@ -316,7 +377,7 @@ export function PremiumFeatureSheet(): React.JSX.Element | null {
             justifyContent: 'center',
           }}
         >
-          <Text style={{ color: '#0a7ea4', fontSize: 17 }}>Maybe later</Text>
+          <Text style={{ color: colors.accent.primary, fontSize: 17 }}>Maybe later</Text>
           <Text
             style={{
               color: isDark ? '#8E8E93' : '#6D6D72',

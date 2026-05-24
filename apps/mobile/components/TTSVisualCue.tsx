@@ -11,6 +11,7 @@ import React from 'react'
 import { Pressable, Text, StyleSheet } from 'react-native'
 import { usePrefsStore } from '@/lib/stores/prefsStore'
 import { useVisualCueStore } from '@/lib/tts/visual-cue'
+import { colorsLight } from '@/lib/theme/colors'
 
 interface Props {
   /** Optional handler invoked when the user taps the cue. The reader
@@ -51,7 +52,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 999,
-    backgroundColor: 'rgba(245, 158, 11, 0.92)',
+    // VIS-026 (#86): bind to the semantic warning token instead of the
+    // Tailwind amber-500 rgba literal that previously lived here. The
+    // light & dark `accent.warning` values are identical (`#FF9F0A`),
+    // so a single static reference is faithful in both schemes.
+    backgroundColor: colorsLight.accent.warning,
     shadowColor: '#000',
     shadowOpacity: 0.25,
     shadowRadius: 6,

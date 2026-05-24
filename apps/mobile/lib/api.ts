@@ -10,7 +10,13 @@
  * without re-running the deep-link flow.
  */
 import { getSessionToken, signOut, WORKER_API_URL } from './auth'
-import { buildDevBypassHeaders, readDevBypassSecret } from './api-dev-bypass'
+// Note: `buildDevBypassHeaders` is intentionally NOT imported here. `apiClient`
+// throws when no bearer is available, so by construction every request it
+// emits already carries `Authorization: Bearer …`. Sending `X-Dev-Bypass`
+// alongside the bearer (the prior behaviour) violated the helper's docstring
+// ("only when no bearer") and short-circuited the worker's real premium gate
+// for signed-in dev users (GAT-107 / #79). The helper remains exported from
+// `./api-dev-bypass` for a hypothetical future anonymous-request path.
 
 /**
  * Authenticated fetch. Resolves with the raw Response so the caller can
@@ -26,14 +32,6 @@ export async function apiClient(
     throw new Error('Unable to obtain Worker session token. User must sign in.')
   }
 
-  // N01 — Mirror electron's X-Dev-Bypass behaviour. In a dev build with a
-  // configured secret, send the header so the worker treats the call as a
-  // dev request (skips premium gating). Production builds never send it.
-  const devBypassHeaders = buildDevBypassHeaders({
-    isDev: typeof __DEV__ !== 'undefined' && __DEV__ === true,
-    secret: readDevBypassSecret(),
-  })
-
   const url = `${WORKER_API_URL}${path}`
   const response = await fetch(url, {
     ...options,
@@ -41,7 +39,10 @@ export async function apiClient(
       'Content-Type': 'application/json',
       ...options.headers,
       Authorization: `Bearer ${token}`,
-      ...devBypassHeaders,
+      // GAT-107 (#79): bearer XOR dev-bypass. Since `token` is guaranteed
+      // non-empty above, the dev-bypass header is omitted unconditionally
+      // here. The helper's intended use is for unauthenticated requests
+      // that need to exercise dev-only worker endpoints.
     },
   })
 
