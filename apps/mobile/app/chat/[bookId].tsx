@@ -697,11 +697,17 @@ function TypingIndicator() {
   )
 }
 
-function PulsingDot({ delay }: { delay: number }) {
+export function PulsingDot({ delay }: { delay: number }) {
   const [opacity, setOpacity] = useState(0.3)
 
   useEffect(() => {
     let mounted = true
+    // #59 — Hoist the interval handle out of the inner `setTimeout`
+    // callback so the outer effect cleanup can actually clear it.
+    // Previously `return () => clearInterval(interval)` was returned
+    // from the timeout callback (which discards return values), leaving
+    // the interval firing forever on torn-down components.
+    let interval: ReturnType<typeof setInterval> | null = null
     const cycle = () => {
       if (!mounted) return
       setOpacity(1)
@@ -713,13 +719,16 @@ function PulsingDot({ delay }: { delay: number }) {
 
     const timeout = setTimeout(() => {
       cycle()
-      const interval = setInterval(cycle, 600)
-      return () => clearInterval(interval)
+      interval = setInterval(cycle, 600)
     }, delay)
 
     return () => {
       mounted = false
       clearTimeout(timeout)
+      if (interval !== null) {
+        clearInterval(interval)
+        interval = null
+      }
     }
   }, [delay])
 
