@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
 
 // ─── Books table ───────────────────────────────────────────────────────────────
 // Matches mobile SQLite schema columns (snake_case) plus sync-specific columns.
@@ -14,6 +14,14 @@ export const books = sqliteTable("books", {
   format: text("format").notNull().default("epub"),
   currentCfi: text("current_cfi"), // EPUB reading position
   currentPage: integer("current_page"), // PDF reading position
+  // #41 — Persisted 0..1 progress float used to render the library
+  // "Reading Now" pill subline AFTER the reader has been closed. EPUB
+  // sources this from epubjs's onRelocated progress arg; PDF/DJVU and
+  // MOBI/AZW3 derive it at save time from their own page/chapter
+  // counts. Stored as SQLite REAL (drizzle `real()`); mobile-only —
+  // never pushed to D1 (the server can reconstruct progress from
+  // page/cfi if needed and we don't want to widen the wire payload).
+  lastProgressPercent: real("last_progress_percent"), // 0..1 float or null
   fileHash: text("file_hash"), // SHA-256 for R2 dedup
   fileR2Key: text("file_r2_key"), // R2 object key for book file
   coverR2Key: text("cover_r2_key"), // R2 object key for cover image

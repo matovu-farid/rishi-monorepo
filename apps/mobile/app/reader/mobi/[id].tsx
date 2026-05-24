@@ -14,7 +14,11 @@ import { useLocalSearchParams, useRouter } from 'expo-router'
 import { WebView } from 'react-native-webview'
 import { File as ExpoFile } from 'expo-file-system'
 import { IconSymbol } from '@/components/ui/icon-symbol'
-import { getBookForReading, updateBookPage } from '@/lib/book-storage'
+import {
+  getBookForReading,
+  updateBookPage,
+  updateBookProgress,
+} from '@/lib/book-storage'
 import { Book } from '@/types/book'
 import { TTSVisualCue } from '@/components/TTSVisualCue'
 import { useVisualCueStore } from '@/lib/tts/visual-cue'
@@ -289,6 +293,10 @@ export default function MobiReaderScreen() {
 
   const webViewRef = useRef<WebView>(null)
   const currentChapterRef = useRef(0)
+  // #41 — Mirrors `chapterCount` state so the bridged-message handler
+  // (which can be invoked before React re-renders with the latest
+  // count) can compute `current / total` for `updateBookProgress`.
+  const chapterCountRef = useRef(0)
   // RDR-024 — set by the chapter postMessage from the WebView. Most MOBI
   // chapters lack `[data-paragraph-index]` ids, so the per-TTS-step
   // injectJavaScript hop below would always be a no-op. We probe once
@@ -363,6 +371,19 @@ export default function MobiReaderScreen() {
       if (nextState === 'background' || nextState === 'inactive') {
         if (book?.id) {
           updateBookPage(book.id, currentChapterRef.current)
+          // #41 — Mirror progress for the library "Reading Now" pill.
+          // MOBI uses chapters as its progress denominator (the format
+          // has no global page count); the pill renders the result as
+          // "X%".
+          const total = chapterCountRef.current
+          if (total > 0) {
+            // currentChapter is 0-indexed; add 1 so a reader who has
+            // started the last chapter shows 100% rather than (N-1)/N.
+            updateBookProgress(
+              book.id,
+              Math.min(1, (currentChapterRef.current + 1) / total),
+            )
+          }
         }
       }
     }
@@ -375,6 +396,10 @@ export default function MobiReaderScreen() {
       const msg = JSON.parse(event.nativeEvent.data)
       if (msg.type === 'loaded') {
         setChapterCount(msg.total)
+        // #41 — mirror into the ref so handleMessage can compute
+        // progress on the next 'chapter' event without waiting for
+        // React to re-render with the new state.
+        chapterCountRef.current = typeof msg.total === 'number' ? msg.total : 0
         // Navigate to saved chapter
         webViewRef.current?.postMessage(
           JSON.stringify({ type: 'goto', chapter: currentChapterRef.current })
@@ -388,6 +413,15 @@ export default function MobiReaderScreen() {
         hasParagraphIdsRef.current = msg.hasParagraphIds === true
         if (book?.id) {
           updateBookPage(book.id, msg.current)
+          // #41 — Persist progress so the library pill subline can
+          // render "X%" after the reader closes.
+          const total = chapterCountRef.current
+          if (total > 0) {
+            updateBookProgress(
+              book.id,
+              Math.min(1, (msg.current + 1) / total),
+            )
+          }
         }
       } else if (msg.type === 'selection') {
         // P1-K — WebView reports the current text selection. We hold it
@@ -530,6 +564,14 @@ export default function MobiReaderScreen() {
   const handleBack = useCallback(() => {
     if (book?.id) {
       updateBookPage(book.id, currentChapterRef.current)
+      // #41 — Persist progress (see handleMessage / handleAppStateChange).
+      const total = chapterCountRef.current
+      if (total > 0) {
+        updateBookProgress(
+          book.id,
+          Math.min(1, (currentChapterRef.current + 1) / total),
+        )
+      }
     }
     safeBack(router)
   }, [book?.id, router])

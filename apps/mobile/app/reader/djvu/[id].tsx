@@ -14,7 +14,11 @@ import { useLocalSearchParams, useRouter } from 'expo-router'
 import { WebView } from 'react-native-webview'
 import { File as ExpoFile } from 'expo-file-system'
 import { IconSymbol } from '@/components/ui/icon-symbol'
-import { getBookForReading, updateBookPage } from '@/lib/book-storage'
+import {
+  getBookForReading,
+  updateBookPage,
+  updateBookProgress,
+} from '@/lib/book-storage'
 import { Book } from '@/types/book'
 import { TTSVisualCue } from '@/components/TTSVisualCue'
 import { useVisualCueStore } from '@/lib/tts/visual-cue'
@@ -229,6 +233,10 @@ export default function DjvuReaderScreen() {
 
   const webViewRef = useRef<WebView>(null)
   const currentPageRef = useRef(1)
+  // #41 — Mirrors `pageCount` so the bridged-message handler can
+  // compute `current / total` for `updateBookProgress` without
+  // waiting for React to re-render with the new state.
+  const pageCountRef = useRef(0)
 
   // Mount the player machine for TTS read-aloud (Batch 7). The DJVU
   // extractor (chunker.getChunks for 'djvu') only returns paragraphs if
@@ -383,6 +391,12 @@ export default function DjvuReaderScreen() {
       if (nextState === 'background' || nextState === 'inactive') {
         if (book?.id) {
           updateBookPage(book.id, currentPageRef.current)
+          // #41 — Mirror progress for the library "Reading Now" pill
+          // ("Page X of Y").
+          const total = pageCountRef.current
+          if (total > 0) {
+            updateBookProgress(book.id, currentPageRef.current / total)
+          }
         }
       }
     }
@@ -395,6 +409,10 @@ export default function DjvuReaderScreen() {
       const msg = JSON.parse(event.nativeEvent.data)
       if (msg.type === 'loaded') {
         setPageCount(msg.total)
+        // #41 — Mirror into the ref so handleMessage's subsequent
+        // 'page' events can compute progress without waiting for
+        // React to re-render with the new state.
+        pageCountRef.current = typeof msg.total === 'number' ? msg.total : 0
         // Render the saved page
         webViewRef.current?.postMessage(
           JSON.stringify({ type: 'goto', page: currentPageRef.current })
@@ -404,6 +422,12 @@ export default function DjvuReaderScreen() {
         currentPageRef.current = msg.current
         if (book?.id) {
           updateBookPage(book.id, msg.current)
+          // #41 — Persist progress so the library pill subline can
+          // render "Page X of Y" after the reader closes.
+          const total = pageCountRef.current
+          if (total > 0) {
+            updateBookProgress(book.id, msg.current / total)
+          }
         }
       } else if (msg.type === 'selection') {
         // P1-K — DJVU canvas selection bridge. In practice the canvas
@@ -547,6 +571,11 @@ export default function DjvuReaderScreen() {
   const handleBack = useCallback(() => {
     if (book?.id) {
       updateBookPage(book.id, currentPageRef.current)
+      // #41 — Persist progress (see handleMessage / handleAppStateChange).
+      const total = pageCountRef.current
+      if (total > 0) {
+        updateBookProgress(book.id, currentPageRef.current / total)
+      }
     }
     safeBack(router)
   }, [book?.id, router])
