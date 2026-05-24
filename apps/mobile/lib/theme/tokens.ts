@@ -41,6 +41,18 @@ export const motion = {
     fast: 200,
     normal: 300,
     slow: 500,
+    // Semantic durations for repeating "breathing" / "spinner" loops.
+    // Distinct from the fast/normal/slow UI-transition triad because they
+    // describe a *period*, not a one-shot tween.
+    //  - pulse:  voice-button breathing & TTS cue heartbeat (~ Apple Books
+    //            voice-active state).
+    //  - pulseFast: secondary pulse for the "speaking" sub-state where the
+    //            cadence needs to feel more responsive than `pulse`.
+    //  - rotate: full revolution period for an indeterminate spinner
+    //            (sync indicator + reader spinner).
+    pulse: 800,
+    pulseFast: 600,
+    rotate: 1000,
   },
 } as const
 
