@@ -404,7 +404,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
         <div className="flex-1 overflow-y-auto px-5 py-3 min-h-0">
           {scanning && filteredBooks.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-40 gap-3 text-gray-400">
-              <ClipLoader color="#9ca3af" size={24} />
+              <ClipLoader color="var(--muted-foreground)" size={24} />
               <p className="text-sm">Scanning for books...</p>
             </div>
           ) : scanComplete && filteredBooks.length === 0 ? (
@@ -456,9 +456,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
                                   {book.author}
                                 </span>
                               ) : null}
-                              <span className="text-xs text-gray-400 uppercase">
-                                {book.format}
-                              </span>
+                              <span className="text-xs text-gray-400 uppercase">{book.format}</span>
                               <span className="text-xs text-gray-400">
                                 {formatFileSize(book.fileSize)}
                               </span>
@@ -502,7 +500,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
         </div>
 
         {/* Bulk-import confirmation */}
-        {confirmOpen && (
+        {confirmOpen ? (
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40">
             <div
               role="dialog"
@@ -539,7 +537,7 @@ export function BookDiscoveryModal({ open, onClose }: BookDiscoveryModalProps) {
               </div>
             </div>
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   )

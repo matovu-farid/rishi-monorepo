@@ -113,7 +113,6 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
       position: { kind: 'mobi', cfi: String(chapterIndex) },
       ttsContext
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chapterIndex])
 
   // Navigation history: RESUME_REQUESTED → navigate to the stored chapter
@@ -286,112 +285,112 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
 
   return (
     <div ref={readerRootRef} className="relative h-full">
-    <div
-      className="relative h-screen flex flex-col"
-      style={{ background: themes[theme].background }}
-    >
-      {/* Main content area */}
-      <div className="flex-1 overflow-hidden">
-        {loading ? (
-          <div className="flex items-center justify-center h-full">
-            <div
-              className="animate-spin rounded-full h-8 w-8 border-2 border-current border-t-transparent"
-              style={{ color: themes[theme].color }}
+      <div
+        className="relative h-screen flex flex-col"
+        style={{ background: themes[theme].background }}
+      >
+        {/* Main content area */}
+        <div className="flex-1 overflow-hidden">
+          {loading ? (
+            <div className="flex items-center justify-center h-full">
+              <div
+                className="animate-spin rounded-full h-8 w-8 border-2 border-current border-t-transparent"
+                style={{ color: themes[theme].color }}
+              />
+            </div>
+          ) : (
+            <iframe
+              ref={iframeRef}
+              srcDoc={srcdoc}
+              className="w-full h-full border-none"
+              title={book.title}
+              sandbox="allow-same-origin"
             />
-          </div>
-        ) : (
-          <iframe
-            ref={iframeRef}
-            srcDoc={srcdoc}
-            className="w-full h-full border-none"
-            title={book.title}
-            sandbox="allow-same-origin"
-          />
-        )}
-      </div>
-
-      {/* Chapter navigation bar */}
-      <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-10">
-        <div className="flex items-center gap-3 px-4 py-2 bg-black/60 rounded-2xl backdrop-blur-lg">
-          <button
-            onClick={goPrev}
-            disabled={chapterIndex <= 0}
-            className="p-1 text-white disabled:opacity-30 hover:opacity-80 transition-opacity"
-            aria-label="Previous chapter"
-          >
-            <ChevronLeft size={20} />
-          </button>
-          <span className="text-white text-sm font-medium min-w-[4rem] text-center">
-            {chapterCount > 0 ? `${chapterIndex + 1} / ${chapterCount}` : '...'}
-          </span>
-          <button
-            onClick={goNext}
-            disabled={chapterIndex >= chapterCount - 1}
-            className="p-1 text-white disabled:opacity-30 hover:opacity-80 transition-opacity"
-            aria-label="Next chapter"
-          >
-            <ChevronRight size={20} />
-          </button>
+          )}
         </div>
-      </div>
 
-      {/* AI chat orb, voice chat launcher, and TTS controls */}
-      <ReaderOverlayControls
-        bookId={book.id.toString()}
-        chatPanelOpen={chatPanelOpen}
-        onChatOrbClick={() => setChatPanelOpen((prev) => !prev)}
-      />
-
-      {/* TOC / Bookmarks Sidebar */}
-      <ReaderTOC
-        open={tocOpen}
-        onOpenChange={setTocOpen}
-        title="Navigation"
-        bookSyncId={bookSyncId}
-        onBookmarkNavigate={(location) => {
-          const idx = parseInt(location, 10)
-          if (Number.isFinite(idx) && idx >= 0) {
-            // Dispatch a JUMP_REQUESTED before navigating so the history
-            // machine records the "from" anchor and can offer resume later.
-            const activeParagraph = usePlayerStore.getState().activeParagraph
-            const indexStr = activeParagraph?.index
-            const paragraphIndex = indexStr != null ? Number(indexStr) : null
-            const fromTts =
-              paragraphIndex != null && Number.isFinite(paragraphIndex)
-                ? { paragraphIndex }
-                : null
-            navigationHistoryActor.send({
-              type: 'JUMP_REQUESTED',
-              from: { kind: 'mobi', cfi: String(chapterIndex) },
-              fromTts,
-              to: { kind: 'mobi', cfi: location },
-              source: 'bookmark',
-              fromLabel: 'previous spot'
-            })
-            setChapterIndex(idx)
-            setTocOpen(false)
-          }
-        }}
-        tocContent={
-          <div className="p-4 text-gray-400 text-sm text-center">
-            Chapter {chapterIndex + 1} of {chapterCount}
+        {/* Chapter navigation bar */}
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-10">
+          <div className="flex items-center gap-3 px-4 py-2 bg-black/60 rounded-2xl backdrop-blur-lg">
+            <button
+              onClick={goPrev}
+              disabled={chapterIndex <= 0}
+              className="p-1 text-white disabled:opacity-30 hover:opacity-80 transition-opacity"
+              aria-label="Previous chapter"
+            >
+              <ChevronLeft size={20} />
+            </button>
+            <span className="text-white text-sm font-medium min-w-[4rem] text-center">
+              {chapterCount > 0 ? `${chapterIndex + 1} / ${chapterCount}` : '...'}
+            </span>
+            <button
+              onClick={goNext}
+              disabled={chapterIndex >= chapterCount - 1}
+              className="p-1 text-white disabled:opacity-30 hover:opacity-80 transition-opacity"
+              aria-label="Next chapter"
+            >
+              <ChevronRight size={20} />
+            </button>
           </div>
-        }
-      />
+        </div>
 
-      {AuthDialog}
+        {/* AI chat orb, voice chat launcher, and TTS controls */}
+        <ReaderOverlayControls
+          bookId={book.id.toString()}
+          chatPanelOpen={chatPanelOpen}
+          onChatOrbClick={() => setChatPanelOpen((prev) => !prev)}
+        />
 
-      {/* Chat Panel */}
-      <ChatPanel
-        bookId={book.id}
-        bookSyncId={bookSyncId}
-        bookTitle={book.title}
-        rendition={null}
-        open={chatPanelOpen}
-        onOpenChange={setChatPanelOpen}
-      />
-    </div>
-    <NavigationHistoryFooter />
+        {/* TOC / Bookmarks Sidebar */}
+        <ReaderTOC
+          open={tocOpen}
+          onOpenChange={setTocOpen}
+          title="Navigation"
+          bookSyncId={bookSyncId}
+          onBookmarkNavigate={(location) => {
+            const idx = parseInt(location, 10)
+            if (Number.isFinite(idx) && idx >= 0) {
+              // Dispatch a JUMP_REQUESTED before navigating so the history
+              // machine records the "from" anchor and can offer resume later.
+              const activeParagraph = usePlayerStore.getState().activeParagraph
+              const indexStr = activeParagraph?.index
+              const paragraphIndex = indexStr != null ? Number(indexStr) : null
+              const fromTts =
+                paragraphIndex != null && Number.isFinite(paragraphIndex)
+                  ? { paragraphIndex }
+                  : null
+              navigationHistoryActor.send({
+                type: 'JUMP_REQUESTED',
+                from: { kind: 'mobi', cfi: String(chapterIndex) },
+                fromTts,
+                to: { kind: 'mobi', cfi: location },
+                source: 'bookmark',
+                fromLabel: 'previous spot'
+              })
+              setChapterIndex(idx)
+              setTocOpen(false)
+            }
+          }}
+          tocContent={
+            <div className="p-4 text-gray-400 text-sm text-center">
+              Chapter {chapterIndex + 1} of {chapterCount}
+            </div>
+          }
+        />
+
+        {AuthDialog}
+
+        {/* Chat Panel */}
+        <ChatPanel
+          bookId={book.id}
+          bookSyncId={bookSyncId}
+          bookTitle={book.title}
+          rendition={null}
+          open={chatPanelOpen}
+          onOpenChange={setChatPanelOpen}
+        />
+      </div>
+      <NavigationHistoryFooter />
     </div>
   )
 }

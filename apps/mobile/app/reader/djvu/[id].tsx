@@ -14,7 +14,11 @@ import { useLocalSearchParams, useRouter } from 'expo-router'
 import { WebView } from 'react-native-webview'
 import { File as ExpoFile } from 'expo-file-system'
 import { IconSymbol } from '@/components/ui/icon-symbol'
-import { getBookForReading, updateBookPage } from '@/lib/book-storage'
+import {
+  getBookForReading,
+  updateBookPage,
+  updateBookProgress,
+} from '@/lib/book-storage'
 import { Book } from '@/types/book'
 import { TTSVisualCue } from '@/components/TTSVisualCue'
 import { useVisualCueStore } from '@/lib/tts/visual-cue'
@@ -28,6 +32,8 @@ import { seedPlayerParagraphsFromChunks } from '@/lib/tts/seed-paragraphs'
 import { resolvePlainTextReadFromSelection } from '@/lib/reader-selection'
 import { useRequireAuth } from '@/components/auth/useRequireAuth'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
+import { buildReaderThemeInjection } from '@/lib/reader-theme-css'
+import { READER_THEMES } from '@/constants/reader-themes'
 import { safeBack } from '@/lib/navigation'
 import type { ReaderSettings } from '@/types/book'
 import {
@@ -227,6 +233,10 @@ export default function DjvuReaderScreen() {
 
   const webViewRef = useRef<WebView>(null)
   const currentPageRef = useRef(1)
+  // #41 — Mirrors `pageCount` so the bridged-message handler can
+  // compute `current / total` for `updateBookProgress` without
+  // waiting for React to re-render with the new state.
+  const pageCountRef = useRef(0)
 
   // Mount the player machine for TTS read-aloud (Batch 7). The DJVU
   // extractor (chunker.getChunks for 'djvu') only returns paragraphs if
@@ -381,6 +391,12 @@ export default function DjvuReaderScreen() {
       if (nextState === 'background' || nextState === 'inactive') {
         if (book?.id) {
           updateBookPage(book.id, currentPageRef.current)
+          // #41 — Mirror progress for the library "Reading Now" pill
+          // ("Page X of Y").
+          const total = pageCountRef.current
+          if (total > 0) {
+            updateBookProgress(book.id, currentPageRef.current / total)
+          }
         }
       }
     }
@@ -393,6 +409,10 @@ export default function DjvuReaderScreen() {
       const msg = JSON.parse(event.nativeEvent.data)
       if (msg.type === 'loaded') {
         setPageCount(msg.total)
+        // #41 — Mirror into the ref so handleMessage's subsequent
+        // 'page' events can compute progress without waiting for
+        // React to re-render with the new state.
+        pageCountRef.current = typeof msg.total === 'number' ? msg.total : 0
         // Render the saved page
         webViewRef.current?.postMessage(
           JSON.stringify({ type: 'goto', page: currentPageRef.current })
@@ -402,6 +422,12 @@ export default function DjvuReaderScreen() {
         currentPageRef.current = msg.current
         if (book?.id) {
           updateBookPage(book.id, msg.current)
+          // #41 — Persist progress so the library pill subline can
+          // render "Page X of Y" after the reader closes.
+          const total = pageCountRef.current
+          if (total > 0) {
+            updateBookProgress(book.id, msg.current / total)
+          }
         }
       } else if (msg.type === 'selection') {
         // P1-K — DJVU canvas selection bridge. In practice the canvas
@@ -489,6 +515,25 @@ export default function DjvuReaderScreen() {
     }))
   }, [pageCount])
 
+  // CHT-002 — voice-chat activation context. DJVU is canvas-only (no text
+  // layer that survives the WebView round-trip), so the best we can do is
+  // pass a "Page N of M" page-text proxy plus the synthesised per-page
+  // outline. When TTS is active, forward the active paragraph too — the
+  // shared extractor can light this up if the DJVU has an OCR layer.
+  // Declared above the loading/error early-returns so the hook order stays
+  // stable across renders (react-hooks/rules-of-hooks).
+  const getActivationContext = useCallback(() => {
+    const outline = tocItems.map((t) => ({ href: t.href, label: t.label }))
+    const pageText = pageCount > 0
+      ? `Page ${currentPage} of ${pageCount}`
+      : `Page ${currentPage}`
+    return {
+      pageText,
+      outline,
+      activeParagraphText: activeParagraph?.text ?? undefined,
+    }
+  }, [tocItems, currentPage, pageCount, activeParagraph])
+
   const currentTocHref = useMemo(
     () => `djvu-page:${currentPage}`,
     [currentPage],
@@ -511,11 +556,26 @@ export default function DjvuReaderScreen() {
     setSettings(next)
   }, [])
 
+  // Issue #47 — forward the active theme into the WebView whenever it
+  // changes. DJVU is canvas-only today so the perceived effect is the
+  // body background swap behind the canvas; without the hop, the
+  // AppearanceSheet's theme picker is a no-op for DJVU users.
+  useEffect(() => {
+    if (!bookLoaded || !webViewRef.current) return
+    const theme = READER_THEMES[settings.themeName]
+    webViewRef.current.injectJavaScript(buildReaderThemeInjection(theme))
+  }, [bookLoaded, settings.themeName])
+
   // safeBack: guards against deep-link cold-start where the nav stack is
   // empty and a bare router.back() would strand the user (P1-B).
   const handleBack = useCallback(() => {
     if (book?.id) {
       updateBookPage(book.id, currentPageRef.current)
+      // #41 — Persist progress (see handleMessage / handleAppStateChange).
+      const total = pageCountRef.current
+      if (total > 0) {
+        updateBookProgress(book.id, currentPageRef.current / total)
+      }
     }
     safeBack(router)
   }, [book?.id, router])
@@ -582,23 +642,6 @@ export default function DjvuReaderScreen() {
     pageCount > 0
       ? { kind: 'page', current: currentPage, total: pageCount }
       : { kind: 'none' }
-
-  // CHT-002 — voice-chat activation context. DJVU is canvas-only (no text
-  // layer that survives the WebView round-trip), so the best we can do is
-  // pass a "Page N of M" page-text proxy plus the synthesised per-page
-  // outline. When TTS is active, forward the active paragraph too — the
-  // shared extractor can light this up if the DJVU has an OCR layer.
-  const getActivationContext = useCallback(() => {
-    const outline = tocItems.map((t) => ({ href: t.href, label: t.label }))
-    const pageText = pageCount > 0
-      ? `Page ${currentPage} of ${pageCount}`
-      : `Page ${currentPage}`
-    return {
-      pageText,
-      outline,
-      activeParagraphText: activeParagraph?.text ?? undefined,
-    }
-  }, [tocItems, currentPage, pageCount, activeParagraph])
 
   const djvuNavCluster = (
     <DjvuNavCluster

@@ -24,7 +24,11 @@ export function ChatPanel({
   open,
   onOpenChange
 }: ChatPanelProps) {
-  const { messages, isLoading, error, sendMessage } = useChat(bookId, bookSyncId, bookTitle)
+  const { messages, isLoading, error, sendMessage, isReady } = useChat(
+    bookId,
+    bookSyncId,
+    bookTitle
+  )
   const scrollEndRef = useRef<HTMLDivElement>(null)
 
   // Auto-scroll to bottom on new messages
@@ -86,7 +90,10 @@ export function ChatPanel({
         {error ? <p className="px-4 py-1 text-sm text-destructive">{error}</p> : null}
 
         <div className="px-4 pb-4 pt-2">
-          <ChatInput onSend={sendMessage} disabled={isLoading} />
+          {/* Disable until the async conversation init has resolved (CHT-012).
+              Sending before isReady would silently drop the message because
+              sendMessage no-ops when conversationId is null. */}
+          <ChatInput onSend={sendMessage} disabled={isLoading || !isReady} />
         </div>
       </SheetContent>
     </Sheet>

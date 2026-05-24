@@ -14,12 +14,13 @@ export function registerHighlightHandlers(): void {
       .all()
 
     // Map on-disk rows to the renderer-facing HighlightRow shape:
-    // - format defaults to 'epub' for legacy rows that predate v2 migration
+    // - format is NOT NULL with a default of 'epub' at the column level, so
+    //   legacy rows already read back as 'epub' from drizzle — no fallback needed.
     // - cfi_range '' (written by PDF rows to satisfy NOT NULL) becomes null
     // - locator passes through as-is (null for EPUB rows)
     return rows.map((row) => ({
       ...row,
-      format: (row.format ?? 'epub') as 'epub' | 'pdf',
+      format: row.format as 'epub' | 'pdf',
       cfiRange: row.cfiRange === '' ? null : row.cfiRange,
       locator: row.locator ?? null
     }))

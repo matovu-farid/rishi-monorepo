@@ -162,8 +162,7 @@ describe('BookImportService.importBatch', () => {
     // detected as a duplicate within the same importBatch call — proving the
     // dedup adapter sees writes made earlier in the batch.
     const { db, savedBooks } = makeDbForImport({
-      findBookByHashImpl: async (hash) =>
-        savedBooks.find((b) => b.fileHash === hash) ?? null
+      findBookByHashImpl: async (hash) => savedBooks.find((b) => b.fileHash === hash) ?? null
     })
     const fileSync = makeFileSync({ hashImpl: async () => 'same-hash' })
     const service = createBookImportService(makeDeps({ db, fileSync }))

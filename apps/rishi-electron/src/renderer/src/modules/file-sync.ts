@@ -115,16 +115,21 @@ export function formatUploadLimitMessage(payload: UploadUrlError): string {
 async function parseUploadLimitError(res: Response): Promise<UploadUrlError | null> {
   try {
     const data = (await res.clone().json()) as Partial<UploadUrlError>
+    // Treat `data` as an untrusted IPC/network payload — at runtime nothing
+    // forces it to actually be a member of `UploadUrlError['code']`, but TS
+    // sees the field as the exhaustive union and would otherwise narrow the
+    // `=== 'STORAGE_LIMIT_REACHED'` arm to a `"x" === "x"` tautology. Walking
+    // through `unknown` keeps the guard honest at the runtime boundary.
+    const codeValue = (data as { code?: unknown }).code
     if (
-      typeof data.code === 'string' &&
-      (data.code === 'FILE_TOO_LARGE' ||
-        data.code === 'BOOK_LIMIT_REACHED' ||
-        data.code === 'STORAGE_LIMIT_REACHED') &&
+      (codeValue === 'FILE_TOO_LARGE' ||
+        codeValue === 'BOOK_LIMIT_REACHED' ||
+        codeValue === 'STORAGE_LIMIT_REACHED') &&
       typeof data.limit === 'number'
     ) {
       return {
         error: typeof data.error === 'string' ? data.error : '',
-        code: data.code,
+        code: codeValue,
         limit: data.limit,
         current: typeof data.current === 'number' ? data.current : undefined
       }

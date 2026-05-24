@@ -296,7 +296,13 @@ export function buildRealtimeAgent({
   return new RealtimeAgent({
     name: 'Assistant',
     voice: 'alloy',
-    instructions: INSTRUCTIONS_TEMPLATE(pageText, language, outline, activeParagraphText, visualSummary),
+    instructions: INSTRUCTIONS_TEMPLATE(
+      pageText,
+      language,
+      outline,
+      activeParagraphText,
+      visualSummary
+    ),
     tools: tools as never
   })
 }

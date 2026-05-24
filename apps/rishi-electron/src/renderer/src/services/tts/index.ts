@@ -16,7 +16,7 @@ import { createVisualCueEmitter, type VisualCueEmitter } from './visual-cue-emit
 let _visualCueEmitter: VisualCueEmitter | null = null
 
 export function getVisualCueEmitter(): VisualCueEmitter {
-  if (!_visualCueEmitter) _visualCueEmitter = createVisualCueEmitter()
+  _visualCueEmitter ??= createVisualCueEmitter()
   return _visualCueEmitter
 }
 

@@ -55,7 +55,7 @@ describe('NoteIconOverlay', () => {
     expect(iframeDoc.querySelectorAll(`[${NOTE_ICON_ATTR}]`)).toHaveLength(0)
   })
 
-  it('positions each icon at the top-right of the range\'s LAST bounding rect (multi-line ranges anchor to the last line)', () => {
+  it("positions each icon at the top-right of the range's LAST bounding rect (multi-line ranges anchor to the last line)", () => {
     const overlay = new NoteIconOverlay({
       iframeDoc,
       resolveRange: () =>
@@ -80,9 +80,7 @@ describe('NoteIconOverlay', () => {
     const overlay = new NoteIconOverlay({
       iframeDoc,
       resolveRange: (cfi) =>
-        cfi === 'cfi:present'
-          ? fakeRange([{ top: 0, left: 0, right: 100, bottom: 20 }])
-          : null,
+        cfi === 'cfi:present' ? fakeRange([{ top: 0, left: 0, right: 100, bottom: 20 }]) : null,
       onIconClick: vi.fn()
     })
 

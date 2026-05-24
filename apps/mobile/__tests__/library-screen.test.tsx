@@ -859,3 +859,141 @@ describe('LibraryScreen (#32: row de-duplication + horizontal layout)', () => {
     expect(flattened.flexDirection).toBe('row')
   })
 })
+
+/**
+ * #41 — "Reading Now" pill needs a progress subline.
+ *
+ * Before the fix, the pill rendered only title + author. We pin three
+ * observable consequences on the pill content after the fix:
+ *   1. A `library-reading-now-progress` Text element is mounted under
+ *      the pill when the last-read book has progress data.
+ *   2. Its content is format-aware:
+ *        - PDF with both `currentPage` and `lastProgressPercent` → "Page X of Y"
+ *        - EPUB with `lastProgressPercent` only → "X%"
+ *   3. When the last-read book has NO progress data (legacy row), the
+ *      subline element is NOT rendered (we don't show a stale label).
+ *   4. The pill matches its snapshot (acceptance criterion: "snapshot
+ *      test verifies the new field is present").
+ */
+describe('LibraryScreen (#41: Reading Now progress subline)', () => {
+  beforeEach(() => {
+    mockBooks.length = 0
+    mockLastReadBook = null
+  })
+
+  function findAllByID(
+    tree: TestRenderer.ReactTestRenderer,
+    testID: string,
+  ): TestRenderer.ReactTestInstance[] {
+    return tree.root.findAll(
+      (n) =>
+        typeof n.type === 'string' &&
+        (n.props as { testID?: string }).testID === testID,
+    )
+  }
+
+  function collectText(node: TestRenderer.ReactTestInstance): string {
+    return node.children
+      .map((child) =>
+        typeof child === 'string'
+          ? child
+          : collectText(child as TestRenderer.ReactTestInstance),
+      )
+      .join('')
+  }
+
+  it('renders "Page X of Y" for a PDF last-read book with page + progress', () => {
+    const lastBook = {
+      id: 'pdf1',
+      title: 'On Photography',
+      author: 'Susan Sontag',
+      format: 'pdf',
+      filePath: '/tmp/op.pdf',
+      coverPath: null,
+      currentCfi: null,
+      currentPage: 42,
+      lastProgressPercent: 0.42,
+      createdAt: 0,
+    }
+    mockBooks.push(lastBook)
+    mockLastReadBook = lastBook
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    const subline = findAllByID(tree, 'library-reading-now-progress')
+    expect(subline.length).toBeGreaterThan(0)
+    expect(collectText(subline[0])).toBe('Page 42 of 100')
+  })
+
+  it('renders "X%" for an EPUB last-read book with stored progress', () => {
+    const lastBook = {
+      id: 'ep1',
+      title: 'The Brothers Karamazov',
+      author: 'Dostoyevsky',
+      format: 'epub',
+      filePath: '/tmp/bk.epub',
+      coverPath: null,
+      currentCfi: 'epubcfi(/6/4!/4/2/2)',
+      currentPage: null,
+      lastProgressPercent: 0.18,
+      createdAt: 0,
+    }
+    mockBooks.push(lastBook)
+    mockLastReadBook = lastBook
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    const subline = findAllByID(tree, 'library-reading-now-progress')
+    expect(subline.length).toBeGreaterThan(0)
+    expect(collectText(subline[0])).toBe('18%')
+  })
+
+  it('omits the subline for a legacy book with no progress data', () => {
+    const lastBook = {
+      id: 'legacy1',
+      title: 'Anna Karenina',
+      author: 'Tolstoy',
+      format: 'epub',
+      filePath: '/tmp/ak.epub',
+      coverPath: null,
+      currentCfi: 'epubcfi(/6/4)',
+      currentPage: null,
+      lastProgressPercent: null,
+      createdAt: 0,
+    }
+    mockBooks.push(lastBook)
+    mockLastReadBook = lastBook
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    const subline = findAllByID(tree, 'library-reading-now-progress')
+    expect(subline.length).toBe(0)
+  })
+
+  it('matches the Reading Now pill snapshot with progress subline', () => {
+    const lastBook = {
+      id: 'snap1',
+      title: 'Snapshot Title',
+      author: 'Snapshot Author',
+      format: 'pdf',
+      filePath: '/tmp/snap.pdf',
+      coverPath: null,
+      currentCfi: null,
+      currentPage: 7,
+      lastProgressPercent: 0.07,
+      createdAt: 0,
+    }
+    mockBooks.push(lastBook)
+    mockLastReadBook = lastBook
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<LibraryScreen />)
+    })
+    const sublines = findAllByID(tree, 'library-reading-now-progress')
+    expect(sublines.length).toBe(1)
+    expect(collectText(sublines[0])).toMatchSnapshot()
+  })
+})

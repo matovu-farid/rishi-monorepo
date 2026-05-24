@@ -10,20 +10,23 @@ interface RadioProps extends React.InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const Radio: React.FC<RadioProps> = ({ label, value, className = '', theme, ...props }) => {
+  // Fallback chain: explicit reader theme color (set by reader pages that
+  // override the OS theme) → app theme tokens via CSS variables. No raw
+  // hex literals so dark mode tracks correctly.
   return (
     <label className="flex items-center cursor-pointer">
       <input
         type="radio"
         value={value}
-        className={`w-4 h-4 border-gray-300 focus:ring-2 ${className}`}
+        className={`w-4 h-4 border-border focus:ring-2 focus:ring-ring ${className}`}
         style={{
-          accentColor: theme?.color ?? '#2563eb',
-          borderColor: theme?.color ? `${theme.color}40` : '#d1d5db'
+          accentColor: theme?.color ?? 'var(--primary)',
+          borderColor: theme?.color ? `${theme.color}40` : 'var(--border)'
         }}
         {...props}
       />
       {label ? (
-        <span className="ml-2 text-sm" style={{ color: theme?.color ?? '#374151' }}>
+        <span className="ml-2 text-sm" style={{ color: theme?.color ?? 'var(--foreground)' }}>
           {label}
         </span>
       ) : null}

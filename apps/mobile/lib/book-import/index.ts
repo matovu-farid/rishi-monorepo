@@ -61,6 +61,7 @@ export function createMobileBookImportService(opts: {
       format,
       currentCfi: null,
       currentPage: format === "pdf" ? 1 : null,
+      lastProgressPercent: null,
       createdAt: Date.now(),
     }),
     bookIdOf: (book) => book.id,
