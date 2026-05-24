@@ -116,8 +116,10 @@ describe('ConversationRow (#60: visible delete affordance via swipe)', () => {
 
     const deleteActions = tree.root.findAll(
       (n) =>
+        typeof n.type === 'string' &&
+        (n.type as string) === 'Pressable' &&
         (n.props as { testID?: string }).testID ===
-        'conversation-row-conv-1-delete-action',
+          'conversation-row-conv-1-delete-action',
     )
     expect(deleteActions.length).toBe(1)
   })
@@ -140,8 +142,10 @@ describe('ConversationRow (#60: visible delete affordance via swipe)', () => {
 
     const deleteAction = tree.root.find(
       (n) =>
+        typeof n.type === 'string' &&
+        (n.type as string) === 'Pressable' &&
         (n.props as { testID?: string }).testID ===
-        'conversation-row-conv-1-delete-action',
+          'conversation-row-conv-1-delete-action',
     )
     const props = deleteAction.props as {
       accessibilityRole?: string
@@ -172,8 +176,10 @@ describe('ConversationRow (#60: visible delete affordance via swipe)', () => {
 
     const deleteAction = tree.root.find(
       (n) =>
+        typeof n.type === 'string' &&
+        (n.type as string) === 'Pressable' &&
         (n.props as { testID?: string }).testID ===
-        'conversation-row-conv-1-delete-action',
+          'conversation-row-conv-1-delete-action',
     )
     act(() => {
       ;(deleteAction.props as { onPress?: () => void }).onPress?.()
@@ -198,8 +204,10 @@ describe('ConversationRow (#60: visible delete affordance via swipe)', () => {
 
     const deleteActions = tree.root.findAll(
       (n) =>
+        typeof n.type === 'string' &&
+        (n.type as string) === 'Pressable' &&
         (n.props as { testID?: string }).testID ===
-        'conversation-row-conv-1-delete-action',
+          'conversation-row-conv-1-delete-action',
     )
     expect(deleteActions.length).toBe(0)
   })
