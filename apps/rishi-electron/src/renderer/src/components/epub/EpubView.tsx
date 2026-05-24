@@ -37,8 +37,24 @@ import {
   saveNoteOnly
 } from '@/modules/highlight-actions'
 import { getSyncService } from '@/services'
-import { getHighlightHex, isNoteOnly } from '@/types/highlight'
+import { getHighlightHexForTheme, isNoteOnly } from '@/types/highlight'
 import type { HighlightColor } from '@/types/highlight'
+
+// Resolve the active app theme at the moment a highlight is drawn. The DOM
+// dark class is the source of truth (see __root.tsx). We don't subscribe to
+// changes here — highlights re-paint on the next rendition lifecycle event.
+function currentMode(): 'light' | 'dark' {
+  if (typeof document === 'undefined') return 'light'
+  return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+}
+
+// `multiply` darkens the page on light backgrounds; on dark backgrounds it
+// makes the highlight nearly invisible. `screen` does the opposite, so we
+// swap per theme — both keep the underlying text readable while making the
+// mark visible (#198).
+function currentBlendMode(): 'multiply' | 'screen' {
+  return currentMode() === 'dark' ? 'screen' : 'multiply'
+}
 import { NoteIconOverlay } from '@/modules/note-icon-overlay'
 import { registerEpubFrame, clearEpubFrame } from '@/modules/pageCapture/epubFrameRegistry'
 import type { Contents } from 'epubjs'
@@ -76,7 +92,9 @@ import { findParagraphForCfi } from '@/modules/cfi-to-paragraph'
 import { resolveLiveSelection } from '@/modules/resolve-live-selection'
 import { buildPartialFirst } from '@/modules/read-aloud-from'
 import { useTtsHighlightReconciler } from '@/hooks/useTtsHighlightReconciler'
+import { useVisibleEpubIframe } from '@/hooks/reader/useVisibleEpubIframe'
 import { createEpubTtsReconciler, type EpubTtsReconciler } from './reconcileTtsHighlight'
+import { useDebouncedLocationSave } from './useDebouncedLocationSave'
 
 function updateTheme(rendition: Rendition, theme: ThemeType) {
   const reditionThemes = rendition.themes
@@ -91,9 +109,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   // a stale id from a different format would otherwise be handed to epubjs,
   // which silently ignores it and opens at the start of the book.
   const resumeCfi = book.lastParagraph?.startsWith('epubcfi(') ? book.lastParagraph : null
-  const [currentLocation, setCurrentLocation] = useState<string>(
-    resumeCfi || book.location || '0'
-  )
+  const [currentLocation, setCurrentLocation] = useState<string>(resumeCfi ?? book.location)
   // Sync with book.location when it changes from a refetch (e.g., returning from library).
   // Only sync before the rendition has settled to avoid overriding user navigation.
   const bookLocationRef = useRef(book.location)
@@ -382,7 +398,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     if (!iframeDoc) return
     // Re-create the overlay if the iframe doc changed (page reflow can
     // swap iframes). Cheap to construct; no state inside.
-    if (!noteIconOverlayRef.current || noteIconOverlayRef.current.iframeDoc !== iframeDoc) {
+    if (noteIconOverlayRef.current?.iframeDoc !== iframeDoc) {
       noteIconOverlayRef.current?.destroy()
       noteIconOverlayRef.current = new NoteIconOverlay({
         iframeDoc,
@@ -419,18 +435,11 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         highlightsByRangeRef.current.set(cfi, hl)
         // Note-only rows have no SVG mark — skip the highlightRange call.
         if (isNoteOnly(hl)) continue
-        void highlightRange(
-          rendition,
-          cfi,
-          {},
-          makeAnnotationClickCb(cfi),
-          'epubjs-hl',
-          {
-            fill: getHighlightHex(hl.color as HighlightColor),
-            'fill-opacity': '0.3',
-            'mix-blend-mode': 'multiply'
-          }
-        )
+        void highlightRange(rendition, cfi, {}, makeAnnotationClickCb(cfi), 'epubjs-hl', {
+          fill: getHighlightHexForTheme(hl.color as HighlightColor, currentMode()),
+          'fill-opacity': '0.3',
+          'mix-blend-mode': currentBlendMode()
+        })
       }
       refreshNoteIcons()
     })
@@ -460,7 +469,11 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     const sync = (): void => {
       // epubjs Views exposes `first()` at runtime even though the typings
       // declare it only as `View[]`. Cast through unknown to access it.
-      const views = rendition.manager?.views as unknown as
+      // `manager` is not on the public Rendition type — go through unknown so
+      // we can probe defensively at runtime without TS treating the chain as
+      // always-defined.
+      const manager = (rendition as unknown as { manager?: { views?: unknown } }).manager
+      const views = manager?.views as
         | { first?: () => { iframe?: HTMLIFrameElement } | undefined }
         | undefined
       const iframe = views?.first?.()?.iframe
@@ -507,7 +520,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   const handleHighlightColor = useCallback(
     (color: HighlightColor) => {
       if (!selectionInfo || !rendition || !bookSyncIdRef.current) return
-      const hex = getHighlightHex(color)
+      const hex = getHighlightHexForTheme(color, currentMode())
       const cfiRange = selectionInfo.cfiRange
       const text = selectionInfo.text
       const bookSyncId = bookSyncIdRef.current
@@ -521,7 +534,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               {},
               makeAnnotationClickCb(cfiRange),
               'epubjs-hl',
-              { fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': 'multiply' }
+              { fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': currentBlendMode() }
             )
           },
           removeVisual: async () => {
@@ -614,14 +627,14 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       if (!rendition || !bookSyncIdRef.current) return
       const row = highlightsByRangeRef.current.get(cfiRange)
       if (!row) return
-      const newHex = getHighlightHex(newColor)
+      const newHex = getHighlightHexForTheme(newColor, currentMode())
 
       // Visual swap: remove old, re-draw with new color and the same click cb.
       await removeHighlight(rendition, cfiRange)
       await highlightRange(rendition, cfiRange, {}, makeAnnotationClickCb(cfiRange), 'epubjs-hl', {
         fill: newHex,
         'fill-opacity': '0.3',
-        'mix-blend-mode': 'multiply'
+        'mix-blend-mode': currentBlendMode()
       })
 
       try {
@@ -642,7 +655,13 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       if (!rendition || !bookSyncIdRef.current) return
       const row = highlightsByRangeRef.current.get(cfiRange)
       if (!row) return
-      const hex = getHighlightHex(row.color as HighlightColor)
+      // Match the other three EPUB highlight draw paths (initial render,
+      // new highlight, color swap): theme-aware hex + dynamic blend mode.
+      // Using the legacy plain getHighlightHex + 'multiply' here regresses
+      // the dark-mode fix (VIS-010 / #198) — the restored highlight after
+      // undo paints with light-mode hex and 'multiply' blend, which is
+      // effectively invisible against the dark-mode background.
+      const hex = getHighlightHexForTheme(row.color as HighlightColor, currentMode())
       const bookSyncId = bookSyncIdRef.current
       const noteOnly = isNoteOnly(row)
 
@@ -656,7 +675,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               {},
               makeAnnotationClickCb(cfiRange),
               'epubjs-hl',
-              { fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': 'multiply' }
+              { fill: hex, 'fill-opacity': '0.3', 'mix-blend-mode': currentBlendMode() }
             )
           },
           removeVisual: async () => {
@@ -856,31 +875,25 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   }, [])
 
   const epubTtsReconcilerRef = useRef<EpubTtsReconciler | null>(null)
-  const [epubContentIframe, setEpubContentIframe] = useState<HTMLIFrameElement | null>(null)
+
+  // Track the currently visible content iframe declaratively via
+  // useSyncExternalStore. Previously this was a setState-in-effect cascade
+  // (flagged by react-hooks/set-state-in-effect); the hook now produces the
+  // value during render and re-subscribes only when the rendition identity
+  // changes.
+  const epubContentIframe = useVisibleEpubIframe(rendition)
 
   // Build (or rebuild) the reconciler whenever the rendition instance changes.
+  // Kept in its own effect (separate concern from iframe tracking) — refs are
+  // fine inside effects, and there's no setState here so the React 19 rule
+  // doesn't apply.
   useEffect(() => {
     if (!rendition) {
       epubTtsReconcilerRef.current = null
-      setEpubContentIframe(null)
       return
     }
     epubTtsReconcilerRef.current = createEpubTtsReconciler(rendition)
-
-    // Resolve the epub.js content iframe via the shared helper, which
-    // correctly filters to the currently displayed view. We update the
-    // state on `rendered` so chapter swaps refresh the iframe reference.
-    const resolveIframe = (): void => {
-      const next = getVisibleIframe(rendition) ?? null
-      setEpubContentIframe((prev) => (prev === next ? prev : next))
-    }
-    resolveIframe()
-
-    // epub.js emits 'rendered' when a new view (chapter) is rendered.
-    rendition.on('rendered', resolveIframe)
-
     return () => {
-      rendition.off('rendered', resolveIframe)
       epubTtsReconcilerRef.current = null
     }
   }, [rendition])
@@ -979,14 +992,13 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       position: { kind: 'epub', cfi: currentLocation },
       ttsContext
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentLocation])
 
   // Navigation history: RESUME_REQUESTED → display the stored CFI
   useEffect(() => {
     return onResumeRequested((anchor) => {
       if (anchor.position.kind !== 'epub') return
-      renditionRef.current?.display(anchor.position.cfi)
+      void renditionRef.current?.display(anchor.position.cfi)
     })
   }, [])
 
@@ -1008,6 +1020,24 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
       toast.error('Can not change book page')
     }
   })
+  // Debounce per-page-turn location saves so rapid page-turns (page-curl
+  // animation + rendition.next() resolve + TTS paragraph advance can all
+  // emit `relocated` within ~100ms) coalesce into a single SQLite write.
+  // The hook flushes the latest pending CFI on unmount so closing the book
+  // never loses the user's last position. The mutate call drives both the
+  // DB write and the cloud-sync trigger. See RDR-003.
+  // Destructure `mutate` from the mutation result so the useCallback dep
+  // identity is referentially stable (the mutation result object itself is
+  // intentionally not — @tanstack/query/no-unstable-deps gates on this).
+  const { mutate: mutateLocation } = updateBookLocationMutation
+  const persistLocation = useCallback(
+    (cfi: string) => {
+      mutateLocation({ bookId: book.id.toString(), location: cfi })
+      getSyncService().triggerWrite()
+    },
+    [mutateLocation, book.id]
+  )
+  const debouncedLocationSave = useDebouncedLocationSave(persistLocation)
   // Update rendition state when ref becomes available
 
   // Show loading state while EPUB data is being fetched
@@ -1064,14 +1094,19 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
             // relocateds can fire at a column-start CFI that differs from the
             // saved one; without the userNav gate they would silently
             // overwrite the correct saved CFI on reopen.
+            //
+            // Per-relocate writes are debounced (RDR-003): page-curl + nav.next
+            // + TTS paragraph advance can emit `relocated` several times within
+            // ~100ms. We coalesce into one SQLite write per 300ms window. The
+            // hook flushes the latest pending CFI on unmount so the user's
+            // last position is preserved on book close / route change.
             if (settledRef.current && userNavHappenedRef.current) {
-              updateBookLocationMutation.mutate({
-                bookId: book.id.toString(),
-                location: epubcfi
-              })
-              getSyncService().triggerWrite()
+              debouncedLocationSave.save(epubcfi)
               // Record the latest CFI so the window-close flush has a value
-              // to write even if the mutation above hasn't completed yet.
+              // to write even if the debounced mutation hasn't fired yet.
+              // The window-close handler bypasses the mutation queue and
+              // writes directly via IPC; lastSavedCfiRef is its source of
+              // truth when the live rendition CFI isn't available.
               // eslint-disable-next-line react-hooks/immutability -- Refs are mutable by design; the lint rule misfires on this standard pattern.
               lastSavedCfiRef.current = epubcfi
             }
@@ -1315,7 +1350,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           // row and saved.
           const row = editingNoteRow
           setEditingNoteRow(null)
-          if (!row || !row.cfiRange) return
+          if (!row?.cfiRange) return
           const cfi = row.cfiRange
           const live = highlightsByRangeRef.current.get(cfi) ?? row
           if (isNoteOnly(live) && live.note.trim().length === 0 && live.cfiRange) {
@@ -1326,9 +1361,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
                 getSyncService().triggerWrite()
                 refreshNoteIcons()
               })
-              .catch((err: unknown) =>
-                console.warn('[note] orphan cleanup failed:', err)
-              )
+              .catch((err: unknown) => console.warn('[note] orphan cleanup failed:', err))
           }
         }}
         onSaved={async () => {
@@ -1349,9 +1382,9 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           const fresh = highlightsByRangeRef.current.get(editedCfi)
           if (!fresh) return
           const hasNote = fresh.note.trim().length > 0
-          setInlinePopover((prev) => (prev && prev.cfiRange === editedCfi ? { ...prev, hasNote } : prev))
+          setInlinePopover((prev) => (prev?.cfiRange === editedCfi ? { ...prev, hasNote } : prev))
           setSelectionTargetHighlight((prev) =>
-            prev && prev.cfiRange === editedCfi ? { ...prev, hasNote } : prev
+            prev?.cfiRange === editedCfi ? { ...prev, hasNote } : prev
           )
           // Re-paint the in-iframe icons so a freshly-added note surfaces
           // its marker immediately, and one that was cleared disappears.

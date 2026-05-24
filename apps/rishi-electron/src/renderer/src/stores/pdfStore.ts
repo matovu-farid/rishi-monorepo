@@ -7,6 +7,7 @@ import type { ParagraphWithIndex } from '@/models/player_control'
 import type { Book } from '@/lib/api'
 import type { FooterMask } from '@/components/pdf/utils/buildFooterMask'
 import { usePrefsStore } from '@/stores/prefsStore'
+import { initBookChatSubscription } from '@/stores/initBookChatSubscription'
 
 /** PDF view uses `Virtualizer<HTMLDivElement, Element>` — the second arg is
  *  the item element type, which @tanstack/react-virtual leaves as Element
@@ -54,8 +55,10 @@ interface PdfState {
   isRenderedPageState: Record<number, boolean>
   hasNavigatedToPage: boolean
   isLookingForNextParagraph: boolean
-  /** Per-book running-footer detection result (#142). In-memory only. */
-  footerMaskByBookId: Record<number, FooterMask>
+  /** Per-book running-footer detection result (#142). In-memory only.
+   *  `Partial<Record>` so indexing an unknown bookId is typed as
+   *  `FooterMask | undefined` and callers must guard before use. */
+  footerMaskByBookId: Partial<Record<number, FooterMask>>
 
   setPageNumber: (n: number) => void
   setScrollPageNumber: (n: number) => void
@@ -234,3 +237,20 @@ usePdfStore.subscribe(
     }
   }
 )
+
+// Side effect (#233): when isChatting turns on and a PDF book is loaded, start
+// the realtime voice-chat session. Uses the shared initBookChatSubscription
+// helper (#237) so this call site stays in lock-step with EpubView and
+// Azw3View — those three reader paths used to copy-paste this same
+// subscription block and drift (mobile parity:
+// apps/mobile/components/reader/ReaderOverlay.tsx:60-94).
+//
+// Guard on book.kind === 'pdf' is critical: routes/books.$id.lazy.tsx sets
+// pdfStore.book for ALL book kinds (PDF, EPUB, MOBI, AZW3), so without this
+// guard the subscription would double-fire alongside the EPUB and AZW3
+// subscriptions for those formats. Returning null from getBookId is how the
+// helper expresses "this reader path isn't active right now — don't fire".
+initBookChatSubscription(() => {
+  const book = usePdfStore.getState().book
+  return book?.kind === 'pdf' ? book.id : null
+})

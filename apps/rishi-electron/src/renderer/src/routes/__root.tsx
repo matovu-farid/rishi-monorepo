@@ -57,8 +57,7 @@ function RootComponent(): JSX.Element {
     const id = e.windowIdentity
 
     const enforce = (): void => {
-      const path =
-        window.location.hash.replace(/^#/, '').replace(/^\/+/, '/') || location.pathname
+      const path = window.location.hash.replace(/^#/, '').replace(/^\/+/, '/') || location.pathname
 
       if (id?.kind === 'library') {
         const m = path.match(/^\/books\/(\d+)/)

@@ -55,7 +55,7 @@ beforeEach(() => {
 })
 
 describe('HighlightsPanel — note-only support', () => {
-  it("renders a distinct (non-transparent, non-highlight-color) border strip for a note-only row so users can tell them apart from colored highlights", async () => {
+  it('renders a distinct (non-transparent, non-highlight-color) border strip for a note-only row so users can tell them apart from colored highlights', async () => {
     ;(getHighlightsForBook as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
       row({ id: 'note-only', color: NOTE_COLOR_NONE, note: 'a thought' })
     ])
@@ -122,7 +122,11 @@ describe('HighlightsPanel — note-only support', () => {
     fireEvent.click(screen.getByRole('button', { name: /delete highlight/i }))
 
     await waitFor(() => expect(deleteHighlightWithUndoMock).toHaveBeenCalledTimes(1))
-    const args = (deleteHighlightWithUndoMock as unknown as { lastArgs: { target: { applyVisual: () => Promise<void> } } }).lastArgs
+    const args = (
+      deleteHighlightWithUndoMock as unknown as {
+        lastArgs: { target: { applyVisual: () => Promise<void> } }
+      }
+    ).lastArgs
     await args.target.applyVisual()
     // The note-only row has no SVG mark to restore — applyVisual must be a
     // pure no-op that never calls into epubjs.
@@ -150,7 +154,11 @@ describe('HighlightsPanel — note-only support', () => {
     fireEvent.click(screen.getByRole('button', { name: /delete highlight/i }))
 
     await waitFor(() => expect(deleteHighlightWithUndoMock).toHaveBeenCalledTimes(1))
-    const args = (deleteHighlightWithUndoMock as unknown as { lastArgs: { target: { applyVisual: () => Promise<void> } } }).lastArgs
+    const args = (
+      deleteHighlightWithUndoMock as unknown as {
+        lastArgs: { target: { applyVisual: () => Promise<void> } }
+      }
+    ).lastArgs
     await args.target.applyVisual()
     expect(highlightRangeMock).toHaveBeenCalledTimes(1)
   })

@@ -17,6 +17,7 @@ const electronAPI: ElectronAPI = {
   getBookOutline: (bookId) => invoke('books:getOutline', bookId),
   findBookByHash: (hash) => invoke('books:findByHash', hash),
   getBookFilepaths: () => invoke('books:getFilepaths'),
+  getCover: (bookId) => invoke('books:getCover', bookId),
 
   // Page/chunk data
   savePageDataMany: (pageData) => invoke('chunks:saveMany', pageData),

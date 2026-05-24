@@ -45,6 +45,11 @@ const columnsToAdd: [string, string][] = [
   // atomic `tmpFile.move()` fails in `downloadBookFile`. UI uses it (via
   // the download-error-store) to surface a retry affordance.
   ['file_needs_redownload', 'INTEGER DEFAULT 0'],
+  // #41 — Persisted 0..1 progress float for the library "Reading Now"
+  // pill subline. Nullable: legacy rows that pre-date the migration
+  // (and rows that have never been opened in a reader) stay null and
+  // the pill omits the subline rather than showing a stale "0%".
+  ['last_progress_percent', 'REAL'],
 ]
 
 for (const [col, type] of columnsToAdd) {

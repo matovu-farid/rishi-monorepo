@@ -116,6 +116,32 @@ export function updateBookPage(id: string, page: number): void {
   triggerSyncOnWrite()
 }
 
+/**
+ * #41 — Persist a format-honest 0..1 progress float so the library
+ * "Reading Now" pill can render a subline (Page X of Y / X%) AFTER the
+ * reader has been closed. Callers are reader screens (EPUB / PDF /
+ * DJVU / MOBI / AZW3); each derives the float in a format-appropriate
+ * way and hands it off here.
+ *
+ * Boundary handling: values outside [0, 1] (epubjs can emit 1.0000001)
+ * and NaN are clamped/dropped before persistence so the database never
+ * holds a garbage value that the formatter would then have to defend
+ * against on every read.
+ *
+ * This update does NOT bump `isDirty` — progress is a mobile-only UI
+ * affordance, never pushed to D1, so there is nothing to sync. We do
+ * still touch `updatedAt` so `getLastReadBook()`'s `ORDER BY` keeps
+ * the most-recently-read book at the top.
+ */
+export function updateBookProgress(id: string, percent: number): void {
+  if (Number.isNaN(percent)) return
+  const clamped = percent < 0 ? 0 : percent > 1 ? 1 : percent
+  db.update(books)
+    .set({ lastProgressPercent: clamped, updatedAt: Date.now() })
+    .where(eq(books.id, id))
+    .run()
+}
+
 export function deleteBook(id: string): void {
   // DAT-008 (#121): cascade vector deletion. Previously `deleteBook` only
   // soft-deleted the row, leaving the `chunks` + `chunk_vectors` rows on
@@ -186,6 +212,11 @@ function mapRowToBook(row: typeof books.$inferSelect): Book {
     format: row.format as Book['format'],
     currentCfi: row.currentCfi,
     currentPage: row.currentPage,
+    // #41 — Project the persisted progress float so the library
+    // "Reading Now" pill can render its subline. Older rows that
+    // pre-date the migration carry null here and the pill omits the
+    // subline instead of showing a misleading "0%".
+    lastProgressPercent: row.lastProgressPercent ?? null,
     createdAt: row.createdAt,
     // Extra field — typed as optional on the Book interface.
     coverExtractionFailed: failed,

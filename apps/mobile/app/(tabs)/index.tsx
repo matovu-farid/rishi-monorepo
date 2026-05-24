@@ -28,6 +28,7 @@ import {
 import { Book } from '@/types/book'
 import { useTourTargetLayout } from '@/lib/onboarding/useTourTarget'
 import { useTheme } from '@/lib/theme'
+import { formatReadingNowProgress } from '@/lib/reading-now-progress'
 
 /**
  * Library tab (P0-I).
@@ -423,6 +424,33 @@ export default function LibraryScreen() {
             >
               {lastReadBook.author}
             </Text>
+            {(() => {
+              // #41 — Format-aware progress subline. The formatter returns
+              // null for legacy rows with no progress data; in that case
+              // we render no extra Text node so we don't surface a stale
+              // or misleading "0%" label.
+              const progressSubline = formatReadingNowProgress({
+                format: lastReadBook.format,
+                currentPage: lastReadBook.currentPage,
+                lastProgressPercent: lastReadBook.lastProgressPercent,
+              })
+              if (!progressSubline) return null
+              return (
+                <Text
+                  testID="library-reading-now-progress"
+                  accessibilityLabel={`Progress: ${progressSubline}`}
+                  numberOfLines={1}
+                  style={{
+                    fontSize: typography.scale.caption.fontSize,
+                    lineHeight: typography.scale.caption.lineHeight,
+                    color: colors.label.tertiary,
+                    marginTop: 2,
+                  }}
+                >
+                  {progressSubline}
+                </Text>
+              )
+            })()}
           </View>
           <IconSymbol
             name="chevron.right"

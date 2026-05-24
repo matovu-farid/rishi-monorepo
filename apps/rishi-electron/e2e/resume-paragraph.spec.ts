@@ -14,7 +14,9 @@ interface PlayerMachineSnapshot {
   resumeParagraphIndex: string | null
 }
 
-async function readMachineContext(page: import('@playwright/test').Page): Promise<PlayerMachineSnapshot> {
+async function readMachineContext(
+  page: import('@playwright/test').Page
+): Promise<PlayerMachineSnapshot> {
   // The renderer exposes the playerStore on window.__rishi but the xstate
   // actor's context isn't exposed directly. We assert on visible store fields
   // that mirror the machine context (paragraphIndex via activeParagraph's
@@ -88,9 +90,11 @@ test.describe('resume from last-played paragraph', () => {
     // 3. Persist that id via the real IPC + DB query path.
     await app.page.evaluate(
       async ({ bookId, lastParagraph }) => {
-        const e = (window as unknown as {
-          electron: { updateBookLastParagraph: (id: number, p: string | null) => Promise<void> }
-        }).electron
+        const e = (
+          window as unknown as {
+            electron: { updateBookLastParagraph: (id: number, p: string | null) => Promise<void> }
+          }
+        ).electron
         await e.updateBookLastParagraph(bookId, lastParagraph)
       },
       { bookId: book.id, lastParagraph: resumeId }
