@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react'
+import React, { useCallback, useMemo } from 'react'
 import { FlatList, Text, TouchableOpacity, View } from 'react-native'
 import { Sheet } from '@/components/ui/Sheet'
 import { useTheme } from '@/lib/theme'
@@ -35,6 +35,19 @@ export function NewConversationSheet({
   onSelectBook,
 }: NewConversationSheetProps): React.JSX.Element {
   const { colors, spacing, typography, radius } = useTheme()
+
+  // #42 — Sort embedded ("Ready") books to the top of the list so users
+  // don't have to scroll past "Preparing" titles to find chat-ready ones.
+  // Stable partition: preserves the parent's relative order within each
+  // group (Array.prototype.sort is stable as of ES2019 / Node 12+).
+  const sortedBooks = useMemo(
+    () =>
+      [...books].sort(
+        (a, b) =>
+          Number(isBookEmbedded(b.id)) - Number(isBookEmbedded(a.id)),
+      ),
+    [books, isBookEmbedded],
+  )
 
   const renderItem = useCallback(
     ({ item }: { item: Book }) => {
@@ -153,7 +166,7 @@ export function NewConversationSheet({
       <View testID="new-conversation-sheet" style={{ minHeight: 200 }}>
         <FlatList
           testID="new-conversation-book-list"
-          data={books}
+          data={sortedBooks}
           keyExtractor={(b) => b.id}
           renderItem={renderItem}
           ListEmptyComponent={empty}
