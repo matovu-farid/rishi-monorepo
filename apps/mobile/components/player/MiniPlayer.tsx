@@ -7,6 +7,7 @@ import React, {
 } from 'react'
 import {
   ActivityIndicator,
+  Keyboard,
   Pressable,
   StyleSheet,
   View,
@@ -433,6 +434,15 @@ export function MiniPlayer({
   const handleAutoCollapse = useCallback(() => {
     setExpanded(false)
   }, [])
+  // WGT-019 / #72 — `bumpCollapse` is the IMPERATIVE re-arm of the
+  // auto-collapse timer. It is called from `dispatch` (i.e. every pill
+  // control press) so a user tapping controls in rapid succession does
+  // not see the pill collapse out from under them mid-tap. Each press
+  // resets the 4s idle clock; the reactive arm inside the hook handles
+  // the inactivity timeout. This re-arm-on-every-press is INTENTIONAL —
+  // it is not the React anti-pattern of restarting an effect on every
+  // render. The hook's `bump()` is referentially stable across renders
+  // because `useAutoCollapseTimer` memoises its internals.
   const { bump: bumpCollapse } = useAutoCollapseTimer({
     expanded,
     isPlaying,
@@ -441,6 +451,10 @@ export function MiniPlayer({
   })
 
   const handleExpand = useCallback(() => {
+    // WGT-020 / #73 — drop any keyboard left up from another screen
+    // (e.g. chat input) before the pill animates in, otherwise it
+    // floats over the controls. Safe no-op when no keyboard is visible.
+    Keyboard.dismiss()
     if (!reduceMotion) {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Soft)
     }
@@ -449,6 +463,9 @@ export function MiniPlayer({
 
   const dispatch = useCallback(
     (event: { type: 'PAUSE' | 'RESUME' | 'STOP' | 'NEXT' | 'PREV' | 'REPEAT' }) => {
+      // WGT-020 / #73 — also dismiss on every control press so any
+      // keyboard that came up between the expand and the tap is dropped.
+      Keyboard.dismiss()
       if (!reduceMotion) {
         void Haptics.selectionAsync()
       }
