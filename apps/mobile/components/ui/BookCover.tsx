@@ -13,6 +13,15 @@ export type BookCoverProps = {
   aspectRatio?: number
   rounded?: RadiusKey
   elevation?: BookCoverElevation
+  /**
+   * #96 / STA-021 — when true, render a dashed-border placeholder
+   * (distinct from the deterministic letter-tile fallback) so the user
+   * knows the cover is still being fetched / extracted. Caller must
+   * set this to `true` only while the cover is genuinely pending —
+   * once extraction has resolved (success OR genuine failure), pass
+   * `loading={false}` so the image OR the letter tile takes over.
+   */
+  loading?: boolean
   style?: ViewStyle
   testID?: string
 }
@@ -59,6 +68,7 @@ export function BookCover({
   aspectRatio = 2 / 3,
   rounded = 'md',
   elevation = 'low',
+  loading = false,
   style,
   testID,
 }: BookCoverProps): React.JSX.Element {
@@ -69,12 +79,22 @@ export function BookCover({
   const borderRadius = radius[rounded]
   const elevationStyle = shadow[elevation]
 
-  const showFallback = !uri || hasError
+  // #96 / STA-021 — loading wins over both the real image and the
+  // letter tile so the caller can always force a "pending" signal
+  // (e.g. while cover extraction is still in flight for a deferred
+  // book). It collapses to false once the caller flips it off.
+  const showLoading = loading
+  const showFallback = !showLoading && (!uri || hasError)
+  const showImage = !showLoading && !showFallback
+
+  const accessibilityLabel = showLoading
+    ? `Cover of ${title} loading`
+    : `Cover of ${title}`
 
   return (
     <View
       accessibilityRole="image"
-      accessibilityLabel={`Cover of ${title}`}
+      accessibilityLabel={accessibilityLabel}
       testID={testID}
       style={[
         {
@@ -83,6 +103,10 @@ export function BookCover({
           borderRadius,
           // VIS-008: only draw a hairline around the letter-tile fallback.
           // Apple Books lets real cover artwork float on the shadow alone.
+          // STA-021: the loading placeholder draws a dashed border (see
+          // the inner `book-cover-loading` View below) — the outer
+          // wrapper stays borderless so the dashed line reads as the
+          // primary "pending" affordance.
           borderWidth: showFallback ? StyleSheet.hairlineWidth : 0,
           borderColor: colors.separator.nonOpaque,
           overflow: 'hidden',
@@ -94,7 +118,21 @@ export function BookCover({
         style,
       ]}
     >
-      {showFallback ? (
+      {showLoading ? (
+        <View
+          testID="book-cover-loading"
+          accessible={false}
+          style={{
+            width: '100%',
+            height: '100%',
+            borderRadius,
+            borderWidth: 1.5,
+            borderStyle: 'dashed',
+            borderColor: colors.separator.opaque,
+            backgroundColor: colors.fill.quaternary,
+          }}
+        />
+      ) : showFallback ? (
         <Text
           style={{
             color: '#FFFFFF',
@@ -104,14 +142,14 @@ export function BookCover({
         >
           {title.charAt(0).toUpperCase()}
         </Text>
-      ) : (
+      ) : showImage ? (
         <Image
           source={{ uri: uri ?? undefined }}
           style={{ width, height, borderRadius }}
           contentFit="cover"
           onError={() => setHasError(true)}
         />
-      )}
+      ) : null}
     </View>
   )
 }

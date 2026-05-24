@@ -8,6 +8,7 @@ import Animated, {
   cancelAnimation,
 } from 'react-native-reanimated'
 import { IconSymbol } from '@/components/ui/icon-symbol'
+import { motion } from '@/lib/theme/tokens'
 import type { RealtimeStatus } from '@/lib/realtime/types'
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity)
@@ -24,25 +25,25 @@ export function RealtimeVoiceButton({ status, onPress }: RealtimeVoiceButtonProp
   useEffect(() => {
     if (status === 'active') {
       pulseOpacity.value = withRepeat(
-        withTiming(0.6, { duration: 800 }),
+        withTiming(0.6, { duration: motion.duration.pulse }),
         -1,
         true
       )
       cancelAnimation(scale)
-      scale.value = withTiming(1, { duration: 200 })
+      scale.value = withTiming(1, { duration: motion.duration.fast })
     } else if (status === 'speaking') {
       cancelAnimation(pulseOpacity)
-      pulseOpacity.value = withTiming(1, { duration: 200 })
+      pulseOpacity.value = withTiming(1, { duration: motion.duration.fast })
       scale.value = withRepeat(
-        withTiming(1.1, { duration: 600 }),
+        withTiming(1.1, { duration: motion.duration.pulseFast }),
         -1,
         true
       )
     } else {
       cancelAnimation(pulseOpacity)
       cancelAnimation(scale)
-      pulseOpacity.value = withTiming(1, { duration: 200 })
-      scale.value = withTiming(1, { duration: 200 })
+      pulseOpacity.value = withTiming(1, { duration: motion.duration.fast })
+      scale.value = withTiming(1, { duration: motion.duration.fast })
     }
   }, [status, pulseOpacity, scale])
 

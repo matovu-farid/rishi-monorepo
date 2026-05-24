@@ -33,6 +33,8 @@
  * Red signal: `@/components/player/MiniPlayer` does not exist yet.
  */
 
+const keyboardDismissMock = jest.fn()
+
 jest.mock('react-native', () => {
   const React = require('react')
   const mk = (name: string) =>
@@ -62,6 +64,12 @@ jest.mock('react-native', () => {
     AccessibilityInfo: {
       isReduceMotionEnabled: jest.fn(async () => false),
       addEventListener: jest.fn(() => ({ remove: jest.fn() })),
+    },
+    // WGT-020 / #73 — MiniPlayer should call Keyboard.dismiss() when it
+    // expands or routes a control event, so a keyboard left up from a
+    // chat-input swipe-over is dropped before the pill animates in.
+    Keyboard: {
+      dismiss: keyboardDismissMock,
     },
   }
 })
@@ -246,6 +254,7 @@ function pressByTestID(
 
 beforeEach(() => {
   sendMock.mockClear()
+  keyboardDismissMock.mockClear()
   playerState = {
     playingState: 'idle',
     send: sendMock,
@@ -493,6 +502,87 @@ describe('MiniPlayer (mobile)', () => {
       // Real bottom-bar visual height = Toolbar.minHeight + insets.bottom
       // = 44 + 34 = 78. The old code shifted by 44 only.
       expect(delta).toBe(44 + 34)
+    })
+  })
+
+  describe('WGT-020 / #73 — keyboard dismiss', () => {
+    // Repro: chat → focus the input (keyboard up) → swipe to library →
+    // tap MiniPlayer. Without an explicit Keyboard.dismiss() in the
+    // expand handler / event dispatcher the keyboard stays floating over
+    // the pill. Both entry points must call Keyboard.dismiss().
+
+    it('dismisses the keyboard when tapping the orb to expand', () => {
+      playerState.playingState = 'playing'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<MiniPlayer bookId="b1" />)
+      })
+      const orb = findByTestID(tree, 'mini-player-orb')
+      act(() => {
+        ;(orb!.props as { onPress: () => void }).onPress()
+      })
+      expect(keyboardDismissMock).toHaveBeenCalled()
+    })
+
+    it('dismisses the keyboard when a pill control dispatches an event', () => {
+      playerState.playingState = 'playing'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<MiniPlayer bookId="b1" />)
+      })
+      // Expand so the pill is mounted.
+      const orb = findByTestID(tree, 'mini-player-orb')
+      act(() => {
+        ;(orb!.props as { onPress: () => void }).onPress()
+      })
+      keyboardDismissMock.mockClear()
+      pressByTestID(tree, 'mini-player-play-pause')
+      expect(keyboardDismissMock).toHaveBeenCalled()
+    })
+  })
+
+  describe('WGT-019 / #72 — auto-collapse re-arm on rapid presses', () => {
+    // The bump() returned from useAutoCollapseTimer is the imperative
+    // re-arm; each control press should reset the 4s timer. We verify
+    // that 4 rapid presses inside the 4s window do NOT collapse the
+    // pill — the timer must re-arm on every press.
+    beforeEach(() => {
+      jest.useFakeTimers()
+    })
+    afterEach(() => {
+      jest.useRealTimers()
+    })
+
+    it('does not collapse mid-tap when controls are pressed every <4s', () => {
+      // Paused state — the auto-collapse only arms when expanded &&
+      // !isPlaying. We stay paused.clean so the timer is live.
+      playerState.playingState = 'paused.clean'
+      let tree!: TestRenderer.ReactTestRenderer
+      act(() => {
+        tree = TestRenderer.create(<MiniPlayer bookId="b1" />)
+      })
+      const orb = findByTestID(tree, 'mini-player-orb')
+      act(() => {
+        ;(orb!.props as { onPress: () => void }).onPress()
+      })
+      // Pill is mounted. We bypass the pillInteractive gate by reaching
+      // for the underlying onPress prop directly — the pointerEvents
+      // toggle is only enforced at the host-platform layer.
+      const stopPress = (findByTestID(tree, 'mini-player-stop')!.props as {
+        onPress: () => void
+      }).onPress
+      // 4 rapid presses, each within the 4s window.
+      for (let i = 0; i < 4; i++) {
+        act(() => {
+          jest.advanceTimersByTime(1500)
+        })
+        act(() => {
+          stopPress()
+        })
+      }
+      // Pill must still be mounted — the timer was re-armed on every
+      // press, so the auto-collapse never fired.
+      expect(findByTestID(tree, 'mini-player-pill')).not.toBeNull()
     })
   })
 

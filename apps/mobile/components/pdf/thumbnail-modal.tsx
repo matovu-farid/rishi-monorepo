@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import PdfThumbnail from 'react-native-pdf-thumbnail'
 import { IconSymbol } from '@/components/ui/icon-symbol'
+import { colorsLight } from '@/lib/theme/colors'
 
 const THUMB_WIDTH = 80
 const THUMB_HEIGHT = 110
@@ -71,7 +72,11 @@ const ThumbnailItem = memo(function ThumbnailItem({
             width: THUMB_WIDTH,
             height: THUMB_HEIGHT,
             borderWidth: isCurrentPage ? 2 : 1,
-            borderColor: isCurrentPage ? '#3b82f6' : '#d1d5db',
+            // VIS-023 (#83): active page binds to the system blue accent;
+            // inactive border uses the semantic separator hue.
+            borderColor: isCurrentPage
+              ? colorsLight.accent.primary
+              : colorsLight.separator.opaque,
             borderRadius: 4,
           }}
           resizeMode="contain"
@@ -80,28 +85,31 @@ const ThumbnailItem = memo(function ThumbnailItem({
         <View style={{
           width: THUMB_WIDTH,
           height: THUMB_HEIGHT,
-          backgroundColor: '#fecaca',
+          // Subtle error fill — the label provides the semantic signal.
+          backgroundColor: colorsLight.fill.secondary,
           borderRadius: 4,
           justifyContent: 'center',
           alignItems: 'center',
         }}>
-          <Text style={{ fontSize: 10, color: '#991b1b' }}>Error</Text>
+          <Text style={{ fontSize: 10, color: colorsLight.accent.error }}>Error</Text>
         </View>
       ) : (
         <View style={{
           width: THUMB_WIDTH,
           height: THUMB_HEIGHT,
-          backgroundColor: '#e5e7eb',
+          backgroundColor: colorsLight.fill.tertiary,
           borderRadius: 4,
           justifyContent: 'center',
           alignItems: 'center',
         }}>
-          <ActivityIndicator size="small" color="#6b7280" />
+          <ActivityIndicator size="small" color={colorsLight.label.tertiary} />
         </View>
       )}
       <Text style={{
         fontSize: 11,
-        color: isCurrentPage ? '#3b82f6' : '#6b7280',
+        color: isCurrentPage
+          ? colorsLight.accent.primary
+          : colorsLight.label.secondary,
         marginTop: 4,
         fontWeight: isCurrentPage ? '700' : '400',
       }}>
@@ -152,7 +160,10 @@ export function ThumbnailModal({
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }} edges={['top', 'bottom']}>
+      <SafeAreaView
+        style={{ flex: 1, backgroundColor: colorsLight.background.primary }}
+        edges={['top', 'bottom']}
+      >
         {/* Header */}
         <View style={{
           flexDirection: 'row',
@@ -161,11 +172,13 @@ export function ThumbnailModal({
           paddingHorizontal: 16,
           paddingVertical: 12,
           borderBottomWidth: 1,
-          borderBottomColor: '#e5e7eb',
+          borderBottomColor: colorsLight.separator.opaque,
         }}>
-          <Text style={{ fontSize: 17, fontWeight: '600' }}>Pages</Text>
+          <Text style={{ fontSize: 17, fontWeight: '600', color: colorsLight.label.primary }}>
+            Pages
+          </Text>
           <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <IconSymbol name="xmark" size={22} color="#000" />
+            <IconSymbol name="xmark" size={22} color={colorsLight.label.primary} />
           </TouchableOpacity>
         </View>
 

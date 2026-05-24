@@ -12,6 +12,7 @@ import { useMemo } from 'react'
 import { Text, TouchableOpacity, View, Dimensions, StyleSheet } from 'react-native'
 import type { TourStep } from '@/lib/stores/tutorialStore'
 import type { TargetLayout } from '@/lib/onboarding/registry'
+import { colorsLight } from '@/lib/theme/colors'
 
 interface TourTooltipProps {
   step: TourStep
@@ -112,10 +113,16 @@ export function TourTooltip({
   )
 }
 
+// VIS-022 (#82): bind every chrome color to a semantic theme token so
+// onboarding cards track the rest of the app palette. Light & dark
+// values are folded into the same `colorsLight` reference here; the
+// component is read-only at render-time and dark-scheme support can
+// flow through a future `useTheme()` upgrade without churning these
+// keys again.
 const styles = StyleSheet.create({
   tooltip: {
     position: 'absolute',
-    backgroundColor: 'white',
+    backgroundColor: colorsLight.background.primary,
     borderRadius: 12,
     padding: 16,
     shadowColor: '#000',
@@ -124,17 +131,17 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 6,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: colorsLight.separator.opaque,
   },
   title: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#111827',
+    fontWeight: '700',
+    color: colorsLight.label.primary,
     marginBottom: 4,
   },
   description: {
     fontSize: 12,
-    color: '#6B7280',
+    color: colorsLight.label.secondary,
     lineHeight: 16,
     marginBottom: 12,
   },
@@ -143,12 +150,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  counter: { fontSize: 11, color: '#9CA3AF' },
+  counter: { fontSize: 11, color: colorsLight.label.tertiary },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   skipBtn: { paddingHorizontal: 8, paddingVertical: 6 },
-  skipText: { fontSize: 12, color: '#9CA3AF' },
+  skipText: { fontSize: 12, color: colorsLight.label.tertiary },
   nextBtn: {
-    backgroundColor: '#6366F1',
+    backgroundColor: colorsLight.accent.primary,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 8,
