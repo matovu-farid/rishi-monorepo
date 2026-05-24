@@ -6,18 +6,35 @@ import type { ViewportLike } from '@/modules/pdf-locator'
 
 function makeViewport(scale = 1): ViewportLike {
   return {
-    width: 400 * scale, height: 600 * scale, scale,
-    convertToViewportPoint(x, y) { return [x * scale, (600 - y) * scale] },
-    convertToPdfPoint(x, y) { return [x / scale, 600 - y / scale] }
+    width: 400 * scale,
+    height: 600 * scale,
+    scale,
+    convertToViewportPoint(x, y) {
+      return [x * scale, (600 - y) * scale]
+    },
+    convertToPdfPoint(x, y) {
+      return [x / scale, 600 - y / scale]
+    }
   }
 }
 
 function makeRow(overrides: Partial<HighlightRow> = {}): HighlightRow {
   return {
-    id: 'r1', bookId: 'b1', format: 'pdf', cfiRange: null,
+    id: 'r1',
+    bookId: 'b1',
+    format: 'pdf',
+    cfiRange: null,
     locator: JSON.stringify({ page: 1, rects: [{ x: 10, y: 580, w: 100, h: 15 }] }),
-    text: 'hi', color: 'yellow', note: '', chapter: null,
-    createdAt: 'now', updatedAt: null, syncId: null, syncVersion: 0, isDirty: 0, isDeleted: 0,
+    text: 'hi',
+    color: 'yellow',
+    note: '',
+    chapter: null,
+    createdAt: 'now',
+    updatedAt: null,
+    syncId: null,
+    syncVersion: 0,
+    isDirty: 0,
+    isDeleted: 0,
     ...overrides
   }
 }
@@ -27,10 +44,13 @@ describe('HighlightLayer', () => {
     const rows = [
       makeRow({
         id: 'a',
-        locator: JSON.stringify({ page: 1, rects: [
-          { x: 0, y: 580, w: 50, h: 15 },
-          { x: 0, y: 560, w: 80, h: 15 }
-        ]})
+        locator: JSON.stringify({
+          page: 1,
+          rects: [
+            { x: 0, y: 580, w: 50, h: 15 },
+            { x: 0, y: 560, w: 80, h: 15 }
+          ]
+        })
       }),
       makeRow({ id: 'b' })
     ]
@@ -50,7 +70,10 @@ describe('HighlightLayer', () => {
     const rows = [
       makeRow({ id: 'null-loc', locator: null }),
       makeRow({ id: 'bad-json', locator: '{not json' }),
-      makeRow({ id: 'other-page', locator: JSON.stringify({ page: 99, rects: [{ x: 0, y: 0, w: 10, h: 10 }] }) }),
+      makeRow({
+        id: 'other-page',
+        locator: JSON.stringify({ page: 99, rects: [{ x: 0, y: 0, w: 10, h: 10 }] })
+      }),
       makeRow({ id: 'ok' })
     ]
     render(

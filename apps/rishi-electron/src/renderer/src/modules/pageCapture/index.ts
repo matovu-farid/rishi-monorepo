@@ -11,7 +11,10 @@ export const CaptureError = {
 export type CaptureErrorCode = (typeof CaptureError)[keyof typeof CaptureError]
 
 export class PageCaptureError extends Error {
-  constructor(public code: CaptureErrorCode, message: string) {
+  constructor(
+    public code: CaptureErrorCode,
+    message: string
+  ) {
     super(message)
     this.name = 'PageCaptureError'
   }

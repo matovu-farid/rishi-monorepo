@@ -31,7 +31,7 @@ export function createEpubTtsReconciler(rendition: Rendition) {
     if (desiredIndex && currentTtsCfi !== desiredIndex) {
       const hash = encodeURI(desiredIndex + 'highlight')
       const internal = (rendition.annotations as { _annotations?: Record<string, unknown> })
-        ?._annotations
+        ._annotations
       const userOwnsIt = internal ? hash in internal : false
       void highlightRange(rendition, desiredIndex)
       if (!userOwnsIt) owned.add(desiredIndex)

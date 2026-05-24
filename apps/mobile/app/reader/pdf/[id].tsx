@@ -36,9 +36,14 @@ import {
   type PdfOutlineItem,
 } from '@/components/pdf/pdf-webview-bridge'
 import { usePdfStore, BookNavigationState } from '@/lib/stores/pdfStore'
-import { getBookForReading, updateBookPage } from '@/lib/book-storage'
+import {
+  getBookForReading,
+  updateBookPage,
+  updateBookProgress,
+} from '@/lib/book-storage'
 import { Book, ReaderSettings } from '@/types/book'
 import { loadReaderSettings, saveReaderSettings } from '@/lib/reader-settings'
+import { READER_THEMES } from '@/constants/reader-themes'
 import { safeBack } from '@/lib/navigation'
 import {
   insertPdfHighlight,
@@ -214,11 +219,19 @@ export default function PdfReaderScreen() {
     const handler = (next: AppStateStatus) => {
       if ((next === 'background' || next === 'inactive') && book?.id && pageNumber > 0) {
         updateBookPage(book.id, pageNumber)
+        // #41 — Mirror the page save with a progress percent so the
+        // library "Reading Now" pill subline can render "Page X of Y"
+        // post-close. `pageCount` may be 0 during a backgrounding
+        // race before the WebView finished `handleLoad`; the guard
+        // keeps us from poisoning the column with NaN.
+        if (pageCount > 0) {
+          updateBookProgress(book.id, pageNumber / pageCount)
+        }
       }
     }
     const sub = AppState.addEventListener('change', handler)
     return () => sub.remove()
-  }, [book?.id, pageNumber])
+  }, [book?.id, pageNumber, pageCount])
 
   // ---- WebView events ----
   const handleLoad = useCallback(
@@ -244,9 +257,18 @@ export default function PdfReaderScreen() {
       setScrollPageNumber(page)
       // Persist with a soft debounce — we save on background change too, so
       // this just makes scrolling-then-killing-the-app safe.
-      if (book?.id) updateBookPage(book.id, page)
+      if (book?.id) {
+        updateBookPage(book.id, page)
+        // #41 — Persist progress so the library pill subline can show
+        // "Page X of Y". `pageCount` is set in `handleLoad` from
+        // `pdfjs.numPages` before the first user-driven page change,
+        // but we guard for the cold-start race anyway.
+        if (pageCount > 0) {
+          updateBookProgress(book.id, page / pageCount)
+        }
+      }
     },
-    [book?.id, setScrollPageNumber]
+    [book?.id, pageCount, setScrollPageNumber]
   )
 
   const handleSelection = useCallback(
@@ -592,12 +614,30 @@ export default function PdfReaderScreen() {
     setSettings(next)
   }, [])
 
+  // Issue #47 — forward the active theme into the pdfjs WebView. We
+  // gate on `pageCount > 0` so the first call runs after pdfjs has
+  // parsed the document and the viewer DOM exists; the readerRef's
+  // setTheme is idempotent so re-runs on subsequent renders are
+  // cheap. Without this hop the AppearanceSheet's theme picker is a
+  // no-op for PDF users.
+  useEffect(() => {
+    if (pageCount <= 0) return
+    const theme = READER_THEMES[settings.themeName]
+    readerRef.current?.setTheme(theme)
+  }, [pageCount, settings.themeName])
+
   // safeBack: deep-link cold-start has an empty stack, so a bare
   // router.back() no-ops and strands the user (P1-B).
   const handleBack = useCallback(() => {
-    if (book?.id && pageNumber > 0) updateBookPage(book.id, pageNumber)
+    if (book?.id && pageNumber > 0) {
+      updateBookPage(book.id, pageNumber)
+      // #41 — Mirror progress for the library pill (see handlePageChange).
+      if (pageCount > 0) {
+        updateBookProgress(book.id, pageNumber / pageCount)
+      }
+    }
     safeBack(router)
-  }, [book?.id, pageNumber, router])
+  }, [book?.id, pageNumber, pageCount, router])
 
   // CHT-002 — voice-chat activation context. PDF doesn't ship rendered
   // page text back across the WebView bridge synchronously, so we use a

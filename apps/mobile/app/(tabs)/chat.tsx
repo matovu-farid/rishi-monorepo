@@ -191,7 +191,13 @@ export default function ConversationsScreen() {
                   `/chat/${item.bookId}?cid=${item.id}&from=Conversations`,
                 )
               }
+              // #60 — the long-press is retained as a power-user shortcut.
+              // The swipe-to-delete action is the discoverable affordance
+              // wired below; both paths route through the same handleDelete
+              // which guards with an Alert.alert confirm before destructive
+              // softDeleteConversation.
               onLongPress={() => handleDelete(item.id)}
+              onSwipeDelete={() => handleDelete(item.id)}
             />
           )
         }}

@@ -1,4 +1,4 @@
-import { type JSX } from 'react'
+import type { JSX } from 'react'
 import { usePillVisible, useTopAnchor, useStackDepth } from '@/hooks/useNavigationHistory'
 import { navigationHistoryActor } from '@/machines/navigationHistory/navigationHistoryActor'
 

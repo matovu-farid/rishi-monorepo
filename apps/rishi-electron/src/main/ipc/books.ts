@@ -10,7 +10,8 @@ import {
   hasSavedEpubData,
   getBookOutline,
   findBookByHash,
-  getBookFilepaths
+  getBookFilepaths,
+  getCover
 } from '../database/queries.js'
 import { deleteIndex } from '../vectordb/index.js'
 import { handle } from '../../preload/ipc-contract.js'
@@ -77,9 +78,7 @@ export function registerBookHandlers(): void {
     try {
       return void updateBookLastParagraph(bookId, lastParagraph)
     } catch (error) {
-      throw new Error(
-        `Failed to update last paragraph for book ${bookId}: ${errorMessage(error)}`
-      )
+      throw new Error(`Failed to update last paragraph for book ${bookId}: ${errorMessage(error)}`)
     }
   })
 
@@ -112,6 +111,18 @@ export function registerBookHandlers(): void {
       return getBookFilepaths()
     } catch (error) {
       throw new Error(`Failed to get book filepaths: ${errorMessage(error)}`)
+    }
+  })
+
+  handle('books:getCover', (_event, bookId) => {
+    try {
+      const buf = getCover(bookId)
+      // Marshal Buffer → number[] for IPC serialization. null propagates to
+      // signal "no such book" so the renderer can distinguish that from a
+      // book whose cover is genuinely empty (returns []).
+      return buf == null ? null : Array.from(buf)
+    } catch (error) {
+      throw new Error(`Failed to get cover for book ${bookId}: ${errorMessage(error)}`)
     }
   })
 }

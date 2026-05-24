@@ -175,6 +175,16 @@ export async function findBookByHash(hash: string): Promise<Book | null> {
 export async function getBookFilepaths(): Promise<string[]> {
   return api().getBookFilepaths()
 }
+
+/**
+ * Lazy-load a single book's cover BLOB. `getBooks()` no longer ships cover
+ * bytes inline (see #190) — components that render a cover should call this
+ * on mount and decode the result into a blob URL. Returns null when the
+ * book id doesn't exist.
+ */
+export async function getCover(bookId: number): Promise<number[] | null> {
+  return api().getCover(bookId)
+}
 export async function getBook(params: { bookId: number }): Promise<Book | null> {
   return api().getBook(params.bookId)
 }
