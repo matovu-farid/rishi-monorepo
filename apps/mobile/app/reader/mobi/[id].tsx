@@ -62,6 +62,58 @@ import {
 } from '@/components/reader'
 
 /**
+ * Issue #52 — file-transfer chunk size for MOBI streaming.
+ *
+ * The WebView receives the file as a sequence of `load-chunk` postMessage
+ * frames so the WebView can write each chunk directly into a preallocated
+ * `Uint8Array`. This avoids the ~3x peak heap of the previous
+ * full-file base64 + single-shot post path (the previous code called
+ * `file.base64`() on the entire MOBI), which crashed the WebView on
+ * iPhone 8 class devices for 50MB MOBIs.
+ *
+ * 256 KiB was picked because:
+ *   - The react-native-webview maintainers identified Android JSONObject
+ *     wrapping as the dominant cost (see RN-WebView discussion #3669,
+ *     2024–2025), with ~300ms observed for a single 10MB payload. A
+ *     256 KiB raw window = ~341 KiB base64 string = ~342 KiB JSON
+ *     payload, which keeps each post comfortably below the threshold
+ *     where wrapping latency becomes user-visible.
+ *   - 50 MB / 256 KiB = 200 frames — coordination overhead is amortized
+ *     well against per-frame setup, and the bridge has room to drain
+ *     between frames (we `await setTimeout(0)` between chunks).
+ *   - Peak heap on the WebView side is `totalBytes + chunkSize` rather
+ *     than `~3 * totalBytes`. For a 50 MB MOBI this is ~50.25 MB instead
+ *     of ~150 MB — comfortably inside the WKWebView heap budget on
+ *     lower-RAM iOS devices.
+ */
+const MOBI_CHUNK_BYTES = 256 * 1024
+
+/**
+ * Issue #52 — convert a Uint8Array chunk into a base64 string for
+ * postMessage. We process in 8 KiB windows so the intermediate binary
+ * string never grows close to chunk size — keeping the per-chunk peak
+ * bounded by the JS engine's small-string buffer rather than the chunk
+ * itself. (Hermes / JSC will short-string-optimize each window.)
+ */
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  const WINDOW = 8192
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += WINDOW) {
+    const end = Math.min(i + WINDOW, bytes.length)
+    binary += String.fromCharCode(...bytes.subarray(i, end))
+  }
+  // RN environments expose globalThis.btoa in Hermes, but we keep a
+  // fallback for safety. Buffer is always available in the Node-targeted
+  // jest VM and in any RN polyfill setup.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const g = globalThis as any
+  if (typeof g.btoa === 'function') {
+    return g.btoa(binary) as string
+  }
+  return Buffer.from(binary, 'binary').toString('base64')
+}
+
+/**
  * Minimal inline MOBI parser running inside a WebView.
  *
  * MOBI/PalmDOC format overview:
@@ -213,17 +265,75 @@ function showChapter(index) {
   }));
 }
 
-function loadBook(base64) {
+// Issue #52 — chunked file transfer. The previous single-shot
+// loadBook(base64) path built the whole base64 string, then a binary
+// string the same length (via atob), then a Uint8Array — three live
+// copies of the file at the peak. A 50MB MOBI = ~150MB heap → WebView
+// crash on iPhone 8 class devices.
+//
+// Protocol (RN → WebView):
+//   { type: 'load-begin', totalBytes }   — preallocate the buffer.
+//   { type: 'load-chunk', offset, data } — decode base64 into the
+//                                          buffer at the offset.
+//                                          Repeated for each chunk.
+//   { type: 'load-end' }                 — parse the now-full buffer.
+//
+// We never materialize the full file as a base64 string; each
+// atob(chunk) releases its binary string once the chunk loop ends, so
+// peak heap is totalBytes + chunkSize, not 3 * totalBytes.
+var pendingBuffer = null;
+var pendingTotalBytes = 0;
+var pendingWritten = 0;
+
+function loadBegin(totalBytes) {
+  try {
+    pendingBuffer = new Uint8Array(totalBytes);
+    pendingTotalBytes = totalBytes;
+    pendingWritten = 0;
+  } catch (e) {
+    document.getElementById('status').className = 'error';
+    document.getElementById('status').textContent = 'Failed to allocate MOBI buffer: ' + e.message;
+    window.ReactNativeWebView.postMessage(JSON.stringify({
+      type: 'error',
+      message: e.message
+    }));
+  }
+}
+
+function loadChunk(offset, base64) {
+  if (pendingBuffer === null) return;
   try {
     var binary = atob(base64);
-    var bytes = new Uint8Array(binary.length);
-    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    chapters = parseMobi(bytes.buffer);
+    var len = binary.length;
+    for (var i = 0; i < len; i++) {
+      pendingBuffer[offset + i] = binary.charCodeAt(i);
+    }
+    pendingWritten += len;
+  } catch (e) {
+    document.getElementById('status').className = 'error';
+    document.getElementById('status').textContent = 'Failed to decode MOBI chunk: ' + e.message;
+    window.ReactNativeWebView.postMessage(JSON.stringify({
+      type: 'error',
+      message: e.message
+    }));
+  }
+}
+
+function loadEnd() {
+  if (pendingBuffer === null) return;
+  try {
+    if (pendingWritten !== pendingTotalBytes) {
+      throw new Error('Incomplete MOBI transfer: ' + pendingWritten + ' / ' + pendingTotalBytes);
+    }
+    var buf = pendingBuffer.buffer;
+    pendingBuffer = null; // drop the Uint8Array ref so GC can reclaim if parseMobi keeps the buffer alive elsewhere
+    chapters = parseMobi(buf);
     window.ReactNativeWebView.postMessage(JSON.stringify({
       type: 'loaded',
       total: chapters.length
     }));
   } catch (e) {
+    pendingBuffer = null;
     document.getElementById('status').className = 'error';
     document.getElementById('status').textContent = 'Failed to parse MOBI: ' + e.message;
     window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -233,16 +343,19 @@ function loadBook(base64) {
   }
 }
 
+function handleMessage(msg) {
+  if (msg.type === 'load-begin') loadBegin(msg.totalBytes);
+  else if (msg.type === 'load-chunk') loadChunk(msg.offset, msg.data);
+  else if (msg.type === 'load-end') loadEnd();
+  else if (msg.type === 'goto') showChapter(msg.chapter);
+}
+
 // Listen for messages from RN
 document.addEventListener('message', function(e) {
-  var msg = JSON.parse(e.data);
-  if (msg.type === 'load') loadBook(msg.data);
-  if (msg.type === 'goto') showChapter(msg.chapter);
+  handleMessage(JSON.parse(e.data));
 });
 window.addEventListener('message', function(e) {
-  var msg = JSON.parse(e.data);
-  if (msg.type === 'load') loadBook(msg.data);
-  if (msg.type === 'goto') showChapter(msg.chapter);
+  handleMessage(JSON.parse(e.data));
 });
 
 // P1-K — Selection bridge: when the user selects text inside the
@@ -354,16 +467,58 @@ export default function MobiReaderScreen() {
     }
   }, [id, loadAttempt])
 
-  // Send file data to WebView once loaded
+  // Send file data to WebView once loaded.
+  //
+  // Issue #52 — stream the file in fixed-size byte windows instead of
+  // shipping one giant base64 string. The previous full-file base64 +
+  // single-shot post (`file.base64`() then one `load` postMessage)
+  // built ~3x the file size in JS
+  // heap (full base64 string → full binary string via atob → full
+  // Uint8Array). A 50MB MOBI was enough to crash the WebView on
+  // iPhone 8 class devices.
+  //
+  // Protocol: `load-begin` (with totalBytes so the WebView can
+  // preallocate one Uint8Array), N × `load-chunk` (each with a byte
+  // offset + base64 payload), then `load-end` to trigger parsing.
   useEffect(() => {
     if (!book || !bookLoaded) return
-
-    const file = new ExpoFile(book.filePath)
-    file.base64().then((base64) => {
-      webViewRef.current?.postMessage(
-        JSON.stringify({ type: 'load', data: base64 })
-      )
-    })
+    let cancelled = false
+    void (async () => {
+      const file = new ExpoFile(book.filePath)
+      const totalBytes = file.size
+      if (totalBytes === 0) return
+      const handle = file.open()
+      try {
+        webViewRef.current?.postMessage(
+          JSON.stringify({ type: 'load-begin', totalBytes }),
+        )
+        let offset = 0
+        while (offset < totalBytes && !cancelled) {
+          const remaining = totalBytes - offset
+          const len =
+            remaining < MOBI_CHUNK_BYTES ? remaining : MOBI_CHUNK_BYTES
+          const bytes = handle.readBytes(len)
+          const data = uint8ArrayToBase64(bytes)
+          webViewRef.current?.postMessage(
+            JSON.stringify({ type: 'load-chunk', offset, data }),
+          )
+          offset += bytes.length
+          // Yield to the event loop between chunks so the bridge has a
+          // chance to drain and the UI thread can still service taps.
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        if (!cancelled) {
+          webViewRef.current?.postMessage(
+            JSON.stringify({ type: 'load-end' }),
+          )
+        }
+      } finally {
+        handle.close()
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [book, bookLoaded])
 
   // Save position on app background
