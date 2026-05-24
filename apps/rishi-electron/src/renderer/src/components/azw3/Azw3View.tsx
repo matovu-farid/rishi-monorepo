@@ -1,6 +1,7 @@
 import type React from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useEpubStore } from '@/stores/epubStore'
+import { initBookChatSubscription } from '@/stores/initBookChatSubscription'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
@@ -170,6 +171,22 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     setBookId(book.id.toString())
   }, [book.id, setBookId])
+
+  // Manage the chat-activation subscription lifecycle — install on mount,
+  // tear down on unmount. The shared helper (#237) is the single source of
+  // truth for the false→true edge that flips into a startChat call; EpubView
+  // and pdfStore use it too so the three reader paths can't drift.
+  //
+  // Use a component-local ref so rapid navigation doesn't cause the cleanup
+  // to wipe the new subscription. Mirrors the pattern at EpubView.tsx:867-875.
+  const chatUnsubsRef = useRef<(() => void)[]>([])
+  useEffect(() => {
+    chatUnsubsRef.current = [initBookChatSubscription(() => book.id)]
+    return () => {
+      chatUnsubsRef.current.forEach((fn) => fn())
+      chatUnsubsRef.current = []
+    }
+  }, [book.id])
 
   // Keep the pageCapture EPUB frame registry up-to-date so that pageCapture
   // (Task 5) can grab the active iframe via html-to-image on tool-call demand.
