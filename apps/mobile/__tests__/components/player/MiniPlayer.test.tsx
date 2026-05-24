@@ -560,9 +560,21 @@ describe('MiniPlayer — play spinner debounce (#236)', () => {
   function playPauseLabel(
     tree: TestRenderer.ReactTestRenderer,
   ): string | undefined {
-    const node = findByTestID(tree, 'mini-player-play-pause')
-    return (node?.props as { accessibilityLabel?: string } | null)
-      ?.accessibilityLabel
+    // The play-pause testID is passed through PillIconButton (the React
+    // component) to its inner <Pressable> host element — so TestRenderer
+    // returns BOTH matches. The component-level match exposes
+    // `label` (the PillIconButton prop name), the host match exposes
+    // `accessibilityLabel`. We want the host-level a11y prop, which is
+    // what VoiceOver/TalkBack actually reads in production.
+    const matches = tree.root.findAll(
+      (n) => (n.props as { testID?: string } | null)?.testID === 'mini-player-play-pause',
+    )
+    for (const node of matches) {
+      const label = (node.props as { accessibilityLabel?: string } | null)
+        ?.accessibilityLabel
+      if (typeof label === 'string') return label
+    }
+    return undefined
   }
 
   function mountAndExpand(): TestRenderer.ReactTestRenderer {
