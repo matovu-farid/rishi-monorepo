@@ -295,6 +295,53 @@ describe('P1-AH — NewConversationSheet replaces Alert button-list', () => {
     expect(rows.length).toBe(14)
   })
 
+  it('sorts embedded (Ready) books first, ahead of Preparing books (#42)', () => {
+    // Interleaved input: pending, ready, pending, ready, pending.
+    // Without sorting, the first rendered row would be `b-pending-1`.
+    mockBooks.push(
+      { id: 'b-pending-1', title: 'Pending 1', format: 'epub', coverPath: null },
+      { id: 'b-ready-1', title: 'Ready 1', format: 'epub', coverPath: null },
+      { id: 'b-pending-2', title: 'Pending 2', format: 'pdf', coverPath: null },
+      { id: 'b-ready-2', title: 'Ready 2', format: 'epub', coverPath: null },
+      { id: 'b-pending-3', title: 'Pending 3', format: 'pdf', coverPath: null },
+    )
+    embeddedIds.add('b-ready-1')
+    embeddedIds.add('b-ready-2')
+
+    const ConversationsScreen = require('@/app/(tabs)/chat').default
+    let tree!: TestRenderer.ReactTestRenderer
+    act(() => {
+      tree = TestRenderer.create(<ConversationsScreen />)
+    })
+
+    act(() => {
+      ;(
+        findByTestID(tree, 'chat-new-conversation-btn')!
+          .props as { onPress: () => void }
+      ).onPress()
+    })
+
+    const rows = findAllByPrefix(tree, 'new-conversation-book-row-')
+    // The first row rendered must correspond to an embedded ("Ready") book.
+    const firstTestId =
+      (rows[0]?.props as { testID?: string } | null)?.testID ?? ''
+    const firstId = firstTestId.replace('new-conversation-book-row-', '')
+    expect(embeddedIds.has(firstId)).toBe(true)
+
+    // And ALL ready rows must come before ANY pending row — i.e. partitioned.
+    const ids = rows.map((r) => {
+      const id = (r.props as { testID?: string } | null)?.testID ?? ''
+      return id.replace('new-conversation-book-row-', '')
+    })
+    const firstPendingIdx = ids.findIndex((id) => !embeddedIds.has(id))
+    const lastReadyIdx = ids.reduce(
+      (acc, id, idx) => (embeddedIds.has(id) ? idx : acc),
+      -1,
+    )
+    expect(firstPendingIdx).toBeGreaterThan(-1)
+    expect(lastReadyIdx).toBeLessThan(firstPendingIdx)
+  })
+
   it('shows embed-status badge per book and routes on tap', () => {
     mockBooks.push(
       { id: 'b-ready', title: 'Ready', format: 'epub', coverPath: null },
