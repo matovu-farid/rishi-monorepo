@@ -62,6 +62,14 @@ const ACTIVE_PLAYBACK_STATES: ReadonlySet<PlayerStoreState> = new Set([
   'republishingParagraphs'
 ])
 
+/**
+ * Debounce window (#232) for showing the play-button spinner when the player
+ * dips from an active-playback state into `loading`. Most inter-paragraph
+ * loads with a cache hit clear in <100ms; a 200ms delay-show window
+ * suppresses the flicker without making genuinely slow loads feel laggy.
+ */
+const SPINNER_DEBOUNCE_MS = 200
+
 export default function TTSControls({ bookId, disabled = false }: TTSControlsProps) {
   const prefersReducedMotion = usePrefersReducedMotion()
   const [showError, setShowError] = useState(false)
@@ -192,18 +200,6 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
     })
   }
 
-  const getPlayIcon = () => {
-    if (playingState === 'loading') {
-      return <Loader2 size={24} className="animate-spin text-black/60" />
-    }
-    if (playingState === 'playing') {
-      return <Pause size={24} className="text-black/60" />
-    }
-    return <Play size={24} className="text-black/60" />
-  }
-
-  const isPlaying = playingState === 'playing'
-
   // Show the Repeat button across a continuous playback session. While
   // `playingState` briefly drops to `loading` between paragraphs, we keep the
   // button mounted so the pill doesn't reflow every paragraph boundary.
@@ -221,6 +217,99 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
     setLastNonLoadingState(playingState)
   }
   const showRepeat = lastNonLoadingState === 'playing'
+
+  // --- Play-spinner debounce (#232) ---
+  //
+  // playerMachine briefly transitions through 'loading' at every paragraph
+  // boundary even when the next paragraph's audio is already cached
+  // (packages/shared/src/machines/playerMachine.ts:374,385,432). The raw
+  // signal would flicker <Loader2 /> on every boundary. We debounce the
+  // spinner only when the predecessor was an active-playback state (cached
+  // inter-paragraph dip); cold-start (idle → loading) and pause→resume
+  // (paused → loading) MUST show the spinner immediately so users get
+  // feedback that their explicit action registered.
+  //
+  // Asymmetric: delay-show by SPINNER_DEBOUNCE_MS, hide immediately. Hiding
+  // immediately is important — leaving a stuck spinner after a failed load
+  // would be worse than the flicker we're fixing.
+  //
+  // `debounceElapsed` is the only piece of state we actually need to track —
+  // it's flipped true once the debounce timer fires. The immediate-show paths
+  // (cold-start / pause→resume) are derived purely from `playingState` and
+  // `lastNonLoadingState` during render, so we don't trigger the
+  // react-x/no-set-state-in-effect lint (the same reason `lastNonLoadingState`
+  // uses the render-set-state-with-guard pattern above).
+  const [debounceElapsed, setDebounceElapsed] = useState(false)
+  const spinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const cameFromActivePlayback = ACTIVE_PLAYBACK_STATES.has(lastNonLoadingState)
+
+  // Reset the elapsed flag the moment we leave 'loading' — same
+  // render-set-state-with-guard pattern as `lastNonLoadingState` above. This
+  // keeps the effect below free of cascading setState calls.
+  if (playingState !== 'loading' && debounceElapsed) {
+    setDebounceElapsed(false)
+  }
+
+  const showSpinner = playingState === 'loading' && (!cameFromActivePlayback || debounceElapsed)
+
+  useEffect(() => {
+    // Only arm the debounce on the cached-dip path. Cold-start /
+    // pause→resume show the spinner immediately via `showSpinner` derived
+    // above — no timer needed. When we're not in 'loading' there's nothing
+    // to do here; the render-guard above already reset `debounceElapsed`.
+    if (playingState !== 'loading' || !cameFromActivePlayback) {
+      return
+    }
+
+    spinnerTimerRef.current = setTimeout(() => {
+      spinnerTimerRef.current = null
+      setDebounceElapsed(true)
+    }, SPINNER_DEBOUNCE_MS)
+
+    return () => {
+      if (spinnerTimerRef.current !== null) {
+        clearTimeout(spinnerTimerRef.current)
+        spinnerTimerRef.current = null
+      }
+    }
+  }, [playingState, cameFromActivePlayback])
+
+  // Unmount cleanup belt-and-braces (the effect cleanup above already covers
+  // re-renders, but unmount mid-debounce must not leak a timer).
+  useEffect(() => {
+    return () => {
+      if (spinnerTimerRef.current !== null) {
+        clearTimeout(spinnerTimerRef.current)
+        spinnerTimerRef.current = null
+      }
+    }
+  }, [])
+
+  // `effectiveState` is the play-button's user-facing state: it preserves the
+  // last steady icon during a suppressed loading dip so the icon AND the
+  // aria-label (TTSControls.tsx:359) stay coupled. Prev/Next/Stop `disabled`
+  // gates intentionally read raw `playingState` — those guard real races.
+  const effectiveState: PlayerStoreState =
+    playingState === 'loading' && !showSpinner ? lastNonLoadingState : playingState
+
+  const getPlayIcon = () => {
+    if (effectiveState === 'loading') {
+      // The accessible label lives on the parent <button> (`playButtonLabel`);
+      // the SVG itself is decorative so we leave aria-hidden=true (Lucide's
+      // default) to avoid the "multiple elements with text" duplicate that
+      // would otherwise confuse both screen readers and Testing Library
+      // queries.
+      return <Loader2 size={24} className="animate-spin text-black/60" />
+    }
+    if (effectiveState === 'playing') {
+      return <Pause size={24} className="text-black/60" />
+    }
+    return <Play size={24} className="text-black/60" />
+  }
+
+  const isPlaying = playingState === 'playing'
+  const playButtonLabel =
+    effectiveState === 'loading' ? 'Loading' : effectiveState === 'playing' ? 'Pause' : 'Play'
 
   // --- Waveform bars ---
   // Stable IDs let React reconcile bars across re-renders without
@@ -356,7 +445,7 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
             <button
               onClick={handlePlay}
               disabled={disabled}
-              aria-label={isPlaying ? 'Pause' : 'Play'}
+              aria-label={playButtonLabel}
               className="flex items-center justify-center rounded-full cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-transform duration-150 hover:scale-105 active:scale-95"
               style={{ ...glassButton, width: 50, height: 50 }}
             >
