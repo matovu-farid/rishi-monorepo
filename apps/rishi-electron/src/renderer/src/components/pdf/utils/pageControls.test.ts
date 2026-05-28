@@ -75,12 +75,13 @@ describe('pageControls.nextPage — page-boundary advance (issue #30)', () => {
 
   it('does NOT leave isLookingForNextParagraph stuck true when nextPage is called on the last page (PR #31 review)', () => {
     // Bug surface (review pullrequestreview-4348558706): when the player
-    // reaches the last paragraph of the last page it still emits
-    // `pageRequest: 'next'` (usePlayerMachine:328-334). pageControls.nextPage
-    // had no bounds check, so it set the flag `true`, called scrollToIndex
-    // with an out-of-bounds index, no page render happened, `currentDiffers`
-    // never flipped, and the flag stayed `true` for the rest of the session —
-    // silently denying auto-scroll for every subsequent highlight.
+    // reaches the last paragraph of the last page it still asks the view
+    // actor to advance (pdfViewActor calls nextPage on NAVIGATE_NEXT).
+    // pageControls.nextPage had no bounds check, so it set the flag `true`,
+    // called scrollToIndex with an out-of-bounds index, no page render
+    // happened, `currentDiffers` never flipped, and the flag stayed `true`
+    // for the rest of the session — silently denying auto-scroll for every
+    // subsequent highlight.
     const { virtualizer, scrollToIndex } = makeStubVirtualizer()
     usePdfStore.setState({
       pageNumber: 10,

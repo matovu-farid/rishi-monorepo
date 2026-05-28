@@ -1,16 +1,14 @@
 // apps/electron/src/renderer/src/hooks/usePlayerMachine.ts
 //
 // Composition layer that wires the playerMachine actor to its side-effect
-// adapters. After Phase 3.3 the audio I/O is owned by an invoked
-// `audioActor` inside playerMachine itself; this hook only handles:
+// adapters. After Phase 3.4 navigation is owned by per-format view actors
+// invoked inside playerMachine; this hook only handles:
 //   - actor lifecycle (create, INITIALIZE, CLEANUP)
 //   - machine→store sync (playingState, activeParagraph, errors)
 //   - store→machine paragraph sync with deep-equality + prefetch
-//   - navStore→machine PAGE_NAVIGATING bridge (until Phase 3.4 collapses it)
+//   - navStore→machine PAGE_NAVIGATING bridge (external EPUB nav, e.g. curl
+//     gesture or arrow button — view-actor flow handles TTS-driven nav)
 //   - PDF seed-on-mount + resume-paragraph DB writes
-//
-// The orchestration bridge stays for now — Phase 3.4 swaps it for the
-// view-actor wiring once playerMachine invokes the view actors directly.
 import { useEffect, useMemo, useRef } from 'react'
 import { createActor, type AnyActorLogic } from 'xstate'
 import { playerMachine, type TtsFetcher } from '@/machines/playerMachine'
@@ -23,9 +21,7 @@ import { usePdfStore } from '@/stores/pdfStore'
 import isEqual from 'fast-deep-equal'
 import type { TextItem, TextMarkedContent } from 'react-pdf'
 import { updateBookLastParagraph } from '@/lib/api'
-import { publishCurrentEpubParagraphs } from '@/stores/epubStore'
 import { audioElement } from '@/actors/audioActor'
-import { wireOrchestrationBridge } from '@/hooks/playerOrchestrationBridge'
 
 export type UsePlayerMachineOptions = {
   /**
@@ -238,11 +234,11 @@ export function usePlayerMachine(bookId: string, options?: UsePlayerMachineOptio
     // When the EPUB rendition starts navigating (curl gesture or arrow
     // button), navStore.navState leaves 'idle' *synchronously* inside the
     // click handler — well before the 200 ms curl animation completes and
-    // long before PARAGRAPHS_UPDATED arrives. We use this signal to:
-    //   1. Pause audio NOW so the old page doesn't bleed into the curl.
-    //   2. Tell the machine via PAGE_NAVIGATING so it transitions out of
-    //      playing/loading/paused into the new `pageNavigating` state and
-    //      remembers whether to auto-resume on the new page.
+    // long before PARAGRAPHS_UPDATED arrives. The player is told via
+    // PAGE_NAVIGATING so it transitions out of playing/loading/paused into
+    // the new `pageNavigating` state. The view actor (epubViewActor) owns
+    // the new-view validation: same-CFI / image-only relocations emit
+    // NAV_NO_PROGRESS directly instead of the old publish-then-detect path.
     const unsubNav = useNavStore.subscribe(
       (s) => s.navState,
       (navState, prevNavState) => {
@@ -252,49 +248,16 @@ export function usePlayerMachine(bookId: string, options?: UsePlayerMachineOptio
           // highlight so the UI doesn't keep the old paragraph marked
           // during the curl.
           usePlayerStore.setState({ activeParagraph: null })
-          // When the player itself requested the nav (waitingForParagraphs
-          // → pageRequest), the request type tells us the direction. Read it
-          // BEFORE EpubView's tryConsumePageRequest clears it (subscribers
-          // fire synchronously inside navMachine.send, before the clear).
-          // For external nav (user clicked the EPUB arrow), pageRequest is
-          // null and we default to 'forward' so the player lands on paragraph
-          // 0 of the new page.
-          const pageRequest = usePlayerStore.getState().pageRequest
-          const direction: 'forward' | 'backward' = pageRequest === 'prev' ? 'backward' : 'forward'
+          // The machine owns direction state; the view actor sets it when
+          // it issues NAVIGATE_PREV. For external nav (user clicked the EPUB
+          // arrow) the machine's stored direction is whatever was last set,
+          // defaulting to 'forward' — which is the correct behaviour for a
+          // forward-arrow click and an acceptable fallback otherwise.
+          const direction: 'forward' | 'backward' = actor.getSnapshot().context.direction
           actor.send({ type: 'PAGE_NAVIGATING', direction })
-        }
-        // Nav completed (returned to idle). In the success path, the
-        // rendition fired `relocated` during r.next() which already pushed
-        // PARAGRAPHS_UPDATED into the machine — so by now we're in
-        // `loading` or beyond. If we are STILL in `pageNavigating`, the
-        // rendition either didn't navigate at all (epubjs No Section Found,
-        // end of book, transient error) or fired `relocated` with the same
-        // location. publishCurrentEpubParagraphs validates that the new
-        // view differs from what's already in playerStore; if not, we
-        // send NAV_NO_PROGRESS so the machine transitions to stopped
-        // immediately instead of timing out or — the original bug —
-        // looping back to paragraph 0 of the OLD view via a republish of
-        // its own paragraphs.
-        if (prevNavState !== 'idle' && navState === 'idle') {
-          if (mapStateValue(actor.getSnapshot().value) === 'pageNavigating') {
-            const published = publishCurrentEpubParagraphs()
-            if (!published) {
-              actor.send({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })
-            }
-          }
         }
       }
     )
-
-    // --- 3. Side-effect bridge (orchestration only — audio moved to actor) ---
-    //
-    // The audio I/O bridge has been replaced by an invoked audioActor inside
-    // playerMachine (Phase 3.3). What remains here is cross-system
-    // orchestration: clearing activeParagraph on visual interruption,
-    // setting pageRequest on waitingForParagraphs, and triggering
-    // publishCurrentEpubParagraphs on republishingParagraphs. Phase 3.4
-    // replaces these by invoking per-format view actors.
-    const teardownOrchestration = wireOrchestrationBridge(actor)
 
     // --- 4. Machine send wiring ---
     const send: PlayerSend = actor.send
@@ -345,7 +308,6 @@ export function usePlayerMachine(bookId: string, options?: UsePlayerMachineOptio
       resumeWrite.dispose()
       actor.send({ type: 'CLEANUP' })
       machineUnsub.unsubscribe()
-      teardownOrchestration()
       unsubCurrent()
       unsubNext()
       unsubPrev()

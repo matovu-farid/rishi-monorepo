@@ -1106,8 +1106,8 @@ test.describe('TTS state follows EPUB page navigation', () => {
   //      `timedOut`). This avoids waiting 10s in real time.
   //   4. Record the EPUB location.
   //   5. Send PLAY (sendPlayerEvent). Pre-fix: this transitions stopped→
-  //      waitingForParagraphs (no paragraphs), which triggers the hook to
-  //      set pageRequest='next' → EPUB navigates forward.
+  //      waitingForParagraphs (no paragraphs), which invokes the view actor
+  //      with NAVIGATE_NEXT → EPUB navigates forward.
   //   6. Assert the EPUB location did NOT change. If it did, that's the
   //      stuck-loop bug.
   // ---------------------------------------------------------------------
@@ -1219,8 +1219,8 @@ test.describe('TTS state follows EPUB page navigation', () => {
     expect(stuckShape.activeParagraph).toBeNull()
 
     // Send PLAY. PRE-FIX: this routes stopped (hasParagraphs=false) →
-    // waitingForParagraphs, which the hook converts to pageRequest='next',
-    // which navMachine.NEXT processes via rendition.next() — the unwanted
+    // waitingForParagraphs, which invokes the view actor with NAVIGATE_NEXT,
+    // which the epub view actor processes via rendition.next() — the unwanted
     // double-nav.
     await sendPlayerEvent(bookPage, 'PLAY')
 
@@ -1474,10 +1474,8 @@ test.describe('TTS state follows EPUB page navigation', () => {
 
     // Strongest assertion (Phase 3.4 acceptance gate). The active paragraph
     // must equal paragraph 0 of the NEW view — NOT paragraph 0 of the OLD
-    // view that the publishCurrentEpubParagraphs safety net used to
-    // republish. Before the NAV_NO_PROGRESS validation rule, the safety net
-    // could land playback on the OLD view's paragraph 0 even when the
-    // rendition didn't actually advance. With the rule:
+    // view that a republish-without-validation path could land on. With the
+    // view-actor NAV_NO_PROGRESS rule:
     //  - On a real advance: new view's paragraph 0 (this assertion)
     //  - On no progress: machine transitions to `stopped` (covered in the
     //    sibling "no-progress" test)
@@ -1518,14 +1516,14 @@ test.describe('TTS state follows EPUB page navigation', () => {
   // Scenario the user reported: TTS reaches the last paragraph of view A
   // and triggers a page nav that DOESN'T actually advance the rendition
   // (end of book, drift restore, image-only page, transient epubjs error).
-  // The OLD code's safety-net republish landed playback on paragraph 0 of
-  // view A. The structural fix: publishCurrentEpubParagraphs returns false
-  // for same-view republishes; the bridge sends NAV_NO_PROGRESS; the
+  // A republish-without-validation path used to land playback on
+  // paragraph 0 of view A. The structural fix: the view actor's
+  // same-locator / empty-paragraphs check emits NAV_NO_PROGRESS; the
   // machine transitions to `stopped` instead of looping.
   //
   // This test simulates that exact path by sending PAGE_NAVIGATING followed
   // by NAV_NO_PROGRESS directly into the actor — exercising the integration
-  // surface that the bridge hits today.
+  // surface that the view actor hits today.
   // ---------------------------------------------------------------------
   test('PAGE_NAVIGATING + NAV_NO_PROGRESS lands in stopped with cleared highlight (no loop-back)', async () => {
     test.setTimeout(60_000)
@@ -1551,9 +1549,10 @@ test.describe('TTS state follows EPUB page navigation', () => {
     await sendPlayerEvent(bookPage, 'PLAY')
     await waitForPlayerState(bookPage, 'playing', 8000)
 
-    // Send PAGE_NAVIGATING (the bridge would emit this when the rendition
-    // starts curling) followed immediately by NAV_NO_PROGRESS (which the
-    // bridge sends when publishCurrentEpubParagraphs returns false).
+    // Send PAGE_NAVIGATING (the navStore→player bridge emits this when the
+    // rendition starts curling) followed immediately by NAV_NO_PROGRESS
+    // (which the view actor emits when the new view matches the old or is
+    // empty).
     await bookPage.evaluate(() => {
       const w = window as unknown as {
         __rishi: {
@@ -1609,7 +1608,7 @@ test.describe('TTS state follows EPUB page navigation', () => {
   // paragraph 0 instead of the last paragraph.
   //
   // Fixes (both applied):
-  //   1. Hook: pass direction='backward' when pageRequest==='prev'.
+  //   1. View actor: emit NAVIGATE_PREV when direction is 'backward'.
   //   2. State machine: waitingForParagraphs → pageNavigating preserves
   //      direction (no setNavDirection) so the player's intent survives a
   //      stale or wrong direction in the event.

@@ -21,9 +21,9 @@ import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
 import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
 import { useChapterParagraphPrefetch } from '@/hooks/reader/useChapterParagraphPrefetch'
-import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
 import ReaderOverlayControls from '@/components/reader/ReaderOverlayControls'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
+import { pdfViewActor, type PdfViewInput, type PdfViewSnapshot } from '@/actors/pdfViewActor'
 import { useBookEmbeddings } from '@/hooks/reader/useBookEmbeddings'
 import {
   navigationHistoryActor,
@@ -243,12 +243,8 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
   // Mirror reader state (book title, TOC open, TTS playing) into the native menu.
   useReaderMenuSync({ book, tocOpen })
 
-  // Co-locate player actor creation with the format reader. AZW3/MOBI seed
-  // paragraphs at chapter-load time (no view-boundary advances during TTS),
-  // so the placeholder noopViewActor inside playerMachine is sufficient —
-  // no viewLogic to provide. This keeps actor lifecycle uniform across all
-  // three readers.
-  usePlayerMachine(book.id.toString())
+  // Player actor wiring lives further down (after goNextPage / goPrevPage are
+  // declared) so the view-actor adapter can close over those callbacks.
 
   // Surface parse errors / empty-book to the user. This effect only reads
   // from query state and shows a toast — it does not call setState.
@@ -613,15 +609,35 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
     }
   })
 
-  // Handle page-turn events from Player (TTS exhausted current chapter).
-  // goNextPage / goPrevPage close over pendingPageAfterLoadRef; the hook
-  // accesses these callbacks via internal refs so the subscription is not
-  // re-created on every re-render.
-  usePageRequestSubscription({
-    onNext: goNextPage,
-    onPrev: goPrevPage,
-    autoClear: true
-  })
+  // Co-locate player actor creation with the format reader. AZW3 uses the
+  // format-agnostic pdfViewActor (named for the file it lives in, not the
+  // format it serves) so view-boundary navigation during TTS routes through
+  // the same NAVIGATE_NEXT/PREV/VIEW_CHANGED protocol as PDF and EPUB.
+  //
+  // The view-actor "page" identity is the synthetic chapter:within-chapter
+  // pair encoded as a single integer; chapter*100000 keeps within-chapter
+  // pages from colliding with adjacent chapters' page 0. Paragraphs come
+  // from useChapterParagraphPrefetch's writes to playerStore.currentParagraphs;
+  // the actor's snapshot reads them directly.
+  const viewInput = useMemo<PdfViewInput>(() => {
+    const getPageId = (): number => chapterIndex * 100000 + pageWithinChapter
+    const toSnapshot = (): PdfViewSnapshot => ({
+      page: getPageId(),
+      paragraphs: usePlayerStore.getState().currentParagraphs
+    })
+    return {
+      next: () => goNextPage(),
+      prev: () => goPrevPage(),
+      goTo: () => {},
+      subscribe: (cb) =>
+        usePlayerStore.subscribe(
+          (s) => s.currentParagraphs,
+          () => cb(toSnapshot())
+        ),
+      getSnapshot: toSnapshot
+    }
+  }, [chapterIndex, pageWithinChapter, goNextPage, goPrevPage])
+  usePlayerMachine(book.id.toString(), { viewLogic: pdfViewActor, viewInput })
 
   // Generate embeddings on first open (for AI chat). The shared hook owns
   // the hasIndexedBookData check + indexBook dispatch + run-once guard;

@@ -166,8 +166,8 @@ test('NEXT on last paragraph of page N lands on page N+1 and does not snap back 
     // paragraph of page 1, with `lastPlayedParagraphIndex` reflecting that
     // saved position. We do NOT run the real player through 6 paragraphs —
     // each play step takes ~100ms+ and the player can race past the boundary
-    // before our assertion runs. The bug we're testing lives between
-    // `requestNextPage()` and what the reader displays after the scroll
+    // before our assertion runs. The bug we're testing lives between the
+    // player's NEXT event and what the reader displays after the scroll
     // settles; the source of the page-request (the real player vs. our
     // direct call) doesn't matter for that downstream path.
     const advanceResult = await bookPage.evaluate(() => {
@@ -287,19 +287,19 @@ test('NEXT on last paragraph of page N lands on page N+1 and does not snap back 
     // ===== THE ACTION: NEXT on last paragraph of page 1 =====
     // This is exactly what the user does ("click next paragraph"). When the
     // player has no further paragraphs on the current page, the machine's
-    // `playing.NEXT[1]` branch enters `waitingForParagraphs`, the audioUnsub
-    // hook sets `pageRequest='next'`, and pdf.tsx's subscription invokes
+    // `playing.NEXT[1]` branch enters `waitingForParagraphs`, which invokes
+    // the pdfViewActor with NAVIGATE_NEXT. The view actor calls
     // `pageControls.nextPage()` — the same chain the real UI executes.
     //
-    // To exercise this chain reliably from the test we trigger the same
-    // `pageRequest='next'` directly via `requestNextPage()`. This is what the
-    // playerMachine would emit one tick later anyway; calling it ourselves
-    // removes the dependency on the audioUnsub seeing the exact state.
+    // To exercise this chain reliably from the test we directly invoke
+    // pageControls.nextPage() via the exposed virtualizer to advance the PDF
+    // view to page 2; the rest of the flow (paragraph re-publish, snap-back
+    // check) is downstream and unaffected by the source of the page change.
     const preBoundary = await bookPage.evaluate(() => {
       const w = window as unknown as {
         __rishi: {
           playerStore: {
-            getState: () => { requestNextPage: () => void }
+            getState: () => { send: ((event: { type: string }) => void) | null }
           }
           pdfStore: {
             getState: () => {
@@ -316,10 +316,12 @@ test('NEXT on last paragraph of page N lands on page N+1 and does not snap back 
         pageCount: pdf.pageCount,
         pageNumber: pdf.pageNumber
       }
-      w.__rishi.playerStore.getState().requestNextPage()
+      // Send NEXT to the player; the machine routes to waitingForParagraphs
+      // and the invoked view actor calls pageControls.nextPage() for us.
+      w.__rishi.playerStore.getState().send?.({ type: 'NEXT' })
       return diag
     })
-    console.log('[diag] requestNextPage dispatched. preBoundary =', JSON.stringify(preBoundary))
+    console.log('[diag] NEXT dispatched. preBoundary =', JSON.stringify(preBoundary))
 
     // Once the virtualizer has scrolled to page 2 and its paragraphs have
     // been published to playerStore.currentParagraphs, advance the player
@@ -490,7 +492,7 @@ test('NEXT on last paragraph of page N lands on page N+1 and does not snap back 
     // which is the snap-back the user reports.
     //
     // We pull the canonical page-2 scrollTop from the FIRST sample
-    // (immediately after `requestNextPage`, when the virtualizer's scroll
+    // (immediately after the NEXT dispatch, when the virtualizer's scroll
     // jump has happened but no centering animate has had a chance to run).
     const initialJumpScrollTop = timeline[0].scrollTop
     expect(

@@ -221,25 +221,17 @@ export function PdfView({
     }
   }, [resetParaphState, setThumbOpen, setPdfDocProxy])
 
-  // Scoped playerStore subscriptions for PDF page navigation and highlighting.
+  // Scoped playerStore subscriptions for PDF highlighting.
   // These must be inside the component lifecycle so they are cleaned up when
   // navigating away from the PDF reader — otherwise they leak across formats.
   //
   // Empty deps `[]` is intentional: PdfView is mounted with `key={book.id}` in
-  // books.$id.lazy.tsx, so a book switch triggers a full remount. The closures
-  // over `nextPage`/`previousPage` are stable module-level functions, and
+  // books.$id.lazy.tsx, so a book switch triggers a full remount.
   // `usePdfStore`/`usePlayerStore` reads use `.getState()` or subscriptions
-  // which always see the latest values.
+  // which always see the latest values. Page navigation is driven by the view
+  // actor (NAVIGATE_NEXT/PREV via the viewInput adapter above), not by this
+  // subscription.
   useEffect(() => {
-    const unsubPage = usePlayerStore.subscribe(
-      (s) => s.pageRequest,
-      (request) => {
-        if (request === 'next') nextPage()
-        if (request === 'prev') previousPage()
-        if (request) usePlayerStore.getState().clearPageRequest()
-      }
-    )
-
     const unsubActive = usePlayerStore.subscribe(
       (s) => ({ active: s.activeParagraph, resume: s.lastPlayedParagraphIndex }),
       ({ active, resume }) => {
@@ -268,7 +260,6 @@ export function PdfView({
     )
 
     return () => {
-      unsubPage()
       unsubActive()
       unsubState()
     }

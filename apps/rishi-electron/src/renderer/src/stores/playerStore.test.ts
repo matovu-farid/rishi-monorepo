@@ -10,7 +10,6 @@ describe('playerStore', () => {
       currentParagraphs: [],
       nextPageParagraphs: [],
       prevPageParagraphs: [],
-      pageRequest: null,
       send: null,
       lastPlayedParagraphIndex: null
     })
@@ -39,22 +38,6 @@ describe('playerStore', () => {
     const paragraphs = [{ index: '0', text: 'Prev' }]
     usePlayerStore.getState().setPrevPageParagraphs(paragraphs)
     expect(usePlayerStore.getState().prevPageParagraphs).toEqual(paragraphs)
-  })
-
-  it('should request next page', () => {
-    usePlayerStore.getState().requestNextPage()
-    expect(usePlayerStore.getState().pageRequest).toBe('next')
-  })
-
-  it('should request prev page', () => {
-    usePlayerStore.getState().requestPrevPage()
-    expect(usePlayerStore.getState().pageRequest).toBe('prev')
-  })
-
-  it('should clear page request', () => {
-    usePlayerStore.getState().requestNextPage()
-    usePlayerStore.getState().clearPageRequest()
-    expect(usePlayerStore.getState().pageRequest).toBeNull()
   })
 
   it('should set send function', () => {

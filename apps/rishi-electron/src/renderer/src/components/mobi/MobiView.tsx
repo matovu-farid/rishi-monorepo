@@ -19,10 +19,11 @@ import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
 import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
 import { useChapterParagraphPrefetch } from '@/hooks/reader/useChapterParagraphPrefetch'
-import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
 import ReaderOverlayControls from '@/components/reader/ReaderOverlayControls'
 import { useBookEmbeddings } from '@/hooks/reader/useBookEmbeddings'
 import { usePlayerStore } from '@/stores/playerStore'
+import { usePlayerMachine } from '@/hooks/usePlayerMachine'
+import { pdfViewActor, type PdfViewInput, type PdfViewSnapshot } from '@/actors/pdfViewActor'
 import {
   navigationHistoryActor,
   onResumeRequested
@@ -213,18 +214,29 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
     fetchAt: (idx) => getMobiText({ path: book.filepath, chapterIndex: idx })
   })
 
-  // Handle page-turn events from Player (TTS exhausted current chapter).
-  usePageRequestSubscription({
-    onNext: () => {
-      if (chapterCount === 0) return
-      setChapterIndex((prev) => Math.min(prev + 1, chapterCount - 1))
-    },
-    onPrev: () => {
-      if (chapterCount === 0) return
-      setChapterIndex((prev) => Math.max(prev - 1, 0))
-    },
-    autoClear: true
-  })
+  // Co-locate player actor creation with the format reader. MOBI uses the
+  // format-agnostic pdfViewActor — view-boundary navigation during TTS routes
+  // through the same NAVIGATE_NEXT/PREV/VIEW_CHANGED protocol as PDF and EPUB.
+  // MOBI operates at chapter granularity (no within-chapter pages) so the
+  // view-actor "page" identity is just chapterIndex.
+  const viewInput = useMemo<PdfViewInput>(() => {
+    const toSnapshot = (): PdfViewSnapshot => ({
+      page: chapterIndex,
+      paragraphs: usePlayerStore.getState().currentParagraphs
+    })
+    return {
+      next: () => goNext(),
+      prev: () => goPrev(),
+      goTo: () => {},
+      subscribe: (cb) =>
+        usePlayerStore.subscribe(
+          (s) => s.currentParagraphs,
+          () => cb(toSnapshot())
+        ),
+      getSnapshot: toSnapshot
+    }
+  }, [chapterIndex, goNext, goPrev])
+  usePlayerMachine(book.id.toString(), { viewLogic: pdfViewActor, viewInput })
 
   // Generate embeddings on first open (for AI chat)
   useBookEmbeddings({
