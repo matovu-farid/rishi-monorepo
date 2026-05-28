@@ -250,4 +250,63 @@ describe('epubViewActor', () => {
       expect(captured).toEqual([])
     })
   })
+
+  describe('REPUBLISH', () => {
+    it('emits VIEW_CHANGED with current locator + paragraphs when paragraphs are non-empty', () => {
+      harness = makeHarness('cfi:current')
+      const { captured, actorRef, setParagraphs } = harness
+      setParagraphs([P('cfi:current'), P('cfi:current-2')])
+      actorRef.send({ type: 'REPUBLISH' })
+      expect(captured).toEqual([
+        {
+          type: 'VIEW_CHANGED',
+          locator: 'cfi:current',
+          paragraphs: [P('cfi:current'), P('cfi:current-2')]
+        }
+      ])
+    })
+
+    it('emits VIEW_CHANGED even when CFI equals previousLocator (no-nav-in-flight republish must still produce the event so the machine can recover from cleared-paragraphs state)', () => {
+      // Drive the actor through a navigation so previousLocator is set.
+      harness = makeHarness('cfi:start')
+      const { rendition, captured, actorRef, setParagraphs } = harness
+      setParagraphs([P('cfi:after')])
+      actorRef.send({ type: 'NAVIGATE_NEXT' })
+      // In production rendition.location is mutated by epubjs before the
+      // relocated callback fires; mirror that here so REPUBLISH reads the
+      // post-nav CFI.
+      rendition.location = { start: { cfi: 'cfi:after' } }
+      rendition.emit('relocated', { start: { cfi: 'cfi:after' } })
+      expect(captured).toEqual([
+        { type: 'VIEW_CHANGED', locator: 'cfi:after', paragraphs: [P('cfi:after')] }
+      ])
+      captured.length = 0
+
+      // Now REPUBLISH against the same CFI — must still emit VIEW_CHANGED.
+      // Production case: playerMachine entered republishingParagraphs after
+      // clearCurrentParagraphs left context.currentParagraphs = []; the
+      // rendition hasn't moved but the machine has nothing to play.
+      actorRef.send({ type: 'REPUBLISH' })
+      expect(captured).toEqual([
+        { type: 'VIEW_CHANGED', locator: 'cfi:after', paragraphs: [P('cfi:after')] }
+      ])
+    })
+
+    it('emits NAV_NO_PROGRESS when current locator is null', () => {
+      // No initial CFI — fresh rendition that hasn't rendered yet.
+      harness = makeHarness(null)
+      const { captured, actorRef, setParagraphs } = harness
+      setParagraphs([P('cfi:something')])
+      actorRef.send({ type: 'REPUBLISH' })
+      expect(captured).toEqual([{ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' }])
+    })
+
+    it('emits NAV_NO_PROGRESS when paragraphs are empty', () => {
+      harness = makeHarness('cfi:image-only')
+      const { captured, actorRef } = harness
+      // setParagraphs defaults to []
+      actorRef.send({ type: 'REPUBLISH' })
+      expect(captured).toEqual([{ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' }])
+    })
+  })
 })

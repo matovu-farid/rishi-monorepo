@@ -102,6 +102,20 @@ export const pdfViewActor = fromCallback<ViewActorCommand, PdfViewInput>(
       else if (cmd.type === 'NAVIGATE_TO') {
         const page = Number.parseInt(cmd.locator, 10)
         if (Number.isFinite(page)) startNav('goTo', page)
+      } else if (cmd.type === 'REPUBLISH') {
+        const snap = getSnapshot()
+        if (snap.paragraphs.length === 0) {
+          sendBack({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })
+          return
+        }
+        // Emit even if page equals previousPage — REPUBLISH is the
+        // "I lost track, tell me again" signal, not a navigation result.
+        previousPage = snap.page
+        sendBack({
+          type: 'VIEW_CHANGED',
+          locator: String(snap.page),
+          paragraphs: snap.paragraphs
+        })
       }
     })
 

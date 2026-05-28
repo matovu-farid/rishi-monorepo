@@ -201,4 +201,43 @@ describe('pdfViewActor', () => {
       expect(harness.captured).toEqual([])
     })
   })
+
+  describe('REPUBLISH', () => {
+    it('emits VIEW_CHANGED with current page + paragraphs when paragraphs are non-empty', () => {
+      const harness = makeHarness(3, [P('pdf-3-0'), P('pdf-3-1')])
+      harness.captured.length = 0 // drop the seed emission
+      harness.actorRef.send({ type: 'REPUBLISH' })
+      expect(harness.captured).toEqual([
+        {
+          type: 'VIEW_CHANGED',
+          locator: '3',
+          paragraphs: [P('pdf-3-0'), P('pdf-3-1')]
+        }
+      ])
+    })
+
+    it('emits VIEW_CHANGED even when page equals previousPage (no-nav-in-flight republish must still produce the event so the machine can recover from cleared-paragraphs state)', () => {
+      const harness = makeHarness(1, [P('pdf-1-0')])
+      // Drive through a navigation so previousPage is set.
+      harness.captured.length = 0
+      harness.actorRef.send({ type: 'NAVIGATE_NEXT' })
+      harness.controls.emit(2, [P('pdf-2-0')])
+      expect(harness.captured).toEqual([
+        { type: 'VIEW_CHANGED', locator: '2', paragraphs: [P('pdf-2-0')] }
+      ])
+      harness.captured.length = 0
+
+      harness.actorRef.send({ type: 'REPUBLISH' })
+      expect(harness.captured).toEqual([
+        { type: 'VIEW_CHANGED', locator: '2', paragraphs: [P('pdf-2-0')] }
+      ])
+    })
+
+    it('emits NAV_NO_PROGRESS when paragraphs are empty', () => {
+      const harness = makeHarness(2, [])
+      harness.captured.length = 0
+      harness.actorRef.send({ type: 'REPUBLISH' })
+      expect(harness.captured).toEqual([{ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' }])
+    })
+  })
 })

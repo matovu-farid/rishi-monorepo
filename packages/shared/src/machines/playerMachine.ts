@@ -7,7 +7,8 @@
  * preservation (CHAT_STARTED / CHAT_ENDED), retry policy, and
  * partial-first override (read-aloud from selection).
  */
-import { setup, assign } from 'xstate'
+import { setup, assign, sendTo, raise, fromCallback } from 'xstate'
+import type { ViewActorCommand } from '../actors/viewActor'
 
 /**
  * The paragraph type used by the player. Mirrors
@@ -20,6 +21,22 @@ export type ParagraphWithIndex = {
 }
 
 const MAX_RETRIES = 3
+
+// Placeholder view actor used when no per-format actor is provided via
+// `.provide({ actors: { view: ... } })`. The default is a no-op so machines
+// created without a view actor (e.g. legacy tests that exercise the state
+// graph without navigation) don't crash on entry actions that
+// sendTo('view', ...).
+const noopViewActor = fromCallback<ViewActorCommand, unknown>(() => () => {})
+
+export type PlayerMachineInput = {
+  /**
+   * Format-specific input for the view actor. The shape depends on which
+   * actor is provided via `.provide({ actors: { view: ... } })`. Carried as
+   * unknown because the machine itself is format-agnostic.
+   */
+  viewInput?: unknown
+}
 
 export type PlayerMachineContext = {
   bookId: string
@@ -48,6 +65,12 @@ export type PlayerMachineContext = {
   partialFirstText: string | null
   partialFirstKey: string | null
   partialFirstParagraphIndex: number | null
+  /**
+   * Format-specific input forwarded to the invoked view actor. Stored in
+   * context so the root `invoke` block can read it via `({ context }) =>
+   * context.viewInput` without import-side coupling. Non-serialisable.
+   */
+  viewInput: unknown
 }
 
 export type PlayerMachineEvent =
@@ -78,8 +101,15 @@ export type PlayerMachineEvent =
   // apps/rishi-electron/src/renderer/src/machines/playerMachine.ts and
   // .parity/2026-05-28-player-actor-restructure/PLAN.md §3.4.
   | { type: 'NAV_NO_PROGRESS'; reason?: 'end-of-document' | 'no-relocation' | 'timeout' }
+  // Emitted by the invoked view actor (epub/pdf/etc) when a navigation or
+  // republish committed a non-empty new view. Re-raised at the root as
+  // PARAGRAPHS_UPDATED so every existing state handler processes it
+  // identically — this decouples per-state behaviour from whether paragraphs
+  // arrived via store subscription or view-actor sendBack. Parity with
+  // electron — see PLAN.md §3.4.
+  | { type: 'VIEW_CHANGED'; locator: string; paragraphs: ParagraphWithIndex[] }
 
-const initialContext: PlayerMachineContext = {
+const initialContext: Omit<PlayerMachineContext, 'viewInput'> = {
   bookId: '',
   paragraphIndex: 0,
   direction: 'forward',
@@ -100,6 +130,9 @@ export const playerMachine = setup({
   types: {
     context: {} as PlayerMachineContext,
     events: {} as PlayerMachineEvent
+  },
+  actors: {
+    view: noopViewActor
   },
   guards: {
     hasParagraphs: ({ context }) => context.currentParagraphs.length > 0,
@@ -211,7 +244,23 @@ export const playerMachine = setup({
 }).createMachine({
   id: 'player',
   initial: 'idle',
-  context: { ...initialContext },
+  context: ({ input }) => {
+    const i = input as PlayerMachineInput | undefined
+    return {
+      ...initialContext,
+      viewInput: i?.viewInput
+    }
+  },
+  invoke: {
+    // Always-on view actor — per-format (epubViewActor, pdfViewActor, ...)
+    // injected via `.provide({ actors: { view: ... } })` at the reader-screen
+    // layer. Receives NAVIGATE_NEXT/PREV/TO/REPUBLISH; emits VIEW_CHANGED /
+    // NAV_NO_PROGRESS back. Default is a no-op so tests that exercise the
+    // state graph without navigation don't crash. Parity with electron.
+    id: 'view',
+    src: 'view',
+    input: ({ context }: { context: PlayerMachineContext }) => context.viewInput
+  },
   on: {
     CLEANUP: {
       target: '.idle',
@@ -226,7 +275,16 @@ export const playerMachine = setup({
       {
         actions: ['clearWantsAutoResumeAfterChat']
       }
-    ]
+    ],
+    // The view actor reports a committed view. Re-raise as PARAGRAPHS_UPDATED
+    // so every existing state handler processes it identically. Parity with
+    // electron — see PLAN.md §3.4.
+    VIEW_CHANGED: {
+      actions: raise(({ event }) => ({
+        type: 'PARAGRAPHS_UPDATED' as const,
+        paragraphs: (event as { paragraphs: ParagraphWithIndex[] }).paragraphs
+      }))
+    }
   },
   states: {
     idle: {
@@ -533,6 +591,15 @@ export const playerMachine = setup({
     },
 
     waitingForParagraphs: {
+      // Ask the view actor to navigate. The view actor emits VIEW_CHANGED
+      // (re-raised as PARAGRAPHS_UPDATED) or NAV_NO_PROGRESS, both already
+      // handled below. Parity with electron — see PLAN.md §3.4.
+      entry: sendTo('view', ({ context }) => ({
+        type:
+          context.direction === 'backward'
+            ? ('NAVIGATE_PREV' as const)
+            : ('NAVIGATE_NEXT' as const)
+      })),
       after: {
         10000: {
           target: 'stopped',
@@ -572,6 +639,10 @@ export const playerMachine = setup({
     },
 
     republishingParagraphs: {
+      // Ask the view actor to re-emit the current view's paragraphs. The
+      // actor validates non-emptiness and emits VIEW_CHANGED (re-raised as
+      // PARAGRAPHS_UPDATED) or NAV_NO_PROGRESS.
+      entry: sendTo('view', { type: 'REPUBLISH' }),
       after: {
         10000: {
           target: 'stopped',

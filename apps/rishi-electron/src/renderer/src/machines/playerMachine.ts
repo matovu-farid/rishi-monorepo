@@ -9,10 +9,11 @@
 //     back via sendBack.
 //   - fetchTtsLogic (fromPromise) inside `loading`, so xstate auto-cancels
 //     in-flight TTS fetches on state exit (replaces fetchGeneration counter).
-import { setup, assign, sendTo, raise } from 'xstate'
+import { setup, assign, sendTo, raise, fromCallback } from 'xstate'
 import type { ParagraphWithIndex } from '@/stores/playerStore'
 import { audioActor, audioElement } from '@/actors/audioActor'
 import { fetchTtsLogic, type TtsFetchInput, type TtsFetchOutput } from '@/actors/ttsFetchActor'
+import type { ViewActorCommand } from '@/actors/viewActor'
 
 const MAX_RETRIES = 3
 
@@ -28,10 +29,24 @@ export type TtsFetcher = TtsFetchInput['fetcher']
  */
 const noopFetcher: TtsFetcher = () => new Promise<string>(() => {})
 
+// Placeholder view actor used when no per-format actor is provided via
+// `.provide({ actors: { view: epubViewActor | pdfViewActor } })`. The default
+// is a no-op so machines created without a view actor (e.g. legacy tests that
+// exercise the state graph without navigation) don't crash on entry actions
+// that sendTo('view', ...).
+const noopViewActor = fromCallback<ViewActorCommand, unknown>(() => () => {})
+
 export type PlayerMachineInput = {
   fetcher?: TtsFetcher
   /** Defaults to the singleton audioElement. Tests can pass a fake. */
   audio?: HTMLMediaElement
+  /**
+   * Format-specific input for the view actor. The shape depends on which
+   * actor is provided via `.provide({ actors: { view: epubViewActor } })`:
+   * EpubViewInput for epub, PdfViewInput for pdf, etc. Carried as unknown
+   * because the machine itself is format-agnostic.
+   */
+  viewInput?: unknown
 }
 
 export type PlayerMachineContext = {
@@ -68,6 +83,12 @@ export type PlayerMachineContext = {
    * Non-serialisable — the machine is not persisted across sessions today.
    */
   fetcher: TtsFetcher
+  /**
+   * Format-specific input forwarded to the invoked view actor. Stored in
+   * context so the root `invoke` block can read it via `({ context }) =>
+   * context.viewInput` without import-side coupling. Non-serialisable.
+   */
+  viewInput: unknown
 }
 
 export type PlayerMachineEvent =
@@ -105,6 +126,12 @@ export type PlayerMachineEvent =
   // instead of timing out or — the bug this kills — silently
   // republishing the OLD view's paragraphs and snapping to paragraph 0.
   | { type: 'NAV_NO_PROGRESS'; reason?: 'end-of-document' | 'no-relocation' | 'timeout' }
+  // Emitted by the invoked view actor (epub/pdf/etc) when a navigation or
+  // republish committed a non-empty new view. Re-raised at the root as
+  // PARAGRAPHS_UPDATED so every existing state handler processes it
+  // identically — this decouples per-state behaviour from whether paragraphs
+  // arrived via store subscription or view-actor sendBack.
+  | { type: 'VIEW_CHANGED'; locator: string; paragraphs: ParagraphWithIndex[] }
 
 const initialContext: Omit<PlayerMachineContext, 'fetcher'> = {
   bookId: '',
@@ -121,7 +148,8 @@ const initialContext: Omit<PlayerMachineContext, 'fetcher'> = {
   partialFirstText: null,
   partialFirstKey: null,
   partialFirstParagraphIndex: null,
-  resumeParagraphIndex: null
+  resumeParagraphIndex: null,
+  viewInput: undefined
 }
 
 export const playerMachine = setup({
@@ -131,7 +159,8 @@ export const playerMachine = setup({
   },
   actors: {
     audio: audioActor,
-    fetchTtsLogic
+    fetchTtsLogic,
+    view: noopViewActor
   },
   guards: {
     hasParagraphs: ({ context }) => context.currentParagraphs.length > 0,
@@ -283,19 +312,32 @@ export const playerMachine = setup({
     const i = input as PlayerMachineInput | undefined
     return {
       ...initialContext,
-      fetcher: i?.fetcher ?? noopFetcher
+      fetcher: i?.fetcher ?? noopFetcher,
+      viewInput: i?.viewInput
     }
   },
-  invoke: {
-    // Always-on audioActor. Lives for the lifetime of the parent. All
-    // PLAY/PAUSE/RESUME/STOP/CLEAR_SRC commands are sendTo('audio', ...).
-    // Audio→machine events (AUDIO_LOADED / AUDIO_ENDED / AUDIO_ERROR) flow
-    // back as parent events via sendBack and are handled by the on:
-    // blocks of whichever state the parent is in.
-    id: 'audio',
-    src: 'audio',
-    input: { audio: audioElement }
-  },
+  invoke: [
+    {
+      // Always-on audioActor. Lives for the lifetime of the parent. All
+      // PLAY/PAUSE/RESUME/STOP/CLEAR_SRC commands are sendTo('audio', ...).
+      // Audio→machine events (AUDIO_LOADED / AUDIO_ENDED / AUDIO_ERROR) flow
+      // back as parent events via sendBack and are handled by the on:
+      // blocks of whichever state the parent is in.
+      id: 'audio',
+      src: 'audio',
+      input: { audio: audioElement }
+    },
+    {
+      // Always-on view actor — per-format (epubViewActor, pdfViewActor, ...)
+      // injected via `.provide({ actors: { view: epubViewActor } })` at the
+      // reader-screen layer. Receives NAVIGATE_NEXT/PREV/TO/REPUBLISH;
+      // emits VIEW_CHANGED / NAV_NO_PROGRESS back. Default is a no-op so
+      // tests that exercise the state graph without navigation don't crash.
+      id: 'view',
+      src: 'view',
+      input: ({ context }: { context: PlayerMachineContext }) => context.viewInput
+    }
+  ],
   on: {
     CLEANUP: {
       target: '.idle',
@@ -315,7 +357,18 @@ export const playerMachine = setup({
       {
         actions: ['clearWantsAutoResumeAfterChat']
       }
-    ]
+    ],
+    // The view actor reports a committed view. Re-raise as PARAGRAPHS_UPDATED
+    // so every existing state handler (loading, playing, waitingForParagraphs,
+    // pageNavigating, republishingParagraphs, etc.) processes it identically.
+    // This decouples per-state event graph from whether paragraphs arrived
+    // via store subscription or view-actor sendBack.
+    VIEW_CHANGED: {
+      actions: raise(({ event }) => ({
+        type: 'PARAGRAPHS_UPDATED' as const,
+        paragraphs: (event as { paragraphs: ParagraphWithIndex[] }).paragraphs
+      }))
+    }
   },
   // Note: PAGE_NAVIGATING is handled per-state below (not as a global handler)
   // because behaviour differs:
@@ -751,7 +804,18 @@ export const playerMachine = setup({
     },
 
     waitingForParagraphs: {
-      entry: sendTo('audio', { type: 'STOP' }),
+      // Stop the previous audio AND ask the view actor to navigate. The
+      // view actor will emit VIEW_CHANGED (re-raised as PARAGRAPHS_UPDATED)
+      // or NAV_NO_PROGRESS, both already handled below.
+      entry: [
+        sendTo('audio', { type: 'STOP' }),
+        sendTo('view', ({ context }) => ({
+          type:
+            context.direction === 'backward'
+              ? ('NAVIGATE_PREV' as const)
+              : ('NAVIGATE_NEXT' as const)
+        }))
+      ],
       after: {
         10000: {
           target: 'stopped',
@@ -809,7 +873,13 @@ export const playerMachine = setup({
       // set pageRequest — the player has not asked for a new page.
       // PLAY_FROM is intentionally NOT handled here — the paragraphs are not
       // yet known so a targeted jump cannot be validated.
-      entry: sendTo('audio', { type: 'STOP' }),
+      entry: [
+        sendTo('audio', { type: 'STOP' }),
+        // Ask the view actor to re-emit the current view's paragraphs.
+        // The actor validates non-emptiness and emits VIEW_CHANGED
+        // (re-raised as PARAGRAPHS_UPDATED) or NAV_NO_PROGRESS.
+        sendTo('view', { type: 'REPUBLISH' })
+      ],
       after: {
         10000: {
           target: 'stopped',

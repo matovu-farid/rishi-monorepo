@@ -108,6 +108,18 @@ export const epubViewActor = fromCallback<ViewActorCommand, EpubViewInput>(
       if (cmd.type === 'NAVIGATE_NEXT') startNav('next')
       else if (cmd.type === 'NAVIGATE_PREV') startNav('prev')
       else if (cmd.type === 'NAVIGATE_TO') startNav('display', cmd.locator)
+      else if (cmd.type === 'REPUBLISH') {
+        const newLocator = rendition.location?.start?.cfi
+        const newParagraphs = getParagraphs()
+        if (!newLocator || newParagraphs.length === 0) {
+          sendBack({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })
+          return
+        }
+        // Emit even if locator equals previousLocator — REPUBLISH is the
+        // "I lost track, tell me again" signal, not a navigation result.
+        previousLocator = newLocator
+        sendBack({ type: 'VIEW_CHANGED', locator: newLocator, paragraphs: newParagraphs })
+      }
     })
 
     return () => {
