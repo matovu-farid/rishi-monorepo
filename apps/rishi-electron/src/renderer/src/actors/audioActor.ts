@@ -24,8 +24,8 @@ import { fromCallback } from 'xstate'
 // Exported so the E2E expose-stores layer can attach it to `window` for
 // browser-side observation. Inside the actor, prefer the `input.audio`
 // path so tests can inject a fake without touching this singleton.
-export const audioElement: HTMLMediaElement =
-  typeof Audio !== 'undefined' ? new Audio() : ({} as HTMLMediaElement)
+export const audioElement: HTMLAudioElement =
+  typeof Audio !== 'undefined' ? new Audio() : ({} as HTMLAudioElement)
 
 export type AudioCommand =
   | { type: 'PLAY'; src: string }

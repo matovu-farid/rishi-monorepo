@@ -1,8 +1,38 @@
 // apps/electron/src/renderer/src/machines/playerMachine.ts
-import { setup, assign } from 'xstate'
+//
+// Phase 3.3 — fromPromise + audioActor wiring.
+//
+// The machine no longer relies on an external bridge to fetch TTS or drive the
+// audio element. It invokes:
+//   - audioActor (fromCallback) at root, so PLAY/PAUSE/RESUME/STOP/CLEAR_SRC
+//     commands are sendTo'd from this graph and audio→machine events flow
+//     back via sendBack.
+//   - fetchTtsLogic (fromPromise) inside `loading`, so xstate auto-cancels
+//     in-flight TTS fetches on state exit (replaces fetchGeneration counter).
+import { setup, assign, sendTo, raise } from 'xstate'
 import type { ParagraphWithIndex } from '@/stores/playerStore'
+import { audioActor, audioElement } from '@/actors/audioActor'
+import { fetchTtsLogic, type TtsFetchInput, type TtsFetchOutput } from '@/actors/ttsFetchActor'
 
 const MAX_RETRIES = 3
+
+/** Signature the renderer binds to getTtsService().requestAudio. */
+export type TtsFetcher = TtsFetchInput['fetcher']
+
+/**
+ * Default fetcher — a forever-pending promise. Real wiring (usePlayerMachine)
+ * passes a production fetcher via `input.fetcher` when calling createActor.
+ * Tests that don't care about the loading state can rely on this so they
+ * don't accidentally trigger real network calls; the state's exit cancels
+ * the pending promise.
+ */
+const noopFetcher: TtsFetcher = () => new Promise<string>(() => {})
+
+export type PlayerMachineInput = {
+  fetcher?: TtsFetcher
+  /** Defaults to the singleton audioElement. Tests can pass a fake. */
+  audio?: HTMLMediaElement
+}
 
 export type PlayerMachineContext = {
   bookId: string
@@ -32,6 +62,12 @@ export type PlayerMachineContext = {
   partialFirstKey: string | null
   partialFirstParagraphIndex: number | null
   resumeParagraphIndex: string | null
+  /**
+   * TTS fetcher resolved from input at createActor time. Stored in context
+   * so the loading-state invoke can read it without import-side coupling.
+   * Non-serialisable — the machine is not persisted across sessions today.
+   */
+  fetcher: TtsFetcher
 }
 
 export type PlayerMachineEvent =
@@ -62,7 +98,7 @@ export type PlayerMachineEvent =
   | { type: 'PLAY_FROM'; paragraphIndex: number; partialFirstText: string; partialFirstKey: string }
   | { type: 'REPEAT' }
 
-const initialContext: PlayerMachineContext = {
+const initialContext: Omit<PlayerMachineContext, 'fetcher'> = {
   bookId: '',
   paragraphIndex: 0,
   direction: 'forward',
@@ -84,6 +120,10 @@ export const playerMachine = setup({
   types: {
     context: {} as PlayerMachineContext,
     events: {} as PlayerMachineEvent
+  },
+  actors: {
+    audio: audioActor,
+    fetchTtsLogic
   },
   guards: {
     hasParagraphs: ({ context }) => context.currentParagraphs.length > 0,
@@ -142,6 +182,18 @@ export const playerMachine = setup({
     logError: assign({
       errors: ({ context, event }) => {
         const msg = event.type === 'AUDIO_ERROR' ? event.error : 'Unknown error'
+        const errs = [...context.errors, msg]
+        if (errs.length > 50) errs.shift()
+        return errs
+      }
+    }),
+    // fetchTtsLogic onError carries the rejection via `event.error`; pull
+    // that into the context.errors array using the same 50-item cap.
+    logErrorFromInvoke: assign({
+      errors: ({ context, event }) => {
+        const err = (event as { error?: unknown }).error
+        const msg =
+          err instanceof Error ? err.message : typeof err === 'string' ? err : 'TTS fetch failed'
         const errs = [...context.errors, msg]
         if (errs.length > 50) errs.shift()
         return errs
@@ -219,11 +271,27 @@ export const playerMachine = setup({
 }).createMachine({
   id: 'player',
   initial: 'idle',
-  context: { ...initialContext },
+  context: ({ input }) => {
+    const i = input as PlayerMachineInput | undefined
+    return {
+      ...initialContext,
+      fetcher: i?.fetcher ?? noopFetcher
+    }
+  },
+  invoke: {
+    // Always-on audioActor. Lives for the lifetime of the parent. All
+    // PLAY/PAUSE/RESUME/STOP/CLEAR_SRC commands are sendTo('audio', ...).
+    // Audio→machine events (AUDIO_LOADED / AUDIO_ENDED / AUDIO_ERROR) flow
+    // back as parent events via sendBack and are handled by the on:
+    // blocks of whichever state the parent is in.
+    id: 'audio',
+    src: 'audio',
+    input: { audio: audioElement }
+  },
   on: {
     CLEANUP: {
       target: '.idle',
-      actions: 'resetAll'
+      actions: ['resetAll', sendTo('audio', { type: 'CLEAR_SRC' })]
     },
     // Voice chat ended. If we paused playback for the chat (flag set on
     // CHAT_STARTED from playing/loading/waitingForParagraphs), re-enter loading
@@ -265,6 +333,7 @@ export const playerMachine = setup({
     },
 
     stopped: {
+      entry: sendTo('audio', { type: 'STOP' }),
       on: {
         PLAY: [
           {
@@ -348,11 +417,67 @@ export const playerMachine = setup({
     },
 
     loading: {
+      // Entry: silence whatever the previous state was playing immediately, so
+      // the user doesn't hear the old paragraph for the ~50-300 ms TTS fetch
+      // window. Idempotent — STOP on already-stopped audio is a no-op.
+      entry: sendTo('audio', { type: 'STOP' }),
       after: {
         60000: {
           target: 'error',
           actions: ['logLoadingTimeout', 'flagTimedOut']
         }
+      },
+      invoke: {
+        // The TTS fetch. xstate cancels this promise when `loading` exits —
+        // replacing the bridge's manual fetchGeneration counter.
+        src: 'fetchTtsLogic',
+        input: ({ context }): TtsFetchInput => {
+          const paragraph = context.currentParagraphs[context.paragraphIndex]
+          const useOverride =
+            context.partialFirstText !== null &&
+            context.partialFirstParagraphIndex === context.paragraphIndex
+          const text = useOverride ? context.partialFirstText! : (paragraph?.text ?? '')
+          const cfiRange = useOverride ? context.partialFirstKey! : (paragraph?.index ?? '')
+          const skip =
+            !paragraph || context.currentParagraphs.length === 0 || !text.trim()
+          return {
+            bookId: context.bookId,
+            cfiRange,
+            text,
+            skip,
+            fetcher: context.fetcher
+          }
+        },
+        onDone: [
+          {
+            // Skip path (empty/image-only paragraph): treat as if playback
+            // ended naturally — let the AUDIO_ENDED handlers below auto-advance
+            // or hand off to waitingForParagraphs. Sending via raise would also
+            // work; the parent's on-handlers see it identically.
+            guard: ({ event }) => (event.output as TtsFetchOutput).kind === 'skip',
+            actions: raise({ type: 'AUDIO_ENDED' })
+          },
+          {
+            // Happy path: ask audioActor to play the freshly-fetched blob.
+            // The AUDIO_LOADED reply transitions loading → playing below.
+            actions: sendTo('audio', ({ event }) => ({
+              type: 'PLAY',
+              src: (event.output as { kind: 'play'; src: string }).src
+            }))
+          }
+        ],
+        onError: [
+          {
+            guard: 'hasRetries',
+            target: 'loading',
+            reenter: true,
+            actions: ['incrementRetry', 'logErrorFromInvoke']
+          },
+          {
+            target: 'error',
+            actions: ['logErrorFromInvoke', 'clearPartialFirst']
+          }
+        ]
       },
       on: {
         AUDIO_LOADED: {
@@ -369,6 +494,21 @@ export const playerMachine = setup({
           {
             target: 'error',
             actions: ['logError', 'clearPartialFirst']
+          }
+        ],
+        // Mirror playing's AUDIO_ENDED so the skip path advances cleanly:
+        //   - more paragraphs on this page → next loading
+        //   - last paragraph → waitingForParagraphs
+        AUDIO_ENDED: [
+          {
+            guard: 'hasMoreParagraphs',
+            target: 'loading',
+            actions: ['clearPartialFirstIfConsumed', 'advanceIndex'],
+            reenter: true
+          },
+          {
+            target: 'waitingForParagraphs',
+            actions: ['clearPartialFirstIfConsumed', 'setDirectionForward', 'setWantsAutoResume']
           }
         ],
         PAUSE: {
@@ -506,6 +646,7 @@ export const playerMachine = setup({
 
     paused: {
       initial: 'clean',
+      entry: sendTo('audio', { type: 'PAUSE' }),
       on: {
         STOP: {
           target: 'stopped',
@@ -567,7 +708,10 @@ export const playerMachine = setup({
           exit: ['clearWantsAutoResumeAfterChat'],
           on: {
             RESUME: {
-              target: '#player.playing'
+              target: '#player.playing',
+              // From paused.clean, currentParagraphs are unchanged and the
+              // audio element still has the right src loaded — just resume.
+              actions: sendTo('audio', { type: 'RESUME' })
             },
             PARAGRAPHS_UPDATED: {
               target: 'stale',
@@ -599,6 +743,7 @@ export const playerMachine = setup({
     },
 
     waitingForParagraphs: {
+      entry: sendTo('audio', { type: 'STOP' }),
       after: {
         10000: {
           target: 'stopped',
@@ -648,6 +793,7 @@ export const playerMachine = setup({
       // set pageRequest — the player has not asked for a new page.
       // PLAY_FROM is intentionally NOT handled here — the paragraphs are not
       // yet known so a targeted jump cannot be validated.
+      entry: sendTo('audio', { type: 'STOP' }),
       after: {
         10000: {
           target: 'stopped',
@@ -683,6 +829,7 @@ export const playerMachine = setup({
     //     double-navigate. So this state just waits for PARAGRAPHS_UPDATED
     //     and resumes loading IFF the player was active before.
     pageNavigating: {
+      entry: sendTo('audio', { type: 'STOP' }),
       after: {
         10000: {
           target: 'stopped',

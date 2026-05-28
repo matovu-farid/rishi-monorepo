@@ -1,14 +1,19 @@
 // apps/electron/src/renderer/src/hooks/usePlayerMachine.ts
 //
 // Composition layer that wires the playerMachine actor to its side-effect
-// adapters. The audio and orchestration concerns live in dedicated bridges
-// (see playerAudioBridge.ts, playerOrchestrationBridge.ts). This file's
-// responsibility is reduced to: actor lifecycle, machine→store sync,
-// store→machine paragraph sync, navStore→machine PAGE_NAVIGATING bridge,
-// PDF seed-on-mount, and resume-paragraph DB writes.
+// adapters. After Phase 3.3 the audio I/O is owned by an invoked
+// `audioActor` inside playerMachine itself; this hook only handles:
+//   - actor lifecycle (create, INITIALIZE, CLEANUP)
+//   - machine→store sync (playingState, activeParagraph, errors)
+//   - store→machine paragraph sync with deep-equality + prefetch
+//   - navStore→machine PAGE_NAVIGATING bridge (until Phase 3.4 collapses it)
+//   - PDF seed-on-mount + resume-paragraph DB writes
+//
+// The orchestration bridge stays for now — Phase 3.4 swaps it for the
+// view-actor wiring once playerMachine invokes the view actors directly.
 import { useEffect, useRef } from 'react'
 import { createActor } from 'xstate'
-import { playerMachine } from '@/machines/playerMachine'
+import { playerMachine, type TtsFetcher } from '@/machines/playerMachine'
 import { usePlayerStore } from '@/stores/playerStore'
 import type { ParagraphWithIndex, PlayerStoreState, PlayerSend } from '@/stores/playerStore'
 import { useNavStore } from '@/stores/navStore'
@@ -19,11 +24,11 @@ import isEqual from 'fast-deep-equal'
 import type { TextItem, TextMarkedContent } from 'react-pdf'
 import { updateBookLastParagraph } from '@/lib/api'
 import { publishCurrentEpubParagraphs } from '@/stores/epubStore'
-import { audioElement, stopAudio, wireAudioBridge } from '@/hooks/playerAudioBridge'
+import { audioElement } from '@/actors/audioActor'
 import { wireOrchestrationBridge } from '@/hooks/playerOrchestrationBridge'
 
 // Re-exported for existing consumers (E2E testing helpers, services that
-// inject the singleton). The actual ownership lives in playerAudioBridge.
+// inject the singleton). The actual ownership lives in actors/audioActor.
 export { audioElement }
 
 // Map XState machine state value to PlayerStoreState string
@@ -87,8 +92,14 @@ export function usePlayerMachine(bookId: string) {
   const sendRef = useRef<PlayerSend>(() => {})
 
   useEffect(() => {
-    // Create and start the machine actor
-    const actor = createActor(playerMachine)
+    // Create and start the machine actor. The fetcher input is bound here so
+    // playerMachine's invoked fetchTtsLogic talks to the real TTS service in
+    // production; tests rely on the machine's default noopFetcher and never
+    // wait for a real fetch to resolve.
+    const ttsFetcher: TtsFetcher = (req) => getTtsService().requestAudio(req)
+    const actor = createActor(playerMachine, {
+      input: { fetcher: ttsFetcher }
+    })
     actorRef.current = actor
 
     // --- 1. Machine -> store sync ---
@@ -205,9 +216,10 @@ export function usePlayerMachine(bookId: string) {
       (s) => s.navState,
       (navState, prevNavState) => {
         if (prevNavState === 'idle' && navState !== 'idle') {
-          stopAudio()
-          // Clear the highlight immediately so the UI doesn't keep the old
-          // paragraph highlighted during the curl.
+          // Audio is silenced by the machine's pageNavigating entry action
+          // (sendTo audio STOP). Just send PAGE_NAVIGATING and clear the
+          // highlight so the UI doesn't keep the old paragraph marked
+          // during the curl.
           usePlayerStore.setState({ activeParagraph: null })
           // When the player itself requested the nav (waitingForParagraphs
           // → pageRequest), the request type tells us the direction. Read it
@@ -236,13 +248,14 @@ export function usePlayerMachine(bookId: string) {
       }
     )
 
-    // --- 3. Side-effect bridges ---
+    // --- 3. Side-effect bridge (orchestration only — audio moved to actor) ---
     //
-    // Audio I/O and store-orchestration are both driven off the same actor
-    // state stream, but the concerns are independent. They live in dedicated
-    // adapters so each can be tested and (in Phase 3 of the rewrite plan)
-    // swapped for an xstate `fromCallback` actor without touching the other.
-    const teardownAudio = wireAudioBridge(actor, bookId)
+    // The audio I/O bridge has been replaced by an invoked audioActor inside
+    // playerMachine (Phase 3.3). What remains here is cross-system
+    // orchestration: clearing activeParagraph on visual interruption,
+    // setting pageRequest on waitingForParagraphs, and triggering
+    // publishCurrentEpubParagraphs on republishingParagraphs. Phase 3.4
+    // replaces these by invoking per-format view actors.
     const teardownOrchestration = wireOrchestrationBridge(actor)
 
     // --- 4. Machine send wiring ---
@@ -294,12 +307,14 @@ export function usePlayerMachine(bookId: string) {
       resumeWrite.dispose()
       actor.send({ type: 'CLEANUP' })
       machineUnsub.unsubscribe()
-      teardownAudio()
       teardownOrchestration()
       unsubCurrent()
       unsubNext()
       unsubPrev()
       unsubNav()
+      // Cancel any in-flight or pending TTS requests for this book. Audio is
+      // already silenced by CLEANUP → idle (sendTo audio CLEAR_SRC).
+      getTtsService().cancelBookRequests(bookId)
       usePlayerStore.getState().setSend(() => {})
       actor.stop()
       actorRef.current = null
@@ -313,6 +328,6 @@ export function usePlayerMachine(bookId: string) {
   }
 }
 
-// Audio helpers used to live here; they now live in playerAudioBridge.ts.
-// Keeping this footer-comment so a future reader who greps for stopAudio /
-// loadAndPlayAudio in this file lands on the relocation note.
+// Audio helpers used to live here, then moved to playerAudioBridge.ts in
+// Phase 2, then to actors/audioActor.ts in Phase 3.3. The bridge file was
+// deleted; future readers grep'ing for stopAudio/loadAndPlayAudio land here.
