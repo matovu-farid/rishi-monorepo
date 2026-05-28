@@ -1,4 +1,11 @@
 // apps/electron/src/renderer/src/hooks/usePlayerMachine.ts
+//
+// Composition layer that wires the playerMachine actor to its side-effect
+// adapters. The audio and orchestration concerns live in dedicated bridges
+// (see playerAudioBridge.ts, playerOrchestrationBridge.ts). This file's
+// responsibility is reduced to: actor lifecycle, machine→store sync,
+// store→machine paragraph sync, navStore→machine PAGE_NAVIGATING bridge,
+// PDF seed-on-mount, and resume-paragraph DB writes.
 import { useEffect, useRef } from 'react'
 import { createActor } from 'xstate'
 import { playerMachine } from '@/machines/playerMachine'
@@ -8,15 +15,16 @@ import { useNavStore } from '@/stores/navStore'
 import { getTtsService } from '@/services'
 import { getVisualCueEmitter, resolveParagraphElement } from '@/services/tts'
 import { usePdfStore } from '@/stores/pdfStore'
-import { publishCurrentEpubParagraphs } from '@/stores/epubStore'
 import isEqual from 'fast-deep-equal'
 import type { TextItem, TextMarkedContent } from 'react-pdf'
 import { updateBookLastParagraph } from '@/lib/api'
+import { publishCurrentEpubParagraphs } from '@/stores/epubStore'
+import { audioElement, stopAudio, wireAudioBridge } from '@/hooks/playerAudioBridge'
+import { wireOrchestrationBridge } from '@/hooks/playerOrchestrationBridge'
 
-// Singleton HTMLAudioElement for TTS playback. Exported so E2E tests can
-// observe `paused`/`src` to verify the player stops the previous page's
-// audio when navigating mid-playback.
-export const audioElement = new Audio()
+// Re-exported for existing consumers (E2E testing helpers, services that
+// inject the singleton). The actual ownership lives in playerAudioBridge.
+export { audioElement }
 
 // Map XState machine state value to PlayerStoreState string
 function mapStateValue(value: string | Record<string, string>): PlayerStoreState {
@@ -228,169 +236,19 @@ export function usePlayerMachine(bookId: string) {
       }
     )
 
-    // --- 3. Machine actions -> audio side effects ---
-    let prevState = ''
-    // Generation counter to cancel stale fetches when a new loading entry fires
-    let fetchGeneration = 0
-    const audioUnsub = actor.subscribe((snapshot) => {
-      const state = mapStateValue(snapshot.value)
-      const ctx = snapshot.context
-      const paragraph = ctx.currentParagraphs[ctx.paragraphIndex] as
-        | (typeof ctx.currentParagraphs)[number]
-        | undefined
-
-      if (state === 'loading') {
-        // Silence the previous page's audio immediately so it doesn't bleed
-        // into the new page while the next TTS fetch is in flight.
-        stopAudio()
-        // Clear old highlight immediately
-        usePlayerStore.setState({ activeParagraph: null })
-        // Increment generation so any in-flight fetch from a previous attempt
-        // is ignored when it resolves.
-        const gen = ++fetchGeneration
-        if (!paragraph || ctx.currentParagraphs.length === 0) {
-          // No paragraphs on this page (image-only page).
-          // Pause briefly then auto-advance to next page.
-          setTimeout(() => {
-            if (gen !== fetchGeneration) return
-            actor.send({ type: 'AUDIO_ENDED' })
-          }, 2000)
-        } else {
-          // When a partial-first override is active for this paragraph, use the
-          // override text/key instead of the full paragraph content so TTS
-          // starts from the user's selection point.
-          const useOverride =
-            ctx.partialFirstText !== null && ctx.partialFirstParagraphIndex === ctx.paragraphIndex
-          const ttsText = useOverride ? ctx.partialFirstText! : paragraph.text
-          const ttsKey = useOverride ? ctx.partialFirstKey! : paragraph.index
-
-          if (!ttsText.trim()) {
-            // Empty paragraph (or selection resolved to whitespace). Skip.
-            setTimeout(() => {
-              if (gen !== fetchGeneration) return
-              actor.send({ type: 'NEXT' })
-            }, 2000)
-          } else {
-            // Fetch audio via TTS service (returns blob URL in Electron)
-            getTtsService()
-              .requestAudio({
-                bookId: ctx.bookId,
-                cfiRange: ttsKey,
-                text: ttsText,
-                priority: 1
-              })
-              .then((blobUrl) => {
-                if (gen !== fetchGeneration) return // stale
-                return loadAndPlayAudio(blobUrl, () => gen !== fetchGeneration)
-              })
-              .then(() => {
-                if (gen !== fetchGeneration) return // stale
-                actor.send({ type: 'AUDIO_LOADED' })
-                // Update activeParagraph now that audio is playing
-                usePlayerStore.setState({ activeParagraph: paragraph })
-                // Schedule prefetch for upcoming paragraphs
-                schedulePrefetch(
-                  ctx.paragraphIndex,
-                  ctx.currentParagraphs,
-                  ctx.nextPageParagraphs,
-                  ctx.bookId
-                )
-              })
-              .catch((err: unknown) => {
-                if (gen !== fetchGeneration) return // stale
-                const msg = err instanceof Error ? err.message : String(err)
-                console.error(`Audio fetch/load failed [p${ctx.paragraphIndex}]: ${msg}`)
-                actor.send({ type: 'AUDIO_ERROR', error: msg })
-              })
-          }
-        }
-      } else {
-        // Left loading state -- invalidate any in-flight fetch
-        fetchGeneration++
-      }
-
-      if (state === 'playing' && prevState.startsWith('paused.clean')) {
-        // Resume from clean pause
-        void audioElement.play()
-      }
-
-      if (state.startsWith('paused') && prevState === 'playing') {
-        audioElement.pause()
-      }
-
-      if (state === 'stopped' && prevState !== 'stopped' && prevState !== 'idle') {
-        stopAudio()
-        usePlayerStore.setState({
-          activeParagraph: null
-        })
-      }
-
-      if (state === 'waitingForParagraphs') {
-        stopAudio()
-        const direction = actor.getSnapshot().context.direction
-        usePlayerStore.setState({
-          pageRequest: direction === 'backward' ? 'prev' : 'next'
-        })
-      }
-
-      if (state === 'republishingParagraphs') {
-        stopAudio()
-        // Do NOT set pageRequest — the player has not asked for a new page.
-        // Re-read the rendition's current view and republish its paragraphs so
-        // the machine can proceed to loading.
-        publishCurrentEpubParagraphs()
-      }
-
-      // pageNavigating: external nav already in flight. Just silence audio
-      // and clear the highlight. Do NOT set pageRequest — the rendition is
-      // already curling and another request would double-navigate.
-      if (state === 'pageNavigating') {
-        stopAudio()
-        usePlayerStore.setState({ activeParagraph: null })
-      }
-
-      if (state === 'idle' && prevState !== 'idle') {
-        cleanupAudio(bookId)
-        usePlayerStore.setState({
-          activeParagraph: null,
-          errors: [],
-          pageRequest: null
-        })
-      }
-
-      prevState = state
-    })
+    // --- 3. Side-effect bridges ---
+    //
+    // Audio I/O and store-orchestration are both driven off the same actor
+    // state stream, but the concerns are independent. They live in dedicated
+    // adapters so each can be tested and (in Phase 3 of the rewrite plan)
+    // swapped for an xstate `fromCallback` actor without touching the other.
+    const teardownAudio = wireAudioBridge(actor, bookId)
+    const teardownOrchestration = wireOrchestrationBridge(actor)
 
     // --- 4. Machine send wiring ---
     const send: PlayerSend = actor.send
     sendRef.current = send
     usePlayerStore.getState().setSend(send)
-
-    // --- 5. AudioElement -> machine callbacks ---
-    const handleEnded = () => {
-      actor.send({ type: 'AUDIO_ENDED' })
-    }
-    const handleError = () => {
-      const error = audioElement.error
-      const code = error?.code
-      const codeNames: Record<number, string> = {
-        1: 'MEDIA_ERR_ABORTED',
-        2: 'MEDIA_ERR_NETWORK',
-        3: 'MEDIA_ERR_DECODE',
-        4: 'MEDIA_ERR_SRC_NOT_SUPPORTED'
-      }
-      // Pick the first usable string out of (message, code label, default).
-      // Empty error.message strings are treated as "missing" so we still fall
-      // back to the friendlier code label.
-      const msg =
-        (error?.message && error.message.length > 0 ? error.message : null) ??
-        (code !== undefined ? codeNames[code] : null) ??
-        'Audio playback error'
-      actor.send({ type: 'AUDIO_ERROR', error: msg })
-    }
-
-    audioElement.addEventListener('ended', handleEnded)
-    audioElement.addEventListener('error', handleError)
 
     // --- Start actor and initialize ---
     actor.start()
@@ -436,15 +294,13 @@ export function usePlayerMachine(bookId: string) {
       resumeWrite.dispose()
       actor.send({ type: 'CLEANUP' })
       machineUnsub.unsubscribe()
-      audioUnsub.unsubscribe()
+      teardownAudio()
+      teardownOrchestration()
       unsubCurrent()
       unsubNext()
       unsubPrev()
-      audioElement.removeEventListener('ended', handleEnded)
-      audioElement.removeEventListener('error', handleError)
       unsubNav()
       usePlayerStore.getState().setSend(() => {})
-      cleanupAudio(bookId)
       actor.stop()
       actorRef.current = null
     }
@@ -457,87 +313,6 @@ export function usePlayerMachine(bookId: string) {
   }
 }
 
-// --- Audio helpers (inline, uses the singleton audioElement) ---
-
-async function loadAndPlayAudio(blobUrl: string, isCancelled?: () => boolean): Promise<void> {
-  audioElement.pause()
-  audioElement.currentTime = 0
-  audioElement.src = blobUrl
-  audioElement.load()
-
-  await new Promise<void>((resolve, reject) => {
-    const handleCanPlay = () => {
-      audioElement.removeEventListener('canplaythrough', handleCanPlay)
-      audioElement.removeEventListener('error', handleError)
-      resolve()
-    }
-    const handleError = (e: Event) => {
-      audioElement.removeEventListener('canplaythrough', handleCanPlay)
-      audioElement.removeEventListener('error', handleError)
-      const mediaError = (e.target as HTMLAudioElement | null)?.error
-      // Empty message strings should fall back to the descriptive default so
-      // we never reject with a blank `Error` message.
-      const message =
-        mediaError?.message && mediaError.message.length > 0
-          ? mediaError.message
-          : `Audio load error (code ${mediaError?.code ?? 'unknown'})`
-      reject(new Error(message))
-    }
-    audioElement.addEventListener('canplaythrough', handleCanPlay, { once: true })
-    audioElement.addEventListener('error', handleError, { once: true })
-  })
-
-  // After awaiting canplaythrough the state may have moved on (page flip,
-  // STOP, etc). If so, do NOT call play() — it would play this now-stale
-  // blob over whatever the player is currently loading.
-  if (isCancelled?.()) return
-  await audioElement.play()
-}
-
-function stopAudio(): void {
-  audioElement.pause()
-  audioElement.currentTime = 0
-}
-
-function cleanupAudio(bookId: string): void {
-  audioElement.pause()
-  audioElement.src = ''
-  // Cancel any in-flight or pending TTS requests for this book.
-  // Other books (e.g. library prefetch) keep running.
-  getTtsService().cancelBookRequests(bookId)
-}
-
-let _prefetchTimer: ReturnType<typeof setTimeout> | null = null
-
-function schedulePrefetch(
-  currentIndex: number,
-  currentParagraphs: { index: string; text: string }[],
-  nextPageParagraphs: { index: string; text: string }[],
-  bookId: string
-): void {
-  if (_prefetchTimer) clearTimeout(_prefetchTimer)
-  _prefetchTimer = setTimeout(() => {
-    // Prefetch next few paragraphs on current page
-    for (let i = 1; i <= 5; i++) {
-      const idx = currentIndex + i
-      if (idx < currentParagraphs.length && currentParagraphs[idx].text.trim()) {
-        void getTtsService()
-          .requestAudio({
-            bookId,
-            cfiRange: currentParagraphs[idx].index,
-            text: currentParagraphs[idx].text,
-            priority: 0
-          })
-          .catch((err: unknown) => console.warn('[audio] prefetch current page failed:', err))
-      }
-    }
-    // Prefetch next page paragraphs
-    for (const p of nextPageParagraphs) {
-      if (p.text.trim()) {
-        void getTtsService()
-          .requestAudio({ bookId, cfiRange: p.index, text: p.text, priority: 0 })
-          .catch((err: unknown) => console.warn('[audio] prefetch next page failed:', err))
-      }
-    }
-  }, 200)
-}
+// Audio helpers used to live here; they now live in playerAudioBridge.ts.
+// Keeping this footer-comment so a future reader who greps for stopAudio /
+// loadAndPlayAudio in this file lands on the relocation note.
