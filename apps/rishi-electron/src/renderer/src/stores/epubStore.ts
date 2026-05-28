@@ -101,14 +101,37 @@ export const useEpubStore = create<EpubState>()(
 
 /**
  * Re-publish the current epub paragraphs to the event bus.
- * Call this after Player.initialize() to seed the Player with
- * paragraphs that were published before it subscribed.
+ *
+ * Returns:
+ *  - `true`  if a NEW view's paragraphs were published (caller can let the
+ *    player resume on the new page).
+ *  - `false` if the view did NOT actually advance — either the rendition is
+ *    not initialised, the new view is image-only (no paragraphs), or the
+ *    new view's paragraphs are byte-for-byte identical to what's already in
+ *    playerStore (same CFI, drift restore, end-of-book rendition.next()
+ *    that returns without relocating).
+ *
+ * Callers that drive playerMachine should react to `false` by sending
+ * `NAV_NO_PROGRESS` so the machine transitions to `stopped` instead of
+ * waiting for paragraphs that already exist and silently looping back to
+ * paragraph 0 of the OLD view. This is the same validation rule encoded by
+ * the epubViewActor (`actors/epubViewActor.ts`); placing it here lets the
+ * existing safety-net paths (republishingParagraphs orchestration +
+ * pageNavigating settle) benefit before Phase 3.4 wires the actor end-to-end.
  */
-export function publishCurrentEpubParagraphs() {
+export function publishCurrentEpubParagraphs(): boolean {
   const { rendition, currentEpubLocation } = useEpubStore.getState()
-  if (!rendition || !currentEpubLocation) return
+  if (!rendition || !currentEpubLocation) return false
 
   const paragraphs = getCurrentViewParagraphs(rendition).map(toPlayerParagraph)
+  if (paragraphs.length === 0) return false
+
+  const currentInPlayer = usePlayerStore.getState().currentParagraphs
+  const sameView =
+    currentInPlayer.length === paragraphs.length &&
+    currentInPlayer.every((p, i) => p.index === paragraphs[i].index)
+  if (sameView) return false
+
   usePlayerStore.getState().setCurrentParagraphs(paragraphs)
 
   // Use a separate timer so re-publish doesn't cancel the subscription's debounce
@@ -129,6 +152,7 @@ export function publishCurrentEpubParagraphs() {
       })
       .catch(warnFetch('republish prev'))
   }, 300)
+  return true
 }
 
 /**

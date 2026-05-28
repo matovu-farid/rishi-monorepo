@@ -238,11 +238,18 @@ export function usePlayerMachine(bookId: string) {
         // `loading` or beyond. If we are STILL in `pageNavigating`, the
         // rendition either didn't navigate at all (epubjs No Section Found,
         // end of book, transient error) or fired `relocated` with the same
-        // location. The player would otherwise wait 10s for the timeout —
-        // republish the current view immediately so the user recovers fast.
+        // location. publishCurrentEpubParagraphs validates that the new
+        // view differs from what's already in playerStore; if not, we
+        // send NAV_NO_PROGRESS so the machine transitions to stopped
+        // immediately instead of timing out or — the original bug —
+        // looping back to paragraph 0 of the OLD view via a republish of
+        // its own paragraphs.
         if (prevNavState !== 'idle' && navState === 'idle') {
           if (mapStateValue(actor.getSnapshot().value) === 'pageNavigating') {
-            publishCurrentEpubParagraphs()
+            const published = publishCurrentEpubParagraphs()
+            if (!published) {
+              actor.send({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })
+            }
           }
         }
       }

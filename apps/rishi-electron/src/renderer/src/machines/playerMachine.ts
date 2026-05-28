@@ -97,6 +97,14 @@ export type PlayerMachineEvent =
   // mid-paragraph. Ignored from idle/pageNavigating/republishingParagraphs.
   | { type: 'PLAY_FROM'; paragraphIndex: number; partialFirstText: string; partialFirstKey: string }
   | { type: 'REPEAT' }
+  // Emitted by the view layer (today: orchestration bridge after a
+  // publishCurrentEpubParagraphs that bailed; future Phase 3.4 wiring:
+  // viewActor sendBack) when a navigation request did NOT yield a new
+  // view (end of book / drift restore / same-CFI relocated / image-only
+  // page). The player transitions to `stopped` with a meaningful reason
+  // instead of timing out or — the bug this kills — silently
+  // republishing the OLD view's paragraphs and snapping to paragraph 0.
+  | { type: 'NAV_NO_PROGRESS'; reason?: 'end-of-document' | 'no-relocation' | 'timeout' }
 
 const initialContext: Omit<PlayerMachineContext, 'fetcher'> = {
   bookId: '',
@@ -755,6 +763,14 @@ export const playerMachine = setup({
           target: 'loading',
           actions: ['storeParagraphs', 'clearTimedOut', 'resetIndexByDirection']
         },
+        // The view-layer (orchestration bridge or, post-Phase-3.4, the
+        // view actor) detected end-of-document / no-relocation. Don't loop;
+        // stop. This is the structural fix for the auto-advance-past-last-
+        // paragraph snap-back bug.
+        NAV_NO_PROGRESS: {
+          target: 'stopped',
+          actions: ['resetIndex', 'clearWantsAutoResume', 'clearPartialFirst']
+        },
         STOP: {
           target: 'stopped',
           actions: ['resetIndex', 'clearPartialFirst']
@@ -805,6 +821,12 @@ export const playerMachine = setup({
           target: 'loading',
           actions: ['storeParagraphs', 'clearTimedOut', 'resetIndexByDirection']
         },
+        // republish bailed (same view / image-only). Stop instead of timing
+        // out at 10 s.
+        NAV_NO_PROGRESS: {
+          target: 'stopped',
+          actions: ['resetIndex', 'clearPartialFirst']
+        },
         STOP: {
           target: 'stopped',
           actions: ['resetIndex', 'clearPartialFirst']
@@ -853,6 +875,16 @@ export const playerMachine = setup({
             actions: ['storeParagraphs', 'clearTimedOut', 'resetIndexByDirection']
           }
         ],
+        // THE bug fix. When the EPUB nav settles (back to navState idle) but
+        // the rendition didn't actually advance — end of book, drift-restore,
+        // image-only page — the orchestration bridge sends NAV_NO_PROGRESS
+        // instead of republishing the same view's paragraphs. Without this,
+        // republish drove PARAGRAPHS_UPDATED → loading → paragraph 0 of the
+        // OLD view, which is what users perceived as "looping back".
+        NAV_NO_PROGRESS: {
+          target: 'stopped',
+          actions: ['resetIndex', 'clearWantsAutoResume', 'clearPartialFirst']
+        },
         STOP: {
           target: 'stopped',
           actions: ['resetIndex', 'clearWantsAutoResume', 'clearPartialFirst']

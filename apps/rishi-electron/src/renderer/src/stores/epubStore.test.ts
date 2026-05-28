@@ -1,5 +1,22 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { useEpubStore, ThemeType } from './epubStore'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+// publishCurrentEpubParagraphs reads paragraphs via getCurrentViewParagraphs
+// from epubwrapper. Mock that BEFORE importing the store so the mock is in
+// place when publishCurrentEpubParagraphs evaluates the module-level call.
+let mockedCurrentViewParagraphs: { text: string; cfiRange: string }[] = []
+
+vi.mock('@/modules/epubwrapper', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/modules/epubwrapper')>()
+  return {
+    ...actual,
+    getCurrentViewParagraphs: vi.fn(() => mockedCurrentViewParagraphs),
+    getNextViewParagraphs: vi.fn(async () => []),
+    getPreviousViewParagraphs: vi.fn(async () => [])
+  }
+})
+
+import { useEpubStore, ThemeType, publishCurrentEpubParagraphs } from './epubStore'
+import { usePlayerStore } from '@/stores/playerStore'
 
 describe('epubStore', () => {
   beforeEach(() => {
@@ -138,5 +155,64 @@ describe('epubStore', () => {
       useEpubStore.getState().incrementRenditionCount()
     }
     expect(useEpubStore.getState().renditionCount).toBe(10)
+  })
+})
+
+describe('publishCurrentEpubParagraphs — view-boundary validation (THE bug class)', () => {
+  beforeEach(() => {
+    useEpubStore.getState().reset()
+    usePlayerStore.setState({ currentParagraphs: [] })
+    mockedCurrentViewParagraphs = []
+  })
+
+  it('returns false when rendition is null (cant read view)', () => {
+    expect(publishCurrentEpubParagraphs()).toBe(false)
+  })
+
+  it('returns false when current view is image-only (no paragraphs to play)', () => {
+    useEpubStore.setState({
+      rendition: {} as never,
+      currentEpubLocation: 'cfi:current'
+    })
+    mockedCurrentViewParagraphs = []
+    expect(publishCurrentEpubParagraphs()).toBe(false)
+    expect(usePlayerStore.getState().currentParagraphs).toEqual([])
+  })
+
+  it('returns false when the new view is byte-for-byte identical to playerStore — the loop-back guard', () => {
+    useEpubStore.setState({
+      rendition: {} as never,
+      currentEpubLocation: 'cfi:same'
+    })
+    const existing = [
+      { index: 'cfi:p0', text: 'first' },
+      { index: 'cfi:p1', text: 'second' }
+    ]
+    usePlayerStore.setState({ currentParagraphs: existing })
+    mockedCurrentViewParagraphs = [
+      { cfiRange: 'cfi:p0', text: 'first' },
+      { cfiRange: 'cfi:p1', text: 'second' }
+    ]
+    expect(publishCurrentEpubParagraphs()).toBe(false)
+    // playerStore not mutated — caller should signal NAV_NO_PROGRESS instead
+    // of triggering a PARAGRAPHS_UPDATED that snaps to paragraph 0.
+    expect(usePlayerStore.getState().currentParagraphs).toBe(existing)
+  })
+
+  it('returns true and updates playerStore when the new view differs', () => {
+    useEpubStore.setState({
+      rendition: {} as never,
+      currentEpubLocation: 'cfi:new'
+    })
+    usePlayerStore.setState({
+      currentParagraphs: [{ index: 'cfi:old-0', text: 'old' }]
+    })
+    mockedCurrentViewParagraphs = [
+      { cfiRange: 'cfi:new-0', text: 'fresh' }
+    ]
+    expect(publishCurrentEpubParagraphs()).toBe(true)
+    expect(usePlayerStore.getState().currentParagraphs).toEqual([
+      { index: 'cfi:new-0', text: 'fresh' }
+    ])
   })
 })

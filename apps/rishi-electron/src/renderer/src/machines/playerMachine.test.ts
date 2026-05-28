@@ -179,6 +179,36 @@ describe('playerMachine', () => {
       expect(snap.context.wantsAutoResume).toBe(false)
     })
 
+    // 5.2.1 — THE bug class fix.
+    //
+    // When TTS reaches the last paragraph of view A and triggers a page nav
+    // that does NOT actually advance (end of book, drift restore, image-only
+    // page), the orchestration bridge used to republish view A's paragraphs
+    // via publishCurrentEpubParagraphs — the machine then transitioned
+    // pageNavigating → loading via PARAGRAPHS_UPDATED and snapped to
+    // paragraph 0 of view A. The structural fix: publishCurrentEpubParagraphs
+    // detects "same view as already in playerStore" and the bridge sends
+    // NAV_NO_PROGRESS instead. This test locks the machine side of the fix.
+    it('pageNavigating + NAV_NO_PROGRESS transitions to stopped (no loop-back to old view)', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PLAY' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      // Simulate TTS reaching the last paragraph and the boundary advance.
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+      expect(actor.getSnapshot().value).toBe('pageNavigating')
+      expect(actor.getSnapshot().context.wantsAutoResume).toBe(true)
+
+      // The view did NOT actually advance (rendition.next() at end of book,
+      // or relocated fired with the same CFI). The bridge signals no progress.
+      actor.send({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })
+      const snap = actor.getSnapshot()
+      expect(snap.value).toBe('stopped')
+      // wantsAutoResume is cleared — the user shouldn't suddenly play once
+      // a new page does eventually arrive.
+      expect(snap.context.wantsAutoResume).toBe(false)
+    })
+
     // 5.3: stopped → pageNavigating → PARAGRAPHS_UPDATED without PLAY → stopped.
     // Proves nav with no user intent does not auto-play.
     it('pageNavigating without PLAY returns to stopped on PARAGRAPHS_UPDATED', () => {

@@ -68,13 +68,19 @@ export function wireOrchestrationBridge(actor: PlayerActor): () => void {
 
     if (state === 'republishingParagraphs') {
       // Do NOT set pageRequest — the player has not asked for a new page.
-      // Re-read the rendition's current view and republish its paragraphs
-      // so the machine can proceed to loading.
-      //
-      // ⚠ When PR3 (actor restructure) lands, this safety net is replaced
-      // by an `epubViewActor` that validates the new CFI before emitting
-      // VIEW_CHANGED, closing the loop-back race.
-      publishCurrentEpubParagraphs()
+      // Re-read the rendition's current view and republish its paragraphs.
+      // publishCurrentEpubParagraphs returns false when the new view is
+      // image-only OR byte-for-byte identical to the paragraphs already in
+      // playerStore (end-of-book / drift restore). In that case we send
+      // NAV_NO_PROGRESS so the machine transitions to `stopped` — without
+      // this the republish-of-same-paragraphs case would loop back to
+      // paragraph 0 of the OLD view. This encodes the same validation rule
+      // as actors/epubViewActor.ts; Phase 3.4 final-form wires the actor
+      // directly and this safety-net path gets deleted.
+      const published = publishCurrentEpubParagraphs()
+      if (!published) {
+        actor.send({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })
+      }
     }
 
     if (state === 'pageNavigating') {
