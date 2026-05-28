@@ -11,8 +11,8 @@
 //
 // The orchestration bridge stays for now — Phase 3.4 swaps it for the
 // view-actor wiring once playerMachine invokes the view actors directly.
-import { useEffect, useRef } from 'react'
-import { createActor } from 'xstate'
+import { useEffect, useMemo, useRef } from 'react'
+import { createActor, type AnyActorLogic } from 'xstate'
 import { playerMachine, type TtsFetcher } from '@/machines/playerMachine'
 import { usePlayerStore } from '@/stores/playerStore'
 import type { ParagraphWithIndex, PlayerStoreState, PlayerSend } from '@/stores/playerStore'
@@ -26,6 +26,26 @@ import { updateBookLastParagraph } from '@/lib/api'
 import { publishCurrentEpubParagraphs } from '@/stores/epubStore'
 import { audioElement } from '@/actors/audioActor'
 import { wireOrchestrationBridge } from '@/hooks/playerOrchestrationBridge'
+
+export type UsePlayerMachineOptions = {
+  /**
+   * Per-format view actor logic. Provided by the format reader (EpubView →
+   * epubViewActor, pdf.tsx → pdfViewActor). The hook overrides the machine's
+   * placeholder `view` actor via `.provide({ actors: { view: viewLogic } })`
+   * so the invoked actor can drive rendition.next() / page navigation and
+   * emit VIEW_CHANGED back to the machine. When omitted, the noop placeholder
+   * remains and NAVIGATE_* sends from the machine are dropped — fine for
+   * formats that don't trigger view-boundary advances during TTS (azw3/mobi
+   * seed all paragraphs at chapter-load time).
+   */
+  viewLogic?: AnyActorLogic
+  /**
+   * Format-specific input forwarded to the invoked view actor. Shape depends
+   * on viewLogic (EpubViewInput for epub, PdfViewInput for pdf). Carried as
+   * unknown because the hook itself is format-agnostic.
+   */
+  viewInput?: unknown
+}
 
 // Re-exported for existing consumers (E2E testing helpers, services that
 // inject the singleton). The actual ownership lives in actors/audioActor.
@@ -87,9 +107,20 @@ export function startResumeWriteSubscription({ bookId }: { bookId: number }): {
   return { dispose, flush }
 }
 
-export function usePlayerMachine(bookId: string) {
+export function usePlayerMachine(bookId: string, options?: UsePlayerMachineOptions) {
   const actorRef = useRef<ReturnType<typeof createActor<typeof playerMachine>> | null>(null)
   const sendRef = useRef<PlayerSend>(() => {})
+
+  // Customise the machine when a per-format view actor is provided. Memo on
+  // viewLogic identity so EpubView/pdf.tsx can stabilise it with their own
+  // useMemo without churning the actor lifecycle.
+  const machine = useMemo(
+    () =>
+      options?.viewLogic
+        ? playerMachine.provide({ actors: { view: options.viewLogic } })
+        : playerMachine,
+    [options?.viewLogic]
+  )
 
   useEffect(() => {
     // Create and start the machine actor. The fetcher input is bound here so
@@ -97,8 +128,8 @@ export function usePlayerMachine(bookId: string) {
     // production; tests rely on the machine's default noopFetcher and never
     // wait for a real fetch to resolve.
     const ttsFetcher: TtsFetcher = (req) => getTtsService().requestAudio(req)
-    const actor = createActor(playerMachine, {
-      input: { fetcher: ttsFetcher }
+    const actor = createActor(machine, {
+      input: { fetcher: ttsFetcher, viewInput: options?.viewInput }
     })
     actorRef.current = actor
 
@@ -326,7 +357,7 @@ export function usePlayerMachine(bookId: string) {
       actor.stop()
       actorRef.current = null
     }
-  }, [bookId])
+  }, [bookId, machine, options?.viewInput])
 
   return {
     // Why: sendRef.current holds the stable wrapped send function created in useEffect; callers consume the returned object synchronously. The ref's identity is stable across renders; only its current value swaps when the actor is recreated.

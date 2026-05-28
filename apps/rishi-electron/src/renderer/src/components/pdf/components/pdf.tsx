@@ -34,6 +34,9 @@ import 'react-pdf/dist/Page/TextLayer.css'
 import { usePdfStore } from '@/stores/pdfStore'
 import { ThumbnailSidebar } from './thumbnail-sidebar'
 import TTSControls from '@/components/tts/TTSControls'
+import { pdfViewActor, type PdfViewInput, type PdfViewSnapshot } from '@/actors/pdfViewActor'
+import { usePlayerMachine } from '@/hooks/usePlayerMachine'
+import type { TextItem } from 'react-pdf'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useUpdateCoverIMage } from '../hooks/useUpdateCoverIMage'
 import { useScrolling } from '../hooks/useScrolling'
@@ -169,6 +172,41 @@ export function PdfView({
   })
 
   useScrolling(scrollContainerRef)
+
+  // Create the player actor here, co-located with the PDF page controls and
+  // pdfStore, so we can wire pdfViewActor with the per-format adapters:
+  // next/prev call the existing pageControls, goTo writes pdfStore directly,
+  // and subscribe/getSnapshot read the live page + paragraphs the same way
+  // the old seed-from-pdfStore branch did inside usePlayerMachine. Empty
+  // deps keep the adapter stable for the lifetime of the PDF view — book
+  // swaps remount via `key={book.id}` on the parent route, so a stale book
+  // can't leak through.
+  const viewInput = useMemo<PdfViewInput>(() => {
+    const toSnapshot = (): PdfViewSnapshot => {
+      const s = usePdfStore.getState()
+      const data = s.pageNumberToPageData[s.pageNumber]
+      if (!data) return { page: s.pageNumber, paragraphs: [] }
+      const paragraphs = data.items
+        .filter((item): item is TextItem => 'str' in item && item.str.trim() !== '')
+        .map((item, idx) => ({
+          index: `pdf-${s.pageNumber}-${idx}`,
+          text: item.str
+        }))
+      return { page: s.pageNumber, paragraphs }
+    }
+    return {
+      next: () => nextPage(),
+      prev: () => previousPage(),
+      goTo: (page: number) => usePdfStore.setState({ pageNumber: page }),
+      subscribe: (cb) =>
+        usePdfStore.subscribe(
+          (s) => ({ page: s.pageNumber, data: s.pageNumberToPageData[s.pageNumber] }),
+          () => cb(toSnapshot())
+        ),
+      getSnapshot: toSnapshot
+    }
+  }, [])
+  usePlayerMachine(book.id.toString(), { viewLogic: pdfViewActor, viewInput })
 
   useUpdateCoverIMage(book)
   // Ref for the scrollable container

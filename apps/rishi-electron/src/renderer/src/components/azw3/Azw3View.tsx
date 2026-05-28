@@ -23,6 +23,7 @@ import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
 import { useChapterParagraphPrefetch } from '@/hooks/reader/useChapterParagraphPrefetch'
 import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
 import ReaderOverlayControls from '@/components/reader/ReaderOverlayControls'
+import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 import { useBookEmbeddings } from '@/hooks/reader/useBookEmbeddings'
 import {
   navigationHistoryActor,
@@ -241,6 +242,13 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
 
   // Mirror reader state (book title, TOC open, TTS playing) into the native menu.
   useReaderMenuSync({ book, tocOpen })
+
+  // Co-locate player actor creation with the format reader. AZW3/MOBI seed
+  // paragraphs at chapter-load time (no view-boundary advances during TTS),
+  // so the placeholder noopViewActor inside playerMachine is sufficient —
+  // no viewLogic to provide. This keeps actor lifecycle uniform across all
+  // three readers.
+  usePlayerMachine(book.id.toString())
 
   // Surface parse errors / empty-book to the user. This effect only reads
   // from query state and shows a toast — it does not call setState.

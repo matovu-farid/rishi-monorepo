@@ -96,6 +96,8 @@ import { useTtsHighlightReconciler } from '@/hooks/useTtsHighlightReconciler'
 import { useVisibleEpubIframe } from '@/hooks/reader/useVisibleEpubIframe'
 import { createEpubTtsReconciler, type EpubTtsReconciler } from './reconcileTtsHighlight'
 import { useDebouncedLocationSave } from './useDebouncedLocationSave'
+import { epubViewActor, type EpubViewInput } from '@/actors/epubViewActor'
+import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 
 function updateTheme(rendition: Rendition, theme: ThemeType) {
   const reditionThemes = rendition.themes
@@ -136,6 +138,24 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     renditionRef.current = rendition
   }, [rendition])
+
+  // Create the player actor here, co-located with the rendition, so we can
+  // wire the per-format view actor (epubViewActor) and let it own
+  // rendition.next() / NAV_NO_PROGRESS detection. viewInput identity is
+  // pinned to the rendition reference — the actor restarts when it changes,
+  // which only happens on book swap (the parent remounts via key={book.id}).
+  const viewInput = useMemo<EpubViewInput | undefined>(() => {
+    if (!rendition) return undefined
+    return {
+      rendition,
+      getParagraphs: () =>
+        getCurrentViewParagraphs(rendition).map((p) => ({
+          text: p.text,
+          index: p.cfiRange
+        }))
+    }
+  }, [rendition])
+  usePlayerMachine(book.id.toString(), { viewLogic: epubViewActor, viewInput })
 
   // Boot the centralised navigation state machine
   useNavMachine(rendition)

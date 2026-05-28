@@ -12,14 +12,19 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { toast } from 'sonner'
 import { useEffect, useRef, useState, useCallback, useSyncExternalStore } from 'react'
 import { useRequireAuth } from '@/hooks/useRequireAuth'
-import { usePlayerMachine } from '@/hooks/usePlayerMachine'
-import { usePlayerStore, type PlayerStoreState } from '@/stores/playerStore'
+import { usePlayerStore, type PlayerStoreState, type PlayerSend } from '@/stores/playerStore'
 import { ContextualHint } from '@/components/tutorial/ContextualHint'
 
 interface TTSControlsProps {
   bookId: string
   disabled?: boolean
 }
+
+// Stable no-op stand-in for the brief window between mount and the format
+// reader's effect publishing the real `send` into playerStore. Module-level
+// so the identity is referentially stable across renders, which keeps memo
+// dep arrays that close over `send` from churning.
+const noopSend: PlayerSend = () => {}
 
 /** Duration before the expanded pill auto-collapses (ms). */
 const AUTO_DISMISS_MS = 4_000
@@ -70,7 +75,7 @@ const ACTIVE_PLAYBACK_STATES: ReadonlySet<PlayerStoreState> = new Set([
  */
 const SPINNER_DEBOUNCE_MS = 200
 
-export default function TTSControls({ bookId, disabled = false }: TTSControlsProps) {
+export default function TTSControls({ bookId: _bookId, disabled = false }: TTSControlsProps) {
   const prefersReducedMotion = usePrefersReducedMotion()
   const [showError, setShowError] = useState(false)
   const error = usePlayerStore((s) => s.errors).join('\n')
@@ -78,7 +83,12 @@ export default function TTSControls({ bookId, disabled = false }: TTSControlsPro
   const { requireAuth, AuthDialog } = useRequireAuth()
 
   const playingState = usePlayerStore((s) => s.playingState)
-  const { send } = usePlayerMachine(bookId)
+  // Actor lifecycle moved up to the format readers (EpubView / pdf.tsx /
+  // Azw3View) so they can wire their per-format view actor at creation
+  // time. TTSControls is now a read-only consumer of the published send;
+  // the noopSend fallback covers the brief mount window before the format
+  // reader's effect publishes the real one.
+  const send = usePlayerStore((s) => s.send) ?? noopSend
 
   // --- Pill expand / collapse state ---
   const [expanded, setExpanded] = useState(false)
