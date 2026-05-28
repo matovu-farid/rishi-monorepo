@@ -172,7 +172,15 @@ export function runMigrations(db: Database.Database): number {
     // v4: track on-disk file size per book so it can ride the sync push up
     // to the cloud. The worker enforces per-user storage + per-file caps on
     // /upload-url; the cloud books.file_size column mirrors this one.
-    db.exec('ALTER TABLE books ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0')
+    //
+    // Fresh DBs created from v1 already include this column (the v1 CREATE
+    // TABLE was retro-added at commit 60c2501d). Only ALTER when the column
+    // is missing — that's the legacy-DB path where v1 ran before the column
+    // landed in the table definition.
+    const cols = db.prepare('PRAGMA table_info(books)').all() as Array<{ name: string }>
+    if (!cols.some((c) => c.name === 'file_size')) {
+      db.exec('ALTER TABLE books ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0')
+    }
     db.pragma('user_version = 4')
   }
 
