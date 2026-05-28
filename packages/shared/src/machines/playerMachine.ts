@@ -70,6 +70,14 @@ export type PlayerMachineEvent =
   | { type: 'PAGE_NAVIGATING'; direction: 'forward' | 'backward' }
   | { type: 'PLAY_FROM'; paragraphIndex: number; partialFirstText: string; partialFirstKey: string }
   | { type: 'REPEAT' }
+  // Emitted by the view layer when a navigation request did NOT yield a new
+  // view (end of book / drift restore / same-CFI relocated / image-only
+  // page). The player transitions to `stopped` with a meaningful reason
+  // instead of timing out or silently republishing the OLD view's
+  // paragraphs and snapping to paragraph 0. Parity with electron — see
+  // apps/rishi-electron/src/renderer/src/machines/playerMachine.ts and
+  // .parity/2026-05-28-player-actor-restructure/PLAN.md §3.4.
+  | { type: 'NAV_NO_PROGRESS'; reason?: 'end-of-document' | 'no-relocation' | 'timeout' }
 
 const initialContext: PlayerMachineContext = {
   bookId: '',
@@ -536,6 +544,14 @@ export const playerMachine = setup({
           target: 'loading',
           actions: ['storeParagraphs', 'clearTimedOut', 'resetIndexByDirection']
         },
+        // The view-layer detected end-of-document / no-relocation. Don't
+        // loop; stop. Parity with electron — the structural fix for the
+        // auto-advance-past-last-paragraph snap-back bug. See
+        // .parity/2026-05-28-player-actor-restructure/PLAN.md §3.4.
+        NAV_NO_PROGRESS: {
+          target: 'stopped',
+          actions: ['resetIndex', 'clearWantsAutoResume', 'clearPartialFirst']
+        },
         STOP: {
           target: 'stopped',
           actions: ['resetIndex', 'clearPartialFirst']
@@ -566,6 +582,10 @@ export const playerMachine = setup({
         PARAGRAPHS_UPDATED: {
           target: 'loading',
           actions: ['storeParagraphs', 'clearTimedOut', 'resetIndexByDirection']
+        },
+        NAV_NO_PROGRESS: {
+          target: 'stopped',
+          actions: ['resetIndex', 'clearPartialFirst']
         },
         STOP: {
           target: 'stopped',
@@ -605,6 +625,16 @@ export const playerMachine = setup({
             actions: ['storeParagraphs', 'clearTimedOut', 'resetIndexByDirection']
           }
         ],
+        // THE bug class fix — when the rendition didn't actually advance
+        // (end of book / drift restore / image-only page / same-CFI
+        // relocated), the view layer signals NAV_NO_PROGRESS so the player
+        // transitions to stopped instead of silently looping back to
+        // paragraph 0 of the OLD view. Parity with electron — see
+        // .parity/2026-05-28-player-actor-restructure/PLAN.md §3.4.
+        NAV_NO_PROGRESS: {
+          target: 'stopped',
+          actions: ['resetIndex', 'clearWantsAutoResume', 'clearPartialFirst']
+        },
         STOP: {
           target: 'stopped',
           actions: ['resetIndex', 'clearWantsAutoResume', 'clearPartialFirst']

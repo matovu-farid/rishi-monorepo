@@ -1472,8 +1472,124 @@ test.describe('TTS state follows EPUB page navigation', () => {
     // before stalling.
     await waitForPlayerState(bookPage, 'playing', 10000)
 
+    // Strongest assertion (Phase 3.4 acceptance gate). The active paragraph
+    // must equal paragraph 0 of the NEW view — NOT paragraph 0 of the OLD
+    // view that the publishCurrentEpubParagraphs safety net used to
+    // republish. Before the NAV_NO_PROGRESS validation rule, the safety net
+    // could land playback on the OLD view's paragraph 0 even when the
+    // rendition didn't actually advance. With the rule:
+    //  - On a real advance: new view's paragraph 0 (this assertion)
+    //  - On no progress: machine transitions to `stopped` (covered in the
+    //    sibling "no-progress" test)
+    const newViewSnap = await readPlayerSnapshot(bookPage)
+    const activeId = await bookPage.evaluate(() => {
+      const w = window as unknown as {
+        __rishi: {
+          playerStore: {
+            getState: () => { activeParagraph: { index: string } | null }
+          }
+        }
+      }
+      return w.__rishi.playerStore.getState().activeParagraph?.index ?? null
+    })
+    expect(
+      activeId,
+      'After auto-advance, activeParagraph must be set to a paragraph of the NEW view.'
+    ).not.toBeNull()
+    expect(
+      activeId,
+      `After auto-advance, activeParagraph (${activeId}) must equal currentParagraphs[0].index ` +
+        `(${newViewSnap.paragraphs[0]?.index}) of the NEW view. If activeId belongs to ` +
+        `the OLD view, the safety-net's republish-without-validation regression ` +
+        `(Phase 3.4 §1) has crept back in.`
+    ).toBe(newViewSnap.paragraphs[0]?.index)
+
     // Teardown
     await sendPlayerEvent(bookPage, 'STOP')
+    await bookPage.evaluate(() => {
+      const w = window as unknown as { __rishi: { setTestTtsService: (s: null) => void } }
+      w.__rishi.setTestTtsService(null)
+    })
+  })
+
+  // ---------------------------------------------------------------------
+  // Phase 3.4 acceptance gate — the loop-back bug class.
+  //
+  // Scenario the user reported: TTS reaches the last paragraph of view A
+  // and triggers a page nav that DOESN'T actually advance the rendition
+  // (end of book, drift restore, image-only page, transient epubjs error).
+  // The OLD code's safety-net republish landed playback on paragraph 0 of
+  // view A. The structural fix: publishCurrentEpubParagraphs returns false
+  // for same-view republishes; the bridge sends NAV_NO_PROGRESS; the
+  // machine transitions to `stopped` instead of looping.
+  //
+  // This test simulates that exact path by sending PAGE_NAVIGATING followed
+  // by NAV_NO_PROGRESS directly into the actor — exercising the integration
+  // surface that the bridge hits today.
+  // ---------------------------------------------------------------------
+  test('PAGE_NAVIGATING + NAV_NO_PROGRESS lands in stopped with cleared highlight (no loop-back)', async () => {
+    test.setTimeout(60_000)
+    const book = await importBook(app.page, {
+      fixturePath: EPUB_FIXTURE,
+      kind: 'epub',
+      title: 'TTS NAV_NO_PROGRESS'
+    })
+    await closeOverlays(app.page)
+    const bookPage = await openBook(app.page, book.id)
+    await expect(bookPage.locator('[aria-label="Next page"]').first()).toBeVisible({
+      timeout: 30000
+    })
+    await waitForParagraphs(bookPage)
+    await installMockTts(bookPage)
+
+    const startSnap = await readPlayerSnapshot(bookPage)
+    expect(
+      startSnap.paragraphs.length,
+      'fixture must publish paragraphs before the test runs'
+    ).toBeGreaterThan(0)
+
+    await sendPlayerEvent(bookPage, 'PLAY')
+    await waitForPlayerState(bookPage, 'playing', 8000)
+
+    // Send PAGE_NAVIGATING (the bridge would emit this when the rendition
+    // starts curling) followed immediately by NAV_NO_PROGRESS (which the
+    // bridge sends when publishCurrentEpubParagraphs returns false).
+    await bookPage.evaluate(() => {
+      const w = window as unknown as {
+        __rishi: {
+          playerStore: {
+            getState: () => { send: ((e: Record<string, unknown>) => void) | null }
+          }
+        }
+      }
+      const send = w.__rishi.playerStore.getState().send
+      if (!send) throw new Error('playerStore.send is null')
+      send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+      send({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })
+    })
+
+    await waitForPlayerState(bookPage, 'stopped', 5000)
+
+    // The visible highlight must be cleared — without this, the OLD view's
+    // paragraph would remain highlighted post-no-progress, which would also
+    // contradict the "no loop-back" guarantee.
+    const activeAfter = await bookPage.evaluate(() => {
+      const w = window as unknown as {
+        __rishi: {
+          playerStore: {
+            getState: () => { activeParagraph: { index: string } | null }
+          }
+        }
+      }
+      return w.__rishi.playerStore.getState().activeParagraph
+    })
+    expect(
+      activeAfter,
+      'On NAV_NO_PROGRESS the active highlight must clear — a residual ' +
+        "highlight means the OLD view's paragraph 0 was about to be played."
+    ).toBeNull()
+
+    // Teardown
     await bookPage.evaluate(() => {
       const w = window as unknown as { __rishi: { setTestTtsService: (s: null) => void } }
       w.__rishi.setTestTtsService(null)
