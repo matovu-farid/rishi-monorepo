@@ -19,6 +19,7 @@ vi.mock('@/modules/ttsPrefetch', () => ({
 // chatStore (#233), so the voice-chat stub must cover the lifecycle methods
 // chatStore wires at module init (onChatStatus, onStateChange, onEndedByAgent,
 // getState, getError).
+const ttsClearBookCacheSpy = vi.fn(async () => {})
 vi.mock('@/services', () => ({
   getBookImportService: () => ({ importBatch: vi.fn(async () => []) }),
   getVoiceChatService: () => ({
@@ -32,6 +33,9 @@ vi.mock('@/services', () => ({
     onStateChange: vi.fn().mockReturnValue(() => {}),
     onChatStatus: vi.fn().mockReturnValue(() => {}),
     onEndedByAgent: vi.fn().mockReturnValue(() => {})
+  }),
+  getTtsService: () => ({
+    clearBookCache: ttsClearBookCacheSpy
   })
 }))
 
@@ -91,12 +95,14 @@ beforeEach(() => {
     makeBook({ id: 1, title: 'Alpha', author: 'A' }),
     makeBook({ id: 2, title: 'Beta', author: 'B' })
   ])
+  ;(window.electron.deleteBook as unknown as ReturnType<typeof vi.fn>).mockClear()
   ;(window.electron.deleteBook as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
   // openBook is called when a book button is clicked; needed so any effect-time
   // invocations (e.g. auto-open on newBookId) don't throw.
   ;(window.electron as unknown as Record<string, ReturnType<typeof vi.fn>>).openBook = vi
     .fn()
     .mockResolvedValue(undefined)
+  ttsClearBookCacheSpy.mockClear()
   localStorage.clear()
 })
 
@@ -217,6 +223,38 @@ describe('FileComponent — bulk delete', () => {
         (toast as unknown as { warning: ReturnType<typeof vi.fn> }).warning
       ).toHaveBeenCalledWith('Deleted 1 of 2 — 1 failed')
     })
+  })
+})
+
+describe('FileComponent — TTS cache eviction on delete', () => {
+  it('single delete clears the per-book TTS cache directory', async () => {
+    renderWithClient(<FileComponent />)
+    await waitFor(() => screen.getByText('Alpha'))
+
+    const alphaCard = screen.getByText('Alpha').closest('div')!
+    fireEvent.contextMenu(alphaCard)
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+
+    await waitFor(() => {
+      expect(window.electron.deleteBook).toHaveBeenCalledWith(1)
+    })
+    expect(ttsClearBookCacheSpy).toHaveBeenCalledWith('1')
+  })
+
+  it('bulk delete clears the per-book TTS cache directory for each book', async () => {
+    renderWithClient(<FileComponent />)
+    await waitFor(() => screen.getByText('Alpha'))
+    fireEvent.click(screen.getByRole('button', { name: /^select$/i }))
+    fireEvent.click(screen.getByLabelText('Select Alpha'))
+    fireEvent.click(screen.getByLabelText('Select Beta'))
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => {
+      expect(window.electron.deleteBook).toHaveBeenCalledTimes(2)
+    })
+    expect(ttsClearBookCacheSpy).toHaveBeenCalledWith('1')
+    expect(ttsClearBookCacheSpy).toHaveBeenCalledWith('2')
   })
 })
 

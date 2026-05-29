@@ -6,7 +6,7 @@ import { Trash2, Plus, Search, BookOpen, Check, Square, CheckSquare } from 'luci
 // chooseFiles moved into BookDiscoveryModal
 import type { Book } from '@/lib/api'
 import { deleteBook, getBooks, getCover } from '@/lib/api'
-import { getBookImportService, getVoiceChatService } from '@/services'
+import { getBookImportService, getTtsService, getVoiceChatService } from '@/services'
 import { prefetchTTSForBooks } from '@/modules/ttsPrefetch'
 import {
   resolveDroppedFilePaths,
@@ -204,6 +204,11 @@ export default function FileComponent(): React.JSX.Element {
     mutationKey: ['deleteBook'],
     mutationFn: async ({ book }: { book: Book }) => {
       await deleteBook({ bookId: book.id })
+      // Wipe the per-book TTS audio cache (<userData>/tts-cache/<bookId>/).
+      // Without this the directory leaks after the row is gone — and if the
+      // user later re-imports a book that gets the same id, stale audio could
+      // be served. clearBookCache swallows its own errors.
+      await getTtsService().clearBookCache(book.id.toString())
       removeBook(book.id)
       revokeCachedCoverUrl(book.id)
       evictPdf(book.id)
@@ -226,6 +231,9 @@ export default function FileComponent(): React.JSX.Element {
         try {
           // eslint-disable-next-line no-await-in-loop -- Backpressure: each delete does DB write + HNSW file removal; parallel would saturate disk and SQLite write queue.
           await deleteBook({ bookId: book.id })
+          // Mirror single-delete: drop the per-book TTS audio cache too.
+          // eslint-disable-next-line no-await-in-loop -- Sequenced with the delete above; clearBookCache catches its own errors.
+          await getTtsService().clearBookCache(book.id.toString())
           removeBook(book.id)
           revokeCachedCoverUrl(book.id)
           evictPdf(book.id)
