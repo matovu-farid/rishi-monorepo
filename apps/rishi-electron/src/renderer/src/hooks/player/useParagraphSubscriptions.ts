@@ -23,9 +23,19 @@ export function useParagraphSubscriptions(actor: PlayerActor | null, bookId: str
     const unsubCurrent = usePlayerStore.subscribe(
       (s) => s.currentParagraphs,
       (paragraphs) => {
-        actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs })
-        // Only prefetch when player is actively playing/loading
+        // Skip the PARAGRAPHS_UPDATED send when the change came from our own
+        // mirror in useMachineToStoreSync (machine ctx → store). Without this
+        // check we'd ping-pong: ctx changes → mirror writes store → this
+        // subscription fires → PARAGRAPHS_UPDATED back to machine → ctx changes
+        // again (no-op via deep equality, but the event still fires through
+        // every transient state). Real external writers (e.g., a test that
+        // calls setCurrentParagraphs) bypass this guard because their value
+        // differs from ctx by definition.
         const ctx = actor.getSnapshot().context
+        if (!isEqual(paragraphs, ctx.currentParagraphs)) {
+          actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs })
+        }
+        // Only prefetch when player is actively playing/loading
         const machineState = mapStateValue(actor.getSnapshot().value)
         if (machineState === 'playing' || machineState === 'loading') {
           // When the override is active, skip prefetching the override paragraph

@@ -4,7 +4,6 @@ import type Rendition from 'epubjs/types/rendition'
 import { ThemeType } from '@/themes/common'
 import {
   getAllParagraphsForBook,
-  getCurrentViewParagraphs,
   getNextViewParagraphs,
   getPreviousViewParagraphs
 } from '@/modules/epubwrapper'
@@ -128,19 +127,34 @@ export function initEpubSubscriptions(): (() => void)[] {
     )
   )
 
-  // Side effect: when rendition + location change, publish current/next/prev paragraphs.
-  // Current-page paragraphs are published immediately (needed for TTS playback).
-  // Next/prev page paragraphs are debounced to avoid wasted work during rapid page flips.
+  // Side effect: when rendition + location change, publish next/prev paragraphs
+  // for TTS prefetch. Debounced to skip rapid page flips.
+  //
+  // The current-view paragraphs are NOT published here. They flow through the
+  // playerMachine's view actor (epubViewActor), which is the SOLE writer of
+  // currentParagraphs. Reason: a single page-curl emits `relocated` several
+  // times within ~100 ms (see EpubView.tsx:1048-1050 for the documented
+  // window) — some of those fires carry stale or transient CFIs. Publishing
+  // currentParagraphs from this subscription would forward stale paragraphs
+  // into the playerStore → PARAGRAPHS_UPDATED → loading.reenter +
+  // resetIndexByDirection, snapping the highlight back to paragraph 0 of the
+  // OLD view immediately after auto-advance.
+  //
+  // The view actor validates (newLocator !== previousLocator && paragraphs.length > 0)
+  // before emitting VIEW_CHANGED, so a stale mid-animation `relocated` becomes
+  // NAV_NO_PROGRESS instead of a regression-causing publish. With the machine
+  // as the SOLE controller of currentParagraphs, the snap-back path is
+  // structurally impossible.
+  //
+  // Next/prev prefetch keeps using location as the trigger because the
+  // worst case here is a wasted fetch — the prefetch slot in playerStore
+  // doesn't drive playback or highlighting.
   unsubs.push(
     useEpubStore.subscribe(
       (state) => ({ rendition: state.rendition, location: state.currentEpubLocation }),
       (current) => {
         const { rendition, location } = current
         if (!rendition || !location) return
-
-        // Current page — publish immediately (Player needs these to play)
-        const paragraphs = getCurrentViewParagraphs(rendition).map(toPlayerParagraph)
-        usePlayerStore.getState().setCurrentParagraphs(paragraphs)
 
         // Next/prev pages — short debounce to skip rapid page flips while keeping
         // TTS prefetch responsive (was 300ms, reduced for faster audio pre-caching)
