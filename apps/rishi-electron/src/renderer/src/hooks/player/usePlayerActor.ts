@@ -7,6 +7,7 @@ import { createActor, type AnyActorLogic } from 'xstate'
 import { playerMachine, type TtsFetcher } from '@/machines/playerMachine'
 import { usePlayerStore, type PlayerSend } from '@/stores/playerStore'
 import { getTtsService } from '@/services'
+import { debugLog } from '@/utils/debugLog'
 
 export type UsePlayerActorOptions = {
   /**
@@ -49,6 +50,29 @@ export function usePlayerActor(
   )
 
   useEffect(() => {
+    // Determinism: when a per-format view actor is provided (epub/pdf/...),
+    // wait for its viewInput to resolve before creating the player actor.
+    // Why this matters: prior behaviour was to call createActor immediately
+    // with `viewInput: undefined`. The invoked view actor would crash inside
+    // Actor.start() trying to destructure undefined input, pushing the parent
+    // player actor into a final state. The follow-up React render (now that
+    // EpubView's rendition had mounted) created a SECOND player actor — but
+    // the singleton audioElement still had listeners from the first, and
+    // epubjs's ContinuousViewManager had been left in a half-initialised
+    // state. The visible symptoms: zombie "Event X was sent to stopped
+    // actor" warnings, audio that plays the new paragraph while the page
+    // visually reverts, and the next-page button locking up.
+    //
+    // With this gate, the player actor is created exactly ONCE per book
+    // session, after the rendition is available. No churn, no zombies.
+    if (options?.viewLogic && !options?.viewInput) {
+      debugLog('playerActor:deferred', {
+        bookId,
+        reason: 'view-input-not-ready'
+      })
+      return
+    }
+
     // The fetcher input is bound here so playerMachine's invoked fetchTtsLogic
     // talks to the real TTS service in production; tests rely on the machine's
     // default noopFetcher and never wait for a real fetch to resolve.
@@ -61,6 +85,12 @@ export function usePlayerActor(
     sendRef.current = send
     usePlayerStore.getState().setSend(send)
 
+    debugLog('playerActor:created', {
+      bookId,
+      hasViewInput: options?.viewInput !== undefined,
+      hasViewLogic: options?.viewLogic !== undefined
+    })
+
     next.start()
     // Seeded by routes/books.$id.lazy.tsx before this hook initializes.
     const resumeParagraphIndex = usePlayerStore.getState().lastPlayedParagraphIndex
@@ -68,6 +98,7 @@ export function usePlayerActor(
     setActor(next)
 
     return () => {
+      debugLog('playerActor:cleanup', { bookId })
       next.send({ type: 'CLEANUP' })
       // Cancel any in-flight or pending TTS requests for this book. Audio is
       // already silenced by CLEANUP → idle (sendTo audio CLEAR_SRC).
@@ -76,7 +107,7 @@ export function usePlayerActor(
       next.stop()
       setActor(null)
     }
-  }, [bookId, machine, options?.viewInput])
+  }, [bookId, machine, options?.viewInput, options?.viewLogic])
 
   return {
     actor,

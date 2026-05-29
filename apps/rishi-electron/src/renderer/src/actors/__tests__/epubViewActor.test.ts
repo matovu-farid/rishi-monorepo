@@ -240,6 +240,160 @@ describe('epubViewActor', () => {
     })
   })
 
+  describe('multi-relocated bounce-back race during page-curl (THE TTS auto-advance loop-back bug)', () => {
+    it('emits VIEW_CHANGED only ONCE per nav even when a stale bounce-back relocated fires within the settle window', async () => {
+      // Repro: TTS auto-advance triggers NAVIGATE_NEXT. epubjs fires
+      // `relocated` more than once within ~100 ms during the page-curl
+      // animation (documented in EpubView.tsx:1048-1050). With no settle
+      // guard, the SECOND relocated — carrying a stale CFI pointing back at
+      // the OLD page — passes the same-CFI check (its CFI differs from the
+      // CFI emitted by the FIRST relocated), so the actor re-emits
+      // VIEW_CHANGED with the OLD view's paragraphs. The playerMachine then
+      // writes those into ctx.currentParagraphs and resetIndexByDirection
+      // snaps paragraphIndex to 0 — the "loop back to paragraph 0 of the
+      // previous page" symptom users observe right after the last paragraph
+      // finishes playing.
+      harness = makeHarness('cfi:A')
+      const { rendition, captured, actorRef, setParagraphs } = harness
+
+      actorRef.send({ type: 'NAVIGATE_NEXT' })
+      await flushMicrotasks()
+
+      // Relocated #1: animation lands on NEW page B. paragraphs are B's.
+      setParagraphs([P('cfi:B-p1'), P('cfi:B-p2')])
+      rendition.location = { start: { cfi: 'cfi:B-p1' } }
+      rendition.emit('relocated', { start: { cfi: 'cfi:B-p1' } })
+
+      // Relocated #2: epubjs bounces back with a stale CFI on the OLD page
+      // A during the same animation window. paragraphs read back as A's.
+      // Without the settle guard, this would emit VIEW_CHANGED again and
+      // snap the player to A_p0.
+      setParagraphs([P('cfi:A-p1'), P('cfi:A-p2')])
+      rendition.location = { start: { cfi: 'cfi:A-p1' } }
+      rendition.emit('relocated', { start: { cfi: 'cfi:A-p1' } })
+
+      expect(captured).toEqual([
+        {
+          type: 'VIEW_CHANGED',
+          locator: 'cfi:B-p1',
+          paragraphs: [P('cfi:B-p1'), P('cfi:B-p2')]
+        }
+      ])
+    })
+
+    it('keeps the bounce guard alive when bounces keep arriving past the original settle window', async () => {
+      // Regression: the original 200 ms guard could be evaded by a
+      // delayed bounce — if epubjs emitted a stale relocated at +250 ms
+      // (e.g. after a React-state re-render layout shift caused a second
+      // viewport oscillation), the view actor would treat it as a fresh
+      // view-changed because settleSuppress had expired. This caused the
+      // player to snap back to the OLD page's paragraph 0 after the
+      // auto-advance, exactly the bug we're fixing. The fix: re-arm the
+      // guard on every suppressed relocated so the window slides forward
+      // as long as bounces keep arriving.
+      vi.useFakeTimers()
+      try {
+        harness = makeHarness('cfi:A')
+        const { rendition, captured, actorRef, setParagraphs } = harness
+
+        actorRef.send({ type: 'NAVIGATE_NEXT' })
+        await vi.advanceTimersByTimeAsync(0)
+
+        // T = 0: relocated #1 = destination B.
+        setParagraphs([P('cfi:B-p1')])
+        rendition.location = { start: { cfi: 'cfi:B-p1' } }
+        rendition.emit('relocated', { start: { cfi: 'cfi:B-p1' } })
+
+        // T = 150 ms: first bounce — suppressed, re-arm window.
+        await vi.advanceTimersByTimeAsync(150)
+        setParagraphs([P('cfi:A-p1')])
+        rendition.location = { start: { cfi: 'cfi:A-p1' } }
+        rendition.emit('relocated', { start: { cfi: 'cfi:A-p1' } })
+
+        // T = 300 ms: WITHOUT the re-arm this would land after the
+        // original 200 ms guard timer fired and emit a stale view-changed.
+        // With the re-arm, the guard is still active (last re-armed at 150
+        // ms, expires at 350 ms).
+        await vi.advanceTimersByTimeAsync(150)
+        setParagraphs([P('cfi:A-p1')])
+        rendition.location = { start: { cfi: 'cfi:A-p1' } }
+        rendition.emit('relocated', { start: { cfi: 'cfi:A-p1' } })
+
+        expect(captured).toEqual([
+          { type: 'VIEW_CHANGED', locator: 'cfi:B-p1', paragraphs: [P('cfi:B-p1')] }
+        ])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('emits VIEW_CHANGED for a SECOND legitimate navigation that arrives after the settle window expires', async () => {
+      // Guard: the bounce-back lock must not block legitimate back-to-back
+      // navigations (e.g. user clicks NEXT twice). When a new NAVIGATE_NEXT
+      // arrives, the actor must accept the result even if the settle timer
+      // from the previous nav is still pending.
+      vi.useFakeTimers()
+      try {
+        harness = makeHarness('cfi:A')
+        const { rendition, captured, actorRef, setParagraphs } = harness
+
+        actorRef.send({ type: 'NAVIGATE_NEXT' })
+        await vi.advanceTimersByTimeAsync(0)
+        setParagraphs([P('cfi:B-p1')])
+        rendition.location = { start: { cfi: 'cfi:B-p1' } }
+        rendition.emit('relocated', { start: { cfi: 'cfi:B-p1' } })
+
+        // Second nav arrives within the bounce-back window — must reset the
+        // lock so its relocated emits VIEW_CHANGED.
+        actorRef.send({ type: 'NAVIGATE_NEXT' })
+        await vi.advanceTimersByTimeAsync(0)
+        setParagraphs([P('cfi:C-p1')])
+        rendition.location = { start: { cfi: 'cfi:C-p1' } }
+        rendition.emit('relocated', { start: { cfi: 'cfi:C-p1' } })
+
+        expect(captured).toEqual([
+          { type: 'VIEW_CHANGED', locator: 'cfi:B-p1', paragraphs: [P('cfi:B-p1')] },
+          { type: 'VIEW_CHANGED', locator: 'cfi:C-p1', paragraphs: [P('cfi:C-p1')] }
+        ])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
+  describe('undefined input (rendition not mounted yet)', () => {
+    it('does NOT throw during start and acknowledges nav commands with NAV_NO_PROGRESS so the parent machine does not deadlock', () => {
+      // Before this guard, destructuring `input` at the top of the actor
+      // threw synchronously inside Actor.start(), pushing the parent player
+      // machine into its final state. Every subsequent INITIALIZE / CLEANUP
+      // / AUDIO_ENDED then fell on a stopped actor — observable in the dev
+      // console as "Event X was sent to stopped actor x:N" cascades.
+      const captured: ViewActorEmit[] = []
+      const parent = createActor(
+        createMachine({
+          invoke: {
+            id: 'view',
+            src: epubViewActor,
+            input: undefined
+          },
+          on: {
+            VIEW_CHANGED: { actions: ({ event }) => captured.push(event as ViewActorEmit) },
+            NAV_NO_PROGRESS: { actions: ({ event }) => captured.push(event as ViewActorEmit) }
+          }
+        })
+      )
+      expect(() => parent.start()).not.toThrow()
+      const ref = parent.getSnapshot().children.view as ActorRefFrom<typeof epubViewActor>
+      ref.send({ type: 'NAVIGATE_NEXT' })
+      ref.send({ type: 'REPUBLISH' })
+      expect(captured).toEqual([
+        { type: 'NAV_NO_PROGRESS', reason: 'no-relocation' },
+        { type: 'NAV_NO_PROGRESS', reason: 'no-relocation' }
+      ])
+      parent.stop()
+    })
+  })
+
   describe('cleanup', () => {
     it('removes the relocated listener on actor stop so post-cleanup events no longer reach the parent', () => {
       harness = makeHarness('cfi:before')

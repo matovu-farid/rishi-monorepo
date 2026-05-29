@@ -7,6 +7,7 @@ import isEqual from 'fast-deep-equal'
 import { usePlayerStore } from '@/stores/playerStore'
 import type { ParagraphWithIndex, PlayerStoreState } from '@/stores/playerStore'
 import { getVisualCueEmitter, resolveParagraphElement } from '@/services/tts'
+import { debugLog } from '@/utils/debugLog'
 import type { PlayerActor } from '@/hooks/player/usePlayerActor'
 
 function mapStateValue(value: string | Record<string, string>): PlayerStoreState {
@@ -27,11 +28,28 @@ export function useMachineToStoreSync(actor: PlayerActor | null): void {
     // for its own subscribers, but other consumers reading via the hook still
     // observe the setState event.
     let lastMirroredParagraphs: ParagraphWithIndex[] | null = null
+    let lastLoggedState: PlayerStoreState | null = null
     const sub = actor.subscribe((snapshot) => {
       const state = mapStateValue(snapshot.value)
       const ctx = snapshot.context
       const currentParagraph: ParagraphWithIndex | null =
         ctx.currentParagraphs[ctx.paragraphIndex] ?? null
+
+      // Log every distinct player-state value the machine settles into.
+      // De-duped via lastLoggedState so the many transient transition ticks
+      // (assigns, child invocations) don't flood the log with the same value.
+      if (state !== lastLoggedState) {
+        debugLog('player:state', {
+          state,
+          previousState: lastLoggedState,
+          paragraphIndex: ctx.paragraphIndex,
+          paragraphCount: ctx.currentParagraphs.length,
+          firstCfi: ctx.currentParagraphs[0]?.index ?? null,
+          direction: ctx.direction,
+          wantsAutoResume: ctx.wantsAutoResume
+        })
+        lastLoggedState = state
+      }
 
       // Invariant: activeParagraph is what the user is *currently hearing*,
       // and it must be a paragraph on the visible page. It tracks the
@@ -65,6 +83,15 @@ export function useMachineToStoreSync(actor: PlayerActor | null): void {
         lastMirroredParagraphs === null ||
         !isEqual(lastMirroredParagraphs, ctx.currentParagraphs)
       if (paragraphsChanged) {
+        debugLog('mirror:paragraphs', {
+          state,
+          paragraphIndex: ctx.paragraphIndex,
+          paragraphCount: ctx.currentParagraphs.length,
+          firstCfi: ctx.currentParagraphs[0]?.index ?? null,
+          activeCfi: nextActive?.index ?? null,
+          prevCount: lastMirroredParagraphs?.length ?? null,
+          prevFirstCfi: lastMirroredParagraphs?.[0]?.index ?? null
+        })
         lastMirroredParagraphs = ctx.currentParagraphs
         usePlayerStore.setState({
           playingState: state,

@@ -81,6 +81,9 @@ const electronAPI: ElectronAPI = {
   clearErrorDump: () => invoke('debug:clearErrorDump'),
   dumpState: (json) => invoke('debug:dumpState', json),
   readStateDump: () => invoke('debug:readStateDump'),
+  appendDebugLog: (line) => invoke('debug:appendLog', line),
+  readDebugLog: () => invoke('debug:readDebugLog'),
+  clearDebugLog: () => invoke('debug:clearDebugLog'),
 
   // Settings store
   getStoreValue: (key) => invoke('store:get', key),

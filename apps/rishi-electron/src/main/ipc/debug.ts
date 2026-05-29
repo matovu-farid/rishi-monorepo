@@ -12,6 +12,10 @@ function getStateDumpPath(): string {
   return path.join(app.getPath('userData'), 'state-dump.json')
 }
 
+function getDebugLogPath(): string {
+  return path.join(app.getPath('userData'), 'debug-log.ndjson')
+}
+
 export function registerDebugHandlers(): void {
   handle('debug:dumpError', async (_event, error) => {
     try {
@@ -83,6 +87,48 @@ export function registerDebugHandlers(): void {
       return await fs.readFile(dumpPath, 'utf-8')
     } catch (error) {
       throw new Error(`Failed to read state dump: ${errorMessage(error)}`)
+    }
+  })
+
+  // ── Append-only debug log (NDJSON) ────────────────────────────────
+  //
+  // fs.appendFile is atomic per-call at the OS level on POSIX, so concurrent
+  // renderer invocations cannot lose entries the way debug:dumpError does
+  // (its read-merge-write window races under burst load — observed in
+  // practice: hundreds of relocated/state events compress down to ~2
+  // surviving entries). Use this for fine-grained timeline tracing where
+  // every event matters.
+  handle('debug:appendLog', async (_event, line) => {
+    try {
+      const dumpPath = getDebugLogPath()
+      // Ensure each entry occupies exactly one line; the renderer helper
+      // already JSON-stringifies, this just adds the terminator.
+      await fs.appendFile(dumpPath, line + '\n', 'utf-8')
+    } catch (err) {
+      throw new Error(`Failed to append debug log: ${errorMessage(err)}`)
+    }
+  })
+
+  handle('debug:readDebugLog', async () => {
+    try {
+      const dumpPath = getDebugLogPath()
+      try {
+        await fs.access(dumpPath)
+      } catch {
+        return ''
+      }
+      return await fs.readFile(dumpPath, 'utf-8')
+    } catch (error) {
+      throw new Error(`Failed to read debug log: ${errorMessage(error)}`)
+    }
+  })
+
+  handle('debug:clearDebugLog', async () => {
+    try {
+      const dumpPath = getDebugLogPath()
+      await fs.unlink(dumpPath).catch(() => {})
+    } catch (error) {
+      throw new Error(`Failed to clear debug log: ${errorMessage(error)}`)
     }
   })
 }

@@ -19,6 +19,7 @@
 import { fromCallback } from 'xstate'
 import type Rendition from 'epubjs/types/rendition'
 import type { ParagraphWithIndex } from '@/stores/playerStore'
+import { debugLog } from '@/utils/debugLog'
 import type { ViewActorCommand, ViewActorEmit } from './viewActor'
 
 export type EpubViewInput = {
@@ -33,22 +34,88 @@ export type EpubViewInput = {
 }
 
 const NAV_TIMEOUT_MS = 10_000
+// During a page-curl, epubjs emits `relocated` more than once within
+// ~100 ms (documented in EpubView.tsx:1048-1050). The first event lands
+// on the new view; subsequent events can bounce back with a STALE CFI
+// describing the old view. Without this guard, the bounce-back re-emits
+// VIEW_CHANGED with the old view's paragraphs and playerMachine snaps
+// playback to paragraph 0 of the old view — the TTS auto-advance loop-
+// back. 200 ms covers the documented window with margin and is far below
+// any plausible user "tap NEXT twice" cadence (~250 ms+).
+const SETTLE_GUARD_MS = 200
 
 type Location = { start: { cfi: string } }
 type NavNoProgressReason = Extract<ViewActorEmit, { type: 'NAV_NO_PROGRESS' }>['reason']
 
-export const epubViewActor = fromCallback<ViewActorCommand, EpubViewInput>(
+export const epubViewActor = fromCallback<ViewActorCommand, EpubViewInput | undefined>(
   ({ sendBack, receive, input }) => {
+    // Defensive: usePlayerActor creates the player actor at mount time using
+    // whatever viewInput is currently available. EpubView's viewInput memo
+    // resolves to `undefined` until the epubjs Rendition has been created in
+    // the `getRendition` callback. If we destructured eagerly here, the
+    // throw would propagate up Actor.start() and put the whole player
+    // machine into a final state — every subsequent INITIALIZE, CLEANUP,
+    // and AUDIO_ENDED then hits a stopped actor (visible in the dev
+    // console as "Event X was sent to stopped actor x:N"). Worse, the
+    // audioActor sibling keeps the singleton audioElement's `ended`
+    // listener attached, so when EpubView finally creates a working
+    // replacement actor we end up with zombie listeners firing AUDIO_ENDED
+    // at the dead actor. Returning a no-op cleanup here keeps the parent
+    // alive; React swaps the actor cleanly once viewInput stabilises.
+    if (!input) {
+      // Still emit the dev dump so the instrumentation captures the swap.
+      debugLog('view:noop-start', { reason: 'input-undefined' })
+      // Acknowledge nav commands with NAV_NO_PROGRESS so the machine doesn't
+      // sit in waitingForParagraphs/republishingParagraphs for the full 10 s
+      // timeout if the user triggers a navigation before the rendition has
+      // mounted. The actor instance is swapped as soon as EpubView produces
+      // a real viewInput.
+      receive((event) => {
+        const cmd = event as ViewActorCommand
+        if (
+          cmd.type === 'NAVIGATE_NEXT' ||
+          cmd.type === 'NAVIGATE_PREV' ||
+          cmd.type === 'NAVIGATE_TO' ||
+          cmd.type === 'REPUBLISH'
+        ) {
+          sendBack({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })
+        }
+      })
+      return () => {}
+    }
     const { rendition, getParagraphs } = input
     let previousLocator: string | null = rendition.location?.start?.cfi ?? null
     let navInProgress = false
     let navTimeout: ReturnType<typeof setTimeout> | null = null
+    // True for SETTLE_GUARD_MS after the most recent VIEW_CHANGED emit.
+    // Filters bounce-back relocated events during a single page-curl.
+    // Reset by startNav so legitimate back-to-back navigations are not
+    // dropped, and by clearSettleGuard() when the timer fires.
+    let settleSuppress = false
+    let settleTimer: ReturnType<typeof setTimeout> | null = null
 
     const clearNavTimeout = (): void => {
       if (navTimeout) {
         clearTimeout(navTimeout)
         navTimeout = null
       }
+    }
+
+    const clearSettleGuard = (): void => {
+      settleSuppress = false
+      if (settleTimer) {
+        clearTimeout(settleTimer)
+        settleTimer = null
+      }
+    }
+
+    const armSettleGuard = (): void => {
+      settleSuppress = true
+      if (settleTimer) clearTimeout(settleTimer)
+      settleTimer = setTimeout(() => {
+        settleSuppress = false
+        settleTimer = null
+      }, SETTLE_GUARD_MS)
     }
 
     const failNav = (reason: NavNoProgressReason): void => {
@@ -59,9 +126,40 @@ export const epubViewActor = fromCallback<ViewActorCommand, EpubViewInput>(
     }
 
     const handleRelocated = (location: Location): void => {
-      const newLocator = location?.start?.cfi
+      const newLocator = location?.start?.cfi ?? null
+      const newParagraphs = newLocator ? getParagraphs() : []
+      const decision = (() => {
+        if (settleSuppress) return 'suppressed-bounce'
+        if (!newLocator) return 'no-cfi'
+        const sameView = previousLocator !== null && newLocator === previousLocator
+        if (sameView) return 'nav-no-progress-same-view'
+        if (newParagraphs.length === 0) return 'nav-no-progress-empty'
+        return 'view-changed'
+      })()
+      debugLog('view:relocated', {
+        newLocator,
+        previousLocator,
+        paragraphCount: newParagraphs.length,
+        firstParagraphCfi: newParagraphs[0]?.index ?? null,
+        navInProgress,
+        settleSuppress,
+        decision,
+        renditionLocationCfi: rendition.location?.start?.cfi ?? null
+      })
+
+      // Bounce-back guard: ignore relocated events that fire within the
+      // settle window after a successful VIEW_CHANGED. epubjs's page-curl
+      // emits multiple relocateds in rapid succession; the second one can
+      // carry a stale CFI that, if accepted, would snap the player back
+      // to the old view's paragraph 0. While bounces keep arriving, KEEP
+      // the guard alive — extends the window beyond SETTLE_GUARD_MS so a
+      // delayed bounce past the original timer still hits a closed gate.
+      if (settleSuppress) {
+        armSettleGuard()
+        return
+      }
+
       if (!newLocator) return
-      const newParagraphs = getParagraphs()
 
       const sameView = previousLocator !== null && newLocator === previousLocator
       const empty = newParagraphs.length === 0
@@ -72,12 +170,17 @@ export const epubViewActor = fromCallback<ViewActorCommand, EpubViewInput>(
         // ignore — emitting NAV_NO_PROGRESS would confuse a parent that
         // didn't ask to navigate.
         failNav('no-relocation')
+        // Re-arm so a same-CFI re-emit (typically from EpubView's
+        // display() re-anchor) keeps the guard alive against a later
+        // bounce to a different stale CFI.
+        armSettleGuard()
         return
       }
 
       previousLocator = newLocator
       navInProgress = false
       clearNavTimeout()
+      armSettleGuard()
       sendBack({
         type: 'VIEW_CHANGED',
         locator: newLocator,
@@ -93,18 +196,42 @@ export const epubViewActor = fromCallback<ViewActorCommand, EpubViewInput>(
       previousLocator = rendition.location?.start?.cfi ?? previousLocator
       navInProgress = true
       clearNavTimeout()
+      // Reset the settle guard from any prior nav. Without this, a NEW
+      // navigation that arrives within SETTLE_GUARD_MS of the previous emit
+      // would have its relocated suppressed and the parent would never
+      // receive VIEW_CHANGED (machine would time out in waitingForParagraphs).
+      clearSettleGuard()
       navTimeout = setTimeout(() => failNav('timeout'), NAV_TIMEOUT_MS)
+
+      debugLog('view:startNav', { kind, locator: locator ?? null, previousLocator })
 
       let promise: Promise<unknown>
       if (kind === 'next') promise = rendition.next()
       else if (kind === 'prev') promise = rendition.prev()
       else promise = rendition.display(locator!)
 
-      promise.catch(() => failNav('end-of-document'))
+      promise.then(
+        () => debugLog('view:navPromise:resolved', { kind }),
+        (err: unknown) => {
+          debugLog('view:navPromise:rejected', {
+            kind,
+            err: err instanceof Error ? err.message : String(err)
+          })
+          failNav('end-of-document')
+        }
+      )
     }
 
     receive((event) => {
       const cmd = event as ViewActorCommand
+      debugLog('view:command', {
+        cmd: cmd.type,
+        locator: cmd.type === 'NAVIGATE_TO' ? cmd.locator : null,
+        previousLocator,
+        navInProgress,
+        settleSuppress,
+        renditionLocationCfi: rendition.location?.start?.cfi ?? null
+      })
       if (cmd.type === 'NAVIGATE_NEXT') startNav('next')
       else if (cmd.type === 'NAVIGATE_PREV') startNav('prev')
       else if (cmd.type === 'NAVIGATE_TO') startNav('display', cmd.locator)
@@ -118,6 +245,9 @@ export const epubViewActor = fromCallback<ViewActorCommand, EpubViewInput>(
         // Emit even if locator equals previousLocator — REPUBLISH is the
         // "I lost track, tell me again" signal, not a navigation result.
         previousLocator = newLocator
+        // Arm the settle guard so any bounce-back relocated that fires
+        // immediately after this re-emit doesn't re-introduce the snap-back.
+        armSettleGuard()
         sendBack({ type: 'VIEW_CHANGED', locator: newLocator, paragraphs: newParagraphs })
       }
     })
@@ -125,6 +255,7 @@ export const epubViewActor = fromCallback<ViewActorCommand, EpubViewInput>(
     return () => {
       rendition.off('relocated', handleRelocated)
       clearNavTimeout()
+      clearSettleGuard()
     }
   }
 )

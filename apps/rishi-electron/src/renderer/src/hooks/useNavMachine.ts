@@ -9,6 +9,7 @@ import { createActor } from 'xstate'
 import { navMachine } from '@/machines/navMachine'
 import type { NavMachineEvent } from '@/machines/navMachine'
 import { useNavStore } from '@/stores/navStore'
+import { debugLog } from '@/utils/debugLog'
 import type { Rendition } from 'epubjs/types'
 
 /**
@@ -39,6 +40,14 @@ export function useNavMachine(rendition: Rendition | null) {
       const ctx = snapshot.context
       const r = renditionRef.current
 
+      debugLog('nav:state', {
+        state,
+        pendingAction: ctx.pendingAction,
+        curlDirection: ctx.curlDirection,
+        version: ctx.version,
+        curlSettled: ctx.curlSettled
+      })
+
       // Always keep the store in sync
       useNavStore.getState().setNavState(state)
 
@@ -53,6 +62,13 @@ export function useNavMachine(rendition: Rendition | null) {
         const settle = () => {
           if (gen === navGen) actor.send({ type: 'SETTLED' })
         }
+
+        debugLog('nav:renditionCall', {
+          via: 'navigating',
+          pendingAction: ctx.pendingAction,
+          pendingLocation: ctx.pendingLocation,
+          gen
+        })
 
         let promise: Promise<void>
         if (ctx.pendingAction === 'next') {
@@ -80,6 +96,11 @@ export function useNavMachine(rendition: Rendition | null) {
         const settle = () => {
           if (gen === navGen) actor.send({ type: 'SETTLED' })
         }
+        debugLog('nav:renditionCall', {
+          via: 'curling',
+          curlDirection: ctx.curlDirection,
+          gen
+        })
         const promise = ctx.curlDirection === 'next' ? r.next() : r.prev()
         promise.then(settle, settle)
       }

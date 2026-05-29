@@ -38,8 +38,12 @@ const NAV_TIMEOUT_MS = 10_000
 
 type NavNoProgressReason = Extract<ViewActorEmit, { type: 'NAV_NO_PROGRESS' }>['reason']
 
-export const pdfViewActor = fromCallback<ViewActorCommand, PdfViewInput>(
+export const pdfViewActor = fromCallback<ViewActorCommand, PdfViewInput | undefined>(
   ({ sendBack, receive, input }) => {
+    // See epubViewActor: usePlayerActor creates the player actor before the
+    // PDF page-controls + virtualizer mount has produced a viewInput. Bail
+    // to a no-op so the parent player actor doesn't enter a final state.
+    if (!input) return () => {}
     const { next, prev, goTo, subscribe, getSnapshot } = input
 
     let previousPage: number | null = null

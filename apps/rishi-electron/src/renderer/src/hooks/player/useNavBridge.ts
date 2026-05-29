@@ -11,6 +11,7 @@
 import { useEffect } from 'react'
 import { useNavStore } from '@/stores/navStore'
 import { usePlayerStore } from '@/stores/playerStore'
+import { debugLog } from '@/utils/debugLog'
 import type { PlayerActor } from '@/hooks/player/usePlayerActor'
 
 export function useNavBridge(actor: PlayerActor | null): void {
@@ -19,6 +20,12 @@ export function useNavBridge(actor: PlayerActor | null): void {
     const unsub = useNavStore.subscribe(
       (s) => s.navState,
       (navState, prevNavState) => {
+        debugLog('navBridge:navState', {
+          prevNavState,
+          navState,
+          playerState: actor.getSnapshot().value,
+          direction: actor.getSnapshot().context.direction
+        })
         if (prevNavState === 'idle' && navState !== 'idle') {
           // Audio is silenced by the machine's pageNavigating entry action
           // (sendTo audio STOP). Just send PAGE_NAVIGATING and clear the
