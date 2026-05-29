@@ -114,6 +114,7 @@ interface PdfState {
     bookId: number,
     dims: { baseWidth: number; baseHeight: number }[]
   ) => void
+  clearPageDimensions: (bookId: number) => void
   getPageDimension: (
     bookId: number,
     pageIndex: number
@@ -222,10 +223,12 @@ export const usePdfStore = create<PdfState>()(
         const s = get()
         const { [id]: _, ...rest } = s.pdfsRendered
         const { [id]: __, ...restMasks } = s.footerMaskByBookId
+        const { [id]: ___, ...restDims } = s.pageDimensionsByBookId
         set({
           books: s.books.filter((b) => b !== id),
           pdfsRendered: rest,
-          footerMaskByBookId: restMasks
+          footerMaskByBookId: restMasks,
+          pageDimensionsByBookId: restDims
         })
       },
       setAllBooks: (ids) => {
@@ -257,6 +260,11 @@ export const usePdfStore = create<PdfState>()(
         set((state) => ({
           pageDimensionsByBookId: { ...state.pageDimensionsByBookId, [bookId]: dims }
         })),
+      clearPageDimensions: (bookId) =>
+        set((state) => {
+          const { [bookId]: _, ...rest } = state.pageDimensionsByBookId
+          return { pageDimensionsByBookId: rest }
+        }),
       getPageDimension: (bookId, pageIndex) => {
         const dims = get().pageDimensionsByBookId[bookId]
         return dims ? dims[pageIndex] : undefined

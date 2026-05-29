@@ -298,4 +298,23 @@ describe('usePdfStore — pageDimensionsByBookId', () => {
       baseHeight: 2
     })
   })
+
+  it('clearPageDimensions evicts the entry for that book', () => {
+    usePdfStore.getState().setPageDimensions(42, [{ baseWidth: 612, baseHeight: 792 }])
+    usePdfStore.getState().setPageDimensions(43, [{ baseWidth: 100, baseHeight: 100 }])
+    usePdfStore.getState().clearPageDimensions(42)
+    expect(usePdfStore.getState().getPageDimension(42, 0)).toBeUndefined()
+    // Other books are unaffected.
+    expect(usePdfStore.getState().getPageDimension(43, 0)).toEqual({
+      baseWidth: 100,
+      baseHeight: 100
+    })
+  })
+
+  it('removeBook evicts pageDimensionsByBookId for that book', () => {
+    usePdfStore.getState().addBook(42)
+    usePdfStore.getState().setPageDimensions(42, [{ baseWidth: 612, baseHeight: 792 }])
+    usePdfStore.getState().removeBook(42)
+    expect(usePdfStore.getState().getPageDimension(42, 0)).toBeUndefined()
+  })
 })
