@@ -1,6 +1,7 @@
 import { safeStorage, app } from 'electron'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
+import { atomicWriteFile } from '../utils/atomicWrite.js'
 
 const FILE = 'session.enc'
 
@@ -28,11 +29,16 @@ export async function readSession(): Promise<string | null> {
 }
 
 export async function writeSession(token: string): Promise<void> {
+  // Atomic write: a crash mid-fs.writeFile previously left session.enc
+  // half-written, which decrypts to garbage and manifests as a silent
+  // logout on next launch. tmp+rename guarantees that the only ever-
+  // observable state is the old token (rename never happened) or the
+  // new token in full (rename completed).
   if (safeStorage.isEncryptionAvailable()) {
     const enc = safeStorage.encryptString(token)
-    await fs.writeFile(path(), enc, { mode: 0o600 })
+    await atomicWriteFile(path(), enc, { mode: 0o600 })
   } else {
-    await fs.writeFile(path(), token, { mode: 0o600, encoding: 'utf-8' })
+    await atomicWriteFile(path(), token, { mode: 0o600 })
   }
 }
 

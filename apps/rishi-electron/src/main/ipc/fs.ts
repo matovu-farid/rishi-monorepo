@@ -4,6 +4,7 @@ import * as path from 'node:path'
 import JSZip from 'jszip'
 import { handle } from '../../preload/ipc-contract.js'
 import { errorMessage } from '../utils/errors.js'
+import { atomicWriteFile } from '../utils/atomicWrite.js'
 
 /**
  * Assert that the given file/directory path is inside the app's userData directory.
@@ -131,7 +132,11 @@ export function registerFsHandlers(): void {
           : data instanceof ArrayBuffer
             ? Buffer.from(data)
             : Buffer.from(data)
-      await fs.writeFile(filePath, buffer)
+      // Atomic write: a crash mid-write previously left a partial file at
+      // filePath. Renderer callers (TTS cache, page-data exports) can't
+      // tell a partial file from a real one and would happily serve
+      // garbage on next read. tmp+rename guarantees only-old-or-only-new.
+      await atomicWriteFile(filePath, buffer)
     } catch (error) {
       throw new Error(`Failed to write file "${filePath}": ${errorMessage(error)}`)
     }

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from 'fs'
+import { mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -68,8 +68,11 @@ class FakeHNSW {
     this.points.set(0, new Array(this.loadedDim).fill(0.1))
   }
 
-  writeIndexSync(_filename: string): void {
-    // No-op — we don't actually need bytes on disk for tests.
+  writeIndexSync(filename: string): void {
+    // Production atomically writes to a sibling tmp then renames over the
+    // target. Real hnswlib lays down bytes on disk; the fake mirrors that
+    // by writing a stub byte so the subsequent renameSync succeeds.
+    writeFileSync(filename, Buffer.from('fake-hnsw'))
   }
 
   setEf(_ef: number): void {
@@ -186,10 +189,12 @@ describe('vectordb index recovery', () => {
       saveVectors('12-vectordb', 384, [{ id: 1, vector: makeVec(384, 0.3) }])
     ).not.toThrow()
 
-    // The corrupt file must have been removed (then re-saved as a fresh
-    // index by writeIndexSync — but FakeHNSW.writeIndexSync is a no-op,
-    // so the file should be absent now).
-    expect(existsSync(indexFile)).toBe(false)
+    // The corrupt file must have been removed and replaced by a fresh
+    // index. FakeHNSW.writeIndexSync now actually writes a stub byte
+    // (matching production's atomic tmp+rename), so the file exists with
+    // the new payload rather than the old corrupt one.
+    expect(existsSync(indexFile)).toBe(true)
+    expect(readFileSync(indexFile).toString()).toBe('fake-hnsw')
   })
 
   it('searchVectors does not throw when the on-disk index is corrupt', () => {
@@ -220,9 +225,11 @@ describe('vectordb index recovery', () => {
       saveVectors('30-vectordb', 384, [{ id: 5, vector: makeVec(384, 0.5) }])
     ).not.toThrow()
 
-    // The stale file must have been unlinked. The fresh index isn't
-    // persisted by the fake, so the file should NOT exist.
-    expect(existsSync(indexFile)).toBe(false)
+    // The stale file must have been unlinked and replaced. Production's
+    // atomic save writes a tmp+rename; the fake mirrors that by writing
+    // a stub byte, so the file should exist with the fresh payload.
+    expect(existsSync(indexFile)).toBe(true)
+    expect(readFileSync(indexFile).toString()).toBe('fake-hnsw')
 
     // The most recently constructed FakeHNSW must have the new dim.
     expect(FakeHNSW.lastInstance?.dim).toBe(384)

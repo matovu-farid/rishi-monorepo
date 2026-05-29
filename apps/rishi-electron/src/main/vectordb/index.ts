@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { join } from 'path'
-import { mkdirSync, existsSync, unlinkSync } from 'fs'
+import { mkdirSync, existsSync, unlinkSync, renameSync } from 'fs'
 import type * as HnswLib from 'hnswlib-node'
 import { errorMessage } from '../utils/errors.js'
 
@@ -263,8 +263,17 @@ export function saveVectors(
 
   entry.count = entry.index.getCurrentCount()
 
-  // Persist to disk
-  entry.index.writeIndexSync(indexPath(name))
+  // Persist to disk atomically: hnswlib writes the binary index in
+  // multiple passes, so a crash mid-write previously left a corrupt file
+  // at `<name>.hnsw`. On next boot the index would fail to load and the
+  // book's vectors would be reindexed from scratch (minutes per book on
+  // large libraries). Write to a sibling tmp file and rename over the
+  // target — POSIX rename is atomic, Windows MoveFileEx with the same
+  // volume is atomic for our purposes.
+  const target = indexPath(name)
+  const tmp = `${target}.tmp`
+  entry.index.writeIndexSync(tmp)
+  renameSync(tmp, target)
 }
 
 /**
