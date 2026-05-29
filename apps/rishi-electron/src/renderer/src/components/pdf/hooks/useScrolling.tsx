@@ -174,8 +174,34 @@ export function useScrolling(scrollContainerRef: React.RefObject<HTMLDivElement 
       const elementTopRelativeToContainer = elementRect.top - containerRect.top + currentScrollTop
 
       // Calculate target scroll position to center the element
-      const targetScrollTop =
+      let targetScrollTop =
         elementTopRelativeToContainer - container.clientHeight / 2 + elementRect.height / 2
+
+      // Centering clamp (issue: jarring back-shift on paragraph 1 of a
+      // freshly-snapped page). After `pageControls.nextPage()` aligns the
+      // new page flush with the viewport top via `align:'start'`, paragraph
+      // 0 is suppressed by `isLookingForNextParagraph` above — but paragraph
+      // 1 (and any other paragraph in the top half of the viewport) would
+      // otherwise be centered, which pulls `scrollTop` *below* the page's
+      // top in document coordinates and visually drags the prior page's
+      // bottom back into view. Clamp the target to the top of the page that
+      // owns the highlighted mark; never scroll backward past it.
+      const pageEl = el.closest<HTMLElement>('[data-page-number]')
+      if (pageEl) {
+        const pageRect = pageEl.getBoundingClientRect()
+        const pageTopInDoc = pageRect.top - containerRect.top + currentScrollTop
+        if (targetScrollTop < pageTopInDoc) {
+          targetScrollTop = pageTopInDoc
+        }
+      }
+
+      // After clamping, if the target equals the current position, skip the
+      // animate entirely — otherwise framer-motion spins a 0.8 s no-op tween
+      // and we needlessly hold `isAutoCentering` true through the trailing
+      // 200 ms clear, blocking usePdfReader's scroll-debounce for ~1 s.
+      if (Math.abs(targetScrollTop - currentScrollTop) < 1) {
+        return
+      }
 
       // Stop any in-flight animate before starting a new one. framer-motion's
       // `animate(value, value, opts)` returns controls but does NOT cancel

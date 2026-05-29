@@ -95,6 +95,39 @@ function setupContainerWithMark(): {
   return { container, mark }
 }
 
+/**
+ * Build a stand-in for the PDF page wrapper (`[data-page-number="N"]`)
+ * around a mark, with a stubbed `getBoundingClientRect()` so the centering
+ * clamp in useScrolling can compute `pageTopInDoc` deterministically. The
+ * wrapper is inserted as the mark's immediate parent inside `container`.
+ */
+function wrapMarkInPage(
+  container: HTMLDivElement,
+  mark: HTMLElement,
+  pageNumber: number,
+  pageTopInViewport: number
+): HTMLDivElement {
+  const pageEl = document.createElement('div')
+  pageEl.setAttribute('data-page-number', String(pageNumber))
+  pageEl.getBoundingClientRect = (): DOMRect =>
+    ({
+      top: pageTopInViewport,
+      left: 0,
+      right: 0,
+      bottom: pageTopInViewport + 1000,
+      width: 0,
+      height: 1000,
+      x: 0,
+      y: pageTopInViewport,
+      toJSON: () => ({})
+    }) as DOMRect
+  // Re-parent the mark under the new wrapper so `mark.closest(...)` resolves.
+  container.removeChild(mark)
+  pageEl.appendChild(mark)
+  container.appendChild(pageEl)
+  return pageEl
+}
+
 /** Renders useScrolling with a stable ref pointing at `container`. */
 function renderUseScrolling(container: HTMLDivElement): void {
   renderHook(() => {
@@ -224,7 +257,32 @@ describe('useScrolling — page-advance snap-back race (issue #30 refined sympto
     // paragraph advances WITHIN the same page must center normally.
     // A naive fix that just left the flag stuck `true` would silently
     // break the in-page auto-scroll-along.
-    const { container } = setupContainerWithMark()
+    const { container, mark } = setupContainerWithMark()
+    // Wrap the mark in a [data-page-number] ancestor positioned so its
+    // top sits 100 px ABOVE the container's top — i.e. pageTopInDoc =
+    // scrollTop(1000) - 100 = 900. This mimics in-page reading geometry
+    // (the user has scrolled partway down the page), where the centering
+    // clamp must NOT engage. Without the wrapper the clamp's defensive
+    // `if (pageEl)` branch silently skips and we wouldn't exercise the
+    // real production geometry.
+    wrapMarkInPage(container, mark, 12, -100)
+    // Move paragraph 1's mark into the lower half of the viewport so
+    // the centered target (1000 + 500 - 400 + 12 = 1112) moves FORWARD
+    // past `currentScrollTop` and stays well above `pageTopInDoc` (900).
+    // Original fixture had the mark at top:0 — that geometry is now
+    // owned by the new clamp test below.
+    mark.getBoundingClientRect = (): DOMRect =>
+      ({
+        top: 500,
+        left: 0,
+        right: 0,
+        bottom: 524,
+        width: 0,
+        height: 24,
+        x: 0,
+        y: 500,
+        toJSON: () => ({})
+      }) as DOMRect
 
     const p0 = makeParagraph('120001', 'first paragraph of new page')
     const p1 = makeParagraph('120002', 'second paragraph of new page')
@@ -256,6 +314,109 @@ describe('useScrolling — page-advance snap-back race (issue #30 refined sympto
     expect(
       animateMock,
       'after consuming the page-advance suppression, in-page highlight advances must continue to auto-center'
+    ).toHaveBeenCalledTimes(1)
+  })
+
+  it('does NOT animate when centering would scroll backward past the new page top (clamp guard for paragraph 1+ on freshly-snapped page)', () => {
+    // Reproduce the second symptom of the auto-advance race: after
+    // pageControls.nextPage() lands page N+1 flush with the viewport top
+    // via `virtualizer.scrollToIndex(N+1, { align: 'start' })`, the
+    // `isLookingForNextParagraph` flag suppresses centering for
+    // paragraph 0 — but paragraph 1's centering math (mark.top in the
+    // top half of the viewport) produces a `targetScrollTop` BELOW the
+    // page's top in document coordinates. Without the clamp, the 0.8 s
+    // tween scrolls backward past the new page's top and visually drags
+    // the previous page's bottom back into view. We isolate the clamp
+    // here by leaving `isLookingForNextParagraph` false — so the only
+    // thing that can suppress the animate is the new clamp+no-op guard.
+    const { container, mark } = setupContainerWithMark()
+    // Paragraph 1 sits 150 px below the page top — top half of the 800
+    // px viewport, so the centered target would be 1000 + 150 - 400 + 12
+    // = 762, which is 238 px ABOVE the page top (1000) → backward scroll
+    // past the page top → clamp engages → no-op early-return.
+    mark.getBoundingClientRect = (): DOMRect =>
+      ({
+        top: 150,
+        left: 0,
+        right: 0,
+        bottom: 174,
+        width: 0,
+        height: 24,
+        x: 0,
+        y: 150,
+        toJSON: () => ({})
+      }) as DOMRect
+    // Page top aligns flush with viewport top → pageTopInDoc =
+    // 0 - 0 + currentScrollTop(1000) = 1000.
+    wrapMarkInPage(container, mark, 2, 0)
+
+    const p = makeParagraph('020001', 'paragraph 1 of freshly-snapped page 2')
+    usePdfStore.setState({
+      // Crucial: the existing isLookingForNextParagraph flag is FALSE.
+      // The previous test covers that suppression path; this test isolates
+      // the new clamp+no-op guard.
+      isLookingForNextParagraph: false,
+      currentViewParagraphs: [p],
+      isTextGot: true,
+      highlightedParagraphIndex: ''
+    })
+
+    renderUseScrolling(container)
+
+    act(() => {
+      usePdfStore.setState({ highlightedParagraphIndex: '020001' })
+    })
+    act(() => {
+      vi.advanceTimersByTime(150)
+    })
+
+    expect(
+      animateMock,
+      'useScrolling must NOT center a paragraph whose centered target would scroll the page backward past its own top — that produces the jarring downward shift right after a page snap (paragraph 1+ regression on freshly-landed pages). The clamp pins targetScrollTop to pageTopInDoc, and the equality check skips the no-op tween so isAutoCentering does not stay held for the trailing-clear window.'
+    ).not.toHaveBeenCalled()
+  })
+
+  it('still animates when the paragraph sits in the lower half of a freshly-snapped page (clamp must be conditional, not blanket)', () => {
+    // Conditional-guard regression: the clamp must NOT fire for marks
+    // whose centered target is forward of pageTopInDoc. Here paragraph
+    // sits 500 px below the page top; centered target = 1000 + 500 - 400
+    // + 12 = 1112, which is 112 px BELOW pageTopInDoc(1000) → no clamp,
+    // forward scroll, animate fires once.
+    const { container, mark } = setupContainerWithMark()
+    mark.getBoundingClientRect = (): DOMRect =>
+      ({
+        top: 500,
+        left: 0,
+        right: 0,
+        bottom: 524,
+        width: 0,
+        height: 24,
+        x: 0,
+        y: 500,
+        toJSON: () => ({})
+      }) as DOMRect
+    wrapMarkInPage(container, mark, 2, 0)
+
+    const p = makeParagraph('020005', 'paragraph 5 of freshly-snapped page 2 (lower half)')
+    usePdfStore.setState({
+      isLookingForNextParagraph: false,
+      currentViewParagraphs: [p],
+      isTextGot: true,
+      highlightedParagraphIndex: ''
+    })
+
+    renderUseScrolling(container)
+
+    act(() => {
+      usePdfStore.setState({ highlightedParagraphIndex: '020005' })
+    })
+    act(() => {
+      vi.advanceTimersByTime(150)
+    })
+
+    expect(
+      animateMock,
+      'lower-half paragraphs whose centered target is below pageTopInDoc must still auto-center — the clamp is a directional guard, not a blanket suppression'
     ).toHaveBeenCalledTimes(1)
   })
 })
