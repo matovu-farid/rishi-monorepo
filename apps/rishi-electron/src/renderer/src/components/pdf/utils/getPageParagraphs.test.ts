@@ -127,3 +127,72 @@ describe('pageDataToParagraphs (mask-aware)', () => {
     expect(out.some((p: any) => p.text.includes('Brendan'))).toBe(false)
   })
 })
+
+describe('pageDataToParagraphs — sentence-aware 5-line break', () => {
+  // Helper: build a "page" with N successive EOL'd lines at the same y-cluster
+  // (no vertical gap, so isVerticallySpaced is false). Lines beyond MIN_PARA_LEN
+  // collectively form ONE paragraph today; the 5-line cap is what splits it.
+  const makeLongParagraphPage = (lines: string[]): any => {
+    const items: any[] = []
+    // Start near top, decrement y by exactly the line-height so vertical gap
+    // detection does NOT fire (lines are tight, like wrapped body text).
+    let y = 560
+    const lineHeight = 14 // small enough that y-delta < getParagraphThreshold
+    for (const text of lines) {
+      items.push(makeItem(text, y, { hasEOL: true, height: 12 }))
+      y -= lineHeight
+    }
+    return { items, styles: {} }
+  }
+
+  it('does NOT break a 6-line paragraph mid-sentence', () => {
+    // 6 lines, no sentence terminator until the very end. Today this splits at
+    // line 6. After the fix, it stays as a single paragraph because lines 1-5
+    // do not end a sentence.
+    const lines = [
+      'Velocity is the key component in nearly all software development',
+      'today, and the industry has evolved from shipping boxed CDs',
+      'to delivering software via web-based services that update hourly',
+      'which means the difference between you and your competitors is',
+      'often the speed with which you can develop and deploy new features',
+      'or respond to innovations developed by other organizations today.'
+    ]
+    const paragraphs = pageDataToParagraphs(7, makeLongParagraphPage(lines))
+    expect(paragraphs).toHaveLength(1)
+    // The whole text should be present in the single emitted paragraph.
+    expect(paragraphs[0].text).toContain('Velocity is the key component')
+    expect(paragraphs[0].text).toContain('developed by other organizations today.')
+  })
+
+  it('breaks at sentence end when line-count threshold has been crossed', () => {
+    // 7 lines: first 4 are mid-sentence, line 5 ends a sentence, lines 6-7 are
+    // a new sentence. Today breaks at line 6 mid-sentence. After fix, breaks
+    // after line 5 (the first sentence-ending EOL beyond the 5-line threshold).
+    const lines = [
+      'This first sentence wraps across several lines without ending',
+      'and continues to wrap so that the line count keeps incrementing',
+      'until we are quite a few lines deep into the paragraph here',
+      'and still the sentence has not yet reached a terminator yet',
+      'but it finally ends right here at the close of this fifth line.',
+      'Now a second sentence begins. It is short and ends on line seven.',
+      'Trailing matter beyond the break does not affect this test outcome.'
+    ]
+    const paragraphs = pageDataToParagraphs(7, makeLongParagraphPage(lines))
+    expect(paragraphs.length).toBeGreaterThanOrEqual(2)
+    // First paragraph contains the first sentence ending with a period.
+    expect(paragraphs[0].text).toMatch(/at the close of this fifth line\.\s*$/)
+    // Second paragraph contains the start of the second sentence.
+    expect(paragraphs[1].text).toContain('Now a second sentence begins')
+  })
+
+  it('forces a break at the safety cap when no sentence terminator appears', () => {
+    // 13 lines, none ending a sentence. After the fix, the safety cap (12)
+    // forces a break so paragraphs never grow unbounded.
+    const lines = Array.from(
+      { length: 13 },
+      (_, i) => `line ${i} of a paragraph that just keeps going and never ends`
+    )
+    const paragraphs = pageDataToParagraphs(7, makeLongParagraphPage(lines))
+    expect(paragraphs.length).toBeGreaterThanOrEqual(2)
+  })
+})
