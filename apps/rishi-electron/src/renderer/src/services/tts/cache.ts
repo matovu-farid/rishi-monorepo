@@ -9,9 +9,9 @@ export interface CacheDeps {
 }
 
 export interface Cache {
-  audioPath(bookId: string, cfiRange: string): Promise<string>
-  getAudio(bookId: string, cfiRange: string, textHash?: string): Promise<ArrayBuffer | null>
-  saveAudio(bookId: string, cfiRange: string, bytes: Uint8Array, textHash?: string): Promise<string>
+  audioPath(bookId: string, cfiRange: string, text?: string): Promise<string>
+  getAudio(bookId: string, cfiRange: string, text?: string): Promise<ArrayBuffer | null>
+  saveAudio(bookId: string, cfiRange: string, bytes: Uint8Array, text?: string): Promise<string>
   clearBook(bookId: string): Promise<void>
   evictIfNeeded(): Promise<void>
 }
@@ -42,36 +42,37 @@ export function createCache(deps: CacheDeps): Cache {
     return dir
   }
 
-  async function audioPath(bookId: string, cfiRange: string): Promise<string> {
+  async function audioPath(bookId: string, cfiRange: string, text?: string): Promise<string> {
     const dir = await bookDir(bookId)
-    return `${dir}/${md5(cfiRange)}.mp3`
+    const suffix = text ? `-${md5(text)}` : ''
+    return `${dir}/${md5(cfiRange)}${suffix}.mp3`
   }
 
   return {
     audioPath,
-    async getAudio(bookId, cfiRange, textHash) {
-      const cfiPath = await audioPath(bookId, cfiRange)
+    async getAudio(bookId, cfiRange, text) {
+      const cfiPath = await audioPath(bookId, cfiRange, text)
       if (await ipc.exists(cfiPath)) {
         return ipc.readFile(cfiPath)
       }
-      if (textHash) {
-        const mirror = await audioPath(bookId, `texthash:${md5(textHash)}`)
+      if (text) {
+        const mirror = await audioPath(bookId, `texthash:${md5(text)}`, text)
         if (await ipc.exists(mirror)) {
           return ipc.readFile(mirror)
         }
       }
       return null
     },
-    async saveAudio(bookId, cfiRange, bytes, textHash) {
+    async saveAudio(bookId, cfiRange, bytes, text) {
       if (bytes.byteLength === 0) {
         throw new Error('Audio blob is zero bytes, skipping cache write')
       }
-      const path = await audioPath(bookId, cfiRange)
+      const path = await audioPath(bookId, cfiRange, text)
       await ipc.writeFile(path, bytes)
 
-      if (textHash && !cfiRange.startsWith('texthash:')) {
+      if (text && !cfiRange.startsWith('texthash:')) {
         try {
-          const mirror = await audioPath(bookId, `texthash:${md5(textHash)}`)
+          const mirror = await audioPath(bookId, `texthash:${md5(text)}`, text)
           const mirrorExists = await ipc.exists(mirror)
           if (!mirrorExists) await ipc.copyFile(path, mirror)
         } catch {

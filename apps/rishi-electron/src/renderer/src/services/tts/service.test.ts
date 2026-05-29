@@ -69,7 +69,7 @@ describe('TtsService.requestAudio', () => {
     // Pre-populate the cache by saving via the cache module the same way service does
     const { createCache } = await import('./cache')
     const cache = createCache({ ipc, cacheMaxBytes: baseConfig.cacheMaxBytes })
-    await cache.saveAudio('book-1', 'cfi-x', new Uint8Array([9, 9, 9]))
+    await cache.saveAudio('book-1', 'cfi-x', new Uint8Array([9, 9, 9]), 'hello')
 
     const { fetch, callCount } = makeFetch({})
     const service = createTtsService({

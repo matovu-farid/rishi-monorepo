@@ -161,7 +161,7 @@ export function makeProgram(deps: ProgramDeps): Program {
       // 3. Cache write is fire-and-forget — matches Stage 1's `void deps.cache.saveAudio(...)`.
       yield* Effect.forkDaemon(
         Effect.tryPromise(() =>
-          deps.cache.saveAudio(item.bookId, item.cfiRange, new Uint8Array(bytes))
+          deps.cache.saveAudio(item.bookId, item.cfiRange, new Uint8Array(bytes), item.text)
         ).pipe(Effect.ignore)
       )
       yield* Effect.forkDaemon(

@@ -145,6 +145,18 @@ describe('cache.getAudio', () => {
 
     expect(got).toBeNull()
   })
+
+  it('returns null when the CFI matches but the text has changed (no stale bytes)', async () => {
+    const { ipc } = makeIpc()
+    const cache = createCache({ ipc, cacheMaxBytes: 500 * 1024 * 1024 })
+    // Same slot-positional CFI (e.g. page*10000+slotN) cached for old footnote text
+    await cache.saveAudio('book-1', 'N0001', new Uint8Array([1, 2, 3]), 'footnote text')
+
+    // After reading-order change, slot N0001 now holds different body text
+    const got = await cache.getAudio('book-1', 'N0001', 'different body text')
+
+    expect(got).toBeNull()
+  })
 })
 
 describe('cache.clearBook', () => {
