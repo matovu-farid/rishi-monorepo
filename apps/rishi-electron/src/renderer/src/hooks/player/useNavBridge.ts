@@ -32,12 +32,14 @@ export function useNavBridge(actor: PlayerActor | null): void {
           // highlight so the UI doesn't keep the old paragraph marked
           // during the curl.
           usePlayerStore.setState({ activeParagraph: null })
-          // The machine owns direction state; the view actor sets it when
-          // it issues NAVIGATE_PREV. For external nav (user clicked the EPUB
-          // arrow) the machine's stored direction is whatever was last set,
-          // defaulting to 'forward' — which is the correct behaviour for a
-          // forward-arrow click and an acceptable fallback otherwise.
-          const direction: 'forward' | 'backward' = actor.getSnapshot().context.direction
+          // Read the direction the nav machine just committed to (forward
+          // for NEXT/CURL_NEXT, backward for PREV/CURL_PREV). The player's
+          // own context.direction is stale here — after a PREV that landed
+          // at the previous page's last paragraph, direction='backward'
+          // persists, and a subsequent next-page click would otherwise
+          // ride that stale value into the new page and snap playback to
+          // its last paragraph instead of paragraph 0.
+          const direction = useNavStore.getState().navDirection
           actor.send({ type: 'PAGE_NAVIGATING', direction })
         }
       }

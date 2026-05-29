@@ -48,8 +48,14 @@ export function useNavMachine(rendition: Rendition | null) {
         curlSettled: ctx.curlSettled
       })
 
-      // Always keep the store in sync
+      // Always keep the store in sync. Publishing direction alongside state
+      // lets useNavBridge forward the actual nav intent to the player —
+      // using the player's own context.direction leaks stale state from a
+      // prior PREV nav and lands a forward-next-page on the last paragraph.
       useNavStore.getState().setNavState(state)
+      const navDirection: 'forward' | 'backward' =
+        ctx.curlDirection === 'prev' || ctx.pendingAction === 'prev' ? 'backward' : 'forward'
+      useNavStore.getState().setNavDirection(navDirection)
 
       // Only execute side-effects for *new* navigation transitions
       // (version is bumped by every action that needs a rendition call).
