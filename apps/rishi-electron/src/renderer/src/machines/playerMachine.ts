@@ -12,7 +12,7 @@
 import { setup, assign, sendTo, raise, fromCallback } from 'xstate'
 import type { ParagraphWithIndex } from '@/stores/playerStore'
 import { audioActor, audioElement } from '@/actors/audioActor'
-import { fetchTtsLogic, type TtsFetchInput, type TtsFetchOutput } from '@/actors/ttsFetchActor'
+import { fetchTtsLogic, type TtsFetchInput } from '@/actors/ttsFetchActor'
 import type { ViewActorCommand } from '@/actors/viewActor'
 
 const MAX_RETRIES = 3
@@ -493,14 +493,22 @@ export const playerMachine = setup({
         // replacing the bridge's manual fetchGeneration counter.
         src: 'fetchTtsLogic',
         input: ({ context }): TtsFetchInput => {
-          const paragraph = context.currentParagraphs[context.paragraphIndex]
+          // `as | undefined` (not a plain annotation) so ts-eslint sees the
+          // widened type at use sites — paragraphIndex may point past the end
+          // of currentParagraphs while paragraphs are being swapped in/out
+          // (transient between PAGE_NAVIGATING and PARAGRAPHS_UPDATED), and
+          // the repo doesn't have noUncheckedIndexedAccess on.
+          const paragraph = context.currentParagraphs[context.paragraphIndex] as
+            | ParagraphWithIndex
+            | undefined
           const useOverride =
             context.partialFirstText !== null &&
             context.partialFirstParagraphIndex === context.paragraphIndex
+          // Non-null assertions are safe inside the useOverride branch — the
+          // guard above proves partialFirstText/Key are non-null.
           const text = useOverride ? context.partialFirstText! : (paragraph?.text ?? '')
           const cfiRange = useOverride ? context.partialFirstKey! : (paragraph?.index ?? '')
-          const skip =
-            !paragraph || context.currentParagraphs.length === 0 || !text.trim()
+          const skip = !paragraph || context.currentParagraphs.length === 0 || !text.trim()
           return {
             bookId: context.bookId,
             cfiRange,
@@ -515,7 +523,7 @@ export const playerMachine = setup({
             // ended naturally — let the AUDIO_ENDED handlers below auto-advance
             // or hand off to waitingForParagraphs. Sending via raise would also
             // work; the parent's on-handlers see it identically.
-            guard: ({ event }) => (event.output as TtsFetchOutput).kind === 'skip',
+            guard: ({ event }) => event.output.kind === 'skip',
             actions: raise({ type: 'AUDIO_ENDED' })
           },
           {

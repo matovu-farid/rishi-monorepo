@@ -52,85 +52,85 @@ function describeMediaError(audio: HTMLMediaElement): string {
   const err = audio.error
   const message = err?.message
   if (message && message.length > 0) return message
-  if (err?.code !== undefined) return MEDIA_ERROR_LABELS[err.code] ?? `Audio error (code ${err.code})`
+  if (err?.code !== undefined)
+    return MEDIA_ERROR_LABELS[err.code] ?? `Audio error (code ${err.code})`
   return 'Audio playback error'
 }
 
-export const audioActor = fromCallback<AudioCommand, AudioInput>(
-  ({ sendBack, receive, input }) => {
-    const audio = input?.audio ?? audioElement
+export const audioActor = fromCallback<AudioCommand, AudioInput>(({ sendBack, receive, input }) => {
+  const audio = input.audio ?? audioElement
 
-    // The pending canplaythrough handler for the most-recent PLAY. A new PLAY
-    // removes the previous one before installing its own, so a single error
-    // or canplaythrough event can never fire two handlers (which would emit
-    // two AUDIO_LOADED / AUDIO_ERROR events to the parent).
-    let pendingCanPlay: (() => void) | null = null
+  // The pending canplaythrough handler for the most-recent PLAY. A new PLAY
+  // removes the previous one before installing its own, so a single error
+  // or canplaythrough event can never fire two handlers (which would emit
+  // two AUDIO_LOADED / AUDIO_ERROR events to the parent).
+  let pendingCanPlay: (() => void) | null = null
 
-    const handleEnded = (): void => {
-      sendBack({ type: 'AUDIO_ENDED' })
+  const handleEnded = (): void => {
+    sendBack({ type: 'AUDIO_ENDED' })
+  }
+  const handleError = (): void => {
+    // Drop any in-flight canplaythrough — the load has failed, no LOADED
+    // will follow. Without this, a delayed canplaythrough would still fire
+    // play() on a broken stream.
+    if (pendingCanPlay) {
+      audio.removeEventListener('canplaythrough', pendingCanPlay)
+      pendingCanPlay = null
     }
-    const handleError = (): void => {
-      // Drop any in-flight canplaythrough — the load has failed, no LOADED
-      // will follow. Without this, a delayed canplaythrough would still fire
-      // play() on a broken stream.
+    sendBack({ type: 'AUDIO_ERROR', error: describeMediaError(audio) })
+  }
+  audio.addEventListener('ended', handleEnded)
+  audio.addEventListener('error', handleError)
+
+  receive((event) => {
+    const cmd = event
+    if (cmd.type === 'PLAY') {
       if (pendingCanPlay) {
         audio.removeEventListener('canplaythrough', pendingCanPlay)
+      }
+      audio.pause()
+      audio.currentTime = 0
+      audio.src = cmd.src
+      audio.load()
+
+      const handleCanPlay = (): void => {
+        audio.removeEventListener('canplaythrough', handleCanPlay)
+        // Defensive: if a newer PLAY swapped the pending handler before this
+        // ran, the listener was already removed and we shouldn't emit.
+        if (pendingCanPlay !== handleCanPlay) return
         pendingCanPlay = null
+        audio.play().then(
+          () => sendBack({ type: 'AUDIO_LOADED' }),
+          (err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err)
+            sendBack({ type: 'AUDIO_ERROR', error: msg })
+          }
+        )
       }
-      sendBack({ type: 'AUDIO_ERROR', error: describeMediaError(audio) })
-    }
-    audio.addEventListener('ended', handleEnded)
-    audio.addEventListener('error', handleError)
-
-    receive((event) => {
-      const cmd = event as AudioCommand
-      if (cmd.type === 'PLAY') {
-        if (pendingCanPlay) {
-          audio.removeEventListener('canplaythrough', pendingCanPlay)
-        }
-        audio.pause()
-        audio.currentTime = 0
-        audio.src = cmd.src
-        audio.load()
-
-        const handleCanPlay = (): void => {
-          audio.removeEventListener('canplaythrough', handleCanPlay)
-          // Defensive: if a newer PLAY swapped the pending handler before this
-          // ran, the listener was already removed and we shouldn't emit.
-          if (pendingCanPlay !== handleCanPlay) return
-          pendingCanPlay = null
-          audio.play().then(
-            () => sendBack({ type: 'AUDIO_LOADED' }),
-            (err: unknown) => {
-              const msg = err instanceof Error ? err.message : String(err)
-              sendBack({ type: 'AUDIO_ERROR', error: msg })
-            }
-          )
-        }
-        pendingCanPlay = handleCanPlay
-        audio.addEventListener('canplaythrough', handleCanPlay)
-      } else if (cmd.type === 'PAUSE') {
-        audio.pause()
-      } else if (cmd.type === 'RESUME') {
-        void audio.play()
-      } else if (cmd.type === 'STOP') {
-        audio.pause()
-        audio.currentTime = 0
-      } else if (cmd.type === 'CLEAR_SRC') {
-        audio.pause()
-        audio.src = ''
-      }
-    })
-
-    return () => {
-      audio.removeEventListener('ended', handleEnded)
-      audio.removeEventListener('error', handleError)
-      if (pendingCanPlay) {
-        audio.removeEventListener('canplaythrough', pendingCanPlay)
-        pendingCanPlay = null
-      }
+      pendingCanPlay = handleCanPlay
+      audio.addEventListener('canplaythrough', handleCanPlay)
+    } else if (cmd.type === 'PAUSE') {
+      audio.pause()
+    } else if (cmd.type === 'RESUME') {
+      void audio.play()
+    } else if (cmd.type === 'STOP') {
+      audio.pause()
+      audio.currentTime = 0
+    } else {
+      // CLEAR_SRC (only remaining variant in AudioCommand).
       audio.pause()
       audio.src = ''
     }
+  })
+
+  return () => {
+    audio.removeEventListener('ended', handleEnded)
+    audio.removeEventListener('error', handleError)
+    if (pendingCanPlay) {
+      audio.removeEventListener('canplaythrough', pendingCanPlay)
+      pendingCanPlay = null
+    }
+    audio.pause()
+    audio.src = ''
   }
-)
+})

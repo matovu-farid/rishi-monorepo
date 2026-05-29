@@ -40,13 +40,13 @@ export function usePlayerActor(
 
   // Customise the machine when a per-format view actor is provided. Memo on
   // viewLogic identity so EpubView/pdf.tsx can stabilise it with their own
-  // useMemo without churning the actor lifecycle.
+  // useMemo without churning the actor lifecycle. Hoisting `viewLogic` to a
+  // local keeps the dep array a stable identifier — React Compiler bails out
+  // on optional-chain deps, so we read once and pass the result through.
+  const viewLogic = options?.viewLogic
   const machine = useMemo(
-    () =>
-      options?.viewLogic
-        ? playerMachine.provide({ actors: { view: options.viewLogic } })
-        : playerMachine,
-    [options?.viewLogic]
+    () => (viewLogic ? playerMachine.provide({ actors: { view: viewLogic } }) : playerMachine),
+    [viewLogic]
   )
 
   useEffect(() => {
@@ -65,7 +65,7 @@ export function usePlayerActor(
     //
     // With this gate, the player actor is created exactly ONCE per book
     // session, after the rendition is available. No churn, no zombies.
-    if (options?.viewLogic && !options?.viewInput) {
+    if (options?.viewLogic && !options.viewInput) {
       debugLog('playerActor:deferred', {
         bookId,
         reason: 'view-input-not-ready'
@@ -95,6 +95,11 @@ export function usePlayerActor(
     // Seeded by routes/books.$id.lazy.tsx before this hook initializes.
     const resumeParagraphIndex = usePlayerStore.getState().lastPlayedParagraphIndex
     next.send({ type: 'INITIALIZE', bookId, resumeParagraphIndex })
+    // Expose the actor to children via the returned `{ actor }` object so
+    // they can subscribe to its snapshot. setState inside this effect is
+    // intentional — actor creation is gated on bookId/viewInput identity,
+    // not a render-loop input, so there's no cascading-render risk.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setActor(next)
 
     return () => {

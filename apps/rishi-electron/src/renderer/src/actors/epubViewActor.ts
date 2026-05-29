@@ -44,7 +44,18 @@ const NAV_TIMEOUT_MS = 10_000
 // any plausible user "tap NEXT twice" cadence (~250 ms+).
 const SETTLE_GUARD_MS = 200
 
-type Location = { start: { cfi: string } }
+// Local shape used by handleRelocated. Marked all-optional because epubjs's
+// `relocated` payload can lose its CFI on certain re-emits (the bounce-back
+// race we already filter elsewhere). Lets us guard with `?.` without
+// triggering @typescript-eslint/no-unnecessary-condition.
+type Location = { start?: { cfi?: string } } | undefined
+// epubjs's Rendition.location is typed as non-null but in practice is
+// undefined until the first `displayed` event fires. Helper centralises the
+// defensive read so we can suppress the lint rule once.
+const readRenditionCfi = (rendition: Rendition): string | null => {
+  const loc = rendition.location as Location
+  return loc?.start?.cfi ?? null
+}
 type NavNoProgressReason = Extract<ViewActorEmit, { type: 'NAV_NO_PROGRESS' }>['reason']
 
 export const epubViewActor = fromCallback<ViewActorCommand, EpubViewInput | undefined>(
@@ -70,21 +81,16 @@ export const epubViewActor = fromCallback<ViewActorCommand, EpubViewInput | unde
       // timeout if the user triggers a navigation before the rendition has
       // mounted. The actor instance is swapped as soon as EpubView produces
       // a real viewInput.
-      receive((event) => {
-        const cmd = event as ViewActorCommand
-        if (
-          cmd.type === 'NAVIGATE_NEXT' ||
-          cmd.type === 'NAVIGATE_PREV' ||
-          cmd.type === 'NAVIGATE_TO' ||
-          cmd.type === 'REPUBLISH'
-        ) {
-          sendBack({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })
-        }
+      receive(() => {
+        // Any command (NAVIGATE_NEXT / PREV / TO or REPUBLISH) gets the
+        // same no-progress reply while the rendition isn't ready. The
+        // command-type switch lives in the real (input-bound) path below.
+        sendBack({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })
       })
       return () => {}
     }
     const { rendition, getParagraphs } = input
-    let previousLocator: string | null = rendition.location?.start?.cfi ?? null
+    let previousLocator: string | null = readRenditionCfi(rendition)
     let navInProgress = false
     let navTimeout: ReturnType<typeof setTimeout> | null = null
     // True for SETTLE_GUARD_MS after the most recent VIEW_CHANGED emit.
@@ -144,7 +150,7 @@ export const epubViewActor = fromCallback<ViewActorCommand, EpubViewInput | unde
         navInProgress,
         settleSuppress,
         decision,
-        renditionLocationCfi: rendition.location?.start?.cfi ?? null
+        renditionLocationCfi: readRenditionCfi(rendition)
       })
 
       // Bounce-back guard: ignore relocated events that fire within the
@@ -193,7 +199,7 @@ export const epubViewActor = fromCallback<ViewActorCommand, EpubViewInput | unde
     const startNav = (kind: 'next' | 'prev' | 'display', locator?: string): void => {
       // Snapshot the current CFI so the relocated-with-same-cfi case can be
       // detected even if the rendition mutates its `location` synchronously.
-      previousLocator = rendition.location?.start?.cfi ?? previousLocator
+      previousLocator = readRenditionCfi(rendition) ?? previousLocator
       navInProgress = true
       clearNavTimeout()
       // Reset the settle guard from any prior nav. Without this, a NEW
@@ -208,7 +214,7 @@ export const epubViewActor = fromCallback<ViewActorCommand, EpubViewInput | unde
       let promise: Promise<unknown>
       if (kind === 'next') promise = rendition.next()
       else if (kind === 'prev') promise = rendition.prev()
-      else promise = rendition.display(locator!)
+      else promise = rendition.display(locator)
 
       promise.then(
         () => debugLog('view:navPromise:resolved', { kind }),
@@ -223,20 +229,21 @@ export const epubViewActor = fromCallback<ViewActorCommand, EpubViewInput | unde
     }
 
     receive((event) => {
-      const cmd = event as ViewActorCommand
+      const cmd = event
       debugLog('view:command', {
         cmd: cmd.type,
         locator: cmd.type === 'NAVIGATE_TO' ? cmd.locator : null,
         previousLocator,
         navInProgress,
         settleSuppress,
-        renditionLocationCfi: rendition.location?.start?.cfi ?? null
+        renditionLocationCfi: readRenditionCfi(rendition)
       })
       if (cmd.type === 'NAVIGATE_NEXT') startNav('next')
       else if (cmd.type === 'NAVIGATE_PREV') startNav('prev')
       else if (cmd.type === 'NAVIGATE_TO') startNav('display', cmd.locator)
-      else if (cmd.type === 'REPUBLISH') {
-        const newLocator = rendition.location?.start?.cfi
+      else {
+        // REPUBLISH (only remaining variant in ViewActorCommand).
+        const newLocator = readRenditionCfi(rendition)
         const newParagraphs = getParagraphs()
         if (!newLocator || newParagraphs.length === 0) {
           sendBack({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })

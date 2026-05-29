@@ -144,13 +144,14 @@ export const pdfViewActor = fromCallback<ViewActorCommand, PdfViewInput | undefi
     }
 
     receive((event) => {
-      const cmd = event as ViewActorCommand
+      const cmd = event
       if (cmd.type === 'NAVIGATE_NEXT') startNav('next')
       else if (cmd.type === 'NAVIGATE_PREV') startNav('prev')
       else if (cmd.type === 'NAVIGATE_TO') {
         const page = Number.parseInt(cmd.locator, 10)
         if (Number.isFinite(page)) startNav('goTo', page)
-      } else if (cmd.type === 'REPUBLISH') {
+      } else {
+        // REPUBLISH (only remaining variant in ViewActorCommand).
         const snap = getSnapshot()
         if (snap.paragraphs.length === 0) {
           sendBack({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })

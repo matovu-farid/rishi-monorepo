@@ -1049,6 +1049,9 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               settled: settledRef.current,
               userNavHappened: userNavHappenedRef.current,
               bookLocation: book.location,
+              // epubjs's Rendition.location is typed non-null but is undefined
+              // before the first relocated. Defensive `?.` is intentional.
+              // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
               renditionLocationCfi: renditionRef.current?.location?.start?.cfi ?? null
             })
 
@@ -1078,17 +1081,17 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               queueMicrotask(() => {
                 const r = renditionRef.current
                 if (!r) return
+                // Same defensive read as above — type lies during init.
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
                 const currentCfi = r.location?.start?.cfi ?? null
                 if (currentCfi !== targetCfi) {
                   debugLog('epub:rendition-reanchor', { targetCfi, currentCfi })
-                  void r
-                    .display(targetCfi)
-                    .catch((err: unknown) =>
-                      debugLog('epub:rendition-reanchor:rejected', {
-                        targetCfi,
-                        err: err instanceof Error ? err.message : String(err)
-                      })
-                    )
+                  void r.display(targetCfi).catch((err: unknown) =>
+                    debugLog('epub:rendition-reanchor:rejected', {
+                      targetCfi,
+                      err: err instanceof Error ? err.message : String(err)
+                    })
+                  )
                 }
               })
               return

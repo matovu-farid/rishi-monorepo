@@ -36,7 +36,7 @@ import { ThumbnailSidebar } from './thumbnail-sidebar'
 import TTSControls from '@/components/tts/TTSControls'
 import { pdfViewActor, type PdfViewInput, type PdfViewSnapshot } from '@/actors/pdfViewActor'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
-import type { TextItem } from 'react-pdf'
+import type { TextContent, TextItem } from 'react-pdf'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useUpdateCoverIMage } from '../hooks/useUpdateCoverIMage'
 import { useScrolling } from '../hooks/useScrolling'
@@ -184,7 +184,10 @@ export function PdfView({
   const viewInput = useMemo<PdfViewInput>(() => {
     const toSnapshot = (): PdfViewSnapshot => {
       const s = usePdfStore.getState()
-      const data = s.pageNumberToPageData[s.pageNumber]
+      // `as | undefined` so ts-eslint sees the widened type at the !data check
+      // — the worker populates the record async and the typed
+      // Record<number, TextContent> claims non-null which is wrong at runtime.
+      const data = s.pageNumberToPageData[s.pageNumber] as TextContent | undefined
       // dataReady flag lets pdfViewActor distinguish "still extracting"
       // (transient, defer) from "extracted but no text" (image-only, fail
       // nav). Without it, auto-advance fires NAV_NO_PROGRESS during the
