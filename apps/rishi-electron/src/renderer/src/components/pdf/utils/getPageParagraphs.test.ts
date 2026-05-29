@@ -194,5 +194,12 @@ describe('pageDataToParagraphs — sentence-aware 5-line break', () => {
     )
     const paragraphs = pageDataToParagraphs(7, makeLongParagraphPage(lines))
     expect(paragraphs.length).toBeGreaterThanOrEqual(2)
+    // Pin the cap location: first paragraph must include exactly the first
+    // 12 lines (line 0..line 11), and the 13th line (line 12) starts a new
+    // paragraph. A regression that fires the cap early — or never fires it —
+    // would change which line label opens paragraph[1].
+    expect(paragraphs[0].text).toContain('line 11 of a paragraph')
+    expect(paragraphs[0].text).not.toContain('line 12 of a paragraph')
+    expect(paragraphs[1].text).toContain('line 12 of a paragraph')
   })
 })
