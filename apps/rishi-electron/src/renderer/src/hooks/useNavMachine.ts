@@ -48,14 +48,18 @@ export function useNavMachine(rendition: Rendition | null) {
         curlSettled: ctx.curlSettled
       })
 
-      // Always keep the store in sync. Publishing direction alongside state
-      // lets useNavBridge forward the actual nav intent to the player —
-      // using the player's own context.direction leaks stale state from a
-      // prior PREV nav and lands a forward-next-page on the last paragraph.
-      useNavStore.getState().setNavState(state)
+      // Publish navState and navDirection in a SINGLE setState. zustand's
+      // subscribeWithSelector fires listeners synchronously inside the
+      // originating `set()` — if we wrote navState first and navDirection
+      // second, useNavBridge's navState listener would observe the new
+      // state alongside the *previous* navDirection. That gap silently
+      // re-introduces the stale-direction bug useNavBridge.test.ts
+      // documents: an EPUB-prev-curl followed by an EPUB-next-curl would
+      // forward direction='backward' from the prior nav and snap the
+      // player to the new page's last paragraph instead of paragraph 0.
       const navDirection: 'forward' | 'backward' =
         ctx.curlDirection === 'prev' || ctx.pendingAction === 'prev' ? 'backward' : 'forward'
-      useNavStore.getState().setNavDirection(navDirection)
+      useNavStore.setState({ navState: state, navDirection })
 
       // Only execute side-effects for *new* navigation transitions
       // (version is bumped by every action that needs a rendition call).
