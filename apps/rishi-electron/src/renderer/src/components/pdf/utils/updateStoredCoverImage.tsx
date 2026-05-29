@@ -1,5 +1,6 @@
 import type { Book } from '@/lib/api'
 import { getBook, updateBookCover } from '@/lib/api'
+import { revokeCachedCoverUrl } from '@/components/library/coverCache'
 
 export async function updateStoredCoverImage(book: Book) {
   if (book.coverKind && book.coverKind !== 'fallback') return
@@ -26,4 +27,9 @@ export async function updateCoverImage(blob: Blob, id: number) {
   const cover = Array.from(new Uint8Array(await blob.arrayBuffer()))
 
   await updateBookCover({ bookId: id, newCover: cover })
+  // Drop the cached blob URL for this book so the next library mount
+  // refetches the freshly-written bytes via getCover(). Without this the
+  // library keeps painting the placeholder until full reload (the cache
+  // keys on book.id alone and updateBookCover doesn't bump book.version).
+  revokeCachedCoverUrl(id)
 }
