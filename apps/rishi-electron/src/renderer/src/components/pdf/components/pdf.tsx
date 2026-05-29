@@ -726,23 +726,39 @@ export function PdfView({
         // is off OR the book is too short for the heuristic to be reliable.
         // Mask lives in-memory only; clearing/toggling the pref doesn't
         // re-scan — selector consults the pref at read time.
-        if (!usePrefsStore.getState().pdfFooterDetection || numPages < MIN_PAGES_FOR_DETECTION) {
+        // Always pre-measure page dimensions for the virtualizer — even when
+        // footer detection is disabled. Heights drive estimateSize so TanStack
+        // Virtual doesn't have to fire layout-correction adjustments when the
+        // user scrolls past pages with non-default heights.
+        const footerDetectionEnabled =
+          usePrefsStore.getState().pdfFooterDetection && numPages >= MIN_PAGES_FOR_DETECTION
+
+        const pageDims: { baseWidth: number; baseHeight: number }[] = new Array(numPages)
+        const scans: PageScanInput[] = []
+
+        for (let n = 1; n <= numPages; n++) {
+          if (isCancelled()) return
+          const page = await loadedDoc.getPage(n)
+          try {
+            const view = page.view
+            const baseWidth = view[2] - view[0]
+            const baseHeight = view[3] - view[1]
+            pageDims[n - 1] = { baseWidth, baseHeight }
+            if (footerDetectionEnabled) {
+              const content = await page.getTextContent()
+              scans.push({ pageNumber: n, content, viewportHeight: baseHeight })
+            }
+          } finally {
+            page.cleanup()
+          }
+        }
+
+        if (isCancelled()) return
+        usePdfStore.getState().setPageDimensions(book.id, pageDims)
+
+        if (!footerDetectionEnabled) {
           usePdfStore.getState().setFooterMask(book.id, new Map())
         } else {
-          const scans: PageScanInput[] = []
-          for (let n = 1; n <= numPages; n++) {
-            if (isCancelled()) return
-            const page = await loadedDoc.getPage(n)
-            try {
-              const content = await page.getTextContent()
-              const view = page.view
-              const viewportHeight = view[3] - view[1]
-              scans.push({ pageNumber: n, content, viewportHeight })
-            } finally {
-              page.cleanup()
-            }
-          }
-          if (isCancelled()) return
           const mask = buildFooterMask(scans)
           const suffixMask = findRepeatingPageSuffix(scans)
           for (const [pageNumber, itemSet] of suffixMask) {
