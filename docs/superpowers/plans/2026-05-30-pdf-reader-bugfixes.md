@@ -168,7 +168,13 @@ Replace with:
 
 ```typescript
 const wantsLineCountBreak = lineCount >= 5 && item.hasEOL
-const endsAtSentence = SENTENCE_END_RE.test(item.str)
+// Check the ACCUMULATED text, not the current incoming item: the break
+// fires *before* appending the current item, so we're asking "is the
+// paragraph so far complete enough that breaking here keeps sentences
+// intact?" Checking item.str instead would split mid-sentence whenever
+// the 6th wrapped line happens to end a sentence the accumulated text
+// hadn't closed yet.
+const endsAtSentence = SENTENCE_END_RE.test(textSoFar)
 const exceedsSafetyCap = lineCount >= PARAGRAPH_LINE_SAFETY_CAP && item.hasEOL
 const hasAtlestFiveLines = (wantsLineCountBreak && endsAtSentence) || exceedsSafetyCap
 
@@ -178,7 +184,7 @@ if ((isVerticallySpaced && isThereText) || hasAtlestFiveLines) {
   }
 ```
 
-Two things change: the line-count signal now requires `endsAtSentence` to actually fire the break, and a `PARAGRAPH_LINE_SAFETY_CAP` escape hatch prevents unbounded growth when no terminator appears. Vertical-gap detection is unchanged — real layout breaks always win.
+Two things change: the line-count signal now requires the accumulated text to end at a sentence boundary before firing the break, and a `PARAGRAPH_LINE_SAFETY_CAP` escape hatch prevents unbounded growth when no terminator appears. Vertical-gap detection is unchanged — real layout breaks always win.
 
 **Note for the engineer:** the new logic must append the current item's text to `paragraghSoFar` *after* deciding to break (i.e., the existing flow that emits the accumulated paragraph, then resets `paragraghSoFar`, then appends `text` on the next loop iteration). The existing code already does this — the only change is the conditions guarding the `if`. Do not reorder anything else.
 
@@ -216,7 +222,7 @@ Find the `PdfState` interface (or wherever existing state fields like `footerMas
  * derives CSS pixel height from these + the scroll container width at
  * estimate time so render-scale changes need no remeasure.
  */
-pageDimensionsByBookId: { [bookId: string]: { baseWidth: number; baseHeight: number }[] }
+pageDimensionsByBookId: Partial<Record<number, { baseWidth: number; baseHeight: number }[]>>
 ```
 
 Add to the store body alongside the existing slices:
@@ -225,14 +231,14 @@ Add to the store body alongside the existing slices:
 pageDimensionsByBookId: {},
 
 setPageDimensions: (
-  bookId: string,
+  bookId: number,
   dims: { baseWidth: number; baseHeight: number }[]
 ) =>
   set((state) => ({
     pageDimensionsByBookId: { ...state.pageDimensionsByBookId, [bookId]: dims }
   })),
 
-getPageDimension: (bookId: string, pageIndex: number) => {
+getPageDimension: (bookId: number, pageIndex: number) => {
   const dims = get().pageDimensionsByBookId[bookId]
   return dims ? dims[pageIndex] : undefined
 }
@@ -242,11 +248,11 @@ Add the matching method signatures to the `PdfState` interface:
 
 ```typescript
 setPageDimensions: (
-  bookId: string,
+  bookId: number,
   dims: { baseWidth: number; baseHeight: number }[]
 ) => void
 getPageDimension: (
-  bookId: string,
+  bookId: number,
   pageIndex: number
 ) => { baseWidth: number; baseHeight: number } | undefined
 ```

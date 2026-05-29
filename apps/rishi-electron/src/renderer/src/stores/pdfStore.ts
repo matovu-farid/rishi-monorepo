@@ -76,7 +76,7 @@ interface PdfState {
    * derives CSS pixel height from these + the scroll container width at
    * estimate time so render-scale changes need no remeasure.
    */
-  pageDimensionsByBookId: { [bookId: string]: { baseWidth: number; baseHeight: number }[] }
+  pageDimensionsByBookId: Partial<Record<number, { baseWidth: number; baseHeight: number }[]>>
 
   setPageNumber: (n: number) => void
   setScrollPageNumber: (n: number) => void
@@ -111,11 +111,11 @@ interface PdfState {
   clearFooterMask: (bookId: number) => void
   getFooterMaskForPage: (bookId: number, pageNumber: number) => ReadonlySet<number> | undefined
   setPageDimensions: (
-    bookId: string,
+    bookId: number,
     dims: { baseWidth: number; baseHeight: number }[]
   ) => void
   getPageDimension: (
-    bookId: string,
+    bookId: number,
     pageIndex: number
   ) => { baseWidth: number; baseHeight: number } | undefined
 }
