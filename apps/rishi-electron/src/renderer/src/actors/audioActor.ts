@@ -19,6 +19,7 @@
 // Tests inject a fake media element via `input.audio` so they don't depend
 // on happy-dom's incomplete HTMLAudioElement.
 import { fromCallback } from 'xstate'
+import { debugLog } from '@/utils/debugLog'
 
 // Singleton HTMLAudioElement used for TTS playback in production.
 // Exported so the E2E expose-stores layer can attach it to `window` for
@@ -67,6 +68,7 @@ export const audioActor = fromCallback<AudioCommand, AudioInput>(({ sendBack, re
   let pendingCanPlay: (() => void) | null = null
 
   const handleEnded = (): void => {
+    debugLog('audio:ended', { src: audio.src.slice(-40) })
     sendBack({ type: 'AUDIO_ENDED' })
   }
   const handleError = (): void => {
@@ -77,13 +79,16 @@ export const audioActor = fromCallback<AudioCommand, AudioInput>(({ sendBack, re
       audio.removeEventListener('canplaythrough', pendingCanPlay)
       pendingCanPlay = null
     }
-    sendBack({ type: 'AUDIO_ERROR', error: describeMediaError(audio) })
+    const error = describeMediaError(audio)
+    debugLog('audio:error', { error, src: audio.src.slice(-40) })
+    sendBack({ type: 'AUDIO_ERROR', error })
   }
   audio.addEventListener('ended', handleEnded)
   audio.addEventListener('error', handleError)
 
   receive((event) => {
     const cmd = event
+    debugLog('audio:command', { cmd: cmd.type, paused: audio.paused })
     if (cmd.type === 'PLAY') {
       if (pendingCanPlay) {
         audio.removeEventListener('canplaythrough', pendingCanPlay)

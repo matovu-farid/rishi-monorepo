@@ -225,9 +225,17 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
       paragraphs: usePlayerStore.getState().currentParagraphs
     })
     return {
-      next: () => goNext(),
-      prev: () => goPrev(),
-      goTo: () => {},
+      next: () => {
+        if (chapterIndex >= chapterCount - 1) return false
+        goNext()
+        return true
+      },
+      prev: () => {
+        if (chapterIndex <= 0) return false
+        goPrev()
+        return true
+      },
+      goTo: () => false,
       subscribe: (cb) =>
         usePlayerStore.subscribe(
           (s) => s.currentParagraphs,
@@ -235,7 +243,7 @@ export default function MobiView({ book }: { book: Book }): React.JSX.Element {
         ),
       getSnapshot: toSnapshot
     }
-  }, [chapterIndex, goNext, goPrev])
+  }, [chapterIndex, chapterCount, goNext, goPrev])
   usePlayerMachine(book.id.toString(), { viewLogic: pdfViewActor, viewInput })
 
   // Generate embeddings on first open (for AI chat)

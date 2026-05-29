@@ -25,10 +25,16 @@ class FakePdfControls {
   // written assuming the host always has text data by the time the
   // subscriber fires. Only the new deferred-emit tests flip this to false.
   dataReady = true
+  // Return value for the next next()/prev() call. `true` = nav initiated,
+  // wait for page-change snapshot. `false` = at document boundary, actor
+  // should emit NAV_NO_PROGRESS('end-of-document') immediately.
+  nextWillNavigate = true
+  prevWillNavigate = true
+  goToWillNavigate = true
   private subscribers: Array<(s: Snapshot) => void> = []
-  next = vi.fn()
-  prev = vi.fn()
-  goTo = vi.fn((_: number) => {})
+  next = vi.fn((): boolean => this.nextWillNavigate)
+  prev = vi.fn((): boolean => this.prevWillNavigate)
+  goTo = vi.fn((_: number): boolean => this.goToWillNavigate)
 
   subscribe = (cb: (s: Snapshot) => void): (() => void) => {
     this.subscribers.push(cb)
@@ -133,20 +139,41 @@ describe('pdfViewActor', () => {
     })
   })
 
-  describe('NAVIGATE_NEXT — the snap-back regression (THE bug class)', () => {
+  describe('NAVIGATE_NEXT — boundary + transient-snapshot handling', () => {
     let harness: Harness
     beforeEach(() => {
       harness = makeHarness(1, [P('pdf-1-0')])
       harness.captured.length = 0
     })
 
-    it('emits NAV_NO_PROGRESS when the page subscription fires with the SAME page number (virtualizer no-op)', () => {
+    it('emits NAV_NO_PROGRESS(end-of-document) immediately when next() returns false (at last page)', () => {
+      const { controls, captured, actorRef } = harness
+      controls.nextWillNavigate = false
+      actorRef.send({ type: 'NAVIGATE_NEXT' })
+      expect(captured).toEqual([{ type: 'NAV_NO_PROGRESS', reason: 'end-of-document' }])
+    })
+
+    // Regression: in production, nextPage()/previousPage() mutate the pdfStore
+    // (set isLookingForNextParagraph=true) BEFORE asking the virtualizer to
+    // scroll. The subscriber fires synchronously on that mutation, producing
+    // a same-page snapshot. The actor used to interpret this as a failed
+    // navigation and fire NAV_NO_PROGRESS — the machine then dropped to
+    // stopped while the scroll was still in flight. User-visible symptom:
+    // last-paragraph AUDIO_ENDED → audio stops, no auto-advance to next page.
+    //
+    // The fix: same-page snapshots during navInProgress are silently
+    // deferred. The page-change snapshot (or the 10s nav timeout) is what
+    // decides outcome.
+    it('does NOT emit NAV_NO_PROGRESS on a same-page snapshot fired during navigation (production race)', () => {
       const { controls, captured, actorRef } = harness
       actorRef.send({ type: 'NAVIGATE_NEXT' })
+      // Same-page snapshot — mimics nextPage() mutating pdfStore before scroll.
       controls.emit(1, [P('pdf-1-0')])
-      expect(captured).toEqual([
-        { type: 'NAV_NO_PROGRESS', reason: 'no-relocation' }
-      ])
+      expect(captured).toEqual([])
+
+      // Page actually changes — the legitimate commit.
+      controls.emit(2, [P('pdf-2-0')])
+      expect(captured).toEqual([{ type: 'VIEW_CHANGED', locator: '2', paragraphs: [P('pdf-2-0')] }])
     })
 
     it('emits NAV_NO_PROGRESS when the new page has no paragraphs AND text extraction is complete (image-only page)', () => {

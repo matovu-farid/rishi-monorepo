@@ -36,7 +36,8 @@ import { ThumbnailSidebar } from './thumbnail-sidebar'
 import TTSControls from '@/components/tts/TTSControls'
 import { pdfViewActor, type PdfViewInput, type PdfViewSnapshot } from '@/actors/pdfViewActor'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
-import type { TextContent, TextItem } from 'react-pdf'
+import type { TextContent } from 'react-pdf'
+import { pageDataToParagraphs } from '../utils/getPageParagraphs'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useUpdateCoverIMage } from '../hooks/useUpdateCoverIMage'
 import { useScrolling } from '../hooks/useScrolling'
@@ -195,18 +196,26 @@ export function PdfView({
       // and before pdf.js's worker delivers its TextContent — and the
       // player drops to stopped instead of resuming on paragraph 0.
       if (!data) return { page: s.pageNumber, paragraphs: [], dataReady: false }
-      const paragraphs = data.items
-        .filter((item): item is TextItem => 'str' in item && item.str.trim() !== '')
-        .map((item, idx) => ({
-          index: `pdf-${s.pageNumber}-${idx}`,
-          text: item.str
-        }))
+      // Use the canonical paragraph extractor (the same one usePdfReader
+      // publishes to playerStore.currentParagraphs). Previously this branch
+      // built synthetic per-TextItem paragraphs with `pdf-N-idx` indexes,
+      // which conflicted with usePdfReader's `${pageNumber * 10000 + i}`
+      // indexes and produced inconsistent ctx state depending on which path
+      // landed first. One extractor, one paragraph shape, no variance.
+      const bookId = s.book?.id
+      const mask = bookId != null ? s.getFooterMaskForPage(bookId, s.pageNumber) : undefined
+      const paragraphs = pageDataToParagraphs(s.pageNumber, data, mask)
       return { page: s.pageNumber, paragraphs, dataReady: true }
     }
     return {
       next: () => nextPage(),
       prev: () => previousPage(),
-      goTo: (page: number) => usePdfStore.setState({ pageNumber: page }),
+      goTo: (page: number) => {
+        const s = usePdfStore.getState()
+        if (page < 1 || (s.pageCount > 0 && page > s.pageCount)) return false
+        usePdfStore.setState({ pageNumber: page })
+        return true
+      },
       subscribe: (cb) =>
         usePdfStore.subscribe(
           (s) => ({ page: s.pageNumber, data: s.pageNumberToPageData[s.pageNumber] }),

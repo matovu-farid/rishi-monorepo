@@ -17,6 +17,7 @@
 // regression class structurally rather than via a regression gate.
 import { fromCallback } from 'xstate'
 import type { ParagraphWithIndex } from '@/stores/playerStore'
+import { debugLog } from '@/utils/debugLog'
 import type { ViewActorCommand, ViewActorEmit } from './viewActor'
 
 export type PdfViewSnapshot = {
@@ -39,12 +40,18 @@ export type PdfViewSnapshot = {
 }
 
 export type PdfViewInput = {
-  /** Advance one page (NOOP at end of document). */
-  next: () => void
-  /** Go back one page (NOOP at start). */
-  prev: () => void
-  /** Jump to a specific page number (1-based). */
-  goTo: (page: number) => void
+  /**
+   * Advance one page. Returns `true` if the navigation was initiated (page
+   * change is in flight; wait for snapshot), `false` if at the document
+   * boundary so no navigation can occur. The actor maps `false` to
+   * NAV_NO_PROGRESS('end-of-document') immediately, so the player drops to
+   * `stopped` without waiting for the 10 s nav timeout.
+   */
+  next: () => boolean
+  /** Go back one page; same semantics as `next`. */
+  prev: () => boolean
+  /** Jump to a specific page; same semantics as `next` (out-of-bounds → false). */
+  goTo: (page: number) => boolean
   /** Subscribe to page+paragraphs snapshots; returns unsubscribe. */
   subscribe: (cb: (s: PdfViewSnapshot) => void) => () => void
   /** Read the current snapshot (used for seed-on-mount). */
@@ -60,8 +67,15 @@ export const pdfViewActor = fromCallback<ViewActorCommand, PdfViewInput | undefi
     // See epubViewActor: usePlayerActor creates the player actor before the
     // PDF page-controls + virtualizer mount has produced a viewInput. Bail
     // to a no-op so the parent player actor doesn't enter a final state.
-    if (!input) return () => {}
+    if (!input) {
+      debugLog('pdfView:noop-start', { reason: 'input-undefined' })
+      return () => {}
+    }
     const { next, prev, goTo, subscribe, getSnapshot } = input
+    debugLog('pdfView:start', {
+      seedPage: getSnapshot().page,
+      seedParagraphCount: getSnapshot().paragraphs.length
+    })
 
     let previousPage: number | null = null
     let navInProgress = false
@@ -78,19 +92,41 @@ export const pdfViewActor = fromCallback<ViewActorCommand, PdfViewInput | undefi
       if (!navInProgress) return
       navInProgress = false
       clearNavTimeout()
+      debugLog('pdfView:emit-nav-no-progress', { reason })
       sendBack({ type: 'NAV_NO_PROGRESS', reason })
     }
 
     const handleSnapshot = ({ page, paragraphs, dataReady = true }: PdfViewSnapshot): void => {
       const samePage = previousPage !== null && page === previousPage
+      debugLog('pdfView:snapshot', {
+        page,
+        previousPage,
+        paragraphCount: paragraphs.length,
+        firstParagraphIndex: paragraphs[0]?.index ?? null,
+        dataReady,
+        samePage,
+        navInProgress
+      })
 
       if (samePage) {
-        // Stayed on the same page — no progress regardless of paragraphs
-        // or extraction state. Same-page subscriber fires happen when the
-        // host republishes paragraphs for the current page (e.g. footer-
-        // mask arrival, refit). If a nav was in flight, signal failure;
-        // otherwise stay silent (handled by failNav's navInProgress guard).
-        failNav('no-relocation')
+        // Same-page snapshots happen for several reasons during normal
+        // operation: footer-mask arrival, paragraph refit, scroll-driven
+        // store mutations, and — critically — `nextPage()` itself, which
+        // sets `isLookingForNextParagraph=true` on the pdfStore BEFORE
+        // asking the virtualizer to scroll. Treating these as a failed
+        // navigation produced the user-visible "audio stops on the last
+        // paragraph" bug: AUDIO_ENDED → waitingForParagraphs →
+        // sendTo('view', NAVIGATE_NEXT) → nextPage() → same-page snapshot
+        // → NAV_NO_PROGRESS → stopped, all before the scroll began.
+        //
+        // The correct outcome signals are:
+        //   - page actually changes (success / image-only path below), or
+        //   - next()/prev() returned false at call time (end-of-document,
+        //     handled in startNav), or
+        //   - the 10 s navTimeout fires (worker crash / truly-stuck case).
+        // Outside an in-flight nav, the same-page case is also silently
+        // ignored — the existing republish flow (REPUBLISH command) is
+        // what callers use when they want a re-emit of the current view.
         return
       }
 
@@ -118,6 +154,11 @@ export const pdfViewActor = fromCallback<ViewActorCommand, PdfViewInput | undefi
       previousPage = page
       navInProgress = false
       clearNavTimeout()
+      debugLog('pdfView:emit-view-changed', {
+        page,
+        paragraphCount: paragraphs.length,
+        firstParagraphIndex: paragraphs[0]?.index ?? null
+      })
       sendBack({
         type: 'VIEW_CHANGED',
         locator: String(page),
@@ -138,13 +179,31 @@ export const pdfViewActor = fromCallback<ViewActorCommand, PdfViewInput | undefi
       navInProgress = true
       clearNavTimeout()
       navTimeout = setTimeout(() => failNav('timeout'), NAV_TIMEOUT_MS)
-      if (kind === 'next') next()
-      else if (kind === 'prev') prev()
-      else goTo(page!)
+      let willNavigate: boolean
+      if (kind === 'next') willNavigate = next()
+      else if (kind === 'prev') willNavigate = prev()
+      else willNavigate = goTo(page!)
+      debugLog('pdfView:startNav', {
+        kind,
+        target: page ?? null,
+        previousPage,
+        willNavigate
+      })
+      // The format reader reported a boundary (first/last page) or invalid
+      // target. Bail out immediately so the player can transition to
+      // `stopped` without waiting for the 10 s nav timeout.
+      if (!willNavigate) failNav('end-of-document')
     }
 
     receive((event) => {
       const cmd = event
+      debugLog('pdfView:command', {
+        cmd: cmd.type,
+        locator: cmd.type === 'NAVIGATE_TO' ? cmd.locator : null,
+        previousPage,
+        navInProgress,
+        currentPage: getSnapshot().page
+      })
       if (cmd.type === 'NAVIGATE_NEXT') startNav('next')
       else if (cmd.type === 'NAVIGATE_PREV') startNav('prev')
       else if (cmd.type === 'NAVIGATE_TO') {
@@ -154,12 +213,17 @@ export const pdfViewActor = fromCallback<ViewActorCommand, PdfViewInput | undefi
         // REPUBLISH (only remaining variant in ViewActorCommand).
         const snap = getSnapshot()
         if (snap.paragraphs.length === 0) {
+          debugLog('pdfView:republish-empty', { page: snap.page })
           sendBack({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })
           return
         }
         // Emit even if page equals previousPage — REPUBLISH is the
         // "I lost track, tell me again" signal, not a navigation result.
         previousPage = snap.page
+        debugLog('pdfView:republish-emit', {
+          page: snap.page,
+          paragraphCount: snap.paragraphs.length
+        })
         sendBack({
           type: 'VIEW_CHANGED',
           locator: String(snap.page),

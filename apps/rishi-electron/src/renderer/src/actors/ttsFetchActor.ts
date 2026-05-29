@@ -3,7 +3,7 @@
 // xstate v5 `fromPromise` actor that owns one TTS fetch lifecycle. The
 // playerMachine invokes it on entering `loading`; xstate auto-cancels the
 // in-flight promise when the state exits — replacing the manual
-// `fetchGeneration` counter used by playerAudioBridge.
+// fetch-generation counter used by the pre-actor bridge.
 //
 // The actor is parameterised by a `fetcher` function so tests can inject a
 // stub. Production binds it to `getTtsService().requestAudio` in the
@@ -37,8 +37,8 @@ export type TtsFetchOutput = { kind: 'play'; src: string } | { kind: 'skip' }
 
 export const fetchTtsLogic = fromPromise<TtsFetchOutput, TtsFetchInput>(async ({ input }) => {
   if (input.skip) {
-    // Match the bridge's 2-second pause on empty paragraphs so the UI doesn't
-    // appear to silently skip pages.
+    // 2-second pause on empty paragraphs so the UI doesn't appear to silently
+    // skip pages.
     await new Promise<void>((r) => setTimeout(r, 2000))
     return { kind: 'skip' }
   }

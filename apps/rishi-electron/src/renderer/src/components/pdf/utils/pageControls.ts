@@ -18,10 +18,14 @@ import { usePdfStore } from '@/stores/pdfStore'
 //     paragraph (sitting flush with the viewport top after `align:'start'`)
 //     gets "centered" — i.e. the container scrolls back to the previous
 //     page. That's the refined symptom reported on PR #31.
-export function nextPage() {
+// Returns true if the navigation was initiated (page-change snapshot will
+// arrive once the virtualizer scrolls), false if at the document boundary
+// or the virtualizer is not yet mounted. pdfViewActor relies on this to
+// distinguish "wait for the page change" from "give up immediately."
+export function nextPage(): boolean {
   const state = usePdfStore.getState()
   const virtualizer = state.virtualizer
-  if (!virtualizer) return
+  if (!virtualizer) return false
   // Bounds check (PR #31 review pullrequestreview-4348558706): the view
   // actor (pdfViewActor) calls nextPage() whenever the player sends
   // NAVIGATE_NEXT, including on the last paragraph of the last page. Without
@@ -31,22 +35,23 @@ export function nextPage() {
   // flag would stay `true` for the rest of the session — silently denying
   // auto-scroll for every subsequent highlight. Make nextPage a no-op when
   // already on the last page.
-  if (state.pageCount > 0 && state.pageNumber >= state.pageCount) return
+  if (state.pageCount > 0 && state.pageNumber >= state.pageCount) return false
   usePdfStore.getState().setIsLookingForNextParagraph(true)
   const pageIndex = state.pageNumber - 1
   virtualizer.scrollToIndex(pageIndex + 1, {
     align: 'start',
     behavior: 'auto'
   })
+  return true
 }
-export function previousPage() {
+export function previousPage(): boolean {
   const state = usePdfStore.getState()
   const virtualizer = state.virtualizer
-  if (!virtualizer) return
+  if (!virtualizer) return false
   // Symmetric guard: never scroll to virtual index -1 from the first page,
   // which would leave the suppression flag stuck `true` for the rest of the
   // session (same failure mode as the nextPage last-page case above).
-  if (state.pageNumber <= 1) return
+  if (state.pageNumber <= 1) return false
 
   usePdfStore.getState().setIsLookingForNextParagraph(true)
   const pageIndex = state.pageNumber - 1
@@ -54,4 +59,5 @@ export function previousPage() {
     align: 'end',
     behavior: 'auto'
   })
+  return true
 }

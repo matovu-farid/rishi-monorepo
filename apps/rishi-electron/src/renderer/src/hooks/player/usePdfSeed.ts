@@ -1,38 +1,30 @@
 // apps/electron/src/renderer/src/hooks/player/usePdfSeed.ts
 //
-// One-shot seed when the actor first becomes available: convert the active PDF
-// page's TextItems into paragraphs, write them to playerStore, then forward
-// whatever is already in playerStore to the machine via PARAGRAPHS_UPDATED.
+// Kickstart for the PDF player: when the actor first mounts, forward
+// whatever paragraphs `usePdfReader` has already published to
+// playerStore.currentParagraphs into the machine as PARAGRAPHS_UPDATED.
+// The pdfViewActor's own seed-on-mount fires too, but it lands in the
+// machine's `idle` state (which discards PARAGRAPHS_UPDATED); this hook
+// runs after INITIALIZE has transitioned the machine to `stopped`, which
+// accepts the event and applies resume-index logic.
+//
+// Previously this hook ALSO built a synthetic per-TextItem paragraph list
+// from pdfStore.pageNumberToPageData and wrote it to playerStore — racing
+// with usePdfReader's canonical extractor and producing two different
+// paragraph shapes (`pdf-N-idx` vs `${N * 10000 + i}`). Removed.
 import { useEffect } from 'react'
-import type { TextItem, TextMarkedContent } from 'react-pdf'
-import { usePdfStore } from '@/stores/pdfStore'
 import { usePlayerStore } from '@/stores/playerStore'
+import { debugLog } from '@/utils/debugLog'
 import type { PlayerActor } from '@/hooks/player/usePlayerActor'
 
 export function usePdfSeed(actor: PlayerActor | null): void {
   useEffect(() => {
     if (!actor) return
-    const pdfState = usePdfStore.getState()
-    const pdfPageData = pdfState.pageNumberToPageData[pdfState.pageNumber] as
-      | (typeof pdfState.pageNumberToPageData)[number]
-      | undefined
-    if (pdfPageData) {
-      const items = pdfPageData.items
-      const paragraphs = items
-        .filter(
-          (item: TextItem | TextMarkedContent): item is TextItem =>
-            'str' in item && item.str.trim() !== ''
-        )
-        .map((item: TextItem, idx: number) => ({
-          index: `pdf-${pdfState.pageNumber}-${idx}`,
-          text: item.str
-        }))
-      if (paragraphs.length > 0) {
-        usePlayerStore.getState().setCurrentParagraphs(paragraphs)
-      }
-    }
-
     const currentParagraphs = usePlayerStore.getState().currentParagraphs
+    debugLog('pdfSeed:run', {
+      paragraphCount: currentParagraphs.length,
+      firstIndex: currentParagraphs[0]?.index ?? null
+    })
     if (currentParagraphs.length > 0) {
       actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: currentParagraphs })
     }

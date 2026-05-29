@@ -55,6 +55,17 @@ interface PdfState {
   isRenderedPageState: Record<number, boolean>
   hasNavigatedToPage: boolean
   isLookingForNextParagraph: boolean
+  /**
+   * True while `useScrolling`'s framer-motion animate is running to center
+   * the active paragraph in the viewport. Used by `usePdfReader.handleScroll`
+   * to suppress PAGE_CHANGED dispatches that would otherwise misread the
+   * programmatic mid-animation scroll position as a user-driven page change.
+   * Without this, centering a paragraph near the top of the current page
+   * scrolls the viewport up enough to cross the previous-page boundary, the
+   * scroll handler reports the visible page as N-1, and the player snaps to
+   * paragraph 0 of N-1 (#252 follow-up regression).
+   */
+  isAutoCentering: boolean
   /** Per-book running-footer detection result (#142). In-memory only.
    *  `Partial<Record>` so indexing an unknown bookId is typed as
    *  `FooterMask | undefined` and callers must guard before use. */
@@ -82,6 +93,7 @@ interface PdfState {
   setBookNavigationState: (state: BookNavigationState) => void
   setHasNavigatedToPage: (value: boolean) => void
   setIsLookingForNextParagraph: (value: boolean) => void
+  setIsAutoCentering: (value: boolean) => void
   setIsPdfRendered: (bookId: string, isRendered: boolean) => void
   isPdfRendered: (bookId: string) => boolean
   resetParagraphState: () => void
@@ -118,6 +130,7 @@ export const usePdfStore = create<PdfState>()(
       isRenderedPageState: {},
       hasNavigatedToPage: false,
       isLookingForNextParagraph: false,
+      isAutoCentering: false,
       footerMaskByBookId: {},
 
       setPageNumber: (n) => {
@@ -171,6 +184,7 @@ export const usePdfStore = create<PdfState>()(
       setBookNavigationState: (state) => set({ bookNavigationState: state }),
       setHasNavigatedToPage: (value) => set({ hasNavigatedToPage: value }),
       setIsLookingForNextParagraph: (value) => set({ isLookingForNextParagraph: value }),
+      setIsAutoCentering: (value) => set({ isAutoCentering: value }),
       setIsPdfRendered: (bookId, isRendered) =>
         set((state) => ({ pdfsRendered: { ...state.pdfsRendered, [bookId]: isRendered } })),
       isPdfRendered: (bookId) => get().pdfsRendered[bookId] ?? false,

@@ -151,4 +151,44 @@ describe('pageControls.nextPage — page-boundary advance (issue #30)', () => {
 
     expect(usePdfStore.getState().isLookingForNextParagraph).toBe(true)
   })
+
+  // The boolean return is what pdfViewActor uses to distinguish "navigation
+  // initiated, wait for snapshot" from "at boundary, give up immediately."
+  // Without this signal the actor would have to wait for the 10 s nav timeout
+  // before transitioning to `stopped` at the end of the document.
+  describe('boolean return (pdfViewActor contract)', () => {
+    it('nextPage returns true mid-document (navigation initiated)', () => {
+      const { virtualizer } = makeStubVirtualizer()
+      usePdfStore.setState({ pageNumber: 5, pageCount: 10, virtualizer })
+      expect(nextPage()).toBe(true)
+    })
+
+    it('nextPage returns false on the last page (no scroll, no nav)', () => {
+      const { virtualizer } = makeStubVirtualizer()
+      usePdfStore.setState({ pageNumber: 10, pageCount: 10, virtualizer })
+      expect(nextPage()).toBe(false)
+    })
+
+    it('nextPage returns false when the virtualizer is not yet mounted', () => {
+      usePdfStore.setState({ pageNumber: 5, pageCount: 10, virtualizer: null })
+      expect(nextPage()).toBe(false)
+    })
+
+    it('previousPage returns true mid-document', () => {
+      const { virtualizer } = makeStubVirtualizer()
+      usePdfStore.setState({ pageNumber: 5, pageCount: 10, virtualizer })
+      expect(previousPage()).toBe(true)
+    })
+
+    it('previousPage returns false on the first page', () => {
+      const { virtualizer } = makeStubVirtualizer()
+      usePdfStore.setState({ pageNumber: 1, pageCount: 10, virtualizer })
+      expect(previousPage()).toBe(false)
+    })
+
+    it('previousPage returns false when the virtualizer is not yet mounted', () => {
+      usePdfStore.setState({ pageNumber: 5, pageCount: 10, virtualizer: null })
+      expect(previousPage()).toBe(false)
+    })
+  })
 })

@@ -22,6 +22,30 @@ export function useScrolling(scrollContainerRef: React.RefObject<HTMLDivElement 
   // rAF tick, fighting the virtualizer's scroll to the new page and
   // producing the user-visible "advances then snaps back" symptom of #30.
   const activeAnimateRef = useRef<AnimationPlaybackControls | null>(null)
+  // Trailing timer that clears `pdfStore.isAutoCentering` AFTER the animate
+  // completes. Why a delay: usePdfReader.handleScroll debounces scroll events
+  // by 80 ms; the last onUpdate scroll event fires at ~animate.end, and
+  // `onComplete` clears the flag synchronously on the same tick. If we cleared
+  // immediately, the 80 ms debounce would expire AFTER the flag was already
+  // false, handleScroll would proceed, and pdfReaderMachine would receive
+  // PAGE_CHANGED based on the centered scrollTop — flipping pdfStore.pageNumber
+  // back to the previous page when the centered paragraph sits near the top
+  // of the current page (#252 follow-up regression). 200 ms covers the
+  // debounce + a comfortable buffer; new animates clear and re-set the timer.
+  const clearAutoCenterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scheduleAutoCenterClear = (): void => {
+    if (clearAutoCenterTimerRef.current) clearTimeout(clearAutoCenterTimerRef.current)
+    clearAutoCenterTimerRef.current = setTimeout(() => {
+      clearAutoCenterTimerRef.current = null
+      usePdfStore.getState().setIsAutoCentering(false)
+    }, 200)
+  }
+  const cancelPendingAutoCenterClear = (): void => {
+    if (clearAutoCenterTimerRef.current) {
+      clearTimeout(clearAutoCenterTimerRef.current)
+      clearAutoCenterTimerRef.current = null
+    }
+  }
 
   // Detect user-initiated scroll (wheel/touch) and pause/resume player.
   // We listen for wheel/touchmove rather than the generic "scroll" event so
@@ -86,10 +110,16 @@ export function useScrolling(scrollContainerRef: React.RefObject<HTMLDivElement 
         if (flag && activeAnimateRef.current) {
           activeAnimateRef.current.stop()
           activeAnimateRef.current = null
+          // Schedule the delayed clear so any trailing scroll-debounce in
+          // usePdfReader.handleScroll still sees the suppression flag.
+          if (usePdfStore.getState().isAutoCentering) {
+            scheduleAutoCenterClear()
+          }
         }
       }
     )
     return unsub
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Auto-scroll to the highlighted paragraph
@@ -155,6 +185,13 @@ export function useScrolling(scrollContainerRef: React.RefObject<HTMLDivElement 
       // happens mid-animate.
       activeAnimateRef.current?.stop()
 
+      // Signal to usePdfReader.handleScroll that the upcoming scroll events
+      // are programmatic centering, not user navigation. A new animate also
+      // cancels any pending trailing-clear from a previous animate so the
+      // flag stays continuously true across rapid paragraph advances.
+      cancelPendingAutoCenterClear()
+      usePdfStore.getState().setIsAutoCentering(true)
+
       // Use framer-motion's animate for smooth scrolling
       activeAnimateRef.current = animate(container.scrollTop, targetScrollTop, {
         duration: 0.8,
@@ -164,8 +201,11 @@ export function useScrolling(scrollContainerRef: React.RefObject<HTMLDivElement 
         },
         onComplete: () => {
           // Self-clear so the next effect run doesn't `.stop()` a finished
-          // animation (no-op, but keeps the ref honest).
+          // animation (no-op, but keeps the ref honest). The flag itself
+          // is cleared trailingly so the post-animate scroll debounce in
+          // usePdfReader still sees suppression.
           activeAnimateRef.current = null
+          scheduleAutoCenterClear()
         }
       })
     }, 100)
@@ -175,6 +215,14 @@ export function useScrolling(scrollContainerRef: React.RefObject<HTMLDivElement 
       // overwrite scrollTop after this effect's highlight has changed.
       activeAnimateRef.current?.stop()
       activeAnimateRef.current = null
+      // Schedule the trailing clear (don't clear immediately) — a scroll
+      // event from the now-stopped animate may still be in handleScroll's
+      // 80 ms debounce queue, and clearing the flag now would let it
+      // through. If the cleanup is for an unmount, the deferred timer is
+      // harmless (the store flag is renderer-global).
+      if (usePdfStore.getState().isAutoCentering) {
+        scheduleAutoCenterClear()
+      }
     }
   }, [highlightedParagraph, isRendered, scrollContainerRef])
 }

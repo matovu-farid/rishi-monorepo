@@ -626,9 +626,24 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
       paragraphs: usePlayerStore.getState().currentParagraphs
     })
     return {
-      next: () => goNextPage(),
-      prev: () => goPrevPage(),
-      goTo: () => {},
+      next: () => {
+        // Returns false at the end of the book so pdfViewActor emits
+        // NAV_NO_PROGRESS('end-of-document') instead of waiting 10 s for the
+        // nav timeout. Same shape as PDF's pageControls.nextPage().
+        const canAdvanceWithinChapter = pageWithinChapter + 1 < pagesInCurrentChapter
+        const canAdvanceChapter = chapterIndex < chapterCount - 1
+        if (!canAdvanceWithinChapter && !canAdvanceChapter) return false
+        goNextPage()
+        return true
+      },
+      prev: () => {
+        const canRetreatWithinChapter = pageWithinChapter > 0
+        const canRetreatChapter = chapterIndex > 0
+        if (!canRetreatWithinChapter && !canRetreatChapter) return false
+        goPrevPage()
+        return true
+      },
+      goTo: () => false,
       subscribe: (cb) =>
         usePlayerStore.subscribe(
           (s) => s.currentParagraphs,
@@ -636,7 +651,14 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         ),
       getSnapshot: toSnapshot
     }
-  }, [chapterIndex, pageWithinChapter, goNextPage, goPrevPage])
+  }, [
+    chapterIndex,
+    chapterCount,
+    pageWithinChapter,
+    pagesInCurrentChapter,
+    goNextPage,
+    goPrevPage
+  ])
   usePlayerMachine(book.id.toString(), { viewLogic: pdfViewActor, viewInput })
 
   // Generate embeddings on first open (for AI chat). The shared hook owns

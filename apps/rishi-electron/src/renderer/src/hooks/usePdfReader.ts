@@ -8,6 +8,7 @@ import { usePdfStore } from '@/stores/pdfStore'
 import { usePlayerStore } from '@/stores/playerStore'
 import { updateBookLocation } from '@/lib/api'
 import { formatPdfLocation, parsePdfLocation } from '@/lib/pdfLocation'
+import { debugLog } from '@/utils/debugLog'
 import { pageDataToParagraphs } from '@/components/pdf/utils/getPageParagraphs'
 import { pdfParagraphToPageNumber } from '@/components/pdf/utils/pdfParagraphToPageNumber'
 import type { Book } from '@/lib/api'
@@ -121,6 +122,11 @@ export function usePdfReader(
     const mirrorUnsub = actor.subscribe((snap) => {
       const machinePage = snap.context.currentPage
       if (machinePage > 0 && usePdfStore.getState().pageNumber !== machinePage) {
+        debugLog('pdfReader:mirrorPageNumber', {
+          from: usePdfStore.getState().pageNumber,
+          to: machinePage,
+          isAutoCentering: usePdfStore.getState().isAutoCentering
+        })
         usePdfStore.setState({ pageNumber: machinePage })
       }
     })
@@ -177,12 +183,30 @@ export function usePdfReader(
       if (scrollDebounce) clearTimeout(scrollDebounce)
       scrollDebounce = setTimeout(() => {
         if (seekRegion(actor.getSnapshot()) !== 'viewing') return
+        // useScrolling runs a framer-motion animate to center the active
+        // paragraph; that animate drives scrollTop programmatically and is
+        // NOT a user-initiated page change. If we interpret it as one, we
+        // get the #252 follow-up regression: centering paragraph 2 of page
+        // N briefly scrolls into page N-1's range, this handler reports
+        // visible page = N-1, PAGE_CHANGED(N-1) flows to pdfStore.pageNumber,
+        // the view actor emits VIEW_CHANGED with page N-1's paragraphs, and
+        // the player snaps to paragraph 0 of N-1.
+        if (usePdfStore.getState().isAutoCentering) {
+          debugLog('pdfReader:scrollSuppressed', { reason: 'auto-centering' })
+          return
+        }
         const currentScrollTop = container?.scrollTop ?? 0
         const delta = Math.abs(currentScrollTop - lastSeenScrollTop)
         lastSeenScrollTop = currentScrollTop
         if (delta < 4) return
         const { page, offset } = visiblePositionFromVirtualizer(virtualizer, container)
         if (!page) return
+        debugLog('pdfReader:pageChanged', {
+          page,
+          offset,
+          delta,
+          isAutoCentering: usePdfStore.getState().isAutoCentering
+        })
         actor.send({ type: 'PAGE_CHANGED', page, offset })
       }, 80)
     }

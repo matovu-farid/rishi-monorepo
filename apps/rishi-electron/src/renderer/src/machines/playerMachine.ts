@@ -108,23 +108,23 @@ export type PlayerMachineEvent =
   | { type: 'CHAT_STARTED' }
   | { type: 'CHAT_ENDED' }
   | { type: 'CLEANUP' }
-  // External page navigation has started (e.g. user clicked the EPUB next-page
-  // arrow). The rendition is curling and PARAGRAPHS_UPDATED will arrive later.
-  // The player must immediately stop playback on the OLD page so the user
-  // doesn't hear the previous paragraph during the curl animation.
+  // External page navigation has started — the format reader (epubjs page-curl,
+  // PDF virtualizer scroll, AZW3 chapter advance, etc.) is mid-transition and a
+  // VIEW_CHANGED / PARAGRAPHS_UPDATED will arrive later. The player must
+  // immediately stop playback on the OLD page so the user doesn't hear the
+  // previous paragraph during the transition.
   | { type: 'PAGE_NAVIGATING'; direction: 'forward' | 'backward' }
   // Jump directly to a specific paragraph (e.g. from a text selection), with
   // an optional override for the first chunk of audio so playback can begin
   // mid-paragraph. Ignored from idle/pageNavigating/republishingParagraphs.
   | { type: 'PLAY_FROM'; paragraphIndex: number; partialFirstText: string; partialFirstKey: string }
   | { type: 'REPEAT' }
-  // Emitted by the view layer (today: orchestration bridge after a
-  // publishCurrentEpubParagraphs that bailed; future Phase 3.4 wiring:
-  // viewActor sendBack) when a navigation request did NOT yield a new
-  // view (end of book / drift restore / same-CFI relocated / image-only
-  // page). The player transitions to `stopped` with a meaningful reason
-  // instead of timing out or — the bug this kills — silently
-  // republishing the OLD view's paragraphs and snapping to paragraph 0.
+  // Emitted by the view actor when a navigation request did NOT yield a
+  // new view (end of document, image-only page, format reader reported it
+  // can't advance, etc.). The player transitions to `stopped` with a
+  // meaningful reason instead of timing out or — the bug this kills —
+  // silently republishing the OLD view's paragraphs and snapping to
+  // paragraph 0.
   | { type: 'NAV_NO_PROGRESS'; reason?: 'end-of-document' | 'no-relocation' | 'timeout' }
   // Emitted by the invoked view actor (epub/pdf/etc) when a navigation or
   // republish committed a non-empty new view. Re-raised at the root as
@@ -244,8 +244,8 @@ export const playerMachine = setup({
     }),
     // Clear the current paragraph view. When an external page navigation
     // starts, the on-screen paragraphs are about to be replaced; clearing
-    // them prevents PLAY from racing the rendition and fetching the old
-    // page's paragraph 0.
+    // them prevents PLAY from racing the format reader and fetching the
+    // old page's paragraph 0.
     clearCurrentParagraphs: assign({
       currentParagraphs: [] as ParagraphWithIndex[],
       paragraphIndex: 0
@@ -377,8 +377,8 @@ export const playerMachine = setup({
   //     paragraphs must not persist into the new page);
   //   - from stopped we transition to pageNavigating WITHOUT clearing
   //     paragraphs — nothing's playing so there's no urgency, and clearing
-  //     would cause a fast PLAY-during-curl to route to waitingForParagraphs
-  //     and emit a spurious pageRequest='next' (double-nav bug);
+  //     would cause a fast PLAY-during-nav to route to waitingForParagraphs
+  //     and emit a spurious NAVIGATE_NEXT (double-nav bug);
   //   - from idle the event is dropped (no book is open yet).
   states: {
     idle: {
@@ -403,7 +403,7 @@ export const playerMachine = setup({
           },
           {
             // Empty paragraphs means we lost them from a failed nav or
-            // initial load. Re-publish from the rendition rather than
+            // initial load. Re-publish from the view actor rather than
             // asking for a new page.
             target: 'republishingParagraphs'
           }
@@ -456,9 +456,9 @@ export const playerMachine = setup({
         // External page navigation while we're already silent. Transition to
         // pageNavigating — the existing state designed for "external nav in
         // flight, wait for paragraphs". Going there directly avoids the
-        // spurious pageRequest='next' that would fire from
-        // waitingForParagraphs if PLAY arrives mid-nav (the PLAY → !hasParagraphs
-        // → waitingForParagraphs path used to clear paragraphs and double-navigate).
+        // spurious NAVIGATE_NEXT that would fire from waitingForParagraphs
+        // if PLAY arrives mid-nav (the PLAY → !hasParagraphs →
+        // waitingForParagraphs path used to clear paragraphs and double-navigate).
         // Paragraphs are NOT cleared here because nothing's playing; when
         // PARAGRAPHS_UPDATED arrives, pageNavigating transitions back to
         // stopped (if no PLAY arrived) or loading (if PLAY did arrive and
@@ -630,11 +630,10 @@ export const playerMachine = setup({
           actions: ['resetIndex', 'clearPartialFirst']
         },
         // Reaching waitingForParagraphs from playing means the user was
-        // actively listening — set wantsAutoResume so once the rendition
-        // delivers the new page's paragraphs (via the
-        // waitingForParagraphs → pageNavigating → PARAGRAPHS_UPDATED
-        // chain triggered by the hook setting pageRequest), playback
-        // continues automatically instead of dropping into `stopped`.
+        // actively listening — set wantsAutoResume so once the view actor
+        // delivers the new page's paragraphs (via VIEW_CHANGED →
+        // PARAGRAPHS_UPDATED), playback continues automatically instead
+        // of dropping into `stopped`.
         AUDIO_ENDED: [
           {
             guard: 'hasMoreParagraphs',
@@ -852,12 +851,12 @@ export const playerMachine = setup({
           // Preserve wantsAutoResume AND direction from however we got here.
           // The player set the direction (forward/backward) on entry to
           // waitingForParagraphs based on the user's NEXT/PREV intent; the
-          // event's direction field is best-effort (the hook can't always
-          // tell which way the rendition is going) and must not overwrite
-          // the player's authoritative intent. Specifically, after PREV at
-          // the first paragraph the player needs direction='backward' to
-          // survive so resetIndexByDirection lands on the LAST paragraph of
-          // the previous page rather than the first.
+          // event's direction field is best-effort (the publisher can't
+          // always tell which way the format reader is going) and must not
+          // overwrite the player's authoritative intent. Specifically,
+          // after PREV at the first paragraph the player needs
+          // direction='backward' to survive so resetIndexByDirection lands
+          // on the LAST paragraph of the previous page rather than the first.
           actions: ['clearCurrentParagraphs', 'clearPartialFirst']
         },
         PLAY_FROM: {
@@ -875,10 +874,11 @@ export const playerMachine = setup({
       // Entered when the machine is in `stopped` with empty currentParagraphs
       // and the user clicks PLAY. Paragraphs were lost (typically via
       // clearCurrentParagraphs during a failed/timed-out page navigation).
-      // The hook responds by calling publishCurrentEpubParagraphs(), which
-      // re-reads the rendition's current view and dispatches a fresh
-      // PARAGRAPHS_UPDATED. Unlike waitingForParagraphs, this state does NOT
-      // set pageRequest — the player has not asked for a new page.
+      // The entry action sends REPUBLISH to the view actor, which re-reads
+      // its current view and emits VIEW_CHANGED (re-raised as
+      // PARAGRAPHS_UPDATED) — or NAV_NO_PROGRESS if the view is empty.
+      // Unlike waitingForParagraphs, this state does NOT request a new page
+      // navigation — the player has not asked to advance.
       // PLAY_FROM is intentionally NOT handled here — the paragraphs are not
       // yet known so a targeted jump cannot be validated.
       entry: [
@@ -921,13 +921,14 @@ export const playerMachine = setup({
 
     // Distinct from waitingForParagraphs:
     //   - waitingForParagraphs is entered when the *player itself* wants the
-    //     next/prev page (via player NEXT/PREV) and emits a pageRequest so
-    //     the EPUB rendition navigates.
+    //     next/prev page (via player NEXT/PREV / AUDIO_ENDED on last
+    //     paragraph). Its entry sends NAVIGATE_NEXT/PREV to the view actor.
     //   - pageNavigating is entered when an *external* navigation has
-    //     already started (user clicked the EPUB page arrow). The rendition
-    //     is already curling; emitting another pageRequest here would
-    //     double-navigate. So this state just waits for PARAGRAPHS_UPDATED
-    //     and resumes loading IFF the player was active before.
+    //     already started (user gesture — epub page-curl, PDF scroll past a
+    //     boundary, etc.). The format reader is already mid-transition;
+    //     sending another NAVIGATE_NEXT here would double-navigate. So this
+    //     state just waits for PARAGRAPHS_UPDATED and resumes loading IFF
+    //     the player was active before.
     pageNavigating: {
       entry: sendTo('audio', { type: 'STOP' }),
       after: {
@@ -953,12 +954,13 @@ export const playerMachine = setup({
             actions: ['storeParagraphs', 'clearTimedOut', 'resetIndexByDirection']
           }
         ],
-        // THE bug fix. When the EPUB nav settles (back to navState idle) but
-        // the rendition didn't actually advance — end of book, drift-restore,
-        // image-only page — the orchestration bridge sends NAV_NO_PROGRESS
-        // instead of republishing the same view's paragraphs. Without this,
-        // republish drove PARAGRAPHS_UPDATED → loading → paragraph 0 of the
-        // OLD view, which is what users perceived as "looping back".
+        // THE bug fix. When the external nav settles but the format reader
+        // didn't actually advance — end of document, drift restore, image-
+        // only page — the view actor sends NAV_NO_PROGRESS instead of
+        // re-emitting the same view's paragraphs. Without this, the old
+        // bridge re-published, driving PARAGRAPHS_UPDATED → loading →
+        // paragraph 0 of the OLD view, which users perceived as "looping
+        // back".
         NAV_NO_PROGRESS: {
           target: 'stopped',
           actions: ['resetIndex', 'clearWantsAutoResume', 'clearPartialFirst']
