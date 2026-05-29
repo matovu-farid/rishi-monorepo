@@ -1106,8 +1106,8 @@ test.describe('TTS state follows EPUB page navigation', () => {
   //      `timedOut`). This avoids waiting 10s in real time.
   //   4. Record the EPUB location.
   //   5. Send PLAY (sendPlayerEvent). Pre-fix: this transitions stopped→
-  //      waitingForParagraphs (no paragraphs), which triggers the hook to
-  //      set pageRequest='next' → EPUB navigates forward.
+  //      waitingForParagraphs (no paragraphs), which invokes the view actor
+  //      with NAVIGATE_NEXT → EPUB navigates forward.
   //   6. Assert the EPUB location did NOT change. If it did, that's the
   //      stuck-loop bug.
   // ---------------------------------------------------------------------
@@ -1219,8 +1219,8 @@ test.describe('TTS state follows EPUB page navigation', () => {
     expect(stuckShape.activeParagraph).toBeNull()
 
     // Send PLAY. PRE-FIX: this routes stopped (hasParagraphs=false) →
-    // waitingForParagraphs, which the hook converts to pageRequest='next',
-    // which navMachine.NEXT processes via rendition.next() — the unwanted
+    // waitingForParagraphs, which invokes the view actor with NAVIGATE_NEXT,
+    // which the epub view actor processes via rendition.next() — the unwanted
     // double-nav.
     await sendPlayerEvent(bookPage, 'PLAY')
 
@@ -1472,6 +1472,458 @@ test.describe('TTS state follows EPUB page navigation', () => {
     // before stalling.
     await waitForPlayerState(bookPage, 'playing', 10000)
 
+    // Strongest assertion (Phase 3.4 acceptance gate). The active paragraph
+    // must equal paragraph 0 of the NEW view — NOT paragraph 0 of the OLD
+    // view that a republish-without-validation path could land on. With the
+    // view-actor NAV_NO_PROGRESS rule:
+    //  - On a real advance: new view's paragraph 0 (this assertion)
+    //  - On no progress: machine transitions to `stopped` (covered in the
+    //    sibling "no-progress" test)
+    const newViewSnap = await readPlayerSnapshot(bookPage)
+    const activeId = await bookPage.evaluate(() => {
+      const w = window as unknown as {
+        __rishi: {
+          playerStore: {
+            getState: () => { activeParagraph: { index: string } | null }
+          }
+        }
+      }
+      return w.__rishi.playerStore.getState().activeParagraph?.index ?? null
+    })
+    expect(
+      activeId,
+      'After auto-advance, activeParagraph must be set to a paragraph of the NEW view.'
+    ).not.toBeNull()
+    expect(
+      activeId,
+      `After auto-advance, activeParagraph (${activeId}) must equal currentParagraphs[0].index ` +
+        `(${newViewSnap.paragraphs[0]?.index}) of the NEW view. If activeId belongs to ` +
+        `the OLD view, the safety-net's republish-without-validation regression ` +
+        `(Phase 3.4 §1) has crept back in.`
+    ).toBe(newViewSnap.paragraphs[0]?.index)
+
+    // Phase 3.4 acceptance gate — snap-back / flip-back.
+    //
+    // Closes a vacuous-pass hole in the assertion above: when the
+    // location-changed-then-flipped-back regression fires, BOTH location
+    // AND currentParagraphs revert to the OLD view in lock-step. The
+    // assertion `activeId === currentParagraphs[0].index` then passes
+    // trivially (both are the OLD view's paragraph 0), so the test
+    // misses the bug that the user smoke-reported.
+    //
+    // Sample the EPUB location for 2.5 s after the player reached `playing`
+    // on the new view. If the location reverts to startLocation at any
+    // point — or even ends up there at the final tick — the snap-back is
+    // live. This catches the case where epubjs's mid-animation `relocated`
+    // events bypass the view-actor's same-CFI guard via an unvalidated
+    // publish path (e.g., a zustand subscriber that writes
+    // playerStore.currentParagraphs from epubStore.currentEpubLocation
+    // without comparing locators).
+    type SnapBackSample = { t: number; location: string; activeIndex: string | null }
+    const snapSamples: SnapBackSample[] = []
+    const snapStart = Date.now()
+    while (Date.now() - snapStart < 2500) {
+      const sample = await bookPage.evaluate(() => {
+        const w = window as unknown as {
+          __rishi: {
+            playerStore: { getState: () => { activeParagraph: { index: string } | null } }
+            epubStore: { getState: () => { currentEpubLocation: string } }
+          }
+        }
+        return {
+          location: w.__rishi.epubStore.getState().currentEpubLocation,
+          activeIndex: w.__rishi.playerStore.getState().activeParagraph?.index ?? null
+        }
+      })
+      snapSamples.push({ t: Date.now() - snapStart, ...sample })
+      await bookPage.waitForTimeout(100)
+    }
+    const revertedAt = snapSamples.find((s) => s.location === startLocation)
+    const finalSnap = snapSamples[snapSamples.length - 1]
+    expect(
+      revertedAt,
+      `After auto-advance the EPUB location must not flip back to the start ` +
+        `view at any point during the next 2.5 s. ` +
+        `startLocation='${startLocation}'. ` +
+        `Reversion detected at t=${revertedAt?.t}ms ` +
+        `(active='${revertedAt?.activeIndex}'). ` +
+        `Final at t=${finalSnap.t}ms: location='${finalSnap.location}' ` +
+        `active='${finalSnap.activeIndex}'. ` +
+        `This is the snap-back regression: the page advances, then an ` +
+        `unvalidated publish path resets currentParagraphs (and therefore ` +
+        `the highlight) back to the OLD view.`
+    ).toBeUndefined()
+
+    // Teardown
+    await sendPlayerEvent(bookPage, 'STOP')
+    await bookPage.evaluate(() => {
+      const w = window as unknown as { __rishi: { setTestTtsService: (s: null) => void } }
+      w.__rishi.setTestTtsService(null)
+    })
+  })
+
+  // ---------------------------------------------------------------------
+  // Phase 3.4 acceptance gate — the loop-back bug class.
+  //
+  // Scenario the user reported: TTS reaches the last paragraph of view A
+  // and triggers a page nav that DOESN'T actually advance the rendition
+  // (end of book, drift restore, image-only page, transient epubjs error).
+  // A republish-without-validation path used to land playback on
+  // paragraph 0 of view A. The structural fix: the view actor's
+  // same-locator / empty-paragraphs check emits NAV_NO_PROGRESS; the
+  // machine transitions to `stopped` instead of looping.
+  //
+  // This test simulates that exact path by sending PAGE_NAVIGATING followed
+  // by NAV_NO_PROGRESS directly into the actor — exercising the integration
+  // surface that the view actor hits today.
+  // ---------------------------------------------------------------------
+  test('PAGE_NAVIGATING + NAV_NO_PROGRESS lands in stopped with cleared highlight (no loop-back)', async () => {
+    test.setTimeout(60_000)
+    const book = await importBook(app.page, {
+      fixturePath: EPUB_FIXTURE,
+      kind: 'epub',
+      title: 'TTS NAV_NO_PROGRESS'
+    })
+    await closeOverlays(app.page)
+    const bookPage = await openBook(app.page, book.id)
+    await expect(bookPage.locator('[aria-label="Next page"]').first()).toBeVisible({
+      timeout: 30000
+    })
+    await waitForParagraphs(bookPage)
+    await installMockTts(bookPage)
+
+    const startSnap = await readPlayerSnapshot(bookPage)
+    expect(
+      startSnap.paragraphs.length,
+      'fixture must publish paragraphs before the test runs'
+    ).toBeGreaterThan(0)
+
+    await sendPlayerEvent(bookPage, 'PLAY')
+    await waitForPlayerState(bookPage, 'playing', 8000)
+
+    // Send PAGE_NAVIGATING (the navStore→player bridge emits this when the
+    // rendition starts curling) followed immediately by NAV_NO_PROGRESS
+    // (which the view actor emits when the new view matches the old or is
+    // empty).
+    await bookPage.evaluate(() => {
+      const w = window as unknown as {
+        __rishi: {
+          playerStore: {
+            getState: () => { send: ((e: Record<string, unknown>) => void) | null }
+          }
+        }
+      }
+      const send = w.__rishi.playerStore.getState().send
+      if (!send) throw new Error('playerStore.send is null')
+      send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+      send({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })
+    })
+
+    await waitForPlayerState(bookPage, 'stopped', 5000)
+
+    // The visible highlight must be cleared — without this, the OLD view's
+    // paragraph would remain highlighted post-no-progress, which would also
+    // contradict the "no loop-back" guarantee.
+    const activeAfter = await bookPage.evaluate(() => {
+      const w = window as unknown as {
+        __rishi: {
+          playerStore: {
+            getState: () => { activeParagraph: { index: string } | null }
+          }
+        }
+      }
+      return w.__rishi.playerStore.getState().activeParagraph
+    })
+    expect(
+      activeAfter,
+      'On NAV_NO_PROGRESS the active highlight must clear — a residual ' +
+        "highlight means the OLD view's paragraph 0 was about to be played."
+    ).toBeNull()
+
+    // Teardown
+    await bookPage.evaluate(() => {
+      const w = window as unknown as { __rishi: { setTestTtsService: (s: null) => void } }
+      w.__rishi.setTestTtsService(null)
+    })
+  })
+
+  // ---------------------------------------------------------------------
+  // Phase 3.4 acceptance gate — manual NEXT path (smoke-reproducible bug).
+  //
+  // User scenario: open EPUB, advance to the LAST paragraph on the visible
+  // view, press the TTS Next button. The player should:
+  //   1. cross to the next view (EPUB location advances), AND
+  //   2. land on paragraph 0 of the new view (the highlight follows).
+  //
+  // This is the EXPLICIT NEXT-event path. The sibling "auto-advance" test
+  // exercises the AUDIO_ENDED path; both eventually hit
+  // `waitingForParagraphs`, but the manual NEXT entry has a different prior
+  // transition (`playing → waitingForParagraphs` on the !hasMoreParagraphs
+  // branch) and was reported by the user to still loop back to paragraph 0
+  // of the OLD view after the Phase 3.4 fix landed for AUDIO_ENDED.
+  //
+  // The 2.5 s wait after pressing NEXT is deliberate: the historical bug
+  // fires AFTER the new view's paragraphs initially land, when a same-view
+  // republish overwrites the highlight back. Reading too early would
+  // pass on the optimistic-update window and miss the regression.
+  // ---------------------------------------------------------------------
+  test('manual NEXT on last paragraph of a view advances to next view at paragraph 0 (no loop-back)', async () => {
+    test.setTimeout(60_000)
+    const book = await importBook(app.page, {
+      fixturePath: EPUB_FIXTURE,
+      kind: 'epub',
+      title: 'TTS Manual NEXT Boundary'
+    })
+    await closeOverlays(app.page)
+    const bookPage = await openBook(app.page, book.id)
+    await expect(bookPage.locator('[aria-label="Next page"]').first()).toBeVisible({
+      timeout: 30000
+    })
+    await waitForParagraphs(bookPage)
+    await installMockTts(bookPage)
+
+    const startSnap = await readPlayerSnapshot(bookPage)
+    const startLocation = startSnap.location
+    const startCount = startSnap.paragraphs.length
+    expect(
+      startCount,
+      'fixture must publish at least 2 paragraphs on the starting view ' +
+        'so the test can step from paragraph 0 to the last paragraph'
+    ).toBeGreaterThanOrEqual(2)
+
+    // PLAY first so the boundary press happens from `playing`, matching the
+    // user-gesture timing exactly (the user reported pressing NEXT during a
+    // read-aloud session, not from idle).
+    await sendPlayerEvent(bookPage, 'PLAY')
+    await waitForPlayerState(bookPage, 'playing', 8000)
+
+    // Step the active paragraph forward to the LAST one on the current view
+    // by sending NEXT once per inter-paragraph gap. Between presses, wait
+    // for the machine to settle into `playing` on the new index — otherwise
+    // a NEXT issued during `loading` is ignored and the loop falls out of
+    // sync with the actual paragraphIndex.
+    for (let step = 0; step < startCount - 1; step++) {
+      await sendPlayerEvent(bookPage, 'NEXT')
+      await bookPage.waitForFunction(
+        (target) => {
+          const w = window as unknown as {
+            __rishi: {
+              playerStore: {
+                getState: () => {
+                  activeParagraph: { index: string } | null
+                  currentParagraphs: { index: string }[]
+                  playingState: string
+                }
+              }
+            }
+          }
+          const s = w.__rishi.playerStore.getState()
+          return (
+            s.playingState === 'playing' &&
+            s.activeParagraph?.index === s.currentParagraphs[target]?.index
+          )
+        },
+        step + 1,
+        { timeout: 10000 }
+      )
+    }
+
+    // Sanity: we are positioned on the last paragraph of the start view and
+    // the EPUB location has NOT changed yet.
+    const beforeBoundary = await bookPage.evaluate(() => {
+      const w = window as unknown as {
+        __rishi: {
+          playerStore: {
+            getState: () => {
+              activeParagraph: { index: string } | null
+              currentParagraphs: { index: string }[]
+            }
+          }
+          epubStore: { getState: () => { currentEpubLocation: string } }
+        }
+      }
+      const s = w.__rishi.playerStore.getState()
+      return {
+        activeIndex: s.activeParagraph?.index ?? null,
+        lastIndex: s.currentParagraphs[s.currentParagraphs.length - 1]?.index ?? null,
+        location: w.__rishi.epubStore.getState().currentEpubLocation
+      }
+    })
+    expect(
+      beforeBoundary.activeIndex,
+      'before the boundary-crossing press, the active paragraph must be ' +
+        'the last paragraph of the start view'
+    ).toBe(beforeBoundary.lastIndex)
+    expect(
+      beforeBoundary.location,
+      'before the boundary-crossing press, the EPUB location must still be ' +
+        'the start view (no nav has happened yet)'
+    ).toBe(startLocation)
+
+    // The boundary-crossing press. From `playing` on the last paragraph this
+    // takes the `!hasMoreParagraphs` branch:
+    //   playing → waitingForParagraphs (direction='forward')
+    //   → view actor NAVIGATE_NEXT
+    //   → VIEW_CHANGED (good) or NAV_NO_PROGRESS (machine stops)
+    await sendPlayerEvent(bookPage, 'NEXT')
+
+    // Sample the player state for 2.5 s after the press at 100 ms ticks so
+    // we can distinguish three failure modes the user could observe:
+    //   (1) the EPUB location never changes (NAV_NO_PROGRESS or no view-
+    //       actor response) — the page didn't turn at all.
+    //   (2) the EPUB location flips to a new view, the highlight briefly
+    //       lands on paragraph 0, then snaps back to a paragraph that is
+    //       not on the visible view — the safety-net republish race.
+    //   (3) the EPUB location flips and the highlight ends up on a
+    //       paragraph that is NOT on the visible view — loop-back to an
+    //       OLD view's paragraph.
+    // The silent mock TTS auto-advances via AUDIO_ENDED every ~100 ms, so
+    // the highlight can legitimately move off paragraph 0 during the
+    // window. The bug we're catching is "highlight points to a paragraph
+    // that is not in currentParagraphs" — that's loop-back regardless of
+    // index. The "small delay" in the user's report exists to surface (2).
+    type Sample = {
+      t: number
+      location: string
+      activeIndex: string | null
+      currentIndexes: string[]
+      paragraphCount: number
+      playingState: string
+    }
+    const samples: Sample[] = []
+    const samplingStart = Date.now()
+    while (Date.now() - samplingStart < 2500) {
+      const sample = await bookPage.evaluate(() => {
+        const w = window as unknown as {
+          __rishi: {
+            playerStore: {
+              getState: () => {
+                activeParagraph: { index: string } | null
+                currentParagraphs: { index: string }[]
+                playingState: string
+              }
+            }
+            epubStore: { getState: () => { currentEpubLocation: string } }
+          }
+        }
+        const s = w.__rishi.playerStore.getState()
+        return {
+          location: w.__rishi.epubStore.getState().currentEpubLocation,
+          activeIndex: s.activeParagraph?.index ?? null,
+          currentIndexes: s.currentParagraphs.map((p) => p.index),
+          paragraphCount: s.currentParagraphs.length,
+          playingState: s.playingState
+        }
+      })
+      samples.push({ t: Date.now() - samplingStart, ...sample })
+      await bookPage.waitForTimeout(100)
+    }
+
+    // Collapse samples to a state-change timeline. Each entry is a
+    // transition (any field that changed from the previous row).
+    const timeline: Sample[] = []
+    for (const s of samples) {
+      const prev = timeline[timeline.length - 1]
+      if (
+        !prev ||
+        prev.location !== s.location ||
+        prev.activeIndex !== s.activeIndex ||
+        prev.paragraphCount !== s.paragraphCount ||
+        prev.playingState !== s.playingState
+      ) {
+        timeline.push(s)
+      }
+    }
+    const timelineStr = timeline
+      .map(
+        (s) =>
+          `  t=${String(s.t).padStart(4, ' ')}ms  state=${s.playingState.padEnd(10)} ` +
+          `loc=${s.location.slice(-32)} ` +
+          `firstOfView=${(s.currentIndexes[0] ?? 'null').slice(-32)} ` +
+          `active=${(s.activeIndex ?? 'null').slice(-32)}`
+      )
+      .join('\n')
+    // Print the timeline so the next session can see it even when the
+    // assertion message gets truncated by Playwright's afterAll-timeout
+    // path.
+    console.log('=== manual NEXT boundary timeline ===')
+    console.log(`startLocation=${startLocation}`)
+    console.log(timelineStr)
+    console.log('=== end timeline ===')
+
+    const final = samples[samples.length - 1]
+    const afterBoundary = {
+      location: final.location,
+      activeIndex: final.activeIndex,
+      firstOfViewIndex: final.currentIndexes[0] ?? null,
+      paragraphCount: final.paragraphCount,
+      playingState: final.playingState
+    }
+
+    // The highlight should follow the page. If the highlight ends up
+    // pointing to a paragraph that is NOT in the current view's
+    // currentParagraphs, the user is seeing a paragraph that is no longer
+    // on screen — the loop-back / snap-back regression.
+    const finalActiveOnVisibleView =
+      final.activeIndex !== null && final.currentIndexes.includes(final.activeIndex)
+
+    // Did the highlight ever cleanly anchor to paragraph 0 of the new view?
+    // True even if the highlight later auto-advances — this guards
+    // against "we never landed on paragraph 0 of the new view at all".
+    const everAtNewViewIndexZero = samples.some(
+      (s) =>
+        s.location !== startLocation &&
+        s.currentIndexes.length > 0 &&
+        s.activeIndex === s.currentIndexes[0]
+    )
+
+    // Assertion 1: we are on a NEW page. The EPUB location string must
+    // have advanced. If it didn't, either the view actor never navigated
+    // or NAV_NO_PROGRESS landed the machine in `stopped` without crossing.
+    expect(
+      afterBoundary.location,
+      `After NEXT at the last paragraph of the start view, the EPUB location ` +
+        `must change. Got '${afterBoundary.location}' (start='${startLocation}'). ` +
+        `If unchanged, either the view actor failed to navigate or ` +
+        `NAV_NO_PROGRESS fired (playingState='${afterBoundary.playingState}').\n` +
+        `Timeline:\n${timelineStr}`
+    ).not.toBe(startLocation)
+    expect(
+      afterBoundary.paragraphCount,
+      'the new view must publish at least one paragraph'
+    ).toBeGreaterThan(0)
+
+    // Assertion 2a: at the end of the sampling window the highlight must
+    // be on a paragraph that IS in the currently-visible view. A
+    // highlight pointing at a paragraph that isn't in currentParagraphs is
+    // the loop-back / snap-back regression — the user sees the highlight
+    // disappear from the visible page or, worse, jump back to the previous
+    // view.
+    expect(
+      finalActiveOnVisibleView,
+      `After NEXT crossed the view boundary, the active paragraph must be ` +
+        `on the currently-visible view. ` +
+        `Got: activeIndex='${final.activeIndex}', ` +
+        `currentParagraphs.length=${final.paragraphCount}, ` +
+        `activeIndex in currentParagraphs? ${finalActiveOnVisibleView}, ` +
+        `playingState='${final.playingState}'.\n` +
+        `Timeline:\n${timelineStr}`
+    ).toBe(true)
+
+    // Assertion 2b: the highlight must have anchored on paragraph 0 of
+    // the new view at SOME point during the window. The view-actor
+    // protocol's resetIndexByDirection always lands on index 0 on a
+    // forward boundary; if this never happened, the machine bypassed
+    // resetIndexByDirection — also a regression.
+    expect(
+      everAtNewViewIndexZero,
+      `After NEXT crossed the view boundary, the highlight must anchor to ` +
+        `paragraph 0 of the NEW view at least once. It never did during the ` +
+        `2.5 s window — resetIndexByDirection on the forward boundary did not ` +
+        `take effect.\n` +
+        `Timeline:\n${timelineStr}`
+    ).toBe(true)
+
     // Teardown
     await sendPlayerEvent(bookPage, 'STOP')
     await bookPage.evaluate(() => {
@@ -1493,7 +1945,7 @@ test.describe('TTS state follows EPUB page navigation', () => {
   // paragraph 0 instead of the last paragraph.
   //
   // Fixes (both applied):
-  //   1. Hook: pass direction='backward' when pageRequest==='prev'.
+  //   1. View actor: emit NAVIGATE_PREV when direction is 'backward'.
   //   2. State machine: waitingForParagraphs → pageNavigating preserves
   //      direction (no setNavDirection) so the player's intent survives a
   //      stale or wrong direction in the event.

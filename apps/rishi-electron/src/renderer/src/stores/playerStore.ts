@@ -34,9 +34,6 @@ interface PlayerStore {
   nextPageParagraphs: ParagraphWithIndex[]
   prevPageParagraphs: ParagraphWithIndex[]
 
-  // --- Signals ---
-  pageRequest: 'next' | 'prev' | null
-
   // --- Machine send reference for non-React code ---
   send: PlayerSend | null
 
@@ -51,9 +48,6 @@ interface PlayerStore {
   setPrevPageParagraphs: (p: ParagraphWithIndex[]) => void
 
   // --- Actions: machine calls these ---
-  requestNextPage: () => void
-  requestPrevPage: () => void
-  clearPageRequest: () => void
   setSend: (send: PlayerSend) => void
   setLastPlayedParagraphIndex: (idx: string | null) => void
 }
@@ -68,7 +62,6 @@ export const usePlayerStore = create<PlayerStore>()(
     nextPageParagraphs: [],
     prevPageParagraphs: [],
 
-    pageRequest: null,
     send: null,
     lastPlayedParagraphIndex: null,
 
@@ -76,9 +69,6 @@ export const usePlayerStore = create<PlayerStore>()(
     setNextPageParagraphs: (p) => set({ nextPageParagraphs: p }),
     setPrevPageParagraphs: (p) => set({ prevPageParagraphs: p }),
 
-    requestNextPage: () => set({ pageRequest: 'next' }),
-    requestPrevPage: () => set({ pageRequest: 'prev' }),
-    clearPageRequest: () => set({ pageRequest: null }),
     setSend: (send) => set({ send }),
     setLastPlayedParagraphIndex: (lastPlayedParagraphIndex) => set({ lastPlayedParagraphIndex })
   }))

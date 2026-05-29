@@ -7,21 +7,30 @@ import type { PlayerStoreState } from '@/stores/playerStore'
 // Mocks
 // ---------------------------------------------------------------------------
 
-const sendMock = vi.fn()
+// Hoisted so the vi.mock factory below (also hoisted) can reference it.
+const { sendMock } = vi.hoisted(() => ({ sendMock: vi.fn() }))
 
 // We mock @/stores/playerStore with a factory that builds its own Zustand
 // store, so both suites work: the Repeat-button suite (initial render) and
-// the auto-collapse suite (reactive re-renders via store.setState).
+// the auto-collapse suite (reactive re-renders via store.setState). After
+// the actor-creation move out of TTSControls, the component reads its send
+// directly from playerStore — so the mock has to seed `send: sendMock`
+// rather than mocking usePlayerMachine.
 vi.mock('@/stores/playerStore', async () => {
   const { create } = await import('zustand')
   const { subscribeWithSelector } = await import('zustand/middleware')
 
-  type State = { playingState: PlayerStoreState; errors: string[] }
+  type State = {
+    playingState: PlayerStoreState
+    errors: string[]
+    send: typeof sendMock
+  }
 
   const store = create<State>()(
     subscribeWithSelector(() => ({
       playingState: 'idle' as PlayerStoreState,
-      errors: [] as string[]
+      errors: [] as string[],
+      send: sendMock
     }))
   )
 
@@ -29,10 +38,6 @@ vi.mock('@/stores/playerStore', async () => {
     usePlayerStore: store
   }
 })
-
-vi.mock('@/hooks/usePlayerMachine', () => ({
-  usePlayerMachine: () => ({ send: sendMock })
-}))
 
 vi.mock('@/hooks/useRequireAuth', () => ({
   useRequireAuth: () => ({

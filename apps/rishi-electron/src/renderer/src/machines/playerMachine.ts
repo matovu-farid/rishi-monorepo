@@ -1,8 +1,53 @@
 // apps/electron/src/renderer/src/machines/playerMachine.ts
-import { setup, assign } from 'xstate'
+//
+// Phase 3.3 — fromPromise + audioActor wiring.
+//
+// The machine no longer relies on an external bridge to fetch TTS or drive the
+// audio element. It invokes:
+//   - audioActor (fromCallback) at root, so PLAY/PAUSE/RESUME/STOP/CLEAR_SRC
+//     commands are sendTo'd from this graph and audio→machine events flow
+//     back via sendBack.
+//   - fetchTtsLogic (fromPromise) inside `loading`, so xstate auto-cancels
+//     in-flight TTS fetches on state exit (replaces fetchGeneration counter).
+import { setup, assign, sendTo, raise, fromCallback } from 'xstate'
 import type { ParagraphWithIndex } from '@/stores/playerStore'
+import { audioActor, audioElement } from '@/actors/audioActor'
+import { fetchTtsLogic, type TtsFetchInput } from '@/actors/ttsFetchActor'
+import type { ViewActorCommand } from '@/actors/viewActor'
 
 const MAX_RETRIES = 3
+
+/** Signature the renderer binds to getTtsService().requestAudio. */
+export type TtsFetcher = TtsFetchInput['fetcher']
+
+/**
+ * Default fetcher — a forever-pending promise. Real wiring (usePlayerMachine)
+ * passes a production fetcher via `input.fetcher` when calling createActor.
+ * Tests that don't care about the loading state can rely on this so they
+ * don't accidentally trigger real network calls; the state's exit cancels
+ * the pending promise.
+ */
+const noopFetcher: TtsFetcher = () => new Promise<string>(() => {})
+
+// Placeholder view actor used when no per-format actor is provided via
+// `.provide({ actors: { view: epubViewActor | pdfViewActor } })`. The default
+// is a no-op so machines created without a view actor (e.g. legacy tests that
+// exercise the state graph without navigation) don't crash on entry actions
+// that sendTo('view', ...).
+const noopViewActor = fromCallback<ViewActorCommand, unknown>(() => () => {})
+
+export type PlayerMachineInput = {
+  fetcher?: TtsFetcher
+  /** Defaults to the singleton audioElement. Tests can pass a fake. */
+  audio?: HTMLMediaElement
+  /**
+   * Format-specific input for the view actor. The shape depends on which
+   * actor is provided via `.provide({ actors: { view: epubViewActor } })`:
+   * EpubViewInput for epub, PdfViewInput for pdf, etc. Carried as unknown
+   * because the machine itself is format-agnostic.
+   */
+  viewInput?: unknown
+}
 
 export type PlayerMachineContext = {
   bookId: string
@@ -32,6 +77,18 @@ export type PlayerMachineContext = {
   partialFirstKey: string | null
   partialFirstParagraphIndex: number | null
   resumeParagraphIndex: string | null
+  /**
+   * TTS fetcher resolved from input at createActor time. Stored in context
+   * so the loading-state invoke can read it without import-side coupling.
+   * Non-serialisable — the machine is not persisted across sessions today.
+   */
+  fetcher: TtsFetcher
+  /**
+   * Format-specific input forwarded to the invoked view actor. Stored in
+   * context so the root `invoke` block can read it via `({ context }) =>
+   * context.viewInput` without import-side coupling. Non-serialisable.
+   */
+  viewInput: unknown
 }
 
 export type PlayerMachineEvent =
@@ -61,8 +118,22 @@ export type PlayerMachineEvent =
   // mid-paragraph. Ignored from idle/pageNavigating/republishingParagraphs.
   | { type: 'PLAY_FROM'; paragraphIndex: number; partialFirstText: string; partialFirstKey: string }
   | { type: 'REPEAT' }
+  // Emitted by the view layer (today: orchestration bridge after a
+  // publishCurrentEpubParagraphs that bailed; future Phase 3.4 wiring:
+  // viewActor sendBack) when a navigation request did NOT yield a new
+  // view (end of book / drift restore / same-CFI relocated / image-only
+  // page). The player transitions to `stopped` with a meaningful reason
+  // instead of timing out or — the bug this kills — silently
+  // republishing the OLD view's paragraphs and snapping to paragraph 0.
+  | { type: 'NAV_NO_PROGRESS'; reason?: 'end-of-document' | 'no-relocation' | 'timeout' }
+  // Emitted by the invoked view actor (epub/pdf/etc) when a navigation or
+  // republish committed a non-empty new view. Re-raised at the root as
+  // PARAGRAPHS_UPDATED so every existing state handler processes it
+  // identically — this decouples per-state behaviour from whether paragraphs
+  // arrived via store subscription or view-actor sendBack.
+  | { type: 'VIEW_CHANGED'; locator: string; paragraphs: ParagraphWithIndex[] }
 
-const initialContext: PlayerMachineContext = {
+const initialContext: Omit<PlayerMachineContext, 'fetcher'> = {
   bookId: '',
   paragraphIndex: 0,
   direction: 'forward',
@@ -77,13 +148,19 @@ const initialContext: PlayerMachineContext = {
   partialFirstText: null,
   partialFirstKey: null,
   partialFirstParagraphIndex: null,
-  resumeParagraphIndex: null
+  resumeParagraphIndex: null,
+  viewInput: undefined
 }
 
 export const playerMachine = setup({
   types: {
     context: {} as PlayerMachineContext,
     events: {} as PlayerMachineEvent
+  },
+  actors: {
+    audio: audioActor,
+    fetchTtsLogic,
+    view: noopViewActor
   },
   guards: {
     hasParagraphs: ({ context }) => context.currentParagraphs.length > 0,
@@ -142,6 +219,18 @@ export const playerMachine = setup({
     logError: assign({
       errors: ({ context, event }) => {
         const msg = event.type === 'AUDIO_ERROR' ? event.error : 'Unknown error'
+        const errs = [...context.errors, msg]
+        if (errs.length > 50) errs.shift()
+        return errs
+      }
+    }),
+    // fetchTtsLogic onError carries the rejection via `event.error`; pull
+    // that into the context.errors array using the same 50-item cap.
+    logErrorFromInvoke: assign({
+      errors: ({ context, event }) => {
+        const err = (event as { error?: unknown }).error
+        const msg =
+          err instanceof Error ? err.message : typeof err === 'string' ? err : 'TTS fetch failed'
         const errs = [...context.errors, msg]
         if (errs.length > 50) errs.shift()
         return errs
@@ -219,11 +308,40 @@ export const playerMachine = setup({
 }).createMachine({
   id: 'player',
   initial: 'idle',
-  context: { ...initialContext },
+  context: ({ input }) => {
+    const i = input as PlayerMachineInput | undefined
+    return {
+      ...initialContext,
+      fetcher: i?.fetcher ?? noopFetcher,
+      viewInput: i?.viewInput
+    }
+  },
+  invoke: [
+    {
+      // Always-on audioActor. Lives for the lifetime of the parent. All
+      // PLAY/PAUSE/RESUME/STOP/CLEAR_SRC commands are sendTo('audio', ...).
+      // Audio→machine events (AUDIO_LOADED / AUDIO_ENDED / AUDIO_ERROR) flow
+      // back as parent events via sendBack and are handled by the on:
+      // blocks of whichever state the parent is in.
+      id: 'audio',
+      src: 'audio',
+      input: { audio: audioElement }
+    },
+    {
+      // Always-on view actor — per-format (epubViewActor, pdfViewActor, ...)
+      // injected via `.provide({ actors: { view: epubViewActor } })` at the
+      // reader-screen layer. Receives NAVIGATE_NEXT/PREV/TO/REPUBLISH;
+      // emits VIEW_CHANGED / NAV_NO_PROGRESS back. Default is a no-op so
+      // tests that exercise the state graph without navigation don't crash.
+      id: 'view',
+      src: 'view',
+      input: ({ context }: { context: PlayerMachineContext }) => context.viewInput
+    }
+  ],
   on: {
     CLEANUP: {
       target: '.idle',
-      actions: 'resetAll'
+      actions: ['resetAll', sendTo('audio', { type: 'CLEAR_SRC' })]
     },
     // Voice chat ended. If we paused playback for the chat (flag set on
     // CHAT_STARTED from playing/loading/waitingForParagraphs), re-enter loading
@@ -239,7 +357,18 @@ export const playerMachine = setup({
       {
         actions: ['clearWantsAutoResumeAfterChat']
       }
-    ]
+    ],
+    // The view actor reports a committed view. Re-raise as PARAGRAPHS_UPDATED
+    // so every existing state handler (loading, playing, waitingForParagraphs,
+    // pageNavigating, republishingParagraphs, etc.) processes it identically.
+    // This decouples per-state event graph from whether paragraphs arrived
+    // via store subscription or view-actor sendBack.
+    VIEW_CHANGED: {
+      actions: raise(({ event }) => ({
+        type: 'PARAGRAPHS_UPDATED' as const,
+        paragraphs: (event as { paragraphs: ParagraphWithIndex[] }).paragraphs
+      }))
+    }
   },
   // Note: PAGE_NAVIGATING is handled per-state below (not as a global handler)
   // because behaviour differs:
@@ -265,6 +394,7 @@ export const playerMachine = setup({
     },
 
     stopped: {
+      entry: sendTo('audio', { type: 'STOP' }),
       on: {
         PLAY: [
           {
@@ -348,11 +478,75 @@ export const playerMachine = setup({
     },
 
     loading: {
+      // Entry: silence whatever the previous state was playing immediately, so
+      // the user doesn't hear the old paragraph for the ~50-300 ms TTS fetch
+      // window. Idempotent — STOP on already-stopped audio is a no-op.
+      entry: sendTo('audio', { type: 'STOP' }),
       after: {
         60000: {
           target: 'error',
           actions: ['logLoadingTimeout', 'flagTimedOut']
         }
+      },
+      invoke: {
+        // The TTS fetch. xstate cancels this promise when `loading` exits —
+        // replacing the bridge's manual fetchGeneration counter.
+        src: 'fetchTtsLogic',
+        input: ({ context }): TtsFetchInput => {
+          // `as | undefined` (not a plain annotation) so ts-eslint sees the
+          // widened type at use sites — paragraphIndex may point past the end
+          // of currentParagraphs while paragraphs are being swapped in/out
+          // (transient between PAGE_NAVIGATING and PARAGRAPHS_UPDATED), and
+          // the repo doesn't have noUncheckedIndexedAccess on.
+          const paragraph = context.currentParagraphs[context.paragraphIndex] as
+            | ParagraphWithIndex
+            | undefined
+          const useOverride =
+            context.partialFirstText !== null &&
+            context.partialFirstParagraphIndex === context.paragraphIndex
+          // Non-null assertions are safe inside the useOverride branch — the
+          // guard above proves partialFirstText/Key are non-null.
+          const text = useOverride ? context.partialFirstText! : (paragraph?.text ?? '')
+          const cfiRange = useOverride ? context.partialFirstKey! : (paragraph?.index ?? '')
+          const skip = !paragraph || context.currentParagraphs.length === 0 || !text.trim()
+          return {
+            bookId: context.bookId,
+            cfiRange,
+            text,
+            skip,
+            fetcher: context.fetcher
+          }
+        },
+        onDone: [
+          {
+            // Skip path (empty/image-only paragraph): treat as if playback
+            // ended naturally — let the AUDIO_ENDED handlers below auto-advance
+            // or hand off to waitingForParagraphs. Sending via raise would also
+            // work; the parent's on-handlers see it identically.
+            guard: ({ event }) => event.output.kind === 'skip',
+            actions: raise({ type: 'AUDIO_ENDED' })
+          },
+          {
+            // Happy path: ask audioActor to play the freshly-fetched blob.
+            // The AUDIO_LOADED reply transitions loading → playing below.
+            actions: sendTo('audio', ({ event }) => ({
+              type: 'PLAY',
+              src: (event.output as { kind: 'play'; src: string }).src
+            }))
+          }
+        ],
+        onError: [
+          {
+            guard: 'hasRetries',
+            target: 'loading',
+            reenter: true,
+            actions: ['incrementRetry', 'logErrorFromInvoke']
+          },
+          {
+            target: 'error',
+            actions: ['logErrorFromInvoke', 'clearPartialFirst']
+          }
+        ]
       },
       on: {
         AUDIO_LOADED: {
@@ -369,6 +563,21 @@ export const playerMachine = setup({
           {
             target: 'error',
             actions: ['logError', 'clearPartialFirst']
+          }
+        ],
+        // Mirror playing's AUDIO_ENDED so the skip path advances cleanly:
+        //   - more paragraphs on this page → next loading
+        //   - last paragraph → waitingForParagraphs
+        AUDIO_ENDED: [
+          {
+            guard: 'hasMoreParagraphs',
+            target: 'loading',
+            actions: ['clearPartialFirstIfConsumed', 'advanceIndex'],
+            reenter: true
+          },
+          {
+            target: 'waitingForParagraphs',
+            actions: ['clearPartialFirstIfConsumed', 'setDirectionForward', 'setWantsAutoResume']
           }
         ],
         PAUSE: {
@@ -506,6 +715,7 @@ export const playerMachine = setup({
 
     paused: {
       initial: 'clean',
+      entry: sendTo('audio', { type: 'PAUSE' }),
       on: {
         STOP: {
           target: 'stopped',
@@ -567,7 +777,10 @@ export const playerMachine = setup({
           exit: ['clearWantsAutoResumeAfterChat'],
           on: {
             RESUME: {
-              target: '#player.playing'
+              target: '#player.playing',
+              // From paused.clean, currentParagraphs are unchanged and the
+              // audio element still has the right src loaded — just resume.
+              actions: sendTo('audio', { type: 'RESUME' })
             },
             PARAGRAPHS_UPDATED: {
               target: 'stale',
@@ -599,6 +812,18 @@ export const playerMachine = setup({
     },
 
     waitingForParagraphs: {
+      // Stop the previous audio AND ask the view actor to navigate. The
+      // view actor will emit VIEW_CHANGED (re-raised as PARAGRAPHS_UPDATED)
+      // or NAV_NO_PROGRESS, both already handled below.
+      entry: [
+        sendTo('audio', { type: 'STOP' }),
+        sendTo('view', ({ context }) => ({
+          type:
+            context.direction === 'backward'
+              ? ('NAVIGATE_PREV' as const)
+              : ('NAVIGATE_NEXT' as const)
+        }))
+      ],
       after: {
         10000: {
           target: 'stopped',
@@ -609,6 +834,14 @@ export const playerMachine = setup({
         PARAGRAPHS_UPDATED: {
           target: 'loading',
           actions: ['storeParagraphs', 'clearTimedOut', 'resetIndexByDirection']
+        },
+        // The view-layer (orchestration bridge or, post-Phase-3.4, the
+        // view actor) detected end-of-document / no-relocation. Don't loop;
+        // stop. This is the structural fix for the auto-advance-past-last-
+        // paragraph snap-back bug.
+        NAV_NO_PROGRESS: {
+          target: 'stopped',
+          actions: ['resetIndex', 'clearWantsAutoResume', 'clearPartialFirst']
         },
         STOP: {
           target: 'stopped',
@@ -648,6 +881,13 @@ export const playerMachine = setup({
       // set pageRequest — the player has not asked for a new page.
       // PLAY_FROM is intentionally NOT handled here — the paragraphs are not
       // yet known so a targeted jump cannot be validated.
+      entry: [
+        sendTo('audio', { type: 'STOP' }),
+        // Ask the view actor to re-emit the current view's paragraphs.
+        // The actor validates non-emptiness and emits VIEW_CHANGED
+        // (re-raised as PARAGRAPHS_UPDATED) or NAV_NO_PROGRESS.
+        sendTo('view', { type: 'REPUBLISH' })
+      ],
       after: {
         10000: {
           target: 'stopped',
@@ -658,6 +898,12 @@ export const playerMachine = setup({
         PARAGRAPHS_UPDATED: {
           target: 'loading',
           actions: ['storeParagraphs', 'clearTimedOut', 'resetIndexByDirection']
+        },
+        // republish bailed (same view / image-only). Stop instead of timing
+        // out at 10 s.
+        NAV_NO_PROGRESS: {
+          target: 'stopped',
+          actions: ['resetIndex', 'clearPartialFirst']
         },
         STOP: {
           target: 'stopped',
@@ -683,6 +929,7 @@ export const playerMachine = setup({
     //     double-navigate. So this state just waits for PARAGRAPHS_UPDATED
     //     and resumes loading IFF the player was active before.
     pageNavigating: {
+      entry: sendTo('audio', { type: 'STOP' }),
       after: {
         10000: {
           target: 'stopped',
@@ -706,6 +953,16 @@ export const playerMachine = setup({
             actions: ['storeParagraphs', 'clearTimedOut', 'resetIndexByDirection']
           }
         ],
+        // THE bug fix. When the EPUB nav settles (back to navState idle) but
+        // the rendition didn't actually advance — end of book, drift-restore,
+        // image-only page — the orchestration bridge sends NAV_NO_PROGRESS
+        // instead of republishing the same view's paragraphs. Without this,
+        // republish drove PARAGRAPHS_UPDATED → loading → paragraph 0 of the
+        // OLD view, which is what users perceived as "looping back".
+        NAV_NO_PROGRESS: {
+          target: 'stopped',
+          actions: ['resetIndex', 'clearWantsAutoResume', 'clearPartialFirst']
+        },
         STOP: {
           target: 'stopped',
           actions: ['resetIndex', 'clearWantsAutoResume', 'clearPartialFirst']

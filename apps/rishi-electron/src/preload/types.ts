@@ -94,6 +94,9 @@ export type ChannelToMethod = {
   'debug:clearErrorDump': 'clearErrorDump'
   'debug:dumpState': 'dumpState'
   'debug:readStateDump': 'readStateDump'
+  'debug:appendLog': 'appendDebugLog'
+  'debug:readDebugLog': 'readDebugLog'
+  'debug:clearDebugLog': 'clearDebugLog'
 
   // Store
   'store:get': 'getStoreValue'

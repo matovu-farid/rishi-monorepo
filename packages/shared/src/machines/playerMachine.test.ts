@@ -179,6 +179,31 @@ describe('playerMachine', () => {
       expect(snap.context.wantsAutoResume).toBe(false)
     })
 
+    // 5.2.1 — THE bug class fix (parity with electron).
+    //
+    // The view layer signals NAV_NO_PROGRESS when the rendition could not
+    // advance (end of document / drift restore / image-only page /
+    // same-CFI relocated). Without this, the prior safety-net path would
+    // republish the OLD view's paragraphs and snap to paragraph 0 of view
+    // A — the "loop back" symptom users reported. See
+    // .parity/2026-05-28-player-actor-restructure/PLAN.md §3.4.
+    it('pageNavigating + NAV_NO_PROGRESS transitions to stopped (no loop-back to old view)', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PLAY' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+      expect(actor.getSnapshot().value).toBe('pageNavigating')
+      expect(actor.getSnapshot().context.wantsAutoResume).toBe(true)
+
+      actor.send({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })
+      const snap = actor.getSnapshot()
+      expect(snap.value).toBe('stopped')
+      // wantsAutoResume cleared — the user shouldn't auto-resume on the next
+      // unrelated page change after the failed nav.
+      expect(snap.context.wantsAutoResume).toBe(false)
+    })
+
     // 5.3: stopped → pageNavigating → PARAGRAPHS_UPDATED without PLAY → stopped.
     // Proves nav with no user intent does not auto-play.
     it('pageNavigating without PLAY returns to stopped on PARAGRAPHS_UPDATED', () => {

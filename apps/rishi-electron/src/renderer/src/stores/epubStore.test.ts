@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
+
 import { useEpubStore, ThemeType } from './epubStore'
 
 describe('epubStore', () => {
@@ -140,3 +141,4 @@ describe('epubStore', () => {
     expect(useEpubStore.getState().renditionCount).toBe(10)
   })
 })
+

@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createActor } from 'xstate'
+import { createActor, fromCallback } from 'xstate'
 import { playerMachine } from './playerMachine'
 import type { ParagraphWithIndex } from '@/stores/playerStore'
+import type { ViewActorCommand, ViewActorEmit } from '@/actors/viewActor'
 
 function makeParagraphs(count: number): ParagraphWithIndex[] {
   return Array.from({ length: count }, (_, i) => ({
@@ -176,6 +177,36 @@ describe('playerMachine', () => {
       const snap = actor.getSnapshot()
       expect(snap.value).toBe('loading')
       expect(snap.context.paragraphIndex).toBe(0)
+      expect(snap.context.wantsAutoResume).toBe(false)
+    })
+
+    // 5.2.1 — THE bug class fix.
+    //
+    // When TTS reaches the last paragraph of view A and triggers a page nav
+    // that does NOT actually advance (end of book, drift restore, image-only
+    // page), the orchestration bridge used to republish view A's paragraphs
+    // via publishCurrentEpubParagraphs — the machine then transitioned
+    // pageNavigating → loading via PARAGRAPHS_UPDATED and snapped to
+    // paragraph 0 of view A. The structural fix: publishCurrentEpubParagraphs
+    // detects "same view as already in playerStore" and the bridge sends
+    // NAV_NO_PROGRESS instead. This test locks the machine side of the fix.
+    it('pageNavigating + NAV_NO_PROGRESS transitions to stopped (no loop-back to old view)', () => {
+      actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+      actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+      actor.send({ type: 'PLAY' })
+      actor.send({ type: 'AUDIO_LOADED' })
+      // Simulate TTS reaching the last paragraph and the boundary advance.
+      actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+      expect(actor.getSnapshot().value).toBe('pageNavigating')
+      expect(actor.getSnapshot().context.wantsAutoResume).toBe(true)
+
+      // The view did NOT actually advance (rendition.next() at end of book,
+      // or relocated fired with the same CFI). The bridge signals no progress.
+      actor.send({ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' })
+      const snap = actor.getSnapshot()
+      expect(snap.value).toBe('stopped')
+      // wantsAutoResume is cleared — the user shouldn't suddenly play once
+      // a new page does eventually arrive.
       expect(snap.context.wantsAutoResume).toBe(false)
     })
 
@@ -1324,4 +1355,163 @@ describe('resume paragraph application', () => {
     expect(actor.getSnapshot().context.paragraphIndex).toBe(2) // unchanged
     expect(actor.getSnapshot().context.resumeParagraphIndex).toBeNull()
   })
+})
+
+describe('view-actor integration (Phase 3.5)', () => {
+  // Mocks the per-format view actor (epubViewActor / pdfViewActor) so the
+  // tests can assert (a) what the machine sendTo's the actor with on entry
+  // to waitingForParagraphs / republishingParagraphs, and (b) that
+  // VIEW_CHANGED sent back from the actor is treated as PARAGRAPHS_UPDATED.
+  type CapturedCommand = ViewActorCommand
+  function makeMockView(): {
+    mockView: ReturnType<typeof fromCallback<ViewActorCommand, unknown>>
+    commands: CapturedCommand[]
+    emit: (event: ViewActorEmit) => void
+  } {
+    const commands: CapturedCommand[] = []
+    let sendBackRef: ((e: ViewActorEmit) => void) | null = null
+    const mockView = fromCallback<ViewActorCommand, unknown>(({ sendBack, receive }) => {
+      sendBackRef = sendBack as (e: ViewActorEmit) => void
+      receive((event) => commands.push(event as ViewActorCommand))
+      return () => {
+        sendBackRef = null
+      }
+    })
+    return {
+      mockView,
+      commands,
+      emit: (event) => sendBackRef?.(event)
+    }
+  }
+
+  it('sendTo NAVIGATE_NEXT on waitingForParagraphs entry (forward, via AUDIO_ENDED at last paragraph)', () => {
+    const { mockView, commands } = makeMockView()
+    const actor = createActor(
+      playerMachine.provide({ actors: { view: mockView } })
+    ).start()
+
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(1) })
+    actor.send({ type: 'PLAY' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    actor.send({ type: 'AUDIO_ENDED' })
+    expect(actor.getSnapshot().value).toBe('waitingForParagraphs')
+    expect(commands).toContainEqual({ type: 'NAVIGATE_NEXT' })
+  })
+
+  it('sendTo NAVIGATE_NEXT on waitingForParagraphs entry (forward, via NEXT at last paragraph)', () => {
+    const { mockView, commands } = makeMockView()
+    const actor = createActor(
+      playerMachine.provide({ actors: { view: mockView } })
+    ).start()
+
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(1) })
+    actor.send({ type: 'PLAY' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    actor.send({ type: 'NEXT' })
+    expect(actor.getSnapshot().value).toBe('waitingForParagraphs')
+    expect(commands).toContainEqual({ type: 'NAVIGATE_NEXT' })
+  })
+
+  it('sendTo NAVIGATE_PREV on waitingForParagraphs entry (backward, via PREV at first paragraph)', () => {
+    const { mockView, commands } = makeMockView()
+    const actor = createActor(
+      playerMachine.provide({ actors: { view: mockView } })
+    ).start()
+
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+    actor.send({ type: 'PLAY' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    actor.send({ type: 'PREV' })
+    expect(actor.getSnapshot().value).toBe('waitingForParagraphs')
+    expect(commands).toContainEqual({ type: 'NAVIGATE_PREV' })
+  })
+
+  it('sendTo REPUBLISH on republishingParagraphs entry', () => {
+    const { mockView, commands } = makeMockView()
+    const actor = createActor(
+      playerMachine.provide({ actors: { view: mockView } })
+    ).start()
+
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    // Stopped + empty paragraphs + PLAY routes to republishingParagraphs.
+    actor.send({ type: 'PLAY' })
+    expect(actor.getSnapshot().value).toBe('republishingParagraphs')
+    expect(commands).toContainEqual({ type: 'REPUBLISH' })
+  })
+
+  it('VIEW_CHANGED in waitingForParagraphs transitions to loading with new paragraphs', () => {
+    const { mockView, emit } = makeMockView()
+    const actor = createActor(
+      playerMachine.provide({ actors: { view: mockView } })
+    ).start()
+
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(1) })
+    actor.send({ type: 'PLAY' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    actor.send({ type: 'AUDIO_ENDED' })
+    expect(actor.getSnapshot().value).toBe('waitingForParagraphs')
+
+    const newParagraphs: ParagraphWithIndex[] = [
+      { index: 'cfi:new-0', text: 'new 0' },
+      { index: 'cfi:new-1', text: 'new 1' }
+    ]
+    emit({ type: 'VIEW_CHANGED', locator: 'cfi:new-0', paragraphs: newParagraphs })
+
+    const snap = actor.getSnapshot()
+    expect(snap.value).toBe('loading')
+    expect(snap.context.currentParagraphs).toEqual(newParagraphs)
+  })
+
+  it('VIEW_CHANGED in republishingParagraphs transitions to loading', () => {
+    const { mockView, emit } = makeMockView()
+    const actor = createActor(
+      playerMachine.provide({ actors: { view: mockView } })
+    ).start()
+
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PLAY' }) // stopped + empty → republishingParagraphs
+    expect(actor.getSnapshot().value).toBe('republishingParagraphs')
+
+    const republished: ParagraphWithIndex[] = [{ index: 'cfi:r-0', text: 'r0' }]
+    emit({ type: 'VIEW_CHANGED', locator: 'cfi:r-0', paragraphs: republished })
+
+    const snap = actor.getSnapshot()
+    expect(snap.value).toBe('loading')
+    expect(snap.context.currentParagraphs).toEqual(republished)
+  })
+
+  it('VIEW_CHANGED in pageNavigating with wantsAutoResume transitions to loading', () => {
+    const { mockView, emit } = makeMockView()
+    const actor = createActor(
+      playerMachine.provide({ actors: { view: mockView } })
+    ).start()
+
+    actor.send({ type: 'INITIALIZE', bookId: 'book1' })
+    actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
+    actor.send({ type: 'PLAY' })
+    actor.send({ type: 'AUDIO_LOADED' })
+    // External page nav from playing → wantsAutoResume=true, pageNavigating.
+    actor.send({ type: 'PAGE_NAVIGATING', direction: 'forward' })
+    expect(actor.getSnapshot().value).toBe('pageNavigating')
+    expect(actor.getSnapshot().context.wantsAutoResume).toBe(true)
+
+    const newParagraphs: ParagraphWithIndex[] = [{ index: 'cfi:n-0', text: 'n0' }]
+    emit({ type: 'VIEW_CHANGED', locator: 'cfi:n-0', paragraphs: newParagraphs })
+
+    const snap = actor.getSnapshot()
+    expect(snap.value).toBe('loading')
+    expect(snap.context.currentParagraphs).toEqual(newParagraphs)
+    expect(snap.context.wantsAutoResume).toBe(false)
+  })
+
+  // The view actor validates non-emptiness before emitting VIEW_CHANGED
+  // (see epubViewActor.test.ts / pdfViewActor.test.ts), so the machine
+  // never sees a VIEW_CHANGED with empty paragraphs. Empty-paragraph cases
+  // produce NAV_NO_PROGRESS instead — covered by the existing
+  // NAV_NO_PROGRESS tests in the pageNavigating / waitingForParagraphs /
+  // republishingParagraphs suites above.
 })

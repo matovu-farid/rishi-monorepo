@@ -19,17 +19,17 @@ const BooksIdLazyRouteImport = createFileRoute('/books/$id')()
 const IndexLazyRoute = IndexLazyRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport
+  getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/index.lazy').then((d) => d.Route))
 const BooksIdLazyRoute = BooksIdLazyRouteImport.update({
   id: '/books/$id',
   path: '/books/$id',
-  getParentRoute: () => rootRouteImport
+  getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/books.$id.lazy').then((d) => d.Route))
 const SettingsAccountRoute = SettingsAccountRouteImport.update({
   id: '/settings/account',
   path: '/settings/account',
-  getParentRoute: () => rootRouteImport
+  getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -91,7 +91,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexLazyRoute: IndexLazyRoute,
   SettingsAccountRoute: SettingsAccountRoute,
-  BooksIdLazyRoute: BooksIdLazyRoute
+  BooksIdLazyRoute: BooksIdLazyRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

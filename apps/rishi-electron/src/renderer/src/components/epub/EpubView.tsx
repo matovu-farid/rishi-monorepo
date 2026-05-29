@@ -72,6 +72,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { usePageTracker } from '@/modules/epub-page-tracker'
 import { dumpError } from '@/utils/errorDump'
+import { debugLog } from '@/utils/debugLog'
 import { getCachedEpub } from '@/services/reader-cache/epub-cache'
 import {
   navigationHistoryActor,
@@ -85,7 +86,6 @@ import { toggleBookmark, publishBookmarksToMenu } from '@/modules/bookmark-stora
 import { useBookSyncId } from '@/hooks/reader/useBookSyncId'
 import { useReaderMenuSync } from '@/hooks/reader/useReaderMenuSync'
 import { useCommonMenuHandlers } from '@/hooks/reader/useCommonMenuHandlers'
-import { usePageRequestSubscription } from '@/hooks/reader/usePageRequestSubscription'
 import { useEpubNavHistoryLifecycle } from '@/hooks/reader/useEpubNavHistoryLifecycle'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { useUndoableHighlightShortcut } from '@/hooks/useUndoableHighlightShortcut'
@@ -96,6 +96,8 @@ import { useTtsHighlightReconciler } from '@/hooks/useTtsHighlightReconciler'
 import { useVisibleEpubIframe } from '@/hooks/reader/useVisibleEpubIframe'
 import { createEpubTtsReconciler, type EpubTtsReconciler } from './reconcileTtsHighlight'
 import { useDebouncedLocationSave } from './useDebouncedLocationSave'
+import { epubViewActor, type EpubViewInput } from '@/actors/epubViewActor'
+import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 
 function updateTheme(rendition: Rendition, theme: ThemeType) {
   const reditionThemes = rendition.themes
@@ -136,6 +138,24 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   useEffect(() => {
     renditionRef.current = rendition
   }, [rendition])
+
+  // Create the player actor here, co-located with the rendition, so we can
+  // wire the per-format view actor (epubViewActor) and let it own
+  // rendition.next() / NAV_NO_PROGRESS detection. viewInput identity is
+  // pinned to the rendition reference — the actor restarts when it changes,
+  // which only happens on book swap (the parent remounts via key={book.id}).
+  const viewInput = useMemo<EpubViewInput | undefined>(() => {
+    if (!rendition) return undefined
+    return {
+      rendition,
+      getParagraphs: () =>
+        getCurrentViewParagraphs(rendition).map((p) => ({
+          text: p.text,
+          index: p.cfiRange
+        }))
+    }
+  }, [rendition])
+  usePlayerMachine(book.id.toString(), { viewLogic: epubViewActor, viewInput })
 
   // Boot the centralised navigation state machine
   useNavMachine(rendition)
@@ -210,8 +230,6 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     onNavigate: (dir) => {
       // Reject if the nav machine is busy — prevents double rendition calls
       if (useNavStore.getState().navState !== 'idle' || !navSend) return false
-      // Clear any pending player page request to avoid double navigation
-      usePlayerStore.getState().clearPageRequest()
       navSend({ type: dir === 'right' ? 'CURL_NEXT' : 'CURL_PREV' })
       return true
     },
@@ -233,6 +251,17 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   // Don't save location to DB until rendition has settled at the saved position.
   // Without this, the transient initial position overwrites the correct saved CFI.
   const settledRef = useRef(false)
+  // Tracks the most recent CFI we've accepted as the canonical position.
+  // Used to filter epubjs's multi-`relocated` burst per page-curl: the
+  // first relocated in a ~300 ms window is the destination, subsequent
+  // CFIs within the window are transient bounces from the continuous
+  // viewport oscillating during animation. If we forwarded each one to
+  // React state, the resulting re-render would cause a layout shift that
+  // nudges the continuous-manager viewport back to the OLD column —
+  // visible to the user as "audio is on the new view but the page reverted
+  // to the old one" and "next-page button stopped working" (the view
+  // actor's previousLocator gets stranded on a stale CFI).
+  const lastAcceptedRelocateRef = useRef<{ time: number; cfi: string } | null>(null)
   // Tracks whether the user has initiated at least one navigation this mount.
   // Combined with settledRef, this prevents restore-drift "relocated" events
   // (which can fire at a different CFI than the saved one) from overwriting
@@ -800,50 +829,6 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
     return () => window.removeEventListener('rishi:readAloudFromSelection', handler)
   }, [handleReadAloudFrom])
 
-  const clearAllHighlights = useCallback(async () => {
-    const r = renditionRef.current
-    if (!r) return
-    return Promise.all(
-      getCurrentViewParagraphs(r).map((paragraph) => removeHighlight(r, paragraph.cfiRange))
-    )
-  }, [])
-
-  // Try to consume a pending pageRequest through the nav machine.
-  // Only succeeds when the machine is idle; otherwise leaves the
-  // request in place so the navState retry subscription (in the
-  // rendition effect below) can pick it up when the machine returns
-  // to idle. Stable across renders so usePageRequestSubscription's
-  // ref-based callback dispatch isn't churned.
-  const tryConsumePageRequest = useCallback(async () => {
-    // Hook is bound at component scope before rendition resolves; guard
-    // against running before there's anything to navigate.
-    if (!renditionRef.current) return
-    const request = usePlayerStore.getState().pageRequest
-    if (!request) return
-    const { navState, send } = useNavStore.getState()
-    if (navState !== 'idle' || !send) return
-    await clearAllHighlights()
-    // Re-check after async highlight removal — machine may have
-    // become busy in the meantime.
-    if (useNavStore.getState().navState !== 'idle') return
-    send({ type: request === 'next' ? 'NEXT' : 'PREV' })
-    // Only clear if the request hasn't been replaced by a new one
-    // during the await window (the player could set a fresh request
-    // while clearAllHighlights was in-flight).
-    if (usePlayerStore.getState().pageRequest === request) {
-      usePlayerStore.getState().clearPageRequest()
-    }
-  }, [clearAllHighlights])
-
-  // Route player page-turn requests through the nav machine.
-  // autoClear: false — tryConsumePageRequest clears the request itself
-  // (only when its guards succeed, to preserve the navState-retry path).
-  usePageRequestSubscription({
-    onNext: tryConsumePageRequest,
-    onPrev: tryConsumePageRequest,
-    autoClear: false
-  })
-
   const setBookId = useEpubStore((s) => s.setBookId)
   const setBookOutline = useEpubStore((s) => s.setBookOutline)
   useEffect(() => {
@@ -904,24 +889,6 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   }, [])
 
   useTtsHighlightReconciler(reconcileTts, epubContentIframe)
-
-  useEffect(() => {
-    if (!rendition) return
-
-    // Retry pending pageRequest when the nav machine returns to idle.
-    // (The pageRequest subscription itself lives in
-    // usePageRequestSubscription at the top of the component.)
-    const unsubNavRetry = useNavStore.subscribe(
-      (s) => s.navState,
-      (state) => {
-        if (state === 'idle') void tryConsumePageRequest()
-      }
-    )
-
-    return () => {
-      unsubNavRetry()
-    }
-  }, [rendition, tryConsumePageRequest, clearAllHighlights])
 
   useEffect(() => {
     if (rendition) {
@@ -1071,18 +1038,67 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
           title={book.title}
           location={currentLocation || book.location || 0}
           locationChanged={(epubcfi: string) => {
-            setCurrentLocation(epubcfi)
-
-            // Dump every locationChanged for debugging
-            dumpError({
-              source: 'epub:locationChanged',
-              location: 'locationChanged',
-              error: JSON.stringify({
-                epubcfi,
-                settled: settledRef.current,
-                bookLocation: book.location
-              })
+            // Atomic append — runs for EVERY relocated, before the bounce
+            // filter, so the timeline always shows the raw epubjs sequence.
+            const lastAccepted = lastAcceptedRelocateRef.current
+            const now = Date.now()
+            debugLog('epub:locationChanged', {
+              epubcfi,
+              lastAcceptedCfi: lastAccepted?.cfi ?? null,
+              ageMs: lastAccepted ? now - lastAccepted.time : null,
+              settled: settledRef.current,
+              userNavHappened: userNavHappenedRef.current,
+              bookLocation: book.location,
+              // epubjs's Rendition.location is typed non-null but is undefined
+              // before the first relocated. Defensive `?.` is intentional.
+              // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+              renditionLocationCfi: renditionRef.current?.location?.start?.cfi ?? null
             })
+
+            // Bounce-back guard. epubjs's continuous manager emits
+            // `relocated` more than once per page-curl. The first carries
+            // the destination CFI; subsequent ones can carry an old CFI
+            // describing a transient mid-animation viewport position. If we
+            // forward each to React state, the re-render → layout shift
+            // makes epubjs re-report the old CFI, and the rendition visually
+            // reverts. See header comment on lastAcceptedRelocateRef.
+            const BOUNCE_WINDOW_MS = 300
+            if (
+              lastAccepted &&
+              epubcfi !== lastAccepted.cfi &&
+              now - lastAccepted.time < BOUNCE_WINDOW_MS
+            ) {
+              debugLog('epub:locationChanged:suppressed', {
+                received: epubcfi,
+                accepted: lastAccepted.cfi,
+                ageMs: now - lastAccepted.time
+              })
+              // If the rendition has physically drifted off the accepted
+              // CFI, force it back. queueMicrotask defers the display call
+              // out of the current `relocated` callback so we don't
+              // re-enter epubjs internals.
+              const targetCfi = lastAccepted.cfi
+              queueMicrotask(() => {
+                const r = renditionRef.current
+                if (!r) return
+                // Same defensive read as above — type lies during init.
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+                const currentCfi = r.location?.start?.cfi ?? null
+                if (currentCfi !== targetCfi) {
+                  debugLog('epub:rendition-reanchor', { targetCfi, currentCfi })
+                  void r.display(targetCfi).catch((err: unknown) =>
+                    debugLog('epub:rendition-reanchor:rejected', {
+                      targetCfi,
+                      err: err instanceof Error ? err.message : String(err)
+                    })
+                  )
+                }
+              })
+              return
+            }
+
+            lastAcceptedRelocateRef.current = { time: now, cfi: epubcfi }
+            setCurrentLocation(epubcfi)
 
             // Only save to DB after rendition has settled at the saved position
             // AND the user has performed at least one navigation. Restore-drift

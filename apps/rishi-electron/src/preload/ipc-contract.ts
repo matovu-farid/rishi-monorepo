@@ -159,6 +159,13 @@ export type IpcContract = {
   'debug:clearErrorDump': { args: []; returns: void }
   'debug:dumpState': { args: [json: string]; returns: void }
   'debug:readStateDump': { args: []; returns: string }
+  // Append-only newline-delimited JSON log. Unlike debug:dumpError which
+  // does a read-merge-write that races under concurrent calls and silently
+  // loses entries, this uses fs.appendFile which is atomic per call. Used
+  // by the renderer's `debugLog` helper for fine-grained timeline tracing.
+  'debug:appendLog': { args: [line: string]; returns: void }
+  'debug:readDebugLog': { args: []; returns: string }
+  'debug:clearDebugLog': { args: []; returns: void }
 
   // -- Settings store --------------------------------------------------
   // Values are intentionally `unknown` — the store is a generic key/value

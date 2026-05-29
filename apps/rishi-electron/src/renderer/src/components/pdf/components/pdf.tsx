@@ -34,6 +34,9 @@ import 'react-pdf/dist/Page/TextLayer.css'
 import { usePdfStore } from '@/stores/pdfStore'
 import { ThumbnailSidebar } from './thumbnail-sidebar'
 import TTSControls from '@/components/tts/TTSControls'
+import { pdfViewActor, type PdfViewInput, type PdfViewSnapshot } from '@/actors/pdfViewActor'
+import { usePlayerMachine } from '@/hooks/usePlayerMachine'
+import type { TextContent, TextItem } from 'react-pdf'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useUpdateCoverIMage } from '../hooks/useUpdateCoverIMage'
 import { useScrolling } from '../hooks/useScrolling'
@@ -170,6 +173,50 @@ export function PdfView({
 
   useScrolling(scrollContainerRef)
 
+  // Create the player actor here, co-located with the PDF page controls and
+  // pdfStore, so we can wire pdfViewActor with the per-format adapters:
+  // next/prev call the existing pageControls, goTo writes pdfStore directly,
+  // and subscribe/getSnapshot read the live page + paragraphs the same way
+  // the old seed-from-pdfStore branch did inside usePlayerMachine. Empty
+  // deps keep the adapter stable for the lifetime of the PDF view — book
+  // swaps remount via `key={book.id}` on the parent route, so a stale book
+  // can't leak through.
+  const viewInput = useMemo<PdfViewInput>(() => {
+    const toSnapshot = (): PdfViewSnapshot => {
+      const s = usePdfStore.getState()
+      // `as | undefined` so ts-eslint sees the widened type at the !data check
+      // — the worker populates the record async and the typed
+      // Record<number, TextContent> claims non-null which is wrong at runtime.
+      const data = s.pageNumberToPageData[s.pageNumber] as TextContent | undefined
+      // dataReady flag lets pdfViewActor distinguish "still extracting"
+      // (transient, defer) from "extracted but no text" (image-only, fail
+      // nav). Without it, auto-advance fires NAV_NO_PROGRESS during the
+      // ~50-500ms window after the virtualizer scrolls to the next page
+      // and before pdf.js's worker delivers its TextContent — and the
+      // player drops to stopped instead of resuming on paragraph 0.
+      if (!data) return { page: s.pageNumber, paragraphs: [], dataReady: false }
+      const paragraphs = data.items
+        .filter((item): item is TextItem => 'str' in item && item.str.trim() !== '')
+        .map((item, idx) => ({
+          index: `pdf-${s.pageNumber}-${idx}`,
+          text: item.str
+        }))
+      return { page: s.pageNumber, paragraphs, dataReady: true }
+    }
+    return {
+      next: () => nextPage(),
+      prev: () => previousPage(),
+      goTo: (page: number) => usePdfStore.setState({ pageNumber: page }),
+      subscribe: (cb) =>
+        usePdfStore.subscribe(
+          (s) => ({ page: s.pageNumber, data: s.pageNumberToPageData[s.pageNumber] }),
+          () => cb(toSnapshot())
+        ),
+      getSnapshot: toSnapshot
+    }
+  }, [])
+  usePlayerMachine(book.id.toString(), { viewLogic: pdfViewActor, viewInput })
+
   useUpdateCoverIMage(book)
   // Ref for the scrollable container
 
@@ -183,25 +230,17 @@ export function PdfView({
     }
   }, [resetParaphState, setThumbOpen, setPdfDocProxy])
 
-  // Scoped playerStore subscriptions for PDF page navigation and highlighting.
+  // Scoped playerStore subscriptions for PDF highlighting.
   // These must be inside the component lifecycle so they are cleaned up when
   // navigating away from the PDF reader — otherwise they leak across formats.
   //
   // Empty deps `[]` is intentional: PdfView is mounted with `key={book.id}` in
-  // books.$id.lazy.tsx, so a book switch triggers a full remount. The closures
-  // over `nextPage`/`previousPage` are stable module-level functions, and
+  // books.$id.lazy.tsx, so a book switch triggers a full remount.
   // `usePdfStore`/`usePlayerStore` reads use `.getState()` or subscriptions
-  // which always see the latest values.
+  // which always see the latest values. Page navigation is driven by the view
+  // actor (NAVIGATE_NEXT/PREV via the viewInput adapter above), not by this
+  // subscription.
   useEffect(() => {
-    const unsubPage = usePlayerStore.subscribe(
-      (s) => s.pageRequest,
-      (request) => {
-        if (request === 'next') nextPage()
-        if (request === 'prev') previousPage()
-        if (request) usePlayerStore.getState().clearPageRequest()
-      }
-    )
-
     const unsubActive = usePlayerStore.subscribe(
       (s) => ({ active: s.activeParagraph, resume: s.lastPlayedParagraphIndex }),
       ({ active, resume }) => {
@@ -230,7 +269,6 @@ export function PdfView({
     )
 
     return () => {
-      unsubPage()
       unsubActive()
       unsubState()
     }

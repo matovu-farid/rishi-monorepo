@@ -9,6 +9,7 @@ import { createActor } from 'xstate'
 import { navMachine } from '@/machines/navMachine'
 import type { NavMachineEvent } from '@/machines/navMachine'
 import { useNavStore } from '@/stores/navStore'
+import { debugLog } from '@/utils/debugLog'
 import type { Rendition } from 'epubjs/types'
 
 /**
@@ -39,8 +40,26 @@ export function useNavMachine(rendition: Rendition | null) {
       const ctx = snapshot.context
       const r = renditionRef.current
 
-      // Always keep the store in sync
-      useNavStore.getState().setNavState(state)
+      debugLog('nav:state', {
+        state,
+        pendingAction: ctx.pendingAction,
+        curlDirection: ctx.curlDirection,
+        version: ctx.version,
+        curlSettled: ctx.curlSettled
+      })
+
+      // Publish navState and navDirection in a SINGLE setState. zustand's
+      // subscribeWithSelector fires listeners synchronously inside the
+      // originating `set()` — if we wrote navState first and navDirection
+      // second, useNavBridge's navState listener would observe the new
+      // state alongside the *previous* navDirection. That gap silently
+      // re-introduces the stale-direction bug useNavBridge.test.ts
+      // documents: an EPUB-prev-curl followed by an EPUB-next-curl would
+      // forward direction='backward' from the prior nav and snap the
+      // player to the new page's last paragraph instead of paragraph 0.
+      const navDirection: 'forward' | 'backward' =
+        ctx.curlDirection === 'prev' || ctx.pendingAction === 'prev' ? 'backward' : 'forward'
+      useNavStore.setState({ navState: state, navDirection })
 
       // Only execute side-effects for *new* navigation transitions
       // (version is bumped by every action that needs a rendition call).
@@ -53,6 +72,13 @@ export function useNavMachine(rendition: Rendition | null) {
         const settle = () => {
           if (gen === navGen) actor.send({ type: 'SETTLED' })
         }
+
+        debugLog('nav:renditionCall', {
+          via: 'navigating',
+          pendingAction: ctx.pendingAction,
+          pendingLocation: ctx.pendingLocation,
+          gen
+        })
 
         let promise: Promise<void>
         if (ctx.pendingAction === 'next') {
@@ -80,6 +106,11 @@ export function useNavMachine(rendition: Rendition | null) {
         const settle = () => {
           if (gen === navGen) actor.send({ type: 'SETTLED' })
         }
+        debugLog('nav:renditionCall', {
+          via: 'curling',
+          curlDirection: ctx.curlDirection,
+          gen
+        })
         const promise = ctx.curlDirection === 'next' ? r.next() : r.prev()
         promise.then(settle, settle)
       }

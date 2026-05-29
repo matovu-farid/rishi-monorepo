@@ -34,8 +34,8 @@
  * `audioPlayer` prop. Without overrides, the hook uses the production
  * service + a real expo-audio player.
  */
-import { useEffect, useRef } from 'react'
-import { createActor } from 'xstate'
+import { useEffect, useMemo, useRef } from 'react'
+import { createActor, type AnyActorLogic } from 'xstate'
 import { playerMachine } from '@rishi/shared/machines/playerMachine'
 import type {
   ParagraphWithIndex,
@@ -133,6 +133,24 @@ export function buildDefaultAudioAdapter(): {
 export interface UsePlayerMachineOptions {
   /** Override the audio adapter (tests). */
   audio?: PlayerAudioAdapter
+  /**
+   * Per-format view actor logic (e.g. mobileEpubViewActor wrapping
+   * @epubjs-react-native/core's useReader). Overrides the placeholder `view`
+   * actor inside the shared playerMachine via `.provide()`, so the invoked
+   * actor can drive goNext()/goPrevious() and emit VIEW_CHANGED back. Mobile
+   * format readers don't supply this today — paragraphs are seeded whole-book
+   * via seedPlayerParagraphsFromChunks, so view-boundary advances during TTS
+   * never enter waitingForParagraphs. When mobile EPUB moves to per-view
+   * seeding (Phase 3.6 follow-up), readers will supply mobileEpubViewActor
+   * here. Until then the placeholder swallows NAVIGATE_* sends harmlessly.
+   */
+  viewLogic?: AnyActorLogic
+  /**
+   * Format-specific input forwarded to the invoked view actor. Shape depends
+   * on viewLogic; carried as unknown because the hook itself is format-
+   * agnostic. Mirror of the electron usePlayerMachine signature.
+   */
+  viewInput?: unknown
 }
 
 export interface UsePlayerMachineResult {
@@ -149,10 +167,24 @@ export function usePlayerMachine(
 ): UsePlayerMachineResult {
   const sendRef = useRef<PlayerSend>(() => {})
 
+  // Customise the machine when a per-format view actor is provided. Memo on
+  // viewLogic identity so reader screens can stabilise it with their own
+  // useMemo without churning the actor lifecycle. Mirror of the electron
+  // hook's pattern.
+  const machine = useMemo(
+    () =>
+      options.viewLogic
+        ? playerMachine.provide({ actors: { view: options.viewLogic } })
+        : playerMachine,
+    [options.viewLogic],
+  )
+
   useEffect(() => {
     if (!bookId) return
 
-    const actor = createActor(playerMachine)
+    const actor = createActor(machine, {
+      input: { viewInput: options.viewInput },
+    })
     let teardownAudio: (() => void) | null = null
     let audio: PlayerAudioAdapter
     if (options.audio) {
@@ -360,7 +392,7 @@ export function usePlayerMachine(
       if (teardownAudio) teardownAudio()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookId])
+  }, [bookId, machine, options.viewInput])
 
   return {
     send: sendRef.current,
