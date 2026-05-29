@@ -94,4 +94,36 @@ describe('pageDataToParagraphs (mask-aware)', () => {
     const masked = (pageDataToParagraphs as any)(3, page, new Set<number>([99, 100]))
     expect(masked).toEqual(baseline)
   })
+
+  it('emits body paragraphs before a footnote that pdf.js streamed first', () => {
+    // Real-world layout: pdf.js returns the footnote block (low y) BEFORE the
+    // body (high y) in items[]. The assembled paragraphs must still read the
+    // body first, then the footnote.
+    const items = [
+      makeItem(longText(0, 'Footnote_Brendan_Burns_et_al'), 75),
+      makeItem(longText(1, 'Body_Kubernetes_open_source_orchestrator'), 560),
+      makeItem(longText(2, 'Body_Since_its_introduction_in_2014'), 360)
+    ]
+    const out = pageDataToParagraphs(3, { items, styles: {} } as any)
+    const bodyIdx = out.findIndex((p: any) => p.text.includes('Body_Kubernetes'))
+    const footIdx = out.findIndex((p: any) => p.text.includes('Footnote_Brendan'))
+    expect(bodyIdx).toBeGreaterThanOrEqual(0)
+    expect(footIdx).toBeGreaterThanOrEqual(0)
+    expect(bodyIdx).toBeLessThan(footIdx)
+  })
+
+  it('excludes a smaller-font footnote at the page bottom from the paragraphs', () => {
+    const items = [
+      // footnote streamed FIRST (low y, smaller font)
+      makeItem('1 Brendan Burns et al., footnote that is long enough to survive merges.', 80, {
+        height: 8
+      }),
+      makeItem(longText(1, 'Body_Kubernetes_open_source_orchestrator'), 560),
+      makeItem(longText(2, 'Body_Since_its_introduction_in_2014'), 360)
+    ]
+    const out = pageDataToParagraphs(3, { items, styles: {} } as any)
+    expect(out.some((p: any) => p.text.includes('Body_Kubernetes'))).toBe(true)
+    expect(out.some((p: any) => p.text.includes('Body_Since'))).toBe(true)
+    expect(out.some((p: any) => p.text.includes('Brendan'))).toBe(false)
+  })
 })

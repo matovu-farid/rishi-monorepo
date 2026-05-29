@@ -1,10 +1,16 @@
 import type { Paragraph } from '@/stores/pdfStore'
 import type { TextContent } from 'react-pdf'
-import type { TextMarkedContent } from 'pdfjs-dist/types/src/display/api'
 
-import type { TextItem } from 'pdfjs-dist/types/src/display/api'
+import type { TextItem, TextMarkedContent } from 'pdfjs-dist/types/src/display/api'
 
 import { getParagraphThreshold } from '../utils/getParagraphThreshold'
+import { orderTextItemsForReading } from '../utils/orderTextItemsForReading'
+import type { OrderedTextItem } from '../utils/orderTextItemsForReading'
+import { detectFootnoteItems } from '../utils/detectFootnoteItems'
+
+function isTextItem(item: TextItem | TextMarkedContent): item is TextItem {
+  return 'str' in item
+}
 
 const MIN_PARAGRAPH_LENGTH = 50
 
@@ -13,10 +19,6 @@ const PARAGRAPH_INDEX_PER_PAGE = 10000
 export interface ParagraphWithItemIndices {
   paragraph: Paragraph
   itemIndices: number[]
-}
-
-function isTextItem(item: TextItem | TextMarkedContent): item is TextItem {
-  return 'str' in item
 }
 
 /**
@@ -28,8 +30,10 @@ function isTextItem(item: TextItem | TextMarkedContent): item is TextItem {
  */
 function assembleRawParagraphs(
   pageNumber: number,
-  pageData: TextContent
+  pageData: TextContent,
+  options?: { forReading?: boolean }
 ): ParagraphWithItemIndices[] {
+  const forReading = options?.forReading ?? false
   const defaultDimensions = {
     bottom: Number.MAX_SAFE_INTEGER,
     top: Number.MIN_SAFE_INTEGER
@@ -44,12 +48,37 @@ function assembleRawParagraphs(
     dimensions: defaultDimensions
   }
 
-  const items = pageData.items
+  let ordered: OrderedTextItem[]
+  let footnoteItems: Set<number>
+  if (forReading) {
+    // Display/player path. Walk items in reconstructed reading order
+    // (top-to-bottom, left-to-right, column-aware) rather than pdf.js
+    // content-stream order, which is not guaranteed to be visual order.
+    // `itemIdx` stays the original stream index so footer masks (which address
+    // items by stream index) keep matching. Bottom-of-page footnotes never
+    // repeat, so the repetition footer mask can't catch them; drop them here
+    // before assembly so they aren't read aloud.
+    ordered = orderTextItemsForReading(pageData.items)
+    footnoteItems = detectFootnoteItems(pageData.items)
+  } else {
+    // Footer-detector path. Reproduce committed main exactly: stream order, no
+    // reorder, no footnote drop. detectFootnoteItems flags small-font items
+    // below the body cluster — which is exactly what a repeating running
+    // footer / page number looks like. Dropping them here would starve
+    // findRepeatingPageSuffix of the very items it needs to build the mask.
+    const streamOrdered: OrderedTextItem[] = []
+    for (let i = 0; i < pageData.items.length; i++) {
+      const it = pageData.items[i]
+      if (isTextItem(it)) streamOrdered.push({ item: it, index: i })
+    }
+    ordered = streamOrdered
+    footnoteItems = new Set<number>()
+  }
   let previousItem: TextItem | null = null
   let lineCount = 0
-  for (let itemIdx = 0; itemIdx < items.length; itemIdx++) {
-    const item = items[itemIdx]
-    if (!isTextItem(item)) continue
+  for (let pos = 0; pos < ordered.length; pos++) {
+    const { item, index: itemIdx } = ordered[pos]
+    if (footnoteItems.has(itemIdx)) continue
 
     const text = item.str
     const textSoFar = paragraghSoFar.text || ''
@@ -131,7 +160,7 @@ export function pageDataToParagraphs(
   pageData: TextContent,
   maskedItemIndices?: ReadonlySet<number>
 ): Paragraph[] {
-  const assembled = assembleRawParagraphs(pageNumber, pageData)
+  const assembled = assembleRawParagraphs(pageNumber, pageData, { forReading: true })
   let paragraphsSoFarArray: Paragraph[] = assembled.map((a) => a.paragraph)
   const paragraphItemIndices: number[][] = assembled.map((a) => a.itemIndices)
 

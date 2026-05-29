@@ -82,6 +82,30 @@ describe('findRepeatingPageSuffix', () => {
     }
   })
 
+  it('masks a small-font repeating footer (footnote-style item) across pages', () => {
+    // The positional footnote detector (detectFootnoteItems) flags small-font
+    // items below the body. The SHARED raw assembler must NOT drop them on the
+    // footer-detection path, or the repetition mask is starved and never
+    // builds. Regression guard for the reading-order/footnote work.
+    const pages: PageScanInput[] = []
+    for (let p = 1; p <= 10; p++) {
+      pages.push(
+        makePage(p, [
+          { str: `Distinct body topic ${String.fromCharCode(64 + p)} for page ${p}`, y: 700, height: 12 },
+          { str: 'Copyright Foo Bar', y: 40, height: 8 }
+        ])
+      )
+    }
+    const mask = findRepeatingPageSuffix(pages)
+    expect(mask.size).toBe(10)
+    for (let p = 1; p <= 10; p++) {
+      const set = mask.get(p)
+      expect(set, `page ${p} should have masked indices`).toBeDefined()
+      expect(set!.has(1)).toBe(true)
+      expect(set!.has(0)).toBe(false)
+    }
+  })
+
   it('masks a footer that spans multiple paragraphs', () => {
     const pages: PageScanInput[] = []
     for (let p = 1; p <= 10; p++) {
