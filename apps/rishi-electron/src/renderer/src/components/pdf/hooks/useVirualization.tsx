@@ -24,6 +24,7 @@ export function useVirualization(
   const initialPageIndexRef = useRef(Math.max(0, initialPosition.page - 1))
   const numPages = usePdfStore((s) => s.pageCount)
   const setHasNavigatedToPage = usePdfStore((s) => s.setHasNavigatedToPage)
+  const getPageDimension = usePdfStore((s) => s.getPageDimension)
   const estimatedPageHeight = PAGE_HEIGHT
   const scrollingRef = useRef<number | null>(null)
   // initialOffset uses ESTIMATED page heights — the virtualizer hasn't
@@ -79,7 +80,17 @@ export function useVirualization(
   const virtualizer = useVirtualizer({
     count: numPages,
     getScrollElement: () => scrollContainerRef.current,
-    estimateSize: () => estimatedPageHeight,
+    estimateSize: (index: number) => {
+      const dim = getPageDimension(book.id, index)
+      if (!dim) return estimatedPageHeight
+      const containerWidth = scrollContainerRef.current?.clientWidth
+      if (!containerWidth || dim.baseWidth <= 0) return estimatedPageHeight
+      // Mirror the per-page scale derivation used at render time
+      // (PdfView line ~154): scale = renderedWidth / page.view[2].
+      // Pages fit to container width, so renderedWidth == containerWidth.
+      const scale = containerWidth / dim.baseWidth
+      return dim.baseHeight * scale
+    },
     overscan: 8,
     enabled: numPages > 0,
     initialOffset: initialOffsetRef.current,
