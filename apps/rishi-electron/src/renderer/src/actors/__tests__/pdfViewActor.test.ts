@@ -16,11 +16,15 @@ import { pdfViewActor, type PdfViewInput } from '../pdfViewActor'
 import type { ViewActorEmit } from '../viewActor'
 import type { ParagraphWithIndex } from '@/stores/playerStore'
 
-type Snapshot = { page: number; paragraphs: ParagraphWithIndex[] }
+type Snapshot = { page: number; paragraphs: ParagraphWithIndex[]; dataReady: boolean }
 
 class FakePdfControls {
   page = 0
   paragraphs: ParagraphWithIndex[] = []
+  // Default to `true` so all existing tests behave as before — they were
+  // written assuming the host always has text data by the time the
+  // subscriber fires. Only the new deferred-emit tests flip this to false.
+  dataReady = true
   private subscribers: Array<(s: Snapshot) => void> = []
   next = vi.fn()
   prev = vi.fn()
@@ -32,11 +36,16 @@ class FakePdfControls {
       this.subscribers = this.subscribers.filter((s) => s !== cb)
     }
   }
-  getSnapshot = (): Snapshot => ({ page: this.page, paragraphs: this.paragraphs })
+  getSnapshot = (): Snapshot => ({
+    page: this.page,
+    paragraphs: this.paragraphs,
+    dataReady: this.dataReady
+  })
   /** Test helper: emit a state change. */
-  emit(page: number, paragraphs: ParagraphWithIndex[]): void {
+  emit(page: number, paragraphs: ParagraphWithIndex[], dataReady = true): void {
     this.page = page
     this.paragraphs = paragraphs
+    this.dataReady = dataReady
     this.subscribers.forEach((s) => s(this.getSnapshot()))
   }
 }
@@ -140,12 +149,44 @@ describe('pdfViewActor', () => {
       ])
     })
 
-    it('emits NAV_NO_PROGRESS when the new page has no paragraphs (image-only page)', () => {
+    it('emits NAV_NO_PROGRESS when the new page has no paragraphs AND text extraction is complete (image-only page)', () => {
       const { controls, captured, actorRef } = harness
       actorRef.send({ type: 'NAVIGATE_NEXT' })
-      controls.emit(2, [])
+      // dataReady=true → the host finished extraction and there's genuinely
+      // no text on this page. The actor must treat this as a failed nav.
+      controls.emit(2, [], true)
+      expect(captured).toEqual([{ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' }])
+    })
+
+    // Regression: TTS-auto-advance scrolls to the next page, but pdf.js's
+    // worker hasn't returned the page's text yet. The pdfStore subscriber
+    // fires immediately on the pageNumber change (data still undefined),
+    // and the actor used to treat that transient empty as a failed nav —
+    // sending NAV_NO_PROGRESS, dropping the player to stopped, and silently
+    // landing the real paragraphs into a context the user can't resume from.
+    //
+    // The actor must DEFER the decision: do nothing on the empty-pending
+    // snapshot, then emit VIEW_CHANGED on the next snapshot once the worker
+    // delivers the text. The 10s nav timeout is the upper bound for the
+    // truly-stuck case (worker crash, malformed PDF).
+    it('defers — does NOT emit NAV_NO_PROGRESS — when the new page has no paragraphs YET (data not extracted)', () => {
+      const { controls, captured, actorRef } = harness
+      actorRef.send({ type: 'NAVIGATE_NEXT' })
+
+      // First subscriber fire: pageNumber flipped to 2 but pdf.js worker
+      // hasn't delivered text yet. dataReady=false → defer.
+      controls.emit(2, [], false)
+      expect(captured).toEqual([])
+
+      // Worker finishes, setPageData populates the store, subscriber fires
+      // again with the real paragraphs. NOW the actor commits.
+      controls.emit(2, [P('pdf-2-0'), P('pdf-2-1')], true)
       expect(captured).toEqual([
-        { type: 'NAV_NO_PROGRESS', reason: 'no-relocation' }
+        {
+          type: 'VIEW_CHANGED',
+          locator: '2',
+          paragraphs: [P('pdf-2-0'), P('pdf-2-1')]
+        }
       ])
     })
   })

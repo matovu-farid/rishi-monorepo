@@ -19,7 +19,24 @@ import { fromCallback } from 'xstate'
 import type { ParagraphWithIndex } from '@/stores/playerStore'
 import type { ViewActorCommand, ViewActorEmit } from './viewActor'
 
-export type PdfViewSnapshot = { page: number; paragraphs: ParagraphWithIndex[] }
+export type PdfViewSnapshot = {
+  page: number
+  paragraphs: ParagraphWithIndex[]
+  /**
+   * True iff the host has finished extracting text for `page`. False during
+   * the brief window between `pageNumber` updating and pdf.js's worker
+   * delivering the page's text content. The actor must NOT treat
+   * `paragraphs: []` with `dataReady: false` as an image-only page — that
+   * case is the transient "still loading" state and a subsequent snapshot
+   * will carry the real paragraphs (or stay empty if truly image-only, at
+   * which point `dataReady` will be true).
+   *
+   * Optional for backwards compatibility with callers / tests that haven't
+   * been updated yet; missing is treated as `true` (legacy behaviour where
+   * empty-paragraphs always meant image-only).
+   */
+  dataReady?: boolean
+}
 
 export type PdfViewInput = {
   /** Advance one page (NOOP at end of document). */
@@ -64,13 +81,40 @@ export const pdfViewActor = fromCallback<ViewActorCommand, PdfViewInput | undefi
       sendBack({ type: 'NAV_NO_PROGRESS', reason })
     }
 
-    const handleSnapshot = ({ page, paragraphs }: PdfViewSnapshot): void => {
+    const handleSnapshot = ({ page, paragraphs, dataReady = true }: PdfViewSnapshot): void => {
       const samePage = previousPage !== null && page === previousPage
-      const empty = paragraphs.length === 0
-      if (samePage || empty) {
+
+      if (samePage) {
+        // Stayed on the same page — no progress regardless of paragraphs
+        // or extraction state. Same-page subscriber fires happen when the
+        // host republishes paragraphs for the current page (e.g. footer-
+        // mask arrival, refit). If a nav was in flight, signal failure;
+        // otherwise stay silent (handled by failNav's navInProgress guard).
         failNav('no-relocation')
         return
       }
+
+      if (!dataReady) {
+        // Page changed but pdf.js's worker hasn't returned text yet. This
+        // is the transient window between `pageNumber` updating and
+        // `setPageData` firing. Defer the decision: the subscriber will
+        // fire again when the worker delivers data. The 10s NAV_TIMEOUT_MS
+        // is the upper bound for the truly-stuck case (worker crash or
+        // malformed PDF). Without this, TTS-auto-advance fires
+        // NAVIGATE_NEXT, the page scrolls, the worker is still running,
+        // the actor sees `paragraphs: []` and prematurely emits
+        // NAV_NO_PROGRESS — the player drops to stopped and the real
+        // paragraphs arrive too late to resume.
+        return
+      }
+
+      if (paragraphs.length === 0) {
+        // Page changed, data loaded, but there's no text — truly image-
+        // only. Same NAV_NO_PROGRESS path as a same-page no-op.
+        failNav('no-relocation')
+        return
+      }
+
       previousPage = page
       navInProgress = false
       clearNavTimeout()

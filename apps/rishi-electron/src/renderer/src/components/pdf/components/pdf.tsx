@@ -185,14 +185,20 @@ export function PdfView({
     const toSnapshot = (): PdfViewSnapshot => {
       const s = usePdfStore.getState()
       const data = s.pageNumberToPageData[s.pageNumber]
-      if (!data) return { page: s.pageNumber, paragraphs: [] }
+      // dataReady flag lets pdfViewActor distinguish "still extracting"
+      // (transient, defer) from "extracted but no text" (image-only, fail
+      // nav). Without it, auto-advance fires NAV_NO_PROGRESS during the
+      // ~50-500ms window after the virtualizer scrolls to the next page
+      // and before pdf.js's worker delivers its TextContent — and the
+      // player drops to stopped instead of resuming on paragraph 0.
+      if (!data) return { page: s.pageNumber, paragraphs: [], dataReady: false }
       const paragraphs = data.items
         .filter((item): item is TextItem => 'str' in item && item.str.trim() !== '')
         .map((item, idx) => ({
           index: `pdf-${s.pageNumber}-${idx}`,
           text: item.str
         }))
-      return { page: s.pageNumber, paragraphs }
+      return { page: s.pageNumber, paragraphs, dataReady: true }
     }
     return {
       next: () => nextPage(),
