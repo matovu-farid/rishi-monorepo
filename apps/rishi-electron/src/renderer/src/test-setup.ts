@@ -30,6 +30,7 @@ const mockElectronAPI = {
   getFileSize: vi.fn().mockResolvedValue(0),
   unzip: vi.fn().mockResolvedValue(''),
   copyFile: vi.fn().mockResolvedValue(undefined),
+  linkOrCopyFile: vi.fn().mockResolvedValue(undefined),
   getAppDataPath: vi.fn().mockResolvedValue('/tmp/test-app-data'),
   readFile: vi.fn().mockResolvedValue(new ArrayBuffer(0)),
   writeFile: vi.fn().mockResolvedValue(undefined),

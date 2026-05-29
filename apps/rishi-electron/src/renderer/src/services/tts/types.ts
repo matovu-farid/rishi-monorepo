@@ -52,6 +52,13 @@ export interface TtsIpcChannels {
   writeFile(path: string, data: Uint8Array): Promise<void>
   readFile(path: string): Promise<ArrayBuffer>
   copyFile(src: string, dest: string): Promise<void>
+  /**
+   * Hardlink src→dest so both names share one inode (zero extra disk).
+   * Falls back to copyFile on EXDEV (cross-volume). The TTS cache uses
+   * this for the texthash mirror — without it, every cache hit cost 2×
+   * disk for the same MP3.
+   */
+  linkOrCopyFile(src: string, dest: string): Promise<void>
   removeFile(path: string): Promise<void>
   getDirSize(path: string): Promise<number>
   getCacheFileStats(dir: string): Promise<Array<{ path: string; size: number; mtimeMs: number }>>

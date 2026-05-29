@@ -9,9 +9,15 @@ import { createCache } from './cache'
 export function makeIpc(initial: Record<string, Uint8Array> = {}): {
   ipc: TtsIpcChannels
   files: Map<string, Uint8Array>
+  // True if `dest` was created via linkOrCopyFile and points at the same
+  // underlying bytes as `src` (a hardlink in real life). The in-memory
+  // fake models this by storing the same Uint8Array reference under both
+  // keys so tests can compare identity to assert sharing.
+  isLinked(dest: string): boolean
 } {
   const files = new Map<string, Uint8Array>(Object.entries(initial))
   const dirs = new Set<string>()
+  const linked = new Set<string>()
   const ipc: TtsIpcChannels = {
     mkdir: vi.fn(async (path) => {
       dirs.add(path)
@@ -29,6 +35,15 @@ export function makeIpc(initial: Record<string, Uint8Array> = {}): {
       const f = files.get(src)
       if (!f) throw new Error(`ENOENT: ${src}`)
       files.set(dest, new Uint8Array(f))
+    }),
+    linkOrCopyFile: vi.fn(async (src, dest) => {
+      const f = files.get(src)
+      if (!f) throw new Error(`ENOENT: ${src}`)
+      // Share the same Uint8Array reference under both keys to model an
+      // inode hardlink: tests can assert files.get(src) === files.get(dest)
+      // to prove no copy happened.
+      files.set(dest, f)
+      linked.add(dest)
     }),
     removeFile: vi.fn(async (path) => {
       files.delete(path)
@@ -57,7 +72,7 @@ export function makeIpc(initial: Record<string, Uint8Array> = {}): {
     }),
     getAppDataPath: vi.fn(async () => '/userData')
   }
-  return { ipc, files }
+  return { ipc, files, isLinked: (dest: string) => linked.has(dest) }
 }
 
 describe('cache.audioPath', () => {
@@ -75,8 +90,8 @@ describe('cache.audioPath', () => {
 })
 
 describe('cache.saveAudio', () => {
-  it('writes the bytes under the CFI key and copies to the text-hash key', async () => {
-    const { ipc, files } = makeIpc()
+  it('writes the bytes under the CFI key and links (not copies) to the text-hash key', async () => {
+    const { ipc, files, isLinked } = makeIpc()
     const cache = createCache({ ipc, cacheMaxBytes: 500 * 1024 * 1024 })
     const bytes = new Uint8Array([1, 2, 3, 4])
 
@@ -84,10 +99,18 @@ describe('cache.saveAudio', () => {
 
     expect(path).toMatch(/\.mp3$/)
     expect(ipc.writeFile).toHaveBeenCalledTimes(1)
-    // copyFile to text-hash mirror
-    expect(ipc.copyFile).toHaveBeenCalledTimes(1)
+    // Mirror is hardlinked, not copied — same inode, zero extra disk.
+    // copyFile must not run; linkOrCopyFile runs exactly once.
+    expect(ipc.copyFile).not.toHaveBeenCalled()
+    expect(ipc.linkOrCopyFile).toHaveBeenCalledTimes(1)
     // Both keys present in the in-memory FS
-    expect([...files.keys()].filter((k) => k.endsWith('.mp3'))).toHaveLength(2)
+    const mp3s = [...files.keys()].filter((k) => k.endsWith('.mp3'))
+    expect(mp3s).toHaveLength(2)
+    // Mirror points at the same underlying Uint8Array (modeling shared
+    // inode) so the texthash lookup is free in disk-space terms.
+    const [primary, mirror] = mp3s
+    expect(files.get(primary)).toBe(files.get(mirror))
+    expect(isLinked(mirror)).toBe(true)
   })
 
   it('rejects empty audio buffers without writing', async () => {
@@ -100,7 +123,7 @@ describe('cache.saveAudio', () => {
     expect(ipc.writeFile).not.toHaveBeenCalled()
   })
 
-  it('does not duplicate the text-hash copy when cfiRange already starts with texthash:', async () => {
+  it('does not duplicate the text-hash mirror when cfiRange already starts with texthash:', async () => {
     const { ipc } = makeIpc()
     const cache = createCache({ ipc, cacheMaxBytes: 500 * 1024 * 1024 })
     const bytes = new Uint8Array([1, 2, 3])
@@ -109,6 +132,7 @@ describe('cache.saveAudio', () => {
 
     expect(ipc.writeFile).toHaveBeenCalledTimes(1)
     expect(ipc.copyFile).not.toHaveBeenCalled()
+    expect(ipc.linkOrCopyFile).not.toHaveBeenCalled()
   })
 })
 

@@ -113,6 +113,7 @@ export function getTtsService(): TtsService {
       writeFile: window.electron.writeFile,
       readFile: window.electron.readFile,
       copyFile: window.electron.copyFile,
+      linkOrCopyFile: window.electron.linkOrCopyFile,
       removeFile: window.electron.removeFile,
       getDirSize: window.electron.getDirSize,
       getCacheFileStats: window.electron.getCacheFileStats,

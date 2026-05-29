@@ -130,6 +130,10 @@ export type IpcContract = {
   'fs:getFileSize': { args: [path: string]; returns: number }
   'fs:unzip': { args: [filePath: string, outDir: string]; returns: string }
   'fs:copyFile': { args: [src: string, dest: string]; returns: void }
+  // Hardlink src→dest so two names share one inode (no extra disk).
+  // Falls back to copy on EXDEV (cross-device / cross-volume). Used by
+  // the TTS cache to avoid 2× disk for the texthash mirror.
+  'fs:linkOrCopyFile': { args: [src: string, dest: string]; returns: void }
   'fs:getAppDataPath': { args: []; returns: string }
   'fs:readFile': { args: [path: string]; returns: ArrayBuffer }
   'fs:writeFile': { args: [path: string, data: Uint8Array | string | ArrayBuffer]; returns: void }

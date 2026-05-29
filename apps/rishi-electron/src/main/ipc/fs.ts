@@ -104,6 +104,36 @@ export function registerFsHandlers(): void {
     }
   })
 
+  handle('fs:linkOrCopyFile', async (_event, src, dest) => {
+    // Hardlink first — two names share one inode, zero extra disk. Works
+    // on macOS / Linux / Windows when src and dest live on the same
+    // volume. EXDEV (cross-device) falls back to a real copy. Used by
+    // the TTS cache's texthash mirror so a 1 MB MP3 doesn't occupy 2 MB
+    // just to be reachable by two key shapes.
+    try {
+      await fs.link(src, dest)
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'EXDEV' && code !== 'EPERM' && code !== 'ENOSYS') {
+        // Hardlinks may also fail with EPERM on some Windows volumes /
+        // network mounts and ENOSYS on filesystems that don't support
+        // them. In all of those cases fall back to copy; only re-throw
+        // for genuinely unexpected errors so they surface to the user.
+        if (code !== 'EEXIST') {
+          throw new Error(`Failed to link file: ${errorMessage(error)}`)
+        }
+        // Mirror already exists — nothing to do.
+        return
+      }
+    }
+    try {
+      await fs.copyFile(src, dest)
+    } catch (error) {
+      throw new Error(`Failed to copy file (link fallback): ${errorMessage(error)}`)
+    }
+  })
+
   handle('fs:getAppDataPath', () => {
     try {
       return app.getPath('userData')

@@ -68,6 +68,7 @@ export type ChannelToMethod = {
   'fs:getFileSize': 'getFileSize'
   'fs:unzip': 'unzip'
   'fs:copyFile': 'copyFile'
+  'fs:linkOrCopyFile': 'linkOrCopyFile'
   'fs:getAppDataPath': 'getAppDataPath'
   'fs:readFile': 'readFile'
   'fs:writeFile': 'writeFile'

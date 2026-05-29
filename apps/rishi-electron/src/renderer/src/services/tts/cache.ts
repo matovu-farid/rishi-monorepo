@@ -74,7 +74,12 @@ export function createCache(deps: CacheDeps): Cache {
         try {
           const mirror = await audioPath(bookId, `texthash:${md5(text)}`, text)
           const mirrorExists = await ipc.exists(mirror)
-          if (!mirrorExists) await ipc.copyFile(path, mirror)
+          // Hardlink so both names share one inode — zero extra disk for
+          // the texthash lookup path used by ttsPrefetch + getAudio's
+          // fallback. linkOrCopyFile falls back to copy on EXDEV /
+          // unsupported filesystems, so behaviour degrades gracefully
+          // rather than breaking the cache write entirely.
+          if (!mirrorExists) await ipc.linkOrCopyFile(path, mirror)
         } catch {
           // Non-critical — CFI-based lookup still works
         }

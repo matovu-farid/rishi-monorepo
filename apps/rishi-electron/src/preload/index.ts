@@ -48,6 +48,7 @@ const electronAPI: ElectronAPI = {
   getFileSize: (path) => invoke('fs:getFileSize', path),
   unzip: (filePath, outDir) => invoke('fs:unzip', filePath, outDir),
   copyFile: (src, dest) => invoke('fs:copyFile', src, dest),
+  linkOrCopyFile: (src, dest) => invoke('fs:linkOrCopyFile', src, dest),
   getAppDataPath: () => invoke('fs:getAppDataPath'),
   readFile: (path) => invoke('fs:readFile', path),
   writeFile: (path, data) => invoke('fs:writeFile', path, data),
