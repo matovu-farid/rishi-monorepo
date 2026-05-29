@@ -10,7 +10,7 @@ import { elementScroll } from '@tanstack/react-virtual'
 import type { VirtualizerOptions } from '@tanstack/react-virtual'
 import { usePdfStore } from '@/stores/pdfStore'
 import { parsePdfLocation } from '@/lib/pdfLocation'
-import { PAGE_HEIGHT, PAGE_GAP } from '../utils/constants'
+import { PAGE_HEIGHT, PAGE_GAP, HORIZONTAL_PADDING } from '../utils/constants'
 import type { Book } from '@/lib/api'
 function easeInOutQuint(t: number) {
   return t < 0.5 ? 16 * t * t * t * t * t : 1 + 16 * --t * t * t * t * t
@@ -25,6 +25,15 @@ export function useVirualization(
   const numPages = usePdfStore((s) => s.pageCount)
   const setHasNavigatedToPage = usePdfStore((s) => s.setHasNavigatedToPage)
   const getPageDimension = usePdfStore((s) => s.getPageDimension)
+  // Subscribe to the dims slice for THIS book so this hook re-renders when
+  // setPageDimensions populates measurements. Selecting only the function
+  // reference (getPageDimension) is stable and would never trigger a re-run.
+  const dimsForBook = usePdfStore((s) => s.pageDimensionsByBookId[book.id])
+  // Dual-page mode renders each page at half-container-width with a height-
+  // driven scale; the width-driven estimate below would produce ~2x the
+  // correct height. Fall back to estimatedPageHeight in dual-page mode —
+  // proper dual-page math is out of scope for this iteration.
+  const isDualPage = usePdfStore((s) => s.isDualPage)
   const estimatedPageHeight = PAGE_HEIGHT
   const scrollingRef = useRef<number | null>(null)
   // initialOffset uses ESTIMATED page heights — the virtualizer hasn't
@@ -81,14 +90,23 @@ export function useVirualization(
     count: numPages,
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: (index: number) => {
+      // Dual-page mode uses a height-driven, half-width per-page scale; this
+      // width-driven estimate doesn't apply. Defer to the constant estimate
+      // and let post-measurement adjustments take over.
+      if (isDualPage) return estimatedPageHeight
       const dim = getPageDimension(book.id, index)
       if (!dim) return estimatedPageHeight
       const containerWidth = scrollContainerRef.current?.clientWidth
-      if (!containerWidth || dim.baseWidth <= 0) return estimatedPageHeight
+      if (!containerWidth) return estimatedPageHeight
       // Mirror the per-page scale derivation used at render time
       // (PdfView line ~154): scale = renderedWidth / page.view[2].
-      // Pages fit to container width, so renderedWidth == containerWidth.
-      const scale = containerWidth / dim.baseWidth
+      // Subtract HORIZONTAL_PADDING (matches usePdfNavigation.pdfWidth) so the
+      // estimate matches the actual rendered width — otherwise we over-estimate
+      // by containerWidth / (containerWidth - 16) and trigger post-measurement
+      // adjustments on every page.
+      const renderedWidth = containerWidth - HORIZONTAL_PADDING
+      if (renderedWidth <= 0 || dim.baseWidth <= 0) return estimatedPageHeight
+      const scale = renderedWidth / dim.baseWidth
       return dim.baseHeight * scale
     },
     overscan: 8,
@@ -98,6 +116,18 @@ export function useVirualization(
     gap: PAGE_GAP
   })
   setVirtualizer(virtualizer)
+
+  // TanStack Virtual caches estimateSize per index. When setPageDimensions
+  // populates dims after the initial render, the cached estimates remain
+  // stale. dimsForBook reference changes exactly once (undefined -> array)
+  // when the parse-walk in pdf.tsx finishes; calling virtualizer.measure()
+  // invalidates the per-index cache so the next render re-runs estimateSize
+  // with the real per-page dimensions.
+  useEffect(() => {
+    if (!dimsForBook) return
+    virtualizer.measure()
+  }, [dimsForBook, virtualizer])
+
   const handlePageRendered = useCallback(() => {
     setHasNavigatedToPage(true)
   }, [setHasNavigatedToPage])

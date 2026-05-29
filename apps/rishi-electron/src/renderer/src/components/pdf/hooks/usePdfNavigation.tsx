@@ -1,6 +1,7 @@
 import { useEffect, useState, type RefObject } from 'react'
 
 import { usePdfStore } from '@/stores/pdfStore'
+import { HORIZONTAL_PADDING } from '../utils/constants'
 
 export function usePdfNavigation(containerRef?: RefObject<HTMLElement | null>) {
   const numPages = usePdfStore((s) => s.pageCount)
@@ -20,8 +21,6 @@ export function usePdfNavigation(containerRef?: RefObject<HTMLElement | null>) {
   // Determine if we should show dual-page view
   const isDualPage = usePdfStore((s) => s.isDualPage)
 
-  // 16px = the px-2 padding on the inner flex wrapper that hosts pages.
-  const HORIZONTAL_PADDING = 16
   const pdfHeight = containerSize.height - 10
   const pdfWidth = containerSize.width - HORIZONTAL_PADDING
   // Calculate page dimensions: in dual-page mode, each page gets half the width
