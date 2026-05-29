@@ -74,6 +74,7 @@ import { usePageTracker } from '@/modules/epub-page-tracker'
 import { dumpError } from '@/utils/errorDump'
 import { debugLog } from '@/utils/debugLog'
 import { getCachedEpub } from '@/services/reader-cache/epub-cache'
+import { epubLocsCacheKey } from './epubLocsCacheKey'
 import {
   navigationHistoryActor,
   onResumeRequested
@@ -1160,7 +1161,11 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
               const pt = usePageTracker.getState()
 
               const CHARS_PER_PAGE = 1600
-              const locsCacheKey = `epub-locs-v5-${book.id}`
+              // Bind the storage key to CHARS_PER_PAGE so a future tune of
+              // the constant naturally evicts every persisted cache — a
+              // locations index generated at 1600 chars/page is not
+              // interchangeable with one at, say, 1200.
+              const locsCacheKey = epubLocsCacheKey(book.id, CHARS_PER_PAGE)
               // Clean up old cache versions
               localStorage.removeItem(`epub-locations-${book.id}`)
               localStorage.removeItem(`epub-locs-v2-${book.id}`)
