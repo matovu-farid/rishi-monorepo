@@ -70,6 +70,13 @@ interface PdfState {
    *  `Partial<Record>` so indexing an unknown bookId is typed as
    *  `FooterMask | undefined` and callers must guard before use. */
   footerMaskByBookId: Partial<Record<number, FooterMask>>
+  /**
+   * Per-book page dimensions in PDF user-space units (1/72 inch).
+   * Indexed by 0-based page index. Holds base width/height; the virtualizer
+   * derives CSS pixel height from these + the scroll container width at
+   * estimate time so render-scale changes need no remeasure.
+   */
+  pageDimensionsByBookId: { [bookId: string]: { baseWidth: number; baseHeight: number }[] }
 
   setPageNumber: (n: number) => void
   setScrollPageNumber: (n: number) => void
@@ -103,6 +110,14 @@ interface PdfState {
   setFooterMask: (bookId: number, mask: FooterMask) => void
   clearFooterMask: (bookId: number) => void
   getFooterMaskForPage: (bookId: number, pageNumber: number) => ReadonlySet<number> | undefined
+  setPageDimensions: (
+    bookId: string,
+    dims: { baseWidth: number; baseHeight: number }[]
+  ) => void
+  getPageDimension: (
+    bookId: string,
+    pageIndex: number
+  ) => { baseWidth: number; baseHeight: number } | undefined
 }
 
 export const usePdfStore = create<PdfState>()(
@@ -132,6 +147,7 @@ export const usePdfStore = create<PdfState>()(
       isLookingForNextParagraph: false,
       isAutoCentering: false,
       footerMaskByBookId: {},
+      pageDimensionsByBookId: {},
 
       setPageNumber: (n) => {
         const state = get()
@@ -236,6 +252,14 @@ export const usePdfStore = create<PdfState>()(
         const mask = get().footerMaskByBookId[bookId]
         if (!mask) return undefined
         return mask.get(pageNumber)
+      },
+      setPageDimensions: (bookId, dims) =>
+        set((state) => ({
+          pageDimensionsByBookId: { ...state.pageDimensionsByBookId, [bookId]: dims }
+        })),
+      getPageDimension: (bookId, pageIndex) => {
+        const dims = get().pageDimensionsByBookId[bookId]
+        return dims ? dims[pageIndex] : undefined
       }
     })),
     { name: 'pdf-store' }

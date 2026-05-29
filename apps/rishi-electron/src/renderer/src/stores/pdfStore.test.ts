@@ -258,3 +258,44 @@ describe('pdfStore', () => {
     })
   })
 })
+
+describe('usePdfStore — pageDimensionsByBookId', () => {
+  beforeEach(() => {
+    usePdfStore.setState({ pageDimensionsByBookId: {} })
+  })
+
+  it('round-trips dimensions for a book', () => {
+    const dims = [
+      { baseWidth: 612, baseHeight: 792 },
+      { baseWidth: 612, baseHeight: 792 },
+      { baseWidth: 612, baseHeight: 1000 }
+    ]
+    usePdfStore.getState().setPageDimensions('book-a', dims)
+    expect(usePdfStore.getState().getPageDimension('book-a', 0)).toEqual({
+      baseWidth: 612,
+      baseHeight: 792
+    })
+    expect(usePdfStore.getState().getPageDimension('book-a', 2)).toEqual({
+      baseWidth: 612,
+      baseHeight: 1000
+    })
+  })
+
+  it('returns undefined for an unknown book', () => {
+    expect(usePdfStore.getState().getPageDimension('nope', 0)).toBeUndefined()
+  })
+
+  it('returns undefined for an out-of-range page index', () => {
+    usePdfStore.getState().setPageDimensions('book-a', [{ baseWidth: 612, baseHeight: 792 }])
+    expect(usePdfStore.getState().getPageDimension('book-a', 99)).toBeUndefined()
+  })
+
+  it('overwriting dimensions for the same book replaces the array', () => {
+    usePdfStore.getState().setPageDimensions('book-a', [{ baseWidth: 1, baseHeight: 1 }])
+    usePdfStore.getState().setPageDimensions('book-a', [{ baseWidth: 2, baseHeight: 2 }])
+    expect(usePdfStore.getState().getPageDimension('book-a', 0)).toEqual({
+      baseWidth: 2,
+      baseHeight: 2
+    })
+  })
+})
