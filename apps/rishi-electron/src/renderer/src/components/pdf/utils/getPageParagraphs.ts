@@ -16,6 +16,9 @@ const MIN_PARAGRAPH_LENGTH = 50
 
 const PARAGRAPH_INDEX_PER_PAGE = 10000
 
+const SENTENCE_END_RE = /[.!?][)"'”’]?\s*$/
+const PARAGRAPH_LINE_SAFETY_CAP = 12
+
 export interface ParagraphWithItemIndices {
   paragraph: Paragraph
   itemIndices: number[]
@@ -89,7 +92,10 @@ function assembleRawParagraphs(
       item.hasEOL
     const isThereText = textSoFar.trim().length > 0
 
-    const hasAtlestFiveLines = lineCount >= 5 && item.hasEOL
+    const wantsLineCountBreak = lineCount >= 5 && item.hasEOL
+    const endsAtSentence = SENTENCE_END_RE.test(textSoFar)
+    const exceedsSafetyCap = lineCount >= PARAGRAPH_LINE_SAFETY_CAP && item.hasEOL
+    const hasAtlestFiveLines = (wantsLineCountBreak && endsAtSentence) || exceedsSafetyCap
 
     if ((isVerticallySpaced && isThereText) || hasAtlestFiveLines) {
       if (hasAtlestFiveLines) {
