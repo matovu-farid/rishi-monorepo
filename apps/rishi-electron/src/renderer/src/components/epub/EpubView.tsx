@@ -384,7 +384,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
   // cache synchronously so a reopen renders with bytes (and the cached
   // parsed Book downstream) on the very first paint — no loader flash.
   const [epubData, setEpubData] = useState<Uint8Array | null>(
-    () => getCachedEpub(book.id)?.bytes ?? null
+    () => getCachedEpub(book.id, book.version)?.bytes ?? null
   )
   useEffect(() => {
     if (epubData) return
@@ -1021,6 +1021,7 @@ export default function EpubView({ book }: { book: Book }): React.JSX.Element {
         <ReactReader
           key={`reader-${book.id}`}
           bookCacheKey={book.id}
+          bookCacheVersion={book.version}
           showToc={true}
           bookSyncId={bookSyncId}
           tocExpanded={tocOpen}

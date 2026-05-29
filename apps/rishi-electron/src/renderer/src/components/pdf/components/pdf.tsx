@@ -560,10 +560,10 @@ export function PdfView({
   // The lazy initializers read the cache synchronously so a cache hit
   // renders with the proxy on the very first paint — no loader flash.
   const [pdfProxy, setPdfProxy] = useState<PDFDocumentProxy | null>(
-    () => getCachedPdf(book.id)?.document ?? null
+    () => getCachedPdf(book.id, book.version)?.document ?? null
   )
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(
-    () => getCachedPdf(book.id)?.bytes ?? null
+    () => getCachedPdf(book.id, book.version)?.bytes ?? null
   )
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -573,7 +573,7 @@ export function PdfView({
     // value within the closure, making the post-await guards appear dead.
     const state: { cancelled: boolean } = { cancelled: false }
 
-    if (getCachedPdf(book.id)) {
+    if (getCachedPdf(book.id, book.version)) {
       // Cache hit — state already initialized from cache by useState. No
       // need to clear loadError synchronously: this branch returns before
       // any new error could be produced for this book.
@@ -612,7 +612,7 @@ export function PdfView({
           void proxy.destroy()
           return
         }
-        setCachedPdf(book.id, proxy, bytes)
+        setCachedPdf(book.id, proxy, bytes, book.version)
         setPdfProxy(proxy)
         setPdfBytes(bytes)
         // Clear any stale error from a previous attempt only after a fresh

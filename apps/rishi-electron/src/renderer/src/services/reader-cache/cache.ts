@@ -15,6 +15,11 @@ export interface ReaderCacheEntry<T> {
   bytes: Uint8Array
   size: number
   lastAccess: number
+  // Bound to book.version when set by the per-format wrapper. Lookup misses
+  // on version mismatch so a re-imported file (same bookId, bumped version)
+  // doesn't serve the previous parse. Optional for callers that don't
+  // version their entries (legacy / non-book uses of the generic cache).
+  version?: number
 }
 
 export interface ReaderCacheOptions<T> {
@@ -37,8 +42,11 @@ export interface ReaderCacheStats {
 }
 
 export interface ReaderCache<T> {
-  get(bookId: number): ReaderCacheEntry<T> | undefined
-  set(bookId: number, document: T, bytes: Uint8Array): void
+  // `version` is opt-in: when supplied, a stored entry tagged with a
+  // different version is treated as a miss (and the stale entry is
+  // dropped + destroyed so it doesn't linger).
+  get(bookId: number, version?: number): ReaderCacheEntry<T> | undefined
+  set(bookId: number, document: T, bytes: Uint8Array, version?: number): void
   evict(bookId: number): void
   // Diagnostic surface — used by e2e tests to assert cache-hit
   // behaviour without monkey-patching the contextBridge IPC layer
@@ -86,18 +94,28 @@ export function createReaderCache<T>(opts: ReaderCacheOptions<T>): ReaderCache<T
   }
 
   return {
-    get(bookId) {
+    get(bookId, version) {
       const entry = entries().get(bookId)
       if (entry) {
+        // Version-aware miss: caller asked for a specific version and the
+        // stored entry was tagged with a different one. Drop the stale
+        // entry so its document gets destroyed and the next set() doesn't
+        // race against a doomed proxy.
+        if (version !== undefined && entry.version !== undefined && entry.version !== version) {
+          destroyEntry(entry)
+          entries().delete(bookId)
+          stats.misses++
+          return undefined
+        }
         entry.lastAccess = Date.now()
         stats.hits++
-      } else {
-        stats.misses++
+        return entry
       }
-      return entry
+      stats.misses++
+      return undefined
     },
 
-    set(bookId, document, bytes) {
+    set(bookId, document, bytes, version) {
       const size = bytes.byteLength
 
       // Skip caching anything that exceeds the per-entry cap; drop any
@@ -122,8 +140,9 @@ export function createReaderCache<T>(opts: ReaderCacheOptions<T>): ReaderCache<T
         existing.bytes = bytes
         existing.size = size
         existing.lastAccess = now
+        existing.version = version
       } else {
-        entries().set(bookId, { document, bytes, size, lastAccess: now })
+        entries().set(bookId, { document, bytes, size, lastAccess: now, version })
       }
 
       // Enforce budgets. The just-inserted entry has the newest

@@ -14,9 +14,17 @@ const pdfCache = createReaderCache<PDFDocumentProxy>({
   destroy: (proxy) => proxy.destroy()
 })
 
-export const getCachedPdf = (bookId: number) => pdfCache.get(bookId)
-export const setCachedPdf = (bookId: number, proxy: PDFDocumentProxy, bytes: Uint8Array): void =>
-  pdfCache.set(bookId, proxy, bytes)
+// `version` is book.version from the DB row. Pass it through so a
+// re-imported file with the same bookId but a bumped version doesn't get
+// the stale parsed proxy. Callers that genuinely don't have a version
+// (legacy code paths) can omit it — the cache then ignores versioning.
+export const getCachedPdf = (bookId: number, version?: number) => pdfCache.get(bookId, version)
+export const setCachedPdf = (
+  bookId: number,
+  proxy: PDFDocumentProxy,
+  bytes: Uint8Array,
+  version?: number
+): void => pdfCache.set(bookId, proxy, bytes, version)
 export const evictPdf = (bookId: number): void => pdfCache.evict(bookId)
 
 // Diagnostic handle for e2e tests. See epub-cache.ts for rationale.

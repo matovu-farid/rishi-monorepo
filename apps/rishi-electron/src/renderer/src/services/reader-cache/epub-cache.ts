@@ -23,9 +23,18 @@ const epubCache = createReaderCache<Book>({
   destroy: (book) => book.destroy()
 })
 
-export const getCachedEpub = (bookId: number) => epubCache.get(bookId)
-export const setCachedEpub = (bookId: number, book: Book, bytes: Uint8Array): void =>
-  epubCache.set(bookId, book, bytes)
+// `version` is book.version from the DB row. Pass it through so a
+// re-imported file with the same bookId but a bumped version doesn't get
+// the stale parsed epubjs Book. Callers that genuinely don't have a
+// version (legacy code paths) can omit it — the cache then ignores
+// versioning.
+export const getCachedEpub = (bookId: number, version?: number) => epubCache.get(bookId, version)
+export const setCachedEpub = (
+  bookId: number,
+  book: Book,
+  bytes: Uint8Array,
+  version?: number
+): void => epubCache.set(bookId, book, bytes, version)
 export const evictEpub = (bookId: number): void => epubCache.evict(bookId)
 
 // Diagnostic handle for e2e tests. Keeping it as a getter object (no
