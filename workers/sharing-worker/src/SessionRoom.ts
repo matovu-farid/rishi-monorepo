@@ -58,4 +58,17 @@ export class SessionRoom extends DurableObject<Env> {
       status: state.status,
     };
   }
+
+  async fetch(request: Request): Promise<Response> {
+    if (request.headers.get("upgrade") !== "websocket") return new Response("Expected websocket", { status: 426 });
+    const { parseSubprotocols } = await import("./wsCreds");
+    const creds = parseSubprotocols(request.headers.get("sec-websocket-protocol"));
+    if (!creds.valid) return new Response(creds.reason, { status: 400 });
+
+    // Real auth happens in a later task. For now the test path is permissive.
+    const { 0: client, 1: server } = new WebSocketPair();
+    // Hibernation API: accept lets the DO sleep between messages.
+    this.ctx.acceptWebSocket(server);
+    return new Response(null, { status: 101, webSocket: client });
+  }
 }

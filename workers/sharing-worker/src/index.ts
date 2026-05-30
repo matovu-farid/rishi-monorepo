@@ -86,5 +86,18 @@ async function getUser(req: Request, env: Env) {
   return verifyAuth(req, env);
 }
 
+app.get("/v1/sessions/:id/wss", async (c) => {
+  if (c.req.header("upgrade") !== "websocket") {
+    return c.text("Expected websocket", 426);
+  }
+  const creds = (await import("./wsCreds")).parseSubprotocols(c.req.header("sec-websocket-protocol") ?? null);
+  if (!creds.valid) return c.text(creds.reason, 400);
+
+  const sessionId = c.req.param("id");
+  const stub = c.env.SESSION_ROOM.get(c.env.SESSION_ROOM.idFromName(sessionId));
+  // The DO's fetch handles the upgrade.
+  return stub.fetch(c.req.raw);
+});
+
 export default app;
 export { SessionRoom } from "./SessionRoom";
