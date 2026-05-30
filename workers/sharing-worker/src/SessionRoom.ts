@@ -222,6 +222,27 @@ export class SessionRoom extends DurableObject<Env> {
     if (meta) await this.removeParticipant(meta.userId, "left");
   }
 
+  async alarm(): Promise<void> {
+    const state = await this.loadState();
+    if (!state) return;
+    const now = Date.now();
+    // Approval timeouts
+    for (const [userId, v] of Object.entries(state.pendingJoiners)) {
+      if (v.requestedAt + CONFIG.APPROVAL_TIMEOUT_MS <= now) {
+        delete state.pendingJoiners[userId];
+        const pending = this.pendingSockets.get(userId);
+        if (pending) {
+          this.pendingSockets.delete(userId);
+          this.sendTo(pending.ws, { t: "approval.result", approved: false, reason: "approval timeout" });
+          pending.ws.close(1000, "timeout");
+        }
+      }
+    }
+    // Future alarm branches (reconnect slot expiry, host grace) added in later tasks.
+    await this.saveState(state);
+    await this.scheduleNextAlarm();
+  }
+
   // ---------- Hello ----------
   private async handleHello(ws: WebSocket, meta: AttachedMeta, hasBookFile: boolean) {
     const state = await this.loadState();
@@ -245,6 +266,7 @@ export class SessionRoom extends DurableObject<Env> {
         userId: meta.userId,
         profile: state.pendingJoiners[meta.userId].profile,
       });
+      await this.scheduleNextAlarm();
       return;
     }
 
@@ -346,5 +368,20 @@ export class SessionRoom extends DurableObject<Env> {
     if (sharerChanged) {
       for (const ws of this.sockets()) this.sendTo(ws, { t: "role.transferred", newSharerId: state.sharerUserId });
     }
+  }
+
+  private async scheduleNextAlarm() {
+    const state = await this.loadState();
+    if (!state) return;
+    const candidates: number[] = [];
+    const now = Date.now();
+    for (const v of Object.values(state.pendingJoiners)) candidates.push(v.requestedAt + CONFIG.APPROVAL_TIMEOUT_MS);
+    for (const p of Object.values(state.participants)) {
+      if (p.reservedUntil) candidates.push(p.reservedUntil);
+    }
+    if (state.hostSuspendedUntil) candidates.push(state.hostSuspendedUntil);
+    if (candidates.length === 0) { await this.ctx.storage.deleteAlarm(); return; }
+    const next = Math.max(now + 100, Math.min(...candidates));
+    await this.ctx.storage.setAlarm(next);
   }
 }
