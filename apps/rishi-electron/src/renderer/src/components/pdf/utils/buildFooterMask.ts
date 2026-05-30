@@ -67,9 +67,18 @@ export function normalizeFooterToken(s: string): string {
   return trimmed.replace(EMBEDDED_NUMBER_RE, '__NUM__')
 }
 
-// Strategies are referenced via getters to side-step the circular import
-// between this module and the strategy files (which import shared types
-// from here). At call time the bindings are fully initialised.
+// Strategies are referenced via getters to side-step a circular import.
+// This file imports each strategy module; each strategy module imports
+// shared types/helpers (FooterMask, PageScanInput, BuildFooterMaskOptions,
+// normalizeFooterToken) from this file. When a strategy module is imported
+// FIRST (e.g., by a test that imports it directly), evaluation enters the
+// cycle and the strategy bindings are still in the TDZ when the orchestrator
+// array is built — `STRATEGIES.map(s => s(...))` then crashes with
+// `TypeError: s is not a function`. Wrapping each reference in a thunk
+// defers the binding read to call time, by which point both modules are
+// fully initialised. DO NOT REMOVE THESE THUNKS without first extracting
+// the shared types into a separate `shared.ts` module that both sides
+// import from (which breaks the cycle structurally).
 const STRATEGIES: Array<() => FooterStrategy> = [
   () => repetitionStrategy,
   () => bottomBandPositionStrategy,
