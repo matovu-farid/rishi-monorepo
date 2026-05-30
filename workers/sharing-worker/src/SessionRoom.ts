@@ -234,8 +234,13 @@ export class SessionRoom extends DurableObject<Env> {
     // Explicit `leave` (code 1000 from our own close call) already removed the participant.
     if (code === 1000 && !state.participants[meta.userId]) return;
     if (meta.userId === state.hostUserId) {
-      // Host suspension handled in T20; for now keep prior behavior of immediate remove.
-      await this.removeParticipant(meta.userId, "left");
+      state.status = "host-suspended";
+      state.hostSuspendedUntil = Date.now() + CONFIG.HOST_GRACE_MS;
+      await this.saveState(state);
+      for (const s of this.sockets()) if (s !== ws) this.sendTo(s, {
+        t: "host.suspended", until: state.hostSuspendedUntil,
+      });
+      await this.scheduleNextAlarm();
       return;
     }
     const reservedUntil = Date.now() + CONFIG.VIEWER_SLOT_GRACE_MS;
@@ -252,6 +257,17 @@ export class SessionRoom extends DurableObject<Env> {
     const state = await this.loadState();
     if (!state) return;
     const now = Date.now();
+    // Host-grace expiry: end the session.
+    if (state.status === "host-suspended" && state.hostSuspendedUntil && state.hostSuspendedUntil <= now) {
+      state.status = "ended";
+      await this.saveState(state);
+      for (const s of this.sockets()) {
+        this.sendTo(s, { t: "session.ended", reason: "host_grace_expired" });
+        s.close(1000, "ended");
+      }
+      await this.ctx.storage.setAlarm(Date.now() + CONFIG.STORAGE_PURGE_AFTER_END_MS);
+      return;
+    }
     // Approval timeouts
     for (const [userId, v] of Object.entries(state.pendingJoiners)) {
       if (v.requestedAt + CONFIG.APPROVAL_TIMEOUT_MS <= now) {
@@ -302,6 +318,12 @@ export class SessionRoom extends DurableObject<Env> {
       existing.connectionState = "connected";
       existing.hasBookFile = hasBookFile;
       delete existing.reservedUntil;
+      // Host reconnect resumes the session (sharer role stays where it was).
+      if (meta.userId === state.hostUserId && state.status === "host-suspended") {
+        state.status = "live";
+        state.hostSuspendedUntil = undefined;
+        for (const s of this.sockets()) if (s !== ws) this.sendTo(s, { t: "host.resumed" });
+      }
       await this.saveState(state);
       const newReservedUntil = Date.now() + CONFIG.HOST_GRACE_MS;
       const newRt = await issueReconnectToken(
@@ -322,6 +344,9 @@ export class SessionRoom extends DurableObject<Env> {
 
     if (Object.keys(state.participants).length >= CONFIG.MAX_PARTICIPANTS && !state.participants[meta.userId]) {
       this.sendError(ws, "cap_reached", "session is full"); ws.close(1000, "full"); return;
+    }
+    if (state.status === "host-suspended" && meta.userId !== state.hostUserId) {
+      this.sendError(ws, "host_suspended", "host disconnected"); ws.close(1000, "host suspended"); return;
     }
 
     // Approval gate: non-host joiners that aren't already participants get queued.
