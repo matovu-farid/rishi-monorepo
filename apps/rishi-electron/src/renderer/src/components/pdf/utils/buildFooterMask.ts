@@ -1,6 +1,7 @@
 import type { TextContent } from 'react-pdf'
 import { repetitionStrategy } from './footerStrategies/repetitionStrategy'
 import { bottomBandPositionStrategy } from './footerStrategies/bottomBandPositionStrategy'
+import { suffixStrategy } from './footerStrategies/suffixStrategy'
 import { expandToLineMates } from './footerStrategies/expandToLineMates'
 import { unionMasks } from './footerStrategies/types'
 import type { FooterStrategy, FooterPostProcessor } from './footerStrategies/types'
@@ -71,7 +72,8 @@ export function normalizeFooterToken(s: string): string {
 // from here). At call time the bindings are fully initialised.
 const STRATEGIES: Array<() => FooterStrategy> = [
   () => repetitionStrategy,
-  () => bottomBandPositionStrategy
+  () => bottomBandPositionStrategy,
+  () => suffixStrategy
 ]
 const POST_PROCESSORS: Array<() => FooterPostProcessor> = [() => expandToLineMates]
 

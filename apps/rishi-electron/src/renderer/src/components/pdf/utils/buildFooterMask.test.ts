@@ -113,11 +113,19 @@ describe('buildFooterMask', () => {
   })
 
   it('masks an item that repeats at the same Y on >=30% of pages', () => {
+    // Use unique alphabetic body strings (no embedded digits) so neither
+    // the repetition nor suffix strategies hash them to the same key.
+    const bodies = [
+      'Alpha narrative one', 'Beta narrative two', 'Gamma narrative three',
+      'Delta narrative four', 'Epsilon narrative five', 'Zeta narrative six',
+      'Eta narrative seven', 'Theta narrative eight', 'Iota narrative nine',
+      'Kappa narrative ten'
+    ]
     const pages: PageScanInput[] = []
     for (let p = 1; p <= 10; p++) {
       pages.push(
         makePage(p, [
-          { str: 'Body of page ' + p, y: 500 },
+          { str: bodies[p - 1], y: 500 },
           { str: 'Running Footer', y: 40 } // repeats verbatim at same y
         ])
       )
@@ -134,22 +142,27 @@ describe('buildFooterMask', () => {
     }
   })
 
-  it('does NOT mask items above the bottom band', () => {
+  it('repetition/position strategies do NOT mask items above the bottom band', () => {
     // bottomBandPct=0.25, viewportHeight=600 => bottom band is y in [0, 150].
-    // y=300 is well above the band.
+    // y=300 is well above the band. NOTE: suffixStrategy operates on logical
+    // paragraphs (not spatial position), so a repeating mid-page string CAN
+    // still be flagged by it; we use unique-per-page strings here so the
+    // bottom-band guard of repetition + position is exercised in isolation.
     const pages: PageScanInput[] = []
     for (let p = 1; p <= 10; p++) {
       pages.push(
         makePage(p, [
-          { str: 'Body of page ' + p, y: 500 },
-          { str: 'Running Mid-page Heading', y: 300 } // repeats but NOT in band
+          { str: `Alpha ${String.fromCharCode(64 + p)} narrative`, y: 500 },
+          {
+            str: `Heading ${String.fromCharCode(64 + p)} unique per page`,
+            y: 300
+          }
         ])
       )
     }
     const mask = buildFooterMask(pages)
     for (let p = 1; p <= 10; p++) {
       const set = mask.get(p)
-      // Either the page is absent from the mask, or the would-be index 1 is not masked.
       if (set) expect(set.has(1)).toBe(false)
     }
   })
@@ -174,15 +187,21 @@ describe('buildFooterMask', () => {
     expect(pagesWithFooterMasked).toBeGreaterThanOrEqual(8)
   })
 
-  it('does NOT mask body text that happens to repeat (out of bottom band)', () => {
+  it('repetition/position strategies do NOT mask a repeating top-of-page heading', () => {
     // Same repetition signal but at the TOP of the page (running heading).
-    // The bottom-band guard means it's not a footer candidate.
+    // The bottom-band guard of the repetition + position strategies means
+    // it's not a candidate for either. Headings are unique per page so
+    // suffixStrategy doesn't grab them either — body+heading both appear
+    // in the bottom-6 paragraph slice but never repeat as text.
     const pages: PageScanInput[] = []
     for (let p = 1; p <= 10; p++) {
       pages.push(
         makePage(p, [
-          { str: 'Same running heading', y: 580 }, // top, outside bottom band
-          { str: 'Body of page ' + p, y: 300 }
+          {
+            str: `Section ${String.fromCharCode(64 + p)} heading`,
+            y: 580
+          }, // top, outside bottom band, unique per page
+          { str: `Unique body content ${String.fromCharCode(64 + p)}`, y: 300 }
         ])
       )
     }
@@ -303,22 +322,25 @@ describe('buildFooterMask', () => {
   })
 
   it('Y binning rejects jitter > yBinPct', () => {
-    // Same string but two very different y positions across pages (40 vs 200).
-    // Since neither cluster individually crosses 30%, no mask.
+    // Y binning for the repetition / position strategies must NOT merge two
+    // very different y positions (40 vs 200) into the same bin. Bodies AND
+    // footers are unique per page so the text-keyed suffix strategy doesn't
+    // grab them — this isolates the position/binning assertion.
     const pages: PageScanInput[] = []
     for (let p = 1; p <= 10; p++) {
       pages.push(
         makePage(p, [
-          { str: 'Body of page ' + p, y: 500 },
-          { str: 'Same Footer', y: p <= 5 ? 40 : 200 }
+          { str: `Alpha narrative ${String.fromCharCode(64 + p)}`, y: 500 },
+          {
+            str: `Footnote ${String.fromCharCode(64 + p)} unique per page`,
+            y: p <= 5 ? 40 : 200
+          }
         ])
       )
     }
     const mask = buildFooterMask(pages)
     // Each cluster has only 5/10 pages and only the bottom cluster is in band.
-    // Even if the bottom cluster (5 pages) is >=30%, the OTHER cluster must
-    // NOT count toward the same bin — that's the assertion. So pages 6..10
-    // (where y=200, NOT in band) must NOT be masked.
+    // pages 6..10 (where y=200, NOT in band) must NOT be masked.
     for (let p = 6; p <= 10; p++) {
       const set = mask.get(p)
       if (set) expect(set.has(1)).toBe(false)
@@ -375,16 +397,30 @@ describe('buildFooterMask — orchestrator union', () => {
   it('flags items contributed by repetitionStrategy AND by bottomBandPositionStrategy', () => {
     // 10 pages. Each has a page number (caught by repetition) and a
     // chapter title at the same y-bin (caught only by position).
+    // Bodies are unique-per-page so the text-keyed strategies don't grab
+    // them and pollute the assertion that body (index 0) stays unmasked.
     const pages: PageScanInput[] = []
     const titles = [
       'Chapter 1', 'Chapter 1', 'Chapter 1', 'Chapter 1',
       'Chapter 2', 'Chapter 2', 'Chapter 2', 'Chapter 2',
       'Chapter 3', 'Chapter 3'
     ]
+    const bodies = [
+      'Alpha narrative one with enough words to feel substantive',
+      'Beta narrative two with enough words to feel substantive',
+      'Gamma narrative three with enough words to feel substantive',
+      'Delta narrative four with enough words to feel substantive',
+      'Epsilon narrative five with enough words to feel substantive',
+      'Zeta narrative six with enough words to feel substantive',
+      'Eta narrative seven with enough words to feel substantive',
+      'Theta narrative eight with enough words to feel substantive',
+      'Iota narrative nine with enough words to feel substantive',
+      'Kappa narrative ten with enough words to feel substantive'
+    ]
     for (let p = 1; p <= 10; p++) {
       pages.push(
         makePage(p, [
-          { str: 'BODY body body body body body body body body body body', y: 400 },
+          { str: bodies[p - 1], y: 400 },
           { str: String(p), y: 30 },     // page number — repetition catches this
           { str: titles[p - 1], y: 30 }  // chapter title — position catches this
         ])

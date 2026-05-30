@@ -57,7 +57,6 @@ import {
   MIN_PAGES_FOR_DETECTION,
   type PageScanInput
 } from '../utils/buildFooterMask'
-import { findRepeatingPageSuffix } from '../utils/findRepeatingPageSuffix'
 import { usePrefsStore } from '@/stores/prefsStore'
 import { useIndexingStore } from '@/stores/indexingStore'
 import { usePdfReader } from '@/hooks/usePdfReader'
@@ -759,17 +758,7 @@ export function PdfView({
         if (!footerDetectionEnabled) {
           usePdfStore.getState().setFooterMask(book.id, new Map())
         } else {
-          const mask = buildFooterMask(scans)
-          const suffixMask = findRepeatingPageSuffix(scans)
-          for (const [pageNumber, itemSet] of suffixMask) {
-            let target = mask.get(pageNumber)
-            if (!target) {
-              target = new Set<number>()
-              mask.set(pageNumber, target)
-            }
-            for (const ix of itemSet) target.add(ix)
-          }
-          usePdfStore.getState().setFooterMask(book.id, mask)
+          usePdfStore.getState().setFooterMask(book.id, buildFooterMask(scans))
         }
 
         // Short-circuit if the whole book is already indexed.

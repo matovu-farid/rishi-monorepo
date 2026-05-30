@@ -52,7 +52,10 @@ describe('repetitionStrategy', () => {
     }
   })
 
-  it('matches what the current buildFooterMask produces (parity)', () => {
+  it("buildFooterMask's output is a superset of repetitionStrategy's (orchestrator union)", () => {
+    // The orchestrator unions repetition + position + suffix strategies and
+    // runs expandToLineMates as a post-processor, so its mask is always a
+    // superset (per page) of what the repetition strategy alone produces.
     const pages: PageScanInput[] = []
     for (let p = 1; p <= 12; p++) {
       pages.push(
@@ -65,11 +68,12 @@ describe('repetitionStrategy', () => {
     const fromStrategy = repetitionStrategy(pages, DEFAULT_FOOTER_MASK_OPTIONS)
     const fromCurrent = buildFooterMask(pages)
 
-    expect([...fromStrategy.keys()].sort()).toEqual([...fromCurrent.keys()].sort())
-    for (const p of fromStrategy.keys()) {
-      expect([...(fromStrategy.get(p) ?? [])].sort()).toEqual(
-        [...(fromCurrent.get(p) ?? [])].sort()
-      )
+    for (const [p, indices] of fromStrategy) {
+      const current = fromCurrent.get(p)
+      expect(current, `orchestrator missing page ${p}`).toBeDefined()
+      for (const ix of indices) {
+        expect(current!.has(ix), `orchestrator missing item ${ix} on page ${p}`).toBe(true)
+      }
     }
   })
 })
