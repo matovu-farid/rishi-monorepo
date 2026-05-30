@@ -115,6 +115,18 @@ export class SessionRoom extends DurableObject<Env> {
           : { t: msg.t, from: meta.userId, sdp: msg.sdp });
         break;
       }
+      case "pass.sharer": {
+        const state = await this.loadState();
+        if (!state) break;
+        if (meta.userId !== state.hostUserId) { this.sendError(ws, "forbidden", "only host can pass"); break; }
+        const target = state.participants[msg.to];
+        if (!target) { this.sendError(ws, "no_such_peer", `${msg.to} not in session`); break; }
+        if (!target.hasBookFile) { this.sendError(ws, "target_lacks_book", "target has no book file"); break; }
+        state.sharerUserId = msg.to;
+        await this.saveState(state);
+        for (const s of this.sockets()) this.sendTo(s, { t: "role.transferred", newSharerId: msg.to });
+        break;
+      }
       // Other handlers added in later tasks.
       default: this.sendError(ws, "unknown", `no handler for ${(msg as any).t}`);
     }
