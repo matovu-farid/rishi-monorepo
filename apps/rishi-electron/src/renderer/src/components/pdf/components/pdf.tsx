@@ -407,14 +407,22 @@ export function PdfView({
       if (!Number.isNaN(index)) {
         pageRefs.current.set(index, node)
       }
-      virtualizer.measureElement(node)
+      // Intentionally NOT calling virtualizer.measureElement(node).
+      // PDF page heights are deterministic from page.view × scale (see
+      // useVirualization.estimateSize), and we pre-measure every page on
+      // book open. Letting TanStack also read getBoundingClientRect()
+      // and override our exact estimates with sub-pixel-different DOM
+      // values produces small `adjustments` to scrollTop each time a page
+      // re-enters the render window — felt as scroll-up jitter even after
+      // exact estimates landed. Trusting the estimate is the source of
+      // truth eliminates the correction loop entirely.
       return () => {
         if (!Number.isNaN(index)) {
           pageRefs.current.delete(index)
         }
       }
     },
-    [pageRefs, virtualizer]
+    [pageRefs]
   )
 
   // pdfReader owns navigation + persistence via xstate. Replaces the old
