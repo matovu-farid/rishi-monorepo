@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-import { CreateSessionBody } from "./schemas";
-import { issueJoinToken } from "./tokens";
+import { CreateSessionBody, RedeemBody } from "./schemas";
+import { issueJoinToken, verifyJoinToken } from "./tokens";
 import { verifyAuth } from "./auth";
 
 type Env = {
@@ -44,6 +44,37 @@ app.post("/v1/sessions", async (c) => {
     sessionId,
     joinToken,
     joinUrl: `rishi://sharing/join?t=${joinToken}`,
+    wsUrl: wsUrl.toString(),
+  });
+});
+
+app.post("/v1/sessions/:id/redeem", async (c) => {
+  try { await getUser(c.req.raw, c.env); }
+  catch (e) { return c.json({ error: (e as Error).message }, 401); }
+  const parsed = RedeemBody.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ error: "invalid body" }, 400);
+
+  let payload;
+  try { payload = await verifyJoinToken(parsed.data.joinToken, c.env.WORKER_HMAC_SECRET); }
+  catch (e) { return c.json({ code: "token_invalid", error: (e as Error).message }, 400); }
+
+  const sessionId = c.req.param("id");
+  if (payload.sessionId !== sessionId) return c.json({ code: "token_invalid" }, 400);
+
+  const stub = c.env.SESSION_ROOM.get(c.env.SESSION_ROOM.idFromName(sessionId));
+  // @ts-expect-error RPC on DO stub
+  const info = await stub.getInfoForRedeem();
+  if (!info) return c.json({ code: "session_ended" }, 404);
+  if (info.status === "ended") return c.json({ code: "session_ended" }, 404);
+
+  const wsUrl = new URL(c.req.url);
+  wsUrl.pathname = `/v1/sessions/${sessionId}/wss`;
+  wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+  return c.json({
+    sessionId,
+    bookContext: info.bookContext,
+    requiresApproval: info.requiresApproval,
+    hostProfile: info.hostProfile,
     wsUrl: wsUrl.toString(),
   });
 });

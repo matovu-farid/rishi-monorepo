@@ -9,6 +9,8 @@ interface Env {
 
 const KEY = "state";
 
+type StoredState = SessionState & { hostProfileFallback: { displayName: string; avatarUrl?: string } };
+
 export class SessionRoom extends DurableObject<Env> {
   async createSession(input: {
     sessionId: string;
@@ -17,9 +19,9 @@ export class SessionRoom extends DurableObject<Env> {
     bookContext: BookContextT;
     requiresApproval: boolean;
   }): Promise<void> {
-    const existing = await this.ctx.storage.get<SessionState>(KEY);
+    const existing = await this.ctx.storage.get<StoredState>(KEY);
     if (existing) throw new Error("already initialized");
-    const state: SessionState = {
+    const state: StoredState = {
       sessionId: input.sessionId,
       hostUserId: input.hostUserId,
       sharerUserId: input.hostUserId,
@@ -30,11 +32,30 @@ export class SessionRoom extends DurableObject<Env> {
       participants: {},
       pendingJoiners: {},
       joinTokens: {},
+      hostProfileFallback: input.hostProfile,
     };
     await this.ctx.storage.put(KEY, state);
   }
 
-  async getState(): Promise<SessionState | null> {
-    return (await this.ctx.storage.get<SessionState>(KEY)) ?? null;
+  async getState(): Promise<StoredState | null> {
+    return (await this.ctx.storage.get<StoredState>(KEY)) ?? null;
+  }
+
+  async getInfoForRedeem(): Promise<null | {
+    sessionId: string;
+    bookContext: SessionState["bookContext"];
+    requiresApproval: boolean;
+    hostProfile: { displayName: string; avatarUrl?: string };
+    status: SessionState["status"];
+  }> {
+    const state = await this.ctx.storage.get<StoredState>(KEY);
+    if (!state) return null;
+    return {
+      sessionId: state.sessionId,
+      bookContext: state.bookContext,
+      requiresApproval: state.requiresApproval,
+      hostProfile: state.participants[state.hostUserId]?.profile ?? state.hostProfileFallback,
+      status: state.status,
+    };
   }
 }
