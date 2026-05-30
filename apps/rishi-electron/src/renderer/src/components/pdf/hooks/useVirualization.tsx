@@ -99,6 +99,27 @@ export function useVirualization(
     ro.observe(el)
     return () => ro.disconnect()
   }, [scrollContainerRef])
+
+  // Cancel any in-flight smooth scroll the moment the user touches the wheel
+  // or trackpad. Without this the rAF loop in scrollToFn keeps overwriting
+  // container.scrollTop on every frame, so a user trying to scroll mid-
+  // animation feels their input being undone (the "fighting" symptom).
+  // wheel/touchstart are user-initiated only — programmatic scrolls (incl.
+  // our own elementScroll calls inside the animation) don't fire them.
+  useEffect(() => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    const cancel = (): void => {
+      scrollingRef.current = null
+    }
+    el.addEventListener('wheel', cancel, { passive: true })
+    el.addEventListener('touchstart', cancel, { passive: true })
+    return () => {
+      el.removeEventListener('wheel', cancel)
+      el.removeEventListener('touchstart', cancel)
+    }
+  }, [scrollContainerRef])
+
   const scrollToFn: VirtualizerOptions<HTMLDivElement, Element>['scrollToFn'] = React.useCallback(
     (offset, canSmooth, instance) => {
       // Skip the smooth animation when:
@@ -113,7 +134,11 @@ export function useVirualization(
         return
       }
 
-      const duration = 1000
+      // 1000ms felt sluggish on TTS page-cross and felt like a "snap" because
+      // the 100ms driveSeek polling cancelled each animation before it could
+      // visibly progress. 500ms is short enough to keep up with audio
+      // playback yet long enough to read as a smooth slide instead of a snap.
+      const duration = 500
       const start = scrollContainerRef.current?.scrollTop ?? 0
       const startTime = (scrollingRef.current = Date.now())
 

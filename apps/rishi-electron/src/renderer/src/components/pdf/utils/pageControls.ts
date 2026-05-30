@@ -40,7 +40,7 @@ export function nextPage(): boolean {
   const pageIndex = state.pageNumber - 1
   virtualizer.scrollToIndex(pageIndex + 1, {
     align: 'start',
-    behavior: 'auto'
+    behavior: 'smooth'
   })
   return true
 }
@@ -57,7 +57,7 @@ export function previousPage(): boolean {
   const pageIndex = state.pageNumber - 1
   virtualizer.scrollToIndex(pageIndex - 1, {
     align: 'end',
-    behavior: 'auto'
+    behavior: 'smooth'
   })
   return true
 }
