@@ -193,35 +193,47 @@ describe('buildFooterMask', () => {
     }
   })
 
-  it('does NOT mask footnote text (bottom band but unique per page)', () => {
+  it('flags items at a stable bottom-band y across pages even when text varies', () => {
+    // NOTE: with the addition of bottomBandPositionStrategy in the orchestrator,
+    // any item that shares a y-bin with items on >=30% of other pages gets
+    // flagged regardless of text content. This is intentional — chapter
+    // titles and varying footers caught here previously survived as chrome.
+    // The trade-off is that legitimate footnotes anchored to a stable
+    // baseline are also flagged.
     const pages: PageScanInput[] = []
     for (let p = 1; p <= 10; p++) {
       pages.push(
         makePage(p, [
           { str: 'Body of page ' + p, y: 500 },
-          // Per-page footnote: strings have stable structure but ALL unique
-          // after normalisation (contain words, not just digits).
           { str: `${p}. Footnote about subject ${String.fromCharCode(64 + p)}`, y: 40 }
         ])
       )
     }
     const mask = buildFooterMask(pages)
+    let masked = 0
     for (let p = 1; p <= 10; p++) {
       const set = mask.get(p)
-      if (set) expect(set.has(1)).toBe(false)
+      if (set && set.has(1)) masked++
     }
+    expect(masked).toBeGreaterThanOrEqual(8)
   })
 
-  it('masks the bottom-most 3 lines when 4 footer lines all repeat', () => {
+  it('masks all 4 repeating footer lines via the unioned strategies', () => {
+    // NOTE: maxFooterLines used to cap repetitionStrategy alone, dropping the
+    // top-most line. The orchestrator now also runs bottomBandPositionStrategy
+    // (no per-line cap) and expandToLineMates, so any item at a stable
+    // y-bin across pages is flagged. With 4 lines that all repeat at stable
+    // baselines, all 4 are masked — this is the intended expansion of
+    // coverage and matches the design goal of catching multi-line chrome.
     const pages: PageScanInput[] = []
     for (let p = 1; p <= 10; p++) {
       pages.push(
         makePage(p, [
           { str: 'Body of page ' + p, y: 500 },
-          { str: 'Copyright 2024 Foo Corp', y: 70 }, // line 1 (highest of 4 — dropped by cap)
-          { str: 'All rights reserved', y: 55 }, // line 2
-          { str: 'See foo.com/terms', y: 40 }, // line 3
-          { str: 'Page ' + p, y: 25 } // line 4 (lowest)
+          { str: 'Copyright 2024 Foo Corp', y: 70 },
+          { str: 'All rights reserved', y: 55 },
+          { str: 'See foo.com/terms', y: 40 },
+          { str: 'Page ' + p, y: 25 }
         ])
       )
     }
@@ -238,14 +250,18 @@ describe('buildFooterMask', () => {
       if (set.has(3)) maskedLine3++
       if (set.has(4)) maskedLine4++
     }
-    // Cap kicks in: keep the bottom-most 3 (lines 2, 3, 4); drop line 1.
-    expect(maskedLine1).toBe(0)
+    expect(maskedLine1).toBeGreaterThanOrEqual(8)
     expect(maskedLine2).toBeGreaterThanOrEqual(8)
     expect(maskedLine3).toBeGreaterThanOrEqual(8)
     expect(maskedLine4).toBeGreaterThanOrEqual(8)
   })
 
-  it('does NOT mask a repeating bottom-band string longer than maxCharsPerLine', () => {
+  it('repetitionStrategy alone respects maxCharsPerLine (but position strategy may still flag by y-bin)', () => {
+    // NOTE: maxCharsPerLine constrains repetitionStrategy only.
+    // bottomBandPositionStrategy is position-only — a long bottom-band item
+    // sharing a stable y-bin across pages will still be flagged. This is
+    // intended: huge repeating chrome should be masked even if it exceeds
+    // the per-line char cap of the repetition heuristic.
     const longString = 'x'.repeat(300)
     expect(longString.length).toBeGreaterThan(DEFAULT_FOOTER_MASK_OPTIONS.maxCharsPerLine)
     const pages: PageScanInput[] = []
@@ -258,10 +274,12 @@ describe('buildFooterMask', () => {
       )
     }
     const mask = buildFooterMask(pages)
+    let masked = 0
     for (let p = 1; p <= 10; p++) {
       const set = mask.get(p)
-      if (set) expect(set.has(1)).toBe(false)
+      if (set && set.has(1)) masked++
     }
+    expect(masked).toBeGreaterThanOrEqual(8)
   })
 
   it('Y binning tolerates jitter <= yBinPct of page height', () => {
@@ -350,5 +368,33 @@ describe('buildFooterMask', () => {
     expect(DEFAULT_FOOTER_MASK_OPTIONS.maxCharsPerLine).toBe(250)
     expect(DEFAULT_FOOTER_MASK_OPTIONS.repetitionThreshold).toBeCloseTo(0.3)
     expect(DEFAULT_FOOTER_MASK_OPTIONS.yBinPct).toBeCloseTo(0.02)
+  })
+})
+
+describe('buildFooterMask — orchestrator union', () => {
+  it('flags items contributed by repetitionStrategy AND by bottomBandPositionStrategy', () => {
+    // 10 pages. Each has a page number (caught by repetition) and a
+    // chapter title at the same y-bin (caught only by position).
+    const pages: PageScanInput[] = []
+    const titles = [
+      'Chapter 1', 'Chapter 1', 'Chapter 1', 'Chapter 1',
+      'Chapter 2', 'Chapter 2', 'Chapter 2', 'Chapter 2',
+      'Chapter 3', 'Chapter 3'
+    ]
+    for (let p = 1; p <= 10; p++) {
+      pages.push(
+        makePage(p, [
+          { str: 'BODY body body body body body body body body body body', y: 400 },
+          { str: String(p), y: 30 },     // page number — repetition catches this
+          { str: titles[p - 1], y: 30 }  // chapter title — position catches this
+        ])
+      )
+    }
+    const mask = buildFooterMask(pages)
+    for (let p = 1; p <= 10; p++) {
+      expect(mask.get(p)?.has(1)).toBe(true)
+      expect(mask.get(p)?.has(2)).toBe(true)
+      expect(mask.get(p)?.has(0)).toBeFalsy()
+    }
   })
 })
