@@ -260,11 +260,19 @@ export class SessionRoom extends DurableObject<Env> {
     if (!state) return;
     if (!state.participants[userId]) return;
     delete state.participants[userId];
+    let sharerChanged = false;
+    if (state.sharerUserId === userId && userId !== state.hostUserId) {
+      state.sharerUserId = state.hostUserId;
+      sharerChanged = true;
+    }
     await this.saveState(state);
-    const out = { t: "peer.left", userId, reason };
+    const left = { t: "peer.left", userId, reason };
     for (const ws of this.sockets()) {
       const m = this.metaFor(ws);
-      if (m?.userId !== userId) this.sendTo(ws, out);
+      if (m?.userId !== userId) this.sendTo(ws, left);
+    }
+    if (sharerChanged) {
+      for (const ws of this.sockets()) this.sendTo(ws, { t: "role.transferred", newSharerId: state.sharerUserId });
     }
   }
 }
