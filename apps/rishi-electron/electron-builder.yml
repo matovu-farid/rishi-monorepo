@@ -27,6 +27,10 @@ fileAssociations:
     description: Kindle eBook
     role: Viewer
     mimeType: application/vnd.amazon.ebook
+protocols:
+  - name: Rishi Shared Reading
+    schemes:
+      - rishi
 asarUnpack:
   - resources/**
   - node_modules/better-sqlite3/**

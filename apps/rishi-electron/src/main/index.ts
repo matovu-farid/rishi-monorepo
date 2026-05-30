@@ -14,6 +14,11 @@ import { MenuInstaller } from './menu/installMenu.js'
 import type { MenuContext, MenuCommand, BookFormat } from './menu/commands.js'
 import { getBook, listRecentBooks } from './database/queries.js'
 import { handle } from '../preload/ipc-contract.js'
+import {
+  initSharingDeepLink,
+  dispatchSecondInstanceArgv,
+  drainQueuedDeepLink
+} from './sharing/deepLink.js'
 
 // File types Rishi advertises in the OS "Open With" menu (see
 // electron-builder.yml `fileAssociations`). The OS routes a matching file
@@ -274,6 +279,13 @@ function attachLibraryWindowSideEffects(win: BrowserWindow): void {
       const paths = pendingOpenFiles.splice(0)
       win.webContents.send('open-files', paths)
     }
+    // Drain any deep-link join token that arrived before the renderer was
+    // ready (first-launch argv on Windows/Linux, or a second-instance event
+    // received during cold start).
+    const queuedToken = drainQueuedDeepLink()
+    if (queuedToken) {
+      win.webContents.send('sharing:deepLinkReceived', { joinToken: queuedToken })
+    }
   })
 
   // Recover from renderer crashes — see #164. The debug build also logs this
@@ -478,6 +490,9 @@ if (!gotTheLock) {
   app.quit()
 } else {
   app.on('second-instance', (_event, argv) => {
+    // Forward any `rishi://` deep-link arg from a second launch (Windows/Linux
+    // route protocol clicks through argv on the second instance).
+    dispatchSecondInstanceArgv(argv)
     // Windows/Linux deliver "Open With" file paths via argv on a second launch.
     deliverOpenFiles(argv.slice(1).filter((a) => !a.startsWith('-')))
     const lib = libraryWindowFromManager()
@@ -538,6 +553,10 @@ app
     getMenuInstaller().setContext(defaultLibraryContext())
 
     registerAuthIpc(() => libraryWindowFromManager())
+
+    // Register `rishi://` protocol handler after the main window exists so
+    // deep links can be routed to it (or buffered for `did-finish-load`).
+    initSharingDeepLink(() => libraryWindowFromManager())
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
