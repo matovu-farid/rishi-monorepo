@@ -16,6 +16,7 @@ import {
   _getAllBooksWithDb,
   _getCoverWithDb
 } from './queries'
+import { runMigrations } from './migrations'
 
 const SCHEMA = `
   CREATE TABLE books (
@@ -251,5 +252,46 @@ describe('_getCoverWithDb', () => {
     const cover = _getCoverWithDb(db, id)
     expect(cover).not.toBeNull()
     expect(cover!.length).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Sharing-provenance columns on `books` (Plan 2 Task 22).
+//
+// P2P-received books carry three nullable columns that local-only books leave
+// NULL. The migration test exercises `runMigrations` against a clean
+// :memory: DB so we cover the actual migration path, not just the inline
+// SCHEMA constant used by the other suites.
+// ---------------------------------------------------------------------------
+describe('books sharing-provenance columns (Task 22)', () => {
+  function makeMigratedDb(): Database {
+    const db = new BetterSqlite3(':memory:')
+    runMigrations(db)
+    return db
+  }
+
+  it('migration adds source / received_from_user_id / received_at columns', () => {
+    const db = makeMigratedDb()
+    const cols = db.prepare(`PRAGMA table_info(books)`).all() as Array<{ name: string }>
+    const names = cols.map((c) => c.name)
+    expect(names).toContain('source')
+    expect(names).toContain('received_from_user_id')
+    expect(names).toContain('received_at')
+  })
+
+  it('source column accepts the shared-session sentinel', () => {
+    const db = makeMigratedDb()
+    db.prepare(
+      `INSERT INTO books (kind, cover, title, filepath, source, received_from_user_id, received_at)
+       VALUES ('epub', x'00', 'T', '/p.epub', 'shared-session', 'u_b', 1700000000000)`
+    ).run()
+    const row = db
+      .prepare(
+        `SELECT source, received_from_user_id, received_at FROM books WHERE title = 'T'`
+      )
+      .get() as { source: string; received_from_user_id: string; received_at: number }
+    expect(row.source).toBe('shared-session')
+    expect(row.received_from_user_id).toBe('u_b')
+    expect(row.received_at).toBe(1700000000000)
   })
 })
