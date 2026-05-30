@@ -1,0 +1,90 @@
+import { promises as fs } from 'node:fs'
+import { join } from 'node:path'
+import { app } from 'electron'
+import { getDb } from '../database/index.js'
+import type {
+  SharingSaveTransferredBookParams,
+  SharingSaveTransferredBookResult
+} from '../../preload/ipc-contract.js'
+
+const SUPPORTED: Record<'epub' | 'pdf', string> = { epub: '.epub', pdf: '.pdf' }
+
+export const SHARED_SESSION_SOURCE = 'shared-session' as const
+
+/**
+ * Persist a book received via a P2P sharing session to disk and the local
+ * library. The file is written to a dedicated `shared-reading-library/`
+ * sub-directory under userData, keyed by content hash so duplicate
+ * transfers de-dupe on disk. The `books` row carries sharing-provenance
+ * columns (`source`, `received_from_user_id`, `received_at`) so the UI
+ * can render a "received via sharing" badge and offer keep/discard at
+ * session end.
+ */
+export async function saveTransferredBook(
+  params: SharingSaveTransferredBookParams
+): Promise<SharingSaveTransferredBookResult> {
+  const dir = join(app.getPath('userData'), 'shared-reading-library')
+  await fs.mkdir(dir, { recursive: true })
+  const ext = SUPPORTED[params.format]
+  const localPath = join(dir, `${params.contentHash}${ext}`)
+  await fs.writeFile(localPath, new Uint8Array(params.blob))
+
+  const db = getDb()
+  const result = db
+    .prepare(
+      `
+    INSERT INTO books (
+      kind, cover, title, filepath, file_hash, file_size, format,
+      source, received_from_user_id, received_at
+    ) VALUES (?, x'00', ?, ?, ?, ?, ?, ?, ?, ?)
+  `
+    )
+    .run(
+      params.format,
+      params.title,
+      localPath,
+      params.contentHash,
+      params.blob.length,
+      params.format,
+      SHARED_SESSION_SOURCE,
+      params.receivedFromUserId,
+      params.receivedAt
+    )
+  return { localPath, dbBookId: Number(result.lastInsertRowid) }
+}
+
+/**
+ * Returns true if a book file matching `contentHash` already exists in
+ * the shared-reading-library directory (for either supported format).
+ * Used by the sharing flow to skip redundant downloads.
+ */
+export async function hasBookFile(params: { contentHash: string }): Promise<boolean> {
+  const dir = join(app.getPath('userData'), 'shared-reading-library')
+  for (const ext of Object.values(SUPPORTED)) {
+    try {
+      await fs.access(join(dir, `${params.contentHash}${ext}`))
+      return true
+    } catch {
+      /* fall through to next extension */
+    }
+  }
+  return false
+}
+
+/**
+ * Discard a previously-transferred book: delete the DB row and unlink
+ * the on-disk file. Used when the recipient chooses NOT to keep books
+ * at session end.
+ */
+export async function discardTransferredBook(params: {
+  dbBookId: number
+  localPath: string
+}): Promise<void> {
+  const db = getDb()
+  db.prepare(`DELETE FROM books WHERE id = ?`).run(params.dbBookId)
+  try {
+    await fs.unlink(params.localPath)
+  } catch {
+    /* already gone — non-fatal */
+  }
+}
