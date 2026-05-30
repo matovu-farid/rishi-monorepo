@@ -2,6 +2,10 @@ import { Hono } from "hono";
 import { CreateSessionBody, RedeemBody } from "./schemas";
 import { issueJoinToken, verifyJoinToken } from "./tokens";
 import { verifyAuth } from "./auth";
+import { GlobalLimiter } from "./perIpLimit";
+
+const createSessionLimiter = new GlobalLimiter({ capacity: 10, windowMs: 60 * 60_000 });
+const redeemLimiter = new GlobalLimiter({ capacity: 5, windowMs: 60_000 });
 
 type Env = {
   SESSION_ROOM: DurableObjectNamespace;
@@ -22,6 +26,8 @@ app.post("/v1/sessions", async (c) => {
   }
   const parsed = CreateSessionBody.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "invalid body", issues: parsed.error.issues }, 400);
+
+  if (!createSessionLimiter.allow(user.userId)) return c.json({ error: "rate_limited" }, 429);
 
   const sessionId = "s_" + crypto.randomUUID();
   const stub = c.env.SESSION_ROOM.get(c.env.SESSION_ROOM.idFromName(sessionId));
@@ -53,6 +59,9 @@ app.post("/v1/sessions/:id/redeem", async (c) => {
   catch (e) { return c.json({ error: (e as Error).message }, 401); }
   const parsed = RedeemBody.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "invalid body" }, 400);
+
+  const ip = c.req.header("cf-connecting-ip") ?? "unknown";
+  if (!redeemLimiter.allow(`${ip}:${c.req.param("id")}`)) return c.json({ error: "rate_limited" }, 429);
 
   let payload;
   try { payload = await verifyJoinToken(parsed.data.joinToken, c.env.WORKER_HMAC_SECRET); }
