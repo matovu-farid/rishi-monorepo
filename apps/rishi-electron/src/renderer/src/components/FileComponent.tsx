@@ -433,6 +433,15 @@ export default function FileComponent(): React.JSX.Element {
                     className="block bg-transparent w-full p-0 border-0 cursor-pointer relative"
                   >
                     <BookCoverImage book={book} />
+                    {book.source === 'shared-session' ? (
+                      <span
+                        aria-label="received via sharing"
+                        title="Received via shared reading session"
+                        className="absolute top-1 right-1 z-10 rounded-full bg-primary text-primary-foreground text-[10px] px-1.5 py-0.5"
+                      >
+                        shared
+                      </span>
+                    ) : null}
                     {selection.selectMode ? (
                       <span
                         className={`absolute top-2 left-2 w-5 h-5 rounded-full flex items-center justify-center ${
