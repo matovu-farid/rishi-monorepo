@@ -20,9 +20,20 @@ import type { Book } from '@/lib/api'
  * sub-page scroll position so reopening lands at the same offset, not
  * snapped to the page boundary.
  */
+// Hysteresis band (pixels) around a page boundary. While scrollTop sits
+// within this band of the current page's edge, keep reporting the current
+// page rather than flipping to the neighbour. Without this, slowly nudging
+// the boundary back and forth across scrollTop fires PAGE_CHANGED on every
+// wobble — and each PAGE_CHANGED cascades into pdfStore + view-actor +
+// player updates that re-render the heavy pdf.tsx tree, dropping frames
+// and reading as scroll jitter. 24px ≈ one CSS line of body text, small
+// enough that the displayed page number never feels stale.
+const PAGE_BOUNDARY_HYSTERESIS_PX = 24
+
 function visiblePositionFromVirtualizer(
   virtualizer: Virtualizer<HTMLDivElement, Element>,
-  container: HTMLElement | null
+  container: HTMLElement | null,
+  currentPage: number = 0
 ): { page: number; offset: number } {
   const items = virtualizer.getVirtualItems()
   if (items.length === 0) return { page: 0, offset: 0 }
@@ -41,7 +52,22 @@ function visiblePositionFromVirtualizer(
     }
     if (item.start <= scrollTop) topmost = item
   }
-  return { page: topmost.index + 1, offset: Math.max(0, scrollTop - topmost.start) }
+  const topmostPage = topmost.index + 1
+
+  // Hysteresis: if we'd flip to a neighbour but scrollTop is still within
+  // PAGE_BOUNDARY_HYSTERESIS_PX of the boundary, stick with currentPage.
+  if (currentPage > 0 && topmostPage !== currentPage) {
+    const currentItem = items.find((it) => it.index + 1 === currentPage)
+    if (currentItem) {
+      const distFromTop = Math.abs(scrollTop - currentItem.start)
+      const distFromBottom = Math.abs(scrollTop - (currentItem.start + currentItem.size))
+      if (distFromTop < PAGE_BOUNDARY_HYSTERESIS_PX || distFromBottom < PAGE_BOUNDARY_HYSTERESIS_PX) {
+        return { page: currentPage, offset: Math.max(0, scrollTop - currentItem.start) }
+      }
+    }
+  }
+
+  return { page: topmostPage, offset: Math.max(0, scrollTop - topmost.start) }
 }
 
 export type UsePdfReaderApi = {
@@ -251,7 +277,12 @@ export function usePdfReader(
         const delta = Math.abs(currentScrollTop - lastSeenScrollTop)
         lastSeenScrollTop = currentScrollTop
         if (delta < 4) return
-        const { page, offset } = visiblePositionFromVirtualizer(virtualizer, container)
+        const currentPage = actor.getSnapshot().context.currentPage
+        const { page, offset } = visiblePositionFromVirtualizer(
+          virtualizer,
+          container,
+          currentPage
+        )
         if (!page) return
         debugLog('pdfReader:pageChanged', {
           page,
