@@ -60,6 +60,27 @@ export type SyncRemotePayload = Record<string, unknown>
  */
 export type SyncRowRecord = Record<string, unknown>
 
+// -- Shared reading types ----------------------------------------------
+export type SharingSignedJwt = { jwt: string; expiresAt: number }
+export type SharingConfig = {
+  wsBaseUrl: string
+  workerBaseUrl: string
+  iceServers: Array<{ urls: string | string[]; username?: string; credential?: string }>
+}
+export type SharingSaveTransferredBookParams = {
+  bookId: string
+  contentHash: string
+  format: 'epub' | 'pdf'
+  blob: number[]
+  receivedFromUserId: string
+  receivedAt: number
+  title: string
+}
+export type SharingSaveTransferredBookResult = {
+  localPath: string
+  dbBookId: number
+}
+
 // ---------------------------------------------------------------------------
 // Channel contract
 // ---------------------------------------------------------------------------
@@ -315,6 +336,20 @@ export type IpcContract = {
   'auth:sign-out': { args: []; returns: void }
   'auth:delete-account': { args: []; returns: void }
   'auth:get-token': { args: []; returns: string | null }
+
+  // -- Shared reading -------------------------------------------------
+  'sharing:getSigningJwt': { args: []; returns: SharingSignedJwt }
+  'sharing:saveTransferredBook': {
+    args: [params: SharingSaveTransferredBookParams]
+    returns: SharingSaveTransferredBookResult
+  }
+  'sharing:discardTransferredBook': {
+    args: [params: { dbBookId: number; localPath: string }]
+    returns: void
+  }
+  'sharing:hasBookFile': { args: [params: { contentHash: string }]; returns: boolean }
+  'sharing:getConfig': { args: []; returns: SharingConfig }
+  'sharing:registerDeepLinkListener': { args: []; returns: void }
 }
 
 export type IpcChannel = keyof IpcContract

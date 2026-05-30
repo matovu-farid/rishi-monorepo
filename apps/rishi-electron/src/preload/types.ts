@@ -174,6 +174,17 @@ export type ChannelToMethod = {
   'auth:sign-out': never
   'auth:delete-account': never
   'auth:get-token': never
+
+  // Sharing (lives on a dedicated `sharing` namespace exposed in preload —
+  // see Task 28. Like the better-auth channels above, these are kept in
+  // `IpcContract` for helper-wrapper coverage but mapped to `never` so
+  // they're excluded from the auto-derived `window.electron` surface.)
+  'sharing:getSigningJwt': never
+  'sharing:saveTransferredBook': never
+  'sharing:discardTransferredBook': never
+  'sharing:hasBookFile': never
+  'sharing:getConfig': never
+  'sharing:registerDeepLinkListener': never
 }
 
 // Compile-time check: every channel in IpcContract must appear in ChannelToMethod.
