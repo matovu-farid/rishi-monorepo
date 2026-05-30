@@ -183,6 +183,10 @@ export function usePdfReader(
     // DIAGNOSTIC (#scroll-jitter) — log raw scrollTop on every event so we
     // can spot non-monotonic movement during steady-direction user scroll
     // (a positive delta when scrolling UP = an adjustment fighting us).
+    // Also captures scrollHeight + clientHeight so we can see if the
+    // browser's scrollable area matches what TanStack thinks the total
+    // size is — a mismatch would explain rubber-band bouncing partway
+    // through what should be valid scroll range.
     // Sample at most once per 33ms so the log doesn't drown.
     let lastRawScrollLogAt = 0
     let lastRawScrollTop = container?.scrollTop ?? 0
@@ -193,9 +197,17 @@ export function usePdfReader(
       const top = container?.scrollTop ?? 0
       const delta = top - lastRawScrollTop
       lastRawScrollTop = top
+      const scrollHeight = container?.scrollHeight ?? 0
+      const clientHeight = container?.clientHeight ?? 0
+      const virt = usePdfStore.getState().virtualizer
+      const tanstackTotal = virt ? virt.getTotalSize() : 0
       debugLog('scroll:raw', {
         scrollTop: top,
         delta,
+        scrollHeight,
+        clientHeight,
+        maxScroll: scrollHeight - clientHeight,
+        tanstackTotal,
         isAutoCentering: usePdfStore.getState().isAutoCentering
       })
     }

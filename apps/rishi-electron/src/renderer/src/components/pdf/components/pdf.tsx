@@ -951,7 +951,17 @@ export function PdfView({
         // ChatPanel, etc.) MUST be rendered as siblings, not
         // children, of this div. Otherwise they anchor to the scroll
         // container's top and scroll away with the content.
-        style={{ overflowAnchor: 'none', contain: 'strict' }}
+        style={{
+          overflowAnchor: 'none',
+          contain: 'strict',
+          // Disable browser rubber-band bounce on this scroll container.
+          // Without this, fast-flick scrolling into a virtualized area where
+          // the actually-rendered content is much shorter than the explicit
+          // height triggers macOS overscroll oscillation, which lands at
+          // positions that align with page-top boundaries — felt as
+          // "resistance / snap when scrolling down past a page top".
+          overscrollBehaviorY: 'contain'
+        }}
       >
         {/* Main PDF Viewer Area */}
         <div className="flex items-center justify-center  px-2 py-1">
