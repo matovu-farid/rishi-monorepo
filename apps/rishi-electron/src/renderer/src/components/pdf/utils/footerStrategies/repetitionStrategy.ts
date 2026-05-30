@@ -1,10 +1,5 @@
 import type { TextItem, TextMarkedContent } from 'pdfjs-dist/types/src/display/api'
-import {
-  normalizeFooterToken,
-  type FooterMask,
-  type PageScanInput,
-  type BuildFooterMaskOptions
-} from '../buildFooterMask'
+import { normalizeFooterToken, type FooterMask } from '../buildFooterMask'
 import type { FooterStrategy } from './types'
 
 function isTextItem(item: TextItem | TextMarkedContent): item is TextItem {
