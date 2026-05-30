@@ -129,3 +129,10 @@ Object.defineProperty(window, 'api', {
   value: { auth: mockAuthApi },
   writable: true
 })
+
+// Make navigator.clipboard writable so tests can stub it via Object.assign.
+Object.defineProperty(navigator, 'clipboard', {
+  value: { writeText: vi.fn().mockResolvedValue(undefined) },
+  writable: true,
+  configurable: true
+})
