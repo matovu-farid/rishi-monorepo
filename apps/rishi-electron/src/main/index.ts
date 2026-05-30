@@ -493,28 +493,11 @@ app
   .then(async () => {
     electronApp.setAppUserModelId('org.fidexa.rishi')
 
-    // React DevTools (dev only) — official path per
-    // https://www.electronjs.org/docs/latest/tutorial/devtools-extension
-    // Must resolve BEFORE any BrowserWindow's loadURL, otherwise the
-    // extension's content scripts don't attach to the renderer.
-    // Loaded into defaultSession (which our BrowserWindows use — no custom
-    // partition; see windows/createBrowserWindow.ts).
-    if (is.dev) {
-      try {
-        const { default: installExtension, REACT_DEVELOPER_TOOLS } = await import(
-          'electron-devtools-installer'
-        )
-        const ext = await installExtension(REACT_DEVELOPER_TOOLS, {
-          loadExtensionOptions: { allowFileAccess: true }
-        })
-        const extArr = Array.isArray(ext) ? ext : [ext]
-        for (const e of extArr) {
-          console.log(`[devtools] loaded: name=${e.name} id=${e.id}`)
-        }
-      } catch (err) {
-        console.warn('[devtools] React DevTools install failed', err)
-      }
-    }
+    // React DevTools: the Chrome-extension flavour doesn't work in Electron
+    // 39 (chrome.storage / Extensions DevTools-protocol gaps cause the
+    // extension's sandboxed runtime to fail to attach — see commit log for
+    // 2081b949 / 31953391). Instead we instrument React's built-in
+    // <Profiler> directly in the renderer; see profiling/PdfProfiler.tsx.
 
     // Register custom protocol for serving local files to renderer
     registerLocalFileProtocol()
