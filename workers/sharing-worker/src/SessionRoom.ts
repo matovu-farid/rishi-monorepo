@@ -22,6 +22,7 @@ interface AttachedMeta {
 
 export class SessionRoom extends DurableObject<Env> {
   private lastRequestSharer = new Map<string, number>();
+  private pendingSockets = new Map<string, { ws: WebSocket; hasBookFile: boolean }>();
 
   // ---------- HTTP RPC ----------
   async createSession(input: {
@@ -183,6 +184,34 @@ export class SessionRoom extends DurableObject<Env> {
         await this.removeParticipant(msg.userId, "kicked");
         break;
       }
+      case "approve.join": {
+        const state = await this.loadState();
+        if (!state) break;
+        if (meta.userId !== state.hostUserId) { this.sendError(ws, "forbidden", "host only"); break; }
+        const pending = this.pendingSockets.get(msg.userId);
+        delete state.pendingJoiners[msg.userId];
+        await this.saveState(state);
+        if (!pending) break;
+        this.pendingSockets.delete(msg.userId);
+        this.sendTo(pending.ws, { t: "approval.result", approved: true });
+        const pendingMeta = this.metaFor(pending.ws);
+        if (pendingMeta) await this.admitParticipant(pending.ws, pendingMeta, pending.hasBookFile, state);
+        break;
+      }
+      case "reject.join": {
+        const state = await this.loadState();
+        if (!state) break;
+        if (meta.userId !== state.hostUserId) { this.sendError(ws, "forbidden", "host only"); break; }
+        delete state.pendingJoiners[msg.userId];
+        await this.saveState(state);
+        const pending = this.pendingSockets.get(msg.userId);
+        if (pending) {
+          this.pendingSockets.delete(msg.userId);
+          this.sendTo(pending.ws, { t: "approval.result", approved: false, reason: "rejected by host" });
+          pending.ws.close(1000, "rejected");
+        }
+        break;
+      }
       // Other handlers added in later tasks.
       default: this.sendError(ws, "unknown", `no handler for ${(msg as any).t}`);
     }
@@ -202,9 +231,28 @@ export class SessionRoom extends DurableObject<Env> {
       this.sendError(ws, "cap_reached", "session is full"); ws.close(1000, "full"); return;
     }
 
-    const reservedUntil = Date.now() + CONFIG.HOST_GRACE_MS;
-    const role: "host" | "viewer" = meta.userId === state.hostUserId ? "host" : "viewer";
+    // Approval gate: non-host joiners that aren't already participants get queued.
+    if (state.requiresApproval && meta.userId !== state.hostUserId && !state.participants[meta.userId]) {
+      state.pendingJoiners[meta.userId] = {
+        profile: { displayName: meta.displayName, avatarUrl: meta.avatarUrl },
+        requestedAt: Date.now(),
+      };
+      await this.saveState(state);
+      this.pendingSockets.set(meta.userId, { ws, hasBookFile });
+      const hostWs = this.findSocketByUserId(state.hostUserId);
+      if (hostWs) this.sendTo(hostWs, {
+        t: "join.requested",
+        userId: meta.userId,
+        profile: state.pendingJoiners[meta.userId].profile,
+      });
+      return;
+    }
 
+    await this.admitParticipant(ws, meta, hasBookFile, state);
+  }
+
+  private async admitParticipant(ws: WebSocket, meta: AttachedMeta, hasBookFile: boolean, state: StoredState) {
+    const reservedUntil = Date.now() + CONFIG.HOST_GRACE_MS;
     state.participants[meta.userId] = {
       userId: meta.userId,
       profile: { displayName: meta.displayName, avatarUrl: meta.avatarUrl },
@@ -219,6 +267,7 @@ export class SessionRoom extends DurableObject<Env> {
       { sessionId: state.sessionId, userId: meta.userId, reservedUntil },
       this.env.WORKER_HMAC_SECRET,
     );
+    const role: "host" | "viewer" = meta.userId === state.hostUserId ? "host" : "viewer";
     this.sendTo(ws, {
       t: "welcome",
       you: meta.userId,
