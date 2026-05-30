@@ -91,13 +91,18 @@ export class SessionRoom extends DurableObject<Env> {
       const [userId, displayName] = creds.jwt.split(":");
       meta = { userId, displayName };
     } else {
-      // Fallback test shortcut: __TEST_AUTH__ global (set in beforeEach).
       const testAuth = (globalThis as any).__TEST_AUTH__;
       if (testAuth) {
         meta = { userId: testAuth.userId, displayName: testAuth.displayName, avatarUrl: testAuth.avatarUrl };
       } else {
-        // Production path implemented in a later task (T23).
-        return new Response("auth not configured", { status: 401 });
+        // Production path: verify with Better Auth.
+        try {
+          const { verifyAuthToken } = await import("./auth");
+          const u = await verifyAuthToken(creds.jwt, this.env);
+          meta = { userId: u.userId, displayName: u.displayName, avatarUrl: u.avatarUrl };
+        } catch (e) {
+          return new Response((e as Error).message, { status: 401 });
+        }
       }
     }
 
