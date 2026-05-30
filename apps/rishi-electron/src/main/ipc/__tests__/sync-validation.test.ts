@@ -44,7 +44,10 @@ const DDL_STATEMENTS = [
     sync_version INTEGER NOT NULL DEFAULT 0,
     is_dirty INTEGER NOT NULL DEFAULT 1,
     is_deleted INTEGER NOT NULL DEFAULT 0,
-    last_paragraph TEXT
+    last_paragraph TEXT,
+    source TEXT,
+    received_from_user_id TEXT,
+    received_at INTEGER
   )`,
   `CREATE TABLE highlights (
     id TEXT PRIMARY KEY,
