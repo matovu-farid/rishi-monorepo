@@ -194,7 +194,25 @@ const electronAPI: ElectronAPI = {
   closeBook: (bookId) => invoke('window:closeBook', bookId),
   focusLibrary: () => invoke('window:focusLibrary'),
   listOpenBooks: () => invoke('window:list'),
-  openSettings: () => invoke('window:openSettings')
+  openSettings: () => invoke('window:openSettings'),
+
+  // Shared-reading surface — see preload/types.ts for the rationale on
+  // why these live under a dedicated `sharing` namespace instead of the
+  // auto-derived flat invoke surface.
+  sharing: {
+    getSigningJwt: () => invoke('sharing:getSigningJwt'),
+    saveTransferredBook: (params) => invoke('sharing:saveTransferredBook', params),
+    discardTransferredBook: (params) => invoke('sharing:discardTransferredBook', params),
+    hasBookFile: (params) => invoke('sharing:hasBookFile', params),
+    getConfig: () => invoke('sharing:getConfig'),
+    onDeepLink: (cb) => {
+      const listener = (_e: unknown, payload: { joinToken: string }): void => cb(payload)
+      ipcRenderer.on('sharing:deepLinkReceived', listener)
+      return () => {
+        ipcRenderer.removeListener('sharing:deepLinkReceived', listener)
+      }
+    }
+  }
 }
 
 const api: Api = {

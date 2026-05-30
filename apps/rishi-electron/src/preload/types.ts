@@ -259,6 +259,34 @@ export type ElectronAPI = DerivedInvokeApi & {
    * augmentation — Electron 32+ requires `webUtils.getPathForFile`.
    */
   getPathForFile: (file: File) => string
+
+  /**
+   * Shared-reading surface. Mirrors the `sharing:*` IPC channels in
+   * `IpcContract`, but exposed under a dedicated namespace because the
+   * channels are mapped to `never` in `ChannelToMethod` (they're not part
+   * of the auto-derived flat surface). The deep-link listener is a
+   * push channel (`sharing:deepLinkReceived`), not an invoke.
+   */
+  sharing: {
+    getSigningJwt: () => Promise<{ jwt: string; expiresAt: number }>
+    saveTransferredBook: (params: {
+      bookId: string
+      contentHash: string
+      format: 'epub' | 'pdf'
+      blob: number[]
+      receivedFromUserId: string
+      receivedAt: number
+      title: string
+    }) => Promise<{ localPath: string; dbBookId: number }>
+    discardTransferredBook: (params: { dbBookId: number; localPath: string }) => Promise<void>
+    hasBookFile: (params: { contentHash: string }) => Promise<boolean>
+    getConfig: () => Promise<{
+      wsBaseUrl: string
+      workerBaseUrl: string
+      iceServers: Array<{ urls: string | string[]; username?: string; credential?: string }>
+    }>
+    onDeepLink: (cb: (p: { joinToken: string }) => void) => () => void
+  }
 }
 
 // ---------------------------------------------------------------------------
