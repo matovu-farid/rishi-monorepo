@@ -21,6 +21,8 @@ interface AttachedMeta {
 }
 
 export class SessionRoom extends DurableObject<Env> {
+  private lastRequestSharer = new Map<string, number>();
+
   // ---------- HTTP RPC ----------
   async createSession(input: {
     sessionId: string;
@@ -125,6 +127,37 @@ export class SessionRoom extends DurableObject<Env> {
         state.sharerUserId = msg.to;
         await this.saveState(state);
         for (const s of this.sockets()) this.sendTo(s, { t: "role.transferred", newSharerId: msg.to });
+        break;
+      }
+      case "request.sharer": {
+        const last = this.lastRequestSharer.get(meta.userId) ?? 0;
+        if (Date.now() - last < CONFIG.RATE_LIMITS.requestSharerCooldownMs) {
+          this.sendError(ws, "rate_limited", "wait before requesting again"); break;
+        }
+        this.lastRequestSharer.set(meta.userId, Date.now());
+        const state = await this.loadState();
+        if (!state) break;
+        const hostWs = this.findSocketByUserId(state.hostUserId);
+        if (hostWs) this.sendTo(hostWs, { t: "peer.updated", userId: meta.userId, patch: { requestingSharer: true } });
+        break;
+      }
+      case "has.book": {
+        const state = await this.loadState();
+        if (!state || !state.participants[meta.userId]) break;
+        state.participants[meta.userId].hasBookFile = msg.value;
+        await this.saveState(state);
+        for (const s of this.sockets()) this.sendTo(s, { t: "peer.updated", userId: meta.userId, patch: { hasBookFile: msg.value } });
+        break;
+      }
+      case "mic.state": {
+        const state = await this.loadState();
+        if (!state || !state.participants[meta.userId]) break;
+        // Host-mute stays sticky; self changes can't override host mute.
+        if (state.participants[meta.userId].micState !== "host-muted") {
+          state.participants[meta.userId].micState = msg.value;
+          await this.saveState(state);
+          for (const s of this.sockets()) this.sendTo(s, { t: "peer.updated", userId: meta.userId, patch: { micState: msg.value } });
+        }
         break;
       }
       // Other handlers added in later tasks.
