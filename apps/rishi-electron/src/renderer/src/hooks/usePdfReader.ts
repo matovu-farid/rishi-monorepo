@@ -213,6 +213,24 @@ export function usePdfReader(
     }
     container?.addEventListener('scroll', handleRawScroll, { passive: true })
 
+    // Abort an in-flight seek the moment the user puts their finger on the
+    // wheel/trackpad. driveSeek polls every 100ms to land the virtualizer
+    // on the saved book position; if the user starts scrolling during that
+    // window, each poll snaps scrollTop back to the seek target — felt as
+    // strong resistance. wheel/touchstart are USER-INITIATED only (programmatic
+    // scrolls don't fire them), so they're a clean signal that the user has
+    // taken over and the seek should yield.
+    const abortSeekOnUserInput = (): void => {
+      if (seekRegion(actor.getSnapshot()) !== 'seeking') return
+      debugLog('seek:aborted-by-user-input', {
+        scrollTop: container?.scrollTop ?? 0,
+        seekTarget: actor.getSnapshot().context.seekTarget
+      })
+      actor.send({ type: 'SEEK_LANDED' })
+    }
+    container?.addEventListener('wheel', abortSeekOnUserInput, { passive: true })
+    container?.addEventListener('touchstart', abortSeekOnUserInput, { passive: true })
+
     const handleScroll = (): void => {
       if (scrollDebounce) clearTimeout(scrollDebounce)
       scrollDebounce = setTimeout(() => {
@@ -356,6 +374,8 @@ export function usePdfReader(
       actor.stop()
       container?.removeEventListener('scroll', handleScroll)
       container?.removeEventListener('scroll', handleRawScroll)
+      container?.removeEventListener('wheel', abortSeekOnUserInput)
+      container?.removeEventListener('touchstart', abortSeekOnUserInput)
       if (scrollDebounce) clearTimeout(scrollDebounce)
       if (landedInterval) clearInterval(landedInterval)
       mirrorUnsub.unsubscribe()
