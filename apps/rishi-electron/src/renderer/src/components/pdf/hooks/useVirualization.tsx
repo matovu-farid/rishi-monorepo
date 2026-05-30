@@ -119,14 +119,26 @@ export function useVirualization(
 
   // TanStack Virtual caches estimateSize per index. When setPageDimensions
   // populates dims after the initial render, the cached estimates remain
-  // stale. dimsForBook reference changes exactly once (undefined -> array)
-  // when the parse-walk in pdf.tsx finishes; calling virtualizer.measure()
-  // invalidates the per-index cache so the next render re-runs estimateSize
-  // with the real per-page dimensions.
+  // stale. Calling virtualizer.measure() invalidates the per-index cache
+  // so the next render re-runs estimateSize with the real per-page
+  // dimensions.
+  //
+  // The invalidation MUST fire at most once per book. Each call to
+  // measure() causes TanStack to recompute layout, which shifts scroll
+  // position to compensate for newly-corrected estimates. If the user is
+  // scrolling near a page boundary at that moment, the shift is felt as
+  // a "snap." Repeated invalidations (e.g., if setPageDimensions ever
+  // gets called twice for the same book, or if the virtualizer instance
+  // changes across renders) compound the problem. Guarding with a ref
+  // keyed on book.id caps it at one invalidation per book — the
+  // unavoidable initial transition from fallback to real dims.
+  const measuredOnceForBookRef = useRef<number | null>(null)
   useEffect(() => {
     if (!dimsForBook) return
+    if (measuredOnceForBookRef.current === book.id) return
+    measuredOnceForBookRef.current = book.id
     virtualizer.measure()
-  }, [dimsForBook, virtualizer])
+  }, [dimsForBook, virtualizer, book.id])
 
   const handlePageRendered = useCallback(() => {
     setHasNavigatedToPage(true)
