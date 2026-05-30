@@ -15,8 +15,12 @@
   ],
   "vars": {
     "AUTH_BASE_URL": "https://rishi.fidexa.org"
+  },
+  "env": {
+    "production": {
+      "vars": { "AUTH_BASE_URL": "https://rishi.fidexa.org" }
+    }
   }
   // Secrets set via `wrangler secret put`:
   //   WORKER_HMAC_SECRET  - signs joinToken + reconnectToken
-  //   BETTER_AUTH_SECRET  - if shared session verification needs it
 }
