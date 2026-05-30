@@ -58,26 +58,29 @@ export const fileTransferActor = fromCallback<
   FileTransferOutEvent
 >(({ emit, receive, input }) => {
   if (input.mode === 'sender') {
-    const totalChunks = Math.ceil(input.payload.byteLength / input.chunkSize)
-    const view = new Uint8Array(input.payload)
+    const senderInput = input
+    const totalChunks = Math.ceil(senderInput.payload.byteLength / senderInput.chunkSize)
+    const view = new Uint8Array(senderInput.payload)
     let nextToSend = 0
     let acked = 0
     let inFlight = 0
     let stopped = false
 
     function pump(): void {
-      while (!stopped && inFlight < input.windowSize && nextToSend < totalChunks) {
-        const start = nextToSend * input.chunkSize
-        const end = Math.min(start + input.chunkSize, input.payload.byteLength)
+      while (!stopped && inFlight < senderInput.windowSize && nextToSend < totalChunks) {
+        const start = nextToSend * senderInput.chunkSize
+        const end = Math.min(start + senderInput.chunkSize, senderInput.payload.byteLength)
         const slice = view.slice(start, end)
         const frame: Frame = { kind: 'data', seq: nextToSend, data: Array.from(slice) }
-        input.send(encodeFrame(frame))
+        senderInput.send(encodeFrame(frame))
         nextToSend++
         inFlight++
       }
       if (acked === totalChunks) {
-        input.send(encodeFrame({ kind: 'end', total: totalChunks, hash: input.hash }))
-        emit({ type: 'COMPLETED', blob: input.payload, hash: input.hash })
+        senderInput.send(
+          encodeFrame({ kind: 'end', total: totalChunks, hash: senderInput.hash })
+        )
+        emit({ type: 'COMPLETED', blob: senderInput.payload, hash: senderInput.hash })
       }
     }
 
