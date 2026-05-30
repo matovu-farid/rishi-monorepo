@@ -4,6 +4,7 @@ import type { SessionState, BookContextT } from "./types";
 import { parseSubprotocols } from "./wsCreds";
 import { issueReconnectToken, verifyReconnectToken } from "./tokens";
 import { CONFIG } from "./config";
+import { RateBucket } from "./rateLimit";
 
 interface Env {
   WORKER_HMAC_SECRET: string;
@@ -23,6 +24,19 @@ interface AttachedMeta {
 export class SessionRoom extends DurableObject<Env> {
   private lastRequestSharer = new Map<string, number>();
   private pendingSockets = new Map<string, { ws: WebSocket; hasBookFile: boolean }>();
+  private frameBuckets = new Map<string, RateBucket>();
+
+  private bucketFor(userId: string): RateBucket {
+    let b = this.frameBuckets.get(userId);
+    if (!b) {
+      b = new RateBucket({
+        capacity: CONFIG.RATE_LIMITS.framesPerSocketPerSec * 2,
+        refillPerSec: CONFIG.RATE_LIMITS.framesPerSocketPerSec,
+      });
+      this.frameBuckets.set(userId, b);
+    }
+    return b;
+  }
 
   // ---------- HTTP RPC ----------
   async createSession(input: {
@@ -113,6 +127,11 @@ export class SessionRoom extends DurableObject<Env> {
     const meta = this.metaFor(ws);
     if (!meta) { this.sendError(ws, "no_meta", "ws not initialized"); return; }
 
+    if (!this.bucketFor(meta.userId).tryConsume()) {
+      this.sendError(ws, "rate_limited", "too many messages");
+      return;
+    }
+
     switch (msg.t) {
       case "hello": await this.handleHello(ws, meta, msg.hasBookFile); break;
       case "ping":  this.sendTo(ws, { t: "pong" }); break;
@@ -122,6 +141,16 @@ export class SessionRoom extends DurableObject<Env> {
       case "ice": {
         const target = this.findSocketByUserId(msg.to);
         if (!target) { this.sendError(ws, "no_such_peer", `peer ${msg.to} not connected`); break; }
+        if (msg.t !== "ice") {
+          const state = await this.loadState();
+          if (state) {
+            state.sdpRelayCount = (state.sdpRelayCount ?? 0) + 1;
+            if (state.sdpRelayCount > CONFIG.RATE_LIMITS.sdpRelaysPerSession) {
+              this.sendError(ws, "rate_limited", "sdp relay budget exhausted"); break;
+            }
+            await this.saveState(state);
+          }
+        }
         this.sendTo(target, msg.t === "ice"
           ? { t: "ice", from: meta.userId, candidate: msg.candidate }
           : { t: msg.t, from: meta.userId, sdp: msg.sdp });
