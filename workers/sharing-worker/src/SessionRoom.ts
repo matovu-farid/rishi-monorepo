@@ -26,6 +26,10 @@ export class SessionRoom extends DurableObject<Env> {
   private pendingSockets = new Map<string, { ws: WebSocket; hasBookFile: boolean }>();
   private frameBuckets = new Map<string, RateBucket>();
 
+  private log(event: string, fields: Record<string, unknown> = {}) {
+    console.log(JSON.stringify({ event, ts: Date.now(), ...fields }));
+  }
+
   private bucketFor(userId: string): RateBucket {
     let b = this.frameBuckets.get(userId);
     if (!b) {
@@ -61,6 +65,7 @@ export class SessionRoom extends DurableObject<Env> {
       hostProfileFallback: input.hostProfile,
     };
     await this.ctx.storage.put(KEY, state);
+    this.log("session.created", { sessionId: input.sessionId, host: input.hostUserId });
   }
 
   async getState(): Promise<StoredState | null> {
@@ -171,6 +176,7 @@ export class SessionRoom extends DurableObject<Env> {
         state.sharerUserId = msg.to;
         await this.saveState(state);
         for (const s of this.sockets()) this.sendTo(s, { t: "role.transferred", newSharerId: msg.to });
+        this.log("role.transferred", { sessionId: state.sessionId, from: meta.userId, to: msg.to });
         break;
       }
       case "request.sharer": {
@@ -305,6 +311,7 @@ export class SessionRoom extends DurableObject<Env> {
         this.sendTo(s, { t: "session.ended", reason: "host_grace_expired" });
         s.close(1000, "ended");
       }
+      this.log("session.ended", { sessionId: state.sessionId, reason: "host_grace_expired" });
       await this.ctx.storage.setAlarm(Date.now() + CONFIG.STORAGE_PURGE_AFTER_END_MS);
       return;
     }
@@ -403,6 +410,7 @@ export class SessionRoom extends DurableObject<Env> {
         userId: meta.userId,
         profile: state.pendingJoiners[meta.userId].profile,
       });
+      this.log("peer.queued", { sessionId: state.sessionId, userId: meta.userId });
       await this.scheduleNextAlarm();
       return;
     }
@@ -448,6 +456,7 @@ export class SessionRoom extends DurableObject<Env> {
     }
 
     await this.broadcastRoster(state);
+    this.log("peer.admitted", { sessionId: state.sessionId, userId: meta.userId, role });
   }
 
   // ---------- Helpers ----------
