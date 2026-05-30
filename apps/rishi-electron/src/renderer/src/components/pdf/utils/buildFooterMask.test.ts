@@ -212,13 +212,12 @@ describe('buildFooterMask', () => {
     }
   })
 
-  it('flags items at a stable bottom-band y across pages even when text varies', () => {
-    // NOTE: with the addition of bottomBandPositionStrategy in the orchestrator,
-    // any item that shares a y-bin with items on >=30% of other pages gets
-    // flagged regardless of text content. This is intentional — chapter
-    // titles and varying footers caught here previously survived as chrome.
-    // The trade-off is that legitimate footnotes anchored to a stable
-    // baseline are also flagged.
+  it('does NOT mask footnote text that varies per page even at a stable bottom-band y', () => {
+    // bottomBandPositionStrategy used to flag any y-bin with ≥30% page
+    // coverage regardless of text. It was removed because it over-masked
+    // body text on prose-heavy PDFs. With only repetition + suffix +
+    // expandToLineMates, footnotes whose text is unique per page have
+    // nothing to anchor them and should pass through as readable text.
     const pages: PageScanInput[] = []
     for (let p = 1; p <= 10; p++) {
       pages.push(
@@ -229,12 +228,10 @@ describe('buildFooterMask', () => {
       )
     }
     const mask = buildFooterMask(pages)
-    let masked = 0
     for (let p = 1; p <= 10; p++) {
       const set = mask.get(p)
-      if (set && set.has(1)) masked++
+      if (set) expect(set.has(1)).toBe(false)
     }
-    expect(masked).toBeGreaterThanOrEqual(8)
   })
 
   it('masks all 4 repeating footer lines via the unioned strategies', () => {

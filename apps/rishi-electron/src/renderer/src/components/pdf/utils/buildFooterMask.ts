@@ -1,10 +1,18 @@
 import type { TextContent } from 'react-pdf'
 import { repetitionStrategy } from './footerStrategies/repetitionStrategy'
-import { bottomBandPositionStrategy } from './footerStrategies/bottomBandPositionStrategy'
 import { suffixStrategy } from './footerStrategies/suffixStrategy'
 import { expandToLineMates } from './footerStrategies/expandToLineMates'
 import { unionMasks } from './footerStrategies/types'
 import type { FooterStrategy, FooterPostProcessor } from './footerStrategies/types'
+// NOTE: `bottomBandPositionStrategy` is intentionally NOT in the strategy
+// list. It silences any y-bin with text on ≥30% of pages regardless of
+// content — which over-masks legitimate body text on prose-heavy PDFs
+// where the last paragraph wraps to the bottom on enough pages. The
+// chapter-title footer case it was meant to catch is already handled by
+// the repetitionStrategy → expandToLineMates path (the page number anchors
+// the baseline and the title is pulled in by line-mate expansion). The
+// file is kept so it can be revived behind a tighter threshold + font-size
+// signal if a real footers-without-page-numbers case shows up.
 
 /**
  * Per-book footer mask: page number -> set of item indices on that page
@@ -81,7 +89,6 @@ export function normalizeFooterToken(s: string): string {
 // import from (which breaks the cycle structurally).
 const STRATEGIES: Array<() => FooterStrategy> = [
   () => repetitionStrategy,
-  () => bottomBandPositionStrategy,
   () => suffixStrategy
 ]
 const POST_PROCESSORS: Array<() => FooterPostProcessor> = [() => expandToLineMates]
