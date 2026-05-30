@@ -210,7 +210,14 @@ export function useVirualization(
     scrollToFn,
     gap: PAGE_GAP
   })
-  setVirtualizer(virtualizer)
+  // Publish the virtualizer to pdfStore at commit time, not during render.
+  // Doing it inline triggers the React 19 "Cannot update a component while
+  // rendering a different component" warning, and can cause subscribers to
+  // re-render in the wrong phase. Zustand uses Object.is internally, so
+  // setting the same instance on subsequent renders is a no-op.
+  useEffect(() => {
+    setVirtualizer(virtualizer)
+  }, [virtualizer, setVirtualizer])
 
   // TanStack Virtual caches estimateSize per index. When setPageDimensions
   // populates dims after the initial render, the cached estimates remain

@@ -1,6 +1,5 @@
 import type React from 'react'
-import { useEffect, useState, useMemo, useRef, useCallback, Profiler } from 'react'
-import { debugLog } from '@/utils/debugLog'
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { ThemeType } from '@/themes/common'
 import Loader from '@/components/Loader'
 import AIChatOrb from '../../chat/AIChatOrb'
@@ -1183,35 +1182,4 @@ export function PdfView({
   )
 }
 
-// Wrap PdfView in React's built-in Profiler in dev so we get a structured
-// log of every commit — which subtree rendered, whether it was a mount or
-// an update, and how long the work took. This is the same data the React
-// DevTools Profiler tab surfaces, but doesn't require the Chrome extension
-// (which doesn't work in current Electron — see main/index.ts comment).
-// Logs go to debugLog (debug-log.ndjson) so we can correlate with scroll
-// events. Throttled per-id so a scroll-driven 60Hz commit stream doesn't
-// drown the log.
-const _PdfViewExport = ((): typeof PdfView => {
-  if (!import.meta.env.DEV) return PdfView
-  const ProfilerInstrumented = (props: Parameters<typeof PdfView>[0]): React.JSX.Element => {
-    return (
-      <Profiler
-        id="PdfView"
-        onRender={(id, phase, actualDuration, _baseDuration, startTime) => {
-          debugLog('profiler:commit', {
-            id,
-            phase,
-            actualDuration: Math.round(actualDuration * 100) / 100,
-            startTime: Math.round(startTime)
-          })
-        }}
-      >
-        <PdfView {...props} />
-      </Profiler>
-    )
-  }
-  ProfilerInstrumented.displayName = 'PdfViewProfiled'
-  return ProfilerInstrumented
-})()
-
-export default _PdfViewExport
+export default PdfView
