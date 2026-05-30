@@ -104,6 +104,7 @@ export class SessionRoom extends DurableObject<Env> {
     switch (msg.t) {
       case "hello": await this.handleHello(ws, meta, msg.hasBookFile); break;
       case "ping":  this.sendTo(ws, { t: "pong" }); break;
+      case "leave": await this.removeParticipant(meta.userId, "left"); ws.close(1000, "left"); break;
       case "sdp.offer":
       case "sdp.answer":
       case "ice": {
@@ -158,6 +159,18 @@ export class SessionRoom extends DurableObject<Env> {
       reconnectToken,
       reservedUntil,
     });
+
+    // Broadcast peer.joined to others (skip self).
+    for (const otherWs of this.sockets()) {
+      if (otherWs === ws) continue;
+      this.sendTo(otherWs, {
+        t: "peer.joined",
+        userId: meta.userId,
+        profile: state.participants[meta.userId].profile,
+        hasBookFile,
+      });
+    }
+
     await this.broadcastRoster(state);
   }
 
@@ -197,11 +210,16 @@ export class SessionRoom extends DurableObject<Env> {
     };
     for (const ws of this.sockets()) this.sendTo(ws, msg);
   }
-  private async removeParticipant(userId: string, _reason: "left" | "kicked" | "dropped") {
+  private async removeParticipant(userId: string, reason: "left" | "kicked" | "dropped") {
     const state = await this.loadState();
     if (!state) return;
+    if (!state.participants[userId]) return;
     delete state.participants[userId];
     await this.saveState(state);
-    await this.broadcastRoster(state);
+    const out = { t: "peer.left", userId, reason };
+    for (const ws of this.sockets()) {
+      const m = this.metaFor(ws);
+      if (m?.userId !== userId) this.sendTo(ws, out);
+    }
   }
 }
