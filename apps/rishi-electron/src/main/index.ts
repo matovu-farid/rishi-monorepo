@@ -560,3 +560,16 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   void stopRendererServer()
 })
+
+// Ctrl+C in the dev-server terminal (or any external SIGTERM) only kills the
+// `electron-vite dev` parent. electron-vite forwards `child.close` → parent
+// `process.exit`, but does NOT forward the reverse — and Electron's main
+// process ignores SIGINT/SIGTERM by default because open BrowserWindows hold
+// the Chromium message loop alive. On macOS that leaves an orphaned dock
+// icon the user has to right-click → Quit. Calling app.quit() here turns
+// one action (Ctrl+C) back into one action.
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+  process.on(signal, () => {
+    app.quit()
+  })
+}
