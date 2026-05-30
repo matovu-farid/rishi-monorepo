@@ -17,6 +17,7 @@ import { registerConversationHandlers } from './conversations.js'
 import { registerBooksExtraHandlers } from './books-extra.js'
 import { registerSyncHandlers } from './sync.js'
 import { registerUpdaterHandlers } from './updater.js'
+import { registerSharingHandlers } from './sharing.js'
 
 export function registerAllIpcHandlers(): void {
   registerBookHandlers()
@@ -37,4 +38,5 @@ export function registerAllIpcHandlers(): void {
   registerBooksExtraHandlers()
   registerSyncHandlers()
   registerUpdaterHandlers()
+  registerSharingHandlers()
 }
