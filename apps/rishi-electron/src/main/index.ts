@@ -563,13 +563,18 @@ app.on('before-quit', () => {
 
 // Ctrl+C in the dev-server terminal (or any external SIGTERM) only kills the
 // `electron-vite dev` parent. electron-vite forwards `child.close` → parent
-// `process.exit`, but does NOT forward the reverse — and Electron's main
+// `process.exit`, but does NOT forward the reverse, and Electron's main
 // process ignores SIGINT/SIGTERM by default because open BrowserWindows hold
-// the Chromium message loop alive. On macOS that leaves an orphaned dock
-// icon the user has to right-click → Quit. Calling app.quit() here turns
-// one action (Ctrl+C) back into one action.
+// the Chromium message loop alive — leaving an orphan dock icon on macOS.
+//
+// app.exit() (not app.quit()) is required because book windows preventDefault
+// the close event to flush pending saves (createBrowserWindow.ts) — that
+// preventDefault aborts app.quit() entirely, so the app would survive the
+// signal even with a handler. Terminal SIGINT is a deliberate force-kill,
+// so skipping the flush is the right tradeoff.
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   process.on(signal, () => {
-    app.quit()
+    console.log(`[main] received ${signal}, exiting`)
+    app.exit(0)
   })
 }
