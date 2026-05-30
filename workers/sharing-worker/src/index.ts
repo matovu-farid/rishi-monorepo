@@ -3,9 +3,11 @@ import { CreateSessionBody, RedeemBody } from "./schemas";
 import { issueJoinToken, verifyJoinToken } from "./tokens";
 import { verifyAuth } from "./auth";
 import { GlobalLimiter } from "./perIpLimit";
+import { UserSearchBody, searchUsers } from "./userSearch";
 
 const createSessionLimiter = new GlobalLimiter({ capacity: 10, windowMs: 60 * 60_000 });
 const redeemLimiter = new GlobalLimiter({ capacity: 5, windowMs: 60_000 });
+const userSearchLimiter = new GlobalLimiter({ capacity: 30, windowMs: 60_000 });
 
 type Env = {
   SESSION_ROOM: DurableObjectNamespace;
@@ -86,6 +88,25 @@ app.post("/v1/sessions/:id/redeem", async (c) => {
     hostProfile: info.hostProfile,
     wsUrl: wsUrl.toString(),
   });
+});
+
+app.post("/v1/users/search", async (c) => {
+  let user;
+  try { user = await getUser(c.req.raw, c.env); }
+  catch (e) { return c.json({ error: (e as Error).message }, 401); }
+
+  const parsed = UserSearchBody.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ error: "invalid body", issues: parsed.error.issues }, 400);
+
+  if (!userSearchLimiter.allow(user.userId)) return c.json({ error: "rate_limited" }, 429);
+
+  const bearer = (c.req.header("authorization") ?? "").replace(/^Bearer\s+/i, "");
+  const users = await searchUsers({
+    q: parsed.data.q,
+    authBaseUrl: c.env.AUTH_BASE_URL,
+    bearer,
+  });
+  return c.json({ users });
 });
 
 async function getUser(req: Request, env: Env) {
