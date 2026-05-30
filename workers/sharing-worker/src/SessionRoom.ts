@@ -104,6 +104,16 @@ export class SessionRoom extends DurableObject<Env> {
     switch (msg.t) {
       case "hello": await this.handleHello(ws, meta, msg.hasBookFile); break;
       case "ping":  this.sendTo(ws, { t: "pong" }); break;
+      case "sdp.offer":
+      case "sdp.answer":
+      case "ice": {
+        const target = this.findSocketByUserId(msg.to);
+        if (!target) { this.sendError(ws, "no_such_peer", `peer ${msg.to} not connected`); break; }
+        this.sendTo(target, msg.t === "ice"
+          ? { t: "ice", from: meta.userId, candidate: msg.candidate }
+          : { t: msg.t, from: meta.userId, sdp: msg.sdp });
+        break;
+      }
       // Other handlers added in later tasks.
       default: this.sendError(ws, "unknown", `no handler for ${(msg as any).t}`);
     }
