@@ -16,6 +16,17 @@ function isTextItem(item: TextItem | TextMarkedContent): item is TextItem {
  * Catches footer lines where the text varies per chapter (chapter titles)
  * but the baseline is stable across the book — the case the existing
  * text-keyed repetitionStrategy misses.
+ *
+ * KNOWN TRADE-OFF: position-only with no font/text signal will false-positive
+ * on documents where legitimate body text consistently lands at the same
+ * bottom y-bin across pages (e.g. a novel where the last paragraph wraps
+ * to the bottom on enough pages to cross the repetition threshold).
+ * `expandToLineMates` then widens the silence to the rest of that baseline.
+ * Acceptable for the target case (technical books with chapter-title
+ * footers); if user reports surface for prose-heavy PDFs, tighten by:
+ *   - raising the threshold above DEFAULT_FOOTER_MASK_OPTIONS.repetitionThreshold
+ *   - adding a font-size delta vs the body-text cluster as a secondary gate
+ *   - exposing a per-book pref to disable position-only flagging
  */
 export const bottomBandPositionStrategy: FooterStrategy = (pages, opts) => {
   const mask: FooterMask = new Map()
