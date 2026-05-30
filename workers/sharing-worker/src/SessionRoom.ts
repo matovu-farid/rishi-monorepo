@@ -256,6 +256,12 @@ export class SessionRoom extends DurableObject<Env> {
   async alarm(): Promise<void> {
     const state = await this.loadState();
     if (!state) return;
+    // Post-end purge: drop the session state once status is ended.
+    if (state.status === "ended") {
+      await this.ctx.storage.delete(KEY);
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
     const now = Date.now();
     // Host-grace expiry: end the session.
     if (state.status === "host-suspended" && state.hostSuspendedUntil && state.hostSuspendedUntil <= now) {
