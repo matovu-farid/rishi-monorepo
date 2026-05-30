@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { ClientMsg } from "./schemas";
 import type { SessionState, BookContextT } from "./types";
 import { parseSubprotocols } from "./wsCreds";
-import { issueReconnectToken } from "./tokens";
+import { issueReconnectToken, verifyReconnectToken } from "./tokens";
 import { CONFIG } from "./config";
 
 interface Env {
@@ -87,9 +87,18 @@ export class SessionRoom extends DurableObject<Env> {
       }
     }
 
+    let isReconnect = false;
+    if (creds.reconnectToken) {
+      try {
+        const v = await verifyReconnectToken(creds.reconnectToken, this.env.WORKER_HMAC_SECRET);
+        if (v.userId === meta.userId) isReconnect = true;
+      } catch { /* invalid token → treat as fresh */ }
+    }
+
     const { 0: client, 1: server } = new WebSocketPair();
     // Hibernation API: tag encodes per-socket metadata so it survives hibernation.
-    this.ctx.acceptWebSocket(server, [JSON.stringify({ meta, reconnectToken: creds.reconnectToken ?? null })]);
+    // Keep tag well under 256-char cap: avoid storing the raw JWT.
+    this.ctx.acceptWebSocket(server, [JSON.stringify({ meta, isReconnect })]);
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -217,9 +226,26 @@ export class SessionRoom extends DurableObject<Env> {
     }
   }
 
-  async webSocketClose(ws: WebSocket): Promise<void> {
+  async webSocketClose(ws: WebSocket, code: number): Promise<void> {
     const meta = this.metaFor(ws);
-    if (meta) await this.removeParticipant(meta.userId, "left");
+    if (!meta) return;
+    const state = await this.loadState();
+    if (!state || !state.participants[meta.userId]) return;
+    // Explicit `leave` (code 1000 from our own close call) already removed the participant.
+    if (code === 1000 && !state.participants[meta.userId]) return;
+    if (meta.userId === state.hostUserId) {
+      // Host suspension handled in T20; for now keep prior behavior of immediate remove.
+      await this.removeParticipant(meta.userId, "left");
+      return;
+    }
+    const reservedUntil = Date.now() + CONFIG.VIEWER_SLOT_GRACE_MS;
+    state.participants[meta.userId].connectionState = "reconnecting";
+    state.participants[meta.userId].reservedUntil = reservedUntil;
+    await this.saveState(state);
+    for (const s of this.sockets()) this.sendTo(s, {
+      t: "peer.updated", userId: meta.userId, patch: { connectionState: "reconnecting" },
+    });
+    await this.scheduleNextAlarm();
   }
 
   async alarm(): Promise<void> {
@@ -238,7 +264,26 @@ export class SessionRoom extends DurableObject<Env> {
         }
       }
     }
-    // Future alarm branches (reconnect slot expiry, host grace) added in later tasks.
+    // Reconnect-slot reservation expiry: evict viewers whose reserved window passed.
+    let sharerChanged = false;
+    for (const [userId, p] of Object.entries(state.participants)) {
+      if (p.reservedUntil && p.reservedUntil <= now) {
+        delete state.participants[userId];
+        if (state.sharerUserId === userId && userId !== state.hostUserId) {
+          state.sharerUserId = state.hostUserId;
+          sharerChanged = true;
+        }
+        const left = { t: "peer.left", userId, reason: "dropped" } as const;
+        for (const ws of this.sockets()) {
+          const m = this.metaFor(ws);
+          if (m?.userId !== userId) this.sendTo(ws, left);
+        }
+      }
+    }
+    if (sharerChanged) {
+      for (const ws of this.sockets()) this.sendTo(ws, { t: "role.transferred", newSharerId: state.sharerUserId });
+    }
+    // Future alarm branches (host grace) added in later tasks.
     await this.saveState(state);
     await this.scheduleNextAlarm();
   }
@@ -248,6 +293,33 @@ export class SessionRoom extends DurableObject<Env> {
     const state = await this.loadState();
     if (!state) { this.sendError(ws, "no_session", "session not found"); ws.close(1011, "no session"); return; }
     if (state.status === "ended") { this.sendError(ws, "session_ended", "session is over"); ws.close(1000, "ended"); return; }
+
+    // Reconnect path: existing participant + reconnect-flag → resume in their reserved slot.
+    const existing = state.participants[meta.userId];
+    const tagJson = this.ctx.getTags(ws)[0];
+    const isReconnect = tagJson ? !!JSON.parse(tagJson).isReconnect : false;
+    if (existing && isReconnect) {
+      existing.connectionState = "connected";
+      existing.hasBookFile = hasBookFile;
+      delete existing.reservedUntil;
+      await this.saveState(state);
+      const newReservedUntil = Date.now() + CONFIG.HOST_GRACE_MS;
+      const newRt = await issueReconnectToken(
+        { sessionId: state.sessionId, userId: meta.userId, reservedUntil: newReservedUntil },
+        this.env.WORKER_HMAC_SECRET,
+      );
+      const role: "host" | "viewer" = meta.userId === state.hostUserId ? "host" : "viewer";
+      this.sendTo(ws, {
+        t: "welcome", you: meta.userId, role,
+        sharerId: state.sharerUserId, reconnectToken: newRt, reservedUntil: newReservedUntil,
+      });
+      for (const s of this.sockets()) if (s !== ws) this.sendTo(s, {
+        t: "peer.updated", userId: meta.userId, patch: { connectionState: "connected", hasBookFile },
+      });
+      await this.broadcastRoster(state);
+      return;
+    }
+
     if (Object.keys(state.participants).length >= CONFIG.MAX_PARTICIPANTS && !state.participants[meta.userId]) {
       this.sendError(ws, "cap_reached", "session is full"); ws.close(1000, "full"); return;
     }
