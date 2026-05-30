@@ -493,6 +493,24 @@ app
   .then(async () => {
     electronApp.setAppUserModelId('org.fidexa.rishi')
 
+    // React DevTools (dev only). Loaded before any BrowserWindow is created
+    // so the extension is registered when the renderer first attaches its
+    // DevTools panel. Failures are non-fatal — devtools are a developer
+    // convenience, not a startup dependency.
+    if (is.dev) {
+      try {
+        const { default: installExtension, REACT_DEVELOPER_TOOLS } = await import(
+          'electron-devtools-installer'
+        )
+        const name = await installExtension(REACT_DEVELOPER_TOOLS, {
+          loadExtensionOptions: { allowFileAccess: true }
+        })
+        console.log(`[devtools] installed: ${name}`)
+      } catch (err) {
+        console.warn('[devtools] React DevTools install failed', err)
+      }
+    }
+
     // Register custom protocol for serving local files to renderer
     registerLocalFileProtocol()
 
