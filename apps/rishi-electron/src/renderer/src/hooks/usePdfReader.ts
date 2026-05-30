@@ -26,9 +26,12 @@ import type { Book } from '@/lib/api'
 // the boundary back and forth across scrollTop fires PAGE_CHANGED on every
 // wobble — and each PAGE_CHANGED cascades into pdfStore + view-actor +
 // player updates that re-render the heavy pdf.tsx tree, dropping frames
-// and reading as scroll jitter. 24px ≈ one CSS line of body text, small
-// enough that the displayed page number never feels stale.
-const PAGE_BOUNDARY_HYSTERESIS_PX = 24
+// and reading as scroll jitter. 120px ≈ a few paragraphs of body text —
+// wide enough that a typical "wiggle the boundary across viewport-top"
+// movement doesn't churn React, narrow enough that a real intentional
+// page change still commits as soon as you're meaningfully into the
+// new page.
+const PAGE_BOUNDARY_HYSTERESIS_PX = 120
 
 function visiblePositionFromVirtualizer(
   virtualizer: Virtualizer<HTMLDivElement, Element>,
@@ -291,7 +294,14 @@ export function usePdfReader(
           isAutoCentering: usePdfStore.getState().isAutoCentering
         })
         actor.send({ type: 'PAGE_CHANGED', page, offset })
-      }, 80)
+      }, 200)
+      // 200ms (was 80ms): during continuous oscillation across a page
+      // boundary the 80ms debounce kept getting re-triggered AND firing
+      // mid-scroll — each PAGE_CHANGED cascade caused a single-frame
+      // re-render that competed with the next paint, visible as a
+      // sub-pixel content shift. 200ms lets the user complete a short
+      // wiggle without triggering the cascade; intentional scrolls still
+      // commit the page change within a sixth of a second of stopping.
     }
     container?.addEventListener('scroll', handleScroll, { passive: true })
 
