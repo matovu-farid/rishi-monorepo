@@ -493,12 +493,6 @@ app
   .then(async () => {
     electronApp.setAppUserModelId('org.fidexa.rishi')
 
-    // React DevTools: the Chrome-extension flavour doesn't work in Electron
-    // 39 (chrome.storage / Extensions DevTools-protocol gaps cause the
-    // extension's sandboxed runtime to fail to attach — see commit log for
-    // 2081b949 / 31953391). Instead we instrument React's built-in
-    // <Profiler> directly in the renderer; see profiling/PdfProfiler.tsx.
-
     // Register custom protocol for serving local files to renderer
     registerLocalFileProtocol()
 
