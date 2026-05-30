@@ -179,6 +179,28 @@ export function usePdfReader(
     // measurement adjustments — those don't change scrollTop, so the delta
     // check filters them out.
     let lastSeenScrollTop = container?.scrollTop ?? 0
+
+    // DIAGNOSTIC (#scroll-jitter) — log raw scrollTop on every event so we
+    // can spot non-monotonic movement during steady-direction user scroll
+    // (a positive delta when scrolling UP = an adjustment fighting us).
+    // Sample at most once per 33ms so the log doesn't drown.
+    let lastRawScrollLogAt = 0
+    let lastRawScrollTop = container?.scrollTop ?? 0
+    const handleRawScroll = (): void => {
+      const now = Date.now()
+      if (now - lastRawScrollLogAt < 33) return
+      lastRawScrollLogAt = now
+      const top = container?.scrollTop ?? 0
+      const delta = top - lastRawScrollTop
+      lastRawScrollTop = top
+      debugLog('scroll:raw', {
+        scrollTop: top,
+        delta,
+        isAutoCentering: usePdfStore.getState().isAutoCentering
+      })
+    }
+    container?.addEventListener('scroll', handleRawScroll, { passive: true })
+
     const handleScroll = (): void => {
       if (scrollDebounce) clearTimeout(scrollDebounce)
       scrollDebounce = setTimeout(() => {
@@ -321,6 +343,7 @@ export function usePdfReader(
       actor.send({ type: 'FLUSH' })
       actor.stop()
       container?.removeEventListener('scroll', handleScroll)
+      container?.removeEventListener('scroll', handleRawScroll)
       if (scrollDebounce) clearTimeout(scrollDebounce)
       if (landedInterval) clearInterval(landedInterval)
       mirrorUnsub.unsubscribe()

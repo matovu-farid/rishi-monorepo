@@ -11,9 +11,34 @@ import type { VirtualizerOptions } from '@tanstack/react-virtual'
 import { usePdfStore } from '@/stores/pdfStore'
 import { parsePdfLocation } from '@/lib/pdfLocation'
 import { PAGE_HEIGHT, PAGE_GAP, HORIZONTAL_PADDING } from '../utils/constants'
+import { debugLog } from '@/utils/debugLog'
 import type { Book } from '@/lib/api'
 function easeInOutQuint(t: number) {
   return t < 0.5 ? 16 * t * t * t * t * t : 1 + 16 * --t * t * t * t * t
+}
+
+// ============================================================================
+// DIAGNOSTIC (#scroll-jitter) — TEMPORARY, remove once root cause is fixed.
+//
+// Logs to debug-log.ndjson only when an estimate for a given index CHANGES
+// (skipping the common "called again, same value" cases to keep volume
+// manageable). Module-scope map persists across renders so we catch
+// flip-flops within a session.
+// ============================================================================
+const lastEstimateByIndex = new Map<number, number>()
+function diagLogEstimateChange(index: number, value: number, source: string): void {
+  const prev = lastEstimateByIndex.get(index)
+  // Round to avoid logging sub-pixel float noise that's already not the issue.
+  const rounded = Math.round(value * 100) / 100
+  if (prev !== undefined && Math.abs(prev - rounded) < 0.01) return
+  lastEstimateByIndex.set(index, rounded)
+  debugLog('virtualizer:estimateSize-change', {
+    index,
+    prev: prev ?? null,
+    next: rounded,
+    delta: prev !== undefined ? rounded - prev : null,
+    source
+  })
 }
 export function useVirualization(
   scrollContainerRef: React.RefObject<HTMLDivElement | null>,
@@ -61,9 +86,15 @@ export function useVirualization(
     const el = scrollContainerRef.current
     if (!el) return
     setStableContainerWidth(el.clientWidth)
+    debugLog('virtualizer:width-init', { width: el.clientWidth, clientHeight: el.clientHeight })
     const ro = new ResizeObserver((entries) => {
-      const width = Math.round(entries[0]?.contentRect.width ?? el.clientWidth)
-      setStableContainerWidth((prev) => (prev === width ? prev : width))
+      const raw = entries[0]?.contentRect.width ?? el.clientWidth
+      const width = Math.round(raw)
+      setStableContainerWidth((prev) => {
+        if (prev === width) return prev
+        debugLog('virtualizer:width-resize', { prev, next: width, raw, scrollTop: el.scrollTop })
+        return width
+      })
     })
     ro.observe(el)
     return () => ro.disconnect()
@@ -116,13 +147,22 @@ export function useVirualization(
       // and let post-measurement adjustments take over.
       if (isDualPage) return estimatedPageHeight
       const dim = getPageDimension(book.id, index)
-      if (!dim) return estimatedPageHeight
+      if (!dim) {
+        // DIAGNOSTIC (#scroll-jitter): if dims are missing we fall back to the
+        // constant. Logging here surfaces "estimate flipping" if a page index
+        // alternates between constant-fallback and exact dim during scroll.
+        diagLogEstimateChange(index, estimatedPageHeight, 'fallback:no-dim')
+        return estimatedPageHeight
+      }
       // Use the ResizeObserver-stabilised width, NOT scrollContainerRef.clientWidth.
       // Reading clientWidth on each call lets sub-pixel container reflow flip
       // the estimate between successive calls for the same index, which
       // TanStack treats as a height change and "corrects" with a scrollTop
       // adjustment.
-      if (!stableContainerWidth) return estimatedPageHeight
+      if (!stableContainerWidth) {
+        diagLogEstimateChange(index, estimatedPageHeight, 'fallback:no-width')
+        return estimatedPageHeight
+      }
       // Mirror the per-page scale derivation used at render time
       // (PdfView line ~154): scale = renderedWidth / page.view[2].
       // Subtract HORIZONTAL_PADDING (matches usePdfNavigation.pdfWidth) so the
@@ -130,9 +170,14 @@ export function useVirualization(
       // by containerWidth / (containerWidth - 16) and trigger post-measurement
       // adjustments on every page.
       const renderedWidth = stableContainerWidth - HORIZONTAL_PADDING
-      if (renderedWidth <= 0 || dim.baseWidth <= 0) return estimatedPageHeight
+      if (renderedWidth <= 0 || dim.baseWidth <= 0) {
+        diagLogEstimateChange(index, estimatedPageHeight, 'fallback:bad-width')
+        return estimatedPageHeight
+      }
       const scale = renderedWidth / dim.baseWidth
-      return dim.baseHeight * scale
+      const out = dim.baseHeight * scale
+      diagLogEstimateChange(index, out, 'measured')
+      return out
     },
     overscan: 8,
     enabled: numPages > 0,
@@ -162,8 +207,14 @@ export function useVirualization(
     if (!dimsForBook) return
     if (measuredOnceForBookRef.current === book.id) return
     measuredOnceForBookRef.current = book.id
+    debugLog('virtualizer:measure', {
+      reason: 'dims-arrived',
+      bookId: book.id,
+      scrollTop: scrollContainerRef.current?.scrollTop ?? null,
+      dimsLen: dimsForBook.length
+    })
     virtualizer.measure()
-  }, [dimsForBook, virtualizer, book.id])
+  }, [dimsForBook, virtualizer, book.id, scrollContainerRef])
 
   // When the container ACTUALLY resizes (window resize, sidebar toggle),
   // every page's estimated height changes because scale = renderedWidth /
@@ -179,9 +230,16 @@ export function useVirualization(
       return
     }
     if (lastMeasuredWidthRef.current === stableContainerWidth) return
+    const prev = lastMeasuredWidthRef.current
     lastMeasuredWidthRef.current = stableContainerWidth
+    debugLog('virtualizer:measure', {
+      reason: 'width-change',
+      prevWidth: prev,
+      nextWidth: stableContainerWidth,
+      scrollTop: scrollContainerRef.current?.scrollTop ?? null
+    })
     virtualizer.measure()
-  }, [stableContainerWidth, virtualizer])
+  }, [stableContainerWidth, virtualizer, scrollContainerRef])
 
   const handlePageRendered = useCallback(() => {
     setHasNavigatedToPage(true)
