@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback } from 'react'
+import React, { useEffect, useRef, useState, useCallback } from 'react'
 
 import { useVirtualizer } from '@tanstack/react-virtual'
 
@@ -47,6 +47,27 @@ export function useVirualization(
   const setVirtualizer = usePdfStore((s) => s.setVirtualizer)
   const pageRefs = useRef(new Map<number, HTMLElement>())
   const hasRequestedInitialScroll = useRef(false)
+
+  // Stable container width derived via ResizeObserver. estimateSize used to
+  // read scrollContainerRef.current?.clientWidth on every call, which fluttered
+  // by sub-pixel amounts from layout reflow as canvases painted, sidebars
+  // mounted, or scrollbars showed/hid. The same page index would return two
+  // different estimates on consecutive calls and TanStack would fire small
+  // adjustments to scrollTop to "compensate" — felt as scroll-up jitter when
+  // pages re-entered the render window. Reading from this state ensures
+  // estimateSize is stable except on actual container resize events.
+  const [stableContainerWidth, setStableContainerWidth] = useState(0)
+  useEffect(() => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    setStableContainerWidth(el.clientWidth)
+    const ro = new ResizeObserver((entries) => {
+      const width = Math.round(entries[0]?.contentRect.width ?? el.clientWidth)
+      setStableContainerWidth((prev) => (prev === width ? prev : width))
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [scrollContainerRef])
   const scrollToFn: VirtualizerOptions<HTMLDivElement, Element>['scrollToFn'] = React.useCallback(
     (offset, canSmooth, instance) => {
       // Skip the smooth animation when:
@@ -96,15 +117,19 @@ export function useVirualization(
       if (isDualPage) return estimatedPageHeight
       const dim = getPageDimension(book.id, index)
       if (!dim) return estimatedPageHeight
-      const containerWidth = scrollContainerRef.current?.clientWidth
-      if (!containerWidth) return estimatedPageHeight
+      // Use the ResizeObserver-stabilised width, NOT scrollContainerRef.clientWidth.
+      // Reading clientWidth on each call lets sub-pixel container reflow flip
+      // the estimate between successive calls for the same index, which
+      // TanStack treats as a height change and "corrects" with a scrollTop
+      // adjustment.
+      if (!stableContainerWidth) return estimatedPageHeight
       // Mirror the per-page scale derivation used at render time
       // (PdfView line ~154): scale = renderedWidth / page.view[2].
       // Subtract HORIZONTAL_PADDING (matches usePdfNavigation.pdfWidth) so the
       // estimate matches the actual rendered width — otherwise we over-estimate
       // by containerWidth / (containerWidth - 16) and trigger post-measurement
       // adjustments on every page.
-      const renderedWidth = containerWidth - HORIZONTAL_PADDING
+      const renderedWidth = stableContainerWidth - HORIZONTAL_PADDING
       if (renderedWidth <= 0 || dim.baseWidth <= 0) return estimatedPageHeight
       const scale = renderedWidth / dim.baseWidth
       return dim.baseHeight * scale
@@ -139,6 +164,24 @@ export function useVirualization(
     measuredOnceForBookRef.current = book.id
     virtualizer.measure()
   }, [dimsForBook, virtualizer, book.id])
+
+  // When the container ACTUALLY resizes (window resize, sidebar toggle),
+  // every page's estimated height changes because scale = renderedWidth /
+  // baseWidth. Invalidate the cache once per width change so subsequent
+  // renders pick up the new estimates. ResizeObserver only fires on real
+  // resizes, so this won't trigger on scroll. Skip the first width arrival
+  // (covered by the dims-arrival measure() above) to avoid a double-call.
+  const lastMeasuredWidthRef = useRef<number>(0)
+  useEffect(() => {
+    if (!stableContainerWidth) return
+    if (lastMeasuredWidthRef.current === 0) {
+      lastMeasuredWidthRef.current = stableContainerWidth
+      return
+    }
+    if (lastMeasuredWidthRef.current === stableContainerWidth) return
+    lastMeasuredWidthRef.current = stableContainerWidth
+    virtualizer.measure()
+  }, [stableContainerWidth, virtualizer])
 
   const handlePageRendered = useCallback(() => {
     setHasNavigatedToPage(true)
