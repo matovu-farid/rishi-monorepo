@@ -2,7 +2,6 @@ import { z } from "zod";
 
 const Base = z.object({ v: z.literal(1) });
 const UserId = z.string().min(1).max(64);
-const SessionId = z.string().min(1).max(64);
 
 const Profile = z.object({
   displayName: z.string().min(1).max(100),
