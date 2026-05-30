@@ -160,6 +160,29 @@ export class SessionRoom extends DurableObject<Env> {
         }
         break;
       }
+      case "mute.peer": {
+        const state = await this.loadState();
+        if (!state) break;
+        if (meta.userId !== state.hostUserId) { this.sendError(ws, "forbidden", "host only"); break; }
+        if (!state.participants[msg.userId]) { this.sendError(ws, "no_such_peer", msg.userId); break; }
+        state.participants[msg.userId].micState = msg.muted ? "host-muted" : "unmuted";
+        await this.saveState(state);
+        for (const s of this.sockets()) this.sendTo(s, { t: "peer.updated", userId: msg.userId, patch: { micState: state.participants[msg.userId].micState } });
+        break;
+      }
+      case "kick.peer": {
+        const state = await this.loadState();
+        if (!state) break;
+        if (meta.userId !== state.hostUserId) { this.sendError(ws, "forbidden", "host only"); break; }
+        if (msg.userId === meta.userId) { this.sendError(ws, "forbidden", "cannot kick self"); break; }
+        const target = this.findSocketByUserId(msg.userId);
+        if (target) {
+          this.sendTo(target, { t: "kicked", reason: "removed by host" });
+          target.close(1000, "kicked");
+        }
+        await this.removeParticipant(msg.userId, "kicked");
+        break;
+      }
       // Other handlers added in later tasks.
       default: this.sendError(ws, "unknown", `no handler for ${(msg as any).t}`);
     }
