@@ -329,3 +329,36 @@ export async function clickMenuItem(
     return true
   }, pathLabels)) as boolean
 }
+
+export interface SharingLaunchOptions extends LaunchOptions {
+  workerUrl: string
+  /** Fake user identity matching the Worker's test-shortcut JWT format: "userId:DisplayName". */
+  userId: string
+  displayName: string
+}
+
+export async function launchAppWithSharingEnv(opts: SharingLaunchOptions): Promise<LaunchedApp> {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rishi-sharing-e2e-'))
+  const app = await electron.launch({
+    args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      SHARING_WORKER_URL: opts.workerUrl,
+      VITE_SHARING_ENABLED: '1',
+      SHARING_TEST_USER_ID: opts.userId,
+      SHARING_TEST_DISPLAY_NAME: opts.displayName
+    }
+  })
+  const page = await app.firstWindow()
+  await page.waitForLoadState('domcontentloaded')
+  await page.evaluate(() => {
+    localStorage.setItem('rishi:tour-completed', '1')
+    localStorage.setItem('rishi:welcome-seen', '1')
+  })
+  await page.reload()
+  await page.waitForTimeout(1500)
+  await dismissWelcome(page)
+  await dismissTour(page)
+  return { app, page, userDataDir }
+}
