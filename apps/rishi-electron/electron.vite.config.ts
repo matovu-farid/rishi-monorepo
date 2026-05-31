@@ -38,6 +38,11 @@ export default defineConfig({
   renderer: {
     root: resolve('src/renderer'),
     resolve: {
+      // Prefer TypeScript sources over stale sibling .js artifacts that some
+      // tsc invocations leave behind in src/. Without this, Vite's default
+      // resolution picks the .js file and the renderer ships a stale version
+      // of files like testing/expose-stores. See #sharing-e2e debugging.
+      extensions: ['.mjs', '.ts', '.tsx', '.js', '.jsx', '.json'],
       alias: {
         '@': resolve('src/renderer/src'),
         '@components': resolve('src/renderer/src/components')

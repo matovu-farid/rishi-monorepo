@@ -341,18 +341,71 @@ export interface SharingLaunchOptions extends LaunchOptions {
   displayName: string
 }
 
+/**
+ * Like {@link launchAppWithSharingEnv} but also imports the given book
+ * fixture and opens it in a reader window, returning a LaunchedApp whose
+ * `page` is the reader window (where `useSessionMachine` is mounted and
+ * `window.__rishi.sessionMachineStore` has a live actor registered).
+ *
+ * The library window page is closed implicitly when the app is closed; the
+ * helper keeps a reference to it on the returned struct as `libraryPage` for
+ * tests that still need to drive library-only IPCs.
+ */
+export async function launchAndOpenBookForSharing(
+  opts: SharingLaunchOptions & { fixturePath: string; kind: ImportOptions['kind'] }
+): Promise<LaunchedApp & { libraryPage: Page; bookId: number }> {
+  const launched = await launchAppWithSharingEnv(opts)
+  const libraryPage = launched.page
+  const imported = await importBook(libraryPage, {
+    fixturePath: opts.fixturePath,
+    kind: opts.kind
+  })
+  const readerPage = await openBook(libraryPage, imported.id)
+  // Give the reader's React tree a moment to mount SessionEntryButton so
+  // window.__rishi.sessionMachineStore has a registered actor before the
+  // first sendSessionEvent call.
+  await readerPage.waitForTimeout(500)
+  return { ...launched, page: readerPage, libraryPage, bookId: imported.id }
+}
+
 export async function launchAppWithSharingEnv(opts: SharingLaunchOptions): Promise<LaunchedApp> {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rishi-sharing-e2e-'))
+  const verbose = process.env.RISHI_E2E_VERBOSE === '1'
+  const tag = opts.userId
   const app = await electron.launch({
     args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     env: {
       ...process.env,
       NODE_ENV: 'production',
       SHARING_WORKER_URL: opts.workerUrl,
-      VITE_SHARING_ENABLED: '1'
+      VITE_SHARING_ENABLED: '1',
+      RISHI_SHARING_TEST_AUTH: '1',
+      RISHI_SHARING_TEST_USER_ID: opts.userId,
+      RISHI_SHARING_TEST_DISPLAY_NAME: opts.displayName
     }
   })
+  if (verbose) {
+    const proc = app.process()
+    proc.stdout?.on('data', (d: Buffer) =>
+      // eslint-disable-next-line no-console -- E2E diagnostic
+      console.log(`[main ${tag} stdout] ${d.toString().trim()}`)
+    )
+    proc.stderr?.on('data', (d: Buffer) =>
+      // eslint-disable-next-line no-console -- E2E diagnostic
+      console.log(`[main ${tag} stderr] ${d.toString().trim()}`)
+    )
+  }
   const page = await app.firstWindow()
+  if (verbose) {
+    page.on('console', (msg) =>
+      // eslint-disable-next-line no-console -- E2E diagnostic
+      console.log(`[renderer ${tag} ${msg.type()}] ${msg.text()}`)
+    )
+    page.on('pageerror', (err) =>
+      // eslint-disable-next-line no-console -- E2E diagnostic
+      console.log(`[renderer ${tag} pageerror] ${err.message}`)
+    )
+  }
   await page.waitForLoadState('domcontentloaded')
   await page.evaluate(() => {
     localStorage.setItem('rishi:tour-completed', '1')

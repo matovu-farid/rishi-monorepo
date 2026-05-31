@@ -9,7 +9,9 @@ export default defineConfig({
   globalSetup: path.resolve(__dirname, 'e2e/global-setup-sharing.ts'),
   globalTeardown: path.resolve(__dirname, 'e2e/global-teardown-sharing.ts'),
   use: {
-    trace: 'on-first-retry'
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
+    video: 'retain-on-failure'
   },
   projects: [
     {
