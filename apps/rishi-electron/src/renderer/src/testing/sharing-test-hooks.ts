@@ -90,6 +90,14 @@ export const signalingTestHook = {
 }
 
 // ---------------------------------------------------------------------------
+// RTC factory override (task #92): the actual mutable slot lives in
+// `@/actors/sharing/rtcAdapter` to keep peerActor's import graph clean.
+// Re-export here so `expose-stores.ts` (and any other testing-side caller)
+// has a single home for sharing test hooks.
+// ---------------------------------------------------------------------------
+export { setRtcFactoryOverride, getRtcFactoryOverride } from '@/actors/sharing/rtcAdapter'
+
+// ---------------------------------------------------------------------------
 // P5: file-transfer progress mirror
 // ---------------------------------------------------------------------------
 

@@ -23,12 +23,44 @@ export interface SessionSnapshot {
 
 export async function readSessionSnapshot(page: Page): Promise<SessionSnapshot> {
   return await page.evaluate(() => {
+    type RawSnap = {
+      value: SessionSnapshot['value']
+      context: Record<string, unknown> & {
+        participants?: Map<string, unknown> | Array<unknown>
+        pendingJoiners?: Map<string, unknown> | Array<unknown>
+      }
+    }
     const w = window as unknown as {
-      __rishi?: { sessionMachineStore: { getState: () => SessionSnapshot } }
+      __rishi?: { sessionMachineStore: { getState: () => RawSnap } }
     }
     if (!w.__rishi?.sessionMachineStore)
       throw new Error('window.__rishi.sessionMachineStore not exposed (Plan 2 prerequisite)')
-    return w.__rishi.sessionMachineStore.getState()
+    const raw = w.__rishi.sessionMachineStore.getState()
+    // The session-machine context stores `participants` and `pendingJoiners` as
+    // `Map<string, ...>`. Map instances are silently dropped by Playwright's
+    // `page.evaluate` IPC serializer (which uses structured-clone semantics
+    // and converts them to empty objects), so flatten them to plain arrays
+    // here. Tests assert `.toHaveLength(...)` against these — without the
+    // flatten step they always see length 0.
+    const participants = raw?.context?.participants
+    const pendingJoiners = raw?.context?.pendingJoiners
+    const flattenedParticipants = participants instanceof Map
+      ? Array.from(participants.values())
+      : Array.isArray(participants) ? participants : []
+    const flattenedPending = pendingJoiners instanceof Map
+      ? Array.from(pendingJoiners.entries()).map(([userId, v]) => {
+          const value = v as { profile?: { displayName?: string } }
+          return { userId, displayName: value?.profile?.displayName ?? '' }
+        })
+      : Array.isArray(pendingJoiners) ? pendingJoiners : []
+    return {
+      value: raw.value,
+      context: {
+        ...raw.context,
+        participants: flattenedParticipants,
+        pendingJoiners: flattenedPending
+      }
+    } as unknown as SessionSnapshot
   })
 }
 
@@ -178,6 +210,23 @@ export function extractJoinToken(joinUrl: string): string {
   const t = u.searchParams.get('t')
   if (!t) throw new Error(`No t= param in join URL: ${joinUrl}`)
   return t
+}
+
+/**
+ * Install the fake `RtcFactory` (task #92) in the renderer so peerActor
+ * never tries to open real UDP sockets in headless Electron. Call this
+ * AFTER the session machine actor is registered (i.e. after the reader
+ * page is mounted) but BEFORE `CREATE_SESSION` / `ACCEPT_INVITE`.
+ */
+export async function installFakeRtcAdapter(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      __rishi?: { installFakeRtcFactory?: () => void }
+    }
+    if (typeof w.__rishi?.installFakeRtcFactory !== 'function')
+      throw new Error('window.__rishi.installFakeRtcFactory not exposed (task #92 prerequisite)')
+    w.__rishi.installFakeRtcFactory()
+  })
 }
 
 export async function viewerAcceptInvite(

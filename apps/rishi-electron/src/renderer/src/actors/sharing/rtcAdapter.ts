@@ -26,6 +26,24 @@ export interface RtcAdapter {
 
 export type RtcFactory = (config: { iceServers: RTCIceServer[] }) => RtcAdapter
 
+/**
+ * Test-time override slot for the RtcFactory. peerActor consults this
+ * before falling back to `defaultRtcFactory`. Production code never sets
+ * it; E2E does via `window.__rishi.setRtcFactoryOverride(...)` (see
+ * `testing/expose-stores.ts`).
+ *
+ * Kept colocated with the adapter (rather than in `testing/`) to avoid a
+ * `actors → testing → actors` circular import; the renderer entry imports
+ * `expose-stores.ts` once at boot, which writes into this module slot.
+ */
+let rtcFactoryOverride: RtcFactory | null = null
+export function setRtcFactoryOverride(factory: RtcFactory | null): void {
+  rtcFactoryOverride = factory
+}
+export function getRtcFactoryOverride(): RtcFactory | null {
+  return rtcFactoryOverride
+}
+
 export const defaultRtcFactory: RtcFactory = (config) => {
   const pc = new RTCPeerConnection(config)
   const wrapChannel = (ch: RTCDataChannel): RtcDataChannelLike => ({

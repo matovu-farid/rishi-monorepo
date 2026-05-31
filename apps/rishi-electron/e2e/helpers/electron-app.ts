@@ -49,7 +49,21 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> 
 }
 
 export async function closeApp(launched: LaunchedApp): Promise<void> {
-  await launched.app.close().catch(() => {})
+  // `app.close()` can hang in headless Electron when background features
+  // (auto-updater, persistent WebSockets, etc.) still hold the event loop
+  // open. Race it against a 5s timeout — at that point we kill the
+  // underlying process so the test teardown is bounded.
+  const closeP = launched.app.close().catch(() => {})
+  await Promise.race([
+    closeP,
+    new Promise<void>((resolve) => setTimeout(resolve, 5_000))
+  ])
+  try {
+    const proc = launched.app.process()
+    if (proc && !proc.killed) proc.kill('SIGKILL')
+  } catch {
+    /* already gone */
+  }
   fs.rmSync(launched.userDataDir, { recursive: true, force: true })
 }
 

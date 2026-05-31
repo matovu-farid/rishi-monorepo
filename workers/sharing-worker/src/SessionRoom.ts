@@ -129,7 +129,18 @@ export class SessionRoom extends DurableObject<Env> {
     // Hibernation API: tag encodes per-socket metadata so it survives hibernation.
     // Keep tag well under 256-char cap: avoid storing the raw JWT.
     this.ctx.acceptWebSocket(server, [JSON.stringify({ meta, isReconnect })]);
-    return new Response(null, { status: 101, webSocket: client });
+    // RFC 6455 §4.2.2: if the client offers a `Sec-WebSocket-Protocol` header,
+    // the server MUST echo back exactly one selected protocol in the 101
+    // response — Chromium aborts the handshake otherwise ("Sent non-empty
+    // 'Sec-WebSocket-Protocol' header but no response was received"). We
+    // always pick `rishi.sharing.v1` (the protocol-version token); the other
+    // offered tokens (`jwt.…`, `reconnect.…`) are bearer-carrying values and
+    // are not selectable protocols.
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      headers: { "sec-websocket-protocol": "rishi.sharing.v1" },
+    });
   }
 
   // ---------- Hibernation handlers ----------

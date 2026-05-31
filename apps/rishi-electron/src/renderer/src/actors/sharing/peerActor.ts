@@ -1,5 +1,11 @@
 import { fromCallback } from 'xstate'
-import { defaultRtcFactory, type RtcAdapter, type RtcFactory, type RtcDataChannelLike } from './rtcAdapter'
+import {
+  defaultRtcFactory,
+  getRtcFactoryOverride,
+  type RtcAdapter,
+  type RtcFactory,
+  type RtcDataChannelLike
+} from './rtcAdapter'
 
 export type PeerInput = {
   remoteUserId: string
@@ -27,7 +33,10 @@ export type PeerOutEvent =
 
 export const peerActor = fromCallback<PeerInEvent, PeerInput, PeerOutEvent>(
   ({ emit, receive, input }) => {
-    const factory = input.factory ?? defaultRtcFactory
+    // Resolution order: explicit `input.factory` (used by peerActor unit
+    // tests) → E2E override installed via `window.__rishi.setRtcFactoryOverride`
+    // → real `RTCPeerConnection` factory.
+    const factory = input.factory ?? getRtcFactoryOverride() ?? defaultRtcFactory
     const pc: RtcAdapter = factory({ iceServers: input.iceServers })
     let stopped = false
 

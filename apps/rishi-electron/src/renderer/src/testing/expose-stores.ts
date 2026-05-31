@@ -10,11 +10,14 @@ import { navigationHistoryActor } from '@/machines/navigationHistory/navigationH
 import {
   sessionMachineStore,
   signalingTestHook,
-  fileTransferProgress
+  fileTransferProgress,
+  setRtcFactoryOverride
 } from './sharing-test-hooks'
+import { fakeRtcFactory } from './fakeRtcAdapter'
 import type { TtsService } from '@/services/tts'
 import type { SyncService } from '@/services/sync'
 import type { FooterMask } from '@/components/pdf/utils/buildFooterMask'
+import type { RtcFactory } from '@/actors/sharing/rtcAdapter'
 
 declare global {
   interface Window {
@@ -54,6 +57,15 @@ declare global {
        * progress (`{ completed, percent }`). Mutated by the fileTransferActor.
        */
       fileTransferProgress: typeof fileTransferProgress
+      /**
+       * E2E hook (task #92): install a fake `RtcFactory` so peerActor can
+       * be driven without opening UDP sockets in headless Electron. Pass
+       * `null` to restore the default factory. A pre-built fake is exposed
+       * as `installFakeRtcFactory()`.
+       */
+      setRtcFactoryOverride: (factory: RtcFactory | null) => void
+      /** Shortcut: install the bundled fake RtcFactory. */
+      installFakeRtcFactory: () => void
     }
   }
 }
@@ -72,5 +84,7 @@ window.__rishi = {
   getFooterMask: (bookId: number) => usePdfStore.getState().footerMaskByBookId[bookId],
   sessionMachineStore,
   signalingTestHook,
-  fileTransferProgress
+  fileTransferProgress,
+  setRtcFactoryOverride,
+  installFakeRtcFactory: () => setRtcFactoryOverride(fakeRtcFactory)
 }
