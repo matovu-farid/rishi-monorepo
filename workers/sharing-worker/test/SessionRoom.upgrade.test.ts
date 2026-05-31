@@ -30,12 +30,14 @@ describe("WS upgrade", () => {
     });
     expect(r.status).toBe(400);
   });
-  it("accepts with rishi.sharing.v1 + jwt.<token>", async () => {
+  it("accepts with rishi.sharing.v1 + jwt.<base64url(token)>", async () => {
     const { sessionId } = await createSession();
+    // "test" → "dGVzdA" (base64url, no padding). The bearer is encoded so any
+    // token shape stays valid as an RFC 6455 subprotocol token.
     const r = await SELF.fetch(`https://x/v1/sessions/${sessionId}/wss`, {
       headers: {
         upgrade: "websocket",
-        "sec-websocket-protocol": "rishi.sharing.v1, jwt.test",
+        "sec-websocket-protocol": "rishi.sharing.v1, jwt.dGVzdA",
       },
     });
     expect(r.status).toBe(101);

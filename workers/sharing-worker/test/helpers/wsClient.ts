@@ -1,7 +1,16 @@
 import { SELF } from "cloudflare:test";
 
+function b64url(s: string): string {
+  // btoa is available in the Workers test runtime (cloudflare:test / miniflare).
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 export async function openWs(wsUrl: string, jwt = "test", reconnect?: string) {
-  const protos = ["rishi.sharing.v1", `jwt.${jwt}`].concat(reconnect ? [`reconnect.${reconnect}`] : []);
+  // Mirror production client: base64url-encode bearer + reconnect token before
+  // stuffing into Sec-WebSocket-Protocol (see workers/sharing-worker/src/wsCreds.ts).
+  const protos = ["rishi.sharing.v1", `jwt.${b64url(jwt)}`].concat(
+    reconnect ? [`reconnect.${b64url(reconnect)}`] : [],
+  );
   // SELF.fetch requires http(s):// — convert wss:// to https:// for the test harness.
   const httpUrl = wsUrl.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://");
   const res = await SELF.fetch(httpUrl, {

@@ -25,6 +25,12 @@ function makeFakeWs() {
   }
 }
 
+function b64urlDecode(s: string): string {
+  const b64 = s.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4)
+  return atob(padded)
+}
+
 describe('signalingActor', () => {
   it('emits CONNECTED on open and sends hello with hasBookFile', () => {
     const fake = makeFakeWs()
@@ -91,6 +97,39 @@ describe('signalingActor', () => {
     fake.fireOpen()
     fake.fireClose(1006, 'lost')
     expect(emitted.find((e) => e.type === 'SIGNALING_DROPPED')).toBeTruthy()
+  })
+
+  it('base64url-encodes jwt + reconnect token in WS subprotocols', () => {
+    const fake = makeFakeWs()
+    const seen: { url: string; protocols: string[] } = { url: '', protocols: [] }
+    const connect = (url: string, protocols: string[]): WsAdapter => {
+      seen.url = url
+      seen.protocols = protocols
+      return fake.adapter
+    }
+    // Bearer contains chars (`:`, space) that RFC 6455 disallows in a
+    // subprotocol token — base64url encoding makes it transport-safe.
+    const rawJwt = 'e2e-host:E2E Host'
+    const rawReconnect = 'rt token'
+    const actor = createActor(signalingActor, {
+      input: {
+        wsUrl: 'wss://x/v1/sessions/s/wss',
+        jwt: rawJwt,
+        reconnectToken: rawReconnect,
+        hasBookFile: false,
+        connect
+      }
+    })
+    actor.start()
+    expect(seen.protocols[0]).toBe('rishi.sharing.v1')
+    const jwtSegment = seen.protocols[1]
+    expect(jwtSegment.startsWith('jwt.')).toBe(true)
+    // No raw colon or space leaks through.
+    expect(jwtSegment).not.toMatch(/[:\s]/)
+    expect(b64urlDecode(jwtSegment.slice(4))).toBe(rawJwt)
+    const reconnectSegment = seen.protocols[2]
+    expect(reconnectSegment.startsWith('reconnect.')).toBe(true)
+    expect(b64urlDecode(reconnectSegment.slice(10))).toBe(rawReconnect)
   })
 
   it('forwards SEND events as ClientMsg JSON', () => {

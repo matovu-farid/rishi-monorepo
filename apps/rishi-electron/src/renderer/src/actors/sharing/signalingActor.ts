@@ -39,11 +39,30 @@ export type SignalingOutEvent =
 
 const HEARTBEAT_MS = 20_000
 
+/**
+ * Encode a string as base64url (RFC 4648 §5: `+` → `-`, `/` → `_`, no padding).
+ * Bearer tokens go into the `Sec-WebSocket-Protocol` header where RFC 6455
+ * restricts characters (no `:`, whitespace, etc.); base64url is the canonical
+ * URL/header-safe alphabet that works for any future bearer shape (JWTs,
+ * opaque tokens, the e2e `userId--DisplayName` form).
+ */
+function encodeBase64Url(value: string): string {
+  // Encode as UTF-8 first so non-ASCII display names survive.
+  const bytes = new TextEncoder().encode(value)
+  let bin = ''
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
 export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, SignalingOutEvent>(
   ({ emit, sendBack, receive, input }) => {
     const connect = input.connect ?? defaultWsConnect
-    const subprotocols = ['rishi.sharing.v1', `jwt.${input.jwt}`]
-    if (input.reconnectToken) subprotocols.push(`reconnect.${input.reconnectToken}`)
+    // Bearer is base64url-encoded so any token shape is valid as an RFC 6455
+    // subprotocol token. Worker decodes in `wsCreds.parseSubprotocols`.
+    const subprotocols = ['rishi.sharing.v1', `jwt.${encodeBase64Url(input.jwt)}`]
+    if (input.reconnectToken) {
+      subprotocols.push(`reconnect.${encodeBase64Url(input.reconnectToken)}`)
+    }
     const ws: WsAdapter = connect(input.wsUrl, subprotocols)
     // Expose the active WS to the E2E signalingTestHook so Playwright can
     // force a disconnect. No-op for production code (registry is never read
