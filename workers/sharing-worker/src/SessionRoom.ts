@@ -97,9 +97,10 @@ export class SessionRoom extends DurableObject<Env> {
       // in the display name) — attach without remote auth. The double-dash and
       // underscore-for-space encoding keeps the bearer valid as an RFC 6455
       // WebSocket subprotocol token (no ":" or spaces allowed).
+      const [, userId, encodedName] = testJwtMatch;
       meta = {
-        userId: testJwtMatch[1],
-        displayName: testJwtMatch[2].replace(/_/g, " "),
+        userId: userId!,
+        displayName: encodedName!.replace(/_/g, " "),
       };
     } else {
       const testAuth = (globalThis as any).__TEST_AUTH__;
@@ -210,18 +211,20 @@ export class SessionRoom extends DurableObject<Env> {
       }
       case "has.book": {
         const state = await this.loadState();
-        if (!state || !state.participants[meta.userId]) break;
-        state.participants[meta.userId].hasBookFile = msg.value;
+        const self = state?.participants[meta.userId];
+        if (!state || !self) break;
+        self.hasBookFile = msg.value;
         await this.saveState(state);
         for (const s of this.sockets()) this.sendTo(s, { t: "peer.updated", userId: meta.userId, patch: { hasBookFile: msg.value } });
         break;
       }
       case "mic.state": {
         const state = await this.loadState();
-        if (!state || !state.participants[meta.userId]) break;
+        const self = state?.participants[meta.userId];
+        if (!state || !self) break;
         // Host-mute stays sticky; self changes can't override host mute.
-        if (state.participants[meta.userId].micState !== "host-muted") {
-          state.participants[meta.userId].micState = msg.value;
+        if (self.micState !== "host-muted") {
+          self.micState = msg.value;
           await this.saveState(state);
           for (const s of this.sockets()) this.sendTo(s, { t: "peer.updated", userId: meta.userId, patch: { micState: msg.value } });
         }
@@ -231,10 +234,11 @@ export class SessionRoom extends DurableObject<Env> {
         const state = await this.loadState();
         if (!state) break;
         if (meta.userId !== state.hostUserId) { this.sendError(ws, "forbidden", "host only"); break; }
-        if (!state.participants[msg.userId]) { this.sendError(ws, "no_such_peer", msg.userId); break; }
-        state.participants[msg.userId].micState = msg.muted ? "host-muted" : "unmuted";
+        const target = state.participants[msg.userId];
+        if (!target) { this.sendError(ws, "no_such_peer", msg.userId); break; }
+        target.micState = msg.muted ? "host-muted" : "unmuted";
         await this.saveState(state);
-        for (const s of this.sockets()) this.sendTo(s, { t: "peer.updated", userId: msg.userId, patch: { micState: state.participants[msg.userId].micState } });
+        for (const s of this.sockets()) this.sendTo(s, { t: "peer.updated", userId: msg.userId, patch: { micState: target.micState } });
         break;
       }
       case "kick.peer": {
@@ -287,7 +291,8 @@ export class SessionRoom extends DurableObject<Env> {
     const meta = this.metaFor(ws);
     if (!meta) return;
     const state = await this.loadState();
-    if (!state || !state.participants[meta.userId]) return;
+    const self = state?.participants[meta.userId];
+    if (!state || !self) return;
     // Explicit `leave` (code 1000 from our own close call) already removed the participant.
     if (code === 1000 && !state.participants[meta.userId]) return;
     if (meta.userId === state.hostUserId) {
@@ -301,8 +306,8 @@ export class SessionRoom extends DurableObject<Env> {
       return;
     }
     const reservedUntil = Date.now() + CONFIG.VIEWER_SLOT_GRACE_MS;
-    state.participants[meta.userId].connectionState = "reconnecting";
-    state.participants[meta.userId].reservedUntil = reservedUntil;
+    self.connectionState = "reconnecting";
+    self.reservedUntil = reservedUntil;
     await this.saveState(state);
     for (const s of this.sockets()) this.sendTo(s, {
       t: "peer.updated", userId: meta.userId, patch: { connectionState: "reconnecting" },
@@ -415,17 +420,18 @@ export class SessionRoom extends DurableObject<Env> {
 
     // Approval gate: non-host joiners that aren't already participants get queued.
     if (state.requiresApproval && meta.userId !== state.hostUserId && !state.participants[meta.userId]) {
-      state.pendingJoiners[meta.userId] = {
+      const pending = {
         profile: { displayName: meta.displayName, avatarUrl: meta.avatarUrl },
         requestedAt: Date.now(),
       };
+      state.pendingJoiners[meta.userId] = pending;
       await this.saveState(state);
       this.pendingSockets.set(meta.userId, { ws, hasBookFile });
       const hostWs = this.findSocketByUserId(state.hostUserId);
       if (hostWs) this.sendTo(hostWs, {
         t: "join.requested",
         userId: meta.userId,
-        profile: state.pendingJoiners[meta.userId].profile,
+        profile: pending.profile,
       });
       this.log("peer.queued", { sessionId: state.sessionId, userId: meta.userId });
       await this.scheduleNextAlarm();
@@ -437,9 +443,10 @@ export class SessionRoom extends DurableObject<Env> {
 
   private async admitParticipant(ws: WebSocket, meta: AttachedMeta, hasBookFile: boolean, state: StoredState) {
     const reservedUntil = Date.now() + CONFIG.HOST_GRACE_MS;
+    const profile = { displayName: meta.displayName, avatarUrl: meta.avatarUrl };
     state.participants[meta.userId] = {
       userId: meta.userId,
-      profile: { displayName: meta.displayName, avatarUrl: meta.avatarUrl },
+      profile,
       joinedAt: Date.now(),
       hasBookFile,
       micState: "unmuted",
@@ -467,7 +474,7 @@ export class SessionRoom extends DurableObject<Env> {
       this.sendTo(otherWs, {
         t: "peer.joined",
         userId: meta.userId,
-        profile: state.participants[meta.userId].profile,
+        profile,
         hasBookFile,
       });
     }
