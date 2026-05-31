@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createActor, fromCallback, fromPromise } from 'xstate'
-import { sessionMachine } from '../sessionMachine'
+import { sessionMachine, type Me, type RedeemOutput } from '../sessionMachine'
 
 const HOST_PROFILE = { displayName: 'Host', avatarUrl: undefined }
 
@@ -59,11 +59,11 @@ function provideDeps(opts: {
           wsUrl: 'wss://x/v1/sessions/s1/wss'
         }
       }),
-      redeemJoinToken: fromPromise(async () => {
+      redeemJoinToken: fromPromise<RedeemOutput, { me: Me; sessionId: string; joinToken: string }>(async () => {
         if (opts.redeemOk === false) throw new Error('redeem_failed')
         return {
           sessionId: 's1',
-          bookContext: { bookId: 'b', contentHash: 'h', format: 'epub' as const },
+          bookContext: { bookId: 'b', contentHash: 'h', format: 'epub' },
           requiresApproval: opts.redeemRequiresApproval ?? false,
           hostProfile: HOST_PROFILE,
           wsUrl: 'wss://x/v1/sessions/s1/wss'
@@ -350,7 +350,7 @@ describe('sessionMachine', () => {
     await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'live')).toBe(true))
     a.send({ type: 'KICK_PEER', userId: 'u_b' })
     const sent = stub.sent.filter((e) => e.type === 'SEND')
-    const payload = sent.map((e) => (e as { payload: { t: string; userId: string } }).payload)
+    const payload = sent.map((e) => (e as unknown as { payload: { t: string; userId: string } }).payload)
       .find((p) => p.t === 'kick.peer')
     expect(payload).toBeTruthy()
     expect(payload?.userId).toBe('u_b')
