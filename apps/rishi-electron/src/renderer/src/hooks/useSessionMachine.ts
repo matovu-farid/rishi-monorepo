@@ -3,6 +3,7 @@ import { useEffect, useMemo } from 'react'
 import { fromPromise } from 'xstate'
 import { sessionMachine } from '@/machines/sessionMachine'
 import type { CreateSessionOutput, Me, RedeemOutput } from '@/machines/sessionMachine'
+import { registerSessionMachineActor } from '@/testing/sharing-test-hooks'
 
 type BookContextT = {
   bookId: string
@@ -61,6 +62,14 @@ export function useSessionMachine() {
     []
   )
   const [state, send, actorRef] = useMachine(machine)
+
+  // Register actor with the E2E test-hook registry. The hook never has more
+  // than one live session at a time, and the registry is a single-slot
+  // singleton; unregister on unmount so we never expose a stale snapshot.
+  useEffect(() => {
+    registerSessionMachineActor(actorRef as unknown as Parameters<typeof registerSessionMachineActor>[0])
+    return () => registerSessionMachineActor(null)
+  }, [actorRef])
 
   useEffect(() => {
     const unsub = window.electron?.sharing?.onDeepLink?.((p) => {

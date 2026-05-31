@@ -1,4 +1,17 @@
 import { fromCallback } from 'xstate'
+import {
+  resetFileTransferProgress,
+  updateFileTransferProgress
+} from '@/testing/sharing-test-hooks'
+
+function reportProgress(sent: number, total: number): void {
+  const percent = total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : 0
+  updateFileTransferProgress({ percent, completed: false })
+}
+
+function reportCompleted(): void {
+  updateFileTransferProgress({ percent: 100, completed: true })
+}
 
 export async function computeSha256Hex(buf: ArrayBuffer): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', buf)
@@ -57,6 +70,7 @@ export const fileTransferActor = fromCallback<
   FileTransferInput,
   FileTransferOutEvent
 >(({ emit, receive, input }) => {
+  resetFileTransferProgress()
   if (input.mode === 'sender') {
     const senderInput = input
     const totalChunks = Math.ceil(senderInput.payload.byteLength / senderInput.chunkSize)
@@ -80,6 +94,7 @@ export const fileTransferActor = fromCallback<
         senderInput.send(
           encodeFrame({ kind: 'end', total: totalChunks, hash: senderInput.hash })
         )
+        reportCompleted()
         emit({ type: 'COMPLETED', blob: senderInput.payload, hash: senderInput.hash })
       }
     }
@@ -90,6 +105,7 @@ export const fileTransferActor = fromCallback<
       else if (evt.type === 'CHUNK_ACK') {
         acked++
         inFlight = Math.max(0, inFlight - 1)
+        reportProgress(acked, totalChunks)
         emit({ type: 'PROGRESS', sent: acked, total: totalChunks })
         pump()
       }
@@ -121,6 +137,7 @@ export const fileTransferActor = fromCallback<
       emit({ type: 'FAILED', reason: 'hash_mismatch' })
       return
     }
+    reportCompleted()
     emit({ type: 'COMPLETED', blob: out.buffer as ArrayBuffer, hash: actual })
   }
 
@@ -134,6 +151,7 @@ export const fileTransferActor = fromCallback<
     }
     if (f.kind === 'data') {
       chunks.set(f.seq, new Uint8Array(f.data))
+      reportProgress(chunks.size, totalChunks ?? chunks.size)
       emit({ type: 'PROGRESS', sent: chunks.size, total: totalChunks ?? chunks.size })
     } else {
       totalChunks = f.total

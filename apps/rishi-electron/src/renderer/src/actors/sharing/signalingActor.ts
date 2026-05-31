@@ -1,6 +1,10 @@
 import { fromCallback } from 'xstate'
 import { ClientMsg, ServerMsg } from '@rishi/sharing-protocol/schemas'
 import { defaultWsConnect, type WsAdapter, type WsConnect } from './wsAdapter'
+import {
+  notifySignalingError,
+  registerSignalingWs
+} from '@/testing/sharing-test-hooks'
 
 export type SignalingInput = {
   wsUrl: string
@@ -41,6 +45,10 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
     const subprotocols = ['rishi.sharing.v1', `jwt.${input.jwt}`]
     if (input.reconnectToken) subprotocols.push(`reconnect.${input.reconnectToken}`)
     const ws: WsAdapter = connect(input.wsUrl, subprotocols)
+    // Expose the active WS to the E2E signalingTestHook so Playwright can
+    // force a disconnect. No-op for production code (registry is never read
+    // outside of `window.__rishi.signalingTestHook`).
+    registerSignalingWs(ws)
 
     let heartbeat: ReturnType<typeof setInterval> | null = null
 
@@ -60,6 +68,7 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
       }
       const result = ServerMsg.safeParse(parsed)
       if (!result.success) {
+        notifySignalingError('protocol_error')
         emit({ type: 'PROTOCOL_ERROR', raw })
         return
       }
@@ -81,12 +90,17 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
         case 'kicked': emit({ type: 'KICKED', msg: m }); break
         case 'session.ended': emit({ type: 'SESSION_ENDED', msg: m }); break
         case 'pong': break
-        case 'error': emit({ type: 'PROTOCOL_ERROR', raw }); break
+        case 'error':
+          notifySignalingError(m.code)
+          emit({ type: 'PROTOCOL_ERROR', raw })
+          break
       }
     })
 
     ws.onClose((code, reason) => {
       if (heartbeat) clearInterval(heartbeat)
+      registerSignalingWs(null)
+      notifySignalingError(`signaling_dropped_${code}`)
       emit({ type: 'SIGNALING_DROPPED', code, reason })
     })
 
