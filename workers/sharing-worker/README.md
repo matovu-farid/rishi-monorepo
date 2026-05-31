@@ -32,3 +32,8 @@ The output prints the workers.dev URL (e.g. `https://rishi-sharing-worker.<accou
 
     pnpm exec wrangler tail --env production
 
+## Domain
+
+The worker runs on `workers.dev` for v1. A custom domain (`sharing.rishi.fidexa.org`) is deferred
+until the `rishi.fidexa.org` DNS zone is delegated to Cloudflare DNS management.
+The WebSocket URL is embedded in the Electron binary; it is not user-visible.
