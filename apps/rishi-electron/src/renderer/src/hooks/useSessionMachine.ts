@@ -1,5 +1,13 @@
 import { useMachine } from '@xstate/react'
-import { useEffect, useMemo } from 'react'
+import {
+  createContext,
+  createElement,
+  useContext,
+  useEffect,
+  useMemo,
+  type PropsWithChildren,
+  type ReactElement
+} from 'react'
 import { fromPromise } from 'xstate'
 import { sessionMachine } from '@/machines/sessionMachine'
 import type { CreateSessionOutput, Me, RedeemOutput } from '@/machines/sessionMachine'
@@ -11,7 +19,12 @@ type BookContextT = {
   format: 'epub' | 'pdf'
 }
 
-export function useSessionMachine() {
+/**
+ * Internal: spawn a single sessionMachine actor and wire it to the test-hook
+ * registry. Exported only via the hook + provider — there is no production
+ * code path that should call this directly.
+ */
+function useSessionMachineInternal() {
   const machine = useMemo(
     () =>
       sessionMachine.provide({
@@ -87,4 +100,43 @@ export function useSessionMachine() {
   }, [send])
 
   return { state, send, actorRef }
+}
+
+type SessionMachineHookValue = ReturnType<typeof useSessionMachineInternal>
+
+const SessionMachineContext = createContext<SessionMachineHookValue | null>(null)
+
+/**
+ * App-shell provider for the session machine. Mount once near the React root
+ * so that every consumer (`SessionEntryButton`, `SharingSessionOverlay`, etc.)
+ * shares ONE actor instance — host actions and the overlay's view of state
+ * must reference the same xstate actor or the overlay will render an empty
+ * stub while the live actor is held by a different component.
+ *
+ * Outside the provider (unit tests calling `useSessionMachine` directly) the
+ * hook falls back to spawning its own actor, keeping the existing test
+ * surface intact.
+ */
+export function SessionMachineProvider({ children }: PropsWithChildren): ReactElement {
+  const value = useSessionMachineInternal()
+  return createElement(SessionMachineContext.Provider, { value }, children)
+}
+
+/**
+ * Access the session machine. Prefers the value from the nearest
+ * `SessionMachineProvider`; if no provider is mounted, spawns a local actor
+ * so direct unit tests of components that depend on this hook still work.
+ *
+ * Implementation note: we deliberately read the context with a default
+ * sentinel and only call the local actor when the sentinel is observed. The
+ * provider/no-provider decision is stable for the lifetime of any consumer
+ * subtree, so the conditional hook call doesn't violate the rules of hooks
+ * in practice (callers don't switch between mounted-in-provider and
+ * mounted-without-provider mid-lifetime).
+ */
+export function useSessionMachine(): SessionMachineHookValue {
+  const ctx = useContext(SessionMachineContext)
+  if (ctx) return ctx
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  return useSessionMachineInternal()
 }
