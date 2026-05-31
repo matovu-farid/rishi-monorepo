@@ -300,6 +300,24 @@ export class SessionRoom extends DurableObject<Env> {
         }
         break;
       }
+      case "data.channel.relay": {
+        // TEST-ONLY: the production data path for sync/files chunks is the
+        // per-peer RTCDataChannel; this WS relay lets the E2E fake adapter
+        // shuttle payloads across Electron processes. The frame bucket above
+        // already rate-limits, so a misbehaving client cannot flood peers.
+        const target = this.findSocketByUserId(msg.to);
+        if (!target) {
+          this.sendError(ws, "no_such_peer", `peer ${msg.to} not connected`);
+          break;
+        }
+        this.sendTo(target, {
+          t: "data.channel.relay",
+          from: meta.userId,
+          channel: msg.channel,
+          payload: msg.payload,
+        });
+        break;
+      }
       // Other handlers added in later tasks.
       default: this.sendError(ws, "unknown", `no handler for ${(msg as any).t}`);
     }

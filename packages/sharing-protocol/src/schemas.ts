@@ -35,6 +35,20 @@ export const ClientMsg = z.discriminatedUnion("t", [
   // the relay when DCs haven't opened yet — it's cheap and rate-limited by the
   // existing per-socket frame bucket.
   Base.extend({ t: z.literal("sync.frame"), frame: z.unknown() }),
+  // TEST-ONLY data-channel relay. The production wire path for sync / files
+  // payloads is the peer-to-peer RTCDataChannel; this WS relay exists so the
+  // E2E fake RtcAdapter (`testing/fakeRtcAdapter.ts`) — whose `send()` is a
+  // no-op because two Electron processes can't share an RTCPeerConnection —
+  // can shuttle payloads through the worker. Production code never emits
+  // this; if it ever does, the receive side is guarded behind a test-only
+  // global bus and is a no-op. The per-socket frame bucket also rate-limits
+  // this path so a misbehaving client cannot flood peers.
+  Base.extend({
+    t: z.literal("data.channel.relay"),
+    to: UserId,
+    channel: z.enum(["sync", "files"]),
+    payload: z.string(),
+  }),
 ]);
 export type ClientMsg = z.infer<typeof ClientMsg>;
 
@@ -89,6 +103,15 @@ export const ServerMsg = z.discriminatedUnion("t", [
   // Relayed sync frame. `from` is the sender's userId; `frame` is the opaque
   // SyncMsg payload (validated client-side against `sync.ts`).
   Base.extend({ t: z.literal("sync.frame"), from: UserId, frame: z.unknown() }),
+  // TEST-ONLY: relayed counterpart of the ClientMsg above. The worker stamps
+  // `from` with the sender's userId and forwards. See ClientMsg.data.channel.relay
+  // for rationale.
+  Base.extend({
+    t: z.literal("data.channel.relay"),
+    from: UserId,
+    channel: z.enum(["sync", "files"]),
+    payload: z.string(),
+  }),
 ]);
 export type ServerMsg = z.infer<typeof ServerMsg>;
 
