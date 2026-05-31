@@ -33,7 +33,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
-    "test:e2e:sharing": "playwright test --project=sharing"
+    "test:e2e:sharing": "playwright test --config=playwright.sharing.config.ts"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

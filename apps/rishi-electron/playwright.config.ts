@@ -1,5 +1,4 @@
 import { defineConfig } from '@playwright/test'
-import path from 'path'
 
 export default defineConfig({
   testDir: './e2e',
@@ -8,18 +7,12 @@ export default defineConfig({
   use: {
     trace: 'on-first-retry'
   },
+  // Sharing specs live behind ./playwright.sharing.config.ts so the wrangler
+  // dev globalSetup only runs when explicitly invoked via `test:e2e:sharing`.
+  testIgnore: /sharing.*\.spec\.ts$/,
   projects: [
     {
-      name: 'electron',
-      testMatch: /^(?!.*sharing).*\.spec\.ts$/
-    },
-    {
-      name: 'sharing',
-      testMatch: /sharing.*\.spec\.ts$/,
-      timeout: 120_000,
-      expect: { timeout: 15_000 },
-      globalSetup: path.resolve(__dirname, 'e2e/global-setup-sharing.ts'),
-      globalTeardown: path.resolve(__dirname, 'e2e/global-teardown-sharing.ts')
+      name: 'electron'
     }
   ]
 })
