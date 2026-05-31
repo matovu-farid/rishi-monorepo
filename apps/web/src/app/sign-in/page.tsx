@@ -167,15 +167,15 @@ function SignInPageInner() {
   const { data: session, isPending } = useSession()
   const handoff = useDesktopHandoff()
 
-  // Auto-kick Google OAuth on ?provider=google (unchanged)
+  // Auto-kick Google OAuth on ?provider=google
   useEffect(() => {
     if (provider !== "google") return
+    if (typeof window === "undefined") return
+    const u = new URL(window.location.href)
+    u.searchParams.delete("provider")
     void signIn.social({
       provider: "google",
-      callbackURL:
-        typeof window !== "undefined"
-          ? window.location.href.replace("provider=google", "")
-          : "/",
+      callbackURL: u.toString(),
     })
   }, [provider])
 
@@ -200,6 +200,8 @@ function SignInPageInner() {
   }
 
   if (session) return <SignInSkeleton />
+
+  if (provider === "google") return <SignInSkeleton />
 
   return <SignInForm params={params} returnTo={returnTo} />
 }
