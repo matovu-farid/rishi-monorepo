@@ -217,15 +217,53 @@ export function extractJoinToken(joinUrl: string): string {
  * never tries to open real UDP sockets in headless Electron. Call this
  * AFTER the session machine actor is registered (i.e. after the reader
  * page is mounted) but BEFORE `CREATE_SESSION` / `ACCEPT_INVITE`.
+ *
+ * Also installs `window.__rishi.__testDataChannelBus` so the fake adapter
+ * can shuttle data-channel payloads across Electron processes via the
+ * worker's `data.channel.relay` path. The bus is a per-renderer registry
+ * of `(remoteUserId, channel) → listener` slots. Production code never
+ * looks at the bus — signalingActor's bus dispatch is gated on its
+ * presence — so installing it from E2E doesn't leak into production.
  */
 export async function installFakeRtcAdapter(page: Page): Promise<void> {
   await page.evaluate(() => {
     const w = window as unknown as {
-      __rishi?: { installFakeRtcFactory?: () => void }
+      __rishi?: {
+        installFakeRtcFactory?: () => void
+        __testDataChannelBus?: unknown
+      }
     }
     if (typeof w.__rishi?.installFakeRtcFactory !== 'function')
       throw new Error('window.__rishi.installFakeRtcFactory not exposed (task #92 prerequisite)')
     w.__rishi.installFakeRtcFactory()
+    if (!w.__rishi.__testDataChannelBus) {
+      type Listener = (data: string | ArrayBuffer) => void
+      const slots = new Map<string, Listener>()
+      const key = (peer: string, ch: 'sync' | 'files'): string => `${peer}.${ch}`
+      const bus = {
+        register(peer: string, ch: 'sync' | 'files', cb: Listener): () => void {
+          slots.set(key(peer, ch), cb)
+          return () => slots.delete(key(peer, ch))
+        },
+        dispatch(peer: string, ch: 'sync' | 'files', payload: string): void {
+          const cb = slots.get(key(peer, ch))
+          if (!cb) return
+          // The sender's encoding decision (string vs base64) is preserved
+          // by the channel: `files` carries binary chunks (base64-encoded),
+          // `sync` carries JSON strings. Decode files back to ArrayBuffer
+          // so it matches what a real RTCDataChannel onmessage delivers.
+          if (ch === 'files') {
+            const bin = atob(payload)
+            const out = new Uint8Array(bin.length)
+            for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+            cb(out.buffer)
+          } else {
+            cb(payload)
+          }
+        }
+      }
+      w.__rishi.__testDataChannelBus = bus
+    }
   })
 }
 

@@ -24,7 +24,17 @@ export interface RtcAdapter {
   close(): void
 }
 
-export type RtcFactory = (config: { iceServers: RTCIceServer[] }) => RtcAdapter
+export type RtcFactoryConfig = {
+  iceServers: RTCIceServer[]
+  /**
+   * Identifier of the remote peer this connection is being built for.
+   * Optional because production callers (and the unit-test factory shortcut
+   * in `peerActor.test.ts`) don't depend on it; the E2E fake adapter uses it
+   * to route data-channel `send()` payloads through the worker WS relay.
+   */
+  remoteUserId?: string
+}
+export type RtcFactory = (config: RtcFactoryConfig) => RtcAdapter
 
 /**
  * Test-time override slot for the RtcFactory. peerActor consults this

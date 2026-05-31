@@ -53,7 +53,10 @@ export const sessionMachineStore = {
 // P4: signaling test hook (force WS disconnect, subscribe to error codes)
 // ---------------------------------------------------------------------------
 
-type WsLike = { close(code?: number, reason?: string): void }
+type WsLike = {
+  close(code?: number, reason?: string): void
+  send?(data: string): void
+}
 let activeSignalingWs: WsLike | null = null
 const signalingErrorListeners = new Set<(code: string) => void>()
 
@@ -86,6 +89,16 @@ export const signalingTestHook = {
   onError(cb: (code: string) => void): () => void {
     signalingErrorListeners.add(cb)
     return () => signalingErrorListeners.delete(cb)
+  },
+  /**
+   * Test-only escape hatch: send a raw ClientMsg-shaped object straight onto
+   * the active signaling WS. The fake RtcAdapter uses this to emit
+   * `data.channel.relay` frames that shuttle data-channel payloads through
+   * the worker (since two Electron processes can't share an RTCPeerConnection).
+   * Production code never reads this hook.
+   */
+  sendRaw(msg: unknown): void {
+    activeSignalingWs?.send?.(JSON.stringify(msg))
   }
 }
 

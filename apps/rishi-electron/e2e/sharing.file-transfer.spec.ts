@@ -15,15 +15,13 @@ import {
   readSessionSnapshot
 } from './helpers/sharing-helpers'
 
-// FIXME: This test requires the viewer to arrive WITHOUT opening a book —
-// the whole point is that the host transfers the PDF via the WebRTC data
-// channel. But the sessionMachine actor is only registered when a reader
-// window mounts `useSessionMachine` (via SessionEntryButton), so the viewer
-// has no actor to send ACCEPT_INVITE to. Unblocks once the fake RTC adapter
-// supports a cross-process data channel relay (see task #92 caveat) and the
-// sessionMachine can be hosted from the library window for "no book yet"
-// viewers, OR once we add a "joining-without-book" entry-point UI surface.
-test.fixme('viewer without book receives P2P file transfer and sync follows', async () => {
+// Cross-process data-channel relay (task #99) is now in place: the fake
+// RTC adapter routes `dataChannel.send()` through the worker's
+// `data.channel.relay` ServerMsg. Remaining caveats are product-side
+// (sessionMachine doesn't yet invoke fileTransferActor on hello-with
+// hasBookFile=false on the host side), so this test may still fail with
+// `fileTransferProgress.completed` never going true.
+test('viewer without book receives P2P file transfer and sync follows', async () => {
   const workerUrl = readWranglerDevUrl()
   // Host has the book; viewer does NOT import it.
   const host = await launchAppWithSharingEnv({

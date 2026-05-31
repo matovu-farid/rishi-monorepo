@@ -38,7 +38,10 @@ export const peerActor = fromCallback<PeerInEvent, PeerInput, PeerOutEvent>(
     // tests) → E2E override installed via `window.__rishi.setRtcFactoryOverride`
     // → real `RTCPeerConnection` factory.
     const factory = input.factory ?? getRtcFactoryOverride() ?? defaultRtcFactory
-    const pc: RtcAdapter = factory({ iceServers: input.iceServers })
+    const pc: RtcAdapter = factory({
+      iceServers: input.iceServers,
+      remoteUserId: input.remoteUserId
+    })
     let stopped = false
 
     let syncCh: RtcDataChannelLike | null = null

@@ -131,6 +131,24 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
         case 'kicked': out({ type: 'KICKED', msg: m }); break
         case 'session.ended': out({ type: 'SESSION_ENDED', msg: m }); break
         case 'sync.frame': out({ type: 'SYNC_FRAME', msg: m }); break
+        case 'data.channel.relay': {
+          // TEST-ONLY: the worker forwards data-channel payloads here when
+          // the E2E fake adapter shuttles sends through the WS instead of
+          // a real RTCDataChannel. We dispatch to the global test bus —
+          // which only exists when E2E sets it up — and never bubble the
+          // message into the parent state machine. Production code never
+          // reaches the dispatch branch because the bus is undefined.
+          const w = globalThis as unknown as {
+            __rishi?: {
+              __testDataChannelBus?: {
+                dispatch: (peer: string, ch: 'sync' | 'files', payload: string) => void
+              }
+            }
+          }
+          const bus = w.__rishi?.__testDataChannelBus
+          if (bus) bus.dispatch(m.from, m.channel, m.payload)
+          break
+        }
         case 'pong': break
         case 'error':
           notifySignalingError(m.code)
