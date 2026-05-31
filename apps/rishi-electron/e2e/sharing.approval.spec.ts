@@ -1,9 +1,7 @@
 import { test, expect } from '@playwright/test'
 import {
-  launchAppWithSharingEnv,
+  launchAndOpenBookForSharing,
   closeApp,
-  importBook,
-  openBook,
   PDF_FIXTURE
 } from './helpers/electron-app'
 import { readWranglerDevUrl } from './helpers/wrangler-dev'
@@ -19,24 +17,21 @@ import {
 
 test('requiresApproval: viewer queued → host approves → both live', async () => {
   const workerUrl = readWranglerDevUrl()
-  const host = await launchAppWithSharingEnv({
+  const host = await launchAndOpenBookForSharing({
     workerUrl,
     userId: 'host-a1',
-    displayName: 'Host'
+    displayName: 'Host',
+    fixturePath: PDF_FIXTURE,
+    kind: 'pdf'
   })
-  const viewer = await launchAppWithSharingEnv({
+  const viewer = await launchAndOpenBookForSharing({
     workerUrl,
     userId: 'viewer-a1',
-    displayName: 'Viewer'
+    displayName: 'Viewer',
+    fixturePath: PDF_FIXTURE,
+    kind: 'pdf'
   })
   try {
-    const hBook = (await importBook(host.page, { fixturePath: PDF_FIXTURE, kind: 'pdf' })).id
-    const vBook = (await importBook(viewer.page, { fixturePath: PDF_FIXTURE, kind: 'pdf' })).id
-    await openBook(host.page, hBook)
-    await openBook(viewer.page, vBook)
-    await host.page.waitForTimeout(1000)
-    await viewer.page.waitForTimeout(1000)
-
     const joinToken = extractJoinToken(
       await hostCreateSession(host.page, { requiresApproval: true })
     )
@@ -60,24 +55,21 @@ test('requiresApproval: viewer queued → host approves → both live', async ()
 
 test('requiresApproval: host rejects → viewer reaches failed', async () => {
   const workerUrl = readWranglerDevUrl()
-  const host = await launchAppWithSharingEnv({
+  const host = await launchAndOpenBookForSharing({
     workerUrl,
     userId: 'host-a2',
-    displayName: 'Host'
+    displayName: 'Host',
+    fixturePath: PDF_FIXTURE,
+    kind: 'pdf'
   })
-  const viewer = await launchAppWithSharingEnv({
+  const viewer = await launchAndOpenBookForSharing({
     workerUrl,
     userId: 'viewer-a2',
-    displayName: 'Viewer'
+    displayName: 'Viewer',
+    fixturePath: PDF_FIXTURE,
+    kind: 'pdf'
   })
   try {
-    const hBook = (await importBook(host.page, { fixturePath: PDF_FIXTURE, kind: 'pdf' })).id
-    const vBook = (await importBook(viewer.page, { fixturePath: PDF_FIXTURE, kind: 'pdf' })).id
-    await openBook(host.page, hBook)
-    await openBook(viewer.page, vBook)
-    await host.page.waitForTimeout(1000)
-    await viewer.page.waitForTimeout(1000)
-
     const joinToken = extractJoinToken(
       await hostCreateSession(host.page, { requiresApproval: true })
     )

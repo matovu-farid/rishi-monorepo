@@ -1,10 +1,7 @@
 import { test, expect } from '@playwright/test'
 import {
-  launchAppWithSharingEnv,
   launchAndOpenBookForSharing,
   closeApp,
-  importBook,
-  openBook,
   PDF_FIXTURE
 } from './helpers/electron-app'
 import { readWranglerDevUrl } from './helpers/wrangler-dev'
@@ -57,24 +54,21 @@ test.describe('Shared reading — happy path', () => {
 
   test('sharer page-turn propagates to viewer within 5s', async () => {
     const workerUrl = readWranglerDevUrl()
-    const host = await launchAppWithSharingEnv({
+    const host = await launchAndOpenBookForSharing({
       workerUrl,
       userId: 'host-2',
-      displayName: 'Host'
+      displayName: 'Host',
+      fixturePath: PDF_FIXTURE,
+      kind: 'pdf'
     })
-    const viewer = await launchAppWithSharingEnv({
+    const viewer = await launchAndOpenBookForSharing({
       workerUrl,
       userId: 'viewer-2',
-      displayName: 'Viewer'
+      displayName: 'Viewer',
+      fixturePath: PDF_FIXTURE,
+      kind: 'pdf'
     })
     try {
-      const hBook = (await importBook(host.page, { fixturePath: PDF_FIXTURE, kind: 'pdf' })).id
-      const vBook = (await importBook(viewer.page, { fixturePath: PDF_FIXTURE, kind: 'pdf' })).id
-      await openBook(host.page, hBook)
-      await openBook(viewer.page, vBook)
-      await host.page.waitForTimeout(1000)
-      await viewer.page.waitForTimeout(1000)
-
       const joinToken = extractJoinToken(
         await hostCreateSession(host.page, { requiresApproval: false })
       )
@@ -92,24 +86,21 @@ test.describe('Shared reading — happy path', () => {
 
   test('host passes sharer role to viewer, sharerId updates on both sides', async () => {
     const workerUrl = readWranglerDevUrl()
-    const host = await launchAppWithSharingEnv({
+    const host = await launchAndOpenBookForSharing({
       workerUrl,
       userId: 'host-3',
-      displayName: 'Host'
+      displayName: 'Host',
+      fixturePath: PDF_FIXTURE,
+      kind: 'pdf'
     })
-    const viewer = await launchAppWithSharingEnv({
+    const viewer = await launchAndOpenBookForSharing({
       workerUrl,
       userId: 'viewer-3',
-      displayName: 'Viewer'
+      displayName: 'Viewer',
+      fixturePath: PDF_FIXTURE,
+      kind: 'pdf'
     })
     try {
-      const hBook = (await importBook(host.page, { fixturePath: PDF_FIXTURE, kind: 'pdf' })).id
-      const vBook = (await importBook(viewer.page, { fixturePath: PDF_FIXTURE, kind: 'pdf' })).id
-      await openBook(host.page, hBook)
-      await openBook(viewer.page, vBook)
-      await host.page.waitForTimeout(1000)
-      await viewer.page.waitForTimeout(1000)
-
       const joinToken = extractJoinToken(
         await hostCreateSession(host.page, { requiresApproval: false })
       )
@@ -143,24 +134,21 @@ test.describe('Shared reading — happy path', () => {
 
   test('host kicks viewer → viewer transitions to failed/idle', async () => {
     const workerUrl = readWranglerDevUrl()
-    const host = await launchAppWithSharingEnv({
+    const host = await launchAndOpenBookForSharing({
       workerUrl,
       userId: 'host-4',
-      displayName: 'Host'
+      displayName: 'Host',
+      fixturePath: PDF_FIXTURE,
+      kind: 'pdf'
     })
-    const viewer = await launchAppWithSharingEnv({
+    const viewer = await launchAndOpenBookForSharing({
       workerUrl,
       userId: 'viewer-4',
-      displayName: 'Viewer'
+      displayName: 'Viewer',
+      fixturePath: PDF_FIXTURE,
+      kind: 'pdf'
     })
     try {
-      const hBook = (await importBook(host.page, { fixturePath: PDF_FIXTURE, kind: 'pdf' })).id
-      const vBook = (await importBook(viewer.page, { fixturePath: PDF_FIXTURE, kind: 'pdf' })).id
-      await openBook(host.page, hBook)
-      await openBook(viewer.page, vBook)
-      await host.page.waitForTimeout(1000)
-      await viewer.page.waitForTimeout(1000)
-
       const joinToken = extractJoinToken(
         await hostCreateSession(host.page, { requiresApproval: false })
       )
@@ -182,25 +170,22 @@ test.describe('Shared reading — happy path', () => {
 
   test('host window closes → viewer sees HostSuspendedBanner; host reopens → session resumes', async () => {
     const workerUrl = readWranglerDevUrl()
-    const host = await launchAppWithSharingEnv({
+    const host = await launchAndOpenBookForSharing({
       workerUrl,
       userId: 'host-5',
-      displayName: 'Host'
+      displayName: 'Host',
+      fixturePath: PDF_FIXTURE,
+      kind: 'pdf'
     })
-    const viewer = await launchAppWithSharingEnv({
+    const viewer = await launchAndOpenBookForSharing({
       workerUrl,
       userId: 'viewer-5',
-      displayName: 'Viewer'
+      displayName: 'Viewer',
+      fixturePath: PDF_FIXTURE,
+      kind: 'pdf'
     })
-    let hostReborn: Awaited<ReturnType<typeof launchAppWithSharingEnv>> | null = null
+    let hostReborn: Awaited<ReturnType<typeof launchAndOpenBookForSharing>> | null = null
     try {
-      const hBook = (await importBook(host.page, { fixturePath: PDF_FIXTURE, kind: 'pdf' })).id
-      const vBook = (await importBook(viewer.page, { fixturePath: PDF_FIXTURE, kind: 'pdf' })).id
-      await openBook(host.page, hBook)
-      await openBook(viewer.page, vBook)
-      await host.page.waitForTimeout(1000)
-      await viewer.page.waitForTimeout(1000)
-
       const joinToken = extractJoinToken(
         await hostCreateSession(host.page, { requiresApproval: false })
       )
@@ -230,11 +215,15 @@ test.describe('Shared reading — happy path', () => {
         timeout: 10_000
       })
 
-      // Relaunch host (same userId so reconnectToken is valid).
-      hostReborn = await launchAppWithSharingEnv({
+      // Relaunch host (same userId so reconnectToken is valid). The reborn
+      // host needs a reader window open so its sessionMachine actor is
+      // registered for the RECONNECT_SESSION event below.
+      hostReborn = await launchAndOpenBookForSharing({
         workerUrl,
         userId: 'host-5',
-        displayName: 'Host'
+        displayName: 'Host',
+        fixturePath: PDF_FIXTURE,
+        kind: 'pdf'
       })
 
       await sendSessionEvent(hostReborn.page, {
