@@ -26,9 +26,26 @@ export async function verifyAuthToken(token: string, env: AuthEnv): Promise<Auth
   };
 }
 
-export async function verifyAuth(req: Request, env: AuthEnv): Promise<AuthedUser> {
+export async function verifyAuth(
+  req: Request,
+  env: AuthEnv & { TEST_AUTH_ALLOWED?: string },
+): Promise<AuthedUser> {
   const header = req.headers.get("authorization");
   if (!header) throw new Error("missing auth header");
+  // E2E test mode: when TEST_AUTH_ALLOWED=1 in the worker env, accept
+  // bearer tokens of the form "userId:DisplayName" without contacting the
+  // real auth service. Production never sets this; the wrangler dev used
+  // by Playwright sets it via `--var TEST_AUTH_ALLOWED:1`.
+  if (env.TEST_AUTH_ALLOWED === "1") {
+    const m = header.match(/^Bearer\s+([^:\s]+):(.+)$/i);
+    if (m) {
+      return {
+        userId: m[1],
+        email: `${m[1]}@e2e.local`,
+        displayName: m[2],
+      };
+    }
+  }
   const fetcher = env.fetcher ?? fetch;
   const res = await fetcher(`${env.AUTH_BASE_URL}/api/auth/get-session`, {
     headers: { authorization: header, accept: "application/json" },

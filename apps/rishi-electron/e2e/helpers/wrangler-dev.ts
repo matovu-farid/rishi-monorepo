@@ -11,13 +11,28 @@ export async function startWranglerDev(timeoutMs = 30_000): Promise<string> {
   return new Promise((resolve, reject) => {
     const child: ChildProcess = spawn(
       'pnpm',
-      ['exec', 'wrangler', 'dev', '--port', '8788', '--local', '--persist-to', '.wrangler/e2e-state'],
+      [
+        'exec',
+        'wrangler',
+        'dev',
+        '--port',
+        '8788',
+        '--local',
+        '--persist-to',
+        '.wrangler/e2e-state',
+        // Enable the `userId:DisplayName` bearer shortcut in verifyAuth so
+        // E2E tests don't need a real Better Auth session to mint a token.
+        '--var',
+        'TEST_AUTH_ALLOWED:1',
+        // WORKER_HMAC_SECRET is a `wrangler secret put` value in prod; here
+        // we plumb it via --var so the host's spawn env doesn't have to leak
+        // through wrangler's worker isolate boundary.
+        '--var',
+        'WORKER_HMAC_SECRET:test-hmac-secret-for-e2e-do-not-use-in-production'
+      ],
       {
         cwd: WORKER_DIR,
-        env: {
-          ...process.env,
-          WORKER_HMAC_SECRET: 'test-hmac-secret-for-e2e-do-not-use-in-production'
-        },
+        env: { ...process.env },
         stdio: ['ignore', 'pipe', 'pipe']
       }
     )

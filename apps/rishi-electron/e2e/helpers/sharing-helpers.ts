@@ -101,12 +101,44 @@ export async function waitForSyncedPage(
   throw new Error(`waitForSyncedPage(${pageIndex}) timed out`)
 }
 
+export interface TestIdentity {
+  userId: string
+  displayName: string
+}
+
+/**
+ * Build a test bearer token of the form `userId:DisplayName`. Recognised by
+ * the worker's verifyAuth + SessionRoom WS handshake when the worker is
+ * launched with `TEST_AUTH_ALLOWED=1` (see helpers/wrangler-dev.ts).
+ */
+export function testBearer(id: TestIdentity): string {
+  return `${id.userId}:${id.displayName}`
+}
+
+/**
+ * Decode the sessionId out of a join JWT. Worker-issued tokens are
+ * `header.payload.sig` with payload = base64url(JSON({ sessionId, ... })).
+ * Viewer flow needs the host's sessionId when calling `/redeem`.
+ */
+function sessionIdFromJoinToken(joinToken: string): string {
+  const parts = joinToken.split('.')
+  if (parts.length !== 3) throw new Error(`invalid join token: ${joinToken}`)
+  const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+  const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4)
+  const json = Buffer.from(padded, 'base64').toString('utf8')
+  const payload = JSON.parse(json) as { sessionId?: string }
+  if (!payload.sessionId) throw new Error('joinToken payload has no sessionId')
+  return payload.sessionId
+}
+
 export async function hostCreateSession(
   hostPage: Page,
-  opts: { requiresApproval: boolean } = { requiresApproval: false }
+  opts: { requiresApproval: boolean; me?: TestIdentity } = { requiresApproval: false }
 ): Promise<string> {
+  const me = opts.me ?? { userId: 'e2e-host', displayName: 'E2E Host' }
   await sendSessionEvent(hostPage, {
     type: 'CREATE_SESSION',
+    me: { ...me, authToken: testBearer(me) },
     bookContext: { bookId: 'e2e-test-book', contentHash: 'abc123', format: 'pdf' },
     requiresApproval: opts.requiresApproval
   })
@@ -135,6 +167,15 @@ export function extractJoinToken(joinUrl: string): string {
   return t
 }
 
-export async function viewerAcceptInvite(viewerPage: Page, joinToken: string): Promise<void> {
-  await sendSessionEvent(viewerPage, { type: 'ACCEPT_INVITE', joinToken })
+export async function viewerAcceptInvite(
+  viewerPage: Page,
+  joinToken: string,
+  me: TestIdentity = { userId: 'e2e-viewer', displayName: 'E2E Viewer' }
+): Promise<void> {
+  await sendSessionEvent(viewerPage, {
+    type: 'ACCEPT_INVITE',
+    joinToken,
+    sessionId: sessionIdFromJoinToken(joinToken),
+    me: { ...me, authToken: testBearer(me) }
+  })
 }
