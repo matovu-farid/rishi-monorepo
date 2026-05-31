@@ -37,7 +37,17 @@ test('requiresApproval: viewer queued → host approves → both live', async ()
     )
     await viewerAcceptInvite(viewer.page, joinToken)
 
-    await waitForSessionState(viewer.page, (v) => v === 'awaitingApproval', 10_000)
+    // awaitingApproval is now an internal substate of `connected` (so the
+    // WS opens and the worker can queue the pending join). Accept either
+    // the legacy top-level shape or the new nested `{ connected: 'awaitingApproval' }`.
+    await waitForSessionState(viewer.page, (v) => {
+      if (v === 'awaitingApproval') return true
+      if (typeof v === 'object' && v !== null) {
+        const inner = (v as { connected?: unknown }).connected
+        if (inner === 'awaitingApproval') return true
+      }
+      return false
+    }, 10_000)
 
     const hostSnap = await readSessionSnapshot(host.page)
     expect(hostSnap.context.pendingJoiners.length).toBeGreaterThan(0)
@@ -74,7 +84,17 @@ test('requiresApproval: host rejects → viewer reaches failed', async () => {
       await hostCreateSession(host.page, { requiresApproval: true })
     )
     await viewerAcceptInvite(viewer.page, joinToken)
-    await waitForSessionState(viewer.page, (v) => v === 'awaitingApproval', 10_000)
+    // awaitingApproval is now an internal substate of `connected` (so the
+    // WS opens and the worker can queue the pending join). Accept either
+    // the legacy top-level shape or the new nested `{ connected: 'awaitingApproval' }`.
+    await waitForSessionState(viewer.page, (v) => {
+      if (v === 'awaitingApproval') return true
+      if (typeof v === 'object' && v !== null) {
+        const inner = (v as { connected?: unknown }).connected
+        if (inner === 'awaitingApproval') return true
+      }
+      return false
+    }, 10_000)
 
     await sendSessionEvent(host.page, { type: 'REJECT_JOIN', userId: 'viewer-a2' })
 

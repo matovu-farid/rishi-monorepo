@@ -34,6 +34,7 @@ export type SignalingOutEvent =
   | { type: 'HOST_RESUMED' }
   | { type: 'KICKED'; msg: Extract<ServerMsg, { t: 'kicked' }> }
   | { type: 'SESSION_ENDED'; msg: Extract<ServerMsg, { t: 'session.ended' }> }
+  | { type: 'SYNC_FRAME'; msg: Extract<ServerMsg, { t: 'sync.frame' }> }
   | { type: 'SIGNALING_DROPPED'; code: number; reason: string }
   | { type: 'PROTOCOL_ERROR'; raw: string }
 
@@ -120,6 +121,7 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
         case 'host.resumed': out({ type: 'HOST_RESUMED' }); break
         case 'kicked': out({ type: 'KICKED', msg: m }); break
         case 'session.ended': out({ type: 'SESSION_ENDED', msg: m }); break
+        case 'sync.frame': out({ type: 'SYNC_FRAME', msg: m }); break
         case 'pong': break
         case 'error':
           notifySignalingError(m.code)

@@ -116,7 +116,12 @@ describe('sessionMachine', () => {
       sessionId: 's1',
       joinToken: 'jt'
     })
-    await vi.waitFor(() => expect(a.getSnapshot().value).toBe('awaitingApproval'))
+    // After the joining-into-connected refactor, awaitingApproval is an
+    // internal substate of `connected` (so the WS opens and the worker can
+    // register the pending join). The state value is now nested.
+    await vi.waitFor(() =>
+      expect(stateMatches(a.getSnapshot().value, 'awaitingApproval')).toBe(true)
+    )
   })
 
   it('redeem failure → failed', async () => {
@@ -226,6 +231,127 @@ describe('sessionMachine', () => {
 
     expect(a.getSnapshot().context.reconnectToken).toBe('rt')
     expect(a.getSnapshot().context.sharerId).toBe('u_a')
+  })
+
+  it('SHARER_POSITION_UPDATE forwards a SyncMsg over signaling and updates lastSyncedPosition', async () => {
+    const stub = makeStubSignaling()
+    const a = createActor(provideDeps({ signalingStub: stub }))
+    a.start()
+    a.send({
+      type: 'CREATE_SESSION',
+      me: { userId: 'u_a', displayName: 'Me', authToken: 'jwt' },
+      bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
+      requiresApproval: false
+    })
+    await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true))
+    a.send({ type: 'SHARER_POSITION_UPDATE', pageIndex: 3 })
+    expect(a.getSnapshot().context.lastSyncedPosition?.pageIndex).toBe(3)
+    const sent = stub.sent.find((e) => e.type === 'SEND')
+    expect(sent).toBeTruthy()
+    const payload = (sent as unknown as { payload: { t: string; frame: { t: string; position: { page: number } } } }).payload
+    expect(payload.t).toBe('sync.frame')
+    expect(payload.frame.t).toBe('reader.position')
+    expect(payload.frame.position.page).toBe(3)
+  })
+
+  it('SYNC_FRAME with reader.position updates lastSyncedPosition', async () => {
+    const stub = makeStubSignaling()
+    const a = createActor(provideDeps({ signalingStub: stub }))
+    a.start()
+    a.send({
+      type: 'ACCEPT_INVITE',
+      me: { userId: 'u_b', displayName: 'B', authToken: 'jwt' },
+      sessionId: 's1', joinToken: 'jt'
+    })
+    await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true))
+    stub.fire({
+      type: 'SYNC_FRAME',
+      msg: {
+        v: 1, t: 'sync.frame', from: 'u_a',
+        frame: {
+          v: 1, t: 'reader.position', ts: Date.now(), bookId: 'b',
+          position: { format: 'pdf', page: 7, offsetY: 0, ts: Date.now() }
+        }
+      }
+    })
+    expect(a.getSnapshot().context.lastSyncedPosition?.pageIndex).toBe(7)
+  })
+
+  it('APPROVAL_RESULT(approved=true) transitions awaitingApproval → connecting', async () => {
+    const stub = makeStubSignaling()
+    const a = createActor(provideDeps({ redeemRequiresApproval: true, signalingStub: stub }))
+    a.start()
+    a.send({
+      type: 'ACCEPT_INVITE',
+      me: { userId: 'u_b', displayName: 'B', authToken: 'jwt' },
+      sessionId: 's1', joinToken: 'jt'
+    })
+    await vi.waitFor(() =>
+      expect(stateMatches(a.getSnapshot().value, 'awaitingApproval')).toBe(true)
+    )
+    stub.fire({
+      type: 'APPROVAL_RESULT',
+      msg: { v: 1, t: 'approval.result', approved: true }
+    })
+    await vi.waitFor(() =>
+      expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true)
+    )
+    expect(a.getSnapshot().context.approvalStatus).toBe('approved')
+  })
+
+  it('APPROVAL_RESULT(approved=false) transitions awaitingApproval → failed', async () => {
+    const stub = makeStubSignaling()
+    const a = createActor(provideDeps({ redeemRequiresApproval: true, signalingStub: stub }))
+    a.start()
+    a.send({
+      type: 'ACCEPT_INVITE',
+      me: { userId: 'u_b', displayName: 'B', authToken: 'jwt' },
+      sessionId: 's1', joinToken: 'jt'
+    })
+    await vi.waitFor(() =>
+      expect(stateMatches(a.getSnapshot().value, 'awaitingApproval')).toBe(true)
+    )
+    stub.fire({
+      type: 'APPROVAL_RESULT',
+      msg: { v: 1, t: 'approval.result', approved: false, reason: 'no' }
+    })
+    await vi.waitFor(() => expect(a.getSnapshot().value).toBe('failed'))
+    expect(a.getSnapshot().context.approvalStatus).toBe('rejected')
+  })
+
+  it('REPORT_HAS_BOOK forwards a has.book frame over signaling', async () => {
+    const stub = makeStubSignaling()
+    const a = createActor(provideDeps({ signalingStub: stub }))
+    a.start()
+    a.send({
+      type: 'CREATE_SESSION',
+      me: { userId: 'u_a', displayName: 'Me', authToken: 'jwt' },
+      bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
+      requiresApproval: false
+    })
+    await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true))
+    a.send({ type: 'REPORT_HAS_BOOK', value: true })
+    const sent = stub.sent.find((e) => e.type === 'SEND')
+    const payload = (sent as { payload: { t: string; value: boolean } } | undefined)?.payload
+    expect(payload?.t).toBe('has.book')
+    expect(payload?.value).toBe(true)
+  })
+
+  it('SIGNALING_DROPPED → reconnecting → RECONNECTED → reconnects to connected', async () => {
+    const stub = makeStubSignaling()
+    const a = createActor(provideDeps({ signalingStub: stub }))
+    a.start()
+    a.send({
+      type: 'CREATE_SESSION',
+      me: { userId: 'u_a', displayName: 'Me', authToken: 'jwt' },
+      bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
+      requiresApproval: false
+    })
+    await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true))
+    a.send({ type: 'SIGNALING_DROPPED', code: 4000, reason: 'test' })
+    expect(a.getSnapshot().value).toBe('reconnecting')
+    a.send({ type: 'RECONNECTED' })
+    await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true))
   })
 
   it('LEAVE from live skips prompt and goes to idle when no books were received', async () => {

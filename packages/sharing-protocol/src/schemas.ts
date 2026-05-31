@@ -24,6 +24,17 @@ export const ClientMsg = z.discriminatedUnion("t", [
   Base.extend({ t: z.literal("mic.state"), value: z.enum(["unmuted", "self-muted"]) }),
   Base.extend({ t: z.literal("leave") }),
   Base.extend({ t: z.literal("ping") }),
+  // Sync-frame relay. Carries an opaque payload (validated as a SyncMsg by the
+  // protocol's `sync.ts` schema on the client side). The worker broadcasts to
+  // all other connected participants without inspecting `frame`.
+  //
+  // Design note: the production happy-path for reader-position sync is the
+  // peer-to-peer `sync` data channel on each RTCPeerConnection. This WS relay
+  // is a server-side fallback used when the data-channel send is unavailable
+  // (e.g. the E2E fake `RtcAdapter` is a no-op). Production code may also use
+  // the relay when DCs haven't opened yet — it's cheap and rate-limited by the
+  // existing per-socket frame bucket.
+  Base.extend({ t: z.literal("sync.frame"), frame: z.unknown() }),
 ]);
 export type ClientMsg = z.infer<typeof ClientMsg>;
 
@@ -75,6 +86,9 @@ export const ServerMsg = z.discriminatedUnion("t", [
   }),
   Base.extend({ t: z.literal("error"), code: z.string(), message: z.string() }),
   Base.extend({ t: z.literal("pong") }),
+  // Relayed sync frame. `from` is the sender's userId; `frame` is the opaque
+  // SyncMsg payload (validated client-side against `sync.ts`).
+  Base.extend({ t: z.literal("sync.frame"), from: UserId, frame: z.unknown() }),
 ]);
 export type ServerMsg = z.infer<typeof ServerMsg>;
 

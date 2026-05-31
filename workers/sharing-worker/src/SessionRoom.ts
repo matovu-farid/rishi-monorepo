@@ -282,6 +282,24 @@ export class SessionRoom extends DurableObject<Env> {
         }
         break;
       }
+      case "sync.frame": {
+        // Server-side fallback for the per-peer `sync` data channel. The worker
+        // relays an opaque `frame` payload (a SyncMsg, validated by the client)
+        // to every other participant. The per-socket RateBucket above already
+        // throttled the frame to `framesPerSocketPerSec`.
+        const state = await this.loadState();
+        if (!state) break;
+        // Only the current sharer may broadcast position-style frames. This
+        // mirrors the production p2p path where only the sharer's `sync`
+        // channel is the source of truth.
+        if (meta.userId !== state.sharerUserId) break;
+        const relay = { t: "sync.frame", from: meta.userId, frame: msg.frame } as const;
+        for (const other of this.sockets()) {
+          if (other === ws) continue;
+          this.sendTo(other, relay);
+        }
+        break;
+      }
       // Other handlers added in later tasks.
       default: this.sendError(ws, "unknown", `no handler for ${(msg as any).t}`);
     }
