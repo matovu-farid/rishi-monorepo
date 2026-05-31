@@ -4,8 +4,9 @@ import TTSControls from '@/components/tts/TTSControls'
 import AIChatOrb from '@/components/chat/AIChatOrb'
 import VoiceChatLauncher from '@/components/chat/VoiceChatLauncher'
 import { TTSVisualCue } from './TTSVisualCue'
-import { isSharingEnabled } from '@/lib/sharing-flag'
+import { isSharingEnabledForUser } from '@/lib/sharing-flag'
 import { SessionEntryButton } from '@/components/sharing/SessionEntryButton'
+import { useAuthStore } from '@/stores/authStore'
 
 type ReaderOverlayControlsProps = {
   bookId: string
@@ -36,12 +37,16 @@ export default function ReaderOverlayControls({
   void _chatPanelOpen
   const isChatting = useChatStore((s) => s.isChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
+  const userId = useAuthStore((s) => s.user?.id)
+  // No userId → user is unauthenticated; hide the sharing entry button rather
+  // than leak the affordance to a user who can't actually start a session.
+  const showSharingEntry = userId !== undefined && isSharingEnabledForUser(userId)
 
   return (
     <>
       {isChatting ? <AIChatOrb chatStatus={chatStatus} onClick={onChatOrbClick} /> : null}
       <VoiceChatLauncher />
-      {isSharingEnabled() && <SessionEntryButton bookId={Number(bookId)} />}
+      {showSharingEntry && <SessionEntryButton bookId={Number(bookId)} />}
       <div style={{ display: isChatting ? 'none' : 'contents' }}>
         <TTSControls bookId={bookId} />
         <TTSVisualCue />

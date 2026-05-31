@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSessionMachine } from '@/hooks/useSessionMachine'
-import { isSharingEnabled } from '@/lib/sharing-flag'
+import { isSharingEnabled, isSharingEnabledForUser } from '@/lib/sharing-flag'
 import { SessionPanel, type SessionPanelParticipant } from './SessionPanel'
 import { ApprovalWaitingScreen } from './ApprovalWaitingScreen'
 import { HostSuspendedBanner } from './HostSuspendedBanner'
@@ -75,8 +75,12 @@ function valueIncludesKey(value: unknown, key: string, target: string): boolean 
  *     `connected.promptingKeepBooks`.
  */
 export function SharingSessionOverlay(): React.JSX.Element | null {
-  const enabled = isSharingEnabled()
   const { state, send } = useSessionMachine()
+  // Phase 2/3 rollout: once we know who the user is, evaluate the per-user
+  // shard. While the machine is still idle (no `me`), keep the existing
+  // feature-flag check so the entry-button gate elsewhere can still appear.
+  const meUserId = state.context.me?.userId
+  const enabled = meUserId ? isSharingEnabledForUser(meUserId) : isSharingEnabled()
   const [roleTransferMessage, setRoleTransferMessage] = useState<string | null>(null)
   const prevSharerIdRef = useRef<string | null>(state.context.sharerId)
 

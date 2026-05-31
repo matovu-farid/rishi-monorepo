@@ -34,8 +34,9 @@ import 'react-pdf/dist/Page/TextLayer.css'
 import { usePdfStore } from '@/stores/pdfStore'
 import { ThumbnailSidebar } from './thumbnail-sidebar'
 import TTSControls from '@/components/tts/TTSControls'
-import { isSharingEnabled } from '@/lib/sharing-flag'
+import { isSharingEnabledForUser } from '@/lib/sharing-flag'
 import { SessionEntryButton } from '@/components/sharing/SessionEntryButton'
+import { useAuthStore } from '@/stores/authStore'
 import { pdfViewActor, type PdfViewInput, type PdfViewSnapshot } from '@/actors/pdfViewActor'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 import type { TextContent } from 'react-pdf'
@@ -112,6 +113,10 @@ export function PdfView({
   const isChatting = useChatStore((s) => s.isChatting)
   const chatStatus = useChatStore((s) => s.chatStatus)
   const queryClient = useQueryClient()
+  const userId = useAuthStore((s) => s.user?.id)
+  // No userId → unauthenticated; hide the sharing entry button to avoid
+  // surfacing the affordance for a user who can't start a session yet.
+  const showSharingEntry = userId !== undefined && isSharingEnabledForUser(userId)
 
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const [selectionPopover, setSelectionPopover] = useState<{
@@ -1084,7 +1089,7 @@ export function PdfView({
       {/* Share button — mounts useSessionMachine so the session actor is
           live and `window.__rishi.sessionMachineStore` is observable while
           the reader is open. Mirror of EpubView's ReaderOverlayControls. */}
-      {isSharingEnabled() && <SessionEntryButton bookId={book.id} />}
+      {showSharingEntry && <SessionEntryButton bookId={book.id} />}
 
       {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
       <div style={{ display: isChatting ? 'none' : 'contents' }}>

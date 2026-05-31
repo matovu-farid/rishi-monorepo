@@ -2,7 +2,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 
 vi.mock('@/lib/sharing-flag', () => ({
-  isSharingEnabled: () => true
+  isSharingEnabled: () => true,
+  isSharingEnabledForUser: () => true
 }))
 
 // Stub the session machine hook directly so we don't have to spin up xstate
