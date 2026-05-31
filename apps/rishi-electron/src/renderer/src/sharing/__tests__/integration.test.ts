@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createActor, fromPromise } from 'xstate'
+import { createActor, fromCallback, fromPromise } from 'xstate'
 import { sessionMachine } from '@/machines/sessionMachine'
 import { signalingActor } from '@/actors/sharing/signalingActor'
 import { syncActor } from '@/actors/sharing/syncActor'
@@ -45,7 +45,8 @@ describe('full-stack integration (no real network)', () => {
             joinUrl: 'rishi://sharing/join?t=jt',
             wsUrl: 'wss://x/v1/sessions/s1/wss'
           })),
-          redeemJoinToken: fromPromise(async () => { throw new Error('not used') })
+          redeemJoinToken: fromPromise(async () => { throw new Error('not used') }),
+          signaling: fromCallback(() => { /* inert */ })
         }
       })
     )
@@ -59,7 +60,8 @@ describe('full-stack integration (no real network)', () => {
             requiresApproval: false,
             hostProfile: { displayName: 'Host' },
             wsUrl: 'wss://x/v1/sessions/s1/wss'
-          }))
+          })),
+          signaling: fromCallback(() => { /* inert */ })
         }
       })
     )
@@ -76,8 +78,15 @@ describe('full-stack integration (no real network)', () => {
       me: { userId: 'u_b', displayName: 'V', authToken: 'jwt' },
       sessionId: 's1', joinToken: 'jt'
     })
-    await vi.waitFor(() => expect(host.getSnapshot().value).toBe('connecting'))
-    await vi.waitFor(() => expect(viewer.getSnapshot().value).toBe('connecting'))
+    const inConnecting = (snap: ReturnType<typeof host.getSnapshot>): boolean => {
+      const v = snap.value as unknown
+      if (v === 'connecting') return true
+      return typeof v === 'object' && v !== null
+        && 'connected' in (v as Record<string, unknown>)
+        && (v as { connected: unknown }).connected === 'connecting'
+    }
+    await vi.waitFor(() => expect(inConnecting(host.getSnapshot())).toBe(true))
+    await vi.waitFor(() => expect(inConnecting(viewer.getSnapshot())).toBe(true))
     host.send({ type: 'ROSTER_READY' })
     viewer.send({ type: 'ROSTER_READY' })
     expect(typeof host.getSnapshot().value).toBe('object')

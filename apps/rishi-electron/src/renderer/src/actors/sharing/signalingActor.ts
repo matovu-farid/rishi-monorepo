@@ -40,7 +40,7 @@ export type SignalingOutEvent =
 const HEARTBEAT_MS = 20_000
 
 export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, SignalingOutEvent>(
-  ({ emit, receive, input }) => {
+  ({ emit, sendBack, receive, input }) => {
     const connect = input.connect ?? defaultWsConnect
     const subprotocols = ['rishi.sharing.v1', `jwt.${input.jwt}`]
     if (input.reconnectToken) subprotocols.push(`reconnect.${input.reconnectToken}`)
@@ -52,8 +52,20 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
 
     let heartbeat: ReturnType<typeof setInterval> | null = null
 
+    /**
+     * Send an event to *both* the emit channel (so callers using
+     * `actor.on('*', …)` keep working — primarily the actor's unit tests) AND
+     * back to the parent invoking machine. The parent path is the load-bearing
+     * one for production: without `sendBack`, the `sessionMachine` would never
+     * see ROSTER / PEER_JOINED / etc. and would sit forever in `connecting`.
+     */
+    const out = (e: SignalingOutEvent): void => {
+      sendBack(e)
+      emit(e)
+    }
+
     ws.onOpen(() => {
-      emit({ type: 'CONNECTED' })
+      out({ type: 'CONNECTED' })
       ws.send(JSON.stringify({ v: 1, t: 'hello', hasBookFile: input.hasBookFile }))
       heartbeat = setInterval(() => {
         try { ws.send(JSON.stringify({ v: 1, t: 'ping' })) } catch { /* ignored */ }
@@ -63,36 +75,36 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
     ws.onMessage((raw) => {
       let parsed: unknown
       try { parsed = JSON.parse(raw) } catch {
-        emit({ type: 'PROTOCOL_ERROR', raw })
+        out({ type: 'PROTOCOL_ERROR', raw })
         return
       }
       const result = ServerMsg.safeParse(parsed)
       if (!result.success) {
         notifySignalingError('protocol_error')
-        emit({ type: 'PROTOCOL_ERROR', raw })
+        out({ type: 'PROTOCOL_ERROR', raw })
         return
       }
       const m = result.data
       switch (m.t) {
-        case 'welcome': emit({ type: 'WELCOME', msg: m }); break
-        case 'roster': emit({ type: 'ROSTER', msg: m }); break
-        case 'peer.joined': emit({ type: 'PEER_JOINED', msg: m }); break
-        case 'peer.left': emit({ type: 'PEER_LEFT', msg: m }); break
-        case 'peer.updated': emit({ type: 'PEER_UPDATED', msg: m }); break
-        case 'sdp.offer': emit({ type: 'SDP_OFFER', msg: m }); break
-        case 'sdp.answer': emit({ type: 'SDP_ANSWER', msg: m }); break
-        case 'ice': emit({ type: 'ICE_CANDIDATE', msg: m }); break
-        case 'role.transferred': emit({ type: 'ROLE_TRANSFERRED', msg: m }); break
-        case 'join.requested': emit({ type: 'JOIN_REQUESTED', msg: m }); break
-        case 'approval.result': emit({ type: 'APPROVAL_RESULT', msg: m }); break
-        case 'host.suspended': emit({ type: 'HOST_SUSPENDED', msg: m }); break
-        case 'host.resumed': emit({ type: 'HOST_RESUMED' }); break
-        case 'kicked': emit({ type: 'KICKED', msg: m }); break
-        case 'session.ended': emit({ type: 'SESSION_ENDED', msg: m }); break
+        case 'welcome': out({ type: 'WELCOME', msg: m }); break
+        case 'roster': out({ type: 'ROSTER', msg: m }); break
+        case 'peer.joined': out({ type: 'PEER_JOINED', msg: m }); break
+        case 'peer.left': out({ type: 'PEER_LEFT', msg: m }); break
+        case 'peer.updated': out({ type: 'PEER_UPDATED', msg: m }); break
+        case 'sdp.offer': out({ type: 'SDP_OFFER', msg: m }); break
+        case 'sdp.answer': out({ type: 'SDP_ANSWER', msg: m }); break
+        case 'ice': out({ type: 'ICE_CANDIDATE', msg: m }); break
+        case 'role.transferred': out({ type: 'ROLE_TRANSFERRED', msg: m }); break
+        case 'join.requested': out({ type: 'JOIN_REQUESTED', msg: m }); break
+        case 'approval.result': out({ type: 'APPROVAL_RESULT', msg: m }); break
+        case 'host.suspended': out({ type: 'HOST_SUSPENDED', msg: m }); break
+        case 'host.resumed': out({ type: 'HOST_RESUMED' }); break
+        case 'kicked': out({ type: 'KICKED', msg: m }); break
+        case 'session.ended': out({ type: 'SESSION_ENDED', msg: m }); break
         case 'pong': break
         case 'error':
           notifySignalingError(m.code)
-          emit({ type: 'PROTOCOL_ERROR', raw })
+          out({ type: 'PROTOCOL_ERROR', raw })
           break
       }
     })
@@ -101,7 +113,7 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
       if (heartbeat) clearInterval(heartbeat)
       registerSignalingWs(null)
       notifySignalingError(`signaling_dropped_${code}`)
-      emit({ type: 'SIGNALING_DROPPED', code, reason })
+      out({ type: 'SIGNALING_DROPPED', code, reason })
     })
 
     ws.onError(() => { /* error → close path handles teardown */ })

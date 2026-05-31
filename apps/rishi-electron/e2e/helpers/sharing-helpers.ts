@@ -50,8 +50,15 @@ export async function waitForSessionState(
 }
 
 export async function waitForBothLive(hostPage: Page, viewerPage: Page): Promise<void> {
-  const isLive = (v: unknown): boolean =>
-    typeof v === 'object' && v !== null && 'live' in (v as object)
+  // The session machine wraps connecting/live/reconnecting under a parent
+  // `connected` state. Accept either the legacy top-level `{ live: ... }` shape
+  // or the new wrapped `{ connected: { live: ... } }` shape.
+  const isLive = (v: unknown): boolean => {
+    if (typeof v !== 'object' || v === null) return false
+    if ('live' in (v as object)) return true
+    const inner = (v as { connected?: unknown }).connected
+    return typeof inner === 'object' && inner !== null && 'live' in (inner as object)
+  }
   await Promise.all([
     waitForSessionState(hostPage, isLive),
     waitForSessionState(viewerPage, isLive)
