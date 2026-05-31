@@ -332,7 +332,11 @@ export async function clickMenuItem(
 
 export interface SharingLaunchOptions extends LaunchOptions {
   workerUrl: string
-  /** Fake user identity matching the Worker's test-shortcut JWT format: "userId:DisplayName". */
+  /**
+   * Fake user identity matching the Worker's test-shortcut JWT format: "userId:DisplayName".
+   * Currently informational — not read by the main process; the worker mints the JWT.
+   * Kept on the type so call-sites stay readable and we can plumb it later if needed.
+   */
   userId: string
   displayName: string
 }
@@ -345,9 +349,7 @@ export async function launchAppWithSharingEnv(opts: SharingLaunchOptions): Promi
       ...process.env,
       NODE_ENV: 'production',
       SHARING_WORKER_URL: opts.workerUrl,
-      VITE_SHARING_ENABLED: '1',
-      SHARING_TEST_USER_ID: opts.userId,
-      SHARING_TEST_DISPLAY_NAME: opts.displayName
+      VITE_SHARING_ENABLED: '1'
     }
   })
   const page = await app.firstWindow()
