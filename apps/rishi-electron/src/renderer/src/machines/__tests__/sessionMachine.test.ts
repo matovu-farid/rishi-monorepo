@@ -319,6 +319,43 @@ describe('sessionMachine', () => {
     expect(a.getSnapshot().context.approvalStatus).toBe('rejected')
   })
 
+  it('KICK_PEER from host forwards a kick.peer frame over signaling while live', async () => {
+    const stub = makeStubSignaling()
+    const a = createActor(provideDeps({ signalingStub: stub }))
+    a.start()
+    a.send({
+      type: 'CREATE_SESSION',
+      me: { userId: 'u_a', displayName: 'Me', authToken: 'jwt' },
+      bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
+      requiresApproval: false
+    })
+    await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true))
+    // Drive to live via ROSTER so the substate is live, not connecting.
+    stub.fire({
+      type: 'WELCOME',
+      msg: {
+        v: 1, t: 'welcome', you: 'u_a', role: 'host',
+        sharerId: 'u_a', reconnectToken: 'rt', reservedUntil: 9999
+      }
+    })
+    stub.fire({
+      type: 'ROSTER',
+      msg: {
+        v: 1, t: 'roster', participants: [],
+        requiresApproval: false,
+        bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
+        status: 'live'
+      }
+    })
+    await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'live')).toBe(true))
+    a.send({ type: 'KICK_PEER', userId: 'u_b' })
+    const sent = stub.sent.filter((e) => e.type === 'SEND')
+    const payload = sent.map((e) => (e as { payload: { t: string; userId: string } }).payload)
+      .find((p) => p.t === 'kick.peer')
+    expect(payload).toBeTruthy()
+    expect(payload?.userId).toBe('u_b')
+  })
+
   it('REPORT_HAS_BOOK forwards a has.book frame over signaling', async () => {
     const stub = makeStubSignaling()
     const a = createActor(provideDeps({ signalingStub: stub }))
@@ -335,6 +372,31 @@ describe('sessionMachine', () => {
     const payload = (sent as { payload: { t: string; value: boolean } } | undefined)?.payload
     expect(payload?.t).toBe('has.book')
     expect(payload?.value).toBe(true)
+  })
+
+  it('SIGNALING_DROPPED → reconnecting → reconnectDriver auto-fires RECONNECTED', async () => {
+    vi.useFakeTimers()
+    try {
+      const stub = makeStubSignaling()
+      const a = createActor(provideDeps({ signalingStub: stub }))
+      a.start()
+      a.send({
+        type: 'CREATE_SESSION',
+        me: { userId: 'u_a', displayName: 'Me', authToken: 'jwt' },
+        bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
+        requiresApproval: false
+      })
+      await vi.advanceTimersByTimeAsync(10)
+      expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true)
+      a.send({ type: 'SIGNALING_DROPPED', code: 4000, reason: 'test' })
+      expect(a.getSnapshot().value).toBe('reconnecting')
+      // The default reconnect actor is the inert driver — it fires
+      // RECONNECTED after `input.delayMs` (1500ms by default).
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('SIGNALING_DROPPED → reconnecting → RECONNECTED → reconnects to connected', async () => {

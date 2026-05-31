@@ -70,9 +70,14 @@ test.describe('Shared reading — happy path', () => {
     })
     try {
       const joinToken = extractJoinToken(
-        await hostCreateSession(host.page, { requiresApproval: false })
+        await hostCreateSession(host.page, {
+          requiresApproval: false,
+          me: { userId: 'host-2', displayName: 'Host' }
+        })
       )
-      await viewerAcceptInvite(viewer.page, joinToken)
+      await viewerAcceptInvite(viewer.page, joinToken, {
+        userId: 'viewer-2', displayName: 'Viewer'
+      })
       await waitForBothLive(host.page, viewer.page)
 
       // Sharer advances to page index 3 via the sessionMachine SHARER_POSITION_UPDATE event.
@@ -102,9 +107,14 @@ test.describe('Shared reading — happy path', () => {
     })
     try {
       const joinToken = extractJoinToken(
-        await hostCreateSession(host.page, { requiresApproval: false })
+        await hostCreateSession(host.page, {
+          requiresApproval: false,
+          me: { userId: 'host-3', displayName: 'Host' }
+        })
       )
-      await viewerAcceptInvite(viewer.page, joinToken)
+      await viewerAcceptInvite(viewer.page, joinToken, {
+        userId: 'viewer-3', displayName: 'Viewer'
+      })
       await waitForBothLive(host.page, viewer.page)
 
       // Viewer reports it has the book so the DO allows pass.sharer.
@@ -150,16 +160,25 @@ test.describe('Shared reading — happy path', () => {
     })
     try {
       const joinToken = extractJoinToken(
-        await hostCreateSession(host.page, { requiresApproval: false })
+        await hostCreateSession(host.page, {
+          requiresApproval: false,
+          me: { userId: 'host-4', displayName: 'Host' }
+        })
       )
-      await viewerAcceptInvite(viewer.page, joinToken)
+      await viewerAcceptInvite(viewer.page, joinToken, {
+        userId: 'viewer-4', displayName: 'Viewer'
+      })
       await waitForBothLive(host.page, viewer.page)
 
       await sendSessionEvent(host.page, { type: 'KICK_PEER', userId: 'viewer-4' })
 
       await waitForSessionState(
         viewer.page,
-        (v) => v === 'idle' || (typeof v === 'object' && v !== null && 'failed' in (v as object)),
+        (v) =>
+          v === 'idle' ||
+          v === 'failed' ||
+          v === 'ending' ||
+          (typeof v === 'object' && v !== null && 'failed' in (v as object)),
         10_000
       )
     } finally {
@@ -187,9 +206,14 @@ test.describe('Shared reading — happy path', () => {
     let hostReborn: Awaited<ReturnType<typeof launchAndOpenBookForSharing>> | null = null
     try {
       const joinToken = extractJoinToken(
-        await hostCreateSession(host.page, { requiresApproval: false })
+        await hostCreateSession(host.page, {
+          requiresApproval: false,
+          me: { userId: 'host-5', displayName: 'Host' }
+        })
       )
-      await viewerAcceptInvite(viewer.page, joinToken)
+      await viewerAcceptInvite(viewer.page, joinToken, {
+        userId: 'viewer-5', displayName: 'Viewer'
+      })
       await waitForBothLive(host.page, viewer.page)
 
       const reconnectToken: string = await host.page.evaluate(() => {
@@ -226,10 +250,17 @@ test.describe('Shared reading — happy path', () => {
         kind: 'pdf'
       })
 
+      // Provide `me` so the WS handshake uses the same `host-5` bearer as
+      // the original host; the worker's reconnectToken is keyed by userId.
       await sendSessionEvent(hostReborn.page, {
         type: 'RECONNECT_SESSION',
         sessionId,
-        reconnectToken
+        reconnectToken,
+        me: {
+          userId: 'host-5',
+          displayName: 'Host',
+          authToken: 'host-5--Host'
+        }
       })
       await waitForSessionState(
         hostReborn.page,

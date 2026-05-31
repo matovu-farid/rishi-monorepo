@@ -32,9 +32,14 @@ test('viewer WS drop → reconnecting → seamless rejoin within 30s grace', asy
   })
   try {
     const joinToken = extractJoinToken(
-      await hostCreateSession(host.page, { requiresApproval: false })
+      await hostCreateSession(host.page, {
+        requiresApproval: false,
+        me: { userId: 'host-r1', displayName: 'Host' }
+      })
     )
-    await viewerAcceptInvite(viewer.page, joinToken)
+    await viewerAcceptInvite(viewer.page, joinToken, {
+      userId: 'viewer-r1', displayName: 'Viewer'
+    })
     await waitForBothLive(host.page, viewer.page)
 
     // Force-disconnect via test hook exposed by signalingActor (Plan 2 prerequisite P4).
@@ -56,10 +61,16 @@ test('viewer WS drop → reconnecting → seamless rejoin within 30s grace', asy
       10_000
     )
 
-    // reconnectActor brings viewer back to live via exponential backoff (max 8s + network).
+    // reconnectActor brings viewer back to live via exponential backoff
+    // (max 8s + network). After reconnect, value is `{ connected: { live: ... } }`.
     await waitForSessionState(
       viewer.page,
-      (v) => typeof v === 'object' && v !== null && 'live' in (v as object),
+      (v) => {
+        if (typeof v !== 'object' || v === null) return false
+        if ('live' in (v as object)) return true
+        const inner = (v as { connected?: unknown }).connected
+        return typeof inner === 'object' && inner !== null && 'live' in (inner as object)
+      },
       35_000
     )
 

@@ -33,9 +33,14 @@ test('requiresApproval: viewer queued → host approves → both live', async ()
   })
   try {
     const joinToken = extractJoinToken(
-      await hostCreateSession(host.page, { requiresApproval: true })
+      await hostCreateSession(host.page, {
+        requiresApproval: true,
+        me: { userId: 'host-a1', displayName: 'Host' }
+      })
     )
-    await viewerAcceptInvite(viewer.page, joinToken)
+    await viewerAcceptInvite(viewer.page, joinToken, {
+      userId: 'viewer-a1', displayName: 'Viewer'
+    })
 
     // awaitingApproval is now an internal substate of `connected` (so the
     // WS opens and the worker can queue the pending join). Accept either
@@ -81,9 +86,14 @@ test('requiresApproval: host rejects → viewer reaches failed', async () => {
   })
   try {
     const joinToken = extractJoinToken(
-      await hostCreateSession(host.page, { requiresApproval: true })
+      await hostCreateSession(host.page, {
+        requiresApproval: true,
+        me: { userId: 'host-a2', displayName: 'Host' }
+      })
     )
-    await viewerAcceptInvite(viewer.page, joinToken)
+    await viewerAcceptInvite(viewer.page, joinToken, {
+      userId: 'viewer-a2', displayName: 'Viewer'
+    })
     // awaitingApproval is now an internal substate of `connected` (so the
     // WS opens and the worker can queue the pending join). Accept either
     // the legacy top-level shape or the new nested `{ connected: 'awaitingApproval' }`.
@@ -100,7 +110,8 @@ test('requiresApproval: host rejects → viewer reaches failed', async () => {
 
     await waitForSessionState(
       viewer.page,
-      (v) => typeof v === 'object' && v !== null && 'failed' in (v as object),
+      (v) => v === 'failed' ||
+        (typeof v === 'object' && v !== null && 'failed' in (v as object)),
       10_000
     )
     const snap = await readSessionSnapshot(viewer.page)

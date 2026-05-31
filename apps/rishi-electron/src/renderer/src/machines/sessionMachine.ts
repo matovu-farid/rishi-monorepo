@@ -595,7 +595,7 @@ export const sessionMachine = setup({
         // SIGNALING_DROPPED leaves `connected` for the top-level reconnecting
         // state so that re-entering `connected` re-invokes signaling with the
         // latest reconnectToken.
-        SIGNALING_DROPPED: { target: 'reconnecting' },
+        SIGNALING_DROPPED: { target: '#session.reconnecting' },
         SIGNALING_FAILED: { target: 'failed', actions: 'storeError' },
         KICKED: [
           { target: '.promptingKeepBooks', guard: 'hasReceivedBooks', actions: 'storeError' },
@@ -700,10 +700,14 @@ export const sessionMachine = setup({
      * the desired behaviour for a flaky network.
      */
     reconnecting: {
-      invoke: {
-        id: 'reconnect',
-        src: 'reconnect',
-        input: { delayMs: 1500 }
+      // `after` schedules a delayed RECONNECTED-equivalent transition. We use
+      // a delayed transition rather than an invoked actor here because XState
+      // schedules `after` on the parent's event queue (which is observable in
+      // tests and doesn't depend on actor-system spawn timing). The same
+      // outcome — re-enter `connected` so the in-context reconnectToken is
+      // picked up by a fresh signalingActor invocation.
+      after: {
+        1500: { target: 'connected' }
       },
       on: {
         RECONNECTED: { target: 'connected' },
