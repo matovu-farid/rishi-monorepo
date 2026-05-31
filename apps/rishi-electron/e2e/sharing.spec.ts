@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 import {
   launchAppWithSharingEnv,
+  launchAndOpenBookForSharing,
   closeApp,
   importBook,
   openBook,
@@ -21,24 +22,21 @@ import {
 test.describe('Shared reading — happy path', () => {
   test('host creates session, viewer joins, both reach live', async () => {
     const workerUrl = readWranglerDevUrl()
-    const host = await launchAppWithSharingEnv({
+    const host = await launchAndOpenBookForSharing({
       workerUrl,
       userId: 'host-1',
-      displayName: 'Host User'
+      displayName: 'Host User',
+      fixturePath: PDF_FIXTURE,
+      kind: 'pdf'
     })
-    const viewer = await launchAppWithSharingEnv({
+    const viewer = await launchAndOpenBookForSharing({
       workerUrl,
       userId: 'viewer-1',
-      displayName: 'Viewer User'
+      displayName: 'Viewer User',
+      fixturePath: PDF_FIXTURE,
+      kind: 'pdf'
     })
     try {
-      const hBook = (await importBook(host.page, { fixturePath: PDF_FIXTURE, kind: 'pdf' })).id
-      const vBook = (await importBook(viewer.page, { fixturePath: PDF_FIXTURE, kind: 'pdf' })).id
-      await openBook(host.page, hBook)
-      await openBook(viewer.page, vBook)
-      await host.page.waitForTimeout(1000)
-      await viewer.page.waitForTimeout(1000)
-
       const joinToken = extractJoinToken(
         await hostCreateSession(host.page, { requiresApproval: false })
       )

@@ -34,6 +34,8 @@ import 'react-pdf/dist/Page/TextLayer.css'
 import { usePdfStore } from '@/stores/pdfStore'
 import { ThumbnailSidebar } from './thumbnail-sidebar'
 import TTSControls from '@/components/tts/TTSControls'
+import { isSharingEnabled } from '@/lib/sharing-flag'
+import { SessionEntryButton } from '@/components/sharing/SessionEntryButton'
 import { pdfViewActor, type PdfViewInput, type PdfViewSnapshot } from '@/actors/pdfViewActor'
 import { usePlayerMachine } from '@/hooks/usePlayerMachine'
 import type { TextContent } from 'react-pdf'
@@ -1078,6 +1080,11 @@ export function PdfView({
 
       {/* Voice chat launcher — paired above the TTS play orb */}
       <VoiceChatLauncher />
+
+      {/* Share button — mounts useSessionMachine so the session actor is
+          live and `window.__rishi.sessionMachineStore` is observable while
+          the reader is open. Mirror of EpubView's ReaderOverlayControls. */}
+      {isSharingEnabled() && <SessionEntryButton bookId={book.id} />}
 
       {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
       <div style={{ display: isChatting ? 'none' : 'contents' }}>

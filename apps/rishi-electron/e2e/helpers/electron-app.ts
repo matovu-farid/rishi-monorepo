@@ -361,10 +361,20 @@ export async function launchAndOpenBookForSharing(
     kind: opts.kind
   })
   const readerPage = await openBook(libraryPage, imported.id)
-  // Give the reader's React tree a moment to mount SessionEntryButton so
-  // window.__rishi.sessionMachineStore has a registered actor before the
-  // first sendSessionEvent call.
-  await readerPage.waitForTimeout(500)
+  // Wait until the reader has mounted useSessionMachine — i.e. the actor
+  // is registered with the test-hook registry. Without this, the first
+  // sendSessionEvent call sees `sessionMachineStore.getState() === null`
+  // and the test fails with "Cannot read properties of null".
+  await readerPage.waitForFunction(
+    () => {
+      const w = window as unknown as {
+        __rishi?: { sessionMachineStore?: { getState: () => unknown } }
+      }
+      return w.__rishi?.sessionMachineStore?.getState?.() != null
+    },
+    null,
+    { timeout: 15_000, polling: 200 }
+  )
   return { ...launched, page: readerPage, libraryPage, bookId: imported.id }
 }
 
@@ -410,6 +420,11 @@ export async function launchAppWithSharingEnv(opts: SharingLaunchOptions): Promi
   await page.evaluate(() => {
     localStorage.setItem('rishi:tour-completed', '1')
     localStorage.setItem('rishi:welcome-seen', '1')
+    // The renderer's isSharingEnabled() also reads VITE_SHARING_ENABLED at
+    // build time, but the production build we test against doesn't bake
+    // that in. Flip the runtime localStorage flag so SessionEntryButton —
+    // and via it useSessionMachine — actually mounts.
+    localStorage.setItem('rishi:sharing-enabled', '1')
   })
   await page.reload()
   await page.waitForTimeout(1500)
