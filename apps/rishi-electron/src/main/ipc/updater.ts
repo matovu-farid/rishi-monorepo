@@ -2,6 +2,7 @@ import { autoUpdater } from 'electron-updater'
 import { BrowserWindow, app } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import { handle } from '../../preload/ipc-contract.js'
+import { readAutoUpdatePref } from './updaterPref.js'
 
 /**
  * Register IPC handlers for the auto-updater.
@@ -12,7 +13,10 @@ import { handle } from '../../preload/ipc-contract.js'
  */
 export function registerUpdaterHandlers(): void {
   // ── Configure autoUpdater ────────────────────────────────────────────
-  autoUpdater.autoDownload = false
+  // `autoDownload` is set per check based on the user's `autoUpdateEnabled`
+  // preference. `autoInstallOnAppQuit` stays on so a downloaded update is
+  // applied the next time the user quits — no restart prompt, no banners.
+  autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
   autoUpdater.logger = console
 
@@ -65,6 +69,17 @@ export function registerUpdaterHandlers(): void {
       console.log('[updater] Skipping update check in dev mode')
       return { updateAvailable: false }
     }
+    // Honour the user's opt-out: when auto-update is disabled, the silent
+    // startup check should be a no-op. (Manual checks from the menu use
+    // the same handler today; opting out also pauses those — flip the
+    // toggle in Settings to resume.)
+    const autoEnabled = await readAutoUpdatePref(app.getPath('userData'))
+    if (!autoEnabled) {
+      console.log('[updater] Auto-update disabled by user preference; skipping check')
+      autoUpdater.autoDownload = false
+      return { updateAvailable: false }
+    }
+    autoUpdater.autoDownload = true
     try {
       const result = await autoUpdater.checkForUpdates()
       return {
