@@ -21,6 +21,10 @@ type SyncMsgReaderPos =
     }
 type SyncMsgT = SyncMsgReaderPos
 import { signalingActor } from '@/actors/sharing/signalingActor'
+import {
+  clearSharingFeatureTag,
+  setSharingFeatureTag
+} from '@/sharing/sentryScope'
 
 type BookContextT = z.infer<typeof BookContext>
 type ParticipantT = z.infer<typeof Participant>
@@ -421,6 +425,12 @@ export const sessionMachine = setup({
     storeApprovalGranted: assign({ approvalStatus: 'approved' as const }),
     clearError: assign({ error: null }),
     resetContext: assign(() => initialContext),
+    // Pin `feature=sharing` on the global Sentry scope for the lifetime of a
+    // session — set on entry to `connected`, cleared on exit. The rollout
+    // runbook in `workers/sharing-worker/logpush/rollout-runbook.md` queries
+    // events by this tag.
+    setSharingScope: () => setSharingFeatureTag(),
+    clearSharingScope: () => clearSharingFeatureTag(),
     // Outbound: forward control events as ClientMsg over the WS.
     sendApproveJoin: sendTo('signaling', ({ event }) => {
       if (event.type !== 'APPROVE_JOIN') return { type: 'NOOP' }
@@ -556,6 +566,8 @@ export const sessionMachine = setup({
      * wrapper re-invokes the signaling actor with the latest reconnectToken.
      */
     connected: {
+      entry: 'setSharingScope',
+      exit: 'clearSharingScope',
       invoke: {
         id: 'signaling',
         src: 'signaling',

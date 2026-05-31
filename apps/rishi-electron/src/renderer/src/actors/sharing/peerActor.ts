@@ -6,6 +6,7 @@ import {
   type RtcFactory,
   type RtcDataChannelLike
 } from './rtcAdapter'
+import { recordSharingBreadcrumb, recordSharingError } from '@/sharing/sentryScope'
 
 export type PeerInput = {
   remoteUserId: string
@@ -69,10 +70,30 @@ export const peerActor = fromCallback<PeerInEvent, PeerInput, PeerOutEvent>(
     })
     pc.onDataChannel((ch) => attachChannel(ch))
     pc.onConnectionStateChange((state) => {
-      if (state === 'connected')
+      if (state === 'connected') {
         emit({ type: 'PEER_CONNECTED', remoteUserId: input.remoteUserId })
-      else if (state === 'failed' || state === 'closed')
+      } else if (state === 'failed' || state === 'disconnected') {
+        // `peer.ice_failed` covers the `sharing.ice_failed` event the rollout
+        // runbook monitors — `connectionState` rolls ICE state up, so failed
+        // or disconnected here mean the underlying ICE transport gave up.
+        // We fire the breadcrumb for both (`disconnected` is transient and can
+        // self-recover) but only Sentry-capture + emit PEER_FAILED on a true
+        // terminal state.
+        recordSharingBreadcrumb('peer.ice_failed', {
+          remoteUserId: input.remoteUserId,
+          state
+        })
+        if (state === 'failed') {
+          recordSharingError(new Error(`peer connection ${state}`), {
+            actor: 'peerActor',
+            remoteUserId: input.remoteUserId,
+            state
+          })
+          emit({ type: 'PEER_FAILED', remoteUserId: input.remoteUserId, reason: state })
+        }
+      } else if (state === 'closed') {
         emit({ type: 'PEER_FAILED', remoteUserId: input.remoteUserId, reason: state })
+      }
     })
 
     if (input.localMicTrack) pc.addTrack(input.localMicTrack.track, input.localMicTrack.stream)
@@ -90,6 +111,7 @@ export const peerActor = fromCallback<PeerInEvent, PeerInput, PeerOutEvent>(
           type: 'LOCAL_SDP', remoteUserId: input.remoteUserId, kind: 'offer', sdp: offer.sdp
         })
       })().catch((e) => {
+        recordSharingError(e, { actor: 'peerActor', remoteUserId: input.remoteUserId, step: 'offer' })
         emit({
           type: 'PEER_FAILED', remoteUserId: input.remoteUserId,
           reason: e instanceof Error ? e.message : 'offer_failed'
@@ -111,6 +133,9 @@ export const peerActor = fromCallback<PeerInEvent, PeerInput, PeerOutEvent>(
               })
             }
           })().catch((e) => {
+            recordSharingError(e, {
+              actor: 'peerActor', remoteUserId: input.remoteUserId, step: 'sdp'
+            })
             emit({
               type: 'PEER_FAILED', remoteUserId: input.remoteUserId,
               reason: e instanceof Error ? e.message : 'sdp_failed'

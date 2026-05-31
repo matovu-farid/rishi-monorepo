@@ -5,6 +5,7 @@ import {
   notifySignalingError,
   registerSignalingWs
 } from '@/testing/sharing-test-hooks'
+import { recordSharingBreadcrumb, recordSharingError } from '@/sharing/sentryScope'
 
 export type SignalingInput = {
   wsUrl: string
@@ -85,6 +86,9 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
     }
 
     ws.onOpen(() => {
+      recordSharingBreadcrumb('signaling.opened', {
+        reconnect: Boolean(input.reconnectToken)
+      })
       out({ type: 'CONNECTED' })
       ws.send(JSON.stringify({ v: 1, t: 'hello', hasBookFile: input.hasBookFile }))
       heartbeat = setInterval(() => {
@@ -101,6 +105,11 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
       const result = ServerMsg.safeParse(parsed)
       if (!result.success) {
         notifySignalingError('protocol_error')
+        recordSharingBreadcrumb('signaling.error', { code: 'protocol_error' })
+        recordSharingError(new Error('signaling protocol_error'), {
+          actor: 'signalingActor',
+          code: 'protocol_error'
+        })
         out({ type: 'PROTOCOL_ERROR', raw })
         return
       }
@@ -125,6 +134,11 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
         case 'pong': break
         case 'error':
           notifySignalingError(m.code)
+          recordSharingBreadcrumb('signaling.error', { code: m.code })
+          recordSharingError(new Error(`signaling error: ${m.code}`), {
+            actor: 'signalingActor',
+            code: m.code
+          })
           out({ type: 'PROTOCOL_ERROR', raw })
           break
       }
@@ -134,6 +148,16 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
       if (heartbeat) clearInterval(heartbeat)
       registerSignalingWs(null)
       notifySignalingError(`signaling_dropped_${code}`)
+      recordSharingBreadcrumb('signaling.closed', { code, reason })
+      // 1000 is a clean close — every other code is an abnormal drop the
+      // runbook wants visibility on, so capture it as an error too.
+      if (code !== 1000) {
+        recordSharingError(new Error(`signaling dropped ${code}: ${reason}`), {
+          actor: 'signalingActor',
+          code,
+          reason
+        })
+      }
       out({ type: 'SIGNALING_DROPPED', code, reason })
     })
 

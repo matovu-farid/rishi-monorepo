@@ -3,6 +3,7 @@ import {
   resetFileTransferProgress,
   updateFileTransferProgress
 } from '@/testing/sharing-test-hooks'
+import { recordSharingBreadcrumb, recordSharingError } from '@/sharing/sentryScope'
 
 function reportProgress(sent: number, total: number): void {
   const percent = total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : 0
@@ -71,6 +72,10 @@ export const fileTransferActor = fromCallback<
   FileTransferOutEvent
 >(({ emit, receive, input }) => {
   resetFileTransferProgress()
+  recordSharingBreadcrumb('fileTransfer.started', {
+    mode: input.mode,
+    contentHash: input.contentHash
+  })
   if (input.mode === 'sender') {
     const senderInput = input
     const totalChunks = Math.ceil(senderInput.payload.byteLength / senderInput.chunkSize)
@@ -95,6 +100,11 @@ export const fileTransferActor = fromCallback<
           encodeFrame({ kind: 'end', total: totalChunks, hash: senderInput.hash })
         )
         reportCompleted()
+        recordSharingBreadcrumb('fileTransfer.completed', {
+          mode: 'sender',
+          totalChunks,
+          contentHash: senderInput.contentHash
+        })
         emit({ type: 'COMPLETED', blob: senderInput.payload, hash: senderInput.hash })
       }
     }
@@ -134,10 +144,26 @@ export const fileTransferActor = fromCallback<
     }
     const actual = await computeSha256Hex(out.buffer as ArrayBuffer)
     if (actual !== expectedHash) {
+      recordSharingBreadcrumb('fileTransfer.failed', {
+        mode: 'receiver',
+        reason: 'hash_mismatch',
+        expected: expectedHash,
+        actual
+      })
+      recordSharingError(new Error('fileTransfer hash_mismatch'), {
+        actor: 'fileTransferActor',
+        reason: 'hash_mismatch',
+        contentHash: input.contentHash
+      })
       emit({ type: 'FAILED', reason: 'hash_mismatch' })
       return
     }
     reportCompleted()
+    recordSharingBreadcrumb('fileTransfer.completed', {
+      mode: 'receiver',
+      totalChunks,
+      contentHash: input.contentHash
+    })
     emit({ type: 'COMPLETED', blob: out.buffer as ArrayBuffer, hash: actual })
   }
 
@@ -146,6 +172,15 @@ export const fileTransferActor = fromCallback<
     if (evt.type !== 'FILE_CHUNK') return
     const f = decodeFrame(evt.buf)
     if (!f) {
+      recordSharingBreadcrumb('fileTransfer.failed', {
+        mode: 'receiver',
+        reason: 'decode_failed'
+      })
+      recordSharingError(new Error('fileTransfer decode_failed'), {
+        actor: 'fileTransferActor',
+        reason: 'decode_failed',
+        contentHash: input.contentHash
+      })
       emit({ type: 'FAILED', reason: 'decode_failed' })
       return
     }
