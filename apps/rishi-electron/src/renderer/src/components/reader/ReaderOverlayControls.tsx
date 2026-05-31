@@ -4,6 +4,8 @@ import TTSControls from '@/components/tts/TTSControls'
 import AIChatOrb from '@/components/chat/AIChatOrb'
 import VoiceChatLauncher from '@/components/chat/VoiceChatLauncher'
 import { TTSVisualCue } from './TTSVisualCue'
+import { isSharingEnabled } from '@/lib/sharing-flag'
+import { SessionEntryButton } from '@/components/sharing/SessionEntryButton'
 
 type ReaderOverlayControlsProps = {
   bookId: string
@@ -39,6 +41,7 @@ export default function ReaderOverlayControls({
     <>
       {isChatting ? <AIChatOrb chatStatus={chatStatus} onClick={onChatOrbClick} /> : null}
       <VoiceChatLauncher />
+      {isSharingEnabled() && <SessionEntryButton bookId={Number(bookId)} />}
       <div style={{ display: isChatting ? 'none' : 'contents' }}>
         <TTSControls bookId={bookId} />
         <TTSVisualCue />
