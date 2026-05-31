@@ -114,12 +114,18 @@ export interface TestIdentity {
 }
 
 /**
- * Build a test bearer token of the form `userId:DisplayName`. Recognised by
- * the worker's verifyAuth + SessionRoom WS handshake when the worker is
- * launched with `TEST_AUTH_ALLOWED=1` (see helpers/wrangler-dev.ts).
+ * Build a test bearer token of the form `userId--DisplayName` (with `_`
+ * replacing spaces in the display name). Recognised by the worker's
+ * verifyAuth + SessionRoom WS handshake when the worker is launched with
+ * `TEST_AUTH_ALLOWED=1` (see helpers/wrangler-dev.ts).
+ *
+ * The double-dash separator and underscore-for-space encoding keep the
+ * bearer valid both as an HTTP Authorization header value AND as a
+ * WebSocket subprotocol token (RFC 6455 disallows `:` and whitespace in
+ * subprotocols — both of which the old `userId:DisplayName` shape used).
  */
 export function testBearer(id: TestIdentity): string {
-  return `${id.userId}:${id.displayName}`
+  return `${id.userId}--${id.displayName.replace(/ /g, '_')}`
 }
 
 /**

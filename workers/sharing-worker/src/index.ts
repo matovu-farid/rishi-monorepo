@@ -13,7 +13,7 @@ type Env = {
   SESSION_ROOM: DurableObjectNamespace;
   WORKER_HMAC_SECRET: string;
   AUTH_BASE_URL: string;
-  /** "1" enables the `userId:DisplayName` bearer shortcut in verifyAuth. E2E only. */
+  /** "1" enables the `userId--DisplayName` bearer shortcut in verifyAuth. E2E only. */
   TEST_AUTH_ALLOWED?: string;
 };
 

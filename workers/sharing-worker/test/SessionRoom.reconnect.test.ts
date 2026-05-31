@@ -15,11 +15,11 @@ async function created() {
 describe("reconnect", () => {
   it("dropped viewer's slot is held; rejoin with reconnectToken restores them", async () => {
     const c = await created();
-    const host = await openWs(c.wsUrl, "u_host:Host");
+    const host = await openWs(c.wsUrl, "u_host--Host");
     send(host, { t: "hello", hasBookFile: true });
     await nextMsg(host, m => m.t === "welcome");
     await nextMsg(host, m => m.t === "roster");
-    const v1 = await openWs(c.wsUrl, "u_v:V");
+    const v1 = await openWs(c.wsUrl, "u_v--V");
     send(v1, { t: "hello", hasBookFile: true });
     const welcome = await nextMsg(v1, m => m.t === "welcome");
     const rt = welcome.reconnectToken;
@@ -28,7 +28,7 @@ describe("reconnect", () => {
     const upd = await nextMsg(host, m => m.t === "peer.updated" && m.userId === "u_v");
     expect(upd.patch.connectionState).toBe("reconnecting");
     // Rejoin with reconnect token
-    const v2 = await openWs(c.wsUrl, "u_v:V", rt);
+    const v2 = await openWs(c.wsUrl, "u_v--V", rt);
     send(v2, { t: "hello", hasBookFile: true });
     await nextMsg(v2, m => m.t === "welcome");
     const resumed = await nextMsg(host, m => m.t === "peer.updated" && m.userId === "u_v" && m.patch.connectionState === "connected");
@@ -37,11 +37,11 @@ describe("reconnect", () => {
 
   it("slot expires after VIEWER_SLOT_GRACE_MS — peer.left { dropped }", async () => {
     const c = await created();
-    const host = await openWs(c.wsUrl, "u_host:Host");
+    const host = await openWs(c.wsUrl, "u_host--Host");
     send(host, { t: "hello", hasBookFile: true });
     await nextMsg(host, m => m.t === "welcome");
     await nextMsg(host, m => m.t === "roster");
-    const v = await openWs(c.wsUrl, "u_v:V");
+    const v = await openWs(c.wsUrl, "u_v--V");
     send(v, { t: "hello", hasBookFile: true });
     await nextMsg(v, m => m.t === "welcome");
     v.close(3000, "lost");

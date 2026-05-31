@@ -33,16 +33,19 @@ export async function verifyAuth(
   const header = req.headers.get("authorization");
   if (!header) throw new Error("missing auth header");
   // E2E test mode: when TEST_AUTH_ALLOWED=1 in the worker env, accept
-  // bearer tokens of the form "userId:DisplayName" without contacting the
-  // real auth service. Production never sets this; the wrangler dev used
-  // by Playwright sets it via `--var TEST_AUTH_ALLOWED:1`.
+  // bearer tokens of the form "userId--DisplayName" without contacting the
+  // real auth service. The "--" separator and "_" for spaces in the display
+  // name keep the bearer compatible with the WebSocket subprotocol rules in
+  // RFC 6455 (token chars only — no ":" or whitespace). Production never sets
+  // this; the wrangler dev used by Playwright sets it via
+  // `--var TEST_AUTH_ALLOWED:1`.
   if (env.TEST_AUTH_ALLOWED === "1") {
-    const m = header.match(/^Bearer\s+([^:\s]+):(.+)$/i);
+    const m = header.match(/^Bearer\s+([^\s-]+(?:-[^\s-]+)*)--(.+)$/i);
     if (m) {
       return {
         userId: m[1],
         email: `${m[1]}@e2e.local`,
-        displayName: m[2],
+        displayName: m[2].replace(/_/g, " "),
       };
     }
   }

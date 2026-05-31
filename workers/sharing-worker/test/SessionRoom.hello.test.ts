@@ -21,8 +21,9 @@ describe("hello/welcome", () => {
 
   it("host gets welcome + roster on hello", async () => {
     const { wsUrl } = await createSession();
-    // The DO test bypass: pass user info via subprotocol jwt.<userId>:<DisplayName>
-    const ws = await openWs(wsUrl, "u_host:Host");
+    // The DO test bypass: pass user info via subprotocol jwt.<userId>--<DisplayName>
+    // (double-dash separator keeps the bearer valid as an RFC 6455 subprotocol)
+    const ws = await openWs(wsUrl, "u_host--Host");
     send(ws, { t: "hello", hasBookFile: true });
     const welcome = await nextMsg(ws, (m) => m.t === "welcome");
     expect(welcome.you).toBe("u_host");

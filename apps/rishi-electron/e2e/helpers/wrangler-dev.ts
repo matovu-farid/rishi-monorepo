@@ -20,7 +20,7 @@ export async function startWranglerDev(timeoutMs = 30_000): Promise<string> {
         '--local',
         '--persist-to',
         '.wrangler/e2e-state',
-        // Enable the `userId:DisplayName` bearer shortcut in verifyAuth so
+        // Enable the `userId--DisplayName` bearer shortcut in verifyAuth so
         // E2E tests don't need a real Better Auth session to mint a token.
         '--var',
         'TEST_AUTH_ALLOWED:1',

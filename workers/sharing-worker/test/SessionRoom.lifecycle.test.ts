@@ -21,11 +21,11 @@ async function created(requiresApproval = false) {
 describe("roster lifecycle", () => {
   it("emits peer.joined when a new viewer connects", async () => {
     const c = await created();
-    const host = await openWs(c.wsUrl, "u_host:Host");
+    const host = await openWs(c.wsUrl, "u_host--Host");
     send(host, { t: "hello", hasBookFile: true });
     await nextMsg(host, (m) => m.t === "welcome");
     await nextMsg(host, (m) => m.t === "roster");
-    const viewer = await openWs(c.wsUrl, "u_v:Viewer");
+    const viewer = await openWs(c.wsUrl, "u_v--Viewer");
     send(viewer, { t: "hello", hasBookFile: true });
     const joined = await nextMsg(host, (m) => m.t === "peer.joined");
     expect(joined.userId).toBe("u_v");
@@ -33,11 +33,11 @@ describe("roster lifecycle", () => {
 
   it("emits peer.left { left } on explicit leave", async () => {
     const c = await created();
-    const host = await openWs(c.wsUrl, "u_host:Host");
+    const host = await openWs(c.wsUrl, "u_host--Host");
     send(host, { t: "hello", hasBookFile: true });
     await nextMsg(host, (m) => m.t === "welcome");
     await nextMsg(host, (m) => m.t === "roster");
-    const v = await openWs(c.wsUrl, "u_v:V");
+    const v = await openWs(c.wsUrl, "u_v--V");
     send(v, { t: "hello", hasBookFile: true });
     await nextMsg(host, (m) => m.t === "peer.joined");
     send(v, { t: "leave" });
@@ -47,16 +47,16 @@ describe("roster lifecycle", () => {
 
   it("rejects 6th joiner with cap_reached", async () => {
     const c = await created();
-    const host = await openWs(c.wsUrl, "u_host:Host");
+    const host = await openWs(c.wsUrl, "u_host--Host");
     send(host, { t: "hello", hasBookFile: true });
     await nextMsg(host, (m) => m.t === "welcome");
     await nextMsg(host, (m) => m.t === "roster");
     for (let i = 0; i < 4; i++) {
-      const v = await openWs(c.wsUrl, `u_${i}:V${i}`);
+      const v = await openWs(c.wsUrl, `u_${i}--V${i}`);
       send(v, { t: "hello", hasBookFile: true });
       await nextMsg(v, (m) => m.t === "welcome");
     }
-    const sixth = await openWs(c.wsUrl, "u_x:X");
+    const sixth = await openWs(c.wsUrl, "u_x--X");
     send(sixth, { t: "hello", hasBookFile: true });
     const err = await nextMsg(sixth, (m) => m.t === "error");
     expect(err.code).toBe("cap_reached");

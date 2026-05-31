@@ -24,4 +24,38 @@ describe("verifyAuth", () => {
       { AUTH_BASE_URL: "x", fetcher } as any,
     )).rejects.toThrow(/unauthorized/i);
   });
+
+  describe("TEST_AUTH_ALLOWED shortcut", () => {
+    it("decodes `userId--DisplayName` bearer without contacting auth", async () => {
+      const fetcher = vi.fn();
+      const out = await verifyAuth(
+        { headers: new Headers({ authorization: "Bearer e2e-host--E2E_Host" }) } as Request,
+        { AUTH_BASE_URL: "x", fetcher, TEST_AUTH_ALLOWED: "1" } as any,
+      );
+      expect(out.userId).toBe("e2e-host");
+      expect(out.displayName).toBe("E2E Host");
+      expect(fetcher).not.toHaveBeenCalled();
+    });
+
+    it("decodes display names with multiple words", async () => {
+      const out = await verifyAuth(
+        { headers: new Headers({ authorization: "Bearer u_42--Alice_Q_Bob" }) } as Request,
+        { AUTH_BASE_URL: "x", fetcher: vi.fn(), TEST_AUTH_ALLOWED: "1" } as any,
+      );
+      expect(out.userId).toBe("u_42");
+      expect(out.displayName).toBe("Alice Q Bob");
+    });
+
+    it("falls back to remote verify when bearer doesn't match the shortcut shape", async () => {
+      const fetcher = vi.fn(async () =>
+        new Response(JSON.stringify({ user: { id: "u", email: "e", name: "N" } }), { status: 200 }),
+      );
+      const out = await verifyAuth(
+        { headers: new Headers({ authorization: "Bearer notashortcut" }) } as Request,
+        { AUTH_BASE_URL: "x", fetcher, TEST_AUTH_ALLOWED: "1" } as any,
+      );
+      expect(out.userId).toBe("u");
+      expect(fetcher).toHaveBeenCalledOnce();
+    });
+  });
 });

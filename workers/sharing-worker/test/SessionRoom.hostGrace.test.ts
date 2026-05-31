@@ -9,11 +9,11 @@ async function viewerInSession() {
     method: "POST", headers: { authorization: "Bearer t", "content-type": "application/json" },
     body: JSON.stringify({ bookContext: { bookId: "b", contentHash: "h", format: "epub" }, requiresApproval: false }),
   }).then(r => r.json() as any);
-  const host = await openWs(c.wsUrl, "u_host:Host");
+  const host = await openWs(c.wsUrl, "u_host--Host");
   send(host, { t: "hello", hasBookFile: true });
   const welcome = await nextMsg(host, m => m.t === "welcome");
   await nextMsg(host, m => m.t === "roster");
-  const viewer = await openWs(c.wsUrl, "u_v:V");
+  const viewer = await openWs(c.wsUrl, "u_v--V");
   send(viewer, { t: "hello", hasBookFile: true });
   await nextMsg(viewer, m => m.t === "welcome");
   await nextMsg(host, m => m.t === "peer.joined");
@@ -37,7 +37,7 @@ describe("host grace", () => {
     await nextMsg(viewer, m => m.t === "host.suspended");
     // Pre-register the viewer's host.resumed listener BEFORE triggering the reconnect.
     const resumedP = nextMsg(viewer, m => m.t === "host.resumed");
-    const host2 = await openWs(c.wsUrl, "u_host:Host", hostRt);
+    const host2 = await openWs(c.wsUrl, "u_host--Host", hostRt);
     send(host2, { t: "hello", hasBookFile: true });
     await nextMsg(host2, m => m.t === "welcome");
     const resumed = await resumedP;

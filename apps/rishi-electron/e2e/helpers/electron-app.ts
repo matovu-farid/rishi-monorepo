@@ -333,7 +333,7 @@ export async function clickMenuItem(
 export interface SharingLaunchOptions extends LaunchOptions {
   workerUrl: string
   /**
-   * Fake user identity matching the Worker's test-shortcut JWT format: "userId:DisplayName".
+   * Fake user identity matching the Worker's test-shortcut JWT format: "userId--DisplayName".
    * Currently informational — not read by the main process; the worker mints the JWT.
    * Kept on the type so call-sites stay readable and we can plumb it later if needed.
    */

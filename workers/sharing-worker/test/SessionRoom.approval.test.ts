@@ -15,11 +15,11 @@ async function createApproved() {
 describe("approval queue", () => {
   it("viewer waits, host gets join.requested, approval lets them in", async () => {
     const c = await createApproved();
-    const host = await openWs(c.wsUrl, "u_host:Host");
+    const host = await openWs(c.wsUrl, "u_host--Host");
     send(host, { t: "hello", hasBookFile: true });
     await nextMsg(host, m => m.t === "welcome");
     await nextMsg(host, m => m.t === "roster");
-    const viewer = await openWs(c.wsUrl, "u_v:V");
+    const viewer = await openWs(c.wsUrl, "u_v--V");
     send(viewer, { t: "hello", hasBookFile: true });
     const req = await nextMsg(host, m => m.t === "join.requested");
     expect(req.userId).toBe("u_v");
@@ -32,11 +32,11 @@ describe("approval queue", () => {
 
   it("reject closes the viewer with approval.result { approved: false }", async () => {
     const c = await createApproved();
-    const host = await openWs(c.wsUrl, "u_host:Host");
+    const host = await openWs(c.wsUrl, "u_host--Host");
     send(host, { t: "hello", hasBookFile: true });
     await nextMsg(host, m => m.t === "welcome");
     await nextMsg(host, m => m.t === "roster");
-    const viewer = await openWs(c.wsUrl, "u_v:V");
+    const viewer = await openWs(c.wsUrl, "u_v--V");
     send(viewer, { t: "hello", hasBookFile: true });
     await nextMsg(host, m => m.t === "join.requested");
     send(host, { t: "reject.join", userId: "u_v" });

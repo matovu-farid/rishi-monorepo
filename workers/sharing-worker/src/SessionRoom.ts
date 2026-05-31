@@ -91,10 +91,16 @@ export class SessionRoom extends DurableObject<Env> {
     if (!creds.valid) return new Response(creds.reason, { status: 400 });
 
     let meta: AttachedMeta;
-    if (creds.jwt.includes(":")) {
-      // Test shortcut: jwt of the form "userId:DisplayName" — attach without remote auth.
-      const [userId, displayName] = creds.jwt.split(":");
-      meta = { userId, displayName };
+    const testJwtMatch = creds.jwt.match(/^([^\s-]+(?:-[^\s-]+)*)--(.+)$/);
+    if (testJwtMatch) {
+      // Test shortcut: jwt of the form "userId--DisplayName" (with "_" for spaces
+      // in the display name) — attach without remote auth. The double-dash and
+      // underscore-for-space encoding keeps the bearer valid as an RFC 6455
+      // WebSocket subprotocol token (no ":" or spaces allowed).
+      meta = {
+        userId: testJwtMatch[1],
+        displayName: testJwtMatch[2].replace(/_/g, " "),
+      };
     } else {
       const testAuth = (globalThis as any).__TEST_AUTH__;
       if (testAuth) {

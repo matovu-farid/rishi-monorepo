@@ -15,11 +15,11 @@ async function pair() {
       requiresApproval: false,
     }),
   }).then((r) => r.json() as any);
-  const host = await openWs(c.wsUrl, "u_host:Host");
+  const host = await openWs(c.wsUrl, "u_host--Host");
   send(host, { t: "hello", hasBookFile: true });
   await nextMsg(host, (m) => m.t === "welcome");
   await nextMsg(host, (m) => m.t === "roster");
-  const viewer = await openWs(c.wsUrl, "u_v:V");
+  const viewer = await openWs(c.wsUrl, "u_v--V");
   send(viewer, { t: "hello", hasBookFile: true });
   await nextMsg(viewer, (m) => m.t === "welcome");
   await nextMsg(host, (m) => m.t === "peer.joined");
