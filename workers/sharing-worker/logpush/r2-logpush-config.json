@@ -1,0 +1,10 @@
+{
+  "_comment": "Reference config for the Logpush job. Actual job lives in Cloudflare dashboard → Logs → Logpush.",
+  "name": "rishi-sharing-worker-logs",
+  "logpull_options": "fields=Event,EventTimestampMs,Outcome,Logs,ScriptName",
+  "destination": "r2://rishi-sharing-logs/sharing-worker/{DATE}",
+  "dataset": "workers_trace_events",
+  "filter": { "where": { "key": "ScriptName", "operator": "eq", "value": "rishi-sharing-worker" } },
+  "enabled": true,
+  "frequency": "high"
+}
