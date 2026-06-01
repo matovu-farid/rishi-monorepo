@@ -19,6 +19,13 @@
   "env": {
     "production": {
       "name": "rishi-sharing-worker",
+      // NOTE: secrets are NOT declared in `vars` — they're set out-of-band
+      // via `wrangler secret put ... --env production` so they never land
+      // in the repo. Production-required secrets:
+      //   WORKER_HMAC_SECRET - signs joinToken + reconnectToken
+      // Production also DELIBERATELY omits the `TEST_AUTH_ALLOWED` var so
+      // the `userId--DisplayName` E2E bearer shortcut and the
+      // `data.channel.relay` test path are both rejected by the DO.
       "vars": { "AUTH_BASE_URL": "https://rishi.fidexa.org" },
       "durable_objects": {
         "bindings": [

@@ -1,6 +1,7 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { openWs, send, nextMsg } from "./helpers/wsClient";
+import { isDataChannelRelayAllowed } from "../src/SessionRoom";
 
 beforeEach(() => {
   vi.stubGlobal("__TEST_AUTH__", { userId: "u_host", email: "h@x.y", displayName: "Host" });
@@ -51,5 +52,24 @@ describe("data.channel.relay", () => {
     });
     const err = await nextMsg(host, (m) => m.t === "error");
     expect(err.code).toBe("no_such_peer");
+  });
+
+});
+
+describe("isDataChannelRelayAllowed gate", () => {
+  // Production hardening: `data.channel.relay` is an E2E-only bridge for
+  // the fake RTC adapter. The worker MUST reject it when the test flag is
+  // unset so a production client can't (a) bypass the RTCDataChannel
+  // path or (b) starve the per-user RateBucket shared with sync.frame.
+  it("rejects when TEST_AUTH_ALLOWED is unset", () => {
+    expect(isDataChannelRelayAllowed(undefined)).toBe(false);
+  });
+  it("rejects when TEST_AUTH_ALLOWED is any value other than '1'", () => {
+    expect(isDataChannelRelayAllowed("0")).toBe(false);
+    expect(isDataChannelRelayAllowed("true")).toBe(false);
+    expect(isDataChannelRelayAllowed("")).toBe(false);
+  });
+  it("allows when TEST_AUTH_ALLOWED is '1'", () => {
+    expect(isDataChannelRelayAllowed("1")).toBe(true);
   });
 });

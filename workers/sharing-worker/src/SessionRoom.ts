@@ -9,6 +9,13 @@ import { RateBucket } from "./rateLimit";
 interface Env {
   WORKER_HMAC_SECRET: string;
   AUTH_BASE_URL: string;
+  /**
+   * When set to "1", enables the E2E test-bearer shortcut (`userId--DisplayName`
+   * jwt format) for the WebSocket upgrade path. Mirrors the gateway-side gate
+   * in `auth.ts:verifyAuth`. MUST be unset in production — otherwise any
+   * client could connect as an arbitrary userId without a real auth check.
+   */
+  TEST_AUTH_ALLOWED?: string;
 }
 
 const KEY = "state";
@@ -19,6 +26,39 @@ interface AttachedMeta {
   userId: string;
   displayName: string;
   avatarUrl?: string;
+}
+
+/**
+ * Resolve a WebSocket bearer to an `AttachedMeta` using the test-shortcut
+ * `userId--DisplayName` format ONLY when `TEST_AUTH_ALLOWED === "1"`.
+ * Returns `null` to indicate the caller should fall through to production
+ * verification. Exposed for unit testing the gate without driving a full
+ * miniflare WS upgrade.
+ */
+export function resolveTestBearer(
+  bearer: string,
+  testAuthAllowed: string | undefined,
+): AttachedMeta | null {
+  if (testAuthAllowed !== "1") return null;
+  const m = bearer.match(/^([^\s-]+(?:-[^\s-]+)*)--(.+)$/);
+  if (!m) return null;
+  return {
+    userId: m[1]!,
+    displayName: m[2]!.replace(/_/g, " "),
+  };
+}
+
+/**
+ * `data.channel.relay` is a test-only path (E2E fake adapter). The worker
+ * accepts it iff `TEST_AUTH_ALLOWED === "1"` so a production client
+ * can't (a) bypass the per-peer RTCDataChannel sync path or (b) starve
+ * legitimate `sync.frame` traffic that shares the per-user RateBucket.
+ * Exposed for unit testing the gate.
+ */
+export function isDataChannelRelayAllowed(
+  testAuthAllowed: string | undefined,
+): boolean {
+  return testAuthAllowed === "1";
 }
 
 export class SessionRoom extends DurableObject<Env> {
@@ -91,17 +131,19 @@ export class SessionRoom extends DurableObject<Env> {
     if (!creds.valid) return new Response(creds.reason, { status: 400 });
 
     let meta: AttachedMeta;
-    const testJwtMatch = creds.jwt.match(/^([^\s-]+(?:-[^\s-]+)*)--(.+)$/);
-    if (testJwtMatch) {
-      // Test shortcut: jwt of the form "userId--DisplayName" (with "_" for spaces
-      // in the display name) — attach without remote auth. The double-dash and
-      // underscore-for-space encoding keeps the bearer valid as an RFC 6455
-      // WebSocket subprotocol token (no ":" or spaces allowed).
-      const [, userId, encodedName] = testJwtMatch;
-      meta = {
-        userId: userId!,
-        displayName: encodedName!.replace(/_/g, " "),
-      };
+    // Test shortcut: jwt of the form "userId--DisplayName" (with "_" for spaces
+    // in the display name) — attach without remote auth. The double-dash and
+    // underscore-for-space encoding keeps the bearer valid as an RFC 6455
+    // WebSocket subprotocol token (no ":" or spaces allowed).
+    //
+    // SECURITY: this shortcut is gated on `TEST_AUTH_ALLOWED === "1"` so that
+    // a public-internet client cannot bypass the real auth check by simply
+    // crafting a `jwt.<base64url("alice--Alice")>` subprotocol. Mirrors the
+    // gateway-side gate in `auth.ts:verifyAuth`. Production must leave this
+    // env var unset (it is not declared in wrangler.jsonc's production env).
+    const testMeta = resolveTestBearer(creds.jwt, this.env.TEST_AUTH_ALLOWED);
+    if (testMeta) {
+      meta = testMeta;
     } else {
       const testAuth = (globalThis as any).__TEST_AUTH__;
       if (testAuth) {
@@ -191,6 +233,16 @@ export class SessionRoom extends DurableObject<Env> {
         const target = state.participants[msg.to];
         if (!target) { this.sendError(ws, "no_such_peer", `${msg.to} not in session`); break; }
         if (!target.hasBookFile) { this.sendError(ws, "target_lacks_book", "target has no book file"); break; }
+        // The participant record can outlive an active WS during the
+        // reconnect grace window (connectionState='reconnecting'). Passing
+        // the sharer role to a peer that is currently offline would mute
+        // the session entirely — sync frames go to /dev/null. Surface a
+        // clear error so the host UI can prompt for a different target.
+        const targetWs = this.findSocketByUserId(msg.to);
+        if (!targetWs || target.connectionState === "reconnecting") {
+          this.sendError(ws, "target_offline", `${msg.to} is not currently connected`);
+          break;
+        }
         state.sharerUserId = msg.to;
         await this.saveState(state);
         for (const s of this.sockets()) this.sendTo(s, { t: "role.transferred", newSharerId: msg.to });
@@ -303,8 +355,18 @@ export class SessionRoom extends DurableObject<Env> {
       case "data.channel.relay": {
         // TEST-ONLY: the production data path for sync/files chunks is the
         // per-peer RTCDataChannel; this WS relay lets the E2E fake adapter
-        // shuttle payloads across Electron processes. The frame bucket above
-        // already rate-limits, so a misbehaving client cannot flood peers.
+        // shuttle payloads across Electron processes.
+        //
+        // SECURITY/PROD-HYGIENE: gate on the same `TEST_AUTH_ALLOWED` flag
+        // as the test-bearer shortcut so misbehaving production clients
+        // cannot use this path to (a) bypass RTCDataChannel chunk-sync
+        // entirely or (b) saturate the per-user RateBucket that legitimate
+        // `sync.frame` traffic shares. The flag is unset in production
+        // wrangler.jsonc.
+        if (!isDataChannelRelayAllowed(this.env.TEST_AUTH_ALLOWED)) {
+          this.sendError(ws, "forbidden", "data.channel.relay is test-only");
+          break;
+        }
         const target = this.findSocketByUserId(msg.to);
         if (!target) {
           this.sendError(ws, "no_such_peer", `peer ${msg.to} not connected`);
