@@ -30,7 +30,8 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> 
     args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     env: {
       ...process.env,
-      NODE_ENV: 'production'
+      NODE_ENV: 'production',
+      RISHI_E2E_HIDDEN: process.env.RISHI_E2E_HEADED === '1' ? '0' : '1'
     }
   })
   const page = await app.firstWindow()
@@ -401,6 +402,7 @@ export async function launchAppWithSharingEnv(opts: SharingLaunchOptions): Promi
     env: {
       ...process.env,
       NODE_ENV: 'production',
+      RISHI_E2E_HIDDEN: process.env.RISHI_E2E_HEADED === '1' ? '0' : '1',
       SHARING_WORKER_URL: opts.workerUrl,
       VITE_SHARING_ENABLED: '1',
       RISHI_SHARING_TEST_AUTH: '1',

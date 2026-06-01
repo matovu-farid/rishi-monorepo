@@ -35,8 +35,8 @@
     "test:watch": "vitest",
     "pretest:e2e": "node scripts/ensure-native-abi.cjs",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui",
-    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "RISHI_E2E_HEADED=1 playwright test --ui",
+    "test:e2e:headed": "RISHI_E2E_HEADED=1 playwright test --headed",
     "pretest:e2e:sharing": "node scripts/ensure-native-abi.cjs",
     "test:e2e:sharing": "playwright test --config=playwright.sharing.config.ts"
   },
