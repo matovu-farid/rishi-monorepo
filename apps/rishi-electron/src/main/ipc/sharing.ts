@@ -12,6 +12,15 @@ import {
   writeReconnect,
   clearReconnect
 } from '../sharing/reconnectStore.js'
+import {
+  saveTransferredBookSchema,
+  discardTransferredBookSchema,
+  hasBookFileSchema,
+  readBookBytesSchema,
+  readReconnectSchema,
+  writeReconnectSchema,
+  clearReconnectSchema
+} from '../sharing/sharing.schemas.js'
 
 /**
  * Register the `sharing:*` IPC handlers. These back the renderer-side
@@ -25,19 +34,39 @@ import {
  */
 export function registerSharingHandlers(): void {
   handle('sharing:getSigningJwt', () => getSigningJwt())
-  handle('sharing:saveTransferredBook', (_e, params) => saveTransferredBook(params))
-  handle('sharing:discardTransferredBook', (_e, params) => discardTransferredBook(params))
-  handle('sharing:hasBookFile', (_e, params) => hasBookFile(params))
-  handle('sharing:readBookBytes', (_e, params) => readBookBytes(params))
+  // Each handler validates its params with a zod schema before dispatching.
+  // A malformed payload throws synchronously and is surfaced to the renderer
+  // via the IPC error path — see `sharing.schemas.ts` for the contract.
+  handle('sharing:saveTransferredBook', (_e, params) =>
+    saveTransferredBook(saveTransferredBookSchema.parse(params))
+  )
+  handle('sharing:discardTransferredBook', (_e, params) =>
+    discardTransferredBook(discardTransferredBookSchema.parse(params))
+  )
+  handle('sharing:hasBookFile', (_e, params) =>
+    hasBookFile(hasBookFileSchema.parse(params))
+  )
+  handle('sharing:readBookBytes', (_e, params) =>
+    readBookBytes(readBookBytesSchema.parse(params))
+  )
   handle('sharing:getConfig', () => getSharingConfig())
   handle('sharing:registerDeepLinkListener', () => {})
   // Reborn-host reconnect persistence — see `sharing/reconnectStore.ts`.
-  handle('sharing:readReconnect', (_e, params) => readReconnect(params.userId))
-  handle('sharing:writeReconnect', (_e, params) => writeReconnect(params.userId, {
-    sessionId: params.sessionId,
-    reconnectToken: params.reconnectToken,
-    wsUrl: params.wsUrl,
-    reservedUntil: params.reservedUntil
-  }))
-  handle('sharing:clearReconnect', (_e, params) => clearReconnect(params.userId))
+  handle('sharing:readReconnect', (_e, params) => {
+    const parsed = readReconnectSchema.parse(params)
+    return readReconnect(parsed.userId)
+  })
+  handle('sharing:writeReconnect', (_e, params) => {
+    const parsed = writeReconnectSchema.parse(params)
+    return writeReconnect(parsed.userId, {
+      sessionId: parsed.sessionId,
+      reconnectToken: parsed.reconnectToken,
+      wsUrl: parsed.wsUrl,
+      reservedUntil: parsed.reservedUntil
+    })
+  })
+  handle('sharing:clearReconnect', (_e, params) => {
+    const parsed = clearReconnectSchema.parse(params)
+    return clearReconnect(parsed.userId)
+  })
 }
