@@ -7,6 +7,7 @@ import type { BookContext, Participant } from '@rishi/sharing-protocol/schemas'
 import type { ClientMsg as ClientMsgT, ServerMsg as ServerMsgT } from '@rishi/sharing-protocol/schemas'
 import type { z } from 'zod'
 import { peerWrapperActor } from '@/actors/sharing/peerWrapperActor'
+import { hostFileSenderActor } from '@/actors/sharing/hostFileSenderActor'
 
 // Inline shape of the sync-frame payload we emit/consume. The full SyncMsg
 // schema lives in `@rishi/sharing-protocol/sync` but the sharing-protocol
@@ -82,6 +83,24 @@ export type SyncedPosition = { pageIndex?: number; cfi?: string }
  * a bridge for SDP/ICE/data-channel events.
  */
 export type PeerWrapperRef = ActorRefFrom<typeof peerWrapperActor>
+export type HostFileSenderRef = ActorRefFrom<typeof hostFileSenderActor>
+
+/**
+ * IPC shim for `sharing:readBookBytes`. Injectable so unit tests can
+ * exercise the host sender wiring without going through `window.electron`.
+ */
+export type ReadBookBytesFn = (params: { bookId: string; contentHash: string }) => Promise<{
+  bytes: number[]
+  format: 'epub' | 'pdf'
+}>
+
+const defaultReadBookBytes: ReadBookBytesFn = async (params) => {
+  type Win = { electron?: { sharing?: { readBookBytes: ReadBookBytesFn } } }
+  const w = (typeof window === 'undefined' ? {} : window) as Win
+  const ipc = w.electron?.sharing?.readBookBytes
+  if (!ipc) throw new Error('readBookBytes IPC unavailable')
+  return await ipc(params)
+}
 
 export interface SessionContext {
   me: Me | null
@@ -102,6 +121,18 @@ export interface SessionContext {
    * parent's event queue and forwards parent → peer events down.
    */
   peers: Map<string, PeerWrapperRef>
+  /**
+   * Active host-side file-transfer senders, keyed by recipient userId.
+   * Spawned on PEER_CONNECTED when (host + hasBookFile) and the peer
+   * reports hasBookFile=false. Stopped on TRANSFER_COMPLETED /
+   * TRANSFER_FAILED / PEER_LEFT.
+   */
+  transfers: Map<string, HostFileSenderRef>
+  /**
+   * Pluggable IPC. Tests inject a stub; production resolves to
+   * `window.electron.sharing.readBookBytes`.
+   */
+  readBookBytes: ReadBookBytesFn
   bookContext: BookContextT | null
   requiresApproval: boolean
   /** Viewer-only: tracks the pending approval lifecycle for the UI. */
@@ -203,6 +234,10 @@ export type SessionEvent =
   | { type: 'FILE_DATA'; remoteUserId: string; payload: ArrayBuffer }
   /** Decoded inbound `files`-channel ack frame from a peer wrapper. */
   | { type: 'FILE_ACK'; remoteUserId: string; seq: number }
+  // ---- Host-side transfer orchestration -------------------------------
+  | { type: 'SEND_FILE_DATA'; peerUserId: string; payload: ArrayBuffer }
+  | { type: 'TRANSFER_COMPLETED'; peerUserId: string; contentHash: string }
+  | { type: 'TRANSFER_FAILED'; peerUserId: string; reason: string }
 
 const initialContext: SessionContext = {
   me: null,
@@ -217,6 +252,8 @@ const initialContext: SessionContext = {
   participants: new Map(),
   pendingJoiners: new Map(),
   peers: new Map(),
+  transfers: new Map(),
+  readBookBytes: defaultReadBookBytes,
   bookContext: null,
   requiresApproval: false,
   approvalStatus: 'none',
@@ -268,7 +305,14 @@ export const sessionMachine = setup({
      * Production uses the real wrapper which builds an RTCPeerConnection
      * via `defaultRtcFactory`.
      */
-    peerWrapper: peerWrapperActor
+    peerWrapper: peerWrapperActor,
+    /**
+     * Host-side file-transfer orchestrator. Spawned per peer that needs
+     * a book copy. Reads the local file via IPC, drives the
+     * fileTransferActor sender, and surfaces SEND_FILE_DATA /
+     * TRANSFER_* events up to this machine.
+     */
+    hostFileSender: hostFileSenderActor
   },
   actions: {
     storeMeAndHost: assign(({ event }) => {
@@ -479,6 +523,71 @@ export const sessionMachine = setup({
       const t = event.kind === 'offer' ? 'sdp.offer' as const : 'sdp.answer' as const
       const payload: ClientMsgT = { v: 1, t, to: event.remoteUserId, sdp: event.sdp }
       return { type: 'SEND', payload }
+    }),
+    /**
+     * Host-side: when an underlying RTCPeerConnection becomes connected,
+     * check whether we should start streaming the book to that peer. The
+     * conditions:
+     *   - local role is host
+     *   - local hasBookFile is true (we have something to send)
+     *   - the remote peer reports hasBookFile=false in the roster
+     *   - we don't already have a transfer in flight for this peer
+     * On match, spawn a `hostFileSenderActor`. The bookId / contentHash
+     * come from the active bookContext — every session has exactly one.
+     */
+    maybeStartHostTransfer: assign(({ context, event, spawn }) => {
+      if (event.type !== 'PEER_CONNECTED') return {}
+      if (context.role !== 'host') return {}
+      if (!context.hasBookFile) return {}
+      if (!context.bookContext) return {}
+      const peerUserId = event.remoteUserId
+      const peer = context.participants.get(peerUserId)
+      if (!peer || peer.hasBookFile) return {}
+      if (context.transfers.has(peerUserId)) return {}
+      const ref = spawn('hostFileSender', {
+        id: `xfer-${peerUserId}`,
+        input: {
+          peerUserId,
+          bookId: context.bookContext.bookId,
+          contentHash: context.bookContext.contentHash,
+          // Chosen to keep per-chunk JSON framing under ~20 KB so we stay
+          // well below the typical 16 KB Chromium RTCDataChannel safe
+          // max. The internal JSON `data: [...]` array roughly doubles
+          // the byte count so 8 KB raw → ~16 KB on the wire.
+          chunkSize: 8 * 1024,
+          windowSize: 32,
+          readBookBytes: context.readBookBytes
+        }
+      }) as HostFileSenderRef
+      const next = new Map(context.transfers)
+      next.set(peerUserId, ref)
+      return { transfers: next }
+    }),
+    /** Route a SEND_FILE_DATA from a host sender → matching peer wrapper. */
+    routeSenderData: ({ context, event }) => {
+      if (event.type !== 'SEND_FILE_DATA') return
+      const ref = context.peers.get(event.peerUserId)
+      if (!ref) return
+      ref.send({ type: 'SEND_FILE_DATA', payload: event.payload })
+    },
+    /** Route an inbound FILE_ACK from a peer wrapper → matching host sender. */
+    routeAckToSender: ({ context, event }) => {
+      if (event.type !== 'FILE_ACK') return
+      const ref = context.transfers.get(event.remoteUserId)
+      if (!ref) return
+      ref.send({ type: 'FILE_ACK', seq: event.seq })
+    },
+    /** Two-step cleanup mirroring stopPeerChild/despawnPeerOnLeft. */
+    stopHostTransferChild: stopChild(({ event }) => {
+      if (event.type !== 'TRANSFER_COMPLETED' && event.type !== 'TRANSFER_FAILED') return ''
+      return `xfer-${event.peerUserId}`
+    }),
+    removeHostTransfer: assign(({ context, event }) => {
+      if (event.type !== 'TRANSFER_COMPLETED' && event.type !== 'TRANSFER_FAILED') return {}
+      if (!context.transfers.has(event.peerUserId)) return {}
+      const next = new Map(context.transfers)
+      next.delete(event.peerUserId)
+      return { transfers: next }
     }),
     /**
      * Outbound: convert a peer wrapper's LOCAL_ICE emit into an ice ClientMsg.
@@ -781,6 +890,16 @@ export const sessionMachine = setup({
         ICE_CANDIDATE: { actions: 'routeRemoteIce' },
         LOCAL_SDP: { actions: 'sendLocalSdp' },
         LOCAL_ICE: { actions: 'sendLocalIce' },
+        // ---- Host-side file transfer wiring -----------------------
+        PEER_CONNECTED: { actions: 'maybeStartHostTransfer' },
+        SEND_FILE_DATA: { actions: 'routeSenderData' },
+        FILE_ACK: { actions: 'routeAckToSender' },
+        TRANSFER_COMPLETED: {
+          actions: ['stopHostTransferChild', 'removeHostTransfer']
+        },
+        TRANSFER_FAILED: {
+          actions: ['stopHostTransferChild', 'removeHostTransfer']
+        },
         ROLE_TRANSFERRED: { actions: 'setSharer' },
         JOIN_REQUESTED: { actions: 'addPendingJoiner', guard: 'isHost' },
         SYNC_FRAME: { actions: 'applySyncFrame' },
