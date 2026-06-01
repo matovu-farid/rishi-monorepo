@@ -1,8 +1,12 @@
 // apps/rishi-electron/src/renderer/src/machines/sessionMachine.ts
-import { setup, assign, fromPromise, sendTo, fromCallback } from 'xstate'
+import {
+  setup, assign, fromPromise, sendTo, fromCallback, stopChild,
+  type ActorRefFrom
+} from 'xstate'
 import type { BookContext, Participant } from '@rishi/sharing-protocol/schemas'
 import type { ClientMsg as ClientMsgT, ServerMsg as ServerMsgT } from '@rishi/sharing-protocol/schemas'
 import type { z } from 'zod'
+import { peerWrapperActor } from '@/actors/sharing/peerWrapperActor'
 
 // Inline shape of the sync-frame payload we emit/consume. The full SyncMsg
 // schema lives in `@rishi/sharing-protocol/sync` but the sharing-protocol
@@ -72,6 +76,13 @@ export type ReceivedBook = {
  */
 export type SyncedPosition = { pageIndex?: number; cfi?: string }
 
+/**
+ * One spawned peerWrapperActor reference per remote participant. The
+ * wrapper owns the underlying peerActor + RTCPeerConnection and exposes
+ * a bridge for SDP/ICE/data-channel events.
+ */
+export type PeerWrapperRef = ActorRefFrom<typeof peerWrapperActor>
+
 export interface SessionContext {
   me: Me | null
   sessionId: string | null
@@ -84,6 +95,13 @@ export interface SessionContext {
   sharerId: string | null
   participants: Map<string, ParticipantT>
   pendingJoiners: Map<string, { profile: { displayName: string; avatarUrl?: string } }>
+  /**
+   * Per-peer wrapper-actor registry, keyed by remote userId. Spawned on
+   * roster / peer.joined, stopped on peer.left. Each ref bridges the
+   * peerActor's emits (LOCAL_SDP, LOCAL_ICE, FILE_DATA, …) into the
+   * parent's event queue and forwards parent → peer events down.
+   */
+  peers: Map<string, PeerWrapperRef>
   bookContext: BookContextT | null
   requiresApproval: boolean
   /** Viewer-only: tracks the pending approval lifecycle for the UI. */
@@ -172,6 +190,19 @@ export type SessionEvent =
   | { type: 'ICE_CANDIDATE'; msg: Extract<ServerMsgT,{ t: 'ice' }> }
   | { type: 'SYNC_FRAME'; msg: SyncFrameT }
   | { type: 'PROTOCOL_ERROR'; raw: string }
+  // ---- Per-peer wrapper bridge events --------------------------------
+  // Emitted by spawned peerWrapperActor refs (via `sendBack`) up into
+  // this machine; we forward them out to the worker via signaling.
+  | { type: 'LOCAL_SDP'; remoteUserId: string; kind: 'offer' | 'answer'; sdp: string }
+  | { type: 'LOCAL_ICE'; remoteUserId: string; candidate: unknown }
+  | { type: 'PEER_CONNECTED'; remoteUserId: string }
+  | { type: 'PEER_FAILED'; remoteUserId: string; reason: string }
+  | { type: 'SYNC_RECEIVED'; remoteUserId: string; payload: string }
+  | { type: 'REMOTE_AUDIO'; remoteUserId: string; track: MediaStreamTrack; stream: MediaStream }
+  /** Decoded inbound `files`-channel data frame from a peer wrapper. */
+  | { type: 'FILE_DATA'; remoteUserId: string; payload: ArrayBuffer }
+  /** Decoded inbound `files`-channel ack frame from a peer wrapper. */
+  | { type: 'FILE_ACK'; remoteUserId: string; seq: number }
 
 const initialContext: SessionContext = {
   me: null,
@@ -185,6 +216,7 @@ const initialContext: SessionContext = {
   sharerId: null,
   participants: new Map(),
   pendingJoiners: new Map(),
+  peers: new Map(),
   bookContext: null,
   requiresApproval: false,
   approvalStatus: 'none',
@@ -229,7 +261,14 @@ export const sessionMachine = setup({
     // connecting/live/reconnecting/promptingKeepBooks substates. Tests
     // `.provide` a stub. Production wiring uses the real `signalingActor`.
     signaling: signalingActor,
-    reconnect: reconnectDriver
+    reconnect: reconnectDriver,
+    /**
+     * Spawned per-remote-peer. Tests `.provide` a stub that records
+     * input and exposes a `sendBack` for simulating peerActor emits.
+     * Production uses the real wrapper which builds an RTCPeerConnection
+     * via `defaultRtcFactory`.
+     */
+    peerWrapper: peerWrapperActor
   },
   actions: {
     storeMeAndHost: assign(({ event }) => {
@@ -332,6 +371,124 @@ export const sessionMachine = setup({
         if (id) return { sharerId: id }
       }
       return {}
+    }),
+    /**
+     * Spawn a peerWrapper for an inbound PEER_JOINED message, unless one is
+     * already registered for that userId. Initiator decision is
+     * deterministic: the side with the lexicographically smaller userId
+     * creates the offer. This avoids a coordination protocol and guarantees
+     * both peers agree on roles regardless of message ordering.
+     */
+    spawnPeerOnJoined: assign(({ context, event, spawn }) => {
+      if (event.type !== 'PEER_JOINED') return {}
+      const userId = event.userId ?? event.msg?.userId
+      if (!userId || !context.me) return {}
+      if (context.peers.has(userId)) return {}
+      const selfUserId = context.me.userId
+      const isInitiator = selfUserId < userId
+      const ref = spawn('peerWrapper', {
+        id: `peer-${userId}`,
+        input: {
+          selfUserId,
+          peerUserId: userId,
+          isInitiator,
+          iceServers: []
+        }
+      }) as PeerWrapperRef
+      const next = new Map(context.peers)
+      next.set(userId, ref)
+      return { peers: next }
+    }),
+    /**
+     * Mirror the roster snapshot into the peers registry: spawn for any
+     * userId we don't yet have a wrapper for. Useful after reconnect or
+     * the initial roster frame when PEER_JOINED was already implied.
+     */
+    spawnPeersFromRoster: assign(({ context, event, spawn }) => {
+      if (event.type !== 'ROSTER' || !context.me) return {}
+      const selfUserId = context.me.userId
+      const next = new Map(context.peers)
+      for (const p of event.msg.participants) {
+        if (p.userId === selfUserId) continue
+        if (next.has(p.userId)) continue
+        const isInitiator = selfUserId < p.userId
+        const ref = spawn('peerWrapper', {
+          id: `peer-${p.userId}`,
+          input: {
+            selfUserId,
+            peerUserId: p.userId,
+            isInitiator,
+            iceServers: []
+          }
+        }) as PeerWrapperRef
+        next.set(p.userId, ref)
+      }
+      return { peers: next }
+    }),
+    /**
+     * Stop the wrapper actor for a peer that left and drop it from the
+     * registry. Stopping the wrapper transitively stops the inner
+     * peerActor, which closes the underlying RTCPeerConnection.
+     *
+     * Two-step in XState v5: `stopChild` produces an action; we still
+     * need an `assign` to remove the entry from the context Map.
+     */
+    stopPeerChild: stopChild(({ event }) => {
+      if (event.type !== 'PEER_LEFT') return ''
+      const userId = event.userId ?? event.msg?.userId
+      return userId ? `peer-${userId}` : ''
+    }),
+    despawnPeerOnLeft: assign(({ context, event }) => {
+      if (event.type !== 'PEER_LEFT') return {}
+      const userId = event.userId ?? event.msg?.userId
+      if (!userId) return {}
+      if (!context.peers.has(userId)) return {}
+      const next = new Map(context.peers)
+      next.delete(userId)
+      return { peers: next }
+    }),
+    /**
+     * Route an inbound SDP/ICE ServerMsg to the wrapper keyed by
+     * `from`. If no wrapper exists yet (frame arrived before the matching
+     * peer.joined was applied), the frame is dropped — the worker will
+     * retransmit on the next ICE/SDP step.
+     */
+    routeRemoteSdpOffer: ({ context, event }) => {
+      if (event.type !== 'SDP_OFFER') return
+      const ref = context.peers.get(event.msg.from)
+      if (!ref) return
+      ref.send({ type: 'SDP_OFFER', sdp: event.msg.sdp })
+    },
+    routeRemoteSdpAnswer: ({ context, event }) => {
+      if (event.type !== 'SDP_ANSWER') return
+      const ref = context.peers.get(event.msg.from)
+      if (!ref) return
+      ref.send({ type: 'SDP_ANSWER', sdp: event.msg.sdp })
+    },
+    routeRemoteIce: ({ context, event }) => {
+      if (event.type !== 'ICE_CANDIDATE') return
+      const ref = context.peers.get(event.msg.from)
+      if (!ref) return
+      ref.send({ type: 'ICE_CANDIDATE', candidate: event.msg.candidate })
+    },
+    /**
+     * Outbound: convert a peer wrapper's LOCAL_SDP emit into a sdp.* ClientMsg.
+     */
+    sendLocalSdp: sendTo('signaling', ({ event }) => {
+      if (event.type !== 'LOCAL_SDP') return { type: 'NOOP' }
+      const t = event.kind === 'offer' ? 'sdp.offer' as const : 'sdp.answer' as const
+      const payload: ClientMsgT = { v: 1, t, to: event.remoteUserId, sdp: event.sdp }
+      return { type: 'SEND', payload }
+    }),
+    /**
+     * Outbound: convert a peer wrapper's LOCAL_ICE emit into an ice ClientMsg.
+     */
+    sendLocalIce: sendTo('signaling', ({ event }) => {
+      if (event.type !== 'LOCAL_ICE') return { type: 'NOOP' }
+      const payload: ClientMsgT = {
+        v: 1, t: 'ice', to: event.remoteUserId, candidate: event.candidate
+      }
+      return { type: 'SEND', payload }
     }),
     addParticipant: assign(({ context, event }) => {
       if (event.type !== 'PEER_JOINED') return {}
@@ -613,11 +770,17 @@ export const sessionMachine = setup({
       // child state doesn't matter.
       on: {
         WELCOME: { actions: 'storeWelcome' },
-        ROSTER: { target: '.live', actions: 'storeRoster' },
+        ROSTER: { target: '.live', actions: ['storeRoster', 'spawnPeersFromRoster'] },
         ROSTER_READY: '.live',
-        PEER_JOINED: { actions: 'addParticipant' },
-        PEER_LEFT: { actions: 'removeParticipant' },
+        PEER_JOINED: { actions: ['addParticipant', 'spawnPeerOnJoined'] },
+        PEER_LEFT: { actions: ['stopPeerChild', 'despawnPeerOnLeft', 'removeParticipant'] },
         PEER_UPDATED: { actions: 'applyPeerUpdated' },
+        // ---- WebRTC signaling routing (parent ↔ peer wrappers) -----
+        SDP_OFFER: { actions: 'routeRemoteSdpOffer' },
+        SDP_ANSWER: { actions: 'routeRemoteSdpAnswer' },
+        ICE_CANDIDATE: { actions: 'routeRemoteIce' },
+        LOCAL_SDP: { actions: 'sendLocalSdp' },
+        LOCAL_ICE: { actions: 'sendLocalIce' },
         ROLE_TRANSFERRED: { actions: 'setSharer' },
         JOIN_REQUESTED: { actions: 'addPendingJoiner', guard: 'isHost' },
         SYNC_FRAME: { actions: 'applySyncFrame' },

@@ -23,7 +23,13 @@ function host() {
       })),
       redeemJoinToken: fromPromise(async () => { throw new Error('not used') }),
       // Inert stub: legacy tests drive transitions directly via actor.send().
-      signaling: fromCallback(() => { /* no-op */ })
+      signaling: fromCallback(() => { /* no-op */ }),
+      // Inert peerWrapper stub — these tests don't drive RTC, but the
+      // machine now spawns wrappers on PEER_JOINED. Without a stub the
+      // real wrapper boots a real RTCPeerConnection which has no global
+      // in Node.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      peerWrapper: fromCallback(() => { /* no-op */ }) as any
     }
   })
 }

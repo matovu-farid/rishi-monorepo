@@ -80,7 +80,13 @@ function provideDeps(opts: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       signaling: (stub
         ? stub.actor
-        : fromCallback(() => { /* inert: no events, no cleanup */ })) as any
+        : fromCallback(() => { /* inert: no events, no cleanup */ })) as any,
+      // Inert peerWrapper stub — none of the existing tests drive
+      // SDP/ICE, but the machine now spawns one wrapper per
+      // PEER_JOINED. Without a stub the real wrapper boots an
+      // RTCPeerConnection which doesn't exist in jsdom.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      peerWrapper: fromCallback(() => { /* no-op */ }) as any
     }
   })
 }
