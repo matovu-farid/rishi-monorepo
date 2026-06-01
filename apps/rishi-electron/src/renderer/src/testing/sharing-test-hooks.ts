@@ -56,6 +56,13 @@ export const sessionMachineStore = {
 type WsLike = {
   close(code?: number, reason?: string): void
   send?(data: string): void
+  /**
+   * Optional test-only escape hatch added by `wsAdapter.defaultWsConnect`:
+   * synthesises a close event so the reconnect path fires immediately
+   * (a real `ws.close()` waits for the server's close-frame ack which can
+   * stall for ~10s under wrangler dev, exceeding the test's 10s wait window).
+   */
+  __testForceCloseSync?(code: number, reason: string): void
 }
 let activeSignalingWs: WsLike | null = null
 const signalingErrorListeners = new Set<(code: string) => void>()
@@ -80,7 +87,13 @@ export const signalingTestHook = {
    * network drop and exercise the reconnect path.
    */
   forceDisconnect(): void {
-    activeSignalingWs?.close(4000, 'e2e_force_disconnect')
+    const ws = activeSignalingWs
+    if (!ws) return
+    if (ws.__testForceCloseSync) {
+      ws.__testForceCloseSync(4000, 'e2e_force_disconnect')
+    } else {
+      ws.close(4000, 'e2e_force_disconnect')
+    }
   },
   /**
    * Subscribe to signaling error codes (PROTOCOL_ERROR / SIGNALING_DROPPED).
