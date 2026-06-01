@@ -8,6 +8,7 @@ import type { ClientMsg as ClientMsgT, ServerMsg as ServerMsgT } from '@rishi/sh
 import type { z } from 'zod'
 import { peerWrapperActor } from '@/actors/sharing/peerWrapperActor'
 import { hostFileSenderActor } from '@/actors/sharing/hostFileSenderActor'
+import { viewerFileReceiverActor } from '@/actors/sharing/viewerFileReceiverActor'
 
 // Inline shape of the sync-frame payload we emit/consume. The full SyncMsg
 // schema lives in `@rishi/sharing-protocol/sync` but the sharing-protocol
@@ -84,6 +85,30 @@ export type SyncedPosition = { pageIndex?: number; cfi?: string }
  */
 export type PeerWrapperRef = ActorRefFrom<typeof peerWrapperActor>
 export type HostFileSenderRef = ActorRefFrom<typeof hostFileSenderActor>
+export type ViewerFileReceiverRef = ActorRefFrom<typeof viewerFileReceiverActor>
+
+/**
+ * IPC shim for `sharing:saveTransferredBook`. Injectable for the same
+ * reason as readBookBytes — keeps the viewer-side wiring testable
+ * without going through `window.electron`.
+ */
+export type SaveTransferredBookFn = (params: {
+  bookId: string
+  contentHash: string
+  format: 'epub' | 'pdf'
+  blob: number[]
+  receivedFromUserId: string
+  receivedAt: number
+  title: string
+}) => Promise<{ localPath: string; dbBookId: number }>
+
+const defaultSaveTransferredBook: SaveTransferredBookFn = async (params) => {
+  type Win = { electron?: { sharing?: { saveTransferredBook: SaveTransferredBookFn } } }
+  const w = (typeof window === 'undefined' ? {} : window) as Win
+  const ipc = w.electron?.sharing?.saveTransferredBook
+  if (!ipc) throw new Error('saveTransferredBook IPC unavailable')
+  return await ipc(params)
+}
 
 /**
  * IPC shim for `sharing:readBookBytes`. Injectable so unit tests can
@@ -129,10 +154,19 @@ export interface SessionContext {
    */
   transfers: Map<string, HostFileSenderRef>
   /**
+   * Active viewer-side file-transfer receivers, keyed by sender userId
+   * (typically the host). Spawned on PEER_CONNECTED when local is
+   * viewer + hasBookFile=false. Stopped on TRANSFER_RECEIVED /
+   * TRANSFER_FAILED / PEER_LEFT.
+   */
+  receivers: Map<string, ViewerFileReceiverRef>
+  /**
    * Pluggable IPC. Tests inject a stub; production resolves to
    * `window.electron.sharing.readBookBytes`.
    */
   readBookBytes: ReadBookBytesFn
+  /** Pluggable IPC for persisting a received book on disk + library. */
+  saveTransferredBook: SaveTransferredBookFn
   bookContext: BookContextT | null
   requiresApproval: boolean
   /** Viewer-only: tracks the pending approval lifecycle for the UI. */
@@ -238,6 +272,18 @@ export type SessionEvent =
   | { type: 'SEND_FILE_DATA'; peerUserId: string; payload: ArrayBuffer }
   | { type: 'TRANSFER_COMPLETED'; peerUserId: string; contentHash: string }
   | { type: 'TRANSFER_FAILED'; peerUserId: string; reason: string }
+  // ---- Viewer-side transfer orchestration ----------------------------
+  | { type: 'SEND_FILE_ACK'; peerUserId: string; seq: number }
+  | {
+      type: 'TRANSFER_RECEIVED'
+      peerUserId: string
+      bookId: string
+      contentHash: string
+      format: 'epub' | 'pdf'
+      title: string
+      blob: ArrayBuffer
+      hash: string
+    }
 
 const initialContext: SessionContext = {
   me: null,
@@ -253,7 +299,9 @@ const initialContext: SessionContext = {
   pendingJoiners: new Map(),
   peers: new Map(),
   transfers: new Map(),
+  receivers: new Map(),
   readBookBytes: defaultReadBookBytes,
+  saveTransferredBook: defaultSaveTransferredBook,
   bookContext: null,
   requiresApproval: false,
   approvalStatus: 'none',
@@ -312,7 +360,13 @@ export const sessionMachine = setup({
      * fileTransferActor sender, and surfaces SEND_FILE_DATA /
      * TRANSFER_* events up to this machine.
      */
-    hostFileSender: hostFileSenderActor
+    hostFileSender: hostFileSenderActor,
+    /**
+     * Viewer-side file-transfer orchestrator. Spawned per peer that
+     * is supplying us the book. Drives the receiver fileTransferActor
+     * and surfaces SEND_FILE_ACK / TRANSFER_* up to this machine.
+     */
+    viewerFileReceiver: viewerFileReceiverActor
   },
   actions: {
     storeMeAndHost: assign(({ event }) => {
@@ -577,6 +631,135 @@ export const sessionMachine = setup({
       if (!ref) return
       ref.send({ type: 'FILE_ACK', seq: event.seq })
     },
+    /**
+     * Viewer-side companion to `maybeStartHostTransfer`. Spawns one
+     * receiver per peer that connects, gated on:
+     *   - local role is viewer
+     *   - local hasBookFile is false
+     *   - bookContext exists (we know what to expect)
+     *   - the connecting peer reports hasBookFile=true (they can supply it)
+     */
+    maybeStartViewerReceive: assign(({ context, event, spawn }) => {
+      if (event.type !== 'PEER_CONNECTED') return {}
+      if (context.role !== 'viewer') return {}
+      if (context.hasBookFile) return {}
+      if (!context.bookContext) return {}
+      const peerUserId = event.remoteUserId
+      const peer = context.participants.get(peerUserId)
+      if (!peer || !peer.hasBookFile) return {}
+      if (context.receivers.has(peerUserId)) return {}
+      const ref = spawn('viewerFileReceiver', {
+        id: `recv-${peerUserId}`,
+        input: {
+          peerUserId,
+          bookId: context.bookContext.bookId,
+          contentHash: context.bookContext.contentHash,
+          format: context.bookContext.format,
+          title: peer.profile.displayName + "'s book",
+          chunkSize: 8 * 1024,
+          windowSize: 32
+        }
+      }) as ViewerFileReceiverRef
+      const next = new Map(context.receivers)
+      next.set(peerUserId, ref)
+      return { receivers: next }
+    }),
+    /** Route an inbound FILE_DATA from a peer wrapper → matching receiver. */
+    routeDataToReceiver: ({ context, event }) => {
+      if (event.type !== 'FILE_DATA') return
+      const ref = context.receivers.get(event.remoteUserId)
+      if (!ref) return
+      ref.send({ type: 'FILE_DATA', payload: event.payload })
+    },
+    /** Route a SEND_FILE_ACK from a receiver → matching peer wrapper. */
+    routeAckOutbound: ({ context, event }) => {
+      if (event.type !== 'SEND_FILE_ACK') return
+      const ref = context.peers.get(event.peerUserId)
+      if (!ref) return
+      ref.send({ type: 'SEND_FILE_ACK', seq: event.seq })
+    },
+    /**
+     * Persist a transferred book on disk + library (saveTransferredBook
+     * IPC) and announce hasBookFile=true to the worker so the roster
+     * reflects it. Fire-and-forget: the save is async, but the receiver
+     * has already verified hash so we don't need to gate further state
+     * on the disk-write result.
+     */
+    persistAndReportReceivedBook: ({ context, event, self }) => {
+      if (event.type !== 'TRANSFER_RECEIVED') return
+      const blobBytes = Array.from(new Uint8Array(event.blob))
+      void context.saveTransferredBook({
+        bookId: event.bookId,
+        contentHash: event.contentHash,
+        format: event.format,
+        blob: blobBytes,
+        receivedFromUserId: event.peerUserId,
+        receivedAt: Date.now(),
+        title: event.title
+      }).then((res) => {
+        // Tell the rest of the machine: book on disk, update roster.
+        self.send({
+          type: 'BOOK_RECEIVED',
+          bookId: event.bookId,
+          contentHash: event.contentHash,
+          format: event.format,
+          receivedFromUserId: event.peerUserId,
+          localPath: res.localPath,
+          title: event.title
+        })
+        self.send({ type: 'REPORT_HAS_BOOK', value: true })
+      }).catch((e) => {
+        // Log only — saveTransferredBook is the side-effect path; if it
+        // fails the in-memory state remains consistent and the user can
+        // retry by re-joining.
+        // eslint-disable-next-line no-console
+        console.warn('[sharing] saveTransferredBook failed', e)
+      })
+    },
+    /** Two-step cleanup mirroring stopPeerChild/despawnPeerOnLeft. */
+    stopViewerReceiverChild: stopChild(({ event }) => {
+      if (event.type !== 'TRANSFER_RECEIVED' && event.type !== 'TRANSFER_FAILED') return ''
+      return `recv-${event.peerUserId}`
+    }),
+    removeViewerReceiver: assign(({ context, event }) => {
+      if (event.type !== 'TRANSFER_RECEIVED' && event.type !== 'TRANSFER_FAILED') return {}
+      if (!context.receivers.has(event.peerUserId)) return {}
+      const next = new Map(context.receivers)
+      next.delete(event.peerUserId)
+      return { receivers: next }
+    }),
+    /**
+     * Stop any active host-side transfer / viewer-side receiver tied to
+     * a peer that just left. The transfer-cleanup map cleanup happens
+     * via `cleanupPeerTransfers` below.
+     */
+    stopTransferOnLeft: stopChild(({ event }) => {
+      if (event.type !== 'PEER_LEFT') return ''
+      const userId = event.userId ?? event.msg?.userId
+      return userId ? `xfer-${userId}` : ''
+    }),
+    stopReceiverOnLeft: stopChild(({ event }) => {
+      if (event.type !== 'PEER_LEFT') return ''
+      const userId = event.userId ?? event.msg?.userId
+      return userId ? `recv-${userId}` : ''
+    }),
+    cleanupPeerTransfers: assign(({ context, event }) => {
+      if (event.type !== 'PEER_LEFT') return {}
+      const userId = event.userId ?? event.msg?.userId
+      if (!userId) return {}
+      const patch: Partial<SessionContext> = {}
+      if (context.transfers.has(userId)) {
+        const next = new Map(context.transfers)
+        next.delete(userId)
+        patch.transfers = next
+      }
+      if (context.receivers.has(userId)) {
+        const next = new Map(context.receivers)
+        next.delete(userId)
+        patch.receivers = next
+      }
+      return patch
+    }),
     /** Two-step cleanup mirroring stopPeerChild/despawnPeerOnLeft. */
     stopHostTransferChild: stopChild(({ event }) => {
       if (event.type !== 'TRANSFER_COMPLETED' && event.type !== 'TRANSFER_FAILED') return ''
@@ -882,7 +1065,12 @@ export const sessionMachine = setup({
         ROSTER: { target: '.live', actions: ['storeRoster', 'spawnPeersFromRoster'] },
         ROSTER_READY: '.live',
         PEER_JOINED: { actions: ['addParticipant', 'spawnPeerOnJoined'] },
-        PEER_LEFT: { actions: ['stopPeerChild', 'despawnPeerOnLeft', 'removeParticipant'] },
+        PEER_LEFT: {
+          actions: [
+            'stopPeerChild', 'stopTransferOnLeft', 'stopReceiverOnLeft',
+            'despawnPeerOnLeft', 'cleanupPeerTransfers', 'removeParticipant'
+          ]
+        },
         PEER_UPDATED: { actions: 'applyPeerUpdated' },
         // ---- WebRTC signaling routing (parent ↔ peer wrappers) -----
         SDP_OFFER: { actions: 'routeRemoteSdpOffer' },
@@ -891,14 +1079,27 @@ export const sessionMachine = setup({
         LOCAL_SDP: { actions: 'sendLocalSdp' },
         LOCAL_ICE: { actions: 'sendLocalIce' },
         // ---- Host-side file transfer wiring -----------------------
-        PEER_CONNECTED: { actions: 'maybeStartHostTransfer' },
+        PEER_CONNECTED: {
+          actions: ['maybeStartHostTransfer', 'maybeStartViewerReceive']
+        },
         SEND_FILE_DATA: { actions: 'routeSenderData' },
         FILE_ACK: { actions: 'routeAckToSender' },
+        FILE_DATA: { actions: 'routeDataToReceiver' },
+        SEND_FILE_ACK: { actions: 'routeAckOutbound' },
         TRANSFER_COMPLETED: {
           actions: ['stopHostTransferChild', 'removeHostTransfer']
         },
         TRANSFER_FAILED: {
-          actions: ['stopHostTransferChild', 'removeHostTransfer']
+          actions: [
+            'stopHostTransferChild', 'removeHostTransfer',
+            'stopViewerReceiverChild', 'removeViewerReceiver'
+          ]
+        },
+        TRANSFER_RECEIVED: {
+          actions: [
+            'persistAndReportReceivedBook',
+            'stopViewerReceiverChild', 'removeViewerReceiver'
+          ]
         },
         ROLE_TRANSFERRED: { actions: 'setSharer' },
         JOIN_REQUESTED: { actions: 'addPendingJoiner', guard: 'isHost' },
