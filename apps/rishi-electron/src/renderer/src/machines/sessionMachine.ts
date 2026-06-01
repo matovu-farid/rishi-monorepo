@@ -109,7 +109,7 @@ export type SessionEvent =
    * the reconnectToken as a third subprotocol entry so the worker recognises
    * the existing participant and skips redeem.
    */
-  | { type: 'RECONNECT_SESSION'; sessionId: string; reconnectToken: string; me?: Me }
+  | { type: 'RECONNECT_SESSION'; sessionId: string; reconnectToken: string; wsUrl: string; me?: Me }
   | { type: 'APPROVED' }
   | { type: 'REJECTED' }
   | { type: 'ROSTER_READY' }
@@ -249,6 +249,12 @@ export const sessionMachine = setup({
         me: event.me ?? context.me,
         sessionId: event.sessionId,
         reconnectToken: event.reconnectToken,
+        // Reborn-host flow: signalingActor needs the wss URL but we have no
+        // prior context (the previous Electron process was killed). The caller
+        // (typically the auth/deeplink handler that received the reconnect
+        // payload) supplies it directly so the WS subprotocol-based reconnect
+        // can fire.
+        wsUrl: event.wsUrl,
         role: context.role
       }
     }),

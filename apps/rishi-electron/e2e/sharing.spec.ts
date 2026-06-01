@@ -231,8 +231,20 @@ test.describe('Shared reading — happy path', () => {
         return w.__rishi.sessionMachineStore.getState().context.sessionId
       })
 
-      // Kill host app abruptly.
-      await host.app.close().catch(() => {})
+      // Kill host app abruptly. Use SIGKILL directly (rather than
+      // `app.close()`) because the host's auto-updater + persistent
+      // WebSocket can keep the Electron event loop open well past the
+      // 120s test budget. SIGKILL closes the WS instantly, which is
+      // exactly the "host crashed" semantics this test is exercising.
+      try {
+        const proc = host.app.process()
+        if (proc && !proc.killed) proc.kill('SIGKILL')
+      } catch {
+        /* already gone */
+      }
+      // Give the worker a beat to observe the WS drop and broadcast
+      // host.suspended before the viewer checks the banner.
+      await viewer.page.waitForTimeout(500)
 
       // Viewer should see the HostSuspendedBanner within 10s.
       await expect(viewer.page.locator('[data-testid="host-suspended-banner"]')).toBeVisible({
@@ -252,10 +264,14 @@ test.describe('Shared reading — happy path', () => {
 
       // Provide `me` so the WS handshake uses the same `host-5` bearer as
       // the original host; the worker's reconnectToken is keyed by userId.
+      // wsUrl must be supplied — the reborn process has no prior context
+      // for it.
+      const wsUrl = workerUrl.replace(/^http/, 'ws') + `/v1/sessions/${sessionId}/wss`
       await sendSessionEvent(hostReborn.page, {
         type: 'RECONNECT_SESSION',
         sessionId,
         reconnectToken,
+        wsUrl,
         me: {
           userId: 'host-5',
           displayName: 'Host',
@@ -264,7 +280,12 @@ test.describe('Shared reading — happy path', () => {
       })
       await waitForSessionState(
         hostReborn.page,
-        (v) => typeof v === 'object' && v !== null && 'live' in (v as object),
+        (v) => {
+          if (typeof v !== 'object' || v === null) return false
+          if ('live' in (v as object)) return true
+          const inner = (v as { connected?: unknown }).connected
+          return typeof inner === 'object' && inner !== null && 'live' in (inner as object)
+        },
         25_000
       )
 
@@ -274,7 +295,18 @@ test.describe('Shared reading — happy path', () => {
       })
     } finally {
       if (hostReborn) await closeApp(hostReborn)
-      else await host.app.close().catch(() => {})
+      else {
+        // Host was already SIGKILL'd above; this is a defensive fallback in
+        // case we never reached the kill step. Bound at 2s.
+        await Promise.race([
+          host.app.close().catch(() => {}),
+          new Promise<void>((resolve) => setTimeout(resolve, 2_000))
+        ])
+        try {
+          const proc = host.app.process()
+          if (proc && !proc.killed) proc.kill('SIGKILL')
+        } catch { /* gone */ }
+      }
       await closeApp(viewer)
     }
   })
