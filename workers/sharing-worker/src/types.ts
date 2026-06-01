@@ -14,7 +14,7 @@ export interface SessionState {
   createdAt: number;
   hostSuspendedUntil?: number;
   participants: Record<string, ParticipantInfo & { reservedUntil?: number }>;
-  pendingJoiners: Record<string, { profile: { displayName: string; avatarUrl?: string }; requestedAt: number }>;
+  pendingJoiners: Record<string, { profile: { displayName: string; avatarUrl?: string }; requestedAt: number; hasBookFile?: boolean }>;
   joinTokens: Record<string, { issuedAt: number; expiresAt: number; uses: number }>;
   sdpRelayCount?: number;
 }

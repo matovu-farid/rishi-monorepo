@@ -65,6 +65,15 @@ export class SessionRoom extends DurableObject<Env> {
   private lastRequestSharer = new Map<string, number>();
   private pendingSockets = new Map<string, { ws: WebSocket; hasBookFile: boolean }>();
   private frameBuckets = new Map<string, RateBucket>();
+  /**
+   * WebSocket Hibernation API destroys the JS object between messages, so the
+   * in-memory `pendingSockets` map is empty on wake. The pending socket's
+   * `hasBookFile` is encoded in the WS tag (see `acceptWebSocket(server, [JSON.stringify({ meta, isReconnect, hasBookFile, pending })])`),
+   * and `state.pendingJoiners` is the durable source of truth for who's pending.
+   * This flag is reset every fresh instance — when false, the next handler that
+   * reads `pendingSockets` walks `getWebSockets()` and re-populates the map.
+   */
+  private _pendingHydrated = false;
 
   private log(event: string, fields: Record<string, unknown> = {}) {
     console.log(JSON.stringify({ event, ts: Date.now(), ...fields }));
@@ -310,6 +319,7 @@ export class SessionRoom extends DurableObject<Env> {
         const state = await this.loadState();
         if (!state) break;
         if (meta.userId !== state.hostUserId) { this.sendError(ws, "forbidden", "host only"); break; }
+        await this.rehydratePendingFromHibernation();
         const pending = this.pendingSockets.get(msg.userId);
         delete state.pendingJoiners[msg.userId];
         await this.saveState(state);
@@ -324,6 +334,7 @@ export class SessionRoom extends DurableObject<Env> {
         const state = await this.loadState();
         if (!state) break;
         if (meta.userId !== state.hostUserId) { this.sendError(ws, "forbidden", "host only"); break; }
+        await this.rehydratePendingFromHibernation();
         delete state.pendingJoiners[msg.userId];
         await this.saveState(state);
         const pending = this.pendingSockets.get(msg.userId);
@@ -435,7 +446,11 @@ export class SessionRoom extends DurableObject<Env> {
       await this.ctx.storage.setAlarm(Date.now() + CONFIG.STORAGE_PURGE_AFTER_END_MS);
       return;
     }
-    // Approval timeouts
+    // Approval timeouts — also need a rehydrated pendingSockets map to
+    // notify joiners whose DO was hibernated mid-wait.
+    if (Object.keys(state.pendingJoiners).length > 0) {
+      await this.rehydratePendingFromHibernation();
+    }
     for (const [userId, v] of Object.entries(state.pendingJoiners)) {
       if (v.requestedAt + CONFIG.APPROVAL_TIMEOUT_MS <= now) {
         delete state.pendingJoiners[userId];
@@ -521,10 +536,15 @@ export class SessionRoom extends DurableObject<Env> {
       const pending = {
         profile: { displayName: meta.displayName, avatarUrl: meta.avatarUrl },
         requestedAt: Date.now(),
+        // Persist hasBookFile so we can rehydrate `pendingSockets` after
+        // WebSocket hibernation. The in-memory map is destroyed on wake; the
+        // storage record + getWebSockets() are the durable inputs.
+        hasBookFile,
       };
       state.pendingJoiners[meta.userId] = pending;
       await this.saveState(state);
       this.pendingSockets.set(meta.userId, { ws, hasBookFile });
+      this._pendingHydrated = true;
       const hostWs = this.findSocketByUserId(state.hostUserId);
       if (hostWs) this.sendTo(hostWs, {
         t: "join.requested",
@@ -579,6 +599,36 @@ export class SessionRoom extends DurableObject<Env> {
 
     await this.broadcastRoster(state);
     this.log("peer.admitted", { sessionId: state.sessionId, userId: meta.userId, role });
+  }
+
+  /**
+   * Rehydrate `pendingSockets` from `getWebSockets()` + persisted
+   * `pendingJoiners`. Idempotent within a single DO lifetime — the
+   * `_pendingHydrated` flag is reset by the runtime each time a fresh
+   * instance is created (so the in-memory map starts empty and rehydration
+   * runs exactly once per wake).
+   *
+   * Without this, after a hibernation cycle:
+   *   - `state.pendingJoiners[userId]` is still set (storage persists)
+   *   - `this.pendingSockets.get(userId)` returns undefined (in-memory map reset)
+   *   - `approve.join`/`reject.join` silently drops the joiner without sending
+   *     the approval.result message they're blocked on.
+   */
+  private async rehydratePendingFromHibernation(): Promise<void> {
+    if (this._pendingHydrated) return;
+    this._pendingHydrated = true;
+    const state = await this.loadState();
+    if (!state) return;
+    if (Object.keys(state.pendingJoiners).length === 0) return;
+    for (const ws of this.ctx.getWebSockets()) {
+      const meta = this.metaFor(ws);
+      if (!meta) continue;
+      const pending = state.pendingJoiners[meta.userId];
+      if (!pending) continue;
+      // hasBookFile was persisted at the time of `peer.queued`; default to
+      // false for legacy records that predate this field.
+      this.pendingSockets.set(meta.userId, { ws, hasBookFile: pending.hasBookFile ?? false });
+    }
   }
 
   // ---------- Helpers ----------
