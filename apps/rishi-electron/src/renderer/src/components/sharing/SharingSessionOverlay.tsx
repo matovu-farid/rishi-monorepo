@@ -6,6 +6,7 @@ import { ApprovalWaitingScreen } from './ApprovalWaitingScreen'
 import { HostSuspendedBanner } from './HostSuspendedBanner'
 import { KickedDialog } from './KickedDialog'
 import { RoleTransferToast } from './RoleTransferToast'
+import { BookPersistFailedToast } from './BookPersistFailedToast'
 import {
   SessionEndedKeepBooksDialog,
   type KeepableBook
@@ -105,6 +106,29 @@ export function SharingSessionOverlay(): React.JSX.Element | null {
     const t = window.setTimeout(() => setRoleTransferMessage(null), 4000)
     return () => window.clearTimeout(t)
   }, [roleTransferMessage])
+
+  // Surface saveTransferredBook IPC failures as a transient toast. We watch
+  // `persistFailures.length` rather than the array identity so a new entry
+  // always triggers a fresh toast even if the user dismissed the prior one.
+  // Defensive `?? []` keeps the overlay rendering when older tests stub a
+  // partial context.
+  const persistFailures = state.context.persistFailures ?? []
+  const [persistFailureMessage, setPersistFailureMessage] = useState<string | null>(null)
+  const seenPersistFailuresRef = useRef<number>(persistFailures.length)
+  useEffect(() => {
+    const seen = seenPersistFailuresRef.current
+    if (persistFailures.length <= seen) return
+    const latest = persistFailures[persistFailures.length - 1]
+    setPersistFailureMessage(
+      `Couldn't save received book "${latest.bookId}": ${latest.error}`
+    )
+    seenPersistFailuresRef.current = persistFailures.length
+  }, [persistFailures])
+  useEffect(() => {
+    if (!persistFailureMessage) return
+    const t = window.setTimeout(() => setPersistFailureMessage(null), 5000)
+    return () => window.clearTimeout(t)
+  }, [persistFailureMessage])
 
   // ALL hooks must run before any early return — these are the derived render
   // collections.
@@ -263,6 +287,13 @@ export function SharingSessionOverlay(): React.JSX.Element | null {
         <RoleTransferToast
           message={roleTransferMessage}
           onDismiss={() => setRoleTransferMessage(null)}
+        />
+      )}
+
+      {persistFailureMessage && (
+        <BookPersistFailedToast
+          message={persistFailureMessage}
+          onDismiss={() => setPersistFailureMessage(null)}
         />
       )}
     </>

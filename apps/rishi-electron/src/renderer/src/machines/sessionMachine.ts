@@ -69,6 +69,22 @@ export type ReceivedBook = {
 }
 
 /**
+ * Records a `saveTransferredBook` IPC rejection. Capped at
+ * `MAX_PERSIST_FAILURES` entries (FIFO eviction) so a misbehaving peer
+ * can't grow context unboundedly. The UI watches this list with a
+ * useEffect to render one toast per new entry.
+ */
+export type PersistFailure = {
+  peerUserId: string
+  bookId: string
+  contentHash: string
+  error: string
+  at: number
+}
+
+export const MAX_PERSIST_FAILURES = 10
+
+/**
  * Last sharer-position the viewer (or anyone in the session) saw. Updated when
  * a `sync.frame` arrives with a `reader.position`-shaped payload, OR when the
  * local sharer broadcasts a SHARER_POSITION_UPDATE event.
@@ -172,6 +188,13 @@ export interface SessionContext {
   /** Viewer-only: tracks the pending approval lifecycle for the UI. */
   approvalStatus: 'none' | 'awaiting' | 'approved' | 'rejected'
   receivedBooks: ReceivedBook[]
+  /**
+   * Recent saveTransferredBook IPC failures, capped at MAX_PERSIST_FAILURES.
+   * Surfaces to the UI as a toast so the viewer learns that a received
+   * book never made it to disk (without this, the receiver actor was
+   * stopped silently and the user had no signal).
+   */
+  persistFailures: PersistFailure[]
   hasBookFile: boolean
   lastSyncedPosition: SyncedPosition | null
   /**
@@ -284,6 +307,18 @@ export type SessionEvent =
       blob: ArrayBuffer
       hash: string
     }
+  /**
+   * `saveTransferredBook` IPC rejected — the received book never made it to
+   * disk. Self-sent from `persistAndReportReceivedBook` so the failure can
+   * be appended to `context.persistFailures` and rendered as a toast.
+   */
+  | {
+      type: 'BOOK_PERSIST_FAILED'
+      peerUserId: string
+      bookId: string
+      contentHash: string
+      error: string
+    }
 
 const initialContext: SessionContext = {
   me: null,
@@ -306,6 +341,7 @@ const initialContext: SessionContext = {
   requiresApproval: false,
   approvalStatus: 'none',
   receivedBooks: [],
+  persistFailures: [],
   hasBookFile: false,
   lastSyncedPosition: null,
   hostSuspendedUntil: null,
@@ -708,14 +744,44 @@ export const sessionMachine = setup({
           title: event.title
         })
         self.send({ type: 'REPORT_HAS_BOOK', value: true })
-      }).catch((e) => {
-        // Log only — saveTransferredBook is the side-effect path; if it
-        // fails the in-memory state remains consistent and the user can
-        // retry by re-joining.
+      }).catch((e: unknown) => {
+        // saveTransferredBook rejected (disk full, IPC torn down, schema
+        // parse error, etc). The receiver actor is already stopped in the
+        // same transition (see TRANSFER_RECEIVED handler). Without this
+        // self-send the viewer has no signal that the book never made it
+        // to disk — log + raise so the UI can surface a toast.
+        const message = e instanceof Error ? e.message : String(e)
         // eslint-disable-next-line no-console
         console.warn('[sharing] saveTransferredBook failed', e)
+        self.send({
+          type: 'BOOK_PERSIST_FAILED',
+          peerUserId: event.peerUserId,
+          bookId: event.bookId,
+          contentHash: event.contentHash,
+          error: message
+        })
       })
     },
+    /**
+     * Append a `BOOK_PERSIST_FAILED` event into `persistFailures` (capped
+     * at `MAX_PERSIST_FAILURES` entries, FIFO eviction).
+     */
+    recordPersistFailure: assign(({ context, event }) => {
+      if (event.type !== 'BOOK_PERSIST_FAILED') return {}
+      const next: PersistFailure[] = [
+        ...context.persistFailures,
+        {
+          peerUserId: event.peerUserId,
+          bookId: event.bookId,
+          contentHash: event.contentHash,
+          error: event.error,
+          at: Date.now()
+        }
+      ]
+      // FIFO eviction once the cap is hit so context can't grow unbounded.
+      while (next.length > MAX_PERSIST_FAILURES) next.shift()
+      return { persistFailures: next }
+    }),
     /** Two-step cleanup mirroring stopPeerChild/despawnPeerOnLeft. */
     stopViewerReceiverChild: stopChild(({ event }) => {
       if (event.type !== 'TRANSFER_RECEIVED' && event.type !== 'TRANSFER_FAILED') return ''
@@ -1101,6 +1167,7 @@ export const sessionMachine = setup({
             'stopViewerReceiverChild', 'removeViewerReceiver'
           ]
         },
+        BOOK_PERSIST_FAILED: { actions: 'recordPersistFailure' },
         ROLE_TRANSFERRED: { actions: 'setSharer' },
         JOIN_REQUESTED: { actions: 'addPendingJoiner', guard: 'isHost' },
         SYNC_FRAME: { actions: 'applySyncFrame' },
