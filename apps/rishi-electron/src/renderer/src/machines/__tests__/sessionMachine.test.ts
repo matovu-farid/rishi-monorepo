@@ -416,6 +416,90 @@ describe('sessionMachine', () => {
     await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true))
   })
 
+  it('END_SESSION from a viewer with no received books falls through to ending', async () => {
+    // Regression for the silent-swallow bug: the previous transition
+    // table required either `hasReceivedBooks` or `isHost`, leaving the
+    // common viewer-with-no-books case unhandled. END_SESSION should
+    // behave like LEAVE for that participant.
+    const stub = makeStubSignaling()
+    const a = createActor(provideDeps({ signalingStub: stub }))
+    a.start()
+    a.send({
+      type: 'ACCEPT_INVITE',
+      me: { userId: 'u_v', displayName: 'V', authToken: 'jwt' },
+      sessionId: 's1', joinToken: 'jt'
+    })
+    await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true))
+    // Roster brings us into `live` and confirms role is viewer (no books).
+    stub.fire({
+      type: 'WELCOME',
+      msg: {
+        v: 1, t: 'welcome', you: 'u_v', role: 'viewer',
+        sharerId: 'u_a', reconnectToken: 'rt', reservedUntil: 9999
+      }
+    })
+    stub.fire({
+      type: 'ROSTER',
+      msg: {
+        v: 1, t: 'roster', participants: [],
+        requiresApproval: false,
+        bookContext: { bookId: 'b', contentHash: 'h', format: 'epub' },
+        status: 'live'
+      }
+    })
+    await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'live')).toBe(true))
+    expect(a.getSnapshot().context.role).toBe('viewer')
+    expect(a.getSnapshot().context.receivedBooks).toHaveLength(0)
+
+    a.send({ type: 'END_SESSION' })
+    await vi.waitFor(() => expect(a.getSnapshot().value).toBe('ending'))
+  })
+
+  it('HOST_SUSPENDED assigns hostSuspendedUntil from the wire frame', async () => {
+    const stub = makeStubSignaling()
+    const a = createActor(provideDeps({ signalingStub: stub }))
+    a.start()
+    a.send({
+      type: 'CREATE_SESSION',
+      me: { userId: 'u_a', displayName: 'Me', authToken: 'jwt' },
+      bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
+      requiresApproval: false
+    })
+    await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true))
+    stub.fire({
+      type: 'WELCOME',
+      msg: {
+        v: 1, t: 'welcome', you: 'u_a', role: 'host',
+        sharerId: 'u_a', reconnectToken: 'rt', reservedUntil: 9999
+      }
+    })
+    stub.fire({
+      type: 'ROSTER',
+      msg: {
+        v: 1, t: 'roster', participants: [],
+        requiresApproval: false,
+        bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
+        status: 'live'
+      }
+    })
+    await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'live')).toBe(true))
+
+    // Server fires host.suspended with a wire-level deadline; the
+    // machine must mirror it into context so HostSuspendedBanner can
+    // render a real countdown (not a hard-coded "now + 30s").
+    const until = Date.now() + 120_000
+    stub.fire({
+      type: 'HOST_SUSPENDED',
+      msg: { v: 1, t: 'host.suspended', until }
+    })
+    expect(a.getSnapshot().context.hostSuspendedUntil).toBe(until)
+
+    // Returning to normal clears the deadline so the banner unmounts
+    // and any future suspension starts from a clean slate.
+    a.send({ type: 'HOST_RESUMED' })
+    expect(a.getSnapshot().context.hostSuspendedUntil).toBeNull()
+  })
+
   it('LEAVE from live skips prompt and goes to idle when no books were received', async () => {
     const a = createActor(provideDeps())
     a.start()

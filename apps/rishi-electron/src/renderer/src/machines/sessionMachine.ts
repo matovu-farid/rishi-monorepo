@@ -91,6 +91,14 @@ export interface SessionContext {
   receivedBooks: ReceivedBook[]
   hasBookFile: boolean
   lastSyncedPosition: SyncedPosition | null
+  /**
+   * Absolute deadline (epoch ms) by which the host must reconnect, sourced
+   * from the worker's `host.suspended` frame (and mirrored on the roster
+   * during reconnection). The HostSuspendedBanner reads this to render a
+   * live countdown rather than a hard-coded `Date.now() + 30s`. `null`
+   * when the host is not currently suspended.
+   */
+  hostSuspendedUntil: number | null
   error: { code: string; message: string; recoverable: boolean } | null
 }
 
@@ -183,6 +191,7 @@ const initialContext: SessionContext = {
   receivedBooks: [],
   hasBookFile: false,
   lastSyncedPosition: null,
+  hostSuspendedUntil: null,
   error: null
 }
 
@@ -300,9 +309,23 @@ export const sessionMachine = setup({
         participants: next,
         pendingJoiners: pending,
         bookContext: event.msg.bookContext,
-        requiresApproval: event.msg.requiresApproval
+        requiresApproval: event.msg.requiresApproval,
+        // Mirror the host-grace deadline from the roster so a viewer that
+        // reconnects mid-suspension still gets an accurate countdown.
+        // When the host is live the worker omits this field; treat that
+        // as "no longer suspended" rather than persisting the stale value.
+        hostSuspendedUntil: event.msg.hostSuspendedUntil ?? null
       }
     }),
+    storeHostSuspendedUntil: assign(({ event }) => {
+      if (event.type !== 'HOST_SUSPENDED') return {}
+      // Prefer the wire-level msg.until (sourced from the worker's
+      // host-grace deadline); fall back to event.until when callers
+      // synthesised the event from a roster patch.
+      const until = event.msg?.until ?? event.until ?? null
+      return { hostSuspendedUntil: until }
+    }),
+    clearHostSuspendedUntil: assign({ hostSuspendedUntil: null }),
     setSharer: assign(({ event }) => {
       if (event.type === 'ROLE_TRANSFERRED') {
         const id = event.msg?.newSharerId ?? event.newSharerId
@@ -629,7 +652,12 @@ export const sessionMachine = setup({
         ],
         END_SESSION: [
           { target: '.promptingKeepBooks', guard: 'hasReceivedBooks' },
-          { target: 'ending', guard: 'isHost' }
+          { target: 'ending', guard: 'isHost' },
+          // Viewer fall-through: a non-host with no transferred books that
+          // fires END_SESSION (typically because the host clicked "End
+          // session" or the panel reused the same handler) gets treated
+          // as a LEAVE rather than silently swallowing the event.
+          { target: 'ending' }
         ]
       },
       states: {
@@ -692,8 +720,18 @@ export const sessionMachine = setup({
             hostStatus: {
               initial: 'normal',
               states: {
-                normal: { on: { HOST_SUSPENDED: 'suspended' } },
-                suspended: { on: { HOST_RESUMED: 'normal' } }
+                normal: {
+                  on: {
+                    HOST_SUSPENDED: {
+                      target: 'suspended',
+                      actions: 'storeHostSuspendedUntil'
+                    }
+                  }
+                },
+                suspended: {
+                  exit: 'clearHostSuspendedUntil',
+                  on: { HOST_RESUMED: 'normal' }
+                }
               }
             }
           }

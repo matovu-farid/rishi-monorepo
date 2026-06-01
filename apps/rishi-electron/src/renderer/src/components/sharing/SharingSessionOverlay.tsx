@@ -169,7 +169,16 @@ export function SharingSessionOverlay(): React.JSX.Element | null {
           data-testid="host-suspended-banner"
           className="fixed top-0 inset-x-0 z-40"
         >
-          <HostSuspendedBanner until={Date.now() + 30_000} />
+          {/*
+            Prefer the wire-sourced deadline from the machine (set by the
+            HOST_SUSPENDED frame and the roster mirror). Fall back to a
+            120s grace from "now" only when the deadline is missing —
+            matches the worker's CONFIG.HOST_GRACE_MS so the local fallback
+            never out-races the server-side timeout.
+          */}
+          <HostSuspendedBanner
+            until={state.context.hostSuspendedUntil ?? Date.now() + 120_000}
+          />
         </div>
       )}
 
