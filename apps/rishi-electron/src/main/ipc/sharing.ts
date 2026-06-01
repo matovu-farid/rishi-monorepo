@@ -6,6 +6,11 @@ import {
   discardTransferredBook
 } from '../sharing/libraryWrite.js'
 import { getSharingConfig } from '../sharing/config.js'
+import {
+  readReconnect,
+  writeReconnect,
+  clearReconnect
+} from '../sharing/reconnectStore.js'
 
 /**
  * Register the `sharing:*` IPC handlers. These back the renderer-side
@@ -24,4 +29,13 @@ export function registerSharingHandlers(): void {
   handle('sharing:hasBookFile', (_e, params) => hasBookFile(params))
   handle('sharing:getConfig', () => getSharingConfig())
   handle('sharing:registerDeepLinkListener', () => {})
+  // Reborn-host reconnect persistence — see `sharing/reconnectStore.ts`.
+  handle('sharing:readReconnect', (_e, params) => readReconnect(params.userId))
+  handle('sharing:writeReconnect', (_e, params) => writeReconnect(params.userId, {
+    sessionId: params.sessionId,
+    reconnectToken: params.reconnectToken,
+    wsUrl: params.wsUrl,
+    reservedUntil: params.reservedUntil
+  }))
+  handle('sharing:clearReconnect', (_e, params) => clearReconnect(params.userId))
 }

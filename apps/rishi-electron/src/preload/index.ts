@@ -211,7 +211,10 @@ const electronAPI: ElectronAPI = {
       return () => {
         ipcRenderer.removeListener('sharing:deepLinkReceived', listener)
       }
-    }
+    },
+    readReconnect: (params) => invoke('sharing:readReconnect', params),
+    writeReconnect: (params) => invoke('sharing:writeReconnect', params),
+    clearReconnect: (params) => invoke('sharing:clearReconnect', params)
   }
 }
 

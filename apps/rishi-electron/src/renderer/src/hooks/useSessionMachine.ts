@@ -84,6 +84,40 @@ function useSessionMachineInternal() {
     return () => registerSessionMachineActor(null)
   }, [actorRef])
 
+  // Reborn-host reconnect persistence: mirror the worker-issued
+  // reconnectToken + wsUrl to disk so a hard-killed host process can
+  // dispatch RECONNECT_SESSION on relaunch (the in-memory machine is
+  // gone). Cleared on `idle` (machine reset after `ending`) so the next
+  // launch doesn't see a stale prompt.
+  useEffect(() => {
+    const sharingApi = window.electron?.sharing
+    if (!sharingApi?.writeReconnect || !sharingApi.clearReconnect) return
+    const sub = actorRef.subscribe((snap) => {
+      const ctx = snap.context
+      const userId = ctx.me?.userId
+      if (!userId) return
+      if (snap.matches('idle')) {
+        void sharingApi.clearReconnect({ userId }).catch((e) =>
+          console.warn('[sharing] clearReconnect failed', e)
+        )
+        return
+      }
+      const { sessionId, reconnectToken, wsUrl, reservedUntil } = ctx
+      if (sessionId && reconnectToken && wsUrl && reservedUntil) {
+        void sharingApi.writeReconnect({
+          userId,
+          sessionId,
+          reconnectToken,
+          wsUrl,
+          reservedUntil
+        }).catch((e) =>
+          console.warn('[sharing] writeReconnect failed', e)
+        )
+      }
+    })
+    return () => sub.unsubscribe()
+  }, [actorRef])
+
   useEffect(() => {
     const unsub = window.electron?.sharing?.onDeepLink?.((p) => {
       void (async () => {

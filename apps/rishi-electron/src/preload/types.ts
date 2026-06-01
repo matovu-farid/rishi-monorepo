@@ -185,6 +185,9 @@ export type ChannelToMethod = {
   'sharing:hasBookFile': never
   'sharing:getConfig': never
   'sharing:registerDeepLinkListener': never
+  'sharing:readReconnect': never
+  'sharing:writeReconnect': never
+  'sharing:clearReconnect': never
 }
 
 // Compile-time check: every channel in IpcContract must appear in ChannelToMethod.
@@ -286,6 +289,26 @@ export type ElectronAPI = DerivedInvokeApi & {
       iceServers: Array<{ urls: string | string[]; username?: string; credential?: string }>
     }>
     onDeepLink: (cb: (p: { joinToken: string }) => void) => () => void
+    /**
+     * Reborn-host reconnect persistence. The renderer writes the
+     * worker-issued reconnect token + wsUrl on `welcome`, reads it on
+     * app start, and clears it on graceful session end.
+     */
+    readReconnect: (params: { userId: string }) => Promise<{
+      sessionId: string
+      reconnectToken: string
+      wsUrl: string
+      reservedUntil: number
+      storedAt: number
+    } | null>
+    writeReconnect: (params: {
+      userId: string
+      sessionId: string
+      reconnectToken: string
+      wsUrl: string
+      reservedUntil: number
+    }) => Promise<void>
+    clearReconnect: (params: { userId: string }) => Promise<void>
   }
 }
 

@@ -80,6 +80,27 @@ export type SharingSaveTransferredBookResult = {
   localPath: string
   dbBookId: number
 }
+/**
+ * Persisted reconnect payload for the reborn-host flow. The renderer
+ * writes this once the worker confirms admission (`welcome` frame) and
+ * clears it on graceful session end / kick / session-ended. On app start
+ * the renderer reads it to surface a "resume session?" affordance — the
+ * worker's `reservedUntil` is the authoritative deadline.
+ */
+export type SharingReconnectPayload = {
+  sessionId: string
+  reconnectToken: string
+  wsUrl: string
+  reservedUntil: number
+  storedAt: number
+}
+export type SharingReconnectWriteParams = {
+  userId: string
+  sessionId: string
+  reconnectToken: string
+  wsUrl: string
+  reservedUntil: number
+}
 
 // ---------------------------------------------------------------------------
 // Channel contract
@@ -350,6 +371,15 @@ export type IpcContract = {
   'sharing:hasBookFile': { args: [params: { contentHash: string }]; returns: boolean }
   'sharing:getConfig': { args: []; returns: SharingConfig }
   'sharing:registerDeepLinkListener': { args: []; returns: void }
+  /**
+   * Reconnect-payload persistence (reborn-host flow). The renderer writes
+   * `(sessionId, reconnectToken, wsUrl, reservedUntil)` once the worker
+   * confirms admission, reads it on app start to detect an in-flight
+   * session, and clears it on graceful session end.
+   */
+  'sharing:readReconnect': { args: [params: { userId: string }]; returns: SharingReconnectPayload | null }
+  'sharing:writeReconnect': { args: [params: SharingReconnectWriteParams]; returns: void }
+  'sharing:clearReconnect': { args: [params: { userId: string }]; returns: void }
 }
 
 export type IpcChannel = keyof IpcContract
