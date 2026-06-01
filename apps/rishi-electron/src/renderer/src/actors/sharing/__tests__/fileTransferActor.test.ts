@@ -42,6 +42,29 @@ describe('fileTransferActor sender', () => {
   })
 })
 
+describe('fileTransferActor receiver SEND_ACK', () => {
+  it('emits SEND_ACK with the seq of each ingested data chunk', async () => {
+    const payload = new Uint8Array(20)
+    payload.fill(0xab)
+    const hash = await computeSha256Hex(payload.buffer as ArrayBuffer)
+    const events: any[] = []
+    const actor = createActor(fileTransferActor, {
+      input: {
+        mode: 'receiver', contentHash: 'h',
+        chunkSize: 16, windowSize: 32, send: () => {}
+      }
+    })
+    actor.on('*', (e) => events.push(e))
+    actor.start()
+    actor.send({ type: 'FILE_CHUNK', buf: encode({ kind: 'data', seq: 0, data: Array.from(payload.subarray(0, 16)) }) })
+    actor.send({ type: 'FILE_CHUNK', buf: encode({ kind: 'data', seq: 1, data: Array.from(payload.subarray(16)) }) })
+    actor.send({ type: 'FILE_CHUNK', buf: encode({ kind: 'end', total: 2, hash }) })
+    await new Promise((r) => setTimeout(r, 10))
+    const acks = events.filter((e) => e.type === 'SEND_ACK').map((e) => e.seq)
+    expect(acks).toEqual([0, 1])
+  })
+})
+
 describe('fileTransferActor receiver', () => {
   it('reassembles chunks and emits COMPLETED with verified hash', async () => {
     const payload = new Uint8Array(20)

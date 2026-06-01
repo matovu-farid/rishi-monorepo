@@ -54,6 +54,13 @@ export type FileTransferOutEvent =
   | { type: 'COMPLETED'; blob: ArrayBuffer; hash: string }
   | { type: 'FAILED'; reason: string }
   | { type: 'SEND_FILE_CHUNK'; payload: ArrayBuffer }
+  /**
+   * Receiver-mode only: per-seq "ack this chunk" signal. The wrapper that
+   * owns the `files` data channel converts each SEND_ACK into a wire ack
+   * frame so the sender's sliding window advances only after the chunk has
+   * actually been ingested (not just `send()`-ed).
+   */
+  | { type: 'SEND_ACK'; seq: number }
 
 function encodeFrame(f: Frame): ArrayBuffer {
   return new TextEncoder().encode(JSON.stringify(f)).buffer as ArrayBuffer
@@ -188,6 +195,9 @@ export const fileTransferActor = fromCallback<
       chunks.set(f.seq, new Uint8Array(f.data))
       reportProgress(chunks.size, totalChunks ?? chunks.size)
       emit({ type: 'PROGRESS', sent: chunks.size, total: totalChunks ?? chunks.size })
+      // Wire-level ack: tell the wrapper to push an ack frame back over
+      // the `files` channel so the sender's sliding window advances.
+      emit({ type: 'SEND_ACK', seq: f.seq })
     } else {
       totalChunks = f.total
       expectedHash = f.hash
