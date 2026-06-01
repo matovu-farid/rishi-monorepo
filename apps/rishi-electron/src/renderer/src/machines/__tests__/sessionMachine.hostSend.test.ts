@@ -4,7 +4,7 @@
  * connectivity / sender-actor surface without spinning up real
  * RTCPeerConnections.
  */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { createActor, fromCallback, fromPromise } from 'xstate'
 import { sessionMachine, type Me, type RedeemOutput } from '../sessionMachine'
 

@@ -101,11 +101,18 @@ export const peerActor = fromCallback<PeerInEvent, PeerInput, PeerOutEvent>(
 
     if (input.localMicTrack) pc.addTrack(input.localMicTrack.track, input.localMicTrack.stream)
 
+    // Always create local data channels for sync + files. In real WebRTC
+    // both ends may legally create channels with the same label; they
+    // negotiate via the SDP exchange. The test-only fake adapter has a
+    // no-op `onDataChannel` because the bus pairs by `(remoteUserId,
+    // channel-label)` — so both sides MUST call `createDataChannel`
+    // themselves to register their listener. Hoisting this out of the
+    // `initiator` branch keeps production happy and unlocks the fake.
+    const sync = pc.createDataChannel('sync', { ordered: true })
+    const files = pc.createDataChannel('files', { ordered: true })
+    attachChannel(sync)
+    attachChannel(files)
     if (input.initiator) {
-      const sync = pc.createDataChannel('sync', { ordered: true })
-      const files = pc.createDataChannel('files', { ordered: true })
-      attachChannel(sync)
-      attachChannel(files)
       ;(async () => {
         const offer = await pc.createOffer()
         if (stopped) return

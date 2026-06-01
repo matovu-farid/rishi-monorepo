@@ -178,13 +178,23 @@ function sessionIdFromJoinToken(joinToken: string): string {
 
 export async function hostCreateSession(
   hostPage: Page,
-  opts: { requiresApproval: boolean; me?: TestIdentity } = { requiresApproval: false }
+  opts: {
+    requiresApproval: boolean
+    me?: TestIdentity
+    /**
+     * Optional bookContext override — file-transfer tests need to pin
+     * `contentHash` to the real imported file's SHA-256 so the host can
+     * actually serve the bytes from disk.
+     */
+    bookContext?: { bookId: string; contentHash: string; format: 'epub' | 'pdf' }
+  } = { requiresApproval: false }
 ): Promise<string> {
   const me = opts.me ?? { userId: 'e2e-host', displayName: 'E2E Host' }
   await sendSessionEvent(hostPage, {
     type: 'CREATE_SESSION',
     me: { ...me, authToken: testBearer(me) },
-    bookContext: { bookId: 'e2e-test-book', contentHash: 'abc123', format: 'pdf' },
+    bookContext: opts.bookContext
+      ?? { bookId: 'e2e-test-book', contentHash: 'abc123', format: 'pdf' },
     requiresApproval: opts.requiresApproval
   })
   await waitForSessionState(

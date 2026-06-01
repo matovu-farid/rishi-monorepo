@@ -60,14 +60,12 @@ export const hostFileSenderActor = fromCallback<
 
   ;(async () => {
     let bytes: number[]
-    let _format: 'epub' | 'pdf'
     try {
       const result = await input.readBookBytes({
         bookId: input.bookId,
         contentHash: input.contentHash
       })
       bytes = result.bytes
-      _format = result.format
     } catch (e) {
       if (stopped) return
       emitOut({
