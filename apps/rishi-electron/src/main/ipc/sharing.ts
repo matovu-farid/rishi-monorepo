@@ -5,6 +5,7 @@ import {
   hasBookFile,
   discardTransferredBook
 } from '../sharing/libraryWrite.js'
+import { readBookBytes } from '../sharing/libraryRead.js'
 import { getSharingConfig } from '../sharing/config.js'
 import {
   readReconnect,
@@ -27,6 +28,7 @@ export function registerSharingHandlers(): void {
   handle('sharing:saveTransferredBook', (_e, params) => saveTransferredBook(params))
   handle('sharing:discardTransferredBook', (_e, params) => discardTransferredBook(params))
   handle('sharing:hasBookFile', (_e, params) => hasBookFile(params))
+  handle('sharing:readBookBytes', (_e, params) => readBookBytes(params))
   handle('sharing:getConfig', () => getSharingConfig())
   handle('sharing:registerDeepLinkListener', () => {})
   // Reborn-host reconnect persistence — see `sharing/reconnectStore.ts`.

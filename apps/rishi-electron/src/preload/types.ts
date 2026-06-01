@@ -183,6 +183,7 @@ export type ChannelToMethod = {
   'sharing:saveTransferredBook': never
   'sharing:discardTransferredBook': never
   'sharing:hasBookFile': never
+  'sharing:readBookBytes': never
   'sharing:getConfig': never
   'sharing:registerDeepLinkListener': never
   'sharing:readReconnect': never
@@ -283,6 +284,16 @@ export type ElectronAPI = DerivedInvokeApi & {
     }) => Promise<{ localPath: string; dbBookId: number }>
     discardTransferredBook: (params: { dbBookId: number; localPath: string }) => Promise<void>
     hasBookFile: (params: { contentHash: string }) => Promise<boolean>
+    /**
+     * Read a locally-stored book's bytes by content hash. Used by the
+     * sharing flow on the host side to feed the P2P file-transfer
+     * sender. The handler validates the on-disk SHA-256 still matches
+     * before returning.
+     */
+    readBookBytes: (params: { bookId: string; contentHash: string }) => Promise<{
+      bytes: number[]
+      format: 'epub' | 'pdf'
+    }>
     getConfig: () => Promise<{
       wsBaseUrl: string
       workerBaseUrl: string

@@ -204,6 +204,7 @@ const electronAPI: ElectronAPI = {
     saveTransferredBook: (params) => invoke('sharing:saveTransferredBook', params),
     discardTransferredBook: (params) => invoke('sharing:discardTransferredBook', params),
     hasBookFile: (params) => invoke('sharing:hasBookFile', params),
+    readBookBytes: (params) => invoke('sharing:readBookBytes', params),
     getConfig: () => invoke('sharing:getConfig'),
     onDeepLink: (cb) => {
       const listener = (_e: unknown, payload: { joinToken: string }): void => cb(payload)

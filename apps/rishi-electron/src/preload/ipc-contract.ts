@@ -81,6 +81,20 @@ export type SharingSaveTransferredBookResult = {
   dbBookId: number
 }
 /**
+ * Read the bytes of a locally-stored book by content hash. Returns the
+ * raw bytes (as a transferable number[]) and the canonical format, after
+ * verifying the on-disk SHA-256 still matches `contentHash`. Used by the
+ * sharing flow on the host side to feed the P2P file-transfer sender.
+ */
+export type SharingReadBookBytesParams = {
+  bookId: string
+  contentHash: string
+}
+export type SharingReadBookBytesResult = {
+  bytes: number[]
+  format: 'epub' | 'pdf'
+}
+/**
  * Persisted reconnect payload for the reborn-host flow. The renderer
  * writes this once the worker confirms admission (`welcome` frame) and
  * clears it on graceful session end / kick / session-ended. On app start
@@ -369,6 +383,10 @@ export type IpcContract = {
     returns: void
   }
   'sharing:hasBookFile': { args: [params: { contentHash: string }]; returns: boolean }
+  'sharing:readBookBytes': {
+    args: [params: SharingReadBookBytesParams]
+    returns: SharingReadBookBytesResult
+  }
   'sharing:getConfig': { args: []; returns: SharingConfig }
   'sharing:registerDeepLinkListener': { args: []; returns: void }
   /**
