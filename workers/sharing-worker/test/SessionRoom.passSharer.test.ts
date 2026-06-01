@@ -30,7 +30,7 @@ describe("pass.sharer", () => {
     expect(h.newSharerId).toBe("u_v");
   });
   it("rejects when non-host attempts", async () => {
-    const { host, viewer } = await pair();
+    const { viewer } = await pair();
     send(viewer, { t: "pass.sharer", to: "u_host" });
     const err = await nextMsg(viewer, (x) => x.t === "error");
     expect(err.code).toBe("forbidden");
