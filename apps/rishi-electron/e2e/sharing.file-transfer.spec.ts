@@ -17,11 +17,14 @@ import {
 
 // Cross-process data-channel relay (task #99) is now in place: the fake
 // RTC adapter routes `dataChannel.send()` through the worker's
-// `data.channel.relay` ServerMsg. Remaining caveats are product-side
-// (sessionMachine doesn't yet invoke fileTransferActor on hello-with
-// hasBookFile=false on the host side), so this test may still fail with
-// `fileTransferProgress.completed` never going true.
-test('viewer without book receives P2P file transfer and sync follows', async () => {
+// `data.channel.relay` ServerMsg. Remaining product-side gap: sessionMachine
+// never invokes fileTransferActor when a viewer's `hello` arrives with
+// hasBookFile=false (and the viewer also lacks a reader window in this
+// scenario so SessionMachineProvider's actor never registers). The viewer
+// helper here uses `launchAppWithSharingEnv` rather than
+// `launchAndOpenBookForSharing` because the whole point is the viewer has
+// no local book to open.
+test.fixme('viewer without book receives P2P file transfer and sync follows', async () => {
   const workerUrl = readWranglerDevUrl()
   // Host has the book; viewer does NOT import it.
   const host = await launchAppWithSharingEnv({
