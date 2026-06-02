@@ -48,7 +48,7 @@ describe('viewerFileReceiverActor', () => {
     const actor = createActor(viewerFileReceiverActor, {
       input: {
         peerUserId: 'u_host',
-        bookId: 'b1', contentHash: 'cH', format: 'pdf', title: 'My Book',
+        bookId: 'b1', contentHash: hash, format: 'pdf', title: 'My Book',
         chunkSize: 5, windowSize: 32
       }
     })
@@ -66,7 +66,7 @@ describe('viewerFileReceiverActor', () => {
     const done = got.find((e) => e.type === 'TRANSFER_RECEIVED')
     expect(done).toBeTruthy()
     expect(done.peerUserId).toBe('u_host')
-    expect(done.contentHash).toBe('cH')
+    expect(done.contentHash).toBe(hash)
     expect(done.format).toBe('pdf')
     expect(done.title).toBe('My Book')
     expect(Array.from(new Uint8Array(done.blob))).toEqual(Array.from(payload))

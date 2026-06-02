@@ -50,7 +50,7 @@ describe('fileTransferActor receiver SEND_ACK', () => {
     const events: any[] = []
     const actor = createActor(fileTransferActor, {
       input: {
-        mode: 'receiver', contentHash: 'h',
+        mode: 'receiver', contentHash: hash,
         chunkSize: 16, windowSize: 32, send: () => {}
       }
     })
@@ -73,7 +73,7 @@ describe('fileTransferActor receiver', () => {
     const events: any[] = []
     const actor = createActor(fileTransferActor, {
       input: {
-        mode: 'receiver', contentHash: 'h',
+        mode: 'receiver', contentHash: hash,
         chunkSize: 16, windowSize: 32, send: () => {}
       }
     })
@@ -100,5 +100,44 @@ describe('fileTransferActor receiver', () => {
     actor.send({ type: 'FILE_CHUNK', buf: encode({ kind: 'end', total: 1, hash: 'not_the_real_hash' }) })
     await new Promise((r) => setTimeout(r, 10))
     expect(events.find((e) => e.type === 'FAILED')).toBeTruthy()
+  })
+
+  it('emits FAILED with content_hash_mismatch when bytes match END hash but not session contentHash', async () => {
+    // Receiver was told (via the session-trusted BookContext announcement) to
+    // expect bytes B with hash(B). A malicious / buggy sender ships bytes B'
+    // and sets the END-frame hash to sha256(B'). Wire-integrity passes, but
+    // the receiver must reject because the bytes do not match what was
+    // announced.
+    const announced = new Uint8Array([1, 2, 3, 4])
+    const announcedHash = await computeSha256Hex(announced.buffer as ArrayBuffer)
+    const shipped = new Uint8Array([9, 9, 9, 9])
+    const shippedHash = await computeSha256Hex(shipped.buffer as ArrayBuffer)
+    expect(shippedHash).not.toBe(announcedHash)
+
+    const events: any[] = []
+    const actor = createActor(fileTransferActor, {
+      input: {
+        mode: 'receiver',
+        contentHash: announcedHash,
+        chunkSize: 4,
+        windowSize: 32,
+        send: () => {}
+      }
+    })
+    actor.on('*', (e) => events.push(e))
+    actor.start()
+    actor.send({
+      type: 'FILE_CHUNK',
+      buf: encode({ kind: 'data', seq: 0, data: Array.from(shipped) })
+    })
+    actor.send({
+      type: 'FILE_CHUNK',
+      buf: encode({ kind: 'end', total: 1, hash: shippedHash })
+    })
+    await new Promise((r) => setTimeout(r, 10))
+    const failed = events.find((e) => e.type === 'FAILED')
+    expect(failed).toBeTruthy()
+    expect(failed.reason).toBe('content_hash_mismatch')
+    expect(events.find((e) => e.type === 'COMPLETED')).toBeUndefined()
   })
 })

@@ -165,6 +165,27 @@ export const fileTransferActor = fromCallback<
       emit({ type: 'FAILED', reason: 'hash_mismatch' })
       return
     }
+    // Session-trust check: the END-frame hash is sender-controlled, so
+    // wire-integrity alone proves only that the sender's claimed hash
+    // matches the bytes it shipped. The receiver also agreed up front
+    // (via the BookContext announcement) to receive `input.contentHash`,
+    // so reject any payload whose hash differs from that announcement
+    // even when the END-frame hash matches.
+    if (actual !== input.contentHash) {
+      recordSharingBreadcrumb('fileTransfer.failed', {
+        mode: 'receiver',
+        reason: 'content_hash_mismatch',
+        expected: input.contentHash,
+        actual
+      })
+      recordSharingError(new Error('fileTransfer content_hash_mismatch'), {
+        actor: 'fileTransferActor',
+        reason: 'content_hash_mismatch',
+        contentHash: input.contentHash
+      })
+      emit({ type: 'FAILED', reason: 'content_hash_mismatch' })
+      return
+    }
     reportCompleted()
     recordSharingBreadcrumb('fileTransfer.completed', {
       mode: 'receiver',
