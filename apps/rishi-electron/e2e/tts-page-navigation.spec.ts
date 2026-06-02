@@ -2043,6 +2043,37 @@ test.describe('TTS state follows EPUB page navigation', () => {
     // Player must reach `playing` on the previous page (proves auto-resume).
     await waitForPlayerState(bookPage, 'playing', 10000)
 
+    // Wait for the highlight to settle on the LAST paragraph of the previous
+    // page. epubjs can emit multiple `relocated` events during a curl; the
+    // first carries an intermediate CFI that the view actor sees before the
+    // destination CFI arrives. Polling here lets the burst resolve before
+    // we read — without this, the test races the last-relocated event.
+    // If the highlight is still on the first paragraph at timeout, that's
+    // the genuine off-by-one bug the assertion below pins down.
+    await bookPage
+      .waitForFunction(
+        () => {
+          const w = window as unknown as {
+            __rishi: {
+              playerStore: {
+                getState: () => {
+                  activeParagraph: { index: string } | null
+                  currentParagraphs: { index: string }[]
+                }
+              }
+            }
+          }
+          const s = w.__rishi.playerStore.getState()
+          const last = s.currentParagraphs[s.currentParagraphs.length - 1]?.index ?? null
+          return last !== null && s.activeParagraph?.index === last
+        },
+        undefined,
+        { timeout: 5000 }
+      )
+      .catch(() => {
+        // Allow the assertion below to produce the precise diff.
+      })
+
     // Verify the active paragraph is the LAST paragraph of the previous page,
     // not the first. The bug landed it on paragraph 0 — this assertion is
     // the precise regression check.
