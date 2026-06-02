@@ -320,14 +320,45 @@ function attachLibraryWindowSideEffects(win: BrowserWindow): void {
   })
 }
 
+// Tracks which window the currently-installed application menu was built for.
+// `BrowserWindow.getFocusedWindow()` is unreliable in two scenarios that
+// matter in practice: (1) Playwright-driven E2E runs where macOS does not
+// always grant OS focus to the new BrowserWindow we just programmatically
+// created and (2) when the user Cmd-Tabs away between the menu install and
+// the click. In both cases routing the click via the focused-window fallback
+// drops it on the floor. We instead remember the menu's *owner* and send
+// there first.
+let lastMenuOwnerWcId: number | null = null
+function setMenuOwner(id: number | null): void {
+  lastMenuOwnerWcId = id
+}
+// Exported alias to make the call site at `app.whenReady` self-documenting.
+function setInitialMenuOwner(id: number): void {
+  setMenuOwner(id)
+}
+
 function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
   const factory = makeBrowserWindowFactory({ loadUrl, preloadPath })
   windowManager = new WindowManager(factory)
   menuInstaller = new MenuInstaller(
     (template) => Menu.setApplicationMenu(Menu.buildFromTemplate(template)),
     (cmd: MenuCommand) => {
-      const focused = BrowserWindow.getFocusedWindow()
-      if (focused) focused.webContents.send('menu:command', cmd)
+      // Prefer the window the current menu was installed for. Fall back to the
+      // OS-focused window, then any live window. This keeps menu commands
+      // working when Playwright (or a real user Cmd-Tab) has stolen focus.
+      const target = (() => {
+        if (lastMenuOwnerWcId !== null) {
+          const w = BrowserWindow.getAllWindows().find(
+            (bw) => bw.webContents.id === lastMenuOwnerWcId
+          )
+          if (w && !w.isDestroyed()) return w
+        }
+        const focused = BrowserWindow.getFocusedWindow()
+        if (focused && !focused.isDestroyed()) return focused
+        const any = BrowserWindow.getAllWindows().find((bw) => !bw.isDestroyed())
+        return any ?? null
+      })()
+      if (target) target.webContents.send('menu:command', cmd)
     }
   )
 
@@ -341,6 +372,7 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
       openBookTitles: openBookTitlesArray()
     }
     windowContexts.set(win.webContents.id, refreshed)
+    setMenuOwner(win.webContents.id)
     getMenuInstaller().setContext(refreshed)
   })
 
@@ -359,6 +391,7 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
       openBookTitles: openBookTitlesArray()
     }
     windowContexts.set(id, refreshed)
+    setMenuOwner(id)
     getMenuInstaller().setContext(refreshed)
   })
 
@@ -366,7 +399,14 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
     const id = event.sender.id
     const merged = mergeContext(windowContexts.get(id), partial)
     windowContexts.set(id, merged)
-    if (BrowserWindow.fromWebContents(event.sender) === BrowserWindow.getFocusedWindow()) {
+    // Reinstall the menu when this window either owns the currently-installed
+    // menu (already its own) or is the OS-focused window. The first half of
+    // the OR keeps the menu in sync with the active reader even when
+    // Playwright (or a real user Cmd-Tab) has drifted OS focus away.
+    const isFocused =
+      BrowserWindow.fromWebContents(event.sender) === BrowserWindow.getFocusedWindow()
+    if (lastMenuOwnerWcId === id || isFocused) {
+      setMenuOwner(id)
       getMenuInstaller().setContext(merged)
     }
   })
@@ -382,7 +422,7 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
     // time it focuses, before the renderer's setMenuContext lands.
     const row = getBook(bookId)
     if (row) {
-      windowContexts.set(w.webContents.id, {
+      const ctx: MenuContext = {
         kind: 'book',
         bookId,
         format: row.kind as BookFormat,
@@ -395,8 +435,16 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
         recentBooks: safeListRecentBooks(),
         openBookTitles: openBookTitlesArray(),
         bookmarks: []
-      })
+      }
+      windowContexts.set(w.webContents.id, ctx)
       openBookTitles.set(bookId, row.title)
+      // Install the book-window menu proactively. `browser-window-focus`
+      // doesn't reliably fire when Playwright opens a window programmatically
+      // (the OS doesn't always grant focus), so without this the per-identity
+      // menu would never be installed and book windows would show only the
+      // default macOS application menu until the user manually focused.
+      setMenuOwner(w.webContents.id)
+      getMenuInstaller().setContext(ctx)
     }
   })
 
@@ -434,6 +482,7 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
         }
         windowContexts.set(senderId, updated)
         if (BrowserWindow.fromWebContents(event.sender) === BrowserWindow.getFocusedWindow()) {
+          setMenuOwner(senderId)
           getMenuInstaller().setContext(updated)
         }
       }
@@ -448,6 +497,7 @@ function bootstrapMenuAndWindows(loadUrl: string, preloadPath: string): void {
         }
         windowContexts.set(w.webContents.id, updatedOther)
         if (w === BrowserWindow.getFocusedWindow()) {
+          setMenuOwner(w.webContents.id)
           getMenuInstaller().setContext(updatedOther)
         }
       }
@@ -548,6 +598,8 @@ app
     bootstrapMenuAndWindows(loadUrl, preloadPath)
     const libWin = getWindowManager().openLibrary() as unknown as BrowserWindow
     attachLibraryWindowSideEffects(libWin)
+    windowContexts.set(libWin.webContents.id, defaultLibraryContext())
+    setInitialMenuOwner(libWin.webContents.id)
     getMenuInstaller().setContext(defaultLibraryContext())
 
     registerAuthIpc(() => libraryWindowFromManager())
