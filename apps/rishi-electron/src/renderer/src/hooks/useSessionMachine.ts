@@ -161,16 +161,14 @@ export function SessionMachineProvider({ children }: PropsWithChildren): ReactEl
  * `SessionMachineProvider`; if no provider is mounted, spawns a local actor
  * so direct unit tests of components that depend on this hook still work.
  *
- * Implementation note: we deliberately read the context with a default
- * sentinel and only call the local actor when the sentinel is observed. The
- * provider/no-provider decision is stable for the lifetime of any consumer
- * subtree, so the conditional hook call doesn't violate the rules of hooks
- * in practice (callers don't switch between mounted-in-provider and
- * mounted-without-provider mid-lifetime).
+ * Both hooks below are called on every render so that hook order is
+ * independent of provider mounting — a parent toggling the provider in/out
+ * mid-lifetime would otherwise trip react-hooks/rules-of-hooks. When the
+ * provider IS present the local actor is unused; the cost (one extra idle
+ * machine per consumer subtree) is the price of safety.
  */
 export function useSessionMachine(): SessionMachineHookValue {
   const ctx = useContext(SessionMachineContext)
-  if (ctx) return ctx
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  return useSessionMachineInternal()
+  const local = useSessionMachineInternal()
+  return ctx ?? local
 }
