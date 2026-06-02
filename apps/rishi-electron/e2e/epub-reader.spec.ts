@@ -35,6 +35,23 @@ test.describe('EPUB reader', () => {
     await expect(bookPage.locator('[aria-label="Next page"]').first()).toBeVisible({
       timeout: 30000
     })
+    // The "Next page" button can paint before the rendition has settled
+    // (settledRef.current = true only after `relocated` fires + locations
+    // generate). Clicking before settle means the locationChanged handler's
+    // `if (settledRef && userNavHappened)` gate drops the save, so the
+    // persisted CFI never changes. Wait for the store-side CFI to publish
+    // before any test interacts.
+    await bookPage.waitForFunction(
+      () => {
+        const w = window as unknown as {
+          __rishi?: { epubStore?: { getState: () => { currentEpubLocation: string } } }
+        }
+        const cfi = w.__rishi?.epubStore?.getState().currentEpubLocation
+        return !!cfi && cfi.startsWith('epubcfi(')
+      },
+      undefined,
+      { timeout: 30000 }
+    )
   })
 
   test('renders prev and next page arrows', async () => {
