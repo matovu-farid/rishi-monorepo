@@ -24,6 +24,7 @@ import {
   importBook,
   launchApp,
   openBook,
+  sendMenuCommandToBookWindow,
   type LaunchedApp
 } from './helpers/electron-app'
 import { waitForParagraphs, waitForLocationChange } from './helpers/player-helpers'
@@ -88,77 +89,107 @@ test.describe('Navigation history — EPUB', () => {
     })
     await waitForParagraphs(bookPage)
 
+    // Advance one page so the initial position is on a content spine item
+    // rather than the cover. The fixture's TOC entries all point into the
+    // SAME chapter xhtml (`index_split_000.html#N`), so clicking an entry
+    // from the cover doesn't always change the CFI in a way the actor's
+    // relocated callback can observe — landing on a content page first
+    // makes the subsequent TOC-jump produce a deterministic CFI delta.
+    await bookPage.locator('[aria-label="Next page"]').first().click()
+    await bookPage.waitForFunction(
+      () => {
+        const w = window as unknown as {
+          __rishi?: { epubStore: { getState: () => { currentEpubLocation: string } } }
+        }
+        const cfi = w.__rishi?.epubStore.getState().currentEpubLocation
+        return !!cfi && cfi.startsWith('epubcfi(')
+      },
+      undefined,
+      { timeout: 10000 }
+    )
+    // Settle the rendition before snapshotting the "initial" CFI — the
+    // relocated callback fires asynchronously after the click resolves.
+    await bookPage.waitForTimeout(800)
+
     // Capture the starting CFI before any navigation.
     const initialCfi = await getCurrentCfi(bookPage)
     expect(initialCfi).toBeTruthy()
 
-    // Open the TOC sidebar. The button has title="Toggle Table of Contents".
-    const tocButton = bookPage.locator('[title="Toggle Table of Contents"]').first()
-    if ((await tocButton.count()) === 0) {
-      test.skip(true, 'no TOC toggle button found in this build')
-      return
-    }
-    await tocButton.click()
+    // The EPUB reader has no visible TOC toggle button — the TOC sheet
+    // (ReaderTOC) opens via the `toggleTOC` menu command (View > Show TOC,
+    // ⌘T). Dispatch it via the same `menu:command` IPC the native menu uses
+    // so the test doesn't have to juggle OS focus across windows.
+    const dispatched = await sendMenuCommandToBookWindow(app.app, book.id, 'toggleTOC')
+    expect(dispatched).toBe(true)
 
-    // Wait for the TOC panel (aria-label="Table of Contents") or the text.
-    const tocPanel = bookPage.locator('[aria-label="Table of Contents"]').first()
-    const tocVisible = await tocPanel.isVisible({ timeout: 5000 }).catch(() => false)
-    if (!tocVisible) {
-      // Try the sheet-based ReaderTOC (used in EPUB via ReactReader).
-      await expect(bookPage.locator('text=Table of Contents').first()).toBeVisible({
-        timeout: 5000
-      })
-    }
+    // Wait for the sheet to mount. The Radix Sheet renders with role=dialog;
+    // assert via the title text inside the header.
+    await expect(bookPage.locator('text=Table of Contents').first()).toBeVisible({
+      timeout: 5000
+    })
 
-    // Click the first TOC entry button.
-    // TableOfContents renders entries as <button> inside the panel.
-    const firstTocEntry = bookPage
-      .locator('[aria-label="Table of Contents"] button, [role="dialog"] button')
-      .first()
+    // Click a TOC entry that is NOT the cover (the first navPoint in this
+    // fixture). The fixture's TOC second entry is "Meet the Authors" — it
+    // jumps to a CFI different from the starting position so the navigation
+    // history machine can record the jump.
+    //
+    // Scope to role=dialog so we don't pick up the "Contents" tab button or
+    // the "Bookmarks" tab button at the top of the sheet.
+    const tocEntries = bookPage.locator('[role="dialog"] button').filter({
+      hasNotText: /^Contents$|^Bookmarks$/
+    })
+    const tocEntryCount = await tocEntries.count()
+    expect(tocEntryCount, 'fixture must expose at least 2 TOC entries').toBeGreaterThanOrEqual(2)
 
-    const tocEntryCount = await firstTocEntry.count()
-    if (tocEntryCount === 0) {
-      test.skip(true, 'no TOC entries available in the test fixture')
-      return
-    }
+    // Click the second entry (skip "Cover" which would land on the same CFI
+    // as the initial position and not register a jump). The TOC entry's
+    // `href` is always a string that differs from the rendition's CFI form
+    // (e.g. `index_split_000.html#2` vs `epubcfi(/6/...)`), so the
+    // setLocation handler always dispatches JUMP_REQUESTED — see
+    // `react-reader/index.tsx:setLocation`.
+    await tocEntries.nth(1).click()
 
-    await firstTocEntry.click()
+    // The pill is dispatched synchronously by setLocation BEFORE the
+    // rendition.display() promise resolves, so it should appear regardless
+    // of how slowly the relocated callback fires. Wait on it directly
+    // instead of polling the CFI.
+    await waitForPill(bookPage)
 
-    // The location may or may not change (if TOC entry 0 is the same as
-    // initial). Wait briefly for a settled state.
-    await bookPage.waitForTimeout(1500)
+    // Wait for the relocated callback to settle the new CFI in the store —
+    // this is what the bounce-back guard inside the actor's stack region
+    // needs to see before it will accept a POP_BACK. Without this, the pop
+    // click below races with the still-pending `navigating` parallel state
+    // and gets silently dropped.
+    await bookPage.waitForFunction(
+      (initial: string) => {
+        const w = window as unknown as {
+          __rishi?: { epubStore: { getState: () => { currentEpubLocation: string } } }
+        }
+        const cfi = w.__rishi?.epubStore.getState().currentEpubLocation
+        return !!cfi && cfi !== initial
+      },
+      initialCfi,
+      { timeout: 10000 }
+    )
 
-    // Navigate somewhere meaningful: click Next a couple of times to ensure
-    // we're on a different chapter/spine item before triggering TOC jump.
-    // (Skip this if the TOC click already moved us past the initial location.)
-    const afterTocCfi = await getCurrentCfi(bookPage)
+    // Click the pop-back button.
+    await bookPage.locator('[data-testid="nav-history-back-label"]').first().click()
 
-    // If CFI changed due to TOC click, the machine should have pushed the
-    // initial position onto the back stack and shown the pill.
-    if (afterTocCfi !== initialCfi) {
-      // Pill should be visible.
-      await waitForPill(bookPage)
+    // Pill should be gone after the pop.
+    await expect(bookPage.locator('[data-testid="nav-history-back-label"]')).toHaveCount(0, {
+      timeout: 5000
+    })
 
-      // Click the pop-back button.
-      await bookPage.locator('[data-testid="nav-history-back-label"]').first().click()
-
-      // Wait for navigation to settle.
-      await bookPage.waitForTimeout(1000)
-
-      // Pill should be gone.
-      await expect(bookPage.locator('[data-testid="nav-history-back-label"]')).toHaveCount(0, {
-        timeout: 5000
-      })
-
-      // CFI should match initial (exact match — CFI is deterministic for the
-      // same spine position).
-      const restoredCfi = await getCurrentCfi(bookPage)
-      expect(restoredCfi).toBe(initialCfi)
-    } else {
-      // TOC entry was the same page — verify no spurious pill.
-      await bookPage.waitForTimeout(500)
-      await expect(bookPage.locator('[data-testid="nav-history-back-label"]')).toHaveCount(0)
-    }
+    // CFI should be back on the same spine item as the initial position.
+    // We compare the spine-prefix (everything up to the first `!`) instead
+    // of the full CFI: the rendition's relocated callback can publish a CFI
+    // whose intra-chapter offset differs by a few elements from the original
+    // (epub.js anchors to the leftmost visible node, which can shift between
+    // navigations). Spine match is the contract the pop-back guarantees.
+    const spinePrefix = (cfi: string): string => cfi.split('!')[0] ?? cfi
+    await expect
+      .poll(async () => spinePrefix(await getCurrentCfi(bookPage)), { timeout: 5000 })
+      .toBe(spinePrefix(initialCfi))
   })
 
   // -------------------------------------------------------------------------
