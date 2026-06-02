@@ -227,12 +227,28 @@ test.describe('Navigation history — EPUB', () => {
       { from: fromCfi, to: initialCfi }
     )
 
-    // Dispatch JUMP_REQUESTED via the navigationHistoryActor singleton,
-    // exposed on window.__rishi by testing/expose-stores.ts.
+    // Dispatch JUMP_REQUESTED via the navigationHistoryActor singleton AND
+    // navigate the rendition — mirror the production link-click flow
+    // (`react-reader/epub_viewer/index.tsx:368`), which calls both
+    // `navigationHistoryActor.send({ type: 'JUMP_REQUESTED', ... })` AND
+    // `rendition.display(href)`. The rendition.display → relocated →
+    // PAGE_VISITED chain is what returns the `stack` parallel region from
+    // `navigating` to `idle` so a later POP_BACK is accepted. Without the
+    // display, stack stays in `navigating` (no POP_BACK handler there) and
+    // the pop click is silently dropped.
     await bookPage.evaluate(
       (cfis: { from: string; to: string }) => {
-        // @ts-expect-error — runtime-exposed via testing/expose-stores.ts
-        window.__rishi.navigationHistoryActor.send({
+        const w = window as unknown as {
+          __rishi: {
+            navigationHistoryActor: { send: (event: unknown) => void }
+            epubStore: {
+              getState: () => {
+                rendition: { display: (cfi: string) => Promise<void> } | null
+              }
+            }
+          }
+        }
+        w.__rishi.navigationHistoryActor.send({
           type: 'JUMP_REQUESTED',
           from: { kind: 'epub', cfi: cfis.from },
           fromTts: null,
@@ -240,12 +256,34 @@ test.describe('Navigation history — EPUB', () => {
           source: 'link',
           fromLabel: 'previous spot'
         })
+        const r = w.__rishi.epubStore.getState().rendition
+        if (r) void r.display(cfis.to)
       },
       { from: fromCfi, to: initialCfi }
     )
 
     // Pill should appear.
     await waitForPill(bookPage)
+
+    // Force PAGE_VISITED to take the actor's `stack` region from
+    // `navigating` (entered by JUMP_REQUESTED) back to `idle`. In
+    // production, EpubView dispatches this from the `relocated` →
+    // `setCurrentLocation` chain after rendition.display() settles, but in
+    // a test environment that relocate event can be absorbed by the
+    // bounce-back guard when the jump target is within the same view as
+    // the current position. We dispatch directly to make the test
+    // deterministic — without this, POP_BACK below would land in
+    // `stack.navigating` (no handler) and be silently dropped.
+    await bookPage.evaluate((cfi: string) => {
+      const w = window as unknown as {
+        __rishi: { navigationHistoryActor: { send: (event: unknown) => void } }
+      }
+      w.__rishi.navigationHistoryActor.send({
+        type: 'PAGE_VISITED',
+        position: { kind: 'epub', cfi },
+        ttsContext: null
+      })
+    }, initialCfi)
 
     // Click pop-back.
     await bookPage.locator('[data-testid="nav-history-back-label"]').first().click()

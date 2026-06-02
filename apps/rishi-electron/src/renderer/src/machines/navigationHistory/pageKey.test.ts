@@ -39,4 +39,20 @@ describe('pageKey', () => {
     expect(() => pageKey({ kind: 'azw3', cfi: '3:1' })).not.toThrow()
     expect(() => pageKey({ kind: 'mobi', cfi: '5' })).not.toThrow()
   })
+
+  it('EPUB tolerates raw / non-CFI seed values without throwing', () => {
+    // Regression: the DB seeds `book.location = "1"` for freshly-imported
+    // books and the EPUB reader publishes the first PAGE_VISITED with that
+    // value before epubjs emits its first real CFI. Throwing here would put
+    // the navigationHistoryActor into the `error` status (silently dropping
+    // every JUMP_REQUESTED / POP_BACK afterwards — the back-nav pill never
+    // appears).
+    expect(() => pageKey({ kind: 'epub', cfi: '1' })).not.toThrow()
+    expect(() => pageKey({ kind: 'epub', cfi: '' })).not.toThrow()
+    expect(pageKey({ kind: 'epub', cfi: '1' })).toBe('epub:raw:1')
+  })
+
+  it('EPUB tolerates malformed epubcfi(...) strings without throwing', () => {
+    expect(() => pageKey({ kind: 'epub', cfi: 'epubcfi(garbage)' })).not.toThrow()
+  })
 })
