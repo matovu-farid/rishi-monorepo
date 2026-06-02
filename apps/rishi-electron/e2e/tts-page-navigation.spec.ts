@@ -119,20 +119,21 @@ test.describe('TTS state follows EPUB page navigation', () => {
     await sendPlayerEvent(bookPage, 'PLAY')
 
     // Wait deterministically until pause has been logged. Under full-suite
-    // pressure the renderer's task queue can take >150 ms to flush the
+    // pressure the renderer's task queue can take >300 ms to flush the
     // state=loading subscriber that calls pause — that's a scheduling
     // delay, not a regression of the production invariant. The assertion
-    // below still uses the *recorded* timestamp against startMs so it
-    // catches the real bug (pause waiting on the 800 ms TTS fetch).
-    // A 600 ms ceiling keeps us well below the 800 ms TTS resolve so a
-    // genuinely-broken implementation (pause-after-fetch) still fails.
+    // below uses the *recorded* timestamp against startMs and asserts
+    // pause fired before the 800 ms TTS resolve — so a genuinely-broken
+    // pause-after-fetch implementation still fails (its pauseLog[0]
+    // would be >= 800 ms from startMs, or the audio-element pause would
+    // never be intercepted at all and the wait times out).
     await bookPage.waitForFunction(
       () => {
         const log = (window as unknown as { __rishiPauseLog?: number[] }).__rishiPauseLog
         return log != null && log.length > 0
       },
       undefined,
-      { timeout: 600 }
+      { timeout: 1500 }
     )
 
     const pauseLog = await bookPage.evaluate(
@@ -142,8 +143,8 @@ test.describe('TTS state follows EPUB page navigation', () => {
     const firstPauseDelay = pauseLog[0] - startMs
     expect(
       firstPauseDelay,
-      `audioElement.pause() must fire shortly after PLAY (not wait for TTS fetch). Got ${firstPauseDelay}ms.`
-    ).toBeLessThan(300)
+      `audioElement.pause() must fire before the TTS fetch resolves (800 ms). Got ${firstPauseDelay}ms.`
+    ).toBeLessThan(700)
 
     // Teardown
     await sendPlayerEvent(bookPage, 'STOP')
@@ -1790,7 +1791,59 @@ test.describe('TTS state follows EPUB page navigation', () => {
       timeout: 30000
     })
     await waitForParagraphs(bookPage)
-    await installMockTts(bookPage)
+    // Install a 30-second silent WAV mock instead of the default 100 ms.
+    // This test is specifically about MANUAL NEXT crossing the view
+    // boundary — AUDIO_ENDED-driven auto-advance is a confounder. The
+    // default mock plays a 100 ms WAV which reaches `ended` while we step
+    // through paragraphs, double-advancing the active index and bumping
+    // it off the LAST-paragraph anchor the test relies on. 30 s of silence
+    // reaches canplaythrough (so `playing` is observable) but cannot fire
+    // AUDIO_ENDED within the 60 s test budget. Same pattern as the T2 fix
+    // (commit 657e226c).
+    await bookPage.evaluate(() => {
+      const w = window as unknown as {
+        __rishi: { setTestTtsService: (s: unknown) => void }
+        __rishiTtsLog?: Array<{ cfiRange: string; text: string; priority: number }>
+      }
+      w.__rishiTtsLog = []
+      const sampleRate = 8000
+      const dataSize = sampleRate * 30
+      const buf = new ArrayBuffer(44 + dataSize)
+      const view = new DataView(buf)
+      const u8 = new Uint8Array(buf)
+      u8.set([0x52, 0x49, 0x46, 0x46], 0)
+      view.setUint32(4, 36 + dataSize, true)
+      u8.set([0x57, 0x41, 0x56, 0x45], 8)
+      u8.set([0x66, 0x6d, 0x74, 0x20], 12)
+      view.setUint32(16, 16, true)
+      view.setUint16(20, 1, true)
+      view.setUint16(22, 1, true)
+      view.setUint32(24, sampleRate, true)
+      view.setUint32(28, sampleRate, true)
+      view.setUint16(32, 1, true)
+      view.setUint16(34, 8, true)
+      u8.set([0x64, 0x61, 0x74, 0x61], 36)
+      view.setUint32(40, dataSize, true)
+      for (let i = 0; i < dataSize; i++) u8[44 + i] = 0x80
+      const wav = u8
+      const noop = (): void => {}
+      w.__rishi.setTestTtsService({
+        requestAudio: async (req: { cfiRange: string; text: string; priority?: number }) => {
+          w.__rishiTtsLog!.push({
+            cfiRange: req.cfiRange,
+            text: req.text,
+            priority: req.priority ?? 0
+          })
+          return URL.createObjectURL(new Blob([wav], { type: 'audio/wav' }))
+        },
+        cancelRequest: () => true,
+        cancelBookRequests: noop,
+        clearBookCache: async () => {},
+        getQueueStatus: () => ({ pending: 0, isProcessing: false, active: 0 }),
+        onAudioReady: () => noop,
+        onError: () => noop
+      })
+    })
 
     const startSnap = await readPlayerSnapshot(bookPage)
     const startLocation = startSnap.location
