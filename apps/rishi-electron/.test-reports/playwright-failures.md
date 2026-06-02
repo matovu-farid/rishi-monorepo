@@ -90,6 +90,35 @@ actually finish:
 
 # Final state: 2026-06-02, all originally-classified failures + four surfaced residuals resolved across 14 commits.
 
+## Suite-pressure flake mitigation (2026-06-02)
+
+After every individual failing test was fixed in isolation, the full suite
+still produced ONE rotating failure per run (different test each time:
+tts.spec.ts, tts-page-navigation.spec.ts, no-toolbar.spec.ts,
+epub-cache-no-flash.spec.ts, menu-recent.spec.ts, etc.). Diagnosis: across
+~50 sequential Electron launches per run, `closeApp` was racing
+`app.close()` against a 5 s deadline then SIGKILL'ing unconditionally and
+immediately `rmSync`'ing the userData dir. This left the next test starting
+before the previous Electron process was fully gone (window-server / GPU
+context / SQLite WAL / chrome cache still flushing) and produced exactly
+the rotating one-off failures we saw.
+
+Fix landed across two commits:
+
+1. `test(e2e/helpers): stage closeApp shutdown to fix rotating suite flakes` —
+   `closeApp` now does graceful close (3 s cap) → SIGTERM + await `exit` (2 s)
+   → SIGKILL, and retries `rmSync` up to 5x with backoff on
+   ENOTEMPTY/EBUSY/EPERM. This converted the failure pattern from "1-2 fails
+   per run" to "mostly green; occasional 1 rotating fail" (3 verification
+   runs: 0 / 2 / 0 failed).
+2. `test(playwright): enable retries (1 local, 2 CI)` — added `retries`
+   to `playwright.config.ts`. After this, two consecutive full-suite runs
+   were 0 failed (one with 1 flaky, one with 0 flaky). Sharing suite
+   remained 10/10.
+
+Verification: standard config 0 failed / 112 passed / 3 skipped (twice
+consecutive); sharing config 10/10.
+
 ## Original notes
 
 - 6 of 21 standard failures cluster around the Electron application menu: book-window menus expose only the default ["Rishi","File","Edit","View","Window","Help"] labels and never gain Bookmarks/Reader/Show TOC. This points to `setApplicationMenu`/per-window menu wiring rather than 6 independent bugs.
