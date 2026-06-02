@@ -55,6 +55,15 @@ test('requiresApproval: viewer queued → host approves → both live', async ()
       10_000
     )
 
+    // The viewer reaching `awaitingApproval` only proves the worker queued the
+    // join — the host still has to receive the `pendingJoiners` broadcast over
+    // its WS. Poll the host's snapshot until that broadcast lands so we don't
+    // race the WS round-trip.
+    await expect
+      .poll(async () => (await readSessionSnapshot(host.page)).context.pendingJoiners.length, {
+        timeout: 10_000
+      })
+      .toBeGreaterThan(0)
     const hostSnap = await readSessionSnapshot(host.page)
     expect(hostSnap.context.pendingJoiners.length).toBeGreaterThan(0)
 
