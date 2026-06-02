@@ -9,6 +9,7 @@ playwright-report/
 e2e/screenshots/
 .test-reports/*
 !.test-reports/skipped-tests.md
+!.test-reports/vitest-failures.md
 # Build artifacts from tsc -b emitting declarations for the vite config — these
 # shadow the .ts source and silently break electron-vite if left around.
 electron.vite.config.js
