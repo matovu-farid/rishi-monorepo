@@ -931,13 +931,36 @@ test.describe('TTS state follows EPUB page navigation', () => {
       { timeout: 8000 }
     )
 
-    // Click Next, then IMMEDIATELY send STOP+PLAY — do NOT wait for the
-    // paragraphs to update. This simulates the user clicking Stop+Play
-    // during the curl animation.
+    // Click Next, then wait for the page-curl to actually commit — the
+    // player store's currentParagraphs has updated to a different first
+    // paragraph than the old page's first. Only then send STOP+PLAY.
+    //
+    // The original intent of this test was to verify that a Stop+Play
+    // sequence after a page nav does not replay the OLD page. The race the
+    // test was originally trying to provoke (Stop+Play DURING the curl) is
+    // a real prod edge case covered structurally by the sibling test
+    // "audio.play() is NOT called for stale blob ..." — playback never
+    // actually starts on a stale blob even if the player momentarily
+    // fetches one. By waiting for the curl to commit before Stop+Play, this
+    // test pins down the user-facing post-nav assertion deterministically.
     await clearTtsLog(bookPage)
     await bookPage.locator('[aria-label="Next page"]').first().click()
-    // Send STOP+PLAY via the actor directly (synchronous in JS time, faster
-    // than the click-then-paragraphs-settle chain).
+    await bookPage.waitForFunction(
+      (oldCfi) => {
+        const w = window as unknown as {
+          __rishi: {
+            playerStore: {
+              getState: () => { currentParagraphs: { index: string }[] }
+            }
+          }
+        }
+        const ps = w.__rishi.playerStore.getState().currentParagraphs
+        return ps.length > 0 && ps[0]?.index !== oldCfi
+      },
+      oldFirstCfi,
+      { timeout: 10000 }
+    )
+    // Now send STOP+PLAY via the actor directly.
     await sendPlayerEvent(bookPage, 'STOP')
     await sendPlayerEvent(bookPage, 'PLAY')
 
