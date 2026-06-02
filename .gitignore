@@ -7,3 +7,20 @@
 .worktrees/
 
 .vercel
+
+# Local agent/orchestration state
+.parity/
+.claude/kanban.json
+.claude/kanban/
+**/.claude/
+/CLAUDE.md
+docs/superpowers/plans/
+apps/mobile/__tests__/rag/chunker-parity.test.ts
+
+# Tool caches
+**/.wrangler/
+*.tsbuildinfo
+
+# Test runner artifacts
+**/test-results/
+**/e2e/screenshots/
