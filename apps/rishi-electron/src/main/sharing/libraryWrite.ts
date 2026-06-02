@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
+import type Database from 'better-sqlite3'
 import { getDb } from '../database/index.js'
 import type {
   SharingSaveTransferredBookParams,
@@ -85,16 +86,33 @@ export async function hasBookFile(params: { contentHash: string }): Promise<bool
  * Discard a previously-transferred book: delete the DB row and unlink
  * the on-disk file. Used when the recipient chooses NOT to keep books
  * at session end.
+ *
+ * The DELETE is provenance-guarded on `source = SHARED_SESSION_SOURCE`
+ * so a renderer-side bug (or a compromised renderer crossing the IPC
+ * trust boundary) cannot wipe arbitrary library rows by passing an
+ * unrelated book id. Rows with any other `source` are a no-op DELETE.
+ * The on-disk unlink still runs because a stale shared-session file
+ * may legitimately outlive its DB row.
  */
+export async function _discardTransferredBookWithDb(
+  db: Database.Database,
+  params: { dbBookId: number; localPath: string }
+): Promise<void> {
+  db.prepare(`DELETE FROM books WHERE id = ? AND source = ?`).run(
+    params.dbBookId,
+    SHARED_SESSION_SOURCE
+  )
+  try {
+    await fs.unlink(params.localPath)
+  } catch {
+    // why: file may already be gone (recipient cleared it manually, or
+    // a prior discard partially completed); non-fatal.
+  }
+}
+
 export async function discardTransferredBook(params: {
   dbBookId: number
   localPath: string
 }): Promise<void> {
-  const db = getDb()
-  db.prepare(`DELETE FROM books WHERE id = ?`).run(params.dbBookId)
-  try {
-    await fs.unlink(params.localPath)
-  } catch {
-    /* already gone — non-fatal */
-  }
+  return _discardTransferredBookWithDb(getDb(), params)
 }
