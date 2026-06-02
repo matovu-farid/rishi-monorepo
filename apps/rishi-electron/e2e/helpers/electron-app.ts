@@ -49,18 +49,67 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> 
 }
 
 export async function closeApp(launched: LaunchedApp): Promise<void> {
-  // `app.close()` can hang in headless Electron when background features
-  // (auto-updater, persistent WebSockets, etc.) still hold the event loop
-  // open. Race it against a 5s timeout — at that point we kill the
-  // underlying process so the test teardown is bounded.
+  // Staged shutdown — important for full-suite stability. Across ~50
+  // sequential launches the OS accumulates file handles / shared memory
+  // segments / window-server resources, and starting the next launch before
+  // the previous Electron process is fully gone produces rotating one-off
+  // failures (ENOTEMPTY on rmSync, blob/src mismatches, etc.).
+  //
+  // 1. Graceful `app.close()` with a tightened 3 s cap.
+  // 2. If alive, SIGTERM and await the `exit` event for up to 2 s.
+  // 3. Last resort: SIGKILL.
+  const proc = (() => {
+    try {
+      return launched.app.process()
+    } catch {
+      return null
+    }
+  })()
+  const exitedP = proc
+    ? new Promise<void>((resolve) => {
+        if (proc.exitCode !== null || proc.signalCode !== null) return resolve()
+        proc.once('exit', () => resolve())
+      })
+    : Promise.resolve()
+
   const closeP = launched.app.close().catch(() => {})
-  await Promise.race([closeP, new Promise<void>((resolve) => setTimeout(resolve, 5_000))])
-  try {
-    const proc = launched.app.process()
-    if (proc && !proc.killed) proc.kill('SIGKILL')
-  } catch {
-    /* already gone */
+  await Promise.race([closeP, new Promise<void>((resolve) => setTimeout(resolve, 3_000))])
+
+  if (proc && proc.exitCode === null && proc.signalCode === null) {
+    try {
+      proc.kill('SIGTERM')
+    } catch {
+      /* already gone */
+    }
+    await Promise.race([exitedP, new Promise<void>((resolve) => setTimeout(resolve, 2_000))])
   }
+
+  if (proc && proc.exitCode === null && proc.signalCode === null) {
+    try {
+      proc.kill('SIGKILL')
+    } catch {
+      /* already gone */
+    }
+    // Brief wait for the kernel to reap.
+    await Promise.race([exitedP, new Promise<void>((resolve) => setTimeout(resolve, 500))])
+  }
+
+  // Retry rmSync — Electron's chrome cache / SQLite WAL writes can still
+  // be flushing during teardown, causing ENOTEMPTY/EBUSY on the first
+  // attempt. Backoff a few times before giving up (force:true swallows
+  // ENOENT, so the only realistic recurring errors are race-related).
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      fs.rmSync(launched.userDataDir, { recursive: true, force: true })
+      return
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM') throw err
+      // eslint-disable-next-line no-await-in-loop -- Retry loop: sequential backoff.
+      await new Promise<void>((resolve) => setTimeout(resolve, 100 * (attempt + 1)))
+    }
+  }
+  // Final attempt — let the error propagate if it's persistent.
   fs.rmSync(launched.userDataDir, { recursive: true, force: true })
 }
 
