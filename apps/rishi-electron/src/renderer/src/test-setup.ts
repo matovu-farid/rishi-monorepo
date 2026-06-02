@@ -105,7 +105,26 @@ const mockElectronAPI = {
 
   on: vi.fn().mockReturnValue(() => {}),
   once: vi.fn(),
-  send: vi.fn()
+  send: vi.fn(),
+
+  // Shared-reading surface. Mirrors the `sharing:*` IPC channels exposed
+  // under `window.electron.sharing` in production preload. Tests that don't
+  // touch sharing still load `useSessionMachine`, which reads this surface
+  // unconditionally.
+  sharing: {
+    getSigningJwt: vi.fn().mockResolvedValue({ jwt: 'mock-jwt', expiresAt: 0 }),
+    saveTransferredBook: vi.fn().mockResolvedValue({ localPath: '', dbBookId: 0 }),
+    discardTransferredBook: vi.fn().mockResolvedValue(undefined),
+    hasBookFile: vi.fn().mockResolvedValue(false),
+    readBookBytes: vi.fn().mockResolvedValue({ bytes: [], format: 'epub' }),
+    getConfig: vi
+      .fn()
+      .mockResolvedValue({ wsBaseUrl: '', workerBaseUrl: '', iceServers: [] }),
+    onDeepLink: vi.fn().mockReturnValue(() => {}),
+    readReconnect: vi.fn().mockResolvedValue(null),
+    writeReconnect: vi.fn().mockResolvedValue(undefined),
+    clearReconnect: vi.fn().mockResolvedValue(undefined)
+  }
 }
 
 Object.defineProperty(window, 'electron', {
@@ -128,4 +147,11 @@ const mockAuthApi = {
 Object.defineProperty(window, 'api', {
   value: { auth: mockAuthApi },
   writable: true
+})
+
+// Make navigator.clipboard writable so tests can stub it via Object.assign.
+Object.defineProperty(navigator, 'clipboard', {
+  value: { writeText: vi.fn().mockResolvedValue(undefined) },
+  writable: true,
+  configurable: true
 })

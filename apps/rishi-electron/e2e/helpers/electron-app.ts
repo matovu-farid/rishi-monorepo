@@ -30,7 +30,8 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> 
     args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     env: {
       ...process.env,
-      NODE_ENV: 'production'
+      NODE_ENV: 'production',
+      RISHI_E2E_HIDDEN: process.env.RISHI_E2E_HEADED === '1' ? '0' : '1'
     }
   })
   const page = await app.firstWindow()
@@ -49,7 +50,18 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> 
 }
 
 export async function closeApp(launched: LaunchedApp): Promise<void> {
-  await launched.app.close().catch(() => {})
+  // `app.close()` can hang in headless Electron when background features
+  // (auto-updater, persistent WebSockets, etc.) still hold the event loop
+  // open. Race it against a 5s timeout — at that point we kill the
+  // underlying process so the test teardown is bounded.
+  const closeP = launched.app.close().catch(() => {})
+  await Promise.race([closeP, new Promise<void>((resolve) => setTimeout(resolve, 5_000))])
+  try {
+    const proc = launched.app.process()
+    if (proc && !proc.killed) proc.kill('SIGKILL')
+  } catch {
+    /* already gone */
+  }
   fs.rmSync(launched.userDataDir, { recursive: true, force: true })
 }
 
@@ -328,4 +340,100 @@ export async function clickMenuItem(
     item.click()
     return true
   }, pathLabels)) as boolean
+}
+
+export interface SharingLaunchOptions extends LaunchOptions {
+  workerUrl: string
+  /**
+   * Fake user identity matching the Worker's test-shortcut JWT format: "userId--DisplayName".
+   * Currently informational — not read by the main process; the worker mints the JWT.
+   * Kept on the type so call-sites stay readable and we can plumb it later if needed.
+   */
+  userId: string
+  displayName: string
+}
+
+/**
+ * Like {@link launchAppWithSharingEnv} but also imports the given book
+ * fixture and opens it in a reader window, returning a LaunchedApp whose
+ * `page` is the reader window (where `useSessionMachine` is mounted and
+ * `window.__rishi.sessionMachineStore` has a live actor registered).
+ *
+ * The library window page is closed implicitly when the app is closed; the
+ * helper keeps a reference to it on the returned struct as `libraryPage` for
+ * tests that still need to drive library-only IPCs.
+ */
+export async function launchAndOpenBookForSharing(
+  opts: SharingLaunchOptions & { fixturePath: string; kind: ImportOptions['kind'] }
+): Promise<LaunchedApp & { libraryPage: Page; bookId: number }> {
+  const launched = await launchAppWithSharingEnv(opts)
+  const libraryPage = launched.page
+  const imported = await importBook(libraryPage, {
+    fixturePath: opts.fixturePath,
+    kind: opts.kind
+  })
+  const readerPage = await openBook(libraryPage, imported.id)
+  // Wait until the reader has mounted useSessionMachine — i.e. the actor
+  // is registered with the test-hook registry. Without this, the first
+  // sendSessionEvent call sees `sessionMachineStore.getState() === null`
+  // and the test fails with "Cannot read properties of null".
+  await readerPage.waitForFunction(
+    () => {
+      const w = window as unknown as {
+        __rishi?: { sessionMachineStore?: { getState: () => unknown } }
+      }
+      return w.__rishi?.sessionMachineStore?.getState?.() != null
+    },
+    null,
+    { timeout: 15_000, polling: 200 }
+  )
+  return { ...launched, page: readerPage, libraryPage, bookId: imported.id }
+}
+
+export async function launchAppWithSharingEnv(opts: SharingLaunchOptions): Promise<LaunchedApp> {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rishi-sharing-e2e-'))
+  const verbose = process.env.RISHI_E2E_VERBOSE === '1'
+  const tag = opts.userId
+  const app = await electron.launch({
+    args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      RISHI_E2E_HIDDEN: process.env.RISHI_E2E_HEADED === '1' ? '0' : '1',
+      SHARING_WORKER_URL: opts.workerUrl,
+      VITE_SHARING_ENABLED: '1',
+      RISHI_SHARING_TEST_AUTH: '1',
+      RISHI_SHARING_TEST_USER_ID: opts.userId,
+      RISHI_SHARING_TEST_DISPLAY_NAME: opts.displayName
+    }
+  })
+  if (verbose) {
+    const proc = app.process()
+    proc.stdout?.on('data', (d: Buffer) =>
+      console.log(`[main ${tag} stdout] ${d.toString().trim()}`)
+    )
+    proc.stderr?.on('data', (d: Buffer) =>
+      console.log(`[main ${tag} stderr] ${d.toString().trim()}`)
+    )
+  }
+  const page = await app.firstWindow()
+  if (verbose) {
+    page.on('console', (msg) => console.log(`[renderer ${tag} ${msg.type()}] ${msg.text()}`))
+    page.on('pageerror', (err) => console.log(`[renderer ${tag} pageerror] ${err.message}`))
+  }
+  await page.waitForLoadState('domcontentloaded')
+  await page.evaluate(() => {
+    localStorage.setItem('rishi:tour-completed', '1')
+    localStorage.setItem('rishi:welcome-seen', '1')
+    // The renderer's isSharingEnabled() also reads VITE_SHARING_ENABLED at
+    // build time, but the production build we test against doesn't bake
+    // that in. Flip the runtime localStorage flag so SessionEntryButton —
+    // and via it useSessionMachine — actually mounts.
+    localStorage.setItem('rishi:sharing-enabled', '1')
+  })
+  await page.reload()
+  await page.waitForTimeout(1500)
+  await dismissWelcome(page)
+  await dismissTour(page)
+  return { app, page, userDataDir }
 }

@@ -1,0 +1,227 @@
+import { fromCallback } from 'xstate'
+import { resetFileTransferProgress, updateFileTransferProgress } from '@/testing/sharing-test-hooks'
+import { recordSharingBreadcrumb, recordSharingError } from '@/sharing/sentryScope'
+
+function reportProgress(sent: number, total: number): void {
+  const percent = total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : 0
+  updateFileTransferProgress({ percent, completed: false })
+}
+
+function reportCompleted(): void {
+  updateFileTransferProgress({ percent: 100, completed: true })
+}
+
+export async function computeSha256Hex(buf: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', buf)
+  const bytes = new Uint8Array(digest)
+  let hex = ''
+  for (const b of bytes) hex += b.toString(16).padStart(2, '0')
+  return hex
+}
+
+type Frame =
+  | { kind: 'data'; seq: number; data: number[] }
+  | { kind: 'end'; total: number; hash: string }
+
+export type FileTransferInput =
+  | {
+      mode: 'sender'
+      payload: ArrayBuffer
+      hash: string
+      contentHash: string
+      chunkSize: number
+      windowSize: number
+      send: (buf: ArrayBuffer) => void
+    }
+  | {
+      mode: 'receiver'
+      contentHash: string
+      chunkSize: number
+      windowSize: number
+      send: (buf: ArrayBuffer) => void
+    }
+
+export type FileTransferInEvent =
+  | { type: 'START' }
+  | { type: 'CHUNK_ACK'; seq: number }
+  | { type: 'FILE_CHUNK'; buf: ArrayBuffer }
+
+export type FileTransferOutEvent =
+  | { type: 'PROGRESS'; sent: number; total: number }
+  | { type: 'COMPLETED'; blob: ArrayBuffer; hash: string }
+  | { type: 'FAILED'; reason: string }
+  | { type: 'SEND_FILE_CHUNK'; payload: ArrayBuffer }
+  /**
+   * Receiver-mode only: per-seq "ack this chunk" signal. The wrapper that
+   * owns the `files` data channel converts each SEND_ACK into a wire ack
+   * frame so the sender's sliding window advances only after the chunk has
+   * actually been ingested (not just `send()`-ed).
+   */
+  | { type: 'SEND_ACK'; seq: number }
+
+function encodeFrame(f: Frame): ArrayBuffer {
+  return new TextEncoder().encode(JSON.stringify(f)).buffer
+}
+function decodeFrame(buf: ArrayBuffer): Frame | null {
+  try {
+    return JSON.parse(new TextDecoder().decode(buf)) as Frame
+  } catch {
+    return null
+  }
+}
+
+export const fileTransferActor = fromCallback<
+  FileTransferInEvent,
+  FileTransferInput,
+  FileTransferOutEvent
+>(({ emit, receive, input }) => {
+  resetFileTransferProgress()
+  recordSharingBreadcrumb('fileTransfer.started', {
+    mode: input.mode,
+    contentHash: input.contentHash
+  })
+  if (input.mode === 'sender') {
+    const senderInput = input
+    const totalChunks = Math.ceil(senderInput.payload.byteLength / senderInput.chunkSize)
+    const view = new Uint8Array(senderInput.payload)
+    let nextToSend = 0
+    let acked = 0
+    let inFlight = 0
+    let stopped = false
+
+    function pump(): void {
+      while (!stopped && inFlight < senderInput.windowSize && nextToSend < totalChunks) {
+        const start = nextToSend * senderInput.chunkSize
+        const end = Math.min(start + senderInput.chunkSize, senderInput.payload.byteLength)
+        const slice = view.slice(start, end)
+        const frame: Frame = { kind: 'data', seq: nextToSend, data: Array.from(slice) }
+        senderInput.send(encodeFrame(frame))
+        nextToSend++
+        inFlight++
+      }
+      if (acked === totalChunks) {
+        senderInput.send(encodeFrame({ kind: 'end', total: totalChunks, hash: senderInput.hash }))
+        reportCompleted()
+        recordSharingBreadcrumb('fileTransfer.completed', {
+          mode: 'sender',
+          totalChunks,
+          contentHash: senderInput.contentHash
+        })
+        emit({ type: 'COMPLETED', blob: senderInput.payload, hash: senderInput.hash })
+      }
+    }
+
+    receive((evt) => {
+      if (stopped) return
+      if (evt.type === 'START') pump()
+      else if (evt.type === 'CHUNK_ACK') {
+        acked++
+        inFlight = Math.max(0, inFlight - 1)
+        reportProgress(acked, totalChunks)
+        emit({ type: 'PROGRESS', sent: acked, total: totalChunks })
+        pump()
+      }
+    })
+
+    return () => {
+      stopped = true
+    }
+  }
+
+  const chunks = new Map<number, Uint8Array>()
+  let totalChunks: number | null = null
+  let expectedHash: string | null = null
+  let stopped = false
+
+  async function tryFinalize(): Promise<void> {
+    if (totalChunks === null || expectedHash === null) return
+    for (let i = 0; i < totalChunks; i++) if (!chunks.has(i)) return
+    const totalBytes = Array.from(chunks.values()).reduce((s, u) => s + u.byteLength, 0)
+    const out = new Uint8Array(totalBytes)
+    let offset = 0
+    for (let i = 0; i < totalChunks; i++) {
+      const u = chunks.get(i)!
+      out.set(u, offset)
+      offset += u.byteLength
+    }
+    const actual = await computeSha256Hex(out.buffer)
+    if (actual !== expectedHash) {
+      recordSharingBreadcrumb('fileTransfer.failed', {
+        mode: 'receiver',
+        reason: 'hash_mismatch',
+        expected: expectedHash,
+        actual
+      })
+      recordSharingError(new Error('fileTransfer hash_mismatch'), {
+        actor: 'fileTransferActor',
+        reason: 'hash_mismatch',
+        contentHash: input.contentHash
+      })
+      emit({ type: 'FAILED', reason: 'hash_mismatch' })
+      return
+    }
+    // Session-trust check: the END-frame hash is sender-controlled, so
+    // wire-integrity alone proves only that the sender's claimed hash
+    // matches the bytes it shipped. The receiver also agreed up front
+    // (via the BookContext announcement) to receive `input.contentHash`,
+    // so reject any payload whose hash differs from that announcement
+    // even when the END-frame hash matches.
+    if (actual !== input.contentHash) {
+      recordSharingBreadcrumb('fileTransfer.failed', {
+        mode: 'receiver',
+        reason: 'content_hash_mismatch',
+        expected: input.contentHash,
+        actual
+      })
+      recordSharingError(new Error('fileTransfer content_hash_mismatch'), {
+        actor: 'fileTransferActor',
+        reason: 'content_hash_mismatch',
+        contentHash: input.contentHash
+      })
+      emit({ type: 'FAILED', reason: 'content_hash_mismatch' })
+      return
+    }
+    reportCompleted()
+    recordSharingBreadcrumb('fileTransfer.completed', {
+      mode: 'receiver',
+      totalChunks,
+      contentHash: input.contentHash
+    })
+    emit({ type: 'COMPLETED', blob: out.buffer, hash: actual })
+  }
+
+  receive((evt) => {
+    if (stopped) return
+    if (evt.type !== 'FILE_CHUNK') return
+    const f = decodeFrame(evt.buf)
+    if (!f) {
+      recordSharingBreadcrumb('fileTransfer.failed', {
+        mode: 'receiver',
+        reason: 'decode_failed'
+      })
+      recordSharingError(new Error('fileTransfer decode_failed'), {
+        actor: 'fileTransferActor',
+        reason: 'decode_failed',
+        contentHash: input.contentHash
+      })
+      emit({ type: 'FAILED', reason: 'decode_failed' })
+      return
+    }
+    if (f.kind === 'data') {
+      chunks.set(f.seq, new Uint8Array(f.data))
+      reportProgress(chunks.size, totalChunks ?? chunks.size)
+      emit({ type: 'PROGRESS', sent: chunks.size, total: totalChunks ?? chunks.size })
+      // Wire-level ack: tell the wrapper to push an ack frame back over
+      // the `files` channel so the sender's sliding window advances.
+      emit({ type: 'SEND_ACK', seq: f.seq })
+    } else {
+      totalChunks = f.total
+      expectedHash = f.hash
+      void tryFinalize()
+    }
+  })
+
+  return () => {
+    stopped = true
+  }
+})

@@ -17,6 +17,12 @@ interface PrefsState {
   /** Detect and hide running-footer chrome on PDFs (#142). */
   pdfFooterDetection: boolean
   /**
+   * When true (default), the app silently checks for updates on startup,
+   * downloads them in the background, and installs on the next quit.
+   * Users can opt out via Settings → Account.
+   */
+  autoUpdateEnabled: boolean
+  /**
    * Read the persisted value from the main-process store. Safe to call
    * multiple times; later calls overwrite the in-memory value.
    */
@@ -33,6 +39,7 @@ interface PrefsState {
   setVoiceChatVisionEnabled: (enabled: boolean) => Promise<void>
   setTtsVisualCueEnabled: (enabled: boolean) => Promise<void>
   setPdfFooterDetection: (enabled: boolean) => Promise<void>
+  setAutoUpdateEnabled: (enabled: boolean) => Promise<void>
 }
 
 export const usePrefsStore = create<PrefsState>()(
@@ -41,6 +48,7 @@ export const usePrefsStore = create<PrefsState>()(
     voiceChatVisionEnabled: true,
     ttsVisualCueEnabled: true,
     pdfFooterDetection: true,
+    autoUpdateEnabled: true,
 
     async hydrate() {
       const raw = await window.electron.getStoreValue('voiceChatLanguage')
@@ -48,11 +56,13 @@ export const usePrefsStore = create<PrefsState>()(
       const visionRaw = await window.electron.getStoreValue('voiceChatVisionEnabled')
       const cueRaw = await window.electron.getStoreValue('ttsVisualCueEnabled')
       const footerRaw = await window.electron.getStoreValue('pdfFooterDetection')
+      const autoUpdateRaw = await window.electron.getStoreValue('autoUpdateEnabled')
       set({
         voiceChatLanguage: next,
         voiceChatVisionEnabled: typeof visionRaw === 'boolean' ? visionRaw : true,
         ttsVisualCueEnabled: typeof cueRaw === 'boolean' ? cueRaw : true,
-        pdfFooterDetection: typeof footerRaw === 'boolean' ? footerRaw : true
+        pdfFooterDetection: typeof footerRaw === 'boolean' ? footerRaw : true,
+        autoUpdateEnabled: typeof autoUpdateRaw === 'boolean' ? autoUpdateRaw : true
       })
     },
 
@@ -82,6 +92,12 @@ export const usePrefsStore = create<PrefsState>()(
       if (get().pdfFooterDetection === enabled) return
       await window.electron.setStoreValue('pdfFooterDetection', enabled)
       set({ pdfFooterDetection: enabled })
+    },
+
+    async setAutoUpdateEnabled(enabled) {
+      if (get().autoUpdateEnabled === enabled) return
+      await window.electron.setStoreValue('autoUpdateEnabled', enabled)
+      set({ autoUpdateEnabled: enabled })
     }
   }))
 )

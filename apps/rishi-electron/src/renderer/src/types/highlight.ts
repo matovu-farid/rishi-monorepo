@@ -55,10 +55,7 @@ export function getHighlightHex(color: HighlightColor): string {
  * back-compat with the light palette so existing SVG overlay code paths and
  * tests remain green.
  */
-export function getHighlightHexForTheme(
-  color: HighlightColor,
-  mode: 'light' | 'dark'
-): string {
+export function getHighlightHexForTheme(color: HighlightColor, mode: 'light' | 'dark'): string {
   if (color === NOTE_COLOR_NONE) return 'transparent'
   const entry = HIGHLIGHT_COLORS.find((c) => c.name === color)
   if (!entry) return mode === 'dark' ? '#FDE68A' : '#FBBF24'

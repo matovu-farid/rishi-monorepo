@@ -6,10 +6,7 @@ import type { FooterMask, PageScanInput, BuildFooterMaskOptions } from '../build
  * unions the partial masks — an item flagged by ANY strategy is treated as
  * footer chrome.
  */
-export type FooterStrategy = (
-  pages: PageScanInput[],
-  opts: BuildFooterMaskOptions
-) => FooterMask
+export type FooterStrategy = (pages: PageScanInput[], opts: BuildFooterMaskOptions) => FooterMask
 
 /**
  * Runs AFTER all strategies have unioned. Used to refine the merged mask

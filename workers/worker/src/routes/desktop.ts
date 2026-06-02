@@ -15,6 +15,7 @@ const StartBody = z.object({
 
 const STATE_TTL_SECONDS = 60 * 30 // 30 min — covers slow email delivery
 const RESULT_TTL_SECONDS = 60 * 5 // 5 min — desktop should be polling immediately
+const COMPLETED_TTL_SECONDS = STATE_TTL_SECONDS // keep idempotency window aligned with the original state lifetime
 
 interface StoredState {
   code_challenge: string
@@ -30,12 +31,21 @@ interface StoredResult {
   createdAt: number
 }
 
+interface StoredCompleted {
+  user_id: string
+  createdAt: number
+}
+
 function stateKey(state: string) {
   return `desktop:state:${state}`
 }
 
 function resultKey(state: string) {
   return `desktop:result:${state}`
+}
+
+function completedKey(state: string) {
+  return `desktop:completed:${state}`
 }
 
 async function sha256Base64Url(input: string): Promise<string> {
@@ -116,7 +126,16 @@ desktopRoutes.post("/start/complete", async (c) => {
 
   const redis = Redis.fromEnv(c.env)
   const stored = (await redis.get<StoredState>(stateKey(body.data.state))) ?? null
-  if (!stored) return c.json({ error: "state_expired" }, 400)
+  if (!stored) {
+    // State record is gone — either never existed, expired, or already consumed.
+    // A stale browser tab from the original handoff may re-POST after the desktop
+    // has already polled; treat that as idempotent for the same signed-in user.
+    const completed = await redis.get<StoredCompleted>(completedKey(body.data.state))
+    if (completed && completed.user_id === session.user.id) {
+      return c.json({ ok: true })
+    }
+    return c.json({ error: "state_expired" }, 400)
+  }
 
   const result: StoredResult = {
     code_challenge: stored.code_challenge,
@@ -125,6 +144,13 @@ desktopRoutes.post("/start/complete", async (c) => {
     createdAt: Date.now(),
   }
   await redis.set(resultKey(body.data.state), result, { ex: RESULT_TTL_SECONDS })
+  // Sentinel scopes idempotency to the same user; a different user re-POSTing
+  // the same state after consumption still gets 400.
+  const completed: StoredCompleted = {
+    user_id: session.user.id,
+    createdAt: Date.now(),
+  }
+  await redis.set(completedKey(body.data.state), completed, { ex: COMPLETED_TTL_SECONDS })
   // State is single-use; once handed off, the original state record is no longer needed
   await redis.del(stateKey(body.data.state))
 
@@ -198,7 +224,7 @@ desktopRoutes.post("/cancel", async (c) => {
   if (body.data.states.length === 0) return c.json({ ok: true })
 
   const redis = Redis.fromEnv(c.env)
-  const keys = body.data.states.flatMap((s) => [stateKey(s), resultKey(s)])
+  const keys = body.data.states.flatMap((s) => [stateKey(s), resultKey(s), completedKey(s)])
   await redis.del(...keys)
   return c.json({ ok: true })
 })

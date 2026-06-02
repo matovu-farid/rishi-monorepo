@@ -33,7 +33,7 @@ class FakeHNSW {
   loadedDim: number
   count = 0
   maxElements = 0
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   points = new Map<number, number[]>()
 
   constructor(space: string, dim: number) {
@@ -43,7 +43,13 @@ class FakeHNSW {
     FakeHNSW.lastInstance = this
   }
 
-  initIndex(maxElements: number, _m?: number, _ef?: number, _seed?: number, _replace?: boolean): void {
+  initIndex(
+    maxElements: number,
+    _m?: number,
+    _ef?: number,
+    _seed?: number,
+    _replace?: boolean
+  ): void {
     this.maxElements = maxElements
   }
 
@@ -143,7 +149,7 @@ describe('vectordb index recovery', () => {
     FakeHNSW.nextLoadedDim = null
     FakeHNSW.lastInstance = null
     _resetForTesting()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     _setHnswForTesting(FakeHNSW as any)
     initVectorDb()
   })

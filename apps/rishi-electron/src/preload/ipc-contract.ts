@@ -60,6 +60,62 @@ export type SyncRemotePayload = Record<string, unknown>
  */
 export type SyncRowRecord = Record<string, unknown>
 
+// -- Shared reading types ----------------------------------------------
+export type SharingSignedJwt = { jwt: string; expiresAt: number }
+export type SharingConfig = {
+  wsBaseUrl: string
+  workerBaseUrl: string
+  iceServers: Array<{ urls: string | string[]; username?: string; credential?: string }>
+}
+export type SharingSaveTransferredBookParams = {
+  bookId: string
+  contentHash: string
+  format: 'epub' | 'pdf'
+  blob: number[]
+  receivedFromUserId: string
+  receivedAt: number
+  title: string
+}
+export type SharingSaveTransferredBookResult = {
+  localPath: string
+  dbBookId: number
+}
+/**
+ * Read the bytes of a locally-stored book by content hash. Returns the
+ * raw bytes (as a transferable number[]) and the canonical format, after
+ * verifying the on-disk SHA-256 still matches `contentHash`. Used by the
+ * sharing flow on the host side to feed the P2P file-transfer sender.
+ */
+export type SharingReadBookBytesParams = {
+  bookId: string
+  contentHash: string
+}
+export type SharingReadBookBytesResult = {
+  bytes: number[]
+  format: 'epub' | 'pdf'
+}
+/**
+ * Persisted reconnect payload for the reborn-host flow. The renderer
+ * writes this once the worker confirms admission (`welcome` frame) and
+ * clears it on graceful session end / kick / session-ended. On app start
+ * the renderer reads it to surface a "resume session?" affordance — the
+ * worker's `reservedUntil` is the authoritative deadline.
+ */
+export type SharingReconnectPayload = {
+  sessionId: string
+  reconnectToken: string
+  wsUrl: string
+  reservedUntil: number
+  storedAt: number
+}
+export type SharingReconnectWriteParams = {
+  userId: string
+  sessionId: string
+  reconnectToken: string
+  wsUrl: string
+  reservedUntil: number
+}
+
 // ---------------------------------------------------------------------------
 // Channel contract
 // ---------------------------------------------------------------------------
@@ -315,6 +371,36 @@ export type IpcContract = {
   'auth:sign-out': { args: []; returns: void }
   'auth:delete-account': { args: []; returns: void }
   'auth:get-token': { args: []; returns: string | null }
+
+  // -- Shared reading -------------------------------------------------
+  'sharing:getSigningJwt': { args: []; returns: SharingSignedJwt }
+  'sharing:saveTransferredBook': {
+    args: [params: SharingSaveTransferredBookParams]
+    returns: SharingSaveTransferredBookResult
+  }
+  'sharing:discardTransferredBook': {
+    args: [params: { dbBookId: number; localPath: string }]
+    returns: void
+  }
+  'sharing:hasBookFile': { args: [params: { contentHash: string }]; returns: boolean }
+  'sharing:readBookBytes': {
+    args: [params: SharingReadBookBytesParams]
+    returns: SharingReadBookBytesResult
+  }
+  'sharing:getConfig': { args: []; returns: SharingConfig }
+  'sharing:registerDeepLinkListener': { args: []; returns: void }
+  /**
+   * Reconnect-payload persistence (reborn-host flow). The renderer writes
+   * `(sessionId, reconnectToken, wsUrl, reservedUntil)` once the worker
+   * confirms admission, reads it on app start to detect an in-flight
+   * session, and clears it on graceful session end.
+   */
+  'sharing:readReconnect': {
+    args: [params: { userId: string }]
+    returns: SharingReconnectPayload | null
+  }
+  'sharing:writeReconnect': { args: [params: SharingReconnectWriteParams]; returns: void }
+  'sharing:clearReconnect': { args: [params: { userId: string }]; returns: void }
 }
 
 export type IpcChannel = keyof IpcContract

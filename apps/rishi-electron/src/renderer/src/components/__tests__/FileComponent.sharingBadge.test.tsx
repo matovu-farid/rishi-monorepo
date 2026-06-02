@@ -1,0 +1,104 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { Book } from '@/lib/api'
+import type React from 'react'
+
+// Mirror the FileComponent.test.tsx mock surface so the component can mount in
+// isolation. Sharing-badge tests share the same heavy bootstrap.
+vi.mock('@/modules/handleDroppedFiles', () => ({
+  resolveDroppedFilePaths: vi.fn(() => []),
+  DroppedFilesError: class extends Error {},
+  getFilesFromDropEvent: vi.fn(async () => [])
+}))
+
+vi.mock('@/modules/ttsPrefetch', () => ({
+  prefetchTTSForBooks: vi.fn(async () => {})
+}))
+
+vi.mock('@/services', () => ({
+  getBookImportService: () => ({ importBatch: vi.fn(async () => []) }),
+  getVoiceChatService: () => ({
+    prewarmKey: vi.fn(),
+    activate: vi.fn().mockResolvedValue(undefined),
+    deactivate: vi.fn(),
+    dispose: vi.fn(),
+    getState: vi.fn().mockReturnValue('idle' as const),
+    getError: vi.fn().mockReturnValue(null),
+    dismissError: vi.fn(),
+    onStateChange: vi.fn().mockReturnValue(() => {}),
+    onChatStatus: vi.fn().mockReturnValue(() => {}),
+    onEndedByAgent: vi.fn().mockReturnValue(() => {})
+  }),
+  getTtsService: () => ({ clearBookCache: vi.fn(async () => {}) })
+}))
+
+vi.mock('@/services/reader-cache/pdf-cache', () => ({ evictPdf: vi.fn() }))
+vi.mock('@/services/reader-cache/epub-cache', () => ({ evictEpub: vi.fn() }))
+vi.mock('sonner', () => ({
+  toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn() })
+}))
+vi.mock('../HelpMenu', () => ({ HelpMenu: () => null }))
+
+import FileComponent from '../FileComponent'
+
+function makeBook(over: Partial<Book> = {}): Book {
+  return {
+    id: 1,
+    title: 'Book One',
+    author: 'Author A',
+    kind: 'pdf',
+    cover: [],
+    filepath: '/tmp/one.pdf',
+    publisher: '',
+    location: '',
+    coverKind: '',
+    format: 'pdf',
+    syncVersion: 0,
+    isDirty: 0,
+    isDeleted: 0,
+    version: 1,
+    ...(over as object)
+  } as Book
+}
+
+function renderWithClient(ui: React.ReactNode) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } }
+  })
+  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
+}
+
+beforeEach(() => {
+  ;(window.electron as unknown as Record<string, ReturnType<typeof vi.fn>>).openBook = vi
+    .fn()
+    .mockResolvedValue(undefined)
+  localStorage.clear()
+})
+
+describe('FileComponent — shared-session badge', () => {
+  it('renders a "received via sharing" badge on books with source === "shared-session"', async () => {
+    ;(window.electron.getBooks as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeBook({ id: 1, title: 'Alpha', author: 'A' }),
+      makeBook({ id: 2, title: 'Beta', author: 'B', source: 'shared-session' })
+    ])
+
+    renderWithClient(<FileComponent />)
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument())
+
+    // Only the shared book carries the badge.
+    const badges = screen.getAllByLabelText(/received via sharing/i)
+    expect(badges).toHaveLength(1)
+  })
+
+  it('omits the badge when no books are shared', async () => {
+    ;(window.electron.getBooks as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeBook({ id: 1, title: 'Alpha', author: 'A' })
+    ])
+
+    renderWithClient(<FileComponent />)
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument())
+
+    expect(screen.queryByLabelText(/received via sharing/i)).toBeNull()
+  })
+})

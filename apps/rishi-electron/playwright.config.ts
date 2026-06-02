@@ -6,5 +6,13 @@ export default defineConfig({
   expect: { timeout: 10000 },
   use: {
     trace: 'on-first-retry'
-  }
+  },
+  // Sharing specs live behind ./playwright.sharing.config.ts so the wrangler
+  // dev globalSetup only runs when explicitly invoked via `test:e2e:sharing`.
+  testIgnore: /sharing.*\.spec\.ts$/,
+  projects: [
+    {
+      name: 'electron'
+    }
+  ]
 })

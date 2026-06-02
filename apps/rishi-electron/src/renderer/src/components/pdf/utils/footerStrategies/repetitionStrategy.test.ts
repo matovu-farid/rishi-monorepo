@@ -25,10 +25,7 @@ const makeItem = (it: {
   hasEOL: it.hasEOL ?? true
 })
 
-const makePage = (
-  pageNumber: number,
-  items: { str: string; y: number }[]
-): PageScanInput => ({
+const makePage = (pageNumber: number, items: { str: string; y: number }[]): PageScanInput => ({
   pageNumber,
   content: { items: items.map(makeItem), styles: {} as any } as any,
   viewportHeight: VIEWPORT_HEIGHT

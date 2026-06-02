@@ -5,7 +5,7 @@ import type Database from 'better-sqlite3'
  * Uses user_version pragma to track whether the schema has been created.
  * If the database already exists from a previous version, it is dropped and recreated.
  */
-const CURRENT_VERSION = 5
+const CURRENT_VERSION = 6
 
 export function runMigrations(db: Database.Database): number {
   const version = db.pragma('user_version', { simple: true }) as number
@@ -192,6 +192,16 @@ export function runMigrations(db: Database.Database): number {
     // keep their pre-heuristic content; only pages not yet in
     // chunk_data get extracted with the footer mask applied.
     db.pragma('user_version = 5')
+  }
+
+  if (version < 6) {
+    // v6 (Plan 2 Task 22): sharing-provenance columns on `books`. P2P-received
+    // books mark `source='shared-session'` and carry the sharer's userId +
+    // ms timestamp; local-only books leave all three NULL.
+    db.exec(`ALTER TABLE books ADD COLUMN source TEXT`)
+    db.exec(`ALTER TABLE books ADD COLUMN received_from_user_id TEXT`)
+    db.exec(`ALTER TABLE books ADD COLUMN received_at INTEGER`)
+    db.pragma('user_version = 6')
   }
 
   return 1

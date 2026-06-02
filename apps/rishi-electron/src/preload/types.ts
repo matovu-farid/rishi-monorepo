@@ -174,6 +174,21 @@ export type ChannelToMethod = {
   'auth:sign-out': never
   'auth:delete-account': never
   'auth:get-token': never
+
+  // Sharing (lives on a dedicated `sharing` namespace exposed in preload —
+  // see Task 28. Like the better-auth channels above, these are kept in
+  // `IpcContract` for helper-wrapper coverage but mapped to `never` so
+  // they're excluded from the auto-derived `window.electron` surface.)
+  'sharing:getSigningJwt': never
+  'sharing:saveTransferredBook': never
+  'sharing:discardTransferredBook': never
+  'sharing:hasBookFile': never
+  'sharing:readBookBytes': never
+  'sharing:getConfig': never
+  'sharing:registerDeepLinkListener': never
+  'sharing:readReconnect': never
+  'sharing:writeReconnect': never
+  'sharing:clearReconnect': never
 }
 
 // Compile-time check: every channel in IpcContract must appear in ChannelToMethod.
@@ -248,6 +263,64 @@ export type ElectronAPI = DerivedInvokeApi & {
    * augmentation — Electron 32+ requires `webUtils.getPathForFile`.
    */
   getPathForFile: (file: File) => string
+
+  /**
+   * Shared-reading surface. Mirrors the `sharing:*` IPC channels in
+   * `IpcContract`, but exposed under a dedicated namespace because the
+   * channels are mapped to `never` in `ChannelToMethod` (they're not part
+   * of the auto-derived flat surface). The deep-link listener is a
+   * push channel (`sharing:deepLinkReceived`), not an invoke.
+   */
+  sharing: {
+    getSigningJwt: () => Promise<{ jwt: string; expiresAt: number }>
+    saveTransferredBook: (params: {
+      bookId: string
+      contentHash: string
+      format: 'epub' | 'pdf'
+      blob: number[]
+      receivedFromUserId: string
+      receivedAt: number
+      title: string
+    }) => Promise<{ localPath: string; dbBookId: number }>
+    discardTransferredBook: (params: { dbBookId: number; localPath: string }) => Promise<void>
+    hasBookFile: (params: { contentHash: string }) => Promise<boolean>
+    /**
+     * Read a locally-stored book's bytes by content hash. Used by the
+     * sharing flow on the host side to feed the P2P file-transfer
+     * sender. The handler validates the on-disk SHA-256 still matches
+     * before returning.
+     */
+    readBookBytes: (params: { bookId: string; contentHash: string }) => Promise<{
+      bytes: number[]
+      format: 'epub' | 'pdf'
+    }>
+    getConfig: () => Promise<{
+      wsBaseUrl: string
+      workerBaseUrl: string
+      iceServers: Array<{ urls: string | string[]; username?: string; credential?: string }>
+    }>
+    onDeepLink: (cb: (p: { joinToken: string }) => void) => () => void
+    /**
+     * Reborn-host reconnect persistence. The renderer writes the
+     * worker-issued reconnect token + wsUrl on `welcome`, reads it on
+     * app start, and clears it on graceful session end.
+     */
+    readReconnect: (params: { userId: string }) => Promise<{
+      sessionId: string
+      reconnectToken: string
+      wsUrl: string
+      reservedUntil: number
+      storedAt: number
+    } | null>
+    writeReconnect: (params: {
+      userId: string
+      sessionId: string
+      reconnectToken: string
+      wsUrl: string
+      reservedUntil: number
+    }) => Promise<void>
+    clearReconnect: (params: { userId: string }) => Promise<void>
+  }
 }
 
 // ---------------------------------------------------------------------------

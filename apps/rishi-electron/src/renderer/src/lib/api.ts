@@ -61,6 +61,13 @@ export interface Book {
   isDirty: number
   isDeleted: number
   lastParagraph?: string | null
+  // Sharing provenance (Plan 2 Task 22 / Task 34): set when the book was
+  // delivered through a P2P sharing session. Local-only books leave these
+  // fields NULL. Surfacing them on the Book type lets the renderer flag
+  // shared books in the library UI without a separate query.
+  source?: string | null
+  receivedFromUserId?: string | null
+  receivedAt?: number | null
 }
 
 export interface BookInsertable {

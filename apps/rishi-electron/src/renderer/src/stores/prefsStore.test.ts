@@ -131,4 +131,53 @@ describe('prefsStore', () => {
     expect(window.electron.getStoreValue).toHaveBeenCalledWith('pdfFooterDetection')
     expect(usePrefsStore.getState().pdfFooterDetection).toBe(false)
   })
+
+  // -------------------------------------------------------------------------
+  // autoUpdateEnabled — drives silent auto-download on startup
+  // -------------------------------------------------------------------------
+
+  it('autoUpdateEnabled defaults to true', async () => {
+    const { usePrefsStore } = await import('./prefsStore')
+    expect(usePrefsStore.getState().autoUpdateEnabled).toBe(true)
+  })
+
+  it('setAutoUpdateEnabled persists via window.electron.setStoreValue', async () => {
+    const { usePrefsStore } = await import('./prefsStore')
+    await usePrefsStore.getState().setAutoUpdateEnabled(false)
+    expect(window.electron.setStoreValue).toHaveBeenCalledWith('autoUpdateEnabled', false)
+    expect(usePrefsStore.getState().autoUpdateEnabled).toBe(false)
+  })
+
+  it('autoUpdateEnabled hydrates from window.electron.getStoreValue on init', async () => {
+    ;(window.electron.getStoreValue as ReturnType<typeof vi.fn>).mockImplementation(
+      (key: string) => {
+        switch (key) {
+          case 'autoUpdateEnabled':
+            return Promise.resolve(false)
+          default:
+            return Promise.resolve(undefined)
+        }
+      }
+    )
+    const { usePrefsStore } = await import('./prefsStore')
+    await usePrefsStore.getState().hydrate()
+    expect(window.electron.getStoreValue).toHaveBeenCalledWith('autoUpdateEnabled')
+    expect(usePrefsStore.getState().autoUpdateEnabled).toBe(false)
+  })
+
+  it('autoUpdateEnabled falls back to true when the IPC returns a non-boolean value', async () => {
+    ;(window.electron.getStoreValue as ReturnType<typeof vi.fn>).mockImplementation(
+      (key: string) => {
+        switch (key) {
+          case 'autoUpdateEnabled':
+            return Promise.resolve(null)
+          default:
+            return Promise.resolve(undefined)
+        }
+      }
+    )
+    const { usePrefsStore } = await import('./prefsStore')
+    await usePrefsStore.getState().hydrate()
+    expect(usePrefsStore.getState().autoUpdateEnabled).toBe(true)
+  })
 })

@@ -209,6 +209,17 @@ export default defineConfig(
     }
   },
 
+  // CommonJS helper scripts (`scripts/*.cjs`) are loaded by Node directly via
+  // `node scripts/foo.cjs` from package.json — `require()` is the native
+  // module syntax for `.cjs`, not an opt-in. Relax the ESM-only require rule
+  // for that surface rather than wrapping every line in inline disables.
+  {
+    files: ['**/*.cjs'],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off'
+    }
+  },
+
   // Tests legitimately float promises (vitest `expect(...).resolves...`
   // patterns), use `any` for partial mocks, and may shadow types. Relax
   // there rather than peppering files with eslint-disable comments.

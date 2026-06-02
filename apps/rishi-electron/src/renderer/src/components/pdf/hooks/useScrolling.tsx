@@ -119,7 +119,6 @@ export function useScrolling(scrollContainerRef: React.RefObject<HTMLDivElement 
       }
     )
     return unsub
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Auto-scroll to the highlighted paragraph

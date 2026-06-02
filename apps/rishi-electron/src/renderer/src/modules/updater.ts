@@ -53,6 +53,11 @@ export function renderStatus(status: UpdateStatus): string | null {
 
 let listenersRegistered = false
 let userInitiatedCheckPending = false
+// Tracks whether the most recently kicked-off check was user-initiated.
+// Silent checks (from app startup) should never produce dialogs — the
+// download proceeds in the background and electron-updater applies the
+// update on the next quit via `autoInstallOnAppQuit`.
+let lastCheckWasUserInitiated = false
 
 /**
  * Register one-time listeners for autoUpdater events forwarded from main process.
@@ -104,7 +109,11 @@ function ensureListeners(): void {
     const data = info as { version?: string } | undefined
     const version = data?.version ?? 'unknown'
     setStatus({ kind: 'ready', version })
-    void promptInstall(version)
+    if (lastCheckWasUserInitiated) {
+      void promptInstall(version)
+    }
+    // Silent path: no dialog. `autoInstallOnAppQuit` applies the update
+    // the next time the user quits the app.
   })
 
   window.electron.on('update-error', (error: unknown) => {
@@ -159,7 +168,8 @@ export async function checkForUpdates(opts?: { silent: boolean }): Promise<void>
 
   ensureListeners()
 
-  if (opts?.silent === false) {
+  lastCheckWasUserInitiated = opts?.silent === false
+  if (lastCheckWasUserInitiated) {
     userInitiatedCheckPending = true
   }
 

@@ -137,9 +137,7 @@ describe('epubViewActor', () => {
       // republished paragraphs of the OLD view and the player snapped to
       // paragraph 0 of the old view.
       rendition.emit('relocated', { start: { cfi: 'cfi:stuck' } })
-      expect(captured).toEqual([
-        { type: 'NAV_NO_PROGRESS', reason: 'no-relocation' }
-      ])
+      expect(captured).toEqual([{ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' }])
     })
 
     it('emits NAV_NO_PROGRESS when the new view has no paragraphs (image-only page)', async () => {
@@ -148,9 +146,7 @@ describe('epubViewActor', () => {
       await flushMicrotasks()
       setParagraphs([]) // new view is image-only
       rendition.emit('relocated', { start: { cfi: 'cfi:image-only' } })
-      expect(captured).toEqual([
-        { type: 'NAV_NO_PROGRESS', reason: 'no-relocation' }
-      ])
+      expect(captured).toEqual([{ type: 'NAV_NO_PROGRESS', reason: 'no-relocation' }])
     })
 
     it('emits NAV_NO_PROGRESS when rendition.next() rejects (end of book)', async () => {
@@ -180,9 +176,7 @@ describe('epubViewActor', () => {
       const ref = parent.getSnapshot().children.view as ActorRefFrom<typeof epubViewActor>
       ref.send({ type: 'NAVIGATE_NEXT' })
       await flushMicrotasks()
-      expect(captured).toEqual([
-        { type: 'NAV_NO_PROGRESS', reason: 'end-of-document' }
-      ])
+      expect(captured).toEqual([{ type: 'NAV_NO_PROGRESS', reason: 'end-of-document' }])
       parent.stop()
     })
   })

@@ -26,7 +26,12 @@ export const books = sqliteTable('books', {
   syncVersion: integer('sync_version').notNull().default(0),
   isDirty: integer('is_dirty').notNull().default(1),
   isDeleted: integer('is_deleted').notNull().default(0),
-  lastParagraph: text('last_paragraph')
+  lastParagraph: text('last_paragraph'),
+  // Sharing provenance (Plan 2 Task 22): set only for books received via a
+  // P2P sharing session. Local-only books leave these NULL.
+  source: text('source'),
+  receivedFromUserId: text('received_from_user_id'),
+  receivedAt: integer('received_at')
 })
 
 // ---------------------------------------------------------------------------

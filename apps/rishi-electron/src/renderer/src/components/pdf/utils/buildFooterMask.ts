@@ -87,10 +87,7 @@ export function normalizeFooterToken(s: string): string {
 // fully initialised. DO NOT REMOVE THESE THUNKS without first extracting
 // the shared types into a separate `shared.ts` module that both sides
 // import from (which breaks the cycle structurally).
-const STRATEGIES: Array<() => FooterStrategy> = [
-  () => repetitionStrategy,
-  () => suffixStrategy
-]
+const STRATEGIES: Array<() => FooterStrategy> = [() => repetitionStrategy, () => suffixStrategy]
 const POST_PROCESSORS: Array<() => FooterPostProcessor> = [() => expandToLineMates]
 
 export function buildFooterMask(

@@ -12,3 +12,14 @@ e2e/screenshots/
 electron.vite.config.js
 electron.vite.config.d.ts
 *.tsbuildinfo
+
+# Stale tsc-emitted artifacts that shadow .ts/.tsx sources. Cleaned by
+# `pnpm clean:src-artifacts` (also runs automatically as `prebuild`).
+# No legitimate .js files live under src/. Ambient .d.ts declarations
+# (no sibling .ts/.tsx) are whitelisted below.
+src/**/*.js
+src/**/*.d.ts
+!src/renderer/src/electron.d.ts
+!src/renderer/src/vite-env.d.ts
+!src/renderer/src/modules/epubjs-extensions.d.ts
+!src/renderer/src/types/foliate-js.d.ts

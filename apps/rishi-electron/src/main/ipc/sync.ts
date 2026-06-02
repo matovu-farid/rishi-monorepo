@@ -65,11 +65,7 @@ export function _markHighlightsCleanWithDb(db: Db, ids: string[], syncVersion: n
   })
 }
 
-export function _markConversationsCleanWithDb(
-  db: Db,
-  ids: string[],
-  syncVersion: number
-): void {
+export function _markConversationsCleanWithDb(db: Db, ids: string[], syncVersion: number): void {
   db.transaction((tx) => {
     for (const id of ids) {
       tx.update(conversations)
@@ -92,11 +88,7 @@ export function _markMessagesCleanWithDb(db: Db, ids: string[], syncVersion: num
 // Conflict handlers (validated + transactional: #166 + #167)
 // ---------------------------------------------------------------------------
 
-export function _applyBookConflictWithDb(
-  db: Db,
-  conflict: unknown,
-  syncVersion: number
-): void {
+export function _applyBookConflictWithDb(db: Db, conflict: unknown, syncVersion: number): void {
   const parsed = bookConflictSchema.safeParse(conflict)
   if (!parsed.success) {
     // Malformed payload — silently skip (matches existing defensive pattern

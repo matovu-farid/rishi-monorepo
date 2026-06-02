@@ -22,7 +22,9 @@ const IS_DEV = import.meta.env.DEV
 // path. Resolved at call time so tests can stub `window.electron` later.
 function getAppender(): ((line: string) => Promise<void>) | null {
   if (typeof window === 'undefined') return null
-  const e = (window as unknown as { electron?: { appendDebugLog?: (line: string) => Promise<void> } }).electron
+  const e = (
+    window as unknown as { electron?: { appendDebugLog?: (line: string) => Promise<void> } }
+  ).electron
   return e?.appendDebugLog ?? null
 }
 

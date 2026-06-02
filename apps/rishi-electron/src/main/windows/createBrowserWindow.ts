@@ -17,6 +17,11 @@ export function makeBrowserWindowFactory(deps: FactoryDeps) {
           ? { width: 1024, height: 770 }
           : { width: 1100, height: 900 }
 
+    // Park e2e windows offscreen so Playwright runs don't steal focus on the
+    // dev machine. `.show()`/`.focus()` still work — the window just isn't on
+    // a visible display. Set RISHI_E2E_HEADED=1 to override for debugging.
+    const hidden = process.env.RISHI_E2E_HIDDEN === '1' && process.env.RISHI_E2E_HEADED !== '1'
+
     const win = new BrowserWindow({
       width: dims.width,
       height: dims.height,
@@ -25,6 +30,7 @@ export function makeBrowserWindowFactory(deps: FactoryDeps) {
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 15, y: 10 },
       show: false,
+      ...(hidden ? { x: -10000, y: -10000, skipTaskbar: true } : {}),
       webPreferences: {
         preload: deps.preloadPath,
         sandbox: false,
@@ -40,7 +46,7 @@ export function makeBrowserWindowFactory(deps: FactoryDeps) {
         additionalArguments: [`--window-identity=${identityFlag(identity)}`]
       }
     })
-    win.on('ready-to-show', () => win.show())
+    if (!hidden) win.on('ready-to-show', () => win.show())
 
     // Flush any in-flight saves before book windows actually close. The
     // renderer's save path is async (page-curl animation + epubjs render +

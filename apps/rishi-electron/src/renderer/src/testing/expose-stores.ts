@@ -7,9 +7,17 @@ import { usePdfStore } from '@/stores/pdfStore'
 import { setTestTtsService, getSyncService } from '@/services'
 import { audioElement } from '@/hooks/usePlayerMachine'
 import { navigationHistoryActor } from '@/machines/navigationHistory/navigationHistoryActor'
+import {
+  sessionMachineStore,
+  signalingTestHook,
+  fileTransferProgress,
+  setRtcFactoryOverride
+} from './sharing-test-hooks'
+import { fakeRtcFactory } from './fakeRtcAdapter'
 import type { TtsService } from '@/services/tts'
 import type { SyncService } from '@/services/sync'
 import type { FooterMask } from '@/components/pdf/utils/buildFooterMask'
+import type { RtcFactory } from '@/actors/sharing/rtcAdapter'
 
 declare global {
   interface Window {
@@ -33,6 +41,31 @@ declare global {
       getSyncService: () => SyncService
       /** E2E hook for #142: read the raw FooterMask without the pref short-circuit. */
       getFooterMask: (bookId: number) => FooterMask | undefined
+      /**
+       * E2E hook (Plan 3 P3): snapshot accessor for the active sharing
+       * `sessionMachine` actor. Returns null when no session is mounted.
+       * Returned snapshot has the XState v5 shape `{ value, context, send }`.
+       */
+      sessionMachineStore: typeof sessionMachineStore
+      /**
+       * E2E hook (Plan 3 P4): control the active signaling WebSocket — force
+       * a disconnect and subscribe to signaling error codes.
+       */
+      signalingTestHook: typeof signalingTestHook
+      /**
+       * E2E hook (Plan 3 P5): live snapshot of the current P2P file transfer
+       * progress (`{ completed, percent }`). Mutated by the fileTransferActor.
+       */
+      fileTransferProgress: typeof fileTransferProgress
+      /**
+       * E2E hook (task #92): install a fake `RtcFactory` so peerActor can
+       * be driven without opening UDP sockets in headless Electron. Pass
+       * `null` to restore the default factory. A pre-built fake is exposed
+       * as `installFakeRtcFactory()`.
+       */
+      setRtcFactoryOverride: (factory: RtcFactory | null) => void
+      /** Shortcut: install the bundled fake RtcFactory. */
+      installFakeRtcFactory: () => void
     }
   }
 }
@@ -48,5 +81,10 @@ window.__rishi = {
   audioElement,
   navigationHistoryActor,
   getSyncService,
-  getFooterMask: (bookId: number) => usePdfStore.getState().footerMaskByBookId[bookId]
+  getFooterMask: (bookId: number) => usePdfStore.getState().footerMaskByBookId[bookId],
+  sessionMachineStore,
+  signalingTestHook,
+  fileTransferProgress,
+  setRtcFactoryOverride,
+  installFakeRtcFactory: () => setRtcFactoryOverride(fakeRtcFactory)
 }

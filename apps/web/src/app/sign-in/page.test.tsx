@@ -171,6 +171,72 @@ describe("<SignInPage>", () => {
     ).toBeInTheDocument()
   })
 
+  it("auto-fires Google OAuth with a clean callbackURL (no provider=google, no &&)", () => {
+    const state = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    mockUseSearchParams.mockReturnValue(
+      paramsFrom({ login: "true", provider: "google", state }),
+    )
+    const originalHref = window.location.href
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        ...window.location,
+        href: `https://rishi.fidexa.org/sign-in?login=true&provider=google&state=${state}`,
+        origin: "https://rishi.fidexa.org",
+      },
+    })
+
+    try {
+      render(<SignInPage />)
+
+      expect(mockSocial).toHaveBeenCalledTimes(1)
+      const arg = mockSocial.mock.calls[0][0] as {
+        provider: string
+        callbackURL: string
+      }
+      expect(arg.provider).toBe("google")
+      expect(arg.callbackURL).toBe(
+        `https://rishi.fidexa.org/sign-in?login=true&state=${state}`,
+      )
+      expect(arg.callbackURL).not.toContain("&&")
+      expect(arg.callbackURL).not.toContain("provider=google")
+    } finally {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        value: { ...window.location, href: originalHref },
+      })
+    }
+  })
+
+  it("does not render the email magic-link form when provider=google is in the URL", () => {
+    mockUseSearchParams.mockReturnValue(
+      paramsFrom({
+        login: "true",
+        provider: "google",
+        state: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      }),
+    )
+
+    render(<SignInPage />)
+
+    expect(
+      screen.queryByRole("heading", { name: /sign in to rishi/i }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByPlaceholderText(/you@example.com/i),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /^continue$/i }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /continue with google/i }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /sign in with passkey/i }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByTestId("sign-in-skeleton")).toBeInTheDocument()
+  })
+
   it("clicking 'Try again' re-fires the handoff POST", async () => {
     mockUseSession.mockReturnValue({
       data: { user: { id: "u_1" } },

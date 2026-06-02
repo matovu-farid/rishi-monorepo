@@ -64,7 +64,10 @@ function visiblePositionFromVirtualizer(
     if (currentItem) {
       const distFromTop = Math.abs(scrollTop - currentItem.start)
       const distFromBottom = Math.abs(scrollTop - (currentItem.start + currentItem.size))
-      if (distFromTop < PAGE_BOUNDARY_HYSTERESIS_PX || distFromBottom < PAGE_BOUNDARY_HYSTERESIS_PX) {
+      if (
+        distFromTop < PAGE_BOUNDARY_HYSTERESIS_PX ||
+        distFromBottom < PAGE_BOUNDARY_HYSTERESIS_PX
+      ) {
         return { page: currentPage, offset: Math.max(0, scrollTop - currentItem.start) }
       }
     }
@@ -281,10 +284,24 @@ export function usePdfReader(
         lastSeenScrollTop = currentScrollTop
         if (delta < 4) return
         const currentPage = actor.getSnapshot().context.currentPage
+        // When `pageControls.nextPage`/`previousPage` has flipped the
+        // programmatic-navigation flag, bypass `visiblePositionFromVirtualizer`'s
+        // 120px boundary hysteresis. The hysteresis exists to absorb user
+        // wobble across a page boundary, but `align:'start'` scrolls land
+        // scrollTop EXACTLY at the next page's start — i.e. 1px past the
+        // previous page's bottom, comfortably inside the 120px band — and
+        // hysteresis then keeps reporting the old page forever. With the
+        // flag we know this is an intentional programmatic advance and
+        // commit the page change immediately (PAGE_CHANGED → currentPage
+        // updates → mirror to pdfStore.pageNumber → pdfViewActor emits
+        // VIEW_CHANGED → TTS auto-resume on the new page). Passing 0 as
+        // currentPage falls through visiblePositionFromVirtualizer's
+        // `currentPage > 0` guard and skips the hysteresis branch.
+        const hysteresisPage = usePdfStore.getState().isLookingForNextParagraph ? 0 : currentPage
         const { page, offset } = visiblePositionFromVirtualizer(
           virtualizer,
           container,
-          currentPage
+          hysteresisPage
         )
         if (!page) return
         debugLog('pdfReader:pageChanged', {

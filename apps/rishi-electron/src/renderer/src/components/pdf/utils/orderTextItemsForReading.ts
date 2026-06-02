@@ -85,7 +85,11 @@ function detectGutter(entries: Entry[]): number | null {
     if (crossings > crossingBudget) continue
     if (leftCount < minSide || rightCount < minSide) continue
     const balance = Math.abs(leftCount - rightCount)
-    if (!best || crossings < best.crossings || (crossings === best.crossings && balance < best.balance)) {
+    if (
+      !best ||
+      crossings < best.crossings ||
+      (crossings === best.crossings && balance < best.balance)
+    ) {
       best = { gx, crossings, balance }
     }
   }

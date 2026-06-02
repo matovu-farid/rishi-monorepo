@@ -13,7 +13,9 @@ function isTextItem(item: TextItem | TextMarkedContent): item is TextItem {
 
 function hasFiniteY(item: TextItem): boolean {
   return (
-    Array.isArray(item.transform) && item.transform.length >= 6 && Number.isFinite(item.transform[5])
+    Array.isArray(item.transform) &&
+    item.transform.length >= 6 &&
+    Number.isFinite(item.transform[5])
   )
 }
 
@@ -98,7 +100,9 @@ export function detectFootnoteItems(items: (TextItem | TextMarkedContent)[]): Se
   const bodyBottomY = bestBottom
 
   // Smaller-font items strictly below the body.
-  const belowSmall = entries.filter((e) => e.height > 0 && e.height < smallThreshold && e.y < bodyBottomY)
+  const belowSmall = entries.filter(
+    (e) => e.height > 0 && e.height < smallThreshold && e.y < bodyBottomY
+  )
   if (belowSmall.length === 0) return result
 
   // The block must be separated from the body by an oversized gap.

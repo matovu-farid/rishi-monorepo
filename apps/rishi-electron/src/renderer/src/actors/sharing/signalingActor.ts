@@ -1,0 +1,233 @@
+import { fromCallback } from 'xstate'
+import { ClientMsg, ServerMsg } from '@rishi/sharing-protocol/schemas'
+import { defaultWsConnect, type WsAdapter, type WsConnect } from './wsAdapter'
+import { notifySignalingError, registerSignalingWs } from '@/testing/sharing-test-hooks'
+import { recordSharingBreadcrumb, recordSharingError } from '@/sharing/sentryScope'
+
+export type SignalingInput = {
+  wsUrl: string
+  jwt: string
+  reconnectToken?: string
+  hasBookFile: boolean
+  connect?: WsConnect
+}
+
+export type SignalingInEvent = { type: 'SEND'; payload: ClientMsg }
+
+export type SignalingOutEvent =
+  | { type: 'CONNECTED' }
+  | { type: 'WELCOME'; msg: Extract<ServerMsg, { t: 'welcome' }> }
+  | { type: 'ROSTER'; msg: Extract<ServerMsg, { t: 'roster' }> }
+  | { type: 'PEER_JOINED'; msg: Extract<ServerMsg, { t: 'peer.joined' }> }
+  | { type: 'PEER_LEFT'; msg: Extract<ServerMsg, { t: 'peer.left' }> }
+  | { type: 'PEER_UPDATED'; msg: Extract<ServerMsg, { t: 'peer.updated' }> }
+  | { type: 'SDP_OFFER'; msg: Extract<ServerMsg, { t: 'sdp.offer' }> }
+  | { type: 'SDP_ANSWER'; msg: Extract<ServerMsg, { t: 'sdp.answer' }> }
+  | { type: 'ICE_CANDIDATE'; msg: Extract<ServerMsg, { t: 'ice' }> }
+  | { type: 'ROLE_TRANSFERRED'; msg: Extract<ServerMsg, { t: 'role.transferred' }> }
+  | { type: 'JOIN_REQUESTED'; msg: Extract<ServerMsg, { t: 'join.requested' }> }
+  | { type: 'APPROVAL_RESULT'; msg: Extract<ServerMsg, { t: 'approval.result' }> }
+  | { type: 'HOST_SUSPENDED'; msg: Extract<ServerMsg, { t: 'host.suspended' }> }
+  | { type: 'HOST_RESUMED' }
+  | { type: 'KICKED'; msg: Extract<ServerMsg, { t: 'kicked' }> }
+  | { type: 'SESSION_ENDED'; msg: Extract<ServerMsg, { t: 'session.ended' }> }
+  | { type: 'SYNC_FRAME'; msg: Extract<ServerMsg, { t: 'sync.frame' }> }
+  | { type: 'SIGNALING_DROPPED'; code: number; reason: string }
+  | { type: 'PROTOCOL_ERROR'; raw: string }
+
+const HEARTBEAT_MS = 20_000
+
+/**
+ * Encode a string as base64url (RFC 4648 §5: `+` → `-`, `/` → `_`, no padding).
+ * Bearer tokens go into the `Sec-WebSocket-Protocol` header where RFC 6455
+ * restricts characters (no `:`, whitespace, etc.); base64url is the canonical
+ * URL/header-safe alphabet that works for any future bearer shape (JWTs,
+ * opaque tokens, the e2e `userId--DisplayName` form).
+ */
+function encodeBase64Url(value: string): string {
+  // Encode as UTF-8 first so non-ASCII display names survive.
+  const bytes = new TextEncoder().encode(value)
+  let bin = ''
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, SignalingOutEvent>(
+  ({ emit, sendBack, receive, input }) => {
+    const connect = input.connect ?? defaultWsConnect
+    // Bearer is base64url-encoded so any token shape is valid as an RFC 6455
+    // subprotocol token. Worker decodes in `wsCreds.parseSubprotocols`.
+    const subprotocols = ['rishi.sharing.v1', `jwt.${encodeBase64Url(input.jwt)}`]
+    if (input.reconnectToken) {
+      subprotocols.push(`reconnect.${encodeBase64Url(input.reconnectToken)}`)
+    }
+    const ws: WsAdapter = connect(input.wsUrl, subprotocols)
+    // Expose the active WS to the E2E signalingTestHook so Playwright can
+    // force a disconnect. No-op for production code (registry is never read
+    // outside of `window.__rishi.signalingTestHook`).
+    registerSignalingWs(ws)
+
+    let heartbeat: ReturnType<typeof setInterval> | null = null
+
+    /**
+     * Send an event to *both* the emit channel (so callers using
+     * `actor.on('*', …)` keep working — primarily the actor's unit tests) AND
+     * back to the parent invoking machine. The parent path is the load-bearing
+     * one for production: without `sendBack`, the `sessionMachine` would never
+     * see ROSTER / PEER_JOINED / etc. and would sit forever in `connecting`.
+     */
+    const out = (e: SignalingOutEvent): void => {
+      sendBack(e)
+      emit(e)
+    }
+
+    ws.onOpen(() => {
+      recordSharingBreadcrumb('signaling.opened', {
+        reconnect: Boolean(input.reconnectToken)
+      })
+      out({ type: 'CONNECTED' })
+      ws.send(JSON.stringify({ v: 1, t: 'hello', hasBookFile: input.hasBookFile }))
+      heartbeat = setInterval(() => {
+        try {
+          ws.send(JSON.stringify({ v: 1, t: 'ping' }))
+        } catch {
+          /* ignored */
+        }
+      }, HEARTBEAT_MS)
+    })
+
+    ws.onMessage((raw) => {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(raw)
+      } catch {
+        out({ type: 'PROTOCOL_ERROR', raw })
+        return
+      }
+      const result = ServerMsg.safeParse(parsed)
+      if (!result.success) {
+        notifySignalingError('protocol_error')
+        recordSharingBreadcrumb('signaling.error', { code: 'protocol_error' })
+        recordSharingError(new Error('signaling protocol_error'), {
+          actor: 'signalingActor',
+          code: 'protocol_error'
+        })
+        out({ type: 'PROTOCOL_ERROR', raw })
+        return
+      }
+      const m = result.data
+      switch (m.t) {
+        case 'welcome':
+          out({ type: 'WELCOME', msg: m })
+          break
+        case 'roster':
+          out({ type: 'ROSTER', msg: m })
+          break
+        case 'peer.joined':
+          out({ type: 'PEER_JOINED', msg: m })
+          break
+        case 'peer.left':
+          out({ type: 'PEER_LEFT', msg: m })
+          break
+        case 'peer.updated':
+          out({ type: 'PEER_UPDATED', msg: m })
+          break
+        case 'sdp.offer':
+          out({ type: 'SDP_OFFER', msg: m })
+          break
+        case 'sdp.answer':
+          out({ type: 'SDP_ANSWER', msg: m })
+          break
+        case 'ice':
+          out({ type: 'ICE_CANDIDATE', msg: m })
+          break
+        case 'role.transferred':
+          out({ type: 'ROLE_TRANSFERRED', msg: m })
+          break
+        case 'join.requested':
+          out({ type: 'JOIN_REQUESTED', msg: m })
+          break
+        case 'approval.result':
+          out({ type: 'APPROVAL_RESULT', msg: m })
+          break
+        case 'host.suspended':
+          out({ type: 'HOST_SUSPENDED', msg: m })
+          break
+        case 'host.resumed':
+          out({ type: 'HOST_RESUMED' })
+          break
+        case 'kicked':
+          out({ type: 'KICKED', msg: m })
+          break
+        case 'session.ended':
+          out({ type: 'SESSION_ENDED', msg: m })
+          break
+        case 'sync.frame':
+          out({ type: 'SYNC_FRAME', msg: m })
+          break
+        case 'data.channel.relay': {
+          // TEST-ONLY: the worker forwards data-channel payloads here when
+          // the E2E fake adapter shuttles sends through the WS instead of
+          // a real RTCDataChannel. We dispatch to the global test bus —
+          // which only exists when E2E sets it up — and never bubble the
+          // message into the parent state machine. Production code never
+          // reaches the dispatch branch because the bus is undefined.
+          const w = globalThis as unknown as {
+            __rishi?: {
+              __testDataChannelBus?: {
+                dispatch: (peer: string, ch: 'sync' | 'files', payload: string) => void
+              }
+            }
+          }
+          const bus = w.__rishi?.__testDataChannelBus
+          if (bus) bus.dispatch(m.from, m.channel, m.payload)
+          break
+        }
+        case 'pong':
+          break
+        case 'error':
+          notifySignalingError(m.code)
+          recordSharingBreadcrumb('signaling.error', { code: m.code })
+          recordSharingError(new Error(`signaling error: ${m.code}`), {
+            actor: 'signalingActor',
+            code: m.code
+          })
+          out({ type: 'PROTOCOL_ERROR', raw })
+          break
+      }
+    })
+
+    ws.onClose((code, reason) => {
+      if (heartbeat) clearInterval(heartbeat)
+      registerSignalingWs(null)
+      notifySignalingError(`signaling_dropped_${code}`)
+      recordSharingBreadcrumb('signaling.closed', { code, reason })
+      // 1000 is a clean close — every other code is an abnormal drop the
+      // runbook wants visibility on, so capture it as an error too.
+      if (code !== 1000) {
+        recordSharingError(new Error(`signaling dropped ${code}: ${reason}`), {
+          actor: 'signalingActor',
+          code,
+          reason
+        })
+      }
+      out({ type: 'SIGNALING_DROPPED', code, reason })
+    })
+
+    ws.onError(() => {
+      /* error → close path handles teardown */
+    })
+
+    receive((evt) => {
+      // Only one `In` variant today (SEND); the discriminant check is elided.
+      const ok = ClientMsg.safeParse(evt.payload)
+      if (!ok.success) return
+      ws.send(JSON.stringify(evt.payload))
+    })
+
+    return () => {
+      if (heartbeat) clearInterval(heartbeat)
+      ws.close(1000, 'actor stop')
+    }
+  }
+)

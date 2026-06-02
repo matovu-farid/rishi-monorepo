@@ -26,6 +26,8 @@ function AccountSettings(): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const voiceChatLanguage = usePrefsStore((s) => s.voiceChatLanguage)
   const setVoiceChatLanguage = usePrefsStore((s) => s.setVoiceChatLanguage)
+  const autoUpdateEnabled = usePrefsStore((s) => s.autoUpdateEnabled)
+  const setAutoUpdateEnabled = usePrefsStore((s) => s.setAutoUpdateEnabled)
 
   if (!user) return <p className="p-8">Sign in to manage your account.</p>
 
@@ -60,6 +62,27 @@ function AccountSettings(): JSX.Element {
         >
           Sign out
         </button>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold">Updates</h2>
+        <label className="flex items-start gap-3">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={autoUpdateEnabled}
+            onChange={(e) => {
+              void setAutoUpdateEnabled(e.target.checked)
+            }}
+          />
+          <span className="space-y-1">
+            <span className="block font-medium">Install updates automatically</span>
+            <span className="block text-sm text-gray-600">
+              Checks for new versions on startup, downloads in the background, and applies the
+              update the next time you quit Rishi.
+            </span>
+          </span>
+        </label>
       </section>
 
       <section className="space-y-3">
