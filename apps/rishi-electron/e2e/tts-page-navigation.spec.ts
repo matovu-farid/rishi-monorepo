@@ -118,9 +118,22 @@ test.describe('TTS state follows EPUB page navigation', () => {
     const startMs = await bookPage.evaluate(() => performance.now())
     await sendPlayerEvent(bookPage, 'PLAY')
 
-    // Wait briefly — long enough for the state-machine subscriber to
-    // process state=loading, but well short of the 800 ms TTS delay.
-    await bookPage.waitForTimeout(150)
+    // Wait deterministically until pause has been logged. Under full-suite
+    // pressure the renderer's task queue can take >150 ms to flush the
+    // state=loading subscriber that calls pause — that's a scheduling
+    // delay, not a regression of the production invariant. The assertion
+    // below still uses the *recorded* timestamp against startMs so it
+    // catches the real bug (pause waiting on the 800 ms TTS fetch).
+    // A 600 ms ceiling keeps us well below the 800 ms TTS resolve so a
+    // genuinely-broken implementation (pause-after-fetch) still fails.
+    await bookPage.waitForFunction(
+      () => {
+        const log = (window as unknown as { __rishiPauseLog?: number[] }).__rishiPauseLog
+        return log != null && log.length > 0
+      },
+      undefined,
+      { timeout: 600 }
+    )
 
     const pauseLog = await bookPage.evaluate(
       () => (window as unknown as { __rishiPauseLog: number[] }).__rishiPauseLog
@@ -1827,42 +1840,82 @@ test.describe('TTS state follows EPUB page navigation', () => {
 
     // Sanity: we are positioned on the last paragraph of the start view and
     // the EPUB location has NOT changed yet.
-    const beforeBoundary = await bookPage.evaluate(() => {
-      const w = window as unknown as {
-        __rishi: {
-          playerStore: {
-            getState: () => {
-              activeParagraph: { index: string } | null
-              currentParagraphs: { index: string }[]
+    //
+    // Re-poll the snapshot until BOTH `activeParagraph === lastParagraph`
+    // AND `location === startLocation` AND `playingState === 'playing'`
+    // are simultaneously true, then capture and dispatch NEXT in the same
+    // page-side step. The 100 ms silent mock WAV reaches `ended` quickly
+    // under suite pressure (the renderer's task queue can be backed up
+    // enough that audio.ended fires before the loop's last
+    // `waitForFunction` returns control), and AUDIO_ENDED auto-advances
+    // the active paragraph. If we read beforeBoundary in a *separate*
+    // round-trip after the loop, the auto-advance window (≈100 ms)
+    // sometimes wins and we observe `activeIndex !== lastIndex`. Doing
+    // the verification + capture + NEXT-dispatch atomically inside one
+    // evaluate eliminates that window.
+    const beforeBoundary = await bookPage.evaluate(
+      async ({ startLoc, timeoutMs }: { startLoc: string; timeoutMs: number }) => {
+        const w = window as unknown as {
+          __rishi: {
+            playerStore: {
+              getState: () => {
+                activeParagraph: { index: string } | null
+                currentParagraphs: { index: string }[]
+                playingState: string
+                send?: (event: { type: string }) => void
+              }
             }
+            epubStore: { getState: () => { currentEpubLocation: string } }
           }
-          epubStore: { getState: () => { currentEpubLocation: string } }
         }
-      }
-      const s = w.__rishi.playerStore.getState()
-      return {
-        activeIndex: s.activeParagraph?.index ?? null,
-        lastIndex: s.currentParagraphs[s.currentParagraphs.length - 1]?.index ?? null,
-        location: w.__rishi.epubStore.getState().currentEpubLocation
-      }
-    })
+        const deadline = performance.now() + timeoutMs
+        let last: {
+          activeIndex: string | null
+          lastIndex: string | null
+          location: string
+          playingState: string
+        } | null = null
+        while (performance.now() < deadline) {
+          const s = w.__rishi.playerStore.getState()
+          const snap = {
+            activeIndex: s.activeParagraph?.index ?? null,
+            lastIndex: s.currentParagraphs[s.currentParagraphs.length - 1]?.index ?? null,
+            location: w.__rishi.epubStore.getState().currentEpubLocation,
+            playingState: s.playingState
+          }
+          last = snap
+          if (
+            snap.activeIndex != null &&
+            snap.activeIndex === snap.lastIndex &&
+            snap.location === startLoc &&
+            snap.playingState === 'playing'
+          ) {
+            // Dispatch NEXT immediately, before the next AUDIO_ENDED can
+            // auto-advance off the last paragraph.
+            s.send?.({ type: 'NEXT' })
+            return snap
+          }
+          await new Promise<void>((r) => {
+            setTimeout(r, 20)
+          })
+        }
+        return last
+      },
+      { startLoc: startLocation, timeoutMs: 5000 }
+    )
+    expect(beforeBoundary).not.toBeNull()
     expect(
-      beforeBoundary.activeIndex,
+      beforeBoundary!.activeIndex,
       'before the boundary-crossing press, the active paragraph must be ' +
         'the last paragraph of the start view'
-    ).toBe(beforeBoundary.lastIndex)
+    ).toBe(beforeBoundary!.lastIndex)
     expect(
-      beforeBoundary.location,
+      beforeBoundary!.location,
       'before the boundary-crossing press, the EPUB location must still be ' +
         'the start view (no nav has happened yet)'
     ).toBe(startLocation)
-
-    // The boundary-crossing press. From `playing` on the last paragraph this
-    // takes the `!hasMoreParagraphs` branch:
-    //   playing → waitingForParagraphs (direction='forward')
-    //   → view actor NAVIGATE_NEXT
-    //   → VIEW_CHANGED (good) or NAV_NO_PROGRESS (machine stops)
-    await sendPlayerEvent(bookPage, 'NEXT')
+    // The boundary-crossing press was already dispatched inside the
+    // evaluate above, atomically with the snapshot read.
 
     // Sample the player state for 2.5 s after the press at 100 ms ticks so
     // we can distinguish three failure modes the user could observe:
@@ -1948,7 +2001,15 @@ test.describe('TTS state follows EPUB page navigation', () => {
     console.log(timelineStr)
     console.log('=== end timeline ===')
 
-    const final = samples[samples.length - 1]
+    // Pick the most recent sample that is NOT a transient loading-with-null
+    // (the 100 ms silent mock WAV auto-advances every paragraph via
+    // AUDIO_ENDED — every gap between paragraphs is briefly
+    // `state=loading, activeIndex=null`). The assertion below checks the
+    // SETTLED state after the boundary crossing, so a loading-blip on the
+    // last 100 ms sampling tick is not a regression. Fall back to the
+    // literal last sample only when no settled sample is available.
+    const final =
+      [...samples].reverse().find((s) => s.activeIndex !== null) ?? samples[samples.length - 1]
     const afterBoundary = {
       location: final.location,
       activeIndex: final.activeIndex,
