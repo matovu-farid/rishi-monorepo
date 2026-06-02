@@ -66,7 +66,7 @@ async function resetEpubCacheStats(page: Page): Promise<void> {
   })
 }
 
-test.skip('first open populates the cache, second open hits it', async () => {
+test('first open populates the cache, second open hits it', async () => {
   // Phase 3 (window split): each book lives in its own BrowserWindow,
   // so the cross-navigation warm-restore path this test exercised
   // (gotoLibrary then re-open in the same renderer) no longer exists.

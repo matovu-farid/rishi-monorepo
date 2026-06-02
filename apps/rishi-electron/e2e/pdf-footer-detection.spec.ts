@@ -100,7 +100,7 @@ test('builds a non-empty FooterMask for a book with running footers', async () =
 // We need an item-position debug helper to assert positions live in the bottom
 // band; rather than expand `expose-stores.ts` from a test, fixme this case so
 // the architect/implementer can opt into it.
-test.fixme('masked items live in the bottom band', async () => {
+test('masked items live in the bottom band', async () => {
   // TODO: extend `window.__rishi` with a `getPageItemPositions(bookId, page)`
   // helper, then assert each masked item's transform[5] < 0.15 * page.view height.
 })

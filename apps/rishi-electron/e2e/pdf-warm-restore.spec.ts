@@ -30,7 +30,7 @@ import {
  *   - No ErrorBoundary fallback after reopen.
  *   - At least one rendered page canvas appears.
  */
-test.skip('reopening a PDF hits the warm-restore cache and renders pages', async () => {
+test('reopening a PDF hits the warm-restore cache and renders pages', async () => {
   // Phase 3 (window split): each book lives in its own BrowserWindow, so
   // the in-window reopen path this test asserted on no longer exists.
   // The pdf-cache LRU semantics will be re-validated with the new
