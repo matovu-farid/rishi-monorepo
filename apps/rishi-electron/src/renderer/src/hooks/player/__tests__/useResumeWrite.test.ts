@@ -6,7 +6,7 @@
 // resume position on close (no flush).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-const updateBookLastParagraph = vi.fn(async () => undefined)
+const updateBookLastParagraph = vi.fn(async (..._args: unknown[]) => undefined)
 vi.mock('@/lib/api', () => ({
   updateBookLastParagraph: (...args: unknown[]) => updateBookLastParagraph(...args)
 }))
