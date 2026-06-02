@@ -119,10 +119,22 @@ export const audioActor = fromCallback<AudioCommand, AudioInput>(({ sendBack, re
     } else if (cmd.type === 'RESUME') {
       void audio.play()
     } else if (cmd.type === 'STOP') {
+      // Drop any in-flight canplaythrough handler from a prior PLAY. Without
+      // this, a delayed canplaythrough event on a now-stale blob would still
+      // fire audio.play() — bleeding the OLD page's audio into the new page
+      // after a PAGE_NAVIGATING cancelled the load mid-flight.
+      if (pendingCanPlay) {
+        audio.removeEventListener('canplaythrough', pendingCanPlay)
+        pendingCanPlay = null
+      }
       audio.pause()
       audio.currentTime = 0
     } else {
       // CLEAR_SRC (only remaining variant in AudioCommand).
+      if (pendingCanPlay) {
+        audio.removeEventListener('canplaythrough', pendingCanPlay)
+        pendingCanPlay = null
+      }
       audio.pause()
       audio.src = ''
     }
