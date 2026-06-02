@@ -42,7 +42,11 @@ export function dispatchSecondInstanceArgv(argv: string[]): void {
   if (url) handleUrl(url)
 }
 
-function parseJoinToken(url: string): string | null {
+/**
+ * Pure URL parser for `rishi://sharing/join?t=<token>`. Exported for direct
+ * testing — the rest of this module wraps Electron event sources.
+ */
+export function parseJoinToken(url: string): string | null {
   try {
     const u = new URL(url)
     if (u.protocol !== `${PROTOCOL}:`) return null
