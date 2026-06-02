@@ -62,7 +62,7 @@ Totals: 1 failed, 9 passed, 0 skipped, 0 flaky
 ### Failing specs
 
 #### e2e/sharing.approval.spec.ts
-- requiresApproval: viewer queued → host approves → both live — hostSnap.context.pendingJoiners.length was 0 (host never observed the viewer's join request, Expected: > 0) [FLAKE] — test reads host snapshot immediately after viewer reaches `awaitingApproval`, with no wait for the host's WS broadcast to arrive. The worker's rehydratePendingFromHibernation fired correctly (workers/sharing-worker/src/SessionRoom.ts:327) but the host has not yet processed the `pendingJoiners` broadcast event by the time readSessionSnapshot runs — a classic race the spec does not await out.
+- requiresApproval: viewer queued → host approves → both live — hostSnap.context.pendingJoiners.length was 0 (host never observed the viewer's join request, Expected: > 0) [FLAKE] — test reads host snapshot immediately after viewer reaches `awaitingApproval`, with no wait for the host's WS broadcast to arrive. The worker's rehydratePendingFromHibernation fired correctly (workers/sharing-worker/src/SessionRoom.ts:327) but the host has not yet processed the `pendingJoiners` broadcast event by the time readSessionSnapshot runs — a classic race the spec does not await out. ✓ FIXED in 83d443ef
 
 ## Un-skipped specs (Phase 3.1)
 
