@@ -8,7 +8,7 @@ describe("approval timeout", () => {
   it("after the alarm fires, viewer gets approval.result rejected", async () => {
     const c = await SELF.fetch("https://x/v1/sessions", {
       method: "POST", headers: { authorization: "Bearer t", "content-type": "application/json" },
-      body: JSON.stringify({ bookContext: { bookId: "b", contentHash: "h", format: "epub" }, requiresApproval: true }),
+      body: JSON.stringify({ bookContext: { bookId: "b", contentHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", format: "epub" }, requiresApproval: true }),
     }).then(r => r.json() as any);
     const host = await openWs(c.wsUrl, "u_host--Host");
     send(host, { t: "hello", hasBookFile: true });

@@ -7,7 +7,7 @@ beforeEach(() => {
 });
 
 const VALID_BODY = {
-  bookContext: { bookId: "b_1", contentHash: "sha", format: "epub" },
+  bookContext: { bookId: "b_1", contentHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", format: "epub" },
   requiresApproval: true,
 };
 

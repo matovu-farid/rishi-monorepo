@@ -7,7 +7,7 @@ beforeEach(() => vi.stubGlobal("__TEST_AUTH__", { userId: "u_host", email: "h@x.
 async function createApproved() {
   const c = await SELF.fetch("https://x/v1/sessions", {
     method: "POST", headers: { authorization: "Bearer t", "content-type": "application/json" },
-    body: JSON.stringify({ bookContext: { bookId: "b", contentHash: "h", format: "epub" }, requiresApproval: true }),
+    body: JSON.stringify({ bookContext: { bookId: "b", contentHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", format: "epub" }, requiresApproval: true }),
   }).then(r => r.json() as any);
   return c;
 }

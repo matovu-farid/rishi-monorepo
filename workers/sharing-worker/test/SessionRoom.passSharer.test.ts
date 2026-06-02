@@ -7,7 +7,7 @@ beforeEach(() => vi.stubGlobal("__TEST_AUTH__", { userId: "u_host", email: "h@x.
 async function pair() {
   const c = await SELF.fetch("https://x/v1/sessions", {
     method: "POST", headers: { authorization: "Bearer t", "content-type": "application/json" },
-    body: JSON.stringify({ bookContext: { bookId: "b", contentHash: "h", format: "epub" }, requiresApproval: false }),
+    body: JSON.stringify({ bookContext: { bookId: "b", contentHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", format: "epub" }, requiresApproval: false }),
   }).then((r) => r.json() as any);
   const host = await openWs(c.wsUrl, "u_host--Host");
   send(host, { t: "hello", hasBookFile: true });
@@ -57,7 +57,7 @@ describe("pass.sharer", () => {
   it("rejects when target lacks book", async () => {
     const c = await SELF.fetch("https://x/v1/sessions", {
       method: "POST", headers: { authorization: "Bearer t", "content-type": "application/json" },
-      body: JSON.stringify({ bookContext: { bookId: "b", contentHash: "h", format: "epub" }, requiresApproval: false }),
+      body: JSON.stringify({ bookContext: { bookId: "b", contentHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", format: "epub" }, requiresApproval: false }),
     }).then((r) => r.json() as any);
     const host = await openWs(c.wsUrl, "u_host--Host");
     send(host, { t: "hello", hasBookFile: true });

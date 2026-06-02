@@ -194,7 +194,7 @@ export async function hostCreateSession(
     type: 'CREATE_SESSION',
     me: { ...me, authToken: testBearer(me) },
     bookContext: opts.bookContext
-      ?? { bookId: 'e2e-test-book', contentHash: 'abc123', format: 'pdf' },
+      ?? { bookId: 'e2e-test-book', contentHash: 'a'.repeat(64), format: 'pdf' },
     requiresApproval: opts.requiresApproval
   })
   await waitForSessionState(

@@ -2,6 +2,16 @@ import { z } from "zod";
 
 const Base = z.object({ v: z.literal(1) });
 const UserId = z.string().min(1).max(64);
+// Lowercase SHA-256 hex. A strict superset of the IPC-side `hex64` check in
+// `apps/rishi-electron/src/main/sharing/sharing.schemas.ts` (which uses the
+// same [0-9a-f]{64} class with `/i`). Tightening here closes finding 253-005:
+// a hostile host can no longer carry an arbitrary `contentHash` (e.g. empty
+// or `"../../../etc/passwd"`) on the wire even before IPC persistence rejects
+// it. Keep the literal pattern in sync — `grep -r '\[0-9a-f\]\{64\}'` should
+// find both this file and the IPC schema.
+const sha256HexSchema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/, "contentHash must be lowercase sha256 hex (64 chars)");
 
 const Profile = z.object({
   displayName: z.string().min(1).max(100),
@@ -64,7 +74,7 @@ export const Participant = z.object({
 
 export const BookContext = z.object({
   bookId: z.string(),
-  contentHash: z.string(),
+  contentHash: sha256HexSchema,
   format: z.enum(["epub", "pdf"]),
 });
 

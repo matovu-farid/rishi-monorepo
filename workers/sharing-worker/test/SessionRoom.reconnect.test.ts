@@ -8,7 +8,7 @@ async function created() {
   return SELF.fetch("https://x/v1/sessions", {
     method: "POST",
     headers: { authorization: "Bearer t", "content-type": "application/json" },
-    body: JSON.stringify({ bookContext: { bookId: "b", contentHash: "h", format: "epub" }, requiresApproval: false }),
+    body: JSON.stringify({ bookContext: { bookId: "b", contentHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", format: "epub" }, requiresApproval: false }),
   }).then(r => r.json() as any);
 }
 

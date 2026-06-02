@@ -73,7 +73,7 @@ describe("WS upgrade integration (TEST_AUTH_ALLOWED='1' baseline)", () => {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        bookContext: { bookId: "b", contentHash: "h", format: "epub" },
+        bookContext: { bookId: "b", contentHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", format: "epub" },
         requiresApproval: false,
       }),
     });

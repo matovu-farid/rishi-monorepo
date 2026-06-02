@@ -8,7 +8,7 @@ describe("hibernation rehydration", () => {
   it("approve.join still admits the pending viewer after in-memory state was cleared (simulated hibernation)", async () => {
     const c = await SELF.fetch("https://x/v1/sessions", {
       method: "POST", headers: { authorization: "Bearer t", "content-type": "application/json" },
-      body: JSON.stringify({ bookContext: { bookId: "b", contentHash: "h", format: "epub" }, requiresApproval: true }),
+      body: JSON.stringify({ bookContext: { bookId: "b", contentHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", format: "epub" }, requiresApproval: true }),
     }).then(r => r.json() as any);
 
     const host = await openWs(c.wsUrl, "u_host--Host");
@@ -45,7 +45,7 @@ describe("hibernation rehydration", () => {
   it("reject.join still notifies the pending viewer after simulated hibernation", async () => {
     const c = await SELF.fetch("https://x/v1/sessions", {
       method: "POST", headers: { authorization: "Bearer t", "content-type": "application/json" },
-      body: JSON.stringify({ bookContext: { bookId: "b", contentHash: "h", format: "epub" }, requiresApproval: true }),
+      body: JSON.stringify({ bookContext: { bookId: "b", contentHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", format: "epub" }, requiresApproval: true }),
     }).then(r => r.json() as any);
 
     const host = await openWs(c.wsUrl, "u_host--Host");

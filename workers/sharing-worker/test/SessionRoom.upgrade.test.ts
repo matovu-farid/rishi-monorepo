@@ -10,7 +10,7 @@ async function createSession() {
     method: "POST",
     headers: { authorization: "Bearer t", "content-type": "application/json" },
     body: JSON.stringify({
-      bookContext: { bookId: "b", contentHash: "h", format: "epub" },
+      bookContext: { bookId: "b", contentHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", format: "epub" },
       requiresApproval: false,
     }),
   });
