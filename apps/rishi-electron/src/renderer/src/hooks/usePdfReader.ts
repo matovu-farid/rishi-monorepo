@@ -297,7 +297,26 @@ export function usePdfReader(
         // VIEW_CHANGED → TTS auto-resume on the new page). Passing 0 as
         // currentPage falls through visiblePositionFromVirtualizer's
         // `currentPage > 0` guard and skips the hysteresis branch.
-        const hysteresisPage = usePdfStore.getState().isLookingForNextParagraph ? 0 : currentPage
+        // Bypass hysteresis when the scroll delta is clearly intentional
+        // (well above any user wobble). The hysteresis band is 120px and is
+        // meant to absorb continuous nudge-the-boundary-back-and-forth
+        // movement — a single scroll event of ≥ 300px is a real navigation
+        // (TOC jump, programmatic `virtualizer.scrollToIndex`, page-down
+        // key, etc.), not wobble. Without this bypass, a programmatic
+        // `scrollToIndex(N, { align: 'start' })` lands scrollTop one pixel
+        // past page (N-1)'s bottom — comfortably inside the 120px band —
+        // and the scroll handler keeps reporting page N-1 forever; the
+        // paragraph publisher then never sees pageNumber change to N (the
+        // visible e2e symptom: pdf-footer-detection's
+        // `currentViewParagraphs` never gained entries for the target
+        // page). The existing `isLookingForNextParagraph` branch covers the
+        // pageControls.nextPage/previousPage path but not the direct
+        // virtualizer.scrollToIndex path nor large user-initiated scrolls.
+        const HYSTERESIS_BYPASS_DELTA_PX = 300
+        const hysteresisPage =
+          usePdfStore.getState().isLookingForNextParagraph || delta >= HYSTERESIS_BYPASS_DELTA_PX
+            ? 0
+            : currentPage
         const { page, offset } = visiblePositionFromVirtualizer(
           virtualizer,
           container,
