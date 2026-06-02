@@ -367,6 +367,33 @@ export function findMenuItem(menu: MenuShape[], pathLabels: string[]): MenuShape
   return found
 }
 
+/**
+ * Send a menu command directly to a specific book window's renderer over the
+ * `menu:command` IPC channel. Bypasses the native menu (which is rebuilt only
+ * for the focused window) so multi-window E2E tests don't have to juggle OS
+ * focus — exactly equivalent to the user clicking the corresponding menu item
+ * while that book window is focused.
+ *
+ * Returns true if the target window was found and the IPC was dispatched.
+ */
+export async function sendMenuCommandToBookWindow(
+  app: ElectronApplication,
+  bookId: number,
+  command: string,
+  arg?: unknown
+): Promise<boolean> {
+  return (await app.evaluate(
+    ({ BrowserWindow }, { urlNeedle, payload }) => {
+      const wins = BrowserWindow.getAllWindows()
+      const win = wins.find((w) => w.webContents.getURL().includes(urlNeedle))
+      if (!win || win.isDestroyed()) return false
+      win.webContents.send('menu:command', payload)
+      return true
+    },
+    { urlNeedle: `/books/${bookId}`, payload: { command, arg } }
+  )) as boolean
+}
+
 export async function clickMenuItem(
   app: ElectronApplication,
   pathLabels: string[]

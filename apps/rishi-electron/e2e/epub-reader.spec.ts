@@ -7,6 +7,7 @@ import {
   importBook,
   launchApp,
   openBook,
+  sendMenuCommandToBookWindow,
   type LaunchedApp
 } from './helpers/electron-app'
 
@@ -72,12 +73,20 @@ test.describe('EPUB reader', () => {
   })
 
   test('TOC toggle opens and closes the table of contents', async () => {
-    const tocToggle = bookPage.locator('[aria-label="Toggle table of contents"]').first()
-    if ((await tocToggle.count()) === 0) test.skip(true, 'no TOC toggle in this build')
-    await tocToggle.click()
+    // The EPUB reader does not render a visible TOC toggle button — the TOC is
+    // a `<Sheet>` (ReaderTOC) controlled by the `toggleTOC` menu command
+    // (View > Show TOC, ⌘T). Dispatch it directly via the same `menu:command`
+    // IPC the native menu uses, so the test doesn't need OS focus to land on
+    // the right window.
+    const dispatched1 = await sendMenuCommandToBookWindow(app.app, bookId, 'toggleTOC')
+    expect(dispatched1).toBe(true)
     await expect(bookPage.locator('text=Table of Contents').first()).toBeVisible({ timeout: 5000 })
-    await tocToggle.click()
-    await expect(bookPage.locator('text=Table of Contents')).toHaveCount(0)
+
+    const dispatched2 = await sendMenuCommandToBookWindow(app.app, bookId, 'toggleTOC')
+    expect(dispatched2).toBe(true)
+    // The Sheet animates closed via Framer Motion AnimatePresence; wait until
+    // the title text is gone from the DOM rather than asserting it's hidden.
+    await expect(bookPage.locator('text=Table of Contents')).toHaveCount(0, { timeout: 5000 })
   })
 
   test('keyboard arrows change the persisted CFI', async () => {
