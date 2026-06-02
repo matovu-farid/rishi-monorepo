@@ -396,36 +396,40 @@ test.describe('TTS state follows EPUB page navigation', () => {
     const oldFirstCfi = startSnap.paragraphs[0]?.index
     expect(oldFirstCfi).toBeTruthy()
 
-    // PLAY -> wait for state=playing AND audio actually un-paused.
+    // PLAY -> wait for state=playing AND audio actually un-paused AND the
+    // src points to the expected first-paragraph blob. Capture the snapshot
+    // atomically from inside waitForFunction so the assertions below cannot
+    // race a fast AUDIO_ENDED (100 ms WAV) that pauses the audio between
+    // the wait settling and the next page.evaluate read.
     await sendPlayerEvent(bookPage, 'PLAY')
-    await bookPage.waitForFunction(
-      () => {
+    const playingBeforeHandle = await bookPage.waitForFunction(
+      (expectedCfi) => {
         const w = window as unknown as {
           __rishi: {
             playerStore: { getState: () => { playingState: string } }
             audioElement: HTMLAudioElement
           }
+          __rishiBlobToCfi: Map<string, string>
         }
-        return (
+        const a = w.__rishi.audioElement
+        const cfiOfSrc = w.__rishiBlobToCfi.get(a.src) ?? null
+        if (
           w.__rishi.playerStore.getState().playingState === 'playing' &&
-          w.__rishi.audioElement.paused === false
-        )
+          a.paused === false &&
+          cfiOfSrc === expectedCfi
+        ) {
+          return { src: a.src, paused: a.paused, cfiOfSrc }
+        }
+        return null
       },
-      undefined,
+      oldFirstCfi,
       { timeout: 8000 }
     )
-
-    const playingBefore = await bookPage.evaluate(() => {
-      const w = window as unknown as {
-        __rishi: { audioElement: HTMLAudioElement }
-        __rishiBlobToCfi: Map<string, string>
-      }
-      return {
-        src: w.__rishi.audioElement.src,
-        paused: w.__rishi.audioElement.paused,
-        cfiOfSrc: w.__rishiBlobToCfi.get(w.__rishi.audioElement.src) ?? null
-      }
-    })
+    const playingBefore = (await playingBeforeHandle.jsonValue()) as {
+      src: string
+      paused: boolean
+      cfiOfSrc: string | null
+    }
     expect(playingBefore.paused).toBe(false)
     expect(
       playingBefore.cfiOfSrc,
