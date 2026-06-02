@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { CreateSessionBody, RedeemBody } from "./schemas";
 import { issueJoinToken, verifyJoinToken } from "./tokens";
-import { verifyAuth } from "./auth";
+import { verifyAuth, resolveTestGlobalAuth } from "./auth";
 import { GlobalLimiter } from "./perIpLimit";
 import { UserSearchBody, searchUsers } from "./userSearch";
 
@@ -112,8 +112,9 @@ app.post("/v1/users/search", async (c) => {
 });
 
 async function getUser(req: Request, env: Env) {
-  // Test-mode shortcut: a global stub is set in beforeEach when present.
-  const stub = (globalThis as any).__TEST_AUTH__;
+  // Test-mode shortcut: a global stub is honored ONLY when
+  // TEST_AUTH_ALLOWED === "1" (see resolveTestGlobalAuth).
+  const stub = resolveTestGlobalAuth(env.TEST_AUTH_ALLOWED);
   if (stub) return stub;
   return verifyAuth(req, env);
 }

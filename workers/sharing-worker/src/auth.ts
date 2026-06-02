@@ -5,6 +5,30 @@ export interface AuthedUser {
   avatarUrl?: string;
 }
 
+interface TestGlobalAuthStub {
+  userId: string;
+  displayName: string;
+  avatarUrl?: string;
+}
+
+/**
+ * Test-only shortcut: `globalThis.__TEST_AUTH__` is set by in-process tests
+ * (vitest-pool-workers) to bypass remote auth. It is gated on
+ * `env.TEST_AUTH_ALLOWED === "1"` for parity with the `userId--DisplayName`
+ * bearer shortcut in `verifyAuth` and the WS-subprotocol shortcut in
+ * `SessionRoom.resolveTestBearer`. Per-isolate globals make this
+ * currently unreachable from public CF traffic, but the gate closes the
+ * defense-in-depth gap flagged in PR #253 review finding 253-003.
+ */
+export function resolveTestGlobalAuth(
+  testAuthAllowed: string | undefined,
+): TestGlobalAuthStub | null {
+  if (testAuthAllowed !== "1") return null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stub = (globalThis as any).__TEST_AUTH__ as TestGlobalAuthStub | undefined;
+  return stub ?? null;
+}
+
 interface AuthEnv {
   AUTH_BASE_URL: string;
   fetcher?: typeof fetch;            // injectable for tests

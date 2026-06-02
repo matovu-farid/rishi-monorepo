@@ -5,6 +5,11 @@ import { parseSubprotocols } from "./wsCreds";
 import { issueReconnectToken, verifyReconnectToken } from "./tokens";
 import { CONFIG } from "./config";
 import { RateBucket } from "./rateLimit";
+import { resolveTestGlobalAuth } from "./auth";
+
+// Re-exported so call-site tests can assert both modules share the same gate
+// implementation (see test/globalTestAuthGate.test.ts, finding 253-003).
+export { resolveTestGlobalAuth } from "./auth";
 
 interface Env {
   WORKER_HMAC_SECRET: string;
@@ -154,7 +159,7 @@ export class SessionRoom extends DurableObject<Env> {
     if (testMeta) {
       meta = testMeta;
     } else {
-      const testAuth = (globalThis as any).__TEST_AUTH__;
+      const testAuth = resolveTestGlobalAuth(this.env.TEST_AUTH_ALLOWED);
       if (testAuth) {
         meta = { userId: testAuth.userId, displayName: testAuth.displayName, avatarUrl: testAuth.avatarUrl };
       } else {

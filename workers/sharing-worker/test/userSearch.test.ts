@@ -5,6 +5,9 @@ const env = {
   WORKER_HMAC_SECRET: "test_secret_at_least_32_chars_long_xx",
   AUTH_BASE_URL: "https://auth.example.com",
   SESSION_ROOM: {} as unknown as DurableObjectNamespace,
+  // Opts in to the `globalThis.__TEST_AUTH__` shortcut consumed by `getUser`.
+  // Mirrors the wrangler test-pool binding; gated per finding 253-003.
+  TEST_AUTH_ALLOWED: "1",
 };
 
 beforeEach(() => {
