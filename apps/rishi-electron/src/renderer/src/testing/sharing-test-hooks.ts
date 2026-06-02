@@ -44,7 +44,7 @@ export const sessionMachineStore = {
     return {
       value: snap.value,
       context: snap.context,
-      send: (event: unknown) => actor.send(event as never)
+      send: (event: unknown) => actor.send(event)
     }
   }
 }

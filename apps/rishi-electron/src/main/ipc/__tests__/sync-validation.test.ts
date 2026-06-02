@@ -158,11 +158,7 @@ describe('sync IPC validation (issue #166)', () => {
         .run()
       const malformed = { id: 123, title: null, isDeleted: 'yes' }
       expect(() => _applyHighlightConflictWithDb(db, malformed, 5)).not.toThrow()
-      const row = db
-        .select()
-        .from(schema.highlights)
-        .where(eq(schema.highlights.id, 'hl-1'))
-        .get()
+      const row = db.select().from(schema.highlights).where(eq(schema.highlights.id, 'hl-1')).get()
       expect(row?.text).toBe('orig text')
     })
   })
@@ -188,9 +184,7 @@ describe('sync IPC validation (issue #166)', () => {
   describe('_upsertBookWithDb', () => {
     it('refuses a payload whose id is not a string (no insert, no crash)', () => {
       const before = db.select().from(schema.books).all().length
-      expect(() =>
-        _upsertBookWithDb(db, { id: 123, title: null, isDeleted: 'yes' })
-      ).not.toThrow()
+      expect(() => _upsertBookWithDb(db, { id: 123, title: null, isDeleted: 'yes' })).not.toThrow()
       const after = db.select().from(schema.books).all().length
       expect(after).toBe(before)
     })
@@ -251,11 +245,7 @@ describe('sync IPC transactions (issue #167)', () => {
   it('_applyBookConflictWithDb wraps the update in a transaction', () => {
     seedBook(sqlite, 'book-tx')
     const txSpy = vi.spyOn(db, 'transaction')
-    _applyBookConflictWithDb(
-      db,
-      { id: 'book-tx', title: 'New', author: 'New', format: 'epub' },
-      5
-    )
+    _applyBookConflictWithDb(db, { id: 'book-tx', title: 'New', author: 'New', format: 'epub' }, 5)
     expect(txSpy).toHaveBeenCalledTimes(1)
   })
 })

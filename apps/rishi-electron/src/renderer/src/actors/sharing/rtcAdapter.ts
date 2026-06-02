@@ -17,7 +17,7 @@ export interface RtcAdapter {
   addIceCandidate(candidate: unknown): Promise<void>
   addTrack(track: MediaStreamTrack, stream: MediaStream): void
   createDataChannel(label: string, init?: { ordered?: boolean }): RtcDataChannelLike
-  onIceCandidate(cb: (candidate: unknown | null) => void): void
+  onIceCandidate(cb: (candidate: unknown) => void): void
   onDataChannel(cb: (channel: RtcDataChannelLike) => void): void
   onTrack(cb: (track: MediaStreamTrack, stream: MediaStream) => void): void
   onConnectionStateChange(cb: (state: RTCPeerConnectionState) => void): void
@@ -57,8 +57,12 @@ export function getRtcFactoryOverride(): RtcFactory | null {
 export const defaultRtcFactory: RtcFactory = (config) => {
   const pc = new RTCPeerConnection(config)
   const wrapChannel = (ch: RTCDataChannel): RtcDataChannelLike => ({
-    get label() { return ch.label },
-    get readyState() { return ch.readyState },
+    get label() {
+      return ch.label
+    },
+    get readyState() {
+      return ch.readyState
+    },
     send: (d) => ch.send(d as never),
     close: () => ch.close(),
     onOpen: (cb) => ch.addEventListener('open', () => cb()),
@@ -75,18 +79,29 @@ export const defaultRtcFactory: RtcFactory = (config) => {
       const a = await pc.createAnswer()
       return { sdp: a.sdp ?? '' }
     },
-    setLocalDescription: async (s) => { await pc.setLocalDescription(s) },
-    setRemoteDescription: async (s) => { await pc.setRemoteDescription(s) },
-    addIceCandidate: async (c) => { await pc.addIceCandidate(c as RTCIceCandidateInit) },
-    addTrack: (t, s) => { pc.addTrack(t, s) },
+    setLocalDescription: async (s) => {
+      await pc.setLocalDescription(s)
+    },
+    setRemoteDescription: async (s) => {
+      await pc.setRemoteDescription(s)
+    },
+    addIceCandidate: async (c) => {
+      await pc.addIceCandidate(c as RTCIceCandidateInit)
+    },
+    addTrack: (t, s) => {
+      pc.addTrack(t, s)
+    },
     createDataChannel: (label, init) => wrapChannel(pc.createDataChannel(label, init)),
-    onIceCandidate: (cb) => pc.addEventListener('icecandidate', (e) => cb(e.candidate?.toJSON() ?? null)),
+    onIceCandidate: (cb) =>
+      pc.addEventListener('icecandidate', (e) => cb(e.candidate?.toJSON() ?? null)),
     onDataChannel: (cb) => pc.addEventListener('datachannel', (e) => cb(wrapChannel(e.channel))),
-    onTrack: (cb) => pc.addEventListener('track', (e) => {
-      const stream = e.streams[0] ?? new MediaStream([e.track])
-      cb(e.track, stream)
-    }),
-    onConnectionStateChange: (cb) => pc.addEventListener('connectionstatechange', () => cb(pc.connectionState)),
+    onTrack: (cb) =>
+      pc.addEventListener('track', (e) => {
+        const stream = e.streams[0] ?? new MediaStream([e.track])
+        cb(e.track, stream)
+      }),
+    onConnectionStateChange: (cb) =>
+      pc.addEventListener('connectionstatechange', () => cb(pc.connectionState)),
     close: () => pc.close()
   }
 }

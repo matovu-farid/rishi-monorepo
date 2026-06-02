@@ -40,19 +40,23 @@ export function withSharingScope<T>(
   extras?: { tags?: Record<string, string>; extras?: Record<string, unknown> }
 ): T {
   let result!: T
-  let captured = false
+  // Mutation flag lives on an object so reads aren't narrowed by TS
+  // control-flow analysis (`Sentry.withScope`'s callback runs synchronously
+  // but TS may collapse the assignment-vs-throw branches into "always true"
+  // and flag the fallback `if (!flag.captured)` below as dead code).
+  const flag = { captured: false }
   try {
     Sentry.withScope((scope) => {
       scope.setTag(SHARING_TAG_KEY, SHARING_TAG_VALUE)
       if (extras?.tags) for (const [k, v] of Object.entries(extras.tags)) scope.setTag(k, v)
       if (extras?.extras) scope.setExtras(extras.extras)
       result = cb()
-      captured = true
+      flag.captured = true
     })
   } catch {
     /* fall through */
   }
-  if (!captured) result = cb()
+  if (!flag.captured) result = cb()
   return result
 }
 
@@ -100,17 +104,21 @@ export function recordSharingBreadcrumb(name: string, data?: Record<string, unkn
  */
 export function setSharingFeatureTag(): void {
   safe(() => {
-    const cfg = (Sentry as unknown as {
-      configureScope?: (cb: (s: { setTag: (k: string, v: string) => void }) => void) => void
-    }).configureScope
+    const cfg = (
+      Sentry as unknown as {
+        configureScope?: (cb: (s: { setTag: (k: string, v: string) => void }) => void) => void
+      }
+    ).configureScope
     if (typeof cfg === 'function') {
       cfg((scope) => scope.setTag(SHARING_TAG_KEY, SHARING_TAG_VALUE))
       return
     }
     // Fallback: getCurrentScope on newer SDKs (v8+).
-    const getCurrent = (Sentry as unknown as {
-      getCurrentScope?: () => { setTag: (k: string, v: string) => void }
-    }).getCurrentScope
+    const getCurrent = (
+      Sentry as unknown as {
+        getCurrentScope?: () => { setTag: (k: string, v: string) => void }
+      }
+    ).getCurrentScope
     if (typeof getCurrent === 'function') {
       getCurrent().setTag(SHARING_TAG_KEY, SHARING_TAG_VALUE)
     }
@@ -119,18 +127,22 @@ export function setSharingFeatureTag(): void {
 
 export function clearSharingFeatureTag(): void {
   safe(() => {
-    const cfg = (Sentry as unknown as {
-      configureScope?: (
-        cb: (s: { setTag: (k: string, v: string | undefined) => void }) => void
-      ) => void
-    }).configureScope
+    const cfg = (
+      Sentry as unknown as {
+        configureScope?: (
+          cb: (s: { setTag: (k: string, v: string | undefined) => void }) => void
+        ) => void
+      }
+    ).configureScope
     if (typeof cfg === 'function') {
       cfg((scope) => scope.setTag(SHARING_TAG_KEY, undefined))
       return
     }
-    const getCurrent = (Sentry as unknown as {
-      getCurrentScope?: () => { setTag: (k: string, v: string | undefined) => void }
-    }).getCurrentScope
+    const getCurrent = (
+      Sentry as unknown as {
+        getCurrentScope?: () => { setTag: (k: string, v: string | undefined) => void }
+      }
+    ).getCurrentScope
     if (typeof getCurrent === 'function') {
       getCurrent().setTag(SHARING_TAG_KEY, undefined)
     }

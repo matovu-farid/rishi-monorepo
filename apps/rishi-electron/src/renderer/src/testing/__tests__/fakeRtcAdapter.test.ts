@@ -15,7 +15,9 @@ describe('fakeRtcAdapter', () => {
     const adapter = fakeRtcFactory({ iceServers: [] })
     const ch = adapter.createDataChannel('sync', { ordered: true })
     let opened = false
-    ch.onOpen(() => { opened = true })
+    ch.onOpen(() => {
+      opened = true
+    })
     // queueMicrotask drains on the next tick.
     await new Promise<void>((r) => queueMicrotask(r))
     expect(opened).toBe(true)

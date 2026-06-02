@@ -18,10 +18,7 @@ vi.mock('electron', () => ({
   }
 }))
 
-import {
-  _discardTransferredBookWithDb,
-  SHARED_SESSION_SOURCE
-} from '../libraryWrite.js'
+import { _discardTransferredBookWithDb, SHARED_SESSION_SOURCE } from '../libraryWrite.js'
 import { runMigrations } from '../../database/migrations.js'
 
 function makeDb(): Database {
@@ -89,9 +86,9 @@ describe('_discardTransferredBookWithDb', () => {
       localPath: '/tmp/does-not-exist-and-thats-fine'
     })
 
-    const row = db
-      .prepare('SELECT id, title FROM books WHERE id = ?')
-      .get(userId) as { id: number; title: string } | undefined
+    const row = db.prepare('SELECT id, title FROM books WHERE id = ?').get(userId) as
+      | { id: number; title: string }
+      | undefined
     expect(row).toBeDefined()
     expect(row?.title).toBe('User Import')
   })

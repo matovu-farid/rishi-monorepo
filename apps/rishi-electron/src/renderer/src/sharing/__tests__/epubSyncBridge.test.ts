@@ -6,7 +6,10 @@ describe('createEpubSyncBridge', () => {
     const broadcasts: any[] = []
     let cb: ((s: { cfi: string }) => void) | null = null
     const ref = {
-      subscribe: (fn: (s: { cfi: string }) => void) => { cb = fn; return () => {} },
+      subscribe: (fn: (s: { cfi: string }) => void) => {
+        cb = fn
+        return () => {}
+      },
       send: vi.fn()
     }
     const bridge = createEpubSyncBridge({
@@ -27,10 +30,16 @@ describe('createEpubSyncBridge', () => {
   it('consumer dispatches NAVIGATE_TO on incoming epub reader.position', () => {
     const ref = { subscribe: () => () => {}, send: vi.fn() }
     const bridge = createEpubSyncBridge({
-      mode: 'consumer', bookId: 'b', epubMachineRef: ref, onBroadcast: () => {}
+      mode: 'consumer',
+      bookId: 'b',
+      epubMachineRef: ref,
+      onBroadcast: () => {}
     })
     bridge.applyIncoming({
-      v: 1, t: 'reader.position', bookId: 'b', ts: 1,
+      v: 1,
+      t: 'reader.position',
+      bookId: 'b',
+      ts: 1,
       position: { format: 'epub', cfi: 'cfi/target', ts: 1 }
     })
     expect(ref.send).toHaveBeenCalledWith({ type: 'NAVIGATE_TO', cfi: 'cfi/target' })
@@ -40,10 +49,16 @@ describe('createEpubSyncBridge', () => {
   it('ignores PDF-format positions', () => {
     const ref = { subscribe: () => () => {}, send: vi.fn() }
     const bridge = createEpubSyncBridge({
-      mode: 'consumer', bookId: 'b', epubMachineRef: ref, onBroadcast: () => {}
+      mode: 'consumer',
+      bookId: 'b',
+      epubMachineRef: ref,
+      onBroadcast: () => {}
     })
     bridge.applyIncoming({
-      v: 1, t: 'reader.position', bookId: 'b', ts: 1,
+      v: 1,
+      t: 'reader.position',
+      bookId: 'b',
+      ts: 1,
       position: { format: 'pdf', page: 3, offsetY: 0, ts: 1 }
     })
     expect(ref.send).not.toHaveBeenCalled()

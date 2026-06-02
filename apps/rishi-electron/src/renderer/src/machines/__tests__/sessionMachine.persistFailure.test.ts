@@ -14,8 +14,12 @@ function makeStubSignaling() {
   const sent: Array<{ type: string; [k: string]: unknown }> = []
   const actor = fromCallback(({ sendBack, receive }) => {
     sendBackRef = sendBack as typeof sendBackRef
-    receive((evt) => { sent.push(evt as { type: string; [k: string]: unknown }) })
-    return () => { sendBackRef = null }
+    receive((evt) => {
+      sent.push(evt as { type: string; [k: string]: unknown })
+    })
+    return () => {
+      sendBackRef = null
+    }
   })
   return {
     actor,
@@ -32,7 +36,9 @@ function makeFromCallbackSpy() {
   const actor = fromCallback(({ input, sendBack, receive }) => {
     const entry = { input, sendBack: sendBack as (e: any) => void, received: [] as any[] }
     spawned.push(entry)
-    receive((e) => { entry.received.push(e) })
+    receive((e) => {
+      entry.received.push(e)
+    })
     return () => {}
   })
   return { actor, spawned }
@@ -47,24 +53,27 @@ function provide(opts: {
   return sessionMachine.provide({
     actors: {
       createSessionOnDO: fromPromise(async () => ({
-        sessionId: 's1', joinToken: 'jt',
+        sessionId: 's1',
+        joinToken: 'jt',
         joinUrl: 'rishi://sharing/join?t=jt',
         wsUrl: 'wss://x/v1/sessions/s1/wss'
       })),
-      redeemJoinToken: fromPromise<RedeemOutput, { me: Me; sessionId: string; joinToken: string }>(async () => ({
-        sessionId: 's1',
-        bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
-        requiresApproval: false,
-        hostProfile: { displayName: 'Host' },
-        wsUrl: 'wss://x/v1/sessions/s1/wss'
-      })),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      redeemJoinToken: fromPromise<RedeemOutput, { me: Me; sessionId: string; joinToken: string }>(
+        async () => ({
+          sessionId: 's1',
+          bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
+          requiresApproval: false,
+          hostProfile: { displayName: 'Host' },
+          wsUrl: 'wss://x/v1/sessions/s1/wss'
+        })
+      ),
+
       signaling: opts.signaling.actor as any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       peerWrapper: opts.peers.actor as any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       hostFileSender: senders.actor as any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       viewerFileReceiver: opts.receivers.actor as any
     }
   })
@@ -87,7 +96,13 @@ async function bootViewerWithSave(save: ReturnType<typeof vi.fn>) {
   ;(a.getSnapshot().context as { saveTransferredBook: any }).saveTransferredBook = save
   sig.fire({
     type: 'PEER_JOINED',
-    msg: { v: 1, t: 'peer.joined', userId: 'u_host', profile: { displayName: 'Host' }, hasBookFile: true }
+    msg: {
+      v: 1,
+      t: 'peer.joined',
+      userId: 'u_host',
+      profile: { displayName: 'Host' },
+      hasBookFile: true
+    }
   })
   await new Promise((r) => setTimeout(r, 5))
   peers.spawned[0].sendBack({ type: 'PEER_CONNECTED', remoteUserId: 'u_host' })
@@ -103,8 +118,12 @@ describe('sessionMachine — saveTransferredBook failure surfacing', () => {
     receivers.spawned[0].sendBack({
       type: 'TRANSFER_RECEIVED',
       peerUserId: 'u_host',
-      bookId: 'b', contentHash: 'h', format: 'pdf', title: 'T',
-      blob, hash: 'h_sha'
+      bookId: 'b',
+      contentHash: 'h',
+      format: 'pdf',
+      title: 'T',
+      blob,
+      hash: 'h_sha'
     })
     await new Promise((r) => setTimeout(r, 30))
     const failures = actor.getSnapshot().context.persistFailures
@@ -121,7 +140,8 @@ describe('sessionMachine — saveTransferredBook failure surfacing', () => {
   })
 
   it('appends a second failure when two TRANSFER_RECEIVED events fail back-to-back', async () => {
-    const save = vi.fn()
+    const save = vi
+      .fn()
       .mockRejectedValueOnce(new Error('fail-1'))
       .mockRejectedValueOnce(new Error('fail-2'))
     const { actor, receivers, peers, sig } = await bootViewerWithSave(save)
@@ -129,15 +149,25 @@ describe('sessionMachine — saveTransferredBook failure surfacing', () => {
     receivers.spawned[0].sendBack({
       type: 'TRANSFER_RECEIVED',
       peerUserId: 'u_host',
-      bookId: 'b1', contentHash: 'h1', format: 'pdf', title: 'T1',
-      blob: blob1, hash: 'h_sha'
+      bookId: 'b1',
+      contentHash: 'h1',
+      format: 'pdf',
+      title: 'T1',
+      blob: blob1,
+      hash: 'h_sha'
     })
     await new Promise((r) => setTimeout(r, 20))
     // Simulate a second incoming transfer from a different peer so the
     // receivers map can re-spawn.
     sig.fire({
       type: 'PEER_JOINED',
-      msg: { v: 1, t: 'peer.joined', userId: 'u_p2', profile: { displayName: 'P2' }, hasBookFile: true }
+      msg: {
+        v: 1,
+        t: 'peer.joined',
+        userId: 'u_p2',
+        profile: { displayName: 'P2' },
+        hasBookFile: true
+      }
     })
     await new Promise((r) => setTimeout(r, 5))
     peers.spawned[1].sendBack({ type: 'PEER_CONNECTED', remoteUserId: 'u_p2' })
@@ -146,8 +176,12 @@ describe('sessionMachine — saveTransferredBook failure surfacing', () => {
     receivers.spawned[1].sendBack({
       type: 'TRANSFER_RECEIVED',
       peerUserId: 'u_p2',
-      bookId: 'b2', contentHash: 'h2', format: 'pdf', title: 'T2',
-      blob: blob2, hash: 'h_sha'
+      bookId: 'b2',
+      contentHash: 'h2',
+      format: 'pdf',
+      title: 'T2',
+      blob: blob2,
+      hash: 'h_sha'
     })
     await new Promise((r) => setTimeout(r, 30))
     const failures = actor.getSnapshot().context.persistFailures

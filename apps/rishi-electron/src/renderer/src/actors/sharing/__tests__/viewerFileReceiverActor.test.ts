@@ -20,8 +20,12 @@ describe('viewerFileReceiverActor', () => {
     const actor = createActor(viewerFileReceiverActor, {
       input: {
         peerUserId: 'u_host',
-        bookId: 'b1', contentHash: 'h', format: 'pdf', title: 'X',
-        chunkSize: 4, windowSize: 32
+        bookId: 'b1',
+        contentHash: 'h',
+        format: 'pdf',
+        title: 'X',
+        chunkSize: 4,
+        windowSize: 32
       }
     })
     actor.on('*', (e) => got.push(e))
@@ -48,8 +52,12 @@ describe('viewerFileReceiverActor', () => {
     const actor = createActor(viewerFileReceiverActor, {
       input: {
         peerUserId: 'u_host',
-        bookId: 'b1', contentHash: hash, format: 'pdf', title: 'My Book',
-        chunkSize: 5, windowSize: 32
+        bookId: 'b1',
+        contentHash: hash,
+        format: 'pdf',
+        title: 'My Book',
+        chunkSize: 5,
+        windowSize: 32
       }
     })
     actor.on('*', (e) => got.push(e))
@@ -78,8 +86,12 @@ describe('viewerFileReceiverActor', () => {
     const actor = createActor(viewerFileReceiverActor, {
       input: {
         peerUserId: 'u_host',
-        bookId: 'b1', contentHash: 'cH', format: 'pdf', title: 'X',
-        chunkSize: 4, windowSize: 32
+        bookId: 'b1',
+        contentHash: 'cH',
+        format: 'pdf',
+        title: 'X',
+        chunkSize: 4,
+        windowSize: 32
       }
     })
     actor.on('*', (e) => got.push(e))

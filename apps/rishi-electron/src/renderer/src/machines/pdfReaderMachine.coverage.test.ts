@@ -48,9 +48,7 @@ const TRAVERSAL_EVENTS: readonly PdfReaderEvent[] = [
  * Drops `saveError` strings and keeps only scalars + region values so the
  * adjacency map stays finite.
  */
-function serializeState(
-  snapshot: ReturnType<typeof pdfReaderMachine.transition>
-): string {
+function serializeState(snapshot: ReturnType<typeof pdfReaderMachine.transition>): string {
   const c = snapshot.context
   return JSON.stringify({
     value: snapshot.value,
@@ -126,9 +124,7 @@ describe('pdfReaderMachine state-graph coverage', () => {
       const snap = actor.getSnapshot()
       expect(
         snap.matches(stateKey as never),
-        `walked shortest path to "${stateKey}" but actor landed in ${JSON.stringify(
-          snap.value
-        )}`
+        `walked shortest path to "${stateKey}" but actor landed in ${JSON.stringify(snap.value)}`
       ).toBe(true)
     })
   }

@@ -1,4 +1,5 @@
-import { app, BrowserWindow } from 'electron'
+import type { BrowserWindow } from 'electron'
+import { app } from 'electron'
 import { resolve as resolvePath } from 'node:path'
 
 const PROTOCOL = 'rishi'
@@ -16,9 +17,7 @@ export function initSharingDeepLink(get: () => BrowserWindow | null): void {
   getMainWindow = get
   if (process.defaultApp) {
     if (process.argv.length >= 2) {
-      app.setAsDefaultProtocolClient(PROTOCOL, process.execPath, [
-        resolvePath(process.argv[1])
-      ])
+      app.setAsDefaultProtocolClient(PROTOCOL, process.execPath, [resolvePath(process.argv[1])])
     }
   } else {
     app.setAsDefaultProtocolClient(PROTOCOL)

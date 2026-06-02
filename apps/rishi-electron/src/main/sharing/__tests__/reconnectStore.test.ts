@@ -15,11 +15,7 @@ vi.mock('electron', () => ({
   }
 }))
 
-import {
-  readReconnect,
-  writeReconnect,
-  clearReconnect
-} from '../reconnectStore.js'
+import { readReconnect, writeReconnect, clearReconnect } from '../reconnectStore.js'
 
 describe('reconnectStore', () => {
   beforeEach(async () => {
@@ -63,11 +59,15 @@ describe('reconnectStore', () => {
 
   it('isolates payloads per user', async () => {
     await writeReconnect('u_alice', {
-      sessionId: 's_a', reconnectToken: 'rt_a', wsUrl: 'w_a',
+      sessionId: 's_a',
+      reconnectToken: 'rt_a',
+      wsUrl: 'w_a',
       reservedUntil: Date.now() + 60_000
     })
     await writeReconnect('u_bob', {
-      sessionId: 's_b', reconnectToken: 'rt_b', wsUrl: 'w_b',
+      sessionId: 's_b',
+      reconnectToken: 'rt_b',
+      wsUrl: 'w_b',
       reservedUntil: Date.now() + 60_000
     })
     expect((await readReconnect('u_alice'))?.sessionId).toBe('s_a')
@@ -76,7 +76,9 @@ describe('reconnectStore', () => {
 
   it('clearReconnect removes the payload', async () => {
     await writeReconnect('u_alice', {
-      sessionId: 's_1', reconnectToken: 'rt', wsUrl: 'w',
+      sessionId: 's_1',
+      reconnectToken: 'rt',
+      wsUrl: 'w',
       reservedUntil: Date.now() + 60_000
     })
     await clearReconnect('u_alice')
@@ -92,7 +94,9 @@ describe('reconnectStore', () => {
     // sanitiser replaces anything outside [A-Za-z0-9_-] with `_`.
     const bad = '../../etc/passwd'
     await writeReconnect(bad, {
-      sessionId: 's_1', reconnectToken: 'rt', wsUrl: 'w',
+      sessionId: 's_1',
+      reconnectToken: 'rt',
+      wsUrl: 'w',
       reservedUntil: Date.now() + 60_000
     })
     // The reconnect file lives under tmpDir/sharing-reconnect/ — verify

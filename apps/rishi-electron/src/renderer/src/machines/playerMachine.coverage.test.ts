@@ -168,9 +168,7 @@ describe('playerMachine state-graph coverage', () => {
       const snap = actor.getSnapshot()
       expect(
         snap.matches(stateKey as never),
-        `walked shortest path to "${stateKey}" but actor landed in ${JSON.stringify(
-          snap.value
-        )}`
+        `walked shortest path to "${stateKey}" but actor landed in ${JSON.stringify(snap.value)}`
       ).toBe(true)
     })
   }
@@ -185,9 +183,9 @@ describe('playerMachine state-graph coverage', () => {
  *
  * Returns the final snapshot so callers can assert end-state shape.
  */
-function walkPath(path: ReturnType<typeof getShortestPaths>[number]): ReturnType<
-  typeof playerMachine.transition
-> {
+function walkPath(
+  path: ReturnType<typeof getShortestPaths>[number]
+): ReturnType<typeof playerMachine.transition> {
   const actor = createActor(machineUnderTest)
   actor.start()
   for (const step of path.steps) {

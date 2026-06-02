@@ -20,11 +20,7 @@
  * Production code never reaches either path — the bus only exists when E2E
  * sets it up, and signalingActor's bus dispatch is gated on its presence.
  */
-import type {
-  RtcAdapter,
-  RtcDataChannelLike,
-  RtcFactory
-} from '@/actors/sharing/rtcAdapter'
+import type { RtcAdapter, RtcDataChannelLike, RtcFactory } from '@/actors/sharing/rtcAdapter'
 
 type ChannelKind = 'sync' | 'files'
 
@@ -80,8 +76,7 @@ function makeFakeChannel(label: string, remoteUserId: string | undefined): RtcDa
       if (!remoteUserId || !kind) return
       const sendRaw = getSendRaw()
       if (!sendRaw) return
-      const payload =
-        typeof data === 'string' ? data : arrayBufferToBase64(data)
+      const payload = typeof data === 'string' ? data : arrayBufferToBase64(data)
       sendRaw({
         v: 1,
         t: 'data.channel.relay',
@@ -125,8 +120,8 @@ export const fakeRtcFactory: RtcFactory = (config) => {
   const remoteUserId = config.remoteUserId
   let onCsCb: ((s: RTCPeerConnectionState) => void) | null = null
   const adapter: RtcAdapter = {
-    createOffer: async () => ({ sdp: 'FAKE_OFFER_SDP' }),
-    createAnswer: async () => ({ sdp: 'FAKE_ANSWER_SDP' }),
+    createOffer: () => Promise.resolve({ sdp: 'FAKE_OFFER_SDP' }),
+    createAnswer: () => Promise.resolve({ sdp: 'FAKE_ANSWER_SDP' }),
     setLocalDescription: async () => {
       /* no-op */
     },

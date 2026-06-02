@@ -1,10 +1,18 @@
 // apps/rishi-electron/src/renderer/src/machines/sessionMachine.ts
 import {
-  setup, assign, fromPromise, sendTo, fromCallback, stopChild,
+  setup,
+  assign,
+  fromPromise,
+  sendTo,
+  fromCallback,
+  stopChild,
   type ActorRefFrom
 } from 'xstate'
 import type { BookContext, Participant } from '@rishi/sharing-protocol/schemas'
-import type { ClientMsg as ClientMsgT, ServerMsg as ServerMsgT } from '@rishi/sharing-protocol/schemas'
+import type {
+  ClientMsg as ClientMsgT,
+  ServerMsg as ServerMsgT
+} from '@rishi/sharing-protocol/schemas'
 import type { z } from 'zod'
 import { peerWrapperActor } from '@/actors/sharing/peerWrapperActor'
 import { hostFileSenderActor } from '@/actors/sharing/hostFileSenderActor'
@@ -18,19 +26,22 @@ import { viewerFileReceiverActor } from '@/actors/sharing/viewerFileReceiverActo
 // these four shapes keeps the machine's type graph clean.
 type SyncMsgReaderPos =
   | {
-      v: 1; t: 'reader.position'; ts: number; bookId: string
+      v: 1
+      t: 'reader.position'
+      ts: number
+      bookId: string
       position: { format: 'pdf'; page: number; offsetY: number; ts: number }
     }
   | {
-      v: 1; t: 'reader.position'; ts: number; bookId: string
+      v: 1
+      t: 'reader.position'
+      ts: number
+      bookId: string
       position: { format: 'epub'; cfi: string; ts: number }
     }
 type SyncMsgT = SyncMsgReaderPos
 import { signalingActor } from '@/actors/sharing/signalingActor'
-import {
-  clearSharingFeatureTag,
-  setSharingFeatureTag
-} from '@/sharing/sentryScope'
+import { clearSharingFeatureTag, setSharingFeatureTag } from '@/sharing/sentryScope'
 
 type BookContextT = z.infer<typeof BookContext>
 type ParticipantT = z.infer<typeof Participant>
@@ -49,11 +60,15 @@ type SyncFrameT = Extract<ServerMsgT, { t: 'sync.frame' }>
 export type Me = { userId: string; displayName: string; avatarUrl?: string; authToken: string }
 
 export type CreateSessionOutput = {
-  sessionId: string; joinToken: string; joinUrl: string; wsUrl: string
+  sessionId: string
+  joinToken: string
+  joinUrl: string
+  wsUrl: string
 }
 export type RedeemOutput = {
-  sessionId: string; bookContext: BookContextT;
-  requiresApproval: boolean;
+  sessionId: string
+  bookContext: BookContextT
+  requiresApproval: boolean
   hostProfile: { displayName: string; avatarUrl?: string }
   wsUrl: string
 }
@@ -233,9 +248,14 @@ export type SessionEvent =
   | { type: 'HARD_FAIL'; reason: string }
   | { type: 'PEER_JOINED'; userId?: string; participant?: ParticipantT; msg?: PeerJoinedT }
   | { type: 'PEER_LEFT'; userId?: string; msg?: PeerLeftT }
-  | { type: 'PEER_UPDATED'; msg: Extract<ServerMsgT,{ t: 'peer.updated' }> }
+  | { type: 'PEER_UPDATED'; msg: Extract<ServerMsgT, { t: 'peer.updated' }> }
   | { type: 'ROLE_TRANSFERRED'; newSharerId?: string; msg?: RoleTransferredT }
-  | { type: 'JOIN_REQUESTED'; userId?: string; profile?: { displayName: string; avatarUrl?: string }; msg?: JoinRequestedT }
+  | {
+      type: 'JOIN_REQUESTED'
+      userId?: string
+      profile?: { displayName: string; avatarUrl?: string }
+      msg?: JoinRequestedT
+    }
   | { type: 'APPROVE_JOIN'; userId: string }
   | { type: 'REJECT_JOIN'; userId: string }
   | { type: 'PASS_SHARER'; userId: string }
@@ -256,9 +276,15 @@ export type SessionEvent =
    * host needs this before allowing pass.sharer).
    */
   | { type: 'REPORT_HAS_BOOK'; value: boolean }
-  | { type: 'BOOK_RECEIVED'
-      bookId: string; contentHash: string; format: 'epub' | 'pdf'
-      receivedFromUserId: string; localPath: string; title: string }
+  | {
+      type: 'BOOK_RECEIVED'
+      bookId: string
+      contentHash: string
+      format: 'epub' | 'pdf'
+      receivedFromUserId: string
+      localPath: string
+      title: string
+    }
   | { type: 'KEEP_BOOKS' }
   | { type: 'DISCARD_BOOKS' }
   | { type: 'LEAVE' }
@@ -273,9 +299,9 @@ export type SessionEvent =
   | { type: 'HOST_SUSPENDED'; until?: number; msg?: HostSuspendedT }
   | { type: 'HOST_RESUMED' }
   | { type: 'APPROVAL_RESULT'; msg: ApprovalResultT }
-  | { type: 'SDP_OFFER'; msg: Extract<ServerMsgT,{ t: 'sdp.offer' }> }
-  | { type: 'SDP_ANSWER'; msg: Extract<ServerMsgT,{ t: 'sdp.answer' }> }
-  | { type: 'ICE_CANDIDATE'; msg: Extract<ServerMsgT,{ t: 'ice' }> }
+  | { type: 'SDP_OFFER'; msg: Extract<ServerMsgT, { t: 'sdp.offer' }> }
+  | { type: 'SDP_ANSWER'; msg: Extract<ServerMsgT, { t: 'sdp.answer' }> }
+  | { type: 'ICE_CANDIDATE'; msg: Extract<ServerMsgT, { t: 'ice' }> }
   | { type: 'SYNC_FRAME'; msg: SyncFrameT }
   | { type: 'PROTOCOL_ERROR'; raw: string }
   // ---- Per-peer wrapper bridge events --------------------------------
@@ -357,13 +383,12 @@ const initialContext: SessionContext = {
  * signaling invocation fails, SIGNALING_DROPPED takes us back to reconnecting
  * naturally.
  */
-const reconnectDriver = fromCallback<
-  { type: string },
-  { delayMs: number }
->(({ sendBack, input }) => {
-  const t = setTimeout(() => sendBack({ type: 'RECONNECTED' }), input.delayMs)
-  return () => clearTimeout(t)
-})
+const reconnectDriver = fromCallback<{ type: string }, { delayMs: number }>(
+  ({ sendBack, input }) => {
+    const t = setTimeout(() => sendBack({ type: 'RECONNECTED' }), input.delayMs)
+    return () => clearTimeout(t)
+  }
+)
 
 export const sessionMachine = setup({
   types: {
@@ -371,9 +396,14 @@ export const sessionMachine = setup({
     events: {} as SessionEvent
   },
   actors: {
-    createSessionOnDO: fromPromise<CreateSessionOutput, {
-      me: Me; bookContext: BookContextT; requiresApproval: boolean
-    }>(() => Promise.reject(new Error('createSessionOnDO not provided'))),
+    createSessionOnDO: fromPromise<
+      CreateSessionOutput,
+      {
+        me: Me
+        bookContext: BookContextT
+        requiresApproval: boolean
+      }
+    >(() => Promise.reject(new Error('createSessionOnDO not provided'))),
     redeemJoinToken: fromPromise<RedeemOutput, { me: Me; sessionId: string; joinToken: string }>(
       () => Promise.reject(new Error('redeemJoinToken not provided'))
     ),
@@ -458,8 +488,7 @@ export const sessionMachine = setup({
         wsUrl: e.output.wsUrl,
         bookContext: e.output.bookContext,
         requiresApproval,
-        approvalStatus: (requiresApproval ? 'awaiting' : 'none') as
-          SessionContext['approvalStatus'],
+        approvalStatus: requiresApproval ? 'awaiting' : 'none',
         sharerId: context.sharerId
       }
     }),
@@ -528,7 +557,7 @@ export const sessionMachine = setup({
           isInitiator,
           iceServers: []
         }
-      }) as PeerWrapperRef
+      })
       const next = new Map(context.peers)
       next.set(userId, ref)
       return { peers: next }
@@ -554,7 +583,7 @@ export const sessionMachine = setup({
             isInitiator,
             iceServers: []
           }
-        }) as PeerWrapperRef
+        })
         next.set(p.userId, ref)
       }
       return { peers: next }
@@ -610,7 +639,7 @@ export const sessionMachine = setup({
      */
     sendLocalSdp: sendTo('signaling', ({ event }) => {
       if (event.type !== 'LOCAL_SDP') return { type: 'NOOP' }
-      const t = event.kind === 'offer' ? 'sdp.offer' as const : 'sdp.answer' as const
+      const t = event.kind === 'offer' ? ('sdp.offer' as const) : ('sdp.answer' as const)
       const payload: ClientMsgT = { v: 1, t, to: event.remoteUserId, sdp: event.sdp }
       return { type: 'SEND', payload }
     }),
@@ -648,7 +677,7 @@ export const sessionMachine = setup({
           windowSize: 32,
           readBookBytes: context.readBookBytes
         }
-      }) as HostFileSenderRef
+      })
       const next = new Map(context.transfers)
       next.set(peerUserId, ref)
       return { transfers: next }
@@ -682,7 +711,7 @@ export const sessionMachine = setup({
       if (!context.bookContext) return {}
       const peerUserId = event.remoteUserId
       const peer = context.participants.get(peerUserId)
-      if (!peer || !peer.hasBookFile) return {}
+      if (!peer?.hasBookFile) return {}
       if (context.receivers.has(peerUserId)) return {}
       const ref = spawn('viewerFileReceiver', {
         id: `recv-${peerUserId}`,
@@ -695,7 +724,7 @@ export const sessionMachine = setup({
           chunkSize: 8 * 1024,
           windowSize: 32
         }
-      }) as ViewerFileReceiverRef
+      })
       const next = new Map(context.receivers)
       next.set(peerUserId, ref)
       return { receivers: next }
@@ -724,43 +753,46 @@ export const sessionMachine = setup({
     persistAndReportReceivedBook: ({ context, event, self }) => {
       if (event.type !== 'TRANSFER_RECEIVED') return
       const blobBytes = Array.from(new Uint8Array(event.blob))
-      void context.saveTransferredBook({
-        bookId: event.bookId,
-        contentHash: event.contentHash,
-        format: event.format,
-        blob: blobBytes,
-        receivedFromUserId: event.peerUserId,
-        receivedAt: Date.now(),
-        title: event.title
-      }).then((res) => {
-        // Tell the rest of the machine: book on disk, update roster.
-        self.send({
-          type: 'BOOK_RECEIVED',
+      void context
+        .saveTransferredBook({
           bookId: event.bookId,
           contentHash: event.contentHash,
           format: event.format,
+          blob: blobBytes,
           receivedFromUserId: event.peerUserId,
-          localPath: res.localPath,
+          receivedAt: Date.now(),
           title: event.title
         })
-        self.send({ type: 'REPORT_HAS_BOOK', value: true })
-      }).catch((e: unknown) => {
-        // saveTransferredBook rejected (disk full, IPC torn down, schema
-        // parse error, etc). The receiver actor is already stopped in the
-        // same transition (see TRANSFER_RECEIVED handler). Without this
-        // self-send the viewer has no signal that the book never made it
-        // to disk — log + raise so the UI can surface a toast.
-        const message = e instanceof Error ? e.message : String(e)
-        // eslint-disable-next-line no-console
-        console.warn('[sharing] saveTransferredBook failed', e)
-        self.send({
-          type: 'BOOK_PERSIST_FAILED',
-          peerUserId: event.peerUserId,
-          bookId: event.bookId,
-          contentHash: event.contentHash,
-          error: message
+        .then((res) => {
+          // Tell the rest of the machine: book on disk, update roster.
+          self.send({
+            type: 'BOOK_RECEIVED',
+            bookId: event.bookId,
+            contentHash: event.contentHash,
+            format: event.format,
+            receivedFromUserId: event.peerUserId,
+            localPath: res.localPath,
+            title: event.title
+          })
+          self.send({ type: 'REPORT_HAS_BOOK', value: true })
         })
-      })
+        .catch((e: unknown) => {
+          // saveTransferredBook rejected (disk full, IPC torn down, schema
+          // parse error, etc). The receiver actor is already stopped in the
+          // same transition (see TRANSFER_RECEIVED handler). Without this
+          // self-send the viewer has no signal that the book never made it
+          // to disk — log + raise so the UI can surface a toast.
+          const message = e instanceof Error ? e.message : String(e)
+
+          console.warn('[sharing] saveTransferredBook failed', e)
+          self.send({
+            type: 'BOOK_PERSIST_FAILED',
+            peerUserId: event.peerUserId,
+            bookId: event.bookId,
+            contentHash: event.contentHash,
+            error: message
+          })
+        })
     },
     /**
      * Append a `BOOK_PERSIST_FAILED` event into `persistFailures` (capped
@@ -844,7 +876,10 @@ export const sessionMachine = setup({
     sendLocalIce: sendTo('signaling', ({ event }) => {
       if (event.type !== 'LOCAL_ICE') return { type: 'NOOP' }
       const payload: ClientMsgT = {
-        v: 1, t: 'ice', to: event.remoteUserId, candidate: event.candidate
+        v: 1,
+        t: 'ice',
+        to: event.remoteUserId,
+        candidate: event.candidate
       }
       return { type: 'SEND', payload }
     }),
@@ -903,15 +938,14 @@ export const sessionMachine = setup({
       // The frame is opaque on the wire — re-validate shape here against the
       // SyncMsg schema. We only care about `reader.position` for now.
       const frame = event.msg.frame as Partial<SyncMsgT> | undefined
-      if (!frame || frame.t !== 'reader.position') return {}
+      if (frame?.t !== 'reader.position') return {}
       const pos = (frame as Extract<SyncMsgT, { t: 'reader.position' }>).position
       if (pos.format === 'pdf') {
         return { lastSyncedPosition: { pageIndex: pos.page } }
       }
-      if (pos.format === 'epub') {
-        return { lastSyncedPosition: { cfi: pos.cfi } }
-      }
-      return {}
+      // Only the `epub` variant remains after the pdf branch returns; TS
+      // narrows `pos` accordingly.
+      return { lastSyncedPosition: { cfi: pos.cfi } }
     }),
     applyLocalSharerPosition: assign(({ event }) => {
       if (event.type !== 'SHARER_POSITION_UPDATE') return {}
@@ -1014,21 +1048,29 @@ export const sessionMachine = setup({
       if (event.type !== 'SHARER_POSITION_UPDATE') return { type: 'NOOP' }
       const format = context.bookContext?.format ?? 'pdf'
       const ts = Date.now()
-      const frame: SyncMsgT | null = format === 'pdf'
-        ? {
-            v: 1, t: 'reader.position', ts,
-            bookId: context.bookContext?.bookId ?? '',
-            position: {
-              format: 'pdf', page: event.pageIndex ?? 0, offsetY: event.offsetY ?? 0, ts
-            }
-          }
-        : event.cfi
+      const frame: SyncMsgT | null =
+        format === 'pdf'
           ? {
-              v: 1, t: 'reader.position', ts,
+              v: 1,
+              t: 'reader.position',
+              ts,
               bookId: context.bookContext?.bookId ?? '',
-              position: { format: 'epub', cfi: event.cfi, ts }
+              position: {
+                format: 'pdf',
+                page: event.pageIndex ?? 0,
+                offsetY: event.offsetY ?? 0,
+                ts
+              }
             }
-          : null
+          : event.cfi
+            ? {
+                v: 1,
+                t: 'reader.position',
+                ts,
+                bookId: context.bookContext?.bookId ?? '',
+                position: { format: 'epub', cfi: event.cfi, ts }
+              }
+            : null
       if (!frame) return { type: 'NOOP' }
       const payload: ClientMsgT = { v: 1, t: 'sync.frame', frame }
       return { type: 'SEND', payload }
@@ -1042,10 +1084,8 @@ export const sessionMachine = setup({
       if (out && typeof out.requiresApproval === 'boolean') return out.requiresApproval
       return context.requiresApproval
     },
-    approvalGranted: ({ event }) =>
-      event.type === 'APPROVAL_RESULT' && event.msg.approved === true,
-    approvalDenied: ({ event }) =>
-      event.type === 'APPROVAL_RESULT' && event.msg.approved === false,
+    approvalGranted: ({ event }) => event.type === 'APPROVAL_RESULT' && event.msg.approved === true,
+    approvalDenied: ({ event }) => event.type === 'APPROVAL_RESULT' && event.msg.approved === false,
     isHost: ({ context }) => context.role === 'host',
     hasReceivedBooks: ({ context }) => context.receivedBooks.length > 0
   }
@@ -1133,8 +1173,12 @@ export const sessionMachine = setup({
         PEER_JOINED: { actions: ['addParticipant', 'spawnPeerOnJoined'] },
         PEER_LEFT: {
           actions: [
-            'stopPeerChild', 'stopTransferOnLeft', 'stopReceiverOnLeft',
-            'despawnPeerOnLeft', 'cleanupPeerTransfers', 'removeParticipant'
+            'stopPeerChild',
+            'stopTransferOnLeft',
+            'stopReceiverOnLeft',
+            'despawnPeerOnLeft',
+            'cleanupPeerTransfers',
+            'removeParticipant'
           ]
         },
         PEER_UPDATED: { actions: 'applyPeerUpdated' },
@@ -1157,14 +1201,17 @@ export const sessionMachine = setup({
         },
         TRANSFER_FAILED: {
           actions: [
-            'stopHostTransferChild', 'removeHostTransfer',
-            'stopViewerReceiverChild', 'removeViewerReceiver'
+            'stopHostTransferChild',
+            'removeHostTransfer',
+            'stopViewerReceiverChild',
+            'removeViewerReceiver'
           ]
         },
         TRANSFER_RECEIVED: {
           actions: [
             'persistAndReportReceivedBook',
-            'stopViewerReceiverChild', 'removeViewerReceiver'
+            'stopViewerReceiverChild',
+            'removeViewerReceiver'
           ]
         },
         BOOK_PERSIST_FAILED: { actions: 'recordPersistFailure' },
@@ -1196,10 +1243,7 @@ export const sessionMachine = setup({
           { target: '.promptingKeepBooks', guard: 'hasReceivedBooks', actions: 'storeError' },
           { target: 'ending', actions: 'storeError' }
         ],
-        LEAVE: [
-          { target: '.promptingKeepBooks', guard: 'hasReceivedBooks' },
-          { target: 'ending' }
-        ],
+        LEAVE: [{ target: '.promptingKeepBooks', guard: 'hasReceivedBooks' }, { target: 'ending' }],
         END_SESSION: [
           { target: '.promptingKeepBooks', guard: 'hasReceivedBooks' },
           { target: 'ending', guard: 'isHost' },
@@ -1216,10 +1260,7 @@ export const sessionMachine = setup({
         // substate via guard directly, so we route via an always-eventless
         // transition from a synthetic gatekeeper.
         gatekeeper: {
-          always: [
-            { target: 'awaitingApproval', guard: 'needsApproval' },
-            { target: 'connecting' }
-          ]
+          always: [{ target: 'awaitingApproval', guard: 'needsApproval' }, { target: 'connecting' }]
         },
         awaitingApproval: {
           on: {
@@ -1245,9 +1286,16 @@ export const sessionMachine = setup({
           },
           // Hard cap: host inactivity safety net. Worker also enforces.
           after: {
-            120000: { target: '#session.failed', actions: assign({
-              error: { code: 'approval_timeout', message: 'Host did not respond in time', recoverable: true }
-            }) }
+            120000: {
+              target: '#session.failed',
+              actions: assign({
+                error: {
+                  code: 'approval_timeout',
+                  message: 'Host did not respond in time',
+                  recoverable: true
+                }
+              })
+            }
           }
         },
         connecting: {

@@ -14,10 +14,7 @@ const makeItem = (it: { str: string; y: number; hasEOL?: boolean }): any => ({
   hasEOL: it.hasEOL ?? true
 })
 
-const makePage = (
-  pageNumber: number,
-  items: { str: string; y: number }[]
-): PageScanInput => ({
+const makePage = (pageNumber: number, items: { str: string; y: number }[]): PageScanInput => ({
   pageNumber,
   content: { items: items.map(makeItem), styles: {} as any } as any,
   viewportHeight: VIEWPORT_HEIGHT
@@ -28,15 +25,22 @@ describe('bottomBandPositionStrategy', () => {
     // 10 pages. y=30 always has SOME item (varying text per chapter), y=400 is body.
     const pages: PageScanInput[] = []
     const chapterTitles = [
-      'Chapter 1', 'Chapter 1', 'Chapter 1',
-      'Chapter 2', 'Chapter 2', 'Chapter 2',
-      'Chapter 3', 'Chapter 3', 'Chapter 3', 'Chapter 3'
+      'Chapter 1',
+      'Chapter 1',
+      'Chapter 1',
+      'Chapter 2',
+      'Chapter 2',
+      'Chapter 2',
+      'Chapter 3',
+      'Chapter 3',
+      'Chapter 3',
+      'Chapter 3'
     ]
     for (let p = 1; p <= 10; p++) {
       pages.push(
         makePage(p, [
           { str: 'BODY body body body body body body body body body body', y: 400 },
-          { str: String(p), y: 30 },           // page number
+          { str: String(p), y: 30 }, // page number
           { str: chapterTitles[p - 1], y: 30 } // chapter title at same y-bin
         ])
       )

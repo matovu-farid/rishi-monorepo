@@ -11,8 +11,12 @@ function makeFakeChannel(label: string) {
     readyState: 'open' as const,
     send: vi.fn(),
     close: vi.fn(),
-    onOpen: (cb: () => void) => { onOpenCb = cb },
-    onMessage: (cb: (d: string | ArrayBuffer) => void) => { onMsgCb = cb },
+    onOpen: (cb: () => void) => {
+      onOpenCb = cb
+    },
+    onMessage: (cb: (d: string | ArrayBuffer) => void) => {
+      onMsgCb = cb
+    },
     onClose: () => {},
     bufferedAmount: () => 0
   }
@@ -38,13 +42,22 @@ function makeFakeRtc() {
       channels.set(label, c)
       return c
     },
-    onIceCandidate: (cb) => { onIce = cb },
+    onIceCandidate: (cb) => {
+      onIce = cb
+    },
     onDataChannel: () => {},
     onTrack: () => {},
-    onConnectionStateChange: (cb) => { onCs = cb },
+    onConnectionStateChange: (cb) => {
+      onCs = cb
+    },
     close: vi.fn()
   }
-  return { adapter, channels, fireIce: (c: unknown) => onIce?.(c), fireConn: (s: RTCPeerConnectionState) => onCs?.(s) }
+  return {
+    adapter,
+    channels,
+    fireIce: (c: unknown) => onIce?.(c),
+    fireConn: (s: RTCPeerConnectionState) => onCs?.(s)
+  }
 }
 
 describe('peerWrapperActor', () => {
@@ -71,8 +84,11 @@ describe('peerWrapperActor', () => {
     const fake = makeFakeRtc()
     const actor = createActor(peerWrapperActor, {
       input: {
-        selfUserId: 'u_a', peerUserId: 'u_b', isInitiator: true,
-        iceServers: [], rtcFactory: () => fake.adapter
+        selfUserId: 'u_a',
+        peerUserId: 'u_b',
+        isInitiator: true,
+        iceServers: [],
+        rtcFactory: () => fake.adapter
       }
     })
     actor.start()
@@ -85,8 +101,11 @@ describe('peerWrapperActor', () => {
     const fake = makeFakeRtc()
     const actor = createActor(peerWrapperActor, {
       input: {
-        selfUserId: 'u_a', peerUserId: 'u_b', isInitiator: true,
-        iceServers: [], rtcFactory: () => fake.adapter
+        selfUserId: 'u_a',
+        peerUserId: 'u_b',
+        isInitiator: true,
+        iceServers: [],
+        rtcFactory: () => fake.adapter
       }
     })
     actor.start()
@@ -105,8 +124,11 @@ describe('peerWrapperActor', () => {
     const fake = makeFakeRtc()
     const actor = createActor(peerWrapperActor, {
       input: {
-        selfUserId: 'u_a', peerUserId: 'u_b', isInitiator: true,
-        iceServers: [], rtcFactory: () => fake.adapter
+        selfUserId: 'u_a',
+        peerUserId: 'u_b',
+        isInitiator: true,
+        iceServers: [],
+        rtcFactory: () => fake.adapter
       }
     })
     actor.start()
@@ -122,8 +144,11 @@ describe('peerWrapperActor', () => {
     const got: any[] = []
     const actor = createActor(peerWrapperActor, {
       input: {
-        selfUserId: 'u_a', peerUserId: 'u_b', isInitiator: true,
-        iceServers: [], rtcFactory: () => fake.adapter
+        selfUserId: 'u_a',
+        peerUserId: 'u_b',
+        isInitiator: true,
+        iceServers: [],
+        rtcFactory: () => fake.adapter
       }
     })
     actor.on('*', (e) => got.push(e))
@@ -142,8 +167,11 @@ describe('peerWrapperActor', () => {
     const got: any[] = []
     const actor = createActor(peerWrapperActor, {
       input: {
-        selfUserId: 'u_a', peerUserId: 'u_b', isInitiator: true,
-        iceServers: [], rtcFactory: () => fake.adapter
+        selfUserId: 'u_a',
+        peerUserId: 'u_b',
+        isInitiator: true,
+        iceServers: [],
+        rtcFactory: () => fake.adapter
       }
     })
     actor.on('*', (e) => got.push(e))
@@ -164,8 +192,11 @@ describe('peerWrapperActor', () => {
     const fake = makeFakeRtc()
     const actor = createActor(peerWrapperActor, {
       input: {
-        selfUserId: 'u_a', peerUserId: 'u_b', isInitiator: true,
-        iceServers: [], rtcFactory: () => fake.adapter
+        selfUserId: 'u_a',
+        peerUserId: 'u_b',
+        isInitiator: true,
+        iceServers: [],
+        rtcFactory: () => fake.adapter
       }
     })
     actor.start()

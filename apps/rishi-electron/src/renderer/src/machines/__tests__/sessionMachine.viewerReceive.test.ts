@@ -10,8 +10,12 @@ function makeStubSignaling() {
   const sent: Array<{ type: string; [k: string]: unknown }> = []
   const actor = fromCallback(({ sendBack, receive }) => {
     sendBackRef = sendBack as typeof sendBackRef
-    receive((evt) => { sent.push(evt as { type: string; [k: string]: unknown }) })
-    return () => { sendBackRef = null }
+    receive((evt) => {
+      sent.push(evt as { type: string; [k: string]: unknown })
+    })
+    return () => {
+      sendBackRef = null
+    }
   })
   return {
     actor,
@@ -28,7 +32,9 @@ function makeFromCallbackSpy() {
   const actor = fromCallback(({ input, sendBack, receive }) => {
     const entry = { input, sendBack: sendBack as (e: any) => void, received: [] as any[] }
     spawned.push(entry)
-    receive((e) => { entry.received.push(e) })
+    receive((e) => {
+      entry.received.push(e)
+    })
     return () => {}
   })
   return { actor, spawned }
@@ -44,24 +50,27 @@ function provideDeps(opts: {
   return sessionMachine.provide({
     actors: {
       createSessionOnDO: fromPromise(async () => ({
-        sessionId: 's1', joinToken: 'jt',
+        sessionId: 's1',
+        joinToken: 'jt',
         joinUrl: 'rishi://sharing/join?t=jt',
         wsUrl: 'wss://x/v1/sessions/s1/wss'
       })),
-      redeemJoinToken: fromPromise<RedeemOutput, { me: Me; sessionId: string; joinToken: string }>(async () => ({
-        sessionId: 's1',
-        bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
-        requiresApproval: false,
-        hostProfile: { displayName: 'Host' },
-        wsUrl: 'wss://x/v1/sessions/s1/wss'
-      })),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      redeemJoinToken: fromPromise<RedeemOutput, { me: Me; sessionId: string; joinToken: string }>(
+        async () => ({
+          sessionId: 's1',
+          bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
+          requiresApproval: false,
+          hostProfile: { displayName: 'Host' },
+          wsUrl: 'wss://x/v1/sessions/s1/wss'
+        })
+      ),
+
       signaling: opts.signaling.actor as any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       peerWrapper: opts.peers.actor as any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       hostFileSender: senders.actor as any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       viewerFileReceiver: opts.receivers.actor as any
     }
   })
@@ -92,8 +101,11 @@ async function bootViewer(opts: {
   opts.signaling.fire({
     type: 'PEER_JOINED',
     msg: {
-      v: 1, t: 'peer.joined', userId: 'u_host',
-      profile: { displayName: 'Host' }, hasBookFile: true
+      v: 1,
+      t: 'peer.joined',
+      userId: 'u_host',
+      profile: { displayName: 'Host' },
+      hasBookFile: true
     }
   })
   await new Promise((r) => setTimeout(r, 5))
@@ -150,7 +162,10 @@ describe('sessionMachine viewer-side file receive wiring', () => {
     const receivers = makeFromCallbackSpy()
     const save = vi.fn().mockResolvedValue({ localPath: '/p/x.pdf', dbBookId: 99 })
     const a = await bootViewer({
-      signaling: sig, peers, receivers, saveTransferredBook: save
+      signaling: sig,
+      peers,
+      receivers,
+      saveTransferredBook: save
     })
     peers.spawned[0].sendBack({ type: 'PEER_CONNECTED', remoteUserId: 'u_host' })
     await new Promise((r) => setTimeout(r, 5))
@@ -158,20 +173,26 @@ describe('sessionMachine viewer-side file receive wiring', () => {
     receivers.spawned[0].sendBack({
       type: 'TRANSFER_RECEIVED',
       peerUserId: 'u_host',
-      bookId: 'b', contentHash: 'h', format: 'pdf', title: 'T',
-      blob, hash: 'h_sha'
+      bookId: 'b',
+      contentHash: 'h',
+      format: 'pdf',
+      title: 'T',
+      blob,
+      hash: 'h_sha'
     })
     await new Promise((r) => setTimeout(r, 20))
     expect(save).toHaveBeenCalledTimes(1)
     expect(save.mock.calls[0][0]).toMatchObject({
-      bookId: 'b', contentHash: 'h', format: 'pdf', title: 'T',
+      bookId: 'b',
+      contentHash: 'h',
+      format: 'pdf',
+      title: 'T',
       receivedFromUserId: 'u_host'
     })
     // After save resolves we expect REPORT_HAS_BOOK to flow over signaling.
     await new Promise((r) => setTimeout(r, 5))
     const hb = sig.sent.find(
-      (e) => e.type === 'SEND'
-        && (e.payload as { t: string }).t === 'has.book'
+      (e) => e.type === 'SEND' && (e.payload as { t: string }).t === 'has.book'
     )
     expect(hb).toBeTruthy()
     expect((hb!.payload as { value: boolean }).value).toBe(true)

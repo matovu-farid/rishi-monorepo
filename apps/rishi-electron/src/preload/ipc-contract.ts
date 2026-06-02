@@ -395,7 +395,10 @@ export type IpcContract = {
    * confirms admission, reads it on app start to detect an in-flight
    * session, and clears it on graceful session end.
    */
-  'sharing:readReconnect': { args: [params: { userId: string }]; returns: SharingReconnectPayload | null }
+  'sharing:readReconnect': {
+    args: [params: { userId: string }]
+    returns: SharingReconnectPayload | null
+  }
   'sharing:writeReconnect': { args: [params: SharingReconnectWriteParams]; returns: void }
   'sharing:clearReconnect': { args: [params: { userId: string }]; returns: void }
 }

@@ -13,8 +13,12 @@ function makeStubSignaling() {
   const sent: Array<{ type: string; [k: string]: unknown }> = []
   const actor = fromCallback(({ sendBack, receive }) => {
     sendBackRef = sendBack as typeof sendBackRef
-    receive((evt) => { sent.push(evt as { type: string; [k: string]: unknown }) })
-    return () => { sendBackRef = null }
+    receive((evt) => {
+      sent.push(evt as { type: string; [k: string]: unknown })
+    })
+    return () => {
+      sendBackRef = null
+    }
   })
   return {
     actor,
@@ -31,7 +35,9 @@ function makePeerWrapperStub() {
   const actor = fromCallback(({ input, sendBack, receive }) => {
     const entry = { input, sendBack: sendBack as (e: any) => void, received: [] as any[] }
     spawned.push(entry)
-    receive((e) => { entry.received.push(e) })
+    receive((e) => {
+      entry.received.push(e)
+    })
     return () => {}
   })
   return { actor, spawned }
@@ -42,7 +48,9 @@ function makeHostSenderStub() {
   const actor = fromCallback(({ input, sendBack, receive }) => {
     const entry = { input, sendBack: sendBack as (e: any) => void, received: [] as any[] }
     spawned.push(entry)
-    receive((e) => { entry.received.push(e) })
+    receive((e) => {
+      entry.received.push(e)
+    })
     return () => {}
   })
   return { actor, spawned }
@@ -56,22 +64,25 @@ function provideDeps(opts: {
   return sessionMachine.provide({
     actors: {
       createSessionOnDO: fromPromise(async () => ({
-        sessionId: 's1', joinToken: 'jt',
+        sessionId: 's1',
+        joinToken: 'jt',
         joinUrl: 'rishi://sharing/join?t=jt',
         wsUrl: 'wss://x/v1/sessions/s1/wss'
       })),
-      redeemJoinToken: fromPromise<RedeemOutput, { me: Me; sessionId: string; joinToken: string }>(async () => ({
-        sessionId: 's1',
-        bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
-        requiresApproval: false,
-        hostProfile: { displayName: 'H' },
-        wsUrl: 'wss://x/v1/sessions/s1/wss'
-      })),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      redeemJoinToken: fromPromise<RedeemOutput, { me: Me; sessionId: string; joinToken: string }>(
+        async () => ({
+          sessionId: 's1',
+          bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
+          requiresApproval: false,
+          hostProfile: { displayName: 'H' },
+          wsUrl: 'wss://x/v1/sessions/s1/wss'
+        })
+      ),
+
       signaling: opts.signaling.actor as any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       peerWrapper: opts.peers.actor as any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       hostFileSender: opts.senders.actor as any
     }
   })
@@ -96,8 +107,11 @@ async function bootHost(opts: {
   opts.signaling.fire({
     type: 'PEER_JOINED',
     msg: {
-      v: 1, t: 'peer.joined', userId: 'u_b',
-      profile: { displayName: 'Bob' }, hasBookFile: false
+      v: 1,
+      t: 'peer.joined',
+      userId: 'u_b',
+      profile: { displayName: 'Bob' },
+      hasBookFile: false
     }
   })
   await new Promise((r) => setTimeout(r, 5))
@@ -142,8 +156,11 @@ describe('sessionMachine host-side file transfer wiring', () => {
     sig.fire({
       type: 'PEER_JOINED',
       msg: {
-        v: 1, t: 'peer.joined', userId: 'u_b',
-        profile: { displayName: 'Bob' }, hasBookFile: true
+        v: 1,
+        t: 'peer.joined',
+        userId: 'u_b',
+        profile: { displayName: 'Bob' },
+        hasBookFile: true
       }
     })
     await new Promise((r) => setTimeout(r, 5))
@@ -195,7 +212,9 @@ describe('sessionMachine host-side file transfer wiring', () => {
     expect(a.getSnapshot().context.transfers.has('u_b')).toBe(true)
 
     senders.spawned[0].sendBack({
-      type: 'TRANSFER_COMPLETED', peerUserId: 'u_b', contentHash: 'h'
+      type: 'TRANSFER_COMPLETED',
+      peerUserId: 'u_b',
+      contentHash: 'h'
     })
     await new Promise((r) => setTimeout(r, 5))
     expect(a.getSnapshot().context.transfers.has('u_b')).toBe(false)

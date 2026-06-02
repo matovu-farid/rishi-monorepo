@@ -165,9 +165,7 @@ export const Menu: React.FC<MenuProps> = ({
                 // Explicit reader-theme overrides still win over CSS-var
                 // defaults so the in-book menu stays in the reader palette.
                 ...(theme?.background ? { backgroundColor: theme.background } : {}),
-                ...(theme?.color
-                  ? { color: theme.color, borderColor: `${theme.color}20` }
-                  : {})
+                ...(theme?.color ? { color: theme.color, borderColor: `${theme.color}20` } : {})
               }}
             >
               {children}

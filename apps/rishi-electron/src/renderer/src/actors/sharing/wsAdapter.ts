@@ -54,7 +54,11 @@ export const defaultWsConnect: WsConnect = (url, subprotocols) => {
       // duplicate because it has already left `connected`).
       if (closed) return
       closed = true
-      try { ws.close(code, reason) } catch { /* ignored */ }
+      try {
+        ws.close(code, reason)
+      } catch {
+        /* ignored */
+      }
       for (const cb of listeners.close) cb(code, reason)
     }
   }

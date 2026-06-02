@@ -1,10 +1,7 @@
 import { fromCallback } from 'xstate'
 import { ClientMsg, ServerMsg } from '@rishi/sharing-protocol/schemas'
 import { defaultWsConnect, type WsAdapter, type WsConnect } from './wsAdapter'
-import {
-  notifySignalingError,
-  registerSignalingWs
-} from '@/testing/sharing-test-hooks'
+import { notifySignalingError, registerSignalingWs } from '@/testing/sharing-test-hooks'
 import { recordSharingBreadcrumb, recordSharingError } from '@/sharing/sentryScope'
 
 export type SignalingInput = {
@@ -15,8 +12,7 @@ export type SignalingInput = {
   connect?: WsConnect
 }
 
-export type SignalingInEvent =
-  | { type: 'SEND'; payload: ClientMsg }
+export type SignalingInEvent = { type: 'SEND'; payload: ClientMsg }
 
 export type SignalingOutEvent =
   | { type: 'CONNECTED' }
@@ -92,13 +88,19 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
       out({ type: 'CONNECTED' })
       ws.send(JSON.stringify({ v: 1, t: 'hello', hasBookFile: input.hasBookFile }))
       heartbeat = setInterval(() => {
-        try { ws.send(JSON.stringify({ v: 1, t: 'ping' })) } catch { /* ignored */ }
+        try {
+          ws.send(JSON.stringify({ v: 1, t: 'ping' }))
+        } catch {
+          /* ignored */
+        }
       }, HEARTBEAT_MS)
     })
 
     ws.onMessage((raw) => {
       let parsed: unknown
-      try { parsed = JSON.parse(raw) } catch {
+      try {
+        parsed = JSON.parse(raw)
+      } catch {
         out({ type: 'PROTOCOL_ERROR', raw })
         return
       }
@@ -115,22 +117,54 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
       }
       const m = result.data
       switch (m.t) {
-        case 'welcome': out({ type: 'WELCOME', msg: m }); break
-        case 'roster': out({ type: 'ROSTER', msg: m }); break
-        case 'peer.joined': out({ type: 'PEER_JOINED', msg: m }); break
-        case 'peer.left': out({ type: 'PEER_LEFT', msg: m }); break
-        case 'peer.updated': out({ type: 'PEER_UPDATED', msg: m }); break
-        case 'sdp.offer': out({ type: 'SDP_OFFER', msg: m }); break
-        case 'sdp.answer': out({ type: 'SDP_ANSWER', msg: m }); break
-        case 'ice': out({ type: 'ICE_CANDIDATE', msg: m }); break
-        case 'role.transferred': out({ type: 'ROLE_TRANSFERRED', msg: m }); break
-        case 'join.requested': out({ type: 'JOIN_REQUESTED', msg: m }); break
-        case 'approval.result': out({ type: 'APPROVAL_RESULT', msg: m }); break
-        case 'host.suspended': out({ type: 'HOST_SUSPENDED', msg: m }); break
-        case 'host.resumed': out({ type: 'HOST_RESUMED' }); break
-        case 'kicked': out({ type: 'KICKED', msg: m }); break
-        case 'session.ended': out({ type: 'SESSION_ENDED', msg: m }); break
-        case 'sync.frame': out({ type: 'SYNC_FRAME', msg: m }); break
+        case 'welcome':
+          out({ type: 'WELCOME', msg: m })
+          break
+        case 'roster':
+          out({ type: 'ROSTER', msg: m })
+          break
+        case 'peer.joined':
+          out({ type: 'PEER_JOINED', msg: m })
+          break
+        case 'peer.left':
+          out({ type: 'PEER_LEFT', msg: m })
+          break
+        case 'peer.updated':
+          out({ type: 'PEER_UPDATED', msg: m })
+          break
+        case 'sdp.offer':
+          out({ type: 'SDP_OFFER', msg: m })
+          break
+        case 'sdp.answer':
+          out({ type: 'SDP_ANSWER', msg: m })
+          break
+        case 'ice':
+          out({ type: 'ICE_CANDIDATE', msg: m })
+          break
+        case 'role.transferred':
+          out({ type: 'ROLE_TRANSFERRED', msg: m })
+          break
+        case 'join.requested':
+          out({ type: 'JOIN_REQUESTED', msg: m })
+          break
+        case 'approval.result':
+          out({ type: 'APPROVAL_RESULT', msg: m })
+          break
+        case 'host.suspended':
+          out({ type: 'HOST_SUSPENDED', msg: m })
+          break
+        case 'host.resumed':
+          out({ type: 'HOST_RESUMED' })
+          break
+        case 'kicked':
+          out({ type: 'KICKED', msg: m })
+          break
+        case 'session.ended':
+          out({ type: 'SESSION_ENDED', msg: m })
+          break
+        case 'sync.frame':
+          out({ type: 'SYNC_FRAME', msg: m })
+          break
         case 'data.channel.relay': {
           // TEST-ONLY: the worker forwards data-channel payloads here when
           // the E2E fake adapter shuttles sends through the WS instead of
@@ -149,7 +183,8 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
           if (bus) bus.dispatch(m.from, m.channel, m.payload)
           break
         }
-        case 'pong': break
+        case 'pong':
+          break
         case 'error':
           notifySignalingError(m.code)
           recordSharingBreadcrumb('signaling.error', { code: m.code })
@@ -179,14 +214,15 @@ export const signalingActor = fromCallback<SignalingInEvent, SignalingInput, Sig
       out({ type: 'SIGNALING_DROPPED', code, reason })
     })
 
-    ws.onError(() => { /* error → close path handles teardown */ })
+    ws.onError(() => {
+      /* error → close path handles teardown */
+    })
 
     receive((evt) => {
-      if (evt.type === 'SEND') {
-        const ok = ClientMsg.safeParse(evt.payload)
-        if (!ok.success) return
-        ws.send(JSON.stringify(evt.payload))
-      }
+      // Only one `In` variant today (SEND); the discriminant check is elided.
+      const ok = ClientMsg.safeParse(evt.payload)
+      if (!ok.success) return
+      ws.send(JSON.stringify(evt.payload))
     })
 
     return () => {

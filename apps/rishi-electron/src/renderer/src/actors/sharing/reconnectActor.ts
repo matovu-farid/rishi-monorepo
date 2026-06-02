@@ -13,11 +13,18 @@ export type ReconnectOutEvent =
 
 export const reconnectActor = fromCallback<never, ReconnectInput, ReconnectOutEvent>(
   ({ emit, input }) => {
-    let stopped = false
+    // `stopped` lives on an object so reads aren't narrowed by TS
+    // control-flow analysis. The cleanup callback below mutates it from a
+    // closure TS can't observe; without this every `state.stopped` read
+    // here would be flagged as dead code.
+    const state = { stopped: false }
     let timer: ReturnType<typeof setTimeout> | null = null
 
-    async function attempt(i: number): Promise<void> {
-      if (stopped) return
+    // Sync orchestrator: the actual await happens inside the timer callback,
+    // not in `attempt` itself, so this function has no awaits and shouldn't
+    // be `async`.
+    function attempt(i: number): void {
+      if (state.stopped) return
       if (Date.now() >= input.reservedUntil) {
         recordSharingError(new Error('reconnect reservation_expired'), {
           actor: 'reconnectActor',
@@ -39,30 +46,32 @@ export const reconnectActor = fromCallback<never, ReconnectInput, ReconnectOutEv
         attempt: i + 1,
         delayMs: input.schedule[i]
       })
-      timer = setTimeout(async () => {
-        if (stopped) return
-        try {
-          const { ref } = await input.tryConnect()
-          if (stopped) return
-          emit({ type: 'RECONNECTED', freshSignalingRef: ref })
-        } catch {
-          if (Date.now() >= input.reservedUntil) {
-            recordSharingError(new Error('reconnect reservation_expired'), {
-              actor: 'reconnectActor',
-              reason: 'reservation_expired'
-            })
-            emit({ type: 'HARD_FAIL', reason: 'reservation_expired' })
-            return
+      timer = setTimeout(() => {
+        if (state.stopped) return
+        void (async () => {
+          try {
+            const { ref } = await input.tryConnect()
+            if (state.stopped) return
+            emit({ type: 'RECONNECTED', freshSignalingRef: ref })
+          } catch {
+            if (Date.now() >= input.reservedUntil) {
+              recordSharingError(new Error('reconnect reservation_expired'), {
+                actor: 'reconnectActor',
+                reason: 'reservation_expired'
+              })
+              emit({ type: 'HARD_FAIL', reason: 'reservation_expired' })
+              return
+            }
+            attempt(i + 1)
           }
-          attempt(i + 1)
-        }
+        })()
       }, input.schedule[i])
     }
 
     attempt(0)
 
     return () => {
-      stopped = true
+      state.stopped = true
       if (timer) clearTimeout(timer)
     }
   }

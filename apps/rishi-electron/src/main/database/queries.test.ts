@@ -286,9 +286,7 @@ describe('books sharing-provenance columns (Task 22)', () => {
        VALUES ('epub', x'00', 'T', '/p.epub', 'shared-session', 'u_b', 1700000000000)`
     ).run()
     const row = db
-      .prepare(
-        `SELECT source, received_from_user_id, received_at FROM books WHERE title = 'T'`
-      )
+      .prepare(`SELECT source, received_from_user_id, received_at FROM books WHERE title = 'T'`)
       .get() as { source: string; received_from_user_id: string; received_at: number }
     expect(row.source).toBe('shared-session')
     expect(row.received_from_user_id).toBe('u_b')

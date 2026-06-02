@@ -14,14 +14,20 @@ describe('syncActor (producer)', () => {
     actor.send({
       type: 'BROADCAST',
       msg: {
-        v: 1, t: 'reader.position', bookId: 'b', ts: 1,
+        v: 1,
+        t: 'reader.position',
+        bookId: 'b',
+        ts: 1,
         position: { format: 'pdf', page: 3, offsetY: 0, ts: 1 }
       }
     })
     actor.send({
       type: 'BROADCAST',
       msg: {
-        v: 1, t: 'reader.position', bookId: 'b', ts: 2,
+        v: 1,
+        t: 'reader.position',
+        bookId: 'b',
+        ts: 2,
         position: { format: 'pdf', page: 3, offsetY: 120, ts: 2 }
       }
     })
@@ -43,14 +49,20 @@ describe('syncActor (producer)', () => {
     actor.send({
       type: 'BROADCAST',
       msg: {
-        v: 1, t: 'reader.position', bookId: 'b', ts: 1,
+        v: 1,
+        t: 'reader.position',
+        bookId: 'b',
+        ts: 1,
         position: { format: 'epub', cfi: 'cfi/a', ts: 1 }
       }
     })
     actor.send({
       type: 'BROADCAST',
       msg: {
-        v: 1, t: 'reader.position', bookId: 'b', ts: 2,
+        v: 1,
+        t: 'reader.position',
+        bookId: 'b',
+        ts: 2,
         position: { format: 'epub', cfi: 'cfi/b', ts: 2 }
       }
     })
@@ -86,14 +98,20 @@ describe('syncActor (consumer)', () => {
     actor.send({
       type: 'SYNC_RECEIVED',
       msg: {
-        v: 1, t: 'reader.position', bookId: 'b', ts: 10,
+        v: 1,
+        t: 'reader.position',
+        bookId: 'b',
+        ts: 10,
         position: { format: 'pdf', page: 1, offsetY: 0, ts: 10 }
       }
     })
     actor.send({
       type: 'SYNC_RECEIVED',
       msg: {
-        v: 1, t: 'reader.position', bookId: 'b', ts: 5,
+        v: 1,
+        t: 'reader.position',
+        bookId: 'b',
+        ts: 5,
         position: { format: 'pdf', page: 1, offsetY: 0, ts: 5 }
       }
     })
@@ -108,15 +126,23 @@ describe('syncActor (consumer)', () => {
     actor.send({
       type: 'SYNC_RECEIVED',
       msg: {
-        v: 1, t: 'reader.position', bookId: 'b', ts: 100,
+        v: 1,
+        t: 'reader.position',
+        bookId: 'b',
+        ts: 100,
         position: { format: 'pdf', page: 1, offsetY: 0, ts: 100 }
       }
     })
     actor.send({
       type: 'SYNC_RECEIVED',
       msg: {
-        v: 1, t: 'tts.state', isPlaying: true,
-        position: { sentenceIdx: 0, charOffset: 0 }, voiceId: 'v', rate: 1, ts: 50
+        v: 1,
+        t: 'tts.state',
+        isPlaying: true,
+        position: { sentenceIdx: 0, charOffset: 0 },
+        voiceId: 'v',
+        rate: 1,
+        ts: 50
       }
     })
     expect(events.filter((e) => e.type === 'TTS_SYNC')).toHaveLength(1)

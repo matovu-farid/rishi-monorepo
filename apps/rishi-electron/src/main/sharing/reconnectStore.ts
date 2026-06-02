@@ -47,7 +47,10 @@ function filePath(userId: string): string {
   return join(dirPath(), `${safeFileName(userId)}.json`)
 }
 
-export async function writeReconnect(userId: string, payload: Omit<ReconnectPayload, 'storedAt'>): Promise<void> {
+export async function writeReconnect(
+  userId: string,
+  payload: Omit<ReconnectPayload, 'storedAt'>
+): Promise<void> {
   await fs.mkdir(dirPath(), { recursive: true })
   const body: ReconnectPayload = { ...payload, storedAt: Date.now() }
   await atomicWriteFile(filePath(userId), JSON.stringify(body), { mode: 0o600 })

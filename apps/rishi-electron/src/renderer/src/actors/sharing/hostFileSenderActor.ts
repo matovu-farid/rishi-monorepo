@@ -50,7 +50,13 @@ export const hostFileSenderActor = fromCallback<
   HostFileSenderInput,
   HostFileSenderOutEvent
 >(({ sendBack, emit, receive, input }) => {
-  let stopped = false
+  // `stopped` lives behind a getter so TS control-flow analysis can't narrow
+  // reads through the function boundary. The cleanup callback below mutates
+  // the backing state long after the surrounding async IIFE has captured the
+  // closure; without the getter every post-`isStopped()` read would be
+  // flagged as dead code.
+  const stopState: { stopped: boolean } = { stopped: false }
+  const isStopped = (): boolean => stopState.stopped
   let sender: ReturnType<typeof createActor<typeof fileTransferActor>> | null = null
 
   const emitOut = (e: HostFileSenderOutEvent): void => {
@@ -67,7 +73,7 @@ export const hostFileSenderActor = fromCallback<
       })
       bytes = result.bytes
     } catch (e) {
-      if (stopped) return
+      if (isStopped()) return
       emitOut({
         type: 'TRANSFER_FAILED',
         peerUserId: input.peerUserId,
@@ -75,11 +81,11 @@ export const hostFileSenderActor = fromCallback<
       })
       return
     }
-    if (stopped) return
+    if (isStopped()) return
 
-    const buf = new Uint8Array(bytes).buffer as ArrayBuffer
+    const buf = new Uint8Array(bytes).buffer
     const hash = await computeSha256Hex(buf)
-    if (stopped) return
+    if (isStopped()) return
 
     sender = createActor(fileTransferActor, {
       input: {
@@ -119,8 +125,8 @@ export const hostFileSenderActor = fromCallback<
     })
     sender.start()
     sender.send({ type: 'START' })
-  })().catch((e) => {
-    if (stopped) return
+  })().catch((e: unknown) => {
+    if (isStopped()) return
     emitOut({
       type: 'TRANSFER_FAILED',
       peerUserId: input.peerUserId,
@@ -129,14 +135,15 @@ export const hostFileSenderActor = fromCallback<
   })
 
   receive((evt) => {
-    if (stopped) return
-    if (evt.type === 'FILE_ACK') {
-      sender?.send({ type: 'CHUNK_ACK', seq: evt.seq })
-    }
+    if (isStopped()) return
+    // Only one `In` variant today (FILE_ACK). Branch elided — the assertion is
+    // load-bearing for the discriminated-union narrowing if a second variant
+    // gets added.
+    sender?.send({ type: 'CHUNK_ACK', seq: evt.seq })
   })
 
   return () => {
-    stopped = true
+    stopState.stopped = true
     sender?.stop()
   }
 })

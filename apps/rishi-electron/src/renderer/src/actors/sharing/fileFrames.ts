@@ -20,9 +20,7 @@
  * would force a base64 layer.
  */
 
-export type FileFrame =
-  | { kind: 'data'; bytes: ArrayBuffer }
-  | { kind: 'ack'; seq: number }
+export type FileFrame = { kind: 'data'; bytes: ArrayBuffer } | { kind: 'ack'; seq: number }
 
 const TAG_DATA = 0x01
 const TAG_ACK = 0x02
@@ -32,7 +30,7 @@ export function encodeDataFrame(bytes: ArrayBuffer): ArrayBuffer {
   const out = new Uint8Array(1 + src.byteLength)
   out[0] = TAG_DATA
   out.set(src, 1)
-  return out.buffer as ArrayBuffer
+  return out.buffer
 }
 
 export function encodeAckFrame(seq: number): ArrayBuffer {

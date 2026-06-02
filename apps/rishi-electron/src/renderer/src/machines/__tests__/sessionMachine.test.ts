@@ -13,8 +13,13 @@ function stateMatches(value: unknown, target: string): boolean {
   if (typeof value === 'object' && value !== null) {
     const obj = value as Record<string, unknown>
     if ('connected' in obj && obj.connected === target) return true
-    if ('connected' in obj && typeof obj.connected === 'object' && obj.connected !== null
-      && target in (obj.connected as Record<string, unknown>)) return true
+    if (
+      'connected' in obj &&
+      typeof obj.connected === 'object' &&
+      obj.connected !== null &&
+      target in (obj.connected as Record<string, unknown>)
+    )
+      return true
   }
   return false
 }
@@ -25,8 +30,12 @@ function makeStubSignaling() {
   const sent: Array<{ type: string; [k: string]: unknown }> = []
   const actor = fromCallback(({ sendBack, receive }) => {
     sendBackRef = sendBack as typeof sendBackRef
-    receive((evt) => { sent.push(evt as { type: string; [k: string]: unknown }) })
-    return () => { sendBackRef = null }
+    receive((evt) => {
+      sent.push(evt as { type: string; [k: string]: unknown })
+    })
+    return () => {
+      sendBackRef = null
+    }
   })
   return {
     actor,
@@ -37,16 +46,20 @@ function makeStubSignaling() {
       sendBackRef(event)
     },
     /** Whether the signaling actor has been invoked (its callback ran). */
-    isInvoked(): boolean { return sendBackRef !== null }
+    isInvoked(): boolean {
+      return sendBackRef !== null
+    }
   }
 }
 
-function provideDeps(opts: {
-  createOk?: boolean
-  redeemOk?: boolean
-  redeemRequiresApproval?: boolean
-  signalingStub?: ReturnType<typeof makeStubSignaling>
-} = {}) {
+function provideDeps(
+  opts: {
+    createOk?: boolean
+    redeemOk?: boolean
+    redeemRequiresApproval?: boolean
+    signalingStub?: ReturnType<typeof makeStubSignaling>
+  } = {}
+) {
   const stub = opts.signalingStub
   return sessionMachine.provide({
     actors: {
@@ -59,16 +72,18 @@ function provideDeps(opts: {
           wsUrl: 'wss://x/v1/sessions/s1/wss'
         }
       }),
-      redeemJoinToken: fromPromise<RedeemOutput, { me: Me; sessionId: string; joinToken: string }>(async () => {
-        if (opts.redeemOk === false) throw new Error('redeem_failed')
-        return {
-          sessionId: 's1',
-          bookContext: { bookId: 'b', contentHash: 'h', format: 'epub' },
-          requiresApproval: opts.redeemRequiresApproval ?? false,
-          hostProfile: HOST_PROFILE,
-          wsUrl: 'wss://x/v1/sessions/s1/wss'
+      redeemJoinToken: fromPromise<RedeemOutput, { me: Me; sessionId: string; joinToken: string }>(
+        async () => {
+          if (opts.redeemOk === false) throw new Error('redeem_failed')
+          return {
+            sessionId: 's1',
+            bookContext: { bookId: 'b', contentHash: 'h', format: 'epub' },
+            requiresApproval: opts.redeemRequiresApproval ?? false,
+            hostProfile: HOST_PROFILE,
+            wsUrl: 'wss://x/v1/sessions/s1/wss'
+          }
         }
-      }),
+      ),
       // Always provide a signaling actor; otherwise the invoke would silently
       // fail (or worse: silently succeed by mounting the real WS-backed actor).
       //
@@ -77,16 +92,20 @@ function provideDeps(opts: {
       // SignalingInput/SignalingOutEvent shape (which transitively reaches the
       // protocol package's zod v4 types) while this stub uses xstate's default
       // generic params. The runtime contract is fulfilled.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       signaling: (stub
         ? stub.actor
-        : fromCallback(() => { /* inert: no events, no cleanup */ })) as any,
+        : fromCallback(() => {
+            /* inert: no events, no cleanup */
+          })) as any,
       // Inert peerWrapper stub — none of the existing tests drive
       // SDP/ICE, but the machine now spawns one wrapper per
       // PEER_JOINED. Without a stub the real wrapper boots an
       // RTCPeerConnection which doesn't exist in jsdom.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      peerWrapper: fromCallback(() => { /* no-op */ }) as any
+
+      peerWrapper: fromCallback(() => {
+        /* no-op */
+      }) as any
     }
   })
 }
@@ -136,7 +155,8 @@ describe('sessionMachine', () => {
     a.send({
       type: 'ACCEPT_INVITE',
       me: { userId: 'u_b', displayName: 'B', authToken: 'jwt' },
-      sessionId: 's1', joinToken: 'jt'
+      sessionId: 's1',
+      joinToken: 'jt'
     })
     await vi.waitFor(() => expect(a.getSnapshot().value).toBe('failed'))
   })
@@ -154,8 +174,11 @@ describe('sessionMachine', () => {
     a.send({ type: 'ROSTER_READY' })
     a.send({
       type: 'BOOK_RECEIVED',
-      bookId: 'b2', contentHash: 'h2', format: 'epub',
-      receivedFromUserId: 'u_b', localPath: '/p/h2.epub',
+      bookId: 'b2',
+      contentHash: 'h2',
+      format: 'epub',
+      receivedFromUserId: 'u_b',
+      localPath: '/p/h2.epub',
       title: "Friend's Book"
     })
     expect(a.getSnapshot().context.receivedBooks).toHaveLength(1)
@@ -175,8 +198,11 @@ describe('sessionMachine', () => {
     a.send({ type: 'ROSTER_READY' })
     a.send({
       type: 'BOOK_RECEIVED',
-      bookId: 'b2', contentHash: 'h2', format: 'epub',
-      receivedFromUserId: 'u_b', localPath: '/p/h2.epub',
+      bookId: 'b2',
+      contentHash: 'h2',
+      format: 'epub',
+      receivedFromUserId: 'u_b',
+      localPath: '/p/h2.epub',
       title: "Friend's Book"
     })
     a.send({ type: 'LEAVE' })
@@ -200,8 +226,8 @@ describe('sessionMachine', () => {
       const snap = a.getSnapshot()
       // value is `{ connected: 'connecting' }` once the wrapper state is in place
       const v = snap.value as unknown
-      const ok = v === 'connecting'
-        || (typeof v === 'object' && v !== null && 'connected' in (v as object))
+      const ok =
+        v === 'connecting' || (typeof v === 'object' && v !== null && 'connected' in (v as object))
       expect(ok).toBe(true)
     })
     expect(stub.isInvoked()).toBe(true)
@@ -211,14 +237,21 @@ describe('sessionMachine', () => {
     stub.fire({
       type: 'WELCOME',
       msg: {
-        v: 1, t: 'welcome', you: 'u_a', role: 'host',
-        sharerId: 'u_a', reconnectToken: 'rt', reservedUntil: 9999
+        v: 1,
+        t: 'welcome',
+        you: 'u_a',
+        role: 'host',
+        sharerId: 'u_a',
+        reconnectToken: 'rt',
+        reservedUntil: 9999
       }
     })
     stub.fire({
       type: 'ROSTER',
       msg: {
-        v: 1, t: 'roster', participants: [],
+        v: 1,
+        t: 'roster',
+        participants: [],
         requiresApproval: false,
         bookContext: { bookId: 'b', contentHash: 'h', format: 'epub' },
         status: 'live'
@@ -227,11 +260,13 @@ describe('sessionMachine', () => {
 
     await vi.waitFor(() => {
       const v = a.getSnapshot().value as unknown
-      const isLive = typeof v === 'object' && v !== null
-        && 'connected' in (v as Record<string, unknown>)
-        && typeof (v as { connected: unknown }).connected === 'object'
-        && (v as { connected: Record<string, unknown> }).connected
-        && 'live' in (v as { connected: Record<string, unknown> }).connected
+      const isLive =
+        typeof v === 'object' &&
+        v !== null &&
+        'connected' in (v as Record<string, unknown>) &&
+        typeof (v as { connected: unknown }).connected === 'object' &&
+        (v as { connected: Record<string, unknown> }).connected &&
+        'live' in (v as { connected: Record<string, unknown> }).connected
       expect(isLive).toBeTruthy()
     })
 
@@ -254,7 +289,11 @@ describe('sessionMachine', () => {
     expect(a.getSnapshot().context.lastSyncedPosition?.pageIndex).toBe(3)
     const sent = stub.sent.find((e) => e.type === 'SEND')
     expect(sent).toBeTruthy()
-    const payload = (sent as unknown as { payload: { t: string; frame: { t: string; position: { page: number } } } }).payload
+    const payload = (
+      sent as unknown as {
+        payload: { t: string; frame: { t: string; position: { page: number } } }
+      }
+    ).payload
     expect(payload.t).toBe('sync.frame')
     expect(payload.frame.t).toBe('reader.position')
     expect(payload.frame.position.page).toBe(3)
@@ -267,15 +306,21 @@ describe('sessionMachine', () => {
     a.send({
       type: 'ACCEPT_INVITE',
       me: { userId: 'u_b', displayName: 'B', authToken: 'jwt' },
-      sessionId: 's1', joinToken: 'jt'
+      sessionId: 's1',
+      joinToken: 'jt'
     })
     await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true))
     stub.fire({
       type: 'SYNC_FRAME',
       msg: {
-        v: 1, t: 'sync.frame', from: 'u_a',
+        v: 1,
+        t: 'sync.frame',
+        from: 'u_a',
         frame: {
-          v: 1, t: 'reader.position', ts: Date.now(), bookId: 'b',
+          v: 1,
+          t: 'reader.position',
+          ts: Date.now(),
+          bookId: 'b',
           position: { format: 'pdf', page: 7, offsetY: 0, ts: Date.now() }
         }
       }
@@ -290,7 +335,8 @@ describe('sessionMachine', () => {
     a.send({
       type: 'ACCEPT_INVITE',
       me: { userId: 'u_b', displayName: 'B', authToken: 'jwt' },
-      sessionId: 's1', joinToken: 'jt'
+      sessionId: 's1',
+      joinToken: 'jt'
     })
     await vi.waitFor(() =>
       expect(stateMatches(a.getSnapshot().value, 'awaitingApproval')).toBe(true)
@@ -299,9 +345,7 @@ describe('sessionMachine', () => {
       type: 'APPROVAL_RESULT',
       msg: { v: 1, t: 'approval.result', approved: true }
     })
-    await vi.waitFor(() =>
-      expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true)
-    )
+    await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true))
     expect(a.getSnapshot().context.approvalStatus).toBe('approved')
   })
 
@@ -312,7 +356,8 @@ describe('sessionMachine', () => {
     a.send({
       type: 'ACCEPT_INVITE',
       me: { userId: 'u_b', displayName: 'B', authToken: 'jwt' },
-      sessionId: 's1', joinToken: 'jt'
+      sessionId: 's1',
+      joinToken: 'jt'
     })
     await vi.waitFor(() =>
       expect(stateMatches(a.getSnapshot().value, 'awaitingApproval')).toBe(true)
@@ -340,14 +385,21 @@ describe('sessionMachine', () => {
     stub.fire({
       type: 'WELCOME',
       msg: {
-        v: 1, t: 'welcome', you: 'u_a', role: 'host',
-        sharerId: 'u_a', reconnectToken: 'rt', reservedUntil: 9999
+        v: 1,
+        t: 'welcome',
+        you: 'u_a',
+        role: 'host',
+        sharerId: 'u_a',
+        reconnectToken: 'rt',
+        reservedUntil: 9999
       }
     })
     stub.fire({
       type: 'ROSTER',
       msg: {
-        v: 1, t: 'roster', participants: [],
+        v: 1,
+        t: 'roster',
+        participants: [],
         requiresApproval: false,
         bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
         status: 'live'
@@ -356,7 +408,8 @@ describe('sessionMachine', () => {
     await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'live')).toBe(true))
     a.send({ type: 'KICK_PEER', userId: 'u_b' })
     const sent = stub.sent.filter((e) => e.type === 'SEND')
-    const payload = sent.map((e) => (e as unknown as { payload: { t: string; userId: string } }).payload)
+    const payload = sent
+      .map((e) => (e as unknown as { payload: { t: string; userId: string } }).payload)
       .find((p) => p.t === 'kick.peer')
     expect(payload).toBeTruthy()
     expect(payload?.userId).toBe('u_b')
@@ -433,21 +486,29 @@ describe('sessionMachine', () => {
     a.send({
       type: 'ACCEPT_INVITE',
       me: { userId: 'u_v', displayName: 'V', authToken: 'jwt' },
-      sessionId: 's1', joinToken: 'jt'
+      sessionId: 's1',
+      joinToken: 'jt'
     })
     await vi.waitFor(() => expect(stateMatches(a.getSnapshot().value, 'connecting')).toBe(true))
     // Roster brings us into `live` and confirms role is viewer (no books).
     stub.fire({
       type: 'WELCOME',
       msg: {
-        v: 1, t: 'welcome', you: 'u_v', role: 'viewer',
-        sharerId: 'u_a', reconnectToken: 'rt', reservedUntil: 9999
+        v: 1,
+        t: 'welcome',
+        you: 'u_v',
+        role: 'viewer',
+        sharerId: 'u_a',
+        reconnectToken: 'rt',
+        reservedUntil: 9999
       }
     })
     stub.fire({
       type: 'ROSTER',
       msg: {
-        v: 1, t: 'roster', participants: [],
+        v: 1,
+        t: 'roster',
+        participants: [],
         requiresApproval: false,
         bookContext: { bookId: 'b', contentHash: 'h', format: 'epub' },
         status: 'live'
@@ -475,14 +536,21 @@ describe('sessionMachine', () => {
     stub.fire({
       type: 'WELCOME',
       msg: {
-        v: 1, t: 'welcome', you: 'u_a', role: 'host',
-        sharerId: 'u_a', reconnectToken: 'rt', reservedUntil: 9999
+        v: 1,
+        t: 'welcome',
+        you: 'u_a',
+        role: 'host',
+        sharerId: 'u_a',
+        reconnectToken: 'rt',
+        reservedUntil: 9999
       }
     })
     stub.fire({
       type: 'ROSTER',
       msg: {
-        v: 1, t: 'roster', participants: [],
+        v: 1,
+        t: 'roster',
+        participants: [],
         requiresApproval: false,
         bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
         status: 'live'

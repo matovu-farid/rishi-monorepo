@@ -50,14 +50,23 @@ describe('fileTransferActor receiver SEND_ACK', () => {
     const events: any[] = []
     const actor = createActor(fileTransferActor, {
       input: {
-        mode: 'receiver', contentHash: hash,
-        chunkSize: 16, windowSize: 32, send: () => {}
+        mode: 'receiver',
+        contentHash: hash,
+        chunkSize: 16,
+        windowSize: 32,
+        send: () => {}
       }
     })
     actor.on('*', (e) => events.push(e))
     actor.start()
-    actor.send({ type: 'FILE_CHUNK', buf: encode({ kind: 'data', seq: 0, data: Array.from(payload.subarray(0, 16)) }) })
-    actor.send({ type: 'FILE_CHUNK', buf: encode({ kind: 'data', seq: 1, data: Array.from(payload.subarray(16)) }) })
+    actor.send({
+      type: 'FILE_CHUNK',
+      buf: encode({ kind: 'data', seq: 0, data: Array.from(payload.subarray(0, 16)) })
+    })
+    actor.send({
+      type: 'FILE_CHUNK',
+      buf: encode({ kind: 'data', seq: 1, data: Array.from(payload.subarray(16)) })
+    })
     actor.send({ type: 'FILE_CHUNK', buf: encode({ kind: 'end', total: 2, hash }) })
     await new Promise((r) => setTimeout(r, 10))
     const acks = events.filter((e) => e.type === 'SEND_ACK').map((e) => e.seq)
@@ -73,14 +82,23 @@ describe('fileTransferActor receiver', () => {
     const events: any[] = []
     const actor = createActor(fileTransferActor, {
       input: {
-        mode: 'receiver', contentHash: hash,
-        chunkSize: 16, windowSize: 32, send: () => {}
+        mode: 'receiver',
+        contentHash: hash,
+        chunkSize: 16,
+        windowSize: 32,
+        send: () => {}
       }
     })
     actor.on('*', (e) => events.push(e))
     actor.start()
-    actor.send({ type: 'FILE_CHUNK', buf: encode({ kind: 'data', seq: 0, data: Array.from(payload.subarray(0, 16)) }) })
-    actor.send({ type: 'FILE_CHUNK', buf: encode({ kind: 'data', seq: 1, data: Array.from(payload.subarray(16)) }) })
+    actor.send({
+      type: 'FILE_CHUNK',
+      buf: encode({ kind: 'data', seq: 0, data: Array.from(payload.subarray(0, 16)) })
+    })
+    actor.send({
+      type: 'FILE_CHUNK',
+      buf: encode({ kind: 'data', seq: 1, data: Array.from(payload.subarray(16)) })
+    })
     actor.send({ type: 'FILE_CHUNK', buf: encode({ kind: 'end', total: 2, hash }) })
     await new Promise((r) => setTimeout(r, 10))
     const done = events.find((e) => e.type === 'COMPLETED')
@@ -96,8 +114,14 @@ describe('fileTransferActor receiver', () => {
     })
     actor.on('*', (e) => events.push(e))
     actor.start()
-    actor.send({ type: 'FILE_CHUNK', buf: encode({ kind: 'data', seq: 0, data: Array.from(payload) }) })
-    actor.send({ type: 'FILE_CHUNK', buf: encode({ kind: 'end', total: 1, hash: 'not_the_real_hash' }) })
+    actor.send({
+      type: 'FILE_CHUNK',
+      buf: encode({ kind: 'data', seq: 0, data: Array.from(payload) })
+    })
+    actor.send({
+      type: 'FILE_CHUNK',
+      buf: encode({ kind: 'end', total: 1, hash: 'not_the_real_hash' })
+    })
     await new Promise((r) => setTimeout(r, 10))
     expect(events.find((e) => e.type === 'FAILED')).toBeTruthy()
   })

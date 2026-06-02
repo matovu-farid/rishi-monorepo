@@ -8,14 +8,20 @@ const baseProps = {
   sharerId: 'u_a',
   participants: [
     {
-      userId: 'u_a', profile: { displayName: 'Me' },
-      joinedAt: 1, hasBookFile: true,
-      micState: 'unmuted' as const, connectionState: 'connected' as const
+      userId: 'u_a',
+      profile: { displayName: 'Me' },
+      joinedAt: 1,
+      hasBookFile: true,
+      micState: 'unmuted' as const,
+      connectionState: 'connected' as const
     },
     {
-      userId: 'u_b', profile: { displayName: 'B' },
-      joinedAt: 2, hasBookFile: true,
-      micState: 'unmuted' as const, connectionState: 'connected' as const
+      userId: 'u_b',
+      profile: { displayName: 'B' },
+      joinedAt: 2,
+      hasBookFile: true,
+      micState: 'unmuted' as const,
+      connectionState: 'connected' as const
     }
   ],
   pendingJoiners: [{ userId: 'u_c', profile: { displayName: 'C' } }],

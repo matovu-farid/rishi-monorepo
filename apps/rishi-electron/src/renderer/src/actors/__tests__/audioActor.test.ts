@@ -94,9 +94,7 @@ describe('audioActor', () => {
       // describeMediaError returns the MEDIA_ERR_SRC_NOT_SUPPORTED label for
       // empty messages; exactly one error fires because the actor uses one
       // error handler (not steady-state + per-PLAY duplicating each other).
-      expect(captured).toEqual([
-        { type: 'AUDIO_ERROR', error: 'MEDIA_ERR_SRC_NOT_SUPPORTED' }
-      ])
+      expect(captured).toEqual([{ type: 'AUDIO_ERROR', error: 'MEDIA_ERR_SRC_NOT_SUPPORTED' }])
     })
 
     it('a second PLAY supersedes the first — the first PLAYs canplaythrough listener is removed before the second is installed', async () => {

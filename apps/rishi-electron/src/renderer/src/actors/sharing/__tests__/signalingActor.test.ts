@@ -11,9 +11,15 @@ function makeFakeWs() {
   const adapter: WsAdapter = {
     send: (d) => sent.push(d),
     close: vi.fn(),
-    onMessage: (cb) => { onMsg = cb },
-    onOpen: (cb) => { onOpen = cb },
-    onClose: (cb) => { onClose = cb },
+    onMessage: (cb) => {
+      onMsg = cb
+    },
+    onOpen: (cb) => {
+      onOpen = cb
+    },
+    onClose: (cb) => {
+      onClose = cb
+    },
     onError: () => {}
   }
   return {
@@ -65,8 +71,13 @@ describe('signalingActor', () => {
     actor.start()
     fake.fireOpen()
     fake.deliver({
-      v: 1, t: 'welcome', you: 'u_a', role: 'host',
-      sharerId: 'u_a', reconnectToken: 'rt', reservedUntil: 9999
+      v: 1,
+      t: 'welcome',
+      you: 'u_a',
+      role: 'host',
+      sharerId: 'u_a',
+      reconnectToken: 'rt',
+      reservedUntil: 9999
     })
     const welcome = emitted.find((e) => e.type === 'WELCOME')
     expect(welcome).toBeTruthy()

@@ -22,8 +22,7 @@ export type MicOutEvent =
 export const micActor = fromCallback<MicInEvent, MicInput, MicOutEvent>(
   ({ emit, receive, input }) => {
     const gum =
-      input.getUserMedia ??
-      ((c) => navigator.mediaDevices.getUserMedia(c ?? { audio: true }))
+      input.getUserMedia ?? ((c) => navigator.mediaDevices.getUserMedia(c ?? { audio: true }))
     let stream: MediaStream | null = null
     let track: MediaStreamTrack | null = null
     let hostMuted = false
@@ -47,11 +46,16 @@ export const micActor = fromCallback<MicInEvent, MicInput, MicOutEvent>(
           return
         }
         stream = s
-        track = s.getAudioTracks()[0] ?? null
-        if (!track) {
+        // `getAudioTracks()` can return an empty array even when getUserMedia
+        // resolves — guard on length explicitly so the no-track branch is
+        // reachable under TS's control-flow analysis (with
+        // `noUncheckedIndexedAccess` off, indexing types as non-undefined).
+        const audioTracks = s.getAudioTracks()
+        if (audioTracks.length === 0) {
           emit({ type: 'MIC_ERROR', message: 'no_audio_track' })
           return
         }
+        track = audioTracks[0]
         emit({ type: 'LOCAL_TRACK_READY', track, stream: s })
       })
       .catch((err: unknown) => {

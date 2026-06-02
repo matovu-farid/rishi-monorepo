@@ -22,7 +22,7 @@
  *    parent only sees decoded frames.
  */
 import { createActor, fromCallback } from 'xstate'
-import { peerActor, type PeerInEvent, type PeerOutEvent } from './peerActor'
+import { peerActor, type PeerInEvent } from './peerActor'
 import type { RtcFactory } from './rtcAdapter'
 import { encodeDataFrame, encodeAckFrame, decodeFrame } from './fileFrames'
 
@@ -85,7 +85,7 @@ export const peerWrapperActor = fromCallback<
   // channel so callers that use `actor.on('*', …)` (the wrapper's unit
   // tests) keep working.
   inner.on('*', (raw) => {
-    const e = raw as unknown as PeerOutEvent
+    const e = raw
     switch (e.type) {
       case 'FILE_CHUNK': {
         const decoded = decodeFrame(e.payload)
@@ -112,8 +112,8 @@ export const peerWrapperActor = fromCallback<
       default: {
         // All other peerActor emits forward unchanged — they share the
         // PeerOutEvent shape with PeerWrapperOutEvent.
-        sendBack(e as unknown as PeerWrapperOutEvent)
-        emit(e as unknown as PeerWrapperOutEvent)
+        sendBack(e)
+        emit(e)
       }
     }
   })
@@ -133,7 +133,9 @@ export const peerWrapperActor = fromCallback<
         break
       case 'SET_MIC_TRACK':
         inner.send({
-          type: 'SET_MIC_TRACK', track: evt.track, stream: evt.stream
+          type: 'SET_MIC_TRACK',
+          track: evt.track,
+          stream: evt.stream
         } satisfies PeerInEvent)
         break
       case 'SEND_SYNC':

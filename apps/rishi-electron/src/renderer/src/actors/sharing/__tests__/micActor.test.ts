@@ -4,7 +4,10 @@ import { micActor } from '../micActor'
 
 function makeFakeMedia() {
   const track = { enabled: true, stop: vi.fn(), kind: 'audio' } as unknown as MediaStreamTrack
-  const stream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream
+  const stream = {
+    getTracks: () => [track],
+    getAudioTracks: () => [track]
+  } as unknown as MediaStream
   const getUserMedia = vi.fn(async () => stream)
   return { track, stream, getUserMedia }
 }

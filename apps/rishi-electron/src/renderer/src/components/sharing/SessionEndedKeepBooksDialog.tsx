@@ -1,4 +1,5 @@
-import React, { useEffect, useRef } from 'react'
+import type React from 'react'
+import { useEffect, useRef } from 'react'
 
 export type KeepableBook = {
   dbBookId: number
@@ -46,11 +47,7 @@ export function SessionEndedKeepBooksDialog({
           ))}
         </ul>
         <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onDiscard}
-            className="px-4 py-2 rounded border text-sm"
-          >
+          <button type="button" onClick={onDiscard} className="px-4 py-2 rounded border text-sm">
             Discard
           </button>
           <button

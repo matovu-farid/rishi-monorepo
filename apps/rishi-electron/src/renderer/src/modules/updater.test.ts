@@ -14,15 +14,14 @@ beforeEach(() => {
   )
   ;(window.electron.showMessageBox as ReturnType<typeof vi.fn>).mockReset()
   ;(window.electron.showMessageBox as ReturnType<typeof vi.fn>).mockResolvedValue({ response: 0 })
-  ;(
-    window.electron as unknown as { checkForUpdates: ReturnType<typeof vi.fn> }
-  ).checkForUpdates = vi.fn().mockResolvedValue({ updateAvailable: true, version: '2.0.0' })
-  ;(
-    window.electron as unknown as { downloadUpdate: ReturnType<typeof vi.fn> }
-  ).downloadUpdate = vi.fn().mockResolvedValue(undefined)
-  ;(
-    window.electron as unknown as { installUpdate: ReturnType<typeof vi.fn> }
-  ).installUpdate = vi.fn().mockResolvedValue(undefined)
+  ;(window.electron as unknown as { checkForUpdates: ReturnType<typeof vi.fn> }).checkForUpdates =
+    vi.fn().mockResolvedValue({ updateAvailable: true, version: '2.0.0' })
+  ;(window.electron as unknown as { downloadUpdate: ReturnType<typeof vi.fn> }).downloadUpdate = vi
+    .fn()
+    .mockResolvedValue(undefined)
+  ;(window.electron as unknown as { installUpdate: ReturnType<typeof vi.fn> }).installUpdate = vi
+    .fn()
+    .mockResolvedValue(undefined)
   vi.resetModules()
 })
 
@@ -45,9 +44,8 @@ describe('updater module — seamless auto-update behaviour', () => {
   })
 
   it('does NOT show any dialog when no update is available after a silent check', async () => {
-    ;(
-      window.electron as unknown as { checkForUpdates: ReturnType<typeof vi.fn> }
-    ).checkForUpdates = vi.fn().mockResolvedValue({ updateAvailable: false })
+    ;(window.electron as unknown as { checkForUpdates: ReturnType<typeof vi.fn> }).checkForUpdates =
+      vi.fn().mockResolvedValue({ updateAvailable: false })
     const { checkForUpdates } = await import('./updater')
 
     await checkForUpdates({ silent: true })

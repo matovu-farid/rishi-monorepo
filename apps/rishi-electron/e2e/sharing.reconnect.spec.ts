@@ -1,9 +1,5 @@
 import { test, expect } from '@playwright/test'
-import {
-  launchAndOpenBookForSharing,
-  closeApp,
-  PDF_FIXTURE
-} from './helpers/electron-app'
+import { launchAndOpenBookForSharing, closeApp, PDF_FIXTURE } from './helpers/electron-app'
 import { readWranglerDevUrl } from './helpers/wrangler-dev'
 import {
   waitForBothLive,
@@ -38,7 +34,8 @@ test('viewer WS drop → reconnecting → seamless rejoin within 30s grace', asy
       })
     )
     await viewerAcceptInvite(viewer.page, joinToken, {
-      userId: 'viewer-r1', displayName: 'Viewer'
+      userId: 'viewer-r1',
+      displayName: 'Viewer'
     })
     await waitForBothLive(host.page, viewer.page)
 

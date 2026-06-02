@@ -110,10 +110,7 @@ interface PdfState {
   setFooterMask: (bookId: number, mask: FooterMask) => void
   clearFooterMask: (bookId: number) => void
   getFooterMaskForPage: (bookId: number, pageNumber: number) => ReadonlySet<number> | undefined
-  setPageDimensions: (
-    bookId: number,
-    dims: { baseWidth: number; baseHeight: number }[]
-  ) => void
+  setPageDimensions: (bookId: number, dims: { baseWidth: number; baseHeight: number }[]) => void
   clearPageDimensions: (bookId: number) => void
   getPageDimension: (
     bookId: number,

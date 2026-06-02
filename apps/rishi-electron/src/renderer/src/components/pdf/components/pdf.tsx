@@ -1089,7 +1089,7 @@ export function PdfView({
       {/* Share button — mounts useSessionMachine so the session actor is
           live and `window.__rishi.sessionMachineStore` is observable while
           the reader is open. Mirror of EpubView's ReaderOverlayControls. */}
-      {showSharingEntry && <SessionEntryButton bookId={book.id} />}
+      {showSharingEntry ? <SessionEntryButton bookId={book.id} /> : null}
 
       {/* TTS Controls — visually hidden while AI chat is active (stays mounted to avoid audio cleanup) */}
       <div style={{ display: isChatting ? 'none' : 'contents' }}>

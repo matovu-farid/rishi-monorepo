@@ -36,7 +36,9 @@ describe('reconnectActor', () => {
   })
 
   it('emits HARD_FAIL when reservedUntil expires before success', async () => {
-    const tryConnect = vi.fn(async () => { throw new Error('down') })
+    const tryConnect = vi.fn(async () => {
+      throw new Error('down')
+    })
     const events: any[] = []
     const start = Date.now()
     const actor = createActor(reconnectActor, {
@@ -55,7 +57,9 @@ describe('reconnectActor', () => {
   })
 
   it('exhausts schedule and emits HARD_FAIL with reason exhausted', async () => {
-    const tryConnect = vi.fn(async () => { throw new Error('down') })
+    const tryConnect = vi.fn(async () => {
+      throw new Error('down')
+    })
     const events: any[] = []
     const actor = createActor(reconnectActor, {
       input: { schedule: [10, 10], reservedUntil: Date.now() + 60_000, tryConnect }

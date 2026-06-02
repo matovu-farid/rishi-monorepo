@@ -46,7 +46,7 @@ export default function ReaderOverlayControls({
     <>
       {isChatting ? <AIChatOrb chatStatus={chatStatus} onClick={onChatOrbClick} /> : null}
       <VoiceChatLauncher />
-      {showSharingEntry && <SessionEntryButton bookId={Number(bookId)} />}
+      {showSharingEntry ? <SessionEntryButton bookId={Number(bookId)} /> : null}
       <div style={{ display: isChatting ? 'none' : 'contents' }}>
         <TTSControls bookId={bookId} />
         <TTSVisualCue />

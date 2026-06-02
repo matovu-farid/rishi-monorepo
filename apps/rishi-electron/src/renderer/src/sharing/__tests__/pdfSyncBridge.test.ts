@@ -43,7 +43,10 @@ describe('createPdfSyncBridge', () => {
       onBroadcast: () => {}
     })
     bridge.applyIncoming({
-      v: 1, t: 'reader.position', bookId: 'b', ts: 1,
+      v: 1,
+      t: 'reader.position',
+      bookId: 'b',
+      ts: 1,
       position: { format: 'pdf', page: 12, offsetY: 88, ts: 1 }
     })
     expect(pdfRef.send).toHaveBeenCalledWith({ type: 'SEEK_REQUESTED', page: 12 })
@@ -54,10 +57,16 @@ describe('createPdfSyncBridge', () => {
   it('ignores EPUB-format positions', () => {
     const pdfRef = { subscribe: () => () => {}, send: vi.fn(), scrollToOffset: vi.fn() }
     const bridge = createPdfSyncBridge({
-      mode: 'consumer', bookId: 'b', pdfMachineRef: pdfRef, onBroadcast: () => {}
+      mode: 'consumer',
+      bookId: 'b',
+      pdfMachineRef: pdfRef,
+      onBroadcast: () => {}
     })
     bridge.applyIncoming({
-      v: 1, t: 'reader.position', bookId: 'b', ts: 1,
+      v: 1,
+      t: 'reader.position',
+      bookId: 'b',
+      ts: 1,
       position: { format: 'epub', cfi: 'cfi/x', ts: 1 }
     })
     expect(pdfRef.send).not.toHaveBeenCalled()

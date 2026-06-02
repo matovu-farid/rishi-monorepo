@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react'
+import type React from 'react'
+import { useEffect, useState } from 'react'
 
 export type InviteUser = { userId: string; email: string; displayName: string; avatarUrl?: string }
 
@@ -9,26 +10,46 @@ export type InvitePanelProps = {
 }
 
 export function InvitePanel({
-  joinUrl, onSearchUsers, onInviteUser
+  joinUrl,
+  onSearchUsers,
+  onInviteUser
 }: InvitePanelProps): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<InviteUser[]>([])
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
-    if (!query) { setResults([]); return }
-    const handle = setTimeout(async () => {
-      try { setResults(await onSearchUsers(query)) } catch { setResults([]) }
+    // Skip the debounced fetch entirely when the query is empty. The render
+    // path below gates on `query` so stale results from a prior query are
+    // never displayed — no synchronous setState-in-effect needed.
+    if (!query) return
+    const handle = setTimeout(() => {
+      void (async () => {
+        try {
+          setResults(await onSearchUsers(query))
+        } catch {
+          setResults([])
+        }
+      })()
     }, 250)
     return () => clearTimeout(handle)
   }, [query, onSearchUsers])
 
+  const displayResults = query ? results : []
+
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <label htmlFor="invite-link" className="text-sm font-medium">Invite link</label>
+        <label htmlFor="invite-link" className="text-sm font-medium">
+          Invite link
+        </label>
         <div className="flex gap-2">
-          <input id="invite-link" readOnly value={joinUrl} className="flex-1 border rounded px-2 py-1" />
+          <input
+            id="invite-link"
+            readOnly
+            value={joinUrl}
+            className="flex-1 border rounded px-2 py-1"
+          />
           <button
             type="button"
             onClick={async () => {
@@ -43,7 +64,9 @@ export function InvitePanel({
         </div>
       </div>
       <div className="space-y-2">
-        <label htmlFor="invite-email" className="text-sm font-medium">Invite by email</label>
+        <label htmlFor="invite-email" className="text-sm font-medium">
+          Invite by email
+        </label>
         <input
           id="invite-email"
           aria-label="email"
@@ -53,10 +76,14 @@ export function InvitePanel({
           className="w-full border rounded px-2 py-1"
         />
         <ul>
-          {results.map((u) => (
+          {displayResults.map((u) => (
             <li key={u.userId} className="flex items-center justify-between py-1">
-              <span>{u.displayName} <span className="text-muted-foreground">({u.email})</span></span>
-              <button type="button" className="text-sm underline" onClick={() => onInviteUser(u)}>Invite</button>
+              <span>
+                {u.displayName} <span className="text-muted-foreground">({u.email})</span>
+              </span>
+              <button type="button" className="text-sm underline" onClick={() => onInviteUser(u)}>
+                Invite
+              </button>
             </li>
           ))}
         </ul>

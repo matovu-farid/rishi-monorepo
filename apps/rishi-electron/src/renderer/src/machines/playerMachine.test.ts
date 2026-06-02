@@ -1386,9 +1386,7 @@ describe('view-actor integration (Phase 3.5)', () => {
 
   it('sendTo NAVIGATE_NEXT on waitingForParagraphs entry (forward, via AUDIO_ENDED at last paragraph)', () => {
     const { mockView, commands } = makeMockView()
-    const actor = createActor(
-      playerMachine.provide({ actors: { view: mockView } })
-    ).start()
+    const actor = createActor(playerMachine.provide({ actors: { view: mockView } })).start()
 
     actor.send({ type: 'INITIALIZE', bookId: 'book1' })
     actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(1) })
@@ -1401,9 +1399,7 @@ describe('view-actor integration (Phase 3.5)', () => {
 
   it('sendTo NAVIGATE_NEXT on waitingForParagraphs entry (forward, via NEXT at last paragraph)', () => {
     const { mockView, commands } = makeMockView()
-    const actor = createActor(
-      playerMachine.provide({ actors: { view: mockView } })
-    ).start()
+    const actor = createActor(playerMachine.provide({ actors: { view: mockView } })).start()
 
     actor.send({ type: 'INITIALIZE', bookId: 'book1' })
     actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(1) })
@@ -1416,9 +1412,7 @@ describe('view-actor integration (Phase 3.5)', () => {
 
   it('sendTo NAVIGATE_PREV on waitingForParagraphs entry (backward, via PREV at first paragraph)', () => {
     const { mockView, commands } = makeMockView()
-    const actor = createActor(
-      playerMachine.provide({ actors: { view: mockView } })
-    ).start()
+    const actor = createActor(playerMachine.provide({ actors: { view: mockView } })).start()
 
     actor.send({ type: 'INITIALIZE', bookId: 'book1' })
     actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })
@@ -1431,9 +1425,7 @@ describe('view-actor integration (Phase 3.5)', () => {
 
   it('sendTo REPUBLISH on republishingParagraphs entry', () => {
     const { mockView, commands } = makeMockView()
-    const actor = createActor(
-      playerMachine.provide({ actors: { view: mockView } })
-    ).start()
+    const actor = createActor(playerMachine.provide({ actors: { view: mockView } })).start()
 
     actor.send({ type: 'INITIALIZE', bookId: 'book1' })
     // Stopped + empty paragraphs + PLAY routes to republishingParagraphs.
@@ -1444,9 +1436,7 @@ describe('view-actor integration (Phase 3.5)', () => {
 
   it('VIEW_CHANGED in waitingForParagraphs transitions to loading with new paragraphs', () => {
     const { mockView, emit } = makeMockView()
-    const actor = createActor(
-      playerMachine.provide({ actors: { view: mockView } })
-    ).start()
+    const actor = createActor(playerMachine.provide({ actors: { view: mockView } })).start()
 
     actor.send({ type: 'INITIALIZE', bookId: 'book1' })
     actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(1) })
@@ -1468,9 +1458,7 @@ describe('view-actor integration (Phase 3.5)', () => {
 
   it('VIEW_CHANGED in republishingParagraphs transitions to loading', () => {
     const { mockView, emit } = makeMockView()
-    const actor = createActor(
-      playerMachine.provide({ actors: { view: mockView } })
-    ).start()
+    const actor = createActor(playerMachine.provide({ actors: { view: mockView } })).start()
 
     actor.send({ type: 'INITIALIZE', bookId: 'book1' })
     actor.send({ type: 'PLAY' }) // stopped + empty → republishingParagraphs
@@ -1486,9 +1474,7 @@ describe('view-actor integration (Phase 3.5)', () => {
 
   it('VIEW_CHANGED in pageNavigating with wantsAutoResume transitions to loading', () => {
     const { mockView, emit } = makeMockView()
-    const actor = createActor(
-      playerMachine.provide({ actors: { view: mockView } })
-    ).start()
+    const actor = createActor(playerMachine.provide({ actors: { view: mockView } })).start()
 
     actor.send({ type: 'INITIALIZE', bookId: 'book1' })
     actor.send({ type: 'PARAGRAPHS_UPDATED', paragraphs: makeParagraphs(3) })

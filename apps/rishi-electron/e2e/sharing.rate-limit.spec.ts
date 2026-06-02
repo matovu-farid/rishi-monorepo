@@ -1,9 +1,5 @@
 import { test, expect } from '@playwright/test'
-import {
-  launchAndOpenBookForSharing,
-  closeApp,
-  PDF_FIXTURE
-} from './helpers/electron-app'
+import { launchAndOpenBookForSharing, closeApp, PDF_FIXTURE } from './helpers/electron-app'
 import { readWranglerDevUrl } from './helpers/wrangler-dev'
 import {
   waitForBothLive,

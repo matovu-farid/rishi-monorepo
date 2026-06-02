@@ -116,9 +116,15 @@ describe('buildFooterMask', () => {
     // Use unique alphabetic body strings (no embedded digits) so neither
     // the repetition nor suffix strategies hash them to the same key.
     const bodies = [
-      'Alpha narrative one', 'Beta narrative two', 'Gamma narrative three',
-      'Delta narrative four', 'Epsilon narrative five', 'Zeta narrative six',
-      'Eta narrative seven', 'Theta narrative eight', 'Iota narrative nine',
+      'Alpha narrative one',
+      'Beta narrative two',
+      'Gamma narrative three',
+      'Delta narrative four',
+      'Epsilon narrative five',
+      'Zeta narrative six',
+      'Eta narrative seven',
+      'Theta narrative eight',
+      'Iota narrative nine',
       'Kappa narrative ten'
     ]
     const pages: PageScanInput[] = []
@@ -398,9 +404,16 @@ describe('buildFooterMask — orchestrator union', () => {
     // them and pollute the assertion that body (index 0) stays unmasked.
     const pages: PageScanInput[] = []
     const titles = [
-      'Chapter 1', 'Chapter 1', 'Chapter 1', 'Chapter 1',
-      'Chapter 2', 'Chapter 2', 'Chapter 2', 'Chapter 2',
-      'Chapter 3', 'Chapter 3'
+      'Chapter 1',
+      'Chapter 1',
+      'Chapter 1',
+      'Chapter 1',
+      'Chapter 2',
+      'Chapter 2',
+      'Chapter 2',
+      'Chapter 2',
+      'Chapter 3',
+      'Chapter 3'
     ]
     const bodies = [
       'Alpha narrative one with enough words to feel substantive',
@@ -418,8 +431,8 @@ describe('buildFooterMask — orchestrator union', () => {
       pages.push(
         makePage(p, [
           { str: bodies[p - 1], y: 400 },
-          { str: String(p), y: 30 },     // page number — repetition catches this
-          { str: titles[p - 1], y: 30 }  // chapter title — position catches this
+          { str: String(p), y: 30 }, // page number — repetition catches this
+          { str: titles[p - 1], y: 30 } // chapter title — position catches this
         ])
       )
     }

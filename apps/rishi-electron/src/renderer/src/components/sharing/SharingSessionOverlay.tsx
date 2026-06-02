@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import type React from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSessionMachine } from '@/hooks/useSessionMachine'
 import { isSharingEnabled, isSharingEnabledForUser } from '@/lib/sharing-flag'
 import { SessionPanel, type SessionPanelParticipant } from './SessionPanel'
@@ -7,10 +8,7 @@ import { HostSuspendedBanner } from './HostSuspendedBanner'
 import { KickedDialog } from './KickedDialog'
 import { RoleTransferToast } from './RoleTransferToast'
 import { BookPersistFailedToast } from './BookPersistFailedToast'
-import {
-  SessionEndedKeepBooksDialog,
-  type KeepableBook
-} from './SessionEndedKeepBooksDialog'
+import { SessionEndedKeepBooksDialog, type KeepableBook } from './SessionEndedKeepBooksDialog'
 import type { InviteUser } from './InvitePanel'
 
 /**
@@ -110,18 +108,14 @@ export function SharingSessionOverlay(): React.JSX.Element | null {
   // Surface saveTransferredBook IPC failures as a transient toast. We watch
   // `persistFailures.length` rather than the array identity so a new entry
   // always triggers a fresh toast even if the user dismissed the prior one.
-  // Defensive `?? []` keeps the overlay rendering when older tests stub a
-  // partial context.
-  const persistFailures = state.context.persistFailures ?? []
+  const persistFailures = state.context.persistFailures
   const [persistFailureMessage, setPersistFailureMessage] = useState<string | null>(null)
   const seenPersistFailuresRef = useRef<number>(persistFailures.length)
   useEffect(() => {
     const seen = seenPersistFailuresRef.current
     if (persistFailures.length <= seen) return
     const latest = persistFailures[persistFailures.length - 1]
-    setPersistFailureMessage(
-      `Couldn't save received book "${latest.bookId}": ${latest.error}`
-    )
+    setPersistFailureMessage(`Couldn't save received book "${latest.bookId}": ${latest.error}`)
     seenPersistFailuresRef.current = persistFailures.length
   }, [persistFailures])
   useEffect(() => {
@@ -172,10 +166,12 @@ export function SharingSessionOverlay(): React.JSX.Element | null {
   const isIdle = value === 'idle'
   if (isIdle) return null
 
-  const inConnected = typeof value === 'object' && value !== null && 'connected' in value
+  const inConnected = typeof value === 'object' && 'connected' in value
   const inAwaitingApproval = inConnected && valueMatches(value, 'connected.awaitingApproval')
-  const inLive = inConnected && typeof (value as { connected: unknown }).connected === 'object'
-    && 'live' in ((value as { connected: Record<string, unknown> }).connected)
+  const inLive =
+    inConnected &&
+    typeof (value as { connected: unknown }).connected === 'object' &&
+    'live' in (value as { connected: Record<string, unknown> }).connected
   const inPromptingKeep = inConnected && valueMatches(value, 'connected.promptingKeepBooks')
   const inFailed = value === 'failed'
   const errorCode = state.context.error?.code
@@ -183,30 +179,24 @@ export function SharingSessionOverlay(): React.JSX.Element | null {
   const isSessionEnded = inFailed && errorCode === 'session_ended'
   const hostSuspended = inLive && valueIncludesKey(value, 'hostStatus', 'suspended')
 
-  const onSearchUsers = async (_q: string): Promise<InviteUser[]> => []
+  const onSearchUsers = (_q: string): Promise<InviteUser[]> => Promise.resolve([])
   const onInviteUser = (_u: InviteUser): void => {}
 
   return (
     <>
-      {hostSuspended && (
-        <div
-          data-testid="host-suspended-banner"
-          className="fixed top-0 inset-x-0 z-40"
-        >
+      {hostSuspended ? (
+        <div data-testid="host-suspended-banner" className="fixed top-0 inset-x-0 z-40">
           {/*
             Prefer the wire-sourced deadline from the machine (set by the
-            HOST_SUSPENDED frame and the roster mirror). Fall back to a
-            120s grace from "now" only when the deadline is missing —
-            matches the worker's CONFIG.HOST_GRACE_MS so the local fallback
-            never out-races the server-side timeout.
+            HOST_SUSPENDED frame and the roster mirror). Pass `null` when
+            the deadline is missing; the banner derives its own 120s
+            fallback at mount — see HostSuspendedBanner's docstring.
           */}
-          <HostSuspendedBanner
-            until={state.context.hostSuspendedUntil ?? Date.now() + 120_000}
-          />
+          <HostSuspendedBanner until={state.context.hostSuspendedUntil ?? null} />
         </div>
-      )}
+      ) : null}
 
-      {inLive && state.context.joinUrl !== null && (
+      {inLive && state.context.joinUrl !== null ? (
         <div className="fixed top-0 right-0 z-30 h-full pointer-events-auto">
           <SessionPanel
             role={state.context.role}
@@ -214,7 +204,7 @@ export function SharingSessionOverlay(): React.JSX.Element | null {
             sharerId={state.context.sharerId ?? ''}
             participants={participants}
             pendingJoiners={pendingJoiners}
-            joinUrl={state.context.joinUrl ?? ''}
+            joinUrl={state.context.joinUrl}
             fileTransfers={[]}
             onSearchUsers={onSearchUsers}
             onInviteUser={onInviteUser}
@@ -226,13 +216,9 @@ export function SharingSessionOverlay(): React.JSX.Element | null {
             onKick={(userId) => send({ type: 'KICK_PEER', userId })}
           />
         </div>
-      )}
+      ) : null}
 
-      {inLive && state.context.role === 'viewer' && state.context.joinUrl === null && (
-        // Viewer-side: no joinUrl, render a compact roster-only panel so the
-        // viewer can still see who else is in the session. SessionPanel needs
-        // a joinUrl for the invite section — pass an empty string and the
-        // host-only Invite section will simply show an empty input.
+      {inLive && state.context.role === 'viewer' && state.context.joinUrl === null ? (
         <div className="fixed top-0 right-0 z-30 h-full pointer-events-auto">
           <SessionPanel
             role="viewer"
@@ -252,50 +238,47 @@ export function SharingSessionOverlay(): React.JSX.Element | null {
             onKick={() => {}}
           />
         </div>
-      )}
+      ) : null}
 
-      {inAwaitingApproval && (
-        <ApprovalWaitingScreen
-          hostName="the host"
-          onCancel={() => send({ type: 'LEAVE' })}
-        />
-      )}
+      {inAwaitingApproval ? (
+        <ApprovalWaitingScreen hostName="the host" onCancel={() => send({ type: 'LEAVE' })} />
+      ) : null}
 
-      {isKicked && (
+      {isKicked ? (
         <KickedDialog
           reason={state.context.error?.message ?? 'You were removed from the session.'}
           onDismiss={() => send({ type: 'DISMISS' })}
         />
-      )}
+      ) : null}
 
-      {isSessionEnded && (
+      {isSessionEnded ? (
         <KickedDialog
           reason={state.context.error?.message ?? 'The session has ended.'}
           onDismiss={() => send({ type: 'DISMISS' })}
         />
-      )}
+      ) : null}
 
-      {inPromptingKeep && keepableBooks.length > 0 && (
+      {inPromptingKeep && keepableBooks.length > 0 ? (
         <SessionEndedKeepBooksDialog
           books={keepableBooks}
           onKeep={() => send({ type: 'KEEP_BOOKS' })}
           onDiscard={() => send({ type: 'DISCARD_BOOKS' })}
         />
-      )}
+      ) : null}
 
-      {roleTransferMessage && (
+      {roleTransferMessage ? (
         <RoleTransferToast
           message={roleTransferMessage}
           onDismiss={() => setRoleTransferMessage(null)}
         />
-      )}
+      ) : null}
 
-      {persistFailureMessage && (
+      {persistFailureMessage ? (
         <BookPersistFailedToast
           message={persistFailureMessage}
           onDismiss={() => setPersistFailureMessage(null)}
         />
-      )}
+      ) : null}
     </>
   )
 }

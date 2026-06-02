@@ -75,9 +75,9 @@ describe('discardTransferredBookSchema', () => {
   })
   it('rejects a sibling-traversal path', () => {
     const evil = path.join(sharedDir, '..', '..', 'etc', 'passwd')
-    expect(() =>
-      discardTransferredBookSchema.parse({ dbBookId: 1, localPath: evil })
-    ).toThrow(/outside|shared-reading-library/i)
+    expect(() => discardTransferredBookSchema.parse({ dbBookId: 1, localPath: evil })).toThrow(
+      /outside|shared-reading-library/i
+    )
   })
   it('rejects non-positive dbBookId', () => {
     expect(() =>
@@ -102,9 +102,7 @@ describe('readBookBytesSchema', () => {
     ).not.toThrow()
   })
   it('rejects empty bookId', () => {
-    expect(() =>
-      readBookBytesSchema.parse({ bookId: '', contentHash: 'b'.repeat(64) })
-    ).toThrow()
+    expect(() => readBookBytesSchema.parse({ bookId: '', contentHash: 'b'.repeat(64) })).toThrow()
   })
 })
 

@@ -117,7 +117,8 @@ test('viewer without book receives P2P file transfer and sync follows', async ()
     // hostFileSender on PEER_CONNECTED, viewer spawns a viewerFileReceiver,
     // bytes flow over the (fake) `files` data channel.
     await viewerAcceptInvite(viewerReader, joinToken, {
-      userId: 'viewer-ft1', displayName: 'Viewer'
+      userId: 'viewer-ft1',
+      displayName: 'Viewer'
     })
     await waitForBothLive(hostReader, viewerReader)
 
@@ -142,9 +143,11 @@ test('viewer without book receives P2P file transfer and sync follows', async ()
     // REPORT_HAS_BOOK) a moment to settle before we poll the library.
     await viewerReader.waitForFunction(
       async () => {
-        const e = (window as unknown as {
-          electron: { getBooks: () => Promise<Array<{ title: string }>> }
-        }).electron
+        const e = (
+          window as unknown as {
+            electron: { getBooks: () => Promise<Array<{ title: string }>> }
+          }
+        ).electron
         const list = await e.getBooks()
         return list.length >= 2
       },
@@ -152,9 +155,11 @@ test('viewer without book receives P2P file transfer and sync follows', async ()
       { timeout: 15_000, polling: 250 }
     )
     const books = await viewerReader.evaluate(async () => {
-      const e = (window as unknown as {
-        electron: { getBooks: () => Promise<Array<{ title: string; file_hash?: string | null }>> }
-      }).electron
+      const e = (
+        window as unknown as {
+          electron: { getBooks: () => Promise<Array<{ title: string; file_hash?: string | null }>> }
+        }
+      ).electron
       return await e.getBooks()
     })
     expect(books.length).toBeGreaterThanOrEqual(2)

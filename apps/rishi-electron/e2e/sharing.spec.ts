@@ -1,9 +1,5 @@
 import { test, expect } from '@playwright/test'
-import {
-  launchAndOpenBookForSharing,
-  closeApp,
-  PDF_FIXTURE
-} from './helpers/electron-app'
+import { launchAndOpenBookForSharing, closeApp, PDF_FIXTURE } from './helpers/electron-app'
 import { readWranglerDevUrl } from './helpers/wrangler-dev'
 import {
   waitForBothLive,
@@ -76,7 +72,8 @@ test.describe('Shared reading — happy path', () => {
         })
       )
       await viewerAcceptInvite(viewer.page, joinToken, {
-        userId: 'viewer-2', displayName: 'Viewer'
+        userId: 'viewer-2',
+        displayName: 'Viewer'
       })
       await waitForBothLive(host.page, viewer.page)
 
@@ -113,7 +110,8 @@ test.describe('Shared reading — happy path', () => {
         })
       )
       await viewerAcceptInvite(viewer.page, joinToken, {
-        userId: 'viewer-3', displayName: 'Viewer'
+        userId: 'viewer-3',
+        displayName: 'Viewer'
       })
       await waitForBothLive(host.page, viewer.page)
 
@@ -166,7 +164,8 @@ test.describe('Shared reading — happy path', () => {
         })
       )
       await viewerAcceptInvite(viewer.page, joinToken, {
-        userId: 'viewer-4', displayName: 'Viewer'
+        userId: 'viewer-4',
+        displayName: 'Viewer'
       })
       await waitForBothLive(host.page, viewer.page)
 
@@ -212,7 +211,8 @@ test.describe('Shared reading — happy path', () => {
         })
       )
       await viewerAcceptInvite(viewer.page, joinToken, {
-        userId: 'viewer-5', displayName: 'Viewer'
+        userId: 'viewer-5',
+        displayName: 'Viewer'
       })
       await waitForBothLive(host.page, viewer.page)
 
@@ -305,7 +305,9 @@ test.describe('Shared reading — happy path', () => {
         try {
           const proc = host.app.process()
           if (proc && !proc.killed) proc.kill('SIGKILL')
-        } catch { /* gone */ }
+        } catch {
+          /* gone */
+        }
       }
       await closeApp(viewer)
     }

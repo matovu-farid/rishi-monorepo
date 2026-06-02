@@ -184,10 +184,9 @@ describe('voiceChatMachine targeted coverage — offline recovery', () => {
       actor.start()
       for (const step of paths[0].steps) actor.send(step.event)
       actor.send({ type: 'OFFLINE' })
-      expect(
-        actor.getSnapshot().value,
-        `OFFLINE from ${stateKey} did not land in offline`
-      ).toBe('offline')
+      expect(actor.getSnapshot().value, `OFFLINE from ${stateKey} did not land in offline`).toBe(
+        'offline'
+      )
     }
   })
 })

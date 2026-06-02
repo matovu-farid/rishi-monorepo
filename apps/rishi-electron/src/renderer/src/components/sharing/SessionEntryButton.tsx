@@ -1,4 +1,5 @@
-import React, { useState, useCallback } from 'react'
+import type React from 'react'
+import { useState, useCallback } from 'react'
 import { StartSessionPopover } from './StartSessionPopover'
 import { useSessionMachine } from '@/hooks/useSessionMachine'
 
@@ -33,7 +34,7 @@ export function SessionEntryButton({ bookId }: SessionEntryButtonProps): React.J
           window.electron.sharing.getSigningJwt(),
           window.electron.getBook(bookId)
         ])
-        if (!book || !book.fileHash) return
+        if (!book?.fileHash) return
         const format = book.format
         if (format !== 'epub' && format !== 'pdf') return
         send({
@@ -65,11 +66,11 @@ export function SessionEntryButton({ bookId }: SessionEntryButtonProps): React.J
       >
         Share
       </button>
-      {open && (
+      {open ? (
         <div className="absolute right-0 mt-2 z-50" role="dialog">
           <StartSessionPopover onStart={onStart} onCancel={onCancel} />
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

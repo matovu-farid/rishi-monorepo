@@ -17,11 +17,9 @@ const makeItem = (
   hasEOL: opts.hasEOL ?? true
 })
 
-const texts = (items: any[]): string[] =>
-  orderTextItemsForReading(items).map((e) => e.item.str)
+const texts = (items: any[]): string[] => orderTextItemsForReading(items).map((e) => e.item.str)
 
-const indices = (items: any[]): number[] =>
-  orderTextItemsForReading(items).map((e) => e.index)
+const indices = (items: any[]): number[] => orderTextItemsForReading(items).map((e) => e.index)
 
 describe('orderTextItemsForReading', () => {
   it('orders a single-column page top-to-bottom even when the stream emits the footnote first', () => {

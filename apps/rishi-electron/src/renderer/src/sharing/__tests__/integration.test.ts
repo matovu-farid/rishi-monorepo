@@ -8,8 +8,16 @@ import type { WsAdapter } from '@/actors/sharing/wsAdapter'
 function makeWsPair() {
   const buses = { a: [] as string[], b: [] as string[] }
   const listeners = {
-    a: { msg: [] as Array<(s: string) => void>, open: [] as Array<() => void>, close: [] as Array<(c: number, r: string) => void> },
-    b: { msg: [] as Array<(s: string) => void>, open: [] as Array<() => void>, close: [] as Array<(c: number, r: string) => void> }
+    a: {
+      msg: [] as Array<(s: string) => void>,
+      open: [] as Array<() => void>,
+      close: [] as Array<(c: number, r: string) => void>
+    },
+    b: {
+      msg: [] as Array<(s: string) => void>,
+      open: [] as Array<() => void>,
+      close: [] as Array<(c: number, r: string) => void>
+    }
   }
   function makeSide(side: 'a' | 'b'): WsAdapter {
     const other = side === 'a' ? 'b' : 'a'
@@ -41,19 +49,26 @@ describe('full-stack integration (no real network)', () => {
       sessionMachine.provide({
         actors: {
           createSessionOnDO: fromPromise(async () => ({
-            sessionId: 's1', joinToken: 'jt',
+            sessionId: 's1',
+            joinToken: 'jt',
             joinUrl: 'rishi://sharing/join?t=jt',
             wsUrl: 'wss://x/v1/sessions/s1/wss'
           })),
-          redeemJoinToken: fromPromise(async () => { throw new Error('not used') }),
-          signaling: fromCallback(() => { /* inert */ })
+          redeemJoinToken: fromPromise(async () => {
+            throw new Error('not used')
+          }),
+          signaling: fromCallback(() => {
+            /* inert */
+          })
         }
       })
     )
     const viewer = createActor(
       sessionMachine.provide({
         actors: {
-          createSessionOnDO: fromPromise(async () => { throw new Error('not used') }),
+          createSessionOnDO: fromPromise(async () => {
+            throw new Error('not used')
+          }),
           redeemJoinToken: fromPromise(async () => ({
             sessionId: 's1',
             bookContext: { bookId: 'b', contentHash: 'h', format: 'epub' as const },
@@ -61,7 +76,9 @@ describe('full-stack integration (no real network)', () => {
             hostProfile: { displayName: 'Host' },
             wsUrl: 'wss://x/v1/sessions/s1/wss'
           })),
-          signaling: fromCallback(() => { /* inert */ })
+          signaling: fromCallback(() => {
+            /* inert */
+          })
         }
       })
     )
@@ -76,14 +93,18 @@ describe('full-stack integration (no real network)', () => {
     viewer.send({
       type: 'ACCEPT_INVITE',
       me: { userId: 'u_b', displayName: 'V', authToken: 'jwt' },
-      sessionId: 's1', joinToken: 'jt'
+      sessionId: 's1',
+      joinToken: 'jt'
     })
     const inConnecting = (snap: ReturnType<typeof host.getSnapshot>): boolean => {
       const v = snap.value as unknown
       if (v === 'connecting') return true
-      return typeof v === 'object' && v !== null
-        && 'connected' in (v as Record<string, unknown>)
-        && (v as { connected: unknown }).connected === 'connecting'
+      return (
+        typeof v === 'object' &&
+        v !== null &&
+        'connected' in (v as Record<string, unknown>) &&
+        (v as { connected: unknown }).connected === 'connecting'
+      )
     }
     await vi.waitFor(() => expect(inConnecting(host.getSnapshot())).toBe(true))
     await vi.waitFor(() => expect(inConnecting(viewer.getSnapshot())).toBe(true))
@@ -103,14 +124,23 @@ describe('full-stack integration (no real network)', () => {
       input: { wsUrl: 'x', jwt: 'j', hasBookFile: true, connect: () => pair.b }
     })
     b.on('*', (e) => eventsB.push(e))
-    a.start(); b.start()
+    a.start()
+    b.start()
     pair.openBoth()
-    pair.a.send(JSON.stringify({
-      v: 1, t: 'welcome', you: 'u_b', role: 'viewer',
-      sharerId: 'u_a', reconnectToken: 'rt', reservedUntil: 9
-    }))
+    pair.a.send(
+      JSON.stringify({
+        v: 1,
+        t: 'welcome',
+        you: 'u_b',
+        role: 'viewer',
+        sharerId: 'u_a',
+        reconnectToken: 'rt',
+        reservedUntil: 9
+      })
+    )
     await vi.waitFor(() => expect(eventsB.find((e) => e.type === 'WELCOME')).toBeTruthy())
-    a.stop(); b.stop()
+    a.stop()
+    b.stop()
   })
 
   it('syncActors round-trip a format-native pdf reader.position', async () => {
@@ -121,11 +151,15 @@ describe('full-stack integration (no real network)', () => {
     producer.on('*', (e) => {
       if (e.type === 'OUTGOING_SYNC') consumer.send({ type: 'SYNC_RECEIVED', msg: e.msg })
     })
-    producer.start(); consumer.start()
+    producer.start()
+    consumer.start()
     producer.send({
       type: 'BROADCAST',
       msg: {
-        v: 1, t: 'reader.position', bookId: 'b', ts: 1,
+        v: 1,
+        t: 'reader.position',
+        bookId: 'b',
+        ts: 1,
         position: { format: 'pdf', page: 4, offsetY: 16, ts: 1 }
       }
     })
@@ -143,11 +177,15 @@ describe('full-stack integration (no real network)', () => {
     producer.on('*', (e) => {
       if (e.type === 'OUTGOING_SYNC') consumer.send({ type: 'SYNC_RECEIVED', msg: e.msg })
     })
-    producer.start(); consumer.start()
+    producer.start()
+    consumer.start()
     producer.send({
       type: 'BROADCAST',
       msg: {
-        v: 1, t: 'reader.position', bookId: 'b', ts: 1,
+        v: 1,
+        t: 'reader.position',
+        bookId: 'b',
+        ts: 1,
         position: { format: 'epub', cfi: 'cfi/x', ts: 1 }
       }
     })

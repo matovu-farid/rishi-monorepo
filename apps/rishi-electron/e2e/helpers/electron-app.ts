@@ -55,10 +55,7 @@ export async function closeApp(launched: LaunchedApp): Promise<void> {
   // open. Race it against a 5s timeout — at that point we kill the
   // underlying process so the test teardown is bounded.
   const closeP = launched.app.close().catch(() => {})
-  await Promise.race([
-    closeP,
-    new Promise<void>((resolve) => setTimeout(resolve, 5_000))
-  ])
+  await Promise.race([closeP, new Promise<void>((resolve) => setTimeout(resolve, 5_000))])
   try {
     const proc = launched.app.process()
     if (proc && !proc.killed) proc.kill('SIGKILL')
@@ -413,24 +410,16 @@ export async function launchAppWithSharingEnv(opts: SharingLaunchOptions): Promi
   if (verbose) {
     const proc = app.process()
     proc.stdout?.on('data', (d: Buffer) =>
-      // eslint-disable-next-line no-console -- E2E diagnostic
       console.log(`[main ${tag} stdout] ${d.toString().trim()}`)
     )
     proc.stderr?.on('data', (d: Buffer) =>
-      // eslint-disable-next-line no-console -- E2E diagnostic
       console.log(`[main ${tag} stderr] ${d.toString().trim()}`)
     )
   }
   const page = await app.firstWindow()
   if (verbose) {
-    page.on('console', (msg) =>
-      // eslint-disable-next-line no-console -- E2E diagnostic
-      console.log(`[renderer ${tag} ${msg.type()}] ${msg.text()}`)
-    )
-    page.on('pageerror', (err) =>
-      // eslint-disable-next-line no-console -- E2E diagnostic
-      console.log(`[renderer ${tag} pageerror] ${err.message}`)
-    )
+    page.on('console', (msg) => console.log(`[renderer ${tag} ${msg.type()}] ${msg.text()}`))
+    page.on('pageerror', (err) => console.log(`[renderer ${tag} pageerror] ${err.message}`))
   }
   await page.waitForLoadState('domcontentloaded')
   await page.evaluate(() => {

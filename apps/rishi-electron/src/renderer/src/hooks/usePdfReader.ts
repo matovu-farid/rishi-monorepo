@@ -64,7 +64,10 @@ function visiblePositionFromVirtualizer(
     if (currentItem) {
       const distFromTop = Math.abs(scrollTop - currentItem.start)
       const distFromBottom = Math.abs(scrollTop - (currentItem.start + currentItem.size))
-      if (distFromTop < PAGE_BOUNDARY_HYSTERESIS_PX || distFromBottom < PAGE_BOUNDARY_HYSTERESIS_PX) {
+      if (
+        distFromTop < PAGE_BOUNDARY_HYSTERESIS_PX ||
+        distFromBottom < PAGE_BOUNDARY_HYSTERESIS_PX
+      ) {
         return { page: currentPage, offset: Math.max(0, scrollTop - currentItem.start) }
       }
     }
@@ -294,9 +297,7 @@ export function usePdfReader(
         // VIEW_CHANGED → TTS auto-resume on the new page). Passing 0 as
         // currentPage falls through visiblePositionFromVirtualizer's
         // `currentPage > 0` guard and skips the hysteresis branch.
-        const hysteresisPage = usePdfStore.getState().isLookingForNextParagraph
-          ? 0
-          : currentPage
+        const hysteresisPage = usePdfStore.getState().isLookingForNextParagraph ? 0 : currentPage
         const { page, offset } = visiblePositionFromVirtualizer(
           virtualizer,
           container,

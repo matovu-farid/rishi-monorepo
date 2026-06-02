@@ -16,6 +16,7 @@ let mockSnapshot: { value: unknown; context: Record<string, unknown> } = {
     participants: new Map(),
     pendingJoiners: new Map(),
     receivedBooks: [],
+    persistFailures: [],
     role: 'host',
     sharerId: null,
     me: null,
@@ -48,6 +49,7 @@ describe('SharingSessionOverlay', () => {
         participants: new Map(),
         pendingJoiners: new Map(),
         receivedBooks: [],
+        persistFailures: [],
         role: 'host',
         sharerId: null,
         me: null,
@@ -60,7 +62,17 @@ describe('SharingSessionOverlay', () => {
   })
 
   it('renders SessionPanel when state is connected.live with participants', () => {
-    const participants = new Map<string, { userId: string; profile: { displayName: string }; joinedAt: number; hasBookFile: boolean; micState: string; connectionState: string }>([
+    const participants = new Map<
+      string,
+      {
+        userId: string
+        profile: { displayName: string }
+        joinedAt: number
+        hasBookFile: boolean
+        micState: string
+        connectionState: string
+      }
+    >([
       [
         'host-1',
         {
@@ -99,6 +111,7 @@ describe('SharingSessionOverlay', () => {
         participants,
         pendingJoiners: new Map(),
         receivedBooks: [],
+        persistFailures: [],
         role: 'host',
         sharerId: 'host-1',
         me: { userId: 'host-1', displayName: 'Alex', authToken: 'jwt' },
@@ -107,7 +120,9 @@ describe('SharingSessionOverlay', () => {
       }
     }
     render(<SharingSessionOverlay />)
-    expect(screen.getByRole('complementary', { name: /shared reading session/i })).toBeInTheDocument()
+    expect(
+      screen.getByRole('complementary', { name: /shared reading session/i })
+    ).toBeInTheDocument()
     // ParticipantTile renders the self user as "<name> (you)" and others as
     // the bare name — match each independently.
     expect(screen.getByText(/Alex/)).toBeInTheDocument()
@@ -121,6 +136,7 @@ describe('SharingSessionOverlay', () => {
         participants: new Map(),
         pendingJoiners: new Map(),
         receivedBooks: [],
+        persistFailures: [],
         role: 'viewer',
         sharerId: null,
         me: { userId: 'viewer-1', displayName: 'Sam', authToken: 'jwt' },
@@ -149,6 +165,7 @@ describe('SharingSessionOverlay', () => {
         participants: new Map(),
         pendingJoiners: new Map(),
         receivedBooks: [],
+        persistFailures: [],
         role: 'viewer',
         sharerId: 'host-1',
         me: { userId: 'viewer-1', displayName: 'Sam', authToken: 'jwt' },

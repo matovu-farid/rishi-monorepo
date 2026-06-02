@@ -44,15 +44,21 @@ export async function readSessionSnapshot(page: Page): Promise<SessionSnapshot> 
     // flatten step they always see length 0.
     const participants = raw?.context?.participants
     const pendingJoiners = raw?.context?.pendingJoiners
-    const flattenedParticipants = participants instanceof Map
-      ? Array.from(participants.values())
-      : Array.isArray(participants) ? participants : []
-    const flattenedPending = pendingJoiners instanceof Map
-      ? Array.from(pendingJoiners.entries()).map(([userId, v]) => {
-          const value = v as { profile?: { displayName?: string } }
-          return { userId, displayName: value?.profile?.displayName ?? '' }
-        })
-      : Array.isArray(pendingJoiners) ? pendingJoiners : []
+    const flattenedParticipants =
+      participants instanceof Map
+        ? Array.from(participants.values())
+        : Array.isArray(participants)
+          ? participants
+          : []
+    const flattenedPending =
+      pendingJoiners instanceof Map
+        ? Array.from(pendingJoiners.entries()).map(([userId, v]) => {
+            const value = v as { profile?: { displayName?: string } }
+            return { userId, displayName: value?.profile?.displayName ?? '' }
+          })
+        : Array.isArray(pendingJoiners)
+          ? pendingJoiners
+          : []
     return {
       value: raw.value,
       context: {
@@ -97,10 +103,7 @@ export async function waitForBothLive(hostPage: Page, viewerPage: Page): Promise
   ])
 }
 
-export async function sendSessionEvent(
-  page: Page,
-  event: Record<string, unknown>
-): Promise<void> {
+export async function sendSessionEvent(page: Page, event: Record<string, unknown>): Promise<void> {
   await page.evaluate((e) => {
     const w = window as unknown as {
       __rishi: { sessionMachineStore: { getState: () => { send: (ev: unknown) => void } } }
@@ -118,9 +121,7 @@ export async function readSyncedPageIndex(page: Page): Promise<number | null> {
         }
       }
     }
-    return (
-      w.__rishi?.sessionMachineStore.getState().context.lastSyncedPosition?.pageIndex ?? null
-    )
+    return w.__rishi?.sessionMachineStore.getState().context.lastSyncedPosition?.pageIndex ?? null
   })
 }
 
@@ -193,8 +194,11 @@ export async function hostCreateSession(
   await sendSessionEvent(hostPage, {
     type: 'CREATE_SESSION',
     me: { ...me, authToken: testBearer(me) },
-    bookContext: opts.bookContext
-      ?? { bookId: 'e2e-test-book', contentHash: 'a'.repeat(64), format: 'pdf' },
+    bookContext: opts.bookContext ?? {
+      bookId: 'e2e-test-book',
+      contentHash: 'a'.repeat(64),
+      format: 'pdf'
+    },
     requiresApproval: opts.requiresApproval
   })
   await waitForSessionState(

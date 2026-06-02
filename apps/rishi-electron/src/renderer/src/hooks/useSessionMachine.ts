@@ -80,7 +80,7 @@ function useSessionMachineInternal() {
   // than one live session at a time, and the registry is a single-slot
   // singleton; unregister on unmount so we never expose a stale snapshot.
   useEffect(() => {
-    registerSessionMachineActor(actorRef as unknown as Parameters<typeof registerSessionMachineActor>[0])
+    registerSessionMachineActor(actorRef)
     return () => registerSessionMachineActor(null)
   }, [actorRef])
 
@@ -90,36 +90,35 @@ function useSessionMachineInternal() {
   // gone). Cleared on `idle` (machine reset after `ending`) so the next
   // launch doesn't see a stale prompt.
   useEffect(() => {
-    const sharingApi = window.electron?.sharing
-    if (!sharingApi?.writeReconnect || !sharingApi.clearReconnect) return
+    const sharingApi = window.electron.sharing
     const sub = actorRef.subscribe((snap) => {
       const ctx = snap.context
       const userId = ctx.me?.userId
       if (!userId) return
       if (snap.matches('idle')) {
-        void sharingApi.clearReconnect({ userId }).catch((e) =>
-          console.warn('[sharing] clearReconnect failed', e)
-        )
+        void sharingApi
+          .clearReconnect({ userId })
+          .catch((e: unknown) => console.warn('[sharing] clearReconnect failed', e))
         return
       }
       const { sessionId, reconnectToken, wsUrl, reservedUntil } = ctx
       if (sessionId && reconnectToken && wsUrl && reservedUntil) {
-        void sharingApi.writeReconnect({
-          userId,
-          sessionId,
-          reconnectToken,
-          wsUrl,
-          reservedUntil
-        }).catch((e) =>
-          console.warn('[sharing] writeReconnect failed', e)
-        )
+        void sharingApi
+          .writeReconnect({
+            userId,
+            sessionId,
+            reconnectToken,
+            wsUrl,
+            reservedUntil
+          })
+          .catch((e: unknown) => console.warn('[sharing] writeReconnect failed', e))
       }
     })
     return () => sub.unsubscribe()
   }, [actorRef])
 
   useEffect(() => {
-    const unsub = window.electron?.sharing?.onDeepLink?.((p) => {
+    const unsub = window.electron.sharing.onDeepLink((p) => {
       void (async () => {
         const { jwt } = await window.electron.sharing.getSigningJwt()
         send({

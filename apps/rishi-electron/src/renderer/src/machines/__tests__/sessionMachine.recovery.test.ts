@@ -7,8 +7,13 @@ function stateMatches(value: unknown, target: string): boolean {
   if (typeof value === 'object' && value !== null) {
     const obj = value as Record<string, unknown>
     if ('connected' in obj && obj.connected === target) return true
-    if ('connected' in obj && typeof obj.connected === 'object' && obj.connected !== null
-      && target in (obj.connected as Record<string, unknown>)) return true
+    if (
+      'connected' in obj &&
+      typeof obj.connected === 'object' &&
+      obj.connected !== null &&
+      target in (obj.connected as Record<string, unknown>)
+    )
+      return true
   }
   return false
 }
@@ -17,19 +22,26 @@ function host() {
   return sessionMachine.provide({
     actors: {
       createSessionOnDO: fromPromise(async () => ({
-        sessionId: 's1', joinToken: 'jt',
+        sessionId: 's1',
+        joinToken: 'jt',
         joinUrl: 'rishi://sharing/join?t=jt',
         wsUrl: 'wss://x/v1/sessions/s1/wss'
       })),
-      redeemJoinToken: fromPromise(async () => { throw new Error('not used') }),
+      redeemJoinToken: fromPromise(async () => {
+        throw new Error('not used')
+      }),
       // Inert stub: legacy tests drive transitions directly via actor.send().
-      signaling: fromCallback(() => { /* no-op */ }),
+      signaling: fromCallback(() => {
+        /* no-op */
+      }),
       // Inert peerWrapper stub — these tests don't drive RTC, but the
       // machine now spawns wrappers on PEER_JOINED. Without a stub the
       // real wrapper boots a real RTCPeerConnection which has no global
       // in Node.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      peerWrapper: fromCallback(() => { /* no-op */ }) as any
+
+      peerWrapper: fromCallback(() => {
+        /* no-op */
+      }) as any
     }
   })
 }
@@ -75,8 +87,12 @@ describe('sessionMachine recovery', () => {
     const a = await intoLive()
     a.send({
       type: 'BOOK_RECEIVED',
-      bookId: 'b2', contentHash: 'h2', format: 'epub',
-      receivedFromUserId: 'u_b', localPath: '/p/h2.epub', title: 'X'
+      bookId: 'b2',
+      contentHash: 'h2',
+      format: 'epub',
+      receivedFromUserId: 'u_b',
+      localPath: '/p/h2.epub',
+      title: 'X'
     })
     a.send({ type: 'KICKED', reason: 'host_kicked_you' })
     expect(stateMatches(a.getSnapshot().value, 'promptingKeepBooks')).toBe(true)
@@ -86,8 +102,12 @@ describe('sessionMachine recovery', () => {
     const a = await intoLive()
     a.send({
       type: 'BOOK_RECEIVED',
-      bookId: 'b2', contentHash: 'h2', format: 'epub',
-      receivedFromUserId: 'u_b', localPath: '/p/h2.epub', title: 'X'
+      bookId: 'b2',
+      contentHash: 'h2',
+      format: 'epub',
+      receivedFromUserId: 'u_b',
+      localPath: '/p/h2.epub',
+      title: 'X'
     })
     a.send({ type: 'LEAVE' })
     expect(stateMatches(a.getSnapshot().value, 'promptingKeepBooks')).toBe(true)
@@ -99,12 +119,15 @@ describe('sessionMachine recovery', () => {
   it('PEER_JOINED + PEER_LEFT update participants map', async () => {
     const a = await intoLive()
     a.send({
-      type: 'PEER_JOINED', userId: 'u_b',
+      type: 'PEER_JOINED',
+      userId: 'u_b',
       participant: {
         userId: 'u_b',
         profile: { displayName: 'B' },
-        joinedAt: 1, hasBookFile: true,
-        micState: 'unmuted', connectionState: 'connected'
+        joinedAt: 1,
+        hasBookFile: true,
+        micState: 'unmuted',
+        connectionState: 'connected'
       }
     })
     expect(a.getSnapshot().context.participants.has('u_b')).toBe(true)

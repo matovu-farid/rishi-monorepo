@@ -14,8 +14,12 @@ function makeStubSignaling() {
   const sent: Array<{ type: string; [k: string]: unknown }> = []
   const actor = fromCallback(({ sendBack, receive }) => {
     sendBackRef = sendBack as typeof sendBackRef
-    receive((evt) => { sent.push(evt as { type: string; [k: string]: unknown }) })
-    return () => { sendBackRef = null }
+    receive((evt) => {
+      sent.push(evt as { type: string; [k: string]: unknown })
+    })
+    return () => {
+      sendBackRef = null
+    }
   })
   return {
     actor,
@@ -37,7 +41,9 @@ function makePeerWrapperStub() {
   const actor = fromCallback(({ input, sendBack, receive }) => {
     const entry = { input, sendBack: sendBack as (e: any) => void, received: [] as any[] }
     spawned.push(entry)
-    receive((e) => { entry.received.push(e) })
+    receive((e) => {
+      entry.received.push(e)
+    })
     return () => {}
   })
   return { actor, spawned }
@@ -55,16 +61,18 @@ function provideDeps(opts: {
         joinUrl: 'rishi://sharing/join?t=jt',
         wsUrl: 'wss://x/v1/sessions/s1/wss'
       })),
-      redeemJoinToken: fromPromise<RedeemOutput, { me: Me; sessionId: string; joinToken: string }>(async () => ({
-        sessionId: 's1',
-        bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
-        requiresApproval: false,
-        hostProfile: { displayName: 'Host' },
-        wsUrl: 'wss://x/v1/sessions/s1/wss'
-      })),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      redeemJoinToken: fromPromise<RedeemOutput, { me: Me; sessionId: string; joinToken: string }>(
+        async () => ({
+          sessionId: 's1',
+          bookContext: { bookId: 'b', contentHash: 'h', format: 'pdf' },
+          requiresApproval: false,
+          hostProfile: { displayName: 'Host' },
+          wsUrl: 'wss://x/v1/sessions/s1/wss'
+        })
+      ),
+
       signaling: opts.signalingStub.actor as any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       peerWrapper: opts.peerStub.actor as any
     }
   })
@@ -88,8 +96,11 @@ describe('sessionMachine peers registry', () => {
     sig.fire({
       type: 'PEER_JOINED',
       msg: {
-        v: 1, t: 'peer.joined', userId: 'u_b',
-        profile: { displayName: 'Bob' }, hasBookFile: false
+        v: 1,
+        t: 'peer.joined',
+        userId: 'u_b',
+        profile: { displayName: 'Bob' },
+        hasBookFile: false
       }
     })
     await new Promise((r) => setTimeout(r, 5))
@@ -99,7 +110,8 @@ describe('sessionMachine peers registry', () => {
 
     // Despawn.
     sig.fire({
-      type: 'PEER_LEFT', msg: { v: 1, t: 'peer.left', userId: 'u_b', reason: 'left' }
+      type: 'PEER_LEFT',
+      msg: { v: 1, t: 'peer.left', userId: 'u_b', reason: 'left' }
     })
     await new Promise((r) => setTimeout(r, 5))
     const snap = a.getSnapshot()
@@ -121,8 +133,11 @@ describe('sessionMachine peers registry', () => {
     sig.fire({
       type: 'PEER_JOINED',
       msg: {
-        v: 1, t: 'peer.joined', userId: 'u_b',
-        profile: { displayName: 'Bob' }, hasBookFile: false
+        v: 1,
+        t: 'peer.joined',
+        userId: 'u_b',
+        profile: { displayName: 'Bob' },
+        hasBookFile: false
       }
     })
     await new Promise((r) => setTimeout(r, 5))
@@ -151,19 +166,24 @@ describe('sessionMachine peers registry', () => {
     sig.fire({
       type: 'PEER_JOINED',
       msg: {
-        v: 1, t: 'peer.joined', userId: 'u_b',
-        profile: { displayName: 'Bob' }, hasBookFile: false
+        v: 1,
+        t: 'peer.joined',
+        userId: 'u_b',
+        profile: { displayName: 'Bob' },
+        hasBookFile: false
       }
     })
     await new Promise((r) => setTimeout(r, 5))
     // Simulate the inner peer emitting LOCAL_SDP (an answer).
     peers.spawned[0].sendBack({
-      type: 'LOCAL_SDP', remoteUserId: 'u_b', kind: 'answer', sdp: 'A_SDP'
+      type: 'LOCAL_SDP',
+      remoteUserId: 'u_b',
+      kind: 'answer',
+      sdp: 'A_SDP'
     })
     await new Promise((r) => setTimeout(r, 5))
     const sent = sig.sent.find(
-      (e) => e.type === 'SEND'
-        && (e.payload as { t: string }).t === 'sdp.answer'
+      (e) => e.type === 'SEND' && (e.payload as { t: string }).t === 'sdp.answer'
     )
     expect(sent).toBeTruthy()
     expect((sent!.payload as { sdp: string }).sdp).toBe('A_SDP')
@@ -184,19 +204,21 @@ describe('sessionMachine peers registry', () => {
     sig.fire({
       type: 'PEER_JOINED',
       msg: {
-        v: 1, t: 'peer.joined', userId: 'u_b',
-        profile: { displayName: 'Bob' }, hasBookFile: false
+        v: 1,
+        t: 'peer.joined',
+        userId: 'u_b',
+        profile: { displayName: 'Bob' },
+        hasBookFile: false
       }
     })
     await new Promise((r) => setTimeout(r, 5))
     peers.spawned[0].sendBack({
-      type: 'LOCAL_ICE', remoteUserId: 'u_b', candidate: { foo: 1 }
+      type: 'LOCAL_ICE',
+      remoteUserId: 'u_b',
+      candidate: { foo: 1 }
     })
     await new Promise((r) => setTimeout(r, 5))
-    const sent = sig.sent.find(
-      (e) => e.type === 'SEND'
-        && (e.payload as { t: string }).t === 'ice'
-    )
+    const sent = sig.sent.find((e) => e.type === 'SEND' && (e.payload as { t: string }).t === 'ice')
     expect(sent).toBeTruthy()
     expect((sent!.payload as { to: string }).to).toBe('u_b')
   })

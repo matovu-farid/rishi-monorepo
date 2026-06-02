@@ -80,8 +80,7 @@ export function useMachineToStoreSync(actor: PlayerActor | null): void {
       // ACTUALLY changes (deep equality), so we don't republish identical
       // arrays during every assign-driven snapshot tick.
       const paragraphsChanged =
-        lastMirroredParagraphs === null ||
-        !isEqual(lastMirroredParagraphs, ctx.currentParagraphs)
+        lastMirroredParagraphs === null || !isEqual(lastMirroredParagraphs, ctx.currentParagraphs)
       if (paragraphsChanged) {
         debugLog('mirror:paragraphs', {
           state,

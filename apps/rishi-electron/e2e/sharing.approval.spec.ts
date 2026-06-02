@@ -1,9 +1,5 @@
 import { test, expect } from '@playwright/test'
-import {
-  launchAndOpenBookForSharing,
-  closeApp,
-  PDF_FIXTURE
-} from './helpers/electron-app'
+import { launchAndOpenBookForSharing, closeApp, PDF_FIXTURE } from './helpers/electron-app'
 import { readWranglerDevUrl } from './helpers/wrangler-dev'
 import {
   waitForBothLive,
@@ -39,20 +35,25 @@ test('requiresApproval: viewer queued → host approves → both live', async ()
       })
     )
     await viewerAcceptInvite(viewer.page, joinToken, {
-      userId: 'viewer-a1', displayName: 'Viewer'
+      userId: 'viewer-a1',
+      displayName: 'Viewer'
     })
 
     // awaitingApproval is now an internal substate of `connected` (so the
     // WS opens and the worker can queue the pending join). Accept either
     // the legacy top-level shape or the new nested `{ connected: 'awaitingApproval' }`.
-    await waitForSessionState(viewer.page, (v) => {
-      if (v === 'awaitingApproval') return true
-      if (typeof v === 'object' && v !== null) {
-        const inner = (v as { connected?: unknown }).connected
-        if (inner === 'awaitingApproval') return true
-      }
-      return false
-    }, 10_000)
+    await waitForSessionState(
+      viewer.page,
+      (v) => {
+        if (v === 'awaitingApproval') return true
+        if (typeof v === 'object' && v !== null) {
+          const inner = (v as { connected?: unknown }).connected
+          if (inner === 'awaitingApproval') return true
+        }
+        return false
+      },
+      10_000
+    )
 
     const hostSnap = await readSessionSnapshot(host.page)
     expect(hostSnap.context.pendingJoiners.length).toBeGreaterThan(0)
@@ -92,26 +93,30 @@ test('requiresApproval: host rejects → viewer reaches failed', async () => {
       })
     )
     await viewerAcceptInvite(viewer.page, joinToken, {
-      userId: 'viewer-a2', displayName: 'Viewer'
+      userId: 'viewer-a2',
+      displayName: 'Viewer'
     })
     // awaitingApproval is now an internal substate of `connected` (so the
     // WS opens and the worker can queue the pending join). Accept either
     // the legacy top-level shape or the new nested `{ connected: 'awaitingApproval' }`.
-    await waitForSessionState(viewer.page, (v) => {
-      if (v === 'awaitingApproval') return true
-      if (typeof v === 'object' && v !== null) {
-        const inner = (v as { connected?: unknown }).connected
-        if (inner === 'awaitingApproval') return true
-      }
-      return false
-    }, 10_000)
+    await waitForSessionState(
+      viewer.page,
+      (v) => {
+        if (v === 'awaitingApproval') return true
+        if (typeof v === 'object' && v !== null) {
+          const inner = (v as { connected?: unknown }).connected
+          if (inner === 'awaitingApproval') return true
+        }
+        return false
+      },
+      10_000
+    )
 
     await sendSessionEvent(host.page, { type: 'REJECT_JOIN', userId: 'viewer-a2' })
 
     await waitForSessionState(
       viewer.page,
-      (v) => v === 'failed' ||
-        (typeof v === 'object' && v !== null && 'failed' in (v as object)),
+      (v) => v === 'failed' || (typeof v === 'object' && v !== null && 'failed' in (v as object)),
       10_000
     )
     const snap = await readSessionSnapshot(viewer.page)

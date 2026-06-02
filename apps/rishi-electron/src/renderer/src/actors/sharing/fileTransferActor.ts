@@ -1,8 +1,5 @@
 import { fromCallback } from 'xstate'
-import {
-  resetFileTransferProgress,
-  updateFileTransferProgress
-} from '@/testing/sharing-test-hooks'
+import { resetFileTransferProgress, updateFileTransferProgress } from '@/testing/sharing-test-hooks'
 import { recordSharingBreadcrumb, recordSharingError } from '@/sharing/sentryScope'
 
 function reportProgress(sent: number, total: number): void {
@@ -63,7 +60,7 @@ export type FileTransferOutEvent =
   | { type: 'SEND_ACK'; seq: number }
 
 function encodeFrame(f: Frame): ArrayBuffer {
-  return new TextEncoder().encode(JSON.stringify(f)).buffer as ArrayBuffer
+  return new TextEncoder().encode(JSON.stringify(f)).buffer
 }
 function decodeFrame(buf: ArrayBuffer): Frame | null {
   try {
@@ -103,9 +100,7 @@ export const fileTransferActor = fromCallback<
         inFlight++
       }
       if (acked === totalChunks) {
-        senderInput.send(
-          encodeFrame({ kind: 'end', total: totalChunks, hash: senderInput.hash })
-        )
+        senderInput.send(encodeFrame({ kind: 'end', total: totalChunks, hash: senderInput.hash }))
         reportCompleted()
         recordSharingBreadcrumb('fileTransfer.completed', {
           mode: 'sender',
@@ -149,7 +144,7 @@ export const fileTransferActor = fromCallback<
       out.set(u, offset)
       offset += u.byteLength
     }
-    const actual = await computeSha256Hex(out.buffer as ArrayBuffer)
+    const actual = await computeSha256Hex(out.buffer)
     if (actual !== expectedHash) {
       recordSharingBreadcrumb('fileTransfer.failed', {
         mode: 'receiver',
@@ -192,7 +187,7 @@ export const fileTransferActor = fromCallback<
       totalChunks,
       contentHash: input.contentHash
     })
-    emit({ type: 'COMPLETED', blob: out.buffer as ArrayBuffer, hash: actual })
+    emit({ type: 'COMPLETED', blob: out.buffer, hash: actual })
   }
 
   receive((evt) => {

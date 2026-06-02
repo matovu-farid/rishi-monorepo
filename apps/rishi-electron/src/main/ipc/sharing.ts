@@ -7,11 +7,7 @@ import {
 } from '../sharing/libraryWrite.js'
 import { readBookBytes } from '../sharing/libraryRead.js'
 import { getSharingConfig } from '../sharing/config.js'
-import {
-  readReconnect,
-  writeReconnect,
-  clearReconnect
-} from '../sharing/reconnectStore.js'
+import { readReconnect, writeReconnect, clearReconnect } from '../sharing/reconnectStore.js'
 import {
   saveTransferredBookSchema,
   discardTransferredBookSchema,
@@ -43,12 +39,8 @@ export function registerSharingHandlers(): void {
   handle('sharing:discardTransferredBook', (_e, params) =>
     discardTransferredBook(discardTransferredBookSchema.parse(params))
   )
-  handle('sharing:hasBookFile', (_e, params) =>
-    hasBookFile(hasBookFileSchema.parse(params))
-  )
-  handle('sharing:readBookBytes', (_e, params) =>
-    readBookBytes(readBookBytesSchema.parse(params))
-  )
+  handle('sharing:hasBookFile', (_e, params) => hasBookFile(hasBookFileSchema.parse(params)))
+  handle('sharing:readBookBytes', (_e, params) => readBookBytes(readBookBytesSchema.parse(params)))
   handle('sharing:getConfig', () => getSharingConfig())
   handle('sharing:registerDeepLinkListener', () => {})
   // Reborn-host reconnect persistence — see `sharing/reconnectStore.ts`.

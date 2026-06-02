@@ -250,9 +250,7 @@ function handleRenderProcessGone(
   // Prefer attaching the modal to the crashed window; fall back to any focused
   // window if that one is already gone, and finally to a parentless dialog.
   const parent = !win.isDestroyed() ? win : BrowserWindow.getFocusedWindow()
-  const dialogPromise = parent
-    ? dialog.showMessageBox(parent, opts)
-    : dialog.showMessageBox(opts)
+  const dialogPromise = parent ? dialog.showMessageBox(parent, opts) : dialog.showMessageBox(opts)
   void dialogPromise
     .then((result) => {
       if (isCrashLoop) {

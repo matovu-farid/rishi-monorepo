@@ -42,7 +42,11 @@ export const peerActor = fromCallback<PeerInEvent, PeerInput, PeerOutEvent>(
       iceServers: input.iceServers,
       remoteUserId: input.remoteUserId
     })
-    let stopped = false
+    // `stopped` lives on an object so reads aren't narrowed by TS
+    // control-flow analysis. The cleanup callback below mutates it from a
+    // closure TS can't observe, and otherwise every `state.stopped` read
+    // here would be flagged as dead code.
+    const state = { stopped: false }
 
     let syncCh: RtcDataChannelLike | null = null
     let filesCh: RtcDataChannelLike | null = null
@@ -115,22 +119,30 @@ export const peerActor = fromCallback<PeerInEvent, PeerInput, PeerOutEvent>(
     if (input.initiator) {
       ;(async () => {
         const offer = await pc.createOffer()
-        if (stopped) return
+        if (state.stopped) return
         await pc.setLocalDescription({ type: 'offer', sdp: offer.sdp })
         emit({
-          type: 'LOCAL_SDP', remoteUserId: input.remoteUserId, kind: 'offer', sdp: offer.sdp
+          type: 'LOCAL_SDP',
+          remoteUserId: input.remoteUserId,
+          kind: 'offer',
+          sdp: offer.sdp
         })
-      })().catch((e) => {
-        recordSharingError(e, { actor: 'peerActor', remoteUserId: input.remoteUserId, step: 'offer' })
+      })().catch((e: unknown) => {
+        recordSharingError(e, {
+          actor: 'peerActor',
+          remoteUserId: input.remoteUserId,
+          step: 'offer'
+        })
         emit({
-          type: 'PEER_FAILED', remoteUserId: input.remoteUserId,
+          type: 'PEER_FAILED',
+          remoteUserId: input.remoteUserId,
           reason: e instanceof Error ? e.message : 'offer_failed'
         })
       })
     }
 
     receive((evt) => {
-      if (stopped) return
+      if (state.stopped) return
       switch (evt.type) {
         case 'REMOTE_SDP': {
           ;(async () => {
@@ -139,37 +151,45 @@ export const peerActor = fromCallback<PeerInEvent, PeerInput, PeerOutEvent>(
               const ans = await pc.createAnswer()
               await pc.setLocalDescription({ type: 'answer', sdp: ans.sdp })
               emit({
-                type: 'LOCAL_SDP', remoteUserId: input.remoteUserId, kind: 'answer', sdp: ans.sdp
+                type: 'LOCAL_SDP',
+                remoteUserId: input.remoteUserId,
+                kind: 'answer',
+                sdp: ans.sdp
               })
             }
-          })().catch((e) => {
+          })().catch((e: unknown) => {
             recordSharingError(e, {
-              actor: 'peerActor', remoteUserId: input.remoteUserId, step: 'sdp'
+              actor: 'peerActor',
+              remoteUserId: input.remoteUserId,
+              step: 'sdp'
             })
             emit({
-              type: 'PEER_FAILED', remoteUserId: input.remoteUserId,
+              type: 'PEER_FAILED',
+              remoteUserId: input.remoteUserId,
               reason: e instanceof Error ? e.message : 'sdp_failed'
             })
           })
           break
         }
         case 'REMOTE_ICE':
-          pc.addIceCandidate(evt.candidate).catch(() => { /* ignore late ICE */ })
+          pc.addIceCandidate(evt.candidate).catch(() => {
+            /* ignore late ICE */
+          })
           break
         case 'SET_MIC_TRACK':
           pc.addTrack(evt.track, evt.stream)
           break
         case 'SEND_SYNC':
-          if (syncCh && syncCh.readyState === 'open') syncCh.send(evt.payload)
+          if (syncCh?.readyState === 'open') syncCh.send(evt.payload)
           break
         case 'SEND_FILE_CHUNK':
-          if (filesCh && filesCh.readyState === 'open') filesCh.send(evt.payload)
+          if (filesCh?.readyState === 'open') filesCh.send(evt.payload)
           break
       }
     })
 
     return () => {
-      stopped = true
+      state.stopped = true
       pc.close()
     }
   }

@@ -14,8 +14,12 @@ function makeFakeChannel(label: string): RtcDataChannelLike & {
     readyState: 'open',
     send: vi.fn(),
     close: vi.fn(),
-    onOpen: (cb) => { onOpen = cb },
-    onMessage: (cb) => { onMsg = cb },
+    onOpen: (cb) => {
+      onOpen = cb
+    },
+    onMessage: (cb) => {
+      onMsg = cb
+    },
     onClose: () => {},
     bufferedAmount: () => 0,
     fireOpen: () => onOpen?.(),
@@ -39,10 +43,14 @@ function makeFakeRtc() {
       channels.set(label, c)
       return c
     },
-    onIceCandidate: (cb) => { onIce = cb },
+    onIceCandidate: (cb) => {
+      onIce = cb
+    },
     onDataChannel: () => {},
     onTrack: () => {},
-    onConnectionStateChange: (cb) => { onCs = cb },
+    onConnectionStateChange: (cb) => {
+      onCs = cb
+    },
     close: vi.fn()
   }
   return {
@@ -79,7 +87,10 @@ describe('peerActor', () => {
     const events: any[] = []
     const actor = createActor(peerActor, {
       input: {
-        remoteUserId: 'u_b', initiator: false, iceServers: [], factory: () => fake.adapter
+        remoteUserId: 'u_b',
+        initiator: false,
+        iceServers: [],
+        factory: () => fake.adapter
       }
     })
     actor.on('*', (e) => events.push(e))

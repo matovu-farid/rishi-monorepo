@@ -23,28 +23,20 @@ import { z } from 'zod'
 const truthyAsInt = z.unknown().transform((v) => (v ? 1 : 0))
 
 /** Optional string that defaults to null when missing or wrong-typed. */
-const optionalNullableString = z
-  .unknown()
-  .transform((v) => (typeof v === 'string' ? v : null))
+const optionalNullableString = z.unknown().transform((v) => (typeof v === 'string' ? v : null))
 
 /** Optional number that defaults to null when missing or wrong-typed. */
-const optionalNullableNumber = z
-  .unknown()
-  .transform((v) => (typeof v === 'number' ? v : null))
+const optionalNullableNumber = z.unknown().transform((v) => (typeof v === 'number' ? v : null))
 
 /** Optional number coerced to 0 (for sync_version-like counters). */
-const optionalNumberOr0 = z
-  .unknown()
-  .transform((v) => (typeof v === 'number' ? v : 0))
+const optionalNumberOr0 = z.unknown().transform((v) => (typeof v === 'number' ? v : 0))
 
 /** Permissive timestamp: accepts string or number, falls back to '' */
-const optionalTimestampString = z
-  .unknown()
-  .transform((v) => {
-    if (typeof v === 'string') return v
-    if (typeof v === 'number') return v.toString()
-    return ''
-  })
+const optionalTimestampString = z.unknown().transform((v) => {
+  if (typeof v === 'string') return v
+  if (typeof v === 'number') return v.toString()
+  return ''
+})
 
 // ---------------------------------------------------------------------------
 // Book conflict payload — `sync:applyBookConflict`

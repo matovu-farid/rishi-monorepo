@@ -20,8 +20,7 @@ export function makeBrowserWindowFactory(deps: FactoryDeps) {
     // Park e2e windows offscreen so Playwright runs don't steal focus on the
     // dev machine. `.show()`/`.focus()` still work — the window just isn't on
     // a visible display. Set RISHI_E2E_HEADED=1 to override for debugging.
-    const hidden =
-      process.env.RISHI_E2E_HIDDEN === '1' && process.env.RISHI_E2E_HEADED !== '1'
+    const hidden = process.env.RISHI_E2E_HIDDEN === '1' && process.env.RISHI_E2E_HEADED !== '1'
 
     const win = new BrowserWindow({
       width: dims.width,

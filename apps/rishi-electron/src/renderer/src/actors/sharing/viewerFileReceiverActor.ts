@@ -72,7 +72,13 @@ export const viewerFileReceiverActor = fromCallback<
   })
   receiver.on('*', (raw) => {
     if (stopped) return
-    const e = raw as unknown as { type: string; seq?: number; reason?: string; blob?: ArrayBuffer; hash?: string }
+    const e = raw as unknown as {
+      type: string
+      seq?: number
+      reason?: string
+      blob?: ArrayBuffer
+      hash?: string
+    }
     if (e.type === 'SEND_ACK' && typeof e.seq === 'number') {
       emitOut({ type: 'SEND_FILE_ACK', peerUserId: input.peerUserId, seq: e.seq })
     } else if (e.type === 'COMPLETED' && e.blob && e.hash) {
@@ -98,9 +104,8 @@ export const viewerFileReceiverActor = fromCallback<
 
   receive((evt) => {
     if (stopped) return
-    if (evt.type === 'FILE_DATA') {
-      receiver.send({ type: 'FILE_CHUNK', buf: evt.payload })
-    }
+    // Only one `In` variant today (FILE_DATA); the discriminant check is elided.
+    receiver.send({ type: 'FILE_CHUNK', buf: evt.payload })
   })
 
   return () => {

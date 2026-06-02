@@ -91,7 +91,11 @@ describe('findRepeatingPageSuffix', () => {
     for (let p = 1; p <= 10; p++) {
       pages.push(
         makePage(p, [
-          { str: `Distinct body topic ${String.fromCharCode(64 + p)} for page ${p}`, y: 700, height: 12 },
+          {
+            str: `Distinct body topic ${String.fromCharCode(64 + p)} for page ${p}`,
+            y: 700,
+            height: 12
+          },
           { str: 'Copyright Foo Bar', y: 40, height: 8 }
         ])
       )

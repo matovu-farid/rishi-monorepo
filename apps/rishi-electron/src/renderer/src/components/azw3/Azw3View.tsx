@@ -651,14 +651,7 @@ export default function Azw3View({ book }: { book: Book }): React.JSX.Element {
         ),
       getSnapshot: toSnapshot
     }
-  }, [
-    chapterIndex,
-    chapterCount,
-    pageWithinChapter,
-    pagesInCurrentChapter,
-    goNextPage,
-    goPrevPage
-  ])
+  }, [chapterIndex, chapterCount, pageWithinChapter, pagesInCurrentChapter, goNextPage, goPrevPage])
   usePlayerMachine(book.id.toString(), { viewLogic: pdfViewActor, viewInput })
 
   // Generate embeddings on first open (for AI chat). The shared hook owns
