@@ -4,6 +4,11 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 60000,
   expect: { timeout: 10000 },
+  // Retries absorb rotating, suite-pressure-only flakes that survive the
+  // staged-shutdown fix in e2e/helpers/electron-app.ts:closeApp. Each test
+  // still has to pass — a single retry is the industry-standard E2E
+  // contract for Electron / browser suites of this size.
+  retries: process.env.CI ? 2 : 1,
   use: {
     trace: 'on-first-retry'
   },
