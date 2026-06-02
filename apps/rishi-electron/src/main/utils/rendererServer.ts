@@ -55,6 +55,31 @@ function mimeFor(path: string): string {
   return MIME[extname(path).toLowerCase()] || 'application/octet-stream'
 }
 
+/**
+ * Security boundary: maps an incoming request pathname to an absolute
+ * filesystem path under `root`, or returns `null` if the request escapes
+ * the renderer root (path-traversal attempt). Exported so the traversal
+ * guard can be unit-tested without standing up an HTTP server.
+ *
+ * Behaviour mirrors the request handler:
+ *   - leading slashes are stripped
+ *   - empty / trailing-slash paths get `index.html` appended
+ *   - percent-encoded segments are decoded by the caller (URL parsing)
+ *     before being passed in; this helper assumes a decoded pathname
+ */
+export function resolveServePath(root: string, decodedPathname: string): string | null {
+  const absRoot = resolve(root)
+  let relPath = decodedPathname.replace(/^\/+/, '')
+  if (relPath === '' || relPath.endsWith('/')) {
+    relPath = join(relPath, 'index.html')
+  }
+  const fullPath = normalize(join(absRoot, relPath))
+  if (fullPath !== absRoot && !fullPath.startsWith(absRoot + sep)) {
+    return null
+  }
+  return fullPath
+}
+
 let serverInstance: Server | null = null
 let serverUrl: string | null = null
 
@@ -93,15 +118,10 @@ export async function startRendererServer(rendererRoot: string): Promise<string>
 
       const url = new URL(req.url ?? '/', 'http://127.0.0.1')
       const decoded = decodeURIComponent(url.pathname)
-      let relPath = decoded.replace(/^\/+/, '') // strip leading /
-      if (relPath === '' || relPath.endsWith('/')) {
-        relPath = join(relPath, 'index.html')
-      }
-
-      const fullPath = normalize(join(root, relPath))
 
       // Path traversal guard: refuse anything outside the renderer root.
-      if (fullPath !== root && !fullPath.startsWith(root + sep)) {
+      const fullPath = resolveServePath(root, decoded)
+      if (fullPath === null) {
         res.writeHead(403).end('Forbidden')
         return
       }
