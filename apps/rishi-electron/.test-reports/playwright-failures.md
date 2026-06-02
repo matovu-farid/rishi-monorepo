@@ -7,24 +7,24 @@ Totals: 21 failed, 87 passed, 7 skipped, 0 flaky (baseline). Plus 3 additional f
 ### Failing specs
 
 #### e2e/azw3-parity.spec.ts
-- AZW3 reader — feature parity with MOBI > View > Show TOC opens the TOC sheet — clickMenuItem(['View','Show TOC']) returned false (Expected: true, Received: false) [BROKEN] — book-window focus event does not rebuild menu in E2E (Menu.getApplicationMenu still shows library template), so the View>Show TOC item the test clicks does not exist; root cause shared with the menu cluster below.
-- AZW3 reader — feature parity with MOBI > Bookmarks > Add Bookmark stores a bookmark in the DB — clickMenuItem(['Bookmarks','Add Bookmark']) returned false (Expected: true, Received: false) [BROKEN] — same per-window menu wiring regression: Bookmarks top-level is missing from the menu the test sees.
+- AZW3 reader — feature parity with MOBI > View > Show TOC opens the TOC sheet — clickMenuItem(['View','Show TOC']) returned false (Expected: true, Received: false) [BROKEN] — book-window focus event does not rebuild menu in E2E (Menu.getApplicationMenu still shows library template), so the View>Show TOC item the test clicks does not exist; root cause shared with the menu cluster below. ✓ FIXED in b81e0f2f
+- AZW3 reader — feature parity with MOBI > Bookmarks > Add Bookmark stores a bookmark in the DB — clickMenuItem(['Bookmarks','Add Bookmark']) returned false (Expected: true, Received: false) [BROKEN] — same per-window menu wiring regression: Bookmarks top-level is missing from the menu the test sees. ✓ FIXED in b81e0f2f
 
 #### e2e/menu-book-epub.spec.ts
-- focused EPUB book window menu hides PDF-only items — findMenuItem(menu, ['View','Show TOC']) is undefined (book-window menu is library menu) [BROKEN] — per-window menu context exists (windowContexts pre-seeded with kind:'book' in src/main/index.ts:385) but `app.on('browser-window-focus')` doesn't fire / setContext doesn't rebuild for the book window before the test reads the menu.
+- focused EPUB book window menu hides PDF-only items — findMenuItem(menu, ['View','Show TOC']) is undefined (book-window menu is library menu) [BROKEN] — per-window menu context exists (windowContexts pre-seeded with kind:'book' in src/main/index.ts:385) but `app.on('browser-window-focus')` doesn't fire / setContext doesn't rebuild for the book window before the test reads the menu. ✓ FIXED in b81e0f2f
 
 #### e2e/menu-book-pdf.spec.ts
-- focused PDF book window menu has Bookmarks, Reader, Show Thumbnails, Dual Page — menu labels were ["Rishi","File","Edit","View","Window","Help"] (no Bookmarks/Reader) [BROKEN] — same root cause as menu-book-epub: focus handler never installs the book-context menu in the test harness.
+- focused PDF book window menu has Bookmarks, Reader, Show Thumbnails, Dual Page — menu labels were ["Rishi","File","Edit","View","Window","Help"] (no Bookmarks/Reader) [BROKEN] — same root cause as menu-book-epub: focus handler never installs the book-context menu in the test harness. ✓ FIXED in b81e0f2f
 
 #### e2e/menu-bookmarks-submenu.spec.ts
-- Bookmarks > recent submenu reflects added bookmarks — findMenuItem(before, ['Bookmarks']) is undefined (Bookmarks top-level missing from book-window menu) [BROKEN] — Bookmarks top-level is only added when MenuContext.kind === 'book'; the menu in effect is the library default — same wiring bug.
+- Bookmarks > recent submenu reflects added bookmarks — findMenuItem(before, ['Bookmarks']) is undefined (Bookmarks top-level missing from book-window menu) [BROKEN] — Bookmarks top-level is only added when MenuContext.kind === 'book'; the menu in effect is the library default — same wiring bug. ✓ FIXED in b81e0f2f
 
 #### e2e/menu-commands.spec.ts
-- View > Switch to Dark Mode toggles theme in renderer — themeAfter still "light" (menu click did not toggle theme class) [BROKEN] — Menu.getApplicationMenu().click() dispatches to the focused webContents; if the wrong window is focused, the renderer that toggles theme never receives 'menu:command'. Shared with the menu cluster.
-- Bookmarks > Add Bookmark adds a row in the DB when a PDF is open — clickMenuItem(['Bookmarks','Add Bookmark']) returned false [BROKEN] — Bookmarks item missing from the active menu for the same per-window-focus reason.
+- View > Switch to Dark Mode toggles theme in renderer — themeAfter still "light" (menu click did not toggle theme class) [BROKEN] — Menu.getApplicationMenu().click() dispatches to the focused webContents; if the wrong window is focused, the renderer that toggles theme never receives 'menu:command'. Shared with the menu cluster. ✓ FIXED in b81e0f2f
+- Bookmarks > Add Bookmark adds a row in the DB when a PDF is open — clickMenuItem(['Bookmarks','Add Bookmark']) returned false [BROKEN] — Bookmarks item missing from the active menu for the same per-window-focus reason. ✓ FIXED in b81e0f2f
 
 #### e2e/menu-recent.spec.ts
-- File > Open Recent lists imported books and opens them — windows().length stayed at 1 after clicking Recent item (Expected: > 1, Received: 1) [BROKEN] — the 'File > Open Recent > <book>' click reaches main but `getWindowManager().openBook(bookId)` never produces a second BrowserWindow under the test environment; likely the same focus/menu-context issue causing the wrong handler to fire.
+- File > Open Recent lists imported books and opens them — windows().length stayed at 1 after clicking Recent item (Expected: > 1, Received: 1) [BROKEN] — the 'File > Open Recent > <book>' click reaches main but `getWindowManager().openBook(bookId)` never produces a second BrowserWindow under the test environment; likely the same focus/menu-context issue causing the wrong handler to fire. ✓ FIXED in b81e0f2f
 
 #### e2e/mobi.spec.ts
 - MOBI reader > non-existent book id does not crash — getByText('Book not found') never visible within 15s (error-path UI not mounted) [STALE] — test sets `window.location.hash = '#/books/99999'` on the library window, but in Phase 3 the library window's renderer no longer hosts the book route (book routes only mount in book BrowserWindows created by openBook); the error-path render at books.$id.lazy.tsx:69 simply never runs in the library window.
