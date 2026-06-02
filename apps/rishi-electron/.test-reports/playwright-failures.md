@@ -34,7 +34,7 @@ Totals: 21 failed, 87 passed, 7 skipped, 0 flaky (baseline). Plus 3 additional f
 - Navigation history — PDF > engagement tap → flip away → pop returns to engaged page — restoredPage was 8, expected <= engagedPage+1 (3) [BROKEN] — same pdfStore restore overshoot, larger delta because the engaged target is further from the current position. ✓ FIXED in 7ad4c905
 
 #### e2e/navigation-history-epub.spec.ts
-- Navigation history — EPUB > simulated internal link jump → pill → pop returns to original CFI — [data-testid="nav-history-back-label"] not visible within 10s (pill never appeared) [BROKEN] — nav-history pill is no longer rendered for EPUB internal-link jumps; production code path that pushes onto the nav stack and shows the pill regressed during Phase 3 player/window split.
+- Navigation history — EPUB > simulated internal link jump → pill → pop returns to original CFI — [data-testid="nav-history-back-label"] not visible within 10s (pill never appeared) [BROKEN] — nav-history pill is no longer rendered for EPUB internal-link jumps; production code path that pushes onto the nav stack and shows the pill regressed during Phase 3 player/window split. ✓ FIXED in 924da9c3 — pageKey threw on the seed-CFI `"1"`, putting the navigationHistoryActor into `error` status which silently swallowed all later events; pageKey now buckets non-CFI inputs as `epub:raw:<value>`. Test also updated to mirror the production link-click flow (dispatch JUMP_REQUESTED *and* call rendition.display) and force-dispatch a PAGE_VISITED so the stack region returns from `navigating` to `idle` before POP_BACK.
 
 #### e2e/pdf-footer-detection.spec.ts
 - paragraph indices stay stable when the heuristic engages (gaps preserved) — bookPage.waitForFunction (waiting for pdfStore page reach) timed out at 30s [BROKEN] — virtualizer.scrollToIndex fires but currentViewParagraphs never gains entries with the target page's encoded index (page * 10000 + idx) within 30s; pdfStore paragraph publication regressed after the Phase 3 player-actor restructure (#252). ✓ FIXED in 66a042f8
@@ -76,6 +76,22 @@ After un-skipping the 4 hard-skipped specs:
 
 - Phase 0 left `node_modules/better-sqlite3` built for Node ABI 127 (Node 22). The first standard run failed all 50 specs at `firstWindow()` because Electron (ABI 140) refused to load the .node file. Reran `scripts/ensure-native-abi.cjs` and the standard suite went from 50F to 21F.
 - Wrangler globalSetup for the sharing suite came up cleanly (`http://localhost:8788` ready) — no infra failure.
+## Final residuals (post-Cluster 3, surfaced under tightened suite)
+
+After Clusters 1–3 fixed the 21 baseline failures, four residual failures
+were observed under full-suite pressure. None were in the original
+baseline — they surfaced because earlier stabilizations let the suite
+actually finish:
+
+- `e2e/epub-reader.spec.ts:45` — `next-page click advances the persisted CFI` — race between Next-page button paint (immediate on mount) and `settledRef.current` flipping (only after the first `relocated` + locations.generate). Click-before-settle drops the save in the locationChanged handler, persisted CFI never moves off the seeded `"1"`. ✓ FIXED in 44eb1380 (test waits for `epubStore.currentEpubLocation` to publish a real CFI in beforeEach).
+- `e2e/navigation-history-epub.spec.ts:173` — see entry above. ✓ FIXED in 924da9c3.
+- `e2e/tts-page-navigation.spec.ts:61` — `entering loading state pauses the audio element BEFORE the TTS fetch resolves` — fixed-150 ms wait then read pause log; renderer task queue can take >150 ms to flush state=loading subscriber under suite pressure. ✓ FIXED in 3bae406a + ea9af96a (poll up to 1500 ms; assert recorded delay < 700 ms — still catches pause-after-800 ms-fetch regressions).
+- `e2e/tts-page-navigation.spec.ts:1780` — `manual NEXT on last paragraph of a view advances to next view at paragraph 0 (no loop-back)` — the default 100 ms silent mock WAV reaches `ended` quickly, AUDIO_ENDED auto-advances active paragraph in the gap between the step loop's wait and the assertion, mis-attributing it to the to-be-issued NEXT. ✓ FIXED in ea9af96a (per-test 30 s WAV mock — same pattern as the T2 fix in 657e226c — so AUDIO_ENDED cannot fire during the test window, plus pre-press sanity verification + NEXT dispatch combined into one atomic page-side evaluate, plus post-boundary assertion picks the most recent non-null-active sample instead of literal last sample which can be a transient loading blip).
+
+# Final state: 2026-06-02, all originally-classified failures + four surfaced residuals resolved across 14 commits.
+
+## Original notes
+
 - 6 of 21 standard failures cluster around the Electron application menu: book-window menus expose only the default ["Rishi","File","Edit","View","Window","Help"] labels and never gain Bookmarks/Reader/Show TOC. This points to `setApplicationMenu`/per-window menu wiring rather than 6 independent bugs.
 - 5 of 21 standard failures are in `tts-page-navigation.spec.ts` and all describe the same family of bugs (stale blob bleeds, replaying old page after Next, PREV landing on first instead of last paragraph). These look like real TTS/page-navigation state bugs, not flakes.
 - 3 of 21 are PDF position/history (`navigation-history-pdf.spec.ts` x2, `pdf-reader.spec.ts` x1): persisted page index isn't being restored or the pop-to-page is overshooting by 2-5 pages.
