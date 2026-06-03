@@ -22,6 +22,13 @@
       "when": 1778363163109,
       "tag": "0002_fantastic_carnage",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1780453441753,
+      "tag": "0003_catch_up_bookmarks_books",
+      "breakpoints": true
     }
   ]
 }
