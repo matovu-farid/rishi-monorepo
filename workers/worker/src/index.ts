@@ -19,6 +19,12 @@ import { mobileRoutes } from "./routes/mobile";
 import { testAuthRoutes } from "./routes/test-auth";
 import { createAuth } from "./auth";
 import { meterFromContext } from "./billing/meter";
+import { createPortalSession } from "./billing/portal";
+import { parseRealtimeUsageBody } from "./billing/realtime-usage";
+import { createStripeClient } from "./billing/stripe";
+import { createDb } from "./db/drizzle";
+import { user as userTable } from "@rishi/shared/schema";
+import { eq } from "drizzle-orm";
 
 // Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
 const ALLOWED_REALTIME_LANGUAGES = [
@@ -195,6 +201,53 @@ app.get("/api/redis-test", requireAuth, async (c) => {
   await redis.set("foo", "bar");
   const value = await redis.get("foo");
   return c.json({ value });
+});
+
+// Customer Portal — mints a Stripe-hosted URL where the user manages
+// payment methods, views invoices, and cancels their subscription.
+// Returns 503 when STRIPE_SECRET_KEY is not configured (local dev),
+// 409 when the user has no stripe customer yet (signup pre-dated the
+// plugin, or signup hasn't finished).
+app.post("/api/billing/portal", requireAuth, async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) {
+    return c.json({ error: "Billing is not configured for this environment" }, 503);
+  }
+  const body = await c.req
+    .json<{ returnUrl?: string }>()
+    .catch((): { returnUrl?: string } => ({}));
+  const returnUrl = body.returnUrl ?? `${c.env.PUBLIC_WEB_URL}/account`;
+  const db = createDb(c.env.DB);
+  const row = await db
+    .select({ stripeCustomerId: userTable.stripeCustomerId })
+    .from(userTable)
+    .where(eq(userTable.id, c.get("userId")))
+    .get();
+  if (!row?.stripeCustomerId) {
+    return c.json({ error: "No Stripe customer for this user yet" }, 409);
+  }
+  const stripe = createStripeClient(c.env.STRIPE_SECRET_KEY);
+  const url = await createPortalSession(stripe, row.stripeCustomerId, returnUrl);
+  return c.json({ url });
+});
+
+// Client-reported realtime usage. The realtime audio stream doesn't pass
+// through the worker (the client connects to OpenAI directly with a
+// minted credential), so the client is responsible for posting the
+// final token counts here when the session ends. Trust is bounded by:
+//   - requireAuth (only the signed-in user can report)
+//   - per-report cap inside parseRealtimeUsageBody
+// Future: per-day soft cap + correlation with client_secrets mint
+// events to detect padding.
+app.post("/api/billing/realtime-usage", requireAuth, async (c) => {
+  const raw = await c.req.json().catch(() => null);
+  const parsed = parseRealtimeUsageBody(raw);
+  if (!parsed.ok) {
+    return c.json({ error: parsed.error }, 400);
+  }
+  c.executionCtx.waitUntil(
+    meterFromContext(c.env, c.get("userId"), parsed.usage),
+  );
+  return c.json({ accepted: true });
 });
 
 // // Health check endpoint
