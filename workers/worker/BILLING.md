@@ -120,6 +120,20 @@ mode needs its own meter, product, and price.
    `unit_amount_decimal: "0.00012"` (cents per micro-dollar). Change the
    live Price's unit amount to shift it — no code change needed.
 
+## Stripe Tax
+
+`applyWelcomeCreditAndSubscription` sets the customer's tax location
+from their IP (`cf-connecting-ip` header on the signup request) and
+creates the subscription with `automatic_tax: { enabled: true }`. For
+tax to actually appear on invoices, enable Stripe Tax in the Stripe
+Dashboard (Settings → Tax) and register for the jurisdictions where
+you have nexus. Until then the flag is a silent no-op — invoices
+generate without a tax line item.
+
+Customers can correct their address or enter a VAT ID via the Customer
+Portal. Enable "Tax IDs" under Portal → Information collected to
+allow EU/UK B2B zero-rating.
+
 ## Realtime metering caveat
 
 `/api/realtime/client_secrets` mints a client credential; the actual
