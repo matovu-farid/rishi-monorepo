@@ -161,6 +161,12 @@ async function createTestClock(stripe: Stripe): Promise<string> {
  * Create a Stripe customer attached to a test clock, with userId
  * stored in metadata. The customer is "the" user from the script's
  * point of view.
+ *
+ * We also set `tax.ip_address` to a sentinel localhost IP. Stripe
+ * Tax (enabled by commit f9936fd6) requires a customer location for
+ * any customers.update that would lead to invoice generation. The
+ * fake IP gives Stripe Tax something to work with; for end-to-end
+ * verification the actual tax jurisdiction doesn't matter.
  */
 async function createClockedCustomer(
   stripe: Stripe,
@@ -172,6 +178,7 @@ async function createClockedCustomer(
     email,
     test_clock: clockId,
     metadata: { userId },
+    tax: { ip_address: "127.0.0.1", validate_location: "deferred" },
   });
   return cust.id;
 }
@@ -389,7 +396,6 @@ interface ScenarioInput {
   label: string;                            // e.g. "A: low usage, no card"
   stripe: Stripe;
   env: Env;
-  clockId: string;
   usageMicros: number;                      // LOW_USAGE_MICROS or HIGH_USAGE_MICROS
   attachCardKind?: "valid" | "decline";     // C: valid; D: decline; undefined: A/B
   advanceSchedule: number[];                // seconds to add per step (e.g. [31*24*3600] for one period; [1d, 3d, ...] for dunning)
@@ -404,6 +410,7 @@ interface ScenarioResult {
   pass: boolean;
   diagnostic?: string;                      // failure detail
   // Created artifacts for cleanup:
+  clockId: string;
   userId: string;
   customerId: string;
   subscriptionId: string;
@@ -414,8 +421,16 @@ async function runScenario(input: ScenarioInput): Promise<ScenarioResult> {
   const userId = `user_e2e_${cryptoRandomHex(8)}`;
   const email = `${userId}@e2e.fidexa.org`;
 
+  // 0. Create a dedicated test clock for this scenario. Sharing a
+  //    clock across scenarios introduced a timing race: the second
+  //    scenario's meter event stamped at the shared clock's already-
+  //    advanced time, which coincided with the new sub's period_start,
+  //    so Stripe rolled the period forward without invoicing.
+  const clockId = await createTestClock(input.stripe);
+  console.log(`  • clock ${clockId}`);
+
   // 1. Create Stripe customer attached to the clock.
-  const customerId = await createClockedCustomer(input.stripe, input.clockId, userId, email);
+  const customerId = await createClockedCustomer(input.stripe, clockId, userId, email);
   console.log(`  • customer ${customerId}`);
 
   // 2. Seed D1 user + session BEFORE creating the subscription. The
@@ -466,7 +481,7 @@ async function runScenario(input: ScenarioInput): Promise<ScenarioResult> {
     accumulated += stepSeconds;
     const target = baseTime + accumulated;
     console.log(`  • advancing clock +${stepSeconds}s`);
-    await advanceClockTo(input.stripe, input.clockId, target);
+    await advanceClockTo(input.stripe, clockId, target);
     observedStatus = await waitForSubStatus(subscriptionId, input.expectedStatus, 120_000);
     if (observedStatus === input.expectedStatus) break;
   }
@@ -509,6 +524,7 @@ async function runScenario(input: ScenarioInput): Promise<ScenarioResult> {
     got,
     pass,
     diagnostic,
+    clockId,
     userId,
     customerId,
     subscriptionId,
@@ -518,13 +534,12 @@ async function runScenario(input: ScenarioInput): Promise<ScenarioResult> {
 const ONE_DAY = 24 * 3600;
 const ONE_MONTH = 31 * ONE_DAY;
 
-function scenarioInputs(stripe: Stripe, env: Env, clockId: string): ScenarioInput[] {
+function scenarioInputs(stripe: Stripe, env: Env): ScenarioInput[] {
   return [
     {
       label: "A: low usage, no card",
       stripe,
       env,
-      clockId,
       usageMicros: LOW_USAGE_MICROS,
       advanceSchedule: [ONE_MONTH + ONE_DAY],
       expectedStatus: "active",
@@ -534,7 +549,6 @@ function scenarioInputs(stripe: Stripe, env: Env, clockId: string): ScenarioInpu
       label: "B: high usage, no card",
       stripe,
       env,
-      clockId,
       usageMicros: HIGH_USAGE_MICROS,
       advanceSchedule: [ONE_MONTH + ONE_DAY],
       expectedStatus: "past_due",
@@ -544,7 +558,6 @@ function scenarioInputs(stripe: Stripe, env: Env, clockId: string): ScenarioInpu
       label: "C: high usage, valid card",
       stripe,
       env,
-      clockId,
       usageMicros: HIGH_USAGE_MICROS,
       attachCardKind: "valid",
       advanceSchedule: [ONE_MONTH + ONE_DAY],
@@ -555,7 +568,6 @@ function scenarioInputs(stripe: Stripe, env: Env, clockId: string): ScenarioInpu
       label: "D: high usage, declining card (dunning)",
       stripe,
       env,
-      clockId,
       usageMicros: HIGH_USAGE_MICROS,
       attachCardKind: "decline",
       // Stripe smart-retry schedule plays out over ~3 weeks.
@@ -579,12 +591,10 @@ async function realRun(flags: Flags): Promise<void> {
   await preflight(env);
 
   const stripe = makeStripe(env);
-  const clockId = await createTestClock(stripe);
-  console.log(`✓ Created test clock ${clockId}`);
 
   const results: ScenarioResult[] = [];
   try {
-    for (const input of scenarioInputs(stripe, env, clockId)) {
+    for (const input of scenarioInputs(stripe, env)) {
       results.push(await runScenario(input));
     }
   } catch (err) {
@@ -614,23 +624,22 @@ async function realRun(flags: Flags): Promise<void> {
   // Cleanup.
   if (flags.keep) {
     console.log("\n--keep: artifacts preserved");
-    console.log(`  Test clock:    ${clockId}`);
     for (const r of results) {
       console.log(`  ${r.label}`);
+      console.log(`    clock:        ${r.clockId}`);
       console.log(`    user:         ${r.userId}`);
       console.log(`    customer:     ${r.customerId}`);
       console.log(`    subscription: ${r.subscriptionId}`);
     }
   } else {
     console.log("\nCleanup…");
-    try {
-      // Deleting the test clock cascades all attached customers + subs.
-      await stripe.testHelpers.testClocks.del(clockId);
-      console.log(`  ✓ deleted clock ${clockId} (Stripe artifacts cascaded)`);
-    } catch (err) {
-      console.error(`  ✗ failed to delete clock ${clockId}:`, err);
-    }
     for (const r of results) {
+      try {
+        // Deleting the per-scenario clock cascades its customer + sub.
+        await stripe.testHelpers.testClocks.del(r.clockId);
+      } catch (err) {
+        console.error(`  ✗ failed to delete clock ${r.clockId}:`, err);
+      }
       try {
         deleteUserCascade(r.userId, r.subscriptionId);
       } catch (err) {
