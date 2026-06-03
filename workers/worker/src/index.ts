@@ -22,6 +22,7 @@ import { meterFromContext } from "./billing/meter";
 import { createPortalSession } from "./billing/portal";
 import { parseRealtimeUsageBody } from "./billing/realtime-usage";
 import { createStripeClient } from "./billing/stripe";
+import { requireActiveSubscription } from "./billing/sub-gate";
 import { createDb } from "./db/drizzle";
 import { user as userTable } from "@rishi/shared/schema";
 import { eq } from "drizzle-orm";
@@ -259,7 +260,7 @@ app.get("/health", (c) => {
   });
 });
 
-app.post("/api/audio/speech", requireAuth, async (c) => {
+app.post("/api/audio/speech", requireAuth, requireActiveSubscription, async (c) => {
   try {
     const { input, voice } = await c.req.json();
 
@@ -310,7 +311,7 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
   }
 });
 
-app.get("/api/realtime/client_secrets", requireAuth, async (c) => {
+app.get("/api/realtime/client_secrets", requireAuth, requireActiveSubscription, async (c) => {
   try {
     const language = coerceLanguage(c.req.query("language"));
     const response = await axios.post(
@@ -343,7 +344,7 @@ app.get("/api/realtime/client_secrets", requireAuth, async (c) => {
   }
 });
 
-app.post("/api/text/completions", requireAuth, async (c) => {
+app.post("/api/text/completions", requireAuth, requireActiveSubscription, async (c) => {
   try {
     const body = await c.req.json();
     const input = body?.input;
@@ -379,7 +380,7 @@ app.post("/api/text/completions", requireAuth, async (c) => {
 });
 
 // ─── POST /api/embed — Server-side embedding fallback ────────────────────────
-app.post("/api/embed", requireAuth, async (c) => {
+app.post("/api/embed", requireAuth, requireActiveSubscription, async (c) => {
   const body = await c.req.json<{ texts: string[] }>();
 
   if (!body.texts || body.texts.length === 0) {
