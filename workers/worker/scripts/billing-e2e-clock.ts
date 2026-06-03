@@ -219,16 +219,16 @@ async function advanceClockTo(
   unixSeconds: number,
 ): Promise<void> {
   await stripe.testHelpers.testClocks.advance(clockId, { frozen_time: unixSeconds });
-  const deadline = Date.now() + 60_000;
+  const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
     const clock = await stripe.testHelpers.testClocks.retrieve(clockId);
     if (clock.status === "ready") return;
     if (clock.status === "internal_failure") {
       throw new Error(`Test clock advance failed for ${clockId} (internal_failure).`);
     }
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 2000));
   }
-  throw new Error(`Test clock ${clockId} did not return to ready within 60s of advance.`);
+  throw new Error(`Test clock ${clockId} did not return to ready within 180s of advance.`);
 }
 
 /**
