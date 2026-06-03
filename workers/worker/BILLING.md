@@ -144,3 +144,35 @@ ends. Trust is bounded by `requireAuth` plus the per-report cap in
 `parseRealtimeUsageBody` (`REALTIME_MAX_TOKENS_PER_REPORT = 500_000`).
 A per-day soft cap and reconciliation against `client_secrets` mint
 events are open follow-ups.
+
+## Test clock script
+
+Before promoting from `sk_test_…` to `sk_live_…`, run the
+end-of-period verification script:
+
+```bash
+# Terminal A:
+cd workers/worker && pnpm run dev
+
+# Terminal B:
+stripe listen --forward-to http://localhost:8787/api/auth/stripe/webhook
+# (if it prints a new whsec_…, update .dev.vars + restart worker)
+
+# Terminal C:
+cd workers/worker
+pnpm tsx scripts/billing-e2e-clock.ts
+```
+
+The script drives four scenarios — low usage no card, high usage no
+card, high usage paid card, high usage declining card — and prints a
+pass/fail table. Exit code is 0 only when all four pass. See
+`docs/superpowers/specs/2026-06-03-billing-test-clock-design.md` for
+design rationale.
+
+Flags:
+
+- `--keep` preserves the test clock, Stripe customers, and D1 rows
+  after the run so you can inspect state. Default is to delete
+  everything.
+- `--dry-run` walks the lifecycle without touching Stripe or D1; for
+  catching argument-parsing regressions in CI.
