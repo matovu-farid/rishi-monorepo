@@ -21,7 +21,13 @@ const WELCOME_CREDIT_CENTS = 100;
 export async function applyWelcomeCreditAndSubscription(
   stripe: Stripe,
   stripeCustomerId: string,
+  customerIpAddress: string | null,
 ): Promise<{ subscriptionId: string }> {
+  if (customerIpAddress) {
+    await stripe.customers.update(stripeCustomerId, {
+      tax: { ip_address: customerIpAddress, validate_location: "auto" },
+    });
+  }
   await stripe.customers.createBalanceTransaction(stripeCustomerId, {
     amount: -WELCOME_CREDIT_CENTS,
     currency: "usd",
@@ -30,6 +36,7 @@ export async function applyWelcomeCreditAndSubscription(
   const subscription = await stripe.subscriptions.create({
     customer: stripeCustomerId,
     items: [{ price: STRIPE_TEST_IDS.priceId }],
+    automatic_tax: { enabled: true },
   });
   return { subscriptionId: subscription.id };
 }

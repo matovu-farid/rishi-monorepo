@@ -73,10 +73,12 @@ export function createAuth(env: CloudflareBindings) {
               stripeClient,
               stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
               createCustomerOnSignUp: true,
-              onCustomerCreate: async ({ stripeCustomer }) => {
+              onCustomerCreate: async ({ stripeCustomer }, request) => {
+                const ip = request?.headers.get("cf-connecting-ip") ?? null;
                 await applyWelcomeCreditAndSubscription(
                   stripeClient,
                   stripeCustomer.id,
+                  ip,
                 )
               },
               subscription: {
