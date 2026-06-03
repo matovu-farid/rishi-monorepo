@@ -32,10 +32,11 @@ describe('rendererServer resolveServePath', () => {
     expect(resolveServePath(ROOT, '/assets/../../../etc/passwd')).toBeNull()
   })
 
-  it('rejects an absolute path that escapes the root', () => {
-    // After stripping the leading slash this becomes "etc/passwd", which
-    // stays under the root — that's fine (it just won't exist on disk).
-    // The dangerous case is a path that, after normalization, escapes:
+  it('rejects a relative path-traversal attempt', () => {
+    // After stripping the leading slash this becomes "../etc/passwd", which
+    // normalizes to a path one level above the root — must be rejected.
+    // (Stripping a leading-slash absolute input is intentionally a separate
+    // concern; the dangerous case pinned here is `..`-traversal.)
     expect(resolveServePath(ROOT, '/../etc/passwd')).toBeNull()
   })
 
