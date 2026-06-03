@@ -59,7 +59,10 @@
     "./voice-chat/activation-program": "./src/voice-chat/activation-program.ts",
     "./voice-chat/service": "./src/voice-chat/service.ts",
     "./voice-chat/build-realtime-agent": "./src/voice-chat/build-realtime-agent.ts",
-    "./tokens": "./src/tokens/index.ts"
+    "./tokens": "./src/tokens/index.ts",
+    "./billing/stripe-config": "./src/billing/stripe-config.ts",
+    "./billing/cost": "./src/billing/cost.ts",
+    "./billing/default-rates": "./src/billing/default-rates.ts"
   },
   "peerDependencies": {
     "drizzle-orm": "^0.44.0",

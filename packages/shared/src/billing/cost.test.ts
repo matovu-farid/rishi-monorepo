@@ -6,6 +6,8 @@ describe("computeOpenAiCostUsd — chat", () => {
     const rates: RateCard = {
       chat: { "gpt-5-nano": { inputPer1M: 0.05, outputPer1M: 0.4 } },
       tts: {},
+      embedding: {},
+      realtime: {},
     };
     const cost = computeOpenAiCostUsd(
       {

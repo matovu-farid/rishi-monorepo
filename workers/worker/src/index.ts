@@ -117,6 +117,11 @@ export interface CloudflareBindings {
   // endpoint".
   ENABLE_TEST_AUTH?: string;
   TEST_AUTH_SECRET?: string;
+  // Stripe billing. Both are wrangler secrets — STRIPE_SECRET_KEY is the
+  // sk_test_/sk_live_ key, STRIPE_WEBHOOK_SECRET is the whsec_ value for
+  // the endpoint registered at /api/auth/stripe/webhook.
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
 }
 
 const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string } }>();

@@ -1,14 +1,25 @@
 import { betterAuth } from "better-auth"
 import { magicLink, bearer } from "better-auth/plugins"
 import { passkey } from "@better-auth/passkey"
+import { stripe } from "@better-auth/stripe"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
 import { Resend } from "resend"
 import { createDb } from "./db/drizzle"
 import { magicLinkEmail } from "./email-templates/magic-link"
+import {
+  applyWelcomeCreditAndSubscription,
+  createStripeClient,
+} from "./billing/stripe"
+import { STRIPE_TEST_IDS } from "@rishi/shared/billing/stripe-config"
 import type { CloudflareBindings } from "./index"
 
 export function createAuth(env: CloudflareBindings) {
   const db = createDb(env.DB)
+  const stripeEnabled = Boolean(env.STRIPE_SECRET_KEY)
+  const stripeClient = stripeEnabled
+    ? createStripeClient(env.STRIPE_SECRET_KEY!)
+    : null
+
   return betterAuth({
     database: drizzleAdapter(db, { provider: "sqlite" }),
     secret: env.BETTER_AUTH_SECRET,
@@ -54,6 +65,27 @@ export function createAuth(env: CloudflareBindings) {
         rpName: "Rishi",
         origin: env.PUBLIC_WEB_URL,
       }),
+      // Stripe is only wired when STRIPE_SECRET_KEY is configured. In local
+      // dev without secrets, the auth stack runs without billing.
+      ...(stripeClient && env.STRIPE_WEBHOOK_SECRET
+        ? [
+            stripe({
+              stripeClient,
+              stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
+              createCustomerOnSignUp: true,
+              onCustomerCreate: async ({ stripeCustomer }) => {
+                await applyWelcomeCreditAndSubscription(
+                  stripeClient,
+                  stripeCustomer.id,
+                )
+              },
+              subscription: {
+                enabled: true,
+                plans: [{ name: "usage", priceId: STRIPE_TEST_IDS.priceId }],
+              },
+            }),
+          ]
+        : []),
     ],
     session: {
       expiresIn: 60 * 60 * 24 * 30,
