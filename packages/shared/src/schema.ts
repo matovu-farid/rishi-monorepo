@@ -135,6 +135,8 @@ export const user = sqliteTable("user", {
   image: text("image"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  // Added by @better-auth/stripe plugin. Populated by createCustomerOnSignUp.
+  stripeCustomerId: text("stripe_customer_id"),
 })
 
 export const session = sqliteTable("session", {
@@ -185,4 +187,28 @@ export const passkey = sqliteTable("passkey", {
   transports: text("transports"),
   createdAt: integer("created_at", { mode: "timestamp" }),
   aaguid: text("aaguid"),
+})
+
+// Added by @better-auth/stripe plugin. Field shape mirrors the plugin's
+// auto-generated schema (packages/stripe/src/schema.ts upstream); we declare
+// it manually since this repo hand-authors the Drizzle schema rather than
+// running `@better-auth/cli generate`.
+export const subscription = sqliteTable("subscription", {
+  id: text("id").primaryKey(),
+  plan: text("plan").notNull(),
+  referenceId: text("reference_id").notNull(),
+  stripeCustomerId: text("stripe_customer_id"),
+  stripeSubscriptionId: text("stripe_subscription_id"),
+  status: text("status").default("incomplete"),
+  periodStart: integer("period_start", { mode: "timestamp" }),
+  periodEnd: integer("period_end", { mode: "timestamp" }),
+  trialStart: integer("trial_start", { mode: "timestamp" }),
+  trialEnd: integer("trial_end", { mode: "timestamp" }),
+  cancelAtPeriodEnd: integer("cancel_at_period_end", { mode: "boolean" }).default(false),
+  cancelAt: integer("cancel_at", { mode: "timestamp" }),
+  canceledAt: integer("canceled_at", { mode: "timestamp" }),
+  endedAt: integer("ended_at", { mode: "timestamp" }),
+  seats: integer("seats"),
+  billingInterval: text("billing_interval"),
+  stripeScheduleId: text("stripe_schedule_id"),
 })
