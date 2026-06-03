@@ -113,39 +113,18 @@ async function probeWorker(): Promise<void> {
   }
 }
 
-/**
- * Confirms stripe listen is forwarding to the worker by triggering a
- * ping event. We don't actually verify the worker received it (would
- * require scraping wrangler stdout); the trigger succeeding plus the
- * stripe CLI being authed is a strong-enough signal. Downstream
- * webhook polling failures will surface a true forwarding gap within
- * 30s if stripe listen is not running.
- */
-function probeStripeListen(env: Env): void {
-  const trig = spawnSync("stripe", ["trigger", "ping"], {
-    encoding: "utf8",
-    env: { ...process.env, STRIPE_API_KEY: env.STRIPE_SECRET_KEY },
-  });
-  if (trig.status !== 0) {
-    throw new Error(
-      `\`stripe trigger ping\` failed (exit ${trig.status}). Is the stripe CLI installed and authed?\n${trig.stderr}`,
-    );
-  }
-  // Give the webhook ~3 seconds to land.
-  const start = Date.now();
-  while (Date.now() - start < 3000) {
-    // no-op
-  }
-  console.log("✓ stripe trigger ping accepted (stripe listen path assumed working)");
-}
-
-async function preflight(env: Env): Promise<void> {
+async function preflight(_env: Env): Promise<void> {
   console.log("→ Preflight…");
   console.log(`  ✓ STRIPE_SECRET_KEY is a test key`);
   console.log(`  ✓ TEST_AUTH_SECRET present`);
   await probeWorker();
   console.log(`  ✓ Worker reachable at ${WORKER_URL}`);
-  probeStripeListen(env);
+  // We deliberately do NOT probe `stripe listen` here: the CLI has no
+  // cheap no-op event to trigger (every `stripe trigger <event>`
+  // creates real Stripe objects). If the operator forgot to start
+  // `stripe listen`, scenarios B/C/D will surface it within 30s as
+  // `waitForSubStatus` returns the seeded "active" instead of the
+  // expected post-invoice status.
 }
 
 import Stripe from "stripe";
