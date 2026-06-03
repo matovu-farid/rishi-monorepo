@@ -188,11 +188,19 @@ async function createClockedCustomer(
 async function attachCardAndSetDefault(
   stripe: Stripe,
   customerId: string,
-  pmId: string,
+  pmTokenOrId: string,
 ): Promise<void> {
-  await stripe.paymentMethods.attach(pmId, { customer: customerId });
+  // Stripe accepts the shared test-method aliases (pm_card_visa,
+  // pm_card_chargeCustomerFail) here. The attach call clones the
+  // alias into a customer-specific pm_… id we get back; that's the
+  // id we must reference in customers.update — passing the original
+  // alias 400s because the customer "doesn't have" that id (the
+  // alias is global, not customer-scoped).
+  const attached = await stripe.paymentMethods.attach(pmTokenOrId, {
+    customer: customerId,
+  });
   await stripe.customers.update(customerId, {
-    invoice_settings: { default_payment_method: pmId },
+    invoice_settings: { default_payment_method: attached.id },
   });
 }
 
@@ -447,7 +455,7 @@ async function runScenario(input: ScenarioInput): Promise<ScenarioResult> {
     const target = baseTime + accumulated;
     console.log(`  • advancing clock +${stepSeconds}s`);
     await advanceClockTo(input.stripe, input.clockId, target);
-    observedStatus = await waitForSubStatus(subscriptionId, input.expectedStatus, 30_000);
+    observedStatus = await waitForSubStatus(subscriptionId, input.expectedStatus, 120_000);
     if (observedStatus === input.expectedStatus) break;
   }
 
