@@ -1,0 +1,50 @@
+/**
+ * Stripe billing config — single source of truth for IDs the worker and web
+ * app need to report usage and create subscriptions.
+ *
+ * Billing model: one metered Price denominated in micro-dollars of OpenAI cost.
+ * The worker computes the USD cost of each OpenAI call and reports it as
+ * `value = round(cost_usd * 1_000_000)` to the meter. The Price multiplies by
+ * `0.00012` cents per unit, which works out to $1.20 charged per $1.00 of cost
+ * — a 20% markup that holds across any model (chat, realtime, embeddings, tts).
+ *
+ * Math:
+ *   1 micro-dollar         = $0.000001
+ *   Price unit_amount_dec  = 0.00012 cents / micro-dollar
+ *   1_000_000 units billed = 120 cents = $1.20  (vs $1.00 raw cost = 1.20x)
+ */
+
+export const MICRO_DOLLARS_PER_USD = 1_000_000;
+export const MARKUP_MULTIPLIER = 1.2;
+export const METER_EVENT_NAME = "openai_cost_micros";
+
+export interface StripeBillingIds {
+  meterId: string;
+  productId: string;
+  priceId: string;
+}
+
+export const STRIPE_TEST_IDS: StripeBillingIds = {
+  meterId: "mtr_test_61UnRo6Ki8qU1tp6D41CcIfMF2dQA3xI",
+  productId: "prod_UdKVqsQgGN0Rcj",
+  priceId: "price_1Te3qyCcIfMF2dQA2xrBWPQ1",
+};
+
+// Populate when we promote to live mode.
+export const STRIPE_LIVE_IDS: StripeBillingIds | null = null;
+
+export function getStripeIds(mode: "test" | "live"): StripeBillingIds {
+  if (mode === "live") {
+    if (!STRIPE_LIVE_IDS) {
+      throw new Error(
+        "STRIPE_LIVE_IDS not configured. Run the test-mode setup against live mode and update stripe-config.ts.",
+      );
+    }
+    return STRIPE_LIVE_IDS;
+  }
+  return STRIPE_TEST_IDS;
+}
+
+export function usdToMicroDollars(usd: number): number {
+  return Math.round(usd * MICRO_DOLLARS_PER_USD);
+}
