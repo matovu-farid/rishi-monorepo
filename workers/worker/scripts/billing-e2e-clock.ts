@@ -162,11 +162,13 @@ async function createTestClock(stripe: Stripe): Promise<string> {
  * stored in metadata. The customer is "the" user from the script's
  * point of view.
  *
- * We also set `tax.ip_address` to a sentinel localhost IP. Stripe
- * Tax (enabled by commit f9936fd6) requires a customer location for
- * any customers.update that would lead to invoice generation. The
- * fake IP gives Stripe Tax something to work with; for end-to-end
- * verification the actual tax jurisdiction doesn't matter.
+ * We also set an explicit `address` (US, zip 94103). Stripe Tax
+ * (enabled by commit f9936fd6) requires a resolvable customer
+ * location for any customers.update that would lead to invoice
+ * generation. The IP-based mode (set via `tax.ip_address`) won't
+ * work because Stripe can't geo-resolve a sentinel IP and the
+ * script's clocked customers don't have a real signup-time IP. An
+ * explicit address bypasses geo-resolution entirely.
  */
 async function createClockedCustomer(
   stripe: Stripe,
@@ -178,7 +180,7 @@ async function createClockedCustomer(
     email,
     test_clock: clockId,
     metadata: { userId },
-    tax: { ip_address: "127.0.0.1", validate_location: "deferred" },
+    address: { country: "US", postal_code: "94103", line1: "1 Test St" },
   });
   return cust.id;
 }
