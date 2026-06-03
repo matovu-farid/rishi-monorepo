@@ -148,6 +148,241 @@ async function preflight(env: Env): Promise<void> {
   probeStripeListen(env);
 }
 
+import Stripe from "stripe";
+import { MICRO_DOLLARS_PER_USD } from "@rishi/shared/billing/stripe-config";
+import { DEFAULT_RATES } from "@rishi/shared/billing/default-rates";
+
+/**
+ * Construct a Stripe client suitable for Node. The worker's own
+ * createStripeClient uses Stripe.createFetchHttpClient() which works
+ * on Node 18+ because fetch is global there. We pass the test-mode
+ * secret key.
+ */
+function makeStripe(env: Env): Stripe {
+  return new Stripe(env.STRIPE_SECRET_KEY, {
+    httpClient: Stripe.createFetchHttpClient(),
+  });
+}
+
+/**
+ * Create a test clock frozen at "now". Reused across all four
+ * scenarios.
+ */
+async function createTestClock(stripe: Stripe): Promise<string> {
+  const clock = await stripe.testHelpers.testClocks.create({
+    frozen_time: Math.floor(Date.now() / 1000),
+    name: `billing-e2e-clock-${Date.now()}`,
+  });
+  return clock.id;
+}
+
+/**
+ * Create a Stripe customer attached to a test clock, with userId
+ * stored in metadata. The customer is "the" user from the script's
+ * point of view.
+ */
+async function createClockedCustomer(
+  stripe: Stripe,
+  clockId: string,
+  userId: string,
+  email: string,
+): Promise<string> {
+  const cust = await stripe.customers.create({
+    email,
+    test_clock: clockId,
+    metadata: { userId },
+  });
+  return cust.id;
+}
+
+/**
+ * Attach a payment method (a Stripe test card) to a customer and set
+ * as the invoice default. Used for scenarios C (valid card) and D
+ * (declining card).
+ *
+ * Stripe test payment-method tokens:
+ *   pm_card_visa                — always succeeds
+ *   pm_card_chargeCustomerFail  — declines on charge
+ */
+async function attachCardAndSetDefault(
+  stripe: Stripe,
+  customerId: string,
+  pmId: string,
+): Promise<void> {
+  await stripe.paymentMethods.attach(pmId, { customer: customerId });
+  await stripe.customers.update(customerId, {
+    invoice_settings: { default_payment_method: pmId },
+  });
+}
+
+/**
+ * Advance the clock to a future timestamp. Stripe processes the
+ * advance synchronously but invoice generation + webhook delivery
+ * happen async. The advance call returns when Stripe has accepted the
+ * jump; the downstream effects manifest within ~10–30s.
+ */
+async function advanceClockTo(
+  stripe: Stripe,
+  clockId: string,
+  unixSeconds: number,
+): Promise<void> {
+  await stripe.testHelpers.testClocks.advance(clockId, { frozen_time: unixSeconds });
+}
+
+/**
+ * Convert a USD amount to micro-dollars (the units Stripe meter
+ * events expect, per stripe-config.ts).
+ */
+function usdToMicros(usd: number): number {
+  return Math.round(usd * MICRO_DOLLARS_PER_USD);
+}
+
+/**
+ * Embed-token cost in USD, using the rate card. Decoupled from the
+ * markup (which is applied in Stripe's Price unit_amount_decimal, not
+ * here).
+ */
+function embedTokensToUsd(tokens: number): number {
+  return (tokens * DEFAULT_RATES.embedding["text-embedding-3-small"].per1MTokens) / 1_000_000;
+}
+
+// Deterministic test amounts derived from the rate card at load time.
+// Low: $0.20 OpenAI cost = $0.24 customer cost (under $1 welcome credit).
+// High: $2.00 OpenAI cost = $2.40 customer cost (over the credit).
+const LOW_USAGE_TOKENS = 10_000_000;
+const HIGH_USAGE_TOKENS = 100_000_000;
+const LOW_USAGE_MICROS = usdToMicros(embedTokensToUsd(LOW_USAGE_TOKENS));
+const HIGH_USAGE_MICROS = usdToMicros(embedTokensToUsd(HIGH_USAGE_TOKENS));
+
+/**
+ * Run a SQL command against local D1 via wrangler. Returns stdout as
+ * a string. Throws on non-zero exit.
+ *
+ * We shell out (not import Drizzle) because the script runs in Node
+ * and doesn't have the Workers DB binding. wrangler's --local mode
+ * uses the same SQLite file the dev server uses, so changes are
+ * immediately visible to the worker.
+ */
+function d1Exec(sqlCmd: string): string {
+  const res = spawnSync(
+    "pnpm",
+    ["wrangler", "d1", "execute", "rishi-sync", "--local", "--command", sqlCmd, "--json"],
+    { cwd: WORKER_DIR, encoding: "utf8" },
+  );
+  if (res.status !== 0) {
+    throw new Error(`wrangler d1 execute failed:\n${res.stderr}\n${res.stdout}`);
+  }
+  return res.stdout;
+}
+
+/**
+ * SELECT one row's first column, or null if no rows. wrangler --json
+ * output is a JSON array of { results: [...] } per command run.
+ */
+function d1Scalar(sqlCmd: string): string | number | null {
+  const out = d1Exec(sqlCmd);
+  const parsed = JSON.parse(out);
+  const results = Array.isArray(parsed) ? parsed[0]?.results : parsed.results;
+  const row = results?.[0];
+  if (!row) return null;
+  const firstCol = Object.values(row)[0];
+  return (firstCol as string | number | null) ?? null;
+}
+
+/**
+ * Escape a single value for inline SQL. We only handle strings,
+ * numbers, and null — that's all the script uses. NEVER pass
+ * untrusted input here; this is fine for the test script's controlled
+ * values but not for general use.
+ */
+function sql(value: string | number | null): string {
+  if (value === null) return "NULL";
+  if (typeof value === "number") return String(value);
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+/**
+ * Insert a Better Auth user row with a known userId. The script
+ * controls every field; no signup flow is exercised.
+ */
+function insertUser(userId: string, email: string, stripeCustomerId: string): void {
+  const now = Math.floor(Date.now() / 1000);
+  d1Exec(
+    `INSERT INTO user (id, name, email, email_verified, image, created_at, updated_at, stripe_customer_id) VALUES (${sql(userId)}, ${sql("test-" + userId)}, ${sql(email)}, 1, NULL, ${now}, ${now}, ${sql(stripeCustomerId)});`,
+  );
+}
+
+/**
+ * Mint a Better Auth session by inserting a row with a random token.
+ * The bearer() plugin (auth.ts:50) authenticates `Authorization: Bearer ${token}`
+ * by looking up the token in this table — no further mechanism
+ * needed.
+ */
+function insertSession(userId: string): { sessionId: string; token: string } {
+  const sessionId = `sess_e2e_${cryptoRandomHex(12)}`;
+  const token = `tok_e2e_${cryptoRandomHex(32)}`;
+  const now = Math.floor(Date.now() / 1000);
+  const expires = now + 3600;
+  d1Exec(
+    `INSERT INTO session (id, expires_at, token, created_at, updated_at, ip_address, user_agent, user_id) VALUES (${sql(sessionId)}, ${expires}, ${sql(token)}, ${now}, ${now}, NULL, ${sql("billing-e2e-clock")}, ${sql(userId)});`,
+  );
+  return { sessionId, token };
+}
+
+function cryptoRandomHex(bytes: number): string {
+  const buf = new Uint8Array(bytes);
+  crypto.getRandomValues(buf);
+  return Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Insert a subscription row (cache layer — webhooks normally
+ * populate this, but for scenarios where we're driving Stripe
+ * directly we seed the row at "active" and let webhook updates flip
+ * the status as the clock advances).
+ */
+function insertSubscription(
+  subscriptionId: string,
+  userId: string,
+  stripeCustomerId: string,
+): void {
+  const now = Math.floor(Date.now() / 1000);
+  d1Exec(
+    `INSERT INTO subscription (id, plan, reference_id, stripe_customer_id, stripe_subscription_id, status, period_start, period_end) VALUES (${sql(subscriptionId)}, 'usage', ${sql(userId)}, ${sql(stripeCustomerId)}, ${sql(subscriptionId)}, 'active', ${now}, ${now + 30 * 24 * 3600});`,
+  );
+}
+
+/**
+ * Poll the subscription row's status until it matches `expected`, or
+ * until `timeoutMs` elapses. Returns the final observed status.
+ */
+async function waitForSubStatus(
+  subscriptionId: string,
+  expected: string,
+  timeoutMs: number,
+): Promise<string | null> {
+  const start = Date.now();
+  let last: string | null = null;
+  while (Date.now() - start < timeoutMs) {
+    const v = d1Scalar(
+      `SELECT status FROM subscription WHERE stripe_subscription_id = ${sql(subscriptionId)};`,
+    );
+    last = typeof v === "string" ? v : null;
+    if (last === expected) return last;
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  return last;
+}
+
+/**
+ * Delete D1 rows for a single test user/customer/subscription. Idempotent.
+ */
+function deleteUserCascade(userId: string, subscriptionId: string): void {
+  d1Exec(`DELETE FROM subscription WHERE stripe_subscription_id = ${sql(subscriptionId)};`);
+  d1Exec(`DELETE FROM session WHERE user_id = ${sql(userId)};`);
+  d1Exec(`DELETE FROM user WHERE id = ${sql(userId)};`);
+}
+
 async function main(): Promise<void> {
   const flags = parseFlags(process.argv.slice(2));
   if (flags.help) {
