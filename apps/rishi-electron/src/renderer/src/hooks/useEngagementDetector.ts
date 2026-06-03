@@ -12,7 +12,19 @@ export function useEngagementDetector({ targetRef, enabled }: UseEngagementDetec
     const node = targetRef.current
     if (!node) return
 
-    const onPointerDown = (): void => navigationHistoryActor.send({ type: 'ENGAGEMENT_TAP' })
+    const onPointerDown = (e: PointerEvent): void => {
+      // Skip pointerdowns originating inside the navigation-history pill —
+      // see `components/navigation-history/NavigationHistoryFooter.tsx` for
+      // the full rationale. Short version: ENGAGEMENT_TAP synchronously
+      // hides the pill (entry: hidePill in the engaged state), which
+      // unmounts the button before its click fires, dropping POP_BACK /
+      // DISMISS_PILL on the floor. A React onPointerDown stopPropagation
+      // does NOT fix this because React's synthetic delegation reaches the
+      // pill AFTER this native listener has already run.
+      const target = e.target as Element | null
+      if (target?.closest('[data-nav-history-pill="true"]')) return
+      navigationHistoryActor.send({ type: 'ENGAGEMENT_TAP' })
+    }
 
     const onSelectionChange = (): void => {
       const sel = window.getSelection()

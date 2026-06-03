@@ -47,14 +47,30 @@ test.describe('MOBI reader', () => {
   })
 
   test('non-existent book id does not crash', async () => {
+    // Phase 3 (PR #253): the library window's root guard converts any
+    // `#/books/N` hash mutation into an `openBook(N)` IPC and resets the
+    // library hash to `/`. WindowManager.openBook spawns a new
+    // BrowserWindow even when the row is missing (main pre-seeds menu
+    // context only if the row exists, but still opens the window). The
+    // error path therefore renders in the SPAWNED book window, not in
+    // the library window — assert against that page.
+    const ctx = app.page.context()
+    const before = new Set(ctx.pages())
+
     await app.page.evaluate(() => {
       window.location.hash = '#/books/99999'
     })
+
+    const bookWindow = await ctx.waitForEvent('page', {
+      predicate: (p) => !before.has(p) && p.url().includes('/books/99999'),
+      timeout: 15000
+    })
+
     // books.$id.lazy.tsx: useQuery's queryFn throws `new Error('Book not
     // found')` when getBook(id) returns null, and the isError branch renders
     // `<div>{error.message}</div>`. Asserting on the user-visible error text
     // positively confirms the error path mounted (no crash, no white-screen)
     // rather than just that <body> exists.
-    await expect(app.page.getByText('Book not found')).toBeVisible({ timeout: 15000 })
+    await expect(bookWindow.getByText('Book not found')).toBeVisible({ timeout: 15000 })
   })
 })

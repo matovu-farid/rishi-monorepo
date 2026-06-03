@@ -66,12 +66,20 @@ test('scrolling up across a page boundary does not jitter', async () => {
       'precondition: pages above must be unmounted before scrolling up'
     ).toBeGreaterThan(1)
 
-    // Now scroll up by ~600px to cross at least one page boundary upward.
-    // The page coming into view from above will need to mount + render.
+    // Scroll up by at least one full page so a previously-unmounted page
+    // above the prior window actually has to remount. With the current
+    // fixture (test-book.pdf, 14 pages) measured page height is ~1400px
+    // and the virtualizer overscan is 8 pages; a smaller scroll (the
+    // original 600px) doesn't move the overscan window far enough to
+    // bring any new lower-numbered page into the mount set, so the
+    // `remountedAbove` guard below would fail vacuously even though the
+    // scroll path under test (an upward cross of a page boundary) is
+    // exactly what's being exercised — just not the remount path. 2000px
+    // is a comfortable margin over one page so the guard pins remount.
     const samples = await bookPage.evaluate(async () => {
       const el = document.querySelector<HTMLElement>('div.overflow-y-scroll')
       if (!el) throw new Error('no scroll container')
-      const target = el.scrollTop - 600
+      const target = el.scrollTop - 2000
       el.scrollTo({ top: target, behavior: 'auto' })
 
       const out: number[] = []

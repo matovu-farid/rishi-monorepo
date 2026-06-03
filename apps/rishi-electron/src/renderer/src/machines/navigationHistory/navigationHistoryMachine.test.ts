@@ -272,6 +272,47 @@ describe('navigationHistoryMachine — resume map + pill', () => {
     expect(actor.getSnapshot().context.stack).toHaveLength(0)
     expect(actor.getSnapshot().context.pillVisible).toBe(false)
   })
+
+  it('POP_BACK emits RESUME_REQUESTED with the popped anchor', () => {
+    // Contract: pill click → POP_BACK → reader subscribers (PdfView etc.)
+    // need RESUME_REQUESTED with the popped anchor so they can seek back.
+    // Without this emit, popping only mutates the stack and the reader
+    // stays at the page the user jumped TO — the pill click silently fails
+    // (the visible nav-history-pdf e2e symptom: restoredPage stayed at the
+    // jump target instead of returning to the original page).
+    const actor = startActor()
+    const emitted: AnchorPoint[] = []
+    actor.on('RESUME_REQUESTED', (e: { type: 'RESUME_REQUESTED'; anchor: AnchorPoint }) => {
+      emitted.push(e.anchor)
+    })
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(1) })
+    actor.send({
+      type: 'JUMP_REQUESTED',
+      from: pos(1),
+      fromTts: { paragraphIndex: 7 },
+      to: pos(9),
+      source: 'toc',
+      fromLabel: 'p. 1'
+    })
+    actor.send({ type: 'PAGE_VISITED', position: pos(9), ttsContext: null })
+    actor.send({ type: 'POP_BACK' })
+    expect(emitted).toHaveLength(1)
+    expect(emitted[0].position).toEqual(pos(1))
+    expect(emitted[0].tts).toEqual({ paragraphIndex: 7 })
+    expect(emitted[0].label).toBe('p. 1')
+  })
+
+  it('POP_BACK on empty stack does not emit RESUME_REQUESTED', () => {
+    // Guard `hasStackEntries` blocks the transition; no emit should fire.
+    const actor = startActor()
+    const emitted: AnchorPoint[] = []
+    actor.on('RESUME_REQUESTED', (e: { type: 'RESUME_REQUESTED'; anchor: AnchorPoint }) => {
+      emitted.push(e.anchor)
+    })
+    actor.send({ type: 'BOOK_OPENED', bookId: 'b', initialPosition: pos(1) })
+    actor.send({ type: 'POP_BACK' })
+    expect(emitted).toHaveLength(0)
+  })
 })
 
 describe('navigationHistoryMachine — smart resume emission', () => {

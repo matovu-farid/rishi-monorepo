@@ -97,13 +97,13 @@ test('builds a non-empty FooterMask for a book with running footers', async () =
   }
 })
 
-// We need an item-position debug helper to assert positions live in the bottom
-// band; rather than expand `expose-stores.ts` from a test, fixme this case so
-// the architect/implementer can opt into it.
-test.fixme('masked items live in the bottom band', async () => {
-  // TODO: extend `window.__rishi` with a `getPageItemPositions(bookId, page)`
-  // helper, then assert each masked item's transform[5] < 0.15 * page.view height.
-})
+// Removed: "masked items live in the bottom band". The assertion requires a
+// new `window.__rishi.getPageItemPositions(bookId, page)` helper (each PDF.js
+// text item's `transform[5]` y in PDF points + page view height) so we can
+// check each masked item's normalized y is within the bottom 25% band. That
+// helper is meaningful production scaffolding and belongs to its own change,
+// not a TODO stub here. The sibling test below ("paragraph indices stay
+// stable when the heuristic engages") already pins the related behavior.
 
 test('paragraph indices stay stable when the heuristic engages (gaps preserved)', async () => {
   const app: LaunchedApp = await launchApp()

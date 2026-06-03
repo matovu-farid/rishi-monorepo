@@ -3,6 +3,24 @@ import * as os from 'node:os'
 import { handle } from '../../preload/ipc-contract.js'
 import { errorMessage } from '../utils/errors.js'
 
+/**
+ * Security boundary: the renderer can only ask the OS to open URLs whose
+ * protocol is in this allow-list. Anything else (file:, javascript:,
+ * vscode:, chrome-extension:, ...) is a renderer-to-OS escape and must be
+ * rejected. Exported so the allow-list can be unit-tested without standing
+ * up Electron.
+ */
+const OPEN_EXTERNAL_ALLOWED_PROTOCOLS = new Set(['http:', 'https:', 'mailto:'])
+
+export function isOpenExternalUrlAllowed(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return OPEN_EXTERNAL_ALLOWED_PROTOCOLS.has(parsed.protocol)
+  } catch {
+    return false
+  }
+}
+
 export function registerUtilHandlers(): void {
   handle('util:isDev', () => {
     return !app.isPackaged
@@ -22,10 +40,15 @@ export function registerUtilHandlers(): void {
 
   handle('shell:openExternal', async (_event, url) => {
     try {
-      // Basic URL validation to prevent opening arbitrary protocols
-      const parsed = new URL(url)
-      if (!['http:', 'https:', 'mailto:'].includes(parsed.protocol)) {
-        throw new Error(`Unsupported protocol: ${parsed.protocol}`)
+      if (!isOpenExternalUrlAllowed(url)) {
+        const parsed = (() => {
+          try {
+            return new URL(url)
+          } catch {
+            return null
+          }
+        })()
+        throw new Error(`Unsupported protocol: ${parsed?.protocol ?? '(invalid URL)'}`)
       }
       await shell.openExternal(url)
     } catch (error) {

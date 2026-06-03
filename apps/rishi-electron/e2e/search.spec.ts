@@ -40,14 +40,35 @@ test.describe('Search', () => {
   })
 
   test('searchBookText IPC accepts a query', async () => {
+    // `importBook` (e2e helper) only inserts the books row — it bypasses the
+    // chunk-data / FTS indexing pipeline that real opens run via
+    // useBookEmbeddings → indexBook → savePageDataMany. Seed a single chunk
+    // here through the existing IPC so the FTS triggers populate
+    // chunk_data_fts for `bookId`, then assert searchBookText finds it.
+    // This keeps the contract under test (the IPC + FTS5 wiring) rather
+    // than the importer.
+    await app.page.evaluate(async (id) => {
+      const e = (window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> })
+        .electron
+      await e.savePageDataMany([
+        {
+          // Omit id so SQLite assigns AUTOINCREMENT — chunk_data_ai trigger
+          // mirrors the row into chunk_data_fts using the new rowid.
+          pageNumber: 1,
+          bookId: id,
+          data: 'The quick brown fox jumps over the lazy dog'
+        }
+      ])
+    }, bookId)
+
     // Let the IPC throw propagate so failures carry the original stack instead
-    // of being reduced to `Expected true / Received false`. The stop-word
-    // 'the' is certain to appear at least once in any English EPUB fixture, so
-    // a silent empty-array return (broken index) fails the length assertion.
+    // of being reduced to `Expected true / Received false`. 'fox' is in the
+    // seeded chunk above, so a silent empty-array return (broken FTS) fails
+    // the length assertion.
     const result = await app.page.evaluate(async (id) => {
       const e = (window as unknown as { electron: Record<string, (...args: unknown[]) => unknown> })
         .electron
-      return (await e.searchBookText('the', id)) as unknown
+      return (await e.searchBookText('fox', id)) as unknown
     }, bookId)
     expect(Array.isArray(result)).toBe(true)
     expect((result as unknown[]).length).toBeGreaterThan(0)

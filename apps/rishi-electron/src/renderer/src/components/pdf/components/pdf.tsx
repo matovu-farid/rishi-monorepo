@@ -492,6 +492,27 @@ export function PdfView({
   useEngagementDetector({ targetRef: readerRootRef, enabled: true })
   useNavigationHistoryKeyboard()
 
+  // Arrow-key page navigation. Other readers (EPUB / AZW3 / MOBI) bind
+  // ArrowRight/ArrowLeft to next/prev; PDF was the only format without a
+  // keyboard binding, so e2e/pdf-reader.spec.ts "keyboard navigation
+  // advances and restores the persisted page index" reported ArrowRight
+  // as a no-op. Skip when the target is an editable element so this
+  // doesn't swallow text input in TOC search, chat input, etc.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
+      // Modifier keys are reserved for menu accelerators / nav-history POP.
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return
+      if (e.key === 'ArrowRight') nextPage()
+      else previousPage()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
   // Wire native-menu commands. Toolbar buttons remain the primary entry
   // point; menu items dispatch the same actions. Setters from useState and
   // store actions read via getState() are stable identities, so this memo

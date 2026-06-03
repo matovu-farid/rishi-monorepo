@@ -56,6 +56,21 @@ export const navigationHistoryMachine = setup({
       if (context.stack.length === 0) return {}
       return { stack: context.stack.slice(0, -1) }
     }),
+    emitPopAnchorAsResume: emit(({ context }): NavigationHistoryEmitted => {
+      // POP_BACK pops the topmost anchor from the stack; reader components
+      // (PdfView / EpubView / etc.) listen on RESUME_REQUESTED via
+      // `onResumeRequested` to drive the actual seek back to that anchor's
+      // saved position. Without this emit, popping only mutates the stack
+      // and the reader never moves — the pill click "succeeds" but the user
+      // stays on the page they jumped TO. Match the popAnchor guard above:
+      // do not emit when the stack was empty (guard `hasStackEntries` on the
+      // POP_BACK transition already blocks that, but the assertion is cheap).
+      const popped = context.stack[context.stack.length - 1]
+      if (!popped) {
+        throw new Error('emitPopAnchorAsResume: no anchor to pop (guard violated)')
+      }
+      return { type: 'RESUME_REQUESTED', anchor: popped }
+    }),
     recordPageVisit: assign(({ event }) => {
       if (event.type !== 'PAGE_VISITED') return {}
       return { currentPage: event.position, currentTts: event.ttsContext }
@@ -126,7 +141,10 @@ export const navigationHistoryMachine = setup({
                 POP_BACK: {
                   target: 'navigating',
                   guard: 'hasStackEntries',
-                  actions: ['popAnchor', 'hidePillIfStackEmpty']
+                  // Order matters: emitPopAnchorAsResume must run BEFORE
+                  // popAnchor mutates the stack — it reads the top of the
+                  // stack to build the RESUME_REQUESTED payload.
+                  actions: ['emitPopAnchorAsResume', 'popAnchor', 'hidePillIfStackEmpty']
                 },
                 PAGE_VISITED: [
                   {

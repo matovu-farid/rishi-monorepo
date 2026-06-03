@@ -30,8 +30,7 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> 
     args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     env: {
       ...process.env,
-      NODE_ENV: 'production',
-      RISHI_E2E_HIDDEN: process.env.RISHI_E2E_HEADED === '1' ? '0' : '1'
+      NODE_ENV: 'production'
     }
   })
   const page = await app.firstWindow()
@@ -50,18 +49,72 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> 
 }
 
 export async function closeApp(launched: LaunchedApp): Promise<void> {
-  // `app.close()` can hang in headless Electron when background features
-  // (auto-updater, persistent WebSockets, etc.) still hold the event loop
-  // open. Race it against a 5s timeout — at that point we kill the
-  // underlying process so the test teardown is bounded.
-  const closeP = launched.app.close().catch(() => {})
-  await Promise.race([closeP, new Promise<void>((resolve) => setTimeout(resolve, 5_000))])
-  try {
-    const proc = launched.app.process()
-    if (proc && !proc.killed) proc.kill('SIGKILL')
-  } catch {
-    /* already gone */
+  // Staged shutdown — important for full-suite stability. Across ~50
+  // sequential launches the OS accumulates file handles / shared memory
+  // segments / window-server resources, and starting the next launch before
+  // the previous Electron process is fully gone produces rotating one-off
+  // failures (ENOTEMPTY on rmSync, blob/src mismatches, etc.).
+  //
+  // 1. Graceful `app.close()` with a tightened 3 s cap.
+  // 2. If alive, SIGTERM and await the `exit` event for up to 2 s.
+  // 3. Last resort: SIGKILL.
+  const proc = (() => {
+    try {
+      return launched.app.process()
+    } catch {
+      return null
+    }
+  })()
+  const exitedP = proc
+    ? new Promise<void>((resolve) => {
+        if (proc.exitCode !== null || proc.signalCode !== null) return resolve()
+        proc.once('exit', () => resolve())
+      })
+    : Promise.resolve()
+
+  const closeP = launched.app.close().catch((err: unknown) => {
+    // Surface persistent close failures so suite-pressure shutdown bugs are
+    // visible in CI logs. We still fall through to SIGTERM/SIGKILL below —
+    // this is observability, not flow control.
+    console.warn('[closeApp] app.close() rejected:', err)
+  })
+  await Promise.race([closeP, new Promise<void>((resolve) => setTimeout(resolve, 3_000))])
+
+  if (proc && proc.exitCode === null && proc.signalCode === null) {
+    try {
+      proc.kill('SIGTERM')
+    } catch {
+      /* already gone */
+    }
+    await Promise.race([exitedP, new Promise<void>((resolve) => setTimeout(resolve, 2_000))])
   }
+
+  if (proc && proc.exitCode === null && proc.signalCode === null) {
+    try {
+      proc.kill('SIGKILL')
+    } catch {
+      /* already gone */
+    }
+    // Brief wait for the kernel to reap.
+    await Promise.race([exitedP, new Promise<void>((resolve) => setTimeout(resolve, 500))])
+  }
+
+  // Retry rmSync — Electron's chrome cache / SQLite WAL writes can still
+  // be flushing during teardown, causing ENOTEMPTY/EBUSY on the first
+  // attempt. Backoff a few times before giving up (force:true swallows
+  // ENOENT, so the only realistic recurring errors are race-related).
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      fs.rmSync(launched.userDataDir, { recursive: true, force: true })
+      return
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM') throw err
+      // eslint-disable-next-line no-await-in-loop -- Retry loop: sequential backoff.
+      await new Promise<void>((resolve) => setTimeout(resolve, 100 * (attempt + 1)))
+    }
+  }
+  // Final attempt — let the error propagate if it's persistent.
   fs.rmSync(launched.userDataDir, { recursive: true, force: true })
 }
 
@@ -319,6 +372,33 @@ export function findMenuItem(menu: MenuShape[], pathLabels: string[]): MenuShape
   return found
 }
 
+/**
+ * Send a menu command directly to a specific book window's renderer over the
+ * `menu:command` IPC channel. Bypasses the native menu (which is rebuilt only
+ * for the focused window) so multi-window E2E tests don't have to juggle OS
+ * focus — exactly equivalent to the user clicking the corresponding menu item
+ * while that book window is focused.
+ *
+ * Returns true if the target window was found and the IPC was dispatched.
+ */
+export async function sendMenuCommandToBookWindow(
+  app: ElectronApplication,
+  bookId: number,
+  command: string,
+  arg?: unknown
+): Promise<boolean> {
+  return (await app.evaluate(
+    ({ BrowserWindow }, { urlNeedle, payload }) => {
+      const wins = BrowserWindow.getAllWindows()
+      const win = wins.find((w) => w.webContents.getURL().includes(urlNeedle))
+      if (!win || win.isDestroyed()) return false
+      win.webContents.send('menu:command', payload)
+      return true
+    },
+    { urlNeedle: `/books/${bookId}`, payload: { command, arg } }
+  )) as boolean
+}
+
 export async function clickMenuItem(
   app: ElectronApplication,
   pathLabels: string[]
@@ -399,7 +479,6 @@ export async function launchAppWithSharingEnv(opts: SharingLaunchOptions): Promi
     env: {
       ...process.env,
       NODE_ENV: 'production',
-      RISHI_E2E_HIDDEN: process.env.RISHI_E2E_HEADED === '1' ? '0' : '1',
       SHARING_WORKER_URL: opts.workerUrl,
       VITE_SHARING_ENABLED: '1',
       RISHI_SHARING_TEST_AUTH: '1',

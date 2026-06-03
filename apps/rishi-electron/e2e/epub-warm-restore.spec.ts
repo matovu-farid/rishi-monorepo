@@ -2,7 +2,6 @@ import { test, expect, type Page } from '@playwright/test'
 import {
   EPUB_FIXTURE,
   closeApp,
-  gotoLibrary,
   importBook,
   launchApp,
   openBook,
@@ -13,16 +12,22 @@ import {
  * Warm-restore cache regression for EPUBs.
  *
  * Contract under test (services/reader-cache/epub-cache):
- *   - First open of a book parses the EPUB into a Book and stores it
- *     in the LRU cache.
- *   - Subsequent opens within the session reuse the cached Book —
- *     outer EpubView seeds bytes from the cache synchronously, inner
- *     viewer skips initialize() entirely.
+ *   - First open of a book parses the EPUB into a Book and stores it in
+ *     the LRU cache.
+ *   - The cache exposes a diagnostic surface on window.__readerCache.epub
+ *     (has/size/stats/resetStats). This pin matters because peer specs
+ *     read it.
+ *   - Reopening a book that already has a window focuses that existing
+ *     window (windowManager.openBook reuses entries); the renderer is
+ *     not torn down so the cache survives the reopen.
  *
- * The test observes a renderer-side diagnostic surface
- * (window.__readerCache.epub) rather than monkey-patching the IPC
- * bridge — contextBridge-exposed objects are frozen and can't be
- * intercepted from page context.
+ * Phase 3 note: PR #253 split each book into its own BrowserWindow. The
+ * original cross-navigation warm-restore path (gotoLibrary then re-mount
+ * the reader in the same window) no longer exists, so a "second open
+ * produces hits>0" assertion is not e2e-observable — there is no
+ * remount of EpubView within the book window's lifetime in production.
+ * This spec now pins what *is* observable: cache population on first
+ * open, and the focus-existing-window invariant on reopen.
  */
 
 interface CacheStats {
@@ -57,21 +62,7 @@ async function epubCacheStats(page: Page): Promise<CacheStats> {
   })
 }
 
-async function resetEpubCacheStats(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const w = window as unknown as {
-      __readerCache?: { epub?: { resetStats: () => void } }
-    }
-    w.__readerCache?.epub?.resetStats()
-  })
-}
-
-test.skip('first open populates the cache, second open hits it', async () => {
-  // Phase 3 (window split): each book lives in its own BrowserWindow,
-  // so the cross-navigation warm-restore path this test exercised
-  // (gotoLibrary then re-open in the same renderer) no longer exists.
-  // The cache layer must be re-evaluated for the new lifecycle in a
-  // follow-up phase before this assertion is meaningful again.
+test('first open populates the cache; reopen reuses the existing window', async () => {
   const app: LaunchedApp = await launchApp()
   try {
     const book = await importBook(app.page, {
@@ -81,38 +72,36 @@ test.skip('first open populates the cache, second open hits it', async () => {
     })
 
     // ---- First open: cold start, must populate cache ----
-    await openBook(app.page, book.id)
+    const bookPage = await openBook(app.page, book.id)
     await expect(
-      app.page.locator('iframe').first(),
+      bookPage.locator('iframe').first(),
       'epub iframe mounts on first open'
     ).toBeVisible({ timeout: 15000 })
 
-    // Give the inner viewer's `book.loaded.navigation.then(...)` a
-    // beat to run setCachedEpub before we navigate away.
-    await app.page.waitForTimeout(500)
+    // setCachedEpub runs inside book.loaded.navigation.then(...) — give that
+    // microtask a beat to land before polling. Poll rather than fixed wait
+    // so a fast machine doesn't waste time and a slow one still passes.
+    await expect
+      .poll(async () => await epubCacheHas(bookPage, book.id), { timeout: 10000 })
+      .toBe(true)
+    expect(await epubCacheSize(bookPage), 'exactly one cached entry').toBe(1)
 
-    expect(await epubCacheHas(app.page, book.id), 'book is cached after first open').toBe(true)
-    expect(await epubCacheSize(app.page), 'one cached entry').toBe(1)
+    const statsAfterFirstOpen = await epubCacheStats(bookPage)
+    expect(statsAfterFirstOpen.misses, 'first open is a cache miss').toBeGreaterThan(0)
 
-    // ---- Reopen: must hit the cache ----
-    await gotoLibrary(app.page)
-    await app.page.waitForTimeout(500)
-    await resetEpubCacheStats(app.page)
-
-    await openBook(app.page, book.id)
-    await expect(
-      app.page.locator('iframe').first(),
-      'epub iframe renders on warm reopen'
-    ).toBeVisible({ timeout: 10000 })
-    await app.page.waitForTimeout(500)
-
-    const stats = await epubCacheStats(app.page)
-    expect(stats.hits, 'reopen produces at least one cache hit').toBeGreaterThan(0)
-    expect(stats.misses, 'reopen produces zero cache misses').toBe(0)
+    // ---- Reopen: openBook reuses the existing window (focus-existing
+    //      path in WindowManager). No remount → cache survives.
+    const reopened = await openBook(app.page, book.id)
+    expect(
+      reopened,
+      'openBook reuses the existing book window instead of spawning a new one'
+    ).toBe(bookPage)
+    expect(await epubCacheHas(bookPage, book.id), 'cache survives reopen').toBe(true)
+    expect(await epubCacheSize(bookPage), 'cache size unchanged after reopen').toBe(1)
 
     // Sanity: no ErrorBoundary fallback.
     await expect(
-      app.page.locator('text=Something went wrong'),
+      bookPage.locator('text=Something went wrong'),
       'no ErrorBoundary after reopen'
     ).toHaveCount(0)
   } finally {
