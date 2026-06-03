@@ -50,8 +50,12 @@ export function parseJoinToken(url: string): string | null {
   try {
     const u = new URL(url)
     if (u.protocol !== `${PROTOCOL}:`) return null
-    const isJoin = u.host === 'sharing' && u.pathname.replace(/^\//, '').startsWith('join')
-    if (!isJoin) return null
+    // Exact `/join` match — `startsWith('join')` would also accept `joinx`,
+    // which is an auth-adjacent footgun. Split on `/` and check the first
+    // non-empty segment matches exactly.
+    if (u.host !== 'sharing') return null
+    const segments = u.pathname.split('/').filter(Boolean)
+    if (segments[0] !== 'join') return null
     return u.searchParams.get('t')
   } catch {
     return null

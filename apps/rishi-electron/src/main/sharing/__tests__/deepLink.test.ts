@@ -23,6 +23,12 @@ describe('parseJoinToken', () => {
     expect(parseJoinToken('rishi://sharing/leave?t=abc123')).toBeNull()
   })
 
+  it('returns null when the pathname is a join-prefixed segment like "joinx"', () => {
+    // `startsWith('join')` would incorrectly accept this; the tightened
+    // parser splits on `/` and requires an exact `join` segment.
+    expect(parseJoinToken('rishi://sharing/joinx?t=abc123')).toBeNull()
+  })
+
   it('returns null when the t param is missing', () => {
     expect(parseJoinToken('rishi://sharing/join')).toBeNull()
   })
