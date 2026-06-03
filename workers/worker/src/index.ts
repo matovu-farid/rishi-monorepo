@@ -18,6 +18,7 @@ import { desktopRoutes } from "./routes/desktop";
 import { mobileRoutes } from "./routes/mobile";
 import { testAuthRoutes } from "./routes/test-auth";
 import { createAuth } from "./auth";
+import { meterFromContext } from "./billing/meter";
 
 // Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
 const ALLOWED_REALTIME_LANGUAGES = [
@@ -228,6 +229,14 @@ app.post("/api/audio/speech", requireAuth, async (c) => {
       voice: validVoice,
     });
 
+    c.executionCtx.waitUntil(
+      meterFromContext(c.env, c.get("userId"), {
+        type: "tts",
+        model: "tts-1",
+        characters: input.length,
+      }),
+    );
+
     const audioBytes = speech.audio.uint8Array;
     return new Response(audioBytes, {
       headers: {
@@ -289,7 +298,7 @@ app.post("/api/text/completions", requireAuth, async (c) => {
       return c.json({ error: "input must be a string under 50000 characters" }, 400);
     }
     const openai = getOpenAI(c.env.OPENAI_API_KEY);
-    const { text } = await generateText({
+    const { text, usage } = await generateText({
       model: openai.responses("gpt-5-nano"),
       prompt: input,
       // The AI SDK's OpenAI Responses provider defaults `store: true`, which
@@ -297,6 +306,15 @@ app.post("/api/text/completions", requireAuth, async (c) => {
       // proxy user book content here — opt out explicitly.
       providerOptions: { openai: { store: false } },
     });
+
+    c.executionCtx.waitUntil(
+      meterFromContext(c.env, c.get("userId"), {
+        type: "chat",
+        model: "gpt-5-nano",
+        inputTokens: usage.inputTokens ?? 0,
+        outputTokens: usage.outputTokens ?? 0,
+      }),
+    );
 
     return c.json(text);
   } catch (error) {
@@ -331,7 +349,7 @@ app.post("/api/embed", requireAuth, async (c) => {
 
   const openai = getOpenAI(c.env.OPENAI_API_KEY);
 
-  const { embeddings } = await embedMany({
+  const { embeddings, usage } = await embedMany({
     model: openai.embeddingModel("text-embedding-3-small"),
     values: body.texts,
     providerOptions: {
@@ -340,6 +358,14 @@ app.post("/api/embed", requireAuth, async (c) => {
       },
     },
   });
+
+  c.executionCtx.waitUntil(
+    meterFromContext(c.env, c.get("userId"), {
+      type: "embedding",
+      model: "text-embedding-3-small",
+      tokens: usage?.tokens ?? 0,
+    }),
+  );
 
   return c.json({ embeddings });
 });
