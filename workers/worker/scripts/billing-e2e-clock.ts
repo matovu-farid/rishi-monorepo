@@ -418,7 +418,16 @@ async function runScenario(input: ScenarioInput): Promise<ScenarioResult> {
   const customerId = await createClockedCustomer(input.stripe, input.clockId, userId, email);
   console.log(`  • customer ${customerId}`);
 
-  // 2. Apply welcome credit + start subscription via worker's own helper.
+  // 2. Seed D1 user + session BEFORE creating the subscription. The
+  //    Better Auth Stripe plugin's customer.subscription.created
+  //    webhook handler looks up the user by stripe_customer_id and
+  //    no-ops with a "No user found" warning if the row is missing.
+  //    Seeding now lets the plugin's webhook find the user and
+  //    populate the subscription row on its own.
+  insertUser(userId, email, customerId);
+  const { token } = insertSession(userId);
+
+  // 3. Apply welcome credit + start subscription via worker's own helper.
   //    Pass null for IP — script bypasses the signup path where IP is captured.
   const { subscriptionId } = await applyWelcomeCreditAndSubscription(
     input.stripe,
@@ -427,9 +436,12 @@ async function runScenario(input: ScenarioInput): Promise<ScenarioResult> {
   );
   console.log(`  • subscription ${subscriptionId}`);
 
-  // 3. Seed D1 (user, session, subscription).
-  insertUser(userId, email, customerId);
-  const { token } = insertSession(userId);
+  // 4. Seed subscription row as a fallback. The Better Auth plugin
+  //    likely also inserts (or upserts) a row from the webhook; this
+  //    seeded row is what waitForSubStatus polls against if the
+  //    webhook hasn't landed yet. If both write the same id, the
+  //    plugin's later .updated webhook still flips the status row in
+  //    place.
   insertSubscription(subscriptionId, userId, customerId);
 
   // 4. Card attach (scenarios C, D).
