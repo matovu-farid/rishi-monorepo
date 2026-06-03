@@ -493,6 +493,134 @@ async function runScenario(input: ScenarioInput): Promise<ScenarioResult> {
   };
 }
 
+const ONE_DAY = 24 * 3600;
+const ONE_MONTH = 31 * ONE_DAY;
+
+function scenarioInputs(stripe: Stripe, env: Env, clockId: string): ScenarioInput[] {
+  return [
+    {
+      label: "A: low usage, no card",
+      stripe,
+      env,
+      clockId,
+      usageMicros: LOW_USAGE_MICROS,
+      advanceSchedule: [ONE_MONTH + ONE_DAY],
+      expectedStatus: "active",
+      expectedHttp: 200,
+    },
+    {
+      label: "B: high usage, no card",
+      stripe,
+      env,
+      clockId,
+      usageMicros: HIGH_USAGE_MICROS,
+      advanceSchedule: [ONE_MONTH + ONE_DAY],
+      expectedStatus: "past_due",
+      expectedHttp: 402,
+    },
+    {
+      label: "C: high usage, valid card",
+      stripe,
+      env,
+      clockId,
+      usageMicros: HIGH_USAGE_MICROS,
+      attachCardKind: "valid",
+      advanceSchedule: [ONE_MONTH + ONE_DAY],
+      expectedStatus: "active",
+      expectedHttp: 200,
+    },
+    {
+      label: "D: high usage, declining card (dunning)",
+      stripe,
+      env,
+      clockId,
+      usageMicros: HIGH_USAGE_MICROS,
+      attachCardKind: "decline",
+      // Stripe smart-retry schedule plays out over ~3 weeks.
+      // After invoice generation + first failed charge, retries at
+      // ~1d, ~3d, ~7d, ~14d. We advance past each.
+      advanceSchedule: [
+        ONE_MONTH + ONE_DAY,
+        ONE_DAY,
+        3 * ONE_DAY,
+        7 * ONE_DAY,
+        14 * ONE_DAY,
+      ],
+      expectedStatus: "unpaid",
+      expectedHttp: 402,
+    },
+  ];
+}
+
+async function realRun(flags: Flags): Promise<void> {
+  const env = loadEnv();
+  await preflight(env);
+
+  const stripe = makeStripe(env);
+  const clockId = await createTestClock(stripe);
+  console.log(`✓ Created test clock ${clockId}`);
+
+  const results: ScenarioResult[] = [];
+  try {
+    for (const input of scenarioInputs(stripe, env, clockId)) {
+      results.push(await runScenario(input));
+    }
+  } catch (err) {
+    console.error("FATAL during scenario run:", err);
+    // Still attempt cleanup unless --keep.
+  }
+
+  // Output table.
+  console.log("\n" + "─".repeat(72));
+  const headerLabel = "Scenario".padEnd(40);
+  const headerExpected = "Expected".padEnd(15);
+  const headerGot = "Got".padEnd(15);
+  console.log(`${headerLabel}${headerExpected}${headerGot}Result`);
+  console.log("─".repeat(72));
+  for (const r of results) {
+    const label = r.label.padEnd(40).slice(0, 40);
+    const exp = r.expected.padEnd(15);
+    const got = r.got.padEnd(15);
+    const result = r.pass ? "PASS" : "FAIL";
+    console.log(`${label}${exp}${got}${result}`);
+    if (r.diagnostic) console.log(`  ↳ ${r.diagnostic}`);
+  }
+  const passed = results.filter((r) => r.pass).length;
+  console.log("─".repeat(72));
+  console.log(`${passed}/${results.length} PASS`);
+
+  // Cleanup.
+  if (flags.keep) {
+    console.log("\n--keep: artifacts preserved");
+    console.log(`  Test clock:    ${clockId}`);
+    for (const r of results) {
+      console.log(`  ${r.label}`);
+      console.log(`    user:         ${r.userId}`);
+      console.log(`    customer:     ${r.customerId}`);
+      console.log(`    subscription: ${r.subscriptionId}`);
+    }
+  } else {
+    console.log("\nCleanup…");
+    try {
+      // Deleting the test clock cascades all attached customers + subs.
+      await stripe.testHelpers.testClocks.del(clockId);
+      console.log(`  ✓ deleted clock ${clockId} (Stripe artifacts cascaded)`);
+    } catch (err) {
+      console.error(`  ✗ failed to delete clock ${clockId}:`, err);
+    }
+    for (const r of results) {
+      try {
+        deleteUserCascade(r.userId, r.subscriptionId);
+      } catch (err) {
+        console.error(`  ✗ D1 cleanup failed for ${r.userId}:`, err);
+      }
+    }
+    console.log(`  ✓ D1 rows removed`);
+  }
+
+  process.exit(passed === results.length && results.length > 0 ? 0 : 1);
+}
+
 async function main(): Promise<void> {
   const flags = parseFlags(process.argv.slice(2));
   if (flags.help) {
@@ -505,11 +633,7 @@ async function main(): Promise<void> {
     console.log("[dry-run] No Stripe or D1 calls made.");
     process.exit(0);
   }
-  const env = loadEnv();
-  await preflight(env);
-  // Scenario runs wired in Task 6.
-  console.error("Scenarios not yet implemented — preflight succeeded.");
-  process.exit(1);
+  await realRun(flags);
 }
 
 main().catch((err) => {
