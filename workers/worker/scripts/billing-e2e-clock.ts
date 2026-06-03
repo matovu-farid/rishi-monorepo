@@ -151,6 +151,8 @@ async function preflight(env: Env): Promise<void> {
 import Stripe from "stripe";
 import { MICRO_DOLLARS_PER_USD } from "@rishi/shared/billing/stripe-config";
 import { DEFAULT_RATES } from "@rishi/shared/billing/default-rates";
+import { applyWelcomeCreditAndSubscription } from "../src/billing/stripe";
+import { reportMeterEvent } from "../src/billing/meter";
 
 /**
  * Construct a Stripe client suitable for Node. The worker's own
@@ -381,6 +383,114 @@ function deleteUserCascade(userId: string, subscriptionId: string): void {
   d1Exec(`DELETE FROM subscription WHERE stripe_subscription_id = ${sql(subscriptionId)};`);
   d1Exec(`DELETE FROM session WHERE user_id = ${sql(userId)};`);
   d1Exec(`DELETE FROM user WHERE id = ${sql(userId)};`);
+}
+
+interface ScenarioInput {
+  label: string;                            // e.g. "A: low usage, no card"
+  stripe: Stripe;
+  env: Env;
+  clockId: string;
+  usageMicros: number;                      // LOW_USAGE_MICROS or HIGH_USAGE_MICROS
+  attachCardKind?: "valid" | "decline";     // C: valid; D: decline; undefined: A/B
+  advanceSchedule: number[];                // seconds to add per step (e.g. [31*24*3600] for one period; [1d, 3d, ...] for dunning)
+  expectedStatus: string;                   // "active" | "past_due" | "unpaid" | ...
+  expectedHttp: 200 | 402;
+}
+
+interface ScenarioResult {
+  label: string;
+  expected: string;                         // "active/200"
+  got: string;                              // "active/200"
+  pass: boolean;
+  diagnostic?: string;                      // failure detail
+  // Created artifacts for cleanup:
+  userId: string;
+  customerId: string;
+  subscriptionId: string;
+}
+
+async function runScenario(input: ScenarioInput): Promise<ScenarioResult> {
+  console.log(`\n→ ${input.label}`);
+  const userId = `user_e2e_${cryptoRandomHex(8)}`;
+  const email = `${userId}@e2e.fidexa.org`;
+
+  // 1. Create Stripe customer attached to the clock.
+  const customerId = await createClockedCustomer(input.stripe, input.clockId, userId, email);
+  console.log(`  • customer ${customerId}`);
+
+  // 2. Apply welcome credit + start subscription via worker's own helper.
+  //    Pass null for IP — script bypasses the signup path where IP is captured.
+  const { subscriptionId } = await applyWelcomeCreditAndSubscription(
+    input.stripe,
+    customerId,
+    null,
+  );
+  console.log(`  • subscription ${subscriptionId}`);
+
+  // 3. Seed D1 (user, session, subscription).
+  insertUser(userId, email, customerId);
+  const { token } = insertSession(userId);
+  insertSubscription(subscriptionId, userId, customerId);
+
+  // 4. Card attach (scenarios C, D).
+  if (input.attachCardKind === "valid") {
+    await attachCardAndSetDefault(input.stripe, customerId, "pm_card_visa");
+    console.log(`  • attached pm_card_visa`);
+  } else if (input.attachCardKind === "decline") {
+    await attachCardAndSetDefault(input.stripe, customerId, "pm_card_chargeCustomerFail");
+    console.log(`  • attached pm_card_chargeCustomerFail`);
+  }
+
+  // 5. Ingest meter usage via the worker's own reportMeterEvent.
+  await reportMeterEvent(input.stripe, customerId, input.usageMicros);
+  console.log(`  • metered ${input.usageMicros} micro-dollars`);
+
+  // 6. Advance the clock in steps. Poll D1 between each step. The
+  //    final observed status is what we assert.
+  const baseTime = Math.floor(Date.now() / 1000);
+  let accumulated = 0;
+  let observedStatus: string | null = "active";
+  for (const stepSeconds of input.advanceSchedule) {
+    accumulated += stepSeconds;
+    const target = baseTime + accumulated;
+    console.log(`  • advancing clock +${stepSeconds}s`);
+    await advanceClockTo(input.stripe, input.clockId, target);
+    observedStatus = await waitForSubStatus(subscriptionId, input.expectedStatus, 30_000);
+    if (observedStatus === input.expectedStatus) break;
+  }
+
+  // 7. Probe the gate.
+  const httpRes = await fetch(`${WORKER_URL}/api/embed`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ input: "test clock probe" }),
+  });
+  const observedHttp = httpRes.status;
+  console.log(`  • /api/embed → ${observedHttp}`);
+
+  const expected = `${input.expectedStatus}/${input.expectedHttp}`;
+  const got = `${observedStatus ?? "null"}/${observedHttp}`;
+  const pass = observedStatus === input.expectedStatus && observedHttp === input.expectedHttp;
+  const diagnostic = pass
+    ? undefined
+    : `expected ${expected}, got ${got}` +
+      (observedHttp !== input.expectedHttp
+        ? ` (response body: ${(await httpRes.text()).slice(0, 200)})`
+        : "");
+
+  return {
+    label: input.label,
+    expected,
+    got,
+    pass,
+    diagnostic,
+    userId,
+    customerId,
+    subscriptionId,
+  };
 }
 
 async function main(): Promise<void> {
