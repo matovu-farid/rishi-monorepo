@@ -197,10 +197,13 @@ async function attachCardAndSetDefault(
 }
 
 /**
- * Advance the clock to a future timestamp. Stripe processes the
- * advance synchronously but invoice generation + webhook delivery
- * happen async. The advance call returns when Stripe has accepted the
- * jump; the downstream effects manifest within ~10–30s.
+ * Advance the clock to a future timestamp and wait until Stripe
+ * finishes the advance (status returns to "ready"). The .advance()
+ * call returns immediately while Stripe processes asynchronously; any
+ * subsequent call on the same clock 429s with "Test clock advancement
+ * underway" until status flips back. We poll every second up to 60s.
+ * Downstream invoice + webhook effects manifest within another ~10–30s
+ * after status is ready.
  */
 async function advanceClockTo(
   stripe: Stripe,
@@ -208,6 +211,16 @@ async function advanceClockTo(
   unixSeconds: number,
 ): Promise<void> {
   await stripe.testHelpers.testClocks.advance(clockId, { frozen_time: unixSeconds });
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const clock = await stripe.testHelpers.testClocks.retrieve(clockId);
+    if (clock.status === "ready") return;
+    if (clock.status === "internal_failure") {
+      throw new Error(`Test clock advance failed for ${clockId} (internal_failure).`);
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error(`Test clock ${clockId} did not return to ready within 60s of advance.`);
 }
 
 /**
@@ -438,25 +451,35 @@ async function runScenario(input: ScenarioInput): Promise<ScenarioResult> {
     if (observedStatus === input.expectedStatus) break;
   }
 
-  // 7. Probe the gate.
+  // 7. Probe the gate. We send a valid /api/embed body shape so a
+  //    gate-pass scenario can reach the handler. We do NOT assert 200
+  //    strictly — if OPENAI_API_KEY isn't configured locally the call
+  //    fails with 500 yet the gate still passed. For block scenarios
+  //    (expectedHttp = 402) we require the exact 402. For pass
+  //    scenarios (expectedHttp = 200) we accept any non-402 response
+  //    as evidence the gate let the request through.
   const httpRes = await fetch(`${WORKER_URL}/api/embed`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ input: "test clock probe" }),
+    body: JSON.stringify({ texts: ["e2e probe"] }),
   });
   const observedHttp = httpRes.status;
   console.log(`  • /api/embed → ${observedHttp}`);
 
-  const expected = `${input.expectedStatus}/${input.expectedHttp}`;
+  const httpPass =
+    input.expectedHttp === 402 ? observedHttp === 402 : observedHttp !== 402;
+  const expected = `${input.expectedStatus}/${
+    input.expectedHttp === 402 ? "402" : "!402"
+  }`;
   const got = `${observedStatus ?? "null"}/${observedHttp}`;
-  const pass = observedStatus === input.expectedStatus && observedHttp === input.expectedHttp;
+  const pass = observedStatus === input.expectedStatus && httpPass;
   const diagnostic = pass
     ? undefined
     : `expected ${expected}, got ${got}` +
-      (observedHttp !== input.expectedHttp
+      (!httpPass
         ? ` (response body: ${(await httpRes.text()).slice(0, 200)})`
         : "");
 
