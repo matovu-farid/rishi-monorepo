@@ -72,7 +72,12 @@ export async function closeApp(launched: LaunchedApp): Promise<void> {
       })
     : Promise.resolve()
 
-  const closeP = launched.app.close().catch(() => {})
+  const closeP = launched.app.close().catch((err: unknown) => {
+    // Surface persistent close failures so suite-pressure shutdown bugs are
+    // visible in CI logs. We still fall through to SIGTERM/SIGKILL below —
+    // this is observability, not flow control.
+    console.warn('[closeApp] app.close() rejected:', err)
+  })
   await Promise.race([closeP, new Promise<void>((resolve) => setTimeout(resolve, 3_000))])
 
   if (proc && proc.exitCode === null && proc.signalCode === null) {
