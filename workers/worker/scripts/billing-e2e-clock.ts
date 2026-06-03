@@ -572,9 +572,13 @@ function scenarioInputs(stripe: Stripe, env: Env): ScenarioInput[] {
       env,
       usageMicros: HIGH_USAGE_MICROS,
       attachCardKind: "decline",
-      // Stripe smart-retry schedule plays out over ~3 weeks.
-      // After invoice generation + first failed charge, retries at
-      // ~1d, ~3d, ~7d, ~14d. We advance past each.
+      // Stripe smart-retry schedule plays out over ~3 weeks. After
+      // invoice generation + first failed charge, retries at ~1d, ~3d,
+      // ~7d, ~14d. We advance past each. The terminal status under
+      // Stripe's default config is `canceled`, not `unpaid` — Stripe
+      // cancels the sub once smart retries are exhausted unless the
+      // sub explicitly opts into "mark as unpaid". Either way the
+      // gate returns 402 BILLING_INACTIVE.
       advanceSchedule: [
         ONE_MONTH + ONE_DAY,
         ONE_DAY,
@@ -582,7 +586,7 @@ function scenarioInputs(stripe: Stripe, env: Env): ScenarioInput[] {
         7 * ONE_DAY,
         14 * ONE_DAY,
       ],
-      expectedStatus: "unpaid",
+      expectedStatus: "canceled",
       expectedHttp: 402,
     },
   ];
