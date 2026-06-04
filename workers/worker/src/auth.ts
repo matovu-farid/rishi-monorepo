@@ -8,7 +8,11 @@ import { createDb } from "./db/drizzle"
 import { magicLinkEmail } from "./email-templates/magic-link"
 import { createStripeClient } from "./billing/stripe"
 import { ensureCreditAndSubscription } from "./billing/backfill"
+import { sendPaymentFailedEmail } from "./billing/payment-failed-email"
+import { user as userTable } from "@rishi/shared/schema"
+import { eq } from "drizzle-orm"
 import { STRIPE_TEST_IDS } from "@rishi/shared/billing/stripe-config"
+import type Stripe from "stripe"
 import type { CloudflareBindings } from "./index"
 
 export function createAuth(env: CloudflareBindings) {
@@ -79,6 +83,29 @@ export function createAuth(env: CloudflareBindings) {
                   STRIPE_TEST_IDS.priceId,
                   ip,
                 )
+              },
+              onEvent: async (event) => {
+                if (event.type !== "invoice.payment_failed") return;
+                const customerId = (event.data.object as Stripe.Invoice).customer;
+                if (typeof customerId !== "string") return;
+                const row = await db
+                  .select({ email: userTable.email, name: userTable.name })
+                  .from(userTable)
+                  .where(eq(userTable.stripeCustomerId, customerId))
+                  .get();
+                if (!row?.email) return;
+                // portalUrl is null for now — the user is unauthenticated when
+                // clicking an email link, so we'd need a signed-token flow to
+                // mint a portal URL ahead of time. Track in BILLING-HANDOFF.md.
+                await sendPaymentFailedEmail(
+                  event,
+                  { email: row.email, name: row.name ?? null },
+                  {
+                    resendApiKey: env.RESEND_API_KEY,
+                    fromAddress: "Rishi <auth@fidexa.org>",
+                    portalUrl: null,
+                  },
+                );
               },
               subscription: {
                 enabled: true,
