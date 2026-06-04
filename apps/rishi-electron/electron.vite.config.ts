@@ -46,7 +46,14 @@ export default defineConfig({
       alias: {
         '@': resolve('src/renderer/src'),
         '@components': resolve('src/renderer/src/components')
-      }
+      },
+      // Resolve through the symlinked workspace member path
+      // (apps/rishi-electron/node_modules/@rishi/shared/...) so transitive
+      // deps of shared (md5, xstate, epubjs, ...) are found in electron's
+      // hoisted node_modules — not in packages/shared/node_modules where
+      // pnpm's per-workspace install does not put them. Same fix applies
+      // to vitest.config.ts.
+      preserveSymlinks: true
     },
     plugins: [
       tailwindcss(),
