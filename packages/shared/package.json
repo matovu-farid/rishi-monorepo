@@ -62,7 +62,9 @@
     "./tokens": "./src/tokens/index.ts",
     "./billing/stripe-config": "./src/billing/stripe-config.ts",
     "./billing/cost": "./src/billing/cost.ts",
-    "./billing/default-rates": "./src/billing/default-rates.ts"
+    "./billing/default-rates": "./src/billing/default-rates.ts",
+    "./billing/realtime-usage-accumulator": "./src/billing/realtime-usage-accumulator.ts",
+    "./billing/realtime-usage-client": "./src/billing/realtime-usage-client.ts"
   },
   "peerDependencies": {
     "drizzle-orm": "^0.44.0",
