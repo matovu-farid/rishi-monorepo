@@ -63,6 +63,7 @@ workers/worker/BILLING.md  — live-mode promotion runbook
 | **Webhook signature verification** | `pending_webhooks: 0` on triggered event in production |
 | **Webhook lifecycle → D1 persistence** | `stripe subscriptions cancel <id>` → `customer.subscription.deleted` 200 → D1 row updated to `canceled` |
 | **Sub-status gate blocks canceled users** | After cancel, `/api/embed` returns `402 BILLING_INACTIVE` with `subscriptionStatus: "canceled"` |
+| **Portal URL points at a live Stripe page** | `scripts/billing-portal-check.ts` mints + probes the URL; matches `billing.stripe.com/p/session/...` and resolves on Stripe. Combined with billing-e2e-clock scenario C (card-attach → invoice paid) this closes gap #5. |
 
 ## Production deploy state
 
