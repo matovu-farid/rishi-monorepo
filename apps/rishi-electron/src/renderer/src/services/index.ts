@@ -33,7 +33,7 @@ import { getAuthToken } from '@/modules/auth'
 import { buildRealtimeAgent } from '@/modules/buildRealtimeAgent'
 import { playReadyChime } from '@/modules/readyChime'
 import { startThinkingSound, stopThinkingSound } from '@/modules/thinkingSound'
-import { getRealtimeClientSecret, transcribeAudio } from '@/lib/api'
+import { getRealtimeClientSecret, transcribeAudio, workerFetch } from '@/lib/api'
 import { RealtimeSession } from '@openai/agents/realtime'
 import { OpenAIRealtimeWebRTC } from '@openai/agents-realtime'
 import config from '@/config.json'
@@ -259,6 +259,7 @@ export function getVoiceChatService(): VoiceChatService {
       rag: getRagService(),
       connectivity: getConnectivityService(),
       ipc: { getRealtimeClientSecret, transcribeAudio },
+      billing: { apiFetch: workerFetch },
       webrtcFactory: ({ mediaStream, audioElement }) =>
         new OpenAIRealtimeWebRTC({
           mediaStream: mediaStream as unknown as MediaStream,

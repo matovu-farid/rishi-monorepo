@@ -22,6 +22,8 @@ import type {
   VoiceChatServiceDeps
 } from './types'
 import { VadDisposedError, VadTimeoutError } from './local-vad'
+import type { RealtimeUsageInput } from '@rishi/shared/billing/realtime-usage-accumulator'
+import { extractUsageFromResponseDone } from './usage-extract'
 
 /**
  * Bundle returned by the activation program on success. `service.ts` stores
@@ -46,6 +48,11 @@ export interface ActivationDeps {
   readonly emit: {
     chatStatus: (status: ChatStatus) => void
     endedByAgent: (reason: string) => void
+    /**
+     * Forward parsed usage from every `response.done` event. Optional so the
+     * pipeline still works in legacy tests that don't wire billing.
+     */
+    usage?: (usage: RealtimeUsageInput) => void
   }
   /** Plain-TS facade over Cache.make — see key-cache.ts (Task 4). */
   readonly keyCacheGet: () => Promise<string>
@@ -265,6 +272,11 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
       // timer so a back-to-back chain of tools doesn't accumulate timeout.
       emit.chatStatus('thinking')
     }
+    const onTransportEvent = (event: unknown): void => {
+      const usage = extractUsageFromResponseDone(event)
+      if (!usage) return
+      emit.usage?.(usage)
+    }
 
     const listeners: Array<readonly [string, (...args: unknown[]) => void]> = [
       ['agent_start', onAgentStart],
@@ -272,7 +284,8 @@ export function makeActivationProgram(a: ActivationDeps): ActivationProgram {
       ['audio_stopped', onAudioStopped],
       ['agent_end', onAgentEnd],
       ['agent_tool_start', onToolStart],
-      ['agent_tool_end', onToolEnd]
+      ['agent_tool_end', onToolEnd],
+      ['transport_event', onTransportEvent]
     ]
     for (const [evt, fn] of listeners) session.on(evt, fn)
     const cleanup = (): void => {

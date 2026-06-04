@@ -433,6 +433,29 @@ export async function transcribeAudio(blob: Blob): Promise<string> {
   return data.transcript ?? ''
 }
 
+/**
+ * Generic worker fetch helper for `@rishi/shared` clients that take an
+ * `ApiFetch` (path, init?) => Promise<Response>. Prepends WORKER_URL,
+ * injects Authorization (or dev-bypass) headers, and passes through caller
+ * headers/body untouched. Throws on missing auth — callers using
+ * `reportRealtimeUsage` already catch and never bubble billing failures
+ * into voice-chat teardown.
+ */
+export async function workerFetch(path: string, init?: RequestInit): Promise<Response> {
+  const authHeaders = await getAuthHeaders()
+  const headers = new Headers(init?.headers)
+  for (const [k, v] of Object.entries(authHeaders)) headers.set(k, v)
+  if (Object.keys(authHeaders).length === 0) {
+    const devBypass = await api().getDevBypassSecret()
+    if (devBypass) {
+      headers.set('X-Dev-Bypass', devBypass)
+    } else {
+      throw new Error('Not authenticated')
+    }
+  }
+  return fetch(`${WORKER_URL}${path}`, { ...init, headers })
+}
+
 // ---- Helpers ----
 /**
  * Convert a local file path to a URL that the renderer can load.

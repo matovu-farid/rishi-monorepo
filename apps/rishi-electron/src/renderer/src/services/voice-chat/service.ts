@@ -7,6 +7,11 @@ import { OfflineError } from './types'
 import { makeActivationProgram, isInterruptCause, type SessionHandle } from './activation-program'
 import type { ActivationError } from './errors'
 import { captureError } from '@/utils/sentry'
+import {
+  createUsageAccumulator,
+  type RealtimeUsageAccumulator
+} from '@rishi/shared/billing/realtime-usage-accumulator'
+import { reportRealtimeUsage } from '@rishi/shared/billing/realtime-usage-client'
 import type {
   AudioElementLike,
   ChatStatus,
@@ -64,14 +69,39 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
     clock
   })
 
+  let usageAccumulator: RealtimeUsageAccumulator | null = null
+
   const program = makeActivationProgram({
     deps,
     emit: {
       chatStatus: (s) => emitChatStatus(s),
-      endedByAgent: (r) => endedByAgentEmitter.emit(r)
+      endedByAgent: (r) => endedByAgentEmitter.emit(r),
+      usage: (u) => {
+        try {
+          usageAccumulator?.add(u)
+        } catch (err) {
+          captureError(err, { operation: 'voiceChatService', step: 'usage_add' })
+        }
+      }
     },
     keyCacheGet: () => keyCache.get()
   })
+
+  function flushAndReportUsage(): void {
+    const acc = usageAccumulator
+    usageAccumulator = null
+    if (!acc) return
+    if (acc.isEmpty()) return
+    const total = acc.flush()
+    const billing = deps.billing
+    if (!billing) return
+    // Fire-and-forget. reportRealtimeUsage never throws — it returns
+    // { ok: false, reason } on failure — but we belt-and-brace catch in
+    // case a future change regresses that contract.
+    void reportRealtimeUsage(billing.apiFetch, total).catch((err: unknown) => {
+      captureError(err, { operation: 'voiceChatService', step: 'usage_report' })
+    })
+  }
 
   // Session-scoped state, in closure.
   let session: RealtimeSessionLike | null = null
@@ -117,6 +147,10 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
 
   function disposeInternal() {
     clearInactivityTimer()
+    // Drain accumulated realtime token usage before tearing down. Reporting
+    // is fire-and-forget and never throws — voice-chat teardown must not be
+    // gated on the billing roundtrip.
+    flushAndReportUsage()
     if (sessionCleanup) {
       sessionCleanup()
       sessionCleanup = null
@@ -246,6 +280,7 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
       sessionCleanup = handle.cleanup
       currentBookId = bookId
       lastContextFingerprint = fingerprintContext(ctx)
+      usageAccumulator = createUsageAccumulator()
       /* eslint-enable require-atomic-updates */
 
       // Wire the session 'error' handler post-resolve (xstate-land, not Effect).

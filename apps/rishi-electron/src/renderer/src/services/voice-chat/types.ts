@@ -3,6 +3,7 @@ import type { RagService } from '@/services/rag'
 import type { ConnectivityService } from '@/services/connectivity'
 import type { VisualSummary } from '@/lib/visualHeuristic'
 import type { CaptureResult } from '@/modules/pageCapture'
+import type { ApiFetch } from '@rishi/shared/billing/realtime-usage-client'
 
 /**
  * Public state surface. Same string union as the internal machine, re-named
@@ -277,6 +278,14 @@ export interface NetworkPort {
   preconnectOpenAI(): void
 }
 
+export interface BillingPort {
+  /**
+   * Authenticated fetch against the worker's billing endpoint. Mirrors the
+   * shape `reportRealtimeUsage` expects.
+   */
+  apiFetch: ApiFetch
+}
+
 export interface VoiceChatServiceDeps {
   rag: RagService
   connectivity: ConnectivityService
@@ -290,6 +299,12 @@ export interface VoiceChatServiceDeps {
   clock: ClockPort
   network: NetworkPort
   config: VoiceChatConfig
+  /**
+   * Optional billing transport for realtime token-usage reporting. When
+   * omitted, response.done events are observed but no POST is made — the
+   * production wiring sets this; legacy / older tests omit it.
+   */
+  billing?: BillingPort
   /**
    * Read the user's chosen voice-chat language at activation time. Synchronous
    * because the value lives in a hydrated Zustand store. Returns an ISO-639-1
