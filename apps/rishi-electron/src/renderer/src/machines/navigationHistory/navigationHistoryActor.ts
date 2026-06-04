@@ -1,6 +1,6 @@
 import { createActor } from 'xstate'
 import { create } from 'zustand'
-import { navigationHistoryMachine } from './navigationHistoryMachine'
+import { navigationHistoryMachine } from '@rishi/shared/machines/navigationHistory'
 import type { AnchorPoint, NavigationHistoryEvent } from './types'
 
 export const navigationHistoryActor = createActor(navigationHistoryMachine)

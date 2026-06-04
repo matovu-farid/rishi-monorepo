@@ -34,7 +34,7 @@ const { FakeOfflineError } = vi.hoisted(() => ({
     }
   }
 }))
-vi.mock('@/services/voice-chat', () => ({ OfflineError: FakeOfflineError }))
+vi.mock('@rishi/shared/voice-chat', () => ({ OfflineError: FakeOfflineError }))
 vi.mock('@/utils/sentry', () => ({ captureError: vi.fn() }))
 vi.mock('@/modules/pageCapture', () => ({
   summarizeCurrentPage: vi.fn().mockReturnValue({ equations: 0, figures: 0, images: 0 })

@@ -339,6 +339,16 @@ export interface NetworkPort {
   preconnectOpenAI(): void
 }
 
+/**
+ * Optional billing transport for realtime token-usage reporting. The wiring
+ * site supplies an authenticated fetch that mirrors `reportRealtimeUsage`'s
+ * expected shape. When omitted, response.done events are still parsed but no
+ * usage POST is made.
+ */
+export interface BillingPort {
+  apiFetch: import('../billing/realtime-usage-client').ApiFetch
+}
+
 export interface VoiceChatServiceDeps {
   rag: VoiceChatRagPort
   connectivity: VoiceChatConnectivityPort
@@ -355,6 +365,8 @@ export interface VoiceChatServiceDeps {
   clock: ClockPort
   network: NetworkPort
   config: VoiceChatConfig
+  /** Optional billing transport — see `BillingPort`. */
+  billing?: BillingPort
   /**
    * Read the user's chosen voice-chat language at activation time.
    * Synchronous because the value lives in a hydrated store. Returns an

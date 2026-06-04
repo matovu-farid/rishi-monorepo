@@ -6,8 +6,8 @@ import { RealtimeAgent, tool } from '@openai/agents/realtime'
 import { z } from 'zod'
 import { Effect } from 'effect'
 import { captureError } from '@/utils/sentry'
-import { LANGUAGE_LABELS, isAllowedLanguage, DEFAULT_LANGUAGE } from '@/lib/languages'
 import { captureCurrentPage, type CaptureResult } from '@/modules/pageCapture'
+import { renderRealtimeInstructions } from '@rishi/shared/voice-chat'
 
 /**
  * Runs a realtime-agent tool execute under Effect so its outcome is
@@ -111,96 +111,11 @@ export interface BuildAgentOptions {
   onInspectImage?: (image: CaptureResult) => void
 }
 
-function renderOutlineSection(outline: BookOutline | undefined): string {
-  if (!outline) return ''
-  const authorLine = outline.author ? `**Author:** ${outline.author}\n` : ''
-  const chapterLines =
-    outline.chapters.length > 0
-      ? `**Chapters:**\n${outline.chapters.map((c) => `- ${c}`).join('\n')}\n`
-      : ''
-  return `## Book Outline
-**Title:** ${outline.title}
-${authorLine}${chapterLines}
-Use this outline to orient the user across the book. If they ask about a specific chapter that isn't on their current page, you may use the bookContext tool to retrieve relevant passages from that chapter.
-
-`
-}
-
-function renderActiveParagraphSection(activeParagraphText: string | undefined): string {
-  if (!activeParagraphText) return ''
-  return `## What the user just heard
-The user was just listening to this passage being read aloud:
-"""
-${activeParagraphText}
-"""
-This is part of the current page above. If they say "this", "that", "what you just read", or otherwise refer back to what they heard, they mean this passage.
-
-`
-}
-
-function renderVisualSection(summary: VisualSummary | undefined): string {
-  if (!summary) return ''
-  const parts: string[] = []
-  if (summary.equations > 0)
-    parts.push(`${summary.equations} ${summary.equations === 1 ? 'equation' : 'equations'}`)
-  if (summary.figures > 0)
-    parts.push(`${summary.figures} ${summary.figures === 1 ? 'figure' : 'figures'}`)
-  if (summary.images > 0)
-    parts.push(`${summary.images} ${summary.images === 1 ? 'image' : 'images'}`)
-  const description = parts.length > 0 ? parts.join(' and ') : 'no visual content (text-only page)'
-
-  return `## Visual context
-The current page contains ${description}.
-
-You have a tool \`inspectCurrentPage({ detail: 'low' | 'high' })\` that returns a screenshot of what the user is looking at right now. Use \`detail: 'low'\` (default) for general layout questions. Use \`detail: 'high'\` only if you need to read small text inside the image (equations, captions, axis labels). Do not call it on every turn — only when the user's question requires visual context.
-
-`
-}
-
-function renderLanguageSection(language: string): string {
-  const code = isAllowedLanguage(language) ? language : DEFAULT_LANGUAGE
-  const label = LANGUAGE_LABELS[code]
-  return `## Language
-Always respond in ${label} regardless of the user's accent or pronunciation. Treat all input as ${label} unless the user explicitly switches mid-conversation.
-
-`
-}
-
-const INSTRUCTIONS_TEMPLATE = (
-  pageText: string,
-  language: string,
-  outline?: BookOutline,
-  activeParagraphText?: string,
-  visualSummary?: VisualSummary
-) => `## Role
-You are a teaching assistant helping the user understand the book they're reading. Make complex ideas accessible and answer questions in a way that aids comprehension.
-
-${renderLanguageSection(language)}${renderOutlineSection(outline)}${renderVisualSection(visualSummary)}## Current Page Content
-"""
-${pageText || '(No page text available)'}
-"""
-If the question is answerable from this page, answer directly. Use the bookContext tool only for content outside this page.
-
-${renderActiveParagraphSection(activeParagraphText)}
-
-## Rules
-- Vary phrasing — never repeat the same sentence verbatim in a single response.
-- Stay conversational; avoid scripted-sounding language.
-- Before calling a tool, say one short line previewing what you're doing (5-12 words).
-- Stay focused on the book, but allow natural chat flow.
-
-## Tools
-
-### bookContext
-For content NOT visible on the current page. Provide a brief preamble before calling. Do not call if the answer is already in the current page text.
-
-### endConversation
-When the user clearly signals they're done (e.g., "thanks, that's all", "goodbye"), respond with a warm closing and call this tool. If the signal is ambiguous, confirm first. Provide a clear \`reason\` describing why the conversation is ending.
-
-## Style notes
-- First message: if the user asks a question, answer it directly. If they greet, respond briefly and ask how you can help.
-- When explaining concepts, break down complexity and use analogies. Briefly check understanding before moving on.
-- Keep responses concise unless depth is requested.`
+// Prompt-rendering helpers (renderOutlineSection, renderActiveParagraphSection,
+// renderVisualSection, renderLanguageSection, INSTRUCTIONS_TEMPLATE) were
+// migrated to `@rishi/shared/voice-chat` (renderRealtimeInstructions) so
+// electron and mobile produce identical system prompts. See SPEC §3.6
+// (DRY-004) and `packages/shared/src/voice-chat/build-realtime-agent.ts`.
 
 export function buildRealtimeAgent({
   bookId,
@@ -296,13 +211,13 @@ export function buildRealtimeAgent({
   return new RealtimeAgent({
     name: 'Assistant',
     voice: 'alloy',
-    instructions: INSTRUCTIONS_TEMPLATE(
+    instructions: renderRealtimeInstructions({
       pageText,
       language,
       outline,
       activeParagraphText,
       visualSummary
-    ),
+    }),
     tools: tools as never
   })
 }
