@@ -492,29 +492,17 @@ async function runScenario(input: ScenarioInput): Promise<ScenarioResult> {
     if (observedStatus === input.expectedStatus) break;
   }
 
-  // 7. Probe the gate. We send a valid /api/embed body shape so a
-  //    gate-pass scenario can reach the handler. We do NOT assert 200
-  //    strictly — if OPENAI_API_KEY isn't configured locally the call
-  //    fails with 500 yet the gate still passed. For block scenarios
-  //    (expectedHttp = 402) we require the exact 402. For pass
-  //    scenarios (expectedHttp = 200) we accept any non-402 response
-  //    as evidence the gate let the request through.
-  const httpRes = await fetch(`${WORKER_URL}/api/embed`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ texts: ["e2e probe"] }),
+  // 7. Probe the gate via the dedicated /test/billing-gate-check endpoint
+  //    (same middleware stack as the AI routes, no downstream work). 200 =
+  //    gate let request through; 402 = gate blocked with BILLING_INACTIVE.
+  const httpRes = await fetch(`${WORKER_URL}/test/billing-gate-check`, {
+    headers: { Authorization: `Bearer ${token}` },
   });
   const observedHttp = httpRes.status;
-  console.log(`  • /api/embed → ${observedHttp}`);
+  console.log(`  • /test/billing-gate-check → ${observedHttp}`);
 
-  const httpPass =
-    input.expectedHttp === 402 ? observedHttp === 402 : observedHttp !== 402;
-  const expected = `${input.expectedStatus}/${
-    input.expectedHttp === 402 ? "402" : "!402"
-  }`;
+  const httpPass = observedHttp === input.expectedHttp;
+  const expected = `${input.expectedStatus}/${input.expectedHttp}`;
   const got = `${observedStatus ?? "null"}/${observedHttp}`;
   const pass = observedStatus === input.expectedStatus && httpPass;
   const diagnostic = pass

@@ -196,6 +196,23 @@ app.route("/mobile", mobileRoutes);
 // src/routes/test-auth.ts. Production keeps both env vars unset.
 app.route("/test", testAuthRoutes);
 
+// Gate-only probe used by scripts/billing-e2e-clock.ts. Same gate stack as
+// the AI endpoints (requireAuth + requireActiveSubscription) but with no
+// downstream work, so a missing OPENAI_API_KEY can't muddy the result.
+// 404 in prod because ENABLE_TEST_AUTH is unset.
+app.get(
+  "/test/billing-gate-check",
+  async (c, next) => {
+    if (c.env.ENABLE_TEST_AUTH !== "true") {
+      return new Response("Not Found", { status: 404 });
+    }
+    return next();
+  },
+  requireAuth,
+  requireActiveSubscription,
+  (c) => c.json({ ok: true }),
+);
+
 // ─── Protected routes ─────────────────────────────────────────────────────────
 app.get("/api/redis-test", requireAuth, async (c) => {
   const redis = Redis.fromEnv(c.env);
