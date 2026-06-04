@@ -94,16 +94,12 @@ export function createAuth(env: CloudflareBindings) {
                   .where(eq(userTable.stripeCustomerId, customerId))
                   .get();
                 if (!row?.email) return;
-                // portalUrl is null for now — the user is unauthenticated when
-                // clicking an email link, so we'd need a signed-token flow to
-                // mint a portal URL ahead of time. Track in BILLING-HANDOFF.md.
                 await sendPaymentFailedEmail(
                   event,
                   { email: row.email, name: row.name ?? null },
                   {
                     resendApiKey: env.RESEND_API_KEY,
                     fromAddress: "Rishi <auth@fidexa.org>",
-                    portalUrl: null,
                   },
                 );
               },

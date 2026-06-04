@@ -26,7 +26,11 @@ beforeEach(() => {
 });
 
 function makeInvoicePaymentFailedEvent(
-  overrides: Partial<{ amount_due: number; customer: string }> = {},
+  overrides: Partial<{
+    amount_due: number;
+    customer: string;
+    hosted_invoice_url: string | null;
+  }> = {},
 ): Stripe.Event {
   // Minimal shape covering the fields buildPaymentFailedEmail reads.
   return {
@@ -38,6 +42,10 @@ function makeInvoicePaymentFailedEvent(
         amount_due: overrides.amount_due ?? 250, // $2.50
         currency: "usd",
         customer: overrides.customer ?? "cus_test",
+        hosted_invoice_url:
+          overrides.hosted_invoice_url === undefined
+            ? "https://invoice.stripe.com/i/test_abc"
+            : overrides.hosted_invoice_url,
       },
     },
   } as unknown as Stripe.Event;
@@ -46,7 +54,6 @@ function makeInvoicePaymentFailedEvent(
 const deps: PaymentFailedEmailDeps = {
   resendApiKey: "re_fake_key",
   fromAddress: "Rishi <auth@fidexa.org>",
-  portalUrl: "https://app.example/account",
 };
 
 const user: ResolvedUser = { email: "u@example.com", name: "Ada" };
@@ -85,19 +92,35 @@ describe("buildPaymentFailedEmail", () => {
     expect(payload!.html).toContain("$0.07");
   });
 
-  test("includes the portal URL when provided", () => {
-    const payload = buildPaymentFailedEmail(makeInvoicePaymentFailedEvent(), user, deps);
-    expect(payload!.html).toContain("https://app.example/account");
-    expect(payload!.html).toMatch(/manage billing/i);
+  test("includes the hosted_invoice_url as the Pay now CTA when present", () => {
+    const payload = buildPaymentFailedEmail(
+      makeInvoicePaymentFailedEvent({ hosted_invoice_url: "https://invoice.stripe.com/i/test_xyz" }),
+      user,
+      deps,
+    );
+    expect(payload!.html).toContain("https://invoice.stripe.com/i/test_xyz");
+    expect(payload!.html).toMatch(/pay/i);
   });
 
-  test("omits the Manage billing link when portalUrl is null", () => {
-    const payload = buildPaymentFailedEmail(makeInvoicePaymentFailedEvent(), user, {
-      ...deps,
-      portalUrl: null,
-    });
-    expect(payload!.html).not.toMatch(/manage billing/i);
+  test("omits the Pay link when hosted_invoice_url is null", () => {
+    const payload = buildPaymentFailedEmail(
+      makeInvoicePaymentFailedEvent({ hosted_invoice_url: null }),
+      user,
+      deps,
+    );
     expect(payload!.html).not.toContain("href=");
+  });
+
+  test("HTML-escapes a malicious hosted_invoice_url", () => {
+    const payload = buildPaymentFailedEmail(
+      makeInvoicePaymentFailedEvent({
+        hosted_invoice_url: 'https://example.com/"><script>alert(1)</script>',
+      }),
+      user,
+      deps,
+    );
+    expect(payload!.html).not.toContain("<script>");
+    expect(payload!.html).toContain("&lt;script&gt;");
   });
 });
 

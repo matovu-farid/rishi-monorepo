@@ -4,7 +4,6 @@ import { Resend } from "resend";
 export type PaymentFailedEmailDeps = {
   resendApiKey: string;
   fromAddress: string;
-  portalUrl: string | null;
 };
 
 export type ResolvedUser = { email: string; name: string | null };
@@ -47,8 +46,10 @@ export function buildPaymentFailedEmail(
   const amount = formatUsdFromCents(invoice.amount_due ?? 0);
   const greetingName = user.name && user.name.trim().length > 0 ? user.name : "there";
 
-  const manageBillingBlock = deps.portalUrl
-    ? `<p>You can update your payment method or manage your subscription here: <a href="${escapeHtml(deps.portalUrl)}">Manage billing</a>.</p>`
+  // hosted_invoice_url is Stripe's public per-invoice URL — no auth needed,
+  // can pay directly. Better UX than a portal link (which requires sign-in).
+  const payNowBlock = invoice.hosted_invoice_url
+    ? `<p><a href="${escapeHtml(invoice.hosted_invoice_url)}">Pay the invoice now</a> to keep your subscription active.</p>`
     : "";
 
   const html = `<!doctype html>
@@ -57,7 +58,7 @@ export function buildPaymentFailedEmail(
     <p>Hi ${escapeHtml(greetingName)},</p>
     <p>We weren't able to charge your payment method for your most recent Rishi invoice (${amount}).</p>
     <p>Stripe will retry the charge over the next few days. If the retries fail, your subscription will be paused and AI features will stop working until billing is sorted out.</p>
-    ${manageBillingBlock}
+    ${payNowBlock}
     <p>— Rishi</p>
   </body>
 </html>`;
