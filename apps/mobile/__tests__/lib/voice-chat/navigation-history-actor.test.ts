@@ -89,6 +89,14 @@ describe('mobile navigationHistoryMachine (NAVHIST-001 wiring)', () => {
       source: 'toc',
       fromLabel: 'p. 1',
     } as NavigationHistoryEvent)
+    // After JUMP_REQUESTED the `stack` region is in `navigating` — POP_BACK
+    // is only accepted in `idle`. Send PAGE_VISITED to return to `idle`
+    // (mirrors how a real reader settles on the destination page).
+    actor.send({
+      type: 'PAGE_VISITED',
+      position: makePosition(42),
+      ttsContext: null,
+    } as NavigationHistoryEvent)
 
     const emitted: Array<{ type: string; anchor: AnchorPoint }> = []
     actor.on('RESUME_REQUESTED', (e) => {
@@ -148,6 +156,13 @@ describe('mobile navigationHistoryMachine (NAVHIST-001 wiring)', () => {
         to: makePosition(i + 1),
         source: 'link',
         fromLabel: `p. ${i}`,
+      } as NavigationHistoryEvent)
+      // Re-enter `stack.idle` so the next JUMP_REQUESTED isn't dropped by
+      // the `navigating` sub-state.
+      actor.send({
+        type: 'PAGE_VISITED',
+        position: makePosition(i + 1),
+        ttsContext: null,
       } as NavigationHistoryEvent)
     }
     expect(actor.getSnapshot().context.stack.length).toBe(STACK_MAX_DEPTH)

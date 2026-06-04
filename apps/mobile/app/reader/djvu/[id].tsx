@@ -60,6 +60,7 @@ import {
   type ReaderProgress,
   type TocItem,
 } from '@/components/reader'
+import { getDjvuPageText } from '@/lib/voice-chat/pagetext/djvu'
 
 /**
  * DJVU reader using djvu.js — a pure JavaScript DJVU decoder.
@@ -565,18 +566,31 @@ export default function DjvuReaderScreen() {
     }))
   }, [pageCount])
 
-  // CHT-002 — voice-chat activation context. DJVU is canvas-only (no text
-  // layer that survives the WebView round-trip), so the best we can do is
-  // pass a "Page N of M" page-text proxy plus the synthesised per-page
-  // outline. When TTS is active, forward the active paragraph too — the
-  // shared extractor can light this up if the DJVU has an OCR layer.
-  // Declared above the loading/error early-returns so the hook order stays
-  // stable across renders (react-hooks/rules-of-hooks).
+  // T-P2.5 (CONTEXT-001) — voice-chat activation context. Per SPEC §3.8
+  // we MUST pass real page prose. Electron's contract is
+  // `currentParagraphs.map(p => p.text).join('\n')`
+  // (apps/rishi-electron/src/renderer/src/stores/chatStore.ts:71). DJVU
+  // is canvas-only on mobile so we can't scrape the DOM; the per-book
+  // chunker-indexer however already pre-extracts OCR text (the same
+  // text driving RAG search), so we plumb its chunks for the current
+  // page through. When the indexer hasn't ingested the page yet the
+  // helper degrades to '' — still better than the "Page N of M" stub
+  // that defeated the agent.
+  //
+  // INFRASTRUCTURE GAP: the indexer-chunk lookup keyed by page number
+  // is not yet plumbed through to this screen — that needs a small
+  // store-level wiring change (out of scope for T-P2.5). For now we
+  // pass `indexerChunkTexts: []` which makes the helper return '';
+  // this is intentional and documented (SPEC §3.8 "Mobile bug sites").
+  // Declared above the loading/error early-returns so the hook order
+  // stays stable across renders (react-hooks/rules-of-hooks).
   const getActivationContext = useCallback(() => {
     const outline = tocItems.map((t) => ({ href: t.href, label: t.label }))
-    const pageText = pageCount > 0
-      ? `Page ${currentPage} of ${pageCount}`
-      : `Page ${currentPage}`
+    const pageText = getDjvuPageText({
+      indexerChunkTexts: [],
+      pageNumber: currentPage,
+      pageCount,
+    })
     return {
       pageText,
       outline,

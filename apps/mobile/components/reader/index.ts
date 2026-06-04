@@ -19,3 +19,4 @@ export {
   type ReaderErrorScreenProps,
   type ReaderErrorCause,
 } from './ReaderErrorScreen'
+export { NavBackPill, type NavBackPillProps } from './NavBackPill'

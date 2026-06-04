@@ -1,20 +1,46 @@
 /**
- * T-P1.3 — BILLING-002 (RED phase placeholder).
+ * T-P1.3 — BILLING-002.
  *
- * Final shape (per SPEC §3.2):
+ * `checkBillingGate(response)` inspects a fetch `Response` for a billing-gate
+ * signal (HTTP 402 with `{ code: 'BILLING_INACTIVE', subscriptionStatus }`)
+ * and throws `BillingInactiveError` when it matches. Every other response
+ * shape — non-402, 402 with a different code, 402 with an unparseable or
+ * empty body — is a no-op passthrough.
  *
- *   export async function checkBillingGate(response: Response): Promise<void>
+ * The response body is read via `response.clone()` so the caller can still
+ * `await response.json()` downstream.
  *
- * Throws `BillingInactiveError` when the response is a 402 with body
- * `{ code: 'BILLING_INACTIVE', subscriptionStatus }`. Clones the
- * response so the body remains readable downstream.
- *
- * Currently a no-op placeholder — the shared `interceptor.test.ts` suite
- * is the canonical red harness; this file exists so dependent mobile red
- * tests can `require('@rishi/shared/billing/interceptor')` without a
- * module-resolution error.
+ * See SPEC §3.2 (BILLING-002).
  */
 
-export async function checkBillingGate(_response: Response): Promise<void> {
-  // Placeholder — no-op until T-P1.3 implements the real interceptor.
+import {
+  BillingInactiveError,
+  isBillingInactiveResponse,
+} from "./errors";
+
+export async function checkBillingGate(response: Response): Promise<void> {
+  if (response.status !== 402) return;
+
+  let bodyText: string;
+  try {
+    // Clone so the caller can still consume the original body.
+    bodyText = await response.clone().text();
+  } catch {
+    // Body unreadable — treat as non-matching, leave to caller.
+    return;
+  }
+
+  if (bodyText === "") return;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    // Non-JSON body — not a BILLING_INACTIVE payload.
+    return;
+  }
+
+  if (!isBillingInactiveResponse(402, parsed)) return;
+
+  throw new BillingInactiveError(parsed.subscriptionStatus);
 }

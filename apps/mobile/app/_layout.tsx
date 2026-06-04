@@ -19,7 +19,9 @@ import { useAuthStore } from '@/lib/stores/authStore'
 import { initVectorExtension, ensureChunkTables } from '@/lib/rag/vector-store'
 import { RagExtractorHost } from '@/components/RagExtractorHost'
 import { PremiumFeatureSheet } from '@/components/auth/PremiumFeatureSheet'
+import { BillingInactiveModal } from '@/components/billing/BillingInactiveModal'
 import { handleIncomingFile, isFileUrl } from '@/lib/file-handler'
+import { runStartupWiring } from '@/lib/voice-chat/startup-wiring'
 
 export const IS_E2E_TEST = process.env.EXPO_PUBLIC_E2E_TEST === 'true'
 
@@ -128,9 +130,21 @@ function RootLayout() {
   // even for users who land directly on `/(tabs)` without ever mounting
   // `/(auth)/_layout.tsx` (H1-04).
   useEffect(() => {
-    void hydrateAuth().catch((err: unknown) => {
-      console.warn('[layout] hydrateAuth threw:', err)
-    })
+    void hydrateAuth()
+      .catch((err: unknown) => {
+        console.warn('[layout] hydrateAuth threw:', err)
+      })
+      .finally(() => {
+        // T-P2.1 (WIRING-001) — wire the voice-chat service into the chat
+        // store after auth hydration completes. Idempotent and auth-gated:
+        // the wiring module subscribes to the auth store and calls
+        // `setChatVoicePort` exactly once when a session becomes available.
+        try {
+          runStartupWiring()
+        } catch (err) {
+          console.warn('[layout] runStartupWiring threw:', err)
+        }
+      })
   }, [hydrateAuth])
 
   // The Better-Auth deep-link round-trip is driven by
@@ -212,6 +226,7 @@ function RootLayout() {
           <Slot />
           <RagExtractorHost />
           <PremiumFeatureSheet />
+          <BillingInactiveModal />
           <StatusBar style="auto" />
         </ThemeProvider>
       </GestureHandlerRootView>
@@ -230,6 +245,7 @@ function RootLayout() {
          */}
         <RagExtractorHost />
         <PremiumFeatureSheet />
+        <BillingInactiveModal />
         <StatusBar style="auto" />
       </ThemeProvider>
     </GestureHandlerRootView>

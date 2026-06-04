@@ -117,6 +117,24 @@ beforeEach(() => {
   mockSignOut.mockClear()
 })
 
+/**
+ * Seed the authStore so the Account-section Manage-billing row renders
+ * (the production component gates the button on `user != null`).
+ *
+ * `jest.resetModules()` runs in `beforeEach`, so we must re-require the
+ * store inside each test after the reset — calling `setState` on the
+ * pre-reset module wouldn't reach the freshly-loaded copy used by the
+ * SettingsScreen import below.
+ */
+function seedSignedInUser() {
+  const { useAuthStore } = require('@/lib/stores/authStore')
+  useAuthStore.setState({
+    user: { id: 'u-mb', email: 'mb@example.com' },
+    isAuthenticated: true,
+    sessionToken: 'tok',
+  })
+}
+
 import React from 'react'
 
 /**
@@ -149,6 +167,7 @@ function mount(node: unknown) {
 
 describe('Settings — Manage Subscription row (T-P2.4)', () => {
   it('renders a Manage-billing row with testID="settings-manage-billing"', () => {
+    seedSignedInUser()
     const SettingsScreen = require('@/app/(tabs)/settings/index').default
     const m = mount(React.createElement(SettingsScreen))
     try {
@@ -159,6 +178,7 @@ describe('Settings — Manage Subscription row (T-P2.4)', () => {
   })
 
   it('press → POST /api/billing/portal → WebBrowser.openBrowserAsync(url)', async () => {
+    seedSignedInUser()
     const TestRenderer = require('react-test-renderer')
     mockApiClient.mockResolvedValueOnce(
       new Response(JSON.stringify({ url: 'https://billing.stripe.com/test' }), {
@@ -193,6 +213,7 @@ describe('Settings — Manage Subscription row (T-P2.4)', () => {
   })
 
   it('on error response, does NOT open the browser and surfaces an error', async () => {
+    seedSignedInUser()
     const TestRenderer = require('react-test-renderer')
     mockApiClient.mockResolvedValueOnce(
       new Response(JSON.stringify({ error: 'server down' }), {

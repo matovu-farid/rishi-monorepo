@@ -146,12 +146,13 @@ function loadWithMocks() {
   } | null = null
 
   jest.isolateModules(() => {
-    // Virtual mock for the not-yet-implemented factory module. Registered
-    // BEFORE `startup-wiring` requires it so the resolver picks the mock.
+    // Mock for the buildService factory. Registered BEFORE
+    // `startup-wiring` requires it so the resolver picks the mock —
+    // `startup-wiring` lazy-requires `./buildService` inside `tryWire`
+    // so this mock is consulted at call-time, not at module load.
     jest.doMock(
       '@/lib/voice-chat/buildService',
       () => ({ buildMobileVoiceChatService }),
-      { virtual: true },
     )
 
     // Wrap chatStore so setChatVoicePort is observable AND the real one
