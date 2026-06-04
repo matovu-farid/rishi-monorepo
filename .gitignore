@@ -11,6 +11,7 @@
 # Local agent/orchestration state
 .parity/
 .parity-v2/
+apps/mobile/pnpm-lock.yaml
 .claude/kanban.json
 .claude/kanban/
 **/.claude/
