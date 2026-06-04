@@ -3,6 +3,7 @@ import { useState, type JSX } from 'react'
 import { useAuthStore } from '@/stores/authStore'
 import { usePrefsStore } from '@/stores/prefsStore'
 import { ALLOWED_LANGUAGES, LANGUAGE_LABELS } from '@/lib/languages'
+import { workerFetch } from '@/lib/api'
 
 export const Route = createFileRoute('/settings/account')({
   component: AccountSettings
@@ -19,17 +20,55 @@ export const Route = createFileRoute('/settings/account')({
  * Required by Apple's App Review Guideline 5.1.1(v): any app that
  * supports account creation must also offer in-app account deletion.
  */
-function AccountSettings(): JSX.Element {
+export function AccountSettings(): JSX.Element {
   const user = useAuthStore((s) => s.user)
   const [deleting, setDeleting] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [billingLoading, setBillingLoading] = useState(false)
+  const [billingError, setBillingError] = useState<string | null>(null)
   const voiceChatLanguage = usePrefsStore((s) => s.voiceChatLanguage)
   const setVoiceChatLanguage = usePrefsStore((s) => s.setVoiceChatLanguage)
   const autoUpdateEnabled = usePrefsStore((s) => s.autoUpdateEnabled)
   const setAutoUpdateEnabled = usePrefsStore((s) => s.setAutoUpdateEnabled)
 
   if (!user) return <p className="p-8">Sign in to manage your account.</p>
+
+  async function handleManageBilling(): Promise<void> {
+    setBillingError(null)
+    setBillingLoading(true)
+    try {
+      const res = await workerFetch('/api/billing/portal', {
+        method: 'POST',
+        body: JSON.stringify({})
+      })
+      if (res.status === 503) {
+        setBillingError('Billing is not available in this build.')
+        return
+      }
+      if (res.status === 409) {
+        setBillingError(
+          "Your account hasn't been set up for billing yet. Please contact support."
+        )
+        return
+      }
+      if (!res.ok) {
+        setBillingError("Couldn't reach the billing portal. Try again.")
+        return
+      }
+      const data = (await res.json()) as { url?: string }
+      if (!data.url) {
+        setBillingError("Couldn't reach the billing portal. Try again.")
+        return
+      }
+      await window.electron.openExternal(data.url)
+    } catch (err: unknown) {
+      console.warn('[account] manage-billing failed:', err)
+      setBillingError("Couldn't reach the billing portal. Try again.")
+    } finally {
+      setBillingLoading(false)
+    }
+  }
 
   async function handleDelete(): Promise<void> {
     setDeleting(true)
@@ -62,6 +101,23 @@ function AccountSettings(): JSX.Element {
         >
           Sign out
         </button>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold">Billing</h2>
+        <p className="text-sm text-gray-600">
+          Manage your subscription, payment method, and invoices in Stripe's secure billing portal.
+        </p>
+        <button
+          className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+          onClick={() => {
+            void handleManageBilling()
+          }}
+          disabled={billingLoading}
+        >
+          {billingLoading ? 'Opening…' : 'Manage billing'}
+        </button>
+        {billingError ? <p className="text-sm text-red-600">{billingError}</p> : null}
       </section>
 
       <section className="space-y-3">

@@ -41,6 +41,18 @@ jest.mock('@/lib/auth', () => ({
   signOut: () => mockSignOut(),
 }))
 
+// ── Mock lib/api.apiClient ───────────────────────────────────────────────────
+const mockApiClient = jest.fn()
+jest.mock('@/lib/api', () => ({
+  apiClient: (path: string, options?: RequestInit) => mockApiClient(path, options),
+}))
+
+// ── Mock expo-web-browser ────────────────────────────────────────────────────
+const mockOpenBrowserAsync = jest.fn().mockResolvedValue({ type: 'opened' })
+jest.mock('expo-web-browser', () => ({
+  openBrowserAsync: (url: string) => mockOpenBrowserAsync(url),
+}))
+
 // ── Mock expo-constants for app version ──────────────────────────────────────
 jest.mock('expo-constants', () => ({
   __esModule: true,
@@ -65,6 +77,7 @@ jest.mock('react-native', () => {
     TouchableOpacity: mk('TouchableOpacity'),
     Switch: mk('Switch'),
     ScrollView: mk('ScrollView'),
+    ActivityIndicator: mk('ActivityIndicator'),
     StyleSheet: { create: (s: Record<string, unknown>) => s, flatten: (s: unknown) => s },
     Platform: { OS: 'ios', select: (m: Record<string, unknown>) => m.ios ?? m.default },
   }
@@ -92,6 +105,8 @@ beforeEach(() => {
   jest.resetModules()
   backingStore = new Map<string, string>()
   mockSignOut.mockClear()
+  mockApiClient.mockReset()
+  mockOpenBrowserAsync.mockClear()
 })
 
 describe('settings screen (G29)', () => {
@@ -374,6 +389,158 @@ describe('settings screen (G29)', () => {
     for (const code of ALLOWED_LANGUAGES) {
       expect(codes).toContain(code)
     }
+  })
+
+  // ── BILLING-HANDOFF gap #7 — Manage billing button ──────────────────────
+  describe('Manage billing button', () => {
+    function makeJsonResponse(status: number, body: unknown): Response {
+      return {
+        status,
+        ok: status >= 200 && status < 300,
+        json: async () => body,
+      } as unknown as Response
+    }
+
+    it('renders a Manage-billing button in the Account section', () => {
+      const TestRenderer = require('react-test-renderer')
+      const React = require('react')
+      const Settings = require('@/app/(tabs)/settings/index').default
+      const { useAuthStore } = require('@/lib/stores/authStore')
+
+      useAuthStore.setState({
+        user: { id: 'u', email: 'a@b.com' },
+        isAuthenticated: true,
+      })
+
+      let tree: ReturnType<typeof TestRenderer.create> | null = null
+      TestRenderer.act(() => {
+        tree = TestRenderer.create(React.createElement(Settings))
+      })
+      expect(() =>
+        tree!.root.findByProps({ testID: 'settings-manage-billing' }),
+      ).not.toThrow()
+    })
+
+    it('tapping the button POSTs to /api/billing/portal and opens the URL', async () => {
+      mockApiClient.mockResolvedValueOnce(
+        makeJsonResponse(200, { url: 'https://billing.stripe.com/abc' }),
+      )
+      const TestRenderer = require('react-test-renderer')
+      const React = require('react')
+      const Settings = require('@/app/(tabs)/settings/index').default
+      const { useAuthStore } = require('@/lib/stores/authStore')
+
+      useAuthStore.setState({
+        user: { id: 'u', email: 'a@b.com' },
+        isAuthenticated: true,
+      })
+
+      let tree: ReturnType<typeof TestRenderer.create> | null = null
+      TestRenderer.act(() => {
+        tree = TestRenderer.create(React.createElement(Settings))
+      })
+      const btn = tree!.root.findByProps({ testID: 'settings-manage-billing' })
+
+      await TestRenderer.act(async () => {
+        btn.props.onPress()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(mockApiClient).toHaveBeenCalledTimes(1)
+      const [path, options] = mockApiClient.mock.calls[0]
+      expect(path).toBe('/api/billing/portal')
+      expect(options.method).toBe('POST')
+      expect(options.body).toBe(JSON.stringify({}))
+      expect(mockOpenBrowserAsync).toHaveBeenCalledWith(
+        'https://billing.stripe.com/abc',
+      )
+    })
+
+    it('shows a "not available" message on 503', async () => {
+      mockApiClient.mockResolvedValueOnce(makeJsonResponse(503, {}))
+      const TestRenderer = require('react-test-renderer')
+      const React = require('react')
+      const Settings = require('@/app/(tabs)/settings/index').default
+      const { useAuthStore } = require('@/lib/stores/authStore')
+
+      useAuthStore.setState({
+        user: { id: 'u', email: 'a@b.com' },
+        isAuthenticated: true,
+      })
+
+      let tree: ReturnType<typeof TestRenderer.create> | null = null
+      TestRenderer.act(() => {
+        tree = TestRenderer.create(React.createElement(Settings))
+      })
+      const btn = tree!.root.findByProps({ testID: 'settings-manage-billing' })
+      await TestRenderer.act(async () => {
+        btn.props.onPress()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(mockOpenBrowserAsync).not.toHaveBeenCalled()
+      expect(JSON.stringify(tree!.toJSON())).toMatch(/not available/i)
+    })
+
+    it('shows a "contact support" message on 409', async () => {
+      mockApiClient.mockResolvedValueOnce(makeJsonResponse(409, {}))
+      const TestRenderer = require('react-test-renderer')
+      const React = require('react')
+      const Settings = require('@/app/(tabs)/settings/index').default
+      const { useAuthStore } = require('@/lib/stores/authStore')
+
+      useAuthStore.setState({
+        user: { id: 'u', email: 'a@b.com' },
+        isAuthenticated: true,
+      })
+
+      let tree: ReturnType<typeof TestRenderer.create> | null = null
+      TestRenderer.act(() => {
+        tree = TestRenderer.create(React.createElement(Settings))
+      })
+      const btn = tree!.root.findByProps({ testID: 'settings-manage-billing' })
+      await TestRenderer.act(async () => {
+        btn.props.onPress()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(mockOpenBrowserAsync).not.toHaveBeenCalled()
+      expect(JSON.stringify(tree!.toJSON())).toMatch(/contact support/i)
+    })
+
+    it('shows a network-error message when apiClient throws', async () => {
+      mockApiClient.mockRejectedValueOnce(new Error('network down'))
+      const TestRenderer = require('react-test-renderer')
+      const React = require('react')
+      const Settings = require('@/app/(tabs)/settings/index').default
+      const { useAuthStore } = require('@/lib/stores/authStore')
+
+      useAuthStore.setState({
+        user: { id: 'u', email: 'a@b.com' },
+        isAuthenticated: true,
+      })
+
+      let tree: ReturnType<typeof TestRenderer.create> | null = null
+      TestRenderer.act(() => {
+        tree = TestRenderer.create(React.createElement(Settings))
+      })
+      const btn = tree!.root.findByProps({ testID: 'settings-manage-billing' })
+      await TestRenderer.act(async () => {
+        btn.props.onPress()
+        await Promise.resolve()
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(mockOpenBrowserAsync).not.toHaveBeenCalled()
+      expect(JSON.stringify(tree!.toJSON())).toMatch(/Couldn't reach/i)
+    })
   })
 
   it('selecting a language calls prefsStore.setVoiceChatLanguage', async () => {

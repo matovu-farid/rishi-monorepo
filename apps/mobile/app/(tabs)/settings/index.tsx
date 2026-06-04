@@ -10,17 +10,19 @@
  * Persistence is handled by the existing MMKV-backed stores
  * (`prefsStore`, `tutorialStore`); this screen is a thin UI shim.
  */
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import {
   View,
   Text,
   TouchableOpacity,
   Switch,
   ScrollView,
+  ActivityIndicator,
   Platform,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import Constants from 'expo-constants'
+import * as WebBrowser from 'expo-web-browser'
 
 import { IconSymbol } from '@/components/ui/icon-symbol'
 import { useAuthStore } from '@/lib/stores/authStore'
@@ -30,6 +32,7 @@ import {
 } from '@/lib/stores/prefsStore'
 import { useTutorialStore } from '@/lib/stores/tutorialStore'
 import { signOut } from '@/lib/auth'
+import { apiClient } from '@/lib/api'
 import {
   ALLOWED_LANGUAGES,
   LANGUAGE_LABELS,
@@ -60,6 +63,48 @@ export default function SettingsScreen() {
 
   const resetTour = useTutorialStore((s) => s.resetTour)
   const startTour = useTutorialStore((s) => s.startTour)
+
+  const [billingLoading, setBillingLoading] = useState(false)
+  const [billingError, setBillingError] = useState<string | null>(null)
+
+  const handleManageBilling = useCallback(async () => {
+    setBillingError(null)
+    setBillingLoading(true)
+    try {
+      const res = await apiClient('/api/billing/portal', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      })
+      if (res.status === 503) {
+        setBillingError('Billing is not available in this build.')
+        return
+      }
+      if (res.status === 409) {
+        setBillingError(
+          "Your account hasn't been set up for billing yet. Please contact support.",
+        )
+        return
+      }
+      if (!res.ok) {
+        setBillingError("Couldn't reach the billing portal. Try again.")
+        return
+      }
+      const data = (await res.json()) as { url?: string }
+      if (!data.url) {
+        setBillingError("Couldn't reach the billing portal. Try again.")
+        return
+      }
+      await WebBrowser.openBrowserAsync(data.url)
+    } catch (err) {
+      // apiClient throws on 401 too — but the catch is generic; the
+      // apiClient already cleared the session, so a generic "try again"
+      // is the right user-facing message.
+      console.warn('[settings] manage-billing failed:', err)
+      setBillingError("Couldn't reach the billing portal. Try again.")
+    } finally {
+      setBillingLoading(false)
+    }
+  }, [])
 
   const handleSignOut = useCallback(async () => {
     try {
@@ -112,6 +157,38 @@ export default function SettingsScreen() {
               <Text className="text-base text-gray-500">Not signed in.</Text>
             </View>
           )}
+          {user ? (
+            <View className="px-6 py-3">
+              <TouchableOpacity
+                testID="settings-manage-billing"
+                onPress={() => {
+                  void handleManageBilling()
+                }}
+                disabled={billingLoading}
+                className="border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 self-start flex-row items-center"
+                accessibilityRole="button"
+                accessibilityLabel="Manage billing"
+              >
+                <Text className="text-base text-gray-900 dark:text-white">
+                  Manage billing
+                </Text>
+                {billingLoading ? (
+                  <ActivityIndicator
+                    testID="settings-manage-billing-spinner"
+                    style={{ marginLeft: 8 }}
+                  />
+                ) : null}
+              </TouchableOpacity>
+              {billingError ? (
+                <Text
+                  testID="settings-manage-billing-error"
+                  className="text-sm text-red-600 mt-2"
+                >
+                  {billingError}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
           <View className="px-6 py-3">
             <TouchableOpacity
               testID="settings-sign-out"
