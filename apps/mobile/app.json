@@ -342,7 +342,13 @@
           "withSQLiteVecExtension": true
         }
       ],
-      "@sentry/react-native/expo"
+      [
+        "@sentry/react-native/expo",
+        {
+          "organization": "farid-org",
+          "project": "rishi-react-native"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

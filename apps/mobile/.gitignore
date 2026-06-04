@@ -41,3 +41,8 @@ app-example
 # generated native folders
 /ios
 /android
+
+.env.local
+
+# This is a pnpm project — never commit an npm lockfile (it confuses EAS Build)
+package-lock.json
