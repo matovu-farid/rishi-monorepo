@@ -11,7 +11,7 @@ import { ensureCreditAndSubscription } from "./billing/backfill"
 import { sendPaymentFailedEmail } from "./billing/payment-failed-email"
 import { user as userTable } from "@rishi/shared/schema"
 import { eq } from "drizzle-orm"
-import { STRIPE_TEST_IDS } from "@rishi/shared/billing/stripe-config"
+import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config"
 import type Stripe from "stripe"
 import type { CloudflareBindings } from "./index"
 
@@ -70,7 +70,9 @@ export function createAuth(env: CloudflareBindings) {
       // Stripe is only wired when STRIPE_SECRET_KEY is configured. In local
       // dev without secrets, the auth stack runs without billing.
       ...(stripeClient && env.STRIPE_WEBHOOK_SECRET
-        ? [
+        ? (() => {
+            const ids = getStripeIdsForKey(env.STRIPE_SECRET_KEY);
+            return [
             stripe({
               stripeClient,
               stripeWebhookSecret: env.STRIPE_WEBHOOK_SECRET,
@@ -80,7 +82,7 @@ export function createAuth(env: CloudflareBindings) {
                 await ensureCreditAndSubscription(
                   stripeClient,
                   stripeCustomer.id,
-                  STRIPE_TEST_IDS.priceId,
+                  ids.priceId,
                   ip,
                 )
               },
@@ -105,10 +107,11 @@ export function createAuth(env: CloudflareBindings) {
               },
               subscription: {
                 enabled: true,
-                plans: [{ name: "usage", priceId: STRIPE_TEST_IDS.priceId }],
+                plans: [{ name: "usage", priceId: ids.priceId }],
               },
             }),
-          ]
+          ];
+          })()
         : []),
     ],
     session: {

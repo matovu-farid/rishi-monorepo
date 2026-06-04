@@ -48,6 +48,16 @@ export function getStripeIds(mode: "test" | "live"): StripeBillingIds {
   return STRIPE_TEST_IDS;
 }
 
+/**
+ * Derive the right billing IDs from the Stripe secret key prefix. sk_live_*
+ * picks live, anything else (sk_test_* or unset) picks test. This lets the
+ * worker and scripts use a single env var (STRIPE_SECRET_KEY) and have the
+ * meter/product/price follow automatically — no extra mode flag to forget.
+ */
+export function getStripeIdsForKey(secretKey: string | undefined): StripeBillingIds {
+  return getStripeIds(secretKey?.startsWith("sk_live_") ? "live" : "test");
+}
+
 export function usdToMicroDollars(usd: number): number {
   return Math.round(usd * MICRO_DOLLARS_PER_USD);
 }

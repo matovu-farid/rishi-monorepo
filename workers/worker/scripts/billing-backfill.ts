@@ -14,7 +14,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import Stripe from "stripe";
-import { STRIPE_TEST_IDS } from "@rishi/shared/billing/stripe-config";
+import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config";
 import { backfillOneUser, type BackfillResult } from "../src/billing/backfill";
 
 interface Flags {
@@ -227,7 +227,7 @@ async function realRun(flags: Flags): Promise<void> {
   }
 
   const stripe = makeStripe(env);
-  const priceId = STRIPE_TEST_IDS.priceId;
+  const priceId = getStripeIdsForKey(env.STRIPE_SECRET_KEY).priceId;
   const outcomes: OutcomeRow[] = [];
 
   for (const u of users) {
