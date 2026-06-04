@@ -30,8 +30,11 @@ export const STRIPE_TEST_IDS: StripeBillingIds = {
   priceId: "price_1Te3qyCcIfMF2dQA2xrBWPQ1",
 };
 
-// Populate when we promote to live mode.
-export const STRIPE_LIVE_IDS: StripeBillingIds | null = null;
+export const STRIPE_LIVE_IDS: StripeBillingIds | null = {
+  meterId: "mtr_61UnuMFlHxDgONTfm41CcIfMF2dQAIwS",
+  productId: "prod_Udo1HFHrW3Zhn0",
+  priceId: "price_1TeWPXCcIfMF2dQAXadBAJcK",
+};
 
 export function getStripeIds(mode: "test" | "live"): StripeBillingIds {
   if (mode === "live") {
