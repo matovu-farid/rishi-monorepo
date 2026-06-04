@@ -6,7 +6,7 @@ import {
   type ChatStatus,
   type VoiceChatPublicState,
   type VoiceError
-} from '@/services/voice-chat'
+} from '@rishi/shared/voice-chat'
 import { usePlayerStore } from './playerStore'
 import { useEpubStore } from './epubStore'
 import { usePrefsStore } from './prefsStore'

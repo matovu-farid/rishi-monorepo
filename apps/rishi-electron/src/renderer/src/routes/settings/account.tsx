@@ -106,7 +106,7 @@ export function AccountSettings(): JSX.Element {
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Billing</h2>
         <p className="text-sm text-gray-600">
-          Manage your subscription, payment method, and invoices in Stripe's secure billing portal.
+          Manage your subscription, payment method, and invoices in Stripe&apos;s secure billing portal.
         </p>
         <button
           className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"

@@ -31,7 +31,7 @@ const { FakeOfflineError } = vi.hoisted(() => ({
   }
 }))
 
-vi.mock('@/services/voice-chat', () => ({
+vi.mock('@rishi/shared/voice-chat', () => ({
   OfflineError: FakeOfflineError
 }))
 

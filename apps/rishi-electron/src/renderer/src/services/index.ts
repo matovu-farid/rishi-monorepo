@@ -16,7 +16,8 @@ import {
   type MediaRecorderLike,
   type ServerVadConfig,
   type VoiceChatService
-} from './voice-chat'
+} from '@rishi/shared/voice-chat'
+import { captureError as sentryCaptureError } from '@/utils/sentry'
 
 export type {
   DiscoveredBook,
@@ -260,6 +261,7 @@ export function getVoiceChatService(): VoiceChatService {
       connectivity: getConnectivityService(),
       ipc: { getRealtimeClientSecret, transcribeAudio },
       billing: { apiFetch: workerFetch },
+      captureError: sentryCaptureError,
       webrtcFactory: ({ mediaStream, audioElement }) =>
         new OpenAIRealtimeWebRTC({
           mediaStream: mediaStream as unknown as MediaStream,

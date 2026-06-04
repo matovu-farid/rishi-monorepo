@@ -62,6 +62,15 @@ export interface TtsIpcChannels {
   writeFile(path: string, data: Uint8Array): Promise<void>
   readFile(path: string): Promise<ArrayBuffer>
   copyFile(src: string, dest: string): Promise<void>
+  /**
+   * Optional hardlink optimization. When provided, the cache prefers
+   * `linkOrCopyFile(src, dest)` over `copyFile(src, dest)` for the texthash
+   * mirror so the same audio bytes are not duplicated on disk. Implementations
+   * should hardlink when src and dest are on the same volume and fall back to
+   * copyFile on EXDEV (cross-device). Electron passes a real implementation;
+   * mobile (URL.createObjectURL-based) leaves this undefined.
+   */
+  linkOrCopyFile?: (src: string, dest: string) => Promise<void>
   removeFile(path: string): Promise<void>
   getDirSize(path: string): Promise<number>
   getCacheFileStats(dir: string): Promise<Array<{ path: string; size: number; mtimeMs: number }>>

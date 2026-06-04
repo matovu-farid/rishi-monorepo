@@ -81,7 +81,20 @@ export function createCache(deps: CacheDeps): Cache {
         try {
           const mirror = await audioPath(bookId, `texthash:${md5(textHash)}`)
           const mirrorExists = await ipc.exists(mirror)
-          if (!mirrorExists) await ipc.copyFile(path, mirror)
+          if (!mirrorExists) {
+            // Prefer hardlink when the platform supplies one (electron); fall
+            // back to plain copy on failure (e.g. EXDEV cross-device) and on
+            // platforms that omit the optional channel (mobile).
+            if (ipc.linkOrCopyFile) {
+              try {
+                await ipc.linkOrCopyFile(path, mirror)
+              } catch {
+                await ipc.copyFile(path, mirror)
+              }
+            } else {
+              await ipc.copyFile(path, mirror)
+            }
+          }
         } catch {
           // Non-critical — CFI-based lookup still works
         }

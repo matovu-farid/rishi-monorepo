@@ -171,6 +171,44 @@ describe('cache.clearBook', () => {
   })
 })
 
+describe('cache.saveAudio — linkOrCopyFile preference (T-P1.4 / DRY-002)', () => {
+  it('prefers ipc.linkOrCopyFile over ipc.copyFile for the text-hash mirror when both are provided', async () => {
+    // DRY-002 forward-compatible API: electron supplies an optional
+    // `linkOrCopyFile` channel (hardlink → falls back to copy on EXDEV).
+    // When present the cache MUST prefer it over `copyFile` so electron
+    // gets zero-extra-disk for the texthash mirror; mobile (no link channel)
+    // continues to use `copyFile`.
+    const { ipc, files } = makeIpc()
+    const linkOrCopyFile = vi.fn(async (src: string, dest: string) => {
+      const f = files.get(src)
+      if (!f) throw new Error(`ENOENT: ${src}`)
+      files.set(dest, new Uint8Array(f))
+    })
+    const ipcWithLink = { ...ipc, linkOrCopyFile }
+    const cache = createCache({ ipc: ipcWithLink, cacheMaxBytes: 500 * 1024 * 1024 })
+    const bytes = new Uint8Array([1, 2, 3, 4])
+
+    await cache.saveAudio('book-1', 'cfi-x', bytes, 'hello world')
+
+    expect(linkOrCopyFile).toHaveBeenCalledTimes(1)
+    expect(ipc.copyFile).not.toHaveBeenCalled()
+    // both keys still materialized in the in-memory FS via the link
+    expect([...files.keys()].filter((k) => k.endsWith('.mp3'))).toHaveLength(2)
+  })
+
+  it('falls back to ipc.copyFile when linkOrCopyFile is not provided (mobile)', async () => {
+    // Regression: legacy ports that omit `linkOrCopyFile` must keep working.
+    const { ipc } = makeIpc()
+    // Assert it really is absent on the legacy port shape
+    expect((ipc as { linkOrCopyFile?: unknown }).linkOrCopyFile).toBeUndefined()
+    const cache = createCache({ ipc, cacheMaxBytes: 500 * 1024 * 1024 })
+
+    await cache.saveAudio('book-1', 'cfi-x', new Uint8Array([1, 2, 3, 4]), 'hello world')
+
+    expect(ipc.copyFile).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('cache.evictIfNeeded', () => {
   it('removes oldest files until total size is under threshold', async () => {
     const { ipc, files } = makeIpc()

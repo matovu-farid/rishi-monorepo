@@ -7,6 +7,7 @@ import React, {
 } from 'react'
 import { View } from 'react-native'
 
+import { NavBackPill } from '@/components/reader/NavBackPill'
 import { ReaderTopBar } from '@/components/reader/ReaderTopBar'
 import { ReaderBottomBar } from '@/components/reader/ReaderBottomBar'
 import { ReaderOverlay } from '@/components/reader/ReaderOverlay'
@@ -431,6 +432,11 @@ export function ReaderShell({
           onChatToggle={onChatToggle}
           getActivationContext={getActivationContext}
         />
+
+        {/* T-P2.6 / NAVHIST-001 — back-pill, mounted above the bottom bar.
+            Reads from the shared navigation-history actor and renders
+            nothing when the stack is empty / pill is hidden. */}
+        <NavBackPill testID="nav-history-pill" />
 
         {sheets?.toc ? (
           <TocSheet

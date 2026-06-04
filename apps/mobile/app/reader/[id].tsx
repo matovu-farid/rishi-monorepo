@@ -59,6 +59,7 @@ import { Book, ReaderSettings } from '@/types/book'
 import type { Highlight, HighlightColor } from '@/types/highlight'
 import { HIGHLIGHT_COLORS, HIGHLIGHT_OPACITY } from '@/types/highlight'
 import type { Annotation } from '@epubjs-react-native/core'
+import { getEpubPageText } from '@/lib/voice-chat/pagetext/epub'
 
 /**
  * P1-J — map epubjs's onRelocated `progress` arg (a 0..1 float) into the
@@ -211,6 +212,13 @@ function ReaderContent({
   const [currentProgress, setCurrentProgress] = useState<number>(Number.NaN)
   const currentCfiRef = useRef<string | null>(book.currentCfi)
   const cfiSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // T-P2.5 (CONTEXT-001) — latest rendered prose captured from the EPUB
+  // WebView. Populated when the epubjs `contents` event fires and the
+  // rendition posts back `document.body.innerText`; consumed by
+  // `getActivationContext` so voice-chat sees real page prose rather
+  // than the chapter label. Stays null until the bridge plumbs a value
+  // through; the helper degrades to '' rather than the stale label.
+  const latestEpubInnerText = useRef<string | null>(null)
 
   // Highlight state
   const [highlights, setHighlights] = useState<Highlight[]>([])
@@ -748,17 +756,28 @@ function ReaderContent({
   const chapterLabel =
     toc?.find((t) => t.href === currentHref)?.label ?? undefined
 
-  // Voice-chat activation context (P0-O). We pass the chapter label as
-  // the page-text proxy (EPUB doesn't cheaply expose the rendered DOM
-  // text), and the spine outline so the model can resolve "the
-  // previous chapter", etc.
+  // T-P2.5 (CONTEXT-001) — voice-chat activation context. Per SPEC §3.8
+  // we MUST pass the actual rendered prose (electron's contract — see
+  // apps/rishi-electron/src/renderer/src/stores/chatStore.ts:71). The
+  // previous chapter-label proxy defeated the agent ("what's on this
+  // page?" → "Chapter 3").
+  //
+  // Page text comes from a WebView innerText capture that future work
+  // will populate via the epubjs rendition `contents` event. Until that
+  // bridge ships, `latestEpubInnerText.current` stays null and the
+  // helper returns '' — strictly better than the stale label, because
+  // the agent will simply ignore the empty field and rely on the
+  // outline + activeParagraphText instead.
   const getActivationContext = useCallback(() => {
     const outline = toc?.map((t) => ({
       href: t.href,
       label: t.label,
     }))
     return {
-      pageText: chapterLabel ?? '',
+      pageText: getEpubPageText({
+        latestInnerText: latestEpubInnerText.current,
+        chapterLabel: chapterLabel ?? null,
+      }),
       outline,
     }
   }, [toc, chapterLabel])

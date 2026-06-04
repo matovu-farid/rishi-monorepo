@@ -69,5 +69,6 @@ export type {
   VoiceChatConnectivityPort,
   BookOutline,
   VisualSummary,
-  CaptureResult
+  CaptureResult,
+  BillingPort
 } from './types'

@@ -60,6 +60,7 @@ import {
   type ReaderProgress,
   type TocItem,
 } from '@/components/reader'
+import { getMobiPageText } from '@/lib/voice-chat/pagetext/mobi'
 
 /**
  * Issue #52 — file-transfer chunk size for MOBI streaming.
@@ -414,6 +415,11 @@ export default function MobiReaderScreen() {
   const undoSnackbar = useUndoSnackbar()
 
   const webViewRef = useRef<WebView>(null)
+  // T-P2.5 (CONTEXT-001) — latest rendered prose for the current MOBI
+  // chapter. Populated when the WebView posts back its
+  // `document.body.innerText`; consumed by `getActivationContext` so
+  // voice-chat sees real page prose instead of "Chapter N".
+  const latestMobiInnerText = useRef<string | null>(null)
   const currentChapterRef = useRef(0)
   // #41 — Mirrors `chapterCount` state so the bridged-message handler
   // (which can be invoked before React re-renders with the latest
@@ -685,18 +691,22 @@ export default function MobiReaderScreen() {
     }))
   }, [chapterCount])
 
-  // CHT-002 — voice-chat activation context. MOBI doesn't cheaply expose
-  // the rendered DOM text (the parser ships HTML into the WebView and
-  // doesn't pipe it back), so we use the synthesised chapter label as
-  // `pageText` and pass the active TTS paragraph when one is live. Outline
-  // = the per-chapter TocItem list so the agent can resolve "previous
-  // chapter" etc.
-  // Declared above the loading/error early-returns so the hook order stays
-  // stable across renders (react-hooks/rules-of-hooks).
+  // T-P2.5 (CONTEXT-001) — voice-chat activation context. Per SPEC §3.8
+  // we MUST pass the actual rendered chapter prose (electron's contract,
+  // see apps/rishi-electron/src/renderer/src/stores/chatStore.ts:71).
+  // The previous "Chapter N" stub defeated the agent. Page text is
+  // hydrated by the WebView's onMessage handler into
+  // `latestMobiInnerText`; the helper degrades to '' when the WebView
+  // has not yet posted a value (still better than the wrong label).
+  // Declared above the loading/error early-returns so the hook order
+  // stays stable across renders (react-hooks/rules-of-hooks).
   const getActivationContext = useCallback(() => {
     const outline = tocItems.map((t) => ({ href: t.href, label: t.label }))
     return {
-      pageText: `Chapter ${currentChapter + 1}`,
+      pageText: getMobiPageText({
+        latestInnerText: latestMobiInnerText.current,
+        currentChapter,
+      }),
       outline,
       activeParagraphText: activeParagraph?.text ?? undefined,
     }

@@ -10,6 +10,8 @@
  * without re-running the deep-link flow.
  */
 import { getSessionToken, signOut, WORKER_API_URL } from './auth'
+import { BillingInactiveError } from '@rishi/shared/billing/errors'
+import { checkBillingGate } from '@rishi/shared/billing/interceptor'
 // Note: `buildDevBypassHeaders` is intentionally NOT imported here. `apiClient`
 // throws when no bearer is available, so by construction every request it
 // emits already carries `Authorization: Bearer …`. Sending `X-Dev-Bypass`
@@ -67,6 +69,33 @@ export async function apiClient(
       console.warn('[api] failed to clear authStore after 401:', err)
     }
     throw new Error('Session expired (401). User must sign in again.')
+  }
+
+  // BILLING-002: 402 BILLING_INACTIVE gate. The shared interceptor clones
+  // the response before reading, so callers can still consume the original
+  // body for any non-matching 402 (e.g. some other 402 reason). When it
+  // throws, mirror the subscription status into the global billing store
+  // so a top-level <BillingInactiveModal /> can surface the upgrade flow.
+  try {
+    await checkBillingGate(response)
+  } catch (err) {
+    if (BillingInactiveError.isInstance(err)) {
+      try {
+        const { useBillingStore } = require('@/lib/stores/billingStore') as {
+          useBillingStore: {
+            getState: () => {
+              setBillingInactive: (status: string | null) => void
+            }
+          }
+        }
+        useBillingStore
+          .getState()
+          .setBillingInactive(err.subscriptionStatus)
+      } catch (storeErr) {
+        console.warn('[api] failed to update billingStore on 402:', storeErr)
+      }
+    }
+    throw err
   }
 
   return response

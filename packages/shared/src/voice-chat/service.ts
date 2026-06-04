@@ -6,6 +6,11 @@ import { createKeyCache } from './key-cache'
 import { OfflineError } from './types'
 import { makeActivationProgram, isInterruptCause, type SessionHandle } from './activation-program'
 import type { ActivationError } from './errors'
+import {
+  createUsageAccumulator,
+  type RealtimeUsageAccumulator
+} from '../billing/realtime-usage-accumulator'
+import { reportRealtimeUsage } from '../billing/realtime-usage-client'
 import type {
   AudioElementLike,
   ChatStatus,
@@ -21,15 +26,6 @@ import type {
   VoiceErrorReason
 } from './types'
 
-/**
- * Voice-chat service factory. Verbatim port from
- * `apps/rishi-electron/src/renderer/src/services/voice-chat/service.ts`.
- *
- * Only difference: electron's `captureError` import is replaced by an
- * optional `captureError` port on `VoiceChatServiceDeps` (defaults to
- * no-op). The mobile-side service supplies a Sentry-React-Native wrapper.
- */
-
 function classifyError(err: unknown): VoiceErrorReason {
   if (err instanceof OfflineError) return 'connect_failed'
   const name = (err as { name?: string }).name
@@ -43,7 +39,9 @@ function classifyError(err: unknown): VoiceErrorReason {
 function fingerprintContext(ctx: VoiceChatContext): string {
   // Note: activeParagraphText is intentionally excluded. It changes on every
   // TTS paragraph advance; including it forced session.updateAgent to re-upload
-  // the full instructions block as input tokens once per paragraph.
+  // the full instructions block as input tokens once per paragraph. The agent
+  // still receives the active paragraph in the COLD-path instructions when the
+  // session first opens — see buildRealtimeAgent.ts.
   return `${ctx.pageText}\n${JSON.stringify(ctx.outline ?? {})}`
 }
 
@@ -71,14 +69,39 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
     clock
   })
 
+  let usageAccumulator: RealtimeUsageAccumulator | null = null
+
   const program = makeActivationProgram({
     deps,
     emit: {
       chatStatus: (s) => emitChatStatus(s),
-      endedByAgent: (r) => endedByAgentEmitter.emit(r)
+      endedByAgent: (r) => endedByAgentEmitter.emit(r),
+      usage: (u) => {
+        try {
+          usageAccumulator?.add(u)
+        } catch (err) {
+          capture(err, { operation: 'voiceChatService', step: 'usage_add' })
+        }
+      }
     },
     keyCacheGet: () => keyCache.get()
   })
+
+  function flushAndReportUsage(): void {
+    const acc = usageAccumulator
+    usageAccumulator = null
+    if (!acc) return
+    if (acc.isEmpty()) return
+    const total = acc.flush()
+    const billing = deps.billing
+    if (!billing) return
+    // Fire-and-forget. reportRealtimeUsage never throws — it returns
+    // { ok: false, reason } on failure — but we belt-and-brace catch in
+    // case a future change regresses that contract.
+    void reportRealtimeUsage(billing.apiFetch, total).catch((err: unknown) => {
+      capture(err, { operation: 'voiceChatService', step: 'usage_report' })
+    })
+  }
 
   // Session-scoped state, in closure.
   let session: RealtimeSessionLike | null = null
@@ -103,12 +126,20 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
   function scheduleInactivityTimer() {
     clearInactivityTimer()
     inactivityTimer = clock.setTimeout(() => {
+      // Notify consumers (chatStore) first so they can reset UI flags like
+      // isChatting before the session disappears. Reusing endedByAgentEmitter
+      // means existing onEndedByAgent listeners handle inactivity uniformly
+      // with agent-initiated endings.
       endedByAgentEmitter.emit('inactivity_timeout')
       disposeInternal()
       actor.send({ type: 'DISPOSE' })
     }, config.inactivityTimeoutMs)
   }
 
+  // Wrap chatStatus emits so any activity (cold-path success, warm-path
+  // success, or session events: agent_start/audio_start/audio_stopped/
+  // agent_end/agent_tool_*) resets the inactivity timer. Without a live
+  // session we don't schedule — the timer only runs while billing is possible.
   function emitChatStatus(s: ChatStatus): void {
     if (session) scheduleInactivityTimer()
     chatStatusEmitter.emit(s)
@@ -116,6 +147,10 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
 
   function disposeInternal() {
     clearInactivityTimer()
+    // Drain accumulated realtime token usage before tearing down. Reporting
+    // is fire-and-forget and never throws — voice-chat teardown must not be
+    // gated on the billing roundtrip.
+    flushAndReportUsage()
     if (sessionCleanup) {
       sessionCleanup()
       sessionCleanup = null
@@ -147,6 +182,8 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
       audioElement.srcObject = null
       audioElement = null
     }
+    // Direct emit here (not emitChatStatus) — session is already null, so
+    // there's nothing to schedule an inactivity timer against.
     chatStatusEmitter.emit('idle')
     lastContextFingerprint = null
   }
@@ -164,11 +201,13 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
   }
 
   async function doActivate(bookId: number, ctx: VoiceChatContext): Promise<void> {
+    // Different bookId — dispose existing session first.
     if (session && currentBookId !== null && currentBookId !== bookId) {
       disposeInternal()
       actor.send({ type: 'DISPOSE' })
     }
 
+    // Warm path: same bookId, session still alive. Plain TS — no Effect.
     if (session && currentBookId === bookId) {
       actor.send({ type: 'CONNECT_STARTED' })
       try {
@@ -188,6 +227,8 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
             language: getLanguage()
           })
           await session.updateAgent(newAgent)
+          // Why: warm path is serialized — doActivate is the only writer of
+          // lastContextFingerprint and runs to completion before another call.
           // eslint-disable-next-line require-atomic-updates
           lastContextFingerprint = fp
         }
@@ -207,20 +248,30 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
       return
     }
 
+    // Cold path — Effect program.
     if (currentFiber) {
+      // Supersede the previous activation. The acquireRelease releases inside
+      // the program will tear down any half-built resources automatically.
       await Effect.runPromise(Fiber.interrupt(currentFiber))
     }
 
     actor.send({ type: 'CONNECT_STARTED' })
+    // Direct emit — session not yet created, so no timer to schedule.
     chatStatusEmitter.emit('connecting')
 
     const { promise, fiber } = program.activate({ bookId, ctx })
+    // Why: cold-path is single-flight — the prior fiber (if any) was awaited
+    // and interrupted above, so currentFiber has no other writers at this point.
     // eslint-disable-next-line require-atomic-updates
     currentFiber = fiber
 
     try {
       const handle = await promise
 
+      // Hand resources to service.ts's closure.
+      // Why: resource handoff after `await promise`. The Effect fiber is the sole
+      // producer of `handle`; the closure variables are only written by doActivate
+      // and disposeInternal (which is called serially on next activate).
       /* eslint-disable require-atomic-updates */
       session = handle.session
       mediaStream = handle.mediaStream
@@ -229,13 +280,17 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
       sessionCleanup = handle.cleanup
       currentBookId = bookId
       lastContextFingerprint = fingerprintContext(ctx)
+      usageAccumulator = createUsageAccumulator()
       /* eslint-enable require-atomic-updates */
 
+      // Wire the session 'error' handler post-resolve (xstate-land, not Effect).
       session.on('error', onSessionError)
 
       actor.send({ type: 'CONNECT_SUCCEEDED' })
+      // session is now set — emitChatStatus will start the inactivity timer.
       emitChatStatus('idle')
     } catch (err) {
+      // Superseded by a subsequent activate() — silent.
       if (isInterruptCause(err)) return
 
       capture(err, { operation: 'voiceChatService', step: 'activate_cold' })
@@ -244,6 +299,7 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
         reason: classifyError(err),
         message: err instanceof Error ? err.message : undefined
       })
+      // Direct emit — cold path failed, session is null/discarded.
       chatStatusEmitter.emit('idle')
       throw err
     } finally {
@@ -268,6 +324,7 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
     stop() {
       if (!started) return
       started = false
+      // Interrupt any in-flight activation, then tear down.
       if (currentFiber) {
         Effect.runFork(Fiber.interrupt(currentFiber))
         currentFiber = null
@@ -286,6 +343,22 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
     },
 
     preconnect(_bookId, _ctx) {
+      // Cheap, token-free warmups so the next explicit activate() pays less
+      // cold-path latency. NEITHER step opens a WebRTC session or prompts for
+      // mic — that's the regression fence from b7449976, where the previous
+      // preconnect impl opened (and muted) a full realtime session per book
+      // open and billed audio/transcription tokens server-side.
+      //
+      //   1. TLS/DNS warmup to api.openai.com (typically <link rel="preconnect">).
+      //      The SDP exchange in session.connect() reuses the pooled HTTP/2
+      //      connection instead of paying a cold handshake (~150–300ms saved).
+      //   2. Ephemeral-key prefetch via keyCache. The keyCache de-dupes against
+      //      prewarmKey() and TTL-caches for ~9 min, so the cost is a single
+      //      worker roundtrip per book session at most.
+      //
+      // Both steps are best-effort: any throw/reject is swallowed so warmup
+      // never user-blocks. Args unused — the warmup is per-host, per-session,
+      // not per-book.
       void _bookId
       void _ctx
       try {
@@ -302,10 +375,17 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
     deactivate() {
       const value = actor.getSnapshot().value
       if (value === 'idle' || value === 'offline' || value === 'error') return
+      // Interrupt any in-flight cold-path activation so its acquireRelease
+      // finalizers tear down the half-built mic/audio/session. Without this,
+      // a "connecting" deactivate would let the fiber resolve and install a
+      // live session into our closure that nothing ever closes.
       if (currentFiber) {
         Effect.runFork(Fiber.interrupt(currentFiber))
         currentFiber = null
       }
+      // Full teardown: closes WebRTC session, stops mic tracks, clears audio
+      // element. A muted-but-open session still bills audio/transcription
+      // tokens server-side.
       disposeInternal()
       actor.send({ type: 'DISPOSE' })
     },
@@ -320,7 +400,9 @@ export function createVoiceChatService(deps: VoiceChatServiceDeps): VoiceChatSer
     },
 
     prewarmKey() {
-      void keyCache.get()
+      void keyCache.get().catch((err: unknown) => {
+        capture(err, { operation: 'voiceChatService', step: 'prewarm_key' })
+      })
     },
 
     invalidateKey() {

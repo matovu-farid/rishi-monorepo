@@ -87,6 +87,7 @@ import {
   type ReaderProgress,
   type TocItem,
 } from '@/components/reader'
+import { getPdfPageText } from '@/lib/voice-chat/pagetext/pdf'
 
 interface ActiveSelection {
   pageNumber: number
@@ -107,6 +108,11 @@ export default function PdfReaderScreen() {
   const router = useRouter()
 
   const readerRef = useRef<PdfWebReaderHandle>(null)
+  // T-P2.5 (CONTEXT-001) — latest rendered prose for the visible page,
+  // hydrated from `readerRef.current.getPageText(pageNumber)` whenever
+  // the page changes. Consumed by `getActivationContext` so voice-chat
+  // sees real page prose instead of "Page N of M".
+  const latestPdfPageText = useRef<string | null>(null)
   const [book, setBook] = useState<Book | null>(null)
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
@@ -689,17 +695,45 @@ export default function PdfReaderScreen() {
     safeBack(router)
   }, [book?.id, pageNumber, pageCount, router])
 
-  // CHT-002 — voice-chat activation context. PDF doesn't ship rendered
-  // page text back across the WebView bridge synchronously, so we use a
-  // "Page N of M" label as the page-text proxy and pass the outline so
-  // the agent can resolve "next chapter" etc. The active TTS paragraph
-  // (when playback is live) gives the agent the actual sentence the user
-  // is currently listening to.
+  // T-P2.5 (CONTEXT-001) — hydrate `latestPdfPageText` whenever the page
+  // changes by asking the pdf.js WebView for the page's rendered
+  // paragraphs. Errors are swallowed (the helper degrades to '' if we
+  // never get a value), which matches the same "graceful degradation"
+  // contract electron uses — see SPEC §3.8.
+  useEffect(() => {
+    if (!pageNumber || pageNumber <= 0) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const paragraphs = await readerRef.current?.getPageText(pageNumber)
+        if (cancelled) return
+        if (paragraphs && paragraphs.length > 0) {
+          latestPdfPageText.current = paragraphs.map((p) => p.text).join('\n')
+        } else {
+          latestPdfPageText.current = null
+        }
+      } catch {
+        if (!cancelled) latestPdfPageText.current = null
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [pageNumber])
+
+  // T-P2.5 (CONTEXT-001) — voice-chat activation context. Per SPEC §3.8
+  // we MUST pass the actual rendered page prose. Electron's contract is
+  // `currentParagraphs.map(p => p.text).join('\n')` (see
+  // apps/rishi-electron/src/renderer/src/stores/chatStore.ts:71). The
+  // previous "Page N of M" stub defeated the agent.
   const getActivationContext = useCallback(() => {
     const outline = tocItems.map((t) => ({ href: t.href, label: t.label }))
-    const pageText = pageCount > 0
-      ? `Page ${pageNumber || 1} of ${pageCount}`
-      : `Page ${pageNumber || 1}`
+    const pageText = getPdfPageText({
+      extractedPageText: latestPdfPageText.current,
+      indexerChunkTexts: [],
+      pageNumber: pageNumber || 1,
+      pageCount,
+    })
     return {
       pageText,
       outline,

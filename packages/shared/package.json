@@ -49,7 +49,9 @@
     "./tts/resolve-paragraph": "./src/tts/resolve-paragraph.ts",
     "./machines/playerMachine": "./src/machines/playerMachine.ts",
     "./machines/pdfReaderMachine": "./src/machines/pdfReaderMachine.ts",
+    "./machines/navigationHistory": "./src/machines/navigationHistory/index.ts",
     "./voice-chat": "./src/voice-chat/index.ts",
+    "./voice-chat/pageTextCap": "./src/voice-chat/pageTextCap.ts",
     "./voice-chat/machine": "./src/voice-chat/machine.ts",
     "./voice-chat/key-cache": "./src/voice-chat/key-cache.ts",
     "./voice-chat/emitter": "./src/voice-chat/emitter.ts",
@@ -64,7 +66,9 @@
     "./billing/cost": "./src/billing/cost.ts",
     "./billing/default-rates": "./src/billing/default-rates.ts",
     "./billing/realtime-usage-accumulator": "./src/billing/realtime-usage-accumulator.ts",
-    "./billing/realtime-usage-client": "./src/billing/realtime-usage-client.ts"
+    "./billing/realtime-usage-client": "./src/billing/realtime-usage-client.ts",
+    "./billing/errors": "./src/billing/errors.ts",
+    "./billing/interceptor": "./src/billing/interceptor.ts"
   },
   "peerDependencies": {
     "drizzle-orm": "^0.44.0",
