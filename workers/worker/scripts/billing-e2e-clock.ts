@@ -128,9 +128,9 @@ async function preflight(_env: Env): Promise<void> {
 }
 
 import Stripe from "stripe";
-import { MICRO_DOLLARS_PER_USD } from "@rishi/shared/billing/stripe-config";
+import { MICRO_DOLLARS_PER_USD, STRIPE_TEST_IDS } from "@rishi/shared/billing/stripe-config";
 import { DEFAULT_RATES } from "@rishi/shared/billing/default-rates";
-import { applyWelcomeCreditAndSubscription } from "../src/billing/stripe";
+import { ensureCreditAndSubscription } from "../src/billing/backfill";
 import { reportMeterEvent } from "../src/billing/meter";
 
 /**
@@ -449,9 +449,10 @@ async function runScenario(input: ScenarioInput): Promise<ScenarioResult> {
 
   // 3. Apply welcome credit + start subscription via worker's own helper.
   //    Pass null for IP — script bypasses the signup path where IP is captured.
-  const { subscriptionId } = await applyWelcomeCreditAndSubscription(
+  const { subscriptionId } = await ensureCreditAndSubscription(
     input.stripe,
     customerId,
+    STRIPE_TEST_IDS.priceId,
     null,
   );
   console.log(`  • subscription ${subscriptionId}`);

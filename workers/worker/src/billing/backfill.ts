@@ -15,6 +15,11 @@ export type BackfillResult = {
   steps: BackfillStep[];
 };
 
+export type EnsureCreditAndSubResult = {
+  subscriptionId: string;
+  steps: BackfillStep[];
+};
+
 const WELCOME_CREDIT_CENTS = 100;
 const ACTIVE_SUB_STATUSES = new Set([
   "active",
@@ -22,6 +27,62 @@ const ACTIVE_SUB_STATUSES = new Set([
   "trialing",
   "incomplete",
 ]);
+
+export async function ensureCreditAndSubscription(
+  stripe: Stripe,
+  stripeCustomerId: string,
+  priceId: string,
+  customerIpAddress: string | null,
+): Promise<EnsureCreditAndSubResult> {
+  const steps: BackfillStep[] = [];
+
+  if (customerIpAddress) {
+    await stripe.customers.update(stripeCustomerId, {
+      tax: { ip_address: customerIpAddress, validate_location: "auto" },
+    });
+  }
+
+  const customer = (await stripe.customers.retrieve(
+    stripeCustomerId,
+  )) as unknown as { balance: number };
+  if (customer.balance <= -WELCOME_CREDIT_CENTS) {
+    steps.push("skipped-credit");
+  } else {
+    await stripe.customers.createBalanceTransaction(stripeCustomerId, {
+      amount: -WELCOME_CREDIT_CENTS,
+      currency: "usd",
+      description: "Welcome credit ($1.00 of included usage)",
+    });
+    steps.push("applied-credit");
+  }
+
+  const subs = await stripe.subscriptions.list({
+    customer: stripeCustomerId,
+    status: "all",
+    limit: 100,
+  });
+  const existing = subs.data.find(
+    (s) =>
+      ACTIVE_SUB_STATUSES.has(s.status) &&
+      s.items.data.some((it) => it.price.id === priceId),
+  );
+
+  let subscriptionId: string;
+  if (existing) {
+    subscriptionId = existing.id;
+    steps.push("skipped-sub");
+  } else {
+    const created = await stripe.subscriptions.create({
+      customer: stripeCustomerId,
+      items: [{ price: priceId }],
+      automatic_tax: { enabled: true },
+    });
+    subscriptionId = created.id;
+    steps.push("created-sub");
+  }
+
+  return { subscriptionId, steps };
+}
 
 export type BackfillOptions = {
   onCustomerEnsured?: (stripeCustomerId: string) => Promise<void>;
@@ -39,18 +100,17 @@ export async function backfillOneUser(
   const search = await stripe.customers.search({
     query: `metadata['userId']:'${userId}'`,
   });
-  let customer: { id: string; balance: number };
+  let customerId: string;
   if (search.data.length >= 1) {
-    const found = search.data[0] as unknown as { id: string; balance: number };
-    customer = { id: found.id, balance: found.balance };
+    customerId = (search.data[0] as unknown as { id: string }).id;
     steps.push("reused-customer");
   } else {
     const created = (await stripe.customers.create({
       email,
       metadata: { userId },
       address: { country: "US" },
-    })) as unknown as { id: string; balance: number };
-    customer = { id: created.id, balance: created.balance };
+    })) as unknown as { id: string };
+    customerId = created.id;
     steps.push("created-customer");
   }
 
@@ -59,44 +119,21 @@ export async function backfillOneUser(
   // fires while the user row still has stripe_customer_id IS NULL, and the
   // Better-Auth Stripe plugin can't map customer -> user.
   if (options.onCustomerEnsured) {
-    await options.onCustomerEnsured(customer.id);
+    await options.onCustomerEnsured(customerId);
   }
 
-  if (customer.balance <= -WELCOME_CREDIT_CENTS) {
-    steps.push("skipped-credit");
-  } else {
-    await stripe.customers.createBalanceTransaction(customer.id, {
-      amount: -WELCOME_CREDIT_CENTS,
-      currency: "usd",
-      description: "Welcome credit ($1.00 of included usage)",
-    });
-    steps.push("applied-credit");
-  }
-
-  const subs = await stripe.subscriptions.list({
-    customer: customer.id,
-    status: "all",
-    limit: 100,
-  });
-  const existing = subs.data.find(
-    (s) =>
-      ACTIVE_SUB_STATUSES.has(s.status) &&
-      s.items.data.some((it) => it.price.id === priceId),
+  const ensured = await ensureCreditAndSubscription(
+    stripe,
+    customerId,
+    priceId,
+    null,
   );
+  steps.push(...ensured.steps);
 
-  let subscriptionId: string;
-  if (existing) {
-    subscriptionId = existing.id;
-    steps.push("skipped-sub");
-  } else {
-    const created = await stripe.subscriptions.create({
-      customer: customer.id,
-      items: [{ price: priceId }],
-      automatic_tax: { enabled: true },
-    });
-    subscriptionId = created.id;
-    steps.push("created-sub");
-  }
-
-  return { userId, stripeCustomerId: customer.id, subscriptionId, steps };
+  return {
+    userId,
+    stripeCustomerId: customerId,
+    subscriptionId: ensured.subscriptionId,
+    steps,
+  };
 }

@@ -6,10 +6,8 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle"
 import { Resend } from "resend"
 import { createDb } from "./db/drizzle"
 import { magicLinkEmail } from "./email-templates/magic-link"
-import {
-  applyWelcomeCreditAndSubscription,
-  createStripeClient,
-} from "./billing/stripe"
+import { createStripeClient } from "./billing/stripe"
+import { ensureCreditAndSubscription } from "./billing/backfill"
 import { STRIPE_TEST_IDS } from "@rishi/shared/billing/stripe-config"
 import type { CloudflareBindings } from "./index"
 
@@ -75,9 +73,10 @@ export function createAuth(env: CloudflareBindings) {
               createCustomerOnSignUp: true,
               onCustomerCreate: async ({ stripeCustomer }, request) => {
                 const ip = request?.headers?.get("cf-connecting-ip") ?? null;
-                await applyWelcomeCreditAndSubscription(
+                await ensureCreditAndSubscription(
                   stripeClient,
                   stripeCustomer.id,
+                  STRIPE_TEST_IDS.priceId,
                   ip,
                 )
               },

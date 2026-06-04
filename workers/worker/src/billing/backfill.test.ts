@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { backfillOneUser } from "./backfill";
+import { backfillOneUser, ensureCreditAndSubscription } from "./backfill";
 
 const PRICE_ID = "price_test_xxx";
 
@@ -20,10 +20,32 @@ function makeStripeStub(opts: StubOptions = {}) {
   const createSubscription = vi
     .fn()
     .mockResolvedValue({ id: "sub_new", status: "active" });
+  const updateCustomer = vi.fn().mockResolvedValue({});
+  // ensureCreditAndSubscription reads balance via customers.retrieve. Mirror
+  // the balance the search/create result already exposes so the existing
+  // backfill tests don't need per-test wiring.
+  const retrieve = vi.fn().mockImplementation(async (id: string) => {
+    const found = opts.searchData?.find((c) => c.id === id);
+    return { id, balance: found?.balance ?? 0 };
+  });
   return {
-    spy: { search, create, createBalanceTransaction, list, createSubscription },
+    spy: {
+      search,
+      create,
+      createBalanceTransaction,
+      list,
+      createSubscription,
+      updateCustomer,
+      retrieve,
+    },
     stripe: {
-      customers: { search, create, createBalanceTransaction },
+      customers: {
+        search,
+        create,
+        createBalanceTransaction,
+        update: updateCustomer,
+        retrieve,
+      },
       subscriptions: { list, create: createSubscription },
     },
   };
@@ -271,5 +293,222 @@ describe("backfillOneUser", () => {
     ).rejects.toThrow("d1 write failed");
     expect(spy.createBalanceTransaction).not.toHaveBeenCalled();
     expect(spy.createSubscription).not.toHaveBeenCalled();
+  });
+});
+
+describe("ensureCreditAndSubscription", () => {
+  test("brand-new customer: applies credit, creates sub, updates tax IP", async () => {
+    const { stripe, spy } = makeStripeStub();
+    const result = await ensureCreditAndSubscription(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stripe as any,
+      "cus_a",
+      PRICE_ID,
+      "203.0.113.42",
+    );
+    expect(result.steps).toEqual(["applied-credit", "created-sub"]);
+    expect(result.subscriptionId).toBe("sub_new");
+    expect(spy.updateCustomer).toHaveBeenCalledTimes(1);
+    expect(spy.updateCustomer).toHaveBeenCalledWith(
+      "cus_a",
+      expect.objectContaining({
+        tax: { ip_address: "203.0.113.42", validate_location: "auto" },
+      }),
+    );
+    expect(spy.createBalanceTransaction).toHaveBeenCalledTimes(1);
+    expect(spy.createSubscription).toHaveBeenCalledTimes(1);
+  });
+
+  test("already-credited (balance -100), no subs: skips credit, creates sub", async () => {
+    const { stripe, spy } = makeStripeStub({
+      searchData: [{ id: "cus_b", balance: -100 }],
+      listData: [],
+    });
+    const result = await ensureCreditAndSubscription(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stripe as any,
+      "cus_b",
+      PRICE_ID,
+      null,
+    );
+    expect(result.steps).toEqual(["skipped-credit", "created-sub"]);
+    expect(spy.createBalanceTransaction).not.toHaveBeenCalled();
+    expect(spy.createSubscription).toHaveBeenCalledTimes(1);
+  });
+
+  test("already-credited with active sub on our price: skips both", async () => {
+    const { stripe, spy } = makeStripeStub({
+      searchData: [{ id: "cus_c", balance: -100 }],
+      listData: [
+        {
+          id: "sub_existing",
+          status: "active",
+          items: { data: [{ price: { id: PRICE_ID } }] },
+        },
+      ],
+    });
+    const result = await ensureCreditAndSubscription(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stripe as any,
+      "cus_c",
+      PRICE_ID,
+      null,
+    );
+    expect(result.steps).toEqual(["skipped-credit", "skipped-sub"]);
+    expect(result.subscriptionId).toBe("sub_existing");
+    expect(spy.createBalanceTransaction).not.toHaveBeenCalled();
+    expect(spy.createSubscription).not.toHaveBeenCalled();
+  });
+
+  test("canceled sub on our price + balance 0: credit applied, new sub created", async () => {
+    const { stripe, spy } = makeStripeStub({
+      searchData: [{ id: "cus_d", balance: 0 }],
+      listData: [
+        {
+          id: "sub_canceled",
+          status: "canceled",
+          items: { data: [{ price: { id: PRICE_ID } }] },
+        },
+      ],
+    });
+    const result = await ensureCreditAndSubscription(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stripe as any,
+      "cus_d",
+      PRICE_ID,
+      null,
+    );
+    expect(result.steps).toEqual(["applied-credit", "created-sub"]);
+    expect(spy.createBalanceTransaction).toHaveBeenCalledTimes(1);
+    expect(spy.createSubscription).toHaveBeenCalledTimes(1);
+  });
+
+  test("IP null: customers.update is NOT called", async () => {
+    const { stripe, spy } = makeStripeStub();
+    await ensureCreditAndSubscription(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stripe as any,
+      "cus_e",
+      PRICE_ID,
+      null,
+    );
+    expect(spy.updateCustomer).not.toHaveBeenCalled();
+  });
+
+  test("IP provided: customers.update called with tax shape", async () => {
+    const { stripe, spy } = makeStripeStub();
+    await ensureCreditAndSubscription(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stripe as any,
+      "cus_f",
+      PRICE_ID,
+      "198.51.100.7",
+    );
+    expect(spy.updateCustomer).toHaveBeenCalledTimes(1);
+    expect(spy.updateCustomer).toHaveBeenCalledWith(
+      "cus_f",
+      expect.objectContaining({
+        tax: { ip_address: "198.51.100.7", validate_location: "auto" },
+      }),
+    );
+  });
+
+  test("balance -250 (over-credited): skips credit (guard is <=, not ===)", async () => {
+    const { stripe, spy } = makeStripeStub({
+      searchData: [{ id: "cus_g", balance: -250 }],
+      listData: [],
+    });
+    const result = await ensureCreditAndSubscription(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stripe as any,
+      "cus_g",
+      PRICE_ID,
+      null,
+    );
+    expect(result.steps).toContain("skipped-credit");
+    expect(spy.createBalanceTransaction).not.toHaveBeenCalled();
+  });
+
+  test("active sub against a different price: ignored, new sub on our price created", async () => {
+    const { stripe, spy } = makeStripeStub({
+      searchData: [{ id: "cus_h", balance: -100 }],
+      listData: [
+        {
+          id: "sub_other",
+          status: "active",
+          items: { data: [{ price: { id: "price_other" } }] },
+        },
+      ],
+    });
+    const result = await ensureCreditAndSubscription(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stripe as any,
+      "cus_h",
+      PRICE_ID,
+      null,
+    );
+    expect(result.steps).toEqual(["skipped-credit", "created-sub"]);
+    expect(spy.createSubscription).toHaveBeenCalledTimes(1);
+  });
+
+  test("idempotent: second call emits skipped-credit + skipped-sub, no writes", async () => {
+    // Mutable state: after the first call applies credit + creates sub, the
+    // next retrieve/list should reflect the new world so guards trip.
+    let balance = 0;
+    const customerId = "cus_idem";
+    const subs: Array<{
+      id: string;
+      status: string;
+      items: { data: Array<{ price: { id: string } }> };
+    }> = [];
+
+    const retrieve = vi.fn(async () => ({ id: customerId, balance }));
+    const createBalanceTransaction = vi.fn(async () => {
+      balance = -100;
+      return {};
+    });
+    const list = vi.fn(async () => ({ data: subs }));
+    const createSubscription = vi.fn(async () => {
+      const sub = {
+        id: "sub_idem",
+        status: "active",
+        items: { data: [{ price: { id: PRICE_ID } }] },
+      };
+      subs.push(sub);
+      return sub;
+    });
+    const updateCustomer = vi.fn().mockResolvedValue({});
+
+    const stripe = {
+      customers: {
+        retrieve,
+        createBalanceTransaction,
+        update: updateCustomer,
+      },
+      subscriptions: { list, create: createSubscription },
+    };
+
+    const first = await ensureCreditAndSubscription(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stripe as any,
+      customerId,
+      PRICE_ID,
+      null,
+    );
+    expect(first.steps).toEqual(["applied-credit", "created-sub"]);
+
+    const second = await ensureCreditAndSubscription(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stripe as any,
+      customerId,
+      PRICE_ID,
+      null,
+    );
+    expect(second.steps).toEqual(["skipped-credit", "skipped-sub"]);
+    expect(second.subscriptionId).toBe("sub_idem");
+
+    // Exactly one write of each kind across both calls.
+    expect(createBalanceTransaction).toHaveBeenCalledTimes(1);
+    expect(createSubscription).toHaveBeenCalledTimes(1);
   });
 });
