@@ -45,6 +45,9 @@ import {
   INSPECT_CURRENT_PAGE_TOOL_SPEC,
   renderRealtimeInstructions
 } from '@rishi/shared/voice-chat/build-realtime-agent'
+import { createUsageAccumulator } from '@rishi/shared/billing/realtime-usage-accumulator'
+import { reportRealtimeUsage } from '@rishi/shared/billing/realtime-usage-client'
+import { apiClient } from '@/lib/api'
 import { captureCurrentPage } from './page-capture'
 
 const OPENAI_REALTIME_URL = 'https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview'
@@ -178,6 +181,7 @@ export const mobileSessionFactory = (
 
   let currentAgent = a._agent
   let isConnected = false
+  const usage = createUsageAccumulator()
 
   function send(message: unknown): void {
     if (!isConnected) return
@@ -273,9 +277,26 @@ export const mobileSessionFactory = (
         case 'response.output_audio.done':
           emit('audio_stopped')
           break
-        case 'response.done':
+        case 'response.done': {
+          const resp = (msg as { response?: { usage?: Record<string, unknown> } }).response
+          const u = resp?.usage
+          if (u) {
+            const inDet = (u.input_token_details ?? {}) as { audio_tokens?: number; text_tokens?: number }
+            const outDet = (u.output_token_details ?? {}) as { audio_tokens?: number; text_tokens?: number }
+            try {
+              usage.add({
+                audioInputTokens: inDet.audio_tokens ?? 0,
+                textInputTokens: inDet.text_tokens ?? 0,
+                audioOutputTokens: outDet.audio_tokens ?? 0,
+                textOutputTokens: outDet.text_tokens ?? 0
+              })
+            } catch {
+              /* malformed usage payload must not break the session */
+            }
+          }
           emit('agent_end')
           break
+        }
         case 'response.function_call_arguments.done':
           void handleToolCall(
             String(msg.name),
@@ -341,6 +362,16 @@ export const mobileSessionFactory = (
     },
 
     close() {
+      // Flush accumulated realtime usage and fire-and-forget the report.
+      // `reportRealtimeUsage` is non-throwing by contract and skips the
+      // POST when all counters are zero, so a session that never emitted
+      // `response.done` produces no network call.
+      try {
+        const total = usage.flush()
+        void reportRealtimeUsage(apiClient, total)
+      } catch {
+        /* never let billing reporting break voice-chat teardown */
+      }
       // H2-01: stop the cloned send-stream tracks BEFORE closing the PC.
       // `RTCPeerConnection.close()` does not stop the underlying
       // `MediaStreamTrack`s held by senders, and the cloned tracks in
