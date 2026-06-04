@@ -4,7 +4,12 @@ import { backfillOneUser, ensureCreditAndSubscription } from "./backfill";
 const PRICE_ID = "price_test_xxx";
 
 interface StubOptions {
-  searchData?: Array<{ id: string; balance: number }>;
+  searchData?: Array<{ id: string }>;
+  grantsData?: Array<{
+    id: string;
+    metadata?: Record<string, string>;
+    voided_at?: number | null;
+  }>;
   listData?: Array<{
     id: string;
     status: string;
@@ -14,37 +19,34 @@ interface StubOptions {
 
 function makeStripeStub(opts: StubOptions = {}) {
   const search = vi.fn().mockResolvedValue({ data: opts.searchData ?? [] });
-  const create = vi.fn().mockResolvedValue({ id: "cus_new", balance: 0 });
-  const createBalanceTransaction = vi.fn().mockResolvedValue({});
+  const create = vi.fn().mockResolvedValue({ id: "cus_new" });
+  const grantsList = vi
+    .fn()
+    .mockResolvedValue({ data: opts.grantsData ?? [] });
+  const grantsCreate = vi.fn().mockResolvedValue({ id: "credgr_new" });
   const list = vi.fn().mockResolvedValue({ data: opts.listData ?? [] });
   const createSubscription = vi
     .fn()
     .mockResolvedValue({ id: "sub_new", status: "active" });
   const updateCustomer = vi.fn().mockResolvedValue({});
-  // ensureCreditAndSubscription reads balance via customers.retrieve. Mirror
-  // the balance the search/create result already exposes so the existing
-  // backfill tests don't need per-test wiring.
-  const retrieve = vi.fn().mockImplementation(async (id: string) => {
-    const found = opts.searchData?.find((c) => c.id === id);
-    return { id, balance: found?.balance ?? 0 };
-  });
   return {
     spy: {
       search,
       create,
-      createBalanceTransaction,
+      grantsList,
+      grantsCreate,
       list,
       createSubscription,
       updateCustomer,
-      retrieve,
     },
     stripe: {
       customers: {
         search,
         create,
-        createBalanceTransaction,
         update: updateCustomer,
-        retrieve,
+      },
+      billing: {
+        creditGrants: { list: grantsList, create: grantsCreate },
       },
       subscriptions: { list, create: createSubscription },
     },
@@ -70,13 +72,14 @@ describe("backfillOneUser", () => {
     expect(result.subscriptionId).toBe("sub_new");
     expect(spy.search).toHaveBeenCalledTimes(1);
     expect(spy.create).toHaveBeenCalledTimes(1);
-    expect(spy.createBalanceTransaction).toHaveBeenCalledTimes(1);
+    expect(spy.grantsCreate).toHaveBeenCalledTimes(1);
     expect(spy.createSubscription).toHaveBeenCalledTimes(1);
   });
 
   test("fully-backfilled user: reuses customer, skips credit, skips sub", async () => {
     const { stripe, spy } = makeStripeStub({
-      searchData: [{ id: "cus_existing", balance: -100 }],
+      searchData: [{ id: "cus_existing" }],
+      grantsData: [{ id: "credgr_x", metadata: { type: "welcome" } }],
       listData: [
         {
           id: "sub_existing",
@@ -100,13 +103,13 @@ describe("backfillOneUser", () => {
     expect(result.stripeCustomerId).toBe("cus_existing");
     expect(result.subscriptionId).toBe("sub_existing");
     expect(spy.create).not.toHaveBeenCalled();
-    expect(spy.createBalanceTransaction).not.toHaveBeenCalled();
+    expect(spy.grantsCreate).not.toHaveBeenCalled();
     expect(spy.createSubscription).not.toHaveBeenCalled();
   });
 
   test("customer exists with no credit and no sub", async () => {
     const { stripe, spy } = makeStripeStub({
-      searchData: [{ id: "cus_existing", balance: 0 }],
+      searchData: [{ id: "cus_existing" }],
       listData: [],
     });
     const result = await backfillOneUser(
@@ -123,13 +126,14 @@ describe("backfillOneUser", () => {
     ]);
     expect(result.stripeCustomerId).toBe("cus_existing");
     expect(spy.create).not.toHaveBeenCalled();
-    expect(spy.createBalanceTransaction).toHaveBeenCalledTimes(1);
+    expect(spy.grantsCreate).toHaveBeenCalledTimes(1);
     expect(spy.createSubscription).toHaveBeenCalledTimes(1);
   });
 
   test("customer exists with credit but no sub", async () => {
     const { stripe, spy } = makeStripeStub({
-      searchData: [{ id: "cus_existing", balance: -100 }],
+      searchData: [{ id: "cus_existing" }],
+      grantsData: [{ id: "credgr_x", metadata: { type: "welcome" } }],
       listData: [],
     });
     const result = await backfillOneUser(
@@ -144,13 +148,14 @@ describe("backfillOneUser", () => {
       "skipped-credit",
       "created-sub",
     ]);
-    expect(spy.createBalanceTransaction).not.toHaveBeenCalled();
+    expect(spy.grantsCreate).not.toHaveBeenCalled();
     expect(spy.createSubscription).toHaveBeenCalledTimes(1);
   });
 
   test("customer exists with sub against a different price: creates new sub on our price", async () => {
     const { stripe, spy } = makeStripeStub({
-      searchData: [{ id: "cus_existing", balance: -100 }],
+      searchData: [{ id: "cus_existing" }],
+      grantsData: [{ id: "credgr_x", metadata: { type: "welcome" } }],
       listData: [
         {
           id: "sub_other",
@@ -176,7 +181,8 @@ describe("backfillOneUser", () => {
 
   test("canceled sub on our price doesn't count as active: creates new sub", async () => {
     const { stripe, spy } = makeStripeStub({
-      searchData: [{ id: "cus_existing", balance: -100 }],
+      searchData: [{ id: "cus_existing" }],
+      grantsData: [{ id: "credgr_x", metadata: { type: "welcome" } }],
       listData: [
         {
           id: "sub_canceled",
@@ -199,7 +205,8 @@ describe("backfillOneUser", () => {
 
   test("balance more negative than -100 skips credit (guard is <=, not ===)", async () => {
     const { stripe, spy } = makeStripeStub({
-      searchData: [{ id: "cus_existing", balance: -250 }],
+      searchData: [{ id: "cus_existing" }],
+      grantsData: [{ id: "credgr_y", metadata: { type: "welcome" } }],
       listData: [],
     });
     const result = await backfillOneUser(
@@ -210,7 +217,7 @@ describe("backfillOneUser", () => {
       PRICE_ID,
     );
     expect(result.steps).toContain("skipped-credit");
-    expect(spy.createBalanceTransaction).not.toHaveBeenCalled();
+    expect(spy.grantsCreate).not.toHaveBeenCalled();
   });
 
   test("customer create called with metadata.userId and US address", async () => {
@@ -252,7 +259,7 @@ describe("backfillOneUser", () => {
   test("onCustomerEnsured fires once with the customer id, before credit + sub calls", async () => {
     const { stripe, spy } = makeStripeStub();
     const callOrder: string[] = [];
-    spy.createBalanceTransaction.mockImplementation(async () => {
+    spy.grantsCreate.mockImplementation(async () => {
       callOrder.push("credit");
       return {};
     });
@@ -291,7 +298,7 @@ describe("backfillOneUser", () => {
         { onCustomerEnsured },
       ),
     ).rejects.toThrow("d1 write failed");
-    expect(spy.createBalanceTransaction).not.toHaveBeenCalled();
+    expect(spy.grantsCreate).not.toHaveBeenCalled();
     expect(spy.createSubscription).not.toHaveBeenCalled();
   });
 });
@@ -315,13 +322,14 @@ describe("ensureCreditAndSubscription", () => {
         tax: { ip_address: "203.0.113.42", validate_location: "auto" },
       }),
     );
-    expect(spy.createBalanceTransaction).toHaveBeenCalledTimes(1);
+    expect(spy.grantsCreate).toHaveBeenCalledTimes(1);
     expect(spy.createSubscription).toHaveBeenCalledTimes(1);
   });
 
   test("already-credited (balance -100), no subs: skips credit, creates sub", async () => {
     const { stripe, spy } = makeStripeStub({
-      searchData: [{ id: "cus_b", balance: -100 }],
+      searchData: [{ id: "cus_b" }],
+      grantsData: [{ id: "credgr_b", metadata: { type: "welcome" } }],
       listData: [],
     });
     const result = await ensureCreditAndSubscription(
@@ -332,13 +340,14 @@ describe("ensureCreditAndSubscription", () => {
       null,
     );
     expect(result.steps).toEqual(["skipped-credit", "created-sub"]);
-    expect(spy.createBalanceTransaction).not.toHaveBeenCalled();
+    expect(spy.grantsCreate).not.toHaveBeenCalled();
     expect(spy.createSubscription).toHaveBeenCalledTimes(1);
   });
 
   test("already-credited with active sub on our price: skips both", async () => {
     const { stripe, spy } = makeStripeStub({
-      searchData: [{ id: "cus_c", balance: -100 }],
+      searchData: [{ id: "cus_c" }],
+      grantsData: [{ id: "credgr_c", metadata: { type: "welcome" } }],
       listData: [
         {
           id: "sub_existing",
@@ -356,13 +365,13 @@ describe("ensureCreditAndSubscription", () => {
     );
     expect(result.steps).toEqual(["skipped-credit", "skipped-sub"]);
     expect(result.subscriptionId).toBe("sub_existing");
-    expect(spy.createBalanceTransaction).not.toHaveBeenCalled();
+    expect(spy.grantsCreate).not.toHaveBeenCalled();
     expect(spy.createSubscription).not.toHaveBeenCalled();
   });
 
   test("canceled sub on our price + balance 0: credit applied, new sub created", async () => {
     const { stripe, spy } = makeStripeStub({
-      searchData: [{ id: "cus_d", balance: 0 }],
+      searchData: [{ id: "cus_d" }],
       listData: [
         {
           id: "sub_canceled",
@@ -379,7 +388,7 @@ describe("ensureCreditAndSubscription", () => {
       null,
     );
     expect(result.steps).toEqual(["applied-credit", "created-sub"]);
-    expect(spy.createBalanceTransaction).toHaveBeenCalledTimes(1);
+    expect(spy.grantsCreate).toHaveBeenCalledTimes(1);
     expect(spy.createSubscription).toHaveBeenCalledTimes(1);
   });
 
@@ -415,7 +424,8 @@ describe("ensureCreditAndSubscription", () => {
 
   test("balance -250 (over-credited): skips credit (guard is <=, not ===)", async () => {
     const { stripe, spy } = makeStripeStub({
-      searchData: [{ id: "cus_g", balance: -250 }],
+      searchData: [{ id: "cus_g" }],
+      grantsData: [{ id: "credgr_g", metadata: { type: "welcome" } }],
       listData: [],
     });
     const result = await ensureCreditAndSubscription(
@@ -426,12 +436,13 @@ describe("ensureCreditAndSubscription", () => {
       null,
     );
     expect(result.steps).toContain("skipped-credit");
-    expect(spy.createBalanceTransaction).not.toHaveBeenCalled();
+    expect(spy.grantsCreate).not.toHaveBeenCalled();
   });
 
   test("active sub against a different price: ignored, new sub on our price created", async () => {
     const { stripe, spy } = makeStripeStub({
-      searchData: [{ id: "cus_h", balance: -100 }],
+      searchData: [{ id: "cus_h" }],
+      grantsData: [{ id: "credgr_h", metadata: { type: "welcome" } }],
       listData: [
         {
           id: "sub_other",
@@ -452,20 +463,29 @@ describe("ensureCreditAndSubscription", () => {
   });
 
   test("idempotent: second call emits skipped-credit + skipped-sub, no writes", async () => {
-    // Mutable state: after the first call applies credit + creates sub, the
-    // next retrieve/list should reflect the new world so guards trip.
-    let balance = 0;
+    // Mutable state: after the first call applies grant + creates sub, the
+    // next list calls reflect the new world so guards trip.
     const customerId = "cus_idem";
+    const grants: Array<{
+      id: string;
+      metadata: Record<string, string>;
+      voided_at: number | null;
+    }> = [];
     const subs: Array<{
       id: string;
       status: string;
       items: { data: Array<{ price: { id: string } }> };
     }> = [];
 
-    const retrieve = vi.fn(async () => ({ id: customerId, balance }));
-    const createBalanceTransaction = vi.fn(async () => {
-      balance = -100;
-      return {};
+    const grantsList = vi.fn(async () => ({ data: grants }));
+    const grantsCreate = vi.fn(async () => {
+      const g = {
+        id: "credgr_idem",
+        metadata: { type: "welcome" },
+        voided_at: null,
+      };
+      grants.push(g);
+      return g;
     });
     const list = vi.fn(async () => ({ data: subs }));
     const createSubscription = vi.fn(async () => {
@@ -480,11 +500,8 @@ describe("ensureCreditAndSubscription", () => {
     const updateCustomer = vi.fn().mockResolvedValue({});
 
     const stripe = {
-      customers: {
-        retrieve,
-        createBalanceTransaction,
-        update: updateCustomer,
-      },
+      customers: { update: updateCustomer },
+      billing: { creditGrants: { list: grantsList, create: grantsCreate } },
       subscriptions: { list, create: createSubscription },
     };
 
@@ -507,8 +524,71 @@ describe("ensureCreditAndSubscription", () => {
     expect(second.steps).toEqual(["skipped-credit", "skipped-sub"]);
     expect(second.subscriptionId).toBe("sub_idem");
 
-    // Exactly one write of each kind across both calls.
-    expect(createBalanceTransaction).toHaveBeenCalledTimes(1);
+    expect(grantsCreate).toHaveBeenCalledTimes(1);
     expect(createSubscription).toHaveBeenCalledTimes(1);
+  });
+
+  test("creates a promotional credit grant with metadata.type=welcome", async () => {
+    const { stripe, spy } = makeStripeStub();
+    await ensureCreditAndSubscription(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stripe as any,
+      "cus_meta",
+      PRICE_ID,
+      null,
+    );
+    expect(spy.grantsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customer: "cus_meta",
+        amount: {
+          type: "monetary",
+          monetary: { currency: "usd", value: 100 },
+        },
+        applicability_config: { scope: { price_type: "metered" } },
+        category: "promotional",
+        metadata: { type: "welcome" },
+      }),
+    );
+  });
+
+  test("voided welcome grant doesn't count as already-credited", async () => {
+    const { stripe, spy } = makeStripeStub({
+      grantsData: [
+        {
+          id: "credgr_voided",
+          metadata: { type: "welcome" },
+          voided_at: 1700000000,
+        },
+      ],
+    });
+    const result = await ensureCreditAndSubscription(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stripe as any,
+      "cus_voided",
+      PRICE_ID,
+      null,
+    );
+    expect(result.steps).toContain("applied-credit");
+    expect(spy.grantsCreate).toHaveBeenCalledTimes(1);
+  });
+
+  test("non-welcome grants (e.g. purchased) don't block welcome credit", async () => {
+    const { stripe, spy } = makeStripeStub({
+      grantsData: [
+        {
+          id: "credgr_purchased",
+          metadata: { type: "purchased" },
+          voided_at: null,
+        },
+      ],
+    });
+    await ensureCreditAndSubscription(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      stripe as any,
+      "cus_purchased",
+      PRICE_ID,
+      null,
+    );
+    expect(spy.grantsCreate).toHaveBeenCalledTimes(1);
   });
 });

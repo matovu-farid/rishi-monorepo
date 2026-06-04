@@ -21,6 +21,8 @@ export type EnsureCreditAndSubResult = {
 };
 
 const WELCOME_CREDIT_CENTS = 100;
+const WELCOME_CREDIT_METADATA_KEY = "type";
+const WELCOME_CREDIT_METADATA_VALUE = "welcome";
 const ACTIVE_SUB_STATUSES = new Set([
   "active",
   "past_due",
@@ -42,16 +44,33 @@ export async function ensureCreditAndSubscription(
     });
   }
 
-  const customer = (await stripe.customers.retrieve(
-    stripeCustomerId,
-  )) as unknown as { balance: number };
-  if (customer.balance <= -WELCOME_CREDIT_CENTS) {
+  // Welcome credit, modeled as a promotional Billing Credit Grant. Applies
+  // pre-tax against any metered price, expires never, and shows up in the
+  // dashboard's "Credit grants" section. Idempotent via metadata.type.
+  const existingGrants = await stripe.billing.creditGrants.list({
+    customer: stripeCustomerId,
+    limit: 100,
+  });
+  const hasWelcomeGrant = existingGrants.data.some(
+    (g) =>
+      g.metadata?.[WELCOME_CREDIT_METADATA_KEY] ===
+        WELCOME_CREDIT_METADATA_VALUE && !g.voided_at,
+  );
+  if (hasWelcomeGrant) {
     steps.push("skipped-credit");
   } else {
-    await stripe.customers.createBalanceTransaction(stripeCustomerId, {
-      amount: -WELCOME_CREDIT_CENTS,
-      currency: "usd",
-      description: "Welcome credit ($1.00 of included usage)",
+    await stripe.billing.creditGrants.create({
+      customer: stripeCustomerId,
+      amount: {
+        type: "monetary",
+        monetary: { currency: "usd", value: WELCOME_CREDIT_CENTS },
+      },
+      applicability_config: { scope: { price_type: "metered" } },
+      category: "promotional",
+      name: "Welcome credit",
+      metadata: {
+        [WELCOME_CREDIT_METADATA_KEY]: WELCOME_CREDIT_METADATA_VALUE,
+      },
     });
     steps.push("applied-credit");
   }
