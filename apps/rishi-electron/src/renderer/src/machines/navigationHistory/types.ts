@@ -19,7 +19,4 @@ export type {
   TtsContext
 } from '@rishi/shared/machines/navigationHistory'
 
-export {
-  DWELL_MS,
-  STACK_MAX_DEPTH
-} from '@rishi/shared/machines/navigationHistory'
+export { DWELL_MS, STACK_MAX_DEPTH } from '@rishi/shared/machines/navigationHistory'
