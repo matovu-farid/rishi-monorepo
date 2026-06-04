@@ -21,8 +21,16 @@ describe("getStripeIdsForKey", () => {
     expect(getStripeIdsForKey("sk_live_abc123")).toBe(STRIPE_LIVE_IDS);
   });
 
+  test("returns live ids when key starts with rk_live_ (restricted live key)", () => {
+    expect(getStripeIdsForKey("rk_live_abc123")).toBe(STRIPE_LIVE_IDS);
+  });
+
   test("returns test ids when key starts with sk_test_", () => {
     expect(getStripeIdsForKey("sk_test_abc123")).toBe(STRIPE_TEST_IDS);
+  });
+
+  test("returns test ids when key starts with rk_test_ (restricted test key)", () => {
+    expect(getStripeIdsForKey("rk_test_abc123")).toBe(STRIPE_TEST_IDS);
   });
 
   test("returns test ids when key is undefined", () => {
@@ -33,7 +41,7 @@ describe("getStripeIdsForKey", () => {
     expect(getStripeIdsForKey("")).toBe(STRIPE_TEST_IDS);
   });
 
-  test("returns test ids when key is malformed", () => {
-    expect(getStripeIdsForKey("rk_live_restricted")).toBe(STRIPE_TEST_IDS);
+  test("returns test ids for an unrecognized prefix", () => {
+    expect(getStripeIdsForKey("pk_live_pubkey_not_a_secret")).toBe(STRIPE_TEST_IDS);
   });
 });
