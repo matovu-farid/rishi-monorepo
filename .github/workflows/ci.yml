@@ -37,6 +37,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install shared package dependencies
+        # The electron workspace symlinks packages/shared as a workspace member
+        # but does not populate packages/shared/node_modules with shared's own
+        # transitive deps (md5, xstate, epubjs, ...). Vitest's Vite resolver
+        # walks UP from shared/src/**/*.ts and fails to find them. Other CI
+        # jobs do the same install step.
+        run: cd ../../packages/shared && pnpm install --frozen-lockfile
+
       - name: Lint
         run: pnpm run lint
 
