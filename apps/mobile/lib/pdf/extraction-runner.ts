@@ -11,6 +11,20 @@ import { rawDb } from '@/lib/db'
 import { extractPages, getPageCount, type PageData } from 'rishi-pdf-extractor'
 import { extractionEvents, type ExtractionProgressEvent } from '@/lib/pdf/extraction-events'
 
+function safeInt(n: number, label: string): number {
+  if (!Number.isInteger(n)) {
+    throw new TypeError(`[sql] ${label} must be an integer, got ${typeof n}: ${String(n)}`)
+  }
+  return n
+}
+
+function safeNum(n: number, label: string): number {
+  if (typeof n !== 'number' || !Number.isFinite(n)) {
+    throw new TypeError(`[sql] ${label} must be a finite number, got ${typeof n}: ${String(n)}`)
+  }
+  return n
+}
+
 interface Job {
   bookId: string
   filePath: string
@@ -68,7 +82,7 @@ async function runJob(job: Job): Promise<void> {
     )
     totalPages = await getPageCount(job.filePath)
     rawDb.execSync(
-      `UPDATE books SET total_pages=${totalPages}, extracted_pages=0 WHERE id='${escapeSql(job.bookId)}'`,
+      `UPDATE books SET total_pages=${safeInt(totalPages, 'totalPages')}, extracted_pages=0 WHERE id='${escapeSql(job.bookId)}'`,
     )
     emit({
       bookId: job.bookId,
@@ -91,7 +105,7 @@ async function runJob(job: Job): Promise<void> {
         }
         done += pages.length
         rawDb.execSync(
-          `UPDATE books SET extracted_pages=${done} WHERE id='${escapeSql(job.bookId)}'`,
+          `UPDATE books SET extracted_pages=${safeInt(done, 'done')} WHERE id='${escapeSql(job.bookId)}'`,
         )
         rawDb.execSync('COMMIT')
       } catch (err) {
@@ -136,16 +150,16 @@ function insertPage(bookId: string, page: PageData): void {
   const now = Date.now()
   const pageText = page.paragraphs.map((p) => p.text).join('\n\n')
   rawDb.execSync(
-    `INSERT OR REPLACE INTO book_pages (book_id, page_number, text, width_pts, height_pts, indexed_at) VALUES ('${escapeSql(bookId)}', ${page.pageNumber}, '${escapeSql(pageText)}', ${page.widthPts}, ${page.heightPts}, ${now})`,
+    `INSERT OR REPLACE INTO book_pages (book_id, page_number, text, width_pts, height_pts, indexed_at) VALUES ('${escapeSql(bookId)}', ${safeInt(page.pageNumber, 'pageNumber')}, '${escapeSql(pageText)}', ${safeNum(page.widthPts, 'widthPts')}, ${safeNum(page.heightPts, 'heightPts')}, ${safeNum(now, 'indexed_at')})`,
   )
   for (const w of page.words) {
     rawDb.execSync(
-      `INSERT OR REPLACE INTO book_words (book_id, page_number, idx, text, x, y, w, h) VALUES ('${escapeSql(bookId)}', ${page.pageNumber}, ${w.idx}, '${escapeSql(w.text)}', ${w.x}, ${w.y}, ${w.w}, ${w.h})`,
+      `INSERT OR REPLACE INTO book_words (book_id, page_number, idx, text, x, y, w, h) VALUES ('${escapeSql(bookId)}', ${safeInt(page.pageNumber, 'pageNumber')}, ${safeInt(w.idx, 'idx')}, '${escapeSql(w.text)}', ${safeNum(w.x, 'x')}, ${safeNum(w.y, 'y')}, ${safeNum(w.w, 'w')}, ${safeNum(w.h, 'h')})`,
     )
   }
   for (const p of page.paragraphs) {
     rawDb.execSync(
-      `INSERT OR REPLACE INTO book_paragraphs (book_id, page_number, paragraph_index, text) VALUES ('${escapeSql(bookId)}', ${page.pageNumber}, '${escapeSql(p.index)}', '${escapeSql(p.text)}')`,
+      `INSERT OR REPLACE INTO book_paragraphs (book_id, page_number, paragraph_index, text) VALUES ('${escapeSql(bookId)}', ${safeInt(page.pageNumber, 'pageNumber')}, '${escapeSql(p.index)}', '${escapeSql(p.text)}')`,
     )
   }
 }
