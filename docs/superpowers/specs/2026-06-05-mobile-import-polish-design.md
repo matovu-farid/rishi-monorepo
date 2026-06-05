@@ -9,19 +9,23 @@
 
 Land a single PR against `apps/mobile` that removes the padlock UI on
 gated buttons, ships the existing 2-column library grid spec end-to-end
-(including PDF cover extraction), rebuilds the PDF reader around a
-single-page horizontal-swipe interaction (with the canvas DPR fix that
-removes blur), and adds Maestro coverage that exercises both EPUB and
-PDF import + reader navigation with screenshots.
+(including PDF cover extraction), applies the pdfjs DPR fix so PDF
+content stops looking blurry, and adds Maestro coverage that exercises
+both EPUB and PDF import + reader navigation with screenshots.
+
+The horizontal-swipe interaction + architectural overhaul of the PDF
+reader (native rendering, native text extraction, SQLite-backed text
+cache) is scoped into a follow-up spec — see "Follow-up: Path E" below.
 
 ## Non-goals
 
-- Replacing pdfjs with `react-native-pdf` (the renderer). Investigated
-  and rejected — Android PdfiumAndroid has no text layer, so we'd lose
-  selection / highlights silently.
-- Adding pinch-zoom inside a PDF page. Out of scope; can land separately.
-- Migrating off the WebView container. Path D keeps the WebView; only
-  the internal rendering / scroll model changes.
+- Replacing the PDF rendering architecture in this PR. The renderer
+  rewrite (`react-native-pdf` + native text extraction TurboModule +
+  SQLite cache) is the right end state but is 1-2 weeks of work across
+  several PRs. Tracked separately as **Path E** (see end of doc).
+- Changing the reader interaction model in this PR. The vertical-scroll
+  WebView stays. Horizontal swipe lands with Path E.
+- Adding pinch-zoom inside a PDF page. Separate spec.
 - File-picker / share-sheet Maestro flows. URL-import only — fast and
   deterministic.
 
@@ -60,7 +64,7 @@ Four work streams, all on one branch:
 | - | - | - | - |
 | 1 | Padlock removal | low | none |
 | 2 | 2-col grid + PDF covers | medium | `react-native-pdf-thumbnail` → rebuild dev client |
-| 3 | PDF reader → Path D (horizontal pages, DPR fix) | medium | none |
+| 3 | PDF crispness — Path A DPR fix only | low | none |
 | 4 | Maestro import + screenshots | low | none |
 
 A `team-reviewer` pass runs across the full diff at the end. All work is
@@ -120,81 +124,62 @@ halves bundled per user choice).
   grid layout.
 - Cover-extraction test for PDF using a fixture PDF.
 
-## Stream 3 — PDF reader Path D
+## Stream 3 — PDF crispness (Path A DPR fix)
 
-### Interaction model
-- One page rendered at a time inside the existing WebView.
-- Horizontal swipe (left → next, right → previous) handled by RN gesture
-  in `PdfWebReader.tsx`. A short `Animated.View` translateX gives the
-  page-turn feel; on release we post `renderPage(n+1)` (or n-1) to the
-  WebView.
-- No vertical scroll. Page is fit-to-width with letterboxing for short
-  pages.
-- A small page indicator ("47 / 312") in the reader chrome. Tap-to-jump
-  via existing TOC unchanged.
+### Scope
 
-### Renderer changes (`components/pdf/webview-template.ts`)
-- Apply the canonical pdfjs HiDPI pattern:
-  ```js
-  const outputScale = window.devicePixelRatio || 1;
-  canvas.width  = Math.floor(viewport.width  * outputScale);
-  canvas.height = Math.floor(viewport.height * outputScale);
-  canvas.style.width  = Math.floor(viewport.width)  + 'px';
-  canvas.style.height = Math.floor(viewport.height) + 'px';
-  const transform =
-    outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
-  page.render({ canvasContext: ctx, transform, viewport });
-  ```
-- Replace `.page-canvas { width: 100%; height: auto }` with explicit px
-  sizing (`style.width / style.height`).
-- Rip out the `IntersectionObserver`-based lazy-render loop and the
-  page-list scroll container.
-- Expose a `renderPage(n)` message handler that clears the canvas,
-  destroys the prior page object, and renders just page n.
-- Keep paragraph extraction (`pageDataToParagraphs`), text-layer
-  rendering, and highlight overlay logic untouched — they just run for a
-  single page at a time now.
+Smallest possible fix that makes PDFs stop looking blurry. No
+interaction-model change, no architecture change. The reader keeps its
+current vertical-scroll WebView layout. Reader rewrite is Path E.
 
-### RN-side changes (`components/pdf/PdfWebReader.tsx`)
-- State: `currentPage: number`, `numPages: number`,
-  `pageRenderState: 'idle' | 'pending' | 'ready'`.
-- `react-native-gesture-handler` `PanGestureHandler` wrapping the
-  WebView. On `onEnded` with horizontal velocity / translation past a
-  threshold, dispatch `next` / `prev`.
-- `next` / `prev` post `renderPage(n±1)` to the WebView via the existing
-  bridge.
-- Animated translateX during the gesture; springs back on cancel, jumps
-  to ±100% on commit (with the WebView swapping page underneath as the
-  animation completes).
-- Optional follow-up (not in this PR unless perceived latency demands
-  it): pre-render adjacent pages on an offscreen canvas inside the
-  WebView.
+### Root cause (verified)
 
-### Bridge changes (`components/pdf/pdf-webview-bridge.ts`)
-- Add `renderPage` outbound message.
-- Inbound `pageRendered { pageNumber, durationMs }` event (used by RN to
-  flip `pageRenderState`).
-- Keep `textSelected`, `highlight`, `gotoPage`, `outline`.
+`components/pdf/webview-template.ts` lines 244-247 set the pdfjs canvas
+backing store in CSS pixels with no `devicePixelRatio` multiplier, then
+CSS-stretches it to 100% width (line 40: `.page-canvas { width: 100%;
+height: auto }`). On a DPR-3 iPhone the displayed bitmap is a 3× upscale
+of a 1× render.
+
+### Changes (`components/pdf/webview-template.ts`)
+
+Apply the canonical pdfjs HiDPI pattern:
+
+```js
+const outputScale = window.devicePixelRatio || 1;
+canvas.width  = Math.floor(viewport.width  * outputScale);
+canvas.height = Math.floor(viewport.height * outputScale);
+canvas.style.width  = Math.floor(viewport.width)  + 'px';
+canvas.style.height = Math.floor(viewport.height) + 'px';
+const transform =
+  outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
+page.render({ canvasContext: ctx, transform, viewport });
+```
+
+Replace `.page-canvas { width: 100%; height: auto }` with explicit px
+sizing on the canvas element so CSS no longer stretches the bitmap.
+
+Keep everything else — `IntersectionObserver` lazy-render, paragraph
+extraction, text-layer, highlights, TOC, TTS pipeline — untouched.
+
+### Memory note
+
+DPR-multiplied canvases use more memory (DPR 3 → 9× the backing-store
+bytes). The existing `IntersectionObserver` lazy-render already evicts
+off-viewport pages. Verify on a 500-page PDF on a low-RAM Android device
+during QA; if memory pressure is a problem, add explicit canvas
+backing-store free on off-screen.
 
 ### Tests
-- Unit tests for the gesture-to-page-change logic (pure RN, no
-  WebView).
-- Bridge contract test: `renderPage` round-trips through the message
-  protocol.
-- Reader integration test asserting that calling `nextPage()` shifts
-  `currentPage` by 1 and the bridge sends `renderPage(n+1)`.
-- Visual A/B: a Maestro screenshot of a known PDF body-text page (e.g.
-  *Crime and Punishment*) at iOS sim DPR 3, compared to a baseline
+- Visual A/B via Maestro screenshot of a known PDF body-text page (e.g.
+  *Crime and Punishment*) on iOS sim DPR 3, compared to a baseline
   capture before the change. Reviewer should see edge sharpness improve.
+- Existing reader unit tests must continue passing — no behavior
+  changes, only render fidelity.
 
 ### Risks
-- **Page-turn perceived latency.** First render of an unseen page is
-  100-300ms in pdfjs. If swipe feels laggy in QA, we add adjacent-page
-  pre-render. Mitigation is well-understood and reversible.
-- **WebView state across page changes.** Highlights and text selections
-  are page-scoped, so the existing highlight overlay re-renders per
-  page. No regression expected.
-- **Landscape PDFs (slides).** Fit-to-width letterboxes them. Acceptable.
+- **Memory on low-end Android.** Mitigated by existing lazy-render +
+  explicit eviction if needed.
+- **None to features** — text selection, highlights, TOC, TTS untouched.
 
 ## Stream 4 — Maestro import + screenshots
 
@@ -206,12 +191,16 @@ halves bundled per user choice).
   - open reader
   - `takeScreenshot reader-page-1`
   - `assertVisible` on body text (not just chrome)
-  - swipe forward, `takeScreenshot reader-page-2`
+  - scroll forward, `takeScreenshot reader-mid-document`
 - Extend `.maestro/08-pdf-reader.yaml`: same shape, with PDF URL.
 - New `.maestro/13-library-grid.yaml`: launches app with seeded books
   (via the existing import flow), asserts grid layout (two columns
   visible), taps a cover, confirms reader opens.
 - Register the new flow in `.maestro/config.yaml`.
+
+Note: navigation inside the PDF reader stays vertical-scroll in this PR.
+Maestro asserts content visibility via scroll, not horizontal swipe.
+Swipe-based assertions land with Path E.
 
 ### Out of scope
 - Native file-picker / share-sheet import (Maestro can't drive picker
@@ -225,15 +214,14 @@ After this spec lands and the implementation plan is written:
   and mechanical.
 - **Grid + covers** → `team-architect` → `team-tester` → `team-coder`.
   Cover-extraction pipeline touches the data layer.
-- **PDF Path D** → `team-architect` → `team-tester` → `team-coder`.
-  Bridge protocol + gesture model both need design before code.
-- **Maestro** → runs *after* Streams 2 and 3 land on the branch
-  (depends on their UI being in place).
+- **PDF DPR fix** → `team-coder` directly. ~30 lines + a screenshot
+  assertion; doesn't need architect involvement.
+- **Maestro** → runs *after* Stream 2 lands on the branch (needs the
+  grid + covers to assert on).
 - **End** → `team-reviewer` over the full diff.
 
-Streams 1 and 3 are independent and can run in parallel. Stream 2 blocks
-Stream 4 (Maestro needs the grid + covers to assert on). Stream 3
-partially blocks Stream 4 (swipe-page screenshots need the new reader).
+Streams 1, 2, and 3 are independent and can run in parallel. Stream 4
+blocks on Stream 2.
 
 ## TDD discipline
 
@@ -249,11 +237,33 @@ failing tests for each stream before any implementation begins.
 - Maestro run command (existing): per `.maestro/config.yaml`.
 - Jest unit tests: existing `pnpm test` from `apps/mobile`.
 
+## Follow-up: Path E — native PDF reader
+
+Tracked as a separate spec (to be written after this PR ships). Sketch:
+
+| Layer | Tech |
+| - | - |
+| Rendering | `react-native-pdf` v7 with `horizontal` + `enablePaging`. Native swipe via UIKit's `PDFView.usePageViewController`. |
+| Text extraction | TurboModule / JSI native module. iOS: PDFKit (`PDFPage.string`, `PDFSelection.selectionsByLine`). Android: Pdfium (`FPDFText_GetText`, `FPDFText_GetCharBox`). Runs **once at import time**. |
+| Storage | New SQLite tables: `book_pages(book_id, page_number, text)` and `book_words(book_id, page_number, idx, text, x, y, w, h)`. |
+| Highlights / search / TTS | Read paragraphs and word bounding boxes from SQLite. Render selection overlays as absolutely-positioned RN `<View>`s over `react-native-pdf`, with coords derived from stored PDF user-space + the library's reported scale. |
+| pdfjs / WebView | Removed from the reader entirely. |
+
+Estimated 1-2 weeks, 3-4 sequenced PRs:
+
+1. Add the native text-extraction TurboModule (no consumers yet).
+2. SQLite schema + import-time extraction job + backfill for existing
+   books.
+3. Swap the PDF reader to `react-native-pdf`, migrate TTS / highlights /
+   search to read from SQLite.
+4. Delete pdfjs WebView, `webview-template.ts`, `pdf-webview-bridge.ts`.
+
+Throwaway from this PR when Path E lands: the DPR-fix lines in
+`webview-template.ts`. Acceptable — they ship reader quality for the
+1-2 weeks Path E takes to land.
+
 ## Open items / follow-ups
 
-- Pre-render adjacent PDF pages if QA flags swipe latency.
-- Pinch-zoom inside a PDF page — separate spec.
-- C2 (native horizontal-swipe via `react-native-pdf` + headless pdfjs)
-  remains an option for a future architecture upgrade; deferred until
-  Path D is in production.
+- Pinch-zoom inside a PDF page — defer; Path E will get it for free via
+  PDFKit/Pdfium's native zoom.
 - Auto-submit MAS releases (per existing memory) unaffected by this work.
