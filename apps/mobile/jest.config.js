@@ -11,6 +11,7 @@ module.exports = {
     '^@/(.*)$': '<rootDir>/$1',
     '^@rishi/shared/(.*)$': '<rootDir>/../../packages/shared/src/$1',
     '^@rishi/shared$': '<rootDir>/../../packages/shared/src',
+    '^rishi-pdf-extractor$': '<rootDir>/__mocks__/rishi-pdf-extractor.ts',
   },
   transform: {
     // `tsconfig.jest.json` sets `jsx: 'react'` so JSX in source files
