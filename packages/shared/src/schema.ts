@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, primaryKey } from "drizzle-orm/sqlite-core";
 
 // ─── Books table ───────────────────────────────────────────────────────────────
 // Matches mobile SQLite schema columns (snake_case) plus sync-specific columns.
@@ -37,6 +37,11 @@ export const books = sqliteTable("books", {
   syncVersion: integer("sync_version").default(0), // server-assigned monotonic counter
   isDirty: integer("is_dirty", { mode: "boolean" }).default(true), // needs push
   isDeleted: integer("is_deleted", { mode: "boolean" }).default(false), // soft delete
+  // Path E text-extraction status. Populated by the import-time runner.
+  extractionStatus: text("extraction_status"),       // 'pending' | 'extracting' | 'extracted' | 'error'
+  extractedPages: integer("extracted_pages").default(0),
+  totalPages: integer("total_pages"),
+  extractionError: text("extraction_error"),
 });
 
 // ─── Sync metadata table ───────────────────────────────────────────────────────
@@ -112,6 +117,65 @@ export const messages = sqliteTable("messages", {
   isDirty: integer("is_dirty", { mode: "boolean" }).default(true),
   isDeleted: integer("is_deleted", { mode: "boolean" }).default(false),
 });
+
+// ─── Book pages: extracted plain text per page ───────────────────────────────
+// Populated once at import time by rishi-pdf-extractor. Coordinates everywhere
+// in this group of tables are in PDF user-space (origin bottom-left, points).
+export const bookPages = sqliteTable(
+  'book_pages',
+  {
+    bookId: text('book_id').notNull(),
+    pageNumber: integer('page_number').notNull(),
+    text: text('text').notNull().default(''),
+    widthPts: real('width_pts').notNull(),
+    heightPts: real('height_pts').notNull(),
+    indexedAt: integer('indexed_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.bookId, table.pageNumber] }),
+  }),
+)
+
+// ─── Book words: per-word bounding boxes for hit-testing + highlights ────────
+export const bookWords = sqliteTable(
+  'book_words',
+  {
+    bookId: text('book_id').notNull(),
+    pageNumber: integer('page_number').notNull(),
+    idx: integer('idx').notNull(),
+    text: text('text').notNull(),
+    x: real('x').notNull(),
+    y: real('y').notNull(),
+    w: real('w').notNull(),
+    h: real('h').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.bookId, table.pageNumber, table.idx] }),
+  }),
+)
+
+// ─── Book paragraphs: TTS-ready paragraph chunks ─────────────────────────────
+// Index strings mirror the existing pdfjs shape: `${pageNumber*10000 + i}`
+// so the resolvePlayFromSelection consumer needs no adapter.
+export const bookParagraphs = sqliteTable(
+  'book_paragraphs',
+  {
+    bookId: text('book_id').notNull(),
+    pageNumber: integer('page_number').notNull(),
+    paragraphIndex: text('paragraph_index').notNull(),
+    text: text('text').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.bookId, table.paragraphIndex] }),
+  }),
+)
+
+export type BookPage = typeof bookPages.$inferSelect
+export type NewBookPage = typeof bookPages.$inferInsert
+export type BookWord = typeof bookWords.$inferSelect
+export type NewBookWord = typeof bookWords.$inferInsert
+export type BookParagraph = typeof bookParagraphs.$inferSelect
+export type NewBookParagraph = typeof bookParagraphs.$inferInsert
 
 // ─── Inferred types ────────────────────────────────────────────────────────────
 export type Book = typeof books.$inferSelect;

@@ -268,3 +268,83 @@ export function wasSyncInterrupted(): boolean {
   )
   return row?.in_progress === 1
 }
+
+// ─── Path E migrations ────────────────────────────────────────────────────────
+//
+// v1: add the PDF text-extraction cache tables (book_pages, book_words,
+// book_paragraphs) and the four extraction-status columns on `books`. Pure
+// additive — no destructive changes — so the migration is safe to re-run on
+// devices that already saw an earlier release.
+export const migrations: Migration[] = [
+  {
+    version: 1,
+    run(database) {
+      // Status columns on `books`. Each ALTER is gated on PRAGMA so a re-run
+      // doesn't throw (this mirrors the bootstrap pattern above).
+      const existing = new Set(
+        (database as unknown as {
+          getAllSync<T>(sql: string): T[]
+        })
+          .getAllSync<{ name: string }>('PRAGMA table_info(books)')
+          .map((r) => r.name),
+      )
+      const newBookCols: [string, string][] = [
+        ['extraction_status', 'TEXT'],
+        ['extracted_pages', 'INTEGER DEFAULT 0'],
+        ['total_pages', 'INTEGER'],
+        ['extraction_error', 'TEXT'],
+      ]
+      for (const [col, type] of newBookCols) {
+        if (existing.has(col)) continue
+        database.execSync(`ALTER TABLE books ADD COLUMN ${col} ${type}`)
+      }
+
+      database.execSync(`
+        CREATE TABLE IF NOT EXISTS book_pages (
+          book_id     TEXT    NOT NULL,
+          page_number INTEGER NOT NULL,
+          text        TEXT    NOT NULL DEFAULT '',
+          width_pts   REAL    NOT NULL,
+          height_pts  REAL    NOT NULL,
+          indexed_at  INTEGER NOT NULL,
+          PRIMARY KEY (book_id, page_number)
+        )
+      `)
+      database.execSync(
+        `CREATE INDEX IF NOT EXISTS idx_book_pages_book ON book_pages(book_id)`,
+      )
+
+      database.execSync(`
+        CREATE TABLE IF NOT EXISTS book_words (
+          book_id     TEXT    NOT NULL,
+          page_number INTEGER NOT NULL,
+          idx         INTEGER NOT NULL,
+          text        TEXT    NOT NULL,
+          x           REAL    NOT NULL,
+          y           REAL    NOT NULL,
+          w           REAL    NOT NULL,
+          h           REAL    NOT NULL,
+          PRIMARY KEY (book_id, page_number, idx)
+        )
+      `)
+      database.execSync(
+        `CREATE INDEX IF NOT EXISTS idx_book_words_book_page ON book_words(book_id, page_number)`,
+      )
+
+      database.execSync(`
+        CREATE TABLE IF NOT EXISTS book_paragraphs (
+          book_id         TEXT NOT NULL,
+          page_number     INTEGER NOT NULL,
+          paragraph_index TEXT NOT NULL,
+          text            TEXT NOT NULL,
+          PRIMARY KEY (book_id, paragraph_index)
+        )
+      `)
+      database.execSync(
+        `CREATE INDEX IF NOT EXISTS idx_book_paragraphs_book ON book_paragraphs(book_id)`,
+      )
+    },
+  },
+]
+
+runMigrations(rawDb, 1, migrations)
