@@ -20,7 +20,13 @@ class RishiPdfExtractorModule : Module() {
         "widthPts" to out.widthPts,
         "heightPts" to out.heightPts,
         "paragraphs" to out.paragraphs.map { mapOf("index" to it.index, "text" to it.text) },
-        "words" to emptyList<Map<String, Any>>(),
+        "words" to out.words.map {
+          mapOf(
+            "idx" to it.idx,
+            "text" to it.text,
+            "x" to it.x, "y" to it.y, "w" to it.w, "h" to it.h,
+          )
+        },
       )
     }
   }

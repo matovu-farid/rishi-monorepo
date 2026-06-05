@@ -99,6 +99,56 @@ class PdfExtractor(private val ctx: Context) {
           height = max(currentMaxY - currentMinY, 12.0),
         )
       }
+      // Word-grouping pass (Task 7): second walk over the same char range.
+      val words = mutableListOf<WordRectOut>()
+      val wordBuf = StringBuilder()
+      var wMinX = Double.POSITIVE_INFINITY
+      var wMinY = Double.POSITIVE_INFINITY
+      var wMaxX = Double.NEGATIVE_INFINITY
+      var wMaxY = Double.NEGATIVE_INFINITY
+      var wordIdx = 0
+
+      fun flushWord() {
+        if (wordBuf.isEmpty()) return
+        words += WordRectOut(
+          idx = wordIdx++,
+          text = wordBuf.toString(),
+          x = wMinX, y = wMinY,
+          w = wMaxX - wMinX, h = wMaxY - wMinY,
+        )
+        wordBuf.clear()
+        wMinX = Double.POSITIVE_INFINITY
+        wMinY = Double.POSITIVE_INFINITY
+        wMaxX = Double.NEGATIVE_INFINITY
+        wMaxY = Double.NEGATIVE_INFINITY
+      }
+
+      for (i in 0 until charCount) {
+        val unicode = core.textPageGetUnicode(textPagePtr, i)
+        if (unicode == 0x000A || unicode == 0x000D) {
+          flushWord()
+          continue
+        }
+        val rect = core.textPageGetCharBox(textPagePtr, i)
+        val minX = min(rect.left.toDouble(), rect.right.toDouble())
+        val maxX = max(rect.left.toDouble(), rect.right.toDouble())
+        val minY = min(rect.top.toDouble(), rect.bottom.toDouble())
+        val maxY = max(rect.top.toDouble(), rect.bottom.toDouble())
+        if (maxX - minX <= 0 && maxY - minY <= 0) {
+          flushWord()
+          continue
+        }
+        val ch = unicode.toChar()
+        if (ch.isWhitespace()) {
+          flushWord()
+        } else {
+          wordBuf.append(ch)
+          wMinX = min(wMinX, minX); wMinY = min(wMinY, minY)
+          wMaxX = max(wMaxX, maxX); wMaxY = max(wMaxY, maxY)
+        }
+      }
+      flushWord()
+
       core.closeTextPage(textPagePtr)
 
       val paragraphs = ParagraphSegmenter.segment(lines, pageNumber)
@@ -107,7 +157,7 @@ class PdfExtractor(private val ctx: Context) {
         widthPts = widthPts,
         heightPts = heightPts,
         paragraphs = paragraphs,
-        words = emptyList(),  // filled in Task 7
+        words = words,
       )
     } finally {
       core.closeDocument(doc)
