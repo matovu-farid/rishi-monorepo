@@ -192,12 +192,7 @@ jest.mock('@rishi/shared/formats/epub-cover', () => ({
 // Imports (after mocks)
 // ────────────────────────────────────────────────────────────────────────────
 
-import {
-  importEpubFile,
-  importPdfFile,
-  importMobiFile,
-  importDjvuFile,
-} from '@/lib/file-import'
+import { importBookFile } from '@/lib/file-import'
 import * as fileSync from '@/lib/sync/file-sync'
 import { extractEpubCover } from '@rishi/shared/formats/epub-cover'
 
@@ -247,7 +242,7 @@ describe('file-import — EPUB happy path', () => {
       { id: 'c2', bookId: 'ignored', chunkIndex: 1, text: 'Second chunk.', chapter: 'Ch 1', createdAt: 1 },
     ]
 
-    const book = await importEpubFile()
+    const book = await importBookFile()
     await flushAsync(10)
 
     expect(book).not.toBeNull()
@@ -286,7 +281,7 @@ describe('file-import — PDF', () => {
       { id: 'p1', bookId: 'ignored', chunkIndex: 0, text: 'Page 1 text.', chapter: 'Page 1', createdAt: 1 },
     ]
 
-    const book = await importPdfFile()
+    const book = await importBookFile()
     await flushAsync(10)
 
     expect(book?.format).toBe('pdf')
@@ -307,7 +302,7 @@ describe('file-import — MOBI / AZW3', () => {
       { id: 'm1', bookId: 'ignored', chunkIndex: 0, text: 'Mobi chunk.', chapter: 'Ch', createdAt: 1 },
     ]
 
-    const book = await importMobiFile()
+    const book = await importBookFile()
     await flushAsync(10)
 
     expect(book?.format).toBe('mobi')
@@ -320,7 +315,7 @@ describe('file-import — MOBI / AZW3', () => {
     pickFileResult = { uri: '/Downloads/new-book.azw3' }
     chunkerReturn = []
 
-    const book = await importMobiFile()
+    const book = await importBookFile()
     await flushAsync(10)
 
     expect(book?.format).toBe('azw3')
@@ -337,7 +332,7 @@ describe('file-import — error paths', () => {
     uploadShouldFail = true
     chunkerReturn = []
 
-    const book = await importEpubFile()
+    const book = await importBookFile()
     await flushAsync(10)
 
     // Book row WAS inserted because the upload is fire-and-forget after save.
@@ -354,7 +349,7 @@ describe('file-import — error paths', () => {
     embedThrows = true
     embeddingReady = true
 
-    const book = await importEpubFile()
+    const book = await importBookFile()
     await flushAsync(10)
 
     // Row still inserted. Indexing will catch the throw inside the embed port
@@ -369,10 +364,10 @@ describe('file-import — picker cancellation', () => {
 
   it('returns null when the picker is dismissed', async () => {
     pickFileResult = null
-    expect(await importEpubFile()).toBeNull()
-    expect(await importPdfFile()).toBeNull()
-    expect(await importMobiFile()).toBeNull()
-    expect(await importDjvuFile()).toBeNull()
+    expect(await importBookFile()).toBeNull()
+    expect(await importBookFile()).toBeNull()
+    expect(await importBookFile()).toBeNull()
+    expect(await importBookFile()).toBeNull()
     expect(dbRecord.insertCalls).toEqual([])
   })
 })
@@ -396,7 +391,7 @@ describe('file-import — sync trigger after import', () => {
     pickFileResult = { uri: '/Downloads/syncme.epub' }
     chunkerReturn = []
 
-    await importEpubFile()
+    await importBookFile()
     await flushAsync(10)
 
     expect(dbRecord.insertCalls).toHaveLength(1)

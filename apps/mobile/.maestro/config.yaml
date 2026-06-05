@@ -4,7 +4,6 @@ flows:
   - "03-sign-in-validation.yaml"
   - "04-sign-in-email-input.yaml"
   - "05-tab-navigation.yaml"
-  - "06-url-import.yaml"
   - "07-epub-reader.yaml"
   - "08-pdf-reader.yaml"
   - "09-reader-toolbar.yaml"

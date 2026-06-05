@@ -150,9 +150,9 @@ afterEach(() => {
 // when its caller doesn't supply one, but the simpler exposed surface is
 // the e2e helper `importBookFromFile(opts.bookId)` which uses the
 // CALLER-provided id (so we can't observe collision through that path).
-// Instead we exercise the picker path via `importEpubFile` and capture
+// Instead we exercise the picker path via `importBookFile` and capture
 // the id from the resolved book.
-import { importEpubFile } from '@/lib/file-import'
+import { importBookFile } from '@/lib/file-import'
 import { handleIncomingFile, __resetInFlightForTests } from '@/lib/file-handler'
 
 // Configure expo-file-system's pickFileAsync to feed back the file URI.
@@ -166,7 +166,7 @@ describe('DAT-013 — generateUUID fallback is collision-safe under rapid calls'
     pickFileAsync.mockResolvedValueOnce({ uri: '/Downloads/a.epub' })
     pickFileAsync.mockResolvedValueOnce({ uri: '/Downloads/b.epub' })
 
-    const [r1, r2] = await Promise.all([importEpubFile(), importEpubFile()])
+    const [r1, r2] = await Promise.all([importBookFile(), importBookFile()])
     expect(r1.ok).toBe(true)
     expect(r2.ok).toBe(true)
     if (r1.ok && r2.ok) {
@@ -183,8 +183,8 @@ describe('DAT-013 — generateUUID fallback is collision-safe under rapid calls'
       pickFileAsync.mockResolvedValueOnce({ uri: '/Downloads/c.epub' })
       pickFileAsync.mockResolvedValueOnce({ uri: '/Downloads/d.epub' })
 
-      const r1 = await importEpubFile()
-      const r2 = await importEpubFile()
+      const r1 = await importBookFile()
+      const r2 = await importBookFile()
       expect(r1.ok && r2.ok).toBe(true)
       if (r1.ok && r2.ok) {
         expect(r1.book.id).not.toEqual(r2.book.id)

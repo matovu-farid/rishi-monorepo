@@ -7,9 +7,7 @@ import {
   TextInput,
   Pressable,
   StyleSheet,
-  Button,
 } from 'react-native'
-import * as Sentry from '@sentry/react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { Directory, Paths } from 'expo-file-system'
@@ -18,13 +16,9 @@ import { BookCover } from '@/components/ui/BookCover'
 import { SyncStatusIndicator } from '@/components/SyncStatusIndicator'
 import { BookRow } from '@/components/BookRow'
 import { LibraryEmptyState } from '@/components/LibraryEmptyState'
-import { UrlImportSheet } from '@/components/UrlImportSheet'
 import { getBooks, deleteBook, getLastReadBook } from '@/lib/book-storage'
 import {
-  importEpubFile,
-  importPdfFile,
-  importMobiFile,
-  importDjvuFile,
+  importBookFile,
   type ImportFailureStage,
 } from '@/lib/file-import'
 import { Book } from '@/types/book'
@@ -54,7 +48,6 @@ export default function LibraryScreen() {
   const [lastReadBook, setLastReadBook] = useState<Book | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [importing, setImporting] = useState(false)
-  const [urlSheetVisible, setUrlSheetVisible] = useState(false)
   // P1-AB: gate the empty / populated branches on the first load so we
   // don't flash "No books yet" while getBooks() is still settling.
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
@@ -129,52 +122,31 @@ export default function LibraryScreen() {
     [],
   )
 
-  const doImport = useCallback(
-    async (format: 'epub' | 'pdf' | 'mobi' | 'djvu') => {
-      setImporting(true)
-      try {
-        const importFns = {
-          epub: importEpubFile,
-          pdf: importPdfFile,
-          mobi: importMobiFile,
-          djvu: importDjvuFile,
+  const handleImport = useCallback(async () => {
+    setImporting(true)
+    try {
+      const result = await importBookFile()
+      if (result.ok) {
+        loadBooks()
+      } else {
+        const message = importErrorCopy(result.stage, 'book')
+        if (message) {
+          Alert.alert('Import Failed', message)
         }
-        const result = await importFns[format]()
-        if (result.ok) {
-          loadBooks()
-        } else {
-          const message = importErrorCopy(result.stage, format)
-          if (message) {
-            Alert.alert('Import Failed', message)
-          }
-          console.warn(
-            `[library] ${format} import failed at stage=${result.stage}: ${result.error}`,
-          )
-        }
-      } catch (error) {
-        // Unexpected throw (e.g. network for URL imports bubbling up).
-        Alert.alert(
-          'Import Failed',
-          `Could not import the ${format.toUpperCase()}. Please try again.`,
+        console.warn(
+          `[library] import failed at stage=${result.stage}: ${result.error}`,
         )
-        console.error('Import error:', error)
-      } finally {
-        setImporting(false)
       }
-    },
-    [loadBooks, importErrorCopy],
-  )
-
-  const handleImport = useCallback(() => {
-    Alert.alert('Import Book', 'Choose file format', [
-      { text: 'EPUB', onPress: () => doImport('epub') },
-      { text: 'PDF', onPress: () => doImport('pdf') },
-      { text: 'MOBI', onPress: () => doImport('mobi') },
-      { text: 'DJVU', onPress: () => doImport('djvu') },
-      { text: 'From URL', onPress: () => setUrlSheetVisible(true) },
-      { text: 'Cancel', style: 'cancel' },
-    ])
-  }, [doImport])
+    } catch (error) {
+      Alert.alert(
+        'Import Failed',
+        'Could not import the book. Please try again.',
+      )
+      console.error('Import error:', error)
+    } finally {
+      setImporting(false)
+    }
+  }, [loadBooks, importErrorCopy])
 
   const handleBookPress = useCallback(
     (book: Book) => {
@@ -344,11 +316,6 @@ export default function LibraryScreen() {
           importButtonProps={{ onLayout: importTarget.onLayout }}
           containerProps={{ onLayout: gridTarget.onLayout }}
         />
-        <UrlImportSheet
-          visible={urlSheetVisible}
-          onDismiss={() => setUrlSheetVisible(false)}
-          onImported={() => loadBooks()}
-        />
       </SafeAreaView>
     )
   }
@@ -391,13 +358,6 @@ export default function LibraryScreen() {
             clearButtonMode="while-editing"
           />
         </View>
-        {/* TEMP: Sentry setup verification — remove once an event is confirmed in the dashboard */}
-        <Button
-          title="Sentry test"
-          onPress={() => {
-            Sentry.captureException(new Error('First error'))
-          }}
-        />
       </View>
       {lastReadBook && (
         <Pressable
@@ -562,11 +522,6 @@ export default function LibraryScreen() {
           }
         />
       </View>
-      <UrlImportSheet
-        visible={urlSheetVisible}
-        onDismiss={() => setUrlSheetVisible(false)}
-        onImported={() => loadBooks()}
-      />
     </SafeAreaView>
   )
 }

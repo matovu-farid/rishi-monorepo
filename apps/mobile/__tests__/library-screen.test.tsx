@@ -179,11 +179,6 @@ jest.mock('@/components/ui/BookCover', () => {
   }
 })
 
-// UrlImportSheet pulls in @gorhom/bottom-sheet — stub completely.
-jest.mock('@/components/UrlImportSheet', () => ({
-  UrlImportSheet: () => null,
-}))
-
 // SyncStatusIndicator pulls in zustand + sync state. Stub to a leaf.
 jest.mock('@/components/SyncStatusIndicator', () => {
   const React = require('react')
@@ -202,10 +197,7 @@ jest.mock('@/lib/book-storage', () => ({
 }))
 
 const fileImportMocks = {
-  importEpubFile: jest.fn(async () => ({ ok: true, book: null })),
-  importPdfFile: jest.fn(async () => ({ ok: true, book: null })),
-  importMobiFile: jest.fn(async () => ({ ok: true, book: null })),
-  importDjvuFile: jest.fn(async () => ({ ok: true, book: null })),
+  importBookFile: jest.fn(async () => ({ ok: true, book: null })),
 }
 jest.mock('@/lib/file-import', () => fileImportMocks)
 
@@ -460,37 +452,24 @@ describe('LibraryScreen (P0-K: stage-specific import errors)', () => {
     mockBooks.length = 0
     mockLastReadBook = null
     Alert.alert.mockClear()
-    fileImportMocks.importEpubFile.mockReset()
-    fileImportMocks.importPdfFile.mockReset()
-    fileImportMocks.importMobiFile.mockReset()
-    fileImportMocks.importDjvuFile.mockReset()
+    fileImportMocks.importBookFile.mockReset()
   })
 
-  async function triggerEpubImport(tree: TestRenderer.ReactTestRenderer) {
-    // The empty-state path renders LibraryEmptyState with its own button,
-    // but the header `+` button is always available. We call doImport
-    // via the Alert.alert("Import Book", ..., buttons) flow: capture the
-    // EPUB button and invoke it directly.
+  async function triggerImport(tree: TestRenderer.ReactTestRenderer) {
+    // The header `+` button now invokes `handleImport` directly — no
+    // format-selection alert. The picker opens; the test's importBookFile
+    // mock substitutes for the picker + import.
     const headerBtn = tree.root.findAll(
       (n) =>
         (n.props as { testID?: string }).testID === 'library-import-button',
     )[0]
     await act(async () => {
-      ;(headerBtn.props as { onPress?: () => void }).onPress?.()
-    })
-    const buttons = Alert.alert.mock.calls[0][2] as Array<{
-      text: string
-      onPress?: () => void | Promise<void>
-    }>
-    Alert.alert.mockClear()
-    const epubBtn = buttons.find((b) => b.text === 'EPUB')!
-    await act(async () => {
-      await epubBtn.onPress?.()
+      await (headerBtn.props as { onPress?: () => void | Promise<void> }).onPress?.()
     })
   }
 
   it('shows parse-specific copy when stage=parse', async () => {
-    fileImportMocks.importEpubFile.mockResolvedValueOnce({
+    fileImportMocks.importBookFile.mockResolvedValueOnce({
       ok: false,
       stage: 'parse',
       error: 'zip header corrupt',
@@ -499,14 +478,14 @@ describe('LibraryScreen (P0-K: stage-specific import errors)', () => {
     act(() => {
       tree = TestRenderer.create(<LibraryScreen />)
     })
-    await triggerEpubImport(tree)
+    await triggerImport(tree)
     expect(Alert.alert).toHaveBeenCalled()
     const [, body] = Alert.alert.mock.calls[0]
     expect(String(body)).toMatch(/corrupt|not a valid|couldn'?t be read/i)
   })
 
   it('shows storage-full copy when stage=storage-full', async () => {
-    fileImportMocks.importEpubFile.mockResolvedValueOnce({
+    fileImportMocks.importBookFile.mockResolvedValueOnce({
       ok: false,
       stage: 'storage-full',
       error: 'ENOSPC',
@@ -515,14 +494,14 @@ describe('LibraryScreen (P0-K: stage-specific import errors)', () => {
     act(() => {
       tree = TestRenderer.create(<LibraryScreen />)
     })
-    await triggerEpubImport(tree)
+    await triggerImport(tree)
     expect(Alert.alert).toHaveBeenCalled()
     const [, body] = Alert.alert.mock.calls[0]
     expect(String(body)).toMatch(/storage|space|full/i)
   })
 
   it('shows permission copy when stage=permission', async () => {
-    fileImportMocks.importEpubFile.mockResolvedValueOnce({
+    fileImportMocks.importBookFile.mockResolvedValueOnce({
       ok: false,
       stage: 'permission',
       error: 'EACCES',
@@ -531,14 +510,14 @@ describe('LibraryScreen (P0-K: stage-specific import errors)', () => {
     act(() => {
       tree = TestRenderer.create(<LibraryScreen />)
     })
-    await triggerEpubImport(tree)
+    await triggerImport(tree)
     expect(Alert.alert).toHaveBeenCalled()
     const [, body] = Alert.alert.mock.calls[0]
     expect(String(body)).toMatch(/permission|access/i)
   })
 
   it('stays silent when stage=picker-cancel', async () => {
-    fileImportMocks.importEpubFile.mockResolvedValueOnce({
+    fileImportMocks.importBookFile.mockResolvedValueOnce({
       ok: false,
       stage: 'picker-cancel',
       error: 'user cancelled',
@@ -547,8 +526,7 @@ describe('LibraryScreen (P0-K: stage-specific import errors)', () => {
     act(() => {
       tree = TestRenderer.create(<LibraryScreen />)
     })
-    await triggerEpubImport(tree)
-    // Only the initial "Import Book" alert was shown — no failure alert.
+    await triggerImport(tree)
     expect(Alert.alert).not.toHaveBeenCalled()
   })
 })

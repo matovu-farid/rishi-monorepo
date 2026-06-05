@@ -12,9 +12,6 @@
  *     touching the filesystem or the shared service.
  *   - Miss → proceed as before; the existing pipeline patches `fileHash`
  *     onto the row via the UploadPort.
- *   - The same gate runs in `importBookFromUrl` after the bytes are
- *     downloaded but BEFORE the per-book directory + tmp file are
- *     written, so a duplicate URL import doesn't leave an orphan dir.
  */
 
 // ── Native fakes ────────────────────────────────────────────────────────────
@@ -223,7 +220,7 @@ afterAll(() => {
   global.fetch = realFetch
 })
 
-import { importEpubFile, importBookFromUrl } from '@/lib/file-import'
+import { importBookFile } from '@/lib/file-import'
 
 function resetAll(): void {
   fakeFiles.clear()
@@ -236,27 +233,6 @@ function resetAll(): void {
   serviceCalls.importFromPath.length = 0
   mockFetch.mockReset()
   jest.clearAllMocks()
-}
-
-function downloadResponse(opts: {
-  ok?: boolean
-  status?: number
-  contentType?: string | null
-  contentLength?: string | null
-}): Response {
-  return {
-    ok: opts.ok ?? true,
-    status: opts.status ?? 200,
-    statusText: 'OK',
-    headers: {
-      get: (k: string) => {
-        if (k.toLowerCase() === 'content-type') return opts.contentType ?? null
-        if (k.toLowerCase() === 'content-length') return opts.contentLength ?? null
-        return null
-      },
-    },
-    arrayBuffer: async () => new ArrayBuffer(4),
-  } as unknown as Response
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -276,7 +252,7 @@ describe('DAT-002 — picker import rejects duplicates by file hash', () => {
 
     pickFileResult = { uri: '/Downloads/sample.epub' }
 
-    const outcome = await importEpubFile()
+    const outcome = await importBookFile()
 
     expect(outcome.ok).toBe(false)
     if (outcome.ok === false) {
@@ -292,7 +268,7 @@ describe('DAT-002 — picker import rejects duplicates by file hash', () => {
     pickFileResult = { uri: '/Downloads/fresh.epub' }
     // dbState.rows is empty → hash query returns undefined.
 
-    const outcome = await importEpubFile()
+    const outcome = await importBookFile()
 
     expect(outcome.ok).toBe(true)
     // The shared service WAS invoked.
@@ -303,32 +279,6 @@ describe('DAT-002 — picker import rejects duplicates by file hash', () => {
 // ────────────────────────────────────────────────────────────────────────────
 // URL import — duplicate gate must also not leave an orphan tmp dir
 // ────────────────────────────────────────────────────────────────────────────
-
-describe('DAT-002 — URL import rejects duplicates by file hash', () => {
-  beforeEach(resetAll)
-
-  it('throws a duplicate error and removes the per-book directory it created', async () => {
-    dbState.rows.set('existing-2', {
-      id: 'existing-2',
-      title: 'Existing URL import',
-      fileHash: 'duplicate-hash',
-    })
-
-    mockFetch.mockResolvedValueOnce(
-      downloadResponse({
-        contentType: 'application/epub+zip',
-        contentLength: '1000',
-      }),
-    )
-
-    await expect(
-      importBookFromUrl('https://example.com/lib/dup.epub'),
-    ).rejects.toThrow(/duplicate|already/i)
-
-    // The shared service was never invoked.
-    expect(serviceCalls.importFromPath).toHaveLength(0)
-  })
-})
 
 // ────────────────────────────────────────────────────────────────────────────
 // DAT-002 follow-up: soft-deleted books MUST be re-importable.
@@ -355,7 +305,7 @@ describe('DAT-002 — soft-deleted books are re-importable', () => {
 
     pickFileResult = { uri: '/Downloads/coming-back.epub' }
 
-    const outcome = await importEpubFile()
+    const outcome = await importBookFile()
 
     // The duplicate gate must NOT short-circuit when the only matching
     // row is soft-deleted; the import must proceed all the way through
@@ -380,7 +330,7 @@ describe('DAT-002 — soft-deleted books are re-importable', () => {
 
     pickFileResult = { uri: '/Downloads/coming-back.epub' }
 
-    const outcome = await importEpubFile()
+    const outcome = await importBookFile()
 
     expect(outcome.ok).toBe(false)
     if (outcome.ok === false) {

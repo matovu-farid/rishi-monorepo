@@ -159,24 +159,6 @@ afterAll(() => {
   global.fetch = realFetch
 })
 
-import { importBookFromUrl } from '@/lib/file-import'
-
-function downloadResponse(opts: {
-  contentType?: string | null
-}): Response {
-  return {
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    headers: {
-      get: (k: string) => {
-        if (k.toLowerCase() === 'content-type') return opts.contentType ?? null
-        return null
-      },
-    },
-    arrayBuffer: async () => new ArrayBuffer(4),
-  } as unknown as Response
-}
 
 function resetAll(): void {
   fakeFiles.clear()
@@ -194,10 +176,10 @@ interface CoverPortDepsLike {
 // `coverPromise` surface we use the underlying picker entry indirectly:
 // importBookFromUrl wraps runImportWithService and unwraps the outcome
 // before throwing on failure. The new surface lives on the OUTCOME
-// returned by the picker functions, so we exercise importEpubFile here
+// returned by the picker functions, so we exercise importBookFile here
 // with a stubbed pickFile.
 
-import { importEpubFile, type ImportOutcome } from '@/lib/file-import'
+import { importBookFile, type ImportOutcome } from '@/lib/file-import'
 import { File as ExpoFile } from 'expo-file-system'
 
 const pickFileAsync = (
@@ -210,7 +192,7 @@ describe('DAT-019 — import outcome surfaces a coverPromise', () => {
   it('the success outcome exposes coverPromise and initial state is pending', async () => {
     pickFileAsync.mockResolvedValueOnce({ uri: '/Downloads/x.epub' })
 
-    const outcome: ImportOutcome = await importEpubFile()
+    const outcome: ImportOutcome = await importBookFile()
     expect(outcome.ok).toBe(true)
     if (outcome.ok) {
       expect(typeof outcome.coverPromise.then).toBe('function')
@@ -223,7 +205,7 @@ describe('DAT-019 — import outcome surfaces a coverPromise', () => {
   it("resolves to status:'ready' when the cover port writes a real path", async () => {
     pickFileAsync.mockResolvedValueOnce({ uri: '/Downloads/y.epub' })
 
-    const outcome = await importEpubFile()
+    const outcome = await importBookFile()
     expect(outcome.ok).toBe(true)
     if (!outcome.ok) return
 
@@ -243,7 +225,7 @@ describe('DAT-019 — import outcome surfaces a coverPromise', () => {
   it("resolves to status:'unavailable' when the cover port reports parse-error", async () => {
     pickFileAsync.mockResolvedValueOnce({ uri: '/Downloads/z.epub' })
 
-    const outcome = await importEpubFile()
+    const outcome = await importBookFile()
     expect(outcome.ok).toBe(true)
     if (!outcome.ok) return
 
@@ -263,9 +245,8 @@ describe('DAT-019 — import outcome surfaces a coverPromise', () => {
 
   it("resolves to status:'unsupported' for PDF without waiting on a cover port event", async () => {
     pickFileAsync.mockResolvedValueOnce({ uri: '/Downloads/p.pdf' })
-    // Import PDF directly via the dedicated wrapper.
-    const { importPdfFile } = await import('@/lib/file-import')
-    const outcome = await importPdfFile()
+    // Single unified picker — format inferred from .pdf extension.
+    const outcome = await importBookFile()
     expect(outcome.ok).toBe(true)
     if (!outcome.ok) return
 

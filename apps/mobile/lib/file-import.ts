@@ -1,12 +1,14 @@
 /**
- * Mobile file-import — orchestrates EPUB / PDF / MOBI / AZW3 / DJVU
- * imports + URL imports.
+ * Mobile file-import — single unified picker for EPUB / PDF / MOBI / AZW3 /
+ * DJVU books.
  *
- * Architecture: each import wrapper picks (or downloads) the source file,
- * mints a UUID, then runs the shared `@rishi/shared/book-import` service
- * through mobile-specific port adapters. The service handles copy + save
- * + done-event; cover extraction + R2 upload run after `done` as
- * fire-and-forget side-effects.
+ * Architecture: `importBookFile()` opens iOS's native document picker
+ * showing every supported format at once, infers the format from the
+ * picked file's extension (iOS's UTI handshake already validated the
+ * file), mints a UUID, then runs the shared `@rishi/shared/book-import`
+ * service through mobile-specific port adapters. The service handles
+ * copy + save + done-event; cover extraction + R2 upload run after
+ * `done` as fire-and-forget side-effects.
  */
 
 import { File, Directory, Paths } from "expo-file-system";
@@ -393,303 +395,59 @@ const PICKER_CANCEL: ImportOutcome = {
   error: "User cancelled the document picker",
 };
 
-export async function importEpubFile(): Promise<ImportOutcome> {
-  const pickedFile = await File.pickFileAsync(undefined, "application/epub+zip");
-  if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
-    return PICKER_CANCEL;
-  }
-  const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile;
-  return runImportWithService({
-    sourceUri: sourceFile.uri,
-    format: "epub",
-    title: titleFromUri(sourceFile.uri, /\.epub$/i),
-  });
+/**
+ * Map a picked-file extension to a `BookFormat`. The iOS document picker
+ * already vouched for the file's UTI when it returned the URI, so the
+ * extension is trustworthy — no need to sniff bytes.
+ */
+function formatFromExtension(uri: string): BookFormat | null {
+  const lower = uri.toLowerCase();
+  if (lower.endsWith(".epub")) return "epub";
+  if (lower.endsWith(".pdf")) return "pdf";
+  if (lower.endsWith(".azw3")) return "azw3";
+  if (lower.endsWith(".mobi")) return "mobi";
+  if (lower.endsWith(".djvu")) return "djvu";
+  return null;
 }
 
-export async function importPdfFile(): Promise<ImportOutcome> {
-  const pickedFile = await File.pickFileAsync(undefined, "application/pdf");
+/**
+ * Unified book import. Opens one document picker that accepts every
+ * supported format; iOS shows EPUB / PDF / MOBI / AZW3 / DJVU files
+ * together (mirrors the electron app's single "Import Book" flow). The
+ * format is inferred from the picked file's extension — iOS's UTI
+ * handshake already validated the file type when the picker returned.
+ *
+ * Returns `picker-cancel` if the user dismisses the picker, `unsupported`
+ * if they somehow pick a non-book file (shouldn't happen given the
+ * `acceptedExtensions` filter, but the check guards against picker
+ * implementations that ignore filters on certain providers).
+ */
+export async function importBookFile(): Promise<ImportOutcome> {
+  // No MIME-type filter — passing one would restrict the picker to a
+  // single format. Showing all books-and-papers and gating on extension
+  // afterwards matches how the electron app's open-file dialog filters.
+  const pickedFile = await File.pickFileAsync();
   if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
     return PICKER_CANCEL;
   }
   const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile;
-  return runImportWithService({
-    sourceUri: sourceFile.uri,
-    format: "pdf",
-    title: titleFromUri(sourceFile.uri, /\.pdf$/i),
-  });
-}
-
-export async function importMobiFile(): Promise<ImportOutcome> {
-  const pickedFile = await File.pickFileAsync(
-    undefined,
-    "application/x-mobipocket-ebook",
-  );
-  if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
-    return PICKER_CANCEL;
+  const format = formatFromExtension(sourceFile.uri);
+  if (!format) {
+    return {
+      ok: false,
+      stage: "unsupported",
+      error: `Unsupported file type. Supported: EPUB, PDF, MOBI, AZW3, DJVU.`,
+    };
   }
-  const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile;
-  const isAzw3 = sourceFile.uri.toLowerCase().endsWith(".azw3");
-  const format: BookFormat = isAzw3 ? "azw3" : "mobi";
+  const titleStripRegex =
+    format === "mobi" || format === "azw3"
+      ? /\.(mobi|azw3)$/i
+      : new RegExp(`\\.${format}$`, "i");
   return runImportWithService({
     sourceUri: sourceFile.uri,
     format,
-    title: titleFromUri(sourceFile.uri, /\.(mobi|azw3)$/i),
+    title: titleFromUri(sourceFile.uri, titleStripRegex),
   });
-}
-
-export async function importDjvuFile(): Promise<ImportOutcome> {
-  const pickedFile = await File.pickFileAsync(undefined, "image/vnd.djvu");
-  if (!pickedFile || (Array.isArray(pickedFile) && pickedFile.length === 0)) {
-    return PICKER_CANCEL;
-  }
-  const sourceFile = Array.isArray(pickedFile) ? pickedFile[0] : pickedFile;
-  return runImportWithService({
-    sourceUri: sourceFile.uri,
-    format: "djvu",
-    title: titleFromUri(sourceFile.uri, /\.djvu$/i),
-  });
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// URL-driven import
-//
-// We can't drive this through the shared service's FsPort because the source
-// arrives as bytes (HTTP body), not a file path. The URL import path:
-//   1. download to a temp file inside the per-book dir
-//   2. point the shared service at it (so we still get cover + upload +
-//      indexing)
-// ────────────────────────────────────────────────────────────────────────────
-
-type UrlFormat = "epub" | "pdf" | "mobi" | "djvu";
-
-function detectFormatFromUrl(url: string): UrlFormat | null {
-  const pathname = new URL(url).pathname.toLowerCase();
-  if (pathname.endsWith(".epub")) return "epub";
-  if (pathname.endsWith(".pdf")) return "pdf";
-  if (pathname.endsWith(".mobi") || pathname.endsWith(".azw3")) return "mobi";
-  if (pathname.endsWith(".djvu")) return "djvu";
-  return null;
-}
-
-function detectFormatFromContentType(
-  contentType: string | null,
-): UrlFormat | null {
-  if (!contentType) return null;
-  if (contentType.includes("application/epub+zip")) return "epub";
-  if (contentType.includes("application/pdf")) return "pdf";
-  if (contentType.includes("application/x-mobipocket-ebook")) return "mobi";
-  if (contentType.includes("image/vnd.djvu")) return "djvu";
-  return null;
-}
-
-function extractTitleFromUrl(url: string): string {
-  const pathname = new URL(url).pathname;
-  const filename = decodeURIComponent(
-    pathname.split("/").pop() || "Unknown Book",
-  );
-  return filename.replace(/\.(epub|pdf|mobi|azw3|djvu)$/i, "");
-}
-
-/**
- * Map a non-2xx HTTP status from the download GET to user-facing copy
- * (P1-AD). Previously we surfaced raw `Download failed: {status} {statusText}`
- * to the UI; users could not tell whether the file was missing, gated, or
- * the server was down. The mapping:
- *   - 404         → "We couldn't find that file"
- *   - 401 / 403   → "URL requires permission"
- *   - other       → "Server refused download"
- */
-export function mapHttpStatusToUserCopy(status: number): string {
-  if (status === 404) {
-    return "We couldn't find that file";
-  }
-  if (status === 401 || status === 403) {
-    return "URL requires permission";
-  }
-  return "Server refused download";
-}
-
-/**
- * DAT-012 (#124): hard cap on URL-import size. Reading a 2 GB body
- * straight into `arrayBuffer()` OOMs the JS VM on Android (heap cap is
- * ~512 MB on most devices). 500 MB is comfortably below the cap and
- * still leaves headroom for the existing book covers + chunker
- * allocations.
- *
- * Exported for tests; not part of the public API surface.
- */
-export const URL_IMPORT_MAX_BYTES = 500 * 1024 * 1024;
-
-function parseContentLengthOrNull(header: string | null): number | null {
-  if (!header) return null;
-  // `Number()` is too lenient ("" → 0, " 12 " → 12). We want a strict
-  // base-10 integer; anything else is treated as "unknown size".
-  if (!/^\d+$/.test(header.trim())) return null;
-  const n = Number(header.trim());
-  return Number.isFinite(n) && n >= 0 ? n : null;
-}
-
-function formatBytesAsMB(bytes: number): string {
-  return `${Math.round(bytes / (1024 * 1024))} MB`;
-}
-
-/**
- * DAT-017 (#129): caller-controllable cancellation. `UrlImportSheet`
- * holds an `AbortController` for the lifetime of the sheet and aborts
- * it on dismiss so a large download stops buffering immediately
- * instead of stranded in the background. The signal is forwarded to
- * both the HEAD probe and the GET; an aborted signal short-circuits
- * with a standard `AbortError` from `fetch`.
- */
-export interface ImportBookFromUrlOptions {
-  signal?: AbortSignal;
-}
-
-export async function importBookFromUrl(
-  url: string,
-  options: ImportBookFromUrlOptions = {},
-): Promise<Book> {
-  if (!url.startsWith("http://") && !url.startsWith("https://")) {
-    throw new Error("Invalid URL — must start with http:// or https://");
-  }
-
-  const { signal } = options;
-
-  let format = detectFormatFromUrl(url);
-  // DAT-012 (#124): track the advertised size from whichever response
-  // first reveals it (HEAD or the GET body). A `content-length` over
-  // the cap aborts the import BEFORE we materialise the body.
-  let advertisedSize: number | null = null;
-
-  if (!format) {
-    try {
-      const headRes = await fetch(url, { method: "HEAD", signal });
-      format = detectFormatFromContentType(headRes.headers.get("content-type"));
-      const headSize = parseContentLengthOrNull(
-        headRes.headers.get("content-length"),
-      );
-      if (headSize != null) {
-        if (headSize > URL_IMPORT_MAX_BYTES) {
-          throw new Error(
-            `File is too large to download (${formatBytesAsMB(headSize)}). Size limit is ${formatBytesAsMB(URL_IMPORT_MAX_BYTES)}.`,
-          );
-        }
-        advertisedSize = headSize;
-      }
-    } catch (err) {
-      // Re-throw size-limit rejections AND abort errors; swallow only
-      // the network / DNS / CORS failures we expected to be tolerant
-      // of here. AbortError must propagate so the caller can switch
-      // its UI back to idle.
-      if (
-        err instanceof Error &&
-        (err.name === "AbortError" || /too large/i.test(err.message))
-      ) {
-        throw err;
-      }
-      // HEAD failed, will try download anyway and check content-type there
-    }
-  }
-
-  const downloadRes = await fetch(url, signal ? { signal } : undefined);
-
-  if (!downloadRes.ok) {
-    throw new Error(mapHttpStatusToUserCopy(downloadRes.status));
-  }
-
-  // DAT-012 (#124): re-check size from the GET response itself; servers
-  // sometimes omit Content-Length on HEAD but include it on GET.
-  if (advertisedSize == null) {
-    const getSize = parseContentLengthOrNull(
-      downloadRes.headers.get("content-length"),
-    );
-    if (getSize != null && getSize > URL_IMPORT_MAX_BYTES) {
-      throw new Error(
-        `File is too large to download (${formatBytesAsMB(getSize)}). Size limit is ${formatBytesAsMB(URL_IMPORT_MAX_BYTES)}.`,
-      );
-    }
-  }
-
-  if (!format) {
-    format = detectFormatFromContentType(downloadRes.headers.get("content-type"));
-  }
-
-  if (!format) {
-    throw new Error(
-      "Unsupported format — only EPUB, PDF, MOBI, and DJVU are supported",
-    );
-  }
-
-  const arrayBuffer = await downloadRes.arrayBuffer();
-  const bytes = new Uint8Array(arrayBuffer);
-
-  ensureBooksDir();
-  // Stash the downloaded bytes in a tmp file inside the book dir so the
-  // shared service's FsPort can copy from a real URI.
-  const bookId = generateUUID();
-  const bookDir = new Directory(BOOKS_DIR, bookId);
-  bookDir.create({ intermediates: true, idempotent: true });
-  const tmpFile = new File(bookDir, `tmp.${format}`);
-  tmpFile.write(bytes);
-
-  const title = extractTitleFromUrl(url);
-  let result: ImportOutcome;
-  try {
-    result = await runImportWithService({
-      sourceUri: tmpFile.uri,
-      format,
-      title,
-    });
-  } catch (err) {
-    // DAT-011 (#123): unexpected throws from the shared service must
-    // not leave the tmp dir orphaned on disk.
-    safeDeleteDirectory(bookDir);
-    throw err;
-  }
-
-  // Clean up the tmp file; the service copied it to book.<format>.
-  try {
-    tmpFile.delete();
-  } catch {
-    /* best-effort */
-  }
-
-  if (!result.ok) {
-    // DAT-011 (#123) + DAT-002 (#115): on any failure (including
-    // duplicate detection), remove the per-book dir we just created so
-    // we don't leave an empty `books/<uuid>/` behind. The shared
-    // service's own copy step already drops `book.<format>` on success;
-    // we only need to clean up when nothing was committed.
-    safeDeleteDirectory(bookDir);
-    throw new Error(`Import failed at stage=${result.stage}: ${result.error}`);
-  }
-
-  // PR #207 review: even on success the URL scratch dir must be
-  // cleaned up. `bookDir` here was created against `urlScratchUuid`
-  // purely to host `tmp.<format>`; `runImportWithService` minted a
-  // DIFFERENT UUID for the actual book and the shared service's FsPort
-  // copied the file into `books/<realBookId>/book.<format>`. Leaving
-  // `books/<urlScratchUuid>/` behind on success leaks an empty
-  // directory whose name looks like a real book id and would confuse
-  // any future janitor walking `/books/`.
-  safeDeleteDirectory(bookDir);
-  return result.book;
-}
-
-/**
- * DAT-011 (#123): best-effort recursive delete of an import-time
- * scratch directory. Swallows errors because callers are always in an
- * error-handling branch — surfacing a cleanup failure on top of the
- * original error would only make the user-visible message noisier.
- */
-function safeDeleteDirectory(dir: Directory): void {
-  try {
-    if (dir.exists) {
-      dir.delete();
-    }
-  } catch {
-    /* best-effort */
-  }
 }
 
 // Re-export for callers that still rely on the legacy embedding helper.
