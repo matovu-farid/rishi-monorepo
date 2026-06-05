@@ -18,6 +18,10 @@ export interface PdfNativeReaderProps {
   onOutline?: (outline: OutlineNode[]) => void
   onScaleChanged?: (scale: number) => void
   onHighlightTap?: (id: string) => void
+  /** iOS-only: pass true (default) to enable native text selection in react-native-pdf */
+  enableTextSelection?: boolean
+  /** Called when the user selects text on iOS via react-native-pdf's onChange("textSelected|...") */
+  onTextSelected?: (text: string) => void
 }
 
 export function PdfNativeReader({
@@ -29,6 +33,8 @@ export function PdfNativeReader({
   onOutline,
   onScaleChanged,
   onHighlightTap,
+  enableTextSelection = true,
+  onTextSelected,
 }: PdfNativeReaderProps) {
   const [page, setPage] = useState(initialPage)
   const [scale, setScale] = useState(1)
@@ -57,6 +63,17 @@ export function PdfNativeReader({
     })
   }, [])
 
+  const handleNativeChange = useCallback(
+    (payload: string) => {
+      if (!payload || typeof payload !== 'string') return
+      if (payload.startsWith('textSelected|')) {
+        const text = payload.slice('textSelected|'.length)
+        onTextSelected?.(text)
+      }
+    },
+    [onTextSelected],
+  )
+
   return (
     <View style={styles.container} onLayout={handleLayout}>
       <Pdf
@@ -74,6 +91,8 @@ export function PdfNativeReader({
           onScaleChanged?.(s)
         }}
         onLoadComplete={handleLoadComplete}
+        enableTextSelection={enableTextSelection}
+        onChange={handleNativeChange}
         style={styles.pdf}
       />
       <HighlightOverlay

@@ -3,10 +3,14 @@ import TestRenderer from 'react-test-renderer'
 import { PdfNativeReader } from '@/components/pdf/PdfNativeReader'
 
 // react-native-pdf needs to be mocked because it's a native view.
+let triggerOnChange: ((payload: string) => void) | null = null
+
 jest.mock('react-native-pdf', () => {
   const React = require('react')
   const { View } = require('react-native')
   return function Pdf(props: any) {
+    // Expose onChange so tests can fire iOS-style events.
+    triggerOnChange = props.onChange ?? null
     React.useEffect(() => {
       props.onLoadComplete?.(3, props.source.uri, [612, 792], [
         { title: 'Chapter 1', pageIdx: 0 },
@@ -54,5 +58,18 @@ describe('PdfNativeReader', () => {
       { title: 'Chapter 1', pageIdx: 0 },
       { title: 'Chapter 2', pageIdx: 5 },
     ])
+  })
+
+  it('calls onTextSelected when iOS textSelected onChange fires', async () => {
+    const onTextSelected = jest.fn()
+    await act(async () => {
+      TestRenderer.create(
+        <PdfNativeReader bookId="b" filePath="/tmp/a.pdf" onTextSelected={onTextSelected} />,
+      )
+    })
+    act(() => {
+      triggerOnChange?.('textSelected|hello there')
+    })
+    expect(onTextSelected).toHaveBeenCalledWith('hello there')
   })
 })
