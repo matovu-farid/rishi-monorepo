@@ -1,7 +1,9 @@
 import React, { useCallback, useState } from 'react'
-import { LayoutChangeEvent, StyleSheet, View } from 'react-native'
+import { LayoutChangeEvent, Platform, StyleSheet, View } from 'react-native'
 import Pdf from 'react-native-pdf'
 import { HighlightOverlay, type HighlightShape } from './HighlightOverlay'
+import { AndroidSelectionOverlay } from './AndroidSelectionOverlay'
+import type { WordRow } from '@/lib/pdf/word-hit-test'
 
 export interface OutlineNode {
   title: string
@@ -22,6 +24,8 @@ export interface PdfNativeReaderProps {
   enableTextSelection?: boolean
   /** Called when the user selects text on iOS via react-native-pdf's onChange("textSelected|...") */
   onTextSelected?: (text: string) => void
+  /** Android-only: word rects for the current page, used by the gesture selection overlay */
+  words?: WordRow[]
 }
 
 export function PdfNativeReader({
@@ -35,6 +39,7 @@ export function PdfNativeReader({
   onHighlightTap,
   enableTextSelection = true,
   onTextSelected,
+  words,
 }: PdfNativeReaderProps) {
   const [page, setPage] = useState(initialPage)
   const [scale, setScale] = useState(1)
@@ -102,6 +107,14 @@ export function PdfNativeReader({
         highlights={highlights}
         onHighlightTap={onHighlightTap}
       />
+      {Platform.OS === 'android' && words && words.length > 0 && (
+        <AndroidSelectionOverlay
+          pageSize={pageSize}
+          viewport={{ widthPx: viewport.widthPx, heightPx: viewport.heightPx, scale }}
+          words={words}
+          onTextSelected={(text) => onTextSelected?.(text)}
+        />
+      )}
     </View>
   )
 }
