@@ -194,6 +194,8 @@ interface MigrationDb {
   // eslint-disable-next-line @typescript-eslint/method-signature-style
   execSync(sql: string): void
   // eslint-disable-next-line @typescript-eslint/method-signature-style
+  getAllSync<T = unknown>(sql: string): T[]
+  // eslint-disable-next-line @typescript-eslint/method-signature-style
   getFirstSync<T = unknown>(sql: string): T | undefined
 }
 
@@ -282,9 +284,7 @@ export const migrations: Migration[] = [
       // Status columns on `books`. Each ALTER is gated on PRAGMA so a re-run
       // doesn't throw (this mirrors the bootstrap pattern above).
       const existing = new Set(
-        (database as unknown as {
-          getAllSync<T>(sql: string): T[]
-        })
+        database
           .getAllSync<{ name: string }>('PRAGMA table_info(books)')
           .map((r) => r.name),
       )
