@@ -99,12 +99,68 @@ public enum PdfExtractor {
 
     let paragraphs = ParagraphSegmenter.segment(lines, pageNumber: pageNumber)
 
+    let words = PdfExtractor.groupCharsIntoWords(page: page)
     return PageData(
       pageNumber: pageNumber,
       widthPts: Double(bounds.width),
       heightPts: Double(bounds.height),
       paragraphs: paragraphs,
-      words: []
+      words: words
     )
+  }
+
+  private static func groupCharsIntoWords(page: PDFPage) -> [WordRect] {
+    let charCount = page.numberOfCharacters
+    let pageString = page.string ?? ""
+    let scalars = Array(pageString.unicodeScalars)
+    let count = min(charCount, scalars.count)
+
+    var words: [WordRect] = []
+    var currentChars: [(scalar: Unicode.Scalar, rect: CGRect)] = []
+    var wordIdx = 0
+
+    func flush() {
+      guard !currentChars.isEmpty else { return }
+      var text = ""
+      for entry in currentChars { text.unicodeScalars.append(entry.scalar) }
+      let minX = currentChars.map { Double($0.rect.minX) }.min() ?? 0
+      let minY = currentChars.map { Double($0.rect.minY) }.min() ?? 0
+      let maxX = currentChars.map { Double($0.rect.maxX) }.max() ?? 0
+      let maxY = currentChars.map { Double($0.rect.maxY) }.max() ?? 0
+      words.append(WordRect(
+        idx: wordIdx,
+        text: text,
+        x: minX,
+        y: minY,
+        w: maxX - minX,
+        h: maxY - minY
+      ))
+      wordIdx += 1
+      currentChars.removeAll()
+    }
+
+    for i in 0..<count {
+      let scalar = scalars[i]
+      // Skip CR/LF and other line separators — they act as word breaks.
+      if scalar.value == 0x000A || scalar.value == 0x000D {
+        flush()
+        continue
+      }
+      let rect = page.characterBounds(at: i)
+      // Treat zero-size rects as non-glyph (invisible) and break the word.
+      guard rect.width > 0 || rect.height > 0 else {
+        flush()
+        continue
+      }
+      // CharacterSet.whitespaces covers space, tab, NBSP, etc.
+      let isWhitespace = CharacterSet.whitespaces.contains(scalar)
+      if isWhitespace {
+        flush()
+      } else {
+        currentChars.append((scalar, rect))
+      }
+    }
+    flush()
+    return words
   }
 }

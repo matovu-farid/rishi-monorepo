@@ -19,7 +19,13 @@ public class RishiPdfExtractorModule: Module {
         "widthPts": data.widthPts,
         "heightPts": data.heightPts,
         "paragraphs": data.paragraphs.map { ["index": $0.index, "text": $0.text] },
-        "words": [] as [[String: Any]],
+        "words": data.words.map {
+          [
+            "idx": $0.idx,
+            "text": $0.text,
+            "x": $0.x, "y": $0.y, "w": $0.w, "h": $0.h,
+          ]
+        },
       ]
     }
   }
