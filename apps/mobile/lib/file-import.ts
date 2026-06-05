@@ -27,6 +27,7 @@ import { shouldSkipIndexing } from "@/lib/file-import-index-gate";
 import { db } from "@/lib/db";
 import { books } from "@rishi/shared/schema";
 import { hashBookFile } from "@/lib/sync/file-sync";
+import { enqueueExtraction } from "@/lib/pdf/extraction-runner";
 
 const BOOKS_DIR = new Directory(Paths.document, "books");
 
@@ -364,6 +365,19 @@ async function runImportWithService(opts: {
   // synchronously for these formats, so this is a defensive fallback.
   if (unsupportedFormat) {
     coverDeferred.resolve({ status: "unsupported", format: opts.format });
+  }
+
+  // Path E: fire-and-forget background text extraction for PDFs. The
+  // runner emits progress to extractionEvents; the reader subscribes.
+  // Errors are swallowed here because the runner records them on the
+  // books row itself.
+  if (opts.format === "pdf") {
+    enqueueExtraction({
+      bookId,
+      filePath: bookPath,
+    }).catch((err) => {
+      console.error("[file-import] extraction enqueue failed", err);
+    });
   }
 
   // Local Book shape — derive from what the service inserted.
