@@ -101,6 +101,26 @@ describe('schema migration v1 — PDF text cache', () => {
     ).toThrow(/UNIQUE|PRIMARY/)
   })
 
+  it('book_paragraphs PK is (book_id, page_number, paragraph_index)', () => {
+    const db = freshDb()
+    runMigrations(db, 1, migrations)
+    db.execSync(
+      `INSERT INTO book_paragraphs (book_id, page_number, paragraph_index, text) VALUES ('b', 1, '0', 'a')`,
+    )
+    // Same paragraph_index on a different page is allowed (PK includes page_number now).
+    expect(() =>
+      db.execSync(
+        `INSERT INTO book_paragraphs (book_id, page_number, paragraph_index, text) VALUES ('b', 2, '0', 'b')`,
+      ),
+    ).not.toThrow()
+    // Same (book_id, page_number, paragraph_index) collides.
+    expect(() =>
+      db.execSync(
+        `INSERT INTO book_paragraphs (book_id, page_number, paragraph_index, text) VALUES ('b', 1, '0', 'c')`,
+      ),
+    ).toThrow(/UNIQUE|PRIMARY/)
+  })
+
   it('migration is idempotent — running twice does not throw', () => {
     const db = freshDb()
     runMigrations(db, 1, migrations)

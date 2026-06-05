@@ -337,7 +337,7 @@ export const migrations: Migration[] = [
           page_number     INTEGER NOT NULL,
           paragraph_index TEXT NOT NULL,
           text            TEXT NOT NULL,
-          PRIMARY KEY (book_id, paragraph_index)
+          PRIMARY KEY (book_id, page_number, paragraph_index)
         )
       `)
       database.execSync(

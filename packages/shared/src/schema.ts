@@ -166,7 +166,7 @@ export const bookParagraphs = sqliteTable(
     text: text('text').notNull(),
   },
   (table) => ({
-    pk: primaryKey({ columns: [table.bookId, table.paragraphIndex] }),
+    pk: primaryKey({ columns: [table.bookId, table.pageNumber, table.paragraphIndex] }),
   }),
 )
 
