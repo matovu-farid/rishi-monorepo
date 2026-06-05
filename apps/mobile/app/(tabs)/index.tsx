@@ -7,7 +7,9 @@ import {
   TextInput,
   Pressable,
   StyleSheet,
+  Button,
 } from 'react-native'
+import * as Sentry from '@sentry/react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { Directory, Paths } from 'expo-file-system'
@@ -389,6 +391,13 @@ export default function LibraryScreen() {
             clearButtonMode="while-editing"
           />
         </View>
+        {/* TEMP: Sentry setup verification — remove once an event is confirmed in the dashboard */}
+        <Button
+          title="Sentry test"
+          onPress={() => {
+            Sentry.captureException(new Error('First error'))
+          }}
+        />
       </View>
       {lastReadBook && (
         <Pressable
