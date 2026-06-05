@@ -9,29 +9,29 @@
 
 Land a single PR against `apps/mobile` that removes the padlock UI on
 gated buttons, ships the existing 2-column library grid spec end-to-end
-(including PDF cover extraction), applies the pdfjs DPR fix so PDF
-content stops looking blurry, and adds Maestro coverage that exercises
-both EPUB and PDF import + reader navigation with screenshots.
+(including PDF cover extraction), and adds Maestro coverage that
+exercises both EPUB and PDF import + reader navigation with screenshots.
 
-The horizontal-swipe interaction + architectural overhaul of the PDF
-reader (native rendering, native text extraction, SQLite-backed text
-cache) is scoped into a follow-up spec — see "Follow-up: Path E" below.
+The entire PDF reader (rendering, text extraction, highlights, TTS) is
+being replaced in a follow-up effort — see "Follow-up: Path E" below.
+Therefore this PR makes **no changes to the PDF reader internals**,
+including the DPR/blur fix. That fix would be throwaway work; the same
+result lands free with Path E's native renderer.
 
 ## Non-goals
 
-- Replacing the PDF rendering architecture in this PR. The renderer
-  rewrite (`react-native-pdf` + native text extraction TurboModule +
-  SQLite cache) is the right end state but is 1-2 weeks of work across
-  several PRs. Tracked separately as **Path E** (see end of doc).
-- Changing the reader interaction model in this PR. The vertical-scroll
-  WebView stays. Horizontal swipe lands with Path E.
-- Adding pinch-zoom inside a PDF page. Separate spec.
+- Touching the PDF reader at all. No DPR fix, no swipe interaction, no
+  WebView changes. PDFs continue to look how they look today; Path E
+  fixes it natively.
+- Adding pinch-zoom inside a PDF page. Path E gets it free via
+  PDFKit/Pdfium.
 - File-picker / share-sheet Maestro flows. URL-import only — fast and
   deterministic.
 
 ## Background
 
-Four user-facing requests motivate the work:
+Three user-facing requests motivate this PR. (The fourth — PDF
+crispness — folds into Path E.)
 
 1. **Padlock icons are visual noise.** Buttons gated behind sign-in show
    a tiny grey lock chip via `components/auth/LockChip.tsx`. The
@@ -41,12 +41,7 @@ Four user-facing requests motivate the work:
    `FlatList` of horizontal `BookRow` cards (small cover + title +
    author + trash icon). A 2-column grid of covers is more book-shelf
    shaped.
-3. **PDFs look blurry.** Confirmed root cause in
-   `components/pdf/webview-template.ts` lines 244-247: the pdfjs canvas
-   backing store is sized in CSS pixels (no `devicePixelRatio`
-   multiplier) and then CSS-stretched to 100% width. On a DPR-3 iPhone
-   that's a 3× upscale of a 1× bitmap.
-4. **Maestro coverage for import + reader is thin on assertions.** The
+3. **Maestro coverage for import + reader is thin on assertions.** The
    existing `07-epub-reader.yaml` / `08-pdf-reader.yaml` flows import via
    URL but don't capture screenshots or assert reader content
    visibility.
@@ -58,14 +53,13 @@ wholesale.
 
 ## Architecture overview
 
-Four work streams, all on one branch:
+Three work streams, all on one branch:
 
 | # | Stream | Risk | Native dep change |
 | - | - | - | - |
 | 1 | Padlock removal | low | none |
 | 2 | 2-col grid + PDF covers | medium | `react-native-pdf-thumbnail` → rebuild dev client |
-| 3 | PDF crispness — Path A DPR fix only | low | none |
-| 4 | Maestro import + screenshots | low | none |
+| 3 | Maestro import + screenshots | low | none |
 
 A `team-reviewer` pass runs across the full diff at the end. All work is
 TDD per repo convention — failing tests first in every stream.
@@ -124,64 +118,7 @@ halves bundled per user choice).
   grid layout.
 - Cover-extraction test for PDF using a fixture PDF.
 
-## Stream 3 — PDF crispness (Path A DPR fix)
-
-### Scope
-
-Smallest possible fix that makes PDFs stop looking blurry. No
-interaction-model change, no architecture change. The reader keeps its
-current vertical-scroll WebView layout. Reader rewrite is Path E.
-
-### Root cause (verified)
-
-`components/pdf/webview-template.ts` lines 244-247 set the pdfjs canvas
-backing store in CSS pixels with no `devicePixelRatio` multiplier, then
-CSS-stretches it to 100% width (line 40: `.page-canvas { width: 100%;
-height: auto }`). On a DPR-3 iPhone the displayed bitmap is a 3× upscale
-of a 1× render.
-
-### Changes (`components/pdf/webview-template.ts`)
-
-Apply the canonical pdfjs HiDPI pattern:
-
-```js
-const outputScale = window.devicePixelRatio || 1;
-canvas.width  = Math.floor(viewport.width  * outputScale);
-canvas.height = Math.floor(viewport.height * outputScale);
-canvas.style.width  = Math.floor(viewport.width)  + 'px';
-canvas.style.height = Math.floor(viewport.height) + 'px';
-const transform =
-  outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
-page.render({ canvasContext: ctx, transform, viewport });
-```
-
-Replace `.page-canvas { width: 100%; height: auto }` with explicit px
-sizing on the canvas element so CSS no longer stretches the bitmap.
-
-Keep everything else — `IntersectionObserver` lazy-render, paragraph
-extraction, text-layer, highlights, TOC, TTS pipeline — untouched.
-
-### Memory note
-
-DPR-multiplied canvases use more memory (DPR 3 → 9× the backing-store
-bytes). The existing `IntersectionObserver` lazy-render already evicts
-off-viewport pages. Verify on a 500-page PDF on a low-RAM Android device
-during QA; if memory pressure is a problem, add explicit canvas
-backing-store free on off-screen.
-
-### Tests
-- Visual A/B via Maestro screenshot of a known PDF body-text page (e.g.
-  *Crime and Punishment*) on iOS sim DPR 3, compared to a baseline
-  capture before the change. Reviewer should see edge sharpness improve.
-- Existing reader unit tests must continue passing — no behavior
-  changes, only render fidelity.
-
-### Risks
-- **Memory on low-end Android.** Mitigated by existing lazy-render +
-  explicit eviction if needed.
-- **None to features** — text selection, highlights, TOC, TTS untouched.
-
-## Stream 4 — Maestro import + screenshots
+## Stream 3 — Maestro import + screenshots
 
 ### Changes
 - Extend `.maestro/07-epub-reader.yaml`:
@@ -198,9 +135,9 @@ backing-store free on off-screen.
   visible), taps a cover, confirms reader opens.
 - Register the new flow in `.maestro/config.yaml`.
 
-Note: navigation inside the PDF reader stays vertical-scroll in this PR.
-Maestro asserts content visibility via scroll, not horizontal swipe.
-Swipe-based assertions land with Path E.
+Note: the PDF reader is untouched in this PR. Maestro asserts content
+visibility via the existing scroll behavior. Whatever the PR looks like
+visually for PDFs is the status quo; Path E rebuilds it.
 
 ### Out of scope
 - Native file-picker / share-sheet import (Maestro can't drive picker
@@ -214,13 +151,11 @@ After this spec lands and the implementation plan is written:
   and mechanical.
 - **Grid + covers** → `team-architect` → `team-tester` → `team-coder`.
   Cover-extraction pipeline touches the data layer.
-- **PDF DPR fix** → `team-coder` directly. ~30 lines + a screenshot
-  assertion; doesn't need architect involvement.
 - **Maestro** → runs *after* Stream 2 lands on the branch (needs the
   grid + covers to assert on).
 - **End** → `team-reviewer` over the full diff.
 
-Streams 1, 2, and 3 are independent and can run in parallel. Stream 4
+Streams 1 and 2 are independent and can run in parallel. Stream 3
 blocks on Stream 2.
 
 ## TDD discipline
@@ -258,9 +193,9 @@ Estimated 1-2 weeks, 3-4 sequenced PRs:
    search to read from SQLite.
 4. Delete pdfjs WebView, `webview-template.ts`, `pdf-webview-bridge.ts`.
 
-Throwaway from this PR when Path E lands: the DPR-fix lines in
-`webview-template.ts`. Acceptable — they ship reader quality for the
-1-2 weeks Path E takes to land.
+No throwaway code from this PR when Path E lands — the padlock removal,
+grid, and Maestro flows all continue to apply. The PDF reader is the
+only piece Path E touches, and this PR doesn't touch it.
 
 ## Open items / follow-ups
 
