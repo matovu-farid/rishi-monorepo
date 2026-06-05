@@ -107,12 +107,13 @@ describe('CG16 — PdfWebReader routes highlightTapped to onHighlightTapped', ()
   })
 })
 
-// ── Reader-screen handler wiring ────────────────────────────────────────────
+// ── Reader-screen handler wiring (PdfNativeReader) ─────────────────────────
 //
-// `app/reader/pdf/[id].tsx` registers `handleHighlightTapped` against
-// the PdfWebReader's `onHighlightTapped` prop. The handler looks the
-// tapped highlight up in local state and opens the recolor/delete
-// picker via `setPickerHighlight` + `setPickerAnchor`.
+// After the Task-15 route swap, `app/reader/pdf/[id].tsx` uses PdfNativeReader.
+// PdfNativeReader exposes `onHighlightTap?: (id: string) => void` (no anchor).
+// The route forwards the id to `handleHighlightTapped(id, { x: 0, y: 0 })`.
+// The handler looks the tapped highlight up in local state and opens the
+// recolor/delete picker via `setPickerHighlight` + `setPickerAnchor`.
 describe('CG16 — PDF reader screen opens the picker on highlight tap', () => {
   const SRC_PATH = join(
     __dirname,
@@ -125,8 +126,11 @@ describe('CG16 — PDF reader screen opens the picker on highlight tap', () => {
   )
   const src = readFileSync(SRC_PATH, 'utf-8')
 
-  it('wires onHighlightTapped={handleHighlightTapped} on the PdfWebReader', () => {
-    expect(src).toMatch(/onHighlightTapped=\{handleHighlightTapped\}/)
+  it('wires onHighlightTap on the PdfNativeReader and calls handleHighlightTapped', () => {
+    // The route now uses PdfNativeReader.onHighlightTap and delegates to
+    // handleHighlightTapped with a zero-origin anchor.
+    expect(src).toMatch(/onHighlightTap=\{/)
+    expect(src).toMatch(/handleHighlightTapped\(id,/)
   })
 
   it('defines handleHighlightTapped with (highlightId, anchor) and looks up by id', () => {

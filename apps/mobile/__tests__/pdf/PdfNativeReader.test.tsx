@@ -29,7 +29,21 @@ jest.mock('react-native', () => {
     )
   return {
     View: mk('View'),
-    StyleSheet: { create: (s: Record<string, unknown>) => s },
+    StyleSheet: { absoluteFill: {}, create: (s: Record<string, unknown>) => s },
+    Platform: { OS: 'ios' },
+    LayoutChangeEvent: {},
+  }
+})
+
+jest.mock('react-native-gesture-handler', () => {
+  const React = require('react')
+  const mk = (name: string) =>
+    ({ children, onHandlerStateChange, onGestureEvent, onEnded, ...rest }: any) =>
+      React.createElement(name, rest, children)
+  return {
+    LongPressGestureHandler: mk('LongPressGestureHandler'),
+    PanGestureHandler: mk('PanGestureHandler'),
+    State: { ACTIVE: 4 },
   }
 })
 

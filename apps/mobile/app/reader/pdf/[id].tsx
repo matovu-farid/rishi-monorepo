@@ -31,11 +31,17 @@ import * as Haptics from 'expo-haptics'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 
 import { IconSymbol } from '@/components/ui/icon-symbol'
-import { PdfWebReader, type PdfWebReaderHandle } from '@/components/pdf/PdfWebReader'
+import { PdfNativeReader, type OutlineNode } from '@/components/pdf/PdfNativeReader'
 import {
   flattenOutline,
   type PdfOutlineItem,
 } from '@/components/pdf/pdf-webview-bridge'
+import { toHighlightShape } from '@/lib/pdf/highlight-mapper'
+import { paragraphsForPage } from '@/lib/pdf/paragraphs-from-db'
+import { extractionEvents } from '@/lib/pdf/extraction-events'
+import type { WordRow } from '@/lib/pdf/word-hit-test'
+import type { HighlightShape } from '@/components/pdf/HighlightOverlay'
+import { rawDb } from '@/lib/db'
 import { usePdfStore, BookNavigationState } from '@/lib/stores/pdfStore'
 import {
   getBookForReading,
@@ -107,12 +113,19 @@ export default function PdfReaderScreen() {
   }>()
   const router = useRouter()
 
-  const readerRef = useRef<PdfWebReaderHandle>(null)
+  // targetPage drives controlled navigation in PdfNativeReader.
+  // We set it whenever we need to programmatically go to a page; the
+  // component syncs its internal page state when this changes.
+  const [targetPage, setTargetPage] = useState<number | undefined>(undefined)
+
   // T-P2.5 (CONTEXT-001) — latest rendered prose for the visible page,
-  // hydrated from `readerRef.current.getPageText(pageNumber)` whenever
-  // the page changes. Consumed by `getActivationContext` so voice-chat
-  // sees real page prose instead of "Page N of M".
+  // hydrated from paragraphsForPage() whenever the page changes.
+  // Consumed by `getActivationContext` so voice-chat sees real page
+  // prose instead of "Page N of M".
   const latestPdfPageText = useRef<string | null>(null)
+
+  // Android selection overlay: words for the current page from SQLite.
+  const [words, setWords] = useState<WordRow[]>([])
   const [book, setBook] = useState<Book | null>(null)
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
@@ -205,6 +218,46 @@ export default function PdfReaderScreen() {
   // would inherit the previous book's state).
   useEffect(() => () => resetParagraphState(), [resetParagraphState])
 
+  // ---- Words for Android selection overlay ----
+  const loadWordsForPage = useCallback(
+    (p: number) => {
+      if (!book?.id) return
+      const safeInt = (n: number): number => (Number.isInteger(n) ? n : 0)
+      const escapeSql = (v: string) => v.replace(/'/g, "''")
+      const rows = rawDb.getAllSync<WordRow>(
+        `SELECT idx, text, x, y, w, h FROM book_words
+           WHERE book_id='${escapeSql(book.id)}' AND page_number=${safeInt(p)}
+           ORDER BY idx`,
+      )
+      setWords(rows)
+    },
+    [book?.id],
+  )
+
+  useEffect(() => {
+    if (pageNumber > 0) loadWordsForPage(pageNumber)
+  }, [pageNumber, loadWordsForPage])
+
+  // Refresh words when extraction completes for the visible page.
+  useEffect(() => {
+    const off = extractionEvents.on('progress', (e) => {
+      if (!book?.id || e.bookId !== book.id) return
+      if (e.status === 'extracted' || e.extractedPages >= pageNumber) {
+        loadWordsForPage(pageNumber)
+      }
+    })
+    return off
+  }, [book?.id, pageNumber, loadWordsForPage])
+
+  // ---- overlayHighlights: map PdfHighlight[] → HighlightShape[] ----
+  const overlayHighlights = useMemo<HighlightShape[]>(
+    () =>
+      highlights
+        .map(toHighlightShape)
+        .filter((h): h is HighlightShape => h !== null),
+    [highlights],
+  )
+
   // ---- Load book ----
   useEffect(() => {
     if (!id) return
@@ -247,53 +300,52 @@ export default function PdfReaderScreen() {
     return () => sub.remove()
   }, [book?.id, pageNumber, pageCount])
 
-  // ---- WebView events ----
-  const handleLoad = useCallback(
-    (info: { numPages: number; outline: PdfOutlineItem[] }) => {
-      setPageCount(info.numPages)
-      setOutlineStore(info.outline)
-      // Apply any previously-saved highlights as overlays.
-      if (highlights.length > 0) {
-        readerRef.current?.setHighlights(
-          highlights.map((h) => ({ id: h.id, color: h.color, locator: h.locator }))
-        )
-      }
-      // Restore reading position.
-      //
-      // #68 — when the user arrives from a chat citation tap, `pageParam`
-      // is the chunk's page number. Honor it ahead of the saved
-      // `book.currentPage` so the reader scrolls to the cited passage
-      // on mount. The next page-change persists the new position via
-      // `handlePageChange` below, so the override doesn't re-fire on
-      // subsequent navigations within the book.
+  // ---- PdfNativeReader callbacks ----
+
+  // Called by PdfNativeReader when the document loads and the outline is ready.
+  // Replaces the old handleLoad/PdfWebReader onLoad path.
+  const handleNativeOutline = useCallback(
+    (outlineNodes: OutlineNode[]) => {
+      // PdfNativeReader's outline uses OutlineNode (pageIdx). Convert to
+      // PdfOutlineItem (pageNumber) for the existing outline consumer.
+      const convert = (nodes: OutlineNode[]): PdfOutlineItem[] =>
+        nodes.map((n) => ({
+          title: n.title,
+          pageNumber: n.pageIdx,
+          children: n.children ? convert(n.children) : undefined,
+        }))
+      setOutlineStore(convert(outlineNodes))
+      setBookNavigationState(BookNavigationState.Idle)
+
+      // #68 — honor citation-tap deep-links over saved position.
       const fromCitation = pageParam ? Number.parseInt(pageParam, 10) : NaN
       const initial =
         Number.isFinite(fromCitation) && fromCitation >= 1
           ? fromCitation
           : book?.currentPage ?? 1
-      if (initial > 1) readerRef.current?.goToPage(initial)
-      setBookNavigationState(BookNavigationState.Idle)
+      if (initial > 1) setTargetPage(initial)
     },
-    [book?.currentPage, pageParam, highlights, setPageCount, setOutlineStore, setBookNavigationState]
+    [book?.currentPage, pageParam, setOutlineStore, setBookNavigationState],
   )
 
   const handlePageChange = useCallback(
-    (page: number) => {
+    (page: number, total: number) => {
       setScrollPageNumber(page)
+      if (total > 0) setPageCount(total)
       // Persist with a soft debounce — we save on background change too, so
       // this just makes scrolling-then-killing-the-app safe.
       if (book?.id) {
         updateBookPage(book.id, page)
         // #41 — Persist progress so the library pill subline can show
-        // "Page X of Y". `pageCount` is set in `handleLoad` from
-        // `pdfjs.numPages` before the first user-driven page change,
-        // but we guard for the cold-start race anyway.
-        if (pageCount > 0) {
+        // "Page X of Y".
+        if (total > 0) {
+          updateBookProgress(book.id, page / total)
+        } else if (pageCount > 0) {
           updateBookProgress(book.id, page / pageCount)
         }
       }
     },
-    [book?.id, pageCount, setScrollPageNumber]
+    [book?.id, pageCount, setScrollPageNumber, setPageCount],
   )
 
   const handleSelection = useCallback(
@@ -301,6 +353,27 @@ export default function PdfReaderScreen() {
       setSelection(sel)
     },
     []
+  )
+
+  // Called by PdfNativeReader when text is selected (iOS native or
+  // Android gesture overlay). Creates a minimal ActiveSelection so the
+  // existing selection action bar (highlight, read-aloud) keeps working.
+  const handleTextSelected = useCallback(
+    (text: string) => {
+      if (!text.trim()) {
+        setSelection(null)
+        return
+      }
+      setSelection({
+        pageNumber: pageNumber || 1,
+        text,
+        // PdfNativeReader doesn't provide a locator / anchor; use
+        // sensible defaults so the highlight-add path doesn't crash.
+        locator: { page: pageNumber || 1, rects: [] },
+        anchor: { x: 0, y: 0 },
+      })
+    },
+    [pageNumber],
   )
 
   const handleSelectionCleared = useCallback(() => {
@@ -327,7 +400,7 @@ export default function PdfReaderScreen() {
           const page = Number.parseInt(text ?? '', 10)
           if (Number.isFinite(page) && page >= 1 && page <= pageCount) {
             setPageNumberStore(page)
-            readerRef.current?.goToPage(page)
+            setTargetPage(page)
           }
         },
         'plain-text',
@@ -342,7 +415,7 @@ export default function PdfReaderScreen() {
   const handleGotoFromModal = useCallback(
     (page: number) => {
       setPageNumberStore(page)
-      readerRef.current?.goToPage(page)
+      setTargetPage(page)
     },
     [setPageNumberStore],
   )
@@ -350,7 +423,7 @@ export default function PdfReaderScreen() {
   const handleSelectThumbnailPage = useCallback(
     (page: number) => {
       setPageNumberStore(page)
-      readerRef.current?.goToPage(page)
+      setTargetPage(page)
     },
     [setPageNumberStore],
   )
@@ -363,9 +436,9 @@ export default function PdfReaderScreen() {
       if (page == null) return
       setOutlineVisible(false)
       setPageNumberStore(page)
-      readerRef.current?.goToPage(page)
+      setTargetPage(page)
     },
-    [setPageNumberStore]
+    [setPageNumberStore],
   )
 
   const handleAddHighlight = useCallback(
@@ -377,42 +450,42 @@ export default function PdfReaderScreen() {
         text: selection.text,
         color,
       })
+      // overlayHighlights is derived from `highlights` via useMemo, so
+      // the HighlightOverlay re-renders automatically when we update state.
       setHighlights((prev) => [inserted, ...prev])
-      readerRef.current?.highlightSelection(inserted.id, color)
       setSelection(null)
     },
-    [book, selection]
+    [book, selection],
   )
 
   const handleChangeHighlightColor = useCallback(
     (color: HighlightColor) => {
       if (!pickerHighlight) return
       updateHighlight(pickerHighlight.id, { color })
+      // State update drives overlayHighlights via useMemo.
       setHighlights((prev) =>
         prev.map((h) => (h.id === pickerHighlight.id ? { ...h, color } : h))
       )
-      readerRef.current?.addHighlight(pickerHighlight.id, color, pickerHighlight.locator)
       setPickerHighlight(null)
       setPickerAnchor(null)
     },
-    [pickerHighlight]
+    [pickerHighlight],
   )
 
   const handleDeleteHighlight = useCallback(() => {
     if (!pickerHighlight) return
     const deleted = pickerHighlight
     deleteHighlight(deleted.id)
+    // State update drives overlayHighlights via useMemo.
     setHighlights((prev) => prev.filter((h) => h.id !== deleted.id))
-    readerRef.current?.removeHighlight(deleted.id)
     setPickerHighlight(null)
     setPickerAnchor(null)
 
-    // G10 — surface undo snackbar. restoreHighlight flips isDeleted
-    // back; the WebView then re-paints the overlay via addHighlight.
+    // G10 — surface undo snackbar. restoreHighlight flips isDeleted back;
+    // the overlay re-renders automatically from updated `highlights` state.
     undoSnackbar.show('Highlight deleted', 'Undo', () => {
       restoreHighlight(deleted.id)
       setHighlights((prev) => [deleted, ...prev])
-      readerRef.current?.addHighlight(deleted.id, deleted.color, deleted.locator)
     })
   }, [pickerHighlight, undoSnackbar])
 
@@ -479,22 +552,21 @@ export default function PdfReaderScreen() {
     })
   }, [book, ttsActive, requireTTS, undoSnackbar])
 
-  // Read-from-selection (G17). Batch 7 wires this fully to the player
-  // machine via playerStore.send PLAY_FROM:
-  //   1. Fetch the selected page paragraphs from the WebView.
+  // Read-from-selection (G17) via PdfNativeReader.
+  //   1. Fetch current-page paragraphs synchronously from SQLite
+  //      (paragraphsForPage replaces PdfWebReader.getPageText).
   //   2. Seed playerStore.currentParagraphs so the machine has the
   //      list to step through.
   //   3. Compute the PLAY_FROM payload via the shared resolver.
   //   4. Dispatch into playerStore.send. The mounted usePlayerMachine
-  //      actor receives the event and fetches audio via the new TTS
-  //      service.
+  //      actor receives the event and fetches audio via the TTS service.
   const handleReadFromSelection = useCallback(() => {
-    if (!selection) return
-    requireTTS(async () => {
+    if (!selection || !book) return
+    requireTTS(() => {
       try {
-        const paragraphs = await readerRef.current?.getPageText(selection.pageNumber)
-        if (!paragraphs) {
-          // STA-024 — getPageText returned nothing for the selected page;
+        const paragraphs = paragraphsForPage(book.id, selection.pageNumber)
+        if (!paragraphs || paragraphs.length === 0) {
+          // STA-024 — no extracted paragraphs for the selected page;
           // surface a toast + a11y announcement instead of silent return.
           AccessibilityInfo.announceForAccessibility('No text available on this page')
           undoSnackbar.show('No text available on this page', 'Dismiss', () => undefined)
@@ -503,7 +575,7 @@ export default function PdfReaderScreen() {
         const playFrom = resolvePlayFromSelection(selection.text, paragraphs)
         if (!playFrom) {
           // STA-024 — keep the toast (non-blocking, parity with MOBI/DJVU)
-          // and announce for VoiceOver. Drops the blocking Alert.
+          // and announce for VoiceOver.
           AccessibilityInfo.announceForAccessibility('Could not find the selected text')
           undoSnackbar.show(
             'Could not find selected text on this page.',
@@ -513,9 +585,7 @@ export default function PdfReaderScreen() {
           return
         }
 
-        // Seed the page's paragraphs as the player's current list. The shape
-        // { index, text } matches ParagraphWithIndex (Batch 5 already emits
-        // this shape from getPageText).
+        // Seed the page's paragraphs as the player's current list.
         usePlayerStore.setState({ currentParagraphs: paragraphs })
 
         const send = usePlayerStore.getState().send
@@ -540,21 +610,20 @@ export default function PdfReaderScreen() {
         undoSnackbar.show('Could not read selection', 'Dismiss', () => undefined)
       }
     })
-  }, [selection, requireTTS, undoSnackbar])
+  }, [selection, book, requireTTS, undoSnackbar])
 
-  // Reconciler: when the active paragraph changes, scroll the WebView to
-  // its page. Mobile PDF doesn't yet have a per-paragraph overlay highlight
-  // bridge command; the page-level follow is enough to keep the user
-  // visually anchored.
+  // Reconciler: when the active paragraph changes, navigate PdfNativeReader
+  // to its page. Mobile PDF doesn't yet have a per-paragraph overlay
+  // highlight; page-level follow is enough to keep the user visually anchored.
   useEffect(() => {
     if (!activeParagraph) return
-    // Active paragraph ids from getPageText follow the pattern
-    // pdf-{page}-{paragraphIndex} (see PdfWebReader webview-template).
-    const match = /^pdf-(\d+)-/.exec(activeParagraph.index)
+    // Active paragraph indices from paragraphsForPage follow the pattern
+    // "<page>-<paragraphIndex>" (see paragraphs-from-db.ts / extraction).
+    const match = /^(\d+)-/.exec(activeParagraph.index)
     if (!match) return
     const page = Number.parseInt(match[1], 10)
     if (Number.isFinite(page) && page > 0 && page !== pageNumber) {
-      readerRef.current?.goToPage(page)
+      setTargetPage(page)
     }
   }, [activeParagraph, pageNumber])
 
@@ -598,7 +667,7 @@ export default function PdfReaderScreen() {
       const page = loc?.page ?? Number.parseInt(location, 10)
       if (Number.isFinite(page) && page >= 1) {
         setPageNumberStore(page)
-        readerRef.current?.goToPage(page)
+        setTargetPage(page)
       }
     },
     [setPageNumberStore],
@@ -610,7 +679,7 @@ export default function PdfReaderScreen() {
       const loc = decodePdfCfiRange(cfiRange)
       if (loc?.page) {
         setPageNumberStore(loc.page)
-        readerRef.current?.goToPage(loc.page)
+        setTargetPage(loc.page)
       }
     },
     [setPageNumberStore],
@@ -621,12 +690,11 @@ export default function PdfReaderScreen() {
       const target = highlights.find((h) => h.id === id)
       if (!target) return
       deleteHighlight(id)
+      // State update drives overlayHighlights via useMemo.
       setHighlights((prev) => prev.filter((h) => h.id !== id))
-      readerRef.current?.removeHighlight(id)
       undoSnackbar.show('Highlight deleted', 'Undo', () => {
         restoreHighlight(id)
         setHighlights((prev) => [target, ...prev])
-        readerRef.current?.addHighlight(target.id, target.color, target.locator)
       })
     },
     [highlights, undoSnackbar],
@@ -658,7 +726,7 @@ export default function PdfReaderScreen() {
       const page = Number.parseInt(m[1], 10)
       if (Number.isFinite(page) && page >= 1) {
         setPageNumberStore(page)
-        readerRef.current?.goToPage(page)
+        setTargetPage(page)
       }
     },
     [setPageNumberStore],
@@ -670,17 +738,12 @@ export default function PdfReaderScreen() {
     setSettings(next)
   }, [])
 
-  // Issue #47 — forward the active theme into the pdfjs WebView. We
-  // gate on `pageCount > 0` so the first call runs after pdfjs has
-  // parsed the document and the viewer DOM exists; the readerRef's
-  // setTheme is idempotent so re-runs on subsequent renders are
-  // cheap. Without this hop the AppearanceSheet's theme picker is a
-  // no-op for PDF users.
-  useEffect(() => {
-    if (pageCount <= 0) return
-    const theme = READER_THEMES[settings.themeName]
-    readerRef.current?.setTheme(theme)
-  }, [pageCount, settings.themeName])
+  // Issue #47 — PdfNativeReader uses react-native-pdf which natively
+  // respects the system dark/light mode. Theme CSS injection via WebView
+  // is not applicable here. READER_THEMES is retained for the settings
+  // sheet which may use it to tint the chrome around the PDF.
+  const _currentTheme = READER_THEMES[settings.themeName]
+  void _currentTheme
 
   // safeBack: deep-link cold-start has an empty stack, so a bare
   // router.back() no-ops and strands the user (P1-B).
@@ -696,30 +759,22 @@ export default function PdfReaderScreen() {
   }, [book?.id, pageNumber, pageCount, router])
 
   // T-P2.5 (CONTEXT-001) — hydrate `latestPdfPageText` whenever the page
-  // changes by asking the pdf.js WebView for the page's rendered
-  // paragraphs. Errors are swallowed (the helper degrades to '' if we
-  // never get a value), which matches the same "graceful degradation"
-  // contract electron uses — see SPEC §3.8.
+  // changes by reading extracted paragraphs from SQLite (synchronous).
+  // Matches the same "graceful degradation" contract electron uses —
+  // see SPEC §3.8.
   useEffect(() => {
-    if (!pageNumber || pageNumber <= 0) return
-    let cancelled = false
-    void (async () => {
-      try {
-        const paragraphs = await readerRef.current?.getPageText(pageNumber)
-        if (cancelled) return
-        if (paragraphs && paragraphs.length > 0) {
-          latestPdfPageText.current = paragraphs.map((p) => p.text).join('\n')
-        } else {
-          latestPdfPageText.current = null
-        }
-      } catch {
-        if (!cancelled) latestPdfPageText.current = null
-      }
-    })()
-    return () => {
-      cancelled = true
+    if (!pageNumber || pageNumber <= 0 || !book?.id) {
+      latestPdfPageText.current = null
+      return
     }
-  }, [pageNumber])
+    try {
+      const paragraphs = paragraphsForPage(book.id, pageNumber)
+      latestPdfPageText.current =
+        paragraphs.length > 0 ? paragraphs.map((p) => p.text).join('\n') : null
+    } catch {
+      latestPdfPageText.current = null
+    }
+  }, [book?.id, pageNumber])
 
   // T-P2.5 (CONTEXT-001) — voice-chat activation context. Per SPEC §3.8
   // we MUST pass the actual rendered page prose. Electron's contract is
@@ -775,10 +830,10 @@ export default function PdfReaderScreen() {
       pageNumber={pageNumber}
       pageCount={pageCount}
       onPrev={() => {
-        if (pageNumber > 1) readerRef.current?.goToPage(pageNumber - 1)
+        if (pageNumber > 1) setTargetPage(pageNumber - 1)
       }}
       onNext={() => {
-        if (pageNumber < pageCount) readerRef.current?.goToPage(pageNumber + 1)
+        if (pageNumber < pageCount) setTargetPage(pageNumber + 1)
       }}
       onPageIndicatorPress={handleGoToPage}
     />
@@ -860,15 +915,28 @@ export default function PdfReaderScreen() {
             toolbar. */}
         <PressableToggleToolbar />
 
-        <PdfWebReader
-          ref={readerRef}
-          fileUri={book.filePath}
-          onLoad={handleLoad}
-          onPageChange={handlePageChange}
-          onSelection={handleSelection}
-          onSelectionCleared={handleSelectionCleared}
-          onHighlightTapped={handleHighlightTapped}
-          onError={(msg) => console.warn('[pdf-webview] error:', msg)}
+        <PdfNativeReader
+          bookId={book.id}
+          filePath={book.filePath}
+          initialPage={
+            (() => {
+              const fromCitation = pageParam ? Number.parseInt(pageParam, 10) : NaN
+              return Number.isFinite(fromCitation) && fromCitation >= 1
+                ? fromCitation
+                : book.currentPage ?? 1
+            })()
+          }
+          page={targetPage}
+          highlights={overlayHighlights}
+          words={words}
+          onPageChanged={handlePageChange}
+          onOutline={handleNativeOutline}
+          onHighlightTap={(id) => {
+            // PdfNativeReader.onHighlightTap provides only the id; we don't
+            // have a screen-space anchor. Open the picker at a default position.
+            handleHighlightTapped(id, { x: 0, y: 0 })
+          }}
+          onTextSelected={handleTextSelected}
         />
 
         {/*
@@ -909,7 +977,6 @@ export default function PdfReaderScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => {
-                readerRef.current?.clearSelection()
                 setSelection(null)
               }}
               style={styles.selectionAction}

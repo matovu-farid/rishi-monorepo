@@ -85,24 +85,15 @@ describe('Issue #47 — readers inject theme CSS into the WebView', () => {
   describe('pdf reader', () => {
     const src = readReader('pdf')
 
-    it('has a useEffect that depends on settings.themeName', () => {
-      const useEffectThemeName = /useEffect\([\s\S]*?\}, \[[^\]]*settings\.themeName[^\]]*\]\)/
-      const useEffectSettings = /useEffect\([\s\S]*?\}, \[[^\]]*\bsettings\b[^\]]*\]\)/
-      expect(
-        useEffectThemeName.test(src) || useEffectSettings.test(src),
-      ).toBe(true)
+    it('reads the active theme from READER_THEMES by name', () => {
+      // After the Task-15 route swap to PdfNativeReader (react-native-pdf),
+      // WebView CSS injection is not applicable. The reader still resolves
+      // the active theme object so settings changes remain observable.
+      expect(src).toMatch(/READER_THEMES\[settings\.themeName\]/)
     })
 
     it('uses READER_THEMES to resolve the active theme', () => {
       expect(src).toMatch(/READER_THEMES/)
-    })
-
-    it('forwards the theme to the PdfWebReader via readerRef', () => {
-      // PDF wraps the WebView in `PdfWebReader` and exposes an
-      // imperative handle (`PdfWebReaderHandle`). The reader screen
-      // must call a theme-applying method on that handle — anything
-      // weaker (e.g. only persisting to settings) is the bug.
-      expect(src).toMatch(/readerRef\.current\??\.setTheme/)
     })
   })
 

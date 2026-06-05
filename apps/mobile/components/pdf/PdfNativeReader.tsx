@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { LayoutChangeEvent, Platform, StyleSheet, View } from 'react-native'
 import Pdf from 'react-native-pdf'
 import { HighlightOverlay, type HighlightShape } from './HighlightOverlay'
@@ -15,6 +15,12 @@ export interface PdfNativeReaderProps {
   bookId: string
   filePath: string
   initialPage?: number
+  /**
+   * Controlled page number. When provided and different from the
+   * reader's internal page state, the reader navigates to this page.
+   * Useful for programmatic navigation (outline taps, go-to-page, etc.)
+   */
+  page?: number
   highlights?: HighlightShape[]
   onPageChanged?: (page: number, total: number) => void
   onOutline?: (outline: OutlineNode[]) => void
@@ -32,6 +38,7 @@ export function PdfNativeReader({
   bookId,
   filePath,
   initialPage = 1,
+  page: controlledPage,
   highlights = [],
   onPageChanged,
   onOutline,
@@ -42,6 +49,19 @@ export function PdfNativeReader({
   words,
 }: PdfNativeReaderProps) {
   const [page, setPage] = useState(initialPage)
+
+  // When `controlledPage` changes (e.g. from outline tap or go-to-page),
+  // sync internal page state so react-native-pdf navigates there.
+  useEffect(() => {
+    if (controlledPage != null && controlledPage !== page && controlledPage >= 1) {
+      setPage(controlledPage)
+    }
+    // We intentionally exclude `page` from deps — we only want to fire
+    // when the *caller* changes their target, not when the user flips
+    // pages natively. The stale-closure risk is acceptable here because
+    // `controlledPage` is always the source of truth for external nav.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controlledPage])
   const [scale, setScale] = useState(1)
   const [pageSize, setPageSize] = useState({ widthPts: 612, heightPts: 792 })
   const [viewport, setViewport] = useState({ widthPx: 1, heightPx: 1 })
