@@ -22,6 +22,7 @@ import { PremiumFeatureSheet } from '@/components/auth/PremiumFeatureSheet'
 import { BillingInactiveModal } from '@/components/billing/BillingInactiveModal'
 import { handleIncomingFile, isFileUrl } from '@/lib/file-handler'
 import { runStartupWiring } from '@/lib/voice-chat/startup-wiring'
+import { backfillUnextractedBooks } from '@/lib/pdf/backfill'
 
 export const IS_E2E_TEST = process.env.EXPO_PUBLIC_E2E_TEST === 'true'
 
@@ -146,6 +147,15 @@ function RootLayout() {
         }
       })
   }, [hydrateAuth])
+
+  // Boot-time backfill: enqueue any PDFs whose extraction is missing or
+  // stuck (NULL / pending / extracting). Fire-and-forget — the runner
+  // handles per-book errors internally.
+  useEffect(() => {
+    backfillUnextractedBooks().catch((err) => {
+      console.error('[boot] backfill failed', err)
+    })
+  }, [])
 
   // The Better-Auth deep-link round-trip is driven by
   // `WebBrowser.openAuthSessionAsync` in `lib/auth.signIn()`, which already
