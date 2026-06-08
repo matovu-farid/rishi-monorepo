@@ -16,6 +16,15 @@ config.resolver.nodeModulesPaths = [
   path.resolve(monorepoRoot, 'node_modules'),
 ];
 
+// Local Expo Modules under modules/ are autolinked for native (Podfile/Gradle)
+// but Metro's JS resolver doesn't know about them. Map the bare-specifier
+// import to the source dir so we don't need a duplicate file: dep in
+// package.json (which expo-doctor flags as a duplicate native module).
+config.resolver.extraNodeModules = {
+  ...(config.resolver.extraNodeModules || {}),
+  'rishi-pdf-extractor': path.resolve(projectRoot, 'modules/rishi-pdf-extractor'),
+};
+
 // Enable package exports resolution for @rishi/shared subpath exports
 config.resolver.unstable_enablePackageExports = true;
 
