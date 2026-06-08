@@ -75,6 +75,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@sentry/cli": "2.55.0",
     "@testing-library/react-native": "^13.3.3",
     "@types/better-sqlite3": "^7.6.13",
     "@types/jest": "29.5.14",
@@ -95,6 +96,8 @@
   "private": true,
   "packageManager": "pnpm@10.22.0+sha512.bf049efe995b28f527fd2b41ae0474ce29186f7edcb3bf545087bd61fbbebb2bf75362d1307fda09c2d288e1e499787ac12d4fcb617a974718a6051f2eee741c",
   "pnpm": {
-    "onlyBuiltDependencies": ["better-sqlite3"]
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
   }
 }
