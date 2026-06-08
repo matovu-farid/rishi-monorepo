@@ -176,6 +176,9 @@ importers:
       react-native-worklets:
         specifier: 0.5.1
         version: 0.5.1(@babel/core@7.29.0)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
+      rishi-pdf-extractor:
+        specifier: file:modules/rishi-pdf-extractor
+        version: file:modules/rishi-pdf-extractor
       tailwind-merge:
         specifier: ^3.6.0
         version: 3.6.0
@@ -5557,6 +5560,9 @@ packages:
     resolution: {integrity: sha512-JZkJMZkAGFFPP2YqXZXPbMlMBgsxzE8ILs4lMIX/2o0L9UBw9O/Y3o6wFw/i9YLapcUJWwqbi3kdxIPdC62TIA==}
     deprecated: Rimraf versions prior to v4 are no longer supported
     hasBin: true
+
+  rishi-pdf-extractor@file:modules/rishi-pdf-extractor:
+    resolution: {directory: modules/rishi-pdf-extractor, type: directory}
 
   run-parallel@1.2.0:
     resolution: {integrity: sha512-5l4VyZR86LZ/lDxZTR6jqL8AFE2S0IFLMP26AbjsLVADxHdhB/c0GUsH+y39UfCi3dzz8OlQuPmnaJOMoDHQBA==}
@@ -12517,6 +12523,8 @@ snapshots:
   rimraf@3.0.2:
     dependencies:
       glob: 7.2.3
+
+  rishi-pdf-extractor@file:modules/rishi-pdf-extractor: {}
 
   run-parallel@1.2.0:
     dependencies:
