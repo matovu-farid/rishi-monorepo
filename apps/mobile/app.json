@@ -348,8 +348,7 @@
           "organization": "farid-org",
           "project": "rishi-react-native"
         }
-      ],
-      "./modules/rishi-pdf-extractor"
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
