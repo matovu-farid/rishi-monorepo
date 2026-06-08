@@ -19,4 +19,8 @@ Pod::Spec.new do |s|
   s.frameworks = ['PDFKit']
 
   s.source_files = "**/*.{h,m,swift}"
+  # XCTest files are wired into a separate test target by the engineer
+  # in Xcode; excluding them from the library's source_files prevents
+  # `no such module 'XCTest'` when building the main library.
+  s.exclude_files = "Tests/**/*"
 end
