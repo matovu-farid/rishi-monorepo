@@ -36,6 +36,7 @@ module.exports = {
       // path has a per-workspace hash suffix that's awkward to encode).
       binaryPath:
         'ios/build/Build/Products/Release-iphonesimulator/rishimobile.app',
+      bundleId: 'com.rishi.mobile',
       // Build Release so the JS bundle is baked into the .app and the
       // expo-dev-client launcher screen is skipped. We use `xcodebuild`
       // directly (rather than `expo run:ios`) because:

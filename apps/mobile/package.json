@@ -85,6 +85,7 @@
     "@types/react-test-renderer": "^19.1.0",
     "babel-plugin-inline-import": "^3.0.0",
     "better-sqlite3": "^12.10.0",
+    "detox": "^20.51.3",
     "drizzle-kit": "^0.31.10",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
