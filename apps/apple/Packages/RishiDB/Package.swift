@@ -23,7 +23,10 @@ let package = Package(
         ),
         .testTarget(
             name: "RishiDBTests",
-            dependencies: ["RishiDB"]
+            dependencies: [
+                "RishiDB",
+                "RishiCore",
+            ]
         ),
     ]
 )
