@@ -1,0 +1,32 @@
+default_platform(:ios)
+
+platform :ios do
+  desc "Upload dSYMs from the most recent archive to Sentry. Called by ci_post_xcodebuild.sh."
+  lane :upload_dsyms do |options|
+    archive_path   = options[:archive_path]   || ENV["CI_ARCHIVE_PATH"]
+    sentry_org     = options[:sentry_org]     || ENV["SENTRY_ORG_SLUG"]
+    sentry_project = options[:sentry_project] || ENV["SENTRY_PROJECT_SLUG"]
+
+    UI.user_error!("archive_path missing") unless archive_path
+
+    dsym_path = File.join(archive_path, "dSYMs")
+    sh("sentry-cli debug-files upload --auth-token \"$SENTRY_AUTH_TOKEN\" " \
+       "--org #{sentry_org} --project #{sentry_project} \"#{dsym_path}\"")
+  end
+
+  desc "Skeleton TestFlight build — proves the signing + upload pipeline end-to-end. " \
+       "Builds the unmodified rishi scheme and pushes a TestFlight build with no testers."
+  lane :testflight_skeleton do
+    build_app(
+      project: "rishi/rishi.xcodeproj",
+      scheme: "rishi",
+      configuration: "Release",
+      clean: true,
+      export_method: "app-store"
+    )
+    upload_to_testflight(
+      skip_waiting_for_build_processing: true,
+      changelog: "Skeleton build from Phase 0 BOOT-09 — proves pipeline only. Not for distribution."
+    )
+  end
+end

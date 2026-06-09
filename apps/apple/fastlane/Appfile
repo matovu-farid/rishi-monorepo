@@ -1,0 +1,3 @@
+app_identifier "org.fidexa.rishi"
+apple_id "matovu90@gmail.com"
+# team_id pulled from APP_STORE_CONNECT_API_KEY_* secrets in Xcode Cloud env at runtime.
