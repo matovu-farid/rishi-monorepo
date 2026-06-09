@@ -23,14 +23,14 @@ public enum KeychainError: Error, Equatable, Sendable {
 public protocol KeychainBackend: Sendable {
 
     /// SecItemAdd — insert a new keychain item. Throws on errSecDuplicateItem.
-    func add(query: [String: Any]) async throws
+    func add(query: sending [String: Any]) async throws
 
     /// SecItemCopyMatching — return the kSecValueData payload, or nil if not found.
-    func copyMatching(query: [String: Any]) async throws -> Data?
+    func copyMatching(query: sending [String: Any]) async throws -> Data?
 
     /// SecItemUpdate — update an existing item's attributes.
-    func update(query: [String: Any], attributes: [String: Any]) async throws
+    func update(query: sending [String: Any], attributes: sending [String: Any]) async throws
 
     /// SecItemDelete — remove a keychain item. No-op if not present.
-    func delete(query: [String: Any]) async throws
+    func delete(query: sending [String: Any]) async throws
 }

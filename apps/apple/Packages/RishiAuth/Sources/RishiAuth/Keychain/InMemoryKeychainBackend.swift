@@ -32,7 +32,7 @@ public final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendable
         storage.withLock { $0.count }
     }
 
-    public func add(query: [String: Any]) async throws {
+    public func add(query: sending [String: Any]) async throws {
         let extracted = Self.extract(from: query)
         guard let key = extracted.key else {
             throw KeychainError.unexpectedStatus(errSecParam)
@@ -48,7 +48,7 @@ public final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendable
         }
     }
 
-    public func copyMatching(query: [String: Any]) async throws -> Data? {
+    public func copyMatching(query: sending [String: Any]) async throws -> Data? {
         let extracted = Self.extract(from: query)
         guard let key = extracted.key else {
             throw KeychainError.unexpectedStatus(errSecParam)
@@ -56,7 +56,7 @@ public final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendable
         return storage.withLock { $0[key] }
     }
 
-    public func update(query: [String: Any], attributes: [String: Any]) async throws {
+    public func update(query: sending [String: Any], attributes: sending [String: Any]) async throws {
         let extractedQuery = Self.extract(from: query)
         let extractedAttrs = Self.extract(from: attributes)
         guard let key = extractedQuery.key else {
@@ -72,7 +72,7 @@ public final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendable
         }
     }
 
-    public func delete(query: [String: Any]) async throws {
+    public func delete(query: sending [String: Any]) async throws {
         let extracted = Self.extract(from: query)
         guard let key = extracted.key else {
             throw KeychainError.unexpectedStatus(errSecParam)
