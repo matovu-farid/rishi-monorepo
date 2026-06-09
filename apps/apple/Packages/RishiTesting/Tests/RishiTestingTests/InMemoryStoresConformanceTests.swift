@@ -1,0 +1,28 @@
+import Foundation
+import Testing
+import RishiCore
+@testable import RishiTesting
+
+@Suite("In-memory stores satisfy conformance")
+struct InMemoryStoresConformanceTests {
+
+    @Test func bookStoreConforms() async throws {
+        try await assertBookStoreConformance(InMemoryBookStore())
+    }
+
+    @Test func highlightStoreConforms() async throws {
+        try await assertHighlightStoreConformance(InMemoryHighlightStore())
+    }
+
+    @Test func positionStoreConforms() async throws {
+        try await assertPositionStoreConformance(InMemoryPositionStore())
+    }
+
+    @Test func conversationStoreConforms() async throws {
+        try await assertConversationStoreConformance(InMemoryConversationStore())
+    }
+
+    @Test func messageStoreConforms() async throws {
+        try await assertMessageStoreConformance(InMemoryMessageStore())
+    }
+}
