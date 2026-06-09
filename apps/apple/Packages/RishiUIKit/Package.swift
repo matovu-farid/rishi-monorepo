@@ -8,6 +8,15 @@ let package = Package(
         .library(name: "RishiUIKit", targets: ["RishiUIKit"]),
     ],
     targets: [
-        .target(name: "RishiUIKit"),
+        .target(
+            name: "RishiUIKit",
+            resources: [
+                .process("Resources"),
+            ]
+        ),
+        .testTarget(
+            name: "RishiUIKitTests",
+            dependencies: ["RishiUIKit"]
+        ),
     ]
 )
