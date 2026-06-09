@@ -5,8 +5,10 @@ import Testing
 @Suite("RishiAPI package smoke")
 struct PackageSmokeTests {
 
-    @Test func apiVersionIsScaffoldMarker() {
-        #expect(RishiAPI.apiVersion == "0.1.0-scaffold")
+    @Test func apiVersionIsWorkerClientMarker() {
+        // Plan 02-04 bumped the marker when the `WorkerClient` actor + retry
+        // middleware shipped. Bump again when the public surface breaks.
+        #expect(RishiAPI.apiVersion == "0.3.0-worker-client")
     }
 
     @Test func httpMethodCoversCommonVerbs() {
