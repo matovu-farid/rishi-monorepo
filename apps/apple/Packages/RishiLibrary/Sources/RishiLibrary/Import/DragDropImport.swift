@@ -1,0 +1,50 @@
+import SwiftUI
+import RishiCore
+
+/// SwiftUI view modifier that wires `.dropDestination(for: URL.self)` to the
+/// shared `ImportCoordinator`. Filters incoming URLs by extension up-front so
+/// the visual drop indicator only highlights when at least one item is a
+/// supported book file.
+public struct LibraryDropDestination: ViewModifier {
+
+    public let coordinator: ImportCoordinator
+    public let onImported: @MainActor (_ outcomes: [ImportCoordinator.ImportOutcome]) -> Void
+
+    public init(
+        coordinator: ImportCoordinator,
+        onImported: @escaping @MainActor (_ outcomes: [ImportCoordinator.ImportOutcome]) -> Void
+    ) {
+        self.coordinator = coordinator
+        self.onImported = onImported
+    }
+
+    public func body(content: Content) -> some View {
+        // `URL` conforms to `Transferable` on iOS 16+/macOS 13+/Catalyst 16+,
+        // so we can drop in `URL.self` directly — no custom UTType registration
+        // required for inter-app drops from Files / Finder.
+        content.dropDestination(for: URL.self) { urls, _ in
+            let supported = ImportCoordinator.filterSupported(urls)
+            guard !supported.isEmpty else { return false }
+            Task {
+                let outcomes = await coordinator.importBooks(supported)
+                await MainActor.run { onImported(outcomes) }
+            }
+            return true
+        } isTargeted: { _ in
+            // Visual targeting handled by the caller view; no-op here.
+        }
+    }
+}
+
+public extension View {
+    /// Attach drag-and-drop import to any container (typically the LibraryGrid
+    /// root). On iPad accepts inter-app drops from Files split-view; on Mac
+    /// Catalyst accepts drops from Finder. No-op on iPhone (the system has no
+    /// drop affordance in single-app mode).
+    func libraryDropDestination(
+        coordinator: ImportCoordinator,
+        onImported: @escaping @MainActor ([ImportCoordinator.ImportOutcome]) -> Void
+    ) -> some View {
+        modifier(LibraryDropDestination(coordinator: coordinator, onImported: onImported))
+    }
+}
