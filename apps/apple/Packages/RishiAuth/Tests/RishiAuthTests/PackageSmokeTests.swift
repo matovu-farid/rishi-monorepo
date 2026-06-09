@@ -1,0 +1,69 @@
+import Foundation
+import Testing
+import RishiCore
+@testable import RishiAuth
+
+@Suite("RishiAuth package smoke")
+struct PackageSmokeTests {
+
+    @Test func apiVersionIsScaffoldMarker() {
+        #expect(RishiAuth.apiVersion == "0.1.0-scaffold")
+    }
+
+    @Test func signInProviderRawValuesAreStable() {
+        #expect(SignInProvider.apple.rawValue == "apple")
+        #expect(SignInProvider.google.rawValue == "google")
+        #expect(SignInProvider.allCases.count == 2)
+    }
+
+    @Test func sessionRoundTripsThroughJSON() throws {
+        let userId = UUID()
+        let original = Session(
+            token: "tok-xyz",
+            userId: userId,
+            email: "user@privaterelay.appleid.com",
+            provider: .apple,
+            issuedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            expiresAt: Date(timeIntervalSince1970: 1_700_086_400)
+        )
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+
+        let data = try encoder.encode(original)
+        let decoded = try decoder.decode(Session.self, from: data)
+
+        #expect(decoded == original)
+        #expect(decoded.userId == userId)
+        #expect(decoded.provider == .apple)
+    }
+
+    @Test func sessionWithNilEmailEncodes() throws {
+        // PITFALLS.md Pitfall 10: subsequent SIWA sign-ins return no email.
+        let session = Session(
+            token: "tok-1",
+            userId: UUID(),
+            email: nil,
+            provider: .apple
+        )
+        let data = try JSONEncoder().encode(session)
+        let decoded = try JSONDecoder().decode(Session.self, from: data)
+        #expect(decoded.email == nil)
+        #expect(decoded.token == "tok-1")
+    }
+
+    @Test func sessionWithGoogleProvider() throws {
+        let session = Session(
+            token: "tok-google",
+            userId: UUID(),
+            email: "u@gmail.com",
+            provider: .google
+        )
+        #expect(session.provider == .google)
+        let data = try JSONEncoder().encode(session)
+        let json = String(data: data, encoding: .utf8) ?? ""
+        #expect(json.contains("\"google\""))
+    }
+}
