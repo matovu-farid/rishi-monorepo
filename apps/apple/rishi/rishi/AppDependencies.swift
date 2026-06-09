@@ -3,6 +3,8 @@ import SwiftUI
 import RishiCore
 import RishiAPI
 import RishiAuth
+import RishiDB
+import RishiLibrary
 
 /// Composition root for the rishi app. Constructed once by `rishiApp.init()`.
 ///
@@ -12,6 +14,7 @@ import RishiAuth
 @MainActor
 final class AppDependencies {
 
+    // Auth + transport
     let keychain: KeychainSessionStore
     let tokenProvider: RishiAuthTokenProvider
     let workerClient: WorkerClient
@@ -20,6 +23,23 @@ final class AppDependencies {
     let siwaCoordinator: SignInWithAppleCoordinator
     let googleCoordinator: GoogleSignInCoordinator
     let authService: RishiAuthService
+
+    // Persistence + library
+    let dbQueue: DatabaseQueue
+    let bookStore: any BookStore
+    let positionStore: any PositionStore
+    let bookFileStorage: BookFileStorage
+    let importCoordinator: ImportCoordinator
+    let sampleBookInstaller: SampleBookInstaller
+    let libraryViewModel: LibraryViewModel
+
+    /// Cached user id pumped in by RootView after the auth session resolves.
+    /// LibraryViewModel reads this synchronously from its currentUserId
+    /// closure so refresh() does not need to hop into the auth actor.
+    var cachedUserId: UserID? {
+        get { userIdBox.value }
+        set { userIdBox.value = newValue }
+    }
 
     init() {
         // Worker base URL (override via env for staging tests).
@@ -69,18 +89,81 @@ final class AppDependencies {
         self.googleCoordinator = googleCoordinator
 
         // 6. Auth service aggregates everything.
-        self.authService = RishiAuthService(
+        let authService = RishiAuthService(
             workerClient: workerClient,
             siwaCoordinator: siwaCoordinator,
             googleCoordinator: googleCoordinator,
             keychain: keychain
         )
+        self.authService = authService
+
+        // 7. Persistence layer (GRDB queue under Documents).
+        let documentsURL = FileManager.default.urls(for: .documentDirectory,
+                                                    in: .userDomainMask).first!
+        let dbURL = documentsURL.appendingPathComponent("rishi.sqlite")
+        let dbQueue: DatabaseQueue
+        do {
+            dbQueue = try RishiDB.makeDatabaseQueue(at: dbURL)
+        } catch {
+            fatalError("Failed to open rishi.sqlite at \(dbURL): \(error)")
+        }
+        self.dbQueue = dbQueue
+
+        // 8. Stores.
+        let bookStore = GRDBBookStore(dbQueue: dbQueue)
+        let positionStore = GRDBPositionStore(dbQueue: dbQueue)
+        self.bookStore = bookStore
+        self.positionStore = positionStore
+
+        // 9. Library file storage (cover extractors for the two v1 formats).
+        let bookFileStorage = BookFileStorage(
+            rootURL: documentsURL,
+            bookStore: bookStore,
+            coverExtractors: [
+                "pdf": PDFKitCoverExtractor(),
+                "epub": EpubCoverExtractor(),
+            ]
+        )
+        self.bookFileStorage = bookFileStorage
+
+        // 10. Import coordinator pulls the current user id from the auth service
+        // at import time (handles sign-out / sign-in transitions correctly).
+        self.importCoordinator = ImportCoordinator(storage: bookFileStorage) {
+            await authService.currentUser?.id
+        }
+
+        // 11. Sample-book installer (first-run alice.epub).
+        self.sampleBookInstaller = SampleBookInstaller(storage: bookFileStorage)
+
+        // 12. Library view model. `currentUserId` reads from a heap-allocated
+        // box that RootView pumps via `cachedUserId`. We can't capture `self`
+        // here (it's still mid-init), so we route through a tiny box and keep
+        // a reference for AppDependencies's setter to update.
+        let userIdBox = UserIdBox()
+        self.userIdBox = userIdBox
+        self.libraryViewModel = LibraryViewModel(
+            bookStore: bookStore,
+            positionStore: positionStore,
+            storage: bookFileStorage,
+            currentUserId: { userIdBox.value }
+        )
     }
+
+    private let userIdBox: UserIdBox
 
     var authServiceForEnvironment: any AuthService { authService }
 }
 
-// MARK: - SwiftUI environment key
+/// Tiny @MainActor-isolated reference box so LibraryViewModel's currentUserId
+/// closure can be constructed before `self` is fully initialised. The closure
+/// captures the box (a reference type), AppDependencies mutates `box.value`,
+/// and LibraryViewModel reads the latest value on every `currentUserId()` call.
+@MainActor
+private final class UserIdBox {
+    var value: UserID? = nil
+}
+
+// MARK: - SwiftUI environment keys
 
 private struct RishiAuthServiceKey: EnvironmentKey {
     static let defaultValue: (any AuthService)? = nil
@@ -90,5 +173,16 @@ extension EnvironmentValues {
     var rishiAuthService: (any AuthService)? {
         get { self[RishiAuthServiceKey.self] }
         set { self[RishiAuthServiceKey.self] = newValue }
+    }
+}
+
+private struct AppDependenciesKey: EnvironmentKey {
+    @MainActor static let defaultValue: AppDependencies? = nil
+}
+
+extension EnvironmentValues {
+    var appDependencies: AppDependencies? {
+        get { self[AppDependenciesKey.self] }
+        set { self[AppDependenciesKey.self] = newValue }
     }
 }

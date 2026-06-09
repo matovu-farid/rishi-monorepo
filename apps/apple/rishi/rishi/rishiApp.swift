@@ -9,6 +9,7 @@ import SwiftUI
 import SwiftData
 import RishiCore
 import RishiAuth
+import RishiLibrary
 
 @main
 struct rishiApp: App {
@@ -29,27 +30,11 @@ struct rishiApp: App {
 
     var body: some Scene {
         WindowGroup {
-            rootView
+            RootView()
                 .environment(\.rishiAuthService, deps.authServiceForEnvironment)
+                .environment(deps.libraryViewModel)
+                .environment(\.appDependencies, deps)
         }
         .modelContainer(sharedModelContainer)
-    }
-
-    @ViewBuilder
-    private var rootView: some View {
-        #if DEBUG
-        NavigationStack {
-            VStack(spacing: 20) {
-                Text("Rishi (Debug)")
-                    .font(.largeTitle)
-                NavigationLink("Open Debug Auth View", destination: DebugAuthView())
-                Divider()
-                NavigationLink("Scaffold (Items)", destination: ContentView())
-            }
-            .padding()
-        }
-        #else
-        ContentView()
-        #endif
     }
 }

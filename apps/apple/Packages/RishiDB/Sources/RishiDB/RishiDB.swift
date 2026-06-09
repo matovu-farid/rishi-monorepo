@@ -1,5 +1,5 @@
 import Foundation
-import GRDB
+@_exported import GRDB
 
 /// Public surface for the RishiDB package.
 public enum RishiDB {
