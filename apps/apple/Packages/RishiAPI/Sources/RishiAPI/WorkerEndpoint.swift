@@ -26,3 +26,30 @@ public protocol WorkerEndpoint: Sendable {
     /// Path relative to `WorkerClient`'s `baseURL` (must start with `/`).
     var path: String { get }
 }
+
+// MARK: - Endpoints WITH a request body (POST/PUT/PATCH)
+
+/// A worker endpoint that sends an Encodable body. Plan 02-05 uses this for
+/// POST/PUT/PATCH endpoints. GET endpoints conform to the bare `WorkerEndpoint`
+/// (no body requirement).
+public protocol WorkerEndpointWithBody: WorkerEndpoint {
+    associatedtype Body: Encodable & Sendable
+    var body: Body { get }
+}
+
+// MARK: - Streaming endpoints (e.g. /api/audio/speech)
+
+/// A worker endpoint that yields chunks of raw bytes over a streaming HTTP body.
+/// Used by `/api/audio/speech` (MP3 chunks). The client surface is
+/// `WorkerClient.stream<E>(_:) -> AsyncThrowingStream<Data, Error>`.
+public protocol WorkerStreamingEndpoint: Sendable {
+    var method: HTTPMethod { get }
+    var path: String { get }
+}
+
+/// Refinement for streaming endpoints that also send an Encodable body
+/// (the typical case — POST /api/audio/speech with {text, voice, speed}).
+public protocol WorkerStreamingEndpointWithBody: WorkerStreamingEndpoint {
+    associatedtype Body: Encodable & Sendable
+    var body: Body { get }
+}
