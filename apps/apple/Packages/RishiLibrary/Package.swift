@@ -32,8 +32,8 @@ let package = Package(
                 "RishiLibrary",
                 "RishiCore",
                 .product(name: "RishiTesting", package: "RishiTesting"),
-            ],
-            resources: [.process("Fixtures")]
+                .product(name: "ZIPFoundation", package: "ZIPFoundation"),
+            ]
         ),
     ]
 )
