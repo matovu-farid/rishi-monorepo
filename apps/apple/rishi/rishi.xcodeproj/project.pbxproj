@@ -11,6 +11,7 @@
 		53A044C8DA088C4CD4F0A61A /* RishiAPI in Frameworks */ = {isa = PBXBuildFile; productRef = 8F44CD0541E29B6DA2049F21 /* RishiAPI */; };
 		57C0D8BB9FAD2213E457E94F /* RishiTesting in Frameworks */ = {isa = PBXBuildFile; productRef = 39E77723BE79C2DC8FD0E4AA /* RishiTesting */; };
 		59D80D1126EB82C9435367FA /* RishiLogging in Frameworks */ = {isa = PBXBuildFile; productRef = 00D1898ADC5FFE76C44614FB /* RishiLogging */; };
+		8839709E009AD7D4E6F50947 /* RishiAuth in Frameworks */ = {isa = PBXBuildFile; productRef = A27D36EE1DC4536405E418CC /* RishiAuth */; };
 		F262D7B88E378B23684A699F /* RishiDB in Frameworks */ = {isa = PBXBuildFile; productRef = FCF3C76E4FA9636D03567457 /* RishiDB */; };
 		F9D3B1838D2E03155B41B0AE /* RishiCore in Frameworks */ = {isa = PBXBuildFile; productRef = F9E6AED6A64A152D5FEA764C /* RishiCore */; };
 /* End PBXBuildFile section */
@@ -83,6 +84,7 @@
 				59D80D1126EB82C9435367FA /* RishiLogging in Frameworks */,
 				53A044C8DA088C4CD4F0A61A /* RishiAPI in Frameworks */,
 				F262D7B88E378B23684A699F /* RishiDB in Frameworks */,
+				8839709E009AD7D4E6F50947 /* RishiAuth in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -149,6 +151,7 @@
 				00D1898ADC5FFE76C44614FB /* RishiLogging */,
 				8F44CD0541E29B6DA2049F21 /* RishiAPI */,
 				FCF3C76E4FA9636D03567457 /* RishiDB */,
+				A27D36EE1DC4536405E418CC /* RishiAuth */,
 			);
 			productName = rishi;
 			productReference = 092254942FD83183008C5ADE /* rishi.app */;
@@ -238,6 +241,7 @@
 				AF8EAC1F08C25230E75FD9AC /* XCLocalSwiftPackageReference "RishiTesting" */,
 				2020D4F0BFAAD9ECBFCBCD65 /* XCLocalSwiftPackageReference "RishiAPI" */,
 				1802D603FBA51B2C069A134E /* XCLocalSwiftPackageReference "RishiDB" */,
+				02A02F24AF08B9EE8465CCE7 /* XCLocalSwiftPackageReference "RishiAuth" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 092254952FD83183008C5ADE /* Products */;
@@ -638,6 +642,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		02A02F24AF08B9EE8465CCE7 /* XCLocalSwiftPackageReference "RishiAuth" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/RishiAuth;
+		};
 		0A43A902E52E4A570EBD6646 /* XCLocalSwiftPackageReference "RishiCore" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Packages/RishiCore;
@@ -684,6 +692,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 2020D4F0BFAAD9ECBFCBCD65 /* XCLocalSwiftPackageReference "RishiAPI" */;
 			productName = RishiAPI;
+		};
+		A27D36EE1DC4536405E418CC /* RishiAuth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 02A02F24AF08B9EE8465CCE7 /* XCLocalSwiftPackageReference "RishiAuth" */;
+			productName = RishiAuth;
 		};
 		F9E6AED6A64A152D5FEA764C /* RishiCore */ = {
 			isa = XCSwiftPackageProductDependency;
