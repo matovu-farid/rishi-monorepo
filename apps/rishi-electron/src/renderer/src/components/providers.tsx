@@ -4,6 +4,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { queryClient } from './queryClient'
 import { SessionMachineProvider } from '@/hooks/useSessionMachine'
 import { SharingSessionOverlay } from '@/components/sharing/SharingSessionOverlay'
+import { BillingInactiveModal } from '@/components/billing/BillingInactiveModal'
 
 /**
  * App-wide providers. Authentication is handled out-of-band via the main
@@ -21,6 +22,7 @@ function Providers({ children }: PropsWithChildren): JSX.Element {
       <SessionMachineProvider>
         {children}
         <SharingSessionOverlay />
+        <BillingInactiveModal />
         <Toaster />
       </SessionMachineProvider>
     </QueryClientProvider>

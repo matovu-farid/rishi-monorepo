@@ -18,13 +18,16 @@ import { desktopRoutes } from "./routes/desktop";
 import { mobileRoutes } from "./routes/mobile";
 import { testAuthRoutes } from "./routes/test-auth";
 import { createAuth } from "./auth";
+import { ensureCreditAndSubscription } from "./billing/backfill";
 import { meterFromContext } from "./billing/meter";
 import { createPortalSession } from "./billing/portal";
 import { parseRealtimeUsageBody } from "./billing/realtime-usage";
+import { ensureCustomerAndPortal } from "./billing/start";
 import { createStripeClient } from "./billing/stripe";
 import { requireActiveSubscription } from "./billing/sub-gate";
 import { createDb } from "./db/drizzle";
 import { user as userTable } from "@rishi/shared/schema";
+import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config";
 import { eq } from "drizzle-orm";
 
 // Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
@@ -245,6 +248,48 @@ app.post("/api/billing/portal", requireAuth, async (c) => {
   }
   const stripe = createStripeClient(c.env.STRIPE_SECRET_KEY);
   const url = await createPortalSession(stripe, row.stripeCustomerId, returnUrl);
+  return c.json({ url });
+});
+
+// Unified billing entry. Same shape as /api/billing/portal but guarantees
+// the user has a Stripe customer + subscription first, so callers never
+// have to handle the 409 "No Stripe customer for this user yet" branch.
+app.post("/api/billing/start", requireAuth, async (c) => {
+  if (!c.env.STRIPE_SECRET_KEY) {
+    return c.json({ error: "Billing is not configured for this environment" }, 503);
+  }
+  const body = await c.req
+    .json<{ returnUrl?: string }>()
+    .catch((): { returnUrl?: string } => ({}));
+  const returnUrl = body.returnUrl ?? `${c.env.PUBLIC_WEB_URL}/account`;
+  const db = createDb(c.env.DB);
+  const stripe = createStripeClient(c.env.STRIPE_SECRET_KEY);
+  const userId = c.get("userId");
+  const { priceId } = getStripeIdsForKey(c.env.STRIPE_SECRET_KEY);
+  const ip = c.req.header("cf-connecting-ip") ?? null;
+  const { url } = await ensureCustomerAndPortal({
+    stripe,
+    priceId,
+    userId,
+    returnUrl,
+    ip,
+    getUserRow: async (id) =>
+      (await db
+        .select({
+          stripeCustomerId: userTable.stripeCustomerId,
+          email: userTable.email,
+        })
+        .from(userTable)
+        .where(eq(userTable.id, id))
+        .get()) ?? null,
+    updateUserStripeCustomerId: async (stripeCustomerId) => {
+      await db
+        .update(userTable)
+        .set({ stripeCustomerId })
+        .where(eq(userTable.id, userId));
+    },
+    ensureCreditAndSubscription,
+  });
   return c.json({ url });
 });
 

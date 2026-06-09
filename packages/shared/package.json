@@ -68,7 +68,8 @@
     "./billing/realtime-usage-accumulator": "./src/billing/realtime-usage-accumulator.ts",
     "./billing/realtime-usage-client": "./src/billing/realtime-usage-client.ts",
     "./billing/errors": "./src/billing/errors.ts",
-    "./billing/interceptor": "./src/billing/interceptor.ts"
+    "./billing/interceptor": "./src/billing/interceptor.ts",
+    "./billing/status": "./src/billing/status.ts"
   },
   "peerDependencies": {
     "drizzle-orm": "^0.44.0",

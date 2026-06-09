@@ -5,6 +5,9 @@
 
 import { getAuthToken } from '@/modules/auth'
 import { WORKER_URL } from '@/config/worker-url'
+import { checkBillingGate } from '@rishi/shared/billing/interceptor'
+import { BillingInactiveError } from '@rishi/shared/billing/errors'
+import { useBillingStore } from '@/stores/billingStore'
 
 // Re-export types that match the original generated types
 
@@ -453,7 +456,18 @@ export async function workerFetch(path: string, init?: RequestInit): Promise<Res
       throw new Error('Not authenticated')
     }
   }
-  return fetch(`${WORKER_URL}${path}`, { ...init, headers })
+  const response = await fetch(`${WORKER_URL}${path}`, { ...init, headers })
+  try {
+    // checkBillingGate reads response.clone(), so downstream callers can still
+    // consume the body via response.json()/text().
+    await checkBillingGate(response)
+  } catch (err) {
+    if (BillingInactiveError.isInstance(err)) {
+      useBillingStore.getState().setBillingInactive(err.subscriptionStatus)
+    }
+    throw err
+  }
+  return response
 }
 
 // ---- Helpers ----
