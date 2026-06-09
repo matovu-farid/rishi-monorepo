@@ -16,6 +16,14 @@ public enum RishiDB {
     ///
     /// Pass `URL(fileURLWithPath: ":memory:")` for an in-memory queue (tests).
     public static func makeDatabaseQueue(at url: URL) throws -> DatabaseQueue {
-        try DatabaseQueue(path: url.path)
+        // SQLite treats the literal string ":memory:" as the in-memory database
+        // sentinel. `URL(fileURLWithPath: ":memory:").path` resolves to an
+        // ABSOLUTE filesystem path (e.g. "/cwd/:memory:"), which would create a
+        // real on-disk file named ":memory:". Detect the sentinel and forward
+        // it untouched so callers get a true in-memory queue.
+        if url.lastPathComponent == ":memory:" {
+            return try DatabaseQueue()
+        }
+        return try DatabaseQueue(path: url.path)
     }
 }
