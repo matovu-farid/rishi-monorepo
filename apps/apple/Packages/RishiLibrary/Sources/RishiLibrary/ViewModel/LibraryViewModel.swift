@@ -1,0 +1,124 @@
+import Foundation
+import Observation
+import RishiCore
+import RishiLogging
+
+/// `@Observable` view model that powers `LibraryRootView` + `LibraryView`.
+///
+/// Owns the materialised library state for the current signed-in user:
+///   - `books` (full list)
+///   - `readingNow` (derived: positions strictly between 0 and 1)
+///   - `filteredBooks` (search results)
+///
+/// Search is debounced 150 ms via Task cancellation per LIB-09. Empty query
+/// resets `filteredBooks` synchronously (no debounce wait) so the user does
+/// not see a brief flash of "no results".
+@MainActor
+@Observable
+public final class LibraryViewModel {
+
+    public private(set) var books: [Book] = []
+    public private(set) var readingNow: [ReadingNowEntry] = []
+    public private(set) var filteredBooks: [Book] = []
+    public private(set) var positionsByBookId: [BookID: Position] = [:]
+
+    public var searchText: String = "" {
+        didSet { scheduleSearchDebounce(oldValue: oldValue) }
+    }
+
+    /// 150 ms by default per LIB-09. Test-only override to shrink the wait
+    /// inside debounce-coalescing tests.
+    public var debounceDuration: Duration = .milliseconds(150)
+
+    private let bookStore: any BookStore
+    private let positionStore: any PositionStore
+    private let storage: BookFileStorage
+    private let currentUserId: @MainActor () -> UserID?
+
+    private var searchTask: Task<Void, Never>? = nil
+
+    public init(bookStore: any BookStore,
+                positionStore: any PositionStore,
+                storage: BookFileStorage,
+                currentUserId: @escaping @MainActor () -> UserID?) {
+        self.bookStore = bookStore
+        self.positionStore = positionStore
+        self.storage = storage
+        self.currentUserId = currentUserId
+    }
+
+    /// Reloads books for the current user and re-derives readingNow + filteredBooks.
+    /// Silent on errors (logged via RishiLogging) — the UI shows empty state.
+    public func refresh() async {
+        guard let userId = currentUserId() else {
+            books = []
+            readingNow = []
+            filteredBooks = []
+            positionsByBookId = [:]
+            return
+        }
+        do {
+            let loaded = try await bookStore.books(for: userId)
+            var positionsByBook: [BookID: Position] = [:]
+            for book in loaded {
+                if let p = try await positionStore.position(for: book.id) {
+                    positionsByBook[book.id] = p
+                }
+            }
+            self.books = loaded
+            self.positionsByBookId = positionsByBook
+            self.readingNow = Self.deriveReadingNow(books: loaded, positions: positionsByBook)
+            self.filteredBooks = LibrarySearchFilter.filter(books: loaded, query: searchText)
+        } catch {
+            Log.error("library.refresh.failed", error: error)
+        }
+    }
+
+    /// Deletes the book on-disk + in the store; updates local state in place.
+    public func delete(_ book: Book) async {
+        do {
+            try await storage.delete(book)
+            books.removeAll { $0.id == book.id }
+            positionsByBookId[book.id] = nil
+            readingNow = Self.deriveReadingNow(books: books, positions: positionsByBookId)
+            filteredBooks = LibrarySearchFilter.filter(books: books, query: searchText)
+        } catch {
+            Log.error("library.delete.failed", error: error)
+        }
+    }
+
+    public func position(for bookId: BookID) -> Position? {
+        positionsByBookId[bookId]
+    }
+
+    public func coverURL(for book: Book) async -> URL? {
+        await storage.cachedCoverURL(for: book)
+    }
+
+    // MARK: - Search debounce
+
+    private func scheduleSearchDebounce(oldValue: String) {
+        searchTask?.cancel()
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            // Empty resets immediately — no debounce.
+            filteredBooks = books
+            return
+        }
+        let snapshotBooks = books
+        let snapshotQuery = searchText
+        let delay = debounceDuration
+        searchTask = Task { @MainActor in
+            try? await Task.sleep(for: delay)
+            if Task.isCancelled { return }
+            filteredBooks = LibrarySearchFilter.filter(books: snapshotBooks, query: snapshotQuery)
+        }
+    }
+
+    static func deriveReadingNow(books: [Book], positions: [BookID: Position]) -> [ReadingNowEntry] {
+        books.compactMap { book in
+            guard let pos = positions[book.id], ReadingNowEntry.isInProgress(pos) else { return nil }
+            return ReadingNowEntry(book: book, position: pos)
+        }.sorted { $0.position.updatedAt > $1.position.updatedAt }
+    }
+}
