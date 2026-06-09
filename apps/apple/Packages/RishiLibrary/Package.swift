@@ -24,6 +24,9 @@ let package = Package(
                 "RishiDB",
                 "RishiLogging",
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
+            ],
+            resources: [
+                .process("Resources/Bundled"),
             ]
         ),
         .testTarget(
