@@ -16,7 +16,7 @@ struct PackageSmokeTests {
         #expect(value == 42)
     }
 
-    @Test func apiVersionIsScaffoldMarker() {
-        #expect(RishiDB.apiVersion == "0.1.0-scaffold")
+    @Test func apiVersionIsSchemaMarker() {
+        #expect(RishiDB.apiVersion == "0.2.0-schema")
     }
 }
