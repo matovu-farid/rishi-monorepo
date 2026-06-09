@@ -6,18 +6,51 @@ import os
 public enum Log {
     public static let subsystem = "org.fidexa.rishi"
 
-    public static let app:    Logger = Logger(subsystem: subsystem, category: "app")
-    public static let api:    Logger = Logger(subsystem: subsystem, category: "api")
-    public static let reader: Logger = Logger(subsystem: subsystem, category: "reader")
-    public static let audio:  Logger = Logger(subsystem: subsystem, category: "audio")
-    public static let sync:   Logger = Logger(subsystem: subsystem, category: "sync")
-    public static let auth:   Logger = Logger(subsystem: subsystem, category: "auth")
+    public static let app:         Logger = Logger(subsystem: subsystem, category: "app")
+    public static let api:         Logger = Logger(subsystem: subsystem, category: "api")
+    public static let reader:      Logger = Logger(subsystem: subsystem, category: "reader")
+    public static let audio:       Logger = Logger(subsystem: subsystem, category: "audio")
+    public static let sync:        Logger = Logger(subsystem: subsystem, category: "sync")
+    public static let auth:        Logger = Logger(subsystem: subsystem, category: "auth")
+    public static let persistence: Logger = Logger(subsystem: subsystem, category: "persistence")
+
+    // MARK: - Test-only capture hook
+    //
+    // Assigned by test code to intercept every `Log.event(...)` call (in addition
+    // to the normal os.Logger + SentryBridge path). Default `nil` — production
+    // code never assigns it, so it's effectively zero-cost. The lock-guarded box
+    // gives us a thread-safe seam without dragging Swift Concurrency isolation
+    // into a static-stored property.
+    public static let _testCapture = TestCaptureBox()
+
+    public final class TestCaptureBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _handler: ((String, LogLevel, [String: String]?) -> Void)?
+
+        public var handler: ((String, LogLevel, [String: String]?) -> Void)? {
+            get { lock.lock(); defer { lock.unlock() }; return _handler }
+            set { lock.lock(); defer { lock.unlock() }; _handler = newValue }
+        }
+
+        public func reset() { handler = nil }
+
+        public func notify(_ name: String, _ level: LogLevel, _ data: [String: String]?) {
+            // Snapshot under the lock so notify() doesn't race against a setter
+            // that nils the handler mid-call.
+            let h: ((String, LogLevel, [String: String]?) -> Void)?
+            lock.lock()
+            h = _handler
+            lock.unlock()
+            h?(name, level, data)
+        }
+    }
 
     // MARK: - Structured events
 
     /// Record a structured event. Always logs to `Log.app`; additionally adds a
     /// Sentry breadcrumb when the Sentry SDK has been initialized via
-    /// `RishiLogging.start(dsn:...)`.
+    /// `RishiLogging.start(dsn:...)`. When a test installs `_testCapture.handler`,
+    /// it is invoked on every call (used by RishiDB's BreadcrumbsTests).
     public static func event(
         _ name: String,
         level: LogLevel = .info,
@@ -29,6 +62,7 @@ public enum Log {
             .joined(separator: " ")
         Self.app.log(level: level.osLogType, "event: \(name, privacy: .public) \(serialized, privacy: .public)")
         SentryBridge.addBreadcrumb(name: name, level: level, data: data)
+        _testCapture.notify(name, level, data)
     }
 
     /// Log an error message. If `error` is non-nil and Sentry is initialized,
