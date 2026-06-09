@@ -156,4 +156,82 @@ struct EndpointCodableTests {
         let r = try JSONDecoder().decode(BillingPortalEndpoint.PortalResponse.self, from: Data(json.utf8))
         #expect(r.url == "https://billing.stripe.com/p/x")
     }
+
+    // MARK: - Users
+
+    @Test func usersSearchEndpoint() throws {
+        let e = UsersSearchEndpoint(body: .init(query: "alice"))
+        #expect(e.path == "/v1/users/search")
+        #expect(e.method == .POST)
+        let bodyJSON = String(data: try JSONEncoder().encode(e.body), encoding: .utf8) ?? ""
+        #expect(bodyJSON.contains("\"query\""))
+        #expect(bodyJSON.contains("\"alice\""))
+        let json = #"{"users":[{"id":"u","email":"a@b","display_name":"A","avatar_url":"https://x"}]}"#
+        let r = try JSONDecoder().decode(UsersSearchEndpoint.SearchResponse.self, from: Data(json.utf8))
+        #expect(r.users.count == 1)
+        #expect(r.users[0].displayName == "A")
+        #expect(r.users[0].avatarURL == "https://x")
+    }
+
+    // MARK: - Sessions
+
+    @Test func createSessionEndpoint() throws {
+        let e = CreateSessionEndpoint(body: .init(bookId: "b"))
+        #expect(e.path == "/v1/sessions")
+        #expect(e.method == .POST)
+        let bodyJSON = String(data: try JSONEncoder().encode(e.body), encoding: .utf8) ?? ""
+        #expect(bodyJSON.contains("\"book_id\""))
+        let json = #"""
+        {"session_id":"s1","reconnect_token":"r1","ws_url":"wss://x","expires_at":1700000000}
+        """#
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .secondsSince1970
+        let r = try dec.decode(CreateSessionEndpoint.CreateResponse.self, from: Data(json.utf8))
+        #expect(r.sessionId == "s1")
+        #expect(r.reconnectToken == "r1")
+        #expect(r.wsUrl == "wss://x")
+    }
+
+    @Test func redeemSessionEndpointInterpolatesId() throws {
+        let e = RedeemSessionEndpoint(sessionId: "sess-1", body: .init(token: "tok"))
+        #expect(e.path == "/v1/sessions/sess-1/redeem")
+        #expect(e.method == .POST)
+        let json = #"{"success":true,"host_user_id":"host-7"}"#
+        let r = try JSONDecoder().decode(RedeemSessionEndpoint.RedeemResponse.self, from: Data(json.utf8))
+        #expect(r.success == true)
+        #expect(r.hostUserId == "host-7")
+    }
+
+    // MARK: - Desktop
+
+    @Test func desktopStartEndpoint() throws {
+        let e = DesktopStartEndpoint(body: .init(codeChallenge: "c", mode: "magic-link", email: "x@y"))
+        #expect(e.path == "/desktop/start")
+        #expect(e.method == .POST)
+        let bodyJSON = String(data: try JSONEncoder().encode(e.body), encoding: .utf8) ?? ""
+        #expect(bodyJSON.contains("\"code_challenge\""))
+        let json = #"{"flow_id":"f1","web_url":"https://accounts/x"}"#
+        let r = try JSONDecoder().decode(DesktopStartEndpoint.StartResponse.self, from: Data(json.utf8))
+        #expect(r.flowId == "f1")
+        #expect(r.webURL == "https://accounts/x")
+    }
+
+    @Test func desktopPollEndpoint() throws {
+        let e = DesktopPollEndpoint(body: .init(flowId: "f", codeVerifier: "v"))
+        #expect(e.path == "/desktop/poll")
+        let bodyJSON = String(data: try JSONEncoder().encode(e.body), encoding: .utf8) ?? ""
+        #expect(bodyJSON.contains("\"flow_id\""))
+        #expect(bodyJSON.contains("\"code_verifier\""))
+        let json = #"{"session_token":"tok","status":"complete"}"#
+        let r = try JSONDecoder().decode(DesktopPollEndpoint.PollResponse.self, from: Data(json.utf8))
+        #expect(r.sessionToken == "tok")
+        #expect(r.status == "complete")
+    }
+
+    @Test func desktopCancelEndpoint() throws {
+        let e = DesktopCancelEndpoint(body: .init(flowId: "f"))
+        #expect(e.path == "/desktop/cancel")
+        let bodyJSON = String(data: try JSONEncoder().encode(e.body), encoding: .utf8) ?? ""
+        #expect(bodyJSON.contains("\"flow_id\""))
+    }
 }
