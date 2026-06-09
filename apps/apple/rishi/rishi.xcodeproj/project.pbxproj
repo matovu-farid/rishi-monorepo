@@ -12,6 +12,7 @@
 		57C0D8BB9FAD2213E457E94F /* RishiTesting in Frameworks */ = {isa = PBXBuildFile; productRef = 39E77723BE79C2DC8FD0E4AA /* RishiTesting */; };
 		59D80D1126EB82C9435367FA /* RishiLogging in Frameworks */ = {isa = PBXBuildFile; productRef = 00D1898ADC5FFE76C44614FB /* RishiLogging */; };
 		8839709E009AD7D4E6F50947 /* RishiAuth in Frameworks */ = {isa = PBXBuildFile; productRef = A27D36EE1DC4536405E418CC /* RishiAuth */; };
+		E7B2FC494C84D0538470DADE /* RishiLibrary in Frameworks */ = {isa = PBXBuildFile; productRef = C9A9E807B1A4CA6AD85C80A2 /* RishiLibrary */; };
 		F262D7B88E378B23684A699F /* RishiDB in Frameworks */ = {isa = PBXBuildFile; productRef = FCF3C76E4FA9636D03567457 /* RishiDB */; };
 		F9D3B1838D2E03155B41B0AE /* RishiCore in Frameworks */ = {isa = PBXBuildFile; productRef = F9E6AED6A64A152D5FEA764C /* RishiCore */; };
 /* End PBXBuildFile section */
@@ -60,11 +61,15 @@
 		};
 		092254A62FD83186008C5ADE /* rishiTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = rishiTests;
 			sourceTree = "<group>";
 		};
 		092254B02FD83186008C5ADE /* rishiUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
 			path = rishiUITests;
 			sourceTree = "<group>";
 		};
@@ -81,6 +86,7 @@
 				53A044C8DA088C4CD4F0A61A /* RishiAPI in Frameworks */,
 				F262D7B88E378B23684A699F /* RishiDB in Frameworks */,
 				8839709E009AD7D4E6F50947 /* RishiAuth in Frameworks */,
+				E7B2FC494C84D0538470DADE /* RishiLibrary in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -148,6 +154,7 @@
 				8F44CD0541E29B6DA2049F21 /* RishiAPI */,
 				FCF3C76E4FA9636D03567457 /* RishiDB */,
 				A27D36EE1DC4536405E418CC /* RishiAuth */,
+				C9A9E807B1A4CA6AD85C80A2 /* RishiLibrary */,
 			);
 			productName = rishi;
 			productReference = 092254942FD83183008C5ADE /* rishi.app */;
@@ -231,13 +238,14 @@
 			mainGroup = 0922548B2FD83183008C5ADE;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				0A43A902E52E4A570EBD6646 /* XCLocalSwiftPackageReference "../Packages/RishiCore" */,
-				C299D995CA514281861348AA /* XCLocalSwiftPackageReference "../Packages/RishiUIKit" */,
-				D5C4A492B9366EFBAA0D040B /* XCLocalSwiftPackageReference "../Packages/RishiLogging" */,
-				AF8EAC1F08C25230E75FD9AC /* XCLocalSwiftPackageReference "../Packages/RishiTesting" */,
-				2020D4F0BFAAD9ECBFCBCD65 /* XCLocalSwiftPackageReference "../Packages/RishiAPI" */,
-				1802D603FBA51B2C069A134E /* XCLocalSwiftPackageReference "../Packages/RishiDB" */,
-				02A02F24AF08B9EE8465CCE7 /* XCLocalSwiftPackageReference "../Packages/RishiAuth" */,
+				0A43A902E52E4A570EBD6646 /* XCLocalSwiftPackageReference "RishiCore" */,
+				C299D995CA514281861348AA /* XCLocalSwiftPackageReference "RishiUIKit" */,
+				D5C4A492B9366EFBAA0D040B /* XCLocalSwiftPackageReference "RishiLogging" */,
+				AF8EAC1F08C25230E75FD9AC /* XCLocalSwiftPackageReference "RishiTesting" */,
+				2020D4F0BFAAD9ECBFCBCD65 /* XCLocalSwiftPackageReference "RishiAPI" */,
+				1802D603FBA51B2C069A134E /* XCLocalSwiftPackageReference "RishiDB" */,
+				02A02F24AF08B9EE8465CCE7 /* XCLocalSwiftPackageReference "RishiAuth" */,
+				B63075EAD65A62CCBE38C6C1 /* XCLocalSwiftPackageReference "RishiLibrary" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 092254952FD83183008C5ADE /* Products */;
@@ -638,31 +646,35 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		02A02F24AF08B9EE8465CCE7 /* XCLocalSwiftPackageReference "../Packages/RishiAuth" */ = {
+		02A02F24AF08B9EE8465CCE7 /* XCLocalSwiftPackageReference "RishiAuth" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Packages/RishiAuth;
 		};
-		0A43A902E52E4A570EBD6646 /* XCLocalSwiftPackageReference "../Packages/RishiCore" */ = {
+		0A43A902E52E4A570EBD6646 /* XCLocalSwiftPackageReference "RishiCore" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Packages/RishiCore;
 		};
-		1802D603FBA51B2C069A134E /* XCLocalSwiftPackageReference "../Packages/RishiDB" */ = {
+		1802D603FBA51B2C069A134E /* XCLocalSwiftPackageReference "RishiDB" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Packages/RishiDB;
 		};
-		2020D4F0BFAAD9ECBFCBCD65 /* XCLocalSwiftPackageReference "../Packages/RishiAPI" */ = {
+		2020D4F0BFAAD9ECBFCBCD65 /* XCLocalSwiftPackageReference "RishiAPI" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Packages/RishiAPI;
 		};
-		AF8EAC1F08C25230E75FD9AC /* XCLocalSwiftPackageReference "../Packages/RishiTesting" */ = {
+		AF8EAC1F08C25230E75FD9AC /* XCLocalSwiftPackageReference "RishiTesting" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Packages/RishiTesting;
 		};
-		C299D995CA514281861348AA /* XCLocalSwiftPackageReference "../Packages/RishiUIKit" */ = {
+		B63075EAD65A62CCBE38C6C1 /* XCLocalSwiftPackageReference "RishiLibrary" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/RishiLibrary;
+		};
+		C299D995CA514281861348AA /* XCLocalSwiftPackageReference "RishiUIKit" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Packages/RishiUIKit;
 		};
-		D5C4A492B9366EFBAA0D040B /* XCLocalSwiftPackageReference "../Packages/RishiLogging" */ = {
+		D5C4A492B9366EFBAA0D040B /* XCLocalSwiftPackageReference "RishiLogging" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Packages/RishiLogging;
 		};
@@ -671,37 +683,42 @@
 /* Begin XCSwiftPackageProductDependency section */
 		00D1898ADC5FFE76C44614FB /* RishiLogging */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = D5C4A492B9366EFBAA0D040B /* XCLocalSwiftPackageReference "../Packages/RishiLogging" */;
+			package = D5C4A492B9366EFBAA0D040B /* XCLocalSwiftPackageReference "RishiLogging" */;
 			productName = RishiLogging;
 		};
 		02462412E0BB4964915C0E2F /* RishiUIKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = C299D995CA514281861348AA /* XCLocalSwiftPackageReference "../Packages/RishiUIKit" */;
+			package = C299D995CA514281861348AA /* XCLocalSwiftPackageReference "RishiUIKit" */;
 			productName = RishiUIKit;
 		};
 		39E77723BE79C2DC8FD0E4AA /* RishiTesting */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = AF8EAC1F08C25230E75FD9AC /* XCLocalSwiftPackageReference "../Packages/RishiTesting" */;
+			package = AF8EAC1F08C25230E75FD9AC /* XCLocalSwiftPackageReference "RishiTesting" */;
 			productName = RishiTesting;
 		};
 		8F44CD0541E29B6DA2049F21 /* RishiAPI */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 2020D4F0BFAAD9ECBFCBCD65 /* XCLocalSwiftPackageReference "../Packages/RishiAPI" */;
+			package = 2020D4F0BFAAD9ECBFCBCD65 /* XCLocalSwiftPackageReference "RishiAPI" */;
 			productName = RishiAPI;
 		};
 		A27D36EE1DC4536405E418CC /* RishiAuth */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 02A02F24AF08B9EE8465CCE7 /* XCLocalSwiftPackageReference "../Packages/RishiAuth" */;
+			package = 02A02F24AF08B9EE8465CCE7 /* XCLocalSwiftPackageReference "RishiAuth" */;
 			productName = RishiAuth;
+		};
+		C9A9E807B1A4CA6AD85C80A2 /* RishiLibrary */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B63075EAD65A62CCBE38C6C1 /* XCLocalSwiftPackageReference "RishiLibrary" */;
+			productName = RishiLibrary;
 		};
 		F9E6AED6A64A152D5FEA764C /* RishiCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 0A43A902E52E4A570EBD6646 /* XCLocalSwiftPackageReference "../Packages/RishiCore" */;
+			package = 0A43A902E52E4A570EBD6646 /* XCLocalSwiftPackageReference "RishiCore" */;
 			productName = RishiCore;
 		};
 		FCF3C76E4FA9636D03567457 /* RishiDB */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 1802D603FBA51B2C069A134E /* XCLocalSwiftPackageReference "../Packages/RishiDB" */;
+			package = 1802D603FBA51B2C069A134E /* XCLocalSwiftPackageReference "RishiDB" */;
 			productName = RishiDB;
 		};
 /* End XCSwiftPackageProductDependency section */
