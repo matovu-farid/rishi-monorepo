@@ -4,7 +4,10 @@ import RishiCore
 import RishiAPI
 @testable import RishiAuth
 
-@Suite("GoogleSignInCoordinator — happy + cancel + missing-token + malformed + URL helpers")
+@Suite(
+    "GoogleSignInCoordinator — happy + cancel + missing-token + malformed + URL helpers",
+    .serialized // GoogleStubURLProtocol uses static state; run tests in serial.
+)
 struct GoogleOAuthFlowTests {
 
     // MARK: - Mock presenter
