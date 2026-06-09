@@ -1,5 +1,9 @@
-// RishiCore — Foundation layer per ARCHITECTURE.md.
-// Phase 1 will populate this with domain models (Book, Highlight, Conversation, ...),
-// RishiError envelope, and the I/O protocols (BookStore, APIClient, AudioPlayer).
-// Phase 0 only scaffolds the package so the Xcode build is green.
-public enum RishiCore { public static let placeholder = "RishiCore" }
+// RishiCore — domain models, service protocols, and the unified error envelope.
+// Public surface is exported through the individual files under Models/, Errors/, and Protocols/.
+
+import Foundation
+
+public enum RishiCore {
+    /// Marker for SemVer of the public RishiCore surface. Bump when public API breaks.
+    public static let apiVersion = "1.0.0"
+}

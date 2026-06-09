@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Placeholder")
 struct PlaceholderTests {
-    @Test func packageBuilds() {
-        #expect(RishiCore.placeholder == "RishiCore")
+    @Test func apiVersionIsSet() {
+        #expect(RishiCore.apiVersion == "1.0.0")
     }
 }
