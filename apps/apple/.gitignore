@@ -1,0 +1,10 @@
+.planning/
+
+# Xcode / SwiftPM build artifacts
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+build.log
+build-catalyst.log
