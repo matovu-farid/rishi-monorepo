@@ -2,40 +2,60 @@
 //  SettingsSheet.swift
 //  rishi
 //
-//  Phase 7 Plan 07-05 — SYNC-07 + SYNC-08 user-facing surface.
+//  Phase 11 Plan 11-06 — replaces the Phase-7 minimal SettingsSheet with
+//  the full `RishiSettings.SettingsScreen` (Account / Subscription /
+//  Reader Defaults / Audio / Sync / Privacy / About sections).
 //
-//  Presented from the Library toolbar gear icon. Embeds `SettingsSyncSection`
-//  from RishiSync inside a Form so the layout matches Apple's stock Settings
-//  affordance.
+//  Composition lives in `AppDependencies.makeSettingsScreen(...)` so this
+//  view only owns:
+//    1. Loading the initial `TTSSettings` for the Audio section picker.
+//    2. Dismiss + sign-out + delete-account dispatch back to RootView.
 //
 
 import SwiftUI
-import RishiSync
+import RishiAudio
+import RishiCore
+import RishiSettings
 
+/// Sheet wrapping `RishiSettings.SettingsScreen`. Presented from the Library
+/// toolbar gear button.
 struct SettingsSheet: View {
 
     let dependencies: AppDependencies
+    let user: User
+    let onSignedOut: () -> Void
+
     @Environment(\.dismiss) private var dismiss
+    @State private var initialAudio: TTSSettings = .default
+    @State private var audioLoaded = false
 
     var body: some View {
-        NavigationStack {
-            Form {
-                SettingsSyncSection(status: dependencies.syncStatus) { [syncEngine = dependencies.syncEngine] in
-                    Task {
-                        await syncEngine.syncNow()
+        Group {
+            if audioLoaded {
+                dependencies.makeSettingsScreen(
+                    user: user,
+                    audioInitial: initialAudio,
+                    onDismiss: { dismiss() },
+                    onSignedOut: {
+                        dismiss()
+                        onSignedOut()
+                    },
+                    onAccountDeleted: {
+                        dismiss()
+                        onSignedOut()
                     }
-                }
-                // Future: account section, theme overrides, etc.
+                )
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .navigationTitle("Settings")
-            #if canImport(UIKit)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
+        }
+        .task {
+            // Load once per sheet presentation; the AudioSection picker reads
+            // `initialAudio` as its seed value, then persists subsequent
+            // changes through `audioStore` itself.
+            initialAudio = await dependencies.ttsSettingsStore.load(userId: user.id)
+            audioLoaded = true
         }
     }
 }

@@ -20,9 +20,12 @@ import SwiftUI
 import RishiCore
 import RishiAudio
 import RishiAuth
+import RishiBilling
 import RishiChat
 import RishiLibrary
+import RishiOnboarding
 import RishiReader
+import RishiSettings
 #if canImport(PDFKit)
 import PDFKit
 #endif
@@ -71,6 +74,16 @@ struct RootView: View {
     @State private var selectedConversation: Conversation? = nil
     @State private var chatPanelForPresenter: ChatPanelViewModel? = nil
 
+    // MARK: - Phase 11 (Onboarding + Billing) state
+    //
+    // `showOnboarding` is set to !state.hasCompletedOnboarding by the
+    // bootstrap task — first-run users see the OnboardingFlowView as a
+    // .fullScreenCover. Returning users skip straight to the library.
+    @State private var showOnboarding = false
+    /// BILL-04 — non-nil while the paywall sheet is presented. The wrapped
+    /// String is the feature name passed into `PaywallView`.
+    @State private var paywallFeature: PaywallFeature? = nil
+
     var body: some View {
         Group {
             if let user = currentUser, let deps = deps {
@@ -84,7 +97,20 @@ struct RootView: View {
                 }
                 .sheet(item: $selectedConversation) { convo in
                     let vm = deps.makeChatPanelViewModel(conversation: convo)
-                    ChatPanelView(viewModel: vm)
+                    NavigationStack {
+                        ChatPanelHost(
+                            presenter: deps.voicePresenter,
+                            viewModel: vm,
+                            bookId: convo.bookId,
+                            initialQuote: nil,
+                            onFreeUserTap: {
+                                paywallFeature = PaywallFeature(name: "Voice Chat")
+                            },
+                            entitlementProvider: { [deps] in
+                                await deps.entitlementService.snapshot()
+                            }
+                        )
+                    }
                 }
                 .sheet(
                     item: Binding(
@@ -111,6 +137,60 @@ struct RootView: View {
             guard !bootstrapped else { return }
             bootstrapped = true
             currentUser = await auth?.currentUser
+            // Phase 11 — gate the first-launch onboarding cover on the
+            // persisted flag. Refresh entitlement only when the user has
+            // already signed in (signed-out users have nothing to fetch).
+            if let deps = deps {
+                let completed = await deps.onboardingState.hasCompletedOnboarding()
+                showOnboarding = !completed
+                if currentUser != nil {
+                    _ = await deps.entitlementService.refresh()
+                }
+            }
+        }
+        // Phase 11 — first-launch onboarding cover. Presented over the
+        // signed-in OR signed-out path because we want the welcome screen
+        // even before the user has authenticated.
+        #if canImport(UIKit)
+        .fullScreenCover(isPresented: $showOnboarding) {
+            if let deps = deps {
+                OnboardingHost(
+                    dependencies: deps,
+                    onCompleted: { showOnboarding = false }
+                )
+            } else {
+                ProgressView()
+            }
+        }
+        #else
+        .sheet(isPresented: $showOnboarding) {
+            if let deps = deps {
+                OnboardingHost(
+                    dependencies: deps,
+                    onCompleted: { showOnboarding = false }
+                )
+            } else {
+                ProgressView()
+            }
+        }
+        #endif
+        // BILL-04 — paywall sheet for free users tapping a Pro feature.
+        // Manage-Subscription tap inside `PaywallView` routes through the
+        // billing portal service (gated on `ReaderAppEntitlementFlag` by
+        // the view itself).
+        .sheet(item: $paywallFeature) { feature in
+            if let deps = deps {
+                PaywallView(
+                    feature: feature.name,
+                    onSubscribe: {
+                        Task { try? await deps.billingPortalService.openPortal() }
+                        paywallFeature = nil
+                    },
+                    onDismiss: { paywallFeature = nil }
+                )
+            } else {
+                ProgressView()
+            }
         }
         .onOpenURL { url in
             guard let deps = deps else { return }
@@ -146,7 +226,11 @@ struct RootView: View {
         }
         #endif
         .sheet(isPresented: $showSettings) {
-            SettingsSheet(dependencies: deps)
+            SettingsSheet(
+                dependencies: deps,
+                user: user,
+                onSignedOut: { currentUser = nil }
+            )
         }
     }
 
@@ -172,7 +256,20 @@ struct RootView: View {
     ) -> some View {
         Group {
             if let vm = chatPanelForPresenter {
-                ChatPanelView(viewModel: vm, initialQuote: pending.initialQuote)
+                NavigationStack {
+                    ChatPanelHost(
+                        presenter: deps.voicePresenter,
+                        viewModel: vm,
+                        bookId: pending.bookId,
+                        initialQuote: pending.initialQuote,
+                        onFreeUserTap: {
+                            paywallFeature = PaywallFeature(name: "Voice Chat")
+                        },
+                        entitlementProvider: { [deps] in
+                            await deps.entitlementService.snapshot()
+                        }
+                    )
+                }
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -213,7 +310,15 @@ struct RootView: View {
                 readerSettingsStore: deps.readerSettingsStore,
                 highlightStore: deps.highlightStore,
                 onReadAloud: FeatureFlags.readAloud ? {
-                    Task { await startPDFReadAloud(vm: pdfVM, deps: deps, userId: userId) }
+                    Task {
+                        // BILL-04 — gate Pro features on entitlement.
+                        let level = await deps.entitlementService.snapshot()
+                        guard level == .pro else {
+                            paywallFeature = PaywallFeature(name: "Read Aloud")
+                            return
+                        }
+                        await startPDFReadAloud(vm: pdfVM, deps: deps, userId: userId)
+                    }
                 } : nil,
                 chatPresenter: deps.chatPresenter
             )
@@ -276,7 +381,15 @@ struct RootView: View {
                 readerSettingsStore: deps.readerSettingsStore,
                 highlightStore: deps.highlightStore,
                 onReadAloud: FeatureFlags.readAloud ? {
-                    Task { await startEPUBReadAloud(vm: epubVM, deps: deps, userId: userId) }
+                    Task {
+                        // BILL-04 — gate Pro features on entitlement.
+                        let level = await deps.entitlementService.snapshot()
+                        guard level == .pro else {
+                            paywallFeature = PaywallFeature(name: "Read Aloud")
+                            return
+                        }
+                        await startEPUBReadAloud(vm: epubVM, deps: deps, userId: userId)
+                    }
                 } : nil,
                 chatPresenter: deps.chatPresenter
             )
@@ -421,6 +534,14 @@ struct RootView: View {
         }
         #endif
     }
+}
+
+/// BILL-04 — Identifiable wrapper so `.sheet(item:)` can drive a paywall
+/// keyed by the feature name. String isn't Identifiable in stdlib; using a
+/// dedicated struct keeps the @State binding straightforward.
+private struct PaywallFeature: Identifiable, Equatable {
+    let name: String
+    var id: String { name }
 }
 
 /// Hashable + Identifiable nav target so `fullScreenCover(item:)` can

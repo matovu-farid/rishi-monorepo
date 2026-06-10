@@ -13,6 +13,7 @@
 //
 
 import SwiftUI
+import RishiBilling
 import RishiCore
 import RishiChat
 import RishiVoice
@@ -33,17 +34,29 @@ struct ChatPanelHost: View {
     let viewModel: ChatPanelViewModel
     let bookId: BookID?
     let initialQuote: String?
+    /// BILL-04 — closure called when the voice button is tapped while the
+    /// user is `.free`. Drives the RootView paywall sheet. When this is
+    /// `nil`, the voice button starts a session immediately (test default).
+    let onFreeUserTap: (() -> Void)?
+    /// Closure resolving the current entitlement. Returns `.pro` to allow
+    /// the session to start; `.free` triggers `onFreeUserTap`. Defaults to
+    /// `.pro` for tests that don't wire billing.
+    let entitlementProvider: () async -> EntitlementLevel
 
     init(
         presenter: VoiceSessionPresenter,
         viewModel: ChatPanelViewModel,
         bookId: BookID?,
-        initialQuote: String? = nil
+        initialQuote: String? = nil,
+        onFreeUserTap: (() -> Void)? = nil,
+        entitlementProvider: @escaping () async -> EntitlementLevel = { .pro }
     ) {
         self._presenter = Bindable(wrappedValue: presenter)
         self.viewModel = viewModel
         self.bookId = bookId
         self.initialQuote = initialQuote
+        self.onFreeUserTap = onFreeUserTap
+        self.entitlementProvider = entitlementProvider
     }
 
     var body: some View {
@@ -51,7 +64,15 @@ struct ChatPanelHost: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        Task { await presenter.start(bookId: bookId) }
+                        Task {
+                            // BILL-04 — gate voice on entitlement.
+                            let level = await entitlementProvider()
+                            guard level == .pro else {
+                                onFreeUserTap?()
+                                return
+                            }
+                            await presenter.start(bookId: bookId)
+                        }
                     } label: {
                         Image(systemName: "waveform.circle")
                     }
