@@ -80,4 +80,70 @@ platform :ios do
       skip_screenshots: ENV["SKIP_SCREENSHOTS"] == "1"
     )
   end
+
+  desc "Capture placeholder + real screenshots for every supported device frame. " \
+       "Invokes fastlane/scripts/capture_screenshots.sh which seeds 1x1 PNG placeholders " \
+       "for any frame that does not already have a capture committed."
+  lane :capture_screenshots do
+    sh("bash #{File.expand_path('../scripts/capture_screenshots.sh', __dir__)}")
+  end
+
+  desc "Build Release iOS + upload to TestFlight (internal testers only). " \
+       "Reads changelog from fastlane/changelog.txt if present, else from `git log -1 --pretty=%B`. " \
+       "Validates metadata first so a malformed name/keywords block never reaches Apple."
+  lane :release_testflight do
+    metadata_validate
+
+    changelog_path = File.expand_path('../changelog.txt', __dir__)
+    changelog = if File.file?(changelog_path)
+      File.read(changelog_path)
+    else
+      `git log -1 --pretty=%B`.strip
+    end
+
+    build_app(
+      project: "rishi/rishi.xcodeproj",
+      scheme: "rishi",
+      configuration: "Release",
+      clean: true,
+      export_method: "app-store"
+    )
+
+    upload_to_testflight(
+      skip_waiting_for_build_processing: true,
+      distribute_external: false,
+      changelog: changelog,
+      notify_external_testers: false
+    )
+  end
+
+  desc "Build Mac Catalyst Release + upload to TestFlight (internal testers). " \
+       "Same changelog source as release_testflight."
+  lane :release_mac_testflight do
+    metadata_validate
+
+    changelog_path = File.expand_path('../changelog.txt', __dir__)
+    changelog = if File.file?(changelog_path)
+      File.read(changelog_path)
+    else
+      `git log -1 --pretty=%B`.strip
+    end
+
+    build_app(
+      project: "rishi/rishi.xcodeproj",
+      scheme: "rishi",
+      configuration: "Release",
+      clean: true,
+      destination: "generic/platform=macOS,variant=Mac Catalyst",
+      export_method: "app-store"
+    )
+
+    upload_to_testflight(
+      platform: "osx",
+      skip_waiting_for_build_processing: true,
+      distribute_external: false,
+      changelog: changelog,
+      notify_external_testers: false
+    )
+  end
 end
