@@ -29,4 +29,55 @@ platform :ios do
       changelog: "Skeleton build from Phase 0 BOOT-09 — proves pipeline only. Not for distribution."
     )
   end
+
+  desc "Validate fastlane metadata files (per-field char limits, URL schemes, presence). " \
+       "Exits non-zero if any en-US or review_information field is missing, empty, oversized, or malformed."
+  lane :metadata_validate do
+    script = File.expand_path('../scripts/validate_metadata.rb', __dir__)
+    root   = File.expand_path('..', __dir__)
+    sh("ruby #{script.shellescape} #{root.shellescape}")
+  end
+
+  desc "Build the iOS app for App Store, upload metadata + screenshots, DO NOT submit. " \
+       "Run the manual submit step in plan 12-06 when the build is ready for review. " \
+       "Pass SKIP_SCREENSHOTS=1 for dry-runs before captures land."
+  lane :release_app_store do
+    metadata_validate
+    build_app(
+      project: "rishi/rishi.xcodeproj",
+      scheme: "rishi",
+      configuration: "Release",
+      clean: true,
+      export_method: "app-store"
+    )
+    upload_to_app_store(
+      submit_for_review: false,
+      automatic_release: false,
+      force: true,
+      skip_screenshots: ENV["SKIP_SCREENSHOTS"] == "1",
+      precheck_include_in_app_purchases: false,
+      submission_information: { add_id_info_uses_idfa: false }
+    )
+  end
+
+  desc "Build the Mac Catalyst app, upload metadata + screenshots to the Mac App Store, DO NOT submit. " \
+       "Same SKIP_SCREENSHOTS=1 escape hatch as release_app_store."
+  lane :release_mac_app_store do
+    metadata_validate
+    build_app(
+      project: "rishi/rishi.xcodeproj",
+      scheme: "rishi",
+      configuration: "Release",
+      clean: true,
+      destination: "generic/platform=macOS,variant=Mac Catalyst",
+      export_method: "app-store"
+    )
+    upload_to_app_store(
+      platform: "osx",
+      submit_for_review: false,
+      automatic_release: false,
+      force: true,
+      skip_screenshots: ENV["SKIP_SCREENSHOTS"] == "1"
+    )
+  end
 end

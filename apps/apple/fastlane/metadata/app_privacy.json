@@ -1,0 +1,58 @@
+{
+  "data_types": [
+    {
+      "category": "User Content",
+      "subtype": "Other User Content",
+      "collected": true,
+      "linked_to_user": true,
+      "used_for_tracking": false,
+      "purposes": ["App Functionality"],
+      "notes": "EPUB / PDF files uploaded by the user, plus highlights, notes, and chat messages. Stored in Cloudflare R2 and Workers KV. Required for cross-device sync."
+    },
+    {
+      "category": "Identifiers",
+      "subtype": "User ID",
+      "collected": true,
+      "linked_to_user": true,
+      "used_for_tracking": false,
+      "purposes": ["App Functionality"],
+      "notes": "Sign in with Apple stable user identifier (or Google sub). Used to associate sync data."
+    },
+    {
+      "category": "Contact Info",
+      "subtype": "Email Address",
+      "collected": true,
+      "linked_to_user": true,
+      "used_for_tracking": false,
+      "purposes": ["App Functionality"],
+      "notes": "May be a private relay address per Sign in with Apple. Used for account recovery + transactional email."
+    },
+    {
+      "category": "Diagnostics",
+      "subtype": "Crash Data",
+      "collected": true,
+      "linked_to_user": false,
+      "used_for_tracking": false,
+      "purposes": ["App Functionality"],
+      "notes": "Sentry crash + breadcrumb data. First-party. Telemetry can be opted out from Settings."
+    },
+    {
+      "category": "Diagnostics",
+      "subtype": "Performance Data",
+      "collected": true,
+      "linked_to_user": false,
+      "used_for_tracking": false,
+      "purposes": ["App Functionality"],
+      "notes": "Sentry performance + breadcrumb data matching PrivacyInfo.xcprivacy NSPrivacyCollectedDataTypePerformanceData. Telemetry can be opted out from Settings."
+    },
+    {
+      "category": "Usage Data",
+      "subtype": "Product Interaction",
+      "collected": true,
+      "linked_to_user": false,
+      "used_for_tracking": false,
+      "purposes": ["App Functionality"],
+      "notes": "Anonymous reading-session length + chat-turn counts. Opt-out available in Settings."
+    }
+  ]
+}
