@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		252859A25AFDB0AC38588F5F /* RishiUIKit in Frameworks */ = {isa = PBXBuildFile; productRef = 02462412E0BB4964915C0E2F /* RishiUIKit */; };
+		3940EE6AEFE7E57CCFCE7B66 /* RishiAudio in Frameworks */ = {isa = PBXBuildFile; productRef = D6E5CE5173F3A3E46D2BDC43 /* RishiAudio */; };
 		443936E1F89255A2DE7AE7E4 /* RishiSync in Frameworks */ = {isa = PBXBuildFile; productRef = ED6697329153BA8878524B1C /* RishiSync */; };
 		519E9AFE739F3C46AE57BEE7 /* RishiReader in Frameworks */ = {isa = PBXBuildFile; productRef = 5DF2FEE0C4B237A301D26963 /* RishiReader */; };
 		53A044C8DA088C4CD4F0A61A /* RishiAPI in Frameworks */ = {isa = PBXBuildFile; productRef = 8F44CD0541E29B6DA2049F21 /* RishiAPI */; };
@@ -91,6 +92,7 @@
 				E7B2FC494C84D0538470DADE /* RishiLibrary in Frameworks */,
 				519E9AFE739F3C46AE57BEE7 /* RishiReader in Frameworks */,
 				443936E1F89255A2DE7AE7E4 /* RishiSync in Frameworks */,
+				3940EE6AEFE7E57CCFCE7B66 /* RishiAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -161,6 +163,7 @@
 				C9A9E807B1A4CA6AD85C80A2 /* RishiLibrary */,
 				5DF2FEE0C4B237A301D26963 /* RishiReader */,
 				ED6697329153BA8878524B1C /* RishiSync */,
+				D6E5CE5173F3A3E46D2BDC43 /* RishiAudio */,
 			);
 			productName = rishi;
 			productReference = 092254942FD83183008C5ADE /* rishi.app */;
@@ -254,6 +257,7 @@
 				B63075EAD65A62CCBE38C6C1 /* XCLocalSwiftPackageReference "RishiLibrary" */,
 				8E875199F9111A45295EC692 /* XCLocalSwiftPackageReference "RishiReader" */,
 				ACA86917896799659B23A413 /* XCLocalSwiftPackageReference "RishiSync" */,
+				075D5CFA3582BF83E9F285F6 /* XCLocalSwiftPackageReference "RishiAudio" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 092254952FD83183008C5ADE /* Products */;
@@ -658,6 +662,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Packages/RishiAuth;
 		};
+		075D5CFA3582BF83E9F285F6 /* XCLocalSwiftPackageReference "RishiAudio" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/RishiAudio;
+		};
 		0A43A902E52E4A570EBD6646 /* XCLocalSwiftPackageReference "RishiCore" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Packages/RishiCore;
@@ -731,6 +739,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = B63075EAD65A62CCBE38C6C1 /* XCLocalSwiftPackageReference "RishiLibrary" */;
 			productName = RishiLibrary;
+		};
+		D6E5CE5173F3A3E46D2BDC43 /* RishiAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 075D5CFA3582BF83E9F285F6 /* XCLocalSwiftPackageReference "RishiAudio" */;
+			productName = RishiAudio;
 		};
 		ED6697329153BA8878524B1C /* RishiSync */ = {
 			isa = XCSwiftPackageProductDependency;
