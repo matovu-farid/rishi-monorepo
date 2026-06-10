@@ -9,6 +9,7 @@ import RishiDB
 import RishiLibrary
 import RishiReader
 import RishiSync
+import RishiVoice
 
 /// Composition root for the rishi app. Constructed once by `rishiApp.init()`.
 ///
@@ -66,12 +67,22 @@ final class AppDependencies {
     let conversationStore: any ConversationStore
     let messageStore: any MessageStore
     let conversationLookup: ConversationLookup
-    let chatDirtyHook: AppChatDirtyHook
+    /// Phase 10 Plan 10-06: dual-conformer forwarder for BOTH `ChatDirtyHook`
+    /// AND `VoiceTranscriptDirtyHook`. Replaces Phase 9's `AppChatDirtyHook`
+    /// so the SyncEngine sees chat + voice transcript dirty marks through
+    /// a single composition seam.
+    let voiceDirtyAdapter: AppVoiceDirtyAdapter
     let chatService: RishiChatService
     /// Retained for the app lifetime. RootView observes
     /// `chatPresenter.pendingPresentation` to drive a `.sheet(item:)`
     /// presenting the chat panel for the active book.
     let chatPresenter: ChatPresenterImpl
+
+    // Voice (Phase 10 — composition root for the realtime voice stack)
+    /// Singleton presenter wiring the chat panel's voice button to the
+    /// `RealtimeVoiceSession` lifecycle. `ChatPanelHost` binds
+    /// `.fullScreenCover(isPresented:)` to `voicePresenter.isPresenting`.
+    let voicePresenter: VoiceSessionPresenter
 
     /// Cached user id pumped in by RootView after the auth session resolves.
     /// LibraryViewModel reads this synchronously from its currentUserId
@@ -281,13 +292,14 @@ final class AppDependencies {
 
         // 15. Chat stack (Phase 9). GRDB stores for conversations + messages,
         //     ConversationLookup actor over the conversation store, the
-        //     RishiChatService actor wired with AppChatDirtyHook (forwards to
-        //     SyncEngine), and the @Observable ChatPresenterImpl that
-        //     RootView binds a sheet to.
+        //     RishiChatService actor wired with AppVoiceDirtyAdapter
+        //     (forwards to SyncEngine for BOTH chat + voice transcript dirty
+        //     marks — Plan 10-06), and the @Observable ChatPresenterImpl
+        //     that RootView binds a sheet to.
         let conversationStore = GRDBConversationStore(dbQueue: dbQueue)
         let messageStore = GRDBMessageStore(dbQueue: dbQueue)
         let conversationLookup = ConversationLookup(store: conversationStore)
-        let chatDirtyHook = AppChatDirtyHook(syncEngine: syncEngine)
+        let voiceDirtyAdapter = AppVoiceDirtyAdapter(syncEngine: syncEngine)
         // `userIdProvider` reads from the same userIdBox the LibraryViewModel
         // uses — RootView pumps it after auth resolves. Chat turns will fail
         // with `RishiError.unauthenticated` until then (intentional).
@@ -299,14 +311,29 @@ final class AppDependencies {
             conversationLookup: conversationLookup,
             conversationStore: conversationStore,
             messageStore: messageStore,
-            dirtyHook: chatDirtyHook
+            dirtyHook: voiceDirtyAdapter
         )
         self.conversationStore = conversationStore
         self.messageStore = messageStore
         self.conversationLookup = conversationLookup
-        self.chatDirtyHook = chatDirtyHook
+        self.voiceDirtyAdapter = voiceDirtyAdapter
         self.chatService = chatService
         self.chatPresenter = ChatPresenterImpl()
+
+        // 16. Voice stack (Phase 10 Plan 10-06). Single `VoiceSessionPresenter`
+        //     wiring the chat-panel voice button to a `RealtimeVoiceSession`.
+        //     Reuses the SAME `audioCoordinator` from the Phase-8 TTS stack so
+        //     `.voice` mode acquisition pre-empts active TTS playback per
+        //     VOICE-04. The dirty-hook is the same dual-conformer adapter
+        //     wired into ChatService above.
+        self.voicePresenter = VoiceSessionPresenter(
+            coordinator: audioStack.coordinator,
+            workerClient: workerClient,
+            messageStore: messageStore,
+            conversationLookup: conversationLookup,
+            userIdProvider: { [userIdBox] in userIdBox.value },
+            dirtyHook: voiceDirtyAdapter
+        )
     }
 
     // MARK: - Chat factories (Phase 9)
