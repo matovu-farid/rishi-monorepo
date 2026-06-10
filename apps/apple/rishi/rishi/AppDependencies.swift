@@ -5,6 +5,7 @@ import RishiAPI
 import RishiAuth
 import RishiDB
 import RishiLibrary
+import RishiReader
 
 /// Composition root for the rishi app. Constructed once by `rishiApp.init()`.
 ///
@@ -28,10 +29,15 @@ final class AppDependencies {
     let dbQueue: DatabaseQueue
     let bookStore: any BookStore
     let positionStore: any PositionStore
+    let highlightStore: any HighlightStore
     let bookFileStorage: BookFileStorage
     let importCoordinator: ImportCoordinator
     let sampleBookInstaller: SampleBookInstaller
+    let sampleReaderInstaller: SampleReaderInstaller
     let libraryViewModel: LibraryViewModel
+
+    // Reader
+    let readerSettingsStore: any ReaderSettingsStore
 
     /// Cached user id pumped in by RootView after the auth session resolves.
     /// LibraryViewModel reads this synchronously from its currentUserId
@@ -112,8 +118,13 @@ final class AppDependencies {
         // 8. Stores.
         let bookStore = GRDBBookStore(dbQueue: dbQueue)
         let positionStore = GRDBPositionStore(dbQueue: dbQueue)
+        let highlightStore = GRDBHighlightStore(dbQueue: dbQueue)
         self.bookStore = bookStore
         self.positionStore = positionStore
+        self.highlightStore = highlightStore
+
+        // 8b. Reader settings (per-book theme persistence via UserDefaults).
+        self.readerSettingsStore = UserDefaultsReaderSettingsStore()
 
         // 9. Library file storage (cover extractors for the two v1 formats).
         let bookFileStorage = BookFileStorage(
@@ -132,8 +143,9 @@ final class AppDependencies {
             await authService.currentUser?.id
         }
 
-        // 11. Sample-book installer (first-run alice.epub).
+        // 11. Sample-book installers (first-run alice.epub + sample.pdf).
         self.sampleBookInstaller = SampleBookInstaller(storage: bookFileStorage)
+        self.sampleReaderInstaller = SampleReaderInstaller(storage: bookFileStorage)
 
         // 12. Library view model. `currentUserId` reads from a heap-allocated
         // box that RootView pumps via `cachedUserId`. We can't capture `self`
