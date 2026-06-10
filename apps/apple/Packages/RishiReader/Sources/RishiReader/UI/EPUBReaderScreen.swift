@@ -1,11 +1,20 @@
 import SwiftUI
 import RishiCore
 import RishiUIKit
+import Foundation
 #if canImport(UIKit)
 import UIKit
 import ReadiumShared
 import ReadiumNavigator
 #endif
+
+/// Phase 12 Plan 12-01 — notification names mirrored from the rishi app's
+/// `RishiCommand` enum. Raw strings MUST match
+/// `rishi/rishi/Mac/RishiKeyboardCommands.swift`.
+private enum EPUBMacCommandNotification {
+    static let fontStep      = Notification.Name("RishiCommand.fontStep")
+    static let fontStepDelta = "delta"
+}
 
 /// Top-level SwiftUI screen for reading an EPUB.
 ///
@@ -177,6 +186,16 @@ public struct EPUBReaderScreen: View {
             // first render uses them (font / size / line-height / theme).
             applyPreferences()
             #endif
+        }
+        // Phase 12 Plan 12-01 — Mac menu font-step.
+        .onReceive(NotificationCenter.default.publisher(for: EPUBMacCommandNotification.fontStep)) { note in
+            let delta = (note.userInfo?[EPUBMacCommandNotification.fontStepDelta] as? Int) ?? 0
+            guard delta != 0 else { return }
+            let current = viewModel.typography.fontSize.points
+            let stepped = ReaderFontSize.clamped(current + Double(delta) * 2.0)
+            var typo = viewModel.typography
+            typo.fontSize = stepped
+            viewModel.typography = typo
         }
         #if canImport(UIKit)
         .epubSpread { mode in

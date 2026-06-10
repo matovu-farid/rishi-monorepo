@@ -35,6 +35,16 @@ struct RootView: View {
     @Environment(\.rishiAuthService) private var auth
     @Environment(\.appDependencies) private var deps
     @Environment(LibraryViewModel.self) private var libraryViewModel
+    /// Phase 12 Plan 12-01 — observes intents fired from `RishiMenuCommands`
+    /// (menu bar + ⌘ shortcuts). `nil` in tests / SwiftUI previews so the
+    /// view still renders without the composition root in scope.
+    @Environment(\.macCommandRouter) private var commandRouter
+
+    /// Phase 12 — bound to the TabView. `MacCommandIntent.selectTab(_)`
+    /// (and `.focusSearch` / `.newConversation`) writes into this so the
+    /// menu can switch the visible tab without touching the underlying
+    /// `LibraryRootView` / `ConversationsListView`.
+    @State private var selectedTab: MacTab = .library
 
     @State private var currentUser: User? = nil
     @State private var bootstrapped = false
@@ -87,11 +97,11 @@ struct RootView: View {
     var body: some View {
         Group {
             if let user = currentUser, let deps = deps {
-                TabView {
-                    Tab("Library", systemImage: "books.vertical") {
+                TabView(selection: $selectedTab) {
+                    Tab("Library", systemImage: "books.vertical", value: MacTab.library) {
                         libraryTab(deps: deps, user: user)
                     }
-                    Tab("Chats", systemImage: "bubble.left.and.bubble.right") {
+                    Tab("Chats", systemImage: "bubble.left.and.bubble.right", value: MacTab.chats) {
                         conversationsTab(deps: deps, user: user)
                     }
                 }
@@ -198,6 +208,86 @@ struct RootView: View {
                 _ = await deps.importCoordinator.importBooks([url])
                 await libraryViewModel.refresh()
             }
+        }
+        // Phase 12 Plan 12-01 — drain the Mac command router whenever the
+        // menu bar / ⌘-shortcut posts a new intent. We use `.task(id:)` so
+        // the closure re-runs on every change to `pendingIntent` (including
+        // back-to-back identical intents, because consume() resets to nil).
+        .task(id: commandRouter?.pendingIntent) {
+            consumePendingMacIntent()
+        }
+    }
+
+    // MARK: - Mac command intent dispatch (Phase 12 Plan 12-01)
+
+    /// Consumes the latest intent from `commandRouter` and dispatches it to
+    /// the matching app surface. NotificationCenter is the seam for surfaces
+    /// that live inside SwiftPM packages (RishiLibrary, RishiReader) so
+    /// those packages do NOT have to import the rishi app target.
+    private func consumePendingMacIntent() {
+        guard let router = commandRouter, let intent = router.pendingIntent else { return }
+        defer { router.consume() }
+
+        switch intent {
+        case .importBook:
+            // LibraryRootView observes `RishiCommand.importBook` and toggles
+            // its document-picker sheet.
+            selectedTab = .library
+            NotificationCenter.default.post(name: RishiCommand.importBook, object: nil)
+
+        case .newConversation:
+            // Jump to the Chats tab. `ChatPresenterImpl.presentChat` requires
+            // a `BookID`, so for an unbound new conversation we let the
+            // ConversationsListView's "+" affordance own the actual creation
+            // path. This keeps the menu command honest (no half-baked book
+            // bindings) while still bringing the user to the right surface.
+            selectedTab = .chats
+
+        case .focusSearch:
+            selectedTab = .library
+            NotificationCenter.default.post(name: RishiCommand.focusSearch, object: nil)
+
+        case .fontIncrease:
+            // Per-book typography state lives in the reader VMs. RootView is
+            // decoupled from them via NotificationCenter so neither
+            // RishiReader nor the host app needs to know about the other.
+            NotificationCenter.default.post(
+                name: RishiCommand.fontStep, object: nil,
+                userInfo: [RishiCommand.fontStepDeltaKey: +1]
+            )
+
+        case .fontDecrease:
+            NotificationCenter.default.post(
+                name: RishiCommand.fontStep, object: nil,
+                userInfo: [RishiCommand.fontStepDeltaKey: -1]
+            )
+
+        case .selectTheme(let macTheme):
+            // Map the Mac/-folder echo enum to the real RishiReader.ReaderTheme
+            // and assign to the app-wide reader defaults. Per-book overrides
+            // are unaffected (those live in `readerSettingsStore`).
+            if let deps {
+                deps.readerDefaults.theme = mapReaderTheme(macTheme)
+            }
+
+        case .selectTab(let tab):
+            selectedTab = tab
+
+        case .pageForward:
+            NotificationCenter.default.post(name: RishiCommand.pageForward, object: nil)
+
+        case .pageBackward:
+            NotificationCenter.default.post(name: RishiCommand.pageBackward, object: nil)
+        }
+    }
+
+    /// Maps the Mac/-folder echo theme onto the real `RishiReader.ReaderTheme`.
+    /// Keeps the Mac/ files free of a RishiReader dependency.
+    private func mapReaderTheme(_ macTheme: MacReaderTheme) -> ReaderTheme {
+        switch macTheme {
+        case .light: return .light
+        case .sepia: return .sepia
+        case .dark:  return .dark
         }
     }
 

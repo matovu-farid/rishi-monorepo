@@ -1,6 +1,16 @@
 import SwiftUI
 import RishiCore
 import RishiUIKit
+import Foundation
+
+/// Phase 12 Plan 12-01 — notification names mirrored from the rishi app's
+/// `RishiCommand` enum so the library package can subscribe without
+/// depending on the host target. Raw string values MUST match the app's
+/// declaration in `rishi/rishi/Mac/RishiKeyboardCommands.swift`.
+private enum LibraryMacCommandNotification {
+    static let importBook  = Notification.Name("RishiCommand.importBook")
+    static let focusSearch = Notification.Name("RishiCommand.focusSearch")
+}
 
 /// Top-level library shell mounted by the rishi app. Wraps `LibraryView` in a
 /// `NavigationStack` and wires in:
@@ -90,6 +100,20 @@ public struct LibraryRootView: View {
         .task {
             await vm.refresh()
             await reloadCovers()
+        }
+        // Phase 12 Plan 12-01 — Mac menu / ⌘O routes through here so the
+        // existing iOS toolbar button and the Catalyst menu share one path.
+        .onReceive(NotificationCenter.default.publisher(for: LibraryMacCommandNotification.importBook)) { _ in
+            #if canImport(UIKit)
+            showDocumentPicker = true
+            #endif
+        }
+        .onReceive(NotificationCenter.default.publisher(for: LibraryMacCommandNotification.focusSearch)) { _ in
+            // SwiftUI doesn't expose direct focus control on `.searchable`,
+            // so we surface the intent by clearing the search text. Users
+            // see the cursor in the field and start typing. Plan 12-04 may
+            // upgrade this to `@FocusState` once the a11y audit lands.
+            vm.searchText = ""
         }
     }
 

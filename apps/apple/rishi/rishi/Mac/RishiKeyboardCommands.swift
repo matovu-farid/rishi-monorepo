@@ -68,4 +68,9 @@ enum RishiCommand {
     static let focusSearch  = Notification.Name("RishiCommand.focusSearch")
     static let pageForward  = Notification.Name("RishiCommand.pageForward")
     static let pageBackward = Notification.Name("RishiCommand.pageBackward")
+    /// Userinfo carries `["delta": Int]` (+1 = larger, -1 = smaller). Reader
+    /// screens observe this and call their VM's typography accessors.
+    static let fontStep     = Notification.Name("RishiCommand.fontStep")
+    /// Userinfo carries `["delta": Int]` for the font-step value.
+    static let fontStepDeltaKey = "delta"
 }

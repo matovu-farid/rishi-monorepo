@@ -1,10 +1,22 @@
 import SwiftUI
 import RishiCore
 import RishiUIKit
+import Foundation
 #if canImport(UIKit)
 import UIKit
 import PDFKit
 #endif
+
+/// Phase 12 Plan 12-01 — notification names mirrored from the rishi app's
+/// `RishiCommand` enum so the reader package can subscribe without
+/// depending on the host target. Raw string values MUST match the app's
+/// declaration in `rishi/rishi/Mac/RishiKeyboardCommands.swift`.
+private enum ReaderMacCommandNotification {
+    static let pageForward    = Notification.Name("RishiCommand.pageForward")
+    static let pageBackward   = Notification.Name("RishiCommand.pageBackward")
+    static let fontStep       = Notification.Name("RishiCommand.fontStep")
+    static let fontStepDelta  = "delta"
+}
 
 /// Top-level SwiftUI screen for reading a PDF.
 ///
@@ -187,6 +199,15 @@ public struct PDFReaderScreen: View {
             if let settings = readerSettingsStore {
                 viewModel.theme = await settings.theme(for: viewModel.book.id)
             }
+        }
+        // Phase 12 Plan 12-01 — Mac menu arrow paging.
+        .onReceive(NotificationCenter.default.publisher(for: ReaderMacCommandNotification.pageForward)) { _ in
+            let next = min(viewModel.pageIndex + 1, max(viewModel.totalPages - 1, 0))
+            viewModel.seek(toPage: next)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ReaderMacCommandNotification.pageBackward)) { _ in
+            let prev = max(viewModel.pageIndex - 1, 0)
+            viewModel.seek(toPage: prev)
         }
         .sheet(isPresented: $showTOC) {
             PDFTOCView(
