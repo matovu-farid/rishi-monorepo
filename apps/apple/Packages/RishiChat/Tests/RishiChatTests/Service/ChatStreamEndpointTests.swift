@@ -95,3 +95,44 @@ struct ChatResponseChunkDecodingTests {
         #expect(chunk.done == nil)
     }
 }
+
+@Suite("ChatStreamEndpoint conformance")
+struct ChatStreamEndpointConformanceTests {
+
+    private func makeEndpoint() -> ChatStreamEndpoint {
+        let bookId = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        return ChatStreamEndpoint(body: ChatRequest(bookId: bookId, query: "hello"))
+    }
+
+    @Test("method is POST")
+    func methodIsPOST() {
+        let endpoint = makeEndpoint()
+        #expect(endpoint.method == .POST)
+    }
+
+    @Test("path is /api/chat")
+    func pathIsApiChat() {
+        let endpoint = makeEndpoint()
+        #expect(endpoint.path == "/api/chat")
+    }
+
+    @Test("conforms to WorkerStreamingEndpointWithBody")
+    func conformsToWorkerStreamingEndpointWithBody() {
+        // Compile-time check: assigning to the existential proves conformance.
+        let endpoint = makeEndpoint()
+        let erased: any WorkerStreamingEndpointWithBody = endpoint
+        #expect(erased.path == "/api/chat")
+        #expect(erased.method == .POST)
+    }
+
+    @Test("body round-trips through JSONEncoder and contains query field")
+    func bodyRoundTripsContainsQuery() throws {
+        let endpoint = makeEndpoint()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(endpoint.body)
+        let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["query"] as? String == "hello")
+        #expect(json["book_id"] as? String == "22222222-2222-2222-2222-222222222222")
+    }
+}
