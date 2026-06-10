@@ -34,12 +34,25 @@ struct RootView: View {
     /// Non-nil while the reader (or EPUB placeholder) is presented.
     @State private var openTarget: OpenTarget?
 
+    /// Holds the active reader → sync bridge for the lifetime of the open
+    /// reader sheet. The bridge polls the VM and forwards position changes
+    /// to `SyncEngine.markPositionDirty`. Cleared on dismiss so its task
+    /// cancels via `deinit`.
+    @State private var pdfSyncBinding: PDFReaderPositionSyncBinding? = nil
+    @State private var epubSyncBinding: EPUBReaderPositionSyncBinding? = nil
+
+    /// SYNC-08 — Settings sheet entry point. Presented from the toolbar
+    /// gear button below.
+    @State private var showSettings = false
+
     var body: some View {
         Group {
             if let user = currentUser, let deps = deps {
-                LibraryRootView(importCoordinator: deps.importCoordinator) { book in
-                    openTarget = openTarget(for: book)
-                }
+                LibraryRootView(
+                    importCoordinator: deps.importCoordinator,
+                    onOpenBook: { book in openTarget = openTarget(for: book) },
+                    onShowSettings: { showSettings = true }
+                )
                 .task(id: user.id) {
                     deps.cachedUserId = user.id
                     _ = await deps.sampleBookInstaller.installIfNeeded(ownerId: user.id)
@@ -55,6 +68,9 @@ struct RootView: View {
                     destinationView(for: target, deps: deps, userId: user.id)
                 }
                 #endif
+                .sheet(isPresented: $showSettings) {
+                    SettingsSheet(dependencies: deps)
+                }
             } else {
                 signedOutView
             }
@@ -89,27 +105,49 @@ struct RootView: View {
                                  userId: UserID) -> some View {
         switch target {
         case .pdf(let book):
+            let pdfVM = PDFReaderViewModel(
+                book: book,
+                userId: userId,
+                documentURL: pdfFileURL(for: book),
+                positionStore: deps.positionStore
+            )
             PDFReaderScreen(
-                viewModel: PDFReaderViewModel(
-                    book: book,
-                    userId: userId,
-                    documentURL: pdfFileURL(for: book),
-                    positionStore: deps.positionStore
-                ),
+                viewModel: pdfVM,
                 readerSettingsStore: deps.readerSettingsStore,
                 highlightStore: deps.highlightStore
             )
+            // SYNC-03 wiring: install a sync bridge for the lifetime of the
+            // reader sheet. The binding cancels its poll task on deinit.
+            .task {
+                pdfSyncBinding = PDFReaderPositionSyncBinding(
+                    viewModel: pdfVM,
+                    syncEngine: deps.syncEngine
+                )
+            }
+            .onDisappear {
+                pdfSyncBinding = nil
+            }
         case .epub(let book):
+            let epubVM = EPUBReaderViewModel(
+                book: book,
+                userId: userId,
+                documentURL: pdfFileURL(for: book),
+                positionStore: deps.positionStore
+            )
             EPUBReaderScreen(
-                viewModel: EPUBReaderViewModel(
-                    book: book,
-                    userId: userId,
-                    documentURL: pdfFileURL(for: book),
-                    positionStore: deps.positionStore
-                ),
+                viewModel: epubVM,
                 readerSettingsStore: deps.readerSettingsStore,
                 highlightStore: deps.highlightStore
             )
+            .task {
+                epubSyncBinding = EPUBReaderPositionSyncBinding(
+                    viewModel: epubVM,
+                    syncEngine: deps.syncEngine
+                )
+            }
+            .onDisappear {
+                epubSyncBinding = nil
+            }
         case .unsupportedFormat(let book):
             EpubPlaceholderView(book: book) {
                 openTarget = nil

@@ -6,6 +6,7 @@ import RishiAuth
 import RishiDB
 import RishiLibrary
 import RishiReader
+import RishiSync
 
 /// Composition root for the rishi app. Constructed once by `rishiApp.init()`.
 ///
@@ -38,6 +39,19 @@ final class AppDependencies {
 
     // Reader
     let readerSettingsStore: any ReaderSettingsStore
+
+    // Sync (Phase 7 — composition root for the sync engine + background coord)
+    let syncMetadataStore: GRDBSyncMetadataStore
+    let syncQueue: SyncQueue
+    let syncStatus: SyncStatus
+    let bookUploader: BookUploader
+    let positionUploader: PositionUploader
+    let highlightUploader: HighlightUploader
+    let remoteChangeFetcher: RemoteChangeFetcher
+    let changeApplier: ChangeApplier
+    let syncEngine: SyncEngine
+    let backgroundTaskCoordinator: BackgroundTaskCoordinator
+    let apnsDeviceRegistrar: APNsDeviceRegistrar
 
     /// Cached user id pumped in by RootView after the auth session resolves.
     /// LibraryViewModel reads this synchronously from its currentUserId
@@ -137,11 +151,80 @@ final class AppDependencies {
         )
         self.bookFileStorage = bookFileStorage
 
+        // 9b. Sync — composition root for the engine + background coordinator.
+        //
+        // Built BEFORE the ImportCoordinator so the coordinator's onBookImported
+        // callback can route into `syncEngine.markBookDirty(_:)` for SYNC-01.
+        let syncMetadataStore = GRDBSyncMetadataStore(dbQueue: dbQueue)
+        self.syncMetadataStore = syncMetadataStore
+
+        let syncQueue = SyncQueue(metadataStore: syncMetadataStore)
+        self.syncQueue = syncQueue
+
+        let syncStatus = SyncStatus()
+        self.syncStatus = syncStatus
+
+        let bookUploader = BookUploader(
+            workerClient: workerClient,
+            metadataStore: syncMetadataStore,
+            fileStorage: bookFileStorage
+        )
+        let positionUploader = PositionUploader(
+            workerClient: workerClient,
+            positionStore: positionStore,
+            bookStore: bookStore,
+            metadataStore: syncMetadataStore
+        )
+        let highlightUploader = HighlightUploader(
+            workerClient: workerClient,
+            highlightStore: highlightStore,
+            metadataStore: syncMetadataStore
+        )
+        let remoteChangeFetcher = RemoteChangeFetcher(
+            workerClient: workerClient,
+            metadataStore: syncMetadataStore
+        )
+        let changeApplier = ChangeApplier(
+            bookStore: bookStore,
+            positionStore: positionStore,
+            highlightStore: highlightStore,
+            metadataStore: syncMetadataStore
+        )
+        self.bookUploader = bookUploader
+        self.positionUploader = positionUploader
+        self.highlightUploader = highlightUploader
+        self.remoteChangeFetcher = remoteChangeFetcher
+        self.changeApplier = changeApplier
+
+        let syncEngine = SyncEngine(
+            config: .init(),
+            queue: syncQueue,
+            metadataStore: syncMetadataStore,
+            bookStore: bookStore,
+            bookUploader: bookUploader,
+            positionUploader: positionUploader,
+            highlightUploader: highlightUploader,
+            fetcher: remoteChangeFetcher,
+            applier: changeApplier
+        )
+        self.syncEngine = syncEngine
+
+        self.backgroundTaskCoordinator = BackgroundTaskCoordinator(engine: syncEngine)
+        self.apnsDeviceRegistrar = APNsDeviceRegistrar(workerClient: workerClient)
+
         // 10. Import coordinator pulls the current user id from the auth service
         // at import time (handles sign-out / sign-in transitions correctly).
-        self.importCoordinator = ImportCoordinator(storage: bookFileStorage) {
-            await authService.currentUser?.id
-        }
+        // SYNC-01: every successful import fans into the sync engine so the
+        // book uploads on the next wave.
+        self.importCoordinator = ImportCoordinator(
+            storage: bookFileStorage,
+            currentUserId: {
+                await authService.currentUser?.id
+            },
+            onBookImported: { [syncEngine] bookId in
+                await syncEngine.markBookDirty(bookId)
+            }
+        )
 
         // 11. Sample-book installers (first-run alice.epub + sample.pdf).
         self.sampleBookInstaller = SampleBookInstaller(storage: bookFileStorage)
@@ -159,6 +242,12 @@ final class AppDependencies {
             storage: bookFileStorage,
             currentUserId: { userIdBox.value }
         )
+
+        // 13. Bind the @Observable SyncStatus to the engine actor. Fire-and-forget
+        //     Task because init can't await; the actor handles the hop.
+        Task { [syncEngine, syncStatus] in
+            await syncEngine.bind(status: syncStatus)
+        }
     }
 
     private let userIdBox: UserIdBox

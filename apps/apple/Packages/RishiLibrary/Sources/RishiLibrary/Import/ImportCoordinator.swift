@@ -27,16 +27,23 @@ public actor ImportCoordinator {
 
     private let storage: BookFileStorage
     private let currentUserId: @Sendable () async -> UserID?
+    private let onBookImported: (@Sendable (BookID) async -> Void)?
 
     /// `currentUserId` is a closure (not a stored `UserID`) so the coordinator
     /// re-reads the user identity at import time — important if the user signs
     /// out and back in between sessions.
+    ///
+    /// `onBookImported` is fired once per successful import — Phase 7 wires
+    /// this to `SyncEngine.markBookDirty(_:)` so SYNC-01 enqueues the upload
+    /// without RishiLibrary needing to know RishiSync exists.
     public init(
         storage: BookFileStorage,
-        currentUserId: @escaping @Sendable () async -> UserID?
+        currentUserId: @escaping @Sendable () async -> UserID?,
+        onBookImported: (@Sendable (BookID) async -> Void)? = nil
     ) {
         self.storage = storage
         self.currentUserId = currentUserId
+        self.onBookImported = onBookImported
     }
 
     /// Filter unsupported extensions before doing any work. Comparison is
@@ -75,6 +82,9 @@ public actor ImportCoordinator {
             do {
                 let book = try await storage.importBook(from: url, ownerId: userId)
                 results.append(ImportOutcome(url: url, book: book, error: nil))
+                if let onBookImported {
+                    await onBookImported(book.id)
+                }
             } catch {
                 Log.error("library.import.failed", error: error)
                 results.append(ImportOutcome(url: url, book: nil, error: "\(error)"))

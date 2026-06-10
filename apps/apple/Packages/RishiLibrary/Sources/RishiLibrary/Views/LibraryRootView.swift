@@ -18,13 +18,21 @@ public struct LibraryRootView: View {
     public let importCoordinator: ImportCoordinator
     public let onOpenBook: (Book) -> Void
 
+    /// Phase 7 (07-05): optional gear-icon callback so the host app can
+    /// surface a Settings sheet without RishiLibrary knowing what's in it.
+    /// `nil` (the default) hides the button entirely so older callers and
+    /// tests continue to render the same toolbar.
+    public let onShowSettings: (() -> Void)?
+
     @State private var showDocumentPicker = false
     @State private var coverURLs: [BookID: URL] = [:]
 
     public init(importCoordinator: ImportCoordinator,
-                onOpenBook: @escaping (Book) -> Void) {
+                onOpenBook: @escaping (Book) -> Void,
+                onShowSettings: (() -> Void)? = nil) {
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
+        self.onShowSettings = onShowSettings
     }
 
     public var body: some View {
@@ -46,6 +54,15 @@ public struct LibraryRootView: View {
                         Label("Import", systemImage: "plus")
                     }
                     .keyboardShortcut("o", modifiers: .command)
+                }
+                if let onShowSettings {
+                    ToolbarItem(placement: .secondaryAction) {
+                        Button {
+                            onShowSettings()
+                        } label: {
+                            Label("Settings", systemImage: "gearshape")
+                        }
+                    }
                 }
             }
         }
