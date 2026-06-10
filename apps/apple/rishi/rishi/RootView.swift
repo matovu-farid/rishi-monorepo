@@ -40,11 +40,30 @@ struct RootView: View {
     /// view still renders without the composition root in scope.
     @Environment(\.macCommandRouter) private var commandRouter
 
-    /// Phase 12 — bound to the TabView. `MacCommandIntent.selectTab(_)`
-    /// (and `.focusSearch` / `.newConversation`) writes into this so the
-    /// menu can switch the visible tab without touching the underlying
-    /// `LibraryRootView` / `ConversationsListView`.
+    /// Phase 12 — bound to the TabView (iPhone compact) AND the sidebar
+    /// `List(selection:)` (iPad regular + Mac Catalyst).
+    /// `MacCommandIntent.selectTab(_)` (and `.focusSearch` /
+    /// `.newConversation`) writes into this so the menu can switch the
+    /// visible surface without touching the underlying `LibraryRootView`
+    /// / `ConversationsListView`.
     @State private var selectedTab: MacTab = .library
+
+    // MARK: - Phase 12 Plan 12-02 — @SceneStorage cells (MAC-05)
+    //
+    // SwiftUI restores `@SceneStorage` per scene-session, so closing the
+    // app with a book open and relaunching reopens the same reader cover
+    // on the same tab. We use two cells so each value is individually
+    // restorable:
+    //   - selectedTabRaw → JSON-encoded `RishiSceneState` snapshot (the
+    //     full struct, future-proofed for additional fields).
+    //   - openBookIdRaw  → bare UUID string of the currently-open book,
+    //     or "" when no reader cover is on screen. Kept in its own cell
+    //     so a corrupted tab cell does not also wipe the reader pointer.
+    @SceneStorage(RishiSceneState.selectedTabKey) private var selectedTabRaw: String = ""
+    @SceneStorage(RishiSceneState.openBookIdKey)  private var openBookIdRaw: String = ""
+    /// Guards the scene-restoration `.task` so we don't keep re-running
+    /// the bookStore lookup on every body refresh.
+    @State private var sceneRestored = false
 
     @State private var currentUser: User? = nil
     @State private var bootstrapped = false
@@ -97,14 +116,26 @@ struct RootView: View {
     var body: some View {
         Group {
             if let user = currentUser, let deps = deps {
-                TabView(selection: $selectedTab) {
-                    Tab("Library", systemImage: "books.vertical", value: MacTab.library) {
-                        libraryTab(deps: deps, user: user)
+                // Phase 12 Plan 12-02 (MAC-02) — sidebar on Mac Catalyst /
+                // iPad regular width class; existing TabView on iPhone
+                // compact. The selection binding is shared so menu-bar
+                // `selectTab(_)` intents land on the same `selectedTab`
+                // regardless of layout mode.
+                RishiSidebarLayout(
+                    selection: $selectedTab,
+                    library:    { libraryTab(deps: deps, user: user) },
+                    chats:      { conversationsTab(deps: deps, user: user) },
+                    compactBody: {
+                        TabView(selection: $selectedTab) {
+                            Tab("Library", systemImage: "books.vertical", value: MacTab.library) {
+                                libraryTab(deps: deps, user: user)
+                            }
+                            Tab("Chats", systemImage: "bubble.left.and.bubble.right", value: MacTab.chats) {
+                                conversationsTab(deps: deps, user: user)
+                            }
+                        }
                     }
-                    Tab("Chats", systemImage: "bubble.left.and.bubble.right", value: MacTab.chats) {
-                        conversationsTab(deps: deps, user: user)
-                    }
-                }
+                )
                 .sheet(item: $selectedConversation) { convo in
                     let vm = deps.makeChatPanelViewModel(conversation: convo)
                     NavigationStack {
@@ -216,6 +247,55 @@ struct RootView: View {
         .task(id: commandRouter?.pendingIntent) {
             consumePendingMacIntent()
         }
+        // Phase 12 Plan 12-02 (MAC-05) — restore selected tab + reader
+        // cover from `@SceneStorage` on first appearance. Guarded by
+        // `sceneRestored` so a re-render of the body does not retrigger
+        // the bookStore lookup.
+        .task {
+            guard !sceneRestored else { return }
+            sceneRestored = true
+            await restoreSceneState()
+        }
+        // Persist the latest scene state on every visible change. We
+        // re-encode the whole struct on each delta so the storage cell
+        // always holds an up-to-date snapshot.
+        .onChange(of: selectedTab) { _, _ in persistSceneState() }
+        .onChange(of: openTarget)  { _, _ in persistSceneState() }
+    }
+
+    // MARK: - Scene restoration (Phase 12 Plan 12-02)
+
+    /// Reads the persisted scene snapshot back into live UI state:
+    ///   - selectedTab → drives the sidebar / tab selection
+    ///   - openBookId  → resolved from the bare-UUID cell first, falling
+    ///                    back to the JSON snapshot. Looked up via
+    ///                    `deps.bookStore.book(_:)`; if the book still
+    ///                    exists, `openTarget` is restored so the reader
+    ///                    cover re-presents on launch.
+    /// Missing book id, deleted book, or any decode failure leaves the
+    /// library tab visible and no reader open.
+    @MainActor
+    private func restoreSceneState() async {
+        let state = RishiSceneState.decodeFromStorage(selectedTabRaw)
+        selectedTab = state.selectedTab
+        // Prefer the dedicated bookId cell; fall back to the snapshot.
+        let bookId: BookID? = UUID(uuidString: openBookIdRaw) ?? state.openBookId
+        guard let bookId, let deps = deps else { return }
+        // Match the actual BookStore protocol: `book(_:) async throws -> Book?`
+        if let book = try? await deps.bookStore.book(bookId) {
+            openTarget = openTarget(for: book)
+        }
+    }
+
+    /// Re-encodes `(selectedTab, openTarget?.bookId)` and writes both
+    /// `@SceneStorage` cells. Called from `.onChange` of either input so
+    /// the cells always reflect the latest UI state.
+    @MainActor
+    private func persistSceneState() {
+        let bookId: BookID? = openTarget?.id
+        let state = RishiSceneState(selectedTab: selectedTab, openBookId: bookId)
+        selectedTabRaw = state.encodeForStorage()
+        openBookIdRaw  = bookId?.uuidString ?? ""
     }
 
     // MARK: - Mac command intent dispatch (Phase 12 Plan 12-01)
