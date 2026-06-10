@@ -21,27 +21,58 @@ import RishiLogging
 /// directly to the container `UIViewController.view` so the active palette
 /// shows around the navigator's content (partial EPUB-04 coverage —
 /// in-content CSS theme application is layered in Plan 06-06).
+///
+/// **Phase 5 selection wiring** (06-05):
+///   - `onSelectionChange` is forwarded to `coordinator.onSelectionChange`
+///     in `makeUIViewController` AND refreshed on every
+///     `updateUIViewController` (so SwiftUI re-renders pick up new closures).
+///   - `coordinatorRef.coordinator` is published back to the screen so it
+///     can call `applyHighlights(_:)` after `loadHighlights` and after each
+///     create/delete.
 public struct EPUBReaderView: UIViewControllerRepresentable {
 
     public let viewModel: EPUBReaderViewModel
+    /// Called whenever the user makes (or clears) a text selection in
+    /// the navigator. The screen uses this to anchor the floating
+    /// ``EPUBHighlightContextMenu``.
+    public let onSelectionChange: (Selection?) -> Void
+    /// Mutable reference holder so the screen can reach the
+    /// coordinator after the SwiftUI representable has installed it.
+    /// Mirrors the `pdfViewRef` pattern from Phase 5.
+    public let coordinatorRef: EPUBCoordinatorRef
 
-    public init(viewModel: EPUBReaderViewModel) {
+    public init(
+        viewModel: EPUBReaderViewModel,
+        onSelectionChange: @escaping (Selection?) -> Void = { _ in },
+        coordinatorRef: EPUBCoordinatorRef = EPUBCoordinatorRef()
+    ) {
         self.viewModel = viewModel
+        self.onSelectionChange = onSelectionChange
+        self.coordinatorRef = coordinatorRef
     }
 
     public func makeCoordinator() -> EPUBNavigatorCoordinator {
-        EPUBNavigatorCoordinator(viewModel: viewModel)
+        let c = EPUBNavigatorCoordinator(viewModel: viewModel)
+        c.onSelectionChange = onSelectionChange
+        coordinatorRef.coordinator = c
+        return c
     }
 
     public func makeUIViewController(context: Context) -> UIViewController {
         let container = UIViewController()
         container.view.backgroundColor = backgroundUIColor(viewModel.theme)
+        context.coordinator.onSelectionChange = onSelectionChange
+        coordinatorRef.coordinator = context.coordinator
         attachNavigatorIfReady(into: container, coordinator: context.coordinator)
         return container
     }
 
     public func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
         uiViewController.view.backgroundColor = backgroundUIColor(viewModel.theme)
+        // Refresh closure to track SwiftUI re-renders (the screen owns
+        // state that the closure captures — pendingSelection bindings, etc).
+        context.coordinator.onSelectionChange = onSelectionChange
+        coordinatorRef.coordinator = context.coordinator
         attachNavigatorIfReady(into: uiViewController, coordinator: context.coordinator)
     }
 
@@ -80,5 +111,16 @@ public struct EPUBReaderView: UIViewControllerRepresentable {
         case .dark:  return UIColor(RishiColor.readerBackgroundDark)
         }
     }
+}
+
+/// Mutable reference holder for the lazy ``EPUBNavigatorCoordinator``.
+/// Lives on the SwiftUI screen so it can call
+/// `coordinator?.applyHighlights(_:)` after `loadHighlights` and after
+/// every create / delete. The screen instantiates this as `@State` so
+/// SwiftUI keeps the same box across view rebuilds.
+@MainActor
+public final class EPUBCoordinatorRef {
+    public weak var coordinator: EPUBNavigatorCoordinator?
+    public init() {}
 }
 #endif
