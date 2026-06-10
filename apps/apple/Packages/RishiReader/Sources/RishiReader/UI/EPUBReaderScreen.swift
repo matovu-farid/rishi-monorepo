@@ -52,6 +52,10 @@ public struct EPUBReaderScreen: View {
     /// never persists. Production wiring in `AppDependencies` passes
     /// `GRDBHighlightStore`.
     private let highlightStore: (any HighlightStore)?
+    /// Optional Phase 8 hook — when non-nil, the toolbar surfaces a
+    /// "Read Aloud" button that invokes this closure. Wiring lives in the
+    /// rishi app layer (RishiReader has no dependency on RishiAudio).
+    private let onReadAloud: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var chromeVisible: Bool = true
@@ -76,11 +80,13 @@ public struct EPUBReaderScreen: View {
     public init(
         viewModel: EPUBReaderViewModel,
         readerSettingsStore: (any ReaderSettingsStore)? = nil,
-        highlightStore: (any HighlightStore)? = nil
+        highlightStore: (any HighlightStore)? = nil,
+        onReadAloud: (() -> Void)? = nil
     ) {
         self.viewModel = viewModel
         self.readerSettingsStore = readerSettingsStore
         self.highlightStore = highlightStore
+        self.onReadAloud = onReadAloud
     }
 
     public var body: some View {
@@ -223,7 +229,8 @@ public struct EPUBReaderScreen: View {
             },
             onShowTOC: showTOCAction,
             onShowTheme: showThemeAction,
-            onShowTypography: showTypographyAction
+            onShowTypography: showTypographyAction,
+            onReadAloud: onReadAloud
         )
     }
 

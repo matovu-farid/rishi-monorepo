@@ -16,6 +16,7 @@ public struct EPUBReaderToolbar: View {
     public let onShowTOC: () -> Void
     public let onShowTheme: () -> Void
     public let onShowTypography: () -> Void
+    public let onReadAloud: (() -> Void)?
 
     public init(
         title: String,
@@ -23,7 +24,8 @@ public struct EPUBReaderToolbar: View {
         onClose: @escaping () -> Void,
         onShowTOC: @escaping () -> Void,
         onShowTheme: @escaping () -> Void,
-        onShowTypography: @escaping () -> Void
+        onShowTypography: @escaping () -> Void,
+        onReadAloud: (() -> Void)? = nil
     ) {
         self.title = title
         self.isPublicationLoaded = isPublicationLoaded
@@ -31,6 +33,7 @@ public struct EPUBReaderToolbar: View {
         self.onShowTOC = onShowTOC
         self.onShowTheme = onShowTheme
         self.onShowTypography = onShowTypography
+        self.onReadAloud = onReadAloud
     }
 
     public var body: some View {
@@ -49,6 +52,15 @@ public struct EPUBReaderToolbar: View {
                 .disabled(!isPublicationLoaded)
             iconButton("circle.lefthalf.filled", label: "Reader theme", action: onShowTheme)
                 .disabled(!isPublicationLoaded)
+            if let onReadAloud {
+                iconButton(
+                    "speaker.wave.2.fill",
+                    label: "Read Aloud",
+                    a11yId: "reader-read-aloud",
+                    action: onReadAloud
+                )
+                .disabled(!isPublicationLoaded)
+            }
         }
         .padding(.horizontal, RishiSpacing.m)
         .padding(.top, RishiSpacing.s)
@@ -56,7 +68,12 @@ public struct EPUBReaderToolbar: View {
     }
 
     @ViewBuilder
-    private func iconButton(_ systemName: String, label: String, action: @escaping () -> Void) -> some View {
+    private func iconButton(
+        _ systemName: String,
+        label: String,
+        a11yId: String? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(RishiTypography.bodyEmphasized)
@@ -64,5 +81,6 @@ public struct EPUBReaderToolbar: View {
                 .frame(width: 44, height: 44)
         }
         .accessibilityLabel(label)
+        .accessibilityIdentifier(a11yId ?? "")
     }
 }

@@ -31,6 +31,10 @@ public struct PDFReaderScreen: View {
     /// (used by tests / previews). Production wiring in 05-07 AppDependencies
     /// passes a `UserDefaultsReaderSettingsStore`.
     private let readerSettingsStore: (any ReaderSettingsStore)?
+    /// Optional Phase 8 hook — when non-nil, the toolbar surfaces a
+    /// "Read Aloud" button that invokes this closure. Wiring lives in the
+    /// rishi app layer (RishiReader has no dependency on RishiAudio).
+    private let onReadAloud: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var chromeVisible: Bool = true
@@ -54,11 +58,13 @@ public struct PDFReaderScreen: View {
     public init(
         viewModel: PDFReaderViewModel,
         readerSettingsStore: (any ReaderSettingsStore)? = nil,
-        highlightStore: (any HighlightStore)? = nil
+        highlightStore: (any HighlightStore)? = nil,
+        onReadAloud: (() -> Void)? = nil
     ) {
         self.viewModel = viewModel
         self.readerSettingsStore = readerSettingsStore
         self.highlightStore = highlightStore
+        self.onReadAloud = onReadAloud
     }
 
     /// SwiftUI binding to the @Observable viewModel's theme. Tracks writes so
@@ -139,7 +145,8 @@ public struct PDFReaderScreen: View {
                             }
                         },
                         onTOC: { showTOC = true },
-                        onTheme: { showThemePicker = true }
+                        onTheme: { showThemePicker = true },
+                        onReadAloud: onReadAloud
                     )
                     Spacer()
                     PDFPageIndicator(

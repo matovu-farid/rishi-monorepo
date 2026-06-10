@@ -18,9 +18,13 @@
 
 import SwiftUI
 import RishiCore
+import RishiAudio
 import RishiAuth
 import RishiLibrary
 import RishiReader
+#if canImport(PDFKit)
+import PDFKit
+#endif
 
 struct RootView: View {
 
@@ -44,6 +48,16 @@ struct RootView: View {
     /// SYNC-08 — Settings sheet entry point. Presented from the toolbar
     /// gear button below.
     @State private var showSettings = false
+
+    // MARK: - Phase 8 (TTS) state
+    //
+    // The ReaderTTSBridge is constructed per-reader-sheet by AppDependencies
+    // and retained here. Two sheets — the controls and the voice/speed
+    // picker — present and dismiss independently.
+    @State private var readerTTSBridge: ReaderTTSBridge? = nil
+    @State private var showTTSControls = false
+    @State private var showTTSPicker = false
+    @State private var ttsPickerInitial: TTSSettings = .default
 
     var body: some View {
         Group {
@@ -114,7 +128,10 @@ struct RootView: View {
             PDFReaderScreen(
                 viewModel: pdfVM,
                 readerSettingsStore: deps.readerSettingsStore,
-                highlightStore: deps.highlightStore
+                highlightStore: deps.highlightStore,
+                onReadAloud: FeatureFlags.readAloud ? {
+                    Task { await startPDFReadAloud(vm: pdfVM, deps: deps, userId: userId) }
+                } : nil
             )
             // SYNC-03 wiring: install a sync bridge for the lifetime of the
             // reader sheet. The binding cancels its poll task on deinit.
@@ -126,6 +143,42 @@ struct RootView: View {
             }
             .onDisappear {
                 pdfSyncBinding = nil
+                Task { await stopReadAloud() }
+            }
+            .sheet(isPresented: $showTTSControls) {
+                if let bridge = readerTTSBridge {
+                    ReadAloudControlsView(
+                        state: deps.ttsState,
+                        onPlayPause: {
+                            Task {
+                                if deps.ttsState.status == .playing {
+                                    await bridge.pause()
+                                } else {
+                                    await bridge.resume()
+                                }
+                            }
+                        },
+                        onStop: {
+                            Task { await stopReadAloud() }
+                        },
+                        onOpenPicker: {
+                            showTTSPicker = true
+                        }
+                    )
+                    .presentationDetents([.height(180), .medium])
+                }
+            }
+            .sheet(isPresented: $showTTSPicker) {
+                VoiceAndSpeedPicker(
+                    initial: ttsPickerInitial,
+                    userId: userId,
+                    store: deps.ttsSettingsStore,
+                    onDismiss: { settings in
+                        ttsPickerInitial = settings
+                        showTTSPicker = false
+                    }
+                )
+                .presentationDetents([.medium])
             }
         case .epub(let book):
             let epubVM = EPUBReaderViewModel(
@@ -137,7 +190,10 @@ struct RootView: View {
             EPUBReaderScreen(
                 viewModel: epubVM,
                 readerSettingsStore: deps.readerSettingsStore,
-                highlightStore: deps.highlightStore
+                highlightStore: deps.highlightStore,
+                onReadAloud: FeatureFlags.readAloud ? {
+                    Task { await startEPUBReadAloud(vm: epubVM, deps: deps, userId: userId) }
+                } : nil
             )
             .task {
                 epubSyncBinding = EPUBReaderPositionSyncBinding(
@@ -147,12 +203,114 @@ struct RootView: View {
             }
             .onDisappear {
                 epubSyncBinding = nil
+                Task { await stopReadAloud() }
+            }
+            .sheet(isPresented: $showTTSControls) {
+                if let bridge = readerTTSBridge {
+                    ReadAloudControlsView(
+                        state: deps.ttsState,
+                        onPlayPause: {
+                            Task {
+                                if deps.ttsState.status == .playing {
+                                    await bridge.pause()
+                                } else {
+                                    await bridge.resume()
+                                }
+                            }
+                        },
+                        onStop: {
+                            Task { await stopReadAloud() }
+                        },
+                        onOpenPicker: {
+                            showTTSPicker = true
+                        }
+                    )
+                    .presentationDetents([.height(180), .medium])
+                }
+            }
+            .sheet(isPresented: $showTTSPicker) {
+                VoiceAndSpeedPicker(
+                    initial: ttsPickerInitial,
+                    userId: userId,
+                    store: deps.ttsSettingsStore,
+                    onDismiss: { settings in
+                        ttsPickerInitial = settings
+                        showTTSPicker = false
+                    }
+                )
+                .presentationDetents([.medium])
             }
         case .unsupportedFormat(let book):
             EpubPlaceholderView(book: book) {
                 openTarget = nil
             }
         }
+    }
+
+    // MARK: - Read Aloud (Phase 8)
+
+    private func startPDFReadAloud(
+        vm: PDFReaderViewModel,
+        deps: AppDependencies,
+        userId: UserID
+    ) async {
+        #if canImport(PDFKit)
+        guard let doc = vm.document else { return }
+        let sentences = vm.sentencesForReadAloud(
+            document: doc,
+            currentPageIndex: vm.pageIndex
+        )
+        await startReadAloud(
+            sentences: sentences,
+            deps: deps,
+            userId: userId,
+            onPassageChange: { index in vm.currentReadAloudPassageIndex = index }
+        )
+        #endif
+    }
+
+    private func startEPUBReadAloud(
+        vm: EPUBReaderViewModel,
+        deps: AppDependencies,
+        userId: UserID
+    ) async {
+        let sentences = await vm.sentencesForReadAloud()
+        await startReadAloud(
+            sentences: sentences,
+            deps: deps,
+            userId: userId,
+            onPassageChange: { index in vm.currentReadAloudPassageIndex = index }
+        )
+    }
+
+    private func startReadAloud(
+        sentences: [String],
+        deps: AppDependencies,
+        userId: UserID,
+        onPassageChange: @escaping (Int?) -> Void
+    ) async {
+        guard !sentences.isEmpty else { return }
+        // Tear down any existing bridge before starting a new session.
+        if let existing = readerTTSBridge {
+            await existing.stop()
+        }
+        let bridge = deps.makeReaderTTSBridge(
+            userId: userId,
+            onPassageChange: onPassageChange
+        )
+        readerTTSBridge = bridge
+        ttsPickerInitial = await deps.ttsSettingsStore.load(userId: userId)
+        showTTSControls = true
+        await bridge.start(sentences: sentences)
+    }
+
+    private func stopReadAloud() async {
+        if let bridge = readerTTSBridge {
+            await bridge.stop()
+        }
+        readerTTSBridge = nil
+        showTTSControls = false
+        showTTSPicker = false
     }
 
     private func pdfFileURL(for book: Book) -> URL {

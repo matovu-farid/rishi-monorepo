@@ -11,17 +11,20 @@ public struct PDFReaderToolbar: View {
     public let onClose: () -> Void
     public let onTOC: (() -> Void)?
     public let onTheme: (() -> Void)?
+    public let onReadAloud: (() -> Void)?
 
     public init(
         title: String,
         onClose: @escaping () -> Void,
         onTOC: (() -> Void)? = nil,
-        onTheme: (() -> Void)? = nil
+        onTheme: (() -> Void)? = nil,
+        onReadAloud: (() -> Void)? = nil
     ) {
         self.title = title
         self.onClose = onClose
         self.onTOC = onTOC
         self.onTheme = onTheme
+        self.onReadAloud = onReadAloud
     }
 
     public var body: some View {
@@ -58,6 +61,17 @@ public struct PDFReaderToolbar: View {
                         .frame(width: 44, height: 44)
                 }
                 .accessibilityLabel("Reader theme")
+            }
+
+            if let onReadAloud {
+                Button(action: onReadAloud) {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .font(RishiTypography.bodyEmphasized)
+                        .foregroundStyle(RishiColor.textPrimary)
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityIdentifier("reader-read-aloud")
+                .accessibilityLabel("Read Aloud")
             }
         }
         .padding(.horizontal, RishiSpacing.m)

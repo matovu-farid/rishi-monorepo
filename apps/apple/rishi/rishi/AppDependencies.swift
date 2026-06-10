@@ -3,6 +3,7 @@ import SwiftUI
 import RishiCore
 import RishiAPI
 import RishiAuth
+import RishiAudio
 import RishiDB
 import RishiLibrary
 import RishiReader
@@ -39,6 +40,13 @@ final class AppDependencies {
 
     // Reader
     let readerSettingsStore: any ReaderSettingsStore
+
+    // Audio / TTS (Phase 8 — composition root for the read-aloud stack)
+    let audioCoordinator: AudioSessionCoordinator
+    let ttsState: TTSPlaybackState
+    let ttsEngine: TTSEngine
+    let ttsSettingsStore: any TTSSettingsStore
+    let nowPlayingController: NowPlayingController
 
     // Sync (Phase 7 — composition root for the sync engine + background coord)
     let syncMetadataStore: GRDBSyncMetadataStore
@@ -248,6 +256,91 @@ final class AppDependencies {
         Task { [syncEngine, syncStatus] in
             await syncEngine.bind(status: syncStatus)
         }
+
+        // 14. Audio / TTS stack (Phase 8). Real AVAudioEngine + MediaPlayer
+        //     adapters on iOS / Catalyst; Fake adapters everywhere else so
+        //     dev-host swift build still resolves.
+        let audioStack = Self.makeAudioStack(workerClient: workerClient)
+        self.audioCoordinator = audioStack.coordinator
+        self.ttsState = audioStack.state
+        self.ttsEngine = audioStack.engine
+        self.ttsSettingsStore = audioStack.settingsStore
+        self.nowPlayingController = audioStack.nowPlaying
+    }
+
+    // MARK: - Audio stack (Phase 8)
+
+    /// Bundle of audio services constructed together so the init body stays
+    /// readable. Computed in a static helper because init can't reference
+    /// `self` partway through property assignments.
+    private struct AudioStack {
+        let coordinator: AudioSessionCoordinator
+        let state: TTSPlaybackState
+        let engine: TTSEngine
+        let settingsStore: any TTSSettingsStore
+        let nowPlaying: NowPlayingController
+    }
+
+    @MainActor
+    private static func makeAudioStack(workerClient: WorkerClient) -> AudioStack {
+        #if (os(iOS) || targetEnvironment(macCatalyst)) && canImport(AVFAudio)
+        let configurator: any AudioSessionConfigurator = AVAudioSessionConfigurator()
+        #else
+        let configurator: any AudioSessionConfigurator = FakeAudioSessionConfigurator()
+        #endif
+
+        #if (os(iOS) || targetEnvironment(macCatalyst)) && canImport(MediaPlayer)
+        let infoSurface: any NowPlayingInfoSurface = MPNowPlayingInfoCenterAdapter()
+        let commandSurface: any RemoteCommandSurface = MPRemoteCommandCenterAdapter()
+        #else
+        let infoSurface: any NowPlayingInfoSurface = FakeNowPlayingInfoSurface()
+        let commandSurface: any RemoteCommandSurface = FakeRemoteCommandSurface()
+        #endif
+
+        let coordinator = AudioSessionCoordinator(configurator: configurator)
+        let state = TTSPlaybackState()
+        let chunkSource = WorkerTTSChunkSource(client: workerClient)
+        let streamer = TTSStreamer(source: chunkSource)
+        let engineAdapter = AVAudioEngineAdapter()
+        let engine = TTSEngine(
+            streamer: streamer,
+            decoderFactory: { try MP3StreamDecoder(targetFormat: $0) },
+            engine: engineAdapter,
+            coordinator: coordinator,
+            state: state
+        )
+        let settingsStore = UserDefaultsTTSSettingsStore()
+        let nowPlaying = NowPlayingController(
+            infoSurface: infoSurface,
+            commandSurface: commandSurface
+        )
+        return AudioStack(
+            coordinator: coordinator,
+            state: state,
+            engine: engine,
+            settingsStore: settingsStore,
+            nowPlaying: nowPlaying
+        )
+    }
+
+    /// Construct a fresh `ReaderTTSBridge` for one reader sheet. Each
+    /// bridge owns its own `TTSPassageTracker` so multiple readers can run
+    /// independent passage streams; the engine + state + settings store
+    /// are shared (single audio session).
+    @MainActor
+    func makeReaderTTSBridge(
+        userId: UserID,
+        onPassageChange: @escaping (Int?) -> Void
+    ) -> ReaderTTSBridge {
+        let tracker = TTSPassageTracker()
+        return ReaderTTSBridge(
+            engine: ttsEngine,
+            state: ttsState,
+            tracker: tracker,
+            settingsStore: ttsSettingsStore,
+            userId: userId,
+            onPassageChange: onPassageChange
+        )
     }
 
     private let userIdBox: UserIdBox
@@ -285,5 +378,22 @@ extension EnvironmentValues {
     var appDependencies: AppDependencies? {
         get { self[AppDependenciesKey.self] }
         set { self[AppDependenciesKey.self] = newValue }
+    }
+}
+
+// MARK: - Feature flags (Phase 8)
+
+/// Compile-time feature flags. Phase 8 ships Read Aloud behind a flag that
+/// is ON in DEBUG (TestFlight + dev) and OFF in Release (App Store builds)
+/// until UAT confirms the read-aloud pipeline meets quality bar.
+enum FeatureFlags {
+    /// TTS / Read Aloud surfaces (reader toolbar button, controls sheet,
+    /// voice + speed picker). Gated to DEBUG until Phase 8 UAT closes.
+    static var readAloud: Bool {
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
     }
 }
