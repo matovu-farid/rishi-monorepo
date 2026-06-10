@@ -29,3 +29,21 @@ public struct PDFPageIndicator: View {
             .accessibilityLabel("Page \(currentPage) of \(totalPages)")
     }
 }
+
+#Preview("Mid-book") {
+    PDFPageIndicator(currentPage: 42, totalPages: 320)
+        .padding(RishiSpacing.l)
+        .background(RishiColor.readerBackgroundLight)
+}
+
+#Preview("First page") {
+    PDFPageIndicator(currentPage: 1, totalPages: 320)
+        .padding(RishiSpacing.l)
+        .background(RishiColor.readerBackgroundSepia)
+}
+
+#Preview("Single-page document") {
+    PDFPageIndicator(currentPage: 1, totalPages: 1)
+        .padding(RishiSpacing.l)
+        .background(RishiColor.readerBackgroundDark)
+}

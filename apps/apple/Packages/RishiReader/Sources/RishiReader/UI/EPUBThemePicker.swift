@@ -96,3 +96,34 @@ public struct EPUBThemePicker: View {
         }
     }
 }
+
+private final class EPUBThemePreviewStore: ReaderSettingsStore, @unchecked Sendable {
+    func theme(for bookId: BookID) async -> ReaderTheme { .default }
+    func setTheme(_ theme: ReaderTheme, for bookId: BookID) async { }
+    func typography(for bookId: BookID) async -> ReaderTypography { .default }
+    func setTypography(_ typography: ReaderTypography, for bookId: BookID) async { }
+}
+
+private struct EPUBThemePickerPreviewHost: View {
+    @State var theme: ReaderTheme
+    var body: some View {
+        EPUBThemePicker(
+            theme: $theme,
+            bookId: UUID(),
+            store: EPUBThemePreviewStore(),
+            onClose: {}
+        )
+    }
+}
+
+#Preview("Light selected") {
+    EPUBThemePickerPreviewHost(theme: .light)
+}
+
+#Preview("Sepia selected") {
+    EPUBThemePickerPreviewHost(theme: .sepia)
+}
+
+#Preview("Dark selected") {
+    EPUBThemePickerPreviewHost(theme: .dark)
+}

@@ -120,3 +120,67 @@ public struct EPUBReaderToolbar: View {
         .accessibilityIdentifier(a11yId ?? "")
     }
 }
+
+#Preview("Loading") {
+    VStack {
+        EPUBReaderToolbar(
+            title: "Loading…",
+            isPublicationLoaded: false,
+            onClose: {},
+            onShowTOC: {},
+            onShowTheme: {},
+            onShowTypography: {}
+        )
+        Spacer()
+    }
+    .background(RishiColor.readerBackgroundLight)
+}
+
+#Preview("Loaded") {
+    VStack {
+        EPUBReaderToolbar(
+            title: "Alice's Adventures in Wonderland",
+            isPublicationLoaded: true,
+            onClose: {},
+            onShowTOC: {},
+            onShowTheme: {},
+            onShowTypography: {}
+        )
+        Spacer()
+    }
+    .background(RishiColor.readerBackgroundLight)
+}
+
+#Preview("Read aloud and chat") {
+    VStack {
+        EPUBReaderToolbar(
+            title: "Pride and Prejudice",
+            isPublicationLoaded: true,
+            onClose: {},
+            onShowTOC: {},
+            onShowTheme: {},
+            onShowTypography: {},
+            onReadAloud: {},
+            onChat: {}
+        )
+        Spacer()
+    }
+    .background(RishiColor.readerBackgroundSepia)
+}
+
+#Preview("Long title truncation") {
+    VStack {
+        EPUBReaderToolbar(
+            title: "A Very Long Book Title That Should Be Truncated With Ellipsis",
+            isPublicationLoaded: true,
+            onClose: {},
+            onShowTOC: {},
+            onShowTheme: {},
+            onShowTypography: {},
+            onReadAloud: {},
+            onChat: {}
+        )
+        Spacer()
+    }
+    .background(RishiColor.readerBackgroundDark)
+}

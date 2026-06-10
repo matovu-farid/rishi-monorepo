@@ -127,3 +127,46 @@ public struct EPUBTypographyPicker: View {
         Task { await store.setTypography(snapshot, for: bookId) }
     }
 }
+
+private final class EPUBTypographyPreviewStore: ReaderSettingsStore, @unchecked Sendable {
+    func theme(for bookId: BookID) async -> ReaderTheme { .default }
+    func setTheme(_ theme: ReaderTheme, for bookId: BookID) async { }
+    func typography(for bookId: BookID) async -> ReaderTypography { .default }
+    func setTypography(_ typography: ReaderTypography, for bookId: BookID) async { }
+}
+
+private struct EPUBTypographyPickerPreviewHost: View {
+    @State var typography: ReaderTypography
+    var body: some View {
+        EPUBTypographyPicker(
+            typography: $typography,
+            bookId: UUID(),
+            store: EPUBTypographyPreviewStore(),
+            onClose: {}
+        )
+    }
+}
+
+#Preview("Defaults") {
+    EPUBTypographyPickerPreviewHost(typography: .default)
+}
+
+#Preview("Serif large") {
+    EPUBTypographyPickerPreviewHost(
+        typography: ReaderTypography(
+            fontFamily: .serif,
+            fontSize: ReaderFontSize(points: 22),
+            lineHeight: ReaderLineHeight(multiplier: 1.6)
+        )
+    )
+}
+
+#Preview("Dyslexic compact") {
+    EPUBTypographyPickerPreviewHost(
+        typography: ReaderTypography(
+            fontFamily: .dyslexic,
+            fontSize: ReaderFontSize(points: 14),
+            lineHeight: ReaderLineHeight(multiplier: 1.2)
+        )
+    )
+}

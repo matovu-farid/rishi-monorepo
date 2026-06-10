@@ -69,3 +69,26 @@ public struct EPUBTOCView: View {
         }
     }
 }
+
+#Preview("Populated") {
+    EPUBTOCView(
+        entries: [
+            ReadiumShared.Link(href: "OEBPS/chapter01.xhtml", title: "Down the Rabbit-Hole"),
+            ReadiumShared.Link(href: "OEBPS/chapter02.xhtml", title: "The Pool of Tears"),
+            ReadiumShared.Link(href: "OEBPS/chapter03.xhtml", title: "A Caucus-Race and a Long Tale"),
+            ReadiumShared.Link(href: "OEBPS/chapter04.xhtml", title: "The Rabbit Sends in a Little Bill"),
+            ReadiumShared.Link(href: "OEBPS/chapter05.xhtml", title: "Advice from a Caterpillar"),
+            ReadiumShared.Link(href: "OEBPS/chapter06.xhtml", title: "Pig and Pepper")
+        ],
+        onSelect: { _ in },
+        onClose: {}
+    )
+}
+
+#Preview("Empty") {
+    EPUBTOCView(
+        entries: [],
+        onSelect: { _ in },
+        onClose: {}
+    )
+}

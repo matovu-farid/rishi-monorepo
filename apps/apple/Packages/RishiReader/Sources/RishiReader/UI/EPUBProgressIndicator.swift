@@ -31,3 +31,27 @@ public struct EPUBProgressIndicator: View {
         }
     }
 }
+
+#Preview("Quarter through") {
+    EPUBProgressIndicator(totalProgression: 0.25)
+        .padding(RishiSpacing.l)
+        .background(RishiColor.readerBackgroundLight)
+}
+
+#Preview("Nearly done") {
+    EPUBProgressIndicator(totalProgression: 0.92)
+        .padding(RishiSpacing.l)
+        .background(RishiColor.readerBackgroundSepia)
+}
+
+#Preview("Just opened") {
+    EPUBProgressIndicator(totalProgression: 0.0)
+        .padding(RishiSpacing.l)
+        .background(RishiColor.readerBackgroundDark)
+}
+
+#Preview("Unavailable") {
+    EPUBProgressIndicator(totalProgression: nil)
+        .padding(RishiSpacing.l)
+        .background(RishiColor.readerBackgroundLight)
+}

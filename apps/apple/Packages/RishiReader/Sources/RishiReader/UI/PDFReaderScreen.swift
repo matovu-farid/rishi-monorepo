@@ -346,3 +346,42 @@ private final class EphemeralReaderSettingsStore: ReaderSettingsStore, @unchecke
     func theme(for bookId: BookID) async -> ReaderTheme { .default }
     func setTheme(_ theme: ReaderTheme, for bookId: BookID) async { /* no-op */ }
 }
+
+private actor PDFPreviewPositionStore: PositionStore {
+    func position(for bookId: BookID) async throws -> Position? { nil }
+    func upsert(_ position: Position) async throws { }
+    func delete(_ id: PositionID) async throws { }
+}
+
+@MainActor
+private func makePDFPreviewViewModel(theme: ReaderTheme = .light) -> PDFReaderViewModel {
+    let url = Bundle.module.url(forResource: "sample", withExtension: "pdf")
+        ?? URL(fileURLWithPath: "/dev/null")
+    let book = Book(
+        userId: UUID(),
+        title: "Sample PDF",
+        author: "Preview Author",
+        formatType: .pdf,
+        fileURL: url.path
+    )
+    let vm = PDFReaderViewModel(
+        book: book,
+        userId: UUID(),
+        documentURL: url,
+        positionStore: PDFPreviewPositionStore()
+    )
+    vm.theme = theme
+    return vm
+}
+
+#Preview("Light theme") {
+    PDFReaderScreen(viewModel: makePDFPreviewViewModel(theme: .light))
+}
+
+#Preview("Sepia theme") {
+    PDFReaderScreen(viewModel: makePDFPreviewViewModel(theme: .sepia))
+}
+
+#Preview("Dark theme") {
+    PDFReaderScreen(viewModel: makePDFPreviewViewModel(theme: .dark))
+}

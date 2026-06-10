@@ -100,3 +100,57 @@ public struct PDFReaderToolbar: View {
         .background(RishiColor.surface.opacity(0.85))
     }
 }
+
+#Preview("Title only") {
+    VStack {
+        PDFReaderToolbar(
+            title: "Alice's Adventures in Wonderland",
+            onClose: {}
+        )
+        Spacer()
+    }
+    .background(RishiColor.readerBackgroundLight)
+}
+
+#Preview("TOC and theme") {
+    VStack {
+        PDFReaderToolbar(
+            title: "The Pragmatic Programmer",
+            onClose: {},
+            onTOC: {},
+            onTheme: {}
+        )
+        Spacer()
+    }
+    .background(RishiColor.readerBackgroundLight)
+}
+
+#Preview("All actions") {
+    VStack {
+        PDFReaderToolbar(
+            title: "Designing Data-Intensive Applications",
+            onClose: {},
+            onTOC: {},
+            onTheme: {},
+            onReadAloud: {},
+            onChat: {}
+        )
+        Spacer()
+    }
+    .background(RishiColor.readerBackgroundSepia)
+}
+
+#Preview("Long title truncation") {
+    VStack {
+        PDFReaderToolbar(
+            title: "A Very Long Book Title That Should Be Truncated With Ellipsis At The End",
+            onClose: {},
+            onTOC: {},
+            onTheme: {},
+            onReadAloud: {},
+            onChat: {}
+        )
+        Spacer()
+    }
+    .background(RishiColor.readerBackgroundDark)
+}

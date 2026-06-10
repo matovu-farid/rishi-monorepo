@@ -418,3 +418,59 @@ struct SelectionContext: Identifiable {
     let frame: CGRect?
 }
 #endif
+
+private actor EPUBPreviewPositionStore: PositionStore {
+    func position(for bookId: BookID) async throws -> Position? { nil }
+    func upsert(_ position: Position) async throws { }
+    func delete(_ id: PositionID) async throws { }
+}
+
+@MainActor
+private func makeEPUBPreviewViewModel(
+    theme: ReaderTheme = .light,
+    typography: ReaderTypography = .default
+) -> EPUBReaderViewModel {
+    let url = Bundle.module.url(forResource: "alice", withExtension: "epub")
+        ?? URL(fileURLWithPath: "/dev/null")
+    let book = Book(
+        userId: UUID(),
+        title: "Alice's Adventures in Wonderland",
+        author: "Lewis Carroll",
+        formatType: .epub,
+        fileURL: url.path
+    )
+    let vm = EPUBReaderViewModel(
+        book: book,
+        userId: UUID(),
+        documentURL: url,
+        positionStore: EPUBPreviewPositionStore()
+    )
+    vm.theme = theme
+    vm.typography = typography
+    return vm
+}
+
+#Preview("Light theme") {
+    EPUBReaderScreen(viewModel: makeEPUBPreviewViewModel(theme: .light))
+}
+
+#Preview("Sepia theme") {
+    EPUBReaderScreen(viewModel: makeEPUBPreviewViewModel(theme: .sepia))
+}
+
+#Preview("Dark theme") {
+    EPUBReaderScreen(viewModel: makeEPUBPreviewViewModel(theme: .dark))
+}
+
+#Preview("Serif large type") {
+    EPUBReaderScreen(
+        viewModel: makeEPUBPreviewViewModel(
+            theme: .sepia,
+            typography: ReaderTypography(
+                fontFamily: .serif,
+                fontSize: ReaderFontSize(points: 22),
+                lineHeight: ReaderLineHeight(multiplier: 1.6)
+            )
+        )
+    )
+}

@@ -70,3 +70,37 @@ public struct HighlightNoteEditor: View {
         }
     }
 }
+
+private struct HighlightNoteEditorPreviewHost: View {
+    @State var note: String
+    let snippet: String
+    var body: some View {
+        HighlightNoteEditor(
+            note: $note,
+            snippet: snippet,
+            onSave: {},
+            onCancel: {}
+        )
+    }
+}
+
+#Preview("Empty note") {
+    HighlightNoteEditorPreviewHost(
+        note: "",
+        snippet: "But the Hatter said, 'I want a clean cup: let's all move one place on.'"
+    )
+}
+
+#Preview("With existing note") {
+    HighlightNoteEditorPreviewHost(
+        note: "Reminds me of the Mad Tea-Party — circular reasoning at work.",
+        snippet: "But the Hatter said, 'I want a clean cup: let's all move one place on.'"
+    )
+}
+
+#Preview("Long snippet") {
+    HighlightNoteEditorPreviewHost(
+        note: "",
+        snippet: "It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief, it was the epoch of incredulity."
+    )
+}

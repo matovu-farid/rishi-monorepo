@@ -71,4 +71,35 @@ public struct EPUBHighlightContextMenu: View {
         return CGPoint(x: x, y: y)
     }
 }
+
+#Preview("Anchored above selection") {
+    EPUBHighlightContextMenu(
+        selectionFrame: CGRect(x: 60, y: 280, width: 240, height: 28),
+        onColor: { _ in },
+        onAddNote: {},
+        onDismiss: {}
+    )
+    .background(RishiColor.readerBackgroundLight)
+}
+
+#Preview("Centered fallback") {
+    EPUBHighlightContextMenu(
+        selectionFrame: nil,
+        onColor: { _ in },
+        onAddNote: {},
+        onDismiss: {}
+    )
+    .background(RishiColor.readerBackgroundSepia)
+}
+
+#Preview("With ask about this") {
+    EPUBHighlightContextMenu(
+        selectionFrame: CGRect(x: 40, y: 200, width: 320, height: 32),
+        onColor: { _ in },
+        onAddNote: {},
+        onDismiss: {},
+        onAskAboutThis: {}
+    )
+    .background(RishiColor.readerBackgroundDark)
+}
 #endif

@@ -89,3 +89,34 @@ public struct PDFThemePicker: View {
         }
     }
 }
+
+private final class PreviewSettingsStore: ReaderSettingsStore, @unchecked Sendable {
+    func theme(for bookId: BookID) async -> ReaderTheme { .default }
+    func setTheme(_ theme: ReaderTheme, for bookId: BookID) async { }
+    func typography(for bookId: BookID) async -> ReaderTypography { .default }
+    func setTypography(_ typography: ReaderTypography, for bookId: BookID) async { }
+}
+
+private struct PDFThemePickerPreviewHost: View {
+    @State var theme: ReaderTheme
+    var body: some View {
+        PDFThemePicker(
+            theme: $theme,
+            bookId: UUID(),
+            store: PreviewSettingsStore(),
+            onClose: {}
+        )
+    }
+}
+
+#Preview("Light selected") {
+    PDFThemePickerPreviewHost(theme: .light)
+}
+
+#Preview("Sepia selected") {
+    PDFThemePickerPreviewHost(theme: .sepia)
+}
+
+#Preview("Dark selected") {
+    PDFThemePickerPreviewHost(theme: .dark)
+}

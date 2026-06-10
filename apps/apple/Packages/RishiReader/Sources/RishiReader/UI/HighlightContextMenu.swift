@@ -90,3 +90,33 @@ public struct HighlightContextMenu: View {
         )
     }
 }
+
+#Preview("New selection") {
+    HighlightContextMenu(
+        onColor: { _ in },
+        onAddNote: {}
+    )
+    .padding(RishiSpacing.xxl)
+    .background(RishiColor.readerBackgroundLight)
+}
+
+#Preview("Existing with delete") {
+    HighlightContextMenu(
+        onColor: { _ in },
+        onAddNote: {},
+        onDelete: {}
+    )
+    .padding(RishiSpacing.xxl)
+    .background(RishiColor.readerBackgroundSepia)
+}
+
+#Preview("Ask about this") {
+    HighlightContextMenu(
+        onColor: { _ in },
+        onAddNote: {},
+        onDelete: {},
+        onAskAboutThis: {}
+    )
+    .padding(RishiSpacing.xxl)
+    .background(RishiColor.readerBackgroundDark)
+}

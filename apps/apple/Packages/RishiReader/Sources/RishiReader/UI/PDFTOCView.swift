@@ -112,3 +112,45 @@ public struct PDFTOCView: View {
         }
     }
 }
+
+#Preview("Populated outline") {
+    PDFTOCView(
+        nodes: [
+            PDFOutlineNode(
+                label: "Part I — Foundations",
+                pageIndex: 1,
+                children: [
+                    PDFOutlineNode(label: "Chapter 1 — Introduction", pageIndex: 3),
+                    PDFOutlineNode(
+                        label: "Chapter 2 — Concepts",
+                        pageIndex: 17,
+                        children: [
+                            PDFOutlineNode(label: "Definitions", pageIndex: 19),
+                            PDFOutlineNode(label: "Examples", pageIndex: 28)
+                        ]
+                    )
+                ]
+            ),
+            PDFOutlineNode(
+                label: "Part II — Practice",
+                pageIndex: 55,
+                children: [
+                    PDFOutlineNode(label: "Chapter 3 — Patterns", pageIndex: 57),
+                    PDFOutlineNode(label: "Chapter 4 — Pitfalls", pageIndex: 92)
+                ]
+            ),
+            PDFOutlineNode(label: "Bibliography", pageIndex: 140),
+            PDFOutlineNode(label: "Index", pageIndex: 152)
+        ],
+        onSelect: { _ in },
+        onClose: {}
+    )
+}
+
+#Preview("Empty outline") {
+    PDFTOCView(
+        nodes: [],
+        onSelect: { _ in },
+        onClose: {}
+    )
+}
