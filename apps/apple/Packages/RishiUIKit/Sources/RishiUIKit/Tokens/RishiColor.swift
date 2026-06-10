@@ -33,6 +33,17 @@ public enum RishiColor {
     public static var highlightGreen:  Color { Color("highlightGreen",  bundle: bundle) }
     public static var highlightBlue:   Color { Color("highlightBlue",   bundle: bundle) }
 
+    // MARK: - Reader background tokens
+    //
+    // Per-theme page background applied to `PDFView.backgroundColor` and the
+    // SwiftUI screen backdrop. Light + dark variants live in `Colors.xcassets`;
+    // sepia ships as a fixed `Color(red:green:blue:)` matching the sepia
+    // palette below (data-only sepia mode, see header comment).
+
+    public static var readerBackgroundLight: Color { Color("readerBackgroundLight", bundle: bundle) }
+    public static var readerBackgroundDark:  Color { Color("readerBackgroundDark",  bundle: bundle) }
+    public static var readerBackgroundSepia: Color { Color(red: 0xF4/255, green: 0xEC/255, blue: 0xD8/255) }
+
     /// Sepia palette — applied by the Reader phase via custom theme switching.
     /// Light + dark variants live in the asset catalog; sepia is data-only so
     /// callers can construct `Color(red:green:blue:)` at theme-switch time.
