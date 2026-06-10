@@ -7,6 +7,9 @@
 //  Phase 5 Plan 05-07 — presents PDFReaderScreen as a full-screen cover
 //  when the user taps a .pdf book in the library; .epub books route to
 //  an explicit placeholder until Phase 6.
+//  Phase 6 Plan 06-06 — .epub now opens EPUBReaderScreen for real;
+//  .mobi / .azw3 keep routing to the placeholder until a future phase
+//  adds a converter.
 //
 //  The reader is mounted as a full-screen cover (not a navigationDestination)
 //  because LibraryRootView owns its own NavigationStack. Nesting another
@@ -74,8 +77,9 @@ struct RootView: View {
 
     private func openTarget(for book: Book) -> OpenTarget {
         switch book.formatType {
-        case .pdf:                  return .pdf(book)
-        case .epub, .mobi, .azw3:   return .epubPlaceholder(book)
+        case .pdf:            return .pdf(book)
+        case .epub:           return .epub(book)
+        case .mobi, .azw3:    return .unsupportedFormat(book)
         }
     }
 
@@ -95,7 +99,18 @@ struct RootView: View {
                 readerSettingsStore: deps.readerSettingsStore,
                 highlightStore: deps.highlightStore
             )
-        case .epubPlaceholder(let book):
+        case .epub(let book):
+            EPUBReaderScreen(
+                viewModel: EPUBReaderViewModel(
+                    book: book,
+                    userId: userId,
+                    documentURL: pdfFileURL(for: book),
+                    positionStore: deps.positionStore
+                ),
+                readerSettingsStore: deps.readerSettingsStore,
+                highlightStore: deps.highlightStore
+            )
+        case .unsupportedFormat(let book):
             EpubPlaceholderView(book: book) {
                 openTarget = nil
             }
@@ -131,17 +146,20 @@ struct RootView: View {
 /// pick the correct destination based on book format.
 private enum OpenTarget: Hashable, Identifiable {
     case pdf(Book)
-    case epubPlaceholder(Book)
+    case epub(Book)
+    case unsupportedFormat(Book)
 
     var id: BookID {
         switch self {
-        case .pdf(let book), .epubPlaceholder(let book): return book.id
+        case .pdf(let book), .epub(let book), .unsupportedFormat(let book):
+            return book.id
         }
     }
 }
 
-/// Phase 6 will replace this with the real EPUB reader. Shipped here so we
-/// never silently no-op when the user taps an .epub.
+/// Catches `.mobi` / `.azw3` taps — those formats need a converter step
+/// that isn't on the v1 milestone. Shipped here so the library never
+/// silently no-ops when the user taps an unsupported book.
 private struct EpubPlaceholderView: View {
     let book: Book
     let onClose: () -> Void
@@ -153,7 +171,7 @@ private struct EpubPlaceholderView: View {
                     .font(.largeTitle)
                 Text(book.title)
                     .font(.title3)
-                Text("EPUB reader arrives in Phase 6.")
+                Text("MOBI / AZW3 aren't supported yet.")
                     .font(.body)
                     .foregroundStyle(.secondary)
             }
