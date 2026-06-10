@@ -37,3 +37,54 @@ struct ConversationRow: View {
         .accessibilityHint(conversation.title)
     }
 }
+
+private enum ConversationRowPreviewFixtures {
+    static func standalone() -> Conversation {
+        Conversation(
+            userId: UUID(),
+            bookId: nil,
+            title: "Reading list ideas for next quarter",
+            createdAt: Date().addingTimeInterval(-RishiPreviewClock.hour),
+            updatedAt: Date().addingTimeInterval(-RishiPreviewClock.minute * 5)
+        )
+    }
+
+    static func inBook() -> Conversation {
+        Conversation(
+            userId: UUID(),
+            bookId: UUID(),
+            title: "Why does the protagonist hesitate at the bridge?",
+            createdAt: Date().addingTimeInterval(-RishiPreviewClock.day),
+            updatedAt: Date().addingTimeInterval(-RishiPreviewClock.minute)
+        )
+    }
+}
+
+private enum RishiPreviewClock {
+    static let minute: TimeInterval = 60
+    static let hour: TimeInterval = 60 * 60
+    static let day: TimeInterval = 60 * 60 * 24
+}
+
+#Preview("Row - standalone") {
+    List {
+        ConversationRow(conversation: ConversationRowPreviewFixtures.standalone())
+    }
+    .listStyle(.plain)
+}
+
+#Preview("Row - in book") {
+    List {
+        ConversationRow(conversation: ConversationRowPreviewFixtures.inBook())
+    }
+    .listStyle(.plain)
+}
+
+#Preview("Row - dark") {
+    List {
+        ConversationRow(conversation: ConversationRowPreviewFixtures.standalone())
+        ConversationRow(conversation: ConversationRowPreviewFixtures.inBook())
+    }
+    .listStyle(.plain)
+    .preferredColorScheme(.dark)
+}

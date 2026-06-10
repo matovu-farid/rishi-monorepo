@@ -117,3 +117,88 @@ public struct ChatPanelView: View {
 
     private static let streamingRowID = "chat.streaming.ghost"
 }
+
+// MARK: - Previews
+
+private struct PreviewMessageStore: MessageStore {
+    let seeded: [Message]
+    func messages(for conversationId: ConversationID) async throws -> [Message] {
+        seeded.filter { $0.conversationId == conversationId }
+    }
+    func upsert(_ message: Message) async throws {}
+    func delete(_ id: MessageID) async throws {}
+}
+
+private struct PreviewChatService: ChatService {
+    func stream(query: String, bookId: BookID?) -> AsyncThrowingStream<ChatEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish()
+        }
+    }
+}
+
+@MainActor
+private enum ChatPanelPreviewFixtures {
+    static func conversation() -> Conversation {
+        Conversation(userId: UUID(), bookId: UUID(), title: "About this book")
+    }
+
+    static func emptyViewModel() -> ChatPanelViewModel {
+        let convo = conversation()
+        return ChatPanelViewModel(
+            conversation: convo,
+            bookId: convo.bookId,
+            chatService: PreviewChatService(),
+            messageStore: PreviewMessageStore(seeded: [])
+        )
+    }
+
+    static func exchangeViewModel() -> ChatPanelViewModel {
+        let convo = conversation()
+        let seed: [Message] = [
+            Message(conversationId: convo.id, role: .user, content: "Who is the narrator in chapter one?"),
+            Message(
+                conversationId: convo.id,
+                role: .assistant,
+                content: "The narrator is the protagonist's younger sister, speaking from the present looking back on a summer in their childhood."
+            ),
+            Message(conversationId: convo.id, role: .user, content: "Why does she keep returning to the river?"),
+            Message(
+                conversationId: convo.id,
+                role: .assistant,
+                content: "The river is the strongest sensory anchor she has to their grandfather — every time she returns to it the prose deliberately echoes phrases used to describe him in chapter two."
+            ),
+        ]
+        return ChatPanelViewModel(
+            conversation: convo,
+            bookId: convo.bookId,
+            chatService: PreviewChatService(),
+            messageStore: PreviewMessageStore(seeded: seed)
+        )
+    }
+
+    static func streamingViewModel() -> ChatPanelViewModel {
+        let vm = exchangeViewModel()
+        vm.streamingState.beginStreaming()
+        vm.streamingState.appendToken("Yes — the storm in chapter four mirrors the argument in chapter one, both in ")
+        vm.streamingState.appendToken("the language used and in how it ends mid-sentence with the same ")
+        return vm
+    }
+}
+
+#Preview("Panel - empty") {
+    ChatPanelView(viewModel: ChatPanelPreviewFixtures.emptyViewModel())
+}
+
+#Preview("Panel - one exchange") {
+    ChatPanelView(viewModel: ChatPanelPreviewFixtures.exchangeViewModel())
+}
+
+#Preview("Panel - mid-stream") {
+    ChatPanelView(viewModel: ChatPanelPreviewFixtures.streamingViewModel())
+}
+
+#Preview("Panel - dark") {
+    ChatPanelView(viewModel: ChatPanelPreviewFixtures.exchangeViewModel())
+        .preferredColorScheme(.dark)
+}

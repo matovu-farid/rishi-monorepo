@@ -17,3 +17,12 @@ struct ConversationsEmptyState: View {
         .background(RishiColor.background)
     }
 }
+
+#Preview("Empty state") {
+    ConversationsEmptyState()
+}
+
+#Preview("Empty state - dark") {
+    ConversationsEmptyState()
+        .preferredColorScheme(.dark)
+}
