@@ -87,7 +87,7 @@ final class RishiAppDelegate: NSObject, UIApplicationDelegate {
     /// Weak so we don't keep the composition root alive past app teardown.
     weak var dependencies: AppDependencies?
 
-    private init(boot: Bool) {
+    private nonisolated init(boot: Bool) {
         super.init()
     }
 
@@ -144,15 +144,12 @@ final class RishiAppDelegate: NSObject, UIApplicationDelegate {
             completionHandler(.noData)
             return
         }
-        let box = SendableCompletionBox(value: completionHandler)
-        SilentPushHandler.handle(userInfo, engine: deps.syncEngine) { result in
-            box.value(result)
-        }
+        let sendableHandler = unsafeBitCast(
+            completionHandler,
+            to: (@Sendable (UIBackgroundFetchResult) -> Void).self
+        )
+        SilentPushHandler.handle(userInfo, engine: deps.syncEngine, completion: sendableHandler)
     }
-}
-
-private struct SendableCompletionBox<T>: @unchecked Sendable {
-    nonisolated let value: (T) -> Void
 }
 
 #endif
