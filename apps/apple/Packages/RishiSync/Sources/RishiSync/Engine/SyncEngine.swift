@@ -115,6 +115,32 @@ public actor SyncEngine {
         }
     }
 
+    /// CHAT-04 — flag a Conversation row for outbound sync. Called by
+    /// `AppChatDirtyHook` (app layer) after `RishiChatService` persists a
+    /// new/updated conversation.
+    public func markConversationDirty(_ id: ConversationID) async {
+        do {
+            try await metadataStore.markDirty(entityId: id, kind: .conversation)
+            await queue.enqueue(SyncQueueItem(entityId: id, kind: .conversation))
+            await refreshPendingCount()
+        } catch {
+            Log.error("sync.markConversationDirty.failed", error: error)
+        }
+    }
+
+    /// CHAT-04 — flag a Message row for outbound sync. Called by
+    /// `AppChatDirtyHook` (app layer) after `RishiChatService` persists a
+    /// user / assistant message.
+    public func markMessageDirty(_ id: MessageID) async {
+        do {
+            try await metadataStore.markDirty(entityId: id, kind: .message)
+            await queue.enqueue(SyncQueueItem(entityId: id, kind: .message))
+            await refreshPendingCount()
+        } catch {
+            Log.error("sync.markMessageDirty.failed", error: error)
+        }
+    }
+
     /// Called by `PositionDebouncer` after the per-bookId window closes.
     fileprivate func commitPositionDirty(_ bookId: BookID) async {
         do {
