@@ -7,6 +7,19 @@
 		<string>org.fidexa.rishi.sync.refresh</string>
 		<string>org.fidexa.rishi.sync.processing</string>
 	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>org.fidexa.rishi</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>rishi</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

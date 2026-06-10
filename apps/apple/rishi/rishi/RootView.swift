@@ -233,11 +233,56 @@ struct RootView: View {
                 ProgressView()
             }
         }
+        // Phase 12 Plan 12-03 — every inbound URL (custom `rishi://` scheme
+        // OR `https://rishi.fidexa.org/...` Universal Link) is funneled
+        // through `DeepLinkRouter` first. The router produces a typed
+        // `DeepLinkDestination`; we dispatch by case. Legacy file:// import
+        // taps from Files / share-sheet still fall through to the `.unknown`
+        // branch so book imports keep working.
         .onOpenURL { url in
             guard let deps = deps else { return }
-            Task {
-                _ = await deps.importCoordinator.importBooks([url])
-                await libraryViewModel.refresh()
+            let destination = DeepLinkRouter().route(url)
+            switch destination {
+            case .authCallback:
+                // Phase 3's ASWebAuthenticationSession owns its own callback
+                // capture for Google OAuth, and SiwaPresenter handles SIWA
+                // natively. The Universal-Link variant of the callback is a
+                // v1.1 nice-to-have (e.g. mail-based magic link) — for v1
+                // we no-op rather than introduce a half-wired token consumer
+                // on RishiAuth.AuthService. Tracked in plan 12-06 follow-up.
+                break
+
+            case .shareRedeem(let token):
+                // Phase 12+ — sharing redeem flow is not yet wired into
+                // RishiCore. Silently no-op rather than crash so taps from
+                // future share emails don't dead-end on production builds.
+                _ = token
+
+            case .openBook(let bookId):
+                Task {
+                    if let book = try? await deps.bookStore.book(bookId) {
+                        openTarget = openTarget(for: book)
+                    }
+                }
+
+            case .openConversation(let conversationId):
+                Task {
+                    if let convo = try? await deps.conversationStore.conversation(conversationId) {
+                        selectedConversation = convo
+                    }
+                }
+
+            case .unknown:
+                // Legacy path — `file://` imports from the Files app /
+                // share-sheet still arrive here, as do any URLs the router
+                // can't classify. Gating on `isFileURL` keeps the router
+                // honest (an unknown `https://` URL is NOT a book file).
+                if url.isFileURL {
+                    Task {
+                        _ = await deps.importCoordinator.importBooks([url])
+                        await libraryViewModel.refresh()
+                    }
+                }
             }
         }
         // Phase 12 Plan 12-01 — drain the Mac command router whenever the
