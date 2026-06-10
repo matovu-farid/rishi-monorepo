@@ -45,7 +45,12 @@ public struct EPUBReaderToolbar: View {
 
     public var body: some View {
         HStack(spacing: RishiSpacing.m) {
-            iconButton("xmark", label: "Close reader", action: onClose)
+            iconButton(
+                "xmark",
+                label: A11yLabel.readerClose,
+                a11yId: "reader.toolbar.close",
+                action: onClose
+            )
 
             Text(title)
                 .font(RishiTypography.titleM)
@@ -53,17 +58,32 @@ public struct EPUBReaderToolbar: View {
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            iconButton("list.bullet.indent", label: "Table of contents", action: onShowTOC)
-                .disabled(!isPublicationLoaded)
-            iconButton("textformat.size", label: "Typography", action: onShowTypography)
-                .disabled(!isPublicationLoaded)
-            iconButton("circle.lefthalf.filled", label: "Reader theme", action: onShowTheme)
-                .disabled(!isPublicationLoaded)
+            iconButton(
+                "list.bullet.indent",
+                label: A11yLabel.readerOpenTOC,
+                a11yId: "reader.toolbar.toc",
+                action: onShowTOC
+            )
+            .disabled(!isPublicationLoaded)
+            iconButton(
+                "textformat.size",
+                label: A11yLabel.readerOpenTypography,
+                a11yId: "reader.toolbar.typography",
+                action: onShowTypography
+            )
+            .disabled(!isPublicationLoaded)
+            iconButton(
+                "circle.lefthalf.filled",
+                label: A11yLabel.readerOpenTheme,
+                a11yId: "reader.toolbar.theme",
+                action: onShowTheme
+            )
+            .disabled(!isPublicationLoaded)
             if let onReadAloud {
                 iconButton(
                     "speaker.wave.2.fill",
-                    label: "Read Aloud",
-                    a11yId: "reader-read-aloud",
+                    label: A11yLabel.readerReadAloud,
+                    a11yId: "reader.toolbar.readAloud",
                     action: onReadAloud
                 )
                 .disabled(!isPublicationLoaded)
@@ -71,8 +91,8 @@ public struct EPUBReaderToolbar: View {
             if let onChat {
                 iconButton(
                     "bubble.left.and.bubble.right",
-                    label: "Chat about this book",
-                    a11yId: "reader-chat",
+                    label: A11yLabel.readerOpenChat,
+                    a11yId: "reader.toolbar.chat",
                     action: onChat
                 )
                 .disabled(!isPublicationLoaded)

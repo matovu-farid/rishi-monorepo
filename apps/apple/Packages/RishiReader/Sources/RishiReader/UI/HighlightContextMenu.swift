@@ -44,7 +44,8 @@ public struct HighlightContextMenu: View {
                         .overlay(Circle().stroke(RishiColor.divider, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Highlight \(color.rawValue)")
+                .accessibilityIdentifier("highlight.color.\(color.rawValue)")
+                .accessibilityLabel("\(A11yLabel.readerHighlightColor) \(color.rawValue)")
             }
             Button(action: onAddNote) {
                 Image(systemName: "note.text")
@@ -53,7 +54,8 @@ public struct HighlightContextMenu: View {
                     .frame(width: 32, height: 32)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Add note")
+            .accessibilityIdentifier("highlight.addNote")
+            .accessibilityLabel(A11yLabel.readerAddNote)
 
             if let onDelete {
                 Button(action: onDelete) {
@@ -63,7 +65,8 @@ public struct HighlightContextMenu: View {
                         .frame(width: 32, height: 32)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Delete highlight")
+                .accessibilityIdentifier("highlight.delete")
+                .accessibilityLabel(A11yLabel.readerDeleteHighlight)
             }
 
             if let onAskAboutThis {

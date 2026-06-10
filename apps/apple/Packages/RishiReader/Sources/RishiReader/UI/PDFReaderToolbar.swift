@@ -42,7 +42,8 @@ public struct PDFReaderToolbar: View {
                     .foregroundStyle(RishiColor.textPrimary)
                     .frame(width: 44, height: 44)
             }
-            .accessibilityLabel("Close reader")
+            .accessibilityIdentifier("reader.toolbar.close")
+            .accessibilityLabel(A11yLabel.readerClose)
 
             Text(title)
                 .font(RishiTypography.titleM)
@@ -57,7 +58,8 @@ public struct PDFReaderToolbar: View {
                         .foregroundStyle(RishiColor.textPrimary)
                         .frame(width: 44, height: 44)
                 }
-                .accessibilityLabel("Table of contents")
+                .accessibilityIdentifier("reader.toolbar.toc")
+                .accessibilityLabel(A11yLabel.readerOpenTOC)
             }
 
             if let onTheme {
@@ -67,7 +69,8 @@ public struct PDFReaderToolbar: View {
                         .foregroundStyle(RishiColor.textPrimary)
                         .frame(width: 44, height: 44)
                 }
-                .accessibilityLabel("Reader theme")
+                .accessibilityIdentifier("reader.toolbar.theme")
+                .accessibilityLabel(A11yLabel.readerOpenTheme)
             }
 
             if let onReadAloud {
@@ -77,8 +80,8 @@ public struct PDFReaderToolbar: View {
                         .foregroundStyle(RishiColor.textPrimary)
                         .frame(width: 44, height: 44)
                 }
-                .accessibilityIdentifier("reader-read-aloud")
-                .accessibilityLabel("Read Aloud")
+                .accessibilityIdentifier("reader.toolbar.readAloud")
+                .accessibilityLabel(A11yLabel.readerReadAloud)
             }
 
             if let onChat {
@@ -88,8 +91,8 @@ public struct PDFReaderToolbar: View {
                         .foregroundStyle(RishiColor.textPrimary)
                         .frame(width: 44, height: 44)
                 }
-                .accessibilityIdentifier("reader-chat")
-                .accessibilityLabel("Chat about this book")
+                .accessibilityIdentifier("reader.toolbar.chat")
+                .accessibilityLabel(A11yLabel.readerOpenChat)
             }
         }
         .padding(.horizontal, RishiSpacing.m)
