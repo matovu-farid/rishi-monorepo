@@ -739,15 +739,13 @@ struct RootView: View {
     }
 
     @ViewBuilder private var signedOutView: some View {
-        #if DEBUG
-        NavigationStack { DebugAuthView() }
-        #else
-        VStack {
-            Text("Sign in to Rishi to access your library")
-                .font(.title2)
-                .padding()
-        }
-        #endif
+        // Quick-SXI: replaced Phase-3 debug stub. SignedOutView pulls
+        // (any AuthService)? from @Environment(\.rishiAuthService) — same
+        // wire rishiApp already injects in `.environment(\.rishiAuthService,
+        // deps.authServiceForEnvironment)`. Both DEBUG and Release render
+        // the same surface; DebugAuthView remains on disk under #if DEBUG
+        // but is no longer reachable from this signed-out path.
+        SignedOutView()
     }
 }
 
