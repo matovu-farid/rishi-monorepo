@@ -57,6 +57,33 @@ public final class EPUBNavigatorCoordinator: NSObject {
         EPUBDecorationApplier.apply(highlights: highlights, to: nav)
     }
 
+    /// Translates our reader settings into Readium's `EPUBPreferences`
+    /// and submits them to the navigator. Safe to call before the
+    /// navigator is built — no-ops in that case; the screen re-applies
+    /// after `load()` completes.
+    public func applyPreferences(
+        typography: ReaderTypography,
+        theme: ReaderTheme,
+        spread: EPUBSpreadMode
+    ) {
+        guard let nav = navigator else { return }
+        EPUBPreferencesBridge.apply(
+            typography: typography,
+            theme: theme,
+            spread: spread,
+            to: nav
+        )
+    }
+
+    /// Navigates to the destination encoded by the supplied TOC `Link`.
+    /// Used by ``EPUBTOCView``'s onSelect callback. No-ops if the
+    /// navigator hasn't been built yet.
+    @discardableResult
+    public func go(to link: ReadiumShared.Link) async -> Bool {
+        guard let nav = navigator else { return false }
+        return await nav.go(to: link, options: NavigatorGoOptions(animated: true))
+    }
+
     /// Imperatively clears the live selection (used after a highlight
     /// is saved so the menu doesn't stay anchored to old text).
     public func clearSelection() {
