@@ -75,3 +75,25 @@ public struct VoiceAndSpeedPicker: View {
         String(format: "Speed: %.2fx", speed)
     }
 }
+
+#Preview("Default voice") {
+    VoiceAndSpeedPicker(
+        initial: .default,
+        userId: UserID(),
+        store: InMemoryTTSSettingsStore(),
+        onDismiss: { _ in }
+    )
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(RishiColor.surface)
+}
+
+#Preview("Alt voice") {
+    VoiceAndSpeedPicker(
+        initial: TTSSettings(voice: "nova", speed: 1.5),
+        userId: UserID(),
+        store: InMemoryTTSSettingsStore(),
+        onDismiss: { _ in }
+    )
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(RishiColor.surface)
+}

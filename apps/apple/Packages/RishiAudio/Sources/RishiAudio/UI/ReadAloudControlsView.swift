@@ -101,3 +101,42 @@ public struct ReadAloudControlsView: View {
         }
     }
 }
+
+#Preview("Playing") {
+    let state = TTSPlaybackState()
+    state.status = .playing
+    return ReadAloudControlsView(
+        state: state,
+        onPlayPause: {},
+        onStop: {},
+        onOpenPicker: {}
+    )
+    .padding(RishiSpacing.l)
+    .background(RishiColor.surface)
+}
+
+#Preview("Paused") {
+    let state = TTSPlaybackState()
+    state.status = .paused
+    return ReadAloudControlsView(
+        state: state,
+        onPlayPause: {},
+        onStop: {},
+        onOpenPicker: {}
+    )
+    .padding(RishiSpacing.l)
+    .background(RishiColor.surface)
+}
+
+#Preview("Loading") {
+    let state = TTSPlaybackState()
+    state.status = .loading
+    return ReadAloudControlsView(
+        state: state,
+        onPlayPause: {},
+        onStop: {},
+        onOpenPicker: {}
+    )
+    .padding(RishiSpacing.l)
+    .background(RishiColor.surface)
+}
