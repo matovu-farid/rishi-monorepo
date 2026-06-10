@@ -24,6 +24,9 @@ let package = Package(
                 "RishiDB",
                 "RishiLogging",
                 "RishiLibrary",
+            ],
+            resources: [
+                .process("Resources/Bundled"),
             ]
         ),
         .testTarget(
