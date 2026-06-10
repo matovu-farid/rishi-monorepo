@@ -1,0 +1,145 @@
+import Foundation
+import PDFKit
+import Observation
+import RishiCore
+import RishiLogging
+
+/// Encodes/decodes the per-page locator stored in `Position.locator` for PDFs.
+///
+/// Wire format: `"pdf-v1:page:N"` where `N` is the zero-based page index.
+/// The `pdf-v1` prefix lets Phase 7 sync identify the schema; a future
+/// `pdf-v2` decoder will fall back to `pdf-v1` for backward compat.
+public enum PDFPositionEncoder {
+    public static let format = "pdf-v1"
+
+    public static func encode(page: Int) -> String { "\(format):page:\(page)" }
+
+    public static func decode(_ locator: String) -> Int? {
+        let parts = locator.split(separator: ":")
+        guard parts.count == 3,
+              parts[0] == Substring(format),
+              parts[1] == "page",
+              let page = Int(parts[2]) else { return nil }
+        return page
+    }
+}
+
+/// Owns the page state, position-debounce task, outline, and theme for one
+/// open PDF.
+///
+/// Marked `@Observable` for SwiftUI bindings. NOT `@MainActor` because the
+/// PDFKit `PDFViewPageChanged` notification is delivered on whatever queue
+/// `PDFView` was hosted on (typically main, but the contract is unspecified).
+/// State mutations are localized to single methods; the debounce uses a
+/// detached `Task` keyed off the latest call so coalescing happens via
+/// `cancel()` on the previous pending write.
+///
+/// `userId` is `internal` (not `private`) so the highlight extension landing
+/// in plan 05-06 can pass it through to `HighlightStore.upsert(_:)`.
+@Observable
+public final class PDFReaderViewModel: @unchecked Sendable {
+
+    public let book: Book
+    public private(set) var document: PDFDocument?
+    public private(set) var totalPages: Int = 0
+    public private(set) var pageIndex: Int = 0
+    public private(set) var outline: [PDFOutlineNode] = []
+    public var theme: ReaderTheme = .default
+
+    internal let userId: UserID
+
+    private let positionStore: any PositionStore
+    private let documentURL: URL
+    private let debounceSeconds: Double
+    private var pendingPositionTask: Task<Void, Never>?
+
+    public init(
+        book: Book,
+        userId: UserID,
+        documentURL: URL,
+        positionStore: any PositionStore,
+        debounceSeconds: Double = 1.0
+    ) {
+        self.book = book
+        self.userId = userId
+        self.documentURL = documentURL
+        self.positionStore = positionStore
+        self.debounceSeconds = debounceSeconds
+    }
+
+    // MARK: - Lifecycle
+
+    /// Loads the document, extracts the outline, restores the last position.
+    /// Call once when the view appears.
+    ///
+    /// `PDFDocument(url:)` runs on the calling executor — the model isn't
+    /// `@MainActor` and PDFDocument is non-Sendable, so a detached Task would
+    /// just trap the type at the boundary. For pathological multi-hundred-MB
+    /// PDFs, the caller can dispatch `load()` from a `.task` modifier (which
+    /// is already off the main draw loop).
+    public func load() async {
+        guard let doc = PDFDocument(url: documentURL) else {
+            Log.reader.error("Failed to open PDFDocument at \(self.documentURL.path, privacy: .public)")
+            return
+        }
+        self.document = doc
+        self.totalPages = doc.pageCount
+        self.outline = PDFOutlineExtractor.extract(from: doc)
+
+        if let last = try? await positionStore.position(for: book.id),
+           let restored = PDFPositionEncoder.decode(last.locator),
+           restored >= 0, restored < totalPages {
+            self.pageIndex = restored
+        }
+    }
+
+    /// Called by the PDFView delegate (`pdfViewPageChanged`) on every page
+    /// turn. Updates the in-memory `pageIndex` immediately so the indicator
+    /// reflects state, and debounces the position write.
+    public func didChangePage(toIndex newIndex: Int) {
+        guard newIndex != pageIndex, newIndex >= 0, newIndex < totalPages else { return }
+        pageIndex = newIndex
+        schedulePositionWrite(pageIndex: newIndex)
+    }
+
+    /// Public seek API used by the TOC sheet (plan 05-07) and bottom slider.
+    public func seek(toPage newIndex: Int) {
+        guard let doc = document, newIndex >= 0, newIndex < doc.pageCount else { return }
+        pageIndex = newIndex
+        schedulePositionWrite(pageIndex: newIndex)
+    }
+
+    /// Flushes any pending debounced write immediately. Call on view dismiss.
+    public func flush() async {
+        pendingPositionTask?.cancel()
+        pendingPositionTask = nil
+        await writePosition(pageIndex: pageIndex)
+    }
+
+    // MARK: - Debounce
+
+    private func schedulePositionWrite(pageIndex: Int) {
+        pendingPositionTask?.cancel()
+        let seconds = debounceSeconds
+        pendingPositionTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            if Task.isCancelled { return }
+            await self?.writePosition(pageIndex: pageIndex)
+        }
+    }
+
+    private func writePosition(pageIndex: Int) async {
+        let percent = totalPages > 0 ? Double(pageIndex) / Double(totalPages) : 0
+        let position = Position(
+            bookId: book.id,
+            locator: PDFPositionEncoder.encode(page: pageIndex),
+            percentComplete: percent,
+            updatedAt: Date()
+        )
+        do {
+            try await positionStore.upsert(position)
+        } catch {
+            Log.reader.error("Failed to persist PDF position page=\(pageIndex, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+}
