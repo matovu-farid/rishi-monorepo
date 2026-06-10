@@ -98,49 +98,115 @@ public actor RishiChatService: ChatService {
 
         // 3. Stream from the worker, accumulate assistant content, finalize on
         //    either explicit `.completed`, clean stream end, or cancel.
+        //
+        //    The parser-side state lives in `AssistantAccumulator` (an actor)
+        //    so a child Task can keep pushing tokens to it while the parent
+        //    coordinates lifecycle. A child Task is necessary because the
+        //    parent must remain responsive to its own cancellation: if the
+        //    parent iterated `byteStream` directly, `for try await chunk in
+        //    byteStream` would block on `iter.next()` between SSE chunks and
+        //    not see cancellation until the next chunk arrived (potentially
+        //    seconds later, exceeding the CHAT-08 cancel budget).
+        //
+        //    When the consumer cancels (drops the AsyncThrowingStream), the
+        //    parent's `withTaskCancellationHandler` onCancel:
+        //      1. cancels the child Task (which eventually drops the
+        //         byteStream iterator and triggers WorkerClient.stream's own
+        //         onTermination — cancelling the URLSessionTask)
+        //      2. finishes the yieldChannel so the parent's `for await event
+        //         in yieldChannel.stream` returns immediately
+        //    The parent then finalizes the partial assistant content (CHAT-04
+        //    preserved on mid-flight cancel) and rethrows CancellationError.
         let endpoint = ChatStreamEndpoint(body: ChatRequest(bookId: bookId, query: query))
         let parser = SSEParser()
-        var accumulated = ""
+        let accumulator = AssistantAccumulator()
         var finalized = false
 
         let byteStream = workerClient.stream(endpoint)
-        do {
+        let yieldChannel = AsyncStream<ChatEvent>.makeStream(bufferingPolicy: .unbounded)
+
+        let consumer = Task { () async throws -> Bool in
+            // Returns true when `.completed` was seen; false on clean stream end.
             for try await chunk in byteStream {
                 try Task.checkCancellation()
                 let events = await parser.consume(chunk)
                 for event in events {
-                    if case let .token(t) = event { accumulated += t }
-                    continuation.yield(event)
+                    if case let .token(t) = event { await accumulator.append(t) }
+                    yieldChannel.continuation.yield(event)
                     if event == .completed {
-                        try await finalizeAssistant(convo: convo, content: accumulated)
-                        finalized = true
-                        return
+                        yieldChannel.continuation.finish()
+                        return true
                     }
                 }
             }
-            // Stream ended without explicit `.completed` — drain partial frame
-            // (defensive), yield any tail events, then finalize + yield .completed.
+            try Task.checkCancellation()
             let tail = await parser.finalize()
             for event in tail {
-                if case let .token(t) = event { accumulated += t }
-                continuation.yield(event)
+                if case let .token(t) = event { await accumulator.append(t) }
+                yieldChannel.continuation.yield(event)
                 if event == .completed {
-                    try await finalizeAssistant(convo: convo, content: accumulated)
-                    finalized = true
-                    return
+                    yieldChannel.continuation.finish()
+                    return true
                 }
             }
-            try await finalizeAssistant(convo: convo, content: accumulated)
-            finalized = true
-            continuation.yield(.completed)
-        } catch is CancellationError {
-            // CHAT-08: preserve partial assistant content on cancel so the next
-            // sync push includes the truncated turn.
+            yieldChannel.continuation.finish()
+            return false
+        }
+
+        await withTaskCancellationHandler {
+            for await event in yieldChannel.stream {
+                if Task.isCancelled { break }
+                continuation.yield(event)
+            }
+        } onCancel: {
+            // Tear down the consumer — that drops its byteStream iterator,
+            // which fires WorkerClient's onTermination hook and cancels the
+            // URLSessionTask.
+            consumer.cancel()
+            yieldChannel.continuation.finish()
+        }
+
+        // After the channel drains, three cases:
+        //   a) parent task cancelled  → consumer was cancelled by onCancel;
+        //      finalize partial + rethrow CancellationError
+        //   b) consumer threw          → bubble that error
+        //   c) consumer returned       → consume result + finalize+yield as needed
+        if Task.isCancelled {
             if !finalized {
-                try? await finalizeAssistant(convo: convo, content: accumulated)
+                let content = await accumulator.value
+                try? await finalizeAssistant(convo: convo, content: content)
             }
             throw CancellationError()
         }
+        do {
+            let sawCompleted = try await consumer.value
+            if sawCompleted {
+                let content = await accumulator.value
+                try await finalizeAssistant(convo: convo, content: content)
+                finalized = true
+            } else {
+                // Clean stream end without explicit `.completed` — finalize
+                // and emit a synthetic `.completed` to keep the contract.
+                let content = await accumulator.value
+                try await finalizeAssistant(convo: convo, content: content)
+                finalized = true
+                continuation.yield(.completed)
+            }
+        } catch is CancellationError {
+            if !finalized {
+                let content = await accumulator.value
+                try? await finalizeAssistant(convo: convo, content: content)
+            }
+            throw CancellationError()
+        }
+    }
+
+    /// Actor-isolated string accumulator so the parent and child task can
+    /// share the in-flight assistant content under strict concurrency.
+    private actor AssistantAccumulator {
+        private var content = ""
+        func append(_ token: String) { content += token }
+        var value: String { content }
     }
 
     private func finalizeAssistant(convo: Conversation, content: String) async throws {
