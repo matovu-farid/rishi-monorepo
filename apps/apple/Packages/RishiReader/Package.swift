@@ -14,6 +14,8 @@ let package = Package(
         .package(path: "../RishiLogging"),
         .package(path: "../RishiLibrary"),
         .package(path: "../RishiTesting"), // test-only consumer
+        // Spike A locked Readium 3.9 (PROVISIONAL PASS).
+        .package(url: "https://github.com/readium/swift-toolkit.git", from: "3.9.0"),
     ],
     targets: [
         .target(
@@ -24,6 +26,10 @@ let package = Package(
                 "RishiDB",
                 "RishiLogging",
                 "RishiLibrary",
+                .product(name: "ReadiumShared", package: "swift-toolkit"),
+                .product(name: "ReadiumNavigator", package: "swift-toolkit"),
+                .product(name: "ReadiumStreamer", package: "swift-toolkit"),
+                .product(name: "ReadiumAdapterGCDWebServer", package: "swift-toolkit"),
             ],
             resources: [
                 .process("Resources/Bundled"),
