@@ -18,5 +18,5 @@ import Foundation
 /// or RishiLibrary — reader integration lives in the rishi/ app layer.
 public enum RishiAudio {
     /// Semantic version of the Feature surface. Bump on breaking API changes.
-    public static let version = "0.1.0-scaffold"
+    public static let version = "0.2.0-coordinator-settings"
 }
