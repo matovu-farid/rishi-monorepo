@@ -9,6 +9,7 @@ import RishiTesting
 struct PDFReaderViewSmokeTests {
 
     @Test("VM-driven document property is reachable after load")
+    @MainActor
     func vmDocumentReachable() async throws {
         let url = URL.temporaryDirectory.appendingPathComponent("smoke-\(UUID().uuidString).pdf")
         try FixtureBuilders.writeMultiPagePDF(to: url, pageCount: 3, withOutline: false)
