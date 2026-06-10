@@ -1,0 +1,21 @@
+Rishi turns the books on your devices into conversations. Read your EPUB and PDF library on iPhone, iPad, and Mac, then ask questions, get summaries, or talk through a passage out loud — all without leaving the page.
+
+Bring your own books. Drop EPUB or PDF files into Rishi and they live in a fast, searchable library with covers, progress, and a Reading Now shelf. Highlights and notes follow you across devices.
+
+Read the way you like. A focused, customizable reader handles fixed-layout and reflowable EPUBs, scanned PDFs with a real text layer, and table-of-contents jumps. Pick light, dark, or sepia. Adjust font size and spacing. Search every page.
+
+Pick up where you left off. Open a book on your Mac, keep reading on iPhone on the train, finish on iPad in bed — Rishi syncs your position, highlights, and notes in the background using silent push.
+
+Chat with any book. Ask "what does this chapter argue?" or "summarize this scene," and Rishi answers grounded in the book you're reading. Conversations are saved per-book and per-session, so you can come back to the thread later.
+
+Talk it through. Real-time voice chat lets you have a natural spoken conversation about what you're reading — ideal for studying, language practice, or thinking out loud on a walk. (Voice chat requires Rishi Pro.)
+
+Read aloud. High-quality narration plays through any speaker or AirPods, with background playback, lock-screen controls, and a configurable voice. Listen while you commute, cook, or rest your eyes.
+
+Made for Apple silicon. Optimized for Mac Catalyst with a real sidebar, full keyboard navigation, native menus, and scene restoration. Universal Links open books straight from Safari, Mail, or Messages.
+
+Accessible by default. VoiceOver labels across the reader, library, and chat. Full Dynamic Type support. AA contrast on every surface. Reduce Motion and Increase Contrast respected.
+
+Private by design. Sign in with Apple — no password to manage, no email required. Your reading data lives in your account, not in an ad network. Anonymous diagnostics can be turned off in Settings.
+
+Pro features (subscription). Voice chat, unlimited chat conversations, and premium narration voices are part of Rishi Pro. Subscriptions are managed at rishi.fidexa.org — open the page from Settings to subscribe, change, or cancel.

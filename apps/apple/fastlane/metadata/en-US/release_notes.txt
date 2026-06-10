@@ -1,0 +1,59 @@
+First release. Rishi reads with you and talks back.
+
+Library
+- Drop EPUB or PDF files into Rishi from Files, AirDrop, or any share sheet.
+- Fast grid with covers, progress, and a Reading Now shelf.
+- Locale-aware search across titles, authors, and metadata.
+- Sample book bundled on first run.
+
+PDF Reader
+- PDFKit-powered viewer with single-page and continuous modes.
+- Highlights with notes in four colors, persisted per-book.
+- Table of contents sheet, outline jumps, and page thumbnails.
+- Light, dark, and sepia backdrops.
+
+EPUB Reader
+- Readium-powered reflowable + fixed-layout EPUB support.
+- Adjustable font size, font family, line spacing, and margins.
+- Highlights with notes via CFI selection.
+- Table of contents and search.
+
+Sync
+- Cross-device position, highlights, and notes via silent push.
+- Background sync windows on iOS, scene-restored sessions on Mac.
+- Manual pull-to-refresh on every screen.
+
+Read Aloud
+- High-quality narration with lock-screen and AirPods controls.
+- Background playback, configurable voice, and per-book resume.
+- Sentence-level highlighting tracks the spoken text.
+
+Chat
+- Ask questions about the book you're reading.
+- Conversations grouped per-book, with full history.
+- Streamed answers grounded in the current chapter or selection.
+
+Voice Chat (Rishi Pro)
+- Real-time spoken conversation about your reading.
+- Push-to-talk and continuous modes.
+- Microphone permission primer explains why access is needed.
+
+Mac Catalyst
+- Real sidebar with library + conversations.
+- Full keyboard shortcuts, menu bar commands, and scene restoration.
+- Universal Links open books straight from Safari, Mail, or Messages.
+
+Accessibility
+- VoiceOver labels across the reader, library, and chat.
+- Full Dynamic Type support up to AX5.
+- AA contrast verified on every surface.
+- Reduce Motion and Increase Contrast respected.
+
+Account
+- Sign in with Apple — private relay email supported.
+- One-tap account deletion in Settings.
+- Anonymous diagnostics can be turned off.
+
+Subscription
+- Rishi Pro subscriptions are managed at rishi.fidexa.org.
+- Open the page from Settings to subscribe, change, or cancel.

@@ -1,0 +1,1 @@
+Now with Mac Catalyst sidebar, keyboard shortcuts, and VoiceOver across the reader and chat. Catch up where you left off on any device.
