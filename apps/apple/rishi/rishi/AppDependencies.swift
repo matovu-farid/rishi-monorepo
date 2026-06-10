@@ -4,6 +4,7 @@ import RishiCore
 import RishiAPI
 import RishiAuth
 import RishiAudio
+import RishiChat
 import RishiDB
 import RishiLibrary
 import RishiReader
@@ -60,6 +61,17 @@ final class AppDependencies {
     let syncEngine: SyncEngine
     let backgroundTaskCoordinator: BackgroundTaskCoordinator
     let apnsDeviceRegistrar: APNsDeviceRegistrar
+
+    // Chat (Phase 9 — composition root for the chat service + presenter seam)
+    let conversationStore: any ConversationStore
+    let messageStore: any MessageStore
+    let conversationLookup: ConversationLookup
+    let chatDirtyHook: AppChatDirtyHook
+    let chatService: RishiChatService
+    /// Retained for the app lifetime. RootView observes
+    /// `chatPresenter.pendingPresentation` to drive a `.sheet(item:)`
+    /// presenting the chat panel for the active book.
+    let chatPresenter: ChatPresenterImpl
 
     /// Cached user id pumped in by RootView after the auth session resolves.
     /// LibraryViewModel reads this synchronously from its currentUserId
@@ -266,6 +278,87 @@ final class AppDependencies {
         self.ttsEngine = audioStack.engine
         self.ttsSettingsStore = audioStack.settingsStore
         self.nowPlayingController = audioStack.nowPlaying
+
+        // 15. Chat stack (Phase 9). GRDB stores for conversations + messages,
+        //     ConversationLookup actor over the conversation store, the
+        //     RishiChatService actor wired with AppChatDirtyHook (forwards to
+        //     SyncEngine), and the @Observable ChatPresenterImpl that
+        //     RootView binds a sheet to.
+        let conversationStore = GRDBConversationStore(dbQueue: dbQueue)
+        let messageStore = GRDBMessageStore(dbQueue: dbQueue)
+        let conversationLookup = ConversationLookup(store: conversationStore)
+        let chatDirtyHook = AppChatDirtyHook(syncEngine: syncEngine)
+        // `userIdProvider` reads from the same userIdBox the LibraryViewModel
+        // uses — RootView pumps it after auth resolves. Chat turns will fail
+        // with `RishiError.unauthenticated` until then (intentional).
+        let chatService = RishiChatService(
+            userIdProvider: { @Sendable [userIdBox] in
+                await userIdBox.value
+            },
+            workerClient: workerClient,
+            conversationLookup: conversationLookup,
+            conversationStore: conversationStore,
+            messageStore: messageStore,
+            dirtyHook: chatDirtyHook
+        )
+        self.conversationStore = conversationStore
+        self.messageStore = messageStore
+        self.conversationLookup = conversationLookup
+        self.chatDirtyHook = chatDirtyHook
+        self.chatService = chatService
+        self.chatPresenter = ChatPresenterImpl()
+    }
+
+    // MARK: - Chat factories (Phase 9)
+
+    /// Builds a ``ChatPanelViewModel`` for a `(userId, bookId)` pair by
+    /// resolving (or minting) the backing ``Conversation`` via
+    /// ``ConversationLookup``.
+    ///
+    /// Called by RootView when the user taps the chat button in the reader
+    /// toolbar or "Ask about this" in a selection menu. Returns `nil` only
+    /// when the lookup throws — a non-recoverable storage failure that we
+    /// surface to the UI by skipping the sheet.
+    func makeChatPanelViewModel(
+        userId: UserID,
+        bookId: BookID?
+    ) async -> ChatPanelViewModel? {
+        do {
+            let convo = try await conversationLookup.findOrCreate(
+                userId: userId,
+                bookId: bookId
+            )
+            return ChatPanelViewModel(
+                conversation: convo,
+                bookId: bookId,
+                chatService: chatService,
+                messageStore: messageStore
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    /// Builds a ``ChatPanelViewModel`` for a conversation chosen from the
+    /// Conversations tab — bypasses the lookup since the conversation is
+    /// already in hand.
+    func makeChatPanelViewModel(conversation: Conversation) -> ChatPanelViewModel {
+        ChatPanelViewModel(
+            conversation: conversation,
+            bookId: conversation.bookId,
+            chatService: chatService,
+            messageStore: messageStore
+        )
+    }
+
+    /// Builds a fresh ``ConversationsListViewModel`` for the Conversations
+    /// tab. The VM hydrates itself in its `.task` modifier from
+    /// `conversationStore` + `messageStore`.
+    func makeConversationsListViewModel() -> ConversationsListViewModel {
+        ConversationsListViewModel(
+            conversationStore: conversationStore,
+            messageStore: messageStore
+        )
     }
 
     // MARK: - Audio stack (Phase 8)

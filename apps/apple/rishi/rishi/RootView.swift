@@ -20,6 +20,7 @@ import SwiftUI
 import RishiCore
 import RishiAudio
 import RishiAuth
+import RishiChat
 import RishiLibrary
 import RishiReader
 #if canImport(PDFKit)
@@ -59,31 +60,48 @@ struct RootView: View {
     @State private var showTTSPicker = false
     @State private var ttsPickerInitial: TTSSettings = .default
 
+    // MARK: - Phase 9 (Chat) state
+    //
+    // Conversations tab + chat sheet:
+    //   - selectedConversation: row tap from Conversations tab → sheet with
+    //     ChatPanelView bound to that conversation
+    //   - chatPanelForPresenter: viewmodel resolved asynchronously from
+    //     deps.chatPresenter.pendingPresentation (reader chat button or
+    //     "Ask about this" selection action)
+    @State private var selectedConversation: Conversation? = nil
+    @State private var chatPanelForPresenter: ChatPanelViewModel? = nil
+
     var body: some View {
         Group {
             if let user = currentUser, let deps = deps {
-                LibraryRootView(
-                    importCoordinator: deps.importCoordinator,
-                    onOpenBook: { book in openTarget = openTarget(for: book) },
-                    onShowSettings: { showSettings = true }
-                )
-                .task(id: user.id) {
-                    deps.cachedUserId = user.id
-                    _ = await deps.sampleBookInstaller.installIfNeeded(ownerId: user.id)
-                    _ = await deps.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
-                    await libraryViewModel.refresh()
+                TabView {
+                    Tab("Library", systemImage: "books.vertical") {
+                        libraryTab(deps: deps, user: user)
+                    }
+                    Tab("Chats", systemImage: "bubble.left.and.bubble.right") {
+                        conversationsTab(deps: deps, user: user)
+                    }
                 }
-                #if canImport(UIKit)
-                .fullScreenCover(item: $openTarget) { target in
-                    destinationView(for: target, deps: deps, userId: user.id)
+                .sheet(item: $selectedConversation) { convo in
+                    let vm = deps.makeChatPanelViewModel(conversation: convo)
+                    ChatPanelView(viewModel: vm)
                 }
-                #else
-                .sheet(item: $openTarget) { target in
-                    destinationView(for: target, deps: deps, userId: user.id)
-                }
-                #endif
-                .sheet(isPresented: $showSettings) {
-                    SettingsSheet(dependencies: deps)
+                .sheet(
+                    item: Binding(
+                        get: { deps.chatPresenter.pendingPresentation },
+                        set: { newValue in
+                            if newValue == nil {
+                                deps.chatPresenter.clear()
+                                chatPanelForPresenter = nil
+                            }
+                        }
+                    )
+                ) { pending in
+                    presenterChatSheet(
+                        pending: pending,
+                        deps: deps,
+                        userId: user.id
+                    )
                 }
             } else {
                 signedOutView
@@ -100,6 +118,71 @@ struct RootView: View {
                 _ = await deps.importCoordinator.importBooks([url])
                 await libraryViewModel.refresh()
             }
+        }
+    }
+
+    // MARK: - Tabs (Phase 9 wraps Library + Conversations in a TabView)
+
+    @ViewBuilder
+    private func libraryTab(deps: AppDependencies, user: User) -> some View {
+        LibraryRootView(
+            importCoordinator: deps.importCoordinator,
+            onOpenBook: { book in openTarget = openTarget(for: book) },
+            onShowSettings: { showSettings = true }
+        )
+        .task(id: user.id) {
+            deps.cachedUserId = user.id
+            _ = await deps.sampleBookInstaller.installIfNeeded(ownerId: user.id)
+            _ = await deps.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
+            await libraryViewModel.refresh()
+        }
+        #if canImport(UIKit)
+        .fullScreenCover(item: $openTarget) { target in
+            destinationView(for: target, deps: deps, userId: user.id)
+        }
+        #else
+        .sheet(item: $openTarget) { target in
+            destinationView(for: target, deps: deps, userId: user.id)
+        }
+        #endif
+        .sheet(isPresented: $showSettings) {
+            SettingsSheet(dependencies: deps)
+        }
+    }
+
+    @ViewBuilder
+    private func conversationsTab(deps: AppDependencies, user: User) -> some View {
+        NavigationStack {
+            ConversationsListView(
+                viewModel: deps.makeConversationsListViewModel(),
+                userId: user.id,
+                onSelect: { convo in selectedConversation = convo }
+            )
+        }
+    }
+
+    /// Resolves the chat-panel viewmodel asynchronously and presents the
+    /// ``ChatPanelView``. Used for the presenter-driven flow (reader chat
+    /// button + "Ask about this" selection action).
+    @ViewBuilder
+    private func presenterChatSheet(
+        pending: ChatPresenterImpl.Pending,
+        deps: AppDependencies,
+        userId: UserID
+    ) -> some View {
+        Group {
+            if let vm = chatPanelForPresenter {
+                ChatPanelView(viewModel: vm, initialQuote: pending.initialQuote)
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: pending.id) {
+            chatPanelForPresenter = await deps.makeChatPanelViewModel(
+                userId: userId,
+                bookId: pending.bookId
+            )
         }
     }
 
@@ -131,7 +214,8 @@ struct RootView: View {
                 highlightStore: deps.highlightStore,
                 onReadAloud: FeatureFlags.readAloud ? {
                     Task { await startPDFReadAloud(vm: pdfVM, deps: deps, userId: userId) }
-                } : nil
+                } : nil,
+                chatPresenter: deps.chatPresenter
             )
             // SYNC-03 wiring: install a sync bridge for the lifetime of the
             // reader sheet. The binding cancels its poll task on deinit.
@@ -193,7 +277,8 @@ struct RootView: View {
                 highlightStore: deps.highlightStore,
                 onReadAloud: FeatureFlags.readAloud ? {
                     Task { await startEPUBReadAloud(vm: epubVM, deps: deps, userId: userId) }
-                } : nil
+                } : nil,
+                chatPresenter: deps.chatPresenter
             )
             .task {
                 epubSyncBinding = EPUBReaderPositionSyncBinding(
