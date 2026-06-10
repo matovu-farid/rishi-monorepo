@@ -7,9 +7,9 @@ import RishiAPI
 @Suite("RishiAudio package smoke")
 struct PackageSmokeTests {
 
-    @Test("Version string is the engine marker")
+    @Test("Version string is the nowplaying marker")
     func versionStringIsScaffoldMarker() {
-        #expect(RishiAudio.version == "0.4.0-engine")
+        #expect(RishiAudio.version == "0.5.0-nowplaying")
     }
 
     @Test("RishiCore UserID + BookID reachable from the test target")
