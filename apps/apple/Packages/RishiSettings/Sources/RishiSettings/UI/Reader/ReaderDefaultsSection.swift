@@ -58,3 +58,27 @@ public struct ReaderDefaultsSection: View {
         }
     }
 }
+
+private struct ReaderDefaultsSectionPreviewHost: View {
+    @State private var theme: ReaderTheme = .light
+    @State private var font: ReaderFontFamily = .system
+
+    var body: some View {
+        Form {
+            ReaderDefaultsSection(
+                defaultTheme: $theme,
+                defaultFontFamily: $font
+            )
+        }
+    }
+}
+
+#Preview("Light") {
+    ReaderDefaultsSectionPreviewHost()
+        .preferredColorScheme(.light)
+}
+
+#Preview("Dark") {
+    ReaderDefaultsSectionPreviewHost()
+        .preferredColorScheme(.dark)
+}

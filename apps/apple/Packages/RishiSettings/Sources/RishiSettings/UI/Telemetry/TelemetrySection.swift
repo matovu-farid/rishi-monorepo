@@ -35,3 +35,15 @@ public struct TelemetrySection: View {
         }
     }
 }
+
+#Preview("Opted In") {
+    Form {
+        TelemetrySection(store: InMemoryTelemetryStore(initial: true))
+    }
+}
+
+#Preview("Opted Out") {
+    Form {
+        TelemetrySection(store: InMemoryTelemetryStore(initial: false))
+    }
+}

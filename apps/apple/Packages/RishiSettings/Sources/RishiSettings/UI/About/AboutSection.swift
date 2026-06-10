@@ -42,3 +42,9 @@ public struct AboutSection: View {
         return "\(short) (\(build))"
     }
 }
+
+#Preview("About") {
+    Form {
+        AboutSection()
+    }
+}

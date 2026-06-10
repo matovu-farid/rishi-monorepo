@@ -41,3 +41,14 @@ public struct AudioSection: View {
         }
     }
 }
+
+#Preview("Audio") {
+    Form {
+        AudioSection(
+            userId: UUID(),
+            initialSettings: .default,
+            store: InMemoryTTSSettingsStore(),
+            onChange: { _ in }
+        )
+    }
+}

@@ -67,3 +67,27 @@ public struct AccountSection: View {
         }
     }
 }
+
+#Preview("With Name") {
+    Form {
+        AccountSection(
+            user: User(
+                email: "reader@example.com",
+                displayName: "Sample Reader",
+                hasPro: true
+            ),
+            onSignOut: {},
+            onShowDeleteFlow: {}
+        )
+    }
+}
+
+#Preview("Email Only") {
+    Form {
+        AccountSection(
+            user: User(email: "reader@example.com"),
+            onSignOut: {},
+            onShowDeleteFlow: {}
+        )
+    }
+}

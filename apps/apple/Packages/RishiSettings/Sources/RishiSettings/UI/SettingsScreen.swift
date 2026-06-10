@@ -132,3 +132,47 @@ public struct SettingsScreen: View {
         }
     }
 }
+
+private struct SettingsScreenPreviewHost: View {
+    @State private var theme: ReaderTheme = .light
+    @State private var font: ReaderFontFamily = .system
+
+    var body: some View {
+        SettingsScreen(
+            user: User(
+                email: "reader@example.com",
+                displayName: "Sample Reader",
+                hasPro: true
+            ),
+            readerTheme: $theme,
+            readerFontFamily: $font,
+            audioUserId: UUID(),
+            audioInitial: .default,
+            audioStore: InMemoryTTSSettingsStore(),
+            onAudioChange: { _ in },
+            syncStatus: SyncStatus(
+                lastSyncedAt: Date().addingTimeInterval(-300),
+                pendingCount: 0,
+                isRunning: false
+            ),
+            onSyncNow: {},
+            telemetryStore: InMemoryTelemetryStore(initial: true),
+            billingEntitlement: .init(isGranted: true),
+            onSignOut: {},
+            onDelete: {},
+            onDeleted: {},
+            onManageSubscription: {},
+            onDismiss: {}
+        )
+    }
+}
+
+#Preview("Light") {
+    SettingsScreenPreviewHost()
+        .preferredColorScheme(.light)
+}
+
+#Preview("Dark") {
+    SettingsScreenPreviewHost()
+        .preferredColorScheme(.dark)
+}

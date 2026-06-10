@@ -20,3 +20,29 @@ public struct SyncSettingsSection: View {
         SettingsSyncSection(status: status, onSyncNow: onSyncNow)
     }
 }
+
+#Preview("Idle") {
+    Form {
+        SyncSettingsSection(
+            status: SyncStatus(
+                lastSyncedAt: Date().addingTimeInterval(-120),
+                pendingCount: 0,
+                isRunning: false
+            ),
+            onSyncNow: {}
+        )
+    }
+}
+
+#Preview("Pending") {
+    Form {
+        SyncSettingsSection(
+            status: SyncStatus(
+                lastSyncedAt: Date().addingTimeInterval(-3600),
+                pendingCount: 4,
+                isRunning: true
+            ),
+            onSyncNow: {}
+        )
+    }
+}

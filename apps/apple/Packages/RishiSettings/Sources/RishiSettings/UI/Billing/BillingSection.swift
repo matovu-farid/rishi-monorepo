@@ -31,3 +31,21 @@ public struct BillingSection: View {
         }
     }
 }
+
+#Preview("Entitlement Granted") {
+    Form {
+        BillingSection(
+            entitlement: .init(isGranted: true),
+            onManage: {}
+        )
+    }
+}
+
+#Preview("Entitlement Pending") {
+    Form {
+        BillingSection(
+            entitlement: .init(isGranted: false),
+            onManage: {}
+        )
+    }
+}
