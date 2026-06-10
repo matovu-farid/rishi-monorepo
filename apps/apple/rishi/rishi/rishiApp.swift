@@ -55,8 +55,15 @@ struct rishiApp: App {
                 .environment(\.rishiAuthService, deps.authServiceForEnvironment)
                 .environment(deps.libraryViewModel)
                 .environment(\.appDependencies, deps)
+                .environment(\.macCommandRouter, deps.macCommandRouter)
         }
         .modelContainer(sharedModelContainer)
+        // Phase 12 Plan 12-01 — Mac Catalyst menu-bar commands.
+        // Universal (not Catalyst-gated) so iPad hardware-keyboard users
+        // get the same ⌘ chords.
+        .commands {
+            RishiMenuCommands(router: deps.macCommandRouter)
+        }
     }
 }
 

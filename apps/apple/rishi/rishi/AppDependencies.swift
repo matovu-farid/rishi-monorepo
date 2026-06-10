@@ -111,6 +111,12 @@ final class AppDependencies {
     /// applied when a book has no per-book override.
     let readerDefaults: AppReaderDefaults
 
+    /// MAC-03 / MAC-04 — single router brokering menu-bar commands and
+    /// ⌘-key shortcuts to `RootView`. Lives at the composition root so the
+    /// same instance is reachable from `WindowGroup.commands { ... }` AND
+    /// from the SwiftUI environment that `RootView` reads.
+    let macCommandRouter = MacCommandRouter()
+
     /// Cached user id pumped in by RootView after the auth session resolves.
     /// LibraryViewModel reads this synchronously from its currentUserId
     /// closure so refresh() does not need to hop into the auth actor.
