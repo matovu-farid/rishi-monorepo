@@ -152,7 +152,7 @@ final class RishiAppDelegate: NSObject, UIApplicationDelegate {
 }
 
 private struct SendableCompletionBox<T>: @unchecked Sendable {
-    let value: (T) -> Void
+    nonisolated let value: (T) -> Void
 }
 
 #endif
