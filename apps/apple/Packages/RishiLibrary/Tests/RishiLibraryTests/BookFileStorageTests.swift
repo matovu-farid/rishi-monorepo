@@ -68,7 +68,7 @@ struct BookFileStorageTests {
         let srcDir = makeTempRoot("import-epub-src")
         defer { try? FileManager.default.removeItem(at: srcDir) }
         let srcEPUB = srcDir.appendingPathComponent("alice.epub")
-        try FixtureBuilders.writeTinyEPUB(to: srcEPUB, withCover: true)
+        try await FixtureBuilders.writeTinyEPUB(to: srcEPUB, withCover: true)
 
         let store = InMemoryBookStore()
         let storage = makeStorage(rootURL: root, bookStore: store)

@@ -13,7 +13,10 @@ let package = Package(
         .package(path: "../RishiDB"),
         .package(path: "../RishiLogging"),
         .package(path: "../RishiTesting"), // test-only consumer
-        .package(url: "https://github.com/weichsel/ZIPFoundation.git", from: "0.9.20"),
+        // Phase 6 (06-01): migrated off weichsel/ZIPFoundation to readium/ZIPFoundation
+        // to resolve the SPM package-identity collision (both share identity "zipfoundation").
+        // Readium 3.9 transitively depends on this fork, so RishiLibrary aligns on it directly.
+        .package(url: "https://github.com/readium/ZIPFoundation.git", from: "3.0.0"),
     ],
     targets: [
         .target(
@@ -23,7 +26,7 @@ let package = Package(
                 "RishiUIKit",
                 "RishiDB",
                 "RishiLogging",
-                .product(name: "ZIPFoundation", package: "ZIPFoundation"),
+                .product(name: "ReadiumZIPFoundation", package: "ZIPFoundation"),
             ],
             resources: [
                 .process("Resources/Bundled"),
@@ -35,7 +38,7 @@ let package = Package(
                 "RishiLibrary",
                 "RishiCore",
                 .product(name: "RishiTesting", package: "RishiTesting"),
-                .product(name: "ZIPFoundation", package: "ZIPFoundation"),
+                .product(name: "ReadiumZIPFoundation", package: "ZIPFoundation"),
             ]
         ),
     ]

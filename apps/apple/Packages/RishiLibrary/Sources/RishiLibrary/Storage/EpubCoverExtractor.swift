@@ -1,5 +1,5 @@
 import Foundation
-import ZIPFoundation
+import ReadiumZIPFoundation
 import RishiLogging
 
 #if canImport(UIKit)
@@ -32,22 +32,23 @@ public struct EpubCoverExtractor: CoverExtractor {
         let size = targetSize
         return await Task.detached(priority: .utility) {
             do {
-                let archive = try Archive(url: fileURL, accessMode: .read)
+                // ReadiumZIPFoundation 3.x: Archive is an actor; init and all access are async.
+                let archive = try await Archive(url: fileURL, accessMode: .read)
 
                 // 1) Locate the OPF path via META-INF/container.xml.
-                guard let containerEntry = archive["META-INF/container.xml"] else {
+                guard let containerEntry = try await archive.get("META-INF/container.xml") else {
                     throw CoverExtractionError.sourceUnreadable
                 }
-                let containerData = try Self.readData(from: archive, entry: containerEntry)
+                let containerData = try await Self.readData(from: archive, entry: containerEntry)
                 guard let opfRelativePath = Self.parseOpfPath(from: containerData) else {
                     throw CoverExtractionError.noCoverEntry
                 }
 
                 // 2) Read the OPF and find the cover image href.
-                guard let opfEntry = archive[opfRelativePath] else {
+                guard let opfEntry = try await archive.get(opfRelativePath) else {
                     throw CoverExtractionError.noCoverEntry
                 }
-                let opfData = try Self.readData(from: archive, entry: opfEntry)
+                let opfData = try await Self.readData(from: archive, entry: opfEntry)
                 guard let coverHref = Self.parseCoverHref(from: opfData) else {
                     throw CoverExtractionError.noCoverEntry
                 }
@@ -55,11 +56,11 @@ public struct EpubCoverExtractor: CoverExtractor {
                 // OPF item hrefs are relative to the OPF's own directory.
                 let opfDir = (opfRelativePath as NSString).deletingLastPathComponent
                 let coverPath = opfDir.isEmpty ? coverHref : "\(opfDir)/\(coverHref)"
-                guard let coverEntry = archive[coverPath] else {
+                guard let coverEntry = try await archive.get(coverPath) else {
                     throw CoverExtractionError.noCoverEntry
                 }
 
-                let imageData = try Self.readData(from: archive, entry: coverEntry)
+                let imageData = try await Self.readData(from: archive, entry: coverEntry)
 
                 // 3) Re-encode to a PNG of the target size so callers see a stable format.
                 guard let png = Self.encodePNG(imageData, targetSize: size) else {
@@ -79,10 +80,23 @@ public struct EpubCoverExtractor: CoverExtractor {
 
     // MARK: - ZIP read helper
 
-    private static func readData(from archive: Archive, entry: Entry) throws -> Data {
-        var collected = Data()
-        _ = try archive.extract(entry) { chunk in collected.append(chunk) }
-        return collected
+    /// ReadiumZIPFoundation's `Consumer` is `@Sendable async throws`, so we cannot
+    /// capture a mutable `var collected = Data()` directly. We funnel chunks through
+    /// an actor-isolated collector to satisfy the Sendable boundary.
+    private static func readData(from archive: Archive, entry: Entry) async throws -> Data {
+        let collector = DataCollector()
+        _ = try await archive.extract(entry) { @Sendable chunk in
+            await collector.append(chunk)
+        }
+        return await collector.value
+    }
+
+    /// Thread-safe accumulator for streamed ZIP entry contents.
+    private actor DataCollector {
+        private(set) var value: Data = Data()
+        func append(_ chunk: Data) {
+            value.append(chunk)
+        }
     }
 
     // MARK: - OPF / container parsing (internal for tests)

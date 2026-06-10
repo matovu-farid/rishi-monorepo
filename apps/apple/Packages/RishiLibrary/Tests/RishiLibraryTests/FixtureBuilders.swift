@@ -1,6 +1,6 @@
 import Foundation
 import PDFKit
-import ZIPFoundation
+import ReadiumZIPFoundation
 
 #if canImport(UIKit)
 import UIKit
@@ -57,21 +57,27 @@ enum FixtureBuilders {
     /// - `META-INF/container.xml`
     /// - `OEBPS/content.opf` declaring a cover image
     /// - `OEBPS/cover.png` (1x1 red pixel)
-    static func writeTinyEPUB(to url: URL, withCover: Bool = true) throws {
-        // Delete any existing file at url (ZIPFoundation.Archive(creating:) requires a fresh path).
+    ///
+    /// ReadiumZIPFoundation 3.x made `Archive` an actor; init and `addEntry` are now `async`,
+    /// so this builder is `async throws`.
+    static func writeTinyEPUB(to url: URL, withCover: Bool = true) async throws {
+        // Delete any existing file at url (Archive(creating:) requires a fresh path).
         try? FileManager.default.removeItem(at: url)
-        guard let archive = try? Archive(url: url, accessMode: .create) else {
+        let archive: Archive
+        do {
+            archive = try await Archive(url: url, accessMode: .create)
+        } catch {
             throw FixtureError.cannotCreateArchive
         }
 
         // 1) mimetype (uncompressed)
         let mimetype = Data("application/epub+zip".utf8)
-        try archive.addEntry(
+        try await archive.addEntry(
             with: "mimetype",
             type: .file,
             uncompressedSize: Int64(mimetype.count),
             compressionMethod: .none,
-            provider: { position, size in
+            provider: { @Sendable position, size in
                 mimetype.subdata(in: Int(position)..<Int(position) + size)
             }
         )
@@ -85,7 +91,7 @@ enum FixtureBuilders {
           </rootfiles>
         </container>
         """
-        try addEntry(archive: archive, path: "META-INF/container.xml", data: Data(container.utf8))
+        try await addEntry(archive: archive, path: "META-INF/container.xml", data: Data(container.utf8))
 
         // 3) content.opf with cover meta
         let coverMeta = withCover ? "<meta name=\"cover\" content=\"cover-image\"/>" : ""
@@ -108,11 +114,11 @@ enum FixtureBuilders {
           </spine>
         </package>
         """
-        try addEntry(archive: archive, path: "OEBPS/content.opf", data: Data(opf.utf8))
+        try await addEntry(archive: archive, path: "OEBPS/content.opf", data: Data(opf.utf8))
 
         // 4) cover.png (1x1 red pixel) — only if we want a cover
         if withCover {
-            try addEntry(archive: archive, path: "OEBPS/cover.png", data: tinyRedPNG())
+            try await addEntry(archive: archive, path: "OEBPS/cover.png", data: tinyRedPNG())
         }
 
         // 5) nav.xhtml stub
@@ -123,16 +129,16 @@ enum FixtureBuilders {
         <body><nav epub:type="toc"><ol><li><a href="nav.xhtml">Start</a></li></ol></nav></body>
         </html>
         """
-        try addEntry(archive: archive, path: "OEBPS/nav.xhtml", data: Data(nav.utf8))
+        try await addEntry(archive: archive, path: "OEBPS/nav.xhtml", data: Data(nav.utf8))
     }
 
-    private static func addEntry(archive: Archive, path: String, data: Data) throws {
-        try archive.addEntry(
+    private static func addEntry(archive: Archive, path: String, data: Data) async throws {
+        try await archive.addEntry(
             with: path,
             type: .file,
             uncompressedSize: Int64(data.count),
             compressionMethod: .deflate,
-            provider: { position, size in
+            provider: { @Sendable position, size in
                 data.subdata(in: Int(position)..<Int(position) + size)
             }
         )

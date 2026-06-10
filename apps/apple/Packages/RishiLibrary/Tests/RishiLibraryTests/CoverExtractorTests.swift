@@ -46,7 +46,7 @@ struct CoverExtractorTests {
         let dir = makeTempDir("epub-happy")
         defer { try? FileManager.default.removeItem(at: dir) }
         let epubURL = dir.appendingPathComponent("fixture.epub")
-        try FixtureBuilders.writeTinyEPUB(to: epubURL, withCover: true)
+        try await FixtureBuilders.writeTinyEPUB(to: epubURL, withCover: true)
 
         let extractor = EpubCoverExtractor()
         let data = await extractor.extractCover(from: epubURL)
@@ -59,7 +59,7 @@ struct CoverExtractorTests {
         let dir = makeTempDir("epub-nocover")
         defer { try? FileManager.default.removeItem(at: dir) }
         let epubURL = dir.appendingPathComponent("fixture.epub")
-        try FixtureBuilders.writeTinyEPUB(to: epubURL, withCover: false)
+        try await FixtureBuilders.writeTinyEPUB(to: epubURL, withCover: false)
 
         let extractor = EpubCoverExtractor()
         let data = await extractor.extractCover(from: epubURL)
