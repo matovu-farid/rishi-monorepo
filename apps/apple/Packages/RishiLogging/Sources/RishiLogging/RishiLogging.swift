@@ -19,4 +19,14 @@ public enum RishiLogging {
 
     /// Marker for the public RishiLogging API version. Bump when the surface breaks.
     public static let apiVersion = "1.0.0"
+
+    /// SET-02 — mute / unmute Sentry uploads at runtime in response to the
+    /// user's telemetry opt-in toggle. The Phase 11 `AppTelemetrySink`
+    /// forwards `TelemetryStore.setOptedIn(_:)` here.
+    ///
+    /// No-op when `RishiLogging.start(dsn:environment:release:)` has not been
+    /// called with a real DSN — keeps tests + dev hosts well-defined.
+    public static func setSentryEnabled(_ enabled: Bool) {
+        SentryBridge.setEnabled(enabled)
+    }
 }

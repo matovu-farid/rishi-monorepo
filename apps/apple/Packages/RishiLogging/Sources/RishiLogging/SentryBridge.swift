@@ -25,6 +25,38 @@ enum SentryBridge {
             // Sampling left at SDK default (1.0); tune in app target.
         }
         isLive = true
+        wasStarted = true
+    }
+
+    /// Local mirror of whether `start(...)` was called with a real DSN. Used
+    /// so `setEnabled(true)` does NOT silently enable a never-started SDK
+    /// (would flip the breadcrumb gate true with no underlying client).
+    nonisolated(unsafe) private static var wasStarted: Bool = false
+
+    /// SET-02 — flip Sentry uploads on/off at runtime in response to the
+    /// user's telemetry opt-in toggle.
+    ///
+    /// `isLive` is the breadcrumb / capture gate consulted by every Sentry
+    /// forwarding call in this file, so toggling it is sufficient to mute
+    /// uploads even without reaching into the Sentry SDK's options. We also
+    /// close the SDK on opt-out so any in-flight envelopes are dropped.
+    ///
+    /// No-op when the SDK was never started — keeps tests + dev hosts well-
+    /// defined (calling `setEnabled(true)` before `start(...)` does NOT
+    /// enable a half-initialized state).
+    static func setEnabled(_ enabled: Bool) {
+        if enabled {
+            // Only honor opt-in if the SDK has actually been started.
+            // Pre-start callers (tests, dev) get a no-op — same as today.
+            isLive = wasStarted
+        } else {
+            isLive = false
+            // Best-effort: drop any in-flight events on opt-out. SentrySDK
+            // exposes `close()` across all supported versions; subsequent
+            // breadcrumb / capture calls in this file are already gated by
+            // `isLive` so they no-op.
+            SentrySDK.close()
+        }
     }
 
     static func addBreadcrumb(name: String, level: LogLevel, data: [String: String]?) {
