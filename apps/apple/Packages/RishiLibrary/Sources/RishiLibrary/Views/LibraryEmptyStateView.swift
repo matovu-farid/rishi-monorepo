@@ -47,3 +47,17 @@ public struct LibraryEmptyStateView: View {
         #endif
     }
 }
+
+#Preview("Empty state - light") {
+    LibraryEmptyStateView()
+}
+
+#Preview("Empty state - dark") {
+    LibraryEmptyStateView()
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Empty state - XL text") {
+    LibraryEmptyStateView()
+        .environment(\.dynamicTypeSize, .accessibility3)
+}

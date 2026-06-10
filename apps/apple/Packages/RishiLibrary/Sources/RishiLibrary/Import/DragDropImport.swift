@@ -48,3 +48,72 @@ public extension View {
         modifier(LibraryDropDestination(coordinator: coordinator, onImported: onImported))
     }
 }
+
+import RishiUIKit
+
+@MainActor
+private enum DragDropPreviewFixtures {
+    static let userId: UserID = UUID()
+
+    static func makeCoordinator() -> ImportCoordinator {
+        final class EmptyBookStore: BookStore, @unchecked Sendable {
+            func books(for userId: UserID) async throws -> [Book] { [] }
+            func book(_ id: BookID) async throws -> Book? { nil }
+            func upsert(_ book: Book) async throws {}
+            func delete(_ id: BookID) async throws {}
+        }
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("DragDropPreview-\(UUID().uuidString)", isDirectory: true)
+        let storage = BookFileStorage(
+            rootURL: tmp,
+            bookStore: EmptyBookStore(),
+            coverExtractors: [:]
+        )
+        let capturedUserId = userId
+        return ImportCoordinator(
+            storage: storage,
+            currentUserId: { capturedUserId }
+        )
+    }
+}
+
+private struct DragDropPreviewHost: View {
+    let coordinator: ImportCoordinator
+
+    var body: some View {
+        VStack(spacing: RishiSpacing.l) {
+            Image(systemName: "tray.and.arrow.down")
+                .font(RishiTypography.titleXL)
+                .foregroundStyle(RishiColor.textMuted)
+            Text("Drop EPUB or PDF here")
+                .font(RishiTypography.titleM)
+                .foregroundStyle(RishiColor.textPrimary)
+            Text("This area accepts inter-app drops from Files or Finder.")
+                .font(RishiTypography.body)
+                .foregroundStyle(RishiColor.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, RishiSpacing.xl)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(RishiColor.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: RishiRadius.medium, style: .continuous)
+                .strokeBorder(RishiColor.divider, style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
+                .padding(RishiSpacing.l)
+        )
+        .libraryDropDestination(coordinator: coordinator) { _ in }
+    }
+}
+
+#Preview("Drop target - idle") {
+    DragDropPreviewHost(coordinator: DragDropPreviewFixtures.makeCoordinator())
+        .padding(RishiSpacing.l)
+        .background(RishiColor.background)
+}
+
+#Preview("Drop target - dark") {
+    DragDropPreviewHost(coordinator: DragDropPreviewFixtures.makeCoordinator())
+        .padding(RishiSpacing.l)
+        .background(RishiColor.background)
+        .preferredColorScheme(.dark)
+}

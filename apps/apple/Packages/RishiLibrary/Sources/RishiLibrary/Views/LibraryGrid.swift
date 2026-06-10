@@ -119,3 +119,91 @@ public struct LibraryGrid: View {
         return "\(book.title) by unknown author"
     }
 }
+
+private enum LibraryGridPreviewFixtures {
+    static let userId: UserID = UUID()
+
+    static func book(_ title: String, author: String? = "Preview Author", format: BookFormat = .epub) -> Book {
+        Book(
+            id: UUID(),
+            userId: userId,
+            title: title,
+            author: author,
+            formatType: format,
+            fileURL: "Books/\(UUID().uuidString)/\(title).\(format.rawValue)"
+        )
+    }
+
+    static let manyBooks: [Book] = [
+        book("Project Hail Mary", author: "Andy Weir"),
+        book("Sapiens", author: "Yuval Noah Harari"),
+        book("The Pragmatic Programmer", author: "Hunt and Thomas"),
+        book("Norwegian Wood", author: "Haruki Murakami"),
+        book("Designing Data-Intensive Applications", author: "Martin Kleppmann"),
+        book("Dune", author: "Frank Herbert"),
+        book("1984", author: "George Orwell"),
+        book("The Hobbit", author: "J.R.R. Tolkien"),
+        book("Brave New World", author: "Aldous Huxley"),
+        book("Ulysses", author: nil),
+        book("PDF Reference", author: "Adobe", format: .pdf),
+        book("A Very Very Very Long Title That Wraps Three Lines Or More", author: "Anonymous"),
+    ]
+
+    static let inProgressIds: Set<BookID> = Set(manyBooks.prefix(3).map(\.id))
+
+    static func positionLookup(_ id: BookID) -> Position? {
+        guard inProgressIds.contains(id) else { return nil }
+        return Position(
+            id: UUID(),
+            bookId: id,
+            locator: "{\"page\":42}",
+            percentComplete: 0.42,
+            updatedAt: Date()
+        )
+    }
+}
+
+#Preview("Grid - populated") {
+    LibraryGrid(
+        books: LibraryGridPreviewFixtures.manyBooks,
+        positionLookup: LibraryGridPreviewFixtures.positionLookup,
+        coverURL: { _ in nil },
+        onOpen: { _ in },
+        onDelete: { _ in }
+    )
+    .background(RishiColor.background)
+}
+
+#Preview("Grid - small list") {
+    LibraryGrid(
+        books: Array(LibraryGridPreviewFixtures.manyBooks.prefix(3)),
+        positionLookup: LibraryGridPreviewFixtures.positionLookup,
+        coverURL: { _ in nil },
+        onOpen: { _ in },
+        onDelete: { _ in }
+    )
+    .background(RishiColor.background)
+}
+
+#Preview("Grid - single book") {
+    LibraryGrid(
+        books: [LibraryGridPreviewFixtures.book("Solo Title", author: "Lone Author")],
+        positionLookup: { _ in nil },
+        coverURL: { _ in nil },
+        onOpen: { _ in },
+        onDelete: { _ in }
+    )
+    .background(RishiColor.background)
+}
+
+#Preview("Grid - dark mode") {
+    LibraryGrid(
+        books: LibraryGridPreviewFixtures.manyBooks,
+        positionLookup: LibraryGridPreviewFixtures.positionLookup,
+        coverURL: { _ in nil },
+        onOpen: { _ in },
+        onDelete: { _ in }
+    )
+    .background(RishiColor.background)
+    .preferredColorScheme(.dark)
+}

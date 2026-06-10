@@ -66,3 +66,38 @@ public extension View {
         modifier(LibrarySearchable(text: text, filteredIsEmpty: filteredIsEmpty))
     }
 }
+
+private struct LibrarySearchablePreviewHost: View {
+    @State var query: String
+    let filteredIsEmpty: Bool
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Text("Result A").foregroundStyle(RishiColor.textPrimary)
+                Text("Result B").foregroundStyle(RishiColor.textPrimary)
+                Text("Result C").foregroundStyle(RishiColor.textPrimary)
+            }
+            .navigationTitle("Library")
+            .background(RishiColor.background)
+        }
+        .librarySearchable(text: $query, filteredIsEmpty: filteredIsEmpty)
+    }
+}
+
+#Preview("Search - idle") {
+    LibrarySearchablePreviewHost(query: "", filteredIsEmpty: false)
+}
+
+#Preview("Search - typed match") {
+    LibrarySearchablePreviewHost(query: "Result", filteredIsEmpty: false)
+}
+
+#Preview("Search - no results") {
+    LibrarySearchablePreviewHost(query: "Whatever Nothing Matches", filteredIsEmpty: true)
+}
+
+#Preview("Search - no results dark") {
+    LibrarySearchablePreviewHost(query: "Quantum", filteredIsEmpty: true)
+        .preferredColorScheme(.dark)
+}

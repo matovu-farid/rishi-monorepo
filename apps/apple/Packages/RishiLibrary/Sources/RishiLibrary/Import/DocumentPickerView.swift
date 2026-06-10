@@ -64,6 +64,46 @@ public struct DocumentPickerView: UIViewControllerRepresentable {
     }
 }
 
+#Preview("Document picker - sheet host") {
+    DocumentPickerPreviewHost()
+}
+
+#Preview("Document picker - dark") {
+    DocumentPickerPreviewHost()
+        .preferredColorScheme(.dark)
+}
+
+private struct DocumentPickerPreviewHost: View {
+    @State private var isPresented = false
+    @State private var lastSelection: [URL] = []
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Button("Open Document Picker") {
+                isPresented = true
+            }
+            .buttonStyle(.borderedProminent)
+
+            if lastSelection.isEmpty {
+                Text("No files picked yet")
+            } else {
+                VStack(alignment: .leading) {
+                    ForEach(lastSelection, id: \.self) { url in
+                        Text(url.lastPathComponent)
+                    }
+                }
+            }
+        }
+        .padding()
+        .sheet(isPresented: $isPresented) {
+            DocumentPickerView { urls in
+                lastSelection = urls
+                isPresented = false
+            }
+        }
+    }
+}
+
 #else
 
 /// Dev-host (macOS / non-UIKit) shell so the type still compiles under
@@ -78,6 +118,11 @@ public struct DocumentPickerView: View {
     public var body: some View {
         Text("Document Picker is only available on iOS / Mac Catalyst")
     }
+}
+
+#Preview("Document picker - macOS stub") {
+    DocumentPickerView { _ in }
+        .padding()
 }
 
 #endif

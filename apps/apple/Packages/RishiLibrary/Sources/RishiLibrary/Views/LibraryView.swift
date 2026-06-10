@@ -59,3 +59,97 @@ public struct LibraryView: View {
         .navigationTitle("Library")
     }
 }
+
+private enum LibraryViewPreviewFixtures {
+    static let userId: UserID = UUID()
+
+    static func book(_ title: String, author: String? = "Preview Author") -> Book {
+        Book(
+            id: UUID(),
+            userId: userId,
+            title: title,
+            author: author,
+            formatType: .epub,
+            fileURL: "Books/\(UUID().uuidString)/\(title).epub"
+        )
+    }
+
+    static let populated: [Book] = [
+        book("Project Hail Mary", author: "Andy Weir"),
+        book("Sapiens", author: "Yuval Noah Harari"),
+        book("The Pragmatic Programmer", author: "Hunt and Thomas"),
+        book("Norwegian Wood", author: "Haruki Murakami"),
+        book("Designing Data-Intensive Applications", author: "Martin Kleppmann"),
+        book("Dune", author: "Frank Herbert"),
+        book("1984", author: "George Orwell"),
+        book("The Hobbit", author: "J.R.R. Tolkien"),
+    ]
+
+    static func readingNow(for books: [Book]) -> [ReadingNowEntry] {
+        books.prefix(3).map { b in
+            ReadingNowEntry(
+                book: b,
+                position: Position(
+                    id: UUID(),
+                    bookId: b.id,
+                    locator: "{\"page\":1}",
+                    percentComplete: 0.35,
+                    updatedAt: Date()
+                )
+            )
+        }
+    }
+}
+
+#Preview("Library - populated with shelf") {
+    NavigationStack {
+        LibraryView(
+            books: LibraryViewPreviewFixtures.populated,
+            readingNow: LibraryViewPreviewFixtures.readingNow(for: LibraryViewPreviewFixtures.populated),
+            positionLookup: { _ in nil },
+            coverURL: { _ in nil },
+            onOpen: { _ in },
+            onDelete: { _ in }
+        )
+    }
+}
+
+#Preview("Library - no shelf") {
+    NavigationStack {
+        LibraryView(
+            books: LibraryViewPreviewFixtures.populated,
+            readingNow: [],
+            positionLookup: { _ in nil },
+            coverURL: { _ in nil },
+            onOpen: { _ in },
+            onDelete: { _ in }
+        )
+    }
+}
+
+#Preview("Library - empty") {
+    NavigationStack {
+        LibraryView(
+            books: [],
+            readingNow: [],
+            positionLookup: { _ in nil },
+            coverURL: { _ in nil },
+            onOpen: { _ in },
+            onDelete: { _ in }
+        )
+    }
+}
+
+#Preview("Library - dark mode") {
+    NavigationStack {
+        LibraryView(
+            books: LibraryViewPreviewFixtures.populated,
+            readingNow: LibraryViewPreviewFixtures.readingNow(for: LibraryViewPreviewFixtures.populated),
+            positionLookup: { _ in nil },
+            coverURL: { _ in nil },
+            onOpen: { _ in },
+            onDelete: { _ in }
+        )
+    }
+    .preferredColorScheme(.dark)
+}

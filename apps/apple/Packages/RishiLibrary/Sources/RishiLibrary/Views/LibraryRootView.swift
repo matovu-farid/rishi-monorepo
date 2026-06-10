@@ -125,3 +125,145 @@ public struct LibraryRootView: View {
         coverURLs = out
     }
 }
+
+private actor LibraryRootPreviewBookStore: BookStore {
+    private var byId: [BookID: Book] = [:]
+
+    init(seed: [Book]) {
+        for b in seed { byId[b.id] = b }
+    }
+
+    func books(for userId: UserID) async throws -> [Book] {
+        byId.values.filter { $0.userId == userId }.sorted { $0.title < $1.title }
+    }
+
+    func book(_ id: BookID) async throws -> Book? { byId[id] }
+
+    func upsert(_ book: Book) async throws { byId[book.id] = book }
+
+    func delete(_ id: BookID) async throws { byId[id] = nil }
+}
+
+private actor LibraryRootPreviewPositionStore: PositionStore {
+    private var byBook: [BookID: Position] = [:]
+
+    init(seed: [Position]) {
+        for p in seed { byBook[p.bookId] = p }
+    }
+
+    func position(for bookId: BookID) async throws -> Position? { byBook[bookId] }
+
+    func upsert(_ position: Position) async throws { byBook[position.bookId] = position }
+
+    func delete(_ id: PositionID) async throws {
+        if let key = byBook.first(where: { $0.value.id == id })?.key {
+            byBook[key] = nil
+        }
+    }
+}
+
+@MainActor
+private enum LibraryRootPreviewFixtures {
+    static let userId: UserID = UUID()
+
+    static func book(_ title: String, author: String? = "Preview Author") -> Book {
+        Book(
+            id: UUID(),
+            userId: userId,
+            title: title,
+            author: author,
+            formatType: .epub,
+            fileURL: "Books/\(UUID().uuidString)/\(title).epub"
+        )
+    }
+
+    static let populated: [Book] = [
+        book("Project Hail Mary", author: "Andy Weir"),
+        book("Sapiens", author: "Yuval Noah Harari"),
+        book("The Pragmatic Programmer", author: "Hunt and Thomas"),
+        book("Norwegian Wood", author: "Haruki Murakami"),
+        book("Designing Data-Intensive Applications", author: "Martin Kleppmann"),
+        book("Dune", author: "Frank Herbert"),
+    ]
+
+    static func positions(for books: [Book]) -> [Position] {
+        books.prefix(2).map { b in
+            Position(
+                id: UUID(),
+                bookId: b.id,
+                locator: "{\"page\":1}",
+                percentComplete: 0.4,
+                updatedAt: Date()
+            )
+        }
+    }
+
+    static func makeViewModel(books: [Book]) -> LibraryViewModel {
+        let bookStore = LibraryRootPreviewBookStore(seed: books)
+        let positionStore = LibraryRootPreviewPositionStore(seed: positions(for: books))
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("RishiLibraryPreview-\(UUID().uuidString)", isDirectory: true)
+        let storage = BookFileStorage(
+            rootURL: tmp,
+            bookStore: bookStore,
+            coverExtractors: [:]
+        )
+        let vm = LibraryViewModel(
+            bookStore: bookStore,
+            positionStore: positionStore,
+            storage: storage,
+            currentUserId: { userId }
+        )
+        return vm
+    }
+
+    static func makeImportCoordinator() -> ImportCoordinator {
+        let bookStore = LibraryRootPreviewBookStore(seed: [])
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("RishiLibraryPreviewImport-\(UUID().uuidString)", isDirectory: true)
+        let storage = BookFileStorage(
+            rootURL: tmp,
+            bookStore: bookStore,
+            coverExtractors: [:]
+        )
+        let capturedUserId = userId
+        return ImportCoordinator(
+            storage: storage,
+            currentUserId: { capturedUserId }
+        )
+    }
+}
+
+#Preview("Root - populated") {
+    LibraryRootView(
+        importCoordinator: LibraryRootPreviewFixtures.makeImportCoordinator(),
+        onOpenBook: { _ in }
+    )
+    .environment(LibraryRootPreviewFixtures.makeViewModel(books: LibraryRootPreviewFixtures.populated))
+}
+
+#Preview("Root - empty") {
+    LibraryRootView(
+        importCoordinator: LibraryRootPreviewFixtures.makeImportCoordinator(),
+        onOpenBook: { _ in }
+    )
+    .environment(LibraryRootPreviewFixtures.makeViewModel(books: []))
+}
+
+#Preview("Root - with settings button") {
+    LibraryRootView(
+        importCoordinator: LibraryRootPreviewFixtures.makeImportCoordinator(),
+        onOpenBook: { _ in },
+        onShowSettings: { }
+    )
+    .environment(LibraryRootPreviewFixtures.makeViewModel(books: LibraryRootPreviewFixtures.populated))
+}
+
+#Preview("Root - dark mode") {
+    LibraryRootView(
+        importCoordinator: LibraryRootPreviewFixtures.makeImportCoordinator(),
+        onOpenBook: { _ in }
+    )
+    .environment(LibraryRootPreviewFixtures.makeViewModel(books: LibraryRootPreviewFixtures.populated))
+    .preferredColorScheme(.dark)
+}

@@ -63,3 +63,66 @@ public struct BookCoverImageView: View {
         }
     }
 }
+
+private enum BookCoverPreviewFixtures {
+    static func book(title: String) -> Book {
+        Book(
+            id: UUID(),
+            userId: UUID(),
+            title: title,
+            author: "Preview Author",
+            formatType: .epub,
+            fileURL: "Books/\(UUID().uuidString)/\(title).epub"
+        )
+    }
+}
+
+#Preview("Cover - gradient fallback") {
+    BookCoverImageView(
+        book: BookCoverPreviewFixtures.book(title: "The Long Title That Wraps"),
+        coverURL: nil
+    )
+    .frame(width: 160, height: 220)
+    .padding(RishiSpacing.l)
+    .background(RishiColor.background)
+}
+
+#Preview("Cover - short title") {
+    BookCoverImageView(
+        book: BookCoverPreviewFixtures.book(title: "1984"),
+        coverURL: nil
+    )
+    .frame(width: 160, height: 220)
+    .padding(RishiSpacing.l)
+    .background(RishiColor.background)
+}
+
+#Preview("Cover - dark mode") {
+    BookCoverImageView(
+        book: BookCoverPreviewFixtures.book(title: "Dune"),
+        coverURL: nil
+    )
+    .frame(width: 160, height: 220)
+    .padding(RishiSpacing.l)
+    .background(RishiColor.background)
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Cover - grid of fallbacks") {
+    ScrollView {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 120), spacing: RishiSpacing.m)],
+            spacing: RishiSpacing.m
+        ) {
+            ForEach(["Brave New World", "The Hobbit", "Sapiens", "Project Hail Mary", "Ulysses", "Norwegian Wood"], id: \.self) { title in
+                BookCoverImageView(
+                    book: BookCoverPreviewFixtures.book(title: title),
+                    coverURL: nil
+                )
+                .frame(height: 180)
+            }
+        }
+        .padding(RishiSpacing.l)
+    }
+    .background(RishiColor.background)
+}
