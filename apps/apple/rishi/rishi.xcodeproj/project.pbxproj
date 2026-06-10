@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		252859A25AFDB0AC38588F5F /* RishiUIKit in Frameworks */ = {isa = PBXBuildFile; productRef = 02462412E0BB4964915C0E2F /* RishiUIKit */; };
 		3940EE6AEFE7E57CCFCE7B66 /* RishiAudio in Frameworks */ = {isa = PBXBuildFile; productRef = D6E5CE5173F3A3E46D2BDC43 /* RishiAudio */; };
+		413ED76603381554479A938C /* RishiVoice in Frameworks */ = {isa = PBXBuildFile; productRef = AE82A5810F84E45F40E103A8 /* RishiVoice */; };
 		443936E1F89255A2DE7AE7E4 /* RishiSync in Frameworks */ = {isa = PBXBuildFile; productRef = ED6697329153BA8878524B1C /* RishiSync */; };
 		519E9AFE739F3C46AE57BEE7 /* RishiReader in Frameworks */ = {isa = PBXBuildFile; productRef = 5DF2FEE0C4B237A301D26963 /* RishiReader */; };
 		53A044C8DA088C4CD4F0A61A /* RishiAPI in Frameworks */ = {isa = PBXBuildFile; productRef = 8F44CD0541E29B6DA2049F21 /* RishiAPI */; };
@@ -95,6 +96,7 @@
 				443936E1F89255A2DE7AE7E4 /* RishiSync in Frameworks */,
 				3940EE6AEFE7E57CCFCE7B66 /* RishiAudio in Frameworks */,
 				5A5D45BDA04E05786EED750A /* RishiChat in Frameworks */,
+				413ED76603381554479A938C /* RishiVoice in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -167,6 +169,7 @@
 				ED6697329153BA8878524B1C /* RishiSync */,
 				D6E5CE5173F3A3E46D2BDC43 /* RishiAudio */,
 				3460E16863E99035F29CC2B4 /* RishiChat */,
+				AE82A5810F84E45F40E103A8 /* RishiVoice */,
 			);
 			productName = rishi;
 			productReference = 092254942FD83183008C5ADE /* rishi.app */;
@@ -262,6 +265,7 @@
 				ACA86917896799659B23A413 /* XCLocalSwiftPackageReference "RishiSync" */,
 				075D5CFA3582BF83E9F285F6 /* XCLocalSwiftPackageReference "RishiAudio" */,
 				D543BA7EAE3658F96B6E7A4F /* XCLocalSwiftPackageReference "RishiChat" */,
+				CA7A797B906AED75504FD128 /* XCLocalSwiftPackageReference "RishiVoice" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 092254952FD83183008C5ADE /* Products */;
@@ -702,6 +706,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Packages/RishiUIKit;
 		};
+		CA7A797B906AED75504FD128 /* XCLocalSwiftPackageReference "RishiVoice" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/RishiVoice;
+		};
 		D543BA7EAE3658F96B6E7A4F /* XCLocalSwiftPackageReference "RishiChat" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Packages/RishiChat;
@@ -747,6 +755,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 02A02F24AF08B9EE8465CCE7 /* XCLocalSwiftPackageReference "RishiAuth" */;
 			productName = RishiAuth;
+		};
+		AE82A5810F84E45F40E103A8 /* RishiVoice */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CA7A797B906AED75504FD128 /* XCLocalSwiftPackageReference "RishiVoice" */;
+			productName = RishiVoice;
 		};
 		C9A9E807B1A4CA6AD85C80A2 /* RishiLibrary */ = {
 			isa = XCSwiftPackageProductDependency;
