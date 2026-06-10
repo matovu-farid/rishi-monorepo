@@ -15,6 +15,7 @@ import Foundation
 import RishiCore
 @testable import rishi
 
+@MainActor
 @Suite("DeepLinkRouter")
 struct DeepLinkRouterTests {
 

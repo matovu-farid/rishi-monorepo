@@ -20,6 +20,7 @@ import Foundation
 import RishiCore
 @testable import rishi
 
+@MainActor
 @Suite("RishiSceneState codec")
 struct SceneRestorationStateTests {
 

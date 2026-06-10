@@ -11,6 +11,7 @@ import Testing
 import Foundation
 @testable import rishi
 
+@MainActor
 @Suite("AASA schema parity with worker ticket")
 struct AASASchemaTests {
 
