@@ -38,10 +38,17 @@ struct RishiSidebarLayout<Library: View, Chats: View, Compact: View>: View {
         #endif
     }
 
+    private var selectionOptional: Binding<MacTab?> {
+        Binding(
+            get: { selection },
+            set: { if let new = $0 { selection = new } }
+        )
+    }
+
     var body: some View {
         if prefersSidebar {
             NavigationSplitView {
-                List(selection: $selection) {
+                List(selection: selectionOptional) {
                     Label("Library", systemImage: "books.vertical")
                         .tag(MacTab.library)
                     Label("Chats", systemImage: "bubble.left.and.bubble.right")
