@@ -102,8 +102,10 @@ struct BookUploaderTests {
 
         MockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/upload-url" {
+                // expires_at is a Foundation Date wire value (seconds since reference date) —
+                // WorkerClient decodes with the default JSONDecoder strategy.
                 let body = """
-                { "url": "\(presignedURL)", "expires_at": "2030-01-01T00:00:00.000Z" }
+                { "url": "\(presignedURL)", "expires_at": 946684800 }
                 """
                 return (200, Data(body.utf8), nil)
             }
@@ -177,7 +179,7 @@ struct BookUploaderTests {
         MockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/upload-url" {
                 let body = """
-                { "url": "\(presignedURL)", "expires_at": "2030-01-01T00:00:00.000Z" }
+                { "url": "\(presignedURL)", "expires_at": 946684800 }
                 """
                 return (200, Data(body.utf8), nil)
             }
