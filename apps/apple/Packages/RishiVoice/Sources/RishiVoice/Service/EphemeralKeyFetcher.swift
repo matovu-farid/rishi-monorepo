@@ -19,6 +19,14 @@ public struct EphemeralKey: Sendable, Equatable {
     }
 }
 
+/// Injection seam for the ephemeral-key fetch path. Production wires
+/// `EphemeralKeyFetcher` (the actor below); RishiVoice tests inject a stub.
+/// Extracted in Plan 10-03 so `RealtimeVoiceSession` can be unit-tested with
+/// canned key responses without touching `WorkerClient`.
+public protocol EphemeralKeyFetching: Sendable {
+    func fetch(language: String?) async throws -> EphemeralKey
+}
+
 /// Fetches an ephemeral OpenAI Realtime client secret for the iOS WebRTC handoff.
 ///
 /// The worker handles SIWA auth + OpenAI key custody. The iOS client just asks
@@ -27,7 +35,7 @@ public struct EphemeralKey: Sendable, Equatable {
 /// (shipped in Phase 2) behind a Sendable, narrow surface so Plan 10-03's
 /// `RealtimeVoiceSession` actor never needs to know about `WorkerClient`
 /// directly.
-public actor EphemeralKeyFetcher {
+public actor EphemeralKeyFetcher: EphemeralKeyFetching {
 
     private let workerClient: WorkerClient
 
