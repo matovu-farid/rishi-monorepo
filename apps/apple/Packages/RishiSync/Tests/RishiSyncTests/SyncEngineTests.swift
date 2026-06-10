@@ -142,7 +142,8 @@ struct SyncEngineTests {
     private func makeFileStorage() async throws -> (BookFileStorage, URL) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("rishi-sync-engine-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let storage = BookFileStorage(rootDirectoryURL: root)
+        // Engine tests never upload books — a throwaway StubBookStore is enough.
+        let storage = BookFileStorage(rootURL: root, bookStore: StubBookStore(), coverExtractors: [:])
         return (storage, root)
     }
 
