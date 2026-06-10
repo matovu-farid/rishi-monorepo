@@ -92,6 +92,8 @@ struct ChatPanelHost: View {
             }
     }
 
+
+
     /// Branches the cover body between the live session UI and the failure
     /// surface. The failure-surface branch retains the same `presenter`
     /// reference so Dismiss / Try-again wire back to a single source of
@@ -119,5 +121,16 @@ struct ChatPanelHost: View {
                 onEnd: { Task { await presenter.end() } }
             )
         }
+    }
+}
+
+#Preview("Default") {
+    NavigationStack {
+        PreviewPlaceholder(
+            title: "Chat Panel",
+            subtitle: "Hosts ChatPanelView with a voice toolbar button.",
+            variant: "Default"
+        )
+        .navigationTitle("Chat")
     }
 }

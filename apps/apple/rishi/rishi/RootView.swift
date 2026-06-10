@@ -774,6 +774,30 @@ private enum OpenTarget: Hashable, Identifiable {
     }
 }
 
+#Preview("Signed in") {
+    PreviewPlaceholder(
+        title: "Library",
+        subtitle: "Signed-in users see the library, chats, and reader.",
+        variant: "Signed in"
+    )
+}
+
+#Preview("Signed out") {
+    PreviewPlaceholder(
+        title: "Sign in to Rishi",
+        subtitle: "Signed-out users see the onboarding or debug auth surface.",
+        variant: "Signed out"
+    )
+}
+
+#Preview("Loading") {
+    PreviewPlaceholder(
+        title: "Loading",
+        subtitle: "Bootstrap task is resolving the current user.",
+        variant: "Loading"
+    )
+}
+
 /// Catches `.mobi` / `.azw3` taps — those formats need a converter step
 /// that isn't on the v1 milestone. Shipped here so the library never
 /// silently no-ops when the user taps an unsupported book.

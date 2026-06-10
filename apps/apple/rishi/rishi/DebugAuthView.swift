@@ -90,4 +90,17 @@ struct DebugAuthView: View {
         statusEmail = user?.email
     }
 }
+
+#Preview("Default") {
+    NavigationStack {
+        DebugAuthView()
+    }
+}
+
+#Preview("Populated") {
+    NavigationStack {
+        DebugAuthView()
+            .preferredColorScheme(.dark)
+    }
+}
 #endif

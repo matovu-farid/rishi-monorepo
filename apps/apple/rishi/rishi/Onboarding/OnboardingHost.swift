@@ -69,3 +69,19 @@ struct OnboardingHost: View {
         )
     }
 }
+
+#Preview("First step") {
+    PreviewPlaceholder(
+        title: "Welcome to Rishi",
+        subtitle: "Sign in, then choose how you want to start.",
+        variant: "First step"
+    )
+}
+
+#Preview("Last step") {
+    PreviewPlaceholder(
+        title: "First Reader Hint",
+        subtitle: "Tap any book in the library to start reading.",
+        variant: "Last step"
+    )
+}

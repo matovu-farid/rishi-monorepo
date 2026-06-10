@@ -59,3 +59,44 @@ struct RishiSidebarLayout<Library: View, Chats: View, Compact: View>: View {
         }
     }
 }
+
+private struct RishiSidebarLayoutPreviewHost: View {
+    @State private var selection: MacTab = .library
+
+    var body: some View {
+        RishiSidebarLayout(
+            selection: $selection,
+            library: {
+                PreviewPlaceholder(
+                    title: "Library",
+                    subtitle: "Books and reading progress appear here.",
+                    variant: "Sidebar detail"
+                )
+            },
+            chats: {
+                PreviewPlaceholder(
+                    title: "Chats",
+                    subtitle: "Conversations with the reading assistant appear here.",
+                    variant: "Sidebar detail"
+                )
+            },
+            compactBody: {
+                PreviewPlaceholder(
+                    title: "Compact Tabs",
+                    subtitle: "iPhone compact width renders a TabView.",
+                    variant: "Compact"
+                )
+            }
+        )
+    }
+}
+
+#Preview("Regular") {
+    RishiSidebarLayoutPreviewHost()
+        .environment(\.horizontalSizeClass, .regular)
+}
+
+#Preview("Compact") {
+    RishiSidebarLayoutPreviewHost()
+        .environment(\.horizontalSizeClass, .compact)
+}
