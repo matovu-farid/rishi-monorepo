@@ -52,7 +52,7 @@ extension EPUBReaderViewModel {
         guard let publication = publication,
               let locator = latestLocator else { return [] }
         guard let resource = publication.get(locator.href) else { return [] }
-        let result = await resource.readAsString(encoding: .utf8)
+        let result = await resource.read().asString(encoding: .utf8)
         guard case .success(let html) = result else { return [] }
         let plain = Self.stripHTML(html)
         return SentenceSplitter.split(plain)

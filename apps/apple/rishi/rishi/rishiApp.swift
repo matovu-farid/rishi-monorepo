@@ -144,8 +144,15 @@ final class RishiAppDelegate: NSObject, UIApplicationDelegate {
             completionHandler(.noData)
             return
         }
-        SilentPushHandler.handle(userInfo, engine: deps.syncEngine, completion: completionHandler)
+        let box = SendableCompletionBox(value: completionHandler)
+        SilentPushHandler.handle(userInfo, engine: deps.syncEngine) { result in
+            box.value(result)
+        }
     }
+}
+
+private struct SendableCompletionBox<T>: @unchecked Sendable {
+    let value: (T) -> Void
 }
 
 #endif
