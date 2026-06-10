@@ -17,6 +17,11 @@ public struct EPUBReaderToolbar: View {
     public let onShowTheme: () -> Void
     public let onShowTypography: () -> Void
     public let onReadAloud: (() -> Void)?
+    /// Plan 09-06 (CHAT-01) — when non-nil, surfaces a chat button that
+    /// asks the injected `ReaderChatPresenter` to open the chat sheet for
+    /// the active book. Nil hides the button so older call sites (tests,
+    /// previews) keep working.
+    public let onChat: (() -> Void)?
 
     public init(
         title: String,
@@ -25,7 +30,8 @@ public struct EPUBReaderToolbar: View {
         onShowTOC: @escaping () -> Void,
         onShowTheme: @escaping () -> Void,
         onShowTypography: @escaping () -> Void,
-        onReadAloud: (() -> Void)? = nil
+        onReadAloud: (() -> Void)? = nil,
+        onChat: (() -> Void)? = nil
     ) {
         self.title = title
         self.isPublicationLoaded = isPublicationLoaded
@@ -34,6 +40,7 @@ public struct EPUBReaderToolbar: View {
         self.onShowTheme = onShowTheme
         self.onShowTypography = onShowTypography
         self.onReadAloud = onReadAloud
+        self.onChat = onChat
     }
 
     public var body: some View {
@@ -58,6 +65,15 @@ public struct EPUBReaderToolbar: View {
                     label: "Read Aloud",
                     a11yId: "reader-read-aloud",
                     action: onReadAloud
+                )
+                .disabled(!isPublicationLoaded)
+            }
+            if let onChat {
+                iconButton(
+                    "bubble.left.and.bubble.right",
+                    label: "Chat about this book",
+                    a11yId: "reader-chat",
+                    action: onChat
                 )
                 .disabled(!isPublicationLoaded)
             }

@@ -17,15 +17,21 @@ public struct HighlightContextMenu: View {
     /// Pass `nil` to hide the trash affordance (e.g. for a brand-new
     /// selection that hasn't been saved yet).
     public let onDelete: (() -> Void)?
+    /// Plan 09-06 (CHAT-05) — when non-nil, surfaces an "Ask about this"
+    /// affordance that opens the chat sheet with the selection text
+    /// prefilled as a quote. Nil hides the button.
+    public let onAskAboutThis: (() -> Void)?
 
     public init(
         onColor: @escaping (HighlightColor) -> Void,
         onAddNote: @escaping () -> Void,
-        onDelete: (() -> Void)? = nil
+        onDelete: (() -> Void)? = nil,
+        onAskAboutThis: (() -> Void)? = nil
     ) {
         self.onColor = onColor
         self.onAddNote = onAddNote
         self.onDelete = onDelete
+        self.onAskAboutThis = onAskAboutThis
     }
 
     public var body: some View {
@@ -58,6 +64,18 @@ public struct HighlightContextMenu: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Delete highlight")
+            }
+
+            if let onAskAboutThis {
+                Button(action: onAskAboutThis) {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                        .font(RishiTypography.body)
+                        .foregroundStyle(RishiColor.textPrimary)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("highlight-ask-about-this")
+                .accessibilityLabel("Ask about this")
             }
         }
         .padding(.horizontal, RishiSpacing.m)

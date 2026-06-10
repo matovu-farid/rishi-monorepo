@@ -56,6 +56,12 @@ public struct EPUBReaderScreen: View {
     /// "Read Aloud" button that invokes this closure. Wiring lives in the
     /// rishi app layer (RishiReader has no dependency on RishiAudio).
     private let onReadAloud: (() -> Void)?
+    /// Plan 09-06 (CHAT-01, CHAT-05) — when non-nil, the toolbar surfaces
+    /// a chat button and the selection context menu gains an "Ask about
+    /// this" affordance. The reader DOES NOT import RishiChat — the
+    /// presenter is the seam (`ReaderChatPresenter` protocol in this
+    /// package, satisfied by `ChatPresenterImpl` at the app layer).
+    private let chatPresenter: (any ReaderChatPresenter)?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var chromeVisible: Bool = true
@@ -81,12 +87,14 @@ public struct EPUBReaderScreen: View {
         viewModel: EPUBReaderViewModel,
         readerSettingsStore: (any ReaderSettingsStore)? = nil,
         highlightStore: (any HighlightStore)? = nil,
-        onReadAloud: (() -> Void)? = nil
+        onReadAloud: (() -> Void)? = nil,
+        chatPresenter: (any ReaderChatPresenter)? = nil
     ) {
         self.viewModel = viewModel
         self.readerSettingsStore = readerSettingsStore
         self.highlightStore = highlightStore
         self.onReadAloud = onReadAloud
+        self.chatPresenter = chatPresenter
     }
 
     public var body: some View {
@@ -119,6 +127,17 @@ public struct EPUBReaderScreen: View {
                     onDismiss: {
                         pendingSelection = nil
                         coordinatorRef.coordinator?.clearSelection()
+                    },
+                    onAskAboutThis: chatPresenter.map { presenter in
+                        {
+                            let quote = pending.locator.text
+                            pendingSelection = nil
+                            coordinatorRef.coordinator?.clearSelection()
+                            presenter.presentChat(
+                                bookId: viewModel.book.id,
+                                initialQuote: quote.isEmpty ? nil : quote
+                            )
+                        }
                     }
                 )
                 .transition(.opacity)
@@ -230,7 +249,10 @@ public struct EPUBReaderScreen: View {
             onShowTOC: showTOCAction,
             onShowTheme: showThemeAction,
             onShowTypography: showTypographyAction,
-            onReadAloud: onReadAloud
+            onReadAloud: onReadAloud,
+            onChat: chatPresenter.map { presenter in
+                { presenter.presentChat(bookId: viewModel.book.id, initialQuote: nil) }
+            }
         )
     }
 

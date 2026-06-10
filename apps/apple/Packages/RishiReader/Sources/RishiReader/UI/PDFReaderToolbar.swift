@@ -12,19 +12,26 @@ public struct PDFReaderToolbar: View {
     public let onTOC: (() -> Void)?
     public let onTheme: (() -> Void)?
     public let onReadAloud: (() -> Void)?
+    /// Plan 09-06 (CHAT-01) — when non-nil, surfaces a chat button that
+    /// asks the injected `ReaderChatPresenter` to open the chat sheet for
+    /// the active book. Nil hides the button so older call sites (tests,
+    /// previews, future readers that opt out) keep working.
+    public let onChat: (() -> Void)?
 
     public init(
         title: String,
         onClose: @escaping () -> Void,
         onTOC: (() -> Void)? = nil,
         onTheme: (() -> Void)? = nil,
-        onReadAloud: (() -> Void)? = nil
+        onReadAloud: (() -> Void)? = nil,
+        onChat: (() -> Void)? = nil
     ) {
         self.title = title
         self.onClose = onClose
         self.onTOC = onTOC
         self.onTheme = onTheme
         self.onReadAloud = onReadAloud
+        self.onChat = onChat
     }
 
     public var body: some View {
@@ -72,6 +79,17 @@ public struct PDFReaderToolbar: View {
                 }
                 .accessibilityIdentifier("reader-read-aloud")
                 .accessibilityLabel("Read Aloud")
+            }
+
+            if let onChat {
+                Button(action: onChat) {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                        .font(RishiTypography.bodyEmphasized)
+                        .foregroundStyle(RishiColor.textPrimary)
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityIdentifier("reader-chat")
+                .accessibilityLabel("Chat about this book")
             }
         }
         .padding(.horizontal, RishiSpacing.m)

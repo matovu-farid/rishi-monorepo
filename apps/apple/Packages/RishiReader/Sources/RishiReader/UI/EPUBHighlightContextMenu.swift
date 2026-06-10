@@ -23,17 +23,21 @@ public struct EPUBHighlightContextMenu: View {
     public let onColor: (HighlightColor) -> Void
     public let onAddNote: () -> Void
     public let onDismiss: () -> Void
+    /// Plan 09-06 (CHAT-05) — when non-nil, surfaces "Ask about this".
+    public let onAskAboutThis: (() -> Void)?
 
     public init(
         selectionFrame: CGRect?,
         onColor: @escaping (HighlightColor) -> Void,
         onAddNote: @escaping () -> Void,
-        onDismiss: @escaping () -> Void
+        onDismiss: @escaping () -> Void,
+        onAskAboutThis: (() -> Void)? = nil
     ) {
         self.selectionFrame = selectionFrame
         self.onColor = onColor
         self.onAddNote = onAddNote
         self.onDismiss = onDismiss
+        self.onAskAboutThis = onAskAboutThis
     }
 
     public var body: some View {
@@ -41,7 +45,8 @@ public struct EPUBHighlightContextMenu: View {
             HighlightContextMenu(
                 onColor: onColor,
                 onAddNote: onAddNote,
-                onDelete: nil // brand-new selection — delete only meaningful for existing rows
+                onDelete: nil, // brand-new selection — delete only meaningful for existing rows
+                onAskAboutThis: onAskAboutThis
             )
             .position(menuCenter(in: proxy.size))
             .contentShape(Rectangle())

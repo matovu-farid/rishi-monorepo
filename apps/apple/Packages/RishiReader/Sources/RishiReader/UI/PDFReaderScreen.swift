@@ -35,6 +35,12 @@ public struct PDFReaderScreen: View {
     /// "Read Aloud" button that invokes this closure. Wiring lives in the
     /// rishi app layer (RishiReader has no dependency on RishiAudio).
     private let onReadAloud: (() -> Void)?
+    /// Plan 09-06 (CHAT-01, CHAT-05) — when non-nil, the toolbar surfaces
+    /// a chat button and the selection context menu gains an "Ask about
+    /// this" affordance. The reader DOES NOT import RishiChat — the
+    /// presenter is the seam (`ReaderChatPresenter` protocol in this
+    /// package, satisfied by `ChatPresenterImpl` at the app layer).
+    private let chatPresenter: (any ReaderChatPresenter)?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var chromeVisible: Bool = true
@@ -59,12 +65,14 @@ public struct PDFReaderScreen: View {
         viewModel: PDFReaderViewModel,
         readerSettingsStore: (any ReaderSettingsStore)? = nil,
         highlightStore: (any HighlightStore)? = nil,
-        onReadAloud: (() -> Void)? = nil
+        onReadAloud: (() -> Void)? = nil,
+        chatPresenter: (any ReaderChatPresenter)? = nil
     ) {
         self.viewModel = viewModel
         self.readerSettingsStore = readerSettingsStore
         self.highlightStore = highlightStore
         self.onReadAloud = onReadAloud
+        self.chatPresenter = chatPresenter
     }
 
     /// SwiftUI binding to the @Observable viewModel's theme. Tracks writes so
@@ -120,6 +128,16 @@ public struct PDFReaderScreen: View {
                         },
                         onAddNote: {
                             startNoteFlow(for: pending)
+                        },
+                        onAskAboutThis: chatPresenter.map { presenter in
+                            {
+                                let quote = pending.text
+                                pendingHighlight = nil
+                                presenter.presentChat(
+                                    bookId: viewModel.book.id,
+                                    initialQuote: quote.isEmpty ? nil : quote
+                                )
+                            }
                         }
                     )
                     .padding(.bottom, RishiSpacing.xxl)
@@ -146,7 +164,10 @@ public struct PDFReaderScreen: View {
                         },
                         onTOC: { showTOC = true },
                         onTheme: { showThemePicker = true },
-                        onReadAloud: onReadAloud
+                        onReadAloud: onReadAloud,
+                        onChat: chatPresenter.map { presenter in
+                            { presenter.presentChat(bookId: viewModel.book.id, initialQuote: nil) }
+                        }
                     )
                     Spacer()
                     PDFPageIndicator(
