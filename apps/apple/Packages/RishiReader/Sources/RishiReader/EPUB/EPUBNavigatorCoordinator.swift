@@ -3,6 +3,7 @@ import Foundation
 import UIKit
 import ReadiumShared
 import ReadiumNavigator
+import RishiCore
 import RishiLogging
 
 /// Constructs and owns the `EPUBNavigatorViewController` for a single
@@ -16,6 +17,12 @@ import RishiLogging
 ///   2. The coordinator hands the navigator back to UIKit.
 ///   3. On every locator change, `navigator(_:locationDidChange:)`
 ///      forwards to `viewModel.didChangeLocation(_:)`.
+///   4. When the user finishes a selection, Readium asks the delegate
+///      whether to show its default menu
+///      (`SelectableNavigatorDelegate.navigator(_:shouldShowMenuForSelection:)`).
+///      We return `false` and forward the selection to the screen via
+///      `onSelectionChange`, which presents our floating
+///      ``EPUBHighlightContextMenu`` instead.
 ///
 /// **Sendability:** `@MainActor` matches Readium's `EPUBNavigatorDelegate`
 /// protocol declaration, so delegate methods don't need `nonisolated`.
@@ -25,9 +32,35 @@ public final class EPUBNavigatorCoordinator: NSObject {
     public let viewModel: EPUBReaderViewModel
     public private(set) var navigator: EPUBNavigatorViewController?
 
+    /// Forwarded to the screen so it can present the highlight context
+    /// menu. The closure is also called with `nil` when the user clears
+    /// the selection — readers should hide the menu in that case.
+    ///
+    /// Readium 3.9 does NOT expose a push-style `selectionDidChange`
+    /// callback. We fire `onSelectionChange` from
+    /// `navigator(_:shouldShowMenuForSelection:)` (the only delegate
+    /// method that gets a fresh `Selection` payload). Returning `false`
+    /// suppresses Readium's default `UIMenuController` so the floating
+    /// menu owns the surface.
+    public var onSelectionChange: (Selection?) -> Void = { _ in }
+
     public init(viewModel: EPUBReaderViewModel) {
         self.viewModel = viewModel
         super.init()
+    }
+
+    /// Re-applies the supplied highlights as Readium decorations in the
+    /// `"rishi-highlights"` group. Safe to call before the navigator is
+    /// built — no-ops in that case (the screen re-applies after load).
+    public func applyHighlights(_ highlights: [Highlight]) {
+        guard let nav = navigator else { return }
+        EPUBDecorationApplier.apply(highlights: highlights, to: nav)
+    }
+
+    /// Imperatively clears the live selection (used after a highlight
+    /// is saved so the menu doesn't stay anchored to old text).
+    public func clearSelection() {
+        navigator?.clearSelection()
     }
 
     /// Builds the navigator if not already built. Safe to call multiple
@@ -63,6 +96,18 @@ extension EPUBNavigatorCoordinator: EPUBNavigatorDelegate {
 
     public func navigator(_ navigator: any Navigator, presentError error: NavigatorError) {
         Log.reader.error("EPUB navigator error: \(error.localizedDescription, privacy: .public)")
+    }
+
+    // MARK: - SelectableNavigatorDelegate
+
+    /// Suppress Readium's default selection menu and forward the
+    /// selection to the screen so it can present
+    /// ``EPUBHighlightContextMenu``. `EPUBNavigatorDelegate` already
+    /// inherits `SelectableNavigatorDelegate`, so no extra conformance
+    /// is needed.
+    public func navigator(_ navigator: SelectableNavigator, shouldShowMenuForSelection selection: Selection) -> Bool {
+        onSelectionChange(selection)
+        return false
     }
 }
 #endif
