@@ -35,7 +35,7 @@ struct RemoteChangeFetcherTests {
 
     private func makeSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [MockURLProtocol.self]
+        config.protocolClasses = [RemoteChangeFetcherMockURLProtocol.self]
         return URLSession(configuration: config)
     }
 
@@ -51,12 +51,12 @@ struct RemoteChangeFetcherTests {
 
     @Test("Nil cursor → endpoint path is /api/sync/changes without ?since=")
     func nilCursorOmitsQuery() async throws {
-        MockURLProtocol.reset()
+        RemoteChangeFetcherMockURLProtocol.reset()
         let session = makeSession()
         let workerClient = makeWorkerClient(session: session)
         let metadata = StubMetadata(cursor: nil)
 
-        MockURLProtocol.handler = { _ in
+        RemoteChangeFetcherMockURLProtocol.handler = { _ in
             let body = """
             { "changes": [] }
             """
@@ -67,7 +67,7 @@ struct RemoteChangeFetcherTests {
         let changes = try await fetcher.fetch()
         #expect(changes.isEmpty)
 
-        let captured = MockURLProtocol.capturedSnapshot()
+        let captured = RemoteChangeFetcherMockURLProtocol.capturedSnapshot()
         #expect(captured.count == 1)
         #expect(captured[0].url?.path == "/api/sync/changes")
         #expect(captured[0].url?.query == nil)
@@ -77,13 +77,13 @@ struct RemoteChangeFetcherTests {
 
     @Test("Set cursor → path includes ?since= with the ISO8601 stamp")
     func cursorIsAppendedAsSinceQuery() async throws {
-        MockURLProtocol.reset()
+        RemoteChangeFetcherMockURLProtocol.reset()
         let session = makeSession()
         let workerClient = makeWorkerClient(session: session)
         let cursor = Date(timeIntervalSince1970: 1_700_000_000)
         let metadata = StubMetadata(cursor: cursor)
 
-        MockURLProtocol.handler = { _ in
+        RemoteChangeFetcherMockURLProtocol.handler = { _ in
             let body = """
             { "changes": [] }
             """
@@ -93,12 +93,16 @@ struct RemoteChangeFetcherTests {
         let fetcher = RemoteChangeFetcher(workerClient: workerClient, metadataStore: metadata)
         _ = try await fetcher.fetch()
 
-        let captured = MockURLProtocol.capturedSnapshot()
+        let captured = RemoteChangeFetcherMockURLProtocol.capturedSnapshot()
         #expect(captured.count == 1)
-        #expect(captured[0].url?.path == "/api/sync/changes")
-        let query = captured[0].url?.query ?? ""
-        #expect(query.contains("since="))
-        // 1_700_000_000 ≈ 2023-11-14T22:13:20Z; check year + month show up.
-        #expect(query.contains("2023") || query.contains("2023-11"))
+        // SyncChangesEndpoint embeds the query in the path string; the worker
+        // URL preserves that as part of absoluteString. We assert on the full
+        // string rather than URL.query — URLComponents tucks the URL-encoded
+        // form into path when constructed via appendPath.
+        let abs = captured[0].url?.absoluteString ?? ""
+        #expect(abs.contains("/api/sync/changes"))
+        #expect(abs.contains("since="))
+        // 1_700_000_000 ≈ 2023-11-14T22:13:20Z; check year shows up.
+        #expect(abs.contains("2023"))
     }
 }

@@ -58,7 +58,7 @@ struct PositionUploaderTests {
 
     private func makeSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [MockURLProtocol.self]
+        config.protocolClasses = [PositionUploaderMockURLProtocol.self]
         return URLSession(configuration: config)
     }
 
@@ -76,7 +76,7 @@ struct PositionUploaderTests {
 
     @Test("Happy path: one pending position → one POST /api/sync/push → markClean with response cursor")
     func happyPath() async throws {
-        MockURLProtocol.reset()
+        PositionUploaderMockURLProtocol.reset()
         let session = makeSession()
         let workerClient = makeWorkerClient(session: session)
         let metadata = StubMetadata()
@@ -95,7 +95,7 @@ struct PositionUploaderTests {
 
         // Reference-date offset = unix - 978307200
         let acceptedAtRef = acceptedAtUnix - 978_307_200
-        MockURLProtocol.handler = { request in
+        PositionUploaderMockURLProtocol.handler = { request in
             #expect(request.url?.path == "/api/sync/push")
             #expect(request.httpMethod == "POST")
             let body = """
@@ -124,7 +124,7 @@ struct PositionUploaderTests {
 
     @Test("Empty input → 0 pushed, no HTTP call issued")
     func emptyInputDoesNothing() async throws {
-        MockURLProtocol.reset()
+        PositionUploaderMockURLProtocol.reset()
         let session = makeSession()
         let workerClient = makeWorkerClient(session: session)
         let metadata = StubMetadata()
@@ -137,15 +137,15 @@ struct PositionUploaderTests {
             metadataStore: metadata
         )
 
-        MockURLProtocol.handler = { _ in (500, Data(), nil) }
+        PositionUploaderMockURLProtocol.handler = { _ in (500, Data(), nil) }
         let pushed = try await uploader.pushPending(items: [])
         #expect(pushed == 0)
-        #expect(MockURLProtocol.capturedSnapshot().isEmpty)
+        #expect(PositionUploaderMockURLProtocol.capturedSnapshot().isEmpty)
     }
 
     @Test("Missing local row → markClean drained, not sent in body, returns 0 live")
     func missingLocalRowDrained() async throws {
-        MockURLProtocol.reset()
+        PositionUploaderMockURLProtocol.reset()
         let session = makeSession()
         let workerClient = makeWorkerClient(session: session)
         let metadata = StubMetadata()
@@ -161,14 +161,14 @@ struct PositionUploaderTests {
         )
 
         // No HTTP should fire — all items are stale.
-        MockURLProtocol.handler = { _ in (500, Data(), nil) }
+        PositionUploaderMockURLProtocol.handler = { _ in (500, Data(), nil) }
 
         let pushed = try await uploader.pushPending(items: [
             SyncQueueItem(entityId: missingBookId, kind: .position),
         ])
 
         #expect(pushed == 0)
-        #expect(MockURLProtocol.capturedSnapshot().isEmpty)
+        #expect(PositionUploaderMockURLProtocol.capturedSnapshot().isEmpty)
         // Drained row should have been markClean'd so the queue stops surfacing it.
         let cleaned = await metadata.cleanedIds()
         #expect(cleaned == [missingBookId])

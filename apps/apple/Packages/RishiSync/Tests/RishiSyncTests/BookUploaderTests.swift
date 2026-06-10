@@ -69,7 +69,7 @@ struct BookUploaderTests {
 
     private func makeSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [MockURLProtocol.self]
+        config.protocolClasses = [BookUploaderMockURLProtocol.self]
         return URLSession(configuration: config)
     }
 
@@ -85,7 +85,7 @@ struct BookUploaderTests {
 
     @Test("Happy path: presigned URL request → PUT to R2 → markClean with ETag")
     func happyPath() async throws {
-        MockURLProtocol.reset()
+        BookUploaderMockURLProtocol.reset()
         let session = makeSession()
         let workerClient = makeWorkerClient(session: session)
         let metadata = StubMetadata()
@@ -100,7 +100,7 @@ struct BookUploaderTests {
 
         let presignedURL = "https://r2.example.invalid/books/\(book.userId.uuidString)/\(book.id.uuidString).epub?sig=abc"
 
-        MockURLProtocol.handler = { request in
+        BookUploaderMockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/upload-url" {
                 // expires_at is a Foundation Date wire value (seconds since reference date) —
                 // WorkerClient decodes with the default JSONDecoder strategy.
@@ -118,7 +118,7 @@ struct BookUploaderTests {
         try await uploader.upload(book)
 
         // Two HTTP calls: presign POST + R2 PUT.
-        let captured = MockURLProtocol.capturedSnapshot()
+        let captured = BookUploaderMockURLProtocol.capturedSnapshot()
         #expect(captured.count == 2)
         #expect(captured[0].url?.path == "/api/sync/upload-url")
         #expect(captured[0].httpMethod == "POST")
@@ -135,7 +135,7 @@ struct BookUploaderTests {
 
     @Test("Presigned-URL request failure (500) does NOT markClean")
     func presignedFailureDoesNotMarkClean() async throws {
-        MockURLProtocol.reset()
+        BookUploaderMockURLProtocol.reset()
         let session = makeSession()
         let workerClient = makeWorkerClient(session: session)
         let metadata = StubMetadata()
@@ -149,7 +149,7 @@ struct BookUploaderTests {
         )
 
         // Worker returns 500 on the presign call.
-        MockURLProtocol.handler = { _ in
+        BookUploaderMockURLProtocol.handler = { _ in
             return (500, Data("{}".utf8), nil)
         }
 
@@ -162,7 +162,7 @@ struct BookUploaderTests {
 
     @Test("PUT failure (R2 503) does NOT markClean")
     func r2PutFailureDoesNotMarkClean() async throws {
-        MockURLProtocol.reset()
+        BookUploaderMockURLProtocol.reset()
         let session = makeSession()
         let workerClient = makeWorkerClient(session: session)
         let metadata = StubMetadata()
@@ -176,7 +176,7 @@ struct BookUploaderTests {
         )
 
         let presignedURL = "https://r2.example.invalid/books/x.epub?sig=abc"
-        MockURLProtocol.handler = { request in
+        BookUploaderMockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/upload-url" {
                 let body = """
                 { "url": "\(presignedURL)", "expires_at": 946684800 }

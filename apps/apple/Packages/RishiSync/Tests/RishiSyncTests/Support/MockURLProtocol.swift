@@ -1,45 +1,36 @@
 import Foundation
 
-/// Test-only URLProtocol that lets a suite script (status, body, headers)
-/// per request and inspect captured requests.
-///
-/// Mirrors the StubURLProtocol pattern from RishiAPI/RishiAuth test targets
-/// but lives local to RishiSync so the package keeps a zero cross-package
-/// test dependency on RishiAPITests' internal helpers.
+/// Test-only URLProtocol base class. Each @Suite that needs an isolated
+/// MockURLProtocol declares its own subclass so the static `handler` +
+/// `captured` storage doesn't race across parallel suites. The subclass
+/// adds zero behavior — it only gives the type system a distinct identity
+/// per suite, which means distinct static storage (Swift type metadata).
 ///
 /// Use with a per-suite session:
 /// ```swift
+/// final class MyMockProto: MockURLProtocolBase {}
+/// // in @Suite(.serialized):
 /// let config = URLSessionConfiguration.ephemeral
-/// config.protocolClasses = [MockURLProtocol.self]
+/// config.protocolClasses = [MyMockProto.self]
 /// let session = URLSession(configuration: config)
-/// MockURLProtocol.handler = { request in (200, body, nil) }
+/// MyMockProto.handler = { req in (200, body, nil) }
 /// ```
 ///
-/// IMPORTANT: Tests that reach this protocol MUST be inside a
-/// `@Suite(.serialized)` — `handler`/`captured` are nonisolated(unsafe)
-/// static state that Swift Testing would otherwise race across @Test
-/// methods.
-final class MockURLProtocol: URLProtocol, @unchecked Sendable {
+/// IMPORTANT: Even with per-suite subclasses, the surrounding @Suite MUST
+/// be `.serialized` because `handler`/`captured` are nonisolated(unsafe)
+/// static state that Swift Testing would otherwise race across parallel
+/// @Test methods within the suite.
+class MockURLProtocolBase: URLProtocol, @unchecked Sendable {
 
-    /// (status, body bytes, optional response headers). Set per-test on the
-    /// main thread before exercising the SUT.
-    nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data, [String: String]?))?
-
-    /// Captured requests for assertions. Cleared per test via `reset()`.
-    nonisolated(unsafe) static var captured: [URLRequest] = []
-
-    private static let lock = NSLock()
+    class var storage: MockURLProtocolStorage { fatalError("subclass must override storage") }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        Self.lock.lock()
-        Self.captured.append(request)
-        let handler = Self.handler
-        Self.lock.unlock()
-
-        guard let handler else {
+        let store = Self.storage
+        store.append(request)
+        guard let handler = store.handler else {
             client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
             return
         }
@@ -60,17 +51,81 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     override func stopLoading() {}
+}
 
-    /// Reset between tests. Call at the top of every @Test method.
-    static func reset() {
-        lock.lock(); defer { lock.unlock() }
-        handler = nil
-        captured.removeAll()
+/// Lock-guarded handler + captured-requests storage. One instance per
+/// MockURLProtocolBase subclass; subclasses inject their own via the
+/// `storage` class-property override.
+final class MockURLProtocolStorage: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _handler: (@Sendable (URLRequest) throws -> (Int, Data, [String: String]?))?
+    private var _captured: [URLRequest] = []
+
+    var handler: (@Sendable (URLRequest) throws -> (Int, Data, [String: String]?))? {
+        get { lock.lock(); defer { lock.unlock() }; return _handler }
+        set { lock.lock(); defer { lock.unlock() }; _handler = newValue }
     }
 
-    /// Snapshot the captured requests under the lock.
-    static func capturedSnapshot() -> [URLRequest] {
+    var captured: [URLRequest] {
         lock.lock(); defer { lock.unlock() }
-        return captured
+        return _captured
     }
+
+    func append(_ request: URLRequest) {
+        lock.lock(); defer { lock.unlock() }
+        _captured.append(request)
+    }
+
+    func reset() {
+        lock.lock(); defer { lock.unlock() }
+        _handler = nil
+        _captured.removeAll()
+    }
+}
+
+// MARK: - Per-suite subclasses
+//
+// Each @Suite that scripts HTTP gets its own subclass + static storage so
+// parallel suites cannot stomp on each other's captured requests / handler.
+// `@Suite(.serialized)` still required to keep @Test methods within ONE
+// suite from racing each other.
+
+final class BookUploaderMockURLProtocol: MockURLProtocolBase, @unchecked Sendable {
+    nonisolated(unsafe) static let _storage = MockURLProtocolStorage()
+    override class var storage: MockURLProtocolStorage { _storage }
+    static var handler: (@Sendable (URLRequest) throws -> (Int, Data, [String: String]?))? {
+        get { _storage.handler } set { _storage.handler = newValue }
+    }
+    static func reset() { _storage.reset() }
+    static func capturedSnapshot() -> [URLRequest] { _storage.captured }
+}
+
+final class PositionUploaderMockURLProtocol: MockURLProtocolBase, @unchecked Sendable {
+    nonisolated(unsafe) static let _storage = MockURLProtocolStorage()
+    override class var storage: MockURLProtocolStorage { _storage }
+    static var handler: (@Sendable (URLRequest) throws -> (Int, Data, [String: String]?))? {
+        get { _storage.handler } set { _storage.handler = newValue }
+    }
+    static func reset() { _storage.reset() }
+    static func capturedSnapshot() -> [URLRequest] { _storage.captured }
+}
+
+final class HighlightUploaderMockURLProtocol: MockURLProtocolBase, @unchecked Sendable {
+    nonisolated(unsafe) static let _storage = MockURLProtocolStorage()
+    override class var storage: MockURLProtocolStorage { _storage }
+    static var handler: (@Sendable (URLRequest) throws -> (Int, Data, [String: String]?))? {
+        get { _storage.handler } set { _storage.handler = newValue }
+    }
+    static func reset() { _storage.reset() }
+    static func capturedSnapshot() -> [URLRequest] { _storage.captured }
+}
+
+final class RemoteChangeFetcherMockURLProtocol: MockURLProtocolBase, @unchecked Sendable {
+    nonisolated(unsafe) static let _storage = MockURLProtocolStorage()
+    override class var storage: MockURLProtocolStorage { _storage }
+    static var handler: (@Sendable (URLRequest) throws -> (Int, Data, [String: String]?))? {
+        get { _storage.handler } set { _storage.handler = newValue }
+    }
+    static func reset() { _storage.reset() }
+    static func capturedSnapshot() -> [URLRequest] { _storage.captured }
 }

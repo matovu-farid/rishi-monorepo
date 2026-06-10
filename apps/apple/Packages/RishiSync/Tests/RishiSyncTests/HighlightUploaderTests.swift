@@ -48,7 +48,7 @@ struct HighlightUploaderTests {
 
     private func makeSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [MockURLProtocol.self]
+        config.protocolClasses = [HighlightUploaderMockURLProtocol.self]
         return URLSession(configuration: config)
     }
 
@@ -67,7 +67,7 @@ struct HighlightUploaderTests {
 
     @Test("Happy path: one pending highlight → POST /api/sync/push → markClean")
     func happyPath() async throws {
-        MockURLProtocol.reset()
+        HighlightUploaderMockURLProtocol.reset()
         let session = makeSession()
         let workerClient = makeWorkerClient(session: session)
         let metadata = StubMetadata()
@@ -84,7 +84,7 @@ struct HighlightUploaderTests {
         await store.seed([highlight])
 
         let acceptedAtRef = acceptedAtUnix - 978_307_200
-        MockURLProtocol.handler = { request in
+        HighlightUploaderMockURLProtocol.handler = { request in
             #expect(request.url?.path == "/api/sync/push")
             let body = """
             { "accepted_at": \(acceptedAtRef) }
@@ -110,7 +110,7 @@ struct HighlightUploaderTests {
 
     @Test("Empty input → 0 pushed, no HTTP call")
     func emptyInputNoOp() async throws {
-        MockURLProtocol.reset()
+        HighlightUploaderMockURLProtocol.reset()
         let session = makeSession()
         let workerClient = makeWorkerClient(session: session)
         let metadata = StubMetadata()
@@ -121,15 +121,15 @@ struct HighlightUploaderTests {
             metadataStore: metadata
         )
 
-        MockURLProtocol.handler = { _ in (500, Data(), nil) }
+        HighlightUploaderMockURLProtocol.handler = { _ in (500, Data(), nil) }
         let pushed = try await uploader.pushPending(items: [])
         #expect(pushed == 0)
-        #expect(MockURLProtocol.capturedSnapshot().isEmpty)
+        #expect(HighlightUploaderMockURLProtocol.capturedSnapshot().isEmpty)
     }
 
     @Test("Missing local row → tombstone (deleted=true) in body + metadata.forget")
     func missingRowTombstones() async throws {
-        MockURLProtocol.reset()
+        HighlightUploaderMockURLProtocol.reset()
         let session = makeSession()
         let workerClient = makeWorkerClient(session: session)
         let metadata = StubMetadata()
@@ -148,7 +148,7 @@ struct HighlightUploaderTests {
         // NSLock is unavailable from async contexts under Swift 6 strict concurrency.
         let bodyBox = OSAllocatedUnfairLock<Data?>(initialState: nil)
 
-        MockURLProtocol.handler = { request in
+        HighlightUploaderMockURLProtocol.handler = { request in
             // URLProtocol doesn't populate request.httpBody — read from BodyStream.
             let captured: Data? = {
                 if let stream = request.httpBodyStream {
@@ -201,7 +201,7 @@ struct HighlightUploaderTests {
 
     @Test("Mixed live + tombstone batch: both kinds present, markClean + forget split correctly")
     func mixedBatch() async throws {
-        MockURLProtocol.reset()
+        HighlightUploaderMockURLProtocol.reset()
         let session = makeSession()
         let workerClient = makeWorkerClient(session: session)
         let metadata = StubMetadata()
@@ -218,7 +218,7 @@ struct HighlightUploaderTests {
         await store.seed([liveHighlight])
 
         let acceptedAtRef = acceptedAtUnix - 978_307_200
-        MockURLProtocol.handler = { _ in
+        HighlightUploaderMockURLProtocol.handler = { _ in
             let body = """
             { "accepted_at": \(acceptedAtRef) }
             """
