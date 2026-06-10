@@ -1,0 +1,31 @@
+import SwiftUI
+import RishiUIKit
+
+/// Floating page indicator pill shown at the bottom of the PDF reader.
+///
+/// Pure value-driven view: callers pass current + total pages already
+/// adjusted to 1-based human display. Surfaces a single combined
+/// accessibility label so VoiceOver speaks "Page 4 of 200" instead of
+/// reading the slash separator.
+public struct PDFPageIndicator: View {
+    public let currentPage: Int
+    public let totalPages: Int
+
+    public init(currentPage: Int, totalPages: Int) {
+        self.currentPage = currentPage
+        self.totalPages = totalPages
+    }
+
+    public var body: some View {
+        Text("\(currentPage) of \(max(totalPages, 1))")
+            .font(RishiTypography.caption)
+            .foregroundStyle(RishiColor.textSecondary)
+            .padding(.horizontal, RishiSpacing.m)
+            .padding(.vertical, RishiSpacing.s)
+            .background(
+                Capsule().fill(RishiColor.surface.opacity(0.85))
+            )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Page \(currentPage) of \(totalPages)")
+    }
+}
