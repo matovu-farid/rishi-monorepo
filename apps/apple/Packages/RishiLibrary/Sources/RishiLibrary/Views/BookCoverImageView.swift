@@ -40,6 +40,10 @@ public struct BookCoverImageView: View {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .stroke(RishiColor.divider, lineWidth: 1)
         )
+        // Cover art is decorative — the grid cell already carries a
+        // `"<title> by <author>"` accessibility label. Hiding the cover
+        // keeps VoiceOver from saying "Image" before announcing the row.
+        .accessibilityHidden(true)
     }
 
     private var gradientFallback: some View {

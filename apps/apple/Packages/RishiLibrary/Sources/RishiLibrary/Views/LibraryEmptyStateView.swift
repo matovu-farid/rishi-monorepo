@@ -8,17 +8,18 @@ import UIKit
 /// LIB-09: empty-state shown when the user has zero books. Provides
 /// per-platform copy explaining HOW to import a book.
 ///
-/// The only hard-coded numeric is the SF Symbol point size (64) for the
-/// `books.vertical` glyph — matches Apple HIG empty-state proportions and
-/// is not part of the `RishiTypography` text scale.
+/// The hero glyph uses `RishiTypography.titleXL` plus `.imageScale(.large)`
+/// so it scales with Dynamic Type (A11Y-02) — no fixed point size.
 public struct LibraryEmptyStateView: View {
     public init() {}
 
     public var body: some View {
         VStack(spacing: RishiSpacing.l) {
             Image(systemName: "books.vertical")
-                .font(.system(size: 64, weight: .regular))
+                .font(RishiTypography.titleXL)
+                .imageScale(.large)
                 .foregroundStyle(RishiColor.textMuted)
+                .accessibilityHidden(true)
             Text("Your library is empty")
                 .font(RishiTypography.titleL)
                 .foregroundStyle(RishiColor.textPrimary)

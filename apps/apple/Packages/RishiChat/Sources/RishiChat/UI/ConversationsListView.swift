@@ -53,6 +53,7 @@ public struct ConversationsListView: View {
                                 Label("Delete", systemImage: "trash")
                             }
                             .accessibilityIdentifier("conversations.row.delete")
+                            .accessibilityLabel(A11yLabel.conversationDelete)
                         }
                     }
                 }

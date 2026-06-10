@@ -33,6 +33,19 @@ struct ChatMessageBubble: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: alignment)
+        // Collapse the bubble into a single VoiceOver element labelled
+        // with role + content so screen readers don't read the spacers,
+        // background shape, or text fragments separately.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(roleLabel): \(message.content)")
+    }
+
+    private var roleLabel: String {
+        switch message.role {
+        case .user:      return "You"
+        case .assistant: return "Assistant"
+        case .system:    return "System"
+        }
     }
 
     private var alignment: Alignment {

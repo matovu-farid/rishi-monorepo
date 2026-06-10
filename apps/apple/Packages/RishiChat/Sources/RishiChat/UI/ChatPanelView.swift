@@ -86,6 +86,7 @@ public struct ChatPanelView: View {
                 .focused($inputFocused)
                 .lineLimit(1...4)
                 .accessibilityIdentifier("chat.input")
+                .accessibilityLabel(A11yLabel.chatMessageInput)
 
             if viewModel.streamingState.isStreaming {
                 Button {
@@ -95,7 +96,7 @@ public struct ChatPanelView: View {
                         .foregroundStyle(RishiColor.danger)
                 }
                 .accessibilityIdentifier("chat.cancel")
-                .accessibilityLabel("Cancel response")
+                .accessibilityLabel(A11yLabel.chatCancelStreaming)
             } else {
                 Button {
                     let toSend = inputText
@@ -107,7 +108,7 @@ public struct ChatPanelView: View {
                 }
                 .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityIdentifier("chat.send")
-                .accessibilityLabel("Send message")
+                .accessibilityLabel(A11yLabel.chatSendMessage)
             }
         }
         .padding(RishiSpacing.m)

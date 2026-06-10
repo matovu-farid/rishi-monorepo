@@ -56,6 +56,10 @@ public struct LibraryGrid: View {
                 onDelete(book)
                 pendingDelete = nil
             }
+            // Per-book label so VoiceOver users know which title is about
+            // to be deleted before they confirm. A11Y-01 — A11yLabel only
+            // ships the verb; we interpolate the book title here.
+            .accessibilityLabel("Delete \(book.title)")
             Button("Cancel", role: .cancel) {
                 pendingDelete = nil
             }
@@ -86,7 +90,9 @@ public struct LibraryGrid: View {
             }
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityText(for: book))
+        .accessibilityHint("Double-tap to open. Long-press for actions.")
         .contextMenu {
             if hasPosition {
                 Button {
@@ -100,13 +106,16 @@ public struct LibraryGrid: View {
             } label: {
                 Label("Delete\u{2026}", systemImage: "trash")
             }
+            // Per-book label so VoiceOver users hear which book the
+            // destructive action targets.
+            .accessibilityLabel("Delete \(book.title)")
         }
     }
 
     private func accessibilityText(for book: Book) -> String {
         if let author = book.author, !author.isEmpty {
-            return "\(book.title), by \(author)"
+            return "\(book.title) by \(author)"
         }
-        return book.title
+        return "\(book.title) by unknown author"
     }
 }

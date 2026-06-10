@@ -29,5 +29,11 @@ struct ConversationRow: View {
             }
         }
         .padding(.vertical, RishiSpacing.xs)
+        // Combine the title + metadata into one VoiceOver element. The
+        // shared `A11yLabel.conversationRowOpen` keeps the verb consistent
+        // with library + reader; the hint exposes the per-row title.
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(A11yLabel.conversationRowOpen)
+        .accessibilityHint(conversation.title)
     }
 }
