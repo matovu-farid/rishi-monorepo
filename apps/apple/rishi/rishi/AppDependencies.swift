@@ -4,10 +4,13 @@ import RishiCore
 import RishiAPI
 import RishiAuth
 import RishiAudio
+import RishiBilling
 import RishiChat
 import RishiDB
 import RishiLibrary
+import RishiOnboarding
 import RishiReader
+import RishiSettings
 import RishiSync
 import RishiVoice
 
@@ -83,6 +86,30 @@ final class AppDependencies {
     /// `RealtimeVoiceSession` lifecycle. `ChatPanelHost` binds
     /// `.fullScreenCover(isPresented:)` to `voicePresenter.isPresenting`.
     let voicePresenter: VoiceSessionPresenter
+
+    // Billing (Phase 11 — entitlement cache + Stripe portal handoff)
+    /// BILL-01: caches `EntitlementLevel` under "billing.entitlement.level"
+    /// and refreshes from `/api/auth/get-session`. UI gates on
+    /// `snapshot()` for synchronous reads.
+    let entitlementService: EntitlementService
+    /// BILL-02: opens the Stripe portal via `ASWebAuthenticationSession`
+    /// using `AppBillingPortalPresenter`.
+    let billingPortalService: BillingPortalService
+
+    // Settings (Phase 11 — telemetry opt-in)
+    /// SET-02: backs the Privacy section toggle. Sink forwards to
+    /// `RishiLogging.setSentryEnabled(_:)` so opting out mutes uploads.
+    let telemetryStore: any TelemetryStore
+
+    // Onboarding (Phase 11 — first-run flow)
+    /// ONB-01 / ONB-02: persisted onboarding flags + the @Observable
+    /// coordinator driving the welcome → first-reader-hint sequence.
+    let onboardingState: any OnboardingState
+    let onboardingCoordinator: OnboardingCoordinator
+
+    /// SET-01 Reader Defaults section bindings — app-wide theme + font
+    /// applied when a book has no per-book override.
+    let readerDefaults: AppReaderDefaults
 
     /// Cached user id pumped in by RootView after the auth session resolves.
     /// LibraryViewModel reads this synchronously from its currentUserId
@@ -334,6 +361,32 @@ final class AppDependencies {
             userIdProvider: { [userIdBox] in userIdBox.value },
             dirtyHook: voiceDirtyAdapter
         )
+
+        // 17. Billing stack (Phase 11). EntitlementService hydrates from
+        //     UserDefaults + refreshes from /api/auth/get-session on
+        //     RootView bootstrap. BillingPortalService opens the Stripe
+        //     portal via ASWebAuthenticationSession (gated on
+        //     ReaderAppEntitlementFlag at the UI layer).
+        self.entitlementService = EntitlementService(workerClient: workerClient)
+        self.billingPortalService = BillingPortalService(
+            workerClient: workerClient,
+            presenter: AppBillingPortalPresenter()
+        )
+
+        // 18. Settings stack — telemetry sink forwards to RishiLogging which
+        //     drops Sentry uploads on opt-out (SET-02).
+        self.telemetryStore = UserDefaultsTelemetryStore(sink: AppTelemetrySink())
+
+        // 19. Onboarding stack — UserDefaults-backed flags + the @Observable
+        //     coordinator driving the first-run flow (ONB-01 / ONB-02).
+        let onboardingState = UserDefaultsOnboardingState()
+        self.onboardingState = onboardingState
+        self.onboardingCoordinator = OnboardingCoordinator(state: onboardingState)
+
+        // 20. Reader defaults (app-wide). Per-book overrides still come from
+        //     `readerSettingsStore`; these defaults drive the Settings
+        //     Reader section pickers.
+        self.readerDefaults = AppReaderDefaults()
     }
 
     // MARK: - Chat factories (Phase 9)
@@ -460,6 +513,59 @@ final class AppDependencies {
             settingsStore: ttsSettingsStore,
             userId: userId,
             onPassageChange: onPassageChange
+        )
+    }
+
+    // MARK: - Settings factory (Phase 11)
+
+    /// Builds the `RishiSettings.SettingsScreen` for the current user,
+    /// wiring every dependency through. `SettingsSheet` (the rishi-app
+    /// wrapper) calls this from its `body`.
+    ///
+    /// `onSignedOut` and `onAccountDeleted` are both invoked AFTER the sheet
+    /// dismisses — RootView clears `currentUser` in response so the
+    /// signed-out path takes over.
+    @MainActor
+    func makeSettingsScreen(
+        user: User,
+        audioInitial: TTSSettings,
+        onDismiss: @escaping () -> Void,
+        onSignedOut: @escaping () -> Void,
+        onAccountDeleted: @escaping () -> Void
+    ) -> SettingsScreen {
+        let defaults = self.readerDefaults
+        let auth = self.authService
+        let billing = self.billingPortalService
+        let sync = self.syncEngine
+        return SettingsScreen(
+            user: user,
+            readerTheme: Binding(
+                get: { defaults.theme },
+                set: { defaults.theme = $0 }
+            ),
+            readerFontFamily: Binding(
+                get: { defaults.fontFamily },
+                set: { defaults.fontFamily = $0 }
+            ),
+            audioUserId: user.id,
+            audioInitial: audioInitial,
+            audioStore: ttsSettingsStore,
+            onAudioChange: { _ in },
+            syncStatus: syncStatus,
+            onSyncNow: { Task { await sync.syncNow() } },
+            telemetryStore: telemetryStore,
+            onSignOut: {
+                try? await auth.signOut()
+                await MainActor.run { onSignedOut() }
+            },
+            onDelete: {
+                try await auth.deleteAccount()
+            },
+            onDeleted: onAccountDeleted,
+            onManageSubscription: {
+                Task { try? await billing.openPortal() }
+            },
+            onDismiss: onDismiss
         )
     }
 
