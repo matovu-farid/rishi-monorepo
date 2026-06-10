@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import os
 @testable import RishiSync
 import RishiAPI
 import RishiCore
@@ -143,27 +144,32 @@ struct HighlightUploaderTests {
         let acceptedAtRef = acceptedAtUnix - 978_307_200
 
         // Capture the request body to verify the tombstone shape.
-        nonisolated(unsafe) var capturedBody: Data?
-        let bodyLock = NSLock()
+        // OSAllocatedUnfairLock supports both sync (handler) and async (test body) contexts;
+        // NSLock is unavailable from async contexts under Swift 6 strict concurrency.
+        let bodyBox = OSAllocatedUnfairLock<Data?>(initialState: nil)
 
         MockURLProtocol.handler = { request in
             // URLProtocol doesn't populate request.httpBody — read from BodyStream.
-            if let stream = request.httpBodyStream {
-                stream.open()
-                defer { stream.close() }
-                var buf = Data()
-                let bufSize = 1024
-                let bytes = UnsafeMutablePointer<UInt8>.allocate(capacity: bufSize)
-                defer { bytes.deallocate() }
-                while stream.hasBytesAvailable {
-                    let read = stream.read(bytes, maxLength: bufSize)
-                    if read <= 0 { break }
-                    buf.append(bytes, count: read)
+            let captured: Data? = {
+                if let stream = request.httpBodyStream {
+                    stream.open()
+                    defer { stream.close() }
+                    var buf = Data()
+                    let bufSize = 1024
+                    let bytes = UnsafeMutablePointer<UInt8>.allocate(capacity: bufSize)
+                    defer { bytes.deallocate() }
+                    while stream.hasBytesAvailable {
+                        let read = stream.read(bytes, maxLength: bufSize)
+                        if read <= 0 { break }
+                        buf.append(bytes, count: read)
+                    }
+                    return buf
+                } else if let body = request.httpBody {
+                    return body
                 }
-                bodyLock.lock(); capturedBody = buf; bodyLock.unlock()
-            } else if let body = request.httpBody {
-                bodyLock.lock(); capturedBody = body; bodyLock.unlock()
-            }
+                return nil
+            }()
+            bodyBox.withLock { $0 = captured }
             let respBody = """
             { "accepted_at": \(acceptedAtRef) }
             """
@@ -181,7 +187,7 @@ struct HighlightUploaderTests {
         #expect(cleaned.isEmpty)
 
         // Verify the body carried a tombstone for the missing id.
-        bodyLock.lock(); let body = capturedBody; bodyLock.unlock()
+        let body = bodyBox.withLock { $0 }
         #expect(body != nil)
         if let body, let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
            let changes = json["changes"] as? [[String: Any]] {
