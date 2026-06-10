@@ -42,13 +42,46 @@ final class SignedOutViewModel {
         self.authService = authService
     }
 
-    // RED-step stubs: deliberately do not mutate `state` so the
-    // SignedOutViewModelTests suite fails before the GREEN commit.
     func signInWithApple() async {
-        // intentionally empty — implemented in the GREEN commit
+        await runSignIn { service in
+            _ = try await service.signInWithApple()
+        }
     }
 
     func signInWithGoogle() async {
-        // intentionally empty — implemented in the GREEN commit
+        await runSignIn { service in
+            _ = try await service.signInWithGoogle()
+        }
+    }
+
+    // MARK: - Helpers
+
+    /// Drives the state machine: enter `.loading`, run the supplied
+    /// service call, then transition to `.idle` on success or
+    /// `.error(message)` on throw. Centralising the transition shape
+    /// guarantees Apple and Google paths cannot drift.
+    private func runSignIn(
+        _ call: (any AuthService) async throws -> Void
+    ) async {
+        guard let authService else {
+            state = .error("Authentication is not available.")
+            return
+        }
+        state = .loading
+        do {
+            try await call(authService)
+            state = .idle
+        } catch {
+            state = .error(Self.humanReadable(error))
+        }
+    }
+
+    /// Surface a non-empty error string for the UI. v1 maps any error to
+    /// `String(describing:)` — Phase 11/12 follow-up will localise these
+    /// against `RishiCore.RishiError` cases when the worker error model
+    /// stabilises.
+    private static func humanReadable(_ error: any Error) -> String {
+        let raw = String(describing: error)
+        return raw.isEmpty ? "Sign-in failed." : raw
     }
 }
