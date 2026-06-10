@@ -52,7 +52,11 @@ enum MacCommandIntent: Equatable, Sendable {
 }
 
 /// Two-tab top-level navigation surface for Mac menu commands.
-enum MacTab: String, Equatable, Sendable { case library, chats }
+///
+/// `Codable` (Phase 12 Plan 12-02) so `RishiSceneState` can round-trip the
+/// selected tab through a `@SceneStorage` JSON cell. `String` rawValue
+/// gives us the encoder/decoder for free.
+enum MacTab: String, Equatable, Sendable, Codable { case library, chats }
 
 /// Local Mac/-folder echo of `RishiReader.ReaderTheme`. Kept here so the
 /// router + menu can be unit-tested without dragging the RishiReader
