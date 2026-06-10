@@ -29,9 +29,14 @@ import ReadiumNavigator
 ///   - On dismiss, calls `await viewModel.flush()` BEFORE `dismiss()` so
 ///     the final locator persists.
 ///
-/// TOC / theme / typography sheet plumbing lands in Plan 06-06. The
-/// closures are intentionally empty placeholders here; the toolbar already
-/// hides them behind `isPublicationLoaded` so users can't fire blank UI.
+/// **Plan 06-06 wiring:** the toolbar's TOC / typography / theme buttons
+/// now flip `showTOC` / `showTypography` / `showTheme` flags, which
+/// mount ``EPUBTOCView`` / ``EPUBTypographyPicker`` / ``EPUBThemePicker``
+/// as sheets. Every typography / theme / spread mutation re-submits a
+/// fresh ``EPUBPreferences`` to the navigator via
+/// ``EPUBPreferencesBridge`` — so the rendered page actually re-flows.
+/// The iPad-landscape two-page spread is driven by
+/// ``EPUBSpreadResolver`` through the `.epubSpread` modifier.
 ///
 /// On macOS dev hosts (non-Catalyst, no UIKit), the reader area renders a
 /// compile-only stub label — ship targets always hit the UIKit branch.
@@ -60,6 +65,12 @@ public struct EPUBReaderScreen: View {
     /// it to re-apply decorations after loadHighlights / createHighlight
     /// / deleteHighlight.
     @State private var coordinatorRef = EPUBCoordinatorRef()
+
+    // 06-06 — sheet presentation + spread tracking.
+    @State private var showTOC = false
+    @State private var showTypography = false
+    @State private var showTheme = false
+    @State private var currentSpread: EPUBSpreadMode = .single
     #endif
 
     public init(
@@ -116,19 +127,7 @@ public struct EPUBReaderScreen: View {
 
             if chromeVisible {
                 VStack {
-                    EPUBReaderToolbar(
-                        title: viewModel.title.isEmpty ? viewModel.book.title : viewModel.title,
-                        isPublicationLoaded: viewModel.publication != nil,
-                        onClose: {
-                            Task {
-                                await viewModel.flush()
-                                dismiss()
-                            }
-                        },
-                        onShowTOC: { /* wired in 06-06 */ },
-                        onShowTheme: { /* wired in 06-06 */ },
-                        onShowTypography: { /* wired in 06-06 */ }
-                    )
+                    toolbar
                     Spacer()
                     EPUBProgressIndicator(
                         totalProgression: viewModel.latestLocator?.locations.totalProgression
@@ -149,9 +148,53 @@ public struct EPUBReaderScreen: View {
                 await viewModel.loadHighlights(from: store)
                 coordinatorRef.coordinator?.applyHighlights(viewModel.loadedHighlights)
             }
+            // Apply the restored settings to Readium immediately so the
+            // first render uses them (font / size / line-height / theme).
+            applyPreferences()
             #endif
         }
         #if canImport(UIKit)
+        .epubSpread { mode in
+            currentSpread = mode
+        }
+        .onChange(of: viewModel.typography) { _, _ in applyPreferences() }
+        .onChange(of: viewModel.theme) { _, _ in applyPreferences() }
+        .onChange(of: currentSpread) { _, _ in applyPreferences() }
+        .sheet(isPresented: $showTOC) {
+            EPUBTOCView(
+                entries: viewModel.publication?.manifest.tableOfContents ?? [],
+                onSelect: { link in
+                    showTOC = false
+                    let coordinator = coordinatorRef.coordinator
+                    Task { @MainActor in
+                        _ = await coordinator?.go(to: link)
+                    }
+                },
+                onClose: { showTOC = false }
+            )
+        }
+        .sheet(isPresented: $showTypography) {
+            EPUBTypographyPicker(
+                typography: Binding(
+                    get: { viewModel.typography },
+                    set: { viewModel.typography = $0 }
+                ),
+                bookId: viewModel.book.id,
+                store: readerSettingsStore ?? EphemeralReaderSettingsStore(),
+                onClose: { showTypography = false }
+            )
+        }
+        .sheet(isPresented: $showTheme) {
+            EPUBThemePicker(
+                theme: Binding(
+                    get: { viewModel.theme },
+                    set: { viewModel.theme = $0 }
+                ),
+                bookId: viewModel.book.id,
+                store: readerSettingsStore ?? EphemeralReaderSettingsStore(),
+                onClose: { showTheme = false }
+            )
+        }
         .sheet(item: $editingHighlight) { hl in
             HighlightNoteEditor(
                 note: $noteText,
@@ -164,6 +207,50 @@ public struct EPUBReaderScreen: View {
         #if !os(macOS)
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
+        #endif
+    }
+
+    @ViewBuilder
+    private var toolbar: some View {
+        EPUBReaderToolbar(
+            title: viewModel.title.isEmpty ? viewModel.book.title : viewModel.title,
+            isPublicationLoaded: viewModel.publication != nil,
+            onClose: {
+                Task {
+                    await viewModel.flush()
+                    dismiss()
+                }
+            },
+            onShowTOC: showTOCAction,
+            onShowTheme: showThemeAction,
+            onShowTypography: showTypographyAction
+        )
+    }
+
+    // The `#if canImport(UIKit)` flag controls whether the sheet state vars
+    // exist, so the toolbar's closure actions are exported through these
+    // computed properties (Swift doesn't allow `#if` inside an argument list).
+    private var showTOCAction: () -> Void {
+        #if canImport(UIKit)
+        return { showTOC = true }
+        #else
+        return { }
+        #endif
+    }
+
+    private var showThemeAction: () -> Void {
+        #if canImport(UIKit)
+        return { showTheme = true }
+        #else
+        return { }
+        #endif
+    }
+
+    private var showTypographyAction: () -> Void {
+        #if canImport(UIKit)
+        return { showTypography = true }
+        #else
+        return { }
         #endif
     }
 
@@ -243,8 +330,36 @@ public struct EPUBReaderScreen: View {
             editingHighlight = nil
         }
     }
+
+    // MARK: - Preferences
+
+    /// Translates the current `theme` + `typography` + `currentSpread`
+    /// into Readium's `EPUBPreferences` and submits them through the
+    /// coordinator. No-ops if the navigator hasn't built yet — the
+    /// `.task` re-fires this after `load()` completes.
+    private func applyPreferences() {
+        coordinatorRef.coordinator?.applyPreferences(
+            typography: viewModel.typography,
+            theme: viewModel.theme,
+            spread: currentSpread
+        )
+    }
     #endif
 }
+
+#if canImport(UIKit)
+/// In-memory fallback used by the typography + theme pickers when no
+/// `ReaderSettingsStore` is injected (previews / tests). Writes are
+/// no-ops; reads always return `.default`. Mirrors the same fallback in
+/// `PDFReaderScreen` (kept fileprivate per file so swapping wiring in
+/// `AppDependencies` doesn't accidentally leak into production code paths).
+private final class EphemeralReaderSettingsStore: ReaderSettingsStore, @unchecked Sendable {
+    func theme(for bookId: BookID) async -> ReaderTheme { .default }
+    func setTheme(_ theme: ReaderTheme, for bookId: BookID) async { /* no-op */ }
+    func typography(for bookId: BookID) async -> ReaderTypography { .default }
+    func setTypography(_ typography: ReaderTypography, for bookId: BookID) async { /* no-op */ }
+}
+#endif
 
 #if canImport(UIKit)
 /// In-flight selection awaiting a color pick. `Identifiable` so SwiftUI
