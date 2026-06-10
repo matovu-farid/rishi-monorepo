@@ -19,6 +19,8 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
     private var _disconnectCalls = 0
     private var _connectShouldThrow: Error?
 
+    private var _failAllConnectsWith: Error?
+
     private var errorContinuation: AsyncStream<RealtimeClientError>.Continuation?
     private var transcriptContinuation: AsyncStream<RealtimeTranscriptEvent>.Continuation?
 
@@ -41,6 +43,18 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
     /// Cause the next `connect()` call to throw `error`. Cleared after one use.
     public func failNextConnect(with error: Error) {
         lock.withLock { _connectShouldThrow = error }
+    }
+
+    /// Cause every subsequent `connect()` call to throw `error` until
+    /// `clearAllConnectFailures()` is invoked. Used by reconnect-ladder
+    /// tests that need a persistent failure mode rather than a one-shot.
+    public func failAllConnects(with error: Error) {
+        lock.withLock { _failAllConnectsWith = error }
+    }
+
+    /// Clear the "fail all connects" mode.
+    public func clearAllConnectFailures() {
+        lock.withLock { _failAllConnectsWith = nil }
     }
 
     /// Drive a transcript event through the fake's stream. No-op if no
@@ -68,10 +82,11 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
 
     public func connect(ephemeralKey: String) async throws {
         let throwError: Error? = lock.withLock {
-            let e = _connectShouldThrow
+            // One-shot failure wins over fail-all, then is cleared.
+            let oneShot = _connectShouldThrow
             _connectShouldThrow = nil
             _connectCalls.append(ephemeralKey)
-            return e
+            return oneShot ?? _failAllConnectsWith
         }
         if let throwError { throw throwError }
         lock.withLock { _status = .connected }
