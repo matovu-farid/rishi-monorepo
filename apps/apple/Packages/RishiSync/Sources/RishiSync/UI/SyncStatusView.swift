@@ -65,3 +65,52 @@ public struct SyncStatusView: View {
         }
     }
 }
+
+#Preview("Idle") {
+    SyncStatusView(
+        status: SyncStatus(),
+        onSyncNow: {}
+    )
+    .padding(RishiSpacing.l)
+    .background(RishiColor.surface)
+}
+
+#Preview("Syncing") {
+    SyncStatusView(
+        status: SyncStatus(
+            lastSyncedAt: Date().addingTimeInterval(-3600),
+            pendingCount: 4,
+            isRunning: true
+        ),
+        onSyncNow: {}
+    )
+    .padding(RishiSpacing.l)
+    .background(RishiColor.surface)
+}
+
+#Preview("Error") {
+    SyncStatusView(
+        status: SyncStatus(
+            lastSyncedAt: Date().addingTimeInterval(-7200),
+            pendingCount: 2,
+            isRunning: false,
+            lastError: "Network unreachable"
+        ),
+        onSyncNow: {}
+    )
+    .padding(RishiSpacing.l)
+    .background(RishiColor.surface)
+}
+
+#Preview("Last synced recently") {
+    SyncStatusView(
+        status: SyncStatus(
+            lastSyncedAt: Date().addingTimeInterval(-30),
+            pendingCount: 0,
+            isRunning: false
+        ),
+        onSyncNow: {}
+    )
+    .padding(RishiSpacing.l)
+    .background(RishiColor.surface)
+}

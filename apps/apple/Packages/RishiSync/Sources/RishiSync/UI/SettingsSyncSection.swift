@@ -25,3 +25,30 @@ public struct SettingsSyncSection: View {
         }
     }
 }
+
+#Preview("Enabled") {
+    Form {
+        SettingsSyncSection(
+            status: SyncStatus(
+                lastSyncedAt: Date().addingTimeInterval(-120),
+                pendingCount: 1,
+                isRunning: false
+            ),
+            onSyncNow: {}
+        )
+    }
+}
+
+#Preview("Disabled") {
+    Form {
+        SettingsSyncSection(
+            status: SyncStatus(
+                lastSyncedAt: nil,
+                pendingCount: 0,
+                isRunning: false,
+                lastError: "Sync disabled"
+            ),
+            onSyncNow: {}
+        )
+    }
+}
