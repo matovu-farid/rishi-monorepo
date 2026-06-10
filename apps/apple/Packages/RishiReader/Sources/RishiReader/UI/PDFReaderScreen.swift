@@ -27,9 +27,15 @@ public struct PDFReaderScreen: View {
     /// Optional injection: when `nil`, the highlight UI is mounted but never
     /// persists. Call sites in plan 05-07 will wire `GRDBHighlightStore`.
     private let highlightStore: (any HighlightStore)?
+    /// Optional injection: when `nil`, theme selections are not persisted
+    /// (used by tests / previews). Production wiring in 05-07 AppDependencies
+    /// passes a `UserDefaultsReaderSettingsStore`.
+    private let readerSettingsStore: (any ReaderSettingsStore)?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var chromeVisible: Bool = true
+    @State private var showTOC: Bool = false
+    @State private var showThemePicker: Bool = false
 
     #if canImport(UIKit)
     // Selection coordinator state — set whenever PDFView publishes a new
@@ -47,10 +53,21 @@ public struct PDFReaderScreen: View {
 
     public init(
         viewModel: PDFReaderViewModel,
+        readerSettingsStore: (any ReaderSettingsStore)? = nil,
         highlightStore: (any HighlightStore)? = nil
     ) {
         self.viewModel = viewModel
+        self.readerSettingsStore = readerSettingsStore
         self.highlightStore = highlightStore
+    }
+
+    /// SwiftUI binding to the @Observable viewModel's theme. Tracks writes so
+    /// the picker's `@Binding var theme` round-trips through the live VM.
+    private var themeBinding: Binding<ReaderTheme> {
+        Binding(
+            get: { viewModel.theme },
+            set: { viewModel.theme = $0 }
+        )
     }
 
     public var body: some View {
@@ -120,7 +137,9 @@ public struct PDFReaderScreen: View {
                                 await viewModel.flush()
                                 dismiss()
                             }
-                        }
+                        },
+                        onTOC: { showTOC = true },
+                        onTheme: { showThemePicker = true }
                     )
                     Spacer()
                     PDFPageIndicator(
@@ -136,6 +155,37 @@ public struct PDFReaderScreen: View {
             await viewModel.load()
             if let store = highlightStore {
                 await viewModel.loadHighlights(from: store)
+            }
+            if let settings = readerSettingsStore {
+                viewModel.theme = await settings.theme(for: viewModel.book.id)
+            }
+        }
+        .sheet(isPresented: $showTOC) {
+            PDFTOCView(
+                nodes: viewModel.outline,
+                onSelect: { pageIndex in
+                    viewModel.seek(toPage: pageIndex)
+                    showTOC = false
+                },
+                onClose: { showTOC = false }
+            )
+        }
+        .sheet(isPresented: $showThemePicker) {
+            if let settings = readerSettingsStore {
+                PDFThemePicker(
+                    theme: themeBinding,
+                    bookId: viewModel.book.id,
+                    store: settings,
+                    onClose: { showThemePicker = false }
+                )
+            } else {
+                // No store: still let the user preview themes in-session.
+                PDFThemePicker(
+                    theme: themeBinding,
+                    bookId: viewModel.book.id,
+                    store: EphemeralReaderSettingsStore(),
+                    onClose: { showThemePicker = false }
+                )
             }
         }
         #if canImport(UIKit)
@@ -238,3 +288,12 @@ struct PendingHighlight: Equatable {
     let text: String
 }
 #endif
+
+/// In-memory fallback used by the theme picker when no `ReaderSettingsStore`
+/// is injected (previews / tests). Writes are no-ops; reads always return
+/// `.default`. Keeps the picker's contract trivially satisfiable without
+/// dragging UserDefaults into preview environments.
+private final class EphemeralReaderSettingsStore: ReaderSettingsStore, @unchecked Sendable {
+    func theme(for bookId: BookID) async -> ReaderTheme { .default }
+    func setTheme(_ theme: ReaderTheme, for bookId: BookID) async { /* no-op */ }
+}
