@@ -1,0 +1,118 @@
+import SwiftUI
+import RishiCore
+import RishiUIKit
+
+/// SwiftUI sheet presented from the reader (Phase 9-06 wires that).
+///
+/// Owns a ``ChatPanelViewModel`` constructed at the app layer with the
+/// resolved ``Conversation`` for the active `(userId, bookId)` pair. Renders
+/// the persisted transcript plus a transient "ghost" assistant bubble while a
+/// turn is in flight, and a composer with a send / cancel button toggle
+/// driven by ``ChatStreamingState.isStreaming``.
+///
+/// All visuals route through RishiUIKit tokens — no hardcoded colors, no
+/// integer `.padding(N)`, no `.system(size:)` literals.
+public struct ChatPanelView: View {
+
+    @Bindable private var viewModel: ChatPanelViewModel
+    @State private var inputText: String
+    @FocusState private var inputFocused: Bool
+
+    public init(viewModel: ChatPanelViewModel, initialQuote: String? = nil) {
+        self._viewModel = Bindable(wrappedValue: viewModel)
+        if let q = initialQuote, !q.isEmpty {
+            self._inputText = State(initialValue: "> \(q)\n\n")
+        } else {
+            self._inputText = State(initialValue: "")
+        }
+    }
+
+    public var body: some View {
+        VStack(spacing: 0) {
+            transcript
+            Divider()
+            composer
+        }
+        .background(RishiColor.background)
+        .task {
+            await viewModel.loadHistory()
+        }
+    }
+
+    // MARK: - Transcript
+
+    private var transcript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: RishiSpacing.s) {
+                    ForEach(viewModel.messages) { message in
+                        ChatMessageBubble(message: message)
+                            .id(message.id)
+                    }
+                    if let streaming = viewModel.streamingState.streamingMessage {
+                        ChatMessageBubble(
+                            message: Message(
+                                conversationId: viewModel.conversation.id,
+                                role: .assistant,
+                                content: streaming
+                            )
+                        )
+                        .id(Self.streamingRowID)
+                    }
+                }
+                .padding(RishiSpacing.m)
+            }
+            .onChange(of: viewModel.messages.count) { _, _ in
+                if let lastID = viewModel.messages.last?.id {
+                    withAnimation { proxy.scrollTo(lastID, anchor: .bottom) }
+                }
+            }
+            .onChange(of: viewModel.streamingState.streamingMessage) { _, newValue in
+                if newValue != nil {
+                    withAnimation { proxy.scrollTo(Self.streamingRowID, anchor: .bottom) }
+                }
+            }
+        }
+    }
+
+    // MARK: - Composer
+
+    private var composer: some View {
+        HStack(spacing: RishiSpacing.s) {
+            TextField("Ask about this book…", text: $inputText, axis: .vertical)
+                .font(RishiTypography.body)
+                .foregroundStyle(RishiColor.textPrimary)
+                .textFieldStyle(.roundedBorder)
+                .focused($inputFocused)
+                .lineLimit(1...4)
+                .accessibilityIdentifier("chat.input")
+
+            if viewModel.streamingState.isStreaming {
+                Button {
+                    viewModel.cancel()
+                } label: {
+                    Image(systemName: "stop.circle.fill")
+                        .foregroundStyle(RishiColor.danger)
+                }
+                .accessibilityIdentifier("chat.cancel")
+                .accessibilityLabel("Cancel response")
+            } else {
+                Button {
+                    let toSend = inputText
+                    inputText = ""
+                    viewModel.send(query: toSend)
+                } label: {
+                    Image(systemName: "paperplane.fill")
+                        .foregroundStyle(RishiColor.accent)
+                }
+                .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("chat.send")
+                .accessibilityLabel("Send message")
+            }
+        }
+        .padding(RishiSpacing.m)
+        .background(RishiColor.surface)
+    }
+
+    private static let streamingRowID = "chat.streaming.ghost"
+}
