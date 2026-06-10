@@ -20,6 +20,19 @@ public enum RishiColor {
     public static var danger:          Color { Color("danger",          bundle: bundle) }
     public static var success:         Color { Color("success",         bundle: bundle) }
 
+    // MARK: - Highlight swatches
+    //
+    // Phase 5 reader highlight palette. Four colors exposed via the picker
+    // in the reader toolbar. Each ships with a light + dark variant in
+    // `Resources/Colors.xcassets` so swatches read correctly on top of the
+    // active reader theme. Raw persistence is `RishiCore.HighlightColor`
+    // (yellow/pink/green/blue) — these are the visual companions.
+
+    public static var highlightYellow: Color { Color("highlightYellow", bundle: bundle) }
+    public static var highlightPink:   Color { Color("highlightPink",   bundle: bundle) }
+    public static var highlightGreen:  Color { Color("highlightGreen",  bundle: bundle) }
+    public static var highlightBlue:   Color { Color("highlightBlue",   bundle: bundle) }
+
     /// Sepia palette — applied by the Reader phase via custom theme switching.
     /// Light + dark variants live in the asset catalog; sepia is data-only so
     /// callers can construct `Color(red:green:blue:)` at theme-switch time.
