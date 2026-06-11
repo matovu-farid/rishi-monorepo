@@ -56,6 +56,72 @@ struct EndpointCodableTests {
         #expect(GetSessionEndpoint().method == .GET)
     }
 
+    // MARK: - SignInSocial (Better Auth Apple provider)
+    //
+    // Phase 15 plan 07: the iOS coordinator stops POSTing to the legacy custom
+    // `/api/auth/apple` route and starts hitting Better Auth's first-party
+    // `/api/auth/sign-in/social` endpoint. The body wraps the Apple JWT inside
+    // an `idToken` OBJECT (token + nonce + optional user); the response is
+    // Better Auth's `{ redirect, token, user }` envelope.
+
+    @Test func signInSocialEndpointBodyEncodesFirstSignInShape() throws {
+        let body = SignInSocialEndpoint.Body(
+            provider: "apple",
+            idToken: .init(
+                token: "eyJabc",
+                nonce: String(repeating: "a", count: 64),
+                user: .init(
+                    name: .init(firstName: "Jane", lastName: "Doe"),
+                    email: "u@example.com"
+                )
+            ),
+            disableRedirect: true
+        )
+        let data = try JSONEncoder().encode(body)
+        let json = String(data: data, encoding: .utf8) ?? ""
+        #expect(json.contains("\"provider\":\"apple\""))
+        #expect(json.contains("\"idToken\":{"))
+        #expect(json.contains("\"token\":\"eyJabc\""))
+        #expect(json.contains("\"firstName\":\"Jane\""))
+        #expect(json.contains("\"disableRedirect\":true"))
+    }
+
+    @Test func signInSocialEndpointBodyOmitsUserOnSecondSignIn() throws {
+        let body = SignInSocialEndpoint.Body(
+            provider: "apple",
+            idToken: .init(
+                token: "eyJabc",
+                nonce: String(repeating: "a", count: 64),
+                user: nil
+            ),
+            disableRedirect: true
+        )
+        let data = try JSONEncoder().encode(body)
+        let json = String(data: data, encoding: .utf8) ?? ""
+        #expect(!json.contains("\"user\""))
+    }
+
+    @Test func signInSocialEndpointResponseDecodesWorkerShape() throws {
+        let json = "{\"redirect\":false,\"token\":\"abc\",\"user\":{\"id\":\"001234.abc.5678\",\"email\":null,\"name\":null,\"emailVerified\":true,\"image\":null}}"
+        let r = try JSONDecoder().decode(SignInSocialEndpoint.SignInSocialResponse.self, from: Data(json.utf8))
+        #expect(r.redirect == false)
+        #expect(r.token == "abc")
+        #expect(r.user.id == "001234.abc.5678")
+        #expect(r.user.email == nil)
+    }
+
+    @Test func signInSocialEndpointPathAndMethod() {
+        let ep = SignInSocialEndpoint(
+            body: .init(
+                provider: "apple",
+                idToken: .init(token: "x", nonce: "y", user: nil),
+                disableRedirect: true
+            )
+        )
+        #expect(ep.path == "/api/auth/sign-in/social")
+        #expect(ep.method == .POST)
+    }
+
     @Test func okResponseDecodes() throws {
         let r = try JSONDecoder().decode(OkResponse.self, from: Data(#"{"ok":true}"#.utf8))
         #expect(r.ok == true)
