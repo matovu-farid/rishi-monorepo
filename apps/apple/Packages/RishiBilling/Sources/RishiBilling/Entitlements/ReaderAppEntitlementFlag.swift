@@ -2,8 +2,9 @@ import Foundation
 import Observation
 
 /// Single UI read-site for "is this user premium?" Phase 13-04 replaces
-/// the Phase-11 `static let isGranted = false` hardcoded constant with
-/// an `@Observable` derived value backed by `EntitlementReconciler`.
+/// the Phase-11 hardcoded `static let isGranted` constant (which always
+/// returned `false`) with an `@Observable` derived value backed by
+/// `EntitlementReconciler`.
 ///
 /// The reconciler unions the on-device `Transaction.currentEntitlements`
 /// signal AND the server's premium response — most permissive wins
