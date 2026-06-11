@@ -117,6 +117,49 @@ platform :ios do
     )
   end
 
+  # ----- StoreKit IAP (Phase 13) ------------------------------------------------
+
+  desc "Create Rishi Pro subscription products in App Store Connect. Idempotent — re-runnable. " \
+       "Delegates to scripts/setup_storekit_products.rb because Spaceship does not wrap the " \
+       "subscription endpoints; the script uses raw ASC REST API calls. " \
+       "Requires ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH env vars."
+  lane :setup_storekit_products do
+    sh("bundle exec ruby #{File.expand_path('../scripts/setup_storekit_products.rb', __dir__).shellescape}")
+  end
+
+  desc "Create an App Store Connect sandbox tester for StoreKit testing. " \
+       "Usage: bundle exec fastlane create_sandbox_tester email:foo@bar.com password:Test1234!"
+  lane :create_sandbox_tester do |options|
+    require "spaceship"
+
+    email      = options[:email]      || UI.user_error!("Pass email:foo@bar.com")
+    password   = options[:password]   || UI.user_error!("Pass password:Test1234!")
+    first_name = options[:first_name] || "Rishi"
+    last_name  = options[:last_name]  || "Sandbox"
+    country    = options[:country]    || "USA"
+
+    token = Spaceship::ConnectAPI::Token.create(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      filepath: File.expand_path(ENV.fetch("ASC_KEY_PATH"))
+    )
+    Spaceship::ConnectAPI.token = token
+
+    if defined?(Spaceship::ConnectAPI::SandboxTester)
+      tester = Spaceship::ConnectAPI::SandboxTester.create(
+        email: email, password: password,
+        first_name: first_name, last_name: last_name,
+        territory: country
+      )
+      UI.success "Created sandbox tester: #{email}"
+    else
+      UI.error "Spaceship::ConnectAPI::SandboxTester not available in this fastlane version."
+      UI.error "Fall back to ASC UI: https://appstoreconnect.apple.com/access/users/sandbox"
+    end
+  end
+
+  # ------------------------------------------------------------------------------
+
   desc "Build Mac Catalyst Release + upload to TestFlight (internal testers). " \
        "Same changelog source as release_testflight."
   lane :release_mac_testflight do
