@@ -180,11 +180,40 @@ struct SiwaFlowTests {
         )
     }
 
-    /// Decode the captured outbound body into the same `SignInSocialEndpoint.Body`
-    /// type the coordinator emits. The `user` field on the encoded payload may be
-    /// absent — JSONDecoder's Optional-decoding handles that as `nil`.
-    static func decodeBody(_ data: Data) throws -> SignInSocialEndpoint.Body {
-        try JSONDecoder().decode(SignInSocialEndpoint.Body.self, from: data)
+    // MARK: - Decodable mirror of the body
+    //
+    // The production `SignInSocialEndpoint.Body` is Encodable-only (one-way on
+    // the wire), so tests use a parallel Decodable mirror to inspect what the
+    // coordinator emitted without polluting the production type.
+
+    struct DecodedBody: Decodable, Equatable {
+        let provider: String
+        let idToken: DecodedIdToken
+        let disableRedirect: Bool
+
+        struct DecodedIdToken: Decodable, Equatable {
+            let token: String
+            let nonce: String
+            let user: DecodedUser?
+
+            struct DecodedUser: Decodable, Equatable {
+                let name: DecodedName?
+                let email: String?
+
+                struct DecodedName: Decodable, Equatable {
+                    let firstName: String?
+                    let lastName: String?
+                }
+            }
+        }
+    }
+
+    /// Decode the captured outbound body via a Decodable mirror that matches
+    /// the production `SignInSocialEndpoint.Body` shape. The `user` field on
+    /// the encoded payload may be absent — JSONDecoder treats missing keys for
+    /// Optional types as `nil`.
+    static func decodeBody(_ data: Data) throws -> DecodedBody {
+        try JSONDecoder().decode(DecodedBody.self, from: data)
     }
 
     // MARK: - Tests

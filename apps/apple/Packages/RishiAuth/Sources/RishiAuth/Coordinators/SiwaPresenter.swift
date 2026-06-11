@@ -17,37 +17,74 @@ public enum SiwaScope: Hashable, Sendable {
     case email
 }
 
+// MARK: - Structured name mirror
+
+/// Plan 15-06: Better Auth's `/api/auth/sign-in/social` Apple `idToken.user.name`
+/// is a structured `{firstName, lastName}` object — see
+/// `@better-auth/core/social-providers/apple.mjs:77` which concatenates
+/// `${token.user.name.firstName} ${token.user.name.lastName}` for the user row.
+/// We capture `PersonNameComponents.givenName` and `.familyName` as discrete
+/// fields rather than collapsing them through `PersonNameComponentsFormatter`,
+/// which would lose the structure Better Auth needs.
+public struct SiwaName: Sendable, Equatable, Hashable {
+    public let firstName: String?
+    public let lastName: String?
+
+    public init(firstName: String?, lastName: String?) {
+        self.firstName = firstName
+        self.lastName = lastName
+    }
+}
+
 // MARK: - Credential mirror
 
 /// Sendable mirror of the fields ``SignInWithAppleCoordinator`` needs from
-/// `ASAuthorizationAppleIDCredential`. `fullName` is reduced to a JSON-encoded
-/// (display) string so we avoid the Sendable/PersonNameComponents friction in
-/// Swift 6.
+/// `ASAuthorizationAppleIDCredential`.
+///
+/// Plan 15-06 shape:
+/// - `identityTokenData`: raw bytes from `ASAuthorizationAppleIDCredential.identityToken`.
+///   These bytes ARE the UTF-8 of the JWT string — the coordinator decodes via
+///   `String(data:encoding:.utf8)` and forwards the raw JWT. NO base64 re-wrap
+///   (PITFALLS Pitfall 2 — Better Auth's `decodeJwt` expects a raw JWT string).
+/// - `fullName`: structured `{firstName, lastName}` instead of a collapsed
+///   display string. Only present on the very first authorization
+///   (PITFALLS Pitfall 8).
+/// - `nonceHex`: SHA-256 hex digest the presenter bound into
+///   `ASAuthorizationAppleIDRequest.nonce`. The coordinator posts the SAME hex
+///   as `idToken.nonce` to Better Auth — string-equality check at
+///   `apple.mjs:58` (PITFALLS Pitfall 1).
 public struct SiwaCredential: Sendable, Equatable {
-    public let identityToken: Data
+    public let identityTokenData: Data
     public let authorizationCode: Data
     /// Apple's stable `sub` (`user` field) — primary key for the worker.
     public let user: String
-    /// Display-string projection of `PersonNameComponents`. Only present on the
-    /// first authorization; `nil` on every subsequent sign-in per PITFALLS.md
-    /// Pitfall 10.
-    public let fullName: String?
+    /// Structured name; `nil` on every sign-in after the first
+    /// (PITFALLS Pitfall 8/10).
+    public let fullName: SiwaName?
     /// `nil` OR a `@privaterelay.appleid.com` address — both pass through
-    /// unchanged to the worker.
+    /// unchanged to the worker (PITFALLS Pitfall 10). `nil` on every
+    /// sign-in after the first.
     public let email: String?
+    /// SHA-256 hex digest of the per-request raw nonce. The presenter bound
+    /// the SAME string into `ASAuthorizationAppleIDRequest.nonce` so the JWT
+    /// returned by Apple carries it verbatim in the `nonce` claim. The
+    /// coordinator forwards this same hex to Better Auth as `idToken.nonce`.
+    public let nonceHex: String
 
     public init(
-        identityToken: Data,
+        identityTokenData: Data,
         authorizationCode: Data,
         user: String,
-        fullName: String?,
-        email: String?
+        fullName: SiwaName?,
+        email: String?,
+        nonceHex: String
     ) {
-        self.identityToken = identityToken
+        self.identityTokenData = identityTokenData
         self.authorizationCode = authorizationCode
         self.user = user
         self.fullName = fullName
         self.email = email
+        self.nonceHex = nonceHex
     }
 }
 
@@ -68,6 +105,12 @@ public protocol SiwaPresenter: Sendable {
 /// import is gated behind `#if canImport(AuthenticationServices) &&
 /// canImport(UIKit)` so the rest of the package (and `swift test` on a macOS
 /// host) compiles cleanly.
+///
+/// Plan 15-06: generates a per-request nonce via ``Nonce/generate()`` and
+/// binds the SHA-256 hex digest into `ASAuthorizationAppleIDRequest.nonce`
+/// BEFORE calling `performRequests()`. The same hex is forwarded back to the
+/// coordinator on the `SiwaCredential.nonceHex` field so it can post the
+/// matching value to Better Auth.
 @MainActor
 public final class SystemSiwaPresenter: NSObject, SiwaPresenter,
     ASAuthorizationControllerDelegate,
@@ -75,6 +118,13 @@ public final class SystemSiwaPresenter: NSObject, SiwaPresenter,
 
     private var continuation: CheckedContinuation<SiwaCredential, Error>?
     private weak var presentationAnchor: ASPresentationAnchor?
+    /// Hex digest of the in-flight nonce. Set immediately before
+    /// `performRequests()`; cleared on terminal callback. Needed because the
+    /// SiwaCredential we build in
+    /// `authorizationController(_:didCompleteWithAuthorization:)` must carry
+    /// the SAME hex we bound to the request — Apple does not echo the nonce
+    /// out on the credential side.
+    private var pendingNonceHex: String?
 
     public init(presentationAnchor: ASPresentationAnchor? = nil) {
         self.presentationAnchor = presentationAnchor
@@ -85,12 +135,20 @@ public final class SystemSiwaPresenter: NSObject, SiwaPresenter,
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<SiwaCredential, Error>) in
             Task { @MainActor in
                 self.continuation = cont
+                let (_, nonceHex) = Nonce.generate()
+                self.pendingNonceHex = nonceHex
                 let provider = ASAuthorizationAppleIDProvider()
                 let request = provider.createRequest()
                 var asScopes: [ASAuthorization.Scope] = []
                 if scopes.contains(.fullName) { asScopes.append(.fullName) }
                 if scopes.contains(.email)    { asScopes.append(.email) }
                 request.requestedScopes = asScopes
+                // PITFALLS Pitfall 1: bind the SHA-256 hex digest to the
+                // Apple request. Apple stores this string verbatim in the
+                // JWT `nonce` claim — Better Auth's check is string-equality
+                // (apple.mjs:58), so the SAME hex goes on the wire to
+                // Better Auth as `idToken.nonce`.
+                request.nonce = nonceHex
                 let controller = ASAuthorizationController(authorizationRequests: [request])
                 controller.delegate = self
                 controller.presentationContextProvider = self
@@ -107,30 +165,44 @@ public final class SystemSiwaPresenter: NSObject, SiwaPresenter,
     ) {
         guard let appleCred = authorization.credential as? ASAuthorizationAppleIDCredential,
               let identityToken = appleCred.identityToken,
-              let authorizationCode = appleCred.authorizationCode else {
+              let authorizationCode = appleCred.authorizationCode,
+              let nonceHex = self.pendingNonceHex else {
             self.continuation?.resume(throwing: RishiError.network(
                 code: "siwa_missing_credential_fields",
-                message: "ASAuthorizationAppleIDCredential missing identityToken or authorizationCode"
+                message: "ASAuthorizationAppleIDCredential missing identityToken, authorizationCode, or in-flight nonce"
             ))
             self.continuation = nil
+            self.pendingNonceHex = nil
             return
         }
-        var encodedFullName: String? = nil
-        if let components = appleCred.fullName {
-            let formatter = PersonNameComponentsFormatter()
-            formatter.style = .long
-            let s = formatter.string(from: components)
-            encodedFullName = s.isEmpty ? nil : s
+        // PITFALLS Pitfall 8: capture .givenName / .familyName as discrete
+        // fields. Better Auth concatenates them with a space at
+        // apple.mjs:77, so passing structured components round-trips losslessly.
+        let name: SiwaName? = appleCred.fullName.map {
+            SiwaName(firstName: $0.givenName, lastName: $0.familyName)
         }
+        // PITFALLS Pitfall 8: on second sign-in Apple returns
+        // PersonNameComponents with both fields nil — collapse to nil so the
+        // coordinator can omit `idToken.user` entirely (sending empty strings
+        // would clobber the user row Better Auth already has).
+        let projectedName: SiwaName? = {
+            guard let name = name,
+                  (name.firstName != nil && !(name.firstName?.isEmpty ?? true))
+                  || (name.lastName != nil && !(name.lastName?.isEmpty ?? true))
+            else { return nil }
+            return name
+        }()
         let credential = SiwaCredential(
-            identityToken: identityToken,
+            identityTokenData: identityToken,
             authorizationCode: authorizationCode,
             user: appleCred.user,
-            fullName: encodedFullName,
-            email: appleCred.email
+            fullName: projectedName,
+            email: appleCred.email,
+            nonceHex: nonceHex
         )
         self.continuation?.resume(returning: credential)
         self.continuation = nil
+        self.pendingNonceHex = nil
     }
 
     public func authorizationController(
@@ -146,6 +218,7 @@ public final class SystemSiwaPresenter: NSObject, SiwaPresenter,
             ))
         }
         self.continuation = nil
+        self.pendingNonceHex = nil
     }
 
     // MARK: - Presentation anchor
