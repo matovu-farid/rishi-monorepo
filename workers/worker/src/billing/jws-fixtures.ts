@@ -1,131 +1,266 @@
 /**
- * Offline JWS fixture builder for `jws-verify.test.ts`.
+ * Offline X.509 chain + JWS fixture builder for `jws-verify.test.ts`.
  *
- * Production `verifyAppleJWS` expects x5c[0] to be a base64-standard-encoded
- * X.509 leaf certificate. Building a synthetic X.509 chain in WebCrypto is
- * out of scope for unit tests (RESEARCH §10.2 — defer real cert-chain
- * regression to a daily reconciliation cron in 14-09).
+ * Generates a REAL three-link ECDSA-P256 X.509 chain (root self-signed,
+ * intermediate signed by root, leaf signed by intermediate) using
+ * `@peculiar/x509`, then emits Apple-shaped JWS Compact Serializations with
+ * the real cert DERs base64-standard encoded in the x5c header.
  *
- * Workaround: tests use the `leafKeyResolver` DI seam on `verifyAppleJWS` to
- * import x5c[0] as SPKI (instead of as an X.509 cert). This exercises every
- * code path the production verifier walks — header decode, alg check, x5c
- * presence, base64-standard decode of x5c[2] (Pitfall 1), root byte-pin
- * compare, jwtVerify against the leaf key — without forging X.509.
+ * This shape exercises the full hardened verifier:
+ *   - importX509 on x5c[0] (production path; no test-only seam needed)
+ *   - leaf-signed-by-intermediate signature check
+ *   - intermediate-signed-by-root signature check
+ *   - root identity pin (byte-compare on x5c[2])
+ *   - notBefore/notAfter window check on every cert
+ *   - ES256 signature on the JWS payload
  *
- * For "real" cert-chain coverage, RESEARCH §12 describes a daily
- * reconciliation cron that hits Apple S2S and flags any verification drift
- * within 24h — that catches root-rotation faster than a synthetic CA builder.
+ * Forge helpers (`signForgedLeafFixture`, `signWithTamperedIntermediate`,
+ * `signWithExpiredLeaf`, `signWithShortChain`) build the four attack
+ * scenarios in the security review. They share the same root identity so
+ * `rootDer` byte-compare alone can't distinguish them — the chain walk has to.
  */
-import { SignJWT, generateKeyPair, type JWTPayload } from "jose";
+import "reflect-metadata";
+import { SignJWT, type JWTPayload } from "jose";
+import * as x509 from "@peculiar/x509";
+
+x509.cryptoProvider.set(crypto);
+
+const ALG: EcKeyGenParams = { name: "ECDSA", namedCurve: "P-256" };
+const SIGN_ALG: EcdsaParams = { name: "ECDSA", hash: "SHA-256" };
 
 export interface SignFixtureOpts {
   /** Override the protected header alg (e.g. "HS256" to exercise the alg reject path). */
   alg?: string;
   /** Drop x5c from the protected header entirely. */
   omitX5c?: boolean;
-  /** Replace x5c[2] with a different b64 blob (simulates a wrong-root chain). */
-  tamperRoot?: boolean;
 }
 
 export interface TestKit {
-  /**
-   * Pinned "root" bytes for this kit. Random 64 bytes — the production
-   * verifier just byte-compares x5c[2] to this, so content is unimportant.
-   */
+  /** Pinned root DER bytes — matches x5c[2] in legitimate fixtures. */
   rootDer: Uint8Array;
-  /**
-   * Build a JWS Compact Serialization (header.payload.sig) signed by the
-   * fixture's leaf key. Header includes a 3-entry x5c shaped like Apple's
-   * (base64 STANDARD, not base64url — Pitfall 1).
-   */
+  /** Real X509 certs (handy for assertions). */
+  rootCert: x509.X509Certificate;
+  intermediateCert: x509.X509Certificate;
+  leafCert: x509.X509Certificate;
+  /** Build a legitimate JWS signed by the real leaf key. */
   signFixture: (payload: JWTPayload, opts?: SignFixtureOpts) => Promise<string>;
   /**
-   * Test-only helper. The kit's leaf public key in SPKI PEM form — pass via
-   * `leafKeyResolver` so `verifyAppleJWS` can import it instead of running
-   * `importX509` on the (non-X.509) x5c[0] entry.
+   * Forged-leaf attack JWS: attacker generates their own keypair + self-signed
+   * leaf cert, parks it at x5c[0], puts the REAL kit intermediate + root at
+   * x5c[1..2], and signs the payload with the attacker key. A verifier that
+   * only byte-compares x5c[2] accepts this; a verifier that walks the chain
+   * rejects (the attacker leaf is not signed by the kit intermediate).
    */
-  leafSpkiPem: string;
+  signForgedLeafFixture: (payload: JWTPayload) => Promise<string>;
+  /** Tampered intermediate JWS: x5c[1] swapped to an unrelated cert. */
+  signWithTamperedIntermediate: (payload: JWTPayload) => Promise<string>;
+  /** Expired-leaf JWS: leaf's notAfter is in the past. */
+  signWithExpiredLeaf: (payload: JWTPayload) => Promise<string>;
+  /** Short chain (only [leaf, intermediate]) — missing root. */
+  signWithShortChain: (payload: JWTPayload) => Promise<string>;
 }
 
-/** Encode bytes as STANDARD base64 (NOT base64url) — Pitfall 1 regression. */
-function bytesToB64Std(bytes: Uint8Array): string {
+function derToB64Std(der: ArrayBuffer): string {
+  const bytes = new Uint8Array(der);
   let bin = "";
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin);
 }
 
-function randomBytes(n: number): Uint8Array {
-  const out = new Uint8Array(n);
-  crypto.getRandomValues(out);
-  return out;
+interface IssuedCert {
+  cert: x509.X509Certificate;
+  privateKey: CryptoKey;
+  publicKey: CryptoKey;
+}
+
+async function issueRoot(name: string, notBefore: Date, notAfter: Date): Promise<IssuedCert> {
+  const keys = await crypto.subtle.generateKey(ALG, true, ["sign", "verify"]);
+  const cert = await x509.X509CertificateGenerator.createSelfSigned({
+    name: `CN=${name}`,
+    keys,
+    notBefore,
+    notAfter,
+    signingAlgorithm: SIGN_ALG,
+    extensions: [
+      new x509.BasicConstraintsExtension(true, undefined, true),
+      new x509.KeyUsagesExtension(
+        x509.KeyUsageFlags.keyCertSign | x509.KeyUsageFlags.cRLSign,
+        true,
+      ),
+    ],
+  });
+  return { cert, privateKey: keys.privateKey, publicKey: keys.publicKey };
+}
+
+async function issueChild(
+  subject: string,
+  issuer: x509.X509Certificate,
+  issuerPrivKey: CryptoKey,
+  notBefore: Date,
+  notAfter: Date,
+  isCA: boolean,
+): Promise<IssuedCert> {
+  const keys = await crypto.subtle.generateKey(ALG, true, ["sign", "verify"]);
+  const extensions: x509.Extension[] = [];
+  if (isCA) {
+    extensions.push(new x509.BasicConstraintsExtension(true, undefined, true));
+    extensions.push(
+      new x509.KeyUsagesExtension(
+        x509.KeyUsageFlags.keyCertSign | x509.KeyUsageFlags.cRLSign,
+        true,
+      ),
+    );
+  } else {
+    extensions.push(new x509.BasicConstraintsExtension(false, undefined, true));
+    extensions.push(
+      new x509.KeyUsagesExtension(
+        x509.KeyUsageFlags.digitalSignature,
+        true,
+      ),
+    );
+  }
+  const cert = await x509.X509CertificateGenerator.create({
+    serialNumber: `0${Math.floor(Math.random() * 1e9).toString(16)}`,
+    subject: `CN=${subject}`,
+    issuer: issuer.subject,
+    notBefore,
+    notAfter,
+    signingAlgorithm: SIGN_ALG,
+    publicKey: keys.publicKey,
+    signingKey: issuerPrivKey,
+    extensions,
+  });
+  return { cert, privateKey: keys.privateKey, publicKey: keys.publicKey };
 }
 
 export async function buildTestKit(): Promise<TestKit> {
-  // Real ES256 keypair — matches Apple's signing alg.
-  const { publicKey, privateKey } = await generateKeyPair("ES256", {
-    extractable: true,
-  });
+  const now = new Date();
+  const farFuture = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
+  const past = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-  // Export leaf public key as SPKI DER. We park these bytes in x5c[0] so the
-  // base64-standard decode + import path is exercised end-to-end.
-  const leafSpkiDer = new Uint8Array(
-    (await crypto.subtle.exportKey("spki", publicKey as CryptoKey)) as ArrayBuffer,
+  // Real 3-link chain.
+  const root = await issueRoot("Test Root CA", new Date(now.getTime() - 60_000), farFuture);
+  const intermediate = await issueChild(
+    "Test Intermediate CA",
+    root.cert,
+    root.privateKey,
+    new Date(now.getTime() - 60_000),
+    farFuture,
+    true,
   );
-  const leafSpkiB64Std = bytesToB64Std(leafSpkiDer);
+  const leaf = await issueChild(
+    "Test Leaf",
+    intermediate.cert,
+    intermediate.privateKey,
+    new Date(now.getTime() - 60_000),
+    farFuture,
+    false,
+  );
 
-  // SPKI PEM the test resolver will hand to `importSPKI`.
-  // Use 64-char-per-line wrap (standard PEM).
-  const wrapped = leafSpkiB64Std.match(/.{1,64}/g)?.join("\n") ?? leafSpkiB64Std;
-  const leafSpkiPem = `-----BEGIN PUBLIC KEY-----\n${wrapped}\n-----END PUBLIC KEY-----\n`;
+  const rootDer = new Uint8Array(root.cert.rawData);
+  const intermediateB64 = derToB64Std(intermediate.cert.rawData);
+  const rootB64 = derToB64Std(root.cert.rawData);
+  const leafB64 = derToB64Std(leaf.cert.rawData);
 
-  // Intermediate stand-in: 96 random bytes. Verifier doesn't validate it in
-  // this iteration (chain walk deferred per RESEARCH §7.2).
-  const intermediateDer = randomBytes(96);
-
-  // Root pin: 64 random bytes. The kit hands these to the test's `rootCa`
-  // option, and emits them as x5c[2] so byte-equality holds.
-  const rootDer = randomBytes(64);
-
-  async function signFixture(
+  async function buildJws(
+    leafCertB64: string,
+    intermediateB64Override: string,
+    rootB64Override: string,
+    signingKey: CryptoKey,
     payload: JWTPayload,
     opts: SignFixtureOpts = {},
+    includeRoot = true,
   ): Promise<string> {
-    const x5c = [
-      leafSpkiB64Std,
-      bytesToB64Std(intermediateDer),
-      opts.tamperRoot
-        ? bytesToB64Std(randomBytes(64))
-        : bytesToB64Std(rootDer),
-    ];
+    const x5c: string[] = [leafCertB64, intermediateB64Override];
+    if (includeRoot) x5c.push(rootB64Override);
 
-    // Pre-build the protected header — we may need to bypass jose's
-    // alg-vs-key check (it refuses to sign HS256 with an EC key). For the
-    // alg-reject test we forge the header by re-serializing.
     const headerObj: Record<string, unknown> = { alg: opts.alg ?? "ES256" };
     if (!opts.omitX5c) headerObj.x5c = x5c;
 
     if (opts.alg && opts.alg !== "ES256") {
-      // Forge a JWS with the requested alg in the header but a real ES256
-      // signature body. Verifier rejects on header.alg before checking the
-      // signature, so the signature content is irrelevant.
+      // Forge a JWS with non-ES256 alg header; signature body is empty since
+      // verifier rejects on header.alg before checking signature.
       const headerB64Url = base64UrlEncode(
         new TextEncoder().encode(JSON.stringify(headerObj)),
       );
       const payloadB64Url = base64UrlEncode(
         new TextEncoder().encode(JSON.stringify(payload)),
       );
-      // Empty signature is fine — verifier rejects before reaching it.
       return `${headerB64Url}.${payloadB64Url}.`;
     }
 
-    // Happy path: real ES256 signature.
     const signer = new SignJWT(payload).setProtectedHeader(
       headerObj as unknown as Parameters<SignJWT["setProtectedHeader"]>[0],
     );
-    return await signer.sign(privateKey as CryptoKey);
+    return await signer.sign(signingKey);
   }
 
-  return { rootDer, signFixture, leafSpkiPem };
+  return {
+    rootDer,
+    rootCert: root.cert,
+    intermediateCert: intermediate.cert,
+    leafCert: leaf.cert,
+    signFixture: (payload, opts = {}) =>
+      buildJws(leafB64, intermediateB64, rootB64, leaf.privateKey, payload, opts),
+    signForgedLeafFixture: async (payload) => {
+      // Attacker forges a self-signed leaf cert using their own key, then
+      // ships [attackerLeaf, realIntermediate, realRoot]. JWS is signed with
+      // the attacker's key.
+      const attacker = await issueRoot(
+        "Attacker Forged Leaf",
+        new Date(now.getTime() - 60_000),
+        farFuture,
+      );
+      const attackerLeafB64 = derToB64Std(attacker.cert.rawData);
+      return buildJws(
+        attackerLeafB64,
+        intermediateB64,
+        rootB64,
+        attacker.privateKey,
+        payload,
+      );
+    },
+    signWithTamperedIntermediate: async (payload) => {
+      // Replace intermediate with an unrelated self-signed cert. Leaf
+      // signature won't trace back to root through this stand-in.
+      const stranger = await issueRoot(
+        "Stranger Intermediate",
+        new Date(now.getTime() - 60_000),
+        farFuture,
+      );
+      const strangerB64 = derToB64Std(stranger.cert.rawData);
+      return buildJws(leafB64, strangerB64, rootB64, leaf.privateKey, payload);
+    },
+    signWithExpiredLeaf: async (payload) => {
+      // Issue a leaf with notAfter in the past, signed by the real intermediate.
+      const expired = await issueChild(
+        "Expired Leaf",
+        intermediate.cert,
+        intermediate.privateKey,
+        new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000),
+        past,
+        false,
+      );
+      const expiredB64 = derToB64Std(expired.cert.rawData);
+      return buildJws(
+        expiredB64,
+        intermediateB64,
+        rootB64,
+        expired.privateKey,
+        payload,
+      );
+    },
+    signWithShortChain: (payload) =>
+      buildJws(
+        leafB64,
+        intermediateB64,
+        rootB64,
+        leaf.privateKey,
+        payload,
+        {},
+        /* includeRoot */ false,
+      ),
+  };
 }
 
 /** base64url (no padding) of raw bytes — used for forged JWS headers. */
