@@ -25,6 +25,7 @@ import { parseRealtimeUsageBody } from "./billing/realtime-usage";
 import { ensureCustomerAndPortal } from "./billing/start";
 import { registerVerifyReceiptRoute } from "./billing/apple-verify-receipt";
 import { registerAppleWebhookRoute } from "./billing/apple-webhook";
+import { registerBillingMeRoute } from "./billing/apple-me";
 import { createStripeClient } from "./billing/stripe";
 import { requireActiveSubscription } from "./billing/sub-gate";
 import { createDb } from "./db/drizzle";
@@ -235,6 +236,14 @@ registerVerifyReceiptRoute(app, requireAuth);
 // Apple's ~24h retry storm halts; dispatch errors persist to the log row's
 // processing_error column for daily reconciliation.
 registerAppleWebhookRoute(app);
+
+// GET /api/billing/me — single source-of-truth entitlement read. Apple row
+// wins (status in 'active' | 'in_grace'); falls back to the existing Stripe
+// `subscription` table (status in 'active' | 'trialing') so users who paid
+// before IAP shipped do not regress to "free". Returns
+// {premium:boolean, premiumUntil: ISO8601 string | null} with a 30s
+// private Cache-Control header to dampen the iOS reconciler hot path.
+registerBillingMeRoute(app, requireAuth);
 
 // ─── Protected routes ─────────────────────────────────────────────────────────
 app.get("/api/redis-test", requireAuth, async (c) => {
