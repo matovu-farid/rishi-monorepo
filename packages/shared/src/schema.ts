@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real, primaryKey, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, primaryKey, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // ─── Books table ───────────────────────────────────────────────────────────────
 // Matches mobile SQLite schema columns (snake_case) plus sync-specific columns.
@@ -342,3 +342,45 @@ export type AppleSubscription = typeof appleSubscriptions.$inferSelect
 export type NewAppleSubscription = typeof appleSubscriptions.$inferInsert
 export type AppleNotificationLogEntry = typeof appleNotificationsLog.$inferSelect
 export type NewAppleNotificationLogEntry = typeof appleNotificationsLog.$inferInsert
+
+// ─── APNs device registrations (Quick-VPX VPX-02) ───────────────────────────
+//
+// iOS `APNsDeviceRegistrar` (RishiSync/Background/APNsDeviceRegistrar.swift)
+// posts to POST /api/devices/register every time iOS hands the app a fresh
+// device token. The worker persists the (userId, deviceToken) pair so the
+// silent-push sync fan-out (SYNC-06) can wake every OTHER device for the
+// same user. The unique index on (user_id, device_token) lets the route
+// idempotently UPSERT via onConflictDoUpdate without a unique-constraint
+// throw on token re-registration. `env` defaults to "production" because
+// the iOS body does NOT carry an env field today — column is there for
+// future-proofing only.
+export const devices = sqliteTable(
+  "devices",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    deviceToken: text("device_token").notNull(),
+    platform: text("platform").notNull(),
+    appVersion: text("app_version").notNull(),
+    bundleId: text("bundle_id").notNull(),
+    topic: text("topic").notNull(),
+    env: text("env").notNull().default("production"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (t) => ({
+    uniqUserToken: uniqueIndex("devices_user_token_uniq").on(
+      t.userId,
+      t.deviceToken,
+    ),
+  }),
+)
+
+export type Device = typeof devices.$inferSelect
+export type NewDevice = typeof devices.$inferInsert

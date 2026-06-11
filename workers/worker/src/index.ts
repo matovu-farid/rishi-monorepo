@@ -16,6 +16,7 @@ import { syncRoutes } from "./routes/sync";
 import { uploadRoutes } from "./routes/upload";
 import { desktopRoutes } from "./routes/desktop";
 import { mobileRoutes } from "./routes/mobile";
+import { devicesRoutes } from "./routes/devices";
 import { testAuthRoutes } from "./routes/test-auth";
 import { createAuth } from "./auth";
 import { ensureCreditAndSubscription } from "./billing/backfill";
@@ -206,6 +207,8 @@ app.route("/api/sync", syncRoutes);
 app.route("/api/sync", uploadRoutes);
 app.route("/desktop", desktopRoutes);
 app.route("/mobile", mobileRoutes);
+// Quick-VPX VPX-02 — APNs device registration for silent-push sync wake.
+app.route("/api/devices", devicesRoutes);
 // ─── Test-only routes (hard-gated by ENABLE_TEST_AUTH + TEST_AUTH_SECRET) ────
 // All endpoints under /test/* return 404 unless three checks pass — see
 // src/routes/test-auth.ts. Production keeps both env vars unset.

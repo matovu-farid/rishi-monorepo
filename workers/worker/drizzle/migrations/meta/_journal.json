@@ -43,6 +43,13 @@
       "when": 1781178324424,
       "tag": "0007_apple_iap",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1781208146746,
+      "tag": "0008_devices",
+      "breakpoints": true
     }
   ]
 }
