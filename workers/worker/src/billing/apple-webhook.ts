@@ -26,7 +26,11 @@ export interface AppleNotificationEnvelope {
   data: {
     bundleId: string;
     environment: "Sandbox" | "Production";
-    signedTransactionInfo: string;
+    // Optional: Apple's `TEST` notification (and any future non-
+    // transactional notification type) does NOT include an inner
+    // transaction JWS. Handler must skip the inner verify + dispatch
+    // when this field is absent — see step 3 below.
+    signedTransactionInfo?: string;
     signedRenewalInfo?: string;
   };
 }
@@ -109,11 +113,20 @@ export interface WebhookResult {
  * Algorithm (RESEARCH §5):
  *   1. Verify outer JWS signature (rejects bad chain / forged leaf).
  *   2. Guard `version === "2.0"` and `bundleId === "org.fidexa.rishi"`.
- *   3. Verify inner `signedTransactionInfo` JWS.
+ *   3. If `data.signedTransactionInfo` is present, verify it as an inner
+ *      JWS. Apple's `TEST` notification (sent by
+ *      `POST /inApps/v1/notifications/test`) omits this field — and any
+ *      future non-transactional type may too. Without an inner JWS we
+ *      skip dispatch entirely and fall through to log-only handling.
  *   4. Atomic INSERT ... ON CONFLICT DO NOTHING on the log row keyed by
  *      notificationUUID. If duplicate, ACK 200 immediately — Apple is
- *      retrying a notification we've already processed.
- *   5. Dispatch by notificationType per RESEARCH §5.3 table.
+ *      retrying a notification we've already processed. When there is no
+ *      inner transaction, `appleTransactionId` is logged as null so the
+ *      row still exists for verification / audit queries.
+ *   5. Dispatch by notificationType per RESEARCH §5.3 table — only when
+ *      a verified transaction payload is available. TEST and any other
+ *      transaction-less type take the dispatcher's unknown / log-only
+ *      branch (no Apple redelivery on 200).
  *   6. Mark the log row processed (or record the error and still ACK 200
  *      so Apple stops retrying; reconciliation cron catches the catch-up).
  *
@@ -142,24 +155,34 @@ export async function handleAppleWebhook(
     return { status: 400, body: { error: "wrong bundleId" } };
   }
 
-  // 3. Verify inner transaction JWS.
-  let tx: AppleTransactionPayload;
-  try {
-    tx = await input.deps.verifyJws(envelope.data.signedTransactionInfo);
-  } catch (e) {
-    if (e instanceof JWSInvalid) {
-      return { status: 400, body: { error: "invalid signature" } };
+  // 3. Verify inner transaction JWS — but only when one is present.
+  // Apple's TEST notification (delivered by
+  // `POST /inApps/v1/notifications/test`) carries NO signedTransactionInfo
+  // and NO signedRenewalInfo. Treating its absence as an error would
+  // return non-2xx and trip `UNSUCCESSFUL_HTTP_RESPONSE_CODE` in Apple's
+  // diagnostics UI — exactly the bug this fix lands. The same fall-
+  // through covers any future non-transactional notificationType.
+  let tx: AppleTransactionPayload | null = null;
+  if (envelope.data.signedTransactionInfo) {
+    try {
+      tx = await input.deps.verifyJws(envelope.data.signedTransactionInfo);
+    } catch (e) {
+      if (e instanceof JWSInvalid) {
+        return { status: 400, body: { error: "invalid signature" } };
+      }
+      throw e;
     }
-    throw e;
   }
 
   // signedRenewalInfo is decoded by the dispatch table on demand — only
   // DID_CHANGE_RENEWAL_STATUS reads it today. Skipped in the hot path so
   // an absent renewal info doesn't fault non-renewal notification types.
 
-  const txIdStr = String(tx.transactionId);
+  const txIdStr = tx ? String(tx.transactionId) : null;
 
   // 4. Idempotent log insert (Pitfall 3 — atomic insert-and-catch).
+  // For TEST / transaction-less notifications, appleTransactionId is null
+  // but the row still lands so verification queries can confirm receipt.
   const insertResult = await input.deps.db.insertLog({
     notificationUuid: envelope.notificationUUID,
     notificationType: envelope.notificationType,
@@ -174,18 +197,25 @@ export async function handleAppleWebhook(
     return { status: 200, body: { ok: true } };
   }
 
-  // 5. Dispatch by notificationType (RESEARCH §5.3 table).
-  try {
-    await dispatch(envelope, tx, input.deps);
+  // 5. Dispatch by notificationType (RESEARCH §5.3 table). Only when a
+  // verified transaction payload is available — TEST and any other
+  // transaction-less type take the dispatcher's log-only / unknown
+  // branch (already logged above; ACK 200 means Apple will not redeliver).
+  if (tx) {
+    try {
+      await dispatch(envelope, tx, input.deps);
+      await input.deps.db.markLogProcessed(envelope.notificationUUID, null);
+    } catch (e) {
+      await input.deps.db.markLogProcessed(
+        envelope.notificationUUID,
+        String(e),
+      );
+      // Still ACK 200 to stop Apple's retry storm. The error column lets
+      // the daily reconciliation cron pick up failed dispatches; the row
+      // is already logged so we have full payload for replay.
+    }
+  } else {
     await input.deps.db.markLogProcessed(envelope.notificationUUID, null);
-  } catch (e) {
-    await input.deps.db.markLogProcessed(
-      envelope.notificationUUID,
-      String(e),
-    );
-    // Still ACK 200 to stop Apple's retry storm. The error column lets
-    // the daily reconciliation cron pick up failed dispatches; the row
-    // is already logged so we have full payload for replay.
   }
   return { status: 200, body: { ok: true } };
 }
