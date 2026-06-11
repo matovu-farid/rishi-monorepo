@@ -98,6 +98,30 @@ final class AppDependencies {
     /// so `ManageSubscriptionRow` can read it without prop-drilling.
     let manageSubscriptionPresenter: ManageSubscriptionPresenter
 
+    // Phase 13 Wave-3 — full IAP object graph (plan 13-05).
+    //
+    /// IAP-02: actor wrapping `Product.products(for:)` + cached snapshot.
+    let storeKitProductService: StoreKitProductService
+    /// IAP-03: PurchaseService actor — enforces finish-after-verify and
+    /// in-flight dedup. Tests inject via `PurchaseProtocol`.
+    let purchaseService: PurchaseService
+    /// IAP-04: long-lived `Transaction.updates` listener. Started at
+    /// launch; survives the entire app lifetime.
+    let transactionListener: TransactionListener
+    /// IAP-05: shared reconciler. `EntitlementService` calls `setServer`;
+    /// `PurchaseService` / `RestoreService` call `setOnDevice`.
+    let entitlementReconciler: EntitlementReconciler
+    /// IAP-05: live `@Observable` flag reading through the reconciler.
+    /// Wave-3 UI (paywall, ManageSubscriptionRow, PremiumGateModifier)
+    /// will switch to reading this directly via `@Environment` in a
+    /// follow-up plan.
+    let readerAppEntitlementFlag: ReaderAppEntitlementFlag
+    /// IAP-06: user-initiated restore via `AppStore.sync()` +
+    /// `Transaction.currentEntitlements` walk.
+    let restoreService: RestoreService
+    /// IAP-10: worker JWS verifier wrapping `WorkerClient`.
+    let workerReceiptVerifier: WorkerReceiptVerifier
+
     // Settings (Phase 11 — telemetry opt-in)
     /// SET-02: backs the Privacy section toggle. Sink forwards to
     /// `RishiLogging.setSentryEnabled(_:)` so opting out mutes uploads.
@@ -371,11 +395,56 @@ final class AppDependencies {
         )
 
         // 17. Billing stack. Phase 11 entitlement cache + Phase 13
-        //     StoreKit Manage Subscriptions presenter. The Stripe portal
-        //     handoff is removed — anti-steering 3.1.1 incompatibility
-        //     (see 13-07-PLAN.md).
+        //     full native StoreKit IAP graph (plan 13-05 Wave-3 wiring).
+        //     The Stripe portal handoff is removed — anti-steering 3.1.1
+        //     incompatibility (see 13-07-PLAN.md).
         self.entitlementService = EntitlementService(workerClient: workerClient)
         self.manageSubscriptionPresenter = ManageSubscriptionPresenter()
+
+        // Phase 13 plan 13-05 — full IAP object graph.
+        //
+        // Wiring order matches RESEARCH §3:
+        //   Wave 1: products → verifier → purchase service → listener
+        //           → reconciler (+ flag)
+        //   Wave 2: restore + manage
+        //   Launch hooks: replayUnfinished() then listener.start()
+        //   Optional: pre-warm products when StoreKitIAPFlag is ON
+        let productService = StoreKitProductService()
+        let receiptVerifier = WorkerReceiptVerifier(client: workerClient)
+        let purchaseService = PurchaseService(
+            productFetcher: productService,
+            verifier: receiptVerifier
+        )
+        let listener = TransactionListener(forwarder: purchaseService)
+        let reconciler = EntitlementReconciler()
+        let entitlementFlag = ReaderAppEntitlementFlag(reconciler: reconciler)
+        let restoreService = RestoreService(reconciler: reconciler)
+
+        self.storeKitProductService = productService
+        self.workerReceiptVerifier = receiptVerifier
+        self.purchaseService = purchaseService
+        self.transactionListener = listener
+        self.entitlementReconciler = reconciler
+        self.readerAppEntitlementFlag = entitlementFlag
+        self.restoreService = restoreService
+
+        // Launch hooks: replay any unfinished transactions FIRST (so the
+        // listener doesn't double-handle them), then install the
+        // long-lived `Transaction.updates` listener. RESEARCH §2.3, §2.4.
+        Task.detached(priority: .background) { [purchaseService, listener] in
+            await purchaseService.replayUnfinished()
+            await listener.start()
+        }
+
+        // Pre-warm the product catalog when the StoreKit IAP flag is ON
+        // (saves a paywall-render-time round-trip). When OFF (release
+        // default until ASC product setup completes), skip — avoids an
+        // unnecessary network call.
+        if StoreKitIAPFlag.isEnabled {
+            Task.detached(priority: .background) { [productService] in
+                _ = try? await productService.load()
+            }
+        }
 
         // 18. Settings stack — telemetry sink forwards to RishiLogging which
         //     drops Sentry uploads on opt-out (SET-02).
@@ -391,6 +460,24 @@ final class AppDependencies {
         //     `readerSettingsStore`; these defaults drive the Settings
         //     Reader section pickers.
         self.readerDefaults = AppReaderDefaults()
+    }
+
+    // MARK: - Paywall factory (Phase 13 plan 13-05)
+
+    /// Build a fresh `PaywallViewModel` wired to the full IAP graph.
+    ///
+    /// RootView (or a future Wave-3 paywall host) calls this when
+    /// presenting the live paywall sheet. The VM is freshly constructed
+    /// per presentation so its `loadState` / `purchaseState` start clean
+    /// — long-lived services (product cache, listener) stay shared.
+    @MainActor
+    func makePaywallViewModel() -> PaywallViewModel {
+        PaywallViewModel(
+            productService: storeKitProductService,
+            purchaseService: purchaseService,
+            restoreService: restoreService,
+            managePresenter: manageSubscriptionPresenter
+        )
     }
 
     // MARK: - Chat factories (Phase 9)
@@ -595,6 +682,17 @@ final class AppDependencies {
 private final class UserIdBox {
     var value: UserID? = nil
 }
+
+// MARK: - StoreKit product-fetching conformance (Phase 13)
+//
+// `PurchaseService` depends on a `ProductFetching` protocol (declared in
+// RishiBilling alongside `ReceiptVerifier`) so its unit tests can inject
+// a single-product fetcher without an SKTestSession daemon. The
+// production `StoreKitProductService` actor already exposes a matching
+// `rawProduct(for:)` accessor; this one-line extension adopts the
+// protocol so AppDependencies can pass the service directly without an
+// intermediate adapter.
+extension StoreKitProductService: ProductFetching {}
 
 // MARK: - SwiftUI environment keys
 

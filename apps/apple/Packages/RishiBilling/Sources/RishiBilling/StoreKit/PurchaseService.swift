@@ -36,6 +36,19 @@ public enum PurchaseError: Error, Equatable, Sendable {
     case storeKit(String)
 }
 
+// MARK: - PurchaseProtocol seam
+
+/// Public protocol covering ``PurchaseService/purchase(productId:)``.
+///
+/// Extracted by plan 13-05 so the Wave-3 ``PaywallViewModel`` can depend
+/// on the protocol (and tests can inject a `StubPurchaseProvider`) without
+/// dragging in an SKTestSession-bound concrete actor. ``PurchaseService``
+/// itself conforms naturally; production callers continue to pass the
+/// concrete actor.
+public protocol PurchaseProtocol: Sendable {
+    func purchase(productId: String) async throws -> PurchaseOutcome
+}
+
 // MARK: - Purchase service actor
 
 /// Drives the StoreKit purchase flow, enforces the load-bearing
@@ -46,6 +59,10 @@ public enum PurchaseError: Error, Equatable, Sendable {
 /// Conforms to ``PurchaseUpdateForwarder`` so a ``TransactionListener`` can
 /// forward `Transaction.updates` events straight to ``processUpdate(_:source:)``
 /// without a separate adapter layer.
+///
+/// Adopts ``PurchaseProtocol`` (plan 13-05) via the extension at the
+/// bottom of this file so the Wave-3 paywall view-model can depend on
+/// the protocol seam instead of the concrete actor.
 public actor PurchaseService: PurchaseUpdateForwarder {
 
     // MARK: Dependencies
@@ -227,3 +244,10 @@ public actor PurchaseService: PurchaseUpdateForwarder {
         }
     }
 }
+
+// MARK: - PurchaseProtocol conformance (plan 13-05)
+//
+// Adopted via extension so the public protocol seam is wired without
+// editing the actor declaration line. PaywallViewModel + tests can take
+// `any PurchaseProtocol`; production passes the concrete actor.
+extension PurchaseService: PurchaseProtocol {}

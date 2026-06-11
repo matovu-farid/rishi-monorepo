@@ -13,18 +13,15 @@ name: Anti-Steering + Entitlements
 #
 # Pure bash + grep, no Xcode/Swift toolchain — runs on ubuntu-latest.
 #
-# Strict-scan gating
-# ------------------
-# The strict scan step is gated behind RUN_STRICT_ANTI_STEERING. Until Phase 13
-# plan 13-05 (paywall rewrite) lands, four legacy patterns intentionally
-# survive in the tree (BillingPortalService, /api/billing/portal, "Subscribe
-# at", stripe.com). Running strict mode now would block every apps/apple PR.
-#
-# Plan 13-05's final task flips RUN_STRICT_ANTI_STEERING to "1" — either via
-# a one-line edit below OR by setting the repo-level GitHub Actions variable
-# `RUN_STRICT_ANTI_STEERING` to "1". The default expression
-# `${{ vars.RUN_STRICT_ANTI_STEERING || '0' }}` honours the repo variable
-# without further file edits.
+# Strict mode is now UNCONDITIONAL (plan 13-05 Wave-3 capstone). The Phase-11
+# legacy patterns that previously survived in the tree
+# (BillingPortalService, /api/billing/portal, "Subscribe at", stripe.com)
+# are all cleaned up:
+#   * BillingPortalService + /api/billing/portal + stripe.com → removed by
+#     plan 13-07 (Manage Subscription presenter rewrite).
+#   * "Subscribe at" steering string in PaywallView → removed by plan 13-05
+#     (paywall rewrite + neutralised fallback body).
+# Any new violation slipped in by a future PR will fail this step.
 
 on:
   pull_request:
@@ -52,13 +49,7 @@ jobs:
       - name: Self-test the anti-steering script
         run: bash apps/apple/scripts/check-anti-steering.sh --self-test
 
-      # Strict scan is gated until Phase 13 plan 13-05 (paywall rewrite) lands.
-      # Flip the repo variable RUN_STRICT_ANTI_STEERING to "1" once paywall
-      # placeholders are gone (or hard-code the env value below).
-      - name: Strict anti-steering scan (gated until 13-05)
-        if: env.RUN_STRICT_ANTI_STEERING == '1'
-        env:
-          RUN_STRICT_ANTI_STEERING: ${{ vars.RUN_STRICT_ANTI_STEERING || '0' }}
+      - name: Strict anti-steering scan
         run: bash apps/apple/scripts/check-anti-steering.sh
 
       - name: Entitlements unchanged

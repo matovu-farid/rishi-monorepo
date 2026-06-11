@@ -25,6 +25,19 @@ public enum RestoreError: Error, Equatable, Sendable {
     case syncFailed(String)
 }
 
+// MARK: - RestoreProtocol seam
+
+/// Public protocol covering ``RestoreService/restore()``.
+///
+/// Extracted by plan 13-05 so the Wave-3 ``PaywallViewModel`` can depend
+/// on the protocol (and tests can inject a `StubRestoreProvider`) without
+/// requiring an SKTestSession-bound concrete actor. ``RestoreService``
+/// itself conforms naturally; production callers continue to pass the
+/// concrete actor.
+public protocol RestoreProtocol: Sendable {
+    func restore() async throws -> RestoreOutcome
+}
+
 // MARK: - Restore service actor
 
 /// Drives the user-initiated Restore Purchases flow.
@@ -125,3 +138,10 @@ public actor RestoreService {
         return ids
     }
 }
+
+// MARK: - RestoreProtocol conformance (plan 13-05)
+//
+// Adopted via extension so the public protocol seam is wired without
+// editing the actor declaration line. PaywallViewModel + tests can take
+// `any RestoreProtocol`; production passes the concrete actor.
+extension RestoreService: RestoreProtocol {}
