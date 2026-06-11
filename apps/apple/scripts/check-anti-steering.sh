@@ -49,10 +49,15 @@ LEGACY_PATTERNS=(
 )
 
 # Allow-list (non-billing links permitted in source; do NOT count as steering).
+# - appstoreconnect:// : Apple-blessed deep link
+# - itms-apps://apps.apple.com/account/subscriptions : Apple-blessed deep link
+# - rishi.fidexa.org/terms , /privacy , /legal/ : non-billing legal links
 ALLOW_PATTERNS=(
     'appstoreconnect://'
+    'itms-apps://apps.apple.com/account/subscriptions'
     'rishi\.fidexa\.org/terms'
     'rishi\.fidexa\.org/privacy'
+    'rishi\.fidexa\.org/legal/'
 )
 
 # scan PATTERN ROOT_DIR — print matches; return non-empty hits via stdout.
