@@ -55,7 +55,7 @@ struct ReaderAppEntitlementFlagTests {
     func isGranted_ObservationFires_OnLevelChange() async {
         let reconciler = EntitlementReconciler()
         let flag = ReaderAppEntitlementFlag(reconciler: reconciler)
-        let counter = LockedCounter()
+        let counter = FlagObservationCounter()
 
         withObservationTracking {
             _ = flag.isGranted
@@ -97,5 +97,25 @@ struct ReaderAppEntitlementFlagTests {
             onTap: {}
         )
         _ = row.body
+    }
+}
+
+// MARK: - Helpers
+
+/// Lock-guarded counter for cross-isolation tracking from the Observation
+/// `onChange` closure. Local helper because Swift Testing's per-file emit
+/// can isolate top-level helpers across suite files in some build modes.
+private final class FlagObservationCounter: @unchecked Sendable {
+    private var _value: Int = 0
+    private let lock = NSLock()
+
+    func increment() {
+        lock.lock(); defer { lock.unlock() }
+        _value += 1
+    }
+
+    var value: Int {
+        lock.lock(); defer { lock.unlock() }
+        return _value
     }
 }
