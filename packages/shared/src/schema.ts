@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real, primaryKey } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, primaryKey, index } from "drizzle-orm/sqlite-core";
 
 // ─── Books table ───────────────────────────────────────────────────────────────
 // Matches mobile SQLite schema columns (snake_case) plus sync-specific columns.
@@ -276,3 +276,69 @@ export const subscription = sqliteTable("subscription", {
   billingInterval: text("billing_interval"),
   stripeScheduleId: text("stripe_schedule_id"),
 })
+
+// ─── Apple IAP (Phase 14) ─────────────────────────────────────────────────────
+// Table named `apple_subscriptions` (NOT `subscriptions`) — the existing
+// Stripe `subscription` table already owns the unprefixed singular name.
+// appleTransactionId / appleOriginalTransactionId stored as TEXT because
+// Apple uses UInt64 values that overflow JS Number.MAX_SAFE_INTEGER.
+// Timestamps use `timestamp_ms` mode (Apple's native ms-epoch unit), NOT
+// the seconds-precision `timestamp` mode used by Better Auth tables.
+export const appleSubscriptions = sqliteTable(
+  "apple_subscriptions",
+  {
+    appleTransactionId: text("apple_transaction_id").primaryKey(),
+    appleOriginalTransactionId: text("apple_original_transaction_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    productId: text("product_id").notNull(),
+    status: text("status", {
+      enum: ["active", "in_grace", "expired", "refunded"],
+    }).notNull(),
+    currentPeriodEnd: integer("current_period_end", {
+      mode: "timestamp_ms",
+    }).notNull(),
+    environment: text("environment", {
+      enum: ["Sandbox", "Production"],
+    }).notNull(),
+    autoRenew: integer("auto_renew", { mode: "boolean" })
+      .notNull()
+      .default(true),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (t) => ({
+    byUser: index("apple_subscriptions_user_id").on(t.userId),
+    byOriginalTxn: index("apple_subscriptions_original_txn").on(
+      t.appleOriginalTransactionId,
+    ),
+  }),
+)
+
+// Apple ASSN V2 webhook idempotency log. PK on notificationUuid lets the
+// webhook handler INSERT OR IGNORE / catch UNIQUE-violation to de-dupe
+// Apple's aggressive ~24h retries. user_id is nullable because some
+// notifications (e.g. REFUND for a deleted user) cannot resolve a user.
+export const appleNotificationsLog = sqliteTable("apple_notifications_log", {
+  notificationUuid: text("notification_uuid").primaryKey(),
+  notificationType: text("notification_type").notNull(),
+  subtype: text("subtype"),
+  userId: text("user_id").references(() => user.id),
+  appleTransactionId: text("apple_transaction_id"),
+  rawPayload: text("raw_payload").notNull(),
+  receivedAt: integer("received_at", { mode: "timestamp_ms" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  processedAt: integer("processed_at", { mode: "timestamp_ms" }),
+  processingError: text("processing_error"),
+})
+
+export type AppleSubscription = typeof appleSubscriptions.$inferSelect
+export type NewAppleSubscription = typeof appleSubscriptions.$inferInsert
+export type AppleNotificationLogEntry = typeof appleNotificationsLog.$inferSelect
+export type NewAppleNotificationLogEntry = typeof appleNotificationsLog.$inferInsert
