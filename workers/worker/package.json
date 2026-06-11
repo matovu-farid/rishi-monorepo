@@ -39,5 +39,10 @@
     "tsx": "^4.22.4",
     "vitest": "^4.1.6",
     "wrangler": "^4.4.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "better-call": "1.3.5"
+    }
   }
 }

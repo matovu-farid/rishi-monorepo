@@ -69,7 +69,7 @@ export async function buildTestKit(): Promise<TestKit> {
   // Export leaf public key as SPKI DER. We park these bytes in x5c[0] so the
   // base64-standard decode + import path is exercised end-to-end.
   const leafSpkiDer = new Uint8Array(
-    await crypto.subtle.exportKey("spki", publicKey as CryptoKey),
+    (await crypto.subtle.exportKey("spki", publicKey as CryptoKey)) as ArrayBuffer,
   );
   const leafSpkiB64Std = bytesToB64Std(leafSpkiDer);
 
