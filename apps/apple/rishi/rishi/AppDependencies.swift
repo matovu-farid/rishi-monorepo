@@ -8,6 +8,7 @@ import RishiBilling
 import RishiChat
 import RishiDB
 import RishiLibrary
+import RishiLogging
 import RishiOnboarding
 import RishiReader
 import RishiSettings
