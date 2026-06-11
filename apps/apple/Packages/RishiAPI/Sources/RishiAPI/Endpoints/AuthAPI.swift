@@ -32,81 +32,93 @@ public struct SessionUser: Codable, Sendable, Equatable, Hashable {
     }
 }
 
-/// Response envelope returned by `/api/auth/apple`.
-public struct AuthSessionResponse: Decodable, Sendable, Equatable, Hashable {
-    public let sessionToken: String
-    public let userId: String
-    public let email: String?
-
-    enum CodingKeys: String, CodingKey {
-        case sessionToken = "session_token"
-        case userId       = "user_id"
-        case email
-    }
-}
-
 /// `{"ok": true}` envelope returned by mutation endpoints that don't have a
 /// payload of their own (sign-out, delete-user, desktop/cancel, …).
 public struct OkResponse: Decodable, Sendable, Equatable, Hashable {
     public let ok: Bool
 }
 
-// MARK: - Sign in with Apple
-//
-// Cross-team blocker per STATE.md: the worker SIWA token-verification endpoint
-// is still pending. The Swift type is declared now so Phase 3 plans can compile
-// against the contract immediately once the worker ships.
-//
-// TODO(worker): wait for `/api/auth/apple` to be deployed before Phase 3 wires
-// this endpoint into the live sign-in flow.
+// MARK: - Sign in with Apple (Better Auth social provider)
 
-/// `POST /api/auth/apple` — exchange a Sign-in-with-Apple identity token for a
-/// Rishi session.
+/// `POST /api/auth/sign-in/social` — exchange a Sign-in-with-Apple identity
+/// token for a Rishi session via Better Auth's first-party Apple provider.
 ///
-/// Per STATE.md Phase 0 SIWA pitfalls, the primary key on the server is Apple's
-/// stable `user_identifier` (the `user` field below) — `email` may be missing
-/// entirely or carry an `@privaterelay.appleid.com` address that rotates on
-/// re-sign-in. `fullName` is only emitted by Apple on the FIRST authorization.
-public struct AppleSignInEndpoint: WorkerEndpointWithBody {
-    public typealias Response = AuthSessionResponse
+/// Wire contract verified against the installed `@better-auth/core@1.6.10`
+/// source (`social-providers/apple.mjs` + `api/routes/sign-in.mjs`). The
+/// `idToken` field is an OBJECT (not a top-level string): `token` is the raw
+/// JWT from `ASAuthorizationAppleIDCredential.identityToken` (UTF-8 decoded —
+/// NOT base64 re-encoded), `nonce` is the SHA-256 hex digest of the raw nonce
+/// the iOS client sent to Apple (Better Auth compares string-equality against
+/// the `nonce` claim on the JWT — `apple.mjs:58`), and `user` carries Apple's
+/// disclosed full name + email on the very first authorization only.
+///
+/// Response uses Better Auth's standard envelope: `redirect` is `false` for
+/// native idToken sign-in, `token` is the bearer token (also set as the
+/// `rishi.session_token` cookie), and `user.id` is the Apple `sub` (a string
+/// like `001234.abcdef.5678`, NOT a UUID).
+public struct SignInSocialEndpoint: WorkerEndpointWithBody {
+    public typealias Response = SignInSocialResponse
 
     public struct Body: Encodable, Sendable, Equatable {
-        public let identityToken: String
-        public let authorizationCode: String
-        /// Apple's stable user identifier (`sub`). MUST be persisted as the
-        /// primary key on the server — email is unreliable.
-        public let user: String?
-        /// JSON-encoded `PersonNameComponents`. Only present on the very first
-        /// authorization; absent on subsequent sign-ins.
-        public let fullName: String?
-        /// Empty / `@privaterelay.appleid.com` is normal — do not fail on it.
-        public let email: String?
+        public let provider: String
+        public let idToken: IdToken
+        public let disableRedirect: Bool
 
-        enum CodingKeys: String, CodingKey {
-            case identityToken     = "identity_token"
-            case authorizationCode = "authorization_code"
-            case user
-            case fullName          = "full_name"
-            case email
+        public struct IdToken: Encodable, Sendable, Equatable {
+            public let token: String
+            public let nonce: String
+            public let user: AppleUser?
+
+            public struct AppleUser: Encodable, Sendable, Equatable {
+                public let name: AppleName?
+                public let email: String?
+
+                public struct AppleName: Encodable, Sendable, Equatable {
+                    public let firstName: String?
+                    public let lastName: String?
+
+                    public init(firstName: String?, lastName: String?) {
+                        self.firstName = firstName
+                        self.lastName = lastName
+                    }
+                }
+
+                public init(name: AppleName?, email: String?) {
+                    self.name = name
+                    self.email = email
+                }
+            }
+
+            public init(token: String, nonce: String, user: AppleUser?) {
+                self.token = token
+                self.nonce = nonce
+                self.user = user
+            }
         }
 
-        public init(
-            identityToken: String,
-            authorizationCode: String,
-            user: String? = nil,
-            fullName: String? = nil,
-            email: String? = nil
-        ) {
-            self.identityToken = identityToken
-            self.authorizationCode = authorizationCode
-            self.user = user
-            self.fullName = fullName
-            self.email = email
+        public init(provider: String, idToken: IdToken, disableRedirect: Bool) {
+            self.provider = provider
+            self.idToken = idToken
+            self.disableRedirect = disableRedirect
+        }
+    }
+
+    public struct SignInSocialResponse: Decodable, Sendable, Equatable {
+        public let redirect: Bool
+        public let token: String
+        public let user: User
+
+        public struct User: Decodable, Sendable, Equatable {
+            public let id: String
+            public let email: String?
+            public let name: String?
+            public let emailVerified: Bool?
+            public let image: String?
         }
     }
 
     public let method: HTTPMethod = .POST
-    public let path: String = "/api/auth/apple"
+    public let path: String = "/api/auth/sign-in/social"
     public let body: Body
 
     public init(body: Body) {

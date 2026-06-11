@@ -2,8 +2,8 @@ import Foundation
 
 /// Tag identifying which provider authenticated the current ``Session``.
 ///
-/// The raw value (`"apple"`) IS the wire shape the worker echoes back in
-/// `AuthSessionResponse` provider fields — keep it stable.
+/// The raw value (`"apple"`) IS the wire shape sent as
+/// `SignInSocialEndpoint.Body.provider` to Better Auth — keep it stable.
 ///
 /// Used for two purposes:
 ///   1. Keychain serialization — round-trips with the ``Session`` so the app

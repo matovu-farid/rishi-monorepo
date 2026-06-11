@@ -6,29 +6,11 @@ import Testing
 struct EndpointCodableTests {
 
     // MARK: - Auth
-
-    @Test func appleSignInIncludesPrivateRelayFriendlyOptionals() throws {
-        let body = AppleSignInEndpoint.Body(
-            identityToken: "idtok",
-            authorizationCode: "code",
-            user: "001234.user",
-            fullName: nil,
-            email: nil
-        )
-        let json = String(data: try JSONEncoder().encode(body), encoding: .utf8) ?? ""
-        #expect(json.contains("\"identity_token\""))
-        #expect(json.contains("\"authorization_code\""))
-        let e = AppleSignInEndpoint(body: body)
-        #expect(e.path == "/api/auth/apple")
-    }
-
-    @Test func authSessionResponseDecodes() throws {
-        let json = #"{"session_token":"s","user_id":"u","email":"x@y"}"#
-        let r = try JSONDecoder().decode(AuthSessionResponse.self, from: Data(json.utf8))
-        #expect(r.sessionToken == "s")
-        #expect(r.userId == "u")
-        #expect(r.email == "x@y")
-    }
+    //
+    // Phase 15 plan 07: the legacy custom `/api/auth/apple` endpoint
+    // (`AppleSignInEndpoint`) and its `AuthSessionResponse` envelope were
+    // deleted in favour of Better Auth's standard `/api/auth/sign-in/social`
+    // route. See `signInSocialEndpoint*` tests below.
 
     @Test func getSessionResponseDecodes() throws {
         let json = #"""
