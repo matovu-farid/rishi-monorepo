@@ -34,7 +34,7 @@ Both flows together yield the "most permissive wins" reconciliation contract doc
 
 ```http
 POST /api/billing/verify-receipt HTTP/1.1
-Host: rishi.fidexa.org
+Host: api.fidexa.org
 Authorization: Bearer <user JWT>
 Content-Type: application/json
 
@@ -57,9 +57,9 @@ Wire shape comes verbatim from `apps/apple/Packages/RishiAPI/Sources/RishiAPI/En
 
 ### 1.3 Worker MUST do
 
-1. **Verify the JWS** using Apple's `app-store-server-library` (Node — see §6 references):
-   - Decode against Apple's x.509 cert chain.
-   - Root cert: **AppleRootCA-G3** — download from Apple's PKI page and pin in the worker image.
+1. **Verify the JWS** using jose 6.x against pinned AppleRootCA-G3 (see `workers/worker/src/billing/jws-verify.ts`). The `@apple/app-store-server-library` package was rejected during Phase 14 research due to Cloudflare Workers compatibility concerns — open issue #318 in that repo tracks the maintainers' planned jose swap.
+   - Decode against Apple's x.509 cert chain (full walk: leaf -> intermediate -> pinned root).
+   - Root cert: **AppleRootCA-G3** — DER bytes pinned in `workers/worker/src/billing/apple-root-ca-g3.ts`.
    - Verify the JWT `alg`, `kid`, signature, and `exp`.
 2. **Decode** the payload (a `JWSTransactionDecodedPayload` from Apple's library).
 3. **Cross-check** the decoded `productId` matches the request body — reject `product_id_mismatch` if not.
@@ -82,10 +82,14 @@ Success:
 ```json
 {
   "verified": true,
-  "premiumUntil": "2027-06-11T00:00:00Z",
+  "premiumUntil": 1812585600,
   "reason": null
 }
 ```
+
+> **Encoding:** `premiumUntil` is a JSON number of seconds since the UNIX epoch (NOT an ISO8601 string). Matches the per-endpoint `JSONDecoder` strategy used by iOS `WorkerClient` for this endpoint specifically. Phase 14 plan 14-08 freezes this in a shared JSON fixture both sides verify against — see `apps/apple/Packages/RishiAPI/Tests/RishiAPITests/Fixtures/verify-receipt-response.json`.
+>
+> **Per-endpoint contract divergence:** `GET /api/billing/me` returns `premiumUntil` as an ISO8601 string (see §3 of `WORKER-CONTRACT-IAP.md` summary — that endpoint pairs with a different iOS decoder). The two shapes are intentional and locked.
 
 Failure (worker says "this JWS does not grant Pro" — distinct from a 5xx):
 
@@ -132,7 +136,7 @@ Apple posts to a worker URL registered in App Store Connect → **My Apps** → 
 
 ### 2.1 Endpoint shape (worker-owned URL)
 
-- **Suggested path:** `POST /api/billing/apple-notifications`
+- **Path:** `POST /api/billing/apple-webhook` (registered at `https://api.fidexa.org/api/billing/apple-webhook` for both ASC Production and Sandbox slots — see [`RUNBOOK-BILLING-WORKER.md`](./RUNBOOK-BILLING-WORKER.md) §2).
 - **Auth:** NONE at the HTTP layer (Apple does not authenticate). Worker MUST verify the JWS `signedPayload` instead — see §2.3.
 - **Body:** Apple posts a small JSON envelope. The decoded JWS holds the actual notification.
 
@@ -210,6 +214,10 @@ The worker adds NO new tables for v1 — `users.premium_until` already exists fr
 | `users.iap_environment`           | `varchar(16)` enum  | `'Sandbox'` or `'Production'` — captured from the JWS payload; useful for support ticket triage.                                     |
 | `apple_notifications_log` (table) | new table           | Append-only log of every received ASSN V2 notification. See schema below.                                                            |
 
+**Implemented:** see `workers/worker/drizzle/migrations/0007_apple_iap.sql` for the canonical schema. Phase 14 chose D1 (SQLite) — `notification_uuid` is `text` (not `uuid`), `raw_payload` is `text` (not `jsonb`), timestamps are `integer` ms-epoch. The names + idempotency contract carry over unchanged. The `users.*` column additions originally suggested (`last_iap_transaction_id`, `iap_auto_renew_status`, `iap_environment`) were NOT added — they are derivable from `apple_subscriptions` joins.
+
+Original Phase 13 sketch (kept here for posterity — DO NOT treat as the truth, the migration is):
+
 ```sql
 CREATE TABLE apple_notifications_log (
   notification_uuid uuid PRIMARY KEY,
@@ -225,8 +233,6 @@ CREATE TABLE apple_notifications_log (
 CREATE INDEX idx_apple_notifications_log_user_id ON apple_notifications_log(user_id);
 CREATE INDEX idx_apple_notifications_log_received_at ON apple_notifications_log(received_at);
 ```
-
-Worker team owns the exact migration shape — column names and types above are suggested defaults.
 
 ---
 
@@ -281,6 +287,7 @@ Tick before the worker deploys IAP support to production.
 
 ### iOS team confirms:
 
+- [ ] `WorkerReceiptVerifier` calls the verified endpoint via cookie OR bearer — both supported by the existing `requireAuth` middleware in `workers/worker/src/index.ts` (Better Auth + `@better-auth/passkey` bearer plugin).
 - [ ] `WorkerReceiptVerifier` calls the verified endpoint URL (env-vared via `WORKER_BASE_URL`, not hardcoded).
 - [ ] `EntitlementService` polling after notable transitions catches webhook-side updates within < 60 s of foreground.
 - [ ] Phase 7 silent-push channel is used by the worker for `REFUND` / `REVOKE` — wakes iOS for immediate reconciliation.
@@ -313,3 +320,25 @@ Tick before the worker deploys IAP support to production.
 - Apple — **Get All Subscription Statuses:** `https://api.storekit.itunes.apple.com/inApps/v1/subscriptions/{transactionId}` (production)
 - Apple — **Sandbox S2S host:** `https://api.storekit-sandbox.itunes.apple.com` (substitute for the production host above when reconciling Sandbox transactions).
 - Apple — **AppleRootCA-G3 cert:** https://www.apple.com/certificateauthority/
+
+---
+
+## 7. Phase 14 Reconciliation (2026-06)
+
+This doc was authored as the Phase 13 contract draft, against an assumed worker in `apps/web` that did not exist. Phase 14 shipped the real backend at `workers/worker/` on `api.fidexa.org` and the seven items below reconcile this contract back against deployed reality. Operations for the deployed system live in [`RUNBOOK-BILLING-WORKER.md`](./RUNBOOK-BILLING-WORKER.md).
+
+1. **Host header (§1.2):** `Host: rishi.fidexa.org` -> `Host: api.fidexa.org`. The worker lives on the Cloudflare custom domain; the marketing site never served billing traffic.
+2. **Verify-receipt response `premiumUntil` (§1.4):** ISO8601 string -> JSON number of seconds-since-1970. Matches the iOS `WorkerClient` decoder strategy locked by Phase 14 plan 14-04 and frozen by the cross-side fixture from plan 14-08. The `GET /api/billing/me` endpoint intentionally keeps an ISO8601 string for its own iOS decoder — the per-endpoint divergence is locked, not a drift bug.
+3. **JWS library (§1.3 step 1):** `@apple/app-store-server-library` (Node) -> `jose` 6.x against pinned AppleRootCA-G3. The Apple package was rejected during Phase 14 research due to Cloudflare Workers compatibility concerns (open issue #318 tracks the maintainers' planned jose swap).
+4. **Webhook path (§2.1):** Suggested `POST /api/billing/apple-notifications` -> implemented `POST /api/billing/apple-webhook`. Registered at `https://api.fidexa.org/api/billing/apple-webhook` for both ASC Production and Sandbox slots — the JWS `environment` claim routes the two environments inside a single endpoint.
+5. **D1 schema (§3):** SQL block replaced with a pointer to `workers/worker/drizzle/migrations/0007_apple_iap.sql`. Phase 14 chose D1 (SQLite) over Postgres; the table names and idempotency contract carry over unchanged. The originally suggested `users.last_iap_transaction_id`, `users.iap_auto_renew_status`, and `users.iap_environment` columns were NOT added — they are derivable via joins against `apple_subscriptions`.
+6. **Cross-Team Checklist (§5):** Added a note that `WorkerReceiptVerifier` may authenticate via cookie OR bearer (Better Auth + `@better-auth/passkey` bearer plugin), reflecting the existing `requireAuth` middleware in `workers/worker/src/index.ts`.
+7. **Anti-steering scope:** the anti-steering CI guard (`apps/apple/scripts/check-anti-steering.sh`) scans Swift sources only — this contract doc and the runbook are out of scope for the grep but still avoid banned strings as a matter of hygiene.
+
+Operational follow-ups (deferred from Phase 14 — tracked in [`RUNBOOK-BILLING-WORKER.md`](./RUNBOOK-BILLING-WORKER.md) §7):
+
+- Defense-in-depth Apple S2S `GetTransactionInfo` call (deferred from plan 14-04).
+- Phase 7 silent-push emission on `REFUND` / `REVOKE` (deferred from plan 14-05).
+- `originalTransactionId -> user_id` reverse lookup for server-initiated `SUBSCRIBED` rows (deferred from plan 14-05).
+- Daily reconciliation cron via Apple `GetAllSubscriptionStatuses` (deferred — RESEARCH §12).
+- Linker-symbol-grep CI guard for `DebugStubReceiptVerifier` (deferred from plan 14-07).
