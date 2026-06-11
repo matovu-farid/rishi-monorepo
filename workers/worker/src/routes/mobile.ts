@@ -152,7 +152,7 @@ mobileRoutes.post("/start/complete", async (c) => {
   const parsed = CompletePostBody.safeParse(await c.req.json().catch(() => null))
   if (!parsed.success) return c.json({ error: "bad_request" }, 400)
 
-  const auth = createAuth(c.env)
+  const auth = await createAuth(c.env)
   const session = await auth.api.getSession({ headers: c.req.raw.headers })
   if (!session) return c.json({ error: "unauthorized" }, 401)
 

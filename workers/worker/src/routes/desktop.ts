@@ -85,7 +85,7 @@ desktopRoutes.post("/start", async (c) => {
 
   if (body.data.mode === "magic-link") {
     if (!body.data.email) return c.json({ error: "email_required" }, 400)
-    const auth = createAuth(c.env)
+    const auth = await createAuth(c.env)
     // Better Auth's signInMagicLink sends the email. The callbackURL points at the web app
     // with our state token attached so the DesktopHandoffListener can complete the handoff
     // by writing the resulting session into Redis.
@@ -120,7 +120,7 @@ desktopRoutes.post("/start/complete", async (c) => {
   if (!body.success) return c.json({ error: "bad_request" }, 400)
 
   // Web app's user must already be signed in (Better Auth session cookie attached)
-  const auth = createAuth(c.env)
+  const auth = await createAuth(c.env)
   const session = await auth.api.getSession({ headers: c.req.raw.headers })
   if (!session) return c.json({ error: "unauthorized" }, 401)
 

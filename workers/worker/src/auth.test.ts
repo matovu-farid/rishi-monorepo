@@ -7,6 +7,32 @@ import {
   type KeyLike,
   type JWK,
 } from "jose";
+
+// Substitute Better Auth's drizzle adapter with the in-memory adapter for the
+// duration of these tests. The production auth.ts wires drizzleAdapter(D1) —
+// the D1 binding is not available under vitest, and Better Auth's user-upsert
+// would fail with `this.client.prepare is not a function` and surface as a 302
+// redirect to the error callback. Swapping the adapter at the import seam
+// lets the tests exercise the full /sign-in/social pipeline (verify → upsert
+// → setSessionCookie → JSON 200) against an in-memory store. This mock is
+// scoped to this file and does not leak into other vitest files.
+vi.mock("better-auth/adapters/drizzle", async () => {
+  const { memoryAdapter } = await import("better-auth/adapters/memory");
+  // Pre-seed the model arrays Better Auth expects. The MemoryAdapter throws
+  // "Model X not found in the DB" if a key is absent rather than empty.
+  const db: Record<string, unknown[]> = {
+    user: [],
+    session: [],
+    account: [],
+    verification: [],
+    passkey: [],
+    rateLimit: [],
+  };
+  return {
+    drizzleAdapter: () => memoryAdapter(db),
+  };
+});
+
 import { createAuth } from "./auth";
 import type { CloudflareBindings } from "./index";
 
@@ -188,7 +214,11 @@ describe("createAuth: Better Auth Apple social provider", () => {
     expect(typeof body.token).toBe("string");
     expect(body.token.length).toBeGreaterThan(0);
     expect(body.user).toBeDefined();
-    expect(body.user.id).toBe("001234.abcdef0123456789.5678");
+    // Better Auth generates its own user.id (PK); Apple's sub is persisted on
+    // the `account` row as account.account_id. We only assert user.id is a
+    // non-empty string and the email round-trips through profile decoding.
+    expect(typeof body.user.id).toBe("string");
+    expect(body.user.id.length).toBeGreaterThan(0);
     expect(body.user.email).toBe("u@example.com");
   });
 

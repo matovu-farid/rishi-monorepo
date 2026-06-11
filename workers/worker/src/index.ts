@@ -136,6 +136,15 @@ export interface CloudflareBindings {
   // the endpoint registered at /api/auth/stripe/webhook.
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
+  // Apple Sign-In (native iOS). All four required to register the Better
+  // Auth Apple social provider; set via `wrangler secret put`. APPLE_TEAM_ID
+  // is shared with Phase 14 (IAP S2S) — do not duplicate. CLIENT_ID is the
+  // iOS bundle identifier (e.g. "org.fidexa.rishi"), KEY_ID is the 10-char
+  // Apple Key ID, PRIVATE_KEY is the .p8 file contents (PKCS8 PEM).
+  APPLE_SIWA_CLIENT_ID?: string;
+  APPLE_SIWA_KEY_ID?: string;
+  APPLE_SIWA_PRIVATE_KEY?: string;
+  APPLE_TEAM_ID?: string;
 }
 
 const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string } }>();
@@ -161,7 +170,7 @@ app.use(
 
 // Better Auth handles all /api/auth/* internally
 app.on(["GET", "POST"], "/api/auth/*", async (c) => {
-  const auth = createAuth(c.env);
+  const auth = await createAuth(c.env);
   return auth.handler(c.req.raw);
 });
 
@@ -183,7 +192,7 @@ export async function requireAuth(c: any, next: () => Promise<void>) {
     }
   }
 
-  const auth = createAuth(c.env);
+  const auth = await createAuth(c.env);
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
   if (!session) {
     return c.json({ error: "Unauthorized" }, 401);

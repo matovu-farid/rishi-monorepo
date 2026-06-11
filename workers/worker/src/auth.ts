@@ -14,12 +14,37 @@ import { eq } from "drizzle-orm"
 import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config"
 import type Stripe from "stripe"
 import type { CloudflareBindings } from "./index"
+import { mintAppleClientSecret } from "./auth-apple-secret"
 
-export function createAuth(env: CloudflareBindings) {
+export async function createAuth(env: CloudflareBindings) {
   const db = createDb(env.DB)
   const stripeEnabled = Boolean(env.STRIPE_SECRET_KEY)
   const stripeClient = stripeEnabled
     ? createStripeClient(env.STRIPE_SECRET_KEY!)
+    : null
+
+  // Apple Sign-In is wired when all four required secrets are present:
+  //   APPLE_SIWA_CLIENT_ID (iOS bundle ID, e.g. "org.fidexa.rishi"),
+  //   APPLE_SIWA_KEY_ID    (10-char key ID from Apple Developer > Keys),
+  //   APPLE_SIWA_PRIVATE_KEY (.p8 PKCS8 PEM contents),
+  //   APPLE_TEAM_ID        (already deployed from Phase 14).
+  // For the native iOS ID-token branch (POST /api/auth/sign-in/social), the
+  // clientSecret is not consumed at runtime — Better Auth verifies the ID
+  // token against Apple's JWKS. The mint is required for the web-redirect
+  // branch and to satisfy the provider's typed config.
+  const appleConfigured = Boolean(
+    env.APPLE_SIWA_CLIENT_ID &&
+      env.APPLE_SIWA_KEY_ID &&
+      env.APPLE_SIWA_PRIVATE_KEY &&
+      env.APPLE_TEAM_ID,
+  )
+  const appleClientSecret = appleConfigured
+    ? await mintAppleClientSecret({
+        APPLE_SIWA_PRIVATE_KEY: env.APPLE_SIWA_PRIVATE_KEY!,
+        APPLE_SIWA_KEY_ID: env.APPLE_SIWA_KEY_ID!,
+        APPLE_TEAM_ID: env.APPLE_TEAM_ID!,
+        APPLE_SIWA_CLIENT_ID: env.APPLE_SIWA_CLIENT_ID!,
+      })
     : null
 
   return betterAuth({
@@ -47,6 +72,17 @@ export function createAuth(env: CloudflareBindings) {
         // skips the user.update step. See better-auth oauth2/link-account.mjs.
         overrideUserInfoOnSignIn: true,
       },
+      ...(appleConfigured && appleClientSecret
+        ? {
+            apple: {
+              clientId: env.APPLE_SIWA_CLIENT_ID!,
+              // appBundleIdentifier resolves the JWT audience check at
+              // apple.mjs:51-52. For native iOS sign-in, audience == bundle ID.
+              appBundleIdentifier: env.APPLE_SIWA_CLIENT_ID!,
+              clientSecret: appleClientSecret,
+            },
+          }
+        : {}),
     },
     plugins: [
       bearer(),

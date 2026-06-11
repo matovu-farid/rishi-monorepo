@@ -106,7 +106,7 @@ testAuthRoutes.post("/sign-in", async (c) => {
     return c.json({ error: "email and password required" }, 400)
   }
 
-  const auth = createAuth(c.env)
+  const auth = await createAuth(c.env)
   const headers = c.req.raw.headers
 
   // Try to sign up first. If the user already exists, Better-Auth throws
