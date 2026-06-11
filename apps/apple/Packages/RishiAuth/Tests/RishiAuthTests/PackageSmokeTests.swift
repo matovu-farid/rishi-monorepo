@@ -17,7 +17,8 @@ struct PackageSmokeTests {
     }
 
     @Test func sessionRoundTripsThroughJSON() throws {
-        let userId = UUID()
+        // Plan 15-02: Session.userId is `String` (Better Auth `user.id`).
+        let userId = "001234.abcdef0123456789.1234"
         let original = Session(
             token: "tok-xyz",
             userId: userId,
@@ -44,7 +45,7 @@ struct PackageSmokeTests {
         // PITFALLS.md Pitfall 10: subsequent SIWA sign-ins return no email.
         let session = Session(
             token: "tok-1",
-            userId: UUID(),
+            userId: "001234.abcdef0123456789.1234",
             email: nil,
             provider: .apple
         )
@@ -57,7 +58,7 @@ struct PackageSmokeTests {
     @Test func sessionWithGoogleProvider() throws {
         let session = Session(
             token: "tok-google",
-            userId: UUID(),
+            userId: "google-user-9876",
             email: "u@gmail.com",
             provider: .google
         )

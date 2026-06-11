@@ -13,9 +13,11 @@ struct KeychainSessionStoreTests {
         email: String? = "u@example.com",
         provider: SignInProvider = .apple
     ) -> Session {
+        // Plan 15-02: Session.userId is `String` (Better Auth `user.id`).
+        // Tests use a stable literal so equality assertions are deterministic.
         Session(
             token: token,
-            userId: UUID(),
+            userId: "001234.abcdef0123456789.1234",
             email: email,
             provider: provider,
             issuedAt: Date(timeIntervalSince1970: 1_700_000_000),

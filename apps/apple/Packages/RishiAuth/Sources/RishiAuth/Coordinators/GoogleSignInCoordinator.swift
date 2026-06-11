@@ -60,9 +60,11 @@ public actor GoogleSignInCoordinator {
             GoogleSignInEndpoint(body: .init(idToken: token))
         )
 
+        // Plan 15-02: response.userId is the Better Auth `user.id` String.
+        // Forwarded into Session.userId directly — no UUID conversion.
         let session = Session(
             token: response.sessionToken,
-            userId: UUID(uuidString: response.userId) ?? UUID(),
+            userId: response.userId,
             email: response.email,
             provider: .google,
             issuedAt: Date(),

@@ -94,10 +94,11 @@ struct GoogleOAuthFlowTests {
     // MARK: - Tests
 
     @Test func happyPathProducesSessionWithProviderGoogle() async throws {
+        // Plan 15-02: Session.userId is `String` (Better Auth user.id).
         GoogleStubURLProtocol.reset()
-        let userId = UUID()
+        let userId = UUID().uuidString
         GoogleStubURLProtocol.responseJSON = """
-        {"session_token":"goog-tok","user_id":"\(userId.uuidString)","email":"u@gmail.com"}
+        {"session_token":"goog-tok","user_id":"\(userId)","email":"u@gmail.com"}
         """
         let callback = URL(string: "rishi://auth/callback?token=goog-id-xyz")!
         let presenter = MockGoogleWebAuthPresenter(result: .success(callback))

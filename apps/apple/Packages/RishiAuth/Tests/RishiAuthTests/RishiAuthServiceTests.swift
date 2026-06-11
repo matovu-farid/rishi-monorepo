@@ -81,10 +81,15 @@ struct RishiAuthServiceTests {
         )
     }
 
+    /// Plan 15-02: Session.userId is `String` (Better Auth `user.id`).
+    /// Use a stable Apple-sub-shaped literal so assertions stay deterministic.
+    static let appleSubFixture = "001234.abcdef0123456789.1234"
+    static let googleIdFixture = "google-user-9876"
+
     static func appleSession(token: String = "siwa-tok") -> Session {
         Session(
             token: token,
-            userId: UUID(),
+            userId: appleSubFixture,
             email: "u@example.com",
             provider: .apple,
             issuedAt: Date(),
@@ -95,7 +100,7 @@ struct RishiAuthServiceTests {
     static func googleSession(token: String = "goog-tok") -> Session {
         Session(
             token: token,
-            userId: UUID(),
+            userId: googleIdFixture,
             email: "u@gmail.com",
             provider: .google,
             issuedAt: Date(),
@@ -118,15 +123,20 @@ struct RishiAuthServiceTests {
         )
 
         let user = try await service.signInWithApple()
-        #expect(user.id == session.userId)
+        // Plan 15-02: User.id (UUID) is derived from Session.userId (String)
+        // via RishiAuthService.deriveUserUUID; the persisted Session keeps
+        // the raw String so the worker join continues to work.
+        let expectedUserId = RishiAuthService.deriveUserUUID(from: session.userId)
+        #expect(user.id == expectedUserId)
         #expect(user.email == "u@example.com")
 
         let loaded = try await keychain.load()
         #expect(loaded?.token == session.token)
         #expect(loaded?.provider == .apple)
+        #expect(loaded?.userId == session.userId)
 
         let current = await service.currentUser
-        #expect(current?.id == session.userId)
+        #expect(current?.id == expectedUserId)
     }
 
     @Test func signInWithGooglePersistsSessionAndExposesCurrentUser() async throws {
@@ -172,7 +182,8 @@ struct RishiAuthServiceTests {
             workerClient: Self.makeWorkerClient()
         )
         let current = await serviceB.currentUser
-        #expect(current?.id == session.userId)
+        // Plan 15-02: derived UUID is deterministic from Session.userId String.
+        #expect(current?.id == RishiAuthService.deriveUserUUID(from: session.userId))
     }
 
     @Test func signOutClearsKeychainEvenIfWorkerFails() async throws {
@@ -269,10 +280,12 @@ struct RishiAuthServiceTests {
 
     @Test func currentUserSynthesisesPlaceholderEmailWhenSessionEmailNil() async throws {
         // PITFALLS Pitfall 10: SIWA may return nil email on 2nd sign-in.
+        // Plan 15-02: Session.userId is `String`; placeholder email uses
+        // the raw String in place of the prior `userId.uuidString`.
         ServiceStubURLProtocol.reset()
         let backend = InMemoryKeychainBackend()
         let keychain = KeychainSessionStore(backend: backend)
-        let userId = UUID()
+        let userId = "001234.abcdef0123456789.1234"
         let session = Session(
             token: "tok",
             userId: userId,
@@ -288,7 +301,7 @@ struct RishiAuthServiceTests {
             workerClient: Self.makeWorkerClient()
         )
         let user = try await service.signInWithApple()
-        #expect(user.email == "apple+\(userId.uuidString).local")
-        #expect(user.id == userId)
+        #expect(user.email == "apple+\(userId).local")
+        #expect(user.id == RishiAuthService.deriveUserUUID(from: userId))
     }
 }

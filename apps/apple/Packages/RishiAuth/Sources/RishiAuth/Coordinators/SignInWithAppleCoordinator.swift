@@ -43,9 +43,12 @@ public actor SignInWithAppleCoordinator {
 
         // Worker is the source of truth for the email field — preserves any
         // @privaterelay.appleid.com address per PITFALLS.md Pitfall 10.
+        // Plan 15-02: response.userId is the Better Auth `user.id` String
+        // (Apple `sub` claim verbatim, never UUID-shaped). Forwarded into
+        // Session.userId directly — no UUID conversion.
         let session = Session(
             token: response.sessionToken,
-            userId: UUID(uuidString: response.userId) ?? UUID(),
+            userId: response.userId,
             email: response.email,
             provider: .apple,
             issuedAt: Date(),

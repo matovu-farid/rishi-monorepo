@@ -8,9 +8,10 @@ import RishiAPI
 struct RishiAuthTokenProviderTests {
 
     private static func makeSession(token: String) -> Session {
+        // Plan 15-02: Session.userId is `String` (Better Auth `user.id`).
         Session(
             token: token,
-            userId: UUID(),
+            userId: "001234.abcdef0123456789.1234",
             email: nil,
             provider: .apple,
             issuedAt: Date(),

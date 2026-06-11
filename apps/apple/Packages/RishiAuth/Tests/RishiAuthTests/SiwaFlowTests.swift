@@ -147,10 +147,12 @@ struct SiwaFlowTests {
     // MARK: - Tests
 
     @Test func happyPathProducesSessionWithProviderApple() async throws {
+        // Plan 15-02: Session.userId is now `String` — the worker's user_id
+        // String is forwarded verbatim, no UUID conversion.
         StubURLProtocol.reset()
-        let userId = UUID()
+        let userId = UUID().uuidString
         StubURLProtocol.setResponse(json: """
-        {"session_token":"tok-happy","user_id":"\(userId.uuidString)","email":"u@example.com"}
+        {"session_token":"tok-happy","user_id":"\(userId)","email":"u@example.com"}
         """)
         let presenter = MockSiwaPresenter(result: .success(Self.credential()))
         let coordinator = SignInWithAppleCoordinator(
@@ -168,9 +170,9 @@ struct SiwaFlowTests {
 
     @Test func privateRelayEmailPassesThroughUnchanged() async throws {
         StubURLProtocol.reset()
-        let userId = UUID()
+        let userId = UUID().uuidString
         StubURLProtocol.setResponse(json: """
-        {"session_token":"tok-relay","user_id":"\(userId.uuidString)","email":"abc123@privaterelay.appleid.com"}
+        {"session_token":"tok-relay","user_id":"\(userId)","email":"abc123@privaterelay.appleid.com"}
         """)
         let cred = Self.credential(email: "abc123@privaterelay.appleid.com")
         let coordinator = SignInWithAppleCoordinator(
@@ -206,9 +208,9 @@ struct SiwaFlowTests {
     @Test func secondSignInWithNilEmailWorks() async throws {
         // PITFALLS.md Pitfall 10: Apple returns no email + no fullName on re-sign-in.
         StubURLProtocol.reset()
-        let userId = UUID()
+        let userId = UUID().uuidString
         StubURLProtocol.setResponse(json: """
-        {"session_token":"tok-resign","user_id":"\(userId.uuidString)","email":null}
+        {"session_token":"tok-resign","user_id":"\(userId)","email":null}
         """)
         let cred = Self.credential(fullName: nil, email: nil)
         let coordinator = SignInWithAppleCoordinator(
@@ -224,9 +226,9 @@ struct SiwaFlowTests {
 
     @Test func requestBodyContainsBase64IdentityTokenAndUserSub() async throws {
         StubURLProtocol.reset()
-        let userId = UUID()
+        let userId = UUID().uuidString
         StubURLProtocol.setResponse(json: """
-        {"session_token":"tok-body","user_id":"\(userId.uuidString)","email":"x@y.z"}
+        {"session_token":"tok-body","user_id":"\(userId)","email":"x@y.z"}
         """)
         let identityBytes = Data([0x01, 0x02, 0x03, 0x04])
         let cred = Self.credential(
