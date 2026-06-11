@@ -7,9 +7,6 @@ public protocol AuthService: Sendable {
     /// Begin Sign in with Apple. Returns the freshly authenticated user.
     func signInWithApple() async throws -> User
 
-    /// Begin Google OAuth via ASWebAuthenticationSession. Returns the freshly authenticated user.
-    func signInWithGoogle() async throws -> User
-
     /// Clear the local session.
     func signOut() async throws
 

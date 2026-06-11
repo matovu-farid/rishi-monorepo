@@ -5,9 +5,10 @@ import RishiAuth
 
 /// Debug-only verification view for Phase 3 wiring.
 ///
-/// Renders four buttons that exercise the four ``AuthService`` methods + a
-/// status label bound to ``AuthService/currentUser``. NOT shipped in Release —
-/// the entire file is wrapped in `#if DEBUG`.
+/// Renders buttons that exercise the ``AuthService`` methods + a status
+/// label bound to ``AuthService/currentUser``. NOT shipped in Release —
+/// the entire file is wrapped in `#if DEBUG`. Phase 15 plan 15-03 trimmed
+/// this surface down to the SIWA-only Apple-v1 contract.
 struct DebugAuthView: View {
 
     @Environment(\.rishiAuthService) private var authService: (any AuthService)?
@@ -56,9 +57,6 @@ struct DebugAuthView: View {
         VStack(spacing: 12) {
             Button("Sign in with Apple") {
                 runAction { _ = try await authService.signInWithApple() }
-            }
-            Button("Sign in with Google") {
-                runAction { _ = try await authService.signInWithGoogle() }
             }
             Button("Sign out") {
                 runAction { try await authService.signOut() }

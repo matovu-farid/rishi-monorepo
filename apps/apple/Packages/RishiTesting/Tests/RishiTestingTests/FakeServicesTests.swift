@@ -15,8 +15,6 @@ struct FakeServicesTests {
         try await auth.signOut()
         #expect(await auth.currentUser == nil)
         #expect(await auth.signOutCallCount == 1)
-        _ = try await auth.signInWithGoogle()
-        #expect(await auth.signInGoogleCallCount == 1)
         try await auth.deleteAccount()
         #expect(await auth.deleteAccountCallCount == 1)
     }

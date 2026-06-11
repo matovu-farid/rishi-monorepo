@@ -7,16 +7,6 @@ struct EndpointCodableTests {
 
     // MARK: - Auth
 
-    @Test func googleSignInPathAndBody() throws {
-        let e = GoogleSignInEndpoint(body: .init(idToken: "tok"))
-        #expect(e.method == .POST)
-        #expect(e.path == "/api/auth/google")
-        let data = try JSONEncoder().encode(e.body)
-        let json = String(data: data, encoding: .utf8) ?? ""
-        #expect(json.contains("\"id_token\""))
-        #expect(json.contains("\"tok\""))
-    }
-
     @Test func appleSignInIncludesPrivateRelayFriendlyOptionals() throws {
         let body = AppleSignInEndpoint.Body(
             identityToken: "idtok",

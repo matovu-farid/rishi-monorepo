@@ -4,49 +4,43 @@ import RishiLogging
 import RishiAPI
 
 /// Top-level RishiAuth surface — conforms to ``RishiCore.AuthService`` and
-/// aggregates the two sign-in coordinators with the keychain store and worker
+/// aggregates the SIWA coordinator with the keychain store and worker
 /// client. Plan 03-06 constructs one of these in the app's composition root.
 ///
-/// Tests inject mocks via the protocol-typed initializer (``AppleSignInDriver``
-/// / ``GoogleSignInDriver`` from ``SignInDriver.swift``); production code uses
-/// the convenience initializer that takes the concrete coordinator actors.
+/// Tests inject mocks via the protocol-typed initializer
+/// (``AppleSignInDriver`` from ``SignInDriver.swift``); production code uses
+/// the convenience initializer that takes the concrete coordinator actor.
 ///
-/// `deleteAccount()` calls the worker's `/api/auth/delete-user` for BOTH
-/// providers — the worker performs Apple's `/auth/revoke` server-side per
-/// `WORKER-TICKETS.md` Ticket 1, so the iOS client does NOT branch by provider.
+/// Phase 15 plan 15-03: Google Sign-In was hard-removed; SIWA is the sole
+/// social provider for v1. The worker still performs Apple's `/auth/revoke`
+/// server-side per `WORKER-TICKETS.md` Ticket 1 inside `deleteAccount()`.
 public actor RishiAuthService: AuthService {
 
     private let siwaDriver: any AppleSignInDriver
-    private let googleDriver: any GoogleSignInDriver
     private let keychain: KeychainSessionStore
     private let workerClient: WorkerClient
 
     /// Driver-protocol initializer for testability. Inject ``MockAppleDriver``
-    /// / ``MockGoogleDriver`` (defined inline by ``RishiAuthServiceTests``)
-    /// here.
+    /// (defined inline by ``RishiAuthServiceTests``) here.
     public init(
         siwaDriver: any AppleSignInDriver,
-        googleDriver: any GoogleSignInDriver,
         keychain: KeychainSessionStore,
         workerClient: WorkerClient
     ) {
         self.siwaDriver = siwaDriver
-        self.googleDriver = googleDriver
         self.keychain = keychain
         self.workerClient = workerClient
     }
 
     /// Convenience initializer for app composition. Forwards into the
-    /// driver-protocol init — the concrete coordinators conform to the driver
-    /// protocols via the retroactive extensions in ``SignInDriver.swift``.
+    /// driver-protocol init — the concrete coordinator conforms to the driver
+    /// protocol via the retroactive extension in ``SignInDriver.swift``.
     public init(
         workerClient: WorkerClient,
         siwaCoordinator: SignInWithAppleCoordinator,
-        googleCoordinator: GoogleSignInCoordinator,
         keychain: KeychainSessionStore
     ) {
         self.siwaDriver = siwaCoordinator
-        self.googleDriver = googleCoordinator
         self.keychain = keychain
         self.workerClient = workerClient
     }
@@ -69,13 +63,6 @@ public actor RishiAuthService: AuthService {
         let session = try await siwaDriver.signIn()
         try await keychain.save(session)
         Log.event("auth.signed_in", level: .info, data: ["provider": "apple"])
-        return makeUser(from: session)
-    }
-
-    public func signInWithGoogle() async throws -> User {
-        let session = try await googleDriver.signIn()
-        try await keychain.save(session)
-        Log.event("auth.signed_in", level: .info, data: ["provider": "google"])
         return makeUser(from: session)
     }
 

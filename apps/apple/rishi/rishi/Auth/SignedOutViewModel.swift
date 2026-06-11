@@ -6,8 +6,8 @@
 //
 //  Drives a simple state machine (.idle / .loading / .error) over the
 //  injected AuthService. Owns NO AuthenticationServices/UIKit code — the
-//  service (RishiAuthService) already encapsulates SIWA + Google flows
-//  (Phase 3 plans 03-03 / 03-04 / 03-05).
+//  service (RishiAuthService) already encapsulates the SIWA flow
+//  (Phase 3 plan 03-03). Phase 15 plan 15-03: Google Sign-In removed.
 //
 
 import Foundation
@@ -58,18 +58,12 @@ final class SignedOutViewModel {
         }
     }
 
-    func signInWithGoogle() async {
-        await runSignIn { service in
-            _ = try await service.signInWithGoogle()
-        }
-    }
-
     // MARK: - Helpers
 
     /// Drives the state machine: enter `.loading`, run the supplied
     /// service call, then transition to `.idle` on success or
     /// `.error(message)` on throw. Centralising the transition shape
-    /// guarantees Apple and Google paths cannot drift.
+    /// keeps every sign-in path on a single state-machine implementation.
     private func runSignIn(
         _ call: (any AuthService) async throws -> Void
     ) async {

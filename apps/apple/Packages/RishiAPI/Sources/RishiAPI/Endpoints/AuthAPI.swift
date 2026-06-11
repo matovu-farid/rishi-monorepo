@@ -32,7 +32,7 @@ public struct SessionUser: Codable, Sendable, Equatable, Hashable {
     }
 }
 
-/// Response envelope returned by `/api/auth/google` and `/api/auth/apple`.
+/// Response envelope returned by `/api/auth/apple`.
 public struct AuthSessionResponse: Decodable, Sendable, Equatable, Hashable {
     public let sessionToken: String
     public let userId: String
@@ -49,33 +49,6 @@ public struct AuthSessionResponse: Decodable, Sendable, Equatable, Hashable {
 /// payload of their own (sign-out, delete-user, desktop/cancel, …).
 public struct OkResponse: Decodable, Sendable, Equatable, Hashable {
     public let ok: Bool
-}
-
-// MARK: - Google sign-in
-
-/// `POST /api/auth/google` — exchange a Google ID token for a Rishi session.
-public struct GoogleSignInEndpoint: WorkerEndpointWithBody {
-    public typealias Response = AuthSessionResponse
-
-    public struct Body: Encodable, Sendable, Equatable {
-        public let idToken: String
-
-        enum CodingKeys: String, CodingKey {
-            case idToken = "id_token"
-        }
-
-        public init(idToken: String) {
-            self.idToken = idToken
-        }
-    }
-
-    public let method: HTTPMethod = .POST
-    public let path: String = "/api/auth/google"
-    public let body: Body
-
-    public init(body: Body) {
-        self.body = body
-    }
 }
 
 // MARK: - Sign in with Apple

@@ -11,9 +11,9 @@ struct PackageSmokeTests {
     }
 
     @Test func signInProviderRawValuesAreStable() {
+        // Phase 15 plan 15-03: Apple is the sole social provider for v1.
         #expect(SignInProvider.apple.rawValue == "apple")
-        #expect(SignInProvider.google.rawValue == "google")
-        #expect(SignInProvider.allCases.count == 2)
+        #expect(SignInProvider.allCases.count == 1)
     }
 
     @Test func sessionRoundTripsThroughJSON() throws {
@@ -55,16 +55,4 @@ struct PackageSmokeTests {
         #expect(decoded.token == "tok-1")
     }
 
-    @Test func sessionWithGoogleProvider() throws {
-        let session = Session(
-            token: "tok-google",
-            userId: "google-user-9876",
-            email: "u@gmail.com",
-            provider: .google
-        )
-        #expect(session.provider == .google)
-        let data = try JSONEncoder().encode(session)
-        let json = String(data: data, encoding: .utf8) ?? ""
-        #expect(json.contains("\"google\""))
-    }
 }

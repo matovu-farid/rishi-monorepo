@@ -7,6 +7,11 @@
 //  to throw or to block on a CheckedContinuation so the test can observe
 //  the in-flight loading state.
 //
+//  Phase 15 plan 15-03: legacy social-provider call-count + failure-path
+//  tests were deleted along with the second sign-in method on
+//  `AuthService`. The late-injection regression test was reframed around
+//  the Apple path so the signed-out-button-noop guard still ships.
+//
 
 import Foundation
 import Testing
@@ -24,14 +29,12 @@ final class StubAuthService: AuthService, @unchecked Sendable {
 
     struct State {
         var appleCallCount = 0
-        var googleCallCount = 0
         var shouldThrow: Error? = nil
     }
 
     private let lock = OSAllocatedUnfairLock<State>(initialState: State())
 
     var appleCallCount: Int { lock.withLock { $0.appleCallCount } }
-    var googleCallCount: Int { lock.withLock { $0.googleCallCount } }
 
     func setShouldThrow(_ error: Error?) {
         lock.withLock { $0.shouldThrow = error }
@@ -45,14 +48,6 @@ final class StubAuthService: AuthService, @unchecked Sendable {
 
     func signInWithApple() async throws -> User {
         lock.withLock { $0.appleCallCount += 1 }
-        if let e = lock.withLock({ $0.shouldThrow }) {
-            throw e
-        }
-        return Self.makeUser()
-    }
-
-    func signInWithGoogle() async throws -> User {
-        lock.withLock { $0.googleCallCount += 1 }
         if let e = lock.withLock({ $0.shouldThrow }) {
             throw e
         }
@@ -105,21 +100,9 @@ struct SignedOutViewModelTests {
         await vm.signInWithApple()
 
         #expect(stub.appleCallCount == 1)
-        #expect(stub.googleCallCount == 0)
     }
 
-    // Test 3: signInWithGoogle() calls stub.signInWithGoogle() exactly once.
-    @Test func signInWithGoogleCallsService() async throws {
-        let stub = StubAuthService()
-        let vm = SignedOutViewModel(authService: stub)
-
-        await vm.signInWithGoogle()
-
-        #expect(stub.googleCallCount == 1)
-        #expect(stub.appleCallCount == 0)
-    }
-
-    // Test 4: When stub throws on Apple, state becomes .error and
+    // Test 3: When stub throws on Apple, state becomes .error and
     // errorMessage is non-nil + non-empty.
     @Test func appleFailureSurfacesError() async throws {
         let stub = StubAuthService()
@@ -136,24 +119,7 @@ struct SignedOutViewModelTests {
         #expect(vm.errorMessage?.isEmpty == false)
     }
 
-    // Test 5: When stub throws on Google, state becomes .error and
-    // errorMessage is non-nil + non-empty.
-    @Test func googleFailureSurfacesError() async throws {
-        let stub = StubAuthService()
-        stub.setShouldThrow(TestError(description: "google-failed"))
-        let vm = SignedOutViewModel(authService: stub)
-
-        await vm.signInWithGoogle()
-
-        if case .error(let msg) = vm.state {
-            #expect(!msg.isEmpty)
-        } else {
-            Issue.record("Expected .error state, got \(vm.state)")
-        }
-        #expect(vm.errorMessage?.isEmpty == false)
-    }
-
-    // Test 6: During an in-flight sign-in, isLoading == true.
+    // Test 4: During an in-flight sign-in, isLoading == true.
     //
     // Gating strategy: a HangingAuthService suspends inside signInWithApple
     // forever (until released by the test). The test fires the sign-in in a
@@ -178,7 +144,7 @@ struct SignedOutViewModelTests {
         await task.value
     }
 
-    // Test 7: A successful sign-in resets state to .idle (errorMessage cleared).
+    // Test 5: A successful sign-in resets state to .idle (errorMessage cleared).
     @Test func successResetsToIdle() async throws {
         let stub = StubAuthService()
         let vm = SignedOutViewModel(authService: stub)
@@ -195,7 +161,7 @@ struct SignedOutViewModelTests {
         #expect(vm.errorMessage == nil)
     }
 
-    // Test 8 (regression for `signed-out-google-button-noop`): A VM
+    // Test 6 (regression for `signed-out-google-button-noop`): A VM
     // constructed with a nil auth service AND later injected with a real
     // service via `setAuthService(_:)` correctly routes subsequent
     // sign-in calls to the injected service.
@@ -203,11 +169,12 @@ struct SignedOutViewModelTests {
     // Background: SignedOutView used to hold a `@State` Optional VM and
     // deferred construction to `.task`. That pattern had two compounding
     // failure modes (tap-before-task, Optional-Observable tracking) that
-    // produced a silent no-op on the Google button in DEBUG sim builds.
+    // produced a silent no-op on the social button in DEBUG sim builds.
     // The fix shipped here is to construct the VM eagerly with nil auth
     // and late-inject the environment value via `setAuthService(_:)`.
     // This test guards the late-injection contract so future refactors
-    // don't reintroduce the silent failure.
+    // don't reintroduce the silent failure. Plan 15-03 reframed this
+    // around the Apple path after Google Sign-In was hard-removed.
     @Test func lateInjectedAuthServiceRoutesCalls() async throws {
         // Construct the VM with no service — mirrors `@State` eager init
         // in SignedOutView before `.task` has run.
@@ -215,7 +182,7 @@ struct SignedOutViewModelTests {
 
         // BEFORE injection: calls bail with the "not available" error
         // (proves the nil-guard works and we haven't accidentally crashed).
-        await vm.signInWithGoogle()
+        await vm.signInWithApple()
         #expect(vm.errorMessage == "Authentication is not available.")
 
         // Late-inject the real service — mirrors `.task` running and
@@ -226,17 +193,17 @@ struct SignedOutViewModelTests {
         // AFTER injection: calls route to the injected service. The
         // previous error is cleared on success, proving the state machine
         // transitions back to .idle.
-        await vm.signInWithGoogle()
-        #expect(stub.googleCallCount == 1)
+        await vm.signInWithApple()
+        #expect(stub.appleCallCount == 1)
         #expect(vm.state == .idle)
         #expect(vm.errorMessage == nil)
     }
 }
 
-// MARK: - HangingAuthService (Test 6 helper)
+// MARK: - HangingAuthService (Test 4 helper)
 
-/// Suspends on the first call to `signInWithApple()` / `signInWithGoogle()`
-/// until `release()` is called. Lets the test observe `isLoading == true`.
+/// Suspends on the first call to `signInWithApple()` until `release()` is
+/// called. Lets the test observe `isLoading == true`.
 final class HangingAuthService: AuthService, @unchecked Sendable {
 
     private let lock = OSAllocatedUnfairLock<CheckedContinuation<Void, Never>?>(initialState: nil)
@@ -244,11 +211,6 @@ final class HangingAuthService: AuthService, @unchecked Sendable {
     var currentUser: User? { get async { nil } }
 
     func signInWithApple() async throws -> User {
-        await suspendUntilReleased()
-        return User(id: UUID(), email: "h@b.c", displayName: nil, avatarURL: nil, hasPro: false, createdAt: Date())
-    }
-
-    func signInWithGoogle() async throws -> User {
         await suspendUntilReleased()
         return User(id: UUID(), email: "h@b.c", displayName: nil, avatarURL: nil, hasPro: false, createdAt: Date())
     }

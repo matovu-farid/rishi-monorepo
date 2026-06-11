@@ -21,18 +21,6 @@ struct RishiAuthServiceTests {
         }
     }
 
-    actor MockGoogleDriver: GoogleSignInDriver {
-        let result: Result<Session, Error>
-        private(set) var callCount = 0
-
-        init(result: Result<Session, Error>) { self.result = result }
-
-        func signIn() async throws -> Session {
-            callCount += 1
-            return try result.get()
-        }
-    }
-
     // MARK: - StubURLProtocol (private to this suite; static state guarded by .serialized)
 
     final class ServiceStubURLProtocol: URLProtocol, @unchecked Sendable {
@@ -84,7 +72,6 @@ struct RishiAuthServiceTests {
     /// Plan 15-02: Session.userId is `String` (Better Auth `user.id`).
     /// Use a stable Apple-sub-shaped literal so assertions stay deterministic.
     static let appleSubFixture = "001234.abcdef0123456789.1234"
-    static let googleIdFixture = "google-user-9876"
 
     static func appleSession(token: String = "siwa-tok") -> Session {
         Session(
@@ -92,17 +79,6 @@ struct RishiAuthServiceTests {
             userId: appleSubFixture,
             email: "u@example.com",
             provider: .apple,
-            issuedAt: Date(),
-            expiresAt: nil
-        )
-    }
-
-    static func googleSession(token: String = "goog-tok") -> Session {
-        Session(
-            token: token,
-            userId: googleIdFixture,
-            email: "u@gmail.com",
-            provider: .google,
             issuedAt: Date(),
             expiresAt: nil
         )
@@ -117,7 +93,6 @@ struct RishiAuthServiceTests {
         let session = Self.appleSession()
         let service = RishiAuthService(
             siwaDriver: MockAppleDriver(result: .success(session)),
-            googleDriver: MockGoogleDriver(result: .failure(RishiError.cancelled)),
             keychain: keychain,
             workerClient: Self.makeWorkerClient()
         )
@@ -139,26 +114,6 @@ struct RishiAuthServiceTests {
         #expect(current?.id == expectedUserId)
     }
 
-    @Test func signInWithGooglePersistsSessionAndExposesCurrentUser() async throws {
-        ServiceStubURLProtocol.reset()
-        let backend = InMemoryKeychainBackend()
-        let keychain = KeychainSessionStore(backend: backend)
-        let session = Self.googleSession()
-        let service = RishiAuthService(
-            siwaDriver: MockAppleDriver(result: .failure(RishiError.cancelled)),
-            googleDriver: MockGoogleDriver(result: .success(session)),
-            keychain: keychain,
-            workerClient: Self.makeWorkerClient()
-        )
-
-        let user = try await service.signInWithGoogle()
-        #expect(user.email == "u@gmail.com")
-
-        let loaded = try await keychain.load()
-        #expect(loaded?.token == session.token)
-        #expect(loaded?.provider == .google)
-    }
-
     @Test func currentUserSurvivesFreshServiceInstance() async throws {
         ServiceStubURLProtocol.reset()
         let backend = InMemoryKeychainBackend()
@@ -167,7 +122,6 @@ struct RishiAuthServiceTests {
 
         let serviceA = RishiAuthService(
             siwaDriver: MockAppleDriver(result: .success(session)),
-            googleDriver: MockGoogleDriver(result: .failure(RishiError.cancelled)),
             keychain: keychainA,
             workerClient: Self.makeWorkerClient()
         )
@@ -177,7 +131,6 @@ struct RishiAuthServiceTests {
         let keychainB = KeychainSessionStore(backend: backend)
         let serviceB = RishiAuthService(
             siwaDriver: MockAppleDriver(result: .failure(RishiError.cancelled)),
-            googleDriver: MockGoogleDriver(result: .failure(RishiError.cancelled)),
             keychain: keychainB,
             workerClient: Self.makeWorkerClient()
         )
@@ -196,7 +149,6 @@ struct RishiAuthServiceTests {
         let session = Self.appleSession()
         let service = RishiAuthService(
             siwaDriver: MockAppleDriver(result: .success(session)),
-            googleDriver: MockGoogleDriver(result: .failure(RishiError.cancelled)),
             keychain: keychain,
             workerClient: Self.makeWorkerClient()
         )
@@ -219,7 +171,6 @@ struct RishiAuthServiceTests {
         let session = Self.appleSession()
         let service = RishiAuthService(
             siwaDriver: MockAppleDriver(result: .success(session)),
-            googleDriver: MockGoogleDriver(result: .failure(RishiError.cancelled)),
             keychain: keychain,
             workerClient: Self.makeWorkerClient()
         )
@@ -244,7 +195,6 @@ struct RishiAuthServiceTests {
         let session = Self.appleSession()
         let service = RishiAuthService(
             siwaDriver: MockAppleDriver(result: .success(session)),
-            googleDriver: MockGoogleDriver(result: .failure(RishiError.cancelled)),
             keychain: keychain,
             workerClient: Self.makeWorkerClient()
         )
@@ -296,7 +246,6 @@ struct RishiAuthServiceTests {
         )
         let service = RishiAuthService(
             siwaDriver: MockAppleDriver(result: .success(session)),
-            googleDriver: MockGoogleDriver(result: .failure(RishiError.cancelled)),
             keychain: keychain,
             workerClient: Self.makeWorkerClient()
         )

@@ -4,7 +4,6 @@ import RishiCore
 public actor FakeAuthService: AuthService {
     public private(set) var preconfiguredUser: User?
     public private(set) var signInAppleCallCount: Int = 0
-    public private(set) var signInGoogleCallCount: Int = 0
     public private(set) var signOutCallCount: Int = 0
     public private(set) var deleteAccountCallCount: Int = 0
 
@@ -20,14 +19,6 @@ public actor FakeAuthService: AuthService {
         signInAppleCallCount += 1
         if let u = preconfiguredUser { return u }
         let u = User.fixture(email: "siwa.fixture@example.com")
-        preconfiguredUser = u
-        return u
-    }
-
-    public func signInWithGoogle() async throws -> User {
-        signInGoogleCallCount += 1
-        if let u = preconfiguredUser { return u }
-        let u = User.fixture(email: "google.fixture@example.com")
         preconfiguredUser = u
         return u
     }

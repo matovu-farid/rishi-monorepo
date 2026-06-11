@@ -28,9 +28,7 @@ final class AppDependencies {
     let tokenProvider: RishiAuthTokenProvider
     let workerClient: WorkerClient
     let siwaPresenter: SystemSiwaPresenter
-    let googlePresenter: SystemGoogleWebAuthPresenter
     let siwaCoordinator: SignInWithAppleCoordinator
-    let googleCoordinator: GoogleSignInCoordinator
     let authService: RishiAuthService
 
     // Persistence + library
@@ -186,31 +184,23 @@ final class AppDependencies {
         )
         self.workerClient = workerClient
 
-        // 4. Presenters (must be constructed on main actor — we ARE the main actor here).
+        // 4. Presenter (must be constructed on main actor — we ARE the main actor here).
         let siwaPresenter = SystemSiwaPresenter()
-        let googlePresenter = SystemGoogleWebAuthPresenter()
         self.siwaPresenter = siwaPresenter
-        self.googlePresenter = googlePresenter
 
-        // 5. Coordinators wrap the presenters + worker client.
+        // 5. Coordinator wraps the presenter + worker client.
         let siwaCoordinator = SignInWithAppleCoordinator(
             workerClient: workerClient,
             presenter: siwaPresenter
         )
-        let googleCoordinator = GoogleSignInCoordinator(
-            workerClient: workerClient,
-            presenter: googlePresenter,
-            baseURL: baseURL,
-            callbackScheme: "rishi"
-        )
         self.siwaCoordinator = siwaCoordinator
-        self.googleCoordinator = googleCoordinator
 
         // 6. Auth service aggregates everything.
+        // Phase 15 plan 15-03: Google Sign-In hard-removed; SIWA is the sole
+        // social provider for v1.
         let authService = RishiAuthService(
             workerClient: workerClient,
             siwaCoordinator: siwaCoordinator,
-            googleCoordinator: googleCoordinator,
             keychain: keychain
         )
         self.authService = authService

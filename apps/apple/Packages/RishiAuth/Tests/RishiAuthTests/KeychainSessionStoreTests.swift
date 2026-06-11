@@ -45,11 +45,11 @@ struct KeychainSessionStoreTests {
         let store = KeychainSessionStore(backend: backend)
 
         try await store.save(makeSession(token: "first"))
-        try await store.save(makeSession(token: "second", provider: .google))
+        try await store.save(makeSession(token: "second"))
 
         let loaded = try await store.load()
         #expect(loaded?.token == "second")
-        #expect(loaded?.provider == .google)
+        #expect(loaded?.provider == .apple)
         let count = backend.snapshotItemCount()
         #expect(count == 1, "Expected exactly one keychain item; got \(count)")
     }
