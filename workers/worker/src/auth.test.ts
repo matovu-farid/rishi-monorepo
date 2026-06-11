@@ -4,7 +4,6 @@ import {
   generateKeyPair,
   exportJWK,
   exportPKCS8,
-  type KeyLike,
   type JWK,
 } from "jose";
 
@@ -43,8 +42,8 @@ import type { CloudflareBindings } from "./index";
 // JWKS endpoint, and signing the JWT with the private half.
 
 interface AppleFixture {
-  publicKey: KeyLike;
-  privateKey: KeyLike;
+  publicKey: CryptoKey;
+  privateKey: CryptoKey;
   jwk: JWK;
   kid: string;
 }
@@ -117,7 +116,7 @@ function stubAppleJWKS(fixture: AppleFixture): ReturnType<typeof vi.fn> {
 const BUNDLE_ID = "org.fidexa.rishi";
 
 async function makeEnv(
-  fixture: AppleFixture,
+  _fixture: AppleFixture,
   overrides: Partial<CloudflareBindings> = {},
 ): Promise<CloudflareBindings> {
   // Generate a separate ECDSA P-256 key purely for the static client-secret

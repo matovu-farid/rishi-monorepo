@@ -23,6 +23,10 @@ declare namespace Cloudflare {
 		STRIPE_WEBHOOK_SECRET: string;
 		ENABLE_TEST_AUTH: string;
 		TEST_AUTH_SECRET: string;
+		APPLE_SIWA_CLIENT_ID: string;
+		APPLE_SIWA_KEY_ID: string;
+		APPLE_SIWA_PRIVATE_KEY: string;
+		APPLE_TEAM_ID: string;
 	}
 }
 interface CloudflareBindings extends Cloudflare.Env {}
