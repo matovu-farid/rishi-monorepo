@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 
 public struct VerifyReceiptResponse: Sendable, Equatable, Decodable {
@@ -23,19 +24,21 @@ public final class StubReceiptVerifier: ReceiptVerifier, @unchecked Sendable {
         public let productId: String
         public let transactionId: UInt64
     }
-    private let lock = NSLock()
-    private var _calls: [Call] = []
+    // OSAllocatedUnfairLock with scoped withLock is async-safe under Swift 6 strict.
+    // NSLock.unlock() is unavailable from async contexts; same workaround as
+    // Phase 03 KeychainBackend.
+    private let _calls = OSAllocatedUnfairLock<[Call]>(initialState: [])
     private let result: Result<VerifyReceiptResponse, Error>
-    public var calls: [Call] { lock.lock(); defer { lock.unlock() }; return _calls }
+    public var calls: [Call] { _calls.withLock { $0 } }
     public init(result: Result<VerifyReceiptResponse, Error> = .success(
         .init(verified: true, premiumUntil: .distantFuture, reason: nil))) {
         self.result = result
     }
     public func verify(jws: String, productId: String, transactionId: UInt64)
         async throws -> VerifyReceiptResponse {
-        lock.lock()
-        _calls.append(.init(jws: jws, productId: productId, transactionId: transactionId))
-        lock.unlock()
+        _calls.withLock {
+            $0.append(.init(jws: jws, productId: productId, transactionId: transactionId))
+        }
         switch result {
         case .success(let v): return v
         case .failure(let e): throw e
