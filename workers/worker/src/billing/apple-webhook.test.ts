@@ -209,4 +209,68 @@ describe("handleAppleWebhook", () => {
     expect(deps._spy.upsertSub).not.toHaveBeenCalled();
     expect(deps._spy.updateSubStatus).not.toHaveBeenCalled();
   });
+
+  it("TEST notificationType: logs row + 200, no inner JWS verify, no dispatch", async () => {
+    // Apple's `POST /inApps/v1/notifications/test` delivers a payload with
+    // notificationType=TEST and NO signedTransactionInfo / signedRenewalInfo.
+    // Verbatim shape observed from sandbox 2026-06:
+    //   { notificationType: "TEST", notificationUUID: "...",
+    //     data: { bundleId, environment }, version: "2.0", signedDate: ... }
+    const deps = makeDeps({
+      envelope: {
+        notificationType: "TEST",
+        notificationUUID: "dfda6a3f-72ca-4d1a-a597-392cba7c0164",
+        version: "2.0",
+        signedDate: 1781186765131,
+        data: {
+          bundleId: "org.fidexa.rishi",
+          environment: "Sandbox" as const,
+          // NO signedTransactionInfo, NO signedRenewalInfo on TEST.
+        },
+      },
+    });
+    const result = await handleAppleWebhook({ deps, signedPayload: "OUTER" });
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ ok: true });
+    // verifyJws called exactly once — for the outer envelope only.
+    // Inner-JWS verify MUST be skipped because there is no signedTransactionInfo.
+    expect(deps._spy.verifyJws).toHaveBeenCalledTimes(1);
+    // Log row written so the row exists for verification queries, with null txId.
+    expect(deps._spy.insertLog).toHaveBeenCalledOnce();
+    const logged = deps._spy.insertLog.mock.calls[0][0];
+    expect(logged.notificationType).toBe("TEST");
+    expect(logged.appleTransactionId).toBeNull();
+    // No subscription side effects.
+    expect(deps._spy.upsertSub).not.toHaveBeenCalled();
+    expect(deps._spy.updateSubStatus).not.toHaveBeenCalled();
+  });
+
+  it("non-TEST notification missing signedTransactionInfo: log-only unknown path, 200", async () => {
+    // Defense in depth: if Apple ever delivers a non-TEST notification type
+    // without an inner transaction JWS (forward-compat for future types),
+    // treat it like the dispatcher's unknown branch — log + 200, no side
+    // effects, no Apple redelivery.
+    const deps = makeDeps({
+      envelope: {
+        notificationType: "FUTURE_TYPE_2099",
+        notificationUUID: "uuid-future",
+        version: "2.0",
+        data: {
+          bundleId: "org.fidexa.rishi",
+          environment: "Sandbox" as const,
+          // signedTransactionInfo intentionally absent.
+        },
+      },
+    });
+    const result = await handleAppleWebhook({ deps, signedPayload: "OUTER" });
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ ok: true });
+    expect(deps._spy.verifyJws).toHaveBeenCalledTimes(1);
+    expect(deps._spy.insertLog).toHaveBeenCalledOnce();
+    const logged = deps._spy.insertLog.mock.calls[0][0];
+    expect(logged.notificationType).toBe("FUTURE_TYPE_2099");
+    expect(logged.appleTransactionId).toBeNull();
+    expect(deps._spy.upsertSub).not.toHaveBeenCalled();
+    expect(deps._spy.updateSubStatus).not.toHaveBeenCalled();
+  });
 });
