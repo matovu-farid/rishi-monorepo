@@ -25,8 +25,8 @@ import * as x509 from "@peculiar/x509";
 
 x509.cryptoProvider.set(crypto);
 
-const ALG: EcKeyGenParams = { name: "ECDSA", namedCurve: "P-256" };
-const SIGN_ALG: EcdsaParams = { name: "ECDSA", hash: "SHA-256" };
+const ALG = { name: "ECDSA", namedCurve: "P-256" } as const;
+const SIGN_ALG = { name: "ECDSA", hash: "SHA-256" } as const;
 
 export interface SignFixtureOpts {
   /** Override the protected header alg (e.g. "HS256" to exercise the alg reject path). */
@@ -74,7 +74,11 @@ interface IssuedCert {
 }
 
 async function issueRoot(name: string, notBefore: Date, notAfter: Date): Promise<IssuedCert> {
-  const keys = await crypto.subtle.generateKey(ALG, true, ["sign", "verify"]);
+  const keys = (await crypto.subtle.generateKey(
+    ALG,
+    true,
+    ["sign", "verify"],
+  )) as CryptoKeyPair;
   const cert = await x509.X509CertificateGenerator.createSelfSigned({
     name: `CN=${name}`,
     keys,
@@ -100,7 +104,11 @@ async function issueChild(
   notAfter: Date,
   isCA: boolean,
 ): Promise<IssuedCert> {
-  const keys = await crypto.subtle.generateKey(ALG, true, ["sign", "verify"]);
+  const keys = (await crypto.subtle.generateKey(
+    ALG,
+    true,
+    ["sign", "verify"],
+  )) as CryptoKeyPair;
   const extensions: x509.Extension[] = [];
   if (isCA) {
     extensions.push(new x509.BasicConstraintsExtension(true, undefined, true));
