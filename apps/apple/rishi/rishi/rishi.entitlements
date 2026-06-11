@@ -16,12 +16,5 @@
 	<array>
 		<string>applinks:rishi.fidexa.org</string>
 	</array>
-	<key>com.apple.developer.background-modes</key>
-	<array>
-		<string>audio</string>
-		<string>fetch</string>
-		<string>processing</string>
-		<string>remote-notification</string>
-	</array>
 </dict>
 </plist>
