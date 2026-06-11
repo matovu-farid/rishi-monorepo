@@ -1,0 +1,65 @@
+name: Anti-Steering + Entitlements
+
+# IAP-08 / IAP-09: enforces App Review Guideline 3.1.1 (no external billing
+# links / steering language) and Pitfall 10 (deprecated StoreKit-1 entitlement
+# never reappears in rishi.entitlements) on every PR touching apps/apple/**.
+#
+# Two scripts run here:
+#   1. apps/apple/scripts/check-anti-steering.sh
+#        - --self-test  : proves the grep mechanics work (always green)
+#        - (strict)     : fails on any forbidden pattern in Swift sources
+#   2. apps/apple/scripts/check-entitlements-unchanged.sh
+#        - fails if com.apple.developer.in-app-payments key returns
+#
+# Pure bash + grep, no Xcode/Swift toolchain — runs on ubuntu-latest.
+#
+# Strict-scan gating
+# ------------------
+# The strict scan step is gated behind RUN_STRICT_ANTI_STEERING. Until Phase 13
+# plan 13-05 (paywall rewrite) lands, four legacy patterns intentionally
+# survive in the tree (BillingPortalService, /api/billing/portal, "Subscribe
+# at", stripe.com). Running strict mode now would block every apps/apple PR.
+#
+# Plan 13-05's final task flips RUN_STRICT_ANTI_STEERING to "1" — either via
+# a one-line edit below OR by setting the repo-level GitHub Actions variable
+# `RUN_STRICT_ANTI_STEERING` to "1". The default expression
+# `${{ vars.RUN_STRICT_ANTI_STEERING || '0' }}` honours the repo variable
+# without further file edits.
+
+on:
+  pull_request:
+    paths:
+      - 'apps/apple/**'
+      - '.github/workflows/apple-anti-steering.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/apple/**'
+      - '.github/workflows/apple-anti-steering.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  anti_steering:
+    name: Anti-Steering + Entitlements
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Self-test the anti-steering script
+        run: bash apps/apple/scripts/check-anti-steering.sh --self-test
+
+      # Strict scan is gated until Phase 13 plan 13-05 (paywall rewrite) lands.
+      # Flip the repo variable RUN_STRICT_ANTI_STEERING to "1" once paywall
+      # placeholders are gone (or hard-code the env value below).
+      - name: Strict anti-steering scan (gated until 13-05)
+        if: env.RUN_STRICT_ANTI_STEERING == '1'
+        env:
+          RUN_STRICT_ANTI_STEERING: ${{ vars.RUN_STRICT_ANTI_STEERING || '0' }}
+        run: bash apps/apple/scripts/check-anti-steering.sh
+
+      - name: Entitlements unchanged
+        run: bash apps/apple/scripts/check-entitlements-unchanged.sh
