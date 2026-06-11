@@ -91,10 +91,14 @@ public struct SettingsScreen: View {
                     onSignOut: onSignOut,
                     onShowDeleteFlow: { showDeleteFlow = true }
                 )
-                BillingSection(
-                    entitlement: billingEntitlement,
-                    onManage: onManageSubscription
-                )
+                // Phase 13: BillingSection no longer takes an `onManage`
+                // closure — `ManageSubscriptionRow` reads
+                // `ManageSubscriptionPresenter` from the SwiftUI
+                // environment and drives the in-app Manage Subscriptions
+                // sheet directly. The `onManageSubscription` parameter
+                // remains in `SettingsScreen`'s init for source compat
+                // until plan 13-05 / 13-06 cleans up the call chain.
+                BillingSection(entitlement: billingEntitlement)
                 ReaderDefaultsSection(
                     defaultTheme: $readerTheme,
                     defaultFontFamily: $readerFontFamily
@@ -107,6 +111,7 @@ public struct SettingsScreen: View {
                 )
                 SyncSettingsSection(status: syncStatus, onSyncNow: onSyncNow)
                 TelemetrySection(store: telemetryStore)
+                LegalLinksSection()
                 AboutSection()
             }
             .navigationTitle("Settings")
