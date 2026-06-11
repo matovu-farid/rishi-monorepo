@@ -102,3 +102,86 @@ struct EntitlementServiceTests {
         #expect(first == .pro)
     }
 }
+
+// MARK: - Null session refresh (Phase 15 plan 05)
+//
+// Better Auth's `GET /api/auth/get-session` returns literal JSON `null` when
+// the caller is unauthenticated. iOS must treat that as "no session, user is
+// free-tier" rather than surfacing a decode error. The suite below scripts a
+// URLProtocol to return a 200 with body "null" and asserts refresh succeeds
+// with `.free` (not `.failure`).
+
+/// Per-suite URLProtocol subclass so this suite's static handler does not race
+/// with sibling suites in this test target.
+final class NullSessionMockURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var handler: (@Sendable (URLRequest) -> (Int, Data))?
+
+    static func reset() { handler = nil }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let h = Self.handler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
+            return
+        }
+        let (status, body) = h(request)
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: status,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
+@Suite(.serialized)
+struct EntitlementServiceNullSessionTests {
+
+    private func makeDefaults() -> UserDefaults {
+        let suiteName = "test.billing.\(UUID().uuidString)"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        return suite
+    }
+
+    private func makeStubbedClient() -> WorkerClient {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [NullSessionMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+        return WorkerClient(
+            baseURL: URL(string: "https://example.invalid")!,
+            session: session,
+            tokenProvider: StaticTokenProvider(nil),
+            devBypassEnabled: false
+        )
+    }
+
+    /// RED → GREEN driver for plan 15-05. Before the fix, the worker returns
+    /// JSON `null`, `JSONDecoder` throws `valueNotFound`, and refresh()
+    /// returns `.failure`. After the fix (Response = ProfileResponse?), the
+    /// decoded value is `nil`, refresh yields `.free`, and the call succeeds.
+    @Test("refresh on null session yields free level, not a failure")
+    func refreshOnNullSessionYieldsFreeLevel() async {
+        NullSessionMockURLProtocol.reset()
+        NullSessionMockURLProtocol.handler = { _ in (200, Data("null".utf8)) }
+        defer { NullSessionMockURLProtocol.reset() }
+
+        let defaults = makeDefaults()
+        let service = EntitlementService(workerClient: makeStubbedClient(), defaults: defaults)
+        let result = await service.refresh()
+
+        switch result {
+        case .success(let level):
+            #expect(level == .free)
+        case .failure(let error):
+            Issue.record("refresh should succeed with free level, got failure: \(error)")
+        }
+    }
+}

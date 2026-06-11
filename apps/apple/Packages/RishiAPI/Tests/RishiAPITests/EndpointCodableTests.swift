@@ -50,6 +50,16 @@ struct EndpointCodableTests {
         #expect(r.user.displayName == nil)
     }
 
+    /// Better Auth's `GET /api/auth/get-session` returns literal JSON `null` when
+    /// no session is present. The endpoint's typed `Response` must decode that
+    /// cleanly as `nil` rather than throwing `valueNotFound`. Regression guard
+    /// for Phase 15 plan 05.
+    @Test func getSessionResponseDecodesNullAsNil() throws {
+        let json = "null"
+        let r = try JSONDecoder().decode(GetSessionEndpoint.Response.self, from: Data(json.utf8))
+        #expect(r == nil)
+    }
+
     @Test func signOutAndDeleteUserPathsAreCorrect() {
         #expect(SignOutEndpoint().path == "/api/auth/sign-out")
         #expect(DeleteUserEndpoint().path == "/api/auth/delete-user")
