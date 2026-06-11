@@ -14,7 +14,7 @@ A user can pick up any iPhone/iPad/Mac, open Rishi, and continue their book + th
 
 <!-- Shipped and confirmed valuable. -->
 
-(None yet — ship to validate. Capabilities below are *Active* hypotheses derived from electron-app parity.)
+- **Native StoreKit 2 IAP for premium subscriptions** — Validated in Phase 13 (2026-06-11). Replaces the Phase-11 text-only paywall fallback. Two products (`org.fidexa.rishi.pro.monthly`, `org.fidexa.rishi.pro.annual`) with 7-day intro trials. Full purchase + restore + manage + Transaction.updates listener. Worker contract for `/api/billing/verify-receipt` + ASSN V2 documented. Anti-steering CI gate strict-on. Ships dark behind `StoreKitIAPFlag` until App Store Connect product setup completes.
 
 ### Active
 
@@ -69,7 +69,7 @@ A user can pick up any iPhone/iPad/Mac, open Rishi, and continue their book + th
 
 ## Constraints
 
-- **Tech stack**: SwiftUI + Observation framework + Swift Concurrency. Minimum iOS 17 / iPadOS 17 / macOS 14 (Catalyst).
+- **Tech stack**: SwiftUI + Observation framework + Swift Concurrency. Minimum iOS 18 / iPadOS 18 / macOS 15 (Catalyst) — raised from 17 on 2026-06-11 because the codebase adopted the iOS 18 declarative `Tab`/`TabView(selection:)` SwiftUI 6 API in Phase 12.
 - **Distribution**: TestFlight → App Store (iOS, iPadOS) + Mac App Store (Catalyst). No side-loading.
 - **App Store compliance**: Sign in with Apple must be offered as a primary option (Guideline 4.8). Subscription handling must respect Apple's review process — Stripe-managed external billing only (out of scope above).
 - **Backend**: Reuse existing Cloudflare Worker; no breaking API changes. Worker must add a SIWA token verification endpoint.
@@ -86,9 +86,9 @@ A user can pick up any iPhone/iPad/Mac, open Rishi, and continue their book + th
 | Sign in with Apple as primary | App Store requires SIWA if any third-party OAuth is offered; making it primary simplifies the UX | — Pending |
 | Reuse worker + R2 sync (no CloudKit) | Single source of truth; cross-platform sync stays consistent with electron data model | — Pending |
 | Defer on-device transformer embeddings → cloud RAG only in v1 | Drops the biggest porting risk (`@xenova/transformers` is impossible on iOS as-is) and keeps app size small; CoreML embeddings are a v2 optimization | — Pending |
-| Stripe + billing portal handoff (no IAP) in v1 | Avoid Apple IAP migration scope creep; ship parity first | — Pending |
+| Stripe + billing portal handoff (no IAP) in v1 | Avoid Apple IAP migration scope creep; ship parity first | **Reversed in Phase 13** — chose native StoreKit 2 IAP (Path A) over Reader App entitlement (Path B); Stripe portal removed entirely |
 | SwiftUI + Observation + Swift Concurrency (no TCA, no UIKit) | Modern iOS 17+ stack, fastest velocity, fewest dependencies | — Pending |
 | MOBI / AZW3 deferred | Long tail; EPUB + PDF cover the common case | — Pending |
 
 ---
-*Last updated: 2026-06-09 after initialization*
+*Last updated: 2026-06-11 after Phase 13 (Native StoreKit 2 IAP) completion*
