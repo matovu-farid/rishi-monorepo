@@ -36,10 +36,20 @@ final class SignedOutViewModel {
         return nil
     }
 
-    private let authService: (any AuthService)?
+    private(set) var authService: (any AuthService)?
 
     init(authService: (any AuthService)?) {
         self.authService = authService
+    }
+
+    /// Late-injects the auth service after construction. Used by
+    /// `SignedOutView` to thread the `@Environment(\.rishiAuthService)`
+    /// value into a view-model that was eagerly constructed (non-Optional
+    /// `@State`) so the Observation runtime tracks property changes
+    /// without going through an `Optional<@Observable>` indirection.
+    /// Idempotent: passing nil after a non-nil value clears the service.
+    func setAuthService(_ service: (any AuthService)?) {
+        self.authService = service
     }
 
     func signInWithApple() async {

@@ -194,6 +194,43 @@ struct SignedOutViewModelTests {
         #expect(vm.state == .idle)
         #expect(vm.errorMessage == nil)
     }
+
+    // Test 8 (regression for `signed-out-google-button-noop`): A VM
+    // constructed with a nil auth service AND later injected with a real
+    // service via `setAuthService(_:)` correctly routes subsequent
+    // sign-in calls to the injected service.
+    //
+    // Background: SignedOutView used to hold a `@State` Optional VM and
+    // deferred construction to `.task`. That pattern had two compounding
+    // failure modes (tap-before-task, Optional-Observable tracking) that
+    // produced a silent no-op on the Google button in DEBUG sim builds.
+    // The fix shipped here is to construct the VM eagerly with nil auth
+    // and late-inject the environment value via `setAuthService(_:)`.
+    // This test guards the late-injection contract so future refactors
+    // don't reintroduce the silent failure.
+    @Test func lateInjectedAuthServiceRoutesCalls() async throws {
+        // Construct the VM with no service — mirrors `@State` eager init
+        // in SignedOutView before `.task` has run.
+        let vm = SignedOutViewModel(authService: nil)
+
+        // BEFORE injection: calls bail with the "not available" error
+        // (proves the nil-guard works and we haven't accidentally crashed).
+        await vm.signInWithGoogle()
+        #expect(vm.errorMessage == "Authentication is not available.")
+
+        // Late-inject the real service — mirrors `.task` running and
+        // calling `setAuthService(authService)` on first appearance.
+        let stub = StubAuthService()
+        vm.setAuthService(stub)
+
+        // AFTER injection: calls route to the injected service. The
+        // previous error is cleared on success, proving the state machine
+        // transitions back to .idle.
+        await vm.signInWithGoogle()
+        #expect(stub.googleCallCount == 1)
+        #expect(vm.state == .idle)
+        #expect(vm.errorMessage == nil)
+    }
 }
 
 // MARK: - HangingAuthService (Test 6 helper)
