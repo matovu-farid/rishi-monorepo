@@ -4,26 +4,22 @@ import RishiBilling
 
 /// Settings section embedding RishiBilling's `ManageSubscriptionRow`.
 ///
-/// `ManageSubscriptionRow` already gates itself on
-/// `ReaderAppEntitlementFlag.Resolver` (BILL-03 failure-mode plan); the
-/// section just provides Form chrome + an `onManage` closure wired by
-/// 11-06 to `BillingPortalService.openPortal()`.
+/// `ManageSubscriptionRow` gates itself on
+/// `ReaderAppEntitlementFlag.Resolver` and (Phase 13) drives the in-app
+/// `AppStore.showManageSubscriptions(in:)` sheet via a
+/// `ManageSubscriptionPresenter` read from the SwiftUI environment. The
+/// section just provides Form chrome — no closures required.
 public struct BillingSection: View {
 
     public let entitlement: ReaderAppEntitlementFlag.Resolver
-    public let onManage: () -> Void
 
-    public init(
-        entitlement: ReaderAppEntitlementFlag.Resolver = .production,
-        onManage: @escaping () -> Void
-    ) {
+    public init(entitlement: ReaderAppEntitlementFlag.Resolver = .production) {
         self.entitlement = entitlement
-        self.onManage = onManage
     }
 
     public var body: some View {
         Section {
-            ManageSubscriptionRow(entitlement: entitlement, onTap: onManage)
+            ManageSubscriptionRow(entitlement: entitlement)
         } header: {
             Text("Subscription")
                 .font(RishiTypography.titleM)
@@ -34,18 +30,14 @@ public struct BillingSection: View {
 
 #Preview("Entitlement Granted") {
     Form {
-        BillingSection(
-            entitlement: .init(isGranted: true),
-            onManage: {}
-        )
+        BillingSection(entitlement: .init(isGranted: true))
     }
+    .environment(ManageSubscriptionPresenter())
 }
 
 #Preview("Entitlement Pending") {
     Form {
-        BillingSection(
-            entitlement: .init(isGranted: false),
-            onManage: {}
-        )
+        BillingSection(entitlement: .init(isGranted: false))
     }
+    .environment(ManageSubscriptionPresenter())
 }

@@ -14,20 +14,17 @@ struct SettingsScreenSmokeTests {
 
     @Test("BillingSection constructs (entitlement granted)")
     func billingSectionConstructsGranted() {
-        let s = BillingSection(
-            entitlement: .init(isGranted: true),
-            onManage: {}
-        )
-        _ = s.body
+        // Phase 13: BillingSection no longer takes onManage; the inner
+        // ManageSubscriptionRow reads ManageSubscriptionPresenter from
+        // the SwiftUI environment.
+        let s = BillingSection(entitlement: .init(isGranted: true))
+        _ = s
     }
 
     @Test("BillingSection constructs (entitlement NOT granted — failure-mode)")
     func billingSectionConstructsNotGranted() {
-        let s = BillingSection(
-            entitlement: .init(isGranted: false),
-            onManage: {}
-        )
-        _ = s.body
+        let s = BillingSection(entitlement: .init(isGranted: false))
+        _ = s
     }
 
     @Test("AboutSection renders version string from Bundle.main")

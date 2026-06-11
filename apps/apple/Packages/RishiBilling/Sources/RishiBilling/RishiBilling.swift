@@ -1,17 +1,18 @@
 import Foundation
 
 /// RishiBilling — Feature-layer package owning the entitlement check, paywall,
-/// and Stripe customer-portal handoff used by Phase 11 to gate Pro features.
+/// and native StoreKit 2 IAP wiring used by Phase 13 to gate Pro features.
 ///
-/// Reader App entitlement (`com.apple.developer.storekit.external-link.account`)
-/// gates the visibility of the "Manage Subscription" external-link UI per
-/// `READER-APP-ENTITLEMENT.md`. Apple has not yet granted the entitlement at
-/// planning time — Plan 11-03 introduces a compile-time
-/// `ReaderAppEntitlementFlag` defaulting to OFF; when Apple grants it, flip
-/// the flag + add the entitlement key to `rishi.entitlements`.
+/// Phase 13 replaces the Phase-11 Stripe portal handoff with native
+/// StoreKit IAP. `ManageSubscriptionPresenter` drives
+/// `AppStore.showManageSubscriptions(in:)` in-app (with an
+/// `itms-apps://apps.apple.com/account/subscriptions` fallback); the
+/// `ReaderAppEntitlementFlag` is now an `@Observable` value reading
+/// from `EntitlementReconciler` (Transaction.currentEntitlements unioned
+/// with the server's premium response — most permissive wins).
 ///
 /// Depends DOWN on RishiCore (models), RishiUIKit (tokens), RishiAPI
-/// (WorkerClient + BillingPortalEndpoint + GetSessionEndpoint), RishiAuth
+/// (WorkerClient + ReceiptVerify endpoint + GetSessionEndpoint), RishiAuth
 /// (KeychainSessionStore for token-bearer reads), RishiLogging.
 public enum RishiBilling {
     /// Semantic version of the Feature surface. Bump on breaking API changes.

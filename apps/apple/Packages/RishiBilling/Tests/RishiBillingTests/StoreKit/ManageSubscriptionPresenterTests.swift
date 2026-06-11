@@ -18,8 +18,11 @@ import Testing
 struct ManageSubscriptionPresenterTests {
 
     /// Stub invoker that records call count and replays a pre-configured
-    /// outcome (or throws). Final class + @unchecked Sendable mirrors the
-    /// pattern used by `StubReceiptVerifier` in this test target.
+    /// outcome (or throws). `@MainActor` protocol requirement means call
+    /// counting is already serialized on the main actor — no extra lock
+    /// needed. Marked `@unchecked Sendable` because the stored `_calls`
+    /// is read/written only from `@MainActor` contexts in these tests.
+    @MainActor
     final class StubInvoker: ManageSubscriptionInvoker, @unchecked Sendable {
         enum Mode: Sendable {
             case sheet
@@ -27,22 +30,14 @@ struct ManageSubscriptionPresenterTests {
             case throwsError(any Error & Sendable)
         }
 
-        private let lock = NSLock()
-        private var _calls = 0
+        private(set) var calls = 0
         let mode: Mode
 
         init(mode: Mode) { self.mode = mode }
 
-        var calls: Int {
-            lock.lock(); defer { lock.unlock() }
-            return _calls
-        }
-
         @MainActor
         func present() async throws -> ManageSubscriptionOutcome {
-            lock.lock()
-            _calls += 1
-            lock.unlock()
+            calls += 1
             switch mode {
             case .sheet:
                 return .presentedInAppSheet

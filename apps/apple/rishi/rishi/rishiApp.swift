@@ -9,6 +9,7 @@ import SwiftUI
 import SwiftData
 import RishiCore
 import RishiAuth
+import RishiBilling
 import RishiLibrary
 import RishiSync
 #if canImport(UIKit)
@@ -56,6 +57,10 @@ struct rishiApp: App {
                 .environment(deps.libraryViewModel)
                 .environment(\.appDependencies, deps)
                 .environment(\.macCommandRouter, deps.macCommandRouter)
+                // Phase 13 / IAP-07 — make the StoreKit Manage
+                // Subscriptions presenter visible to every SwiftUI view
+                // (consumed by `ManageSubscriptionRow`).
+                .environment(deps.manageSubscriptionPresenter)
         }
         .modelContainer(sharedModelContainer)
         // Phase 12 Plan 12-01 — Mac Catalyst menu-bar commands.

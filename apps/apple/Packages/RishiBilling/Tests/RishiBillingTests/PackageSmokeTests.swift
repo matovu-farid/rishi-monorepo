@@ -25,9 +25,7 @@ struct PackageSmokeTests {
         #expect(user.hasPro == false)
     }
 
-    @Test("RishiAPI BillingPortalEndpoint is reachable")
-    func rishiAPIBillingEndpointIsReachable() {
-        let ep = BillingPortalEndpoint()
-        #expect(ep.path == "/api/billing/portal")
-    }
+    // BillingPortalEndpoint removed in Phase 13 (Stripe portal handoff
+    // replaced by StoreKit 2 `AppStore.showManageSubscriptions(in:)`
+    // via ManageSubscriptionPresenter). See 13-07-PLAN.md.
 }

@@ -147,15 +147,9 @@ struct EndpointCodableTests {
     }
 
     // MARK: - Billing
-
-    @Test func billingPortalShape() throws {
-        let e = BillingPortalEndpoint()
-        #expect(e.path == "/api/billing/portal")
-        #expect(e.method == .POST)
-        let json = #"{"url":"https://billing.stripe.com/p/x"}"#
-        let r = try JSONDecoder().decode(BillingPortalEndpoint.PortalResponse.self, from: Data(json.utf8))
-        #expect(r.url == "https://billing.stripe.com/p/x")
-    }
+    // BillingPortalEndpoint removed in Phase 13 — Stripe portal handoff
+    // replaced by native StoreKit `AppStore.showManageSubscriptions(in:)`
+    // (see RishiBilling/StoreKit/ManageSubscriptionPresenter.swift).
 
     // MARK: - Users
 

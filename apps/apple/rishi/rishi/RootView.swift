@@ -216,15 +216,19 @@ struct RootView: View {
         }
         #endif
         // BILL-04 — paywall sheet for free users tapping a Pro feature.
-        // Manage-Subscription tap inside `PaywallView` routes through the
-        // billing portal service (gated on `ReaderAppEntitlementFlag` by
-        // the view itself).
+        // Phase 13: the legacy Stripe-portal onSubscribe path is removed
+        // (anti-steering). The full paywall rewrite to native StoreKit
+        // purchase + Restore lives in plan 13-05; until then `onSubscribe`
+        // is a no-op TODO that dismisses the sheet so the failure-mode
+        // text-only fallback in `PaywallView` continues to render.
         .sheet(item: $paywallFeature) { feature in
-            if let deps = deps {
+            if deps != nil {
                 PaywallView(
                     feature: feature.name,
                     onSubscribe: {
-                        Task { try? await deps.billingPortalService.openPortal() }
+                        // TODO(13-05): wire onSubscribe to PurchaseService
+                        // for native StoreKit 2 IAP. The Phase-11 Stripe
+                        // portal handoff is gone (Phase 13 anti-steering).
                         paywallFeature = nil
                     },
                     onDismiss: { paywallFeature = nil }

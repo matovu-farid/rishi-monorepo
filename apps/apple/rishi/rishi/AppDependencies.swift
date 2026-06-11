@@ -87,14 +87,16 @@ final class AppDependencies {
     /// `.fullScreenCover(isPresented:)` to `voicePresenter.isPresenting`.
     let voicePresenter: VoiceSessionPresenter
 
-    // Billing (Phase 11 — entitlement cache + Stripe portal handoff)
+    // Billing (Phase 11 entitlement cache + Phase 13 StoreKit handoff)
     /// BILL-01: caches `EntitlementLevel` under "billing.entitlement.level"
     /// and refreshes from `/api/auth/get-session`. UI gates on
     /// `snapshot()` for synchronous reads.
     let entitlementService: EntitlementService
-    /// BILL-02: opens the Stripe portal via `ASWebAuthenticationSession`
-    /// using `AppBillingPortalPresenter`.
-    let billingPortalService: BillingPortalService
+    /// IAP-07: drives the in-app "Manage Subscriptions" sheet via
+    /// `AppStore.showManageSubscriptions(in:)` with an `itms-apps://`
+    /// fallback. Installed into the SwiftUI environment by `RootView`
+    /// so `ManageSubscriptionRow` can read it without prop-drilling.
+    let manageSubscriptionPresenter: ManageSubscriptionPresenter
 
     // Settings (Phase 11 — telemetry opt-in)
     /// SET-02: backs the Privacy section toggle. Sink forwards to
@@ -368,16 +370,12 @@ final class AppDependencies {
             dirtyHook: voiceDirtyAdapter
         )
 
-        // 17. Billing stack (Phase 11). EntitlementService hydrates from
-        //     UserDefaults + refreshes from /api/auth/get-session on
-        //     RootView bootstrap. BillingPortalService opens the Stripe
-        //     portal via ASWebAuthenticationSession (gated on
-        //     ReaderAppEntitlementFlag at the UI layer).
+        // 17. Billing stack. Phase 11 entitlement cache + Phase 13
+        //     StoreKit Manage Subscriptions presenter. The Stripe portal
+        //     handoff is removed — anti-steering 3.1.1 incompatibility
+        //     (see 13-07-PLAN.md).
         self.entitlementService = EntitlementService(workerClient: workerClient)
-        self.billingPortalService = BillingPortalService(
-            workerClient: workerClient,
-            presenter: AppBillingPortalPresenter()
-        )
+        self.manageSubscriptionPresenter = ManageSubscriptionPresenter()
 
         // 18. Settings stack — telemetry sink forwards to RishiLogging which
         //     drops Sentry uploads on opt-out (SET-02).
@@ -541,7 +539,7 @@ final class AppDependencies {
     ) -> SettingsScreen {
         let defaults = self.readerDefaults
         let auth = self.authService
-        let billing = self.billingPortalService
+        let presenter = self.manageSubscriptionPresenter
         let sync = self.syncEngine
         return SettingsScreen(
             user: user,
@@ -569,7 +567,16 @@ final class AppDependencies {
             },
             onDeleted: onAccountDeleted,
             onManageSubscription: {
-                Task { try? await billing.openPortal() }
+                // Phase 13 — Manage Subscription is now driven directly by
+                // `ManageSubscriptionRow` reading the
+                // `ManageSubscriptionPresenter` from the SwiftUI
+                // environment (installed by `RootView`). This closure is
+                // a redundant safety path for `SettingsScreen` source
+                // compat until plan 13-05 / 13-06 cleans up the call
+                // chain.
+                Task { @MainActor in
+                    await presenter.present()
+                }
             },
             onDismiss: onDismiss
         )

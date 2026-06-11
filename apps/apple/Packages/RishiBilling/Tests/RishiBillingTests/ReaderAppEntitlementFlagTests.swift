@@ -81,22 +81,18 @@ struct ReaderAppEntitlementFlagTests {
 
     @Test("ManageSubscriptionRow constructs in granted state via Resolver")
     func manageRowGranted() {
-        var tapped = 0
-        let row = ManageSubscriptionRow(
-            entitlement: .init(isGranted: true),
-            onTap: { tapped += 1 }
-        )
-        _ = row.body
-        _ = tapped
+        // Phase-13 rewrite: ManageSubscriptionRow now reads
+        // ManageSubscriptionPresenter from the SwiftUI environment instead
+        // of taking an onTap closure. Construction smoke only; tap
+        // behaviour is exercised by ManageSubscriptionPresenterTests.
+        let row = ManageSubscriptionRow(entitlement: .init(isGranted: true))
+        _ = row
     }
 
     @Test("ManageSubscriptionRow constructs in not-granted state via Resolver")
     func manageRowNotGranted() {
-        let row = ManageSubscriptionRow(
-            entitlement: .init(isGranted: false),
-            onTap: {}
-        )
-        _ = row.body
+        let row = ManageSubscriptionRow(entitlement: .init(isGranted: false))
+        _ = row
     }
 }
 
