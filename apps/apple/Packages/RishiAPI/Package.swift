@@ -21,7 +21,10 @@ let package = Package(
         ),
         .testTarget(
             name: "RishiAPITests",
-            dependencies: ["RishiAPI"]
+            dependencies: ["RishiAPI"],
+            resources: [
+                .copy("Fixtures"),
+            ]
         ),
     ]
 )
