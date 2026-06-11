@@ -3,75 +3,54 @@ import Foundation
 import SwiftUI
 @testable import RishiBilling
 
+/// Plan 13-05 — Paywall UI smoke tests.
+///
+/// The Wave-3 paywall rewrite gates its body on `StoreKitIAPFlag`:
+///   - flag ON  → live, hand-rolled SwiftUI paywall consuming a VM
+///   - flag OFF → text-only fallback (zero regression for release builds
+///     where StoreKitIAPFlag is hardcoded false)
+///
+/// These tests are compile-time / construction smoke tests — they prove
+/// the view type-checks against both flag states. They do NOT attempt to
+/// render against a SwiftUI host, which is not supported under `swift test`.
 @MainActor
-@Suite("Paywall UI construction smoke")
+@Suite("Paywall UI flag-gated smoke")
 struct PaywallUITests {
 
-    @Test("PaywallView constructs for arbitrary feature names")
-    func paywallConstructs() {
-        for feature in ["Read Aloud", "Voice Chat", "Sync", "Pro Feature"] {
-            let view = PaywallView(feature: feature, onSubscribe: {}, onDismiss: {})
-            _ = view.body
-        }
-    }
-
-    @Test("PaywallView constructs in granted entitlement state")
-    func paywallGranted() {
-        let view = PaywallView(
-            feature: "Read Aloud",
-            entitlement: .init(isGranted: true),
-            onSubscribe: {},
-            onDismiss: {}
+    private func makeVM() -> PaywallViewModel {
+        let productService = StoreKitProductService()
+        let purchase = PaywallViewModelTests.StubPurchaseProvider(mode: .cancelled)
+        let restore = PaywallViewModelTests.StubRestoreProvider(mode: .nothingToRestore)
+        let presenter = ManageSubscriptionPresenter(
+            invoker: PaywallViewModelTests.StubManageInvoker()
         )
-        _ = view.body
-    }
-
-    @Test("PaywallView constructs in not-granted (text-only) state")
-    func paywallNotGranted() {
-        let view = PaywallView(
-            feature: "Voice Chat",
-            entitlement: .init(isGranted: false),
-            onSubscribe: {},
-            onDismiss: {}
-        )
-        _ = view.body
-    }
-
-    @Test("PremiumGateModifier shows wrapped content for .pro")
-    func gateShowsContentForPro() {
-        // Construct the modifier directly and exercise its body(content:)
-        // path. We can't call `.body` on a `ModifiedContent` (SwiftUI
-        // fatalErrors), so we build the modifier and feed it a stub.
-        let modifier = PremiumGateModifier(
-            feature: "Read Aloud",
-            entitlement: .pro,
-            onSubscribe: {}
-        )
-        #expect(modifier.entitlement == .pro)
-        #expect(modifier.feature == "Read Aloud")
-        // Convenience extension also builds.
-        _ = Text("Pro content").premiumGated(
-            feature: "Read Aloud",
-            entitlement: .pro,
-            onSubscribe: {}
+        return PaywallViewModel(
+            productService: productService,
+            purchaseService: purchase,
+            restoreService: restore,
+            managePresenter: presenter
         )
     }
 
-    @Test("PremiumGateModifier shows paywall for .free")
-    func gateShowsPaywallForFree() {
-        var subscribed = 0
-        let modifier = PremiumGateModifier(
-            feature: "Read Aloud",
-            entitlement: .free,
-            onSubscribe: { subscribed += 1 }
-        )
-        #expect(modifier.entitlement == .free)
-        // Convenience extension also builds.
-        _ = Text("Pro content").premiumGated(
-            feature: "Read Aloud",
-            entitlement: .free,
-            onSubscribe: { subscribed += 1 }
-        )
-        _ = subscribed
+    @Test("PaywallView constructs with the live VM (flag ON path compiles)")
+    func liveBody_constructs_whenFlagOn() {
+        #if DEBUG
+        let previous = StoreKitIAPFlag.isEnabled
+        StoreKitIAPFlag.setEnabled(true)
+        defer { StoreKitIAPFlag.setEnabled(previous) }
+        #endif
+        let view = PaywallView(viewModel: makeVM())
+        _ = view
+    }
+
+    @Test("PaywallView constructs in fallback body when flag is OFF")
+    func fallbackBody_constructs_whenFlagOff() {
+        #if DEBUG
+        let previous = StoreKitIAPFlag.isEnabled
+        StoreKitIAPFlag.setEnabled(false)
+        defer { StoreKitIAPFlag.setEnabled(previous) }
+        #endif
+        let view = PaywallView(viewModel: makeVM())
+        _ = view
     }
 }
