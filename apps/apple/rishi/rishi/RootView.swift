@@ -23,6 +23,7 @@ import RishiAuth
 import RishiBilling
 import RishiChat
 import RishiLibrary
+import RishiLogging
 import RishiOnboarding
 import RishiReader
 import RishiSettings
@@ -216,20 +217,31 @@ struct RootView: View {
         }
         #endif
         // BILL-04 — paywall sheet for free users tapping a Pro feature.
-        // Phase 13: the legacy Stripe-portal onSubscribe path is removed
-        // (anti-steering). The full paywall rewrite to native StoreKit
-        // purchase + Restore lives in plan 13-05; until then `onSubscribe`
-        // is a no-op TODO that dismisses the sheet so the failure-mode
-        // text-only fallback in `PaywallView` continues to render.
+        // Quick-VPX Task 1 (GAP 1): onSubscribe now invokes the real
+        // PurchaseService via the `paywallSubscribeAction` seam in
+        // RishiBilling. The seam wraps the awaiting `purchase(productId:)`
+        // call in a Task, switches on `PurchaseOutcome`, and routes
+        // success/cancel/error into the three closures below. The
+        // `EntitlementService` observation refreshes entitlement state on
+        // its own snapshot read after a successful purchase — no manual
+        // mutation here. Error breadcrumbs go through `Log.event` via
+        // RishiLogging (the canonical bridge — no direct Sentry call).
         .sheet(item: $paywallFeature) { feature in
-            if deps != nil {
+            if let deps = deps {
                 PaywallView(
                     feature: feature.name,
                     onSubscribe: {
-                        // TODO(13-05): wire onSubscribe to PurchaseService
-                        // for native StoreKit 2 IAP. The Phase-11 Stripe
-                        // portal handoff is gone (Phase 13 anti-steering).
-                        paywallFeature = nil
+                        paywallSubscribeAction(
+                            purchaseService: deps.purchaseService,
+                            productId: StoreKitProductService.monthlyProductId,
+                            onSuccess: { paywallFeature = nil },
+                            onCancel:  { paywallFeature = nil },
+                            onError: { _ in
+                                Log.event("paywall.purchase.failed",
+                                          level: .error)
+                                paywallFeature = nil
+                            }
+                        )
                     },
                     onDismiss: { paywallFeature = nil }
                 )
