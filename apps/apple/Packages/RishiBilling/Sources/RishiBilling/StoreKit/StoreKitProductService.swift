@@ -189,3 +189,13 @@ public actor StoreKitProductService {
         )
     }
 }
+
+// MARK: - ProductFetching Conformance
+//
+// Moved into RishiBilling (owning module) in Phase 15 plan 15-04 to eliminate
+// the Swift 6 retroactive-conformance warning. Both StoreKitProductService and
+// ProductFetching are declared in this same module, so the conformance lives
+// here structurally — no annotation needed. The protocol declaration lives in
+// ReceiptVerifier.swift; the actor exposes the matching `rawProduct(for:)`
+// accessor used by PurchaseService.
+extension StoreKitProductService: ProductFetching {}

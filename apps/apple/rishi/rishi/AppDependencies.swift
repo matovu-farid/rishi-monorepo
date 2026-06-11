@@ -705,17 +705,6 @@ private final class UserIdBox {
     var value: UserID? = nil
 }
 
-// MARK: - StoreKit product-fetching conformance (Phase 13)
-//
-// `PurchaseService` depends on a `ProductFetching` protocol (declared in
-// RishiBilling alongside `ReceiptVerifier`) so its unit tests can inject
-// a single-product fetcher without an SKTestSession daemon. The
-// production `StoreKitProductService` actor already exposes a matching
-// `rawProduct(for:)` accessor; this one-line extension adopts the
-// protocol so AppDependencies can pass the service directly without an
-// intermediate adapter.
-extension StoreKitProductService: ProductFetching {}
-
 // MARK: - SwiftUI environment keys
 
 private struct RishiAuthServiceKey: EnvironmentKey {
