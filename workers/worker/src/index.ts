@@ -24,6 +24,7 @@ import { createPortalSession } from "./billing/portal";
 import { parseRealtimeUsageBody } from "./billing/realtime-usage";
 import { ensureCustomerAndPortal } from "./billing/start";
 import { registerVerifyReceiptRoute } from "./billing/apple-verify-receipt";
+import { registerAppleWebhookRoute } from "./billing/apple-webhook";
 import { createStripeClient } from "./billing/stripe";
 import { requireActiveSubscription } from "./billing/sub-gate";
 import { createDb } from "./db/drizzle";
@@ -226,6 +227,14 @@ app.get(
 // there; an `import { requireAuth } from "../index"` on the other side
 // would form a runtime cycle Vitest's ESM loader rejects.
 registerVerifyReceiptRoute(app, requireAuth);
+
+// POST /api/billing/apple-webhook — Apple App Store Server Notifications V2
+// endpoint. NO requireAuth: Apple posts unauthenticated; trust is the JWS
+// chain (verifyAppleJWS). Idempotent on notificationUUID via INSERT ... ON
+// CONFLICT DO NOTHING. Always ACKs 200 once the envelope is validated so
+// Apple's ~24h retry storm halts; dispatch errors persist to the log row's
+// processing_error column for daily reconciliation.
+registerAppleWebhookRoute(app);
 
 // ─── Protected routes ─────────────────────────────────────────────────────────
 app.get("/api/redis-test", requireAuth, async (c) => {
