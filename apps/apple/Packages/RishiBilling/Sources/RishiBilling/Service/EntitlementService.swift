@@ -64,11 +64,16 @@ public actor EntitlementService {
 
     /// Hit `/api/auth/get-session` and update cache + stream. Transport errors
     /// are logged but DO NOT clobber the cache — offline reads stay valid.
+    ///
+    /// Better Auth returns literal JSON `null` for unauthenticated callers,
+    /// which decodes as `nil`. That is NOT an error — it just means "no
+    /// session, free tier". Only thrown errors (transport, 4xx/5xx, decode
+    /// failures on a non-null body) flow into `.failure`.
     @discardableResult
     public func refresh() async -> Result<EntitlementLevel, Error> {
         do {
             let response = try await workerClient.send(GetSessionEndpoint())
-            let level = EntitlementLevel(hasPro: response.hasPro)
+            let level = EntitlementLevel(hasPro: response?.hasPro ?? false)
             setCached(level)
             return .success(level)
         } catch {

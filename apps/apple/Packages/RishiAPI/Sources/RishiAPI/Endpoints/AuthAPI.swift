@@ -174,8 +174,14 @@ public struct DeleteUserEndpoint: WorkerEndpoint {
 
 /// `GET /api/auth/get-session` — re-hydrate the local session from a stored
 /// bearer token at app start.
+///
+/// Better Auth returns literal JSON `null` (not 401, not an empty object) when
+/// the request has no active session. `Response` is therefore Optional so
+/// `JSONDecoder` produces `nil` for the unauthenticated case rather than
+/// throwing `valueNotFound`. Consumers must treat `nil` as "no session, user
+/// is free-tier" — see `RishiBilling.EntitlementService.refresh()`.
 public struct GetSessionEndpoint: WorkerEndpoint {
-    public typealias Response = ProfileResponse
+    public typealias Response = ProfileResponse?
 
     public let method: HTTPMethod = .GET
     public let path: String = "/api/auth/get-session"
