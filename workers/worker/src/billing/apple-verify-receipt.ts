@@ -1,11 +1,15 @@
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import type { Hono } from "hono";
+import type { Hono, MiddlewareHandler } from "hono";
 import { verifyAppleJWS, JWSInvalid } from "./jws-verify";
 import { appleSubscriptions } from "@rishi/shared/schema";
 import { createDb } from "../db/drizzle";
+// NOTE: `CloudflareBindings` and `requireAuth` live in `../index.ts`. We
+// CANNOT `import { requireAuth } from "../index"` here — index.ts imports
+// `registerVerifyReceiptRoute` from this file, and a runtime cycle breaks
+// Vitest's ESM loader (`Cannot access '__vite_ssr_import_*__' before
+// initialization`). Caller passes `requireAuth` in via the route factory.
 import type { CloudflareBindings } from "../index";
-import { requireAuth } from "../index";
 
 // ─── Wire types ────────────────────────────────────────────────────────────
 
@@ -204,6 +208,7 @@ export function registerVerifyReceiptRoute(
     Bindings: CloudflareBindings;
     Variables: { userId: string };
   }>,
+  requireAuth: MiddlewareHandler,
 ): void {
   app.post("/api/billing/verify-receipt", requireAuth, async (c) => {
     const raw = await c.req.json().catch(() => null);

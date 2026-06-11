@@ -23,6 +23,7 @@ import { meterFromContext } from "./billing/meter";
 import { createPortalSession } from "./billing/portal";
 import { parseRealtimeUsageBody } from "./billing/realtime-usage";
 import { ensureCustomerAndPortal } from "./billing/start";
+import { registerVerifyReceiptRoute } from "./billing/apple-verify-receipt";
 import { createStripeClient } from "./billing/stripe";
 import { requireActiveSubscription } from "./billing/sub-gate";
 import { createDb } from "./db/drizzle";
@@ -215,6 +216,16 @@ app.get(
   requireActiveSubscription,
   (c) => c.json({ ok: true }),
 );
+
+// ─── Apple IAP routes (Phase 14) ──────────────────────────────────────────────
+// POST /api/billing/verify-receipt — mounted behind requireAuth by the
+// route factory; iOS calls this after Product.purchase() to re-verify the
+// signed JWS server-side and persist the canonical subscription row.
+// `requireAuth` is passed in to avoid a circular import: the route factory
+// lives in ./billing/apple-verify-receipt.ts and this module imports from
+// there; an `import { requireAuth } from "../index"` on the other side
+// would form a runtime cycle Vitest's ESM loader rejects.
+registerVerifyReceiptRoute(app, requireAuth);
 
 // ─── Protected routes ─────────────────────────────────────────────────────────
 app.get("/api/redis-test", requireAuth, async (c) => {
