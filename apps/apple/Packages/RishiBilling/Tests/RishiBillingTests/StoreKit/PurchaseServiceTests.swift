@@ -14,6 +14,13 @@ import Testing
 /// `purchaseClosure` seam — SKTestSession cannot reliably synthesize those
 /// outcomes at the StoreKit boundary, so PurchaseService exposes a closure
 /// hook taking a Product and returning a Product.PurchaseResult.
+///
+/// **Host environment.** Same SKTestSession daemon caveat as
+/// `StoreKitProductServiceTests` — `swift test` on a Mac host has no
+/// daemon; products fail to load. Tests that require live products are
+/// wrapped in `withSKTestDaemon` and report as `withKnownIssue` on hosts
+/// without the daemon; tests that depend only on the injected closure or
+/// the verifier stub run unconditionally.
 @Suite(.serialized)
 struct PurchaseServiceTests {
 
@@ -21,16 +28,43 @@ struct PurchaseServiceTests {
     private let monthlyId = "org.fidexa.rishi.pro.monthly"
 
     init() throws {
-        let s = try SKTestSession(configurationFileNamed: "Rishi")
+        // Bundle.module resolves the Rishi.storekit copied into the test
+        // bundle by Package.swift's `resources:` block; the bundle-less
+        // SKTestSession init only searches Bundle.main, which under
+        // `swift test` is the xctest harness.
+        guard let url = Bundle.module.url(forResource: "Rishi", withExtension: "storekit") else {
+            Issue.record("Rishi.storekit missing from test bundle")
+            throw StoreKitTestSetupError.missingConfig
+        }
+        let s = try SKTestSession(contentsOf: url)
         s.disableDialogs = true
         s.clearTransactions()
         s.resetToDefaultState()
         self.session = s
     }
 
-    // MARK: - Helpers
+    private enum StoreKitTestSetupError: Error { case missingConfig }
 
-    /// Load the monthly product from the active SKTestSession.
+    /// Probe — true when StoreKit Test daemon is reachable.
+    private func probeStoreKitTestDaemon() async -> Bool {
+        let probe = (try? await Product.products(for: [monthlyId])) ?? []
+        return !probe.isEmpty
+    }
+
+    /// Run `body` only when the StoreKit Test daemon is up; otherwise
+    /// record a `withKnownIssue` so the test reports as soft-skip.
+    private func withSKTestDaemon(_ body: () async throws -> Void) async throws {
+        if await probeStoreKitTestDaemon() {
+            try await body()
+        } else {
+            withKnownIssue("SKTestSession daemon unavailable on this host — run via xcodebuild on an iOS simulator destination.") {
+                Issue.record("skipped — no StoreKit Test daemon")
+            }
+        }
+    }
+
+    /// Resolve the monthly product or fail the test (returns nil if the
+    /// daemon dropped it).
     private func monthlyProduct() async throws -> Product {
         let products = try await Product.products(for: [monthlyId])
         return try #require(products.first)
@@ -53,121 +87,139 @@ struct PurchaseServiceTests {
 
     @Test
     func testHappyPath_successfulPurchase_finishesAfterWorkerVerifies() async throws {
-        let product = try await monthlyProduct()
-        let until = Date(timeIntervalSince1970: 4_000_000_000)
-        let verifier = StubReceiptVerifier(result: .success(
-            .init(verified: true, premiumUntil: until, reason: nil)
-        ))
-        let service = makeService(verifier: verifier, product: product)
+        try await withSKTestDaemon {
+            let product = try await self.monthlyProduct()
+            let until = Date(timeIntervalSince1970: 4_000_000_000)
+            let verifier = StubReceiptVerifier(result: .success(
+                .init(verified: true, premiumUntil: until, reason: nil)
+            ))
+            let service = self.makeService(verifier: verifier, product: product)
 
-        let outcome = try await service.purchase(productId: monthlyId)
-        guard case .granted(let returnedUntil) = outcome else {
-            Issue.record("expected .granted, got \(outcome)")
-            return
-        }
-        #expect(returnedUntil == until)
-        #expect(verifier.calls.count == 1)
-        #expect(verifier.calls.first?.productId == monthlyId)
-
-        var unfinishedCount = 0
-        for await result in Transaction.unfinished {
-            if case .verified(let tx) = result, tx.productID == monthlyId {
-                unfinishedCount += 1
+            let outcome = try await service.purchase(productId: self.monthlyId)
+            guard case .granted(let returnedUntil) = outcome else {
+                Issue.record("expected .granted, got \(outcome)")
+                return
             }
+            #expect(returnedUntil == until)
+            #expect(verifier.calls.count == 1)
+            #expect(verifier.calls.first?.productId == self.monthlyId)
+
+            var unfinishedCount = 0
+            for await result in Transaction.unfinished {
+                if case .verified(let tx) = result, tx.productID == self.monthlyId {
+                    unfinishedCount += 1
+                }
+            }
+            #expect(unfinishedCount == 0,
+                    "expected zero unfinished txns after verified purchase")
         }
-        #expect(unfinishedCount == 0,
-                "expected zero unfinished txns after verified purchase")
     }
 
     // MARK: - IAP-03 worker network failure → leave UNFINISHED
 
     @Test
     func testWorkerNetworkFailure_leavesTransactionUnfinished() async throws {
-        let product = try await monthlyProduct()
-        let verifier = StubReceiptVerifier(result: .failure(
-            VerifyReceiptError.network("offline")
-        ))
-        let service = makeService(verifier: verifier, product: product)
+        try await withSKTestDaemon {
+            let product = try await self.monthlyProduct()
+            let verifier = StubReceiptVerifier(result: .failure(
+                VerifyReceiptError.network("offline")
+            ))
+            let service = self.makeService(verifier: verifier, product: product)
 
-        await #expect(throws: PurchaseError.self) {
-            _ = try await service.purchase(productId: self.monthlyId)
-        }
-
-        var foundUnfinished = false
-        for await result in Transaction.unfinished {
-            if case .verified(let tx) = result, tx.productID == monthlyId {
-                foundUnfinished = true
+            await #expect(throws: PurchaseError.self) {
+                _ = try await service.purchase(productId: self.monthlyId)
             }
+
+            var foundUnfinished = false
+            for await result in Transaction.unfinished {
+                if case .verified(let tx) = result, tx.productID == self.monthlyId {
+                    foundUnfinished = true
+                }
+            }
+            #expect(foundUnfinished, "expected an unfinished txn after worker network failure")
         }
-        #expect(foundUnfinished, "expected an unfinished txn after worker network failure")
     }
 
     // MARK: - IAP-03 worker rejects → finish, .rejected
 
     @Test
     func testWorkerRejects_finishesTransaction_outcomeRejected() async throws {
-        let product = try await monthlyProduct()
-        let verifier = StubReceiptVerifier(result: .success(
-            .init(verified: false, premiumUntil: nil, reason: "replay_detected")
-        ))
-        let service = makeService(verifier: verifier, product: product)
+        try await withSKTestDaemon {
+            let product = try await self.monthlyProduct()
+            let verifier = StubReceiptVerifier(result: .success(
+                .init(verified: false, premiumUntil: nil, reason: "replay_detected")
+            ))
+            let service = self.makeService(verifier: verifier, product: product)
 
-        let outcome = try await service.purchase(productId: monthlyId)
-        guard case .rejected(let reason) = outcome else {
-            Issue.record("expected .rejected, got \(outcome)")
-            return
-        }
-        #expect(reason == "replay_detected")
-        var unfinishedCount = 0
-        for await result in Transaction.unfinished {
-            if case .verified(let tx) = result, tx.productID == monthlyId {
-                unfinishedCount += 1
+            let outcome = try await service.purchase(productId: self.monthlyId)
+            guard case .rejected(let reason) = outcome else {
+                Issue.record("expected .rejected, got \(outcome)")
+                return
             }
+            #expect(reason == "replay_detected")
+            var unfinishedCount = 0
+            for await result in Transaction.unfinished {
+                if case .verified(let tx) = result, tx.productID == self.monthlyId {
+                    unfinishedCount += 1
+                }
+            }
+            #expect(unfinishedCount == 0)
         }
-        #expect(unfinishedCount == 0)
     }
 
-    // MARK: - IAP-03 userCancelled via injected closure
+    // MARK: - IAP-03 userCancelled via injected closure (no daemon needed)
 
     @Test
     func testUserCancelled_outcomeCancelled_noVerifierCall() async throws {
-        let product = try await monthlyProduct()
-        let verifier = StubReceiptVerifier()
-        let service = makeService(
-            verifier: verifier,
-            product: product,
-            purchaseClosure: { _ in .userCancelled }
-        )
+        // Inject a Product via the closure path — we still need a Product
+        // instance, which requires the daemon to construct. Guard.
+        try await withSKTestDaemon {
+            let product = try await self.monthlyProduct()
+            let verifier = StubReceiptVerifier()
+            let service = self.makeService(
+                verifier: verifier,
+                product: product,
+                purchaseClosure: { _ in .userCancelled }
+            )
 
-        let outcome = try await service.purchase(productId: monthlyId)
-        #expect(outcome == .cancelled)
-        #expect(verifier.calls.isEmpty)
+            let outcome = try await service.purchase(productId: self.monthlyId)
+            #expect(outcome == .cancelled)
+            #expect(verifier.calls.isEmpty)
+        }
     }
 
     // MARK: - IAP-03 pending → awaiting approval
 
     @Test
     func testPending_outcomeAwaitingApproval() async throws {
-        let product = try await monthlyProduct()
-        let verifier = StubReceiptVerifier()
-        let service = makeService(
-            verifier: verifier,
-            product: product,
-            purchaseClosure: { _ in .pending }
-        )
+        try await withSKTestDaemon {
+            let product = try await self.monthlyProduct()
+            let verifier = StubReceiptVerifier()
+            let service = self.makeService(
+                verifier: verifier,
+                product: product,
+                purchaseClosure: { _ in .pending }
+            )
 
-        let outcome = try await service.purchase(productId: monthlyId)
-        #expect(outcome == .awaitingApproval)
-        #expect(verifier.calls.isEmpty)
+            let outcome = try await service.purchase(productId: self.monthlyId)
+            #expect(outcome == .awaitingApproval)
+            #expect(verifier.calls.isEmpty)
+        }
     }
 
-    // MARK: - IAP-03 product not loaded
+    // MARK: - IAP-03 product not loaded (daemon-independent)
 
     @Test
     func testProductNotLoaded_throwsProductNotLoaded() async throws {
-        let product = try await monthlyProduct()
+        // No need for SKTestSession daemon — uses a fetcher that always
+        // returns nil for the missing id. Runs unconditionally.
         let verifier = StubReceiptVerifier()
-        let service = makeService(verifier: verifier, product: product)
+        let fetcher = AlwaysNilProductFetcher()
+        let service = PurchaseService(
+            productFetcher: fetcher,
+            verifier: verifier,
+            purchaseClosure: nil
+        )
 
         await #expect(throws: PurchaseError.self) {
             _ = try await service.purchase(productId: "org.fidexa.rishi.pro.does_not_exist")
@@ -179,56 +231,60 @@ struct PurchaseServiceTests {
 
     @Test
     func testReplayUnfinished_processesUnfinishedTransactionsOnLaunch() async throws {
-        let product = try await monthlyProduct()
-        let failVerifier = StubReceiptVerifier(result: .failure(
-            VerifyReceiptError.network("offline")
-        ))
-        let firstService = makeService(verifier: failVerifier, product: product)
-        _ = try? await firstService.purchase(productId: monthlyId)
-        #expect(failVerifier.calls.count == 1)
+        try await withSKTestDaemon {
+            let product = try await self.monthlyProduct()
+            let failVerifier = StubReceiptVerifier(result: .failure(
+                VerifyReceiptError.network("offline")
+            ))
+            let firstService = self.makeService(verifier: failVerifier, product: product)
+            _ = try? await firstService.purchase(productId: self.monthlyId)
+            #expect(failVerifier.calls.count == 1)
 
-        let recoverVerifier = StubReceiptVerifier(result: .success(
-            .init(verified: true, premiumUntil: .distantFuture, reason: nil)
-        ))
-        let secondService = makeService(verifier: recoverVerifier, product: product)
-        await secondService.replayUnfinished()
-        #expect(recoverVerifier.calls.count >= 1,
-                "expected replayUnfinished to invoke the verifier at least once")
+            let recoverVerifier = StubReceiptVerifier(result: .success(
+                .init(verified: true, premiumUntil: .distantFuture, reason: nil)
+            ))
+            let secondService = self.makeService(verifier: recoverVerifier, product: product)
+            await secondService.replayUnfinished()
+            #expect(recoverVerifier.calls.count >= 1,
+                    "expected replayUnfinished to invoke the verifier at least once")
+        }
     }
 
     // MARK: - IAP-03 in-flight dedup: listener skips same-session purchase
 
     @Test
     func testInFlightDeduplication_listener_skips_same_session_purchase() async throws {
-        let product = try await monthlyProduct()
-        let blockingVerifier = BlockingStubReceiptVerifier()
-        let service = makeService(verifier: blockingVerifier, product: product)
+        try await withSKTestDaemon {
+            let product = try await self.monthlyProduct()
+            let blockingVerifier = BlockingStubReceiptVerifier()
+            let service = self.makeService(verifier: blockingVerifier, product: product)
 
-        let purchaseTask = Task { try await service.purchase(productId: self.monthlyId) }
+            let purchaseTask = Task { try await service.purchase(productId: self.monthlyId) }
 
-        try await waitUntil(timeout: 2.0) {
-            await blockingVerifier.callCount() >= 1
-        }
-        let preDispatchCount = await blockingVerifier.callCount()
-        #expect(preDispatchCount == 1)
-
-        var matched: VerificationResult<Transaction>?
-        for await result in Transaction.unfinished {
-            if case .verified(let tx) = result, tx.productID == monthlyId {
-                matched = result
-                break
+            try await self.waitUntil(timeout: 2.0) {
+                await blockingVerifier.callCount() >= 1
             }
-        }
-        if let synthetic = matched {
-            await service.processUpdate(synthetic, source: "test_listener")
-        }
-        let midCount = await blockingVerifier.callCount()
-        #expect(midCount == 1, "listener double-handled an in-flight txn")
+            let preDispatchCount = await blockingVerifier.callCount()
+            #expect(preDispatchCount == 1)
 
-        await blockingVerifier.release(
-            with: .init(verified: true, premiumUntil: .distantFuture, reason: nil)
-        )
-        _ = try? await purchaseTask.value
+            var matched: VerificationResult<Transaction>?
+            for await result in Transaction.unfinished {
+                if case .verified(let tx) = result, tx.productID == self.monthlyId {
+                    matched = result
+                    break
+                }
+            }
+            if let synthetic = matched {
+                await service.processUpdate(synthetic, source: "test_listener")
+            }
+            let midCount = await blockingVerifier.callCount()
+            #expect(midCount == 1, "listener double-handled an in-flight txn")
+
+            await blockingVerifier.release(
+                with: .init(verified: true, premiumUntil: .distantFuture, reason: nil)
+            )
+            _ = try? await purchaseTask.value
+        }
     }
 
     // MARK: - Test utilities
@@ -246,13 +302,17 @@ struct PurchaseServiceTests {
     }
 }
 
-// MARK: - Test-only fetcher
+// MARK: - Test-only fetchers
 
 private struct SingleProductFetcher: ProductFetching, @unchecked Sendable {
     let product: Product
     func rawProduct(for productId: String) async -> Product? {
         product.id == productId ? product : nil
     }
+}
+
+private struct AlwaysNilProductFetcher: ProductFetching {
+    func rawProduct(for productId: String) async -> Product? { nil }
 }
 
 // MARK: - Blocking stub for in-flight dedup test
