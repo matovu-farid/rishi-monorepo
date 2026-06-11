@@ -119,8 +119,15 @@ final class AppDependencies {
     /// IAP-06: user-initiated restore via `AppStore.sync()` +
     /// `Transaction.currentEntitlements` walk.
     let restoreService: RestoreService
-    /// IAP-10: worker JWS verifier wrapping `WorkerClient`.
-    let workerReceiptVerifier: WorkerReceiptVerifier
+    /// IAP-10: receipt verifier (existential). Normally
+    /// `WorkerReceiptVerifier` (Release + DEBUG with the stub flag off).
+    /// In DEBUG, when `UserDefaults RishiUseStubReceiptVerifier == YES`,
+    /// `AppDependencies` swaps in `DebugStubReceiptVerifier` (Phase 14
+    /// plan 14-07) so simulator builds can exercise the IAP flow without
+    /// a live worker. The field name is retained for source-stability
+    /// against existing tests; the runtime type may be either concrete
+    /// verifier.
+    let workerReceiptVerifier: any ReceiptVerifier
 
     // Settings (Phase 11 — telemetry opt-in)
     /// SET-02: backs the Privacy section toggle. Sink forwards to
@@ -410,7 +417,21 @@ final class AppDependencies {
         //   Launch hooks: replayUnfinished() then listener.start()
         //   Optional: pre-warm products when StoreKitIAPFlag is ON
         let productService = StoreKitProductService()
-        let receiptVerifier = WorkerReceiptVerifier(client: workerClient)
+        // Phase 14 plan 14-07 — DEBUG stub swap.
+        // In DEBUG, when `defaults write org.fidexa.rishi RishiUseStubReceiptVerifier -bool YES`
+        // is set, route receipt verification through the in-process
+        // `DebugStubReceiptVerifier` (always-verified, 30-day premium) so
+        // the simulator IAP flow can be exercised offline. Release builds
+        // skip the entire branch (stub type is `#if DEBUG`-stripped).
+        let receiptVerifier: any ReceiptVerifier = {
+            #if DEBUG
+            if UserDefaults.standard.bool(forKey: "RishiUseStubReceiptVerifier") {
+                Log.event("iap.verifier.stub.enabled", level: .info)
+                return DebugStubReceiptVerifier()
+            }
+            #endif
+            return WorkerReceiptVerifier(client: workerClient)
+        }()
         let purchaseService = PurchaseService(
             productFetcher: productService,
             verifier: receiptVerifier

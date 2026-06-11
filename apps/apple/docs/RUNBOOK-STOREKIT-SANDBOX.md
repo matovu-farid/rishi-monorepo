@@ -252,3 +252,44 @@ If any step in §5–§8 fails after retrying with a fresh tester (§9):
 3. Capture Xcode → **Debug** → **StoreKit** → **Manage Transactions** screenshot.
 4. Capture a screenshot of the ASC product page showing the product status.
 5. File in `#ios-billing` Slack with the above four attachments, the build number, the device model + iOS version, and the Sandbox tester email used.
+
+---
+
+## 13. DEBUG stub verifier (offline / pre-deploy testing)
+
+Phase 14 plan 14-07 adds `DebugStubReceiptVerifier`, a `#if DEBUG`-gated
+actor that returns `verified: true` with `premiumUntil = now + 30 days`
+without contacting the worker. Use this when the worker is unreachable
+or not yet deployed, but you still need to exercise the iOS IAP flow.
+
+### Activate (simulator)
+
+Run BOTH commands — the StoreKit feature flag turns the IAP graph on,
+the stub flag swaps the verifier:
+
+```bash
+defaults write org.fidexa.rishi StoreKitIAPFlag -bool YES
+defaults write org.fidexa.rishi RishiUseStubReceiptVerifier -bool YES
+```
+
+Relaunch the app. The graph wires `DebugStubReceiptVerifier` in
+`AppDependencies` and emits `iap.verifier.stub.enabled` at .info.
+
+### Deactivate
+
+```bash
+defaults delete org.fidexa.rishi RishiUseStubReceiptVerifier
+```
+
+(Leave `StoreKitIAPFlag` ON unless you also want the IAP graph dormant.)
+
+### Compile-strip guarantee
+
+The entire `DebugStubReceiptVerifier.swift` source file and the
+corresponding branch in `AppDependencies.swift` are wrapped in `#if DEBUG`.
+Release builds emit a zero-symbol object for the stub — it physically
+cannot ship to TestFlight or the App Store. Pattern mirrors Phase 3's
+`DevBypassConfig`.
+
+A future CI step (`nm .build/release/RishiBilling.o | grep DebugStub`
+must return empty) is tracked as deferred in `14-07-SUMMARY.md`.
