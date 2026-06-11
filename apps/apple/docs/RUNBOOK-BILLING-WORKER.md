@@ -114,6 +114,130 @@ curl -sS -X POST https://api.fidexa.org/api/billing/apple-webhook \
 # → 400 (envelope validation; this is correct — Apple posts a signed payload, not an empty body)
 ```
 
+### 1.4 SIWA Provider (Apple Sign-In)
+
+The worker provides Sign in with Apple via Better Auth's first-party Apple social provider (Phase 15). Full cross-team wire contract: see [`WORKER-CONTRACT-AUTH.md`](./WORKER-CONTRACT-AUTH.md) (repo path `apps/apple/docs/WORKER-CONTRACT-AUTH.md`). This section covers operator setup only.
+
+#### Required Wrangler Secrets
+
+The Apple provider only mounts when all four of these secrets are present (see `workers/worker/src/auth.ts:35-48` — the provider is conditionally added to `socialProviders`). Three are NEW for Phase 15; the fourth is shared with Phase 14 and already deployed.
+
+| Secret                    | Source                                                                                                          | Status |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------- | ------ |
+| `APPLE_SIWA_CLIENT_ID`    | Static value: `org.fidexa.rishi` (iOS bundle identifier — doubles as the OAuth audience for native ID-token sign-in) | NEW    |
+| `APPLE_SIWA_KEY_ID`       | Apple Developer Console > Certificates, IDs & Profiles > Keys > select the SIWA-enabled key > copy the 10-char `Key ID` | NEW    |
+| `APPLE_SIWA_PRIVATE_KEY`  | Full contents of the downloaded `AuthKey_<KEY_ID>.p8` PKCS8 PEM file (BEGIN/END markers included)                | NEW    |
+| `APPLE_TEAM_ID`           | Apple Developer Console > Membership > Team ID                                                                  | Shared with Phase 14 IAP — already deployed; do NOT duplicate |
+
+Set them ONCE per environment:
+
+```bash
+cd workers/worker
+
+pnpm exec wrangler secret put APPLE_SIWA_CLIENT_ID
+# Value: org.fidexa.rishi
+
+pnpm exec wrangler secret put APPLE_SIWA_KEY_ID
+# Value: the 10-char Key ID from Apple Developer Console
+
+pnpm exec wrangler secret put APPLE_SIWA_PRIVATE_KEY
+# Value: paste the entire .p8 file contents, including
+#   -----BEGIN PRIVATE KEY-----
+#   ...
+#   -----END PRIVATE KEY-----
+# wrangler accepts multi-line input on stdin.
+```
+
+Confirm all four are present:
+
+```bash
+pnpm exec wrangler secret list | grep APPLE_
+# Expect:
+#   APPLE_ASC_KEY_ID         (Phase 14 IAP)
+#   APPLE_ASC_ISSUER_ID      (Phase 14 IAP)
+#   APPLE_ASC_PRIVATE_KEY    (Phase 14 IAP)
+#   APPLE_BUNDLE_ID          (Phase 14 IAP)
+#   APPLE_TEAM_ID            (Phase 14 IAP, reused by SIWA)
+#   APPLE_SIWA_CLIENT_ID     (Phase 15)
+#   APPLE_SIWA_KEY_ID        (Phase 15)
+#   APPLE_SIWA_PRIVATE_KEY   (Phase 15)
+```
+
+Note: APPLE_TEAM_ID is shared between Phase 14 IAP and Phase 15 SIWA. Do NOT add a second copy under a Phase-15-only name.
+
+#### .p8 Source
+
+The `.p8` is generated in Apple Developer Console:
+
+1. Sign in at https://developer.apple.com/account
+2. **Certificates, IDs & Profiles** -> **Keys** (left rail)
+3. Click **+** to register a new key
+4. Name it (e.g. `Rishi SIWA`); enable **Sign in with Apple** capability; click **Configure** and select the primary App ID (`org.fidexa.rishi`)
+5. Continue -> Register -> Download. Apple downloads `AuthKey_<KEY_ID>.p8`.
+
+The downloaded path on this operator's machine is `~/Downloads/AuthKey_<KEY_ID>.p8`. Move it OUT of `~/Downloads/` after deploy — Apple's console allows the `.p8` file to be downloaded ONCE per key, ever. Lose it and the only recovery path is to issue a new key (and reset `APPLE_SIWA_KEY_ID` + `APPLE_SIWA_PRIVATE_KEY` accordingly).
+
+Save the Key ID separately — the value goes into `APPLE_SIWA_KEY_ID` and ALSO appears as part of the `.p8` filename (`AuthKey_<KEY_ID>.p8`). Both reads must match.
+
+#### Deploy
+
+After setting the three new secrets:
+
+```bash
+cd workers/worker
+pnpm deploy
+```
+
+Same single-command flow as Phase 14 IAP — `wrangler deploy` packages the worker including the new `auth-apple-secret.ts` module and the conditional Apple provider block in `auth.ts`.
+
+#### Post-Deploy Verification
+
+Run all four checks. All four must pass before flipping the iOS SIWA flag for production.
+
+1. **Provider is mounted** — the literal-null get-session contract proves Better Auth wired up the apple provider AND that the Optional decoder fix from Plan 15-05 works end-to-end:
+
+```bash
+curl -sS -w "\nHTTP %{http_code}\n" https://api.fidexa.org/api/auth/get-session
+# Expected:
+#   null
+#   HTTP 200
+```
+
+A 200 with body `null` means Better Auth is mounted (`/api/auth/*` catch-all is live) AND it correctly returns its standard "no session" envelope. If you see HTTP 401 or 404, the worker did not deploy with the new auth wiring — re-check `pnpm deploy` output.
+
+2. **Apple provider is registered** — POST a deliberately invalid JWT and confirm the provider runs and rejects it (rather than returning `INVALID_PROVIDER`):
+
+```bash
+curl -sS -w "\nHTTP %{http_code}\n" https://api.fidexa.org/api/auth/sign-in/social \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"apple","idToken":{"token":"deliberately-invalid","nonce":"x"},"disableRedirect":true}'
+# Expected:
+#   {"error":"INVALID_TOKEN"} (or equivalent Better Auth 401 envelope)
+#   HTTP 401
+```
+
+If you see `{"error":"INVALID_PROVIDER"}` (HTTP 400) instead, the provider did NOT mount — one of the four secrets is missing or `mintAppleClientSecret` threw at startup. Check `pnpm exec wrangler tail rishi-worker --format pretty` for a startup error.
+
+If you see HTTP 500 with a stack trace mentioning `importPKCS8`, the `APPLE_SIWA_PRIVATE_KEY` value is not a valid PKCS8 PEM — most likely the BEGIN/END markers were dropped during `wrangler secret put`. Re-set the secret with the full PEM block.
+
+3. **End-to-end iOS DEBUG simulator** — install the latest iOS DEBUG build on a simulator (or a real device with a development profile), tap **Sign in with Apple** on the signed-out screen, complete the Apple sheet, and confirm the app lands on the library screen. This exercises the full path: ASAuthorizationAppleIDProvider -> SignInWithAppleCoordinator -> `/api/auth/sign-in/social` -> Better Auth verify -> bearer-token Keychain persist -> `/api/auth/get-session` returns the `ProfileResponse` envelope on next launch -> library hydrates.
+
+The DEBUG build target was lowered to iOS 18.0 in commit `474a5fb76`; any simulator running iOS 18.0 or later works.
+
+4. **Worker logs are clean** — tail logs during the simulator sign-in and confirm no Sentry errors:
+
+```bash
+pnpm exec wrangler tail rishi-worker --format pretty | grep -i "auth\|apple"
+```
+
+Expected: a single `POST /api/auth/sign-in/social` line followed by a `GET /api/auth/get-session` line on the next launch. No `error` lines.
+
+#### Note on Google Sign-In
+
+Sign in with Google was removed from the iOS app in Phase 15 (Apple-only v1 scope). The worker's `socialProviders.google` block at `workers/worker/src/auth.ts:62-74` stays configured for future web / Android use, but iOS does NOT exercise it. No Google iOS coordinator, no Google button, no Google URL scheme in `Info.plist`. Marketing-site auth on `apps/web` is unchanged and continues to use Google's web OAuth as before.
+
+If a future iOS plan re-adds Google (it won't for v1), it will register a new SIWA-style coordinator against `POST /api/auth/sign-in/social` with `provider: "google"` — the wire contract is provider-agnostic. There is no Google-specific iOS setup step to maintain in this runbook.
+
 ---
 
 ## 2. ASC Webhook Registration
@@ -287,6 +411,7 @@ Tracked separately so a future operator does not chase them as bugs:
 
 ## 8. References
 
+- [`WORKER-CONTRACT-AUTH.md`](./WORKER-CONTRACT-AUTH.md) — cross-team SIWA auth contract (see also Section 1.4 ## SIWA Provider above for operator setup).
 - [`RUNBOOK-STOREKIT-SANDBOX.md`](./RUNBOOK-STOREKIT-SANDBOX.md) — iOS-side Sandbox flow + §13 DEBUG stub activation.
 - [`WORKER-CONTRACT-IAP.md`](./WORKER-CONTRACT-IAP.md) — cross-team contract reflecting Phase 14 deployed shapes.
 - `workers/worker/BILLING.md` — Stripe metered billing runbook (parallel system; do not confuse Apple IAP with Stripe).
