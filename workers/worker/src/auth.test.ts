@@ -1,0 +1,270 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  SignJWT,
+  generateKeyPair,
+  exportJWK,
+  exportPKCS8,
+  type KeyLike,
+  type JWK,
+} from "jose";
+import { createAuth } from "./auth";
+import type { CloudflareBindings } from "./index";
+
+// ─── Fixture helpers ─────────────────────────────────────────────────────────
+// Apple's iOS identity tokens are ES256 JWTs signed by Apple's authorization
+// server. Tests synthesize an equivalent locally by minting an ephemeral ES256
+// keypair, publishing the public half on a stubbed `https://appleid.apple.com/auth/keys`
+// JWKS endpoint, and signing the JWT with the private half.
+
+interface AppleFixture {
+  publicKey: KeyLike;
+  privateKey: KeyLike;
+  jwk: JWK;
+  kid: string;
+}
+
+async function generateAppleSigningKey(): Promise<AppleFixture> {
+  const { publicKey, privateKey } = await generateKeyPair("ES256", {
+    extractable: true,
+  });
+  const jwk = await exportJWK(publicKey);
+  const kid = "test-apple-kid-1";
+  jwk.kid = kid;
+  jwk.alg = "ES256";
+  jwk.use = "sig";
+  return { publicKey, privateKey, jwk, kid };
+}
+
+interface IdTokenOpts {
+  fixture: AppleFixture;
+  sub: string;
+  email: string | null;
+  nonceClaim?: string;
+  audience: string;
+  issuer?: string;
+  emailVerified?: boolean;
+  isPrivateEmail?: boolean;
+  expSecondsFromNow?: number;
+}
+
+async function mintAppleIdToken(opts: IdTokenOpts): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const exp = now + (opts.expSecondsFromNow ?? 60 * 30);
+  const claims: Record<string, unknown> = {
+    sub: opts.sub,
+    email_verified: opts.emailVerified ?? true,
+    is_private_email: opts.isPrivateEmail ?? false,
+  };
+  if (opts.email !== null) claims.email = opts.email;
+  if (opts.nonceClaim !== undefined) claims.nonce = opts.nonceClaim;
+  return await new SignJWT(claims)
+    .setProtectedHeader({ alg: "ES256", kid: opts.fixture.kid })
+    .setIssuer(opts.issuer ?? "https://appleid.apple.com")
+    .setAudience(opts.audience)
+    .setIssuedAt(now)
+    .setExpirationTime(exp)
+    .sign(opts.fixture.privateKey);
+}
+
+function stubAppleJWKS(fixture: AppleFixture): ReturnType<typeof vi.fn> {
+  const realFetch = globalThis.fetch;
+  const spy = vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    if (url.includes("appleid.apple.com/auth/keys")) {
+      return new Response(JSON.stringify({ keys: [fixture.jwk] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return realFetch(input as RequestInit & Request, init);
+  });
+  vi.stubGlobal("fetch", spy);
+  return spy;
+}
+
+// ─── Env binding helpers ─────────────────────────────────────────────────────
+
+const BUNDLE_ID = "org.fidexa.rishi";
+
+async function makeEnv(
+  fixture: AppleFixture,
+  overrides: Partial<CloudflareBindings> = {},
+): Promise<CloudflareBindings> {
+  // Generate a separate ECDSA P-256 key purely for the static client-secret
+  // mint (the iOS ID-token branch does NOT consume this key, but Better Auth's
+  // typed Apple options require a clientSecret value at config time).
+  const { privateKey: secretKey } = await generateKeyPair("ES256", {
+    extractable: true,
+  });
+  const pem = await exportPKCS8(secretKey);
+  return {
+    BETTER_AUTH_SECRET: "test-secret-not-used-for-jwt-verify",
+    DEEPGRAM_KEY: "",
+    OPENAI_API_KEY: "",
+    GOOGLE_CLIENT_ID: "test-google-client",
+    GOOGLE_CLIENT_SECRET: "test-google-secret",
+    RESEND_API_KEY: "test-resend",
+    PUBLIC_API_URL: "https://api.fidexa.org",
+    PUBLIC_WEB_URL: "https://rishi.fidexa.org",
+    RISHI_DESKTOP_STATE: {} as KVNamespace,
+    UPSTASH_REDIS_REST_URL: "",
+    UPSTASH_REDIS_REST_TOKEN: "",
+    DB: {} as D1Database,
+    BOOK_STORAGE: {} as R2Bucket,
+    R2_ACCESS_KEY_ID: "",
+    R2_SECRET_ACCESS_KEY: "",
+    CLOUDFLARE_ACCOUNT_ID: "",
+    APPLE_SIWA_CLIENT_ID: BUNDLE_ID,
+    APPLE_SIWA_KEY_ID: "H37XG77FHH",
+    APPLE_SIWA_PRIVATE_KEY: pem,
+    APPLE_TEAM_ID: "TESTTEAMID",
+    ...overrides,
+  } as CloudflareBindings;
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
+
+describe("createAuth: Better Auth Apple social provider", () => {
+  let fixture: AppleFixture;
+
+  beforeEach(async () => {
+    fixture = await generateAppleSigningKey();
+    stubAppleJWKS(fixture);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("registers apple provider when secrets present", async () => {
+    const env = await makeEnv(fixture);
+    const auth = await createAuth(env);
+    const ctx = await auth.$context;
+    // Better Auth exposes registered social providers on the runtime context.
+    // The shape is `socialProviders: Array<{ id: string; ... }>` for the
+    // resolved providers. Lookup is by `id === "apple"`.
+    const providers = ctx.socialProviders as Array<{ id: string }>;
+    const apple = providers.find((p) => p.id === "apple");
+    expect(apple).toBeDefined();
+  });
+
+  it("apple idToken happy path: POST /api/auth/sign-in/social returns 200 with token+user", async () => {
+    const env = await makeEnv(fixture);
+    const auth = await createAuth(env);
+    const nonce = "deadbeefcafef00d";
+    const idToken = await mintAppleIdToken({
+      fixture,
+      sub: "001234.abcdef0123456789.5678",
+      email: "u@example.com",
+      nonceClaim: nonce,
+      audience: BUNDLE_ID,
+    });
+    const req = new Request(`${env.PUBLIC_API_URL}/api/auth/sign-in/social`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: "apple",
+        idToken: {
+          token: idToken,
+          nonce,
+          user: {
+            name: { firstName: "Jane", lastName: "Doe" },
+            email: "u@example.com",
+          },
+        },
+        disableRedirect: true,
+      }),
+    });
+    const res = await auth.handler(req);
+    const bodyText = await res.text();
+    expect(res.status, `body=${bodyText}`).toBe(200);
+    const body = JSON.parse(bodyText);
+    expect(body.redirect).toBe(false);
+    expect(typeof body.token).toBe("string");
+    expect(body.token.length).toBeGreaterThan(0);
+    expect(body.user).toBeDefined();
+    expect(body.user.id).toBe("001234.abcdef0123456789.5678");
+    expect(body.user.email).toBe("u@example.com");
+  });
+
+  it("apple idToken nonce mismatch: returns 401 INVALID_TOKEN", async () => {
+    const env = await makeEnv(fixture);
+    const auth = await createAuth(env);
+    const idToken = await mintAppleIdToken({
+      fixture,
+      sub: "001234.aaaaaaaaaaaaaa.0000",
+      email: "u2@example.com",
+      nonceClaim: "AAAAAAAA", // JWT claims nonce A
+      audience: BUNDLE_ID,
+    });
+    const req = new Request(`${env.PUBLIC_API_URL}/api/auth/sign-in/social`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: "apple",
+        idToken: {
+          token: idToken,
+          nonce: "BBBBBBBB", // request asserts nonce B → mismatch
+        },
+        disableRedirect: true,
+      }),
+    });
+    const res = await auth.handler(req);
+    expect(res.status).toBe(401);
+    const body = await res.json() as { code?: string; message?: string };
+    // Better Auth surfaces invalid id tokens with code INVALID_TOKEN.
+    expect(body.code ?? body.message ?? "").toMatch(/INVALID_TOKEN|invalid id token/i);
+  });
+
+  it("get-session returns literal JSON null when no session present", async () => {
+    const env = await makeEnv(fixture);
+    const auth = await createAuth(env);
+    const req = new Request(`${env.PUBLIC_API_URL}/api/auth/get-session`, {
+      method: "GET",
+    });
+    const res = await auth.handler(req);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text.trim()).toBe("null");
+  });
+
+  it("private-relay email passes through unchanged in response.user.email", async () => {
+    const env = await makeEnv(fixture);
+    const auth = await createAuth(env);
+    const nonce = "abc123def456";
+    const idToken = await mintAppleIdToken({
+      fixture,
+      sub: "001234.privaterelay0000.0001",
+      email: "u@privaterelay.appleid.com",
+      nonceClaim: nonce,
+      audience: BUNDLE_ID,
+      isPrivateEmail: true,
+    });
+    const req = new Request(`${env.PUBLIC_API_URL}/api/auth/sign-in/social`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: "apple",
+        idToken: {
+          token: idToken,
+          nonce,
+          user: {
+            name: { firstName: "Private", lastName: "Relay" },
+            email: "u@privaterelay.appleid.com",
+          },
+        },
+        disableRedirect: true,
+      }),
+    });
+    const res = await auth.handler(req);
+    const bodyText = await res.text();
+    expect(res.status, `body=${bodyText}`).toBe(200);
+    const body = JSON.parse(bodyText);
+    expect(body.user.email).toBe("u@privaterelay.appleid.com");
+  });
+});
