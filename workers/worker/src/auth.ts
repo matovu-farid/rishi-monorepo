@@ -1,5 +1,5 @@
 import { betterAuth } from "better-auth"
-import { magicLink, bearer } from "better-auth/plugins"
+import { magicLink, bearer, customSession } from "better-auth/plugins"
 import { passkey } from "@better-auth/passkey"
 import { stripe } from "@better-auth/stripe"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
@@ -9,12 +9,103 @@ import { magicLinkEmail } from "./email-templates/magic-link"
 import { createStripeClient } from "./billing/stripe"
 import { ensureCreditAndSubscription } from "./billing/backfill"
 import { sendPaymentFailedEmail } from "./billing/payment-failed-email"
-import { user as userTable } from "@rishi/shared/schema"
-import { eq } from "drizzle-orm"
+import {
+  user as userTable,
+  appleSubscriptions,
+  subscription,
+} from "@rishi/shared/schema"
+import { and, desc, eq, inArray } from "drizzle-orm"
 import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config"
 import type Stripe from "stripe"
 import type { CloudflareBindings } from "./index"
 import { mintAppleClientSecret } from "./auth-apple-secret"
+
+// ─── has_pro session projection (Phase 17-01) ───────────────────────────────
+// iOS RishiBilling/Service/EntitlementService.swift:75 calls GET /api/auth/get-session
+// on every signed-in launch and decodes {user, has_pro}
+// (apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/AuthAPI.swift:176-185).
+// Better Auth's default get-session emits {user, session}; without has_pro the
+// decoder throws and the entitlement check fails for every signed-in user.
+//
+// `deriveHasPro` is the pure handler. Precedence MUST mirror handleBillingMe
+// (./billing/apple-me.ts:77-95) so the two endpoints agree on premium state:
+//   1. Apple `apple_subscriptions` row with status in ('active','in_grace')
+//      → has_pro=true (Apple wins so we don't double-bill).
+//   2. Otherwise Stripe `subscription` row with status in ('active','trialing')
+//      → has_pro=true (Stripe fallback for pre-IAP customers).
+//   3. Otherwise has_pro=false.
+
+export interface HasProDeps {
+  db: {
+    findAppleActive(userId: string): Promise<{
+      currentPeriodEnd: Date
+      status: string
+    } | null>
+    findStripeActive(userId: string): Promise<{
+      periodEnd: number
+      status: string
+    } | null>
+  }
+}
+
+export async function deriveHasPro(input: {
+  userId: string
+  deps: HasProDeps
+}): Promise<boolean> {
+  const apple = await input.deps.db.findAppleActive(input.userId)
+  if (apple) return true
+  const stripe = await input.deps.db.findStripeActive(input.userId)
+  if (stripe) return true
+  return false
+}
+
+// Production resolver wiring deriveHasPro against the D1-backed Drizzle client.
+// Mirrors the BillingMeDeps construction in registerBillingMeRoute so the two
+// sites stay aligned — any future change to status filters MUST land in both.
+function makeHasProDeps(db: ReturnType<typeof createDb>): HasProDeps {
+  return {
+    db: {
+      findAppleActive: async (uid) => {
+        const row = await db
+          .select({
+            currentPeriodEnd: appleSubscriptions.currentPeriodEnd,
+            status: appleSubscriptions.status,
+          })
+          .from(appleSubscriptions)
+          .where(
+            and(
+              eq(appleSubscriptions.userId, uid),
+              inArray(appleSubscriptions.status, ["active", "in_grace"]),
+            ),
+          )
+          .orderBy(desc(appleSubscriptions.currentPeriodEnd))
+          .get()
+        return row ?? null
+      },
+      findStripeActive: async (uid) => {
+        const row = await db
+          .select({
+            periodEnd: subscription.periodEnd,
+            status: subscription.status,
+          })
+          .from(subscription)
+          .where(
+            and(
+              eq(subscription.referenceId, uid),
+              inArray(subscription.status, ["active", "trialing"]),
+            ),
+          )
+          .orderBy(desc(subscription.periodEnd))
+          .get()
+        if (!row || row.periodEnd == null) return null
+        return {
+          periodEnd: Math.floor(row.periodEnd.getTime() / 1000),
+          status: row.status ?? "active",
+        }
+      },
+    },
+  }
+}
 
 export async function createAuth(env: CloudflareBindings) {
   const db = createDb(env.DB)
@@ -86,6 +177,17 @@ export async function createAuth(env: CloudflareBindings) {
     },
     plugins: [
       bearer(),
+      // Phase 17-01: project has_pro into the get-session response body so iOS
+      // EntitlementService.refresh() decodes {user, has_pro} without throwing.
+      // Better Auth's customSession only runs when a session exists, so
+      // unauthenticated callers still receive the literal JSON null body.
+      customSession(async ({ user, session }) => {
+        const has_pro = await deriveHasPro({
+          userId: user.id,
+          deps: makeHasProDeps(db),
+        })
+        return { user, session, has_pro }
+      }),
       magicLink({
         sendMagicLink: async ({ email, url }) => {
           const resend = new Resend(env.RESEND_API_KEY)
