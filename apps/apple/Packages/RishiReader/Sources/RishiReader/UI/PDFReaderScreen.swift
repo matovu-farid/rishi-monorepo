@@ -126,69 +126,70 @@ public struct PDFReaderScreen: View {
 
             #if canImport(UIKit)
             // Outer GeometryReader feeds the tap-region resolver with the
-            // live page-area size. PageTurnAnimator owns its own inner
-            // GeometryReader for the drag/slide math; PDFKit's
-            // UIPageViewController keeps owning its internal swipe.
+            // live page-area size. Phase 18 Plan 18-03 (F-P1-02): the
+            // engine renders directly inside this ZStack — the old
+            // SwiftUI page-turn wrapper installed its own DragGesture
+            // that captured horizontal swipes and never forwarded them
+            // to PDFKit's `UIPageViewController`, so the user could not
+            // swipe pages. Horizontal paging now belongs to PDFKit
+            // (`PDFView.usePageViewController(true)`) end-to-end. The
+            // Color.clear overlay still sits ABOVE the PDFKit `PDFView`
+            // so the SwiftUI `SpatialTapGesture` receives taps (the
+            // PDFView's UIKit gesture stack would otherwise greedily
+            // claim them) — `.simultaneousGesture` keeps PDFKit's own
+            // pan/swipe recognizers active beneath it.
             GeometryReader { proxy in
-                PageTurnAnimator(
-                    pageIndex: viewModel.pageIndex,
-                    totalPages: viewModel.totalPages,
-                    onCommitNext: {
-                        let next = min(viewModel.pageIndex + 1, max(viewModel.totalPages - 1, 0))
-                        viewModel.seek(toPage: next)
-                    },
-                    onCommitPrevious: {
-                        let prev = max(viewModel.pageIndex - 1, 0)
-                        viewModel.seek(toPage: prev)
-                    },
-                    onBoundary: { /* PageTurnAnimator already snaps back at edges. */ }
-                ) {
-                    // ZStack so the transparent SwiftUI tap layer sits ABOVE
-                    // the PDFKit `PDFView`. Attaching `.gesture(...)` to the
-                    // `UIViewControllerRepresentable` itself loses every tap
-                    // to PDFView's internal `UIPageViewController` gesture
-                    // stack — the tap closure never fires, the chrome stays
-                    // hidden, and the user is trapped on the first page with
-                    // no `xmark` visible. The overlay's
-                    // `.contentShape(Rectangle())` makes the clear color
-                    // hit-testable, and `.simultaneousGesture` lets
-                    // `PageTurnAnimator`'s `DragGesture` still receive drags.
-                    ZStack {
-                        PDFReaderView(
-                            viewModel: viewModel,
-                            onSelectionChange: { sel in
-                                handleSelectionChange(sel)
-                            },
-                            onPDFViewReady: { view in
-                                pdfViewRef = view
-                            }
-                        )
+                ZStack {
+                    PDFReaderView(
+                        viewModel: viewModel,
+                        onSelectionChange: { sel in
+                            handleSelectionChange(sel)
+                        },
+                        onPDFViewReady: { view in
+                            pdfViewRef = view
+                        }
+                    )
 
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .simultaneousGesture(
-                                SpatialTapGesture()
-                                    .onEnded { event in
-                                        let resolver = ReaderTapRegionResolver()
-                                        let decision = resolver.decide(
-                                            at: event.location,
-                                            in: readerAreaSize
-                                        )
-                                        switch decision {
-                                        case .toggleChrome:
-                                            withAnimation(.easeInOut(duration: 0.25)) {
-                                                chrome.toggle()
-                                            }
-                                        case .nextPage:
-                                            let next = min(viewModel.pageIndex + 1, max(viewModel.totalPages - 1, 0))
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .simultaneousGesture(
+                            SpatialTapGesture()
+                                .onEnded { event in
+                                    let resolver = ReaderTapRegionResolver()
+                                    let decision = resolver.decide(
+                                        at: event.location,
+                                        in: readerAreaSize
+                                    )
+                                    switch decision {
+                                    case .toggleChrome:
+                                        withAnimation(.easeInOut(duration: 0.25)) {
+                                            chrome.toggle()
+                                        }
+                                    case .nextPage:
+                                        let next = min(viewModel.pageIndex + 1, max(viewModel.totalPages - 1, 0))
+                                        if next == viewModel.pageIndex {
+                                            // Phase 18 Plan 18-02 — F-P1-01:
+                                            // clamp didn't move = boundary hit.
+                                            // Drives `.sensoryFeedback(.warning,
+                                            // trigger: viewModel.lastBoundaryHitTick)`.
+                                            viewModel.hitBoundary()
+                                        } else {
+                                            // Drives `.sensoryFeedback(.impact(.light),
+                                            // trigger: viewModel.currentPageIndex)`.
+                                            viewModel.advancePage()
                                             viewModel.seek(toPage: next)
-                                        case .previousPage:
-                                            let prev = max(viewModel.pageIndex - 1, 0)
+                                        }
+                                    case .previousPage:
+                                        let prev = max(viewModel.pageIndex - 1, 0)
+                                        if prev == viewModel.pageIndex {
+                                            viewModel.hitBoundary()
+                                        } else {
+                                            viewModel.advancePage()
                                             viewModel.seek(toPage: prev)
                                         }
                                     }
-                            )
-                    }
+                                }
+                        )
                 }
                 .onAppear { readerAreaSize = proxy.size }
                 .onChange(of: proxy.size) { _, newSize in readerAreaSize = newSize }
@@ -271,6 +272,16 @@ public struct PDFReaderScreen: View {
                 }
             }
         }
+        // Phase 18 Plan 18-02 — F-P1-01.
+        // Native SwiftUI haptics. SwiftUI fires the haptic each time the
+        // trigger value changes. Page-turn call sites bump
+        // `currentPageIndex` (a synthetic Int counter on the VM —
+        // distinct from `pageIndex`, which tracks the PDF page) and
+        // boundary-clamp sites bump `lastBoundaryHitTick`. SwiftUI
+        // gates haptics on Reduce Motion automatically — no manual
+        // `.prepare()` priming, no `UIImpactFeedbackGenerator`.
+        .sensoryFeedback(.impact(weight: .light), trigger: viewModel.currentPageIndex)
+        .sensoryFeedback(.warning, trigger: viewModel.lastBoundaryHitTick)
         #if !os(macOS)
         .statusBarHidden(!chrome.isVisible)
         .persistentSystemOverlays(chrome.isVisible ? .automatic : .hidden)
@@ -285,13 +296,25 @@ public struct PDFReaderScreen: View {
             }
         }
         // Phase 12 Plan 12-01 — Mac menu arrow paging.
+        // Phase 18 Plan 18-02 (F-P1-01) — bump the haptic trigger
+        // counters so `.sensoryFeedback` fires from Mac arrow keys too.
         .onReceive(NotificationCenter.default.publisher(for: ReaderMacCommandNotification.pageForward)) { _ in
             let next = min(viewModel.pageIndex + 1, max(viewModel.totalPages - 1, 0))
-            viewModel.seek(toPage: next)
+            if next == viewModel.pageIndex {
+                viewModel.hitBoundary()
+            } else {
+                viewModel.advancePage()
+                viewModel.seek(toPage: next)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: ReaderMacCommandNotification.pageBackward)) { _ in
             let prev = max(viewModel.pageIndex - 1, 0)
-            viewModel.seek(toPage: prev)
+            if prev == viewModel.pageIndex {
+                viewModel.hitBoundary()
+            } else {
+                viewModel.advancePage()
+                viewModel.seek(toPage: prev)
+            }
         }
         .sheet(isPresented: $showTOC) {
             PDFTOCView(

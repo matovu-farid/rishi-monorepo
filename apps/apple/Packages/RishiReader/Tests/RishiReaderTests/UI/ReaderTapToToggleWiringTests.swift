@@ -18,10 +18,10 @@ import CoreGraphics
 /// cover with no `xmark` visible.
 ///
 /// The fix moves the tap gesture onto a transparent `Color.clear` overlay
-/// that sits ABOVE the engine inside the `PageTurnAnimator`'s content
-/// slot, uses `.simultaneousGesture` so the parent `DragGesture` still
-/// works, and flips `initiallyVisible` to `true` so the `xmark` is always
-/// reachable on first open.
+/// that sits ABOVE the engine inside the ZStack, and uses
+/// `.simultaneousGesture` so the engine's own pan/swipe recognizers
+/// (Readium's WKWebView page scroller, PDFKit's `UIPageViewController`)
+/// keep receiving horizontal swipes for paging.
 ///
 /// This suite cannot drive SwiftUI's hit-testing in a unit test, so it
 /// covers the *behavioral* contract: feed the resolver the same point a
