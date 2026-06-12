@@ -68,6 +68,8 @@ struct BackgroundTaskCoordinatorTests {
         let bookUploader = BookUploader(workerClient: client, metadataStore: metadata, fileStorage: fileStorage)
         let positionUploader = PositionUploader(workerClient: client, positionStore: positionStore, bookStore: bookStore, metadataStore: metadata)
         let highlightUploader = HighlightUploader(workerClient: client, highlightStore: highlightStore, metadataStore: metadata)
+        let conversationUploader = ConversationUploader(workerClient: client, conversationStore: NoopConversationStore(), metadataStore: metadata)
+        let messageUploader = MessageUploader(workerClient: client, messageStore: NoopMessageStore(), metadataStore: metadata)
         let fetcher = RemoteChangeFetcher(workerClient: client, metadataStore: metadata)
         let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, metadataStore: metadata)
 
@@ -78,6 +80,8 @@ struct BackgroundTaskCoordinatorTests {
             bookUploader: bookUploader,
             positionUploader: positionUploader,
             highlightUploader: highlightUploader,
+            conversationUploader: conversationUploader,
+            messageUploader: messageUploader,
             fetcher: fetcher,
             applier: applier
         )
@@ -109,6 +113,18 @@ struct BackgroundTaskCoordinatorTests {
         func highlight(_ id: HighlightID) async throws -> Highlight? { nil }
         func upsert(_ highlight: Highlight) async throws {}
         func delete(_ id: HighlightID) async throws {}
+    }
+    private actor NoopConversationStore: ConversationStore {
+        func conversations(for userId: UserID) async throws -> [Conversation] { [] }
+        func conversation(_ id: ConversationID) async throws -> Conversation? { nil }
+        func upsert(_ conversation: Conversation) async throws {}
+        func delete(_ id: ConversationID) async throws {}
+    }
+    private actor NoopMessageStore: MessageStore {
+        func messages(for conversationId: ConversationID) async throws -> [Message] { [] }
+        func message(_ id: MessageID) async throws -> Message? { nil }
+        func upsert(_ message: Message) async throws {}
+        func delete(_ id: MessageID) async throws {}
     }
 
     // MARK: - Tests

@@ -73,6 +73,20 @@ struct SyncEngineChatDirtyTests {
         func delete(_ id: HighlightID) async throws { rows[id] = nil }
     }
 
+    private actor StubConversationStore: ConversationStore {
+        func conversations(for userId: UserID) async throws -> [Conversation] { [] }
+        func conversation(_ id: ConversationID) async throws -> Conversation? { nil }
+        func upsert(_ conversation: Conversation) async throws {}
+        func delete(_ id: ConversationID) async throws {}
+    }
+
+    private actor StubMessageStore: MessageStore {
+        func messages(for conversationId: ConversationID) async throws -> [Message] { [] }
+        func message(_ id: MessageID) async throws -> Message? { nil }
+        func upsert(_ message: Message) async throws {}
+        func delete(_ id: MessageID) async throws {}
+    }
+
     // MARK: - Helpers
 
     private func makeEngine(metadata: any SyncMetadataStore) async throws -> (SyncEngine, SyncQueue) {
@@ -92,6 +106,8 @@ struct SyncEngineChatDirtyTests {
         let bookUploader = BookUploader(workerClient: workerClient, metadataStore: metadata, fileStorage: storage)
         let positionUploader = PositionUploader(workerClient: workerClient, positionStore: positionStore, bookStore: bookStore, metadataStore: metadata)
         let highlightUploader = HighlightUploader(workerClient: workerClient, highlightStore: highlightStore, metadataStore: metadata)
+        let conversationUploader = ConversationUploader(workerClient: workerClient, conversationStore: StubConversationStore(), metadataStore: metadata)
+        let messageUploader = MessageUploader(workerClient: workerClient, messageStore: StubMessageStore(), metadataStore: metadata)
         let fetcher = RemoteChangeFetcher(workerClient: workerClient, metadataStore: metadata)
         let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, metadataStore: metadata)
         let engine = SyncEngine(
@@ -102,6 +118,8 @@ struct SyncEngineChatDirtyTests {
             bookUploader: bookUploader,
             positionUploader: positionUploader,
             highlightUploader: highlightUploader,
+            conversationUploader: conversationUploader,
+            messageUploader: messageUploader,
             fetcher: fetcher,
             applier: applier
         )

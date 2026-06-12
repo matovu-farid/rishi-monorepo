@@ -26,6 +26,8 @@ public actor SyncEngine {
         public var booksUploaded: Int = 0
         public var positionsPushed: Int = 0
         public var highlightsPushed: Int = 0
+        public var conversationsPushed: Int = 0
+        public var messagesPushed: Int = 0
         public var errors: [String] = []
 
         public init() {}
@@ -39,6 +41,8 @@ public actor SyncEngine {
     private let bookUploader: BookUploader
     private let positionUploader: PositionUploader
     private let highlightUploader: HighlightUploader
+    private let conversationUploader: ConversationUploader
+    private let messageUploader: MessageUploader
     private let fetcher: RemoteChangeFetcher
     private let applier: ChangeApplier
 
@@ -53,6 +57,8 @@ public actor SyncEngine {
         bookUploader: BookUploader,
         positionUploader: PositionUploader,
         highlightUploader: HighlightUploader,
+        conversationUploader: ConversationUploader,
+        messageUploader: MessageUploader,
         fetcher: RemoteChangeFetcher,
         applier: ChangeApplier
     ) {
@@ -63,6 +69,8 @@ public actor SyncEngine {
         self.bookUploader = bookUploader
         self.positionUploader = positionUploader
         self.highlightUploader = highlightUploader
+        self.conversationUploader = conversationUploader
+        self.messageUploader = messageUploader
         self.fetcher = fetcher
         self.applier = applier
 
@@ -190,16 +198,15 @@ public actor SyncEngine {
         var booksBucket: [SyncQueueItem] = []
         var positionsBucket: [SyncQueueItem] = []
         var highlightsBucket: [SyncQueueItem] = []
+        var conversationsBucket: [SyncQueueItem] = []
+        var messagesBucket: [SyncQueueItem] = []
         for item in drained {
             switch item.kind {
-            case .book:      booksBucket.append(item)
-            case .position:  positionsBucket.append(item)
-            case .highlight: highlightsBucket.append(item)
-            case .conversation, .message:
-                // Phase 9 will wire outbound conversation+message. Forget so
-                // the queue doesn't keep surfacing rows we have no uploader for.
-                do { try await metadataStore.forget(entityId: item.entityId, kind: item.kind) }
-                catch { wave.errors.append("forget.\(item.kind.rawValue): \(error)") }
+            case .book:         booksBucket.append(item)
+            case .position:     positionsBucket.append(item)
+            case .highlight:    highlightsBucket.append(item)
+            case .conversation: conversationsBucket.append(item)
+            case .message:      messagesBucket.append(item)
             }
         }
 
@@ -239,6 +246,26 @@ public actor SyncEngine {
             }
         }
 
+        // 2d. Conversations — batch push (Phase 16-04).
+        if !conversationsBucket.isEmpty {
+            do {
+                wave.conversationsPushed = try await conversationUploader.pushPending(items: conversationsBucket)
+            } catch {
+                wave.errors.append("conversation.push: \(error)")
+                for item in conversationsBucket { await queue.enqueue(item) }
+            }
+        }
+
+        // 2e. Messages — batch push (Phase 16-04).
+        if !messagesBucket.isEmpty {
+            do {
+                wave.messagesPushed = try await messageUploader.pushPending(items: messagesBucket)
+            } catch {
+                wave.errors.append("message.push: \(error)")
+                for item in messagesBucket { await queue.enqueue(item) }
+            }
+        }
+
         // 3. Snapshot SyncStatus for the UI.
         await snapshotStatus(error: wave.errors.first)
 
@@ -251,6 +278,8 @@ public actor SyncEngine {
             "books_uploaded": String(wave.booksUploaded),
             "positions_pushed": String(wave.positionsPushed),
             "highlights_pushed": String(wave.highlightsPushed),
+            "conversations_pushed": String(wave.conversationsPushed),
+            "messages_pushed": String(wave.messagesPushed),
             "errors": String(wave.errors.count),
         ])
         return wave

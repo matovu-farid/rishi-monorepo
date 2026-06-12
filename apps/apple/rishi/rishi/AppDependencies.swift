@@ -268,6 +268,24 @@ final class AppDependencies {
             highlightStore: highlightStore,
             metadataStore: syncMetadataStore
         )
+
+        // Phase 16-04 — conversation + message GRDB stores must exist before
+        // the SyncEngine so the new uploaders can be wired into the init.
+        // The chat stack (step 15 below) reuses these same store instances.
+        let conversationStore = GRDBConversationStore(dbQueue: dbQueue)
+        let messageStore = GRDBMessageStore(dbQueue: dbQueue)
+
+        let conversationUploader = ConversationUploader(
+            workerClient: workerClient,
+            conversationStore: conversationStore,
+            metadataStore: syncMetadataStore
+        )
+        let messageUploader = MessageUploader(
+            workerClient: workerClient,
+            messageStore: messageStore,
+            metadataStore: syncMetadataStore
+        )
+
         let remoteChangeFetcher = RemoteChangeFetcher(
             workerClient: workerClient,
             metadataStore: syncMetadataStore
@@ -292,6 +310,8 @@ final class AppDependencies {
             bookUploader: bookUploader,
             positionUploader: positionUploader,
             highlightUploader: highlightUploader,
+            conversationUploader: conversationUploader,
+            messageUploader: messageUploader,
             fetcher: remoteChangeFetcher,
             applier: changeApplier
         )
@@ -347,14 +367,13 @@ final class AppDependencies {
         self.ttsSettingsStore = audioStack.settingsStore
         self.nowPlayingController = audioStack.nowPlaying
 
-        // 15. Chat stack (Phase 9). GRDB stores for conversations + messages,
-        //     ConversationLookup actor over the conversation store, the
-        //     RishiChatService actor wired with AppVoiceDirtyAdapter
-        //     (forwards to SyncEngine for BOTH chat + voice transcript dirty
-        //     marks — Plan 10-06), and the @Observable ChatPresenterImpl
-        //     that RootView binds a sheet to.
-        let conversationStore = GRDBConversationStore(dbQueue: dbQueue)
-        let messageStore = GRDBMessageStore(dbQueue: dbQueue)
+        // 15. Chat stack (Phase 9). GRDB stores for conversations + messages
+        //     were constructed in step 9b so the SyncEngine's uploaders share
+        //     the same instances (Phase 16-04). The chat stack only wires the
+        //     ConversationLookup actor, the RishiChatService actor with
+        //     AppVoiceDirtyAdapter (forwards to SyncEngine for BOTH chat +
+        //     voice transcript dirty marks — Plan 10-06), and the @Observable
+        //     ChatPresenterImpl that RootView binds a sheet to.
         let conversationLookup = ConversationLookup(store: conversationStore)
         let voiceDirtyAdapter = AppVoiceDirtyAdapter(syncEngine: syncEngine)
         // `userIdProvider` reads from the same userIdBox the LibraryViewModel
