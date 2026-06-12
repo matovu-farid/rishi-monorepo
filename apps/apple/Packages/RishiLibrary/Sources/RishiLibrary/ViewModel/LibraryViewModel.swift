@@ -59,11 +59,27 @@ public final class LibraryViewModel {
         }
         do {
             let loaded = try await bookStore.books(for: userId)
-            var positionsByBook: [BookID: Position] = [:]
-            for book in loaded {
-                if let p = try await positionStore.position(for: book.id) {
-                    positionsByBook[book.id] = p
+            // F-P0-03: fan out positionStore reads concurrently via withTaskGroup
+            // instead of awaiting each one serially. PositionStore is Sendable +
+            // nonisolated, so each spawned task runs off the MainActor; the only
+            // hop back is for the final state assignment. Per locked decision #2
+            // the PositionStore protocol stays unchanged — fan-out lives in the
+            // view-model. Swift book reference: "Calling Asynchronous Functions
+            // in Parallel".
+            let positionsByBook: [BookID: Position] = await withTaskGroup(
+                of: (BookID, Position?).self
+            ) { group in
+                for book in loaded {
+                    group.addTask { [positionStore = self.positionStore] in
+                        let p = try? await positionStore.position(for: book.id)
+                        return (book.id, p)
+                    }
                 }
+                var out: [BookID: Position] = [:]
+                for await (id, position) in group {
+                    if let position { out[id] = position }
+                }
+                return out
             }
             self.books = loaded
             self.positionsByBookId = positionsByBook
