@@ -32,7 +32,7 @@ vi.mock("better-auth/adapters/drizzle", async () => {
   };
 });
 
-import { createAuth } from "./auth";
+import { createAuth, deriveHasPro, type HasProDeps } from "./auth";
 import type { CloudflareBindings } from "./index";
 
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
@@ -295,5 +295,96 @@ describe("createAuth: Better Auth Apple social provider", () => {
     expect(res.status, `body=${bodyText}`).toBe(200);
     const body = JSON.parse(bodyText);
     expect(body.user.email).toBe("u@privaterelay.appleid.com");
+  });
+});
+
+// ─── deriveHasPro: Phase 17-01 has_pro session projection ────────────────────
+// Pure handler shared by the customSession plugin. iOS
+// (apps/apple/Packages/RishiBilling/Sources/RishiBilling/Service/EntitlementService.swift:75)
+// decodes {user, has_pro} on every signed-in launch; this helper provides the
+// boolean. Precedence MUST mirror handleBillingMe (apple-me.ts:77-95): Apple
+// wins when active|in_grace; Stripe fallback when active|trialing; else false.
+//
+// DI/in-memory test pattern mirrors apple-me.test.ts so the handler stays a
+// pure function — production resolver applies the status filter and orders
+// rows; the handler simply reacts to whatever the resolver returns.
+
+// 2027-06-11T00:00:00.000Z — apple_subscriptions.currentPeriodEnd stores ms.
+const HASPRO_APPLE_MS = 1812585600000;
+// 2027-07-12T00:00:00Z — Stripe periodEnd handed through in seconds (the
+// production resolver converts the Drizzle timestamp Date to seconds first).
+const HASPRO_STRIPE_SEC = 1815264000;
+
+function makeHasProDeps(
+  opts: {
+    appleRow?: { currentPeriodEnd: Date; status: string } | null;
+    stripeRow?: { periodEnd: number; status: string } | null;
+  } = {},
+): HasProDeps & {
+  _spy: {
+    findAppleActive: ReturnType<typeof vi.fn>;
+    findStripeActive: ReturnType<typeof vi.fn>;
+  };
+} {
+  const findAppleActive = vi.fn(async () => opts.appleRow ?? null);
+  const findStripeActive = vi.fn(async () => opts.stripeRow ?? null);
+  return {
+    db: { findAppleActive, findStripeActive },
+    _spy: { findAppleActive, findStripeActive },
+  };
+}
+
+describe("deriveHasPro (has_pro session projection)", () => {
+  it("exposes a deriveHasPro export from ./auth (RED gate)", () => {
+    // First assertion documents the missing export: RED fails here until
+    // Task 2 (GREEN) lands deriveHasPro in auth.ts.
+    expect(deriveHasPro).toBeDefined();
+    expect(typeof deriveHasPro).toBe("function");
+  });
+
+  it("active apple_subscriptions row → has_pro=true, Stripe not queried", async () => {
+    const deps = makeHasProDeps({
+      appleRow: { currentPeriodEnd: new Date(HASPRO_APPLE_MS), status: "active" },
+    });
+    const has_pro = await deriveHasPro({ userId: "u1", deps });
+    expect(has_pro).toBe(true);
+    // Apple-wins precedence: Stripe is never consulted when Apple has a row.
+    expect(deps._spy.findStripeActive).not.toHaveBeenCalled();
+  });
+
+  it("apple_subscriptions in_grace row → has_pro=true", async () => {
+    const deps = makeHasProDeps({
+      appleRow: { currentPeriodEnd: new Date(HASPRO_APPLE_MS), status: "in_grace" },
+    });
+    const has_pro = await deriveHasPro({ userId: "u1", deps });
+    expect(has_pro).toBe(true);
+    expect(deps._spy.findStripeActive).not.toHaveBeenCalled();
+  });
+
+  it("no apple row + no Stripe row → has_pro=false", async () => {
+    const deps = makeHasProDeps({ appleRow: null, stripeRow: null });
+    const has_pro = await deriveHasPro({ userId: "u1", deps });
+    expect(has_pro).toBe(false);
+    expect(deps._spy.findAppleActive).toHaveBeenCalledOnce();
+    expect(deps._spy.findStripeActive).toHaveBeenCalledOnce();
+  });
+
+  it("no apple row + active Stripe subscription → has_pro=true (Stripe fallback)", async () => {
+    const deps = makeHasProDeps({
+      appleRow: null,
+      stripeRow: { periodEnd: HASPRO_STRIPE_SEC, status: "active" },
+    });
+    const has_pro = await deriveHasPro({ userId: "u1", deps });
+    expect(has_pro).toBe(true);
+    expect(deps._spy.findStripeActive).toHaveBeenCalledOnce();
+  });
+
+  it("no apple row + trialing Stripe subscription → has_pro=true", async () => {
+    const deps = makeHasProDeps({
+      appleRow: null,
+      stripeRow: { periodEnd: HASPRO_STRIPE_SEC, status: "trialing" },
+    });
+    const has_pro = await deriveHasPro({ userId: "u1", deps });
+    expect(has_pro).toBe(true);
   });
 });
