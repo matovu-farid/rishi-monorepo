@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import SwiftUI
 import RishiCore
 import RishiAPI
@@ -14,140 +15,75 @@ import RishiReader
 import RishiSettings
 import RishiSync
 import RishiVoice
+#if canImport(BackgroundTasks) && (os(iOS) || targetEnvironment(macCatalyst))
+import BackgroundTasks
+#endif
 
 /// Composition root for the rishi app. Constructed once by `rishiApp.init()`.
 ///
-/// Holds references to every long-lived service the app needs. Actors do their
-/// own isolation; this `@MainActor` class is just the holder that SwiftUI can
-/// reach into synchronously to fetch them.
+/// Phase 19 plan 19-01 — **two-phase bootstrap**.
+///
+/// ## Phase 1 — synchronous `init()`
+/// The synchronous initializer is now empty by design. It returns in well
+/// under 10ms because it allocates no DB queues, no AVAudioEngine, no
+/// StoreKit object graph. `rishiApp.body` and the AppDelegate's
+/// `didFinishLaunchingWithOptions` callback both run inside this cheap
+/// window so first-frame paint is never blocked.
+///
+/// ## Phase 2 — async ``bootstrap()``
+/// All heavy wiring (open the GRDB queue + run schema migrations, build
+/// the audio stack, instantiate the StoreKit object graph) lives in
+/// ``bootstrap()`` which trampolines into a `Task.detached(priority:
+/// .userInitiated)` so the work happens off the MainActor. RootView gates
+/// its `realBody` behind `deps.services != nil` and shows a `ProgressView`
+/// until the factory completes.
+///
+/// ## BGTaskScheduler contract
+/// Apple requires `BGTaskScheduler.register(...)` to be called before
+/// `application(_:didFinishLaunchingWithOptions:)` returns. We honour that
+/// by registering the launch handlers directly against `BGTaskScheduler`
+/// in ``registerBGTasksSynchronously()`` — that helper runs at the very
+/// top of the AppDelegate's `didFinishLaunching`, BEFORE bootstrap. The
+/// handlers capture `self` weakly and short-circuit to
+/// `task.setTaskCompleted(success: false)` when ``services`` is still nil
+/// (i.e. the OS fires a BG task before bootstrap has completed).
+///
+/// ## Force-unwrap accessors
+/// To keep the 50+ existing `deps.bookStore`, `deps.syncEngine`, …
+/// call-sites compiling untouched, every service field is exposed as a
+/// computed property forwarding through `services!`. The outer
+/// `if deps.services != nil` gate in `RootView.body` guarantees the
+/// force-unwrap can never trip from a UI rendering path.
 @MainActor
 final class AppDependencies {
 
-    // Auth + transport
-    let keychain: KeychainSessionStore
-    let tokenProvider: RishiAuthTokenProvider
-    let workerClient: WorkerClient
-    let siwaPresenter: SystemSiwaPresenter
-    let siwaCoordinator: SignInWithAppleCoordinator
-    let authService: RishiAuthService
+    // MARK: - Two-phase bootstrap state
 
-    // Persistence + library
-    let dbQueue: DatabaseQueue
-    let bookStore: any BookStore
-    let positionStore: any PositionStore
-    let highlightStore: any HighlightStore
-    let bookFileStorage: BookFileStorage
-    let importCoordinator: ImportCoordinator
-    let sampleBookInstaller: SampleBookInstaller
-    let sampleReaderInstaller: SampleReaderInstaller
-    let libraryViewModel: LibraryViewModel
+    /// Heavy service graph. `nil` until ``bootstrap()`` completes. The
+    /// `private(set)` makes the assignment a single MainActor mutation
+    /// from within ``bootstrap()`` itself — SwiftUI observes it via the
+    /// `if deps.services != nil` guard in `RootView.body`.
+    private(set) var services: BootstrappedServices?
 
-    // Reader
-    let readerSettingsStore: any ReaderSettingsStore
+    /// In-flight bootstrap task. Reentrant calls to ``bootstrap()`` join
+    /// the same `Task` so a re-render of `RootView`'s `.task` modifier
+    /// does not kick off a second detached DB-open.
+    private var bootstrapTask: Task<Void, Never>?
 
-    // Audio / TTS (Phase 8 — composition root for the read-aloud stack)
-    let audioCoordinator: AudioSessionCoordinator
-    let ttsState: TTSPlaybackState
-    let ttsEngine: TTSEngine
-    let ttsSettingsStore: any TTSSettingsStore
-    let nowPlayingController: NowPlayingController
+    /// Signposter for the cold-launch trace. Five boundaries are emitted:
+    /// `bootstrap.start`, `db.open`, `audio.ready`, `storekit.ready`,
+    /// `bootstrap.end`. Plan 19-08 wraps the rest of the hot paths.
+    private static let signposter = OSSignposter(
+        subsystem: "org.fidexa.rishi",
+        category: "bootstrap"
+    )
 
-    // Sync (Phase 7 — composition root for the sync engine + background coord)
-    let syncMetadataStore: GRDBSyncMetadataStore
-    let syncQueue: SyncQueue
-    let syncStatus: SyncStatus
-    let bookUploader: BookUploader
-    let positionUploader: PositionUploader
-    let highlightUploader: HighlightUploader
-    let remoteChangeFetcher: RemoteChangeFetcher
-    let changeApplier: ChangeApplier
-    let syncEngine: SyncEngine
-    let backgroundTaskCoordinator: BackgroundTaskCoordinator
-    let apnsDeviceRegistrar: APNsDeviceRegistrar
-    /// Phase 16-05 — UI-refresh bridge between `SyncEngine` and the
-    /// Conversations tab's `ConversationsListViewModel`. The engine fires
-    /// `chatSyncDidMerge()` after applying any inbound chat row; the
-    /// adapter forwards to whichever VM is currently mounted (set by
-    /// RootView via `setActiveConversationsListViewModel`).
-    let chatRefreshAdapter: AppChatRefreshAdapter
-
-    // Chat (Phase 9 — composition root for the chat service + presenter seam)
-    let conversationStore: any ConversationStore
-    let messageStore: any MessageStore
-    let conversationLookup: ConversationLookup
-    /// Phase 10 Plan 10-06: dual-conformer forwarder for BOTH `ChatDirtyHook`
-    /// AND `VoiceTranscriptDirtyHook`. Replaces Phase 9's `AppChatDirtyHook`
-    /// so the SyncEngine sees chat + voice transcript dirty marks through
-    /// a single composition seam.
-    let voiceDirtyAdapter: AppVoiceDirtyAdapter
-    let chatService: RishiChatService
-    /// Retained for the app lifetime. RootView observes
-    /// `chatPresenter.pendingPresentation` to drive a `.sheet(item:)`
-    /// presenting the chat panel for the active book.
-    let chatPresenter: ChatPresenterImpl
-
-    // Voice (Phase 10 — composition root for the realtime voice stack)
-    /// Singleton presenter wiring the chat panel's voice button to the
-    /// `RealtimeVoiceSession` lifecycle. `ChatPanelHost` binds
-    /// `.fullScreenCover(isPresented:)` to `voicePresenter.isPresenting`.
-    let voicePresenter: VoiceSessionPresenter
-
-    // Billing (Phase 11 entitlement cache + Phase 13 StoreKit handoff)
-    /// BILL-01: caches `EntitlementLevel` under "billing.entitlement.level"
-    /// and refreshes from `/api/auth/get-session`. UI gates on
-    /// `snapshot()` for synchronous reads.
-    let entitlementService: EntitlementService
-    /// IAP-07: drives the in-app "Manage Subscriptions" sheet via
-    /// `AppStore.showManageSubscriptions(in:)` with an `itms-apps://`
-    /// fallback. Installed into the SwiftUI environment by `RootView`
-    /// so `ManageSubscriptionRow` can read it without prop-drilling.
-    let manageSubscriptionPresenter: ManageSubscriptionPresenter
-
-    // Phase 13 Wave-3 — full IAP object graph (plan 13-05).
+    // MARK: - Persistent UI-layer fields
     //
-    /// IAP-02: actor wrapping `Product.products(for:)` + cached snapshot.
-    let storeKitProductService: StoreKitProductService
-    /// IAP-03: PurchaseService actor — enforces finish-after-verify and
-    /// in-flight dedup. Tests inject via `PurchaseProtocol`.
-    let purchaseService: PurchaseService
-    /// IAP-04: long-lived `Transaction.updates` listener. Started at
-    /// launch; survives the entire app lifetime.
-    let transactionListener: TransactionListener
-    /// IAP-05: shared reconciler. `EntitlementService` calls `setServer`;
-    /// `PurchaseService` / `RestoreService` call `setOnDevice`.
-    let entitlementReconciler: EntitlementReconciler
-    /// IAP-05: live `@Observable` flag reading through the reconciler.
-    /// Wave-3 UI (paywall, ManageSubscriptionRow, PremiumGateModifier)
-    /// will switch to reading this directly via `@Environment` in a
-    /// follow-up plan.
-    let readerAppEntitlementFlag: ReaderAppEntitlementFlag
-    /// IAP-06: user-initiated restore via `AppStore.sync()` +
-    /// `Transaction.currentEntitlements` walk.
-    let restoreService: RestoreService
-    /// IAP-10: receipt verifier (existential). Normally
-    /// `WorkerReceiptVerifier` (Release + DEBUG with the stub flag off).
-    /// In DEBUG, when `UserDefaults RishiUseStubReceiptVerifier == YES`,
-    /// `AppDependencies` swaps in `DebugStubReceiptVerifier` (Phase 14
-    /// plan 14-07) so simulator builds can exercise the IAP flow without
-    /// a live worker. The field name is retained for source-stability
-    /// against existing tests; the runtime type may be either concrete
-    /// verifier.
-    let workerReceiptVerifier: any ReceiptVerifier
-
-    // Settings (Phase 11 — telemetry opt-in)
-    /// SET-02: backs the Privacy section toggle. Sink forwards to
-    /// `RishiLogging.setSentryEnabled(_:)` so opting out mutes uploads.
-    let telemetryStore: any TelemetryStore
-
-    // Onboarding (Phase 11 — first-run flow)
-    /// ONB-01 / ONB-02: persisted onboarding flags + the @Observable
-    /// coordinator driving the welcome → first-reader-hint sequence.
-    let onboardingState: any OnboardingState
-    let onboardingCoordinator: OnboardingCoordinator
-
-    /// SET-01 Reader Defaults section bindings — app-wide theme + font
-    /// applied when a book has no per-book override.
-    let readerDefaults: AppReaderDefaults
+    // These do NOT depend on the heavy services and are safe to construct
+    // synchronously. `macCommandRouter` is referenced from
+    // `rishiApp.commands { ... }` BEFORE bootstrap completes (the menu bar
+    // builds in the scene-init window) so it MUST stay on AppDependencies.
 
     /// MAC-03 / MAC-04 — single router brokering menu-bar commands and
     /// ⌘-key shortcuts to `RootView`. Lives at the composition root so the
@@ -163,7 +99,67 @@ final class AppDependencies {
         set { userIdBox.value = newValue }
     }
 
+    /// Heap-allocated reference box so the LibraryViewModel + ChatService
+    /// closures can capture a stable seam before `self` is fully wired.
+    private let userIdBox = UserIdBox()
+
+    // MARK: - Init (synchronous, cheap, no IO)
+
     init() {
+        // Intentionally empty. All heavy work moved to ``bootstrap()``.
+        // Plan 19-01 must-have: this initializer returns in under 10ms.
+    }
+
+    // MARK: - Bootstrap (off-main)
+
+    /// Build the heavy service graph off the MainActor and publish it via
+    /// ``services``. SwiftUI's `RootView.body` re-renders when `services`
+    /// flips non-nil because the `private(set) var` lives on a
+    /// `@MainActor`-isolated class held by `@State`.
+    ///
+    /// Re-entrant: a second concurrent call joins the in-flight task.
+    func bootstrap() async {
+        if let inFlight = bootstrapTask {
+            await inFlight.value
+            return
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            let signpostId = Self.signposter.makeSignpostID()
+            let state = Self.signposter.beginInterval("bootstrap", id: signpostId)
+            let built = await Self.makeServices(userIdBox: self.userIdBox)
+            self.services = built
+            Self.signposter.endInterval("bootstrap", state)
+        }
+        bootstrapTask = task
+        await task.value
+    }
+
+    /// Off-main factory. `nonisolated` static + wrapped in `Task.detached`
+    /// so the entire heavy graph constructs without bouncing onto the
+    /// MainActor. The Swift Programming Language book covers this pattern
+    /// under "Tasks and Task Groups → Unstructured Concurrency"
+    /// (`Task.detached` opts out of the surrounding actor isolation) and
+    /// "Isolation → Nonisolated Code" (`nonisolated` static methods on a
+    /// `@MainActor` class are allowed).
+    nonisolated private static func makeServices(
+        userIdBox: UserIdBox
+    ) async -> BootstrappedServices {
+        await Task.detached(priority: .userInitiated) {
+            await buildServices(userIdBox: userIdBox)
+        }.value
+    }
+
+    /// Off-main service-graph builder. Invoked from inside `Task.detached`
+    /// (off-main) by ``makeServices(userIdBox:)``. Hops onto MainActor
+    /// only for the small subset of objects whose initialisers are
+    /// MainActor-isolated upstream (SwiftUI presenters, `@Observable`
+    /// view models, `BackgroundTaskCoordinator`). The bulk of the work —
+    /// GRDB queue open + migrations, AVAudioEngine alloc, StoreKit graph
+    /// — runs nonisolated on the detached executor.
+    nonisolated private static func buildServices(
+        userIdBox: UserIdBox
+    ) async -> BootstrappedServices {
         // Worker base URL (override via env for staging tests).
         let baseURLString = ProcessInfo.processInfo.environment["RISHI_API_URL"]
             ?? "https://api.fidexa.org"
@@ -171,11 +167,9 @@ final class AppDependencies {
 
         // 1. Keychain — single instance backing the token provider AND the auth service.
         let keychain = KeychainSessionStore()
-        self.keychain = keychain
 
         // 2. Token provider reads from the same keychain.
         let tokenProvider = RishiAuthTokenProvider(keychain: keychain)
-        self.tokenProvider = tokenProvider
 
         // 3. WorkerClient with dev-bypass gated to DEBUG only.
         #if DEBUG
@@ -188,51 +182,47 @@ final class AppDependencies {
             tokenProvider: tokenProvider,
             devBypassEnabled: devBypassEnabled
         )
-        self.workerClient = workerClient
 
-        // 4. Presenter (must be constructed on main actor — we ARE the main actor here).
-        let siwaPresenter = SystemSiwaPresenter()
-        self.siwaPresenter = siwaPresenter
-
-        // 5. Coordinator wraps the presenter + worker client.
+        // 4-6. Auth presenter + coordinator + service. SystemSiwaPresenter
+        // is `@MainActor` and we are NOT on main here. The presenter's
+        // init is a cheap struct alloc with no UI calls; the actual
+        // `present(...)` call happens later on MainActor when the user
+        // taps Sign In. We hop onto MainActor just to construct it.
+        let siwaPresenter = await MainActor.run { SystemSiwaPresenter() }
         let siwaCoordinator = SignInWithAppleCoordinator(
             workerClient: workerClient,
             presenter: siwaPresenter
         )
-        self.siwaCoordinator = siwaCoordinator
-
-        // 6. Auth service aggregates everything.
-        // Phase 15 plan 15-03: Google Sign-In hard-removed; SIWA is the sole
-        // social provider for v1.
         let authService = RishiAuthService(
             workerClient: workerClient,
             siwaCoordinator: siwaCoordinator,
             keychain: keychain
         )
-        self.authService = authService
 
-        // 7. Persistence layer (GRDB queue under Documents).
+        // 7. Persistence — open the GRDB queue + run migrations. This is
+        // the F-P0-04 hotspot: `RishiDB.makeDatabaseQueue` runs
+        // `Migrations.migrator.migrate(queue)` inline. We are already off
+        // the MainActor inside this `Task.detached` so the migration
+        // runner does not block first-frame paint.
         let documentsURL = FileManager.default.urls(for: .documentDirectory,
                                                     in: .userDomainMask).first!
         let dbURL = documentsURL.appendingPathComponent("rishi.sqlite")
+        let dbState = signposter.beginInterval("db.open")
         let dbQueue: DatabaseQueue
         do {
             dbQueue = try RishiDB.makeDatabaseQueue(at: dbURL)
         } catch {
             fatalError("Failed to open rishi.sqlite at \(dbURL): \(error)")
         }
-        self.dbQueue = dbQueue
+        signposter.endInterval("db.open", dbState)
 
         // 8. Stores.
         let bookStore = GRDBBookStore(dbQueue: dbQueue)
         let positionStore = GRDBPositionStore(dbQueue: dbQueue)
         let highlightStore = GRDBHighlightStore(dbQueue: dbQueue)
-        self.bookStore = bookStore
-        self.positionStore = positionStore
-        self.highlightStore = highlightStore
 
         // 8b. Reader settings (per-book theme persistence via UserDefaults).
-        self.readerSettingsStore = UserDefaultsReaderSettingsStore()
+        let readerSettingsStore = UserDefaultsReaderSettingsStore()
 
         // 9. Library file storage (cover extractors for the two v1 formats).
         let bookFileStorage = BookFileStorage(
@@ -243,20 +233,11 @@ final class AppDependencies {
                 "epub": EpubCoverExtractor(),
             ]
         )
-        self.bookFileStorage = bookFileStorage
 
         // 9b. Sync — composition root for the engine + background coordinator.
-        //
-        // Built BEFORE the ImportCoordinator so the coordinator's onBookImported
-        // callback can route into `syncEngine.markBookDirty(_:)` for SYNC-01.
         let syncMetadataStore = GRDBSyncMetadataStore(dbQueue: dbQueue)
-        self.syncMetadataStore = syncMetadataStore
-
         let syncQueue = SyncQueue(metadataStore: syncMetadataStore)
-        self.syncQueue = syncQueue
-
         let syncStatus = SyncStatus()
-        self.syncStatus = syncStatus
 
         let bookUploader = BookUploader(
             workerClient: workerClient,
@@ -277,7 +258,6 @@ final class AppDependencies {
 
         // Phase 16-04 — conversation + message GRDB stores must exist before
         // the SyncEngine so the new uploaders can be wired into the init.
-        // The chat stack (step 15 below) reuses these same store instances.
         let conversationStore = GRDBConversationStore(dbQueue: dbQueue)
         let messageStore = GRDBMessageStore(dbQueue: dbQueue)
 
@@ -302,9 +282,6 @@ final class AppDependencies {
             highlightStore: highlightStore,
             metadataStore: syncMetadataStore
         )
-        // Phase 16-05 — dedicated chat-sync fetchers (NOT routed through
-        // ChangeApplier; the engine drives upserts directly via the chat
-        // stores so we don't widen ChangeApplier's dep surface).
         let conversationsFetcher = ConversationsFetcher(
             workerClient: workerClient,
             metadataStore: syncMetadataStore
@@ -313,18 +290,8 @@ final class AppDependencies {
             workerClient: workerClient,
             metadataStore: syncMetadataStore
         )
-        self.bookUploader = bookUploader
-        self.positionUploader = positionUploader
-        self.highlightUploader = highlightUploader
-        self.remoteChangeFetcher = remoteChangeFetcher
-        self.changeApplier = changeApplier
 
-        // Phase 16-05 — UI-refresh seam from the engine to the
-        // Conversations tab. AppDependencies adopts ChatSyncRefreshDelegate
-        // (see extension below) and dispatches to whichever
-        // ConversationsListViewModel is currently mounted.
         let chatRefreshAdapter = AppChatRefreshAdapter()
-        self.chatRefreshAdapter = chatRefreshAdapter
 
         let syncEngine = SyncEngine(
             config: .init(),
@@ -344,16 +311,17 @@ final class AppDependencies {
             messageStore: messageStore,
             chatRefreshDelegate: chatRefreshAdapter
         )
-        self.syncEngine = syncEngine
 
-        self.backgroundTaskCoordinator = BackgroundTaskCoordinator(engine: syncEngine)
-        self.apnsDeviceRegistrar = APNsDeviceRegistrar(workerClient: workerClient)
+        // BackgroundTaskCoordinator is @MainActor-isolated. Construct it
+        // on main; the actual `register()` call from
+        // `registerBGTasksSynchronously()` happens later.
+        let backgroundTaskCoordinator = await MainActor.run {
+            BackgroundTaskCoordinator(engine: syncEngine)
+        }
+        let apnsDeviceRegistrar = APNsDeviceRegistrar(workerClient: workerClient)
 
-        // 10. Import coordinator pulls the current user id from the auth service
-        // at import time (handles sign-out / sign-in transitions correctly).
-        // SYNC-01: every successful import fans into the sync engine so the
-        // book uploads on the next wave.
-        self.importCoordinator = ImportCoordinator(
+        // 10. Import coordinator.
+        let importCoordinator = ImportCoordinator(
             storage: bookFileStorage,
             currentUserId: {
                 await authService.currentUser?.id
@@ -364,50 +332,34 @@ final class AppDependencies {
         )
 
         // 11. Sample-book installers (first-run alice.epub + sample.pdf).
-        self.sampleBookInstaller = SampleBookInstaller(storage: bookFileStorage)
-        self.sampleReaderInstaller = SampleReaderInstaller(storage: bookFileStorage)
+        let sampleBookInstaller = SampleBookInstaller(storage: bookFileStorage)
+        let sampleReaderInstaller = SampleReaderInstaller(storage: bookFileStorage)
 
-        // 12. Library view model. `currentUserId` reads from a heap-allocated
-        // box that RootView pumps via `cachedUserId`. We can't capture `self`
-        // here (it's still mid-init), so we route through a tiny box and keep
-        // a reference for AppDependencies's setter to update.
-        let userIdBox = UserIdBox()
-        self.userIdBox = userIdBox
-        self.libraryViewModel = LibraryViewModel(
-            bookStore: bookStore,
-            positionStore: positionStore,
-            storage: bookFileStorage,
-            currentUserId: { userIdBox.value }
-        )
+        // 12. Library view model — needs MainActor isolation.
+        let libraryViewModel = await MainActor.run {
+            LibraryViewModel(
+                bookStore: bookStore,
+                positionStore: positionStore,
+                storage: bookFileStorage,
+                currentUserId: { userIdBox.value }
+            )
+        }
 
-        // 13. Bind the @Observable SyncStatus to the engine actor. Fire-and-forget
-        //     Task because init can't await; the actor handles the hop.
+        // 13. Bind the @Observable SyncStatus to the engine actor.
         Task { [syncEngine, syncStatus] in
             await syncEngine.bind(status: syncStatus)
         }
 
-        // 14. Audio / TTS stack (Phase 8). Real AVAudioEngine + MediaPlayer
-        //     adapters on iOS / Catalyst; Fake adapters everywhere else so
-        //     dev-host swift build still resolves.
-        let audioStack = Self.makeAudioStack(workerClient: workerClient)
-        self.audioCoordinator = audioStack.coordinator
-        self.ttsState = audioStack.state
-        self.ttsEngine = audioStack.engine
-        self.ttsSettingsStore = audioStack.settingsStore
-        self.nowPlayingController = audioStack.nowPlaying
+        // 14. Audio / TTS stack (Phase 8).
+        let audioState = signposter.beginInterval("audio.ready")
+        let audioStack = await MainActor.run {
+            Self.makeAudioStack(workerClient: workerClient)
+        }
+        signposter.endInterval("audio.ready", audioState)
 
-        // 15. Chat stack (Phase 9). GRDB stores for conversations + messages
-        //     were constructed in step 9b so the SyncEngine's uploaders share
-        //     the same instances (Phase 16-04). The chat stack only wires the
-        //     ConversationLookup actor, the RishiChatService actor with
-        //     AppVoiceDirtyAdapter (forwards to SyncEngine for BOTH chat +
-        //     voice transcript dirty marks — Plan 10-06), and the @Observable
-        //     ChatPresenterImpl that RootView binds a sheet to.
+        // 15. Chat stack (Phase 9).
         let conversationLookup = ConversationLookup(store: conversationStore)
         let voiceDirtyAdapter = AppVoiceDirtyAdapter(syncEngine: syncEngine)
-        // `userIdProvider` reads from the same userIdBox the LibraryViewModel
-        // uses — RootView pumps it after auth resolves. Chat turns will fail
-        // with `RishiError.unauthenticated` until then (intentional).
         let chatService = RishiChatService(
             userIdProvider: { @Sendable [userIdBox] in
                 await userIdBox.value
@@ -418,50 +370,28 @@ final class AppDependencies {
             messageStore: messageStore,
             dirtyHook: voiceDirtyAdapter
         )
-        self.conversationStore = conversationStore
-        self.messageStore = messageStore
-        self.conversationLookup = conversationLookup
-        self.voiceDirtyAdapter = voiceDirtyAdapter
-        self.chatService = chatService
-        self.chatPresenter = ChatPresenterImpl()
+        let chatPresenter = await MainActor.run { ChatPresenterImpl() }
 
-        // 16. Voice stack (Phase 10 Plan 10-06). Single `VoiceSessionPresenter`
-        //     wiring the chat-panel voice button to a `RealtimeVoiceSession`.
-        //     Reuses the SAME `audioCoordinator` from the Phase-8 TTS stack so
-        //     `.voice` mode acquisition pre-empts active TTS playback per
-        //     VOICE-04. The dirty-hook is the same dual-conformer adapter
-        //     wired into ChatService above.
-        self.voicePresenter = VoiceSessionPresenter(
-            coordinator: audioStack.coordinator,
-            workerClient: workerClient,
-            messageStore: messageStore,
-            conversationLookup: conversationLookup,
-            userIdProvider: { [userIdBox] in userIdBox.value },
-            dirtyHook: voiceDirtyAdapter
-        )
+        // 16. Voice stack (Phase 10 Plan 10-06).
+        let voicePresenter = await MainActor.run {
+            VoiceSessionPresenter(
+                coordinator: audioStack.coordinator,
+                workerClient: workerClient,
+                messageStore: messageStore,
+                conversationLookup: conversationLookup,
+                userIdProvider: { [userIdBox] in userIdBox.value },
+                dirtyHook: voiceDirtyAdapter
+            )
+        }
 
-        // 17. Billing stack. Phase 11 entitlement cache + Phase 13
-        //     full native StoreKit IAP graph (plan 13-05 Wave-3 wiring).
-        //     The Stripe portal handoff is removed — anti-steering 3.1.1
-        //     incompatibility (see 13-07-PLAN.md).
-        self.entitlementService = EntitlementService(workerClient: workerClient)
-        self.manageSubscriptionPresenter = ManageSubscriptionPresenter()
+        // 17. Billing stack.
+        let entitlementService = EntitlementService(workerClient: workerClient)
+        let manageSubscriptionPresenter = await MainActor.run {
+            ManageSubscriptionPresenter()
+        }
 
-        // Phase 13 plan 13-05 — full IAP object graph.
-        //
-        // Wiring order matches RESEARCH §3:
-        //   Wave 1: products → verifier → purchase service → listener
-        //           → reconciler (+ flag)
-        //   Wave 2: restore + manage
-        //   Launch hooks: replayUnfinished() then listener.start()
-        //   Optional: pre-warm products when StoreKitIAPFlag is ON
+        let storekitState = signposter.beginInterval("storekit.ready")
         let productService = StoreKitProductService()
-        // Phase 14 plan 14-07 — DEBUG stub swap.
-        // In DEBUG, when `defaults write org.fidexa.rishi RishiUseStubReceiptVerifier -bool YES`
-        // is set, route receipt verification through the in-process
-        // `DebugStubReceiptVerifier` (always-verified, 30-day premium) so
-        // the simulator IAP flow can be exercised offline. Release builds
-        // skip the entire branch (stub type is `#if DEBUG`-stripped).
         let receiptVerifier: any ReceiptVerifier = {
             #if DEBUG
             if UserDefaults.standard.bool(forKey: "RishiUseStubReceiptVerifier") {
@@ -476,60 +406,260 @@ final class AppDependencies {
             verifier: receiptVerifier
         )
         let listener = TransactionListener(forwarder: purchaseService)
-        let reconciler = EntitlementReconciler()
-        let entitlementFlag = ReaderAppEntitlementFlag(reconciler: reconciler)
+        let reconciler = await MainActor.run { EntitlementReconciler() }
+        let entitlementFlag = await MainActor.run {
+            ReaderAppEntitlementFlag(reconciler: reconciler)
+        }
         let restoreService = RestoreService(reconciler: reconciler)
+        signposter.endInterval("storekit.ready", storekitState)
 
-        self.storeKitProductService = productService
-        self.workerReceiptVerifier = receiptVerifier
-        self.purchaseService = purchaseService
-        self.transactionListener = listener
-        self.entitlementReconciler = reconciler
-        self.readerAppEntitlementFlag = entitlementFlag
-        self.restoreService = restoreService
-
-        // Launch hooks: replay any unfinished transactions FIRST (so the
-        // listener doesn't double-handle them), then install the
-        // long-lived `Transaction.updates` listener. RESEARCH §2.3, §2.4.
+        // Launch hooks: replay any unfinished transactions FIRST.
         Task.detached(priority: .background) { [purchaseService, listener] in
             await purchaseService.replayUnfinished()
             await listener.start()
         }
-
-        // Pre-warm the product catalog when the StoreKit IAP flag is ON
-        // (saves a paywall-render-time round-trip). When OFF (release
-        // default until ASC product setup completes), skip — avoids an
-        // unnecessary network call.
         if StoreKitIAPFlag.isEnabled {
             Task.detached(priority: .background) { [productService] in
                 _ = try? await productService.load()
             }
         }
 
-        // 18. Settings stack — telemetry sink forwards to RishiLogging which
-        //     drops Sentry uploads on opt-out (SET-02).
-        self.telemetryStore = UserDefaultsTelemetryStore(sink: AppTelemetrySink())
+        // 18. Settings stack.
+        let telemetryStore = await MainActor.run {
+            UserDefaultsTelemetryStore(sink: AppTelemetrySink())
+        }
 
-        // 19. Onboarding stack — UserDefaults-backed flags + the @Observable
-        //     coordinator driving the first-run flow (ONB-01 / ONB-02).
+        // 19. Onboarding stack.
         let onboardingState = UserDefaultsOnboardingState()
-        self.onboardingState = onboardingState
-        self.onboardingCoordinator = OnboardingCoordinator(state: onboardingState)
+        let onboardingCoordinator = await MainActor.run {
+            OnboardingCoordinator(state: onboardingState)
+        }
 
-        // 20. Reader defaults (app-wide). Per-book overrides still come from
-        //     `readerSettingsStore`; these defaults drive the Settings
-        //     Reader section pickers.
-        self.readerDefaults = AppReaderDefaults()
+        // 20. Reader defaults.
+        let readerDefaults = await MainActor.run { AppReaderDefaults() }
+
+        return BootstrappedServices(
+            keychain: keychain,
+            tokenProvider: tokenProvider,
+            workerClient: workerClient,
+            siwaPresenter: siwaPresenter,
+            siwaCoordinator: siwaCoordinator,
+            authService: authService,
+            dbQueue: dbQueue,
+            bookStore: bookStore,
+            positionStore: positionStore,
+            highlightStore: highlightStore,
+            bookFileStorage: bookFileStorage,
+            importCoordinator: importCoordinator,
+            sampleBookInstaller: sampleBookInstaller,
+            sampleReaderInstaller: sampleReaderInstaller,
+            libraryViewModel: libraryViewModel,
+            readerSettingsStore: readerSettingsStore,
+            audioCoordinator: audioStack.coordinator,
+            ttsState: audioStack.state,
+            ttsEngine: audioStack.engine,
+            ttsSettingsStore: audioStack.settingsStore,
+            nowPlayingController: audioStack.nowPlaying,
+            syncMetadataStore: syncMetadataStore,
+            syncQueue: syncQueue,
+            syncStatus: syncStatus,
+            bookUploader: bookUploader,
+            positionUploader: positionUploader,
+            highlightUploader: highlightUploader,
+            remoteChangeFetcher: remoteChangeFetcher,
+            changeApplier: changeApplier,
+            syncEngine: syncEngine,
+            backgroundTaskCoordinator: backgroundTaskCoordinator,
+            apnsDeviceRegistrar: apnsDeviceRegistrar,
+            chatRefreshAdapter: chatRefreshAdapter,
+            conversationStore: conversationStore,
+            messageStore: messageStore,
+            conversationLookup: conversationLookup,
+            voiceDirtyAdapter: voiceDirtyAdapter,
+            chatService: chatService,
+            chatPresenter: chatPresenter,
+            voicePresenter: voicePresenter,
+            entitlementService: entitlementService,
+            manageSubscriptionPresenter: manageSubscriptionPresenter,
+            storeKitProductService: productService,
+            purchaseService: purchaseService,
+            transactionListener: listener,
+            entitlementReconciler: reconciler,
+            readerAppEntitlementFlag: entitlementFlag,
+            restoreService: restoreService,
+            workerReceiptVerifier: receiptVerifier,
+            telemetryStore: telemetryStore,
+            onboardingState: onboardingState,
+            onboardingCoordinator: onboardingCoordinator,
+            readerDefaults: readerDefaults
+        )
     }
+
+    // MARK: - BGTask registration (synchronous; honours Apple ordering contract)
+
+    /// Register BGTask launch handlers BEFORE
+    /// `application(_:didFinishLaunchingWithOptions:)` returns. Apple's
+    /// `BGTaskScheduler` documentation requires registration to happen
+    /// inside the launch window; if bootstrap has not yet completed (the
+    /// expected case), the handlers short-circuit to
+    /// `task.setTaskCompleted(success: false)` so the OS reschedules the
+    /// task for a later wave.
+    ///
+    /// Called from `RishiAppDelegate.application(_:didFinishLaunching:)`.
+    /// The handlers themselves are `@MainActor` per the
+    /// `BGTaskScheduler.register(forTaskWithIdentifier:using:)` contract.
+    @MainActor
+    func registerBGTasksSynchronously() {
+        #if canImport(BackgroundTasks) && (os(iOS) || targetEnvironment(macCatalyst))
+        let processing = BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: BackgroundTaskCoordinator.processingIdentifier,
+            using: nil
+        ) { [weak self] task in
+            Task { @MainActor in
+                await self?.driveBGTask(task)
+            }
+        }
+        let refresh = BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: BackgroundTaskCoordinator.refreshIdentifier,
+            using: nil
+        ) { [weak self] task in
+            Task { @MainActor in
+                await self?.driveBGTask(task)
+            }
+        }
+        Log.event("sync.bg.registered", level: .info, data: [
+            "processing": String(processing),
+            "refresh": String(refresh),
+            "via": "AppDependencies.registerBGTasksSynchronously",
+        ])
+
+        // Submit the initial BG task requests. `BGTaskScheduler.submit` is
+        // safe to call any time after `register`. Launch handlers re-arm
+        // on every completion via `BackgroundTaskCoordinator.scheduleAll()`
+        // after bootstrap publishes the coordinator.
+        do {
+            let processingRequest = BGProcessingTaskRequest(
+                identifier: BackgroundTaskCoordinator.processingIdentifier
+            )
+            processingRequest.requiresNetworkConnectivity = true
+            processingRequest.requiresExternalPower = false
+            try BGTaskScheduler.shared.submit(processingRequest)
+
+            let refreshRequest = BGAppRefreshTaskRequest(
+                identifier: BackgroundTaskCoordinator.refreshIdentifier
+            )
+            refreshRequest.earliestBeginDate = Date(timeIntervalSinceNow: 60 * 60)
+            try BGTaskScheduler.shared.submit(refreshRequest)
+            Log.event("sync.bg.scheduled", level: .info)
+        } catch {
+            Log.error("sync.bg.schedule.failed", error: error)
+        }
+        #endif
+    }
+
+    #if canImport(BackgroundTasks) && (os(iOS) || targetEnvironment(macCatalyst))
+    /// Common BGTask drive path used by both the processing and refresh
+    /// launch handlers registered above. Bootstrap must be complete
+    /// before we can drive `syncEngine.runOnce()`; if the OS fires before
+    /// bootstrap finishes we await it (it'll be in-flight from
+    /// `rishiApp.body`'s `.task` already). After bootstrap completes,
+    /// `BackgroundTaskCoordinator.scheduleAll()` re-arms the next wave.
+    @MainActor
+    private func driveBGTask(_ task: BGTask) async {
+        // Ensure bootstrap has completed (or in-flight bootstrap completes
+        // before we run). If the in-flight task is nil at OS BG fire time,
+        // start one — production launch ALWAYS kicks bootstrap from
+        // `rishiApp.body`'s `.task` so this is purely a safety net.
+        if services == nil {
+            await bootstrap()
+        }
+        guard let services else {
+            task.setTaskCompleted(success: false)
+            return
+        }
+        let runTask = Task { [engine = services.syncEngine] in
+            let wave = await engine.runOnce()
+            return wave.errors.isEmpty
+        }
+        task.expirationHandler = { runTask.cancel() }
+        let ok = (try? await runTask.value) ?? false
+        task.setTaskCompleted(success: ok)
+        services.backgroundTaskCoordinator.scheduleAll()
+    }
+    #endif
+
+    // MARK: - Forwarder accessors (compat with pre-bootstrap call sites)
+    //
+    // These force-unwrap `services` and are ONLY safe to read AFTER
+    // `RootView.body` confirms `deps.services != nil`. The 50+ existing
+    // call sites in RootView/SettingsSheet/OnboardingHost reach into the
+    // composition root through these accessors; the outer gate guarantees
+    // the unwrap never traps from a UI rendering path.
+
+    var keychain: KeychainSessionStore { services!.keychain }
+    var tokenProvider: RishiAuthTokenProvider { services!.tokenProvider }
+    var workerClient: WorkerClient { services!.workerClient }
+    var siwaPresenter: SystemSiwaPresenter { services!.siwaPresenter }
+    var siwaCoordinator: SignInWithAppleCoordinator { services!.siwaCoordinator }
+    var authService: RishiAuthService { services!.authService }
+
+    var dbQueue: DatabaseQueue { services!.dbQueue }
+    var bookStore: any BookStore { services!.bookStore }
+    var positionStore: any PositionStore { services!.positionStore }
+    var highlightStore: any HighlightStore { services!.highlightStore }
+    var bookFileStorage: BookFileStorage { services!.bookFileStorage }
+    var importCoordinator: ImportCoordinator { services!.importCoordinator }
+    var sampleBookInstaller: SampleBookInstaller { services!.sampleBookInstaller }
+    var sampleReaderInstaller: SampleReaderInstaller { services!.sampleReaderInstaller }
+    var libraryViewModel: LibraryViewModel { services!.libraryViewModel }
+    var readerSettingsStore: any ReaderSettingsStore { services!.readerSettingsStore }
+
+    var audioCoordinator: AudioSessionCoordinator { services!.audioCoordinator }
+    var ttsState: TTSPlaybackState { services!.ttsState }
+    var ttsEngine: TTSEngine { services!.ttsEngine }
+    var ttsSettingsStore: any TTSSettingsStore { services!.ttsSettingsStore }
+    var nowPlayingController: NowPlayingController { services!.nowPlayingController }
+
+    var syncMetadataStore: GRDBSyncMetadataStore { services!.syncMetadataStore }
+    var syncQueue: SyncQueue { services!.syncQueue }
+    var syncStatus: SyncStatus { services!.syncStatus }
+    var bookUploader: BookUploader { services!.bookUploader }
+    var positionUploader: PositionUploader { services!.positionUploader }
+    var highlightUploader: HighlightUploader { services!.highlightUploader }
+    var remoteChangeFetcher: RemoteChangeFetcher { services!.remoteChangeFetcher }
+    var changeApplier: ChangeApplier { services!.changeApplier }
+    var syncEngine: SyncEngine { services!.syncEngine }
+    var backgroundTaskCoordinator: BackgroundTaskCoordinator { services!.backgroundTaskCoordinator }
+    var apnsDeviceRegistrar: APNsDeviceRegistrar { services!.apnsDeviceRegistrar }
+    var chatRefreshAdapter: AppChatRefreshAdapter { services!.chatRefreshAdapter }
+
+    var conversationStore: any ConversationStore { services!.conversationStore }
+    var messageStore: any MessageStore { services!.messageStore }
+    var conversationLookup: ConversationLookup { services!.conversationLookup }
+    var voiceDirtyAdapter: AppVoiceDirtyAdapter { services!.voiceDirtyAdapter }
+    var chatService: RishiChatService { services!.chatService }
+    var chatPresenter: ChatPresenterImpl { services!.chatPresenter }
+    var voicePresenter: VoiceSessionPresenter { services!.voicePresenter }
+
+    var entitlementService: EntitlementService { services!.entitlementService }
+    var manageSubscriptionPresenter: ManageSubscriptionPresenter { services!.manageSubscriptionPresenter }
+    var storeKitProductService: StoreKitProductService { services!.storeKitProductService }
+    var purchaseService: PurchaseService { services!.purchaseService }
+    var transactionListener: TransactionListener { services!.transactionListener }
+    var entitlementReconciler: EntitlementReconciler { services!.entitlementReconciler }
+    var readerAppEntitlementFlag: ReaderAppEntitlementFlag { services!.readerAppEntitlementFlag }
+    var restoreService: RestoreService { services!.restoreService }
+    var workerReceiptVerifier: any ReceiptVerifier { services!.workerReceiptVerifier }
+    var telemetryStore: any TelemetryStore { services!.telemetryStore }
+    var onboardingState: any OnboardingState { services!.onboardingState }
+    var onboardingCoordinator: OnboardingCoordinator { services!.onboardingCoordinator }
+    var readerDefaults: AppReaderDefaults { services!.readerDefaults }
+
+    var authServiceForEnvironment: any AuthService { services!.authService }
 
     // MARK: - Paywall factory (Phase 13 plan 13-05)
 
     /// Build a fresh `PaywallViewModel` wired to the full IAP graph.
-    ///
-    /// RootView (or a future Wave-3 paywall host) calls this when
-    /// presenting the live paywall sheet. The VM is freshly constructed
-    /// per presentation so its `loadState` / `purchaseState` start clean
-    /// — long-lived services (product cache, listener) stay shared.
     @MainActor
     func makePaywallViewModel() -> PaywallViewModel {
         PaywallViewModel(
@@ -545,11 +675,6 @@ final class AppDependencies {
     /// Builds a ``ChatPanelViewModel`` for a `(userId, bookId)` pair by
     /// resolving (or minting) the backing ``Conversation`` via
     /// ``ConversationLookup``.
-    ///
-    /// Called by RootView when the user taps the chat button in the reader
-    /// toolbar or "Ask about this" in a selection menu. Returns `nil` only
-    /// when the lookup throws — a non-recoverable storage failure that we
-    /// surface to the UI by skipping the sheet.
     func makeChatPanelViewModel(
         userId: UserID,
         bookId: BookID?
@@ -571,8 +696,7 @@ final class AppDependencies {
     }
 
     /// Builds a ``ChatPanelViewModel`` for a conversation chosen from the
-    /// Conversations tab — bypasses the lookup since the conversation is
-    /// already in hand.
+    /// Conversations tab.
     func makeChatPanelViewModel(conversation: Conversation) -> ChatPanelViewModel {
         ChatPanelViewModel(
             conversation: conversation,
@@ -583,8 +707,7 @@ final class AppDependencies {
     }
 
     /// Builds a fresh ``ConversationsListViewModel`` for the Conversations
-    /// tab. The VM hydrates itself in its `.task` modifier from
-    /// `conversationStore` + `messageStore`.
+    /// tab.
     func makeConversationsListViewModel() -> ConversationsListViewModel {
         ConversationsListViewModel(
             conversationStore: conversationStore,
@@ -597,7 +720,7 @@ final class AppDependencies {
     /// Bundle of audio services constructed together so the init body stays
     /// readable. Computed in a static helper because init can't reference
     /// `self` partway through property assignments.
-    private struct AudioStack {
+    fileprivate struct AudioStack {
         let coordinator: AudioSessionCoordinator
         let state: TTSPlaybackState
         let engine: TTSEngine
@@ -606,7 +729,7 @@ final class AppDependencies {
     }
 
     @MainActor
-    private static func makeAudioStack(workerClient: WorkerClient) -> AudioStack {
+    fileprivate static func makeAudioStack(workerClient: WorkerClient) -> AudioStack {
         #if (os(iOS) || targetEnvironment(macCatalyst)) && canImport(AVFAudio)
         let configurator: any AudioSessionConfigurator = AVAudioSessionConfigurator()
         #else
@@ -647,10 +770,7 @@ final class AppDependencies {
         )
     }
 
-    /// Construct a fresh `ReaderTTSBridge` for one reader sheet. Each
-    /// bridge owns its own `TTSPassageTracker` so multiple readers can run
-    /// independent passage streams; the engine + state + settings store
-    /// are shared (single audio session).
+    /// Construct a fresh `ReaderTTSBridge` for one reader sheet.
     @MainActor
     func makeReaderTTSBridge(
         userId: UserID,
@@ -670,12 +790,7 @@ final class AppDependencies {
     // MARK: - Settings factory (Phase 11)
 
     /// Builds the `RishiSettings.SettingsScreen` for the current user,
-    /// wiring every dependency through. `SettingsSheet` (the rishi-app
-    /// wrapper) calls this from its `body`.
-    ///
-    /// `onSignedOut` and `onAccountDeleted` are both invoked AFTER the sheet
-    /// dismisses — RootView clears `currentUser` in response so the
-    /// signed-out path takes over.
+    /// wiring every dependency through.
     @MainActor
     func makeSettingsScreen(
         user: User,
@@ -714,13 +829,6 @@ final class AppDependencies {
             },
             onDeleted: onAccountDeleted,
             onManageSubscription: {
-                // Phase 13 — Manage Subscription is now driven directly by
-                // `ManageSubscriptionRow` reading the
-                // `ManageSubscriptionPresenter` from the SwiftUI
-                // environment (installed by `RootView`). This closure is
-                // a redundant safety path for `SettingsScreen` source
-                // compat until plan 13-05 / 13-06 cleans up the call
-                // chain.
                 Task { @MainActor in
                     await presenter.present()
                 }
@@ -728,10 +836,88 @@ final class AppDependencies {
             onDismiss: onDismiss
         )
     }
+}
 
-    private let userIdBox: UserIdBox
+// MARK: - BootstrappedServices
 
-    var authServiceForEnvironment: any AuthService { authService }
+/// Heavy service graph built off-main by ``AppDependencies/bootstrap()``.
+///
+/// Holds references to every long-lived service. `Sendable`-by-construction
+/// because every member is an actor, a `Sendable` reference type, or a
+/// value type composed of `Sendable` parts. `@unchecked` is used because
+/// the SwiftUI / UIKit reference types (presenters, view models) carry no
+/// `Sendable` annotation upstream — we hop onto MainActor when constructing
+/// them inside ``AppDependencies/buildServices(userIdBox:)`` and they stay
+/// pinned to MainActor for their lifetimes.
+struct BootstrappedServices: @unchecked Sendable {
+    // Auth + transport
+    let keychain: KeychainSessionStore
+    let tokenProvider: RishiAuthTokenProvider
+    let workerClient: WorkerClient
+    let siwaPresenter: SystemSiwaPresenter
+    let siwaCoordinator: SignInWithAppleCoordinator
+    let authService: RishiAuthService
+
+    // Persistence + library
+    let dbQueue: DatabaseQueue
+    let bookStore: any BookStore
+    let positionStore: any PositionStore
+    let highlightStore: any HighlightStore
+    let bookFileStorage: BookFileStorage
+    let importCoordinator: ImportCoordinator
+    let sampleBookInstaller: SampleBookInstaller
+    let sampleReaderInstaller: SampleReaderInstaller
+    let libraryViewModel: LibraryViewModel
+    let readerSettingsStore: any ReaderSettingsStore
+
+    // Audio / TTS
+    let audioCoordinator: AudioSessionCoordinator
+    let ttsState: TTSPlaybackState
+    let ttsEngine: TTSEngine
+    let ttsSettingsStore: any TTSSettingsStore
+    let nowPlayingController: NowPlayingController
+
+    // Sync
+    let syncMetadataStore: GRDBSyncMetadataStore
+    let syncQueue: SyncQueue
+    let syncStatus: SyncStatus
+    let bookUploader: BookUploader
+    let positionUploader: PositionUploader
+    let highlightUploader: HighlightUploader
+    let remoteChangeFetcher: RemoteChangeFetcher
+    let changeApplier: ChangeApplier
+    let syncEngine: SyncEngine
+    let backgroundTaskCoordinator: BackgroundTaskCoordinator
+    let apnsDeviceRegistrar: APNsDeviceRegistrar
+    let chatRefreshAdapter: AppChatRefreshAdapter
+
+    // Chat
+    let conversationStore: any ConversationStore
+    let messageStore: any MessageStore
+    let conversationLookup: ConversationLookup
+    let voiceDirtyAdapter: AppVoiceDirtyAdapter
+    let chatService: RishiChatService
+    let chatPresenter: ChatPresenterImpl
+
+    // Voice
+    let voicePresenter: VoiceSessionPresenter
+
+    // Billing
+    let entitlementService: EntitlementService
+    let manageSubscriptionPresenter: ManageSubscriptionPresenter
+    let storeKitProductService: StoreKitProductService
+    let purchaseService: PurchaseService
+    let transactionListener: TransactionListener
+    let entitlementReconciler: EntitlementReconciler
+    let readerAppEntitlementFlag: ReaderAppEntitlementFlag
+    let restoreService: RestoreService
+    let workerReceiptVerifier: any ReceiptVerifier
+
+    // Settings + onboarding
+    let telemetryStore: any TelemetryStore
+    let onboardingState: any OnboardingState
+    let onboardingCoordinator: OnboardingCoordinator
+    let readerDefaults: AppReaderDefaults
 }
 
 /// Tiny @MainActor-isolated reference box so LibraryViewModel's currentUserId
@@ -739,7 +925,7 @@ final class AppDependencies {
 /// captures the box (a reference type), AppDependencies mutates `box.value`,
 /// and LibraryViewModel reads the latest value on every `currentUserId()` call.
 @MainActor
-private final class UserIdBox {
+final class UserIdBox {
     var value: UserID? = nil
 }
 
