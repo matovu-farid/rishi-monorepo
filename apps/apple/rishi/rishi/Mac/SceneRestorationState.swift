@@ -29,22 +29,29 @@ struct RishiSceneState: Codable, Equatable {
 
     /// Default state for a fresh install (and the fallback for any decode
     /// failure). Library tab visible, no book mid-read.
-    static let `default` = RishiSceneState(selectedTab: .library, openBookId: nil)
+    ///
+    /// Phase 19 Plan 19-11 — `nonisolated` so the off-MainActor decode
+    /// helper can reference it without an actor hop.
+    nonisolated static let `default` = RishiSceneState(selectedTab: .library, openBookId: nil)
 
     // MARK: Storage keys — keep these stable across app updates.
     //
     // Renaming either of these will silently reset every existing user's
     // restored window state. If the schema ever changes shape, bump the
     // suffix (e.g. `.v2`) instead of mutating the existing key.
-    static let selectedTabKey  = "rishi.scene.selectedTab"
-    static let openBookIdKey   = "rishi.scene.openBookId"
+    nonisolated static let selectedTabKey  = "rishi.scene.selectedTab"
+    nonisolated static let openBookIdKey   = "rishi.scene.openBookId"
 
     // MARK: Codec helpers
 
     /// Encodes the state as a JSON `String` suitable for a `@SceneStorage`
     /// `String` cell. Returns `""` on encode failure so the call site can
     /// treat empty == "use default" without branching on optionals.
-    func encodeForStorage() -> String {
+    ///
+    /// Phase 19 Plan 19-11 — `nonisolated` so the bundled
+    /// `decodeSceneRestoreCells(...)` helper can call it from any context
+    /// under `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`.
+    nonisolated func encodeForStorage() -> String {
         guard let data = try? JSONEncoder().encode(self),
               let s = String(data: data, encoding: .utf8) else {
             return ""
@@ -56,13 +63,52 @@ struct RishiSceneState: Codable, Equatable {
     /// Any non-decodable input — empty cell (first launch), garbage, or
     /// shape drift after an app update — returns `.default` instead of
     /// throwing.
-    static func decodeFromStorage(_ raw: String) -> RishiSceneState {
+    ///
+    /// Phase 19 Plan 19-11 — `nonisolated` so the bundled
+    /// `decodeSceneRestoreCells(...)` helper can call it off MainActor.
+    nonisolated static func decodeFromStorage(_ raw: String) -> RishiSceneState {
         guard !raw.isEmpty,
               let data = raw.data(using: .utf8),
               let decoded = try? JSONDecoder().decode(RishiSceneState.self, from: data) else {
             return .default
         }
         return decoded
+    }
+
+    // MARK: - Phase 19 Plan 19-11 — Nonisolated decode bundle (F-P0-05)
+    //
+    // Cold launch invokes `restoreSceneState()` on the MainActor `.task`
+    // modifier. That body used to run THREE sequential JSON decodes
+    // (RishiSceneState + NavigationPath.CodableRepresentation +
+    // ReaderRoute) AND a `UUID(uuidString:)` parse — all pure value work,
+    // all on main. Per the Swift book "Isolation → Nonisolated Code"
+    // section, pure value functions should be `nonisolated` so callers in
+    // any isolation context invoke them without a hop.
+    //
+    // This helper bundles the four decodes into a single nonisolated
+    // static. The MainActor call site (RootView.restoreSceneState) does
+    // exactly one synchronous call out to it, then assigns the projected
+    // tuple into @State.
+
+    /// Pure value decode of every legacy + current scene-restoration
+    /// shape. Safe to call from any isolation context (MainActor, an
+    /// actor, or a detached Task).
+    ///
+    /// Returns whatever each individual decoder yields; the caller is
+    /// responsible for choosing precedence (NavigationPath > ReaderRoute
+    /// > bare-UUID legacy DB lookup).
+    nonisolated static func decodeSceneRestoreCells(
+        tabRaw: String,
+        openBookIdRaw: String
+    ) -> (state: RishiSceneState, path: NavigationPath?, route: ReaderRoute?, legacyId: UUID?) {
+        let state = Self.decodeFromStorage(tabRaw)
+        let path: NavigationPath? = {
+            let decoded = NavigationPath.decodeFromStorage(openBookIdRaw)
+            return decoded.isEmpty ? nil : decoded
+        }()
+        let route = ReaderRoute.decodeFromStorage(openBookIdRaw)
+        let legacyId = UUID(uuidString: openBookIdRaw)
+        return (state, path, route, legacyId)
     }
 }
 
@@ -77,7 +123,8 @@ struct RishiSceneState: Codable, Equatable {
 // legacy bare-UUID branch instead of crashing.
 
 extension ReaderRoute {
-    static func encodeForStorage(_ route: ReaderRoute?) -> String {
+    /// Phase 19 Plan 19-11 — `nonisolated` for off-MainActor decode bundling.
+    nonisolated static func encodeForStorage(_ route: ReaderRoute?) -> String {
         guard let route else { return "" }
         do {
             let data = try JSONEncoder().encode(route)
@@ -87,7 +134,8 @@ extension ReaderRoute {
         }
     }
 
-    static func decodeFromStorage(_ raw: String) -> ReaderRoute? {
+    /// Phase 19 Plan 19-11 — `nonisolated` for off-MainActor decode bundling.
+    nonisolated static func decodeFromStorage(_ raw: String) -> ReaderRoute? {
         guard !raw.isEmpty, let data = raw.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(ReaderRoute.self, from: data)
     }
@@ -106,7 +154,9 @@ extension ReaderRoute {
 extension NavigationPath {
     /// Encode a NavigationPath whose elements are all Codable+Hashable
     /// (e.g. ReaderRoute) to a JSON String suitable for @SceneStorage.
-    static func encodeForStorage(_ path: NavigationPath) -> String {
+    ///
+    /// Phase 19 Plan 19-11 — `nonisolated` for off-MainActor decode bundling.
+    nonisolated static func encodeForStorage(_ path: NavigationPath) -> String {
         guard let codable = path.codable else { return "" }
         do {
             let data = try JSONEncoder().encode(codable)
@@ -118,7 +168,9 @@ extension NavigationPath {
 
     /// Decode a previously-encoded JSON String back into a NavigationPath;
     /// returns an empty path on failure.
-    static func decodeFromStorage(_ raw: String) -> NavigationPath {
+    ///
+    /// Phase 19 Plan 19-11 — `nonisolated` for off-MainActor decode bundling.
+    nonisolated static func decodeFromStorage(_ raw: String) -> NavigationPath {
         guard !raw.isEmpty, let data = raw.data(using: .utf8) else { return NavigationPath() }
         do {
             let decoded = try JSONDecoder().decode(NavigationPath.CodableRepresentation.self, from: data)

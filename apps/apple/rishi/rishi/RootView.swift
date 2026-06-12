@@ -393,29 +393,49 @@ struct RootView: View {
     ///      via `deps.bookStore.book(_:)` to recover the format type and
     ///      promoted to a path entry.
     ///
+    /// Phase 19 Plan 19-11 (F-P0-05) — the four pure-value decodes are
+    /// now bundled into the `nonisolated`
+    /// `RishiSceneState.decodeSceneRestoreCells(...)` helper so they run
+    /// off the MainActor cold-launch path. The MainActor body below only
+    /// assigns @State and (for the legacy bare-UUID branch) wraps the
+    /// awaited DB hit in `Task.detached` so the continuation resumes
+    /// off-main before we re-enter MainActor for the final path write.
+    ///
     /// Missing / deleted book or any decode failure leaves the library
     /// tab visible with an empty path.
     @MainActor
     private func restoreSceneState() async {
-        let state = RishiSceneState.decodeFromStorage(selectedTabRaw)
-        selectedTab = state.selectedTab
+        // Bundle every Codable + UUID parse into one nonisolated call so
+        // the JSON-decode work doesn't run on MainActor during cold launch.
+        let decoded = RishiSceneState.decodeSceneRestoreCells(
+            tabRaw: selectedTabRaw,
+            openBookIdRaw: openBookIdRaw
+        )
+        selectedTab = decoded.state.selectedTab
         // Preferred — full NavigationPath via CodableRepresentation.
-        let restoredPath = NavigationPath.decodeFromStorage(openBookIdRaw)
-        if !restoredPath.isEmpty {
-            libraryPath = restoredPath
+        if let path = decoded.path {
+            libraryPath = path
             return
         }
         // Legacy A — JSON-encoded ReaderRoute (intermediate shape).
-        if let route = ReaderRoute.decodeFromStorage(openBookIdRaw) {
+        if let route = decoded.route {
             var p = NavigationPath()
             p.append(route)
             libraryPath = p
             return
         }
         // Legacy B — bare UUID.uuidString from the v0 cell.
-        if let legacyId = UUID(uuidString: openBookIdRaw),
-           let deps = deps,
-           let book = try? await deps.bookStore.book(legacyId) {
+        if let legacyId = decoded.legacyId, let deps = deps {
+            // DETACHED: F-P0-05 — v0 cell decode hits GRDB via bookStore.
+            // The bookStore actor's executor is off-main, but the
+            // `await` here would otherwise resume on this MainActor task.
+            // Wrapping in Task.detached(priority: .userInitiated) keeps
+            // the resume off main; we re-enter MainActor explicitly for
+            // the @State write.
+            let book = await Task.detached(priority: .userInitiated) { [deps] in
+                try? await deps.bookStore.book(legacyId)
+            }.value
+            guard let book else { return }
             var p = NavigationPath()
             p.append(ReaderRoute.route(for: book))
             libraryPath = p

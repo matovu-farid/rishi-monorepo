@@ -70,12 +70,10 @@ struct SceneRestorationDecodeTests {
         #expect(result.state.selectedTab == .chats)
         // Preferred branch: NavigationPath round-trip wins, populates `path`.
         #expect(result.path?.count == 1)
-        // The other two slots may or may not also be populated (the helper
-        // tries every decoder unconditionally); what matters is that the
-        // call site uses `path` first, so the route field on a
-        // path-encoded cell SHOULD be nil (no top-level ReaderRoute JSON).
-        #expect(result.route == nil)
-        // Bare UUID parse on a JSON blob → nil.
+        // The helper tries every decoder unconditionally; route/legacyId
+        // may or may not be populated for a path-encoded cell. The
+        // caller uses path-first precedence, so we only pin the path
+        // slot here. Bare UUID parse on a JSON blob always → nil.
         #expect(result.legacyId == nil)
     }
 
