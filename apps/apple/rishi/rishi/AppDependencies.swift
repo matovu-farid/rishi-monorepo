@@ -81,9 +81,12 @@ final class AppDependencies {
     /// does not kick off a second detached DB-open.
     private var bootstrapTask: Task<Void, Never>?
 
-    /// Signposter for the cold-launch trace. Five boundaries are emitted:
-    /// `bootstrap.start`, `db.open`, `audio.ready`, `storekit.ready`,
-    /// `bootstrap.end`. Plan 19-08 wraps the rest of the hot paths.
+    /// Signposter for the cold-launch trace. The top-level interval is
+    /// `cold-launch.bootstrap` (Plan 19-08 — F-P2-04); inner boundaries
+    /// `db.open`, `audio.ready`, `storekit.ready` are emitted as nested
+    /// intervals so the Instruments Time Profiler attributes time to each
+    /// hotspot inside the bootstrap. Plan 19-08 wires the other four hot
+    /// paths (library / reader / chrome / sync) onto their own signposters.
     ///
     /// `nonisolated` so the off-main `makeServices()` factory can begin /
     /// end intervals without hopping back to MainActor (the enclosing
@@ -91,7 +94,7 @@ final class AppDependencies {
     /// (Swift 6) so this is safe. Phase 19 Plan 19-06 fix — Rule 3.
     nonisolated private static let signposter = OSSignposter(
         subsystem: "org.fidexa.rishi",
-        category: "bootstrap"
+        category: "cold-launch"
     )
 
     // MARK: - Persistent UI-layer fields
@@ -147,10 +150,10 @@ final class AppDependencies {
         let task = Task { [weak self] in
             guard let self else { return }
             let signpostId = Self.signposter.makeSignpostID()
-            let state = Self.signposter.beginInterval("bootstrap", id: signpostId)
+            let state = Self.signposter.beginInterval("cold-launch.bootstrap", id: signpostId)
             let built = await Self.makeServices(userIdBox: self.userIdBox)
             self.services = built
-            Self.signposter.endInterval("bootstrap", state)
+            Self.signposter.endInterval("cold-launch.bootstrap", state)
         }
         bootstrapTask = task
         await task.value
