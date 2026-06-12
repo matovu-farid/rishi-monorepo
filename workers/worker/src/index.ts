@@ -20,6 +20,7 @@ import { devicesRoutes } from "./routes/devices";
 import { chatRoutes } from "./routes/chat";
 import { conversationsRoutes } from "./routes/conversations";
 import { messagesRoutes } from "./routes/messages";
+import { changesRoutes } from "./routes/changes";
 import { testAuthRoutes } from "./routes/test-auth";
 import { createAuth } from "./auth";
 import { ensureCreditAndSubscription } from "./billing/backfill";
@@ -206,6 +207,17 @@ export async function requireAuth(c: any, next: () => Promise<void>) {
 }
 
 // ─── Sync routes ─────────────────────────────────────────────────────────────
+// Quick task 260612-g89 — closes the Phase-7 inbound book + highlight bridge
+// gap. iOS RishiSync/Inbound/RemoteChangeFetcher.swift calls this route on
+// every sync tick; before this mount the live worker returned 404 for every
+// caller. The handler enforces requireAuth + per-user filter and emits
+// updated_at as seconds-since-2001 so the bare JSONDecoder() in
+// apps/apple/Packages/RishiAPI/Sources/RishiAPI/WorkerClient.swift:96
+// (.deferredToDate) decodes Date correctly. See changes.ts header for the
+// full SyncChange envelope + Date wire-format contract.
+// Mounted BEFORE the broader /api/sync prefix so the more-specific
+// /api/sync/changes router wins regardless of Hono's prefix-match order.
+app.route("/api/sync/changes", changesRoutes);
 app.route("/api/sync", syncRoutes);
 app.route("/api/sync", uploadRoutes);
 // Phase 16 — chat sync (conversations + messages). Both behind requireAuth
