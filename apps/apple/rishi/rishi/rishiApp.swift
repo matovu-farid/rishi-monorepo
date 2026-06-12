@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import SwiftData
 import RishiCore
 import RishiAuth
 import RishiBilling
@@ -18,19 +17,6 @@ import UIKit
 
 @main
 struct rishiApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Item.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
-    }()
-
     @State private var deps = AppDependencies()
 
     #if canImport(UIKit)
@@ -62,7 +48,6 @@ struct rishiApp: App {
                 // (consumed by `ManageSubscriptionRow`).
                 .environment(deps.manageSubscriptionPresenter)
         }
-        .modelContainer(sharedModelContainer)
         // Phase 12 Plan 12-01 — Mac Catalyst menu-bar commands.
         // Universal (not Catalyst-gated) so iPad hardware-keyboard users
         // get the same ⌘ chords.
@@ -158,3 +143,5 @@ final class RishiAppDelegate: NSObject, UIApplicationDelegate {
 }
 
 #endif
+
+
