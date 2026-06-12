@@ -144,7 +144,8 @@ struct SyncEngineTests {
         conversationStore: any ConversationStore = StubConversationStore(),
         messageStore: any MessageStore = StubMessageStore(),
         workerClient: WorkerClient,
-        fileStorage: BookFileStorage
+        fileStorage: BookFileStorage,
+        chatRefreshDelegate: (any ChatSyncRefreshDelegate)? = nil
     ) -> SyncEngine {
         let queue = SyncQueue(metadataStore: metadata)
         let bookUploader = BookUploader(workerClient: workerClient, metadataStore: metadata, fileStorage: fileStorage)
@@ -154,6 +155,8 @@ struct SyncEngineTests {
         let messageUploader = MessageUploader(workerClient: workerClient, messageStore: messageStore, metadataStore: metadata)
         let fetcher = RemoteChangeFetcher(workerClient: workerClient, metadataStore: metadata)
         let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, metadataStore: metadata)
+        let conversationsFetcher = ConversationsFetcher(workerClient: workerClient, metadataStore: metadata)
+        let messagesFetcher = MessagesFetcher(workerClient: workerClient, metadataStore: metadata)
         return SyncEngine(
             config: config,
             queue: queue,
@@ -165,7 +168,12 @@ struct SyncEngineTests {
             conversationUploader: conversationUploader,
             messageUploader: messageUploader,
             fetcher: fetcher,
-            applier: applier
+            applier: applier,
+            conversationsFetcher: conversationsFetcher,
+            messagesFetcher: messagesFetcher,
+            conversationStore: conversationStore,
+            messageStore: messageStore,
+            chatRefreshDelegate: chatRefreshDelegate
         )
     }
 
@@ -479,5 +487,313 @@ struct SyncEngineTests {
         #expect(sawMessagesPost, "expected POST /api/sync/messages to fire")
         let stillDirty = await metadata.currentDirty()
         #expect(stillDirty.filter { $0.kind == .message }.isEmpty)
+    }
+
+    // MARK: - Phase 16-05: inbound chat sync (Conversations + Messages fetchers)
+
+    /// Test-only delegate spy. `final class @unchecked Sendable` so the
+    /// closure-capturing engine can hold it without Swift 6 strict yelling.
+    private final class SpyChatRefreshDelegate: ChatSyncRefreshDelegate, @unchecked Sendable {
+        let lock = NSLock()
+        var calls: Int = 0
+        func chatSyncDidMerge() async {
+            lock.lock(); defer { lock.unlock() }
+            calls += 1
+        }
+        func callCount() -> Int {
+            lock.lock(); defer { lock.unlock() }
+            return calls
+        }
+    }
+
+    @Test("runOnce inbound: ConversationsFetcher rows are upserted + watermark advanced")
+    func runOnceInboundConversationsApplied() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let conversationStore = StubConversationStore()
+        let (storage, _) = try await makeFileStorage()
+
+        let convoId = UUID()
+        let userId = UUID()
+        let bookId = UUID()
+        let updatedAtMs: Int64 = 1_700_000_200_000
+        let row = """
+        {
+            "id": "\(convoId.uuidString)",
+            "user_id": "\(userId.uuidString)",
+            "book_id": "\(bookId.uuidString)",
+            "title": "Remote chat",
+            "archived": false,
+            "created_at": 1700000100000,
+            "updated_at": \(updatedAtMs)
+        }
+        """
+
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                return (200, self.emptyChangesBody(), nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("""
+                { "rows": [\(row)] }
+                """.utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("""
+                { "rows": [] }
+                """.utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            conversationStore: conversationStore,
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+        let wave = await engine.runOnce()
+        #expect(wave.applied >= 1, "expected at least one inbound apply (conversation), got \(wave.applied); errors: \(wave.errors)")
+
+        let stored = try await conversationStore.conversation(convoId)
+        #expect(stored != nil)
+        #expect(stored?.title == "Remote chat")
+        #expect(stored?.bookId == bookId)
+
+        // Watermark advanced through markClean: the spy's cleaned snapshot
+        // must include a `.conversation` entry for this id.
+        let cleaned = await metadata.cleanedSnapshot()
+        #expect(cleaned.contains(where: { $0.0 == convoId && $0.1 == .conversation }))
+    }
+
+    @Test("runOnce inbound: MessagesFetcher rows are upserted (append-only)")
+    func runOnceInboundMessagesApplied() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let messageStore = StubMessageStore()
+        let (storage, _) = try await makeFileStorage()
+
+        let msgId = UUID()
+        let convoId = UUID()
+        let row = """
+        {
+            "id": "\(msgId.uuidString)",
+            "conversation_id": "\(convoId.uuidString)",
+            "role": "assistant",
+            "content": "from server",
+            "created_at": 1700000300000,
+            "updated_at": 1700000300000
+        }
+        """
+
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                return (200, self.emptyChangesBody(), nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("""
+                { "rows": [] }
+                """.utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("""
+                { "rows": [\(row)] }
+                """.utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            messageStore: messageStore,
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+        let wave = await engine.runOnce()
+        #expect(wave.applied >= 1, "expected at least one inbound apply (message), got \(wave.applied); errors: \(wave.errors)")
+
+        let stored = try await messageStore.message(msgId)
+        #expect(stored != nil)
+        #expect(stored?.content == "from server")
+        #expect(stored?.role == .assistant)
+
+        let cleaned = await metadata.cleanedSnapshot()
+        #expect(cleaned.contains(where: { $0.0 == msgId && $0.1 == .message }))
+    }
+
+    @Test("runOnce inbound LWW: local conversation newer than remote → dropped, conflicts++")
+    func runOnceInboundConversationLWWDropsOlderRemote() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let conversationStore = StubConversationStore()
+        let (storage, _) = try await makeFileStorage()
+
+        let convoId = UUID()
+        let userId = UUID()
+        // Seed local — newer than the remote row below.
+        let localConvo = Conversation(
+            id: convoId,
+            userId: userId,
+            bookId: nil,
+            title: "Local newer",
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_500)
+        )
+        await conversationStore.seed(localConvo)
+
+        // Remote is older by updated_at.
+        let row = """
+        {
+            "id": "\(convoId.uuidString)",
+            "user_id": "\(userId.uuidString)",
+            "book_id": "00000000-0000-0000-0000-000000000000",
+            "title": "Older remote",
+            "archived": false,
+            "created_at": 1700000000000,
+            "updated_at": 1700000100000
+        }
+        """
+
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                return (200, self.emptyChangesBody(), nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("""
+                { "rows": [\(row)] }
+                """.utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("""
+                { "rows": [] }
+                """.utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            conversationStore: conversationStore,
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+        let wave = await engine.runOnce()
+        #expect(wave.conflicts >= 1, "expected at least one LWW conflict on conversations, got \(wave.conflicts); errors: \(wave.errors)")
+
+        // Local row preserved.
+        let stored = try await conversationStore.conversation(convoId)
+        #expect(stored?.title == "Local newer")
+    }
+
+    @Test("runOnce inbound: ChatSyncRefreshDelegate fires after applied conversation/message")
+    func runOnceInboundFiresChatRefreshDelegate() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let conversationStore = StubConversationStore()
+        let (storage, _) = try await makeFileStorage()
+        let spy = SpyChatRefreshDelegate()
+
+        let convoId = UUID()
+        let userId = UUID()
+        let row = """
+        {
+            "id": "\(convoId.uuidString)",
+            "user_id": "\(userId.uuidString)",
+            "book_id": "00000000-0000-0000-0000-000000000000",
+            "title": "Delegate trigger",
+            "archived": false,
+            "created_at": 1700000000000,
+            "updated_at": 1700000050000
+        }
+        """
+
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                return (200, self.emptyChangesBody(), nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("""
+                { "rows": [\(row)] }
+                """.utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("""
+                { "rows": [] }
+                """.utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            conversationStore: conversationStore,
+            workerClient: workerClient,
+            fileStorage: storage,
+            chatRefreshDelegate: spy
+        )
+        _ = await engine.runOnce()
+        // Allow the detached refresh-delegate call to land.
+        try await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        #expect(spy.callCount() >= 1, "expected delegate to fire at least once")
+    }
+
+    @Test("runOnce inbound: ChatSyncRefreshDelegate does NOT fire when no chat rows applied")
+    func runOnceInboundSkipsDelegateWhenNoApply() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let (storage, _) = try await makeFileStorage()
+        let spy = SpyChatRefreshDelegate()
+
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                return (200, self.emptyChangesBody(), nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("""
+                { "rows": [] }
+                """.utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("""
+                { "rows": [] }
+                """.utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            workerClient: workerClient,
+            fileStorage: storage,
+            chatRefreshDelegate: spy
+        )
+        _ = await engine.runOnce()
+        try await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        #expect(spy.callCount() == 0, "delegate should not fire when no chat rows applied")
     }
 }

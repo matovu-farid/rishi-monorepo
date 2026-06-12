@@ -413,6 +413,41 @@ struct ChangeApplierConflictTests {
         #expect(forgotten.first?.1 == .book)
     }
 
+    /// Phase 16-05 regression guard: chat sync moved to dedicated
+    /// `/api/sync/conversations` + `/api/sync/messages` endpoints driven
+    /// directly by `SyncEngine.runOnce` (bypassing `ChangeApplier`). The
+    /// legacy `.conversation` / `.message` branch in `ChangeApplier.apply`
+    /// is preserved as a defensive markClean no-op so any row that DOES
+    /// somehow arrive via the legacy `/api/sync/changes` envelope still
+    /// advances the cursor instead of looping. This test pins that branch.
+    @Test("Phase 16-05 regression: legacy SyncChange.conversation still skipped + markClean'd")
+    func phase16LegacyConversationStillSkipped() async throws {
+        let metadata = StubMetadata()
+        let applier = makeApplier(
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            metadata: metadata
+        )
+
+        let convoChange = SyncChange(
+            kind: SyncEntityKind.conversation.rawValue,
+            id: UUID(),
+            payload: SyncOpaqueJSON(data: Data("{}".utf8)),
+            updatedAt: Date(timeIntervalSince1970: 1_750_000_000),
+            deleted: false
+        )
+
+        let result = await applier.apply([convoChange])
+        #expect(result.skipped == 1)
+        #expect(result.applied == 0)
+        #expect(result.errors.isEmpty)
+
+        let cleaned = await metadata.cleaned()
+        #expect(cleaned.count == 1)
+        #expect(cleaned[0].1 == .conversation)
+    }
+
     @Test("Conversation + Message kinds → skipped (Phase 9) but markClean still called")
     func phase9KindsAreSkippedNotErrored() async throws {
         let metadata = StubMetadata()
