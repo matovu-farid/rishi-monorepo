@@ -92,8 +92,15 @@ public struct PDFReaderScreen: View {
         )
         #endif
     }()
-    @State private var showTOC: Bool = false
-    @State private var showThemePicker: Bool = false
+
+    /// Phase 18 Plan 18-08 (F-P2-01) — single source of truth for which
+    /// content sheet is currently presented. Replaces the prior chain of
+    /// `$showTOC` / `$showThemePicker` / `$editingNoteOn` flags with a
+    /// `ReaderSheet?` enum. Setting one case automatically unsets the
+    /// others; setting `nil` dismisses. The paywall sheet stays SEPARATE
+    /// (mounted from `RootView`) so it can fire concurrently with a
+    /// content sheet here.
+    @State private var activeSheet: ReaderSheet?
 
     #if canImport(UIKit)
     // Selection coordinator state — set whenever PDFView publishes a new
@@ -101,8 +108,6 @@ public struct PDFReaderScreen: View {
     // current selection so the context menu can save it; cleared after
     // the user picks a color or dismisses.
     @State private var pendingHighlight: PendingHighlight?
-    // Sheet item for the note editor; non-nil = sheet is visible.
-    @State private var editingNoteOn: Highlight?
     @State private var editingNoteText: String = ""
     // Live PDFView reference, captured via `onPDFViewReady`. Used to build
     // the user-space → view-space rect mapper for the overlay.
@@ -318,44 +323,68 @@ public struct PDFReaderScreen: View {
                 viewModel.seek(toPage: prev)
             }
         }
-        .sheet(isPresented: $showTOC) {
-            PDFTOCView(
-                nodes: viewModel.outline,
-                onSelect: { pageIndex in
-                    viewModel.seek(toPage: pageIndex)
-                    showTOC = false
-                },
-                onClose: { showTOC = false }
-            )
-        }
-        .sheet(isPresented: $showThemePicker) {
-            if let settings = readerSettingsStore {
-                PDFThemePicker(
-                    theme: themeBinding,
-                    bookId: viewModel.book.id,
-                    store: settings,
-                    onClose: { showThemePicker = false }
+        // Phase 18 Plan 18-08 (F-P2-01) — single `.sheet(item:)` driven by
+        // the `ReaderSheet?` enum replaces the prior chain of three
+        // cascading `.sheet(isPresented:)` modifiers (TOC, theme picker,
+        // highlight-note editor). The paywall sheet stays SEPARATE
+        // (mounted from `RootView`) and CAN fire concurrently with this
+        // sheet — e.g. user taps Read Aloud while the theme picker is up
+        // and an entitlement check fails. Folding the paywall in here
+        // would lose that concurrency, which is why the enum deliberately
+        // does NOT include a paywall case.
+        //
+        // The `.typography` / `.ttsControls` / `.ttsPicker` cases of
+        // `ReaderSheet` are unreachable on the PDF screen: PDFKit owns
+        // typography via its native gestures + platform menu; the live
+        // TTS sheets are owned by `RootView`. The switch handles them
+        // with `EmptyView()` so the enum invariant (exhaustive coverage)
+        // holds.
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .toc:
+                PDFTOCView(
+                    nodes: viewModel.outline,
+                    onSelect: { pageIndex in
+                        viewModel.seek(toPage: pageIndex)
+                        activeSheet = nil
+                    },
+                    onClose: { activeSheet = nil }
                 )
-            } else {
-                // No store: still let the user preview themes in-session.
-                PDFThemePicker(
-                    theme: themeBinding,
-                    bookId: viewModel.book.id,
-                    store: EphemeralReaderSettingsStore(),
-                    onClose: { showThemePicker = false }
+            case .theme:
+                if let settings = readerSettingsStore {
+                    PDFThemePicker(
+                        theme: themeBinding,
+                        bookId: viewModel.book.id,
+                        store: settings,
+                        onClose: { activeSheet = nil }
+                    )
+                } else {
+                    // No store: still let the user preview themes in-session.
+                    PDFThemePicker(
+                        theme: themeBinding,
+                        bookId: viewModel.book.id,
+                        store: EphemeralReaderSettingsStore(),
+                        onClose: { activeSheet = nil }
+                    )
+                }
+            case .typography, .ttsControls, .ttsPicker:
+                // Unreachable for PDF — PDFKit owns typography; TTS sheets
+                // are owned by RootView. Placeholder keeps the switch
+                // exhaustive and the enum invariant intact.
+                EmptyView()
+            case .highlightNote(let highlight):
+                #if canImport(UIKit)
+                HighlightNoteEditor(
+                    note: $editingNoteText,
+                    snippet: highlight.text,
+                    onSave: { commitNoteEdit(on: highlight) },
+                    onCancel: { activeSheet = nil }
                 )
+                #else
+                EmptyView()
+                #endif
             }
         }
-        #if canImport(UIKit)
-        .sheet(item: $editingNoteOn) { highlight in
-            HighlightNoteEditor(
-                note: $editingNoteText,
-                snippet: highlight.text,
-                onSave: { commitNoteEdit(on: highlight) },
-                onCancel: { editingNoteOn = nil }
-            )
-        }
-        #endif
         #if !os(macOS)
         // Phase 18 Plan 18-07 (F-P1-05) — native SwiftUI toolbar replaces
         // the hand-rolled HStack overlay toolbar. Items live
@@ -371,7 +400,7 @@ public struct PDFReaderScreen: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
                     chrome.userActivity()
-                    showTOC = true
+                    activeSheet = .toc
                 } label: {
                     Image(systemName: "list.bullet.indent")
                 }
@@ -380,7 +409,7 @@ public struct PDFReaderScreen: View {
 
                 Button {
                     chrome.userActivity()
-                    showThemePicker = true
+                    activeSheet = .theme
                 } label: {
                     Image(systemName: "circle.lefthalf.filled")
                 }
@@ -485,7 +514,10 @@ public struct PDFReaderScreen: View {
                 store: store
             ) {
                 editingNoteText = ""
-                editingNoteOn = saved
+                // Phase 18 Plan 18-08 (F-P2-01) — drive the single
+                // .sheet(item:) instead of the prior dedicated
+                // `editingNoteOn` @State binding.
+                activeSheet = .highlightNote(saved)
             }
             pendingHighlight = nil
         }
@@ -502,7 +534,9 @@ public struct PDFReaderScreen: View {
                     store: store
                 )
             }
-            editingNoteOn = nil
+            // Phase 18 Plan 18-08 (F-P2-01) — dismissing the highlight
+            // editor clears the single-sheet enum.
+            activeSheet = nil
         }
     }
     #endif
