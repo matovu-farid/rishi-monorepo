@@ -35,7 +35,13 @@ struct RootView: View {
 
     @Environment(\.rishiAuthService) private var auth
     @Environment(\.appDependencies) private var deps
-    @Environment(LibraryViewModel.self) private var libraryViewModel
+    /// Phase 19 plan 19-01 — LibraryViewModel is now part of the
+    /// `BootstrappedServices` graph, reached via `deps.libraryViewModel`.
+    /// We no longer pull it from `@Environment(LibraryViewModel.self)`
+    /// because that environment slot would be nil until bootstrap
+    /// completes; routing through `deps` keeps the lookup uniform with
+    /// the rest of the services accessors.
+    private var libraryViewModel: LibraryViewModel? { deps?.services?.libraryViewModel }
     /// Phase 12 Plan 12-01 — observes intents fired from `RishiMenuCommands`
     /// (menu bar + ⌘ shortcuts). `nil` in tests / SwiftUI previews so the
     /// view still renders without the composition root in scope.
@@ -122,8 +128,40 @@ struct RootView: View {
     @State private var paywallFeature: PaywallFeature? = nil
 
     var body: some View {
+        // Phase 19 plan 19-01 (F-P0-01) — gate the real UI on bootstrap
+        // completion. `deps.services` flips non-nil after the off-main
+        // factory finishes. SwiftUI re-evaluates `body` because `deps`
+        // is `@State`-held and `services` is a `private(set) var` on a
+        // `@MainActor` class. Until then we show a ProgressView so first
+        // frame paints immediately instead of the user staring at a
+        // black/launchscreen-frozen window for hundreds of ms.
+        if let deps, deps.services != nil {
+            realBody(deps: deps)
+        } else {
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityLabel("Loading Rishi")
+        }
+    }
+
+    @ViewBuilder
+    private func realBody(deps: AppDependencies) -> some View {
+        // Phase 19 plan 19-01 — re-inject object-typed environments that
+        // used to live on the `WindowGroup` root. They can only be
+        // installed once `deps.services` is non-nil, which the outer
+        // `body` guard guarantees here. `LibraryRootView` reads
+        // `@Environment(LibraryViewModel.self)`, and `ManageSubscriptionRow`
+        // (presented from `SettingsSheet`) reads
+        // `@Environment(ManageSubscriptionPresenter.self)`.
+        realBodyContent(deps: deps)
+            .environment(deps.libraryViewModel)
+            .environment(deps.manageSubscriptionPresenter)
+    }
+
+    @ViewBuilder
+    private func realBodyContent(deps: AppDependencies) -> some View {
         Group {
-            if let user = currentUser, let deps = deps {
+            if let user = currentUser {
                 // Phase 12 Plan 12-02 (MAC-02) — sidebar on Mac Catalyst /
                 // iPad regular width class; existing TabView on iPhone
                 // compact. The selection binding is shared so menu-bar
@@ -189,12 +227,12 @@ struct RootView: View {
             // Phase 11 — gate the first-launch onboarding cover on the
             // persisted flag. Refresh entitlement only when the user has
             // already signed in (signed-out users have nothing to fetch).
-            if let deps = deps {
-                let completed = await deps.onboardingState.hasCompletedOnboarding()
-                showOnboarding = !completed
-                if currentUser != nil {
-                    _ = await deps.entitlementService.refresh()
-                }
+            // Phase 19 plan 19-01 — deps is now non-optional inside
+            // realBody (services already verified).
+            let completed = await deps.onboardingState.hasCompletedOnboarding()
+            showOnboarding = !completed
+            if currentUser != nil {
+                _ = await deps.entitlementService.refresh()
             }
         }
         // Phase 11 — first-launch onboarding cover. Presented over the
@@ -202,25 +240,17 @@ struct RootView: View {
         // even before the user has authenticated.
         #if canImport(UIKit)
         .fullScreenCover(isPresented: $showOnboarding) {
-            if let deps = deps {
-                OnboardingHost(
-                    dependencies: deps,
-                    onCompleted: { showOnboarding = false }
-                )
-            } else {
-                ProgressView()
-            }
+            OnboardingHost(
+                dependencies: deps,
+                onCompleted: { showOnboarding = false }
+            )
         }
         #else
         .sheet(isPresented: $showOnboarding) {
-            if let deps = deps {
-                OnboardingHost(
-                    dependencies: deps,
-                    onCompleted: { showOnboarding = false }
-                )
-            } else {
-                ProgressView()
-            }
+            OnboardingHost(
+                dependencies: deps,
+                onCompleted: { showOnboarding = false }
+            )
         }
         #endif
         // BILL-04 — paywall sheet for free users tapping a Pro feature.
@@ -234,27 +264,23 @@ struct RootView: View {
         // mutation here. Error breadcrumbs go through `Log.event` via
         // RishiLogging (the canonical bridge — no direct Sentry call).
         .sheet(item: $paywallFeature) { feature in
-            if let deps = deps {
-                PaywallView(
-                    feature: feature.name,
-                    onSubscribe: {
-                        paywallSubscribeAction(
-                            purchaseService: deps.purchaseService,
-                            productId: StoreKitProductService.monthlyProductId,
-                            onSuccess: { paywallFeature = nil },
-                            onCancel:  { paywallFeature = nil },
-                            onError: { _ in
-                                Log.event("paywall.purchase.failed",
-                                          level: .error)
-                                paywallFeature = nil
-                            }
-                        )
-                    },
-                    onDismiss: { paywallFeature = nil }
-                )
-            } else {
-                ProgressView()
-            }
+            PaywallView(
+                feature: feature.name,
+                onSubscribe: {
+                    paywallSubscribeAction(
+                        purchaseService: deps.purchaseService,
+                        productId: StoreKitProductService.monthlyProductId,
+                        onSuccess: { paywallFeature = nil },
+                        onCancel:  { paywallFeature = nil },
+                        onError: { _ in
+                            Log.event("paywall.purchase.failed",
+                                      level: .error)
+                            paywallFeature = nil
+                        }
+                    )
+                },
+                onDismiss: { paywallFeature = nil }
+            )
         }
         // Phase 12 Plan 12-03 — every inbound URL (custom `rishi://` scheme
         // OR `https://rishi.fidexa.org/...` Universal Link) is funneled
@@ -263,7 +289,7 @@ struct RootView: View {
         // taps from Files / share-sheet still fall through to the `.unknown`
         // branch so book imports keep working.
         .onOpenURL { url in
-            guard let deps = deps else { return }
+            // Phase 19 plan 19-01 — deps is non-optional inside realBody.
             let destination = DeepLinkRouter().route(url)
             switch destination {
             case .authCallback:
@@ -306,7 +332,7 @@ struct RootView: View {
                 if url.isFileURL {
                     Task {
                         _ = await deps.importCoordinator.importBooks([url])
-                        await libraryViewModel.refresh()
+                        await libraryViewModel?.refresh()
                     }
                 }
             }
@@ -486,7 +512,7 @@ struct RootView: View {
                 deps.cachedUserId = user.id
                 _ = await deps.sampleBookInstaller.installIfNeeded(ownerId: user.id)
                 _ = await deps.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
-                await libraryViewModel.refresh()
+                await libraryViewModel?.refresh()
             }
         }
         .sheet(isPresented: $showSettings) {

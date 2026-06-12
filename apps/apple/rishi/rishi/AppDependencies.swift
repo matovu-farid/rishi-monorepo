@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import OSLog
 import SwiftUI
 import RishiCore
@@ -54,7 +55,17 @@ import BackgroundTasks
 /// computed property forwarding through `services!`. The outer
 /// `if deps.services != nil` gate in `RootView.body` guarantees the
 /// force-unwrap can never trip from a UI rendering path.
+///
+/// ## `@Observable` rationale
+/// The class is `@Observable` so SwiftUI re-renders `RootView.body` when
+/// ``bootstrap()`` flips ``services`` from `nil` to the populated
+/// graph. The plan's docstring claimed `@State`-held reference tracking
+/// would cover this — it does not, because `@State<AppDependencies>`
+/// only observes replacement of the reference, not interior mutations.
+/// Without `@Observable`, the `if deps.services != nil` gate would
+/// latch on the initial `nil` read and never swap to `realBody`.
 @MainActor
+@Observable
 final class AppDependencies {
 
     // MARK: - Two-phase bootstrap state

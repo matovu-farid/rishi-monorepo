@@ -24,14 +24,13 @@ struct rishiApp: App {
     #endif
 
     init() {
-        // Phase 7 (07-05): BGTaskScheduler.register MUST run before
-        // applicationDidFinishLaunching returns. We're inside that window
-        // here (rishiApp.init runs before the Scene body builds).
-        deps.backgroundTaskCoordinator.register()
-        deps.backgroundTaskCoordinator.scheduleAll()
+        // Phase 19 plan 19-01 — BGTaskScheduler.register MUST run before
+        // application(_:didFinishLaunchingWithOptions:) returns per Apple's
+        // contract. The AppDelegate is the canonical home for that hook;
+        // it calls `deps.registerBGTasksSynchronously()` from inside
+        // `didFinishLaunchingWithOptions`. We forward the back-reference
+        // here so the delegate can find the live AppDependencies instance.
         #if canImport(UIKit)
-        // Hand the AppDelegate a back-reference so APNs + silent-push
-        // callbacks can route into the sync engine.
         RishiAppDelegate.shared.dependencies = deps
         #endif
     }
@@ -39,14 +38,16 @@ struct rishiApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environment(\.rishiAuthService, deps.authServiceForEnvironment)
-                .environment(deps.libraryViewModel)
+                .environment(\.rishiAuthService, deps.services?.authService)
                 .environment(\.appDependencies, deps)
                 .environment(\.macCommandRouter, deps.macCommandRouter)
-                // Phase 13 / IAP-07 — make the StoreKit Manage
-                // Subscriptions presenter visible to every SwiftUI view
-                // (consumed by `ManageSubscriptionRow`).
-                .environment(deps.manageSubscriptionPresenter)
+                // Phase 19 plan 19-01 — drive the off-main bootstrap from
+                // the WindowGroup root. `.task` runs once when the root
+                // first appears; RootView's outer `if deps.services !=
+                // nil` guard renders a ProgressView until this completes.
+                .task {
+                    await deps.bootstrap()
+                }
         }
         // Phase 12 Plan 12-01 — Mac Catalyst menu-bar commands.
         // Universal (not Catalyst-gated) so iPad hardware-keyboard users
@@ -61,6 +62,11 @@ struct rishiApp: App {
 
 /// UIKit delegate adapter for the SwiftUI `App`. Wires APNs registration
 /// + silent-push reception into the Phase-7 sync engine.
+///
+/// Phase 19 plan 19-01 — also owns the BGTaskScheduler registration call
+/// (was previously in `rishiApp.init`). Apple's contract requires
+/// registration before `application(_:didFinishLaunchingWithOptions:)`
+/// returns; that call site is the canonical home.
 ///
 /// Held alive by `@UIApplicationDelegateAdaptor`; `Self.shared` is set in
 /// `application(_:didFinishLaunchingWithOptions:)` so `rishiApp.init` can
@@ -90,6 +96,15 @@ final class RishiAppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // Phase 19 plan 19-01 — BGTaskScheduler.register MUST run before
+        // this method returns per Apple's contract. We invoke the
+        // synchronous helper on AppDependencies, which registers the
+        // launch handlers directly against BGTaskScheduler.shared. The
+        // handlers await bootstrap before driving syncEngine.runOnce().
+        if let deps = dependencies {
+            deps.registerBGTasksSynchronously()
+        }
+
         // Request silent-push registration. Apple-recommended dispatch to
         // main avoids re-entering an in-flight launch sequence.
         DispatchQueue.main.async {
@@ -105,7 +120,12 @@ final class RishiAppDelegate: NSObject, UIApplicationDelegate {
         guard let deps = dependencies else { return }
         let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
         let platform = "ios"
-        Task { [registrar = deps.apnsDeviceRegistrar] in
+        // Phase 19 plan 19-01 — services may still be nil if APNs
+        // registration races against bootstrap. The Task awaits bootstrap
+        // through the AppDependencies guard before reaching apnsDeviceRegistrar.
+        Task { @MainActor in
+            if deps.services == nil { await deps.bootstrap() }
+            guard let registrar = deps.services?.apnsDeviceRegistrar else { return }
             do {
                 try await registrar.register(
                     token: deviceToken,
@@ -138,10 +158,20 @@ final class RishiAppDelegate: NSObject, UIApplicationDelegate {
             completionHandler,
             to: (@Sendable (UIBackgroundFetchResult) -> Void).self
         )
-        SilentPushHandler.handle(userInfo, engine: deps.syncEngine, completion: sendableHandler)
+        // Phase 19 plan 19-01 — silent push may arrive before bootstrap
+        // completes (push wakes the app from a cold-launch background
+        // window). Buffer by awaiting bootstrap, then dispatch into the
+        // freshly published syncEngine.
+        Task { @MainActor in
+            if deps.services == nil { await deps.bootstrap() }
+            guard let engine = deps.services?.syncEngine else {
+                sendableHandler(.noData)
+                return
+            }
+            SilentPushHandler.handle(userInfo, engine: engine, completion: sendableHandler)
+        }
     }
 }
 
 #endif
-
 
