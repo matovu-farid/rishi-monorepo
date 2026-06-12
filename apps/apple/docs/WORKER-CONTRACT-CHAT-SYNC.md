@@ -482,6 +482,197 @@ Reference deployed version: `23209ea6-3446-4da8-93b6-b7b8cadc9864` (2026-06-12).
 
 ---
 
+## 9.5. /api/sync/changes — Inbound Book + Highlight Pull
+
+Status: Live (deployed 2026-06-12, version `df4d9cfe-8983-4e1f-a946-b5e88e7bce75`).
+Related plan: quick-task `260612-g89`.
+
+Closes the Phase-7 audit gap where `apps/apple/Packages/RishiSync/Sources/RishiSync/Inbound/RemoteChangeFetcher.swift` posted to a route the worker never shipped (live probe was 404). Before this section the call site fired on every sync tick and got HTTP 404 — every user re-installing the app or signing in on a fresh device pulled zero server-side state and saw an empty library. With this route mounted, iOS now pulls the caller's books + highlights back from D1 with zero iOS code changes (the endpoint, decoder, and caller all already shipped).
+
+This is **separate** from the Phase 16 `/api/sync/conversations` and `/api/sync/messages` routes documented in Sections 3–7. Those are chat-only; `/api/sync/changes` is book + highlight only. They share the same `requireAuth` middleware and the same D1 database, but the wire shape is different (see §9.5.4 below).
+
+### 9.5.1. Method + Path
+
+```
+GET /api/sync/changes[?since=<ISO8601>]
+```
+
+Source: `workers/worker/src/routes/changes.ts`.
+Mount: `workers/worker/src/index.ts` — `app.route("/api/sync/changes", changesRoutes)` inserted BEFORE the broader `app.route("/api/sync", syncRoutes)` mount so the more-specific prefix wins regardless of Hono's match order.
+
+### 9.5.2. Auth
+
+Same `requireAuth` middleware as every other authenticated route in this contract (see Section 2). Bearer token OR session cookie; dev-bypass header honored in non-production builds. Unauthenticated -> `401 {"error":"Unauthorized"}`, no DB read.
+
+### 9.5.3. Since cursor
+
+Optional `?since=<ISO8601>` query parameter.
+
+| Case                        | Behavior                                                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Absent                      | Full-pull semantics: returns every non-tombstoned + every tombstoned row the user owns (subject to `PULL_LIMIT`).  |
+| Valid ISO8601               | Server filters rows where `row.updated_at (ms) > Date.parse(since)`. Both strict and inclusive bounds documented in code. |
+| Malformed                   | `400 {"error":"since must be a valid ISO8601 timestamp"}`. The parser is `Date.parse(rawSince)`; `Number.isNaN` triggers the 400. |
+
+The comparison happens on the server-side `updated_at` column (ms-since-1970, the canonical SQLite shape). The cursor is `Date.parse(<iso>)` so iOS callers can pass any ISO8601 string the standard library produces.
+
+### 9.5.4. Response envelope
+
+```json
+{
+  "changes": [
+    { "kind": "book",      "id": "<uuid>", "payload": { ... }, "updated_at": 825100800.0, "deleted": false },
+    { "kind": "highlight", "id": "<uuid>", "payload": { ... }, "updated_at": 825100900.5, "deleted": false }
+  ]
+}
+```
+
+NO `syncVersion` field. NO `hasMore` field. The iOS decoder for this route is `SyncChangesResponse` at `apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/SyncAPI.swift:212-216`; it expects exactly `{ changes: [SyncChange] }` and will fail-loud on any extra envelope keys via `JSONDecoder` strict matching. (Other routes in this contract DO emit `syncVersion` + `hasMore`; this one deliberately does not, because the iOS `SyncChange` model is a flat per-row envelope and the caller treats every batch as the full delta since the cursor.)
+
+### 9.5.5. SyncChange shape
+
+| key          | JSON type        | notes                                                                                                                                                                                                                                                       |
+| ------------ | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kind`       | string           | `"book"` or `"highlight"` in v1. Future kinds (see §9.5.8) MAY appear; iOS treats unknown kinds as ignorable.                                                                                                                                                |
+| `id`         | string (uuid)    | Row id of the book or highlight.                                                                                                                                                                                                                            |
+| `payload`    | object           | For `kind="book"`: D1 row JSON MINUS `file_path` and `cover_path` (local-only paths stripped server-side, same rule as the `/api/sync/pull` handler at `workers/worker/src/routes/sync.ts:396-400`). For `kind="highlight"`: D1 row JSON with every column.   |
+| `updated_at` | **number**       | Seconds since reference date 2001-01-01T00:00:00Z. **NOT** seconds-since-1970, **NOT** ms-epoch, **NOT** an ISO8601 string. See §9.5.6 for the rationale and conversion constant.                                                                            |
+| `deleted`    | boolean          | `true` when `row.is_deleted = true`. Soft-deleted rows ARE included in the response so the iOS `ChangeApplier` can mirror tombstones; iOS-side `RemoteChangeFetcher` is the seam that converts tombstones into local deletions.                              |
+
+### 9.5.6. Date format rationale (LOAD-BEARING)
+
+`updated_at` is emitted as a JSON number equal to `(row.updated_at - 978_307_200_000) / 1000`.
+
+Why: The iOS `WorkerClient` at `apps/apple/Packages/RishiAPI/Sources/RishiAPI/WorkerClient.swift:96` decodes every response through a bare `JSONDecoder()` with NO custom `dateDecodingStrategy`:
+
+```swift
+case 200..<300:
+    do {
+        return try JSONDecoder().decode(E.Response.self, from: data)
+        // ^^ bare JSONDecoder() — NO custom dateDecodingStrategy.
+        // For Date fields this means .deferredToDate ==
+        // "JSON number = seconds since 2001-01-01T00:00:00Z (reference date)"
+    } catch { ... }
+```
+
+For `Date` fields the default strategy is `.deferredToDate`, which reads the JSON value as `Double` and feeds it to `Date(timeIntervalSinceReferenceDate:)`. Apple's reference date is 2001-01-01T00:00:00Z = 978_307_200 unix seconds after the 1970 epoch. Confirmed by two existing in-tree assertions:
+
+- `apps/apple/Packages/RishiSync/Tests/RishiSyncTests/SyncEngineTests.swift:309` — *"Date wire = seconds since reference date (2001-01-01) — matches default JSONDecoder."*
+- `apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/VerifyReceiptAPI.swift:22` — *"Default JSONDecoder() strategy (.deferredToDate) would otherwise misinterpret the number as seconds-since Apple's reference date (2001-01-01)."*
+
+Rejected alternatives:
+
+| Alternative                | Why rejected                                                                  |
+| -------------------------- | ----------------------------------------------------------------------------- |
+| Raw `row.updated_at` (ms-epoch)        | Decodes to year ~57220. Wrong.                                                |
+| `row.updated_at / 1000` (seconds-since-1970) | Decodes to year ~2057 (off by exactly the 1970->2001 gap, 31 years). Wrong.   |
+| ISO8601 string             | `.deferredToDate` decodes Date from a Double, not a String. Would throw at decode time. Wrong. |
+| Change iOS `JSONDecoder` strategy | Out of scope: iOS code is locked, this route must conform to the existing decoder. |
+
+Conversion constant in `workers/worker/src/routes/changes.ts`:
+
+```typescript
+const REFERENCE_DATE_OFFSET_MS = 978_307_200_000;
+function toSecondsSinceRefDate(msEpoch: number): number {
+  return (msEpoch - REFERENCE_DATE_OFFSET_MS) / 1000;
+}
+```
+
+A row with `updated_at = 978_307_201_000` (1 second after the reference date in ms) wires as `1.0`. The vitest case `"updated_at encoded as seconds-since-reference-date (2001-01-01)"` in `changes.test.ts` is the load-bearing regression check for this rule.
+
+### 9.5.7. Ordering
+
+ASC by `row.updated_at`. Books and highlights are interleaved across the two kinds so the iOS `ChangeApplier` sees a stable, monotonically-increasing iteration order across the whole batch. This matches the `since-cursor + LWW` semantics every other route in this contract uses.
+
+### 9.5.8. Kinds covered in v1
+
+Covered:
+
+- `"book"` — every row from the `books` table the caller owns (Drizzle column shape MINUS `file_path` + `cover_path`).
+- `"highlight"` — every row from the `highlights` table the caller owns (every column passes through).
+
+Deferred to v1.1 (not emitted by this route — see the kind-by-kind routing below):
+
+| Future kind        | Where it actually rides today                                                                                                                                  |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"position"`       | Inside the book payload via `current_cfi` / `current_page` / `last_progress_percent` columns. The iOS `ChangeApplier` projects these back into the position store. |
+| `"conversation"`   | The Phase 16 route `/api/sync/conversations` handles this end-to-end (Section 3 above). NOT emitted by `/api/sync/changes`.                                    |
+| `"message"`        | The Phase 16 route `/api/sync/messages` handles this end-to-end (Section 5 above). NOT emitted by `/api/sync/changes`.                                          |
+
+Adding new kinds in v1.1 is additive: the iOS `SyncChange.kind` decoder treats unknown kinds as ignorable, so introducing `"bookmark"` or `"annotation"` later is non-breaking on the iOS side.
+
+### 9.5.9. Error codes
+
+| status | when                                                                                                |
+| ------ | --------------------------------------------------------------------------------------------------- |
+| 200    | Success — even when `changes: []`.                                                                  |
+| 400    | Malformed `since` query parameter.                                                                  |
+| 401    | No Better Auth session AND no dev-bypass header. The 401 happens BEFORE the `since` parser runs.    |
+
+There is no 5xx-on-empty path: an unauthenticated user with a garbage cursor sees 401, not 400.
+
+### 9.5.10. Example response
+
+```json
+{
+  "changes": [
+    {
+      "kind": "book",
+      "id": "11111111-1111-4111-8111-111111111111",
+      "payload": {
+        "id": "11111111-1111-4111-8111-111111111111",
+        "userId": "user_alice",
+        "title": "The Brothers Karamazov",
+        "author": "Dostoevsky",
+        "format": "epub",
+        "currentCfi": "epubcfi(/6/4!/4/10/1:0)",
+        "currentPage": null,
+        "lastProgressPercent": 0.42,
+        "fileHash": "sha256-abcd",
+        "fileR2Key": "books/user_alice/11111111.epub",
+        "coverR2Key": "covers/user_alice/11111111.jpg",
+        "fileSize": 1872391,
+        "createdAt": 1781193600000,
+        "updatedAt": 1781193600000,
+        "syncVersion": 3,
+        "isDirty": false,
+        "extractionStatus": "extracted",
+        "extractedPages": 824,
+        "totalPages": 824,
+        "extractionError": null
+      },
+      "updated_at": 802886400.0,
+      "deleted": false
+    },
+    {
+      "kind": "highlight",
+      "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "payload": {
+        "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "bookId": "11111111-1111-4111-8111-111111111111",
+        "userId": "user_alice",
+        "cfiRange": "epubcfi(/6/4!/4/10/1:0,/4/10/1:48)",
+        "text": "It's life that matters, nothing but life",
+        "color": "yellow",
+        "note": null,
+        "chapter": "Book V — Pro and Contra",
+        "createdAt": 1781193700000,
+        "updatedAt": 1781193700000,
+        "syncVersion": 1,
+        "isDirty": false,
+        "isDeleted": false
+      },
+      "updated_at": 802886500.0,
+      "deleted": false
+    }
+  ]
+}
+```
+
+Note: `payload.file_path` and `payload.cover_path` are absent from the book row above by design — they are local-only and must never overwrite the iOS-side paths. The `updated_at` value `802886400.0` is what `(1781193600000 - 978307200000) / 1000` produces; pasted verbatim so future engineers can verify the conversion without reaching for a calculator.
+
+---
+
 ## 10. References
 
 - `16-CONTEXT.md` — Phase 16 locked decisions (this doc's source of authority).
