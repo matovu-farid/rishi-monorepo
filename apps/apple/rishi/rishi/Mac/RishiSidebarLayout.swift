@@ -10,10 +10,15 @@
 //  the supplied `compactBody` closure — the existing TabView code stays
 //  intact for the iPhone path.
 //
-//  Choice is purely a function of `horizontalSizeClass`. We force the
-//  sidebar on Mac Catalyst regardless of size class because Catalyst can
-//  report `.compact` in narrow window states and we want the sidebar
-//  affordance there too.
+//  Choice is purely a function of `horizontalSizeClass`. The
+//  `.navigationSplitViewStyle(.balanced)` modifier hands sidebar
+//  pinning vs. auto-collapse to the system: wide Catalyst / iPad
+//  windows pin the sidebar inline; narrow windows collapse it to a
+//  toggle button at the top-left, matching macOS Finder / Mail.
+//
+//  Phase 18 Plan 18-04 (F-P1-04) — replaced the previous
+//  Catalyst-always-pin compile-time gate with the native
+//  auto-collapse policy driven by the size class + split-view style.
 //
 
 import SwiftUI
@@ -30,12 +35,13 @@ struct RishiSidebarLayout<Library: View, Chats: View, Compact: View>: View {
     /// `true` whenever we should render the NavigationSplitView (sidebar)
     /// instead of the TabView. Centralised so tests can read the policy
     /// from a single property.
+    ///
+    /// On iPhone-class widths (compact horizontal) the TabView wins.
+    /// On iPad and Mac Catalyst the NavigationSplitView is used and the
+    /// `.balanced` style decides whether to pin the sidebar inline or
+    /// collapse it to a toggle button based on the current window width.
     var prefersSidebar: Bool {
-        #if targetEnvironment(macCatalyst)
-        return true                              // Mac always splits
-        #else
-        return horizontal == .regular            // iPad regular = split, iPhone compact = tab
-        #endif
+        horizontal == .regular
     }
 
     private var selectionOptional: Binding<MacTab?> {
@@ -61,6 +67,7 @@ struct RishiSidebarLayout<Library: View, Chats: View, Compact: View>: View {
                 case .chats:   chats()
                 }
             }
+            .navigationSplitViewStyle(.balanced)
         } else {
             compactBody()
         }
