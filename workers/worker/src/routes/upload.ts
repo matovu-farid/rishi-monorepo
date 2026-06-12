@@ -5,10 +5,6 @@ import type { CloudflareBindings } from "../index";
 import { requireAuth } from "../index";
 import { createDb } from "../db/drizzle";
 import { books } from "@rishi/shared/schema";
-import type {
-  DownloadUrlRequest,
-  DownloadUrlResponse,
-} from "@rishi/shared/sync-types";
 
 // Defaults applied when the corresponding wrangler var is unset.
 const DEFAULT_BOOK_MAX_PER_USER = 500;
@@ -25,6 +21,10 @@ const REFERENCE_DATE_OFFSET_MS = 978_307_200_000;
 // Presigned upload URL expiry — 5 minutes is enough for the iOS uploader to
 // PUT a single book file, short enough that a leaked URL is low risk.
 const UPLOAD_URL_EXPIRES_SEC = 300;
+
+// Presigned download URL expiry — 10 minutes covers large EPUB/PDF downloads
+// on flaky mobile networks.
+const DOWNLOAD_URL_EXPIRES_SEC = 600;
 
 function getLimits(env: CloudflareBindings) {
   return {
@@ -189,18 +189,37 @@ uploadRoutes.post("/upload-url", requireAuth, async (c) => {
 });
 
 // ─── POST /download-url ────────────────────────────────────────────────────────
-// Returns a presigned GET URL for downloading a file from R2.
+// Returns a presigned GET URL for downloading a file from R2, scoped to the
+// iOS-supplied R2 key. iOS contract (PH17-09 Gap 4):
+//
+//   Request:  { key: "books/<userId>/<bookId>.<ext>" }
+//   Response: { url: "<signed-url>", expires_at: <seconds-since-2001 number> }
+//
+// See apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/SyncAPI.swift
+// (PresignedURLResponse, SyncDownloadURLEndpoint.Body) and the
+// DownloadCoordinator that consumes PresignedURLResponse.
+//
+// Key safety: `body.key` MUST begin with `books/<authedUserId>/` and contain no
+// `..`/`%`/null-byte tricks (isR2KeySafe). This prevents the client from
+// downloading another user's book file.
 uploadRoutes.post("/download-url", requireAuth, async (c) => {
-  const body = await c.req.json<DownloadUrlRequest>();
-  const userId = c.get("userId");
-
-  // Validate that the r2Key is scoped to this user's prefix to prevent path traversal
-  const expectedPrefix = `books/${userId}/`;
-  if (!body.r2Key || !isR2KeySafe(body.r2Key, expectedPrefix)) {
-    return c.json({ error: "Forbidden: invalid r2Key" }, 403);
+  const body = await c.req
+    .json<{ key?: unknown }>()
+    .catch(() => null);
+  if (!body || typeof body.key !== "string") {
+    return c.json({ error: "Forbidden: invalid key" }, 403);
   }
 
-  const bucketUrl = `https://${c.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com/rishi-books/${body.r2Key}`;
+  const userId = c.get("userId");
+
+  // ─── Key prefix safety (per-user isolation) ──────────────────────────────
+  const expectedPrefix = `books/${userId}/`;
+  if (!isR2KeySafe(body.key, expectedPrefix)) {
+    return c.json({ error: "Forbidden: invalid key" }, 403);
+  }
+
+  // ─── Sign the GET URL against the iOS-supplied key ──────────────────────
+  const bucketUrl = `https://${c.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com/rishi-books/${body.key}`;
 
   const aws = new AwsClient({
     accessKeyId: c.env.R2_ACCESS_KEY_ID,
@@ -210,13 +229,21 @@ uploadRoutes.post("/download-url", requireAuth, async (c) => {
   });
 
   const signed = await aws.sign(new Request(bucketUrl, { method: "GET" }), {
-    aws: { signQuery: true, datetime: new Date().toISOString().replace(/[:-]|\.\d{3}/g, '') },
-    headers: { "X-Amz-Expires": "600" },
+    aws: {
+      signQuery: true,
+      datetime: new Date().toISOString().replace(/[:-]|\.\d{3}/g, ""),
+    },
+    headers: { "X-Amz-Expires": String(DOWNLOAD_URL_EXPIRES_SEC) },
   });
 
-  const response: DownloadUrlResponse = {
-    downloadUrl: signed.url.toString(),
-    expiresIn: 600,
-  };
-  return c.json(response);
+  // Date wire format = seconds since 2001-01-01 reference date — see
+  // routes/changes.ts and routes/devices.test.ts.
+  const expiresAtSeconds =
+    (Date.now() + DOWNLOAD_URL_EXPIRES_SEC * 1000 - REFERENCE_DATE_OFFSET_MS) /
+    1000;
+
+  return c.json({
+    url: signed.url.toString(),
+    expires_at: expiresAtSeconds,
+  });
 });
