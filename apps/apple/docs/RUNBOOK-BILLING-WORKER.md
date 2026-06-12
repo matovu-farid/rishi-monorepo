@@ -240,6 +240,76 @@ If a future iOS plan re-adds Google (it won't for v1), it will register a new SI
 
 ---
 
+## 1.5 Chat/Voice Sync Routes (Phase 16)
+
+Phase 16 adds two route groups for cross-device chat history sync: `POST/GET /api/sync/conversations` and `POST/GET /api/sync/messages`. Both sit behind Better Auth's `requireAuth` middleware (the same middleware as `/api/devices`), and both are sourced from `workers/worker/src/routes/conversations.ts` + `workers/worker/src/routes/messages.ts`. Voice transcripts inherit the wiring because `RishiVoice.VoiceTranscriptBridge` persists through the same `conversations` + `messages` tables — see [`WORKER-CONTRACT-CHAT-SYNC.md`](./WORKER-CONTRACT-CHAT-SYNC.md) for the full wire contract.
+
+### Deploy command
+
+From the repo root:
+
+```bash
+cd workers/worker
+npx wrangler deploy
+```
+
+`wrangler deploy` packages the worker including the new `src/routes/conversations.ts` + `src/routes/messages.ts` modules and the route mounts in `src/index.ts` (`app.route("/api/sync/conversations", conversationsRoutes)` and `messages` likewise). The output line `Deployed rishi-worker triggers (XXms)` confirms success; capture the version id for Sentry alignment.
+
+### Migration command
+
+Phase 16 ships migration `0009_chat_sync.sql` (adds the FK from `conversations.user_id` to `user.id ON DELETE CASCADE`, plus indexes on `conversations(user_id, updated_at)` and `messages(conversation_id, updated_at)`). Apply it to remote D1 before or after `wrangler deploy` — the migration is independent of the route code:
+
+```bash
+cd workers/worker
+npx wrangler d1 migrations apply rishi-sync --remote
+```
+
+For local dev (vitest fixtures), omit `--remote`:
+
+```bash
+cd workers/worker
+npx wrangler d1 migrations apply rishi-sync
+```
+
+Note on local D1 inconsistency: an earlier Phase-14 raw `wrangler d1 execute` step left the local D1 sqlite file ahead of the migrations journal — `apple_notifications_log` exists on disk but is not recorded as applied. This blocks `--local` migration applies until the local D1 file is reset (`rm -rf workers/worker/.wrangler/state/v3/d1` then re-apply the journal). It does NOT affect remote D1, which is the slot this section deploys to.
+
+### Verification curl (expects 401)
+
+The canonical "did the route mount?" smoke is an unauthenticated POST. Both routes MUST return HTTP 401 with the `Unauthorized` envelope — proves `requireAuth` is wired AND the route is reachable.
+
+```bash
+curl -sw '\n%{http_code}' -X POST https://api.fidexa.org/api/sync/conversations \
+  -H 'Content-Type: application/json' \
+  -d '{"conversations":[]}'
+```
+
+Expected output (last two lines):
+
+```
+{"error":"Unauthorized"}
+401
+```
+
+Then the same for messages:
+
+```bash
+curl -sw '\n%{http_code}' -X POST https://api.fidexa.org/api/sync/messages \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[]}'
+```
+
+Expected: `{"error":"Unauthorized"}` and HTTP 401.
+
+If you see HTTP 404 instead of 401, the routes are not mounted — re-check `workers/worker/src/index.ts` for the two `app.route("/api/sync/...", ...)` lines. If you see HTTP 500, check `npx wrangler tail rishi-worker --format pretty` for the stack trace; the common cause is column-name drift between `packages/shared/src/schema.ts` and the actual D1 table — re-apply 0009.
+
+### Rollback
+
+To revert without a full redeploy: comment out the two `app.route(...)` lines in `workers/worker/src/index.ts` and run `npx wrangler deploy`. Migration `0009_chat_sync.sql` can stay applied — the new FK + indexes are idempotent and do not break existing reads of the `conversations` / `messages` tables (which existed pre-Phase-16 for Core Data parity, just without sync wiring on top).
+
+If a worse rollback is needed (drop the FK + indexes), generate a `0010_revert_chat_sync.sql` migration via Drizzle — DO NOT hand-edit `0009` after it has been applied to remote.
+
+---
+
 ## 2. ASC Webhook Registration
 
 Apple posts App Store Server Notifications V2 (ASSN V2) to a single URL. Phase 14 routes Sandbox and Production via the JWS `environment` claim — both ASC slots get the SAME URL.
