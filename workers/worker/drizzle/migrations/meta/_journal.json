@@ -50,6 +50,13 @@
       "when": 1781208146746,
       "tag": "0008_devices",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1781229108895,
+      "tag": "0009_chat_sync",
+      "breakpoints": true
     }
   ]
 }
