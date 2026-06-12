@@ -384,6 +384,104 @@ Tick before any platform's chat-sync build ships to production.
 
 ---
 
+## /api/chat — Streaming Chat
+
+Status: Live (deployed 2026-06-12, quick task 260612-f7p)
+Source: `workers/worker/src/routes/chat.ts` mounted at `workers/worker/src/index.ts:218`.
+iOS caller: `apps/apple/Packages/RishiChat/Sources/RishiChat/Service/ChatStreamEndpoint.swift`.
+
+The four `/api/sync/*` routes above carry persisted chat history between devices. This route is the live LLM stream that PRODUCES new chat tokens. The two surfaces are intentionally separate: history sync is durable and idempotent, the LLM stream is ephemeral and one-shot.
+
+### Method + Path
+
+```
+POST /api/chat
+```
+
+Auth: Better Auth session (Bearer token or `rishi.session_token` cookie). Active subscription required (`requireActiveSubscription` middleware — same gate as `/api/text/completions`).
+
+### Request body
+
+JSON, validated by zod at `workers/worker/src/routes/chat.ts:42-46`. Shape mirrors `apps/apple/Packages/RishiChat/Sources/RishiChat/Models/ChatRequest.swift` exactly:
+
+```json
+{
+  "book_id": "11111111-2222-3333-4444-555555555555",
+  "query": "What is the protagonist's name?"
+}
+```
+
+| Field     | Type                   | Notes                                                                                                              |
+| --------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `book_id` | UUID string (optional) | Lowercase canonical form (`/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/`). iOS encodes UUIDs lowercase; uppercased values surface as 400. Omit when the chat is not tied to a book. |
+| `query`   | string (required)      | User prompt. Length 1..50000. Empty / over-cap rejected with 400 before the LLM call.                              |
+
+### Response
+
+`200 OK`. Headers:
+
+```
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+```
+
+Body is a stream of SSE frames terminated by `\n\n`. Each frame body is single-line JSON that decodes as `ChatResponseChunk` (`apps/apple/Packages/RishiChat/Sources/RishiChat/Models/ChatResponseChunk.swift`):
+
+```
+data: {"delta":"Hello"}
+
+data: {"delta":" world"}
+
+data: {"done":true}
+
+```
+
+Recognised payload keys (all snake_case, matching iOS `CodingKeys`):
+
+| Key         | Type          | Meaning                                                                                                                                  |
+| ----------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `delta`     | string        | Next chunk of assistant text. Emitted once per non-empty token from the ai SDK `streamText` text stream.                                 |
+| `tool_call` | string (JSON) | Opaque JSON-encoded tool invocation payload. Reserved; the v1 handler never emits this (no tools wired). Decoder tolerates it.            |
+| `done`      | bool          | Terminal sentinel. Emitted exactly once at end-of-stream. iOS `SSEParser` also accepts the literal `data: [DONE]\n\n`; the worker emits `{"done":true}` for clarity. |
+
+A delta frame, then more delta frames, then a single done frame — that is the only ordering the iOS decoder expects. The worker invokes OpenAI through `ai` SDK `streamText` against `openai.responses("gpt-5-nano")` with `providerOptions.openai.store = false`, mirroring `/api/text/completions`.
+
+### Error codes
+
+| Status | Body                                                                                                                       | When                                                                                                                                |
+| ------ | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `401`  | `{ "error": "Unauthorized" }`                                                                                              | Missing / invalid Better Auth session. From `requireAuth` (`workers/worker/src/index.ts:188`).                                      |
+| `402`  | `{ "error": "Active subscription required to use this feature", "code": "BILLING_INACTIVE", "subscriptionStatus": "..." }` | Authenticated but no active or trialing subscription. From `requireActiveSubscription` (`workers/worker/src/billing/sub-gate.ts`). |
+| `400`  | `{ "error": "bad_request", "detail": "<zod error>" }`                                                                      | Body fails schema: missing/empty `query`, `query.length > 50000`, or non-lowercase-uuid `book_id`.                                  |
+
+`401` is intentionally indistinguishable from "session expired" on the wire — iOS treats both as `AuthError.unauthenticated` and triggers a re-sign-in.
+
+### Deferred (v1.1)
+
+RAG, embeddings, and vector retrieval are NOT implemented in v1. `book_id` is forwarded to the model as a single system-message context hint:
+
+```
+The user is currently reading a book with ID <uuid>. Use this as context if relevant.
+```
+
+…and that is the entire effect of `book_id` on the prompt. No paragraph lookup, no `book_chunks` table, no semantic search. When embeddings infrastructure ships (own quick task / phase), this section will be revised to describe the retrieval pipeline. The request and response wire shapes documented above are stable across that change — only the server-side prompt construction will gain a retrieval step.
+
+### Live smoke
+
+```bash
+# Unauthenticated -> 401 proves the route is mounted in production.
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -X POST https://api.fidexa.org/api/chat \
+  -H 'content-type: application/json' \
+  -d '{}'
+# expected: 401
+```
+
+Reference deployed version: `23209ea6-3446-4da8-93b6-b7b8cadc9864` (2026-06-12).
+
+---
+
 ## 10. References
 
 - `16-CONTEXT.md` — Phase 16 locked decisions (this doc's source of authority).
