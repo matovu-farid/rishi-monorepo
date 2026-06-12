@@ -14,6 +14,10 @@ public actor InMemoryMessageStore: MessageStore {
             .sorted { $0.createdAt < $1.createdAt }
     }
 
+    public func message(_ id: MessageID) async throws -> Message? {
+        storage[id]
+    }
+
     public func upsert(_ message: Message) async throws {
         storage[message.id] = message
     }

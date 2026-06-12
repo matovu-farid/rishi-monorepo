@@ -36,6 +36,25 @@ public final class GRDBMessageStore: MessageStore, @unchecked Sendable {
         }
     }
 
+    public func message(_ id: MessageID) async throws -> Message? {
+        Log.event("db.read", level: .debug, data: [
+            "table": Tables.Messages.table,
+            "operation": "message_by_id",
+        ])
+        do {
+            return try await dbQueue.read { db -> Message? in
+                let row = try Row.fetchOne(db, sql: """
+                    SELECT * FROM \(Tables.Messages.table)
+                    WHERE \(Tables.Messages.id) = ?
+                """, arguments: [id.uuidString])
+                return row.flatMap(Self.decode)
+            }
+        } catch {
+            Log.error("db.error", error: error)
+            throw RishiError.persistence("message(_:) failed: \(error)")
+        }
+    }
+
     public func upsert(_ message: Message) async throws {
         Log.event("db.write", level: .debug, data: [
             "table": Tables.Messages.table,

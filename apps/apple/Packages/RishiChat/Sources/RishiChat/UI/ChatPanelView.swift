@@ -125,6 +125,9 @@ private struct PreviewMessageStore: MessageStore {
     func messages(for conversationId: ConversationID) async throws -> [Message] {
         seeded.filter { $0.conversationId == conversationId }
     }
+    func message(_ id: MessageID) async throws -> Message? {
+        seeded.first(where: { $0.id == id })
+    }
     func upsert(_ message: Message) async throws {}
     func delete(_ id: MessageID) async throws {}
 }
