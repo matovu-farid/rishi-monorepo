@@ -6,22 +6,28 @@ import { requireAuth } from "../index";
 import { createDb } from "../db/drizzle";
 import { books } from "@rishi/shared/schema";
 import type {
-  UploadUrlRequest,
-  UploadUrlResponse,
-  UploadUrlError,
   DownloadUrlRequest,
   DownloadUrlResponse,
 } from "@rishi/shared/sync-types";
 
 // Defaults applied when the corresponding wrangler var is unset.
-const DEFAULT_BOOK_MAX_FILE_BYTES = 838_860_800; // 800 MB
 const DEFAULT_BOOK_MAX_PER_USER = 500;
 const DEFAULT_BOOK_MAX_USER_BYTES = 10_737_418_240; // 10 GB
 
+// Reference offset constant: 978_307_200_000 ms is the gap between the Unix
+// epoch (1970-01-01) and Apple's Foundation reference date (2001-01-01). iOS
+// `JSONDecoder()` with `.deferredToDate` (verified in
+// apps/apple/Packages/RishiAPI/Sources/RishiAPI/WorkerClient.swift:96) decodes
+// JSON numbers as seconds-since-2001. Every Date emitted from this worker MUST
+// use this conversion — see plan 17-10 audit.
+const REFERENCE_DATE_OFFSET_MS = 978_307_200_000;
+
+// Presigned upload URL expiry — 5 minutes is enough for the iOS uploader to
+// PUT a single book file, short enough that a leaked URL is low risk.
+const UPLOAD_URL_EXPIRES_SEC = 300;
+
 function getLimits(env: CloudflareBindings) {
   return {
-    perFile:
-      Number(env.BOOK_MAX_FILE_BYTES) || DEFAULT_BOOK_MAX_FILE_BYTES,
     perUserCount:
       Number(env.BOOK_MAX_PER_USER) || DEFAULT_BOOK_MAX_PER_USER,
     perUserBytes:
@@ -67,56 +73,50 @@ function isR2KeySafe(r2Key: string, expectedPrefix: string): boolean {
 }
 
 // ─── POST /upload-url ──────────────────────────────────────────────────────────
-// Returns a presigned PUT URL for direct R2 upload, or {exists: true} for dedup.
-// Does NOT sign Content-Type in headers (per research pitfall -- signQuery only).
+// Returns a presigned PUT URL for direct R2 upload, scoped to the
+// iOS-supplied R2 key. iOS contract (PH17-08 Gap 3):
+//
+//   Request:  { key: "books/<userId>/<bookId>.<ext>", content_type: "<mime>" }
+//   Response: { url: "<signed-url>", expires_at: <seconds-since-2001 number> }
+//
+// See apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/SyncAPI.swift
+// (PresignedURLResponse, SyncUploadURLEndpoint.Body) and BookUploader.swift:54.
+//
+// Key safety: `body.key` MUST begin with `books/<authedUserId>/` and contain no
+// `..`/`%`/null-byte tricks (isR2KeySafe). This prevents the client from
+// uploading on behalf of another user.
+//
+// Storage caps: per-user book count + per-user bytes are still enforced from
+// the DB. iOS no longer passes fileSize, so the per-file size precheck is
+// skipped — we rely on R2's per-object size ceiling and the per-user bytes
+// query (which sums existing books.file_size rows).
+//
+// Does NOT sign Content-Type in headers (signQuery only) so the client's PUT
+// can use whatever Content-Type it likes without breaking the signature.
 uploadRoutes.post("/upload-url", requireAuth, async (c) => {
-  const body = await c.req.json<UploadUrlRequest>();
-
-  if (!body.fileHash || !/^[a-fA-F0-9]{64}$/.test(body.fileHash)) {
-    return c.json({ error: "Invalid fileHash format" }, 400);
-  }
-
-  const limits = getLimits(c.env);
-
-  // ─── 1. Per-file size cap ────────────────────────────────────────────────
-  // Enforced even on the dedup path: the client could be lying about the file
-  // backing this hash, and we don't want oversized blobs taking up R2 quota
-  // for any user.
+  const body = await c.req
+    .json<{ key?: unknown; content_type?: unknown }>()
+    .catch(() => null);
   if (
-    typeof body.fileSize !== "number" ||
-    !Number.isFinite(body.fileSize) ||
-    body.fileSize <= 0 ||
-    body.fileSize > limits.perFile
+    !body ||
+    typeof body.key !== "string" ||
+    typeof body.content_type !== "string"
   ) {
-    const err: UploadUrlError = {
-      error: `File exceeds per-file size limit of ${limits.perFile} bytes`,
-      code: "FILE_TOO_LARGE",
-      limit: limits.perFile,
-    };
-    return c.json(err, 413);
+    return c.json({ error: "bad_request" }, 400);
   }
 
   const userId = c.get("userId");
-  const db = createDb(c.env.DB);
 
-  // Check for existing file with same hash scoped to this user
-  const existing = await db
-    .select({ fileR2Key: books.fileR2Key })
-    .from(books)
-    .where(and(eq(books.fileHash, body.fileHash), eq(books.userId, userId)))
-    .get();
-
-  if (existing?.fileR2Key) {
-    // Dedup hit — the user already has this file. We skip the count + storage
-    // checks because the upload is a no-op (no new R2 object will be written).
-    const response: UploadUrlResponse = {
-      exists: true,
-      r2Key: existing.fileR2Key,
-    };
-    return c.json(response);
+  // ─── Key prefix safety (per-user isolation) ──────────────────────────────
+  const expectedPrefix = `books/${userId}/`;
+  if (!isR2KeySafe(body.key, expectedPrefix)) {
+    return c.json({ error: "Forbidden: invalid key" }, 403);
   }
 
-  // ─── 2. Per-user book count cap ─────────────────────────────────────────
+  const limits = getLimits(c.env);
+  const db = createDb(c.env.DB);
+
+  // ─── Per-user book count cap ─────────────────────────────────────────────
   const countResult = await db
     .select({ n: count() })
     .from(books)
@@ -124,35 +124,42 @@ uploadRoutes.post("/upload-url", requireAuth, async (c) => {
     .get();
   const currentCount = Number(countResult?.n ?? 0);
   if (currentCount >= limits.perUserCount) {
-    const err: UploadUrlError = {
-      error: `User has reached the maximum number of books (${limits.perUserCount})`,
-      code: "BOOK_LIMIT_REACHED",
-      limit: limits.perUserCount,
-      current: currentCount,
-    };
-    return c.json(err, 507);
+    return c.json(
+      {
+        error: `User has reached the maximum number of books (${limits.perUserCount})`,
+        code: "BOOK_LIMIT_REACHED",
+        limit: limits.perUserCount,
+        current: currentCount,
+      },
+      507,
+    );
   }
 
-  // ─── 3. Per-user storage bytes cap ──────────────────────────────────────
+  // ─── Per-user storage bytes cap ──────────────────────────────────────────
+  // iOS no longer ships fileSize, so we cannot pre-add the incoming file. We
+  // gate purely on the EXISTING sum: if the user is already at or over the
+  // cap, reject. The next push that lands a books row with file_size will
+  // catch any overflow before the user can upload again.
   const sumResult = await db
     .select({ total: sum(books.fileSize) })
     .from(books)
     .where(and(eq(books.userId, userId), eq(books.isDeleted, false)))
     .get();
   const currentBytes = Number(sumResult?.total ?? 0);
-  if (currentBytes + body.fileSize > limits.perUserBytes) {
-    const err: UploadUrlError = {
-      error: `User would exceed storage limit of ${limits.perUserBytes} bytes`,
-      code: "STORAGE_LIMIT_REACHED",
-      limit: limits.perUserBytes,
-      current: currentBytes,
-    };
-    return c.json(err, 507);
+  if (currentBytes >= limits.perUserBytes) {
+    return c.json(
+      {
+        error: `User would exceed storage limit of ${limits.perUserBytes} bytes`,
+        code: "STORAGE_LIMIT_REACHED",
+        limit: limits.perUserBytes,
+        current: currentBytes,
+      },
+      507,
+    );
   }
 
-  // Generate R2 key and presigned PUT URL
-  const r2Key = `books/${userId}/${body.fileHash}`;
-  const bucketUrl = `https://${c.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com/rishi-books/${r2Key}`;
+  // ─── Sign the PUT URL against the iOS-supplied key ──────────────────────
+  const bucketUrl = `https://${c.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com/rishi-books/${body.key}`;
 
   const aws = new AwsClient({
     accessKeyId: c.env.R2_ACCESS_KEY_ID,
@@ -161,20 +168,24 @@ uploadRoutes.post("/upload-url", requireAuth, async (c) => {
     region: "auto",
   });
 
-  // Sign with signQuery: true and bare Request (no Content-Type header)
-  // to avoid signature mismatch when client sends different Content-Type
   const signed = await aws.sign(new Request(bucketUrl, { method: "PUT" }), {
-    aws: { signQuery: true, datetime: new Date().toISOString().replace(/[:-]|\.\d{3}/g, '') },
-    headers: { "X-Amz-Expires": "300" },
+    aws: {
+      signQuery: true,
+      datetime: new Date().toISOString().replace(/[:-]|\.\d{3}/g, ""),
+    },
+    headers: { "X-Amz-Expires": String(UPLOAD_URL_EXPIRES_SEC) },
   });
 
-  const response: UploadUrlResponse = {
-    exists: false,
-    uploadUrl: signed.url.toString(),
-    r2Key,
-    expiresIn: 300,
-  };
-  return c.json(response);
+  // Date wire format = seconds since 2001-01-01 reference date — see
+  // routes/changes.ts and routes/devices.test.ts.
+  const expiresAtSeconds =
+    (Date.now() + UPLOAD_URL_EXPIRES_SEC * 1000 - REFERENCE_DATE_OFFSET_MS) /
+    1000;
+
+  return c.json({
+    url: signed.url.toString(),
+    expires_at: expiresAtSeconds,
+  });
 });
 
 // ─── POST /download-url ────────────────────────────────────────────────────────
