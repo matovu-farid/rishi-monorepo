@@ -141,6 +141,46 @@ struct ConversationsListViewModelTests {
         #expect(stillThere == nil)
     }
 
+    // MARK: - 6a. Phase 16-05: refreshAfterSync(userId:) re-reads from the store.
+
+    @Test("refreshAfterSync re-reads from store after inbound sync merge")
+    func refreshAfterSyncPicksUpNewConversation() async {
+        let userId = UUID()
+        let existing = Conversation(
+            userId: userId,
+            title: "Existing",
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_100)
+        )
+        let convoStore = InMemoryConversationStore(initial: [existing])
+        let msgStore = InMemoryMessageStore()
+        let vm = ConversationsListViewModel(
+            conversationStore: convoStore,
+            messageStore: msgStore
+        )
+
+        await vm.load(userId: userId)
+        #expect(vm.conversations.count == 1)
+        #expect(vm.filteredConversations.first?.title == "Existing")
+
+        // Simulate the SyncEngine's inbound chat merge: a brand-new
+        // conversation lands in the store directly (e.g. inbound LWW
+        // upsert from another device) — newer than `existing`.
+        let inbound = Conversation(
+            userId: userId,
+            title: "Synced",
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_500)
+        )
+        try? await convoStore.upsert(inbound)
+
+        // The VM should not know about it until refreshAfterSync fires.
+        #expect(vm.conversations.count == 1)
+
+        await vm.refreshAfterSync(userId: userId)
+        #expect(vm.conversations.count == 2)
+        // Sorted by updatedAt desc — the newer "Synced" row is first.
+        #expect(vm.filteredConversations.first?.title == "Synced")
+    }
+
     // MARK: - 6. Load error: throwing store → loadError surfaced + conversations empty.
 
     @Test("load failure sets loadError and leaves conversations empty")
