@@ -25,9 +25,11 @@ public struct ReaderTapRegionResolver: Sendable, Equatable {
     public init() {}
 
     public func decide(at point: CGPoint, in size: CGSize) -> Decision {
-        // RED: intentionally wrong so the first test run fails on the
-        // previousPage and nextPage cases. The GREEN commit replaces this
-        // with the real boundary math.
+        guard size.width > 0 else { return .toggleChrome }
+        let leadingEdge = size.width * 0.25
+        let trailingEdge = size.width * 0.75
+        if point.x < leadingEdge { return .previousPage }
+        if point.x > trailingEdge { return .nextPage }
         return .toggleChrome
     }
 }
