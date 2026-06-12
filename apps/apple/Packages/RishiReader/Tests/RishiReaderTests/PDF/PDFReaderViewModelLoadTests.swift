@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import os
 import PDFKit
 import RishiCore
 import RishiTesting
@@ -38,26 +39,36 @@ struct PDFReaderViewModelLoadTests {
 
     /// Captures `Thread.isMainThread` inside the loader body so the test can
     /// assert the viewmodel invoked it from a detached context.
+    ///
+    /// Uses `OSAllocatedUnfairLock` because `NSLock.lock()/unlock()` are
+    /// unavailable from async contexts in Swift 6 strict mode.
     private final class ThreadProbe: @unchecked Sendable {
-        private let lock = NSLock()
-        private var _wasMain: Bool?
-        private var _called = false
+        private struct State {
+            var wasMain: Bool?
+            var called: Bool
+        }
+        private let storage = OSAllocatedUnfairLock<State>(initialState: State(wasMain: nil, called: false))
 
         var wasInvokedOnMain: Bool? {
-            lock.lock(); defer { lock.unlock() }
-            return _wasMain
+            storage.withLock { $0.wasMain }
         }
         var wasCalled: Bool {
-            lock.lock(); defer { lock.unlock() }
-            return _called
+            storage.withLock { $0.called }
         }
 
         func record(isMain: Bool) {
-            lock.lock()
-            _wasMain = isMain
-            _called = true
-            lock.unlock()
+            storage.withLock { state in
+                state.wasMain = isMain
+                state.called = true
+            }
         }
+    }
+
+    /// Synchronous main-thread probe — `Thread.isMainThread` is unavailable
+    /// from async contexts in Swift 6 strict, so callers hop through this
+    /// non-async helper.
+    nonisolated private static func isOnMainThreadSync() -> Bool {
+        Thread.isMainThread
     }
 
     @Test("load() invokes documentLoader off the main thread")
@@ -75,7 +86,7 @@ struct PDFReaderViewModelLoadTests {
             positionStore: store,
             debounceSeconds: 0.05,
             documentLoader: { @Sendable loaderURL in
-                probe.record(isMain: Thread.isMainThread)
+                probe.record(isMain: Self.isOnMainThreadSync())
                 return PDFDocument(url: loaderURL)
             }
         )

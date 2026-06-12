@@ -1,5 +1,5 @@
 import Foundation
-import PDFKit
+@preconcurrency import PDFKit
 import Observation
 import RishiCore
 import RishiLogging
@@ -83,6 +83,7 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     private let positionStore: any PositionStore
     private let documentURL: URL
     private let debounceSeconds: Double
+    private let documentLoader: @Sendable (URL) async -> PDFDocument?
     private var pendingPositionTask: Task<Void, Never>?
 
     public init(
@@ -90,13 +91,15 @@ public final class PDFReaderViewModel: @unchecked Sendable {
         userId: UserID,
         documentURL: URL,
         positionStore: any PositionStore,
-        debounceSeconds: Double = 1.0
+        debounceSeconds: Double = 1.0,
+        documentLoader: (@Sendable (URL) async -> PDFDocument?)? = nil
     ) {
         self.book = book
         self.userId = userId
         self.documentURL = documentURL
         self.positionStore = positionStore
         self.debounceSeconds = debounceSeconds
+        self.documentLoader = documentLoader ?? { url in PDFDocument(url: url) }
     }
 
     // MARK: - Lifecycle
@@ -104,13 +107,26 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     /// Loads the document, extracts the outline, restores the last position.
     /// Call once when the view appears.
     ///
-    /// `PDFDocument(url:)` runs on the calling executor — the model isn't
-    /// `@MainActor` and PDFDocument is non-Sendable, so a detached Task would
-    /// just trap the type at the boundary. For pathological multi-hundred-MB
-    /// PDFs, the caller can dispatch `load()` from a `.task` modifier (which
-    /// is already off the main draw loop).
+    /// The synchronous `PDFDocument(url:)` parse can take multiple seconds
+    /// on large books, so the call is dispatched to
+    /// `Task.detached(priority: .userInitiated)` and the result is awaited
+    /// back via `.value`. `Task.detached`'s `.value` is a `sending` return,
+    /// so the detached task's result can cross back into this viewmodel's
+    /// isolation. PDFKit's `PDFDocument` is not formally `Sendable`, but
+    /// the module is imported `@preconcurrency` at the top of this file
+    /// because PDFDocument is safe to construct on one thread and read
+    /// from another (Apple's own off-main parse pattern depends on it).
+    /// State assignment after the await still happens on this viewmodel's
+    /// executor — callers typically dispatch `load()` from a `@MainActor`
+    /// `.task` modifier, so post-load mutations remain observable from
+    /// SwiftUI.
     public func load() async {
-        guard let doc = PDFDocument(url: documentURL) else {
+        let loader = self.documentLoader
+        let url = self.documentURL
+        let loaded: PDFDocument? = await Task.detached(priority: .userInitiated) {
+            await loader(url)
+        }.value
+        guard let doc = loaded else {
             Log.reader.error("Failed to open PDFDocument at \(self.documentURL.path, privacy: .public)")
             return
         }
