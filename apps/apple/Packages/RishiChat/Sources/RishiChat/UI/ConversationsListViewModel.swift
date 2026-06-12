@@ -80,6 +80,23 @@ public final class ConversationsListViewModel {
         }
     }
 
+    /// Phase 16-05 — public entrypoint for the SyncEngine UI-refresh bridge.
+    ///
+    /// `RishiSync.SyncEngine.runOnce` calls `ChatSyncRefreshDelegate.chatSyncDidMerge()`
+    /// at the end of any wave that applied at least one inbound conversation
+    /// or message row. The app layer's adapter
+    /// (`AppChatRefreshAdapter` in `apps/apple/rishi/rishi/Chat/`) forwards
+    /// into this method on the MainActor so the Conversations tab
+    /// re-reads from the store and the user sees rows that just landed
+    /// from another device.
+    ///
+    /// Implementation forwards to `load(userId:)` — same hydration shape,
+    /// including the per-conversation message index. This avoids any
+    /// drift between first-load and post-sync state.
+    public func refreshAfterSync(userId: UserID) async {
+        await load(userId: userId)
+    }
+
     /// Deletes the conversation AND every persisted message whose
     /// `conversationId == id`. Message deletes happen FIRST so a partial
     /// failure can't orphan rows (sync would otherwise resurrect them on the
