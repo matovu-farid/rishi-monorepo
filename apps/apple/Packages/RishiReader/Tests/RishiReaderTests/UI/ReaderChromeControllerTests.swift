@@ -24,17 +24,32 @@ struct ReaderChromeControllerTests {
         var isVoiceOverRunning: Bool { voiceOver }
     }
 
-    /// A controllable sleep: the test resolves the continuation when it
-    /// wants the auto-hide timer to "fire". `cancel()` simulates timer
-    /// cancellation (`Task.sleep` throws `CancellationError`).
+    /// A controllable sleep: the test calls `waitForSleep()` to wait until
+    /// the controller has suspended on `sleep(for:)`, then `fire()` /
+    /// `cancel()` to resume the suspension. Without that handshake the
+    /// test races the controller's spawned Task and the continuation may
+    /// not yet be installed when the test tries to resolve it.
     final class FakeSleeper: @unchecked Sendable {
         private var continuation: CheckedContinuation<Void, Error>?
+        private var pendingWaiters: [CheckedContinuation<Void, Never>] = []
         var sleepCallCount = 0
 
         func sleep(for: Duration) async throws {
             sleepCallCount += 1
             try await withCheckedThrowingContinuation { cont in
                 self.continuation = cont
+                // Wake anyone waiting for "the controller is now suspended".
+                let waiters = self.pendingWaiters
+                self.pendingWaiters = []
+                for w in waiters { w.resume() }
+            }
+        }
+
+        /// Suspend until the controller is parked inside `sleep(for:)`.
+        func waitForSleep() async {
+            if continuation != nil { return }
+            await withCheckedContinuation { cont in
+                self.pendingWaiters.append(cont)
             }
         }
 
@@ -89,10 +104,13 @@ struct ReaderChromeControllerTests {
 
         controller.show()
         #expect(controller.isVisible == true)
+        // Wait for the controller's Task to suspend inside sleep().
+        await sleeper.waitForSleep()
 
-        // Advance the test clock so the sleep returns; expect controller hides.
+        // Resolve the sleep so the auto-hide branch runs.
         sleeper.fire()
-        // Yield so the awaiting Task can resume.
+        // Yield so the awaiting Task can resume and set isVisible = false.
+        await Task.yield()
         await Task.yield()
         await Task.yield()
 
@@ -109,6 +127,7 @@ struct ReaderChromeControllerTests {
         )
 
         controller.show()
+        await sleeper.waitForSleep()
         controller.hide()
         // Pending sleep gets cancelled internally; resolving it here mimics
         // the cancellation path firing. The controller MUST NOT re-set
@@ -162,13 +181,15 @@ struct ReaderChromeControllerTests {
         )
 
         controller.show()
-        let firstSleepCount = sleeper.sleepCallCount
-        #expect(firstSleepCount == 1)
+        await sleeper.waitForSleep()
+        #expect(sleeper.sleepCallCount == 1)
 
-        // User interacts with the toolbar — reset the timer.
+        // User interacts with the toolbar — reset the timer. Cancelling
+        // the in-flight sleep needs to resolve the parked continuation so
+        // the controller's `Task.sleep` rethrows and unwinds.
         controller.userActivity()
-        await Task.yield()
-        await Task.yield()
+        sleeper.cancel() // drain the first sleep's parked continuation
+        await sleeper.waitForSleep()
 
         #expect(sleeper.sleepCallCount == 2)
         #expect(controller.isVisible == true)

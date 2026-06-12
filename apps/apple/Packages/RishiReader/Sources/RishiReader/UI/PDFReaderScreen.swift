@@ -55,7 +55,16 @@ public struct PDFReaderScreen: View {
     private let chatPresenter: (any ReaderChatPresenter)?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var chromeVisible: Bool = true
+    /// Chrome visibility is owned by a small `@Observable` controller so
+    /// the tap-to-toggle, auto-hide, and VoiceOver behaviors live in a
+    /// single testable seam (see `ReaderChromeController`).
+    @State private var chrome: ReaderChromeController = {
+        #if canImport(UIKit)
+        return ReaderChromeController(accessibility: UIKitAccessibilityProvider())
+        #else
+        return ReaderChromeController(accessibility: PreviewAccessibility())
+        #endif
+    }()
     @State private var showTOC: Bool = false
     @State private var showThemePicker: Bool = false
 
@@ -112,7 +121,9 @@ public struct PDFReaderScreen: View {
             )
             .ignoresSafeArea()
             .onTapGesture {
-                chromeVisible.toggle()
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    chrome.toggle()
+                }
             }
             .rishiAnimation(RishiMotion.standard, reduce: reduceMotion)
 
@@ -164,7 +175,7 @@ public struct PDFReaderScreen: View {
                 .foregroundStyle(RishiColor.textPrimary)
             #endif
 
-            if chromeVisible {
+            if chrome.isVisible {
                 VStack {
                     PDFReaderToolbar(
                         title: viewModel.book.title,
@@ -174,23 +185,33 @@ public struct PDFReaderScreen: View {
                                 dismiss()
                             }
                         },
-                        onTOC: { showTOC = true },
-                        onTheme: { showThemePicker = true },
-                        onReadAloud: onReadAloud,
+                        onTOC: { chrome.userActivity(); showTOC = true },
+                        onTheme: { chrome.userActivity(); showThemePicker = true },
+                        onReadAloud: onReadAloud.map { action in
+                            { chrome.userActivity(); action() }
+                        },
                         onChat: chatPresenter.map { presenter in
-                            { presenter.presentChat(bookId: viewModel.book.id, initialQuote: nil) }
+                            {
+                                chrome.userActivity()
+                                presenter.presentChat(bookId: viewModel.book.id, initialQuote: nil)
+                            }
                         }
                     )
+                    .transition(.move(edge: .top).combined(with: .opacity))
                     Spacer()
                     PDFPageIndicator(
                         currentPage: viewModel.pageIndex + 1,
                         totalPages: viewModel.totalPages
                     )
                     .padding(.bottom, RishiSpacing.m)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-                .transition(.opacity)
             }
         }
+        #if !os(macOS)
+        .statusBarHidden(!chrome.isVisible)
+        .persistentSystemOverlays(chrome.isVisible ? .automatic : .hidden)
+        #endif
         .task {
             await viewModel.load()
             if let store = highlightStore {
@@ -346,6 +367,16 @@ private final class EphemeralReaderSettingsStore: ReaderSettingsStore, @unchecke
     func theme(for bookId: BookID) async -> ReaderTheme { .default }
     func setTheme(_ theme: ReaderTheme, for bookId: BookID) async { /* no-op */ }
 }
+
+#if !canImport(UIKit)
+/// Compile-only `AccessibilityProviding` for the non-UIKit (macOS dev host)
+/// branch. `UIAccessibility` is unavailable outside iOS / Catalyst so we
+/// hand back a fixed `false` — preview content never has VoiceOver running.
+@MainActor
+private final class PreviewAccessibility: AccessibilityProviding {
+    var isVoiceOverRunning: Bool { false }
+}
+#endif
 
 private actor PDFPreviewPositionStore: PositionStore {
     func position(for bookId: BookID) async throws -> Position? { nil }

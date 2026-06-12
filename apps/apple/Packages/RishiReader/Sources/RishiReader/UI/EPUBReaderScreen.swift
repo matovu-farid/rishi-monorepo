@@ -73,7 +73,16 @@ public struct EPUBReaderScreen: View {
     private let chatPresenter: (any ReaderChatPresenter)?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var chromeVisible: Bool = true
+    /// See `PDFReaderScreen` — chrome state lives in a small `@Observable`
+    /// controller so tap-to-toggle, auto-hide, and VoiceOver behavior
+    /// share one tested implementation.
+    @State private var chrome: ReaderChromeController = {
+        #if canImport(UIKit)
+        return ReaderChromeController(accessibility: UIKitAccessibilityProvider())
+        #else
+        return ReaderChromeController(accessibility: PreviewAccessibility())
+        #endif
+    }()
 
     #if canImport(UIKit)
     @State private var pendingSelection: SelectionContext?
@@ -120,7 +129,9 @@ public struct EPUBReaderScreen: View {
             )
             .ignoresSafeArea()
             .onTapGesture {
-                chromeVisible.toggle()
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    chrome.toggle()
+                }
             }
             .rishiAnimation(RishiMotion.standard, reduce: reduceMotion)
 
@@ -159,18 +170,23 @@ public struct EPUBReaderScreen: View {
                 .foregroundStyle(RishiColor.textPrimary)
             #endif
 
-            if chromeVisible {
+            if chrome.isVisible {
                 VStack {
                     toolbar
+                        .transition(.move(edge: .top).combined(with: .opacity))
                     Spacer()
                     EPUBProgressIndicator(
                         totalProgression: viewModel.latestLocator?.locations.totalProgression
                     )
                     .padding(.bottom, RishiSpacing.m)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-                .transition(.opacity)
             }
         }
+        #if !os(macOS)
+        .statusBarHidden(!chrome.isVisible)
+        .persistentSystemOverlays(chrome.isVisible ? .automatic : .hidden)
+        #endif
         .task {
             await viewModel.load()
             if let settings = readerSettingsStore {
@@ -280,7 +296,7 @@ public struct EPUBReaderScreen: View {
     // computed properties (Swift doesn't allow `#if` inside an argument list).
     private var showTOCAction: () -> Void {
         #if canImport(UIKit)
-        return { showTOC = true }
+        return { chrome.userActivity(); showTOC = true }
         #else
         return { }
         #endif
@@ -288,7 +304,7 @@ public struct EPUBReaderScreen: View {
 
     private var showThemeAction: () -> Void {
         #if canImport(UIKit)
-        return { showTheme = true }
+        return { chrome.userActivity(); showTheme = true }
         #else
         return { }
         #endif
@@ -296,7 +312,7 @@ public struct EPUBReaderScreen: View {
 
     private var showTypographyAction: () -> Void {
         #if canImport(UIKit)
-        return { showTypography = true }
+        return { chrome.userActivity(); showTypography = true }
         #else
         return { }
         #endif
@@ -406,6 +422,15 @@ private final class EphemeralReaderSettingsStore: ReaderSettingsStore, @unchecke
     func setTheme(_ theme: ReaderTheme, for bookId: BookID) async { /* no-op */ }
     func typography(for bookId: BookID) async -> ReaderTypography { .default }
     func setTypography(_ typography: ReaderTypography, for bookId: BookID) async { /* no-op */ }
+}
+#endif
+
+#if !canImport(UIKit)
+/// Compile-only `AccessibilityProviding` for the macOS dev-host branch.
+/// See `PDFReaderScreen.swift` for rationale.
+@MainActor
+private final class PreviewAccessibility: AccessibilityProviding {
+    var isVoiceOverRunning: Bool { false }
 }
 #endif
 
