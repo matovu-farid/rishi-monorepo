@@ -108,10 +108,38 @@ public actor BookFileStorage {
     }
 
     /// Returns an absolute URL for a book's cached cover if one was extracted.
-    public func cachedCoverURL(for book: Book) -> URL? {
+    ///
+    /// Phase 19 Plan 19-02 (F-P0-02): the `FileManager.fileExists(atPath:)`
+    /// syscall is dispatched into a `Task.detached` so it runs off this actor's
+    /// executor. Library cover paint fans out N of these calls concurrently
+    /// via `LibraryRootView.computeCoverURLs`; keeping the stat syscall on the
+    /// actor would re-serialise them on a single thread and defeat the fan-out.
+    /// The actor still owns the inputs (`rootURL`, `book.coverPath`, `fileManager`)
+    /// so the function remains correct under Swift 6 strict concurrency.
+    public func cachedCoverURL(for book: Book) async -> URL? {
         guard let rel = book.coverPath else { return nil }
         let url = rootURL.appendingPathComponent(rel)
-        return fileManager.fileExists(atPath: url.path) ? url : nil
+        let exists = await Self.fileExistsOffActor(path: url.path)
+        return exists ? url : nil
+    }
+
+    /// Phase 19 Plan 19-02 (F-P0-02): dispatch `FileManager.fileExists` into a
+    /// detached task so the syscall runs off this actor's executor. Library
+    /// cover paint fans out N of these calls concurrently via
+    /// `LibraryRootView.computeCoverURLs`; keeping the stat syscall on the
+    /// actor would re-serialise them on a single thread and defeat fan-out.
+    ///
+    /// `nonisolated static` so the closure captures only `path` (a `String`,
+    /// trivially `Sendable`), satisfying Swift 6 strict's `sending`-parameter
+    /// rule. Uses `FileManager.default` because `FileManager` is not declared
+    /// `Sendable` and cannot be transferred to the detached body. The init
+    /// parameter still accepts a custom `FileManager` for the in-actor sync
+    /// operations (`copyItem`, `createDirectory`, etc.); only the off-actor
+    /// existence check pins to the documented-thread-safe singleton.
+    private nonisolated static func fileExistsOffActor(path: String) async -> Bool {
+        await Task.detached(priority: .utility) {
+            FileManager.default.fileExists(atPath: path)
+        }.value
     }
 
     /// Returns an absolute URL for the on-disk book file.

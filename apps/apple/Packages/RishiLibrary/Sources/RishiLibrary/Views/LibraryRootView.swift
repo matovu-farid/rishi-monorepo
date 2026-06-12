@@ -156,11 +156,41 @@ public struct LibraryRootView: View {
     }
 
     private func reloadCovers() async {
-        var out: [BookID: URL] = [:]
-        for book in viewModel.books {
-            if let url = await viewModel.coverURL(for: book) { out[book.id] = url }
+        let books = viewModel.books
+        let pairs = await Self.computeCoverURLs(books: books) { [viewModel] book in
+            await viewModel.coverURL(for: book)
         }
-        coverURLs = out
+        coverURLs = pairs
+    }
+
+    /// Phase 19 Plan 19-02 (F-P0-02) — parallelisable kernel of `reloadCovers`.
+    ///
+    /// Replaces the prior serial `for book in books { await ... }` loop with a
+    /// `withTaskGroup` parallel fan-out per Swift book / "Calling Asynchronous
+    /// Functions in Parallel". For a 50-book library this collapses 50 serial
+    /// MainActor hops into one `await` that resumes once all child tasks have
+    /// completed concurrently.
+    ///
+    /// `nonisolated` because the body does no UI state mutation — every value
+    /// flowing through is `Sendable` and the result dictionary is returned to
+    /// the caller, who owns the @State write back on MainActor.
+    nonisolated static func computeCoverURLs(
+        books: [Book],
+        coverURLFor: @Sendable @escaping (Book) async -> URL?
+    ) async -> [BookID: URL] {
+        await withTaskGroup(of: (BookID, URL?).self) { group in
+            for book in books {
+                group.addTask {
+                    let url = await coverURLFor(book)
+                    return (book.id, url)
+                }
+            }
+            var out: [BookID: URL] = [:]
+            for await (id, url) in group {
+                if let url { out[id] = url }
+            }
+            return out
+        }
     }
 }
 
