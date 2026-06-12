@@ -310,6 +310,76 @@ If a worse rollback is needed (drop the FK + indexes), generate a `0010_revert_c
 
 ---
 
+## 1.6 has_pro Session Projection (Phase 17-01)
+
+**Shipped:** Phase 17 Plan 17-01 — `feat(worker): GREEN — has_pro session projection via customSession (PH17-01)`.
+**Source:** `workers/worker/src/auth.ts` (the `customSession` plugin block) plus the `deriveHasPro({ userId, db })` helper colocated in the same file.
+**iOS consumer:** `apps/apple/Packages/RishiBilling/Sources/RishiBilling/Service/EntitlementService.swift:75` reads `has_pro` from the `GET /api/auth/get-session` response on every signed-in app launch and gates premium features (TTS, voice chat, sync) off the result.
+
+### What it does
+
+Better Auth's `customSession` plugin (from `better-auth/plugins`) lets us inject server-derived fields into the response Better Auth returns from `GET /api/auth/get-session`. We use it to project a single boolean — `has_pro` — alongside the existing `{ user, session }` envelope, so iOS sees:
+
+```json
+{
+  "user": { "id": "...", "email": "...", "name": "..." },
+  "session": { "token": "...", "expiresAt": "..." },
+  "has_pro": true
+}
+```
+
+Before Phase 17, iOS would either receive `null` (unauthenticated, the Better Auth default for missing sessions) or the bare `{ user, session }` envelope — never `has_pro`. The iOS decoder `ProfileResponse` in `apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/AuthAPI.swift` required `has_pro`, so every signed-in launch failed to decode and the entitlement check defaulted to `false` — premium users were locked out of their own paid features. The Phase 17 customSession hook closes that gap end-to-end.
+
+### Precedence
+
+`deriveHasPro({ userId, db })` returns `true` when ANY of the following are true for the supplied `userId`:
+
+| Source                  | Condition                                                              | Notes                                                                                                                                                                |
+| ----------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apple_subscriptions`   | row exists with `status IN ('active', 'in_grace')` for this `userId`.  | Apple is the primary v1 channel — App Store IAP. `in_grace` keeps access during the billing-retry window.                                                            |
+| `subscription` (Stripe) | row exists with `status IN ('active', 'trialing')` for this `userId`. | Web-only Stripe path (existing Phase 13 subscriptions). `trialing` is honored to preserve marketing-funnel trials.                                                   |
+| neither                 | no matching row.                                                       | `has_pro` is `false`. iOS gates features off.                                                                                                                        |
+
+Apple takes precedence over Stripe in the implementation — the helper short-circuits on the first truthy row — but the precedence is **observationally idempotent**: a user can only have one active billing channel at a time in v1 (Apple anti-steering forbids mixing). The ordering exists for performance, not for correctness.
+
+### Drift-by-construction guarantee
+
+`GET /api/billing/me` (Phase 14-06) and `GET /api/auth/get-session` (Phase 17-01) both derive their entitlement boolean from the SAME `deriveHasPro` helper — there is only one source of truth in the worker codebase. **Drift between `/me.appleEntitlement == "active"` and `/get-session.has_pro == true` is impossible by construction.** If a user reports inconsistency between the two reads, that is a bug — capture the exact session bearer + user id + both responses and open an issue. Do NOT treat it as a "stale cache" support issue.
+
+### Verification curl
+
+The unauthenticated case still returns `200 null` (Better Auth's documented behavior — there is no session to project onto, so `customSession` is skipped):
+
+```bash
+curl -i https://api.fidexa.org/api/auth/get-session
+# HTTP/1.1 200 OK
+# content-type: application/json
+# null
+```
+
+For an authenticated check, pass a Better Auth bearer token from a real session:
+
+```bash
+curl -sS https://api.fidexa.org/api/auth/get-session \
+  -H 'Authorization: Bearer <better-auth-token>'
+# {"user":{"id":"...","email":"..."},"session":{...},"has_pro":true}
+```
+
+The `has_pro` field is always present and always a JSON boolean (never `null`, never absent) when the session itself resolves to a user.
+
+### Operator note
+
+A user reporting "I paid but `has_pro` is false" — check `apple_subscriptions` on remote D1 first:
+
+```bash
+cd workers/worker && pnpm exec wrangler d1 execute rishi-sync --remote \
+  --command "SELECT user_id, status, expires_at FROM apple_subscriptions WHERE user_id = '<better-auth-user-id>' ORDER BY updated_at DESC LIMIT 5"
+```
+
+If the row shows `status != 'active' AND status != 'in_grace'`, the issue is upstream of the projection (webhook delivery, JWS verification, receipt validation — see §6.1 below). If the row IS active and `has_pro` still returns false, that is a regression in the projection itself — file a P1 bug.
+
+---
+
 ## 2. ASC Webhook Registration
 
 Apple posts App Store Server Notifications V2 (ASSN V2) to a single URL. Phase 14 routes Sandbox and Production via the JWS `environment` claim — both ASC slots get the SAME URL.

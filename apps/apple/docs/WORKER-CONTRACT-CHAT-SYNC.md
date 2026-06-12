@@ -673,6 +673,335 @@ Note: `payload.file_path` and `payload.cover_path` are absent from the book row 
 
 ---
 
+## Phase 17 — Reconciled Endpoints
+
+**Status:** All eight endpoints below were reconciled in Phase 17 (Plans 17-01..17-09). Wire shapes match iOS expectations verbatim as of 2026-06-12. Deployed via `npx wrangler deploy --minify` from `workers/worker/` — the deployed version id is recorded in `apps/apple/.planning/phases/17-wire-contract-reconciliation-ios-worker-shape-gaps-has-pro-entitlement-projection/17-10-date-audit-deploy-smoke-SUMMARY.md`.
+
+**Why this section exists:** a deep audit on 2026-06-12 found eight wire-contract gaps between iOS `Endpoint.path` literals and the deployed worker — paths matched, bodies/responses diverged. Phase 7/8/10/11 SUMMARYs had over-claimed completion because the iOS and worker halves were built independently and never reconciled. Phase 17 closes those gaps; this section documents the reconciled shapes so future agents (and future humans) can ship downstream features without redoing the audit.
+
+**LOAD-BEARING date convention:** Every iOS-Date-decoded field on the wire is a JSON number representing `(msEpoch - 978_307_200_000) / 1000` — i.e. seconds since 2001-01-01T00:00:00Z. This matches `Date(timeIntervalSinceReferenceDate:)` so the bare `JSONDecoder()` at `apps/apple/Packages/RishiAPI/Sources/RishiAPI/WorkerClient.swift:96` (`.deferredToDate` strategy) round-trips cleanly. The static + behavioural regression guard is `workers/worker/src/date-wire-audit.test.ts` (Plan 17-10).
+
+The Phase 16 `/api/sync/conversations` and `/api/sync/messages` routes (Sections 3 + 9.5) keep their pre-existing Int64 ms-epoch shape — they are decoded as `Int64`, NOT Swift `Date`, and are deliberately excluded from the Phase 17 sweep.
+
+### P17.1 GET /api/auth/get-session (Plan 17-01)
+
+**Auth:** Better Auth session (Bearer or cookie). Better Auth's documented behaviour for unauthenticated callers is `200 null` (no error envelope).
+**Source:** `workers/worker/src/auth.ts` — `customSession` plugin block + `deriveHasPro({ userId, db })` helper.
+**iOS caller:** `apps/apple/Packages/RishiBilling/Sources/RishiBilling/Service/EntitlementService.swift:75` (every signed-in launch).
+
+Request: none — bare GET.
+
+Response (authenticated):
+
+```json
+{
+  "user":    { "id": "...", "email": "...", "name": "..." },
+  "session": { "token": "...", "expiresAt": "..." },
+  "has_pro": true
+}
+```
+
+Response (unauthenticated): literal `null` with HTTP 200 (NOT 401 — Better Auth convention).
+
+`has_pro` precedence: Apple `active|in_grace` > Stripe `active|trialing` > false. See `RUNBOOK-BILLING-WORKER.md` §1.6 for the operator-facing description and the drift-by-construction guarantee with `/api/billing/me`.
+
+Date wire format: N/A — no Date fields. `session.expiresAt` is the Better Auth default (ISO8601 string decoded by iOS as String, not Date — Better Auth's own shape, locked).
+
+Curl smoke:
+
+```bash
+curl -i https://api.fidexa.org/api/auth/get-session
+# HTTP/1.1 200 OK
+# null
+```
+
+### P17.2 POST /api/devices/register (Plan 17-02)
+
+**Auth:** `requireAuth`. No active-subscription gate — APNs registration is a free-tier capability so silent-push sync works for free users.
+**Source:** `workers/worker/src/routes/devices.ts`.
+**iOS caller:** `apps/apple/Packages/RishiSync/Sources/RishiSync/Background/APNsDeviceRegistrar.swift`.
+
+Request body (zod-validated):
+
+```json
+{
+  "device_token": "<64-hex-chars APNs token>",
+  "platform": "ios",
+  "app_version": "1.0.0",
+  "bundle_id": "org.fidexa.rishi",
+  "topic": "org.fidexa.rishi"
+}
+```
+
+Response (HTTP 200):
+
+```json
+{
+  "device_id":     "<uuid>",
+  "registered_at": 802886400.0
+}
+```
+
+Date wire format: `registered_at` is a JSON number = `(msEpoch - 978_307_200_000) / 1000`. iOS `DevicesRegisterResponse.registeredAt: Date` decodes via `.deferredToDate`.
+
+Idempotency: `onConflictDoUpdate` on `(userId, deviceToken)` — re-registration of the same token by the same user upserts in place, never throws a UNIQUE violation.
+
+Curl smoke (unauth — proves route is mounted):
+
+```bash
+curl -i -X POST https://api.fidexa.org/api/devices/register \
+  -H 'Content-Type: application/json' -d '{}'
+# HTTP/1.1 401 Unauthorized
+# {"error":"Unauthorized"}
+```
+
+### P17.3 POST /api/audio/speech (Plan 17-03)
+
+**Auth:** `requireAuth` + `requireActiveSubscription` (TTS is a paid feature).
+**Source:** `workers/worker/src/index.ts` — inline `app.post("/api/audio/speech", ...)` handler.
+**iOS caller:** `apps/apple/Packages/RishiVoice/Sources/RishiVoice/TTS/TTSStreamer.swift:21`.
+
+Request body:
+
+```json
+{
+  "text":  "<utterance to synthesize>",
+  "voice": "alloy",
+  "speed": 1.0
+}
+```
+
+| Field   | Type                           | Notes                                                                          |
+| ------- | ------------------------------ | ------------------------------------------------------------------------------ |
+| `text`  | string (1..4096)               | UTF-8 utterance. OpenAI imposes the upper bound; iOS chunks larger content.    |
+| `voice` | string (OpenAI voice id)       | `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`. Validated against the OpenAI list. |
+| `speed` | number (0.25..4.0)             | Passed straight to OpenAI's `speed` parameter. iOS default is `1.0`.            |
+
+Response: streaming `audio/mpeg` (MP3 frames). Headers:
+
+```
+Content-Type: audio/mpeg
+Transfer-Encoding: chunked
+```
+
+iOS streams the body straight into `AVAudioEngine` via `TTSStreamer` (no JSON decode — binary body).
+
+Date wire format: N/A — binary audio response.
+
+Curl smoke (unauth):
+
+```bash
+curl -i -X POST https://api.fidexa.org/api/audio/speech \
+  -H 'Content-Type: application/json' -d '{}'
+# HTTP/1.1 401 Unauthorized
+```
+
+### P17.4 POST /api/audio/transcribe (Plan 17-04)
+
+**Auth:** `requireAuth` + `requireActiveSubscription` (STT is a paid feature).
+**Source:** `workers/worker/src/index.ts` — inline `app.post("/api/audio/transcribe", ...)` handler.
+**iOS caller:** `apps/apple/Packages/RishiVoice/Sources/RishiVoice/STT/SpeechTranscriber.swift`.
+
+Request body — JSON with base64-encoded audio (v1 chosen over multipart for parity with iOS's `URLSession` JSON encoder; multipart deferred to v1.1):
+
+```json
+{
+  "audio":     "<base64-encoded audio bytes>",
+  "mime_type": "audio/wav"
+}
+```
+
+| Field       | Type                  | Notes                                                                                                              |
+| ----------- | --------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `audio`     | base64 string         | Caller MUST NOT include a `data:` prefix — raw base64 only. Decoded server-side via `atob`.                        |
+| `mime_type` | string (audio MIME)   | Forwarded to OpenAI Whisper as the audio container hint. iOS sends `audio/wav` for the in-app recorder.            |
+
+Response (HTTP 200):
+
+```json
+{
+  "transcript": "Hello world."
+}
+```
+
+Date wire format: N/A — no Date fields.
+
+Curl smoke (unauth):
+
+```bash
+curl -i -X POST https://api.fidexa.org/api/audio/transcribe \
+  -H 'Content-Type: application/json' -d '{}'
+# HTTP/1.1 401 Unauthorized
+```
+
+### P17.5 GET /api/realtime/client_secrets (Plan 17-05)
+
+**Auth:** `requireAuth` + `requireActiveSubscription` (voice chat is a paid feature).
+**Source:** `workers/worker/src/index.ts` — inline `app.get("/api/realtime/client_secrets", ...)` handler.
+**iOS caller:** `apps/apple/Packages/RishiVoice/Sources/RishiVoice/Realtime/EphemeralKeyFetcher.swift:57`.
+
+Request: none — bare GET. The handler internally mints an ephemeral OpenAI Realtime API session and projects the response.
+
+Response (HTTP 200):
+
+```json
+{
+  "client_secret": "ek_...",
+  "session_id":    "sess_..."
+}
+```
+
+The worker projects the raw OpenAI shape `{ "client_secret": { "value": "ek_..." }, "id": "sess_..." }` down to the flat iOS shape (`client_secret.value` -> `client_secret`, `id` -> `session_id`). Plan 17-05 GREEN commit.
+
+Date wire format: N/A — no Date fields. Ephemeral key TTL is enforced server-side and not surfaced to iOS in v1.
+
+Curl smoke (unauth):
+
+```bash
+curl -i https://api.fidexa.org/api/realtime/client_secrets
+# HTTP/1.1 401 Unauthorized
+```
+
+### P17.6 POST /api/sync/push (Plan 17-07)
+
+**Auth:** `requireAuth`.
+**Source:** `workers/worker/src/routes/sync.ts` — `syncRoutes.post("/push", ...)`.
+**iOS callers:** `HighlightUploader.swift:73`, `PositionUploader.swift:79`, `ConversationUploader.swift`, `MessageUploader.swift` (via the same shared `SyncPushEndpoint`).
+
+Request body — flat array of typed `SyncChange` rows (matches `apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/SyncAPI.swift:89`):
+
+```json
+{
+  "changes": [
+    {
+      "kind":       "highlight",
+      "id":         "<uuid>",
+      "payload":    { "...": "opaque per-kind JSON" },
+      "updated_at": 802886400.0,
+      "deleted":    false
+    }
+  ]
+}
+```
+
+| Field        | Type                                                                  | Notes                                                                                                |
+| ------------ | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `kind`       | enum `"book" \| "position" \| "highlight" \| "conversation" \| "message"` | Per-kind dispatch — see `sync.ts` for the table mapping and per-kind LWW rules.                       |
+| `id`         | string                                                                | Row primary key. Per-kind authoritative shape — usually a UUID.                                       |
+| `payload`    | opaque JSON object                                                    | Snake_case `WirePayloads` from `SyncPayloadCodec.swift`. For `book`, `file_url` + `cover_path` are STRIPPED server-side (local-only paths). |
+| `updated_at` | number (seconds-since-2001)                                           | LWW key. Server passes through unchanged into the high-water-mark response.                          |
+| `deleted`    | boolean                                                               | Soft-delete tombstone flag.                                                                          |
+
+Array length: 0..5000.
+
+Response (HTTP 200):
+
+```json
+{
+  "accepted_at": 802886400.0
+}
+```
+
+`accepted_at` = `max(updated_at)` across all changes in the batch. It is the high-water-mark cursor iOS persists into `sync_metadata.last_synced_at` so the next push has a known starting point. Already in seconds-since-2001 — pass-through, no conversion needed.
+
+Date wire format: both `updated_at` (request) and `accepted_at` (response) are JSON numbers in seconds-since-2001. The Phase 16 conversations + messages routes use a DIFFERENT envelope (`{ conversations: [...] }` + `{ messages: [...] }` with ms-epoch `updated_at`); `POST /api/sync/push` is the per-kind dispatcher for the typed `SyncChange` shape and is the iOS-Date-decoded route. See § P17.6.3 below for the dispatch rules.
+
+Curl smoke (unauth):
+
+```bash
+curl -i -X POST https://api.fidexa.org/api/sync/push \
+  -H 'Content-Type: application/json' -d '{}'
+# HTTP/1.1 401 Unauthorized
+```
+
+### P17.7 POST /api/sync/upload-url (Plan 17-08)
+
+**Auth:** `requireAuth` + `requireActiveSubscription` (book sync is a paid feature).
+**Source:** `workers/worker/src/routes/upload.ts` — `uploadRoutes.post("/upload-url", ...)`.
+**iOS caller:** `apps/apple/Packages/RishiSync/Sources/RishiSync/Upload/BookUploader.swift:54`.
+
+Request body:
+
+```json
+{
+  "key":          "books/<user_id>/<book_id>.epub",
+  "content_type": "application/epub+zip"
+}
+```
+
+| Field          | Type                                       | Notes                                                                                                 |
+| -------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `key`          | string (`books/<userId>/<bookId>.<ext>`)   | Server validates the prefix matches the caller's userId — cross-user key writes return 403.            |
+| `content_type` | string (MIME)                              | Echoed back into the R2 presigned PUT signature. iOS sends `application/epub+zip` or `application/pdf`. |
+
+Response (HTTP 200):
+
+```json
+{
+  "url":        "https://<r2-account>.r2.cloudflarestorage.com/...?X-Amz-...",
+  "expires_at": 802886700.0
+}
+```
+
+`expires_at` = `(Date.now() + 300_000 - 978_307_200_000) / 1000`. The presigned URL is valid for 5 minutes from issue; the `X-Amz-Expires=300` query parameter inside `url` matches.
+
+Date wire format: `expires_at` is a JSON number in seconds-since-2001. iOS `PresignedURLResponse.expiresAt: Date` decodes via `.deferredToDate`.
+
+The legacy keys `uploadUrl`, `r2Key`, `expiresIn`, `exists` are NO LONGER emitted — Plan 17-08 reconciled the response to match iOS verbatim.
+
+Curl smoke (unauth):
+
+```bash
+curl -i -X POST https://api.fidexa.org/api/sync/upload-url \
+  -H 'Content-Type: application/json' -d '{}'
+# HTTP/1.1 401 Unauthorized
+```
+
+### P17.8 POST /api/sync/download-url (Plan 17-09)
+
+**Auth:** `requireAuth` + `requireActiveSubscription` (book sync is a paid feature).
+**Source:** `workers/worker/src/routes/upload.ts` — `uploadRoutes.post("/download-url", ...)`.
+**iOS caller:** `apps/apple/Packages/RishiSync/Sources/RishiSync/Download/BookDownloader.swift`.
+
+Request body:
+
+```json
+{
+  "key": "books/<user_id>/<book_id>.epub"
+}
+```
+
+Server validates the prefix matches the caller's userId — cross-user key reads return 403.
+
+Response (HTTP 200):
+
+```json
+{
+  "url":        "https://<r2-account>.r2.cloudflarestorage.com/...?X-Amz-...",
+  "expires_at": 802887000.0
+}
+```
+
+`expires_at` = `(Date.now() + 600_000 - 978_307_200_000) / 1000`. The presigned URL is valid for 10 minutes from issue; the `X-Amz-Expires=600` query parameter inside `url` matches.
+
+Date wire format: `expires_at` is a JSON number in seconds-since-2001. iOS `PresignedURLResponse.expiresAt: Date` decodes via `.deferredToDate`.
+
+The legacy keys `downloadUrl`, `expiresIn` are NO LONGER emitted — Plan 17-09 reconciled the response to match iOS verbatim.
+
+Curl smoke (unauth):
+
+```bash
+curl -i -X POST https://api.fidexa.org/api/sync/download-url \
+  -H 'Content-Type: application/json' -d '{}'
+# HTTP/1.1 401 Unauthorized
+```
+
+### P17.9 has_pro — operator hand-off to Billing runbook
+
+For the `has_pro` projection lifecycle (precedence, drift-by-construction guarantee with `/api/billing/me`, operator troubleshooting), see `RUNBOOK-BILLING-WORKER.md` §1.6. That doc is the authoritative operator reference; this contract doc only documents the wire shape.
+
+---
+
 ## 10. References
 
 - `16-CONTEXT.md` — Phase 16 locked decisions (this doc's source of authority).
