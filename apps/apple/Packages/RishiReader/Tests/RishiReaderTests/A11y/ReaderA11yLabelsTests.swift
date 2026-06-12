@@ -69,11 +69,16 @@ struct ReaderA11yLabelsTests {
 
     @Test("Reader toolbar buttons declare accessibilityLabel from A11yLabel")
     func toolbarButtonsCarryLabels() throws {
-        let toolbars = ["PDFReaderToolbar.swift", "EPUBReaderToolbar.swift"]
-        for url in try Self.readerSources() where toolbars.contains(url.lastPathComponent) {
+        // Phase 18 Plan 18-07 (F-P1-05) — the standalone overlay toolbar
+        // files were deleted in favor of native `.toolbar { ToolbarItemGroup }`
+        // blocks living inside the reader screens themselves. Assertions
+        // now run against the screen source files.
+        let screens = ["PDFReaderScreen.swift", "EPUBReaderScreen.swift"]
+        for url in try Self.readerSources() where screens.contains(url.lastPathComponent) {
             let s = try String(contentsOf: url, encoding: .utf8)
-            // Every toolbar references the shared A11yLabel vocabulary at
-            // least once — this guarantees we're not duplicating strings.
+            // Every reader screen references the shared A11yLabel
+            // vocabulary at least once — this guarantees we're not
+            // duplicating strings.
             #expect(
                 s.contains("A11yLabel."),
                 "\(url.lastPathComponent) should source labels from A11yLabel"
@@ -102,7 +107,11 @@ struct ReaderA11yLabelsTests {
 
     @Test("Toolbar buttons declare stable accessibility identifiers")
     func toolbarIdentifiers() throws {
-        let pdfURL = try Self.readerSources().first { $0.lastPathComponent == "PDFReaderToolbar.swift" }
+        // Phase 18 Plan 18-07 (F-P1-05) — identifiers now live inside the
+        // screens' `.toolbar { ToolbarItemGroup }` blocks (the standalone
+        // overlay toolbar files were deleted). Source files to scan
+        // migrated accordingly.
+        let pdfURL = try Self.readerSources().first { $0.lastPathComponent == "PDFReaderScreen.swift" }
         try #require(pdfURL != nil)
         let pdf = try String(contentsOf: pdfURL!, encoding: .utf8)
         // Phase 18 Plan 18-01 (F-P0-02) — the legacy in-app close
@@ -116,41 +125,40 @@ struct ReaderA11yLabelsTests {
             "reader.toolbar.chat",
         ]
         for id in pdfIds {
-            #expect(pdf.contains(id), "PDFReaderToolbar missing identifier \(id)")
+            #expect(pdf.contains(id), "PDFReaderScreen missing identifier \(id)")
         }
 
-        let epubURL = try Self.readerSources().first { $0.lastPathComponent == "EPUBReaderToolbar.swift" }
+        let epubURL = try Self.readerSources().first { $0.lastPathComponent == "EPUBReaderScreen.swift" }
         try #require(epubURL != nil)
         let epub = try String(contentsOf: epubURL!, encoding: .utf8)
         let epubIds = pdfIds + ["reader.toolbar.typography"]
         for id in epubIds {
-            #expect(epub.contains(id), "EPUBReaderToolbar missing identifier \(id)")
+            #expect(epub.contains(id), "EPUBReaderScreen missing identifier \(id)")
         }
     }
 
-    @Test("Toolbar Button call sites are matched by accessibilityLabel call sites")
+    @Test("Toolbar accessibilityIdentifier sites match the screen's static identifier list")
     func toolbarButtonsLabelled() throws {
-        // Two acceptable patterns:
-        //   (a) Inline `Button(action:) { … }.accessibilityLabel(…)`
-        //   (b) `iconButton(…)` helper whose definition already attaches
-        //       `.accessibilityLabel(label)`. Each invocation passes a
-        //       label argument, so we count label arguments instead of
-        //       `.accessibilityLabel(` modifier sites.
-        let names = ["PDFReaderToolbar.swift", "EPUBReaderToolbar.swift"]
-        for url in try Self.readerSources() where names.contains(url.lastPathComponent) {
+        // Phase 18 Plan 18-07 (F-P1-05) — with the overlay toolbar files
+        // deleted, the toolbar Button call sites now sit inline inside
+        // each screen's `.toolbar { ToolbarItemGroup }` block, mixed in
+        // with unrelated highlight-menu / picker buttons. Counting raw
+        // `Button(...)` call sites in the whole file would over-count.
+        // Instead we count the `reader.toolbar.*` accessibility-identifier
+        // sites and assert they equal the expected list (no more, no
+        // fewer). If the runtime block grows or shrinks the test will
+        // flag the mismatch.
+        let expectedByFile: [String: Int] = [
+            "EPUBReaderScreen.swift": 5,
+            "PDFReaderScreen.swift": 4,
+        ]
+        for url in try Self.readerSources() where expectedByFile.keys.contains(url.lastPathComponent) {
             let s = try String(contentsOf: url, encoding: .utf8)
-            let buttonSites = s.components(separatedBy: "Button(action:").count - 1
-            let helperSites = (s.components(separatedBy: "iconButton(").count - 1)
-                - (s.contains("private func iconButton") ? 1 : 0)
-            let totalButtonSites = buttonSites + helperSites
-            // Count both direct .accessibilityLabel(…) modifiers AND
-            // `label: A11yLabel.` arguments passed into the helper.
-            let labelModifiers = s.components(separatedBy: ".accessibilityLabel(").count - 1
-            let helperLabelArgs = s.components(separatedBy: "label: A11yLabel.").count - 1
-            let totalLabelSites = labelModifiers + helperLabelArgs
+            let idSites = s.components(separatedBy: ".accessibilityIdentifier(\"reader.toolbar.").count - 1
+            let expected = expectedByFile[url.lastPathComponent]!
             #expect(
-                totalLabelSites >= totalButtonSites,
-                "\(url.lastPathComponent): \(totalButtonSites) button call sites but only \(totalLabelSites) accessibilityLabel sites"
+                idSites == expected,
+                "\(url.lastPathComponent): expected \(expected) reader.toolbar.* identifier sites, found \(idSites)"
             )
         }
     }

@@ -20,7 +20,8 @@ private enum EPUBMacCommandNotification {
 ///
 /// Composes:
 ///   - ``EPUBReaderView`` (UIKit-gated Readium navigator wrapper)
-///   - ``EPUBReaderToolbar`` (close + title + TOC/typography/theme buttons)
+///   - Native `.toolbar { ToolbarItemGroup(placement: .topBarTrailing) }`
+///     (TOC + typography + theme + read-aloud + chat — Plan 18-07 / F-P1-05)
 ///   - ``EPUBProgressIndicator`` (floating bottom percent chip)
 ///   - ``EPUBHighlightContextMenu`` (4-color palette + Add Note, 06-05)
 ///   - ``HighlightNoteEditor`` sheet (06-05; reused from Phase 5)
@@ -51,6 +52,23 @@ private enum EPUBMacCommandNotification {
 /// compile-only stub label — ship targets always hit the UIKit branch.
 @MainActor
 public struct EPUBReaderScreen: View {
+
+    /// Phase 18 Plan 18-07 (F-P1-05) — canonical source of truth for the
+    /// accessibility identifiers attached to the buttons inside this
+    /// screen's `.toolbar { ToolbarItemGroup(placement: .topBarTrailing) }`
+    /// block. The runtime toolbar reads from this exact array so a drift
+    /// between source-of-truth and render-time becomes a compile error.
+    ///
+    /// `nonisolated` because pure-data `[String]` constants don't need
+    /// MainActor isolation and the test suite (default isolation
+    /// `nonisolated`) reads it without an `await`.
+    nonisolated public static let toolbarAccessibilityIdentifiers: [String] = [
+        "reader.toolbar.toc",
+        "reader.toolbar.typography",
+        "reader.toolbar.theme",
+        "reader.toolbar.readAloud",
+        "reader.toolbar.chat",
+    ]
 
     private let viewModel: EPUBReaderViewModel
     /// Optional injection: when `nil`, the screen runs against an ephemeral
@@ -237,8 +255,6 @@ public struct EPUBReaderScreen: View {
 
             if chrome.isVisible {
                 VStack {
-                    toolbar
-                        .transition(.move(edge: .top).combined(with: .opacity))
                     Spacer()
                     EPUBProgressIndicator(
                         totalProgression: viewModel.latestLocator?.locations.totalProgression
@@ -340,13 +356,63 @@ public struct EPUBReaderScreen: View {
         }
         #endif
         #if !os(macOS)
-        // Phase 18 Plan 18-01 (F-P0-04) — gate the nav bar on chrome
-        // visibility. When chrome is up, the system back chevron is
-        // rendered at top-left (labeled "Library"); when chrome is
-        // hidden, the immersive bare-page state is preserved. The iOS
+        // Phase 18 Plan 18-07 (F-P1-05) — native SwiftUI toolbar replaces
+        // the hand-rolled HStack overlay toolbar. Items live
+        // in the system nav bar; visibility follows the chrome state via
+        // the `navBarVisibility(...)` modifier below, so the system
+        // bar (and these ToolbarItems with it) hide when the reader is
+        // in immersive mode. Catalyst gets NSToolbar bridging for free.
+        //
+        // The `.bottomBar` slot is explicitly hidden because we ship no
+        // bottom-bar items today and the platform would otherwise reserve
+        // safe-area space for one when the nav bar is visible.
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button(action: showTOCAction) {
+                    Image(systemName: "list.bullet.indent")
+                }
+                .accessibilityIdentifier("reader.toolbar.toc")
+                .accessibilityLabel(A11yLabel.readerOpenTOC)
+
+                Button(action: showTypographyAction) {
+                    Image(systemName: "textformat.size")
+                }
+                .accessibilityIdentifier("reader.toolbar.typography")
+                .accessibilityLabel(A11yLabel.readerOpenTypography)
+
+                Button(action: showThemeAction) {
+                    Image(systemName: "circle.lefthalf.filled")
+                }
+                .accessibilityIdentifier("reader.toolbar.theme")
+                .accessibilityLabel(A11yLabel.readerOpenTheme)
+
+                if onReadAloud != nil {
+                    Button(action: readAloudAction) {
+                        Image(systemName: "speaker.wave.2.fill")
+                    }
+                    .accessibilityIdentifier("reader.toolbar.readAloud")
+                    .accessibilityLabel(A11yLabel.readerReadAloud)
+                }
+
+                if chatPresenter != nil {
+                    Button(action: chatAction) {
+                        Image(systemName: "bubble.left.and.bubble.right")
+                    }
+                    .accessibilityIdentifier("reader.toolbar.chat")
+                    .accessibilityLabel(A11yLabel.readerOpenChat)
+                }
+            }
+        }
+        // Phase 18 Plan 18-01 (F-P0-04) + Plan 18-07 (F-P1-05) — gate the
+        // nav bar AND the bottom bar on chrome visibility. When chrome is
+        // up, the system back chevron is rendered at top-left (labeled
+        // "Library") and the ToolbarItemGroup above is visible at
+        // top-right; when chrome is hidden, the immersive bare-page state
+        // is preserved (nav bar + bottom bar collapse together). The iOS
         // edge-swipe-from-left works in BOTH states because the host
         // NavigationStack owns dismissal.
         .toolbar(navBarVisibility(forChromeVisible: chrome.isVisible), for: .navigationBar)
+        .toolbar(navBarVisibility(forChromeVisible: chrome.isVisible), for: .bottomBar)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -358,24 +424,16 @@ public struct EPUBReaderScreen: View {
         }
     }
 
-    @ViewBuilder
-    private var toolbar: some View {
-        EPUBReaderToolbar(
-            title: viewModel.title.isEmpty ? viewModel.book.title : viewModel.title,
-            isPublicationLoaded: viewModel.publication != nil,
-            onShowTOC: showTOCAction,
-            onShowTheme: showThemeAction,
-            onShowTypography: showTypographyAction,
-            onReadAloud: onReadAloud,
-            onChat: chatPresenter.map { presenter in
-                { presenter.presentChat(bookId: viewModel.book.id, initialQuote: nil) }
-            }
-        )
-    }
-
-    // The `#if canImport(UIKit)` flag controls whether the sheet state vars
-    // exist, so the toolbar's closure actions are exported through these
-    // computed properties (Swift doesn't allow `#if` inside an argument list).
+    // Phase 18 Plan 18-07 (F-P1-05) — the in-app overlay toolbar was
+    // replaced by a native `.toolbar { ToolbarItemGroup }` block on the
+    // screen body. See the `.toolbar { ToolbarItemGroup(placement:
+    // .topBarTrailing) { … } }` modifier below for the new wiring.
+    //
+    // The `#if canImport(UIKit)` flag controls whether the sheet-state
+    // `@State` vars exist (`showTOC`, `showTypography`, `showTheme`); on
+    // the macOS dev-host stub branch the buttons no-op. Action helpers
+    // are computed because Swift doesn't allow `#if` inside a closure
+    // body inline-mounted on a `ToolbarItem`.
     private var showTOCAction: () -> Void {
         #if canImport(UIKit)
         return { chrome.userActivity(); showTOC = true }
@@ -398,6 +456,37 @@ public struct EPUBReaderScreen: View {
         #else
         return { }
         #endif
+    }
+
+    /// Phase 18 Plan 18-07 (F-P1-05) — chat opener used by the
+    /// `ToolbarItem` (top-bar trailing) and respected from the selection
+    /// menu's "Ask about this" affordance. Mirrors the previous overlay
+    /// toolbar's behavior: bumps chrome user-activity so the auto-hide
+    /// timer resets when the user reaches for chat.
+    private var chatAction: () -> Void {
+        guard let presenter = chatPresenter else {
+            return { }
+        }
+        return {
+            #if canImport(UIKit)
+            chrome.userActivity()
+            #endif
+            presenter.presentChat(bookId: viewModel.book.id, initialQuote: nil)
+        }
+    }
+
+    /// Read-aloud closure (Phase 8 opt-in). Wraps with `chrome.userActivity()`
+    /// on UIKit hosts so tapping the toolbar button postpones auto-hide.
+    private var readAloudAction: () -> Void {
+        guard let action = onReadAloud else {
+            return { }
+        }
+        return {
+            #if canImport(UIKit)
+            chrome.userActivity()
+            #endif
+            action()
+        }
     }
 
     @ViewBuilder

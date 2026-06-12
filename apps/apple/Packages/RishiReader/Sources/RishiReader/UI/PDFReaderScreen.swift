@@ -23,7 +23,8 @@ private enum ReaderMacCommandNotification {
 /// Composes:
 ///   - `PDFReaderView` (UIKit-gated PDFKit wrapper, plan 05-05)
 ///   - `PDFHighlightOverlay` (saved highlights as tinted rects, plan 05-06)
-///   - `PDFReaderToolbar` (close + title)
+///   - Native `.toolbar { ToolbarItemGroup(placement: .topBarTrailing) }`
+///     (TOC + theme + read-aloud + chat — Plan 18-07 / F-P1-05)
 ///   - `PDFPageIndicator` (floating page count)
 ///   - `HighlightContextMenu` (4-color palette + Add Note, plan 05-06)
 ///   - `HighlightNoteEditor` sheet (plan 05-06)
@@ -34,6 +35,22 @@ private enum ReaderMacCommandNotification {
 /// macOS dev-host renders a stub label; Mac Catalyst hits the UIKit branch.
 @MainActor
 public struct PDFReaderScreen: View {
+
+    /// Phase 18 Plan 18-07 (F-P1-05) — canonical source of truth for the
+    /// accessibility identifiers attached to the buttons inside this
+    /// screen's `.toolbar { ToolbarItemGroup(placement: .topBarTrailing) }`
+    /// block. PDF has no typography button — PDFKit owns font/zoom
+    /// controls via its native gestures and the platform menu.
+    ///
+    /// `nonisolated` because pure-data `[String]` constants don't need
+    /// MainActor isolation and the test suite (default isolation
+    /// `nonisolated`) reads it without an `await`.
+    nonisolated public static let toolbarAccessibilityIdentifiers: [String] = [
+        "reader.toolbar.toc",
+        "reader.toolbar.theme",
+        "reader.toolbar.readAloud",
+        "reader.toolbar.chat",
+    ]
 
     private let viewModel: PDFReaderViewModel
     /// Optional injection: when `nil`, the highlight UI is mounted but never
@@ -247,21 +264,6 @@ public struct PDFReaderScreen: View {
 
             if chrome.isVisible {
                 VStack {
-                    PDFReaderToolbar(
-                        title: viewModel.book.title,
-                        onTOC: { chrome.userActivity(); showTOC = true },
-                        onTheme: { chrome.userActivity(); showThemePicker = true },
-                        onReadAloud: onReadAloud.map { action in
-                            { chrome.userActivity(); action() }
-                        },
-                        onChat: chatPresenter.map { presenter in
-                            {
-                                chrome.userActivity()
-                                presenter.presentChat(bookId: viewModel.book.id, initialQuote: nil)
-                            }
-                        }
-                    )
-                    .transition(.move(edge: .top).combined(with: .opacity))
                     Spacer()
                     PDFPageIndicator(
                         currentPage: viewModel.pageIndex + 1,
@@ -355,13 +357,69 @@ public struct PDFReaderScreen: View {
         }
         #endif
         #if !os(macOS)
-        // Phase 18 Plan 18-01 (F-P0-04) — gate the nav bar on chrome
-        // visibility. When chrome is up, the system back chevron is
-        // rendered at top-left (labeled "Library"); when chrome is
-        // hidden, the immersive bare-page state is preserved. The iOS
+        // Phase 18 Plan 18-07 (F-P1-05) — native SwiftUI toolbar replaces
+        // the hand-rolled HStack overlay toolbar. Items live
+        // in the system nav bar; visibility follows the chrome state via
+        // the `navBarVisibility(...)` modifier below, so the system bar
+        // (and these ToolbarItems with it) hide when the reader is in
+        // immersive mode. Catalyst gets NSToolbar bridging for free.
+        //
+        // The `.bottomBar` slot is explicitly hidden because we ship no
+        // bottom-bar items today and the platform would otherwise reserve
+        // safe-area space for one when the nav bar is visible.
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    chrome.userActivity()
+                    showTOC = true
+                } label: {
+                    Image(systemName: "list.bullet.indent")
+                }
+                .accessibilityIdentifier("reader.toolbar.toc")
+                .accessibilityLabel(A11yLabel.readerOpenTOC)
+
+                Button {
+                    chrome.userActivity()
+                    showThemePicker = true
+                } label: {
+                    Image(systemName: "circle.lefthalf.filled")
+                }
+                .accessibilityIdentifier("reader.toolbar.theme")
+                .accessibilityLabel(A11yLabel.readerOpenTheme)
+
+                if let onReadAloud {
+                    Button {
+                        chrome.userActivity()
+                        onReadAloud()
+                    } label: {
+                        Image(systemName: "speaker.wave.2.fill")
+                    }
+                    .accessibilityIdentifier("reader.toolbar.readAloud")
+                    .accessibilityLabel(A11yLabel.readerReadAloud)
+                }
+
+                if let chatPresenter {
+                    Button {
+                        chrome.userActivity()
+                        chatPresenter.presentChat(bookId: viewModel.book.id, initialQuote: nil)
+                    } label: {
+                        Image(systemName: "bubble.left.and.bubble.right")
+                    }
+                    .accessibilityIdentifier("reader.toolbar.chat")
+                    .accessibilityLabel(A11yLabel.readerOpenChat)
+                }
+            }
+        }
+        // Phase 18 Plan 18-01 (F-P0-04) + Plan 18-07 (F-P1-05) — gate the
+        // nav bar AND the bottom bar on chrome visibility. When chrome is
+        // up, the system back chevron is rendered at top-left (labeled
+        // "Library") and the ToolbarItemGroup above is visible at
+        // top-right; when chrome is hidden, the immersive bare-page state
+        // is preserved (nav bar + bottom bar collapse together). The iOS
         // edge-swipe-from-left works in BOTH states because the host
         // NavigationStack owns dismissal.
         .toolbar(navBarVisibility(forChromeVisible: chrome.isVisible), for: .navigationBar)
+        .toolbar(navBarVisibility(forChromeVisible: chrome.isVisible), for: .bottomBar)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         #endif
