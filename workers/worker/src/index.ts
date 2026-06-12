@@ -386,32 +386,51 @@ app.get("/health", (c) => {
 
 app.post("/api/audio/speech", requireAuth, requireActiveSubscription, async (c) => {
   try {
-    const { input, voice } = await c.req.json();
+    // Phase 17-03: iOS SpeechStreamEndpoint.Body sends {text, voice, speed}
+    // (apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/AudioAPI.swift).
+    // The previous {input, voice} shape was an OpenAI passthrough that the iOS
+    // client never matched, so every TTSStreamer.swift call short-circuited
+    // to 400. Speed is forwarded into the AI SDK's experimental_generateSpeech
+    // call so the user-facing voice playback rate actually changes.
+    const { text, voice, speed } = await c.req.json<{
+      text?: string;
+      voice?: string;
+      speed?: number;
+    }>();
 
-    if (!input || typeof input !== "string" || input.trim().length === 0) {
-      return c.json({ error: "Missing or empty input text" }, 400);
+    if (!text || typeof text !== "string" || text.trim().length === 0) {
+      return c.json({ error: "Missing or empty text" }, 400);
     }
 
-    if (input.length > 4096) {
-      return c.json({ error: "Input text must be 4096 characters or fewer" }, 400);
+    if (text.length > 4096) {
+      return c.json({ error: "text must be 4096 characters or fewer" }, 400);
     }
 
     const allowedVoices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
-    const validVoice = allowedVoices.includes(voice) ? voice : "alloy";
+    const validVoice = allowedVoices.includes(voice as string) ? (voice as string) : "alloy";
+
+    // Clamp speed to OpenAI TTS's supported 0.25-4.0 range; fall back to 1.0
+    // for missing / non-finite / out-of-range values so the AI SDK never sees
+    // a hostile float.
+    const validSpeed =
+      typeof speed === "number" && Number.isFinite(speed) && speed >= 0.25 && speed <= 4.0
+        ? speed
+        : 1.0;
 
     const openai = getOpenAI(c.env.OPENAI_API_KEY);
 
     const speech = await generateSpeech({
       model: openai.speech("tts-1"),
-      text: input,
+      text: text,
       voice: validVoice,
+      speed: validSpeed,
     });
 
     c.executionCtx.waitUntil(
       meterFromContext(c.env, c.get("userId"), {
         type: "tts",
         model: "tts-1",
-        characters: input.length,
+        characters: text.length,
       }),
     );
 
