@@ -17,6 +17,7 @@ import { uploadRoutes } from "./routes/upload";
 import { desktopRoutes } from "./routes/desktop";
 import { mobileRoutes } from "./routes/mobile";
 import { devicesRoutes } from "./routes/devices";
+import { chatRoutes } from "./routes/chat";
 import { conversationsRoutes } from "./routes/conversations";
 import { messagesRoutes } from "./routes/messages";
 import { testAuthRoutes } from "./routes/test-auth";
@@ -215,6 +216,8 @@ app.route("/desktop", desktopRoutes);
 app.route("/mobile", mobileRoutes);
 // Quick-VPX VPX-02 — APNs device registration for silent-push sync wake.
 app.route("/api/devices", devicesRoutes);
+// Quick task 260612-f7p — streaming chat for iOS RishiChat (v1 no RAG).
+app.route("/api/chat", chatRoutes);
 // ─── Test-only routes (hard-gated by ENABLE_TEST_AUTH + TEST_AUTH_SECRET) ────
 // All endpoints under /test/* return 404 unless three checks pass — see
 // src/routes/test-auth.ts. Production keeps both env vars unset.
