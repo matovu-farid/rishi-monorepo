@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { eq, gt, and, max, asc, sql, getTableColumns } from "drizzle-orm";
+import { eq, gt, and, max, asc, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
 import type { CloudflareBindings } from "../index";
 import { requireAuth } from "../index";
