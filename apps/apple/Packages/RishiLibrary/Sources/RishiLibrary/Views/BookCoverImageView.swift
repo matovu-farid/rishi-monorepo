@@ -1,3 +1,10 @@
+// CONCURRENCY: Library cover decode runs off the MainActor via SwiftUI
+// `AsyncImage`, which is the system-managed off-main background decode path
+// for SwiftUI image loading. Any explicit `UIImage(contentsOfFile:)` or
+// `UIImage(data:)` fallback added below MUST be wrapped in
+// `Task.detached(priority: .utility)` per 19-RESEARCH.md §UIImage-decode.
+// The off-main invariant is locked by BookCoverImageViewDecodeTests (19-10).
+
 import SwiftUI
 import RishiCore
 import RishiUIKit
