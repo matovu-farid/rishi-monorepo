@@ -467,12 +467,23 @@ struct RootView: View {
 
     @ViewBuilder
     private func conversationsTab(deps: AppDependencies, user: User) -> some View {
+        // Phase 16-05 — mint the VM once per tab presentation and register
+        // it with `chatRefreshAdapter` so the SyncEngine's inbound chat
+        // merge can call back into refreshAfterSync(userId:). We tear the
+        // registration down in `.onDisappear`.
+        let viewModel = deps.makeConversationsListViewModel()
         NavigationStack {
             ConversationsListView(
-                viewModel: deps.makeConversationsListViewModel(),
+                viewModel: viewModel,
                 userId: user.id,
                 onSelect: { convo in selectedConversation = convo }
             )
+            .task {
+                deps.chatRefreshAdapter.setActive(viewModel: viewModel, userId: user.id)
+            }
+            .onDisappear {
+                deps.chatRefreshAdapter.clearActive()
+            }
         }
     }
 
