@@ -5,6 +5,11 @@ import { createDb } from "../db/drizzle"
 import type { CloudflareBindings } from "../index"
 import { requireAuth } from "../index"
 
+// 1970->2001 epoch gap. Matches workers/worker/src/routes/changes.ts.
+// Required so iOS WorkerClient.swift:96 bare JSONDecoder (.deferredToDate)
+// decodes Date.
+const REFERENCE_DATE_OFFSET_MS = 978_307_200_000
+
 /**
  * POST /api/devices/register — Quick-VPX Task 2 (GAP 2).
  *
@@ -83,6 +88,8 @@ devicesRoutes.post("/register", requireAuth, async (c) => {
 
   return c.json({
     device_id: inserted?.id ?? id,
-    registered_at: (inserted?.createdAt ?? now).toISOString(),
+    registered_at:
+      ((inserted?.createdAt ?? now).getTime() - REFERENCE_DATE_OFFSET_MS) /
+      1000,
   })
 })
