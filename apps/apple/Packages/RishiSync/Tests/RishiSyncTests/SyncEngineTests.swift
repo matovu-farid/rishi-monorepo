@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import os
 @testable import RishiSync
 import RishiAPI
 import RishiCore
@@ -204,6 +205,18 @@ struct SyncEngineTests {
         EngineMockURLProtocol.handler = { request in
             if request.url?.path == "/api/sync/changes" {
                 return (200, self.emptyChangesBody(), nil)
+            }
+            // Phase 16-05 — chat-sync GETs added to the inbound branch.
+            // Empty-wave test must satisfy them too.
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "GET" {
+                return (200, Data("""
+                { "rows": [] }
+                """.utf8), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "GET" {
+                return (200, Data("""
+                { "rows": [] }
+                """.utf8), nil)
             }
             return (404, Data(), nil)
         }
@@ -493,16 +506,15 @@ struct SyncEngineTests {
 
     /// Test-only delegate spy. `final class @unchecked Sendable` so the
     /// closure-capturing engine can hold it without Swift 6 strict yelling.
+    /// Uses `OSAllocatedUnfairLock` because NSLock.lock()/unlock() are
+    /// unavailable from async contexts in Swift 6.
     private final class SpyChatRefreshDelegate: ChatSyncRefreshDelegate, @unchecked Sendable {
-        let lock = NSLock()
-        var calls: Int = 0
+        private let counter = OSAllocatedUnfairLock<Int>(initialState: 0)
         func chatSyncDidMerge() async {
-            lock.lock(); defer { lock.unlock() }
-            calls += 1
+            counter.withLock { $0 += 1 }
         }
         func callCount() -> Int {
-            lock.lock(); defer { lock.unlock() }
-            return calls
+            counter.withLock { $0 }
         }
     }
 

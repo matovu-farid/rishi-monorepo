@@ -46,6 +46,14 @@ public actor SyncEngine {
     private let fetcher: RemoteChangeFetcher
     private let applier: ChangeApplier
 
+    // Phase 16-05 — chat inbound surface. Fetchers pull rows; the engine
+    // drives upserts via the stores directly (bypassing ChangeApplier).
+    private let conversationsFetcher: ConversationsFetcher
+    private let messagesFetcher: MessagesFetcher
+    private let conversationStore: any ConversationStore
+    private let messageStore: any MessageStore
+    private let chatRefreshDelegate: (any ChatSyncRefreshDelegate)?
+
     private var debouncer: PositionDebouncer!
     private var status: SyncStatus?
 
@@ -60,7 +68,12 @@ public actor SyncEngine {
         conversationUploader: ConversationUploader,
         messageUploader: MessageUploader,
         fetcher: RemoteChangeFetcher,
-        applier: ChangeApplier
+        applier: ChangeApplier,
+        conversationsFetcher: ConversationsFetcher,
+        messagesFetcher: MessagesFetcher,
+        conversationStore: any ConversationStore,
+        messageStore: any MessageStore,
+        chatRefreshDelegate: (any ChatSyncRefreshDelegate)? = nil
     ) {
         self.config = config
         self.queue = queue
@@ -73,6 +86,11 @@ public actor SyncEngine {
         self.messageUploader = messageUploader
         self.fetcher = fetcher
         self.applier = applier
+        self.conversationsFetcher = conversationsFetcher
+        self.messagesFetcher = messagesFetcher
+        self.conversationStore = conversationStore
+        self.messageStore = messageStore
+        self.chatRefreshDelegate = chatRefreshDelegate
 
         // PositionDebouncer's commit closure hops back into this actor so
         // queue + metadata + status mutations stay isolated. self isn't
@@ -191,6 +209,54 @@ public actor SyncEngine {
             wave.errors.append("fetch: \(error)")
         }
 
+        // 1b. Inbound — Phase 16-05: dedicated chat-sync pulls. The legacy
+        //     ChangeApplier `.conversation` / `.message` branches stay as a
+        //     defensive markClean no-op (regression-guarded by tests); the
+        //     real merge happens here so the engine can drive the stores
+        //     directly without widening ChangeApplier's dep surface.
+        var chatRowsApplied = 0
+        do {
+            let convos = try await conversationsFetcher.fetch()
+            for convo in convos {
+                // LWW: drop remote if local is newer-or-equal.
+                if let local = try await conversationStore.conversation(convo.id),
+                   local.updatedAt >= convo.updatedAt {
+                    wave.conflicts += 1
+                    continue
+                }
+                try await conversationStore.upsert(convo)
+                try await metadataStore.markClean(
+                    entityId: convo.id,
+                    kind: .conversation,
+                    lastSyncedAt: convo.updatedAt,
+                    remoteEtag: nil
+                )
+                wave.applied += 1
+                chatRowsApplied += 1
+            }
+        } catch {
+            wave.errors.append("conversations.fetch: \(error)")
+        }
+
+        do {
+            let msgs = try await messagesFetcher.fetch()
+            for msg in msgs {
+                // Messages are append-only locally — server is canonical;
+                // unconditional upsert keyed by id is the right move.
+                try await messageStore.upsert(msg)
+                try await metadataStore.markClean(
+                    entityId: msg.id,
+                    kind: .message,
+                    lastSyncedAt: msg.createdAt,
+                    remoteEtag: nil
+                )
+                wave.applied += 1
+                chatRowsApplied += 1
+            }
+        } catch {
+            wave.errors.append("messages.fetch: \(error)")
+        }
+
         // 2. Outbound — drain queue with per-kind buckets so a book-only
         //    drain doesn't accidentally swallow position items as collateral.
         let limit = config.batchLimit
@@ -268,6 +334,14 @@ public actor SyncEngine {
 
         // 3. Snapshot SyncStatus for the UI.
         await snapshotStatus(error: wave.errors.first)
+
+        // 3b. Phase 16-05 — fire the chat-refresh delegate so the
+        //     Conversations tab re-reads from the store after an inbound
+        //     chat merge. Skipped when no chat rows were applied so the
+        //     UI doesn't churn on book-only or empty waves.
+        if chatRowsApplied > 0, let delegate = chatRefreshDelegate {
+            await delegate.chatSyncDidMerge()
+        }
 
         setRunning(false)
 

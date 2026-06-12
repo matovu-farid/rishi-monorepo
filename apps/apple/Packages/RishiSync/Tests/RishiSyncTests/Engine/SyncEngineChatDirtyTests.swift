@@ -106,10 +106,15 @@ struct SyncEngineChatDirtyTests {
         let bookUploader = BookUploader(workerClient: workerClient, metadataStore: metadata, fileStorage: storage)
         let positionUploader = PositionUploader(workerClient: workerClient, positionStore: positionStore, bookStore: bookStore, metadataStore: metadata)
         let highlightUploader = HighlightUploader(workerClient: workerClient, highlightStore: highlightStore, metadataStore: metadata)
-        let conversationUploader = ConversationUploader(workerClient: workerClient, conversationStore: StubConversationStore(), metadataStore: metadata)
-        let messageUploader = MessageUploader(workerClient: workerClient, messageStore: StubMessageStore(), metadataStore: metadata)
+        let conversationStore = StubConversationStore()
+        let messageStore = StubMessageStore()
+        let conversationUploader = ConversationUploader(workerClient: workerClient, conversationStore: conversationStore, metadataStore: metadata)
+        let messageUploader = MessageUploader(workerClient: workerClient, messageStore: messageStore, metadataStore: metadata)
         let fetcher = RemoteChangeFetcher(workerClient: workerClient, metadataStore: metadata)
         let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, metadataStore: metadata)
+        // Phase 16-05 — dedicated chat-sync fetchers.
+        let conversationsFetcher = ConversationsFetcher(workerClient: workerClient, metadataStore: metadata)
+        let messagesFetcher = MessagesFetcher(workerClient: workerClient, metadataStore: metadata)
         let engine = SyncEngine(
             config: .init(positionDebounceWindow: 0.1, batchLimit: 50, backgroundRefreshInterval: 3600),
             queue: queue,
@@ -121,7 +126,11 @@ struct SyncEngineChatDirtyTests {
             conversationUploader: conversationUploader,
             messageUploader: messageUploader,
             fetcher: fetcher,
-            applier: applier
+            applier: applier,
+            conversationsFetcher: conversationsFetcher,
+            messagesFetcher: messagesFetcher,
+            conversationStore: conversationStore,
+            messageStore: messageStore
         )
         return (engine, queue)
     }

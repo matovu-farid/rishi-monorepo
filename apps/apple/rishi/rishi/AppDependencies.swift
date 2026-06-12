@@ -64,6 +64,12 @@ final class AppDependencies {
     let syncEngine: SyncEngine
     let backgroundTaskCoordinator: BackgroundTaskCoordinator
     let apnsDeviceRegistrar: APNsDeviceRegistrar
+    /// Phase 16-05 — UI-refresh bridge between `SyncEngine` and the
+    /// Conversations tab's `ConversationsListViewModel`. The engine fires
+    /// `chatSyncDidMerge()` after applying any inbound chat row; the
+    /// adapter forwards to whichever VM is currently mounted (set by
+    /// RootView via `setActiveConversationsListViewModel`).
+    let chatRefreshAdapter: AppChatRefreshAdapter
 
     // Chat (Phase 9 — composition root for the chat service + presenter seam)
     let conversationStore: any ConversationStore
@@ -296,11 +302,29 @@ final class AppDependencies {
             highlightStore: highlightStore,
             metadataStore: syncMetadataStore
         )
+        // Phase 16-05 — dedicated chat-sync fetchers (NOT routed through
+        // ChangeApplier; the engine drives upserts directly via the chat
+        // stores so we don't widen ChangeApplier's dep surface).
+        let conversationsFetcher = ConversationsFetcher(
+            workerClient: workerClient,
+            metadataStore: syncMetadataStore
+        )
+        let messagesFetcher = MessagesFetcher(
+            workerClient: workerClient,
+            metadataStore: syncMetadataStore
+        )
         self.bookUploader = bookUploader
         self.positionUploader = positionUploader
         self.highlightUploader = highlightUploader
         self.remoteChangeFetcher = remoteChangeFetcher
         self.changeApplier = changeApplier
+
+        // Phase 16-05 — UI-refresh seam from the engine to the
+        // Conversations tab. AppDependencies adopts ChatSyncRefreshDelegate
+        // (see extension below) and dispatches to whichever
+        // ConversationsListViewModel is currently mounted.
+        let chatRefreshAdapter = AppChatRefreshAdapter()
+        self.chatRefreshAdapter = chatRefreshAdapter
 
         let syncEngine = SyncEngine(
             config: .init(),
@@ -313,7 +337,12 @@ final class AppDependencies {
             conversationUploader: conversationUploader,
             messageUploader: messageUploader,
             fetcher: remoteChangeFetcher,
-            applier: changeApplier
+            applier: changeApplier,
+            conversationsFetcher: conversationsFetcher,
+            messagesFetcher: messagesFetcher,
+            conversationStore: conversationStore,
+            messageStore: messageStore,
+            chatRefreshDelegate: chatRefreshAdapter
         )
         self.syncEngine = syncEngine
 
