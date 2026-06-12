@@ -1,10 +1,17 @@
 //
 //  PDFReaderTTSExtension.swift
-//  rishi (Phase 8 plan 08-06)
+//  rishi (Phase 8 plan 08-06, refactored Phase 18 plan 18-05)
 //
 //  Adds a `currentReadAloudPassageIndex: Int?` hook + a
-//  `sentencesForReadAloud(...)` text source to `PDFReaderViewModel` via the
-//  external-lock box pattern (PDFReaderViewModel highlight cache, 05-06).
+//  `sentencesForReadAloud(...)` text source to `PDFReaderViewModel`.
+//
+//  SwiftUI extensions can't add stored properties, so the per-VM index lives
+//  in a file-private `ObjectIdentifier`-keyed dictionary. Phase 18 plan 18-05
+//  removed the OSAllocatedUnfairLock + `@unchecked Sendable` boxing — all
+//  callers (RootView startPDFReadAloud + the @MainActor ReaderTTSBridge
+//  passage callback) run on MainActor, so a `@MainActor`-isolated storage
+//  reference is enough. Same pattern as commit 4bffec8f8
+//  (AppChatRefreshAdapter cleanup).
 //
 //  RishiReader has no dependency on RishiAudio (Feature layer hygiene), so
 //  the bridge wiring lives here in the rishi app layer.
@@ -13,28 +20,19 @@
 import Foundation
 import PDFKit
 import RishiReader
-import os.lock
 
-/// External-lock box mirroring the pattern used by the 05-06 highlight cache:
-/// SwiftUI extensions can't add stored properties, so we keep the state in
-/// an external `ObjectIdentifier`-keyed box. The box is private to this file.
-private final class PDFReadAloudIndexBox: @unchecked Sendable {
-    private let lock = OSAllocatedUnfairLock(initialState: [ObjectIdentifier: Int]())
-    func get(_ id: ObjectIdentifier) -> Int? {
-        lock.withLock { $0[id] }
-    }
-    func set(_ id: ObjectIdentifier, _ value: Int?) {
-        lock.withLock { storage in
-            if let value {
-                storage[id] = value
-            } else {
-                storage.removeValue(forKey: id)
-            }
-        }
-    }
+/// MainActor-isolated storage for the per-VM read-aloud index. Default-
+/// isolation = MainActor (Swift 6 strict) makes the explicit annotation
+/// redundant in most files; here we make it explicit because the type is
+/// touched from extension property accessors that callers may otherwise
+/// expect to be nonisolated.
+@MainActor
+private final class PDFReadAloudIndexStore {
+    var storage: [ObjectIdentifier: Int] = [:]
 }
 
-private let pdfReadAloudIndexBox = PDFReadAloudIndexBox()
+@MainActor
+private let pdfReadAloudIndexStore = PDFReadAloudIndexStore()
 
 extension PDFReaderViewModel {
 
@@ -42,10 +40,16 @@ extension PDFReaderViewModel {
     /// session is active. The setter touches an existing tracked field
     /// (`theme`) so @Observable's automatic-tracking system wakes any
     /// SwiftUI subtree that reads this value.
+    @MainActor
     public var currentReadAloudPassageIndex: Int? {
-        get { pdfReadAloudIndexBox.get(ObjectIdentifier(self)) }
+        get { pdfReadAloudIndexStore.storage[ObjectIdentifier(self)] }
         set {
-            pdfReadAloudIndexBox.set(ObjectIdentifier(self), newValue)
+            let key = ObjectIdentifier(self)
+            if let newValue {
+                pdfReadAloudIndexStore.storage[key] = newValue
+            } else {
+                pdfReadAloudIndexStore.storage.removeValue(forKey: key)
+            }
             // Wake @Observable trackers by writing-through an existing
             // tracked field. Same pattern the 05-06 highlight cache uses.
             self.theme = self.theme

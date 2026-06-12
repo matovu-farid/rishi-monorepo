@@ -1,45 +1,46 @@
 //
 //  EPUBReaderTTSExtension.swift
-//  rishi (Phase 8 plan 08-06)
+//  rishi (Phase 8 plan 08-06, refactored Phase 18 plan 18-05)
 //
 //  Adds a `currentReadAloudPassageIndex: Int?` hook + an async
-//  `sentencesForReadAloud()` source to `EPUBReaderViewModel` via the same
-//  external-lock box pattern as the PDF extension.
+//  `sentencesForReadAloud()` source to `EPUBReaderViewModel`.
+//
+//  Phase 18 plan 18-05 removed the OSAllocatedUnfairLock + `@unchecked
+//  Sendable` boxing — all callers run on MainActor (RootView
+//  startEPUBReadAloud + the @MainActor ReaderTTSBridge passage callback),
+//  so a `@MainActor`-isolated dictionary is enough. Same pattern as commit
+//  4bffec8f8 (AppChatRefreshAdapter cleanup).
 //
 
 import Foundation
 import RishiReader
 import ReadiumShared
-import os.lock
 
-/// External-lock box keyed by ObjectIdentifier(of: viewModel).
-private final class EPUBReadAloudIndexBox: @unchecked Sendable {
-    private let lock = OSAllocatedUnfairLock(initialState: [ObjectIdentifier: Int]())
-    func get(_ id: ObjectIdentifier) -> Int? {
-        lock.withLock { $0[id] }
-    }
-    func set(_ id: ObjectIdentifier, _ value: Int?) {
-        lock.withLock { storage in
-            if let value {
-                storage[id] = value
-            } else {
-                storage.removeValue(forKey: id)
-            }
-        }
-    }
+/// MainActor-isolated storage for the per-VM read-aloud index. Mirrors the
+/// PDFReaderTTSExtension store.
+@MainActor
+private final class EPUBReadAloudIndexStore {
+    var storage: [ObjectIdentifier: Int] = [:]
 }
 
-private let epubReadAloudIndexBox = EPUBReadAloudIndexBox()
+@MainActor
+private let epubReadAloudIndexStore = EPUBReadAloudIndexStore()
 
 extension EPUBReaderViewModel {
 
     /// Index of the sentence currently being read aloud, or `nil` when no
     /// session is active. The setter touches an existing tracked field
     /// (`theme`) to wake @Observable trackers.
+    @MainActor
     public var currentReadAloudPassageIndex: Int? {
-        get { epubReadAloudIndexBox.get(ObjectIdentifier(self)) }
+        get { epubReadAloudIndexStore.storage[ObjectIdentifier(self)] }
         set {
-            epubReadAloudIndexBox.set(ObjectIdentifier(self), newValue)
+            let key = ObjectIdentifier(self)
+            if let newValue {
+                epubReadAloudIndexStore.storage[key] = newValue
+            } else {
+                epubReadAloudIndexStore.storage.removeValue(forKey: key)
+            }
             // Same wake-hook strategy as PDF.
             self.theme = self.theme
         }
