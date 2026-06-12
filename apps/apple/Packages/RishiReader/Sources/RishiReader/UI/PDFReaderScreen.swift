@@ -59,10 +59,21 @@ public struct PDFReaderScreen: View {
     /// the tap-to-toggle, auto-hide, and VoiceOver behaviors live in a
     /// single testable seam (see `ReaderChromeController`).
     @State private var chrome: ReaderChromeController = {
+        // Start with chrome visible so the user always has a way out (the
+        // top-left `xmark` lives inside the toolbar). The auto-hide timer
+        // takes care of dismissing it after 4s of idle. Without this, if
+        // the tap-toggle gesture ever fails to land (e.g. swallowed by the
+        // underlying PDFView gesture stack) the user is trapped.
         #if canImport(UIKit)
-        return ReaderChromeController(accessibility: UIKitAccessibilityProvider())
+        return ReaderChromeController(
+            accessibility: UIKitAccessibilityProvider(),
+            initiallyVisible: true
+        )
         #else
-        return ReaderChromeController(accessibility: PreviewAccessibility())
+        return ReaderChromeController(
+            accessibility: PreviewAccessibility(),
+            initiallyVisible: true
+        )
         #endif
     }()
     @State private var showTOC: Bool = false
@@ -133,38 +144,52 @@ public struct PDFReaderScreen: View {
                     },
                     onBoundary: { /* PageTurnAnimator already snaps back at edges. */ }
                 ) {
-                    PDFReaderView(
-                        viewModel: viewModel,
-                        onSelectionChange: { sel in
-                            handleSelectionChange(sel)
-                        },
-                        onPDFViewReady: { view in
-                            pdfViewRef = view
-                        }
-                    )
-                    .contentShape(Rectangle())
-                    .gesture(
-                        SpatialTapGesture()
-                            .onEnded { event in
-                                let resolver = ReaderTapRegionResolver()
-                                let decision = resolver.decide(
-                                    at: event.location,
-                                    in: readerAreaSize
-                                )
-                                switch decision {
-                                case .toggleChrome:
-                                    withAnimation(.easeInOut(duration: 0.25)) {
-                                        chrome.toggle()
-                                    }
-                                case .nextPage:
-                                    let next = min(viewModel.pageIndex + 1, max(viewModel.totalPages - 1, 0))
-                                    viewModel.seek(toPage: next)
-                                case .previousPage:
-                                    let prev = max(viewModel.pageIndex - 1, 0)
-                                    viewModel.seek(toPage: prev)
-                                }
+                    // ZStack so the transparent SwiftUI tap layer sits ABOVE
+                    // the PDFKit `PDFView`. Attaching `.gesture(...)` to the
+                    // `UIViewControllerRepresentable` itself loses every tap
+                    // to PDFView's internal `UIPageViewController` gesture
+                    // stack — the tap closure never fires, the chrome stays
+                    // hidden, and the user is trapped on the first page with
+                    // no `xmark` visible. The overlay's
+                    // `.contentShape(Rectangle())` makes the clear color
+                    // hit-testable, and `.simultaneousGesture` lets
+                    // `PageTurnAnimator`'s `DragGesture` still receive drags.
+                    ZStack {
+                        PDFReaderView(
+                            viewModel: viewModel,
+                            onSelectionChange: { sel in
+                                handleSelectionChange(sel)
+                            },
+                            onPDFViewReady: { view in
+                                pdfViewRef = view
                             }
-                    )
+                        )
+
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .simultaneousGesture(
+                                SpatialTapGesture()
+                                    .onEnded { event in
+                                        let resolver = ReaderTapRegionResolver()
+                                        let decision = resolver.decide(
+                                            at: event.location,
+                                            in: readerAreaSize
+                                        )
+                                        switch decision {
+                                        case .toggleChrome:
+                                            withAnimation(.easeInOut(duration: 0.25)) {
+                                                chrome.toggle()
+                                            }
+                                        case .nextPage:
+                                            let next = min(viewModel.pageIndex + 1, max(viewModel.totalPages - 1, 0))
+                                            viewModel.seek(toPage: next)
+                                        case .previousPage:
+                                            let prev = max(viewModel.pageIndex - 1, 0)
+                                            viewModel.seek(toPage: prev)
+                                        }
+                                    }
+                            )
+                    }
                 }
                 .onAppear { readerAreaSize = proxy.size }
                 .onChange(of: proxy.size) { _, newSize in readerAreaSize = newSize }
