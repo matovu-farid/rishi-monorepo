@@ -5,15 +5,33 @@ import type { CloudflareBindings } from "../index";
 import { requireAuth } from "../index";
 import { createDb } from "../db/drizzle";
 import { books, highlights, conversations, messages } from "@rishi/shared/schema";
-import type { PushResponse, PullResponse } from "@rishi/shared/sync-types";
+import type { PullResponse } from "@rishi/shared/sync-types";
 
-const pushRequestSchema = z.object({
-  changes: z.object({
-    books: z.array(z.record(z.string(), z.unknown())).max(500).default([]),
-    highlights: z.array(z.record(z.string(), z.unknown())).max(5000).default([]),
-    conversations: z.array(z.record(z.string(), z.unknown())).max(500).default([]),
-    messages: z.array(z.record(z.string(), z.unknown())).max(5000).default([]),
-  }),
+// ─── Date wire convention ──────────────────────────────────────────────────────
+// iOS WorkerClient.swift:96 uses a bare JSONDecoder() with the default
+// .deferredToDate strategy, which reads JSON numbers via
+// Date(timeIntervalSinceReferenceDate:). Apple's reference date is
+// 2001-01-01T00:00:00Z, i.e. 978_307_200_000 ms after the unix epoch. Every
+// Date that crosses this wire MUST therefore round-trip through these helpers.
+// See workers/worker/src/routes/changes.ts for the canonical conversion.
+const REFERENCE_DATE_OFFSET_MS = 978_307_200_000;
+const fromSecondsSinceRef = (s: number) => s * 1000 + REFERENCE_DATE_OFFSET_MS;
+
+// ─── iOS SyncChange envelope schema ───────────────────────────────────────────
+// Matches apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/SyncAPI.swift
+// SyncChange + SyncPushEndpoint.Body verbatim. The flat array shape replaces
+// the legacy grouped-object body {changes: {books, highlights, ...}} that the
+// /pull handler still echoes — those two contracts diverged after Phase 7.
+const SyncChangeSchema = z.object({
+  kind: z.enum(["book", "position", "highlight", "conversation", "message"]),
+  id: z.string(),
+  payload: z.record(z.string(), z.unknown()),
+  updated_at: z.number(),
+  deleted: z.boolean(),
+});
+
+const PushBodySchema = z.object({
+  changes: z.array(SyncChangeSchema).max(5000),
 });
 
 export const syncRoutes = new Hono<{
@@ -22,283 +40,298 @@ export const syncRoutes = new Hono<{
 }>();
 
 // ─── POST /push ────────────────────────────────────────────────────────────────
-// Accepts dirty book and highlight records from client, upserts into D1 with LWW resolution.
-// filePath and coverPath are stripped before writing -- they are local-only paths.
+// Accepts the iOS flat SyncChange envelope and dispatches per `kind` to the
+// matching D1 table. Returns {accepted_at: <seconds-since-2001>} as the
+// high-water-mark cursor iOS persists into sync_metadata.last_synced_at.
+//
+// Per-kind dispatch (snake_case WirePayloads from SyncPayloadCodec.swift):
+//   - book         -> books table (LWW by updated_at, scoped to userId).
+//                     file_url + cover_path are STRIPPED — local-only paths
+//                     that must never round-trip through D1.
+//   - position     -> UPDATE existing books row WHERE id == payload.book_id
+//                     setting currentCfi = payload.locator and
+//                     lastProgressPercent = payload.percent_complete. There
+//                     is no separate position table on the worker (per
+//                     17-CONTEXT.md: position rides in the book row).
+//   - highlight    -> highlights table (LWW). deleted=true flips isDeleted
+//                     on the matching row when one exists.
+//   - conversation -> conversations table (LWW).
+//   - message      -> messages table (append-only — existing rows are never
+//                     overwritten; userId is enforced via parent conversation).
 syncRoutes.post("/push", requireAuth, async (c) => {
-  const body = pushRequestSchema.parse(await c.req.json());
+  const rawBody = await c.req.json().catch(() => null);
+  const parsed = PushBodySchema.safeParse(rawBody);
+  if (!parsed.success) {
+    return c.json(
+      { error: "bad_request", detail: parsed.error.message },
+      400,
+    );
+  }
+  const body = parsed.data;
   const userId = c.get("userId");
   const db = createDb(c.env.DB);
 
-  const result = await db.transaction(async (tx) => {
-    const conflicts: Array<Record<string, unknown>> = [];
-    const upsertedBookIds: string[] = [];
-    const upsertedHighlightIds: string[] = [];
+  await db.transaction(async (tx) => {
+    for (const change of body.changes) {
+      // ── book ─────────────────────────────────────────────────────────────
+      if (change.kind === "book") {
+        const p = change.payload as Record<string, unknown>;
+        const bookId = (p.id as string) ?? change.id;
+        if (!bookId) continue;
 
-    // ── Books upsert loop ──────────────────────────────────────────────────────
-    for (const book of body.changes.books) {
-      // Strip local-only fields -- these MUST NOT be written to D1
-      const {
-        filePath,
-        coverPath,
-        isDirty,
-        ...serverFields
-      } = book as Record<string, unknown>;
+        const pushedUpdatedAtMs = fromSecondsSinceRef(change.updated_at);
 
-      const bookId = serverFields.id as string;
-      if (!bookId) continue;
+        // Whitelist allowed columns from the snake_case wire payload.
+        // STRIP file_url + cover_path (local-only, see changes.ts:108-111).
+        const fields: Record<string, unknown> = {};
+        if (typeof p.title === "string") fields.title = p.title;
+        if (typeof p.author === "string") fields.author = p.author;
+        if (typeof p.format_type === "string") fields.format = p.format_type;
+        if (typeof p.current_cfi === "string") fields.currentCfi = p.current_cfi;
+        if (typeof p.current_page === "number") fields.currentPage = p.current_page;
+        if (typeof p.last_progress_percent === "number")
+          fields.lastProgressPercent = p.last_progress_percent;
 
-      // Look up existing record scoped to this user
-      const existing = await tx
-        .select()
-        .from(books)
-        .where(and(eq(books.id, bookId), eq(books.userId, userId)))
-        .get();
+        const existing = await tx
+          .select()
+          .from(books)
+          .where(and(eq(books.id, bookId), eq(books.userId, userId)))
+          .get();
 
-      const pushedUpdatedAt = (serverFields.updatedAt as number) ?? 0;
-
-      // Whitelist of allowed book fields (excludes id, userId, filePath, coverPath, isDirty, syncVersion)
-      const allowedBookKeys = ['title', 'author', 'format', 'fileHash', 'fileR2Key', 'coverR2Key', 'currentCfi', 'currentPage', 'isDeleted'] as const;
-      const safeBookFields: Record<string, unknown> = {};
-      for (const key of allowedBookKeys) {
-        if (key in serverFields) safeBookFields[key] = serverFields[key];
+        if (!existing) {
+          await tx.insert(books).values({
+            ...fields,
+            id: bookId,
+            userId,
+            title: (fields.title as string) ?? "Untitled",
+            author: (fields.author as string) ?? "Unknown",
+            format: (fields.format as string) ?? "epub",
+            // Local-only path: ALWAYS empty server-side. The mobile client
+            // re-derives the on-device path from the R2 key on pull.
+            filePath: "",
+            coverPath: null,
+            isDeleted: change.deleted,
+            updatedAt: pushedUpdatedAtMs,
+            createdAt: pushedUpdatedAtMs,
+          } as typeof books.$inferInsert);
+        } else if (pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
+          await tx
+            .update(books)
+            .set({
+              ...fields,
+              isDeleted: change.deleted,
+              updatedAt: pushedUpdatedAtMs,
+            } as Partial<typeof books.$inferInsert>)
+            .where(and(eq(books.id, bookId), eq(books.userId, userId)));
+        }
+        continue;
       }
 
-      if (!existing) {
-        // INSERT new record
-        await tx.insert(books).values({
-          ...safeBookFields,
-          id: bookId,
-          userId,
-          // Ensure filePath has a default for the NOT NULL constraint in schema
-          filePath: "",
-          updatedAt: pushedUpdatedAt || Date.now(),
-          createdAt: (serverFields.createdAt as number) || Date.now(),
-        } as typeof books.$inferInsert);
-        upsertedBookIds.push(bookId);
-      } else if (pushedUpdatedAt > (existing.updatedAt ?? 0)) {
-        // Client is newer -- UPDATE (excluding filePath/coverPath)
+      // ── position (no separate table — folds into books row) ──────────────
+      if (change.kind === "position") {
+        const p = change.payload as Record<string, unknown>;
+        const bookId = p.book_id as string | undefined;
+        if (!bookId) continue;
+        const pushedUpdatedAtMs = fromSecondsSinceRef(change.updated_at);
+
+        const patch: Record<string, unknown> = { updatedAt: pushedUpdatedAtMs };
+        if (typeof p.locator === "string") patch.currentCfi = p.locator;
+        if (typeof p.percent_complete === "number")
+          patch.lastProgressPercent = p.percent_complete;
+
         await tx
           .update(books)
-          .set({
-            ...safeBookFields,
-            filePath: existing.filePath, // Preserve server's existing value
-            coverPath: existing.coverPath, // Preserve server's existing value
-            updatedAt: pushedUpdatedAt,
-          } as Partial<typeof books.$inferInsert>)
+          .set(patch as Partial<typeof books.$inferInsert>)
           .where(and(eq(books.id, bookId), eq(books.userId, userId)));
-        upsertedBookIds.push(bookId);
-      } else {
-        // Server is newer -- conflict
-        conflicts.push(existing as unknown as Record<string, unknown>);
-      }
-    }
-
-    // ── Highlights upsert loop ─────────────────────────────────────────────────
-    for (const highlight of body.changes.highlights ?? []) {
-      const { isDirty, ...serverFields } = highlight as Record<string, unknown>;
-      const highlightId = serverFields.id as string;
-      if (!highlightId) continue;
-
-      const existing = await tx
-        .select()
-        .from(highlights)
-        .where(and(eq(highlights.id, highlightId), eq(highlights.userId, userId)))
-        .get();
-
-      const pushedUpdatedAt = (serverFields.updatedAt as number) ?? 0;
-
-      // Whitelist of allowed highlight fields
-      const allowedHighlightKeys = ['bookId', 'cfiRange', 'text', 'color', 'note', 'chapter', 'isDeleted'] as const;
-      const safeHighlightFields: Record<string, unknown> = {};
-      for (const key of allowedHighlightKeys) {
-        if (key in serverFields) safeHighlightFields[key] = serverFields[key];
-      }
-
-      if (!existing) {
-        // INSERT new highlight (union merge: always accept new highlights)
-        await tx.insert(highlights).values({
-          ...safeHighlightFields,
-          id: highlightId,
-          userId,
-          updatedAt: pushedUpdatedAt || Date.now(),
-          createdAt: (serverFields.createdAt as number) || Date.now(),
-        } as typeof highlights.$inferInsert);
-        upsertedHighlightIds.push(highlightId);
-      } else if (pushedUpdatedAt > (existing.updatedAt ?? 0)) {
-        // Client is newer -- UPDATE (LWW by updatedAt)
-        await tx
-          .update(highlights)
-          .set({
-            ...safeHighlightFields,
-            updatedAt: pushedUpdatedAt,
-          } as Partial<typeof highlights.$inferInsert>)
-          .where(and(eq(highlights.id, highlightId), eq(highlights.userId, userId)));
-        upsertedHighlightIds.push(highlightId);
-      } else {
-        // Server is newer -- return server version as conflict (union merge: never delete)
-        conflicts.push(existing as unknown as Record<string, unknown>);
-      }
-    }
-
-    // ── Conversations upsert loop (LWW) ──────────────────────────────────────
-    const upsertedConversationIds: string[] = [];
-
-    for (const conv of body.changes.conversations ?? []) {
-      const { isDirty, ...serverFields } = conv as Record<string, unknown>;
-      const convId = serverFields.id as string;
-      if (!convId) continue;
-
-      const existing = await tx
-        .select()
-        .from(conversations)
-        .where(and(eq(conversations.id, convId), eq(conversations.userId, userId)))
-        .get();
-
-      const pushedUpdatedAt = (serverFields.updatedAt as number) ?? 0;
-
-      // Whitelist of allowed conversation fields
-      const allowedConvKeys = ['bookId', 'title', 'isDeleted'] as const;
-      const safeConvFields: Record<string, unknown> = {};
-      for (const key of allowedConvKeys) {
-        if (key in serverFields) safeConvFields[key] = serverFields[key];
-      }
-
-      if (!existing) {
-        await tx.insert(conversations).values({
-          ...safeConvFields,
-          id: convId,
-          userId,
-          updatedAt: pushedUpdatedAt || Date.now(),
-          createdAt: (serverFields.createdAt as number) || Date.now(),
-        } as typeof conversations.$inferInsert);
-        upsertedConversationIds.push(convId);
-      } else if (pushedUpdatedAt > (existing.updatedAt ?? 0)) {
-        await tx
-          .update(conversations)
-          .set({
-            ...safeConvFields,
-            updatedAt: pushedUpdatedAt,
-          } as Partial<typeof conversations.$inferInsert>)
-          .where(and(eq(conversations.id, convId), eq(conversations.userId, userId)));
-        upsertedConversationIds.push(convId);
-      } else {
-        conflicts.push(existing as unknown as Record<string, unknown>);
-      }
-    }
-
-    // ── Messages upsert loop (append-only) ─────────────────────────────────
-    const upsertedMessageIds: string[] = [];
-
-    for (const msg of body.changes.messages ?? []) {
-      const { isDirty, ...serverFields } = msg as Record<string, unknown>;
-      const msgId = serverFields.id as string;
-      if (!msgId) continue;
-
-      const existing = await tx
-        .select()
-        .from(messages)
-        .where(eq(messages.id, msgId))
-        .get();
-
-      if (existing) {
-        // Append-only: never update existing messages, skip entirely
         continue;
       }
 
-      // Verify the parent conversation belongs to this user before inserting
-      const convId = serverFields.conversationId as string;
-      if (!convId) continue;
+      // ── highlight ────────────────────────────────────────────────────────
+      if (change.kind === "highlight") {
+        const p = change.payload as Record<string, unknown>;
+        const highlightId = (p.id as string) ?? change.id;
+        if (!highlightId) continue;
+        const pushedUpdatedAtMs = fromSecondsSinceRef(change.updated_at);
 
-      const parentConv = await tx
-        .select({ userId: conversations.userId })
-        .from(conversations)
-        .where(and(eq(conversations.id, convId), eq(conversations.userId, userId)))
-        .get();
+        const existing = await tx
+          .select()
+          .from(highlights)
+          .where(
+            and(eq(highlights.id, highlightId), eq(highlights.userId, userId)),
+          )
+          .get();
 
-      if (!parentConv) {
-        // Conversation doesn't exist or doesn't belong to this user -- skip
+        if (change.deleted) {
+          // Tombstone: flip isDeleted on the matching row if it exists.
+          // No-op for unknown ids (the row may live on another device).
+          if (existing) {
+            await tx
+              .update(highlights)
+              .set({
+                isDeleted: true,
+                updatedAt: pushedUpdatedAtMs,
+              } as Partial<typeof highlights.$inferInsert>)
+              .where(
+                and(
+                  eq(highlights.id, highlightId),
+                  eq(highlights.userId, userId),
+                ),
+              );
+          }
+          continue;
+        }
+
+        const bookId = p.book_id as string | undefined;
+        // cfiRange is the canonical column — accept both locator_start (the
+        // iOS wire DTO field) and an explicit cfi_range/cfiRange.
+        const cfiRange =
+          (p.cfi_range as string | undefined) ??
+          (p.cfiRange as string | undefined) ??
+          (p.locator_start as string | undefined) ??
+          "";
+        const text = (p.text as string) ?? "";
+        const color = (p.color as string) ?? "yellow";
+        const note = (p.note as string | undefined) ?? null;
+
+        if (!existing) {
+          await tx.insert(highlights).values({
+            id: highlightId,
+            bookId: bookId ?? "",
+            userId,
+            cfiRange,
+            text,
+            color,
+            note,
+            isDeleted: false,
+            updatedAt: pushedUpdatedAtMs,
+            createdAt: pushedUpdatedAtMs,
+          } as typeof highlights.$inferInsert);
+        } else if (pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
+          const patch: Record<string, unknown> = {
+            text,
+            color,
+            note,
+            updatedAt: pushedUpdatedAtMs,
+          };
+          if (bookId) patch.bookId = bookId;
+          if (cfiRange) patch.cfiRange = cfiRange;
+          await tx
+            .update(highlights)
+            .set(patch as Partial<typeof highlights.$inferInsert>)
+            .where(
+              and(
+                eq(highlights.id, highlightId),
+                eq(highlights.userId, userId),
+              ),
+            );
+        }
         continue;
       }
 
-      // Whitelist of allowed message fields
-      const allowedMsgKeys = ['conversationId', 'role', 'content', 'sourceChunks', 'isDeleted'] as const;
-      const safeMsgFields: Record<string, unknown> = {};
-      for (const key of allowedMsgKeys) {
-        if (key in serverFields) safeMsgFields[key] = serverFields[key];
+      // ── conversation ─────────────────────────────────────────────────────
+      if (change.kind === "conversation") {
+        const p = change.payload as Record<string, unknown>;
+        const convId = (p.id as string) ?? change.id;
+        if (!convId) continue;
+        const pushedUpdatedAtMs = fromSecondsSinceRef(change.updated_at);
+
+        const existing = await tx
+          .select()
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.id, convId),
+              eq(conversations.userId, userId),
+            ),
+          )
+          .get();
+
+        const title = (p.title as string) ?? "New conversation";
+        const bookId = (p.book_id as string) ?? "";
+
+        if (!existing) {
+          await tx.insert(conversations).values({
+            id: convId,
+            userId,
+            bookId,
+            title,
+            isDeleted: change.deleted,
+            updatedAt: pushedUpdatedAtMs,
+            createdAt: pushedUpdatedAtMs,
+          } as typeof conversations.$inferInsert);
+        } else if (pushedUpdatedAtMs > (existing.updatedAt ?? 0)) {
+          const patch: Record<string, unknown> = {
+            title,
+            isDeleted: change.deleted,
+            updatedAt: pushedUpdatedAtMs,
+          };
+          if (bookId) patch.bookId = bookId;
+          await tx
+            .update(conversations)
+            .set(patch as Partial<typeof conversations.$inferInsert>)
+            .where(
+              and(
+                eq(conversations.id, convId),
+                eq(conversations.userId, userId),
+              ),
+            );
+        }
+        continue;
       }
 
-      // New message -- insert (userId verified via conversation ownership)
-      await tx.insert(messages).values({
-        ...safeMsgFields,
-        id: msgId,
-        updatedAt: (serverFields.updatedAt as number) || Date.now(),
-        createdAt: (serverFields.createdAt as number) || Date.now(),
-      } as typeof messages.$inferInsert);
-      upsertedMessageIds.push(msgId);
+      // ── message (append-only) ────────────────────────────────────────────
+      if (change.kind === "message") {
+        const p = change.payload as Record<string, unknown>;
+        const msgId = (p.id as string) ?? change.id;
+        if (!msgId) continue;
+        const pushedUpdatedAtMs = fromSecondsSinceRef(change.updated_at);
+
+        const existing = await tx
+          .select()
+          .from(messages)
+          .where(eq(messages.id, msgId))
+          .get();
+        if (existing) continue; // append-only
+
+        const convId = p.conversation_id as string | undefined;
+        if (!convId) continue;
+
+        // Enforce per-user scoping via parent conversation ownership.
+        const parentConv = await tx
+          .select()
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.id, convId),
+              eq(conversations.userId, userId),
+            ),
+          )
+          .get();
+        if (!parentConv) continue;
+
+        await tx.insert(messages).values({
+          id: msgId,
+          conversationId: convId,
+          role: (p.role as string) ?? "user",
+          content: (p.content as string) ?? "",
+          isDeleted: change.deleted,
+          updatedAt: pushedUpdatedAtMs,
+          createdAt: pushedUpdatedAtMs,
+        } as typeof messages.$inferInsert);
+        continue;
+      }
     }
-
-    // ── Assign syncVersion to all upserted records (inside transaction) ────
-    const totalUpserted = upsertedBookIds.length + upsertedHighlightIds.length + upsertedConversationIds.length + upsertedMessageIds.length;
-    let newSyncVersion = 0;
-
-    if (totalUpserted > 0) {
-      // Compute the next version ONCE inside the transaction to guarantee all
-      // records in this push get the same monotonically increasing version
-      // number. The transaction isolation prevents concurrent pushes from
-      // reading the same MAX and assigning duplicate versions.
-      const nextVersionResult = await tx.get<{ next_version: number }>(
-        sql`SELECT COALESCE(MAX(v), 0) + 1 AS next_version FROM (
-          SELECT MAX(sync_version) AS v FROM books
-          UNION ALL SELECT MAX(sync_version) AS v FROM highlights
-          UNION ALL SELECT MAX(sync_version) AS v FROM conversations
-          UNION ALL SELECT MAX(sync_version) AS v FROM messages
-        )`
-      );
-      const nextVersion = nextVersionResult?.next_version ?? 1;
-
-      // Update all upserted books
-      for (const id of upsertedBookIds) {
-        await tx.run(sql`UPDATE books SET sync_version = ${nextVersion}, is_dirty = 0 WHERE id = ${id}`);
-      }
-
-      // Update all upserted highlights
-      for (const id of upsertedHighlightIds) {
-        await tx.run(sql`UPDATE highlights SET sync_version = ${nextVersion}, is_dirty = 0 WHERE id = ${id}`);
-      }
-
-      // Update all upserted conversations
-      for (const id of upsertedConversationIds) {
-        await tx.run(sql`UPDATE conversations SET sync_version = ${nextVersion}, is_dirty = 0 WHERE id = ${id}`);
-      }
-
-      // Update all upserted messages
-      for (const id of upsertedMessageIds) {
-        await tx.run(sql`UPDATE messages SET sync_version = ${nextVersion}, is_dirty = 0 WHERE id = ${id}`);
-      }
-
-      newSyncVersion = nextVersion;
-    } else {
-      // No upserts -- return current max version across all tables
-      const versionResult = await tx.get<{ v: number }>(
-        sql`SELECT COALESCE(MAX(v), 0) AS v FROM (
-          SELECT MAX(sync_version) AS v FROM books
-          UNION ALL SELECT MAX(sync_version) AS v FROM highlights
-          UNION ALL SELECT MAX(sync_version) AS v FROM conversations
-          UNION ALL SELECT MAX(sync_version) AS v FROM messages
-        )`
-      );
-      newSyncVersion = versionResult?.v ?? 0;
-    }
-
-    return { conflicts, syncVersion: newSyncVersion };
   });
 
-  const response: PushResponse = {
-    conflicts: result.conflicts,
-    syncVersion: result.syncVersion,
-  };
+  // High-water-mark cursor: the max wire updated_at across all accepted
+  // changes. Already in seconds-since-2001 — pass through unmodified so iOS
+  // round-trips it via .deferredToDate without any conversion drift.
+  let acceptedAt = 0;
+  for (const change of body.changes) {
+    if (change.updated_at > acceptedAt) acceptedAt = change.updated_at;
+  }
 
-  return c.json(response);
+  return c.json({ accepted_at: acceptedAt });
 });
 
 // ─── GET /pull ─────────────────────────────────────────────────────────────────
