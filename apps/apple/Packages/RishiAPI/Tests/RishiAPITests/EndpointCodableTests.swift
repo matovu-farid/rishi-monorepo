@@ -136,17 +136,6 @@ struct EndpointCodableTests {
         #expect(r.sessionId == "sid")
     }
 
-    @Test func realtimeUsagePostsSnakeCaseBody() throws {
-        let body = RealtimeUsageEndpoint.Body(sessionId: "x", durationSeconds: 30, charactersGenerated: 500)
-        let json = String(data: try JSONEncoder().encode(body), encoding: .utf8) ?? ""
-        #expect(json.contains("\"session_id\""))
-        #expect(json.contains("\"duration_seconds\""))
-        #expect(json.contains("\"characters_generated\""))
-        let e = RealtimeUsageEndpoint(body: body)
-        #expect(e.path == "/api/realtime/usage")
-        #expect(e.method == .POST)
-    }
-
     @Test func speechStreamEndpointShape() throws {
         let e = SpeechStreamEndpoint(body: .init(text: "hi", voice: "alloy", speed: 1.0))
         #expect(e.path == "/api/audio/speech")

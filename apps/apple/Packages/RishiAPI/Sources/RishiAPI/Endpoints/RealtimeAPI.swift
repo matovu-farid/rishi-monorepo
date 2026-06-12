@@ -38,37 +38,3 @@ public struct RealtimeClientSecretsEndpoint: WorkerEndpoint {
         }
     }
 }
-
-// MARK: - POST /api/realtime/usage
-
-/// `POST /api/realtime/usage` — emit a billing usage record after a voice
-/// session terminates. Phase 10/11 wires this through.
-public struct RealtimeUsageEndpoint: WorkerEndpointWithBody {
-    public typealias Response = OkResponse
-
-    public struct Body: Encodable, Sendable, Equatable {
-        public let sessionId: String
-        public let durationSeconds: Int
-        public let charactersGenerated: Int
-
-        enum CodingKeys: String, CodingKey {
-            case sessionId           = "session_id"
-            case durationSeconds     = "duration_seconds"
-            case charactersGenerated = "characters_generated"
-        }
-
-        public init(sessionId: String, durationSeconds: Int, charactersGenerated: Int) {
-            self.sessionId = sessionId
-            self.durationSeconds = durationSeconds
-            self.charactersGenerated = charactersGenerated
-        }
-    }
-
-    public let method: HTTPMethod = .POST
-    public let path: String = "/api/realtime/usage"
-    public let body: Body
-
-    public init(body: Body) {
-        self.body = body
-    }
-}
