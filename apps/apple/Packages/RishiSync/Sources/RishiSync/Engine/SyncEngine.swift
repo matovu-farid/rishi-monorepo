@@ -1,8 +1,20 @@
 import Foundation
+import os.signpost
 import RishiAPI
 import RishiCore
 import RishiLibrary
 import RishiLogging
+
+/// Phase 19 Plan 19-08 (F-P2-04) — file-static signposter for sync waves.
+/// Every `runOnce()` call (BGTaskScheduler-triggered, silent-push-triggered,
+/// or user-Sync-Now-triggered) emits a `sync.wave` interval so Instruments
+/// can attribute the cost of fetch + apply + outbound drain. `OSSignposter`
+/// is `Sendable` so the actor-isolated `runOnce()` body uses it without an
+/// extra hop. Pure additive; the engine's behavior is unchanged.
+private let syncSignposter = OSSignposter(
+    subsystem: "org.fidexa.rishi",
+    category: "sync"
+)
 
 /// Owns the sync loop and serializes all sync work through actor isolation.
 ///
@@ -184,6 +196,13 @@ public actor SyncEngine {
     /// outbound queue by kind → snapshot status.
     @discardableResult
     public func runOnce() async -> Wave {
+        // Phase 19 Plan 19-08 (F-P2-04) — wrap the full sync wave so the
+        // BGTask + silent-push + manual paths share one Instruments
+        // interval. The endInterval is in a `defer` so errors thrown
+        // mid-wave (none today; runOnce never rethrows) would still close
+        // the trace cleanly. Pure additive.
+        let signpostState = syncSignposter.beginInterval("sync.wave")
+        defer { syncSignposter.endInterval("sync.wave", signpostState) }
         var wave = Wave()
         setRunning(true)
 

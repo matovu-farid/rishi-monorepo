@@ -2,10 +2,21 @@ import SwiftUI
 import RishiCore
 import RishiUIKit
 import Foundation
+import os.signpost
 #if canImport(UIKit)
 import UIKit
 import PDFKit
 #endif
+
+/// Phase 19 Plan 19-08 (F-P2-04) — file-static signposter so Instruments
+/// Time Profiler can attribute the cost of opening a PDF (document load
+/// + outline parse + highlight hydrate + theme restore). Distinct from
+/// the EPUB signposter by interval name (`reader.pdf.open` vs
+/// `reader.epub.open`) so traces remain grep-able.
+private let pdfReaderSignposter = OSSignposter(
+    subsystem: "org.fidexa.rishi",
+    category: "reader"
+)
 
 /// Phase 12 Plan 12-01 — notification names mirrored from the rishi app's
 /// `RishiCommand` enum so the reader package can subscribe without
@@ -294,6 +305,11 @@ public struct PDFReaderScreen: View {
         .persistentSystemOverlays(chrome.isVisible ? .automatic : .hidden)
         #endif
         .task {
+            // Phase 19 Plan 19-08 (F-P2-04) — wrap the PDF open hot path
+            // (document load + highlights hydrate + theme restore). Pure
+            // additive; behavior unchanged.
+            let state = pdfReaderSignposter.beginInterval("reader.pdf.open")
+            defer { pdfReaderSignposter.endInterval("reader.pdf.open", state) }
             await viewModel.load()
             if let store = highlightStore {
                 await viewModel.loadHighlights(from: store)

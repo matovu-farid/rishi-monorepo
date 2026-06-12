@@ -2,6 +2,7 @@ import SwiftUI
 import RishiCore
 import RishiUIKit
 import Foundation
+import os.signpost
 
 /// Phase 12 Plan 12-01 — notification names mirrored from the rishi app's
 /// `RishiCommand` enum so the library package can subscribe without
@@ -11,6 +12,16 @@ private enum LibraryMacCommandNotification {
     static let importBook  = Notification.Name("RishiCommand.importBook")
     static let focusSearch = Notification.Name("RishiCommand.focusSearch")
 }
+
+/// Phase 19 Plan 19-08 (F-P2-04) — file-static signposter so Instruments
+/// Time Profiler can attribute the library first-paint cost (refresh +
+/// parallel cover-URL fan-out). `OSSignposter` is `Sendable`, so the
+/// nonisolated declaration is safe to share across MainActor view bodies
+/// and the `Task` that runs the `.task` body.
+private let librarySignposter = OSSignposter(
+    subsystem: "org.fidexa.rishi",
+    category: "library"
+)
 
 /// Top-level library shell mounted by the rishi app. Wraps `LibraryView` in a
 /// `NavigationStack` and wires in:
@@ -105,6 +116,12 @@ public struct LibraryRootView: View {
         }
         #endif
         .task {
+            // Phase 19 Plan 19-08 (F-P2-04) — wrap the first-paint hot path
+            // so Instruments captures the combined cost of viewModel.refresh
+            // (GRDB book fetch) and reloadCovers (parallel cover-URL fan-out).
+            // Pure additive; behavior is unchanged.
+            let state = librarySignposter.beginInterval("library.first-paint")
+            defer { librarySignposter.endInterval("library.first-paint", state) }
             await vm.refresh()
             await reloadCovers()
         }

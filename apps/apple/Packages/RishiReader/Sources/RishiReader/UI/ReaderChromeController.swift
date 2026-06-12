@@ -1,9 +1,21 @@
 import Foundation
 import Observation
 import SwiftUI
+import os.signpost
 #if canImport(UIKit)
 import UIKit
 #endif
+
+/// Phase 19 Plan 19-08 (F-P2-04) — file-static signposter so Instruments
+/// can plot chrome-toggle latency (tap → SwiftUI re-render with new bar
+/// visibility) on the timeline. `toggle()` is hit on every reader tap, so
+/// the interval is intentionally cheap: a single field flip plus the
+/// auto-hide task arm. The recorded interval is what surfaces in
+/// Time Profiler as "user tap → visible chrome update".
+private let chromeSignposter = OSSignposter(
+    subsystem: "org.fidexa.rishi",
+    category: "chrome"
+)
 
 /// Phase 18 Plan 18-01 (F-P0-04) — pure mapping from chrome visibility
 /// to the SwiftUI `Visibility` value passed into `.toolbar(_:for: .navigationBar)`.
@@ -93,6 +105,13 @@ public final class ReaderChromeController {
     /// Flip visibility. If becoming visible, (re)arm the auto-hide timer.
     /// If becoming hidden, cancel any pending dismissal.
     public func toggle() {
+        // Phase 19 Plan 19-08 (F-P2-04) — wrap the chrome-toggle hot path.
+        // Pure additive; behavior unchanged. The interval bounds the
+        // synchronous body — the auto-hide Task started by show() runs
+        // outside the interval, which is the right boundary for Instruments
+        // (the tap → re-render latency is what matters).
+        let state = chromeSignposter.beginInterval("reader.chrome.toggle")
+        defer { chromeSignposter.endInterval("reader.chrome.toggle", state) }
         if isVisible {
             hide()
         } else {

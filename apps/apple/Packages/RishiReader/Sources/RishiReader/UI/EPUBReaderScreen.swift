@@ -2,11 +2,24 @@ import SwiftUI
 import RishiCore
 import RishiUIKit
 import Foundation
+import os.signpost
 #if canImport(UIKit)
 import UIKit
 import ReadiumShared
 import ReadiumNavigator
 #endif
+
+/// Phase 19 Plan 19-08 (F-P2-04) — file-static signposter so Instruments
+/// Time Profiler can attribute the cost of opening an EPUB (publication
+/// load, position restore, highlight hydrate, Readium preferences apply).
+/// Shared with `PDFReaderScreen` / `ReaderChromeController` would have
+/// blurred the category, so this and PDF each own their own signposter on
+/// the `reader` category but emit distinct interval names (`reader.epub.open`
+/// vs `reader.pdf.open`).
+private let epubReaderSignposter = OSSignposter(
+    subsystem: "org.fidexa.rishi",
+    category: "reader"
+)
 
 /// Phase 12 Plan 12-01 — notification names mirrored from the rishi app's
 /// `RishiCommand` enum. Raw strings MUST match
@@ -283,6 +296,11 @@ public struct EPUBReaderScreen: View {
         .persistentSystemOverlays(chrome.isVisible ? .automatic : .hidden)
         #endif
         .task {
+            // Phase 19 Plan 19-08 (F-P2-04) — wrap the EPUB open hot path
+            // (publication load + theme/typography hydrate + highlight load
+            // + preferences apply). Pure additive; behavior unchanged.
+            let state = epubReaderSignposter.beginInterval("reader.epub.open")
+            defer { epubReaderSignposter.endInterval("reader.epub.open", state) }
             await viewModel.load()
             if let settings = readerSettingsStore {
                 viewModel.theme = await settings.theme(for: viewModel.book.id)
