@@ -152,7 +152,7 @@ export interface CloudflareBindings {
   APPLE_TEAM_ID?: string;
 }
 
-const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string } }>();
+export const app = new Hono<{ Bindings: CloudflareBindings; Variables: { userId: string } }>();
 
 // CORS must be registered before any auth middleware
 app.use(
@@ -549,14 +549,55 @@ app.post("/api/embed", requireAuth, requireActiveSubscription, async (c) => {
 });
 
 // ─── POST /api/audio/transcribe — Deepgram STT proxy ──────────────────────────
-app.post("/api/audio/transcribe", requireAuth, async (c) => {
-  const contentType = c.req.header("Content-Type") || "audio/webm";
-  const audioData = await c.req.arrayBuffer();
+// Accepts iOS TranscribeEndpoint.Body shape — JSON `{audio: <base64>, mime_type}`
+// — see apps/apple/Packages/RishiAPI/Sources/RishiAPI/Endpoints/AudioAPI.swift.
+// Swift's default JSONEncoder() serializes `Data` as a base64 string, so the
+// worker base64-decodes the audio field before forwarding raw bytes to
+// Deepgram with `Content-Type: <mime_type>`. Phase 17-04 / Gap 7.
+const ALLOWED_TRANSCRIBE_MIME_TYPES = new Set([
+  "audio/webm",
+  "audio/mp4",
+  "audio/mpeg",
+  "audio/wav",
+  "audio/ogg",
+  "audio/m4a",
+]);
 
-  if (audioData.byteLength === 0) {
+app.post("/api/audio/transcribe", requireAuth, async (c) => {
+  // 1. Parse JSON body.
+  const body = await c.req
+    .json<{ audio?: unknown; mime_type?: unknown }>()
+    .catch(() => null);
+  if (
+    !body ||
+    typeof body.audio !== "string" ||
+    typeof body.mime_type !== "string"
+  ) {
+    return c.json(
+      { error: "Missing or invalid {audio, mime_type}" },
+      400,
+    );
+  }
+
+  // 2. Base64-decode `audio`. atob throws on illegal base64 — catch and 400.
+  let audioBytes: Uint8Array;
+  try {
+    const bin = atob(body.audio);
+    audioBytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0));
+  } catch {
+    return c.json({ error: "audio must be valid base64" }, 400);
+  }
+  if (audioBytes.byteLength === 0) {
     return c.json({ error: "Empty audio data" }, 400);
   }
 
+  // 3. Whitelist mime_type — fall back to audio/webm for unknown types so a
+  // misconfigured client cannot tunnel an arbitrary Content-Type upstream.
+  const validatedMimeType = ALLOWED_TRANSCRIBE_MIME_TYPES.has(body.mime_type)
+    ? body.mime_type
+    : "audio/webm";
+
+  // 4. Forward to Deepgram with raw decoded bytes.
   const dgAbort = new AbortController();
   const dgTimeout = setTimeout(() => dgAbort.abort(), 30_000);
   let dgResponse: Response;
@@ -567,9 +608,9 @@ app.post("/api/audio/transcribe", requireAuth, async (c) => {
         method: "POST",
         headers: {
           "Authorization": `Token ${c.env.DEEPGRAM_KEY}`,
-          "Content-Type": contentType,
+          "Content-Type": validatedMimeType,
         },
-        body: audioData,
+        body: audioBytes,
         signal: dgAbort.signal,
       }
     );
