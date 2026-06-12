@@ -34,45 +34,52 @@ public struct LibraryRootView: View {
     /// tests continue to render the same toolbar.
     public let onShowSettings: (() -> Void)?
 
+    /// Phase 18 Plan 18-01 — when non-nil, the host app owns the outer
+    /// `NavigationStack(path:)` and this view renders without wrapping its
+    /// content in another stack. Required for the reader push migration
+    /// (F-P0-01) — nested stacks crash iPad split-view.
+    ///
+    /// Legacy init (path == nil) keeps the previous behavior so existing
+    /// previews and any non-app callers keep compiling.
+    private let externalPath: Binding<NavigationPath>?
+
     @State private var showDocumentPicker = false
     @State private var coverURLs: [BookID: URL] = [:]
 
+    /// Legacy initializer — wraps content in a self-owned NavigationStack.
+    /// Kept for previews + future callers that want the simple shape.
     public init(importCoordinator: ImportCoordinator,
                 onOpenBook: @escaping (Book) -> Void,
                 onShowSettings: (() -> Void)? = nil) {
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
+        self.externalPath = nil
+    }
+
+    /// Phase 18 Plan 18-01 — host-owned NavigationStack initializer. The
+    /// rishi app target uses this so the reader can be pushed onto the
+    /// SAME stack and the system back chevron / edge-swipe always work.
+    public init(path: Binding<NavigationPath>,
+                importCoordinator: ImportCoordinator,
+                onOpenBook: @escaping (Book) -> Void,
+                onShowSettings: (() -> Void)? = nil) {
+        self.importCoordinator = importCoordinator
+        self.onOpenBook = onOpenBook
+        self.onShowSettings = onShowSettings
+        self.externalPath = path
     }
 
     public var body: some View {
         @Bindable var vm = viewModel
-        return NavigationStack {
-            LibraryView(
-                books: vm.searchText.isEmpty ? vm.books : vm.filteredBooks,
-                readingNow: vm.readingNow,
-                positionLookup: { vm.position(for: $0) },
-                coverURL: { coverURLs[$0.id] },
-                onOpen: onOpenBook,
-                onDelete: { book in Task { await vm.delete(book) } }
-            )
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showDocumentPicker = true
-                    } label: {
-                        Label("Import", systemImage: "plus")
-                    }
-                    .keyboardShortcut("o", modifiers: .command)
-                }
-                if let onShowSettings {
-                    ToolbarItem(placement: .secondaryAction) {
-                        Button {
-                            onShowSettings()
-                        } label: {
-                            Label("Settings", systemImage: "gearshape")
-                        }
-                    }
+        return Group {
+            if externalPath != nil {
+                // Host owns the NavigationStack — render bare content so the
+                // outer stack provides the chrome (chevron, edge-swipe, etc).
+                libraryContent(vm: vm)
+            } else {
+                NavigationStack {
+                    libraryContent(vm: vm)
                 }
             }
         }
@@ -114,6 +121,37 @@ public struct LibraryRootView: View {
             // see the cursor in the field and start typing. Plan 12-04 may
             // upgrade this to `@FocusState` once the a11y audit lands.
             vm.searchText = ""
+        }
+    }
+
+    @ViewBuilder
+    private func libraryContent(vm: LibraryViewModel) -> some View {
+        LibraryView(
+            books: vm.searchText.isEmpty ? vm.books : vm.filteredBooks,
+            readingNow: vm.readingNow,
+            positionLookup: { vm.position(for: $0) },
+            coverURL: { coverURLs[$0.id] },
+            onOpen: onOpenBook,
+            onDelete: { book in Task { await vm.delete(book) } }
+        )
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showDocumentPicker = true
+                } label: {
+                    Label("Import", systemImage: "plus")
+                }
+                .keyboardShortcut("o", modifiers: .command)
+            }
+            if let onShowSettings {
+                ToolbarItem(placement: .secondaryAction) {
+                    Button {
+                        onShowSettings()
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                }
+            }
         }
     }
 

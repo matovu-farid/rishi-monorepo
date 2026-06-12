@@ -69,8 +69,15 @@ struct RootView: View {
     @State private var currentUser: User? = nil
     @State private var bootstrapped = false
 
-    /// Non-nil while the reader (or EPUB placeholder) is presented.
-    @State private var openTarget: OpenTarget?
+    /// Phase 18 Plan 18-01 (F-P0-01) — per-tab navigation path. The reader
+    /// pushes onto this path so the system back chevron + edge-swipe-from-
+    /// left are always available. Replaces the prior `.fullScreenCover
+    /// (item: $openTarget)` modal that stripped both.
+    ///
+    /// Persisted through `@SceneStorage` via
+    /// `NavigationPath.CodableRepresentation` so a force-quit + relaunch
+    /// reopens the same reader pushed on top of the library.
+    @State private var libraryPath: NavigationPath = NavigationPath()
 
     /// Holds the active reader → sync bridge for the lifetime of the open
     /// reader sheet. The bridge polls the VM and forwards position changes
@@ -277,7 +284,10 @@ struct RootView: View {
             case .openBook(let bookId):
                 Task {
                     if let book = try? await deps.bookStore.book(bookId) {
-                        openTarget = openTarget(for: book)
+                        selectedTab = .library
+                        var p = NavigationPath()
+                        p.append(ReaderRoute.route(for: book))
+                        libraryPath = p
                     }
                 }
 
@@ -321,42 +331,61 @@ struct RootView: View {
         // re-encode the whole struct on each delta so the storage cell
         // always holds an up-to-date snapshot.
         .onChange(of: selectedTab) { _, _ in persistSceneState() }
-        .onChange(of: openTarget)  { _, _ in persistSceneState() }
+        .onChange(of: libraryPath) { _, _ in persistSceneState() }
     }
 
     // MARK: - Scene restoration (Phase 12 Plan 12-02)
 
-    /// Reads the persisted scene snapshot back into live UI state:
-    ///   - selectedTab → drives the sidebar / tab selection
-    ///   - openBookId  → resolved from the bare-UUID cell first, falling
-    ///                    back to the JSON snapshot. Looked up via
-    ///                    `deps.bookStore.book(_:)`; if the book still
-    ///                    exists, `openTarget` is restored so the reader
-    ///                    cover re-presents on launch.
-    /// Missing book id, deleted book, or any decode failure leaves the
-    /// library tab visible and no reader open.
+    /// Reads the persisted scene snapshot back into live UI state.
+    ///
+    /// Phase 18 Plan 18-01 — three-step decode chain for forward + backward
+    /// compat across the F-P0-01 migration:
+    ///   1. Preferred: full NavigationPath round-trip via
+    ///      `NavigationPath.CodableRepresentation` (F-P0-05 step 2, native).
+    ///   2. Legacy A: JSON-encoded `ReaderRoute` (intermediate shape used
+    ///      mid-migration if a build with step-1 hadn't shipped yet).
+    ///   3. Legacy B: bare `UUID.uuidString` from the v0 cell — looked up
+    ///      via `deps.bookStore.book(_:)` to recover the format type and
+    ///      promoted to a path entry.
+    ///
+    /// Missing / deleted book or any decode failure leaves the library
+    /// tab visible with an empty path.
     @MainActor
     private func restoreSceneState() async {
         let state = RishiSceneState.decodeFromStorage(selectedTabRaw)
         selectedTab = state.selectedTab
-        // Prefer the dedicated bookId cell; fall back to the snapshot.
-        let bookId: BookID? = UUID(uuidString: openBookIdRaw) ?? state.openBookId
-        guard let bookId, let deps = deps else { return }
-        // Match the actual BookStore protocol: `book(_:) async throws -> Book?`
-        if let book = try? await deps.bookStore.book(bookId) {
-            openTarget = openTarget(for: book)
+        // Preferred — full NavigationPath via CodableRepresentation.
+        let restoredPath = NavigationPath.decodeFromStorage(openBookIdRaw)
+        if !restoredPath.isEmpty {
+            libraryPath = restoredPath
+            return
+        }
+        // Legacy A — JSON-encoded ReaderRoute (intermediate shape).
+        if let route = ReaderRoute.decodeFromStorage(openBookIdRaw) {
+            var p = NavigationPath()
+            p.append(route)
+            libraryPath = p
+            return
+        }
+        // Legacy B — bare UUID.uuidString from the v0 cell.
+        if let legacyId = UUID(uuidString: openBookIdRaw),
+           let deps = deps,
+           let book = try? await deps.bookStore.book(legacyId) {
+            var p = NavigationPath()
+            p.append(ReaderRoute.route(for: book))
+            libraryPath = p
         }
     }
 
-    /// Re-encodes `(selectedTab, openTarget?.bookId)` and writes both
-    /// `@SceneStorage` cells. Called from `.onChange` of either input so
-    /// the cells always reflect the latest UI state.
+    /// Re-encodes the live UI state into both `@SceneStorage` cells.
+    /// `openBookIdRaw` now holds a `NavigationPath.CodableRepresentation`
+    /// JSON String — the cell key is preserved across the migration so
+    /// existing TestFlight installs upgrade in-place.
     @MainActor
     private func persistSceneState() {
-        let bookId: BookID? = openTarget?.id
-        let state = RishiSceneState(selectedTab: selectedTab, openBookId: bookId)
+        let state = RishiSceneState(selectedTab: selectedTab, openBookId: nil)
         selectedTabRaw = state.encodeForStorage()
-        openBookIdRaw  = bookId?.uuidString ?? ""
+        openBookIdRaw  = NavigationPath.encodeForStorage(libraryPath)
     }
 
     // MARK: - Mac command intent dispatch (Phase 12 Plan 12-01)
@@ -436,26 +465,30 @@ struct RootView: View {
 
     @ViewBuilder
     private func libraryTab(deps: AppDependencies, user: User) -> some View {
-        LibraryRootView(
-            importCoordinator: deps.importCoordinator,
-            onOpenBook: { book in openTarget = openTarget(for: book) },
-            onShowSettings: { showSettings = true }
-        )
-        .task(id: user.id) {
-            deps.cachedUserId = user.id
-            _ = await deps.sampleBookInstaller.installIfNeeded(ownerId: user.id)
-            _ = await deps.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
-            await libraryViewModel.refresh()
+        // Phase 18 Plan 18-01 (F-P0-01) — host-owned NavigationStack.
+        // LibraryRootView's internal NavigationStack is bypassed via the
+        // host-path initializer so the reader can push onto THIS stack and
+        // the system back chevron + edge-swipe-from-left are always
+        // available. Nested NavigationStacks crash iPad split-view.
+        NavigationStack(path: $libraryPath) {
+            LibraryRootView(
+                path: $libraryPath,
+                importCoordinator: deps.importCoordinator,
+                onOpenBook: { book in
+                    libraryPath.append(ReaderRoute.route(for: book))
+                },
+                onShowSettings: { showSettings = true }
+            )
+            .navigationDestination(for: ReaderRoute.self) { route in
+                destinationView(for: route, deps: deps, userId: user.id)
+            }
+            .task(id: user.id) {
+                deps.cachedUserId = user.id
+                _ = await deps.sampleBookInstaller.installIfNeeded(ownerId: user.id)
+                _ = await deps.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
+                await libraryViewModel.refresh()
+            }
         }
-        #if canImport(UIKit)
-        .fullScreenCover(item: $openTarget) { target in
-            destinationView(for: target, deps: deps, userId: user.id)
-        }
-        #else
-        .sheet(item: $openTarget) { target in
-            destinationView(for: target, deps: deps, userId: user.id)
-        }
-        #endif
         .sheet(isPresented: $showSettings) {
             SettingsSheet(
                 dependencies: deps,
@@ -527,27 +560,43 @@ struct RootView: View {
 
     // MARK: - Navigation destinations
 
-    private func openTarget(for book: Book) -> OpenTarget {
-        switch book.formatType {
-        case .pdf:            return .pdf(book)
-        case .epub:           return .epub(book)
-        case .mobi, .azw3:    return .unsupportedFormat(book)
+    /// Phase 18 Plan 18-01 — `NavigationStack`'s `.navigationDestination`
+    /// hands us a `ReaderRoute` (BookID + format). We resolve the full
+    /// `Book` lazily inside `NavigationLazyBook` so the push payload stays
+    /// `Codable` for scene restoration.
+    @ViewBuilder
+    private func destinationView(for route: ReaderRoute,
+                                 deps: AppDependencies,
+                                 userId: UserID) -> some View {
+        switch route {
+        case .pdf(let bookId):
+            NavigationLazyBook(bookId: bookId, deps: deps) { book in
+                pdfReaderDestination(book: book, deps: deps, userId: userId)
+            }
+        case .epub(let bookId):
+            NavigationLazyBook(bookId: bookId, deps: deps) { book in
+                epubReaderDestination(book: book, deps: deps, userId: userId)
+            }
+        case .unsupportedFormat(let bookId):
+            NavigationLazyBook(bookId: bookId, deps: deps) { book in
+                EpubPlaceholderView(book: book) {
+                    if !libraryPath.isEmpty { libraryPath.removeLast() }
+                }
+            }
         }
     }
 
     @ViewBuilder
-    private func destinationView(for target: OpenTarget,
-                                 deps: AppDependencies,
-                                 userId: UserID) -> some View {
-        switch target {
-        case .pdf(let book):
-            let pdfVM = PDFReaderViewModel(
-                book: book,
-                userId: userId,
-                documentURL: pdfFileURL(for: book),
-                positionStore: deps.positionStore
-            )
-            PDFReaderScreen(
+    private func pdfReaderDestination(book: Book,
+                                      deps: AppDependencies,
+                                      userId: UserID) -> some View {
+        let pdfVM = PDFReaderViewModel(
+            book: book,
+            userId: userId,
+            documentURL: pdfFileURL(for: book),
+            positionStore: deps.positionStore
+        )
+        PDFReaderScreen(
                 viewModel: pdfVM,
                 readerSettingsStore: deps.readerSettingsStore,
                 highlightStore: deps.highlightStore,
@@ -611,79 +660,79 @@ struct RootView: View {
                 )
                 .presentationDetents([.medium])
             }
-        case .epub(let book):
-            let epubVM = EPUBReaderViewModel(
-                book: book,
-                userId: userId,
-                documentURL: pdfFileURL(for: book),
-                positionStore: deps.positionStore
-            )
-            EPUBReaderScreen(
-                viewModel: epubVM,
-                readerSettingsStore: deps.readerSettingsStore,
-                highlightStore: deps.highlightStore,
-                onReadAloud: FeatureFlags.readAloud ? {
-                    Task {
-                        // BILL-04 — gate Pro features on entitlement.
-                        let level = await deps.entitlementService.snapshot()
-                        guard level == .pro else {
-                            paywallFeature = PaywallFeature(name: "Read Aloud")
-                            return
-                        }
-                        await startEPUBReadAloud(vm: epubVM, deps: deps, userId: userId)
+    }
+
+    @ViewBuilder
+    private func epubReaderDestination(book: Book,
+                                       deps: AppDependencies,
+                                       userId: UserID) -> some View {
+        let epubVM = EPUBReaderViewModel(
+            book: book,
+            userId: userId,
+            documentURL: pdfFileURL(for: book),
+            positionStore: deps.positionStore
+        )
+        EPUBReaderScreen(
+            viewModel: epubVM,
+            readerSettingsStore: deps.readerSettingsStore,
+            highlightStore: deps.highlightStore,
+            onReadAloud: FeatureFlags.readAloud ? {
+                Task {
+                    // BILL-04 — gate Pro features on entitlement.
+                    let level = await deps.entitlementService.snapshot()
+                    guard level == .pro else {
+                        paywallFeature = PaywallFeature(name: "Read Aloud")
+                        return
                     }
-                } : nil,
-                chatPresenter: deps.chatPresenter
-            )
-            .task {
-                epubSyncBinding = EPUBReaderPositionSyncBinding(
-                    viewModel: epubVM,
-                    syncEngine: deps.syncEngine
-                )
-            }
-            .onDisappear {
-                epubSyncBinding = nil
-                Task { await stopReadAloud() }
-            }
-            .sheet(isPresented: $showTTSControls) {
-                if let bridge = readerTTSBridge {
-                    ReadAloudControlsView(
-                        state: deps.ttsState,
-                        onPlayPause: {
-                            Task {
-                                if deps.ttsState.status == .playing {
-                                    await bridge.pause()
-                                } else {
-                                    await bridge.resume()
-                                }
-                            }
-                        },
-                        onStop: {
-                            Task { await stopReadAloud() }
-                        },
-                        onOpenPicker: {
-                            showTTSPicker = true
-                        }
-                    )
-                    .presentationDetents([.height(180), .medium])
+                    await startEPUBReadAloud(vm: epubVM, deps: deps, userId: userId)
                 }
-            }
-            .sheet(isPresented: $showTTSPicker) {
-                VoiceAndSpeedPicker(
-                    initial: ttsPickerInitial,
-                    userId: userId,
-                    store: deps.ttsSettingsStore,
-                    onDismiss: { settings in
-                        ttsPickerInitial = settings
-                        showTTSPicker = false
+            } : nil,
+            chatPresenter: deps.chatPresenter
+        )
+        .task {
+            epubSyncBinding = EPUBReaderPositionSyncBinding(
+                viewModel: epubVM,
+                syncEngine: deps.syncEngine
+            )
+        }
+        .onDisappear {
+            epubSyncBinding = nil
+            Task { await stopReadAloud() }
+        }
+        .sheet(isPresented: $showTTSControls) {
+            if let bridge = readerTTSBridge {
+                ReadAloudControlsView(
+                    state: deps.ttsState,
+                    onPlayPause: {
+                        Task {
+                            if deps.ttsState.status == .playing {
+                                await bridge.pause()
+                            } else {
+                                await bridge.resume()
+                            }
+                        }
+                    },
+                    onStop: {
+                        Task { await stopReadAloud() }
+                    },
+                    onOpenPicker: {
+                        showTTSPicker = true
                     }
                 )
-                .presentationDetents([.medium])
+                .presentationDetents([.height(180), .medium])
             }
-        case .unsupportedFormat(let book):
-            EpubPlaceholderView(book: book) {
-                openTarget = nil
-            }
+        }
+        .sheet(isPresented: $showTTSPicker) {
+            VoiceAndSpeedPicker(
+                initial: ttsPickerInitial,
+                userId: userId,
+                store: deps.ttsSettingsStore,
+                onDismiss: { settings in
+                    ttsPickerInitial = settings
+                    showTTSPicker = false
+                }
+            )
+            .presentationDetents([.medium])
         }
     }
 
@@ -802,17 +851,29 @@ private struct PaywallFeature: Identifiable, Equatable {
     var id: String { name }
 }
 
-/// Hashable + Identifiable nav target so `fullScreenCover(item:)` can
-/// pick the correct destination based on book format.
-private enum OpenTarget: Hashable, Identifiable {
-    case pdf(Book)
-    case epub(Book)
-    case unsupportedFormat(Book)
+/// Phase 18 Plan 18-01 — async-resolve a `Book` from a `BookID` for use
+/// inside a `NavigationStack` destination. The path itself only carries
+/// `ReaderRoute` (Codable + BookID) so scene restoration stays primitive.
+/// This helper performs the `deps.bookStore.book(_:)` lookup on appear,
+/// rendering a `ProgressView` until the book resolves.
+private struct NavigationLazyBook<Content: View>: View {
+    let bookId: BookID
+    let deps: AppDependencies
+    @ViewBuilder let content: (Book) -> Content
 
-    var id: BookID {
-        switch self {
-        case .pdf(let book), .epub(let book), .unsupportedFormat(let book):
-            return book.id
+    @State private var book: Book?
+
+    var body: some View {
+        Group {
+            if let book {
+                content(book)
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: bookId) {
+            book = try? await deps.bookStore.book(bookId)
         }
     }
 }
