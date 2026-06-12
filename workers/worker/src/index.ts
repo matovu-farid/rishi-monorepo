@@ -17,6 +17,8 @@ import { uploadRoutes } from "./routes/upload";
 import { desktopRoutes } from "./routes/desktop";
 import { mobileRoutes } from "./routes/mobile";
 import { devicesRoutes } from "./routes/devices";
+import { conversationsRoutes } from "./routes/conversations";
+import { messagesRoutes } from "./routes/messages";
 import { testAuthRoutes } from "./routes/test-auth";
 import { createAuth } from "./auth";
 import { ensureCreditAndSubscription } from "./billing/backfill";
@@ -205,6 +207,10 @@ export async function requireAuth(c: any, next: () => Promise<void>) {
 // ─── Sync routes ─────────────────────────────────────────────────────────────
 app.route("/api/sync", syncRoutes);
 app.route("/api/sync", uploadRoutes);
+// Phase 16 — chat sync (conversations + messages). Both behind requireAuth
+// (declared inside each router). Parallel to the existing /api/sync mounts.
+app.route("/api/sync/conversations", conversationsRoutes);
+app.route("/api/sync/messages", messagesRoutes);
 app.route("/desktop", desktopRoutes);
 app.route("/mobile", mobileRoutes);
 // Quick-VPX VPX-02 — APNs device registration for silent-push sync wake.
