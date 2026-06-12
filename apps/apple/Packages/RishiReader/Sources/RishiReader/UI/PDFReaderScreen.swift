@@ -279,7 +279,7 @@ public struct PDFReaderScreen: View {
         // distinct from `pageIndex`, which tracks the PDF page) and
         // boundary-clamp sites bump `lastBoundaryHitTick`. SwiftUI
         // gates haptics on Reduce Motion automatically — no manual
-        // `.prepare()` priming, no `UIImpactFeedbackGenerator`.
+        // `.prepare()` priming, no UIKit feedback-generator dance.
         .sensoryFeedback(.impact(weight: .light), trigger: viewModel.currentPageIndex)
         .sensoryFeedback(.warning, trigger: viewModel.lastBoundaryHitTick)
         #if !os(macOS)

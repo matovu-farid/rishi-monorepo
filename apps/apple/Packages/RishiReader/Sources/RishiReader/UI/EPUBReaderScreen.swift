@@ -255,7 +255,7 @@ public struct EPUBReaderScreen: View {
         // pages; Readium owns real position); boundary-clamp sites
         // bump `lastBoundaryHitTick`. SwiftUI gates haptics on Reduce
         // Motion automatically — no manual `.prepare()` priming, no
-        // `UIImpactFeedbackGenerator`.
+        // UIKit feedback-generator dance.
         .sensoryFeedback(.impact(weight: .light), trigger: viewModel.currentPageIndex)
         .sensoryFeedback(.warning, trigger: viewModel.lastBoundaryHitTick)
         #if !os(macOS)

@@ -33,6 +33,39 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
     public var theme: ReaderTheme = .default
     public var typography: ReaderTypography = .default
 
+    // MARK: - Phase 18 Plan 18-02 — F-P1-01 SwiftUI native haptics
+
+    /// Monotonically-increasing trigger value observed by the reader
+    /// screen's `.sensoryFeedback(.impact(weight: .light), trigger:)`
+    /// modifier. SwiftUI fires the haptic whenever this value changes;
+    /// callers should invoke ``advancePage()`` on every committed page
+    /// turn rather than mutating the field directly. EPUB has no
+    /// integer page model — Readium owns real position — so this is a
+    /// synthetic counter that exists purely to drive the trigger
+    /// binding. `&+` overflow wrapping keeps long sessions safe.
+    public private(set) var currentPageIndex: Int = 0
+
+    /// Monotonically-increasing trigger value observed by the reader
+    /// screen's `.sensoryFeedback(.warning, trigger:)` modifier.
+    /// Incremented whenever the navigator reports a boundary hit
+    /// (before-first or after-last). Same overflow-wrapping semantics
+    /// as ``currentPageIndex``.
+    public private(set) var lastBoundaryHitTick: Int = 0
+
+    /// Bumps ``currentPageIndex`` by 1. SwiftUI's
+    /// `.sensoryFeedback(_:trigger:)` observes the change and fires a
+    /// light impact haptic on the reader screen.
+    public func advancePage() {
+        currentPageIndex &+= 1
+    }
+
+    /// Bumps ``lastBoundaryHitTick`` by 1. SwiftUI's
+    /// `.sensoryFeedback(_:trigger:)` observes the change and fires a
+    /// warning notification haptic on the reader screen.
+    public func hitBoundary() {
+        lastBoundaryHitTick &+= 1
+    }
+
     private let positionStore: any PositionStore
     private let loader: EPUBPublicationLoader
     private let debounceSeconds: Double

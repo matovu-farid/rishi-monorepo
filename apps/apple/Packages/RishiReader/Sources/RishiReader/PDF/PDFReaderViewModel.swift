@@ -46,6 +46,38 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     public private(set) var outline: [PDFOutlineNode] = []
     public var theme: ReaderTheme = .default
 
+    // MARK: - Phase 18 Plan 18-02 — F-P1-01 SwiftUI native haptics
+
+    /// Monotonically-increasing trigger value observed by the reader
+    /// screen's `.sensoryFeedback(.impact(weight: .light), trigger:)`
+    /// modifier. SwiftUI fires the haptic whenever this value changes;
+    /// callers should invoke ``advancePage()`` on every committed page
+    /// turn rather than mutating the field directly. Use
+    /// `&+` overflow wrapping so a long reading session can never
+    /// trap on `Int.max` — wrap-around is still a change.
+    public private(set) var currentPageIndex: Int = 0
+
+    /// Monotonically-increasing trigger value observed by the reader
+    /// screen's `.sensoryFeedback(.warning, trigger:)` modifier.
+    /// Incremented whenever the user hits a boundary (page-before-first
+    /// or page-after-last). Same overflow-wrapping semantics as
+    /// ``currentPageIndex``.
+    public private(set) var lastBoundaryHitTick: Int = 0
+
+    /// Bumps ``currentPageIndex`` by 1. SwiftUI's
+    /// `.sensoryFeedback(_:trigger:)` observes the change and fires a
+    /// light impact haptic on the reader screen.
+    public func advancePage() {
+        currentPageIndex &+= 1
+    }
+
+    /// Bumps ``lastBoundaryHitTick`` by 1. SwiftUI's
+    /// `.sensoryFeedback(_:trigger:)` observes the change and fires a
+    /// warning notification haptic on the reader screen.
+    public func hitBoundary() {
+        lastBoundaryHitTick &+= 1
+    }
+
     internal let userId: UserID
 
     private let positionStore: any PositionStore
