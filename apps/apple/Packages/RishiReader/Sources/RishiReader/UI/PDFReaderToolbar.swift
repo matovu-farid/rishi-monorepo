@@ -1,14 +1,15 @@
 import SwiftUI
 import RishiUIKit
 
-/// Top chrome row for the PDF reader: close button + book title +
-/// optional TOC + theme actions.
+/// Top chrome row for the PDF reader: book title + optional TOC + theme
+/// actions. The system NavigationStack chevron (top-left) provides
+/// dismissal — there is no in-app close button. See F-P0-02 in
+/// `apps/apple/.planning/phases/18-native-swiftui-audit-and-migration-sweep-for-the-ios-app/18-RESEARCH.md`.
 ///
 /// `onTOC` and `onTheme` are optional — when nil, the buttons are hidden so
 /// older call sites (tests, previews) keep working without sheet plumbing.
 public struct PDFReaderToolbar: View {
     public let title: String
-    public let onClose: () -> Void
     public let onTOC: (() -> Void)?
     public let onTheme: (() -> Void)?
     public let onReadAloud: (() -> Void)?
@@ -20,14 +21,12 @@ public struct PDFReaderToolbar: View {
 
     public init(
         title: String,
-        onClose: @escaping () -> Void,
         onTOC: (() -> Void)? = nil,
         onTheme: (() -> Void)? = nil,
         onReadAloud: (() -> Void)? = nil,
         onChat: (() -> Void)? = nil
     ) {
         self.title = title
-        self.onClose = onClose
         self.onTOC = onTOC
         self.onTheme = onTheme
         self.onReadAloud = onReadAloud
@@ -36,15 +35,6 @@ public struct PDFReaderToolbar: View {
 
     public var body: some View {
         HStack(spacing: RishiSpacing.m) {
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(RishiTypography.bodyEmphasized)
-                    .foregroundStyle(RishiColor.textPrimary)
-                    .frame(width: 44, height: 44)
-            }
-            .accessibilityIdentifier("reader.toolbar.close")
-            .accessibilityLabel(A11yLabel.readerClose)
-
             Text(title)
                 .font(RishiTypography.titleM)
                 .foregroundStyle(RishiColor.textPrimary)
@@ -104,8 +94,7 @@ public struct PDFReaderToolbar: View {
 #Preview("Title only") {
     VStack {
         PDFReaderToolbar(
-            title: "Alice's Adventures in Wonderland",
-            onClose: {}
+            title: "Alice's Adventures in Wonderland"
         )
         Spacer()
     }
@@ -116,7 +105,6 @@ public struct PDFReaderToolbar: View {
     VStack {
         PDFReaderToolbar(
             title: "The Pragmatic Programmer",
-            onClose: {},
             onTOC: {},
             onTheme: {}
         )
@@ -129,7 +117,6 @@ public struct PDFReaderToolbar: View {
     VStack {
         PDFReaderToolbar(
             title: "Designing Data-Intensive Applications",
-            onClose: {},
             onTOC: {},
             onTheme: {},
             onReadAloud: {},
@@ -144,7 +131,6 @@ public struct PDFReaderToolbar: View {
     VStack {
         PDFReaderToolbar(
             title: "A Very Long Book Title That Should Be Truncated With Ellipsis At The End",
-            onClose: {},
             onTOC: {},
             onTheme: {},
             onReadAloud: {},

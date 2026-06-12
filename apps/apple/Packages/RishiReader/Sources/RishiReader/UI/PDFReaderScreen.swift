@@ -53,26 +53,25 @@ public struct PDFReaderScreen: View {
     /// presenter is the seam (`ReaderChatPresenter` protocol in this
     /// package, satisfied by `ChatPresenterImpl` at the app layer).
     private let chatPresenter: (any ReaderChatPresenter)?
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Chrome visibility is owned by a small `@Observable` controller so
     /// the tap-to-toggle, auto-hide, and VoiceOver behaviors live in a
     /// single testable seam (see `ReaderChromeController`).
     @State private var chrome: ReaderChromeController = {
-        // Start with chrome visible so the user always has a way out (the
-        // top-left `xmark` lives inside the toolbar). The auto-hide timer
-        // takes care of dismissing it after 4s of idle. Without this, if
-        // the tap-toggle gesture ever fails to land (e.g. swallowed by the
-        // underlying PDFView gesture stack) the user is trapped.
+        // Phase 18 Plan 18-01 (F-P0-03 revert): chrome starts hidden —
+        // immersive full-bleed reading. The system back chevron lives in
+        // the NavigationStack and is always reachable when chrome is
+        // shown. The iOS edge-swipe-from-left always pops the reader,
+        // regardless of chrome state, so the user can never be trapped.
         #if canImport(UIKit)
         return ReaderChromeController(
             accessibility: UIKitAccessibilityProvider(),
-            initiallyVisible: true
+            initiallyVisible: false
         )
         #else
         return ReaderChromeController(
             accessibility: PreviewAccessibility(),
-            initiallyVisible: true
+            initiallyVisible: false
         )
         #endif
     }()
@@ -249,12 +248,6 @@ public struct PDFReaderScreen: View {
                 VStack {
                     PDFReaderToolbar(
                         title: viewModel.book.title,
-                        onClose: {
-                            Task {
-                                await viewModel.flush()
-                                dismiss()
-                            }
-                        },
                         onTOC: { chrome.userActivity(); showTOC = true },
                         onTheme: { chrome.userActivity(); showThemePicker = true },
                         onReadAloud: onReadAloud.map { action in
@@ -339,9 +332,22 @@ public struct PDFReaderScreen: View {
         }
         #endif
         #if !os(macOS)
-        .navigationBarBackButtonHidden(true)
-        .toolbar(.hidden, for: .navigationBar)
+        // Phase 18 Plan 18-01 (F-P0-04) — gate the nav bar on chrome
+        // visibility. When chrome is up, the system back chevron is
+        // rendered at top-left (labeled "Library"); when chrome is
+        // hidden, the immersive bare-page state is preserved. The iOS
+        // edge-swipe-from-left works in BOTH states because the host
+        // NavigationStack owns dismissal.
+        .toolbar(navBarVisibility(forChromeVisible: chrome.isVisible), for: .navigationBar)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
         #endif
+        // Flush position-store writes when this view leaves the screen,
+        // regardless of whether the user used the system chevron or the
+        // edge-swipe pop gesture.
+        .onDisappear {
+            Task { await viewModel.flush() }
+        }
     }
 
     @ViewBuilder

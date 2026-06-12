@@ -1,8 +1,23 @@
 import Foundation
 import Observation
+import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #endif
+
+/// Phase 18 Plan 18-01 (F-P0-04) — pure mapping from chrome visibility
+/// to the SwiftUI `Visibility` value passed into `.toolbar(_:for: .navigationBar)`.
+///
+/// Lives at the top of this file so EPUBReaderScreen / PDFReaderScreen can
+/// import the same symbol they already pull in for `ReaderChromeController`.
+/// Kept as a free function (not a method on the controller) so it can be
+/// invoked from a SwiftUI modifier-builder closure without dragging the
+/// `@Observable` lifetime through the toolbar modifier — and tested without
+/// constructing a controller.
+@MainActor
+public func navBarVisibility(forChromeVisible isVisible: Bool) -> Visibility {
+    isVisible ? .visible : .hidden
+}
 
 /// Abstracts the OS-level accessibility flags the reader needs to read
 /// (currently only "is VoiceOver running"). Lets tests inject a fake

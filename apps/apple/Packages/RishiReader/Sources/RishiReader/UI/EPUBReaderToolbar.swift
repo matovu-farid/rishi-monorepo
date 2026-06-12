@@ -1,8 +1,10 @@
 import SwiftUI
 import RishiUIKit
 
-/// Top chrome row for the EPUB reader: close + book title + Contents +
-/// Typography + Theme buttons.
+/// Top chrome row for the EPUB reader: book title + Contents + Typography
+/// + Theme buttons. The system NavigationStack chevron (top-left) provides
+/// dismissal — there is no in-app close button. See F-P0-02 in
+/// `apps/apple/.planning/phases/18-native-swiftui-audit-and-migration-sweep-for-the-ios-app/18-RESEARCH.md`.
 ///
 /// The TOC / theme / typography buttons fire closures; the screen mounts
 /// the corresponding sheets in 06-06. While the publication is loading
@@ -12,7 +14,6 @@ public struct EPUBReaderToolbar: View {
 
     public let title: String
     public let isPublicationLoaded: Bool
-    public let onClose: () -> Void
     public let onShowTOC: () -> Void
     public let onShowTheme: () -> Void
     public let onShowTypography: () -> Void
@@ -26,7 +27,6 @@ public struct EPUBReaderToolbar: View {
     public init(
         title: String,
         isPublicationLoaded: Bool,
-        onClose: @escaping () -> Void,
         onShowTOC: @escaping () -> Void,
         onShowTheme: @escaping () -> Void,
         onShowTypography: @escaping () -> Void,
@@ -35,7 +35,6 @@ public struct EPUBReaderToolbar: View {
     ) {
         self.title = title
         self.isPublicationLoaded = isPublicationLoaded
-        self.onClose = onClose
         self.onShowTOC = onShowTOC
         self.onShowTheme = onShowTheme
         self.onShowTypography = onShowTypography
@@ -45,13 +44,6 @@ public struct EPUBReaderToolbar: View {
 
     public var body: some View {
         HStack(spacing: RishiSpacing.m) {
-            iconButton(
-                "xmark",
-                label: A11yLabel.readerClose,
-                a11yId: "reader.toolbar.close",
-                action: onClose
-            )
-
             Text(title)
                 .font(RishiTypography.titleM)
                 .foregroundStyle(RishiColor.textPrimary)
@@ -126,7 +118,6 @@ public struct EPUBReaderToolbar: View {
         EPUBReaderToolbar(
             title: "Loading…",
             isPublicationLoaded: false,
-            onClose: {},
             onShowTOC: {},
             onShowTheme: {},
             onShowTypography: {}
@@ -141,7 +132,6 @@ public struct EPUBReaderToolbar: View {
         EPUBReaderToolbar(
             title: "Alice's Adventures in Wonderland",
             isPublicationLoaded: true,
-            onClose: {},
             onShowTOC: {},
             onShowTheme: {},
             onShowTypography: {}
@@ -156,7 +146,6 @@ public struct EPUBReaderToolbar: View {
         EPUBReaderToolbar(
             title: "Pride and Prejudice",
             isPublicationLoaded: true,
-            onClose: {},
             onShowTOC: {},
             onShowTheme: {},
             onShowTypography: {},
@@ -173,7 +162,6 @@ public struct EPUBReaderToolbar: View {
         EPUBReaderToolbar(
             title: "A Very Long Book Title That Should Be Truncated With Ellipsis",
             isPublicationLoaded: true,
-            onClose: {},
             onShowTOC: {},
             onShowTheme: {},
             onShowTypography: {},

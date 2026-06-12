@@ -78,8 +78,9 @@ struct ReaderA11yLabelsTests {
                 s.contains("A11yLabel."),
                 "\(url.lastPathComponent) should source labels from A11yLabel"
             )
-            // Each toolbar surfaces close + TOC + theme at minimum.
-            #expect(s.contains("A11yLabel.readerClose"))
+            // Phase 18 Plan 18-01 (F-P0-02) — the in-app close button
+            // (`A11yLabel.readerClose`) was deleted in favor of the system
+            // NavigationStack back chevron, so it's no longer asserted.
             #expect(s.contains("A11yLabel.readerOpenTOC"))
             #expect(s.contains("A11yLabel.readerOpenTheme"))
         }
@@ -104,8 +105,11 @@ struct ReaderA11yLabelsTests {
         let pdfURL = try Self.readerSources().first { $0.lastPathComponent == "PDFReaderToolbar.swift" }
         try #require(pdfURL != nil)
         let pdf = try String(contentsOf: pdfURL!, encoding: .utf8)
+        // Phase 18 Plan 18-01 (F-P0-02) — the legacy in-app close
+        // identifier was removed when the `xmark` button was deleted in
+        // favor of the system NavigationStack back chevron, so it's no
+        // longer listed below.
         let pdfIds = [
-            "reader.toolbar.close",
             "reader.toolbar.toc",
             "reader.toolbar.theme",
             "reader.toolbar.readAloud",
