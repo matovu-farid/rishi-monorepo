@@ -468,12 +468,27 @@ app.get("/api/realtime/client_secrets", requireAuth, requireActiveSubscription, 
         timeout: 30_000,
       }
     );
+    // OpenAI's POST /v1/realtime/client_secrets returns a richer payload than
+    // we used to consume: `value` is the JWT ephemeral key, `expires_at` is
+    // the JWT TTL, and `id` is the realtime session id. iOS
+    // RishiAPI/Endpoints/RealtimeAPI.swift:31-39 decodes the response as
+    // `{client_secret: String, session_id: String}` — both flat strings.
+    //
+    // Project the OpenAI shape into the iOS contract. If OpenAI ever omits
+    // `id` (defensive — it's present in production today), synthesise a
+    // `local_<uuid>` so the iOS decoder still gets a non-empty string and
+    // logs can distinguish synthesised ids from real OpenAI session ids.
+    // Phase 17-05 (Gap 8 of the 2026-06-12 wire-contract audit).
     const responseSchema = z.object({
       value: z.string(),
       expires_at: z.number(),
+      id: z.string().optional(),
     });
     const parsedResponse = responseSchema.parse(response.data);
-    return c.json({ client_secret: { value: parsedResponse.value } });
+    return c.json({
+      client_secret: parsedResponse.value,
+      session_id: parsedResponse.id ?? `local_${crypto.randomUUID()}`,
+    });
   } catch (error) {
     const axiosErr = error as { response?: { status?: number; data?: unknown }; message?: string }
     const upstreamStatus = axiosErr.response?.status ?? null
