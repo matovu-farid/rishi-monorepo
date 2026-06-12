@@ -1,6 +1,13 @@
 import Foundation
 import Observation
-import ReadiumShared
+// `@preconcurrency` downgrades the Readium `Publication` non-Sendable
+// error to a warning when crossing the `Task.detached(...).value`
+// boundary in `load()`. The detached task is a single-producer
+// single-consumer transfer and the value is only mutated through
+// nonisolated Readium APIs after handoff (parse-then-display), so the
+// downgrade is sound here. Tracked as the documented Readium 3.x
+// Swift 6 concurrency gap — Phase 19 plan 19-09 (F-P0-08 EPUB slice).
+@preconcurrency import ReadiumShared
 import RishiCore
 import RishiLogging
 
@@ -67,7 +74,7 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
     }
 
     private let positionStore: any PositionStore
-    private let loader: EPUBPublicationLoader
+    private let loader: any EPUBPublicationLoading
     private let debounceSeconds: Double
     private var pendingPositionTask: Task<Void, Never>?
 
@@ -76,7 +83,7 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
         userId: UserID,
         documentURL: URL,
         positionStore: any PositionStore,
-        loader: EPUBPublicationLoader = EPUBPublicationLoader(),
+        loader: any EPUBPublicationLoading = EPUBPublicationLoader(),
         debounceSeconds: Double = 1.0
     ) {
         self.book = book
@@ -91,20 +98,50 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
 
     /// Loads the publication and restores the last known locator (if any).
     /// Call once when the view appears.
+    ///
+    /// Phase 19 plan 19-09 (F-P0-08 EPUB slice): the Readium
+    /// `AssetRetriever` + `PublicationOpener` pipeline does a
+    /// multi-second ZIP unpack + parse on large EPUBs. SwiftUI `.task`
+    /// inherits the enclosing view's `@MainActor` isolation, so a bare
+    /// `await loader.open(...)` would resume the continuation on main
+    /// and (worst case) execute parts of the body on main too. We hop
+    /// to a detached `.userInitiated` task so the body and the awaited
+    /// continuation both land off-main. Only the state assignment
+    /// (`publication`, `title`, `latestLocator`) happens after we
+    /// re-enter the caller's isolation.
+    ///
+    /// Note on the navigator factory: `EPUBNavigatorViewController` is
+    /// a UIKit class and is hard-`@MainActor` by Readium's contract.
+    /// We do NOT (and cannot) construct it off-main. Per RESEARCH
+    /// §F-P0-08 the navigator `init` itself is cheap; the multi-second
+    /// work is the publication parse handled here. The navigator is
+    /// constructed in `EPUBReaderScreen` from this `publication` value
+    /// after `load()` completes, on main, where Readium expects it.
     public func load() async {
+        // DETACHED: Readium ZIP unpack + parse are multi-second on large
+        // EPUBs; offload to `.userInitiated` so the body and the awaited
+        // continuation both land off-main. The result is consumed by a
+        // single awaiter (this Task), so the non-Sendable `Publication`
+        // crosses the boundary via the detached-task `sending` result.
+        let pub: Publication?
         do {
-            let pub = try await loader.open(fileURL: documentURL)
-            self.publication = pub
-            self.title = pub.metadata.title ?? book.title
-
-            // Restore last position.
-            if let last = try? await positionStore.position(for: book.id),
-               let wrapper = try? EPUBPositionLocator.decode(jsonString: last.locator),
-               let restored = wrapper.toReadiumLocator() {
-                self.latestLocator = restored
-            }
+            pub = try await Task.detached(priority: .userInitiated) { [loader, documentURL] in
+                try await loader.open(fileURL: documentURL)
+            }.value
         } catch {
             Log.reader.error("EPUBReaderViewModel.load failed for \(self.documentURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return
+        }
+
+        guard let pub else { return }
+        self.publication = pub
+        self.title = pub.metadata.title ?? book.title
+
+        // Restore last position.
+        if let last = try? await positionStore.position(for: book.id),
+           let wrapper = try? EPUBPositionLocator.decode(jsonString: last.locator),
+           let restored = wrapper.toReadiumLocator() {
+            self.latestLocator = restored
         }
     }
 

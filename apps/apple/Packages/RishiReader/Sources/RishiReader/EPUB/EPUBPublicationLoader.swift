@@ -1,5 +1,11 @@
 import Foundation
-import ReadiumShared
+// `@preconcurrency` keeps the Readium 3.x non-Sendable types
+// (Publication, Asset) from breaking the `EPUBPublicationLoading`
+// protocol surface under Swift 6 strict-concurrency. The loader is
+// invoked exactly once per book open and the returned `Publication`
+// is consumed by a single awaiter; see EPUBReaderViewModel.load() for
+// the full transfer-region reasoning.
+@preconcurrency import ReadiumShared
 import ReadiumStreamer
 import RishiLogging
 
@@ -8,6 +14,18 @@ public enum EPUBPublicationLoaderError: Error, Equatable {
     case invalidFileURL(URL)
     case assetRetrievalFailed(String)
     case publicationOpenFailed(String)
+}
+
+/// Protocol seam for the EPUB publication loader. Production code uses
+/// ``EPUBPublicationLoader``; tests inject a probe to verify the open
+/// body runs off the main thread (Phase 19 plan 19-09 — F-P0-08 EPUB
+/// slice).
+///
+/// `Sendable` so callers (e.g. ``EPUBReaderViewModel``) can hold the
+/// loader across `Task.detached` boundaries without strict-concurrency
+/// warnings.
+public protocol EPUBPublicationLoading: Sendable {
+    func open(fileURL: URL) async throws -> Publication
 }
 
 /// Resolves a Book's on-disk file URL → Readium `Publication` via the
@@ -24,12 +42,21 @@ public enum EPUBPublicationLoaderError: Error, Equatable {
 /// method to a nonisolated caller. The pipeline is built fresh per call,
 /// so the loader holds no mutable cross-call state and the Sendable
 /// override is sound.
-public final class EPUBPublicationLoader: @unchecked Sendable {
+public final class EPUBPublicationLoader: EPUBPublicationLoading, @unchecked Sendable {
 
     public init() {}
 
     /// Opens the EPUB at `fileURL`. Throws on any failure in the
     /// retrieve → open pipeline.
+    ///
+    /// Per Phase 19 plan 19-09 (F-P0-08 EPUB slice): this body runs
+    /// off-main when called from ``EPUBReaderViewModel/load()`` because
+    /// the view-model wraps the invocation in `Task.detached(priority:
+    /// .userInitiated)`. The Readium `AssetRetriever.retrieve` and
+    /// `PublicationOpener.open` calls are themselves `async` and
+    /// nonisolated, so the awaited continuation also resumes off-main —
+    /// the multi-second EPUB ZIP unpack never touches the main draw
+    /// loop.
     public func open(fileURL: URL) async throws -> Publication {
         guard let readiumFileURL = FileURL(url: fileURL) else {
             throw EPUBPublicationLoaderError.invalidFileURL(fileURL)
