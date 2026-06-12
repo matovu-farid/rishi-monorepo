@@ -129,6 +129,9 @@ struct SignedOutView: View {
     /// `ASAuthorizationController` presentation via `SiwaPresenter`.
     private var appleButton: some View {
         Button {
+            // KEEP: viewModel is @Observable / @MainActor; signInWithApple
+            // drives the ASAuthorizationController on main, then hops into
+            // RishiAuthService for the worker round-trip. UI-bound by design.
             Task { await viewModel.signInWithApple() }
         } label: {
             HStack(spacing: 6) {

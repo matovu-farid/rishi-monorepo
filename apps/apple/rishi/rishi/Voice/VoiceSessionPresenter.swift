@@ -140,6 +140,12 @@ final class VoiceSessionPresenter {
         let conversationId = conversation.id
         let presenterState = state
         bridgeTask?.cancel()
+        // KEEP: F-P0-06 audit — bridge.consume(stream:conversationId:state:)
+        // is a long-lived `for await` over the SDK's transcript AsyncStream.
+        // The body awaits a stream + hops into the @MainActor `state` for
+        // transcript updates; the underlying MessageStore.upsert is on an
+        // actor. Wrapping in Task.detached would force MainActor.run on
+        // every transcript fragment — strictly worse. UI-bound by design.
         bridgeTask = Task {
             await bridge.consume(
                 stream: adapter.transcriptStream(),

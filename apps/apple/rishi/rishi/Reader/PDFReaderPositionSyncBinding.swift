@@ -18,10 +18,19 @@
 
 import Foundation
 import Observation
+import os.signpost
 import RishiCore
 import RishiReader
 import RishiSync
 
+// Phase 19 Plan 19-06 — F-P1-02: native OSSignposter so Instruments can attribute
+// the poll-tick wake rate during cold-launch / reader-running captures.
+private let positionSyncSignposter = OSSignposter(
+    subsystem: "org.fidexa.rishi",
+    category: "position-sync"
+)
+
+// v1.1 backlog: replace 250ms poll with push-based AsyncStream<Locator>; see apps/apple/docs/SWIFT-CONCURRENCY-RULES.md §"Position-sync polling".
 /// Owned by `RootView` while a PDF reader sheet is on screen. Cancels its
 /// poll task on `deinit` so dismissed readers stop pushing.
 @MainActor
@@ -43,15 +52,22 @@ final class PDFReaderPositionSyncBinding {
 
     private func start() {
         let bookId = viewModel.book.id
+        // KEEP: F-P0-06 audit — poll loop reads `pageIndex` via
+        // `MainActor.run` and hops into the syncEngine actor. UI-state
+        // read + actor hop; no detached work. (v1.1: push-observation
+        // replacement tracked in the file-level backlog comment above.)
         task = Task { [weak self] in
             guard let self else { return }
             var lastSeen: Int = -1
             while !Task.isCancelled {
+                let signpostName: StaticString = "pdf.position.poll.tick"
+                let signpostState = positionSyncSignposter.beginInterval(signpostName)
                 let current = await MainActor.run { self.viewModel.pageIndex }
                 if current != lastSeen {
                     lastSeen = current
                     await self.syncEngine.markPositionDirty(bookId)
                 }
+                positionSyncSignposter.endInterval(signpostName, signpostState)
                 // Match the reader VM's debounce cadence so we don't poll
                 // faster than the engine can act. The engine debounces
                 // again on its end so duplicates are cheap.

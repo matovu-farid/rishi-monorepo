@@ -69,6 +69,9 @@ struct DebugAuthView: View {
     }
 
     private func runAction(_ block: @escaping () async throws -> Void) {
+        // KEEP: DEBUG-only auth tool; isBusy is @State, refreshStatus
+        // touches UI state — must run on MainActor. Body chains awaits
+        // through the auth actor (signOut / deleteAccount).
         Task {
             isBusy = true
             lastError = nil

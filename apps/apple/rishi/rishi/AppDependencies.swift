@@ -84,7 +84,12 @@ final class AppDependencies {
     /// Signposter for the cold-launch trace. Five boundaries are emitted:
     /// `bootstrap.start`, `db.open`, `audio.ready`, `storekit.ready`,
     /// `bootstrap.end`. Plan 19-08 wraps the rest of the hot paths.
-    private static let signposter = OSSignposter(
+    ///
+    /// `nonisolated` so the off-main `makeServices()` factory can begin /
+    /// end intervals without hopping back to MainActor (the enclosing
+    /// class is `@MainActor`-isolated). OSSignposter itself is `Sendable`
+    /// (Swift 6) so this is safe. Phase 19 Plan 19-06 fix — Rule 3.
+    nonisolated private static let signposter = OSSignposter(
         subsystem: "org.fidexa.rishi",
         category: "bootstrap"
     )
@@ -134,6 +139,11 @@ final class AppDependencies {
             await inFlight.value
             return
         }
+        // KEEP: outer Task here is a *handle* for re-entry coalescing —
+        // multiple concurrent bootstrap() callers join the same in-flight
+        // task. The real off-main work lives inside makeServices(...),
+        // which is `static nonisolated` and wraps its body in
+        // Task.detached(priority: .userInitiated) — see plan 19-01.
         let task = Task { [weak self] in
             guard let self else { return }
             let signpostId = Self.signposter.makeSignpostID()
@@ -357,6 +367,8 @@ final class AppDependencies {
         }
 
         // 13. Bind the @Observable SyncStatus to the engine actor.
+        // KEEP: fire-and-forget; syncEngine is an actor and `bind(status:)`
+        // is a cheap field assignment behind the actor hop. No IO.
         Task { [syncEngine, syncStatus] in
             await syncEngine.bind(status: syncStatus)
         }
@@ -526,6 +538,9 @@ final class AppDependencies {
             forTaskWithIdentifier: BackgroundTaskCoordinator.processingIdentifier,
             using: nil
         ) { [weak self] task in
+            // KEEP: BGTaskScheduler hands the BGTask to MainActor by
+            // contract; driveBGTask awaits the syncEngine actor on its
+            // own executor. Body chains an await — no main-bound IO.
             Task { @MainActor in
                 await self?.driveBGTask(task)
             }
@@ -534,6 +549,7 @@ final class AppDependencies {
             forTaskWithIdentifier: BackgroundTaskCoordinator.refreshIdentifier,
             using: nil
         ) { [weak self] task in
+            // KEEP: same shape as the processing variant above.
             Task { @MainActor in
                 await self?.driveBGTask(task)
             }
@@ -588,6 +604,9 @@ final class AppDependencies {
             task.setTaskCompleted(success: false)
             return
         }
+        // KEEP: runTask handle is consumed by `task.expirationHandler` for
+        // cancellation; the engine.runOnce() body runs on the syncEngine
+        // actor's executor. Wrapper body only chains an await + returns Bool.
         let runTask = Task { [engine = services.syncEngine] in
             let wave = await engine.runOnce()
             return wave.errors.isEmpty
@@ -829,6 +848,7 @@ final class AppDependencies {
             audioStore: ttsSettingsStore,
             onAudioChange: { _ in },
             syncStatus: syncStatus,
+            // KEEP: Settings "Sync now" tap → syncEngine actor await; no main IO.
             onSyncNow: { Task { await sync.syncNow() } },
             telemetryStore: telemetryStore,
             onSignOut: {
@@ -840,6 +860,9 @@ final class AppDependencies {
             },
             onDeleted: onAccountDeleted,
             onManageSubscription: {
+                // KEEP: presenter.present() drives StoreKit's
+                // ManageSubscriptionsView which is a @MainActor sheet —
+                // explicit isolation is required for the SwiftUI surface.
                 Task { @MainActor in
                     await presenter.present()
                 }

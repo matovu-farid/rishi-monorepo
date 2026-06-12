@@ -59,7 +59,14 @@ extension PDFReaderViewModel {
     /// Extract sentences from the currently-visible page. Best-effort —
     /// many scanned PDFs have no embedded text and `PDFPage.string` returns
     /// nil; the bridge handles `[]` by no-op'ing.
-    public func sentencesForReadAloud(document: PDFDocument, currentPageIndex: Int) -> [String] {
+    ///
+    /// Phase 19 plan 19-04 (F-P0-06): marked `nonisolated` so callers can
+    /// invoke this from `Task.detached(priority: .userInitiated)` without
+    /// hopping back to MainActor for the PDFKit text extraction. The body
+    /// reads only the function parameters (PDFDocument is non-Sendable but
+    /// arrives as a `sending`-shaped parameter via the detached task's
+    /// single-consumer transfer region) — no `self` state is touched.
+    public nonisolated func sentencesForReadAloud(document: PDFDocument, currentPageIndex: Int) -> [String] {
         guard let page = document.page(at: currentPageIndex) else { return [] }
         let text = page.string ?? ""
         return SentenceSplitter.split(text)

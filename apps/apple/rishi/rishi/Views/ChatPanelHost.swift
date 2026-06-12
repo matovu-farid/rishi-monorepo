@@ -64,6 +64,12 @@ struct ChatPanelHost: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
+                        // KEEP: F-P0-06 audit — entitlementProvider() awaits
+                        // the entitlement actor (off-main internally);
+                        // presenter.start(bookId:) is @MainActor (drives the
+                        // .fullScreenCover binding). Wrapping in Task.detached
+                        // would force MainActor.run for the start() call —
+                        // strictly worse. UI-bound by design.
                         Task {
                             // BILL-04 — gate voice on entitlement.
                             let level = await entitlementProvider()
@@ -84,6 +90,8 @@ struct ChatPanelHost: View {
                 get: { presenter.isPresenting },
                 set: { newValue in
                     if newValue == false {
+                        // KEEP: presenter.end() is @MainActor; tears down
+                        // the SwiftUI cover binding. UI-bound by design.
                         Task { await presenter.end() }
                     }
                 }
@@ -107,6 +115,9 @@ struct ChatPanelHost: View {
                 reason: reason,
                 message: state.lastError,
                 onRetry: {
+                    // KEEP: dismissFailure + presenter.start are both
+                    // @MainActor; the .fullScreenCover binding mutates on
+                    // main. UI-bound by design.
                     Task {
                         // Reset and restart the same conversation context.
                         presenter.dismissFailure()
@@ -118,6 +129,7 @@ struct ChatPanelHost: View {
         default:
             VoiceSessionView(
                 state: state,
+                // KEEP: presenter.end() is @MainActor; mutates isPresenting.
                 onEnd: { Task { await presenter.end() } }
             )
         }

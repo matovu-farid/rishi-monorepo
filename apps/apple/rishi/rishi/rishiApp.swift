@@ -123,6 +123,9 @@ final class RishiAppDelegate: NSObject, UIApplicationDelegate {
         // Phase 19 plan 19-01 — services may still be nil if APNs
         // registration races against bootstrap. The Task awaits bootstrap
         // through the AppDependencies guard before reaching apnsDeviceRegistrar.
+        // KEEP: explicit @MainActor required to touch `deps` (the @MainActor
+        // composition root); registrar is itself an actor so the worker
+        // call hops off main internally — body is fire-and-forget.
         Task { @MainActor in
             if deps.services == nil { await deps.bootstrap() }
             guard let registrar = deps.services?.apnsDeviceRegistrar else { return }
@@ -162,6 +165,8 @@ final class RishiAppDelegate: NSObject, UIApplicationDelegate {
         // completes (push wakes the app from a cold-launch background
         // window). Buffer by awaiting bootstrap, then dispatch into the
         // freshly published syncEngine.
+        // KEEP: explicit @MainActor to touch `deps`; SilentPushHandler
+        // hops into the syncEngine actor on its own — body is short.
         Task { @MainActor in
             if deps.services == nil { await deps.bootstrap() }
             guard let engine = deps.services?.syncEngine else {

@@ -308,8 +308,15 @@ struct RootView: View {
                 _ = token
 
             case .openBook(let bookId):
+                // DETACHED: F-P0-06 + F-P0-09 — deep-link openBook does a DB
+                // lookup; offload to userInitiated and re-enter MainActor
+                // only for path/state assignment.
                 Task {
-                    if let book = try? await deps.bookStore.book(bookId) {
+                    let book: Book? = await Task.detached(priority: .userInitiated) { [deps] in
+                        try? await deps.bookStore.book(bookId)
+                    }.value
+                    guard let book else { return }
+                    await MainActor.run {
                         selectedTab = .library
                         var p = NavigationPath()
                         p.append(ReaderRoute.route(for: book))
@@ -318,8 +325,15 @@ struct RootView: View {
                 }
 
             case .openConversation(let conversationId):
+                // DETACHED: F-P0-06 — deep-link openConversation does a DB
+                // lookup; offload to userInitiated and re-enter MainActor
+                // for the @State assignment.
                 Task {
-                    if let convo = try? await deps.conversationStore.conversation(conversationId) {
+                    let convo: Conversation? = await Task.detached(priority: .userInitiated) { [deps] in
+                        try? await deps.conversationStore.conversation(conversationId)
+                    }.value
+                    guard let convo else { return }
+                    await MainActor.run {
                         selectedConversation = convo
                     }
                 }
@@ -330,8 +344,13 @@ struct RootView: View {
                 // can't classify. Gating on `isFileURL` keeps the router
                 // honest (an unknown `https://` URL is NOT a book file).
                 if url.isFileURL {
+                    // DETACHED: F-P0-06 — importBooks runs a file copy + cover
+                    // extract + DB write off the calling actor; refresh hops
+                    // back to main for the library VM mutation.
                     Task {
-                        _ = await deps.importCoordinator.importBooks([url])
+                        await Task.detached(priority: .userInitiated) { [deps] in
+                            _ = await deps.importCoordinator.importBooks([url])
+                        }.value
                         await libraryViewModel?.refresh()
                     }
                 }
@@ -627,6 +646,10 @@ struct RootView: View {
                 readerSettingsStore: deps.readerSettingsStore,
                 highlightStore: deps.highlightStore,
                 onReadAloud: FeatureFlags.readAloud ? {
+                    // KEEP: outer Task only chains MainActor awaits
+                    // (entitlementService is an actor, startPDFReadAloud
+                    // is @MainActor); the heavy PDF text extraction is
+                    // detached inside startPDFReadAloud itself.
                     Task {
                         // BILL-04 — gate Pro features on entitlement.
                         let level = await deps.entitlementService.snapshot()
@@ -649,6 +672,7 @@ struct RootView: View {
             }
             .onDisappear {
                 pdfSyncBinding = nil
+                // KEEP: stopReadAloud cancels the @MainActor bridge; UI-only.
                 Task { await stopReadAloud() }
             }
             .sheet(isPresented: $showTTSControls) {
@@ -656,6 +680,9 @@ struct RootView: View {
                     ReadAloudControlsView(
                         state: deps.ttsState,
                         onPlayPause: {
+                            // KEEP: pause/resume hop into the TTS engine actor;
+                            // outer Task only chains the actor await — no main-
+                            // bound IO.
                             Task {
                                 if deps.ttsState.status == .playing {
                                     await bridge.pause()
@@ -665,6 +692,7 @@ struct RootView: View {
                             }
                         },
                         onStop: {
+                            // KEEP: stopReadAloud cancels the @MainActor bridge.
                             Task { await stopReadAloud() }
                         },
                         onOpenPicker: {
@@ -703,6 +731,9 @@ struct RootView: View {
             readerSettingsStore: deps.readerSettingsStore,
             highlightStore: deps.highlightStore,
             onReadAloud: FeatureFlags.readAloud ? {
+                // KEEP: outer Task only chains MainActor awaits; the heavy
+                // EPUB resource read + HTML strip is detached inside
+                // startEPUBReadAloud (sentencesForReadAloud) per F-P0-06.
                 Task {
                     // BILL-04 — gate Pro features on entitlement.
                     let level = await deps.entitlementService.snapshot()
@@ -723,6 +754,7 @@ struct RootView: View {
         }
         .onDisappear {
             epubSyncBinding = nil
+            // KEEP: stopReadAloud cancels the @MainActor bridge.
             Task { await stopReadAloud() }
         }
         .sheet(isPresented: $showTTSControls) {
@@ -730,6 +762,8 @@ struct RootView: View {
                 ReadAloudControlsView(
                     state: deps.ttsState,
                     onPlayPause: {
+                        // KEEP: pause/resume routes through the TTS engine
+                        // actor; outer Task only chains the await.
                         Task {
                             if deps.ttsState.status == .playing {
                                 await bridge.pause()
@@ -739,6 +773,7 @@ struct RootView: View {
                         }
                     },
                     onStop: {
+                        // KEEP: stopReadAloud cancels the @MainActor bridge.
                         Task { await stopReadAloud() }
                     },
                     onOpenPicker: {
@@ -771,10 +806,15 @@ struct RootView: View {
     ) async {
         #if canImport(PDFKit)
         guard let doc = vm.document else { return }
-        let sentences = vm.sentencesForReadAloud(
-            document: doc,
-            currentPageIndex: vm.pageIndex
-        )
+        let pageIndex = vm.pageIndex
+        // F-P0-06 — PDFKit text extraction (PDFPage.string) is sync but
+        // non-trivial for text-heavy pages; offload to userInitiated and
+        // collect the Sendable [String] result. The extension method is
+        // `nonisolated` (see PDFReaderTTSExtension.swift) so this body
+        // really does run off MainActor.
+        let sentences = await Task.detached(priority: .userInitiated) {
+            vm.sentencesForReadAloud(document: doc, currentPageIndex: pageIndex)
+        }.value
         await startReadAloud(
             sentences: sentences,
             deps: deps,
@@ -789,7 +829,14 @@ struct RootView: View {
         deps: AppDependencies,
         userId: UserID
     ) async {
-        let sentences = await vm.sentencesForReadAloud()
+        // F-P0-06 (cross-ref F-P1-07 in plan 19-08): Readium resource read +
+        // HTML strip is non-trivial. The extension method on EPUBReaderViewModel
+        // is `async` (touches `publication`/`latestLocator`); we wrap the outer
+        // call so the awaited continuation lands off-main. Plan 19-08 will
+        // hoist the stripHTML internals onto a detached executor.
+        let sentences = await Task.detached(priority: .userInitiated) {
+            await vm.sentencesForReadAloud()
+        }.value
         await startReadAloud(
             sentences: sentences,
             deps: deps,
@@ -863,6 +910,9 @@ struct RootView: View {
         SignedOutView(onSignedIn: { user in
             currentUser = user
             if let deps {
+                // KEEP: fire-and-forget actor hop — entitlementService is an
+                // actor and refresh() awaits the worker on its own executor;
+                // the outer Task only chains the await.
                 Task { _ = await deps.entitlementService.refresh() }
             }
         })

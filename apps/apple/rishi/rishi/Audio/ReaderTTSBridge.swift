@@ -90,6 +90,10 @@ final class ReaderTTSBridge {
 
     private func startConsumingPassages() {
         consumeTask?.cancel()
+        // KEEP: F-P0-06 audit — explicit @MainActor required so the
+        // onPassageChange(_:) callback (which writes the @Observable
+        // currentReadAloudPassageIndex on the reader VM) executes on
+        // main. Body chains an AsyncStream from the tracker actor.
         consumeTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let stream = await self.tracker.passageStream()
@@ -106,6 +110,10 @@ final class ReaderTTSBridge {
     /// state-update cadence (50ms in NowPlayingController + tracker).
     private func startAdvanceWatcher() {
         advanceTask?.cancel()
+        // KEEP: F-P0-06 audit — explicit @MainActor required to read
+        // `state.status` (the @Observable TTSPlaybackState lives on main).
+        // Body sleeps 100ms between poll ticks; the await sleep yields
+        // back to the main runloop so SwiftUI rendering interleaves.
         advanceTask = Task { @MainActor [weak self] in
             guard let self else { return }
             // Wait for the engine to leave .loading and enter .playing first

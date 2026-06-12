@@ -87,8 +87,10 @@ struct BareTaskAuditTests {
                 // Exclude `Task<` generic declarations (e.g. `var t: Task<Void,Never>?`).
                 if trimmed.contains("Task<") { continue }
 
-                // Look back up to 3 source lines for KEEP / DETACHED marker.
-                let lookbackStart = max(0, idx - 3)
+                // Look back up to 7 source lines for KEEP / DETACHED marker.
+                // 7 lines accommodates multi-line rationale comments that
+                // would otherwise force terse single-line annotations.
+                let lookbackStart = max(0, idx - 7)
                 let window = lines[lookbackStart..<idx].joined(separator: "\n")
                 let hasMarker =
                     window.contains("// KEEP:") ||
