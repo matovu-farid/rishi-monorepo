@@ -234,13 +234,16 @@ describe("POST /api/devices/register", () => {
   it("happy path: authenticated + valid body -> 200 { device_id, registered_at }", async () => {
     const res = await callRegister(validBody())
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { device_id: string; registered_at: string }
+    // Date wire format = seconds since 2001-01-01 reference date — matches
+    // iOS WorkerClient.swift:96 .deferredToDate. See routes/changes.ts.
+    const body = (await res.json()) as { device_id: string; registered_at: number }
     expect(typeof body.device_id).toBe("string")
     expect(body.device_id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     )
-    expect(typeof body.registered_at).toBe("string")
-    expect(() => new Date(body.registered_at).toISOString()).not.toThrow()
+    expect(typeof body.registered_at).toBe("number")
+    const expectedNowSec = (Date.now() - 978_307_200_000) / 1000
+    expect(Math.abs(body.registered_at - expectedNowSec)).toBeLessThan(5.0)
     expect(deviceStore.length).toBe(1)
     const row = deviceStore[0]
     expect(row.userId).toBe("user_alice")
