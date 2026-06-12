@@ -114,7 +114,6 @@ public struct EPUBReaderScreen: View {
 
     #if canImport(UIKit)
     @State private var pendingSelection: SelectionContext?
-    @State private var editingHighlight: Highlight?
     @State private var noteText: String = ""
     /// Lazy reference to the live navigator coordinator; populated by
     /// ``EPUBReaderView`` once Readium installs the navigator. We use
@@ -122,10 +121,15 @@ public struct EPUBReaderScreen: View {
     /// / deleteHighlight.
     @State private var coordinatorRef = EPUBCoordinatorRef()
 
-    // 06-06 — sheet presentation + spread tracking.
-    @State private var showTOC = false
-    @State private var showTypography = false
-    @State private var showTheme = false
+    /// Phase 18 Plan 18-08 (F-P2-01) — single source of truth for which
+    /// content sheet is currently presented. Replaces the prior chain of
+    /// `$showTOC` / `$showTypography` / `$showTheme` / `$editingHighlight`
+    /// flags with a `ReaderSheet?` enum. Setting one case automatically
+    /// unsets the others; setting `nil` dismisses. The paywall sheet
+    /// stays SEPARATE (mounted from `RootView`) so it can fire
+    /// concurrently with a content sheet here.
+    @State private var activeSheet: ReaderSheet?
+
     @State private var currentSpread: EPUBSpreadMode = .single
 
     /// Live size of the reader content area; populated by the outer
@@ -311,48 +315,68 @@ public struct EPUBReaderScreen: View {
         .onChange(of: viewModel.typography) { _, _ in applyPreferences() }
         .onChange(of: viewModel.theme) { _, _ in applyPreferences() }
         .onChange(of: currentSpread) { _, _ in applyPreferences() }
-        .sheet(isPresented: $showTOC) {
-            EPUBTOCView(
-                entries: viewModel.publication?.manifest.tableOfContents ?? [],
-                onSelect: { link in
-                    showTOC = false
-                    let coordinator = coordinatorRef.coordinator
-                    Task { @MainActor in
-                        _ = await coordinator?.go(to: link)
-                    }
-                },
-                onClose: { showTOC = false }
-            )
-        }
-        .sheet(isPresented: $showTypography) {
-            EPUBTypographyPicker(
-                typography: Binding(
-                    get: { viewModel.typography },
-                    set: { viewModel.typography = $0 }
-                ),
-                bookId: viewModel.book.id,
-                store: readerSettingsStore ?? EphemeralReaderSettingsStore(),
-                onClose: { showTypography = false }
-            )
-        }
-        .sheet(isPresented: $showTheme) {
-            EPUBThemePicker(
-                theme: Binding(
-                    get: { viewModel.theme },
-                    set: { viewModel.theme = $0 }
-                ),
-                bookId: viewModel.book.id,
-                store: readerSettingsStore ?? EphemeralReaderSettingsStore(),
-                onClose: { showTheme = false }
-            )
-        }
-        .sheet(item: $editingHighlight) { hl in
-            HighlightNoteEditor(
-                note: $noteText,
-                snippet: hl.text,
-                onSave: { commitNoteEdit(on: hl) },
-                onCancel: { editingHighlight = nil }
-            )
+        // Phase 18 Plan 18-08 (F-P2-01) — single `.sheet(item:)` driven by
+        // the `ReaderSheet?` enum replaces the prior chain of four cascading
+        // `.sheet(isPresented:)` modifiers (TOC, typography, theme,
+        // highlight-note editor). The paywall sheet stays SEPARATE
+        // (mounted from `RootView`) and CAN fire concurrently with this
+        // sheet — e.g. user taps Read Aloud while the theme picker is up
+        // and an entitlement check fails. Folding the paywall in here
+        // would lose that concurrency, which is why the enum deliberately
+        // does NOT include a paywall case.
+        //
+        // The `.ttsControls` / `.ttsPicker` cases of `ReaderSheet` are
+        // currently unreached on this screen — the live TTS sheets are
+        // owned by `RootView`. The switch handles them with `EmptyView()`
+        // so the enum invariant (exhaustive coverage) holds; the day TTS
+        // migrates into this package, swap the `EmptyView()` for the real
+        // sheet view and the call sites already feed the right enum case.
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .toc:
+                EPUBTOCView(
+                    entries: viewModel.publication?.manifest.tableOfContents ?? [],
+                    onSelect: { link in
+                        activeSheet = nil
+                        let coordinator = coordinatorRef.coordinator
+                        Task { @MainActor in
+                            _ = await coordinator?.go(to: link)
+                        }
+                    },
+                    onClose: { activeSheet = nil }
+                )
+            case .typography:
+                EPUBTypographyPicker(
+                    typography: Binding(
+                        get: { viewModel.typography },
+                        set: { viewModel.typography = $0 }
+                    ),
+                    bookId: viewModel.book.id,
+                    store: readerSettingsStore ?? EphemeralReaderSettingsStore(),
+                    onClose: { activeSheet = nil }
+                )
+            case .theme:
+                EPUBThemePicker(
+                    theme: Binding(
+                        get: { viewModel.theme },
+                        set: { viewModel.theme = $0 }
+                    ),
+                    bookId: viewModel.book.id,
+                    store: readerSettingsStore ?? EphemeralReaderSettingsStore(),
+                    onClose: { activeSheet = nil }
+                )
+            case .ttsControls, .ttsPicker:
+                // Owned by RootView today. Placeholder keeps the
+                // switch exhaustive and the enum invariant intact.
+                EmptyView()
+            case .highlightNote(let hl):
+                HighlightNoteEditor(
+                    note: $noteText,
+                    snippet: hl.text,
+                    onSave: { commitNoteEdit(on: hl) },
+                    onCancel: { activeSheet = nil }
+                )
+            }
         }
         #endif
         #if !os(macOS)
@@ -436,7 +460,7 @@ public struct EPUBReaderScreen: View {
     // body inline-mounted on a `ToolbarItem`.
     private var showTOCAction: () -> Void {
         #if canImport(UIKit)
-        return { chrome.userActivity(); showTOC = true }
+        return { chrome.userActivity(); activeSheet = .toc }
         #else
         return { }
         #endif
@@ -444,7 +468,7 @@ public struct EPUBReaderScreen: View {
 
     private var showThemeAction: () -> Void {
         #if canImport(UIKit)
-        return { chrome.userActivity(); showTheme = true }
+        return { chrome.userActivity(); activeSheet = .theme }
         #else
         return { }
         #endif
@@ -452,7 +476,7 @@ public struct EPUBReaderScreen: View {
 
     private var showTypographyAction: () -> Void {
         #if canImport(UIKit)
-        return { chrome.userActivity(); showTypography = true }
+        return { chrome.userActivity(); activeSheet = .typography }
         #else
         return { }
         #endif
@@ -544,7 +568,10 @@ public struct EPUBReaderScreen: View {
             ) {
                 coordinatorRef.coordinator?.applyHighlights(viewModel.loadedHighlights)
                 noteText = ""
-                editingHighlight = saved
+                // Phase 18 Plan 18-08 (F-P2-01) — drive the single
+                // .sheet(item:) instead of the prior dedicated
+                // `editingHighlight` @State binding.
+                activeSheet = .highlightNote(saved)
             }
             pendingSelection = nil
             coordinatorRef.coordinator?.clearSelection()
@@ -562,7 +589,9 @@ public struct EPUBReaderScreen: View {
                     store: store
                 )
             }
-            editingHighlight = nil
+            // Phase 18 Plan 18-08 (F-P2-01) — dismissing the highlight
+            // editor clears the single-sheet enum.
+            activeSheet = nil
         }
     }
 
