@@ -26,6 +26,17 @@ struct SignedOutView: View {
 
     @Environment(\.rishiAuthService) private var authService: (any AuthService)?
 
+    /// Fired by the view-model immediately after a successful
+    /// `signInWithApple()` so the parent (`RootView`) can re-read
+    /// `auth.currentUser` and mount the signed-in tree. Without this
+    /// callback the VM completes successfully, the spinner disappears,
+    /// the button re-enables, and a stray second tap drives a duplicate
+    /// `POST /api/auth/sign-in/social` which Better Auth rejects with
+    /// 403 — see `.planning/debug/resolved/siwa-double-fire-403.md`.
+    /// Default is a no-op so previews / DEBUG can construct
+    /// `SignedOutView()` directly.
+    var onSignedIn: (User) -> Void = { _ in }
+
     /// Eagerly-constructed non-Optional view model.
     ///
     /// IMPORTANT: This used to be `@State private var viewModel: SignedOutViewModel? = nil`
@@ -67,6 +78,11 @@ struct SignedOutView: View {
             // Inject the env-resolved service into the eager VM. Safe to
             // call on every .task run because setAuthService is idempotent.
             viewModel.setAuthService(authService)
+            // Wire the success callback once. The VM clears its own
+            // reference after firing so we never double-deliver, but we
+            // re-assign on every `.task` so a recomposed view (e.g.
+            // environment value resolved late) still gets a live closure.
+            viewModel.onSignedIn = onSignedIn
         }
     }
 
@@ -128,7 +144,11 @@ struct SignedOutView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
-        .disabled(viewModel.isLoading)
+        // Disable in BOTH loading AND signed-in terminal states. The
+        // signed-in case prevents the stray re-tap window between the
+        // VM completing and RootView swapping the view tree. See
+        // `.planning/debug/resolved/siwa-double-fire-403.md`.
+        .disabled(viewModel.isSignInButtonDisabled)
         .accessibilityLabel("Sign in with Apple")
         .accessibilityIdentifier("signed-out-apple")
     }

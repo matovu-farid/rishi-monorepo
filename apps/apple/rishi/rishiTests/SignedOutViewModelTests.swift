@@ -144,8 +144,13 @@ struct SignedOutViewModelTests {
         await task.value
     }
 
-    // Test 5: A successful sign-in resets state to .idle (errorMessage cleared).
-    @Test func successResetsToIdle() async throws {
+    // Test 5: A successful sign-in transitions to terminal .signedIn
+    // (errorMessage cleared). Plan-15-quick-fix `siwa-double-fire-403`:
+    // success no longer returns to .idle because the VM must keep the
+    // button disabled until RootView swaps the view tree. Re-tap during
+    // that window was the root cause of the 403 on the second
+    // `/api/auth/sign-in/social` POST.
+    @Test func successTransitionsToSignedIn() async throws {
         let stub = StubAuthService()
         let vm = SignedOutViewModel(authService: stub)
 
@@ -154,11 +159,59 @@ struct SignedOutViewModelTests {
         await vm.signInWithApple()
         #expect(vm.errorMessage != nil)
 
-        // ...then a successful retry should clear the error.
+        // ...then a successful retry should clear the error AND park the
+        // VM in the .signedIn terminal state.
         stub.setShouldThrow(nil)
         await vm.signInWithApple()
-        #expect(vm.state == .idle)
+        #expect(vm.state == .signedIn)
         #expect(vm.errorMessage == nil)
+        #expect(vm.isSignInButtonDisabled == true)
+    }
+
+    // Test 7 (regression for `siwa-double-fire-403`): once the first
+    // `signInWithApple()` succeeds, a second invocation MUST NOT call the
+    // underlying service again. Before the fix, the VM returned to .idle
+    // after success, the SignedOutView button re-enabled, and a re-tap
+    // during the RootView render swap produced a duplicate
+    // `POST /api/auth/sign-in/social` that Better Auth rejected with 403.
+    @Test func secondSignInAfterSuccessIsDropped() async throws {
+        let stub = StubAuthService()
+        let vm = SignedOutViewModel(authService: stub)
+
+        await vm.signInWithApple()
+        #expect(stub.appleCallCount == 1)
+        #expect(vm.state == .signedIn)
+
+        // Simulate a stray re-tap (or programmatic re-entry) after the
+        // first success. The VM must drop the call.
+        await vm.signInWithApple()
+        #expect(stub.appleCallCount == 1, "Second sign-in invocation after success must be dropped")
+        #expect(vm.state == .signedIn)
+    }
+
+    // Test 8 (regression for `siwa-double-fire-403`): the
+    // `onSignedIn` callback fires exactly once on the first successful
+    // sign-in and is NOT re-fired by any subsequent invocation. This
+    // closes the wire RootView uses to flip `currentUser` and mount the
+    // signed-in tree.
+    @Test func onSignedInFiresExactlyOnceOnSuccess() async throws {
+        let stub = StubAuthService()
+        let vm = SignedOutViewModel(authService: stub)
+
+        // Re-entrant @MainActor counter — simple Int is fine here because
+        // the closure is invoked synchronously inside the VM's
+        // `@MainActor`-isolated method body.
+        var callbackCount = 0
+        vm.onSignedIn = { _ in callbackCount += 1 }
+
+        await vm.signInWithApple()
+        #expect(callbackCount == 1)
+
+        // Subsequent calls are dropped (Test 7) and MUST NOT re-fire the
+        // callback even if a future refactor weakens the drop.
+        await vm.signInWithApple()
+        await vm.signInWithApple()
+        #expect(callbackCount == 1, "onSignedIn must fire exactly once")
     }
 
     // Test 6 (regression for `signed-out-google-button-noop`): A VM
@@ -191,11 +244,11 @@ struct SignedOutViewModelTests {
         vm.setAuthService(stub)
 
         // AFTER injection: calls route to the injected service. The
-        // previous error is cleared on success, proving the state machine
-        // transitions back to .idle.
+        // previous error is cleared on success; the VM parks in the
+        // terminal .signedIn state (siwa-double-fire-403 regression).
         await vm.signInWithApple()
         #expect(stub.appleCallCount == 1)
-        #expect(vm.state == .idle)
+        #expect(vm.state == .signedIn)
         #expect(vm.errorMessage == nil)
     }
 }

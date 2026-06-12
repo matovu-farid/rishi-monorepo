@@ -772,7 +772,25 @@ struct RootView: View {
         // deps.authServiceForEnvironment)`. Both DEBUG and Release render
         // the same surface; DebugAuthView remains on disk under #if DEBUG
         // but is no longer reachable from this signed-out path.
-        SignedOutView()
+        //
+        // `onSignedIn`: SignedOutView's VM fires this exactly once after
+        // the SIWA worker round-trip succeeds. We flip `currentUser` on
+        // the main actor so RootView's body branches into the signed-in
+        // tree on the next render, unmounting SignedOutView and
+        // preventing the duplicate `auth.siwa.started` /
+        // `/api/auth/sign-in/social` 403 that the previous fire-and-
+        // forget bootstrap pattern allowed (see
+        // `.planning/debug/resolved/siwa-double-fire-403.md`).
+        //
+        // We also refresh the entitlement snapshot here for parity with
+        // the bootstrap branch in the outer `.task` so a freshly signed-
+        // in user immediately has Pro state available.
+        SignedOutView(onSignedIn: { user in
+            currentUser = user
+            if let deps {
+                Task { _ = await deps.entitlementService.refresh() }
+            }
+        })
     }
 }
 
