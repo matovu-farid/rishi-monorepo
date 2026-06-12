@@ -99,6 +99,18 @@ public struct EPUBReaderScreen: View {
     @State private var showTypography = false
     @State private var showTheme = false
     @State private var currentSpread: EPUBSpreadMode = .single
+
+    /// Synthetic monotonically-increasing counter that gives
+    /// ``PageTurnAnimator`` something to swap on (.id(pageIndex) drives the
+    /// SwiftUI transition). EPUB has no integer pages; Readium is the
+    /// source of truth for real page position. Incremented on every
+    /// committed page-turn from a tap or drag.
+    @State private var epubTurnCounter: Int = 0
+
+    /// Live size of the reader content area; populated by the outer
+    /// GeometryReader so the tap-region resolver can compute left/center/
+    /// right based on actual width.
+    @State private var readerAreaSize: CGSize = .zero
     #endif
 
     public init(
@@ -120,19 +132,70 @@ public struct EPUBReaderScreen: View {
             background
 
             #if canImport(UIKit)
-            EPUBReaderView(
-                viewModel: viewModel,
-                onSelectionChange: { selection in
-                    handleSelectionChange(selection)
-                },
-                coordinatorRef: coordinatorRef
-            )
-            .ignoresSafeArea()
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    chrome.toggle()
+            // Outer GeometryReader feeds the tap-region resolver with the
+            // live page-area size. The PageTurnAnimator owns its own inner
+            // GeometryReader for the drag/slide math.
+            GeometryReader { proxy in
+                PageTurnAnimator(
+                    pageIndex: epubTurnCounter,
+                    totalPages: Int.max,
+                    onCommitNext: {
+                        epubTurnCounter += 1
+                        let navigator = coordinatorRef.coordinator?.navigator
+                        Task { @MainActor in
+                            _ = await navigator?.goForward(options: NavigatorGoOptions(animated: true))
+                        }
+                    },
+                    onCommitPrevious: {
+                        epubTurnCounter += 1
+                        let navigator = coordinatorRef.coordinator?.navigator
+                        Task { @MainActor in
+                            _ = await navigator?.goBackward(options: NavigatorGoOptions(animated: true))
+                        }
+                    },
+                    onBoundary: { /* Readium owns boundary bounce internally. */ }
+                ) {
+                    EPUBReaderView(
+                        viewModel: viewModel,
+                        onSelectionChange: { selection in
+                            handleSelectionChange(selection)
+                        },
+                        coordinatorRef: coordinatorRef
+                    )
+                    .contentShape(Rectangle())
+                    .gesture(
+                        SpatialTapGesture()
+                            .onEnded { event in
+                                let resolver = ReaderTapRegionResolver()
+                                let decision = resolver.decide(
+                                    at: event.location,
+                                    in: readerAreaSize
+                                )
+                                switch decision {
+                                case .toggleChrome:
+                                    withAnimation(.easeInOut(duration: 0.25)) {
+                                        chrome.toggle()
+                                    }
+                                case .nextPage:
+                                    epubTurnCounter += 1
+                                    let navigator = coordinatorRef.coordinator?.navigator
+                                    Task { @MainActor in
+                                        _ = await navigator?.goForward(options: NavigatorGoOptions(animated: true))
+                                    }
+                                case .previousPage:
+                                    epubTurnCounter += 1
+                                    let navigator = coordinatorRef.coordinator?.navigator
+                                    Task { @MainActor in
+                                        _ = await navigator?.goBackward(options: NavigatorGoOptions(animated: true))
+                                    }
+                                }
+                            }
+                    )
                 }
+                .onAppear { readerAreaSize = proxy.size }
+                .onChange(of: proxy.size) { _, newSize in readerAreaSize = newSize }
             }
+            .ignoresSafeArea()
             .rishiAnimation(RishiMotion.standard, reduce: reduceMotion)
 
             if let pending = pendingSelection {

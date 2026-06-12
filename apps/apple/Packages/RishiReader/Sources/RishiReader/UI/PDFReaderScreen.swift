@@ -80,6 +80,11 @@ public struct PDFReaderScreen: View {
     // Live PDFView reference, captured via `onPDFViewReady`. Used to build
     // the user-space → view-space rect mapper for the overlay.
     @State private var pdfViewRef: PDFView?
+
+    /// Live size of the reader content area; populated by the outer
+    /// GeometryReader so the tap-region resolver can compute left/center/
+    /// right based on actual width.
+    @State private var readerAreaSize: CGSize = .zero
     #endif
 
     public init(
@@ -110,21 +115,61 @@ public struct PDFReaderScreen: View {
             background
 
             #if canImport(UIKit)
-            PDFReaderView(
-                viewModel: viewModel,
-                onSelectionChange: { sel in
-                    handleSelectionChange(sel)
-                },
-                onPDFViewReady: { view in
-                    pdfViewRef = view
+            // Outer GeometryReader feeds the tap-region resolver with the
+            // live page-area size. PageTurnAnimator owns its own inner
+            // GeometryReader for the drag/slide math; PDFKit's
+            // UIPageViewController keeps owning its internal swipe.
+            GeometryReader { proxy in
+                PageTurnAnimator(
+                    pageIndex: viewModel.pageIndex,
+                    totalPages: viewModel.totalPages,
+                    onCommitNext: {
+                        let next = min(viewModel.pageIndex + 1, max(viewModel.totalPages - 1, 0))
+                        viewModel.seek(toPage: next)
+                    },
+                    onCommitPrevious: {
+                        let prev = max(viewModel.pageIndex - 1, 0)
+                        viewModel.seek(toPage: prev)
+                    },
+                    onBoundary: { /* PageTurnAnimator already snaps back at edges. */ }
+                ) {
+                    PDFReaderView(
+                        viewModel: viewModel,
+                        onSelectionChange: { sel in
+                            handleSelectionChange(sel)
+                        },
+                        onPDFViewReady: { view in
+                            pdfViewRef = view
+                        }
+                    )
+                    .contentShape(Rectangle())
+                    .gesture(
+                        SpatialTapGesture()
+                            .onEnded { event in
+                                let resolver = ReaderTapRegionResolver()
+                                let decision = resolver.decide(
+                                    at: event.location,
+                                    in: readerAreaSize
+                                )
+                                switch decision {
+                                case .toggleChrome:
+                                    withAnimation(.easeInOut(duration: 0.25)) {
+                                        chrome.toggle()
+                                    }
+                                case .nextPage:
+                                    let next = min(viewModel.pageIndex + 1, max(viewModel.totalPages - 1, 0))
+                                    viewModel.seek(toPage: next)
+                                case .previousPage:
+                                    let prev = max(viewModel.pageIndex - 1, 0)
+                                    viewModel.seek(toPage: prev)
+                                }
+                            }
+                    )
                 }
-            )
-            .ignoresSafeArea()
-            .onTapGesture {
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    chrome.toggle()
-                }
+                .onAppear { readerAreaSize = proxy.size }
+                .onChange(of: proxy.size) { _, newSize in readerAreaSize = newSize }
             }
+            .ignoresSafeArea()
             .rishiAnimation(RishiMotion.standard, reduce: reduceMotion)
 
             // Saved-highlight overlay. Renders nothing until the PDFView is
