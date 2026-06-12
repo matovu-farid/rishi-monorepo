@@ -83,6 +83,30 @@ struct SyncEngineTests {
         func delete(_ id: HighlightID) async throws { rows[id] = nil }
     }
 
+    private actor StubConversationStore: ConversationStore {
+        var rows: [ConversationID: Conversation] = [:]
+        func seed(_ convo: Conversation) { rows[convo.id] = convo }
+        func conversations(for userId: UserID) async throws -> [Conversation] {
+            rows.values.filter { $0.userId == userId }
+        }
+        func conversation(_ id: ConversationID) async throws -> Conversation? { rows[id] }
+        func upsert(_ conversation: Conversation) async throws { rows[conversation.id] = conversation }
+        func delete(_ id: ConversationID) async throws { rows.removeValue(forKey: id) }
+    }
+
+    private actor StubMessageStore: MessageStore {
+        var rows: [MessageID: Message] = [:]
+        func seed(_ msg: Message) { rows[msg.id] = msg }
+        func messages(for conversationId: ConversationID) async throws -> [Message] {
+            rows.values
+                .filter { $0.conversationId == conversationId }
+                .sorted { $0.createdAt < $1.createdAt }
+        }
+        func message(_ id: MessageID) async throws -> Message? { rows[id] }
+        func upsert(_ message: Message) async throws { rows[message.id] = message }
+        func delete(_ id: MessageID) async throws { rows.removeValue(forKey: id) }
+    }
+
     // MARK: - URLProtocol for fetcher/uploaders
 
     final class EngineMockURLProtocol: MockURLProtocolBase, @unchecked Sendable {
@@ -117,6 +141,8 @@ struct SyncEngineTests {
         bookStore: any BookStore,
         positionStore: any PositionStore,
         highlightStore: any HighlightStore,
+        conversationStore: any ConversationStore = StubConversationStore(),
+        messageStore: any MessageStore = StubMessageStore(),
         workerClient: WorkerClient,
         fileStorage: BookFileStorage
     ) -> SyncEngine {
@@ -124,6 +150,8 @@ struct SyncEngineTests {
         let bookUploader = BookUploader(workerClient: workerClient, metadataStore: metadata, fileStorage: fileStorage)
         let positionUploader = PositionUploader(workerClient: workerClient, positionStore: positionStore, bookStore: bookStore, metadataStore: metadata)
         let highlightUploader = HighlightUploader(workerClient: workerClient, highlightStore: highlightStore, metadataStore: metadata)
+        let conversationUploader = ConversationUploader(workerClient: workerClient, conversationStore: conversationStore, metadataStore: metadata)
+        let messageUploader = MessageUploader(workerClient: workerClient, messageStore: messageStore, metadataStore: metadata)
         let fetcher = RemoteChangeFetcher(workerClient: workerClient, metadataStore: metadata)
         let applier = ChangeApplier(bookStore: bookStore, positionStore: positionStore, highlightStore: highlightStore, metadataStore: metadata)
         return SyncEngine(
@@ -134,6 +162,8 @@ struct SyncEngineTests {
             bookUploader: bookUploader,
             positionUploader: positionUploader,
             highlightUploader: highlightUploader,
+            conversationUploader: conversationUploader,
+            messageUploader: messageUploader,
             fetcher: fetcher,
             applier: applier
         )
@@ -348,5 +378,106 @@ struct SyncEngineTests {
         let afterSnapshot = status.snapshot()
         #expect(afterSnapshot.isRunning == false)
         #expect(afterSnapshot.lastSyncedAt != nil)
+    }
+
+    // MARK: - Phase 16-04: conversation/message bucket routing
+
+    @Test("runOnce routes pending .conversation through ConversationUploader -> POST /api/sync/conversations")
+    func runOnceDrainsPendingConversation() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let conversationStore = StubConversationStore()
+        let (storage, _) = try await makeFileStorage()
+
+        let convo = Conversation(
+            id: UUID(),
+            userId: UUID(),
+            bookId: nil,
+            title: "Synced chat",
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_100)
+        )
+        await conversationStore.seed(convo)
+        try await metadata.markDirty(entityId: convo.id, kind: .conversation)
+
+        nonisolated(unsafe) var sawConversationsPost = false
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                return (200, self.emptyChangesBody(), nil)
+            }
+            if request.url?.path == "/api/sync/conversations" && request.httpMethod == "POST" {
+                sawConversationsPost = true
+                return (200, Data("""
+                { "applied_count": 1 }
+                """.utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            conversationStore: conversationStore,
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+        let wave = await engine.runOnce()
+        #expect(wave.conversationsPushed == 1, "expected 1 conversation pushed, got \(wave.conversationsPushed); errors: \(wave.errors)")
+        #expect(sawConversationsPost, "expected POST /api/sync/conversations to fire")
+        let stillDirty = await metadata.currentDirty()
+        #expect(stillDirty.filter { $0.kind == .conversation }.isEmpty)
+    }
+
+    @Test("runOnce routes pending .message through MessageUploader -> POST /api/sync/messages")
+    func runOnceDrainsPendingMessage() async throws {
+        EngineMockURLProtocol.reset()
+        let session = makeSession()
+        let workerClient = makeWorkerClient(session: session)
+        let metadata = StubMetadata()
+        let messageStore = StubMessageStore()
+        let (storage, _) = try await makeFileStorage()
+
+        let msg = Message(
+            id: UUID(),
+            conversationId: UUID(),
+            role: .user,
+            content: "synced",
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        await messageStore.seed(msg)
+        try await metadata.markDirty(entityId: msg.id, kind: .message)
+
+        nonisolated(unsafe) var sawMessagesPost = false
+        EngineMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/sync/changes" {
+                return (200, self.emptyChangesBody(), nil)
+            }
+            if request.url?.path == "/api/sync/messages" && request.httpMethod == "POST" {
+                sawMessagesPost = true
+                return (200, Data("""
+                { "applied_count": 1 }
+                """.utf8), nil)
+            }
+            return (404, Data(), nil)
+        }
+
+        let engine = makeEngine(
+            metadata: metadata,
+            bookStore: StubBookStore(),
+            positionStore: StubPositionStore(),
+            highlightStore: StubHighlightStore(),
+            messageStore: messageStore,
+            workerClient: workerClient,
+            fileStorage: storage
+        )
+        let wave = await engine.runOnce()
+        #expect(wave.messagesPushed == 1, "expected 1 message pushed, got \(wave.messagesPushed); errors: \(wave.errors)")
+        #expect(sawMessagesPost, "expected POST /api/sync/messages to fire")
+        let stillDirty = await metadata.currentDirty()
+        #expect(stillDirty.filter { $0.kind == .message }.isEmpty)
     }
 }
