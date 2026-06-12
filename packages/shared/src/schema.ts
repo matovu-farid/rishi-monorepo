@@ -72,17 +72,28 @@ export const highlights = sqliteTable("highlights", {
 
 // ─── Conversations table ──────────────────────────────────────────────────────
 // Stores conversation threads tied to books with sync support.
-export const conversations = sqliteTable("conversations", {
-  id: text("id").primaryKey(), // UUID, client-generated
-  bookId: text("book_id").notNull(), // FK to books.id
-  userId: text("user_id"), // null on mobile, set by server
-  title: text("title").notNull().default("New conversation"),
-  createdAt: integer("created_at").notNull(), // Unix timestamp ms
-  updatedAt: integer("updated_at").notNull(), // Unix timestamp ms
-  syncVersion: integer("sync_version").default(0),
-  isDirty: integer("is_dirty", { mode: "boolean" }).default(true),
-  isDeleted: integer("is_deleted", { mode: "boolean" }).default(false),
-});
+// Phase 16-01: userId tightened to NOT NULL + FK ON DELETE CASCADE so the
+// chat-sync routes can scope queries to the caller via Better Auth session.
+// (user_id, updated_at) index powers since-cursor scans for /api/sync/conversations.
+export const conversations = sqliteTable(
+  "conversations",
+  {
+    id: text("id").primaryKey(), // UUID, client-generated
+    bookId: text("book_id").notNull(), // FK to books.id
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default("New conversation"),
+    createdAt: integer("created_at").notNull(), // Unix timestamp ms
+    updatedAt: integer("updated_at").notNull(), // Unix timestamp ms
+    syncVersion: integer("sync_version").default(0),
+    isDirty: integer("is_dirty", { mode: "boolean" }).default(true),
+    isDeleted: integer("is_deleted", { mode: "boolean" }).default(false),
+  },
+  (t) => ({
+    byUserUpdated: index("conversations_user_updated_idx").on(t.userId, t.updatedAt),
+  }),
+);
 
 // ─── Bookmarks table ─────────────────────────────────────────────────────────
 // Stores EPUB (and future PDF) bookmarks with sync support. Mirrors the
@@ -105,18 +116,27 @@ export const bookmarks = sqliteTable("bookmarks", {
 
 // ─── Messages table ──────────────────────────────────────────────────────────
 // Stores individual messages within conversations. Append-only during sync.
-export const messages = sqliteTable("messages", {
-  id: text("id").primaryKey(), // UUID, client-generated
-  conversationId: text("conversation_id").notNull(), // FK to conversations.id
-  role: text("role").notNull(), // 'user' | 'assistant'
-  content: text("content").notNull(),
-  sourceChunks: text("source_chunks"), // JSON-serialized SourceChunk[]
-  createdAt: integer("created_at").notNull(), // Unix timestamp ms
-  updatedAt: integer("updated_at").notNull(), // Unix timestamp ms
-  syncVersion: integer("sync_version").default(0),
-  isDirty: integer("is_dirty", { mode: "boolean" }).default(true),
-  isDeleted: integer("is_deleted", { mode: "boolean" }).default(false),
-});
+// Phase 16-01: (conversation_id, updated_at) index powers join-then-since fetch
+// for /api/sync/messages. Per-row ownership is enforced via the parent
+// conversation's userId FK at query time (no per-message FK to user).
+export const messages = sqliteTable(
+  "messages",
+  {
+    id: text("id").primaryKey(), // UUID, client-generated
+    conversationId: text("conversation_id").notNull(), // FK to conversations.id
+    role: text("role").notNull(), // 'user' | 'assistant'
+    content: text("content").notNull(),
+    sourceChunks: text("source_chunks"), // JSON-serialized SourceChunk[]
+    createdAt: integer("created_at").notNull(), // Unix timestamp ms
+    updatedAt: integer("updated_at").notNull(), // Unix timestamp ms
+    syncVersion: integer("sync_version").default(0),
+    isDirty: integer("is_dirty", { mode: "boolean" }).default(true),
+    isDeleted: integer("is_deleted", { mode: "boolean" }).default(false),
+  },
+  (t) => ({
+    byConvUpdated: index("messages_conv_updated_idx").on(t.conversationId, t.updatedAt),
+  }),
+);
 
 // ─── Book pages: extracted plain text per page ───────────────────────────────
 // Populated once at import time by rishi-pdf-extractor. Coordinates everywhere
