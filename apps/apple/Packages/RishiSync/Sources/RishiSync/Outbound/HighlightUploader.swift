@@ -8,7 +8,7 @@ import RishiLogging
 /// SYNC-01 (highlights family). Highlights pulled out of HighlightStore are
 /// pushed as live changes; queued ids without a backing row are tombstoned
 /// via `deleted=true` so the worker can propagate the delete to other devices.
-public final class HighlightUploader: @unchecked Sendable {
+public final class HighlightUploader: Sendable {
 
     public enum UploadError: Error, Sendable {
         case encodingFailed(String)
