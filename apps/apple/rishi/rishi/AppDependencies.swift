@@ -424,9 +424,7 @@ final class AppDependencies {
                 // unblocked. Failures inside `prewarm` are silent by
                 // contract — the cold-open path remains the fallback.
                 Task.detached(priority: .userInitiated) {
-                    guard let book = try? await bookStore.book(bookId),
-                          let book
-                    else { return }
+                    guard let book = try? await bookStore.book(bookId) else { return }
                     let url = await bookFileStorage.absoluteFileURL(for: book)
                     await bookPrewarmer.prewarm(book: book, fileURL: url)
                 }
