@@ -285,3 +285,7 @@ the cost-benefit favors deferral.
   effort.
 - Revisit Merges 2, 4, 5 only if a concrete pain point (e.g. an audio
   session bug that crosses RishiAudio/RishiVoice) surfaces post-ship.
+
+---
+
+**End of the reading order.** Return to the [contributor README](../README.md) when you're ready to start writing code.

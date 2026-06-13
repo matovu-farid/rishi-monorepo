@@ -48,3 +48,7 @@ Read Aloud turns the page the reader is on into spoken audio. The user taps a sp
 
 - The audio category is `.playback` with mode `.spokenAudio`. Do not change it locally; route everything through `AudioSessionCoordinator.requestActiveMode(.tts)`.
 - TTS is a Pro feature. The UI surface checks the billing entitlement before showing the Read Aloud control.
+
+---
+
+**Next:** [billing.md](billing.md) — StoreKit, paywall, entitlements.

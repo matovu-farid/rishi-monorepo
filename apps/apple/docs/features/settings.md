@@ -49,3 +49,7 @@ Settings is the single screen reached from the user-avatar button in the top bar
 
 - The avatar button that opens Settings lives in the app target, not in this package — the package only provides the screen and expects the caller to present it as a sheet.
 - Manage Subscriptions is the system sheet; do not roll a custom subscription-management screen. App Review will flag a duplicate.
+
+---
+
+**Next:** [../architecture/package-consolidation.md](../architecture/package-consolidation.md) — optional reference: which packages we considered merging and why we deferred.

@@ -81,3 +81,7 @@ database and pushes them out.
 - Dates over the wire are seconds-since-2001 (Apple's reference date),
   not Unix epoch. Set on `WorkerClient` and matched server-side. Do
   not change without a coordinated worker-side change.
+
+---
+
+**Next:** [chat.md](chat.md) — text chat over a book with streaming replies.

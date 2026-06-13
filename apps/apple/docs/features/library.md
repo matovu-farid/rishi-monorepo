@@ -64,3 +64,7 @@ to the same stores; the Library never calls them directly.
 - Sample books are bundled in the package's resources and installed on
   first launch by `SampleBookInstaller`. If they do not appear, check
   that `Bundle.module` resolves for the target.
+
+---
+
+**Next:** [auth.md](auth.md) — sign-in. Required reading before any cloud-touching feature (sync, chat, voice, billing).

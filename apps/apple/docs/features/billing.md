@@ -48,3 +48,7 @@ Billing decides whether the current user is on the free tier or on Rishi Pro, se
 
 - Never call `AppStore.sync()` opportunistically — Apple shows a sign-in prompt every time. Only call it from the user-initiated Restore button.
 - Receipt verification goes through the worker, not directly to Apple, because the worker is the source of truth for the entitlement record.
+
+---
+
+**Next:** [onboarding.md](onboarding.md) — first-run flow.

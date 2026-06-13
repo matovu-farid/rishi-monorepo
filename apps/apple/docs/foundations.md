@@ -27,3 +27,7 @@ Foundations are the horizontal Swift packages that user-facing features depend o
 ## RishiTesting
 
 `apps/apple/Packages/RishiTesting/` is the test-support package. It owns the in-memory fakes for every RishiCore store (`InMemoryBookStore`, `InMemoryPositionStore`, and the rest), service fakes (`FakeAuthService`, `FakeChatService`, `MockWorkerClient`), book and message fixtures, and the conformance helpers (`assertBookStoreConformance`, and so on) that GRDB stores and in-memory stores both run against. The rule that catches people: RishiTesting has zero dependency on XCTest. The conformance helpers `throw RishiTestingError` rather than calling `XCTAssert`, because they are reused from Swift Testing targets (`@Test`, `#expect`). All tests in this project use Swift Testing — no XCTest. If you find yourself wanting to add `import XCTest`, stop and use `#expect` instead.
+
+---
+
+**Next:** [architecture/feature-map.md](architecture/feature-map.md) — feature-to-package lookup table. Use it to answer "where is X handled?"

@@ -74,3 +74,7 @@ and on EPUB tune typography.
   interchangeable.
 - `BookPrewarmer` kicks off a parse at import time. If you change
   import flow, make sure the prewarm hook still fires.
+
+---
+
+**Next:** [sync.md](sync.md) — how local reader state (positions, highlights, conversations) travels to the worker and back.

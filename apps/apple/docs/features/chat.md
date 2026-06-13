@@ -70,3 +70,7 @@ a small protocol seam wired in the app's composition root.
 - Embeddings and retrieval-augmented generation happen on the worker.
   There is no on-device vector store; do not add one without
   coordinating with the worker team.
+
+---
+
+**Next:** [voice.md](voice.md) — real-time voice conversation.

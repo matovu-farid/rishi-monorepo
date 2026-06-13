@@ -28,6 +28,46 @@ on-device database, `RishiAPI` for the Cloudflare Worker client,
 `RishiTesting`). A feature can import a foundation; the reverse is
 forbidden by the package manifests.
 
+## Reading order
+
+If you are reading top to bottom rather than looking up a specific
+feature, follow this sequence. Each page ends with a "Next:" link
+pointing to the next one.
+
+1. **This page (`README.md`)** — what the app is, the mental model, how
+   to build and test.
+2. **[foundations.md](foundations.md)** — the horizontal packages every
+   feature builds on (Core, DB, API, UIKit, Logging, Testing). Read
+   this before any feature page; the vocabulary it introduces shows up
+   everywhere else.
+3. **[architecture/feature-map.md](architecture/feature-map.md)** —
+   navigational reference: feature → primary package → also-touches.
+   Use this whenever you ask "where is X handled?"
+4. **[features/library.md](features/library.md)** — the entry-point
+   feature. What the user sees when they open the app.
+5. **[features/auth.md](features/auth.md)** — sign-in. Read before any
+   cloud-touching feature (sync, chat, voice, billing all assume an
+   authenticated user).
+6. **[features/reader.md](features/reader.md)** — the heart of the app:
+   PDF + EPUB reading, highlights, themes, position persistence.
+7. **[features/sync.md](features/sync.md)** — how local reader state
+   (positions, highlights, conversations) travels to the worker and
+   back.
+8. **[features/chat.md](features/chat.md)** — text chat over a book.
+9. **[features/voice.md](features/voice.md)** — real-time voice
+   conversation.
+10. **[features/audio-tts.md](features/audio-tts.md)** — text-to-speech
+    read-aloud.
+11. **[features/billing.md](features/billing.md)** — StoreKit, paywall,
+    entitlements.
+12. **[features/onboarding.md](features/onboarding.md)** — first-run
+    flow.
+13. **[features/settings.md](features/settings.md)** — settings screen
+    and preferences.
+14. **[architecture/package-consolidation.md](architecture/package-consolidation.md)** —
+    historical reference: which packages we considered merging, why we
+    deferred. Optional reading.
+
 ## Where to look for a feature
 
 | If you want to work on… | Read |

@@ -85,3 +85,7 @@ The app target wires this into the root scene.
 **"Where do test fakes live?"**
 RishiTesting/Sources/. Each feature package imports it only from its
 `Tests/` target (never from production sources).
+
+---
+
+**Next:** [../features/library.md](../features/library.md) — the entry-point feature: what the user sees when they open the app.

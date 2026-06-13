@@ -46,3 +46,7 @@ Authentication signs the user in, keeps a session token in the device keychain, 
 
 - The bearer token attached to worker requests comes from the keychain via `RishiAuthTokenProvider`. Do not cache it elsewhere — keychain is the single source of truth.
 - `DevBypassConfig` exists only in DEBUG builds; the symbol is physically absent from Release binaries so it cannot be referenced from shipping code.
+
+---
+
+**Next:** [reader.md](reader.md) — the heart of the app: PDF + EPUB reading, highlights, themes, position persistence.

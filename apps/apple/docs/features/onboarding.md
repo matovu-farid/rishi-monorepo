@@ -46,3 +46,7 @@ Onboarding is the short flow a new user sees the first time they open the app. I
 
 - The flow is shown as a `.fullScreenCover` from the app root. Do not try to wrap it in a `.sheet` — the welcome step assumes full-screen layout.
 - Completion is tied to the persisted flag, not to reaching the last screen. If you change the order of stages, double-check that the final stage still calls `setHasCompletedOnboarding(true)` before dismissing.
+
+---
+
+**Next:** [settings.md](settings.md) — settings screen and preferences.
