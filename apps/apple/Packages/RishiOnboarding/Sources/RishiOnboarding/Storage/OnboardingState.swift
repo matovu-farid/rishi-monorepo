@@ -16,6 +16,11 @@ public protocol OnboardingState: Sendable {
 
 /// UserDefaults-backed implementation. Defaults to `.standard`; tests pass a
 /// scratch suite so they don't pollute the host defaults.
+///
+/// @unchecked Sendable justified: holds `let defaults: UserDefaults`, which
+/// is non-Sendable under Swift 6 strict concurrency despite Apple's documented
+/// thread safety for the scalar accessors used here. Mirrors the same pattern
+/// across the codebase (UserDefaultsReaderSettingsStore, etc.).
 public final class UserDefaultsOnboardingState: OnboardingState, @unchecked Sendable {
 
     fileprivate static let keyCompleted    = "onboarding.completed"
