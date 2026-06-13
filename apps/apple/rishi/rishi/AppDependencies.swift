@@ -131,6 +131,19 @@ final class AppDependencies {
     /// moved to ``bootstrap()`` so there is nothing here that needs main.
     nonisolated init() {
         // Plan 19-01 must-have: this initializer returns in under 10ms.
+
+        // DEBUG-simulator-only file-based log sink. Mirrors every structured
+        // log event into reset-on-launch dump files inside the simulator's
+        // app sandbox so the host (Claude Code orchestrator) can read them
+        // from the Mac via `xcrun simctl get_app_container booted
+        // org.fidexa.rishi data` when triaging a bug report. Returns nil
+        // (no-op) on device or in Release; safe to call unconditionally.
+        // See `apps/apple/scripts/rishi-dump-path.sh` for the host script.
+        #if DEBUG && targetEnvironment(simulator)
+        if let dumpSink = SimulatorDumpSink.make() {
+            Log.installSink(dumpSink)
+        }
+        #endif
     }
 
     // MARK: - Bootstrap (off-main)
