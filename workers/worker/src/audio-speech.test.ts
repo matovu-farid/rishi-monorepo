@@ -214,6 +214,13 @@ const env = {
   PUBLIC_WEB_URL: "https://rishi.fidexa.org",
   // STRIPE_SECRET_KEY left undefined so the sub-gate's billing-disabled path
   // is irrelevant here — we already stubbed the middleware to a pass-through.
+  // Phase 22-01: the speech handler now reads c.env.TTS_CACHE.get(...) before
+  // calling OpenAI. These body-shape tests assert miss-path behavior, so the
+  // stub returns null unconditionally and a no-op put silently succeeds.
+  TTS_CACHE: {
+    get: async () => null,
+    put: async () => ({}),
+  } as unknown as R2Bucket,
 } as unknown as Record<string, unknown>
 
 const ctx = {
