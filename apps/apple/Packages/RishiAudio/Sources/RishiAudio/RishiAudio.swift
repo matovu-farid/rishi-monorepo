@@ -16,9 +16,9 @@ import Foundation
 /// WorkerClient), RishiAuth (AuthService for userId), RishiUIKit (tokens),
 /// RishiLogging (os.Logger). Has NO dependency on RishiReader, RishiSync,
 /// or RishiLibrary — reader integration lives in the rishi/ app layer.
-public enum RishiAudio {
+enum RishiAudio {
     /// Semantic version of the Feature surface. Bump on breaking API changes.
     /// 1.0.0 — Phase 8 complete (controls UI + reader integration shipped
     /// behind FeatureFlags.readAloud).
-    public static let version = "1.0.0"
+    static let version = "1.0.0"
 }
