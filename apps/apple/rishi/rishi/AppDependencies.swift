@@ -423,6 +423,10 @@ final class AppDependencies {
                 // immediately and `LibraryViewModel.refresh()` runs
                 // unblocked. Failures inside `prewarm` are silent by
                 // contract — the cold-open path remains the fallback.
+                // DETACHED: multi-step I/O (bookStore fetch + EPUB unzip
+                // / PDF render); earns the detach per Pattern C (Rule 10
+                // does NOT apply — body is two awaits + dispatch, not a
+                // single actor-method await).
                 Task.detached(priority: .userInitiated) {
                     guard let book = try? await bookStore.book(bookId) else { return }
                     let url = await bookFileStorage.absoluteFileURL(for: book)
