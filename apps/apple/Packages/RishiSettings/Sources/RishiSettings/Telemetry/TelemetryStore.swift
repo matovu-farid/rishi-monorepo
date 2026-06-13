@@ -30,6 +30,10 @@ public struct NoOpTelemetrySink: TelemetrySink {
 
 /// Default UserDefaults-backed store. The sink is invoked synchronously
 /// after persistence so a toggle-off can't be observed in a partial state.
+///
+/// @unchecked Sendable justified: holds `let defaults: UserDefaults`, which
+/// is non-Sendable under Swift 6 strict concurrency despite the documented
+/// thread-safe scalar accessors.
 public final class UserDefaultsTelemetryStore: TelemetryStore, @unchecked Sendable {
 
     /// Persistence key. Stable wire identifier — DO NOT rename without a
