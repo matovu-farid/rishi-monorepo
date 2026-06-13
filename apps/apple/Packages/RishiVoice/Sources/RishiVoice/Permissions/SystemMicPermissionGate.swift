@@ -43,9 +43,9 @@ public struct SystemMicPermissionGate: MicPermissionGate {
 
 /// Production `AudioApplicationProbing` backed by `AVAudioApplication`.
 ///
-/// `@unchecked Sendable` because the type is a stateless struct over OS
-/// singletons; the only mutable surface is the OS itself (thread-safe).
-public struct SystemAudioApplicationProbe: AudioApplicationProbing, @unchecked Sendable {
+/// Stateless struct over OS singletons — the compiler proves Sendable
+/// directly with no stored properties.
+public struct SystemAudioApplicationProbe: AudioApplicationProbing {
     public init() {}
 
     public func currentPermission() -> MicPermissionDecision {
