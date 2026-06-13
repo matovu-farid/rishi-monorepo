@@ -36,6 +36,10 @@ public enum PDFPositionEncoder {
 ///
 /// `userId` is `internal` (not `private`) so the highlight extension landing
 /// in plan 05-06 can pass it through to `HighlightStore.upsert(_:)`.
+/// @unchecked Sendable justified: holds the non-Sendable PDFKit
+/// `PDFDocument?` plus several `var` properties driving the `@Observable`
+/// surface. Mutations are scoped to single methods invoked from main; the
+/// reader screen treats this VM as MainActor-pinned in practice.
 @Observable
 public final class PDFReaderViewModel: @unchecked Sendable {
 
