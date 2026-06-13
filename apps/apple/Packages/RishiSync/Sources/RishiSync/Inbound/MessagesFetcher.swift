@@ -13,7 +13,7 @@ import RishiLogging
 /// Rows whose `role` string doesn't decode into a `MessageRole` (`user` /
 /// `assistant` / `system`) are silently dropped — defensive against a
 /// future worker emitting an unknown role rather than crashing the wave.
-public final class MessagesFetcher: @unchecked Sendable {
+public final class MessagesFetcher: Sendable {
 
     private let workerClient: WorkerClient
     private let metadataStore: any SyncMetadataStore
