@@ -100,8 +100,14 @@ public actor EPUBUnpackedCache {
         if let existing = inflight[bookId] {
             return await existing.value
         }
-        let task = Task { [weak self] () async -> URL? in
-            await self?.performUnpack(bookId: bookId, sourceFileURL: sourceFileURL)
+        // KEEP: actor-method await; the actor already retains this task
+        // in `inflight[bookId]`, so a weak-self capture would orphan the
+        // in-flight unzip if the actor briefly released. Strong capture
+        // is the safe, canonical choice — the task is removed from
+        // `inflight` immediately after `task.value` returns, so the
+        // strong reference does not extend the actor's lifetime.
+        let task = Task { [self] () async -> URL? in
+            await self.performUnpack(bookId: bookId, sourceFileURL: sourceFileURL)
         }
         inflight[bookId] = task
         let result = await task.value
