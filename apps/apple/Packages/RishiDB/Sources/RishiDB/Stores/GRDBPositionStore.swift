@@ -5,7 +5,7 @@ import RishiLogging
 
 /// GRDB-backed `PositionStore`. See `GRDBBookStore` for the `@unchecked
 /// Sendable` rationale.
-public final class GRDBPositionStore: PositionStore, @unchecked Sendable {
+public final class GRDBPositionStore: PositionStore, Sendable {
 
     private let dbQueue: any DatabaseWriter
 
