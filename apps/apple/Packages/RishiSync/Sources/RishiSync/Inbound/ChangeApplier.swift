@@ -23,7 +23,7 @@ import RishiLogging
 /// Every successful apply calls
 /// `markClean(entityId: change.id, kind: ..., lastSyncedAt: change.updatedAt)`
 /// so the inbound wave doesn't re-surface on the next outbound push.
-public final class ChangeApplier: @unchecked Sendable {
+public final class ChangeApplier: Sendable {
 
     public struct ApplyResult: Sendable, Equatable {
         public var applied: Int = 0
