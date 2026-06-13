@@ -18,11 +18,11 @@ import Foundation
 /// Feature package RishiLibrary (BookFileStorage for resolving file URLs).
 /// Has no dependency on RishiReader — the reader writes Positions; this
 /// package reads them.
-public enum RishiSync {
+enum RishiSync {
     /// Semantic version of the Feature surface. Bump on breaking API changes.
-    public static let version = "0.1.0-scaffold"
+    static let version = "0.1.0-scaffold"
 
     /// Wire-format tag for sync payloads. Schema changes require a bump
     /// AND a decoder fallback that still accepts the prior version.
-    public static let wireFormat = "sync-v1"
+    static let wireFormat = "sync-v1"
 }

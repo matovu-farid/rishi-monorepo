@@ -14,9 +14,9 @@ import RishiCore
 /// Schema changes require:
 ///   1. Bumping `RishiSync.wireFormat` to `sync-v2`.
 ///   2. Adding a decoder fallback that still accepts sync-v1.
-public enum SyncPayloadCodec {
+enum SyncPayloadCodec {
 
-    public enum CodecError: Error, Sendable, Equatable {
+    enum CodecError: Error, Sendable, Equatable {
         case unsupportedKind(String)
         case decodeFailed(kind: String, underlying: String)
     }
