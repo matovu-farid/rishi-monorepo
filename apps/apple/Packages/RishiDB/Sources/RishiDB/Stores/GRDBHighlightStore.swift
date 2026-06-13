@@ -6,7 +6,7 @@ import RishiLogging
 /// GRDB-backed `HighlightStore`. See `GRDBBookStore` for the `@unchecked
 /// Sendable` rationale (mutable state is the injected DatabaseQueue, which
 /// already serialises access).
-public final class GRDBHighlightStore: HighlightStore, @unchecked Sendable {
+public final class GRDBHighlightStore: HighlightStore, Sendable {
 
     private let dbQueue: any DatabaseWriter
 
