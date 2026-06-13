@@ -1,0 +1,125 @@
+import Foundation
+import RishiLogging
+
+/// Wraps any upstream `TTSChunkSource` with a file-backed LRU cache.
+///
+/// Hit: yields cached bytes in 16 KiB chunks without touching upstream.
+/// Miss: tees upstream chunks into `<key>.mp3.partial`; atomic-renames to `<key>.mp3`
+///       on stream completion. On error or cancel, leaves `.partial` in place for the
+///       LRU sweep to evict — never promotes a half-written file.
+public actor CachingTTSChunkSource: TTSChunkSource {
+    private let upstream: any TTSChunkSource
+    private let store: TTSAudioCacheStore
+
+    public init(upstream: any TTSChunkSource, store: TTSAudioCacheStore) {
+        self.upstream = upstream
+        self.store = store
+    }
+
+    public nonisolated func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task { [self] in
+                let key = TTSCacheKey.compute(
+                    text: request.text,
+                    voice: request.voice,
+                    speed: request.speed
+                )
+
+                if let hitURL = await self.store.read(key: key) {
+                    Log.event("tts.cache.hit", level: .info, data: ["key_prefix": String(key.prefix(8))])
+                    do {
+                        try await Self.streamFile(at: hitURL, into: continuation)
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                    return
+                }
+
+                Log.event("tts.cache.miss", level: .info, data: ["key_prefix": String(key.prefix(8))])
+                await self.streamMiss(request: request, key: key, into: continuation)
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    // MARK: - Hit path: stream the cached file in 16 KiB chunks
+
+    private static func streamFile(
+        at url: URL,
+        into continuation: AsyncThrowingStream<Data, Error>.Continuation
+    ) async throws {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let chunkSize = 16 * 1024
+        while true {
+            try Task.checkCancellation()
+            let chunk = try handle.read(upToCount: chunkSize) ?? Data()
+            if chunk.isEmpty { return }
+            continuation.yield(chunk)
+        }
+    }
+
+    // MARK: - Miss path: tee upstream chunks to `.partial` then atomic-rename
+
+    private func streamMiss(
+        request: TTSStreamRequest,
+        key: String,
+        into continuation: AsyncThrowingStream<Data, Error>.Continuation
+    ) async {
+        let partialURL: URL
+        do {
+            partialURL = try await store.beginWrite(key: key)
+        } catch {
+            // If we cannot open a partial, fall back to passthrough: don't fail the user.
+            Log.event("tts.cache.beginWrite.failed", level: .error, data: ["error": "\(error)"])
+            await passthrough(request: request, into: continuation)
+            return
+        }
+
+        guard let handle = try? FileHandle(forWritingTo: partialURL) else {
+            Log.event("tts.cache.openWrite.failed", level: .error, data: [:])
+            await store.discard(key: key)
+            await passthrough(request: request, into: continuation)
+            return
+        }
+
+        var committed = false
+        do {
+            for try await chunk in upstream.stream(request: request) {
+                try Task.checkCancellation()
+                continuation.yield(chunk)
+                try handle.write(contentsOf: chunk)
+            }
+            try? handle.close()
+            try await store.commit(key: key)
+            committed = true
+            continuation.finish()
+        } catch is CancellationError {
+            try? handle.close()
+            if !committed { await store.discard(key: key) }
+            continuation.finish(throwing: CancellationError())
+        } catch {
+            try? handle.close()
+            if !committed { await store.discard(key: key) }
+            continuation.finish(throwing: error)
+        }
+    }
+
+    /// Last-resort: pass upstream bytes through without writing to disk.
+    /// Reached only when the cache store itself is broken (cannot create partial).
+    private func passthrough(
+        request: TTSStreamRequest,
+        into continuation: AsyncThrowingStream<Data, Error>.Continuation
+    ) async {
+        do {
+            for try await chunk in upstream.stream(request: request) {
+                try Task.checkCancellation()
+                continuation.yield(chunk)
+            }
+            continuation.finish()
+        } catch {
+            continuation.finish(throwing: error)
+        }
+    }
+}
