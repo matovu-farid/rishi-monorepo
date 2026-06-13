@@ -16,7 +16,7 @@ import RishiLogging
 /// Errors at step 1 or 2 leave the row dirty so the next sync wave retries.
 /// The uploader does NOT touch SyncQueue — `SyncEngine` (07-04) is the only
 /// consumer of the queue; this class is a single-shot pure async function.
-public final class BookUploader: @unchecked Sendable {
+public final class BookUploader: Sendable {
 
     public enum UploadError: Error, Sendable {
         case bytesUnreadable(URL)
