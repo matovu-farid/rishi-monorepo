@@ -175,11 +175,28 @@ public struct GetSessionEndpoint: WorkerEndpoint {
 
     public struct ProfileResponse: Decodable, Sendable, Equatable {
         public let user: SessionUser
+        /// `false` when the worker payload omits `has_pro` entirely.
+        /// The worker side of `/api/auth/get-session` does not always
+        /// emit `has_pro` (it's set only when the entitlement projection
+        /// runs server-side), so the client treats absence as the
+        /// safer "free tier" default rather than failing the whole
+        /// decode and breaking session hydration.
         public let hasPro: Bool
 
         enum CodingKeys: String, CodingKey {
             case user
             case hasPro = "has_pro"
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.user = try container.decode(SessionUser.self, forKey: .user)
+            self.hasPro = try container.decodeIfPresent(Bool.self, forKey: .hasPro) ?? false
+        }
+
+        public init(user: SessionUser, hasPro: Bool) {
+            self.user = user
+            self.hasPro = hasPro
         }
     }
 }

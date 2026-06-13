@@ -32,6 +32,23 @@ struct EndpointCodableTests {
         #expect(r == nil)
     }
 
+    /// Phase 21 — the production worker can return a session payload that
+    /// does NOT include `has_pro` (the entitlement projection is layered
+    /// on a separate code path that does not always run). The client must
+    /// treat absence as `hasPro = false` rather than failing the decode
+    /// — otherwise the worker contract drift breaks `EntitlementService
+    /// .refresh()` and the user loses Pro features entirely on app start.
+    /// Reproduces the `keyNotFound("has_pro")` error reported in the
+    /// reader log dump.
+    @Test func getSessionResponseDecodesWhenHasProMissing() throws {
+        let json = #"""
+        {"user":{"id":"u","email":"x@y","display_name":null,"avatar_url":null}}
+        """#
+        let r = try JSONDecoder().decode(GetSessionEndpoint.ProfileResponse.self, from: Data(json.utf8))
+        #expect(r.hasPro == false)
+        #expect(r.user.id == "u")
+    }
+
     @Test func signOutAndDeleteUserPathsAreCorrect() {
         #expect(SignOutEndpoint().path == "/api/auth/sign-out")
         #expect(DeleteUserEndpoint().path == "/api/auth/delete-user")
