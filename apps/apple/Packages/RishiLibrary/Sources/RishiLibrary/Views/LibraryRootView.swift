@@ -32,6 +32,14 @@ private let librarySignposter = OSSignposter(
 /// Reads `LibraryViewModel` from the SwiftUI environment via
 /// `@Environment(LibraryViewModel.self)` — paired with `.environment(deps.libraryViewModel)`
 /// in `rishiApp` so every descendant sees the same `@Observable` instance.
+///
+/// Phase 21 Plan 21-01 — `LibraryViewModel.refresh()` now owns the cover-URL
+/// fan-out via the nonisolated `BookFileStorage.cachedCoverURLIfFresh` fast
+/// path, so this view no longer maintains a `@State` cover-URL dictionary
+/// nor runs a post-render `reloadCovers()` wave. The grid binds the
+/// `coverURL:` projection directly to `vm.coverURLs`, so cache-warm books
+/// render real covers on the first paint after `await vm.refresh()`
+/// returns.
 @MainActor
 public struct LibraryRootView: View {
 
@@ -62,7 +70,6 @@ public struct LibraryRootView: View {
     private let externalPath: Binding<NavigationPath>?
 
     @State private var showDocumentPicker = false
-    @State private var coverURLs: [BookID: URL] = [:]
 
     /// Legacy initializer — wraps content in a self-owned NavigationStack.
     /// Kept for previews + future callers that want the simple shape.
@@ -108,16 +115,13 @@ public struct LibraryRootView: View {
         .librarySearchable(text: $vm.searchText,
                            filteredIsEmpty: !vm.searchText.isEmpty && vm.filteredBooks.isEmpty)
         .libraryDropDestination(coordinator: importCoordinator) { outcomes in
-            // KEEP: vm.refresh and reloadCovers both await actor methods
-            // (BookStore + storage); outer Task chains the awaits. UI state
-            // writes happen inside `refresh` on its own MainActor isolation.
+            // Phase 21 Plan 21-01 — `vm.refresh()` now owns the cover-URL
+            // fan-out internally (nonisolated cache fast path inside a
+            // withTaskGroup), so the post-refresh `reloadCovers()` wave is
+            // gone. The host's auto-open hook still fires AFTER refresh so
+            // bookHints + path push see the new book in `vm.books`.
             Task {
                 await vm.refresh()
-                await reloadCovers()
-                // Phase 21 follow-up — surface batch outcomes to host so
-                // single-book imports auto-open the reader. Fire AFTER the
-                // refresh so the host's bookHints + path push see the new
-                // book in `vm.books`.
                 onImported?(outcomes)
             }
         }
@@ -126,18 +130,17 @@ public struct LibraryRootView: View {
             DocumentPickerView { urls in
                 showDocumentPicker = false
                 guard !urls.isEmpty else { return }
+                // Phase 21 Plan 21-01 — `vm.refresh()` owns the cover-URL
+                // fan-out, so the prior `reloadCovers()` follow-up is gone.
                 // KEEP: closure runs on @MainActor (DocumentPickerView's
                 // onPicked is MainActor-isolated). importBooks is an actor
                 // method (ImportCoordinator actor) so the heavy file copy +
-                // cover extract + DB write runs on the actor's executor, not
-                // main; vm.refresh + reloadCovers re-enter MainActor only to
-                // commit the @Observable + @State writes. Detaching would
-                // sever the @Bindable @MainActor capture of `vm`.
+                // cover extract + DB write runs on the actor's executor;
+                // vm.refresh re-enters MainActor only to commit the
+                // @Observable writes.
                 Task {
                     let outcomes = await importCoordinator.importBooks(urls)
                     await vm.refresh()
-                    await reloadCovers()
-                    // Phase 21 follow-up — auto-open hook (see drop above).
                     onImported?(outcomes)
                 }
             }
@@ -145,34 +148,17 @@ public struct LibraryRootView: View {
         #endif
         .task {
             // Phase 19 Plan 19-08 (F-P2-04) — wrap the first-paint hot path
-            // so Instruments captures the combined cost of viewModel.refresh
-            // (GRDB book fetch) and reloadCovers (parallel cover-URL fan-out).
-            // Pure additive; behavior is unchanged.
+            // so Instruments captures the cost of viewModel.refresh, which
+            // (post Phase 21 Plan 21-01) ALSO owns the parallel cover-URL
+            // fan-out via the nonisolated cache fast path. The interval
+            // therefore still captures the full first-paint cost. The
+            // previously-paired `.task(id: vm.books.map(\.id))` catch-up
+            // wave is gone too: any later refresh re-publishes coverURLs
+            // in the same MainActor turn as `vm.books`, so SwiftUI's diff
+            // sees real URLs in the same render pass.
             let state = librarySignposter.beginInterval("library.first-paint")
             defer { librarySignposter.endInterval("library.first-paint", state) }
             await vm.refresh()
-            await reloadCovers()
-        }
-        // Phase 21 follow-up — reload covers whenever the underlying book
-        // set changes. Without this, a refresh that arrives AFTER first
-        // paint (e.g. the host's `.task(id: user.id)` that runs the sample
-        // book installer THEN calls `vm.refresh()`, or the inner `.task`
-        // observing an empty DB before the installer finished) updates
-        // `vm.books` via @Observable, re-renders the tiles, but never
-        // republishes `coverURLs` — every tile falls back to the gradient
-        // placeholder. Tapping a book and navigating back re-runs the
-        // outer `.task` against the now-populated book list, which is why
-        // the symptom is "covers only show up after I open a book and
-        // come back".
-        //
-        // Keying off the book-id list (not `vm.books` directly) collapses
-        // no-op re-orderings — we only want to re-fan-out when the
-        // membership actually changed. The first-paint `.task` above ALSO
-        // calls `reloadCovers()` so the warm-path stays inside the
-        // signposted first-paint interval; this `.task(id:)` is the
-        // catch-up that fires when a later refresh expands the list.
-        .task(id: vm.books.map(\.id)) {
-            await reloadCovers()
         }
         // Phase 12 Plan 12-01 — Mac menu / ⌘O routes through here so the
         // existing iOS toolbar button and the Catalyst menu share one path.
@@ -196,7 +182,7 @@ public struct LibraryRootView: View {
             books: vm.searchText.isEmpty ? vm.books : vm.filteredBooks,
             readingNow: vm.readingNow,
             positionLookup: { vm.position(for: $0) },
-            coverURL: { coverURLs[$0.id] },
+            coverURL: { vm.coverURLs[$0.id] },
             onOpen: onOpenBook,
             // KEEP: vm.delete is @MainActor (LibraryViewModel @MainActor); the
             // BookFileStorage delete inside it hops to its own actor executor.
@@ -221,44 +207,6 @@ public struct LibraryRootView: View {
                     }
                 }
             }
-        }
-    }
-
-    private func reloadCovers() async {
-        let books = viewModel.books
-        let pairs = await Self.computeCoverURLs(books: books) { [viewModel] book in
-            await viewModel.coverURL(for: book)
-        }
-        coverURLs = pairs
-    }
-
-    /// Phase 19 Plan 19-02 (F-P0-02) — parallelisable kernel of `reloadCovers`.
-    ///
-    /// Replaces the prior serial `for book in books { await ... }` loop with a
-    /// `withTaskGroup` parallel fan-out per Swift book / "Calling Asynchronous
-    /// Functions in Parallel". For a 50-book library this collapses 50 serial
-    /// MainActor hops into one `await` that resumes once all child tasks have
-    /// completed concurrently.
-    ///
-    /// `nonisolated` because the body does no UI state mutation — every value
-    /// flowing through is `Sendable` and the result dictionary is returned to
-    /// the caller, who owns the @State write back on MainActor.
-    nonisolated static func computeCoverURLs(
-        books: [Book],
-        coverURLFor: @Sendable @escaping (Book) async -> URL?
-    ) async -> [BookID: URL] {
-        await withTaskGroup(of: (BookID, URL?).self) { group in
-            for book in books {
-                group.addTask {
-                    let url = await coverURLFor(book)
-                    return (book.id, url)
-                }
-            }
-            var out: [BookID: URL] = [:]
-            for await (id, url) in group {
-                if let url { out[id] = url }
-            }
-            return out
         }
     }
 }
