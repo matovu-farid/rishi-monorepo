@@ -11,8 +11,8 @@ import AVFAudio
 /// 2. After mid-play cancellation, `engine.stop()` remains reachable without
 ///    hanging.
 ///
-/// Phase 23 promised these properties when the protocol moved from
-/// `schedule(buffer:completion:)` + escaping closure to AsyncSequence-in /
+/// Phase 23 promised these properties when the protocol moved from the
+/// pre-refactor schedule + escaping-closure shape to AsyncSequence-in /
 /// AsyncStream-out. The test asserts them against the production-faithful
 /// `FakeAudioEngine` so a future regression (e.g. dropping the
 /// `continuation.onTermination = { _ in task.cancel() }` line inside the
