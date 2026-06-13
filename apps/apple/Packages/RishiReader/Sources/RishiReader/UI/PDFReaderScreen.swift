@@ -290,6 +290,21 @@ public struct PDFReaderScreen: View {
                 }
             }
         }
+        // Phase 21 Plan 21-03 — cold-open overlay. Driven off the VM's
+        // `loadingState` so the user never lands on a blank white page
+        // during the multi-second `PDFDocument(url:)` parse. `.idle`
+        // is treated as "still loading" — covers the brief window
+        // before `.task` runs `load()` and flips state to `.loading`.
+        .overlay {
+            switch viewModel.loadingState {
+            case .idle, .loading:
+                ReaderColdOpenOverlay(bookTitle: viewModel.book.title)
+            case .failed(let reason):
+                ReaderColdOpenFailureOverlay(bookTitle: viewModel.book.title, reason: reason)
+            case .loaded:
+                EmptyView()
+            }
+        }
         // Phase 18 Plan 18-02 — F-P1-01.
         // Native SwiftUI haptics. SwiftUI fires the haptic each time the
         // trigger value changes. Page-turn call sites bump
@@ -596,6 +611,62 @@ private final class PreviewAccessibility: AccessibilityProviding {
     var isVoiceOverRunning: Bool { false }
 }
 #endif
+
+/// Phase 21 Plan 21-03 — native SwiftUI overlay shown while the reader
+/// view-model's `load()` is still resolving the document. Uses stock
+/// `ProgressView` per the Phase 18 native-UI rule; the book title is
+/// the only customisation. SwiftUI gates the spinner on Reduce Motion
+/// automatically — no manual handling required.
+private struct ReaderColdOpenOverlay: View {
+    let bookTitle: String
+    var body: some View {
+        ZStack {
+            RishiColor.background.opacity(0.95).ignoresSafeArea()
+            VStack(spacing: RishiSpacing.m) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .scaleEffect(1.2)
+                Text("Opening \(bookTitle)")
+                    .font(RishiTypography.bodyEmphasized)
+                    .foregroundStyle(RishiColor.textPrimary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, RishiSpacing.l)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Opening \(bookTitle)")
+    }
+}
+
+/// Phase 21 Plan 21-03 — overlay shown when `load()` fails so the user
+/// is never left on a blank screen. Native SwiftUI only.
+private struct ReaderColdOpenFailureOverlay: View {
+    let bookTitle: String
+    let reason: String
+    var body: some View {
+        ZStack {
+            RishiColor.background.ignoresSafeArea()
+            VStack(spacing: RishiSpacing.m) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.largeTitle)
+                    .foregroundStyle(RishiColor.textPrimary)
+                Text("Could not open \(bookTitle)")
+                    .font(RishiTypography.bodyEmphasized)
+                    .foregroundStyle(RishiColor.textPrimary)
+                Text(reason)
+                    .font(RishiTypography.body)
+                    .foregroundStyle(RishiColor.textPrimary.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, RishiSpacing.l)
+                    .lineLimit(3)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Could not open \(bookTitle). \(reason)")
+    }
+}
 
 private actor PDFPreviewPositionStore: PositionStore {
     func position(for bookId: BookID) async throws -> Position? { nil }
