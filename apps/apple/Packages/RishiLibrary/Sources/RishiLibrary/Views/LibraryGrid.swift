@@ -17,8 +17,13 @@ public struct LibraryGrid: View {
 
     @State private var pendingDelete: Book?
 
+    /// Fixed 2-column grid. Phase 21 UI pass: the prior adaptive layout
+    /// combined with per-tile text labels produced uneven row heights and
+    /// visible bleed between rows. A fixed 2-column grid + fixed 2:3 aspect
+    /// tiles + no per-tile chrome guarantees a uniform mosaic.
     private let columns: [GridItem] = [
-        GridItem(.adaptive(minimum: 140), spacing: RishiSpacing.m)
+        GridItem(.flexible(), spacing: RishiSpacing.m),
+        GridItem(.flexible(), spacing: RishiSpacing.m)
     ]
 
     public init(books: [Book],
@@ -74,20 +79,14 @@ public struct LibraryGrid: View {
         Button {
             onOpen(book)
         } label: {
-            VStack(alignment: .leading, spacing: RishiSpacing.xs) {
-                BookCoverImageView(book: book, coverURL: coverURL(book))
-                    .frame(height: 200)
-                Text(book.title)
-                    .font(RishiTypography.bodyEmphasized)
-                    .foregroundStyle(RishiColor.textPrimary)
-                    .lineLimit(1)
-                if let author = book.author, !author.isEmpty {
-                    Text(author)
-                        .font(RishiTypography.caption)
-                        .foregroundStyle(RishiColor.textSecondary)
-                        .lineLimit(1)
-                }
-            }
+            // Phase 21 UI pass: the tile is pure cover art at a fixed 2:3
+            // portrait aspect ratio (standard book-cover proportion). No
+            // title / author labels — they pushed multi-line text into the
+            // next row's tile and made the grid look ragged. Tap reveals
+            // the book; VoiceOver still announces "<title> by <author>"
+            // via the accessibility label below.
+            BookCoverImageView(book: book, coverURL: coverURL(book))
+                .aspectRatio(2.0 / 3.0, contentMode: .fit)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)

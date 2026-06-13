@@ -28,6 +28,7 @@ public actor BookFileStorage {
     private let bookStore: any BookStore
     private let coverExtractors: [String: any CoverExtractor]
     private let fileManager: FileManager
+    private let coverCache: CoverCache?
 
     public init(
         rootURL: URL,
@@ -40,6 +41,25 @@ public actor BookFileStorage {
         self.bookStore = bookStore
         self.coverExtractors = coverExtractors
         self.fileManager = fileManager
+        // Phase 21: opportunistic disk cache for extracted covers. Lives under
+        // `<root>/Caches/book-covers/` so we don't pollute the Books layout.
+        // The cache is only useful when we have extractors to delegate to; in
+        // test fixtures that pass `coverExtractors: [:]` we leave it nil so
+        // the legacy "cover.png-only" path is preserved.
+        if coverExtractors.isEmpty {
+            self.coverCache = nil
+        } else {
+            // Pin to `FileManager.default` (documented thread-safe) so the
+            // cache can be created from this @MainActor / nonisolated init
+            // without tripping Swift 6 strict-concurrency `sending` rules.
+            // The init parameter still threads through a custom FileManager
+            // for the synchronous in-actor operations (copyItem, etc.).
+            self.coverCache = CoverCache(
+                cacheDir: rootURL
+                    .appendingPathComponent("Caches", isDirectory: true)
+                    .appendingPathComponent("book-covers", isDirectory: true)
+            )
+        }
     }
 
     /// Copies `sourceURL` into the library, inserts a `Book` row, best-effort
@@ -104,6 +124,7 @@ public actor BookFileStorage {
         if fileManager.fileExists(atPath: bookDir.path) {
             try fileManager.removeItem(at: bookDir)
         }
+        await coverCache?.clear(book.id)
         try await bookStore.delete(book.id)
     }
 
@@ -117,10 +138,32 @@ public actor BookFileStorage {
     /// The actor still owns the inputs (`rootURL`, `book.coverPath`, `fileManager`)
     /// so the function remains correct under Swift 6 strict concurrency.
     public func cachedCoverURL(for book: Book) async -> URL? {
-        guard let rel = book.coverPath else { return nil }
-        let url = rootURL.appendingPathComponent(rel)
-        let exists = await Self.fileExistsOffActor(path: url.path)
-        return exists ? url : nil
+        // Path 1 — DB has a `coverPath` recorded at import time. This is the
+        // happy path for books imported after the cover extractor was wired.
+        if let rel = book.coverPath {
+            let url = rootURL.appendingPathComponent(rel)
+            if await Self.fileExistsOffActor(path: url.path) {
+                return url
+            }
+        }
+
+        // Path 2 — fall back to the lazy disk cache. This rescues two
+        // legitimate cases observed in the field:
+        //   1. Books imported before the EPUB extractor was robust (DB
+        //      `coverPath` is NULL even though the file is a valid EPUB).
+        //   2. Books whose `cover.png` was deleted out from under us by an
+        //      iCloud restore that didn't include the per-book directory.
+        // The cache extracts on first miss, persists HEIC, and re-uses it
+        // on subsequent cold launches. Invalidation tracks file mtime.
+        guard let cache = coverCache else { return nil }
+        let ext = (book.fileURL as NSString).pathExtension.lowercased()
+        guard let extractor = coverExtractors[ext] else { return nil }
+        let sourceURL = rootURL.appendingPathComponent(book.fileURL)
+        return await cache.cachedURL(
+            for: book.id,
+            sourceFileURL: sourceURL,
+            extractor: extractor
+        )
     }
 
     /// Phase 19 Plan 19-02 (F-P0-02): dispatch `FileManager.fileExists` into a

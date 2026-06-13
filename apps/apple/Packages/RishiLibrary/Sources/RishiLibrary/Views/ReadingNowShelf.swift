@@ -43,15 +43,12 @@ public struct ReadingNowShelf: View {
         Button {
             onOpen(entry.book)
         } label: {
-            VStack(alignment: .leading, spacing: RishiSpacing.xs) {
-                BookCoverImageView(book: entry.book, coverURL: coverURL(entry.book))
-                    .frame(width: 110, height: 165)
-                Text(entry.book.title)
-                    .font(RishiTypography.caption)
-                    .foregroundStyle(RishiColor.textPrimary)
-                    .lineLimit(1)
-                    .frame(width: 110, alignment: .leading)
-            }
+            // Phase 21 UI pass: pure cover, no per-tile label. The shelf
+            // title ("Reading Now") above already tells the user what this
+            // strip is; VoiceOver announces the book + percent via the
+            // accessibility label.
+            BookCoverImageView(book: entry.book, coverURL: coverURL(entry.book))
+                .frame(width: 110, height: 165)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(entry.book.title), \(Int(entry.percentComplete * 100))% read")

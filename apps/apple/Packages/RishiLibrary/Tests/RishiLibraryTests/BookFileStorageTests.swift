@@ -121,11 +121,13 @@ struct BookFileStorageTests {
     }
 
     @Test
-    func cachedCoverURL_returnsNilWhenCoverPathIsNil() async throws {
-        let root = makeTempRoot("cached")
+    func cachedCoverURL_returnsNilWhenCoverPathIsNilAndSourceMissing() async throws {
+        let root = makeTempRoot("cached-nil")
         defer { try? FileManager.default.removeItem(at: root) }
         let store = InMemoryBookStore()
         let storage = makeStorage(rootURL: root, bookStore: store)
+        // Source file does not exist on disk -> extractor returns nil ->
+        // cache returns nil -> cachedCoverURL returns nil.
         let bookWithoutCover = Book(
             userId: UUID(),
             title: "X",
@@ -135,5 +137,39 @@ struct BookFileStorageTests {
         )
         let url = await storage.cachedCoverURL(for: bookWithoutCover)
         #expect(url == nil)
+    }
+
+    /// Phase 21: rescue path for books imported before the EPUB extractor
+    /// was robust. DB row has `coverPath == nil`, but the on-disk file IS a
+    /// valid EPUB with a cover — `cachedCoverURL` should lazily extract,
+    /// persist to the disk cache, and return a usable URL.
+    @Test
+    func cachedCoverURL_lazilyExtractsWhenCoverPathNilButSourceValid() async throws {
+        let root = makeTempRoot("cached-lazy")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let store = InMemoryBookStore()
+        let storage = makeStorage(rootURL: root, bookStore: store)
+
+        // Build an EPUB inside the storage root at a known relative path so
+        // `BookFileStorage.absoluteFileURL(for:)` resolves correctly.
+        let booksDir = root.appendingPathComponent("Books/legacy", isDirectory: true)
+        try FileManager.default.createDirectory(at: booksDir, withIntermediateDirectories: true)
+        let epubURL = booksDir.appendingPathComponent("legacy.epub")
+        try await FixtureBuilders.writeTinyEPUB(to: epubURL, withCover: true)
+
+        let legacyBook = Book(
+            userId: UUID(),
+            title: "Legacy",
+            formatType: .epub,
+            fileURL: "Books/legacy/legacy.epub",
+            coverPath: nil
+        )
+
+        let url = await storage.cachedCoverURL(for: legacyBook)
+        #expect(url != nil)
+        if let url {
+            #expect(FileManager.default.fileExists(atPath: url.path))
+        }
     }
 }
