@@ -152,8 +152,9 @@ public struct LibraryRootView: View {
             // (post Phase 21 Plan 21-01) ALSO owns the parallel cover-URL
             // fan-out via the nonisolated cache fast path. The interval
             // therefore still captures the full first-paint cost. The
-            // previously-paired `.task(id: vm.books.map(\.id))` catch-up
-            // wave is gone too: any later refresh re-publishes coverURLs
+            // previously-paired id-keyed catch-up `.task` (which re-ran a
+            // separate cover-URL wave when the book set changed) is gone
+            // too: any later refresh re-publishes coverURLs
             // in the same MainActor turn as `vm.books`, so SwiftUI's diff
             // sees real URLs in the same render pass.
             let state = librarySignposter.beginInterval("library.first-paint")
