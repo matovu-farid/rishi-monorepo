@@ -892,7 +892,25 @@ final class AppDependencies {
 
         let coordinator = AudioSessionCoordinator(configurator: configurator)
         let state = TTSPlaybackState()
-        let chunkSource = WorkerTTSChunkSource(client: workerClient)
+        // Phase 22 plan 22-03 — wrap the production WorkerTTSChunkSource in
+        // a CachingTTSChunkSource so repeat plays of the same (text, voice,
+        // speed) on this device round-trip from local disk with zero network
+        // and zero OpenAI cost. If the cache store init throws (e.g. caches
+        // directory cannot be created), fall back to the bare upstream so a
+        // broken cache never breaks TTS. The downstream
+        // `TTSStreamer(source:)` keeps consuming `any TTSChunkSource`, so
+        // the streamer + engine + lock-screen surface need no edit.
+        let ttsUpstream = WorkerTTSChunkSource(client: workerClient)
+        let ttsCacheStore: TTSAudioCacheStore?
+        do {
+            ttsCacheStore = try TTSAudioCacheStore()
+        } catch {
+            Log.event("tts.cache.init.failed", level: .error, data: ["error": "\(error)"])
+            ttsCacheStore = nil
+        }
+        let chunkSource: any TTSChunkSource = ttsCacheStore.map { store in
+            CachingTTSChunkSource(upstream: ttsUpstream, store: store)
+        } ?? ttsUpstream
         let streamer = TTSStreamer(source: chunkSource)
         let engineAdapter = AVAudioEngineAdapter()
         let engine = TTSEngine(
