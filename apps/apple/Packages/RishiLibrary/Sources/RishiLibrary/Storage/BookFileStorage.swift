@@ -27,6 +27,7 @@ public actor BookFileStorage {
     private let booksDirURL: URL
     private let bookStore: any BookStore
     private let coverExtractors: [String: any CoverExtractor]
+    private let metadataExtractors: [String: any MetadataExtractor]
     private let fileManager: FileManager
     private let coverCache: CoverCache?
 
@@ -34,12 +35,14 @@ public actor BookFileStorage {
         rootURL: URL,
         bookStore: any BookStore,
         coverExtractors: [String: any CoverExtractor],
+        metadataExtractors: [String: any MetadataExtractor] = [:],
         fileManager: FileManager = .default
     ) {
         self.rootURL = rootURL
         self.booksDirURL = rootURL.appendingPathComponent("Books", isDirectory: true)
         self.bookStore = bookStore
         self.coverExtractors = coverExtractors
+        self.metadataExtractors = metadataExtractors
         self.fileManager = fileManager
         // Phase 21: opportunistic disk cache for extracted covers. Lives under
         // `<root>/Caches/book-covers/` so we don't pollute the Books layout.
@@ -85,6 +88,17 @@ public actor BookFileStorage {
             throw StorageError.copyFailed(underlying: error)
         }
 
+        // Best-effort metadata extraction (never throws). The fields default
+        // to "filename-derived title + nil author"; whenever the embedded
+        // metadata is present and non-empty it overrides the filename. This
+        // is what makes the search bar actually match the user's "Alice in
+        // Wonderland" mental model instead of the `1751655…_alice.epub`
+        // filename hash.
+        var metadata = BookMetadata()
+        if let extractor = metadataExtractors[ext] {
+            metadata = await extractor.extractMetadata(from: destURL)
+        }
+
         // Best-effort cover extraction (never throws).
         var coverPath: String?
         if let extractor = coverExtractors[ext] {
@@ -106,8 +120,8 @@ public actor BookFileStorage {
         let book = Book(
             id: bookId,
             userId: ownerId,
-            title: titleFallback(from: filename),
-            author: nil,
+            title: metadata.title ?? titleFallback(from: filename),
+            author: metadata.author,
             formatType: format,
             addedAt: Date(),
             openedAt: nil,

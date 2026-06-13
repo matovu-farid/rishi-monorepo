@@ -265,13 +265,21 @@ final class AppDependencies {
         // 8b. Reader settings (per-book theme persistence via UserDefaults).
         let readerSettingsStore = UserDefaultsReaderSettingsStore()
 
-        // 9. Library file storage (cover extractors for the two v1 formats).
+        // 9. Library file storage (cover + metadata extractors for the two v1
+        // formats). Metadata extractors populate `Book.title` / `Book.author`
+        // from `<dc:title>` / `<dc:creator>` (EPUB) or PDFKit
+        // `documentAttributes` (PDF); when they yield nothing the import path
+        // falls back to a filename-derived title.
         let bookFileStorage = BookFileStorage(
             rootURL: documentsURL,
             bookStore: bookStore,
             coverExtractors: [
                 "pdf": PDFKitCoverExtractor(),
                 "epub": EpubCoverExtractor(),
+            ],
+            metadataExtractors: [
+                "pdf": PDFKitMetadataExtractor(),
+                "epub": EpubMetadataExtractor(),
             ]
         )
 

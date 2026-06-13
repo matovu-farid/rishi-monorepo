@@ -21,8 +21,35 @@ struct BookFileStorageTests {
             coverExtractors: [
                 "pdf": PDFKitCoverExtractor(targetSize: CGSize(width: 120, height: 160)),
                 "epub": EpubCoverExtractor()
+            ],
+            metadataExtractors: [
+                "pdf": PDFKitMetadataExtractor(),
+                "epub": EpubMetadataExtractor()
             ]
         )
+    }
+
+    /// Regression: the user reported imports landing as
+    /// `1751655520501062500_alice.epub` with `Book.title` set to that
+    /// filename instead of the embedded `<dc:title>`. The metadata extractor
+    /// must override the filename whenever the OPF carries a non-empty title.
+    @Test
+    func importEPUB_usesEmbeddedDCTitleOverFilename() async throws {
+        let root = makeTempRoot("import-epub-dctitle")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let srcDir = makeTempRoot("import-epub-dctitle-src")
+        defer { try? FileManager.default.removeItem(at: srcDir) }
+        // FixtureBuilders.writeTinyEPUB writes `<dc:title>Fixture Title</dc:title>`.
+        let srcEPUB = srcDir.appendingPathComponent("1751655520501062500_alice.epub")
+        try await FixtureBuilders.writeTinyEPUB(to: srcEPUB, withCover: true)
+
+        let store = InMemoryBookStore()
+        let storage = makeStorage(rootURL: root, bookStore: store)
+        let book = try await storage.importBook(from: srcEPUB, ownerId: UUID())
+
+        #expect(book.title == "Fixture Title")
+        // Author absent from fixture OPF — should be nil rather than filename.
+        #expect(book.author == nil)
     }
 
     @Test
