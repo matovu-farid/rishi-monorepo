@@ -16,7 +16,7 @@ import os
 ///
 /// Production code MUST NOT depend on this type; it lives in the main module
 /// only so Swift Testing can find it under `@testable import RishiAuth`.
-public final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendable {
+final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendable {
 
     private struct Key: Hashable {
         let service: String
@@ -25,14 +25,14 @@ public final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendable
 
     private let storage = OSAllocatedUnfairLock<[Key: Data]>(initialState: [:])
 
-    public init() {}
+    init() {}
 
     /// Snapshot accessor for assertions. Test-only.
-    public func snapshotItemCount() -> Int {
+    func snapshotItemCount() -> Int {
         storage.withLock { $0.count }
     }
 
-    public func add(query: sending [String: Any]) async throws {
+    func add(query: sending [String: Any]) async throws {
         let extracted = Self.extract(from: query)
         guard let key = extracted.key else {
             throw KeychainError.unexpectedStatus(errSecParam)
@@ -48,7 +48,7 @@ public final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendable
         }
     }
 
-    public func copyMatching(query: sending [String: Any]) async throws -> Data? {
+    func copyMatching(query: sending [String: Any]) async throws -> Data? {
         let extracted = Self.extract(from: query)
         guard let key = extracted.key else {
             throw KeychainError.unexpectedStatus(errSecParam)
@@ -56,7 +56,7 @@ public final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendable
         return storage.withLock { $0[key] }
     }
 
-    public func update(query: sending [String: Any], attributes: sending [String: Any]) async throws {
+    func update(query: sending [String: Any], attributes: sending [String: Any]) async throws {
         let extractedQuery = Self.extract(from: query)
         let extractedAttrs = Self.extract(from: attributes)
         guard let key = extractedQuery.key else {
@@ -72,7 +72,7 @@ public final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendable
         }
     }
 
-    public func delete(query: sending [String: Any]) async throws {
+    func delete(query: sending [String: Any]) async throws {
         let extracted = Self.extract(from: query)
         guard let key = extracted.key else {
             throw KeychainError.unexpectedStatus(errSecParam)

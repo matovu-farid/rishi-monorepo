@@ -1,7 +1,7 @@
 import Foundation
 
 /// Typed errors thrown by Keychain operations.
-public enum KeychainError: Error, Equatable, Sendable {
+enum KeychainError: Error, Equatable, Sendable {
     /// Any non-success, non-not-found OSStatus from Security.framework.
     case unexpectedStatus(OSStatus)
     /// Encoder/decoder failure marshalling a Session blob.
