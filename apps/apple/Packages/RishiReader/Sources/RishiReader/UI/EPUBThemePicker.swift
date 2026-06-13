@@ -100,7 +100,7 @@ public struct EPUBThemePicker: View {
     }
 }
 
-private final class EPUBThemePreviewStore: ReaderSettingsStore, @unchecked Sendable {
+private final class EPUBThemePreviewStore: ReaderSettingsStore, Sendable {
     func theme(for bookId: BookID) async -> ReaderTheme { .default }
     func setTheme(_ theme: ReaderTheme, for bookId: BookID) async { }
     func typography(for bookId: BookID) async -> ReaderTypography { .default }
