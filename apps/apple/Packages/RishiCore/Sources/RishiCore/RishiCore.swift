@@ -3,7 +3,7 @@
 
 import Foundation
 
-public enum RishiCore {
+enum RishiCore {
     /// Marker for SemVer of the public RishiCore surface. Bump when public API breaks.
-    public static let apiVersion = "1.0.0"
+    static let apiVersion = "1.0.0"
 }
