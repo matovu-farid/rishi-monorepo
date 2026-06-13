@@ -61,7 +61,7 @@ private enum DragDropPreviewFixtures {
     static let userId: UserID = UUID()
 
     static func makeCoordinator() -> ImportCoordinator {
-        final class EmptyBookStore: BookStore, @unchecked Sendable {
+        final class EmptyBookStore: BookStore, Sendable {
             func books(for userId: UserID) async throws -> [Book] { [] }
             func book(_ id: BookID) async throws -> Book? { nil }
             func upsert(_ book: Book) async throws {}
