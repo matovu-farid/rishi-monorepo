@@ -30,52 +30,57 @@ public struct EpubCoverExtractor: CoverExtractor {
 
     public func extractCover(from fileURL: URL) async -> Data? {
         let size = targetSize
-        return await Task.detached(priority: .utility) {
-            do {
-                // ReadiumZIPFoundation 3.x: Archive is an actor; init and all access are async.
-                let archive = try await Archive(url: fileURL, accessMode: .read)
+        // Phase 20 structured-concurrency audit: this struct is `nonisolated`
+        // (package default), so the function body already runs on the
+        // cooperative executor — wrapping in `Task.detached` was redundant.
+        // Every internal call is `await`-bound (`Archive` is an actor;
+        // `readData` / `encodePNG` are nonisolated). Direct awaits preserve
+        // off-main execution while restoring cancellation propagation and
+        // priority inheritance from the caller.
+        do {
+            // ReadiumZIPFoundation 3.x: Archive is an actor; init and all access are async.
+            let archive = try await Archive(url: fileURL, accessMode: .read)
 
-                // 1) Locate the OPF path via META-INF/container.xml.
-                guard let containerEntry = try await archive.get("META-INF/container.xml") else {
-                    throw CoverExtractionError.sourceUnreadable
-                }
-                let containerData = try await Self.readData(from: archive, entry: containerEntry)
-                guard let opfRelativePath = Self.parseOpfPath(from: containerData) else {
-                    throw CoverExtractionError.noCoverEntry
-                }
-
-                // 2) Read the OPF and find the cover image href.
-                guard let opfEntry = try await archive.get(opfRelativePath) else {
-                    throw CoverExtractionError.noCoverEntry
-                }
-                let opfData = try await Self.readData(from: archive, entry: opfEntry)
-                guard let coverHref = Self.parseCoverHref(from: opfData) else {
-                    throw CoverExtractionError.noCoverEntry
-                }
-
-                // OPF item hrefs are relative to the OPF's own directory.
-                let opfDir = (opfRelativePath as NSString).deletingLastPathComponent
-                let coverPath = opfDir.isEmpty ? coverHref : "\(opfDir)/\(coverHref)"
-                guard let coverEntry = try await archive.get(coverPath) else {
-                    throw CoverExtractionError.noCoverEntry
-                }
-
-                let imageData = try await Self.readData(from: archive, entry: coverEntry)
-
-                // 3) Re-encode to a PNG of the target size so callers see a stable format.
-                guard let png = Self.encodePNG(imageData, targetSize: size) else {
-                    throw CoverExtractionError.decodeFailed
-                }
-                return png
-            } catch {
-                Log.event(
-                    "cover.extract.epub.failed",
-                    level: .info,
-                    data: ["reason": "\(error)", "url": fileURL.lastPathComponent]
-                )
-                return Data?.none
+            // 1) Locate the OPF path via META-INF/container.xml.
+            guard let containerEntry = try await archive.get("META-INF/container.xml") else {
+                throw CoverExtractionError.sourceUnreadable
             }
-        }.value
+            let containerData = try await Self.readData(from: archive, entry: containerEntry)
+            guard let opfRelativePath = Self.parseOpfPath(from: containerData) else {
+                throw CoverExtractionError.noCoverEntry
+            }
+
+            // 2) Read the OPF and find the cover image href.
+            guard let opfEntry = try await archive.get(opfRelativePath) else {
+                throw CoverExtractionError.noCoverEntry
+            }
+            let opfData = try await Self.readData(from: archive, entry: opfEntry)
+            guard let coverHref = Self.parseCoverHref(from: opfData) else {
+                throw CoverExtractionError.noCoverEntry
+            }
+
+            // OPF item hrefs are relative to the OPF's own directory.
+            let opfDir = (opfRelativePath as NSString).deletingLastPathComponent
+            let coverPath = opfDir.isEmpty ? coverHref : "\(opfDir)/\(coverHref)"
+            guard let coverEntry = try await archive.get(coverPath) else {
+                throw CoverExtractionError.noCoverEntry
+            }
+
+            let imageData = try await Self.readData(from: archive, entry: coverEntry)
+
+            // 3) Re-encode to a PNG of the target size so callers see a stable format.
+            guard let png = Self.encodePNG(imageData, targetSize: size) else {
+                throw CoverExtractionError.decodeFailed
+            }
+            return png
+        } catch {
+            Log.event(
+                "cover.extract.epub.failed",
+                level: .info,
+                data: ["reason": "\(error)", "url": fileURL.lastPathComponent]
+            )
+            return nil
+        }
     }
 
     // MARK: - ZIP read helper

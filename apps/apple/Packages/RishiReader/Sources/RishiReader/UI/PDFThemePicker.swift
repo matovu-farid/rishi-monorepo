@@ -70,10 +70,10 @@ public struct PDFThemePicker: View {
         theme = option
         let bookId = self.bookId
         let store = self.store
-        // DETACHED: store.setTheme writes to GRDB via ReaderSettingsStore
-        // (actor). The local @State has already updated, so the persist can
-        // run off main without blocking the UI.
-        Task.detached(priority: .userInitiated) { await store.setTheme(option, for: bookId) }
+        // KEEP: store is an actor backed by GRDB; the `await` already hops
+        // off MainActor for the persist. Phase 20 revert of gratuitous
+        // `Task.detached` — see SWIFT-CONCURRENCY-RULES.md Pattern A.
+        Task { await store.setTheme(option, for: bookId) }
     }
 
     private func swatch(for theme: ReaderTheme) -> Color {

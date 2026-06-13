@@ -137,9 +137,13 @@ public actor BookFileStorage {
     /// operations (`copyItem`, `createDirectory`, etc.); only the off-actor
     /// existence check pins to the documented-thread-safe singleton.
     private nonisolated static func fileExistsOffActor(path: String) async -> Bool {
-        await Task.detached(priority: .utility) {
-            FileManager.default.fileExists(atPath: path)
-        }.value
+        // Phase 20 structured-concurrency audit: `nonisolated async` functions
+        // are executed on the generic (cooperative) executor per SE-0338, so
+        // the `FileManager.fileExists` syscall already runs off the calling
+        // actor without an explicit `Task.detached` hop. The wrapper was
+        // redundant; removing it preserves the off-actor guarantee while
+        // restoring cancellation propagation from the caller.
+        FileManager.default.fileExists(atPath: path)
     }
 
     /// Returns an absolute URL for the on-disk book file.

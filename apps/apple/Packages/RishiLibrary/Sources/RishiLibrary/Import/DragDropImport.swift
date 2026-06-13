@@ -25,12 +25,14 @@ public struct LibraryDropDestination: ViewModifier {
         content.dropDestination(for: URL.self) { urls, _ in
             let supported = ImportCoordinator.filterSupported(urls)
             guard !supported.isEmpty else { return false }
-            // DETACHED: importBooks does a file copy + cover extract + DB write
-            // — heavy I/O that belongs off main. Detach with userInitiated and
-            // re-enter MainActor only for the `onImported` callback.
-            Task.detached(priority: .userInitiated) {
+            // KEEP: Phase 20 audit — `importBooks` is actor-bound, so the
+            // body already runs off the MainActor caller via the `await`
+            // suspension. A bare `Task { }` keeps the fire-and-forget shape
+            // while preserving cancellation / priority inheritance from the
+            // calling SwiftUI view.
+            Task {
                 let outcomes = await coordinator.importBooks(supported)
-                await MainActor.run { onImported(outcomes) }
+                onImported(outcomes)
             }
             return true
         } isTargeted: { _ in

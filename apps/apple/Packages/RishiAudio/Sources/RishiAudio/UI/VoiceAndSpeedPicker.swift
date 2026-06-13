@@ -55,10 +55,10 @@ public struct VoiceAndSpeedPicker: View {
                 let settings = TTSSettings(voice: voice, speed: speed)
                 let store = store
                 let userId = userId
-                // DETACHED: store.save is an actor method (off-main); persist
-                // a copy of `settings`/`userId` and run on userInitiated so the
-                // MainActor view doesn't await persistence inline.
-                Task.detached(priority: .userInitiated) { await store.save(settings, userId: userId) }
+                // KEEP: store.save is an actor method; the `await` already hops
+                // off MainActor. Phase 20 revert of gratuitous `Task.detached`
+                // — see SWIFT-CONCURRENCY-RULES.md Pattern A.
+                Task { await store.save(settings, userId: userId) }
                 onDismiss(settings)
             } label: {
                 Text("Done")

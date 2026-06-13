@@ -308,34 +308,28 @@ struct RootView: View {
                 _ = token
 
             case .openBook(let bookId):
-                // DETACHED: F-P0-06 + F-P0-09 — deep-link openBook does a DB
-                // lookup; offload to userInitiated and re-enter MainActor
-                // only for path/state assignment.
+                // KEEP: Phase 20 audit — `deps.bookStore.book` is actor-bound,
+                // so the DB lookup runs off MainActor through the `await`
+                // suspension. The previous `Task.detached` only moved where
+                // the continuation resumed; we still re-enter MainActor for
+                // the `@State` write, which is the canonical pattern.
                 Task {
-                    let book: Book? = await Task.detached(priority: .userInitiated) { [deps] in
-                        try? await deps.bookStore.book(bookId)
-                    }.value
+                    let book: Book? = try? await deps.bookStore.book(bookId)
                     guard let book else { return }
-                    await MainActor.run {
-                        selectedTab = .library
-                        var p = NavigationPath()
-                        p.append(ReaderRoute.route(for: book))
-                        libraryPath = p
-                    }
+                    selectedTab = .library
+                    var p = NavigationPath()
+                    p.append(ReaderRoute.route(for: book))
+                    libraryPath = p
                 }
 
             case .openConversation(let conversationId):
-                // DETACHED: F-P0-06 — deep-link openConversation does a DB
-                // lookup; offload to userInitiated and re-enter MainActor
-                // for the @State assignment.
+                // KEEP: Phase 20 audit — same shape as `.openBook`. The
+                // conversation store is actor-bound, so the DB lookup is
+                // already off-main without an explicit `Task.detached` hop.
                 Task {
-                    let convo: Conversation? = await Task.detached(priority: .userInitiated) { [deps] in
-                        try? await deps.conversationStore.conversation(conversationId)
-                    }.value
+                    let convo: Conversation? = try? await deps.conversationStore.conversation(conversationId)
                     guard let convo else { return }
-                    await MainActor.run {
-                        selectedConversation = convo
-                    }
+                    selectedConversation = convo
                 }
 
             case .unknown:
@@ -344,13 +338,14 @@ struct RootView: View {
                 // can't classify. Gating on `isFileURL` keeps the router
                 // honest (an unknown `https://` URL is NOT a book file).
                 if url.isFileURL {
-                    // DETACHED: F-P0-06 — importBooks runs a file copy + cover
-                    // extract + DB write off the calling actor; refresh hops
-                    // back to main for the library VM mutation.
+                    // KEEP: Phase 20 audit — `importBooks` is actor-bound, so
+                    // the file copy + cover extract + DB write run off the
+                    // MainActor caller via the `await` suspension. The
+                    // `Task.detached` wrapper only relocated the
+                    // continuation; dropping it preserves off-main execution
+                    // while restoring cancellation propagation.
                     Task {
-                        await Task.detached(priority: .userInitiated) { [deps] in
-                            _ = await deps.importCoordinator.importBooks([url])
-                        }.value
+                        _ = await deps.importCoordinator.importBooks([url])
                         await libraryViewModel?.refresh()
                     }
                 }
@@ -426,15 +421,12 @@ struct RootView: View {
         }
         // Legacy B — bare UUID.uuidString from the v0 cell.
         if let legacyId = decoded.legacyId, let deps = deps {
-            // DETACHED: F-P0-05 — v0 cell decode hits GRDB via bookStore.
-            // The bookStore actor's executor is off-main, but the
-            // `await` here would otherwise resume on this MainActor task.
-            // Wrapping in Task.detached(priority: .userInitiated) keeps
-            // the resume off main; we re-enter MainActor explicitly for
-            // the @State write.
-            let book = await Task.detached(priority: .userInitiated) { [deps] in
-                try? await deps.bookStore.book(legacyId)
-            }.value
+            // Phase 20 structured-concurrency audit: `bookStore.book` is
+            // actor-bound, so the DB lookup runs off MainActor through the
+            // `await` suspension point. The previous `Task.detached` only
+            // moved the continuation; the post-await assignment is a single
+            // `@State` write that is cheap on MainActor.
+            let book = try? await deps.bookStore.book(legacyId)
             guard let book else { return }
             var p = NavigationPath()
             p.append(ReaderRoute.route(for: book))
@@ -849,14 +841,14 @@ struct RootView: View {
         deps: AppDependencies,
         userId: UserID
     ) async {
-        // F-P0-06 (cross-ref F-P1-07 in plan 19-08): Readium resource read +
-        // HTML strip is non-trivial. The extension method on EPUBReaderViewModel
-        // is `async` (touches `publication`/`latestLocator`); we wrap the outer
-        // call so the awaited continuation lands off-main. Plan 19-08 will
-        // hoist the stripHTML internals onto a detached executor.
-        let sentences = await Task.detached(priority: .userInitiated) {
-            await vm.sentencesForReadAloud()
-        }.value
+        // Phase 20 structured-concurrency audit: `vm.sentencesForReadAloud`
+        // is declared in the app target (MainActor by default), so the
+        // detached task body still re-entered MainActor for the actual
+        // execution — the wrapper was pure noise. Plan 19-08 will hoist
+        // the Readium resource read + `stripHTML` work onto a nonisolated
+        // executor; until then the `await` here at least no longer pretends
+        // to be off-main.
+        let sentences = await vm.sentencesForReadAloud()
         await startReadAloud(
             sentences: sentences,
             deps: deps,

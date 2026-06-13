@@ -2,10 +2,10 @@
 
 - **ADR Number:** ADR-002
 - **Date:** 2026-06-13
-- **Status:** Accepted
-- **Author:** GSD Phase 19 (swift-concurrency-audit-mainactor-offload-sweep-for-the-ios-app)
+- **Status:** Accepted (Phase 20 addendum 2026-06-13)
+- **Author:** GSD Phase 19 (swift-concurrency-audit-mainactor-offload-sweep-for-the-ios-app); Phase 20 canonical-simplicity addendum
 - **Supersedes:** None
-- **Last updated:** 2026-06-13
+- **Last updated:** 2026-06-13 (Phase 20 — see "Phase 20 addendum" section at end)
 - **Scope:** `apps/apple/` (iOS + Mac Catalyst app target + every SwiftPM package under `apps/apple/Packages/`).
 - **Out of scope:** `apps/web`, `apps/mobile`, `apps/electron`, `workers/`.
 
@@ -283,3 +283,50 @@ Deferred to post-v1.0 (NOT shipping in Phase 19):
 - Plan 19-11 commit `97b655b8e` (scene-restore decode off-MainActor)
 - STATE.md — `apps/apple/.planning/STATE.md` (Phase 2 GRDB decision, Phase 3 Keychain decision, Phase 7 RishiSync decision)
 - Apple TN1170 — `NSCache` thread safety (cited in `PDFThumbnailCache` kept-deviation)
+
+## Phase 20 addendum — canonical-simplicity revert
+
+**Date:** 2026-06-13. **Trigger:** user request — "review how concurrency is done... canonical Swift way and the simplest way but with it still being performant... willing to revert Phase-19 changes that turned out to be cargo-culted."
+
+### Rule 10 — Do NOT wrap a single actor-method `await` in `Task.detached`.
+
+When a closure body's only work is `await someActor.method(...)`, a plain `Task { await someActor.method(...) }` is the canonical choice. Reaching for `Task.detached(priority: .userInitiated) { await someActor.method(...) }` is an over-correction:
+
+- The `await` already hops to the actor's executor. MainActor releases at the suspend point.
+- `Task.detached` loses parent priority, task-local values, and structured cancellation propagation for zero benefit.
+- The "doesn't block the UI" justification is wrong — a plain inherited-context `Task { }` also returns immediately from a Button action; SwiftUI does not wait for the closure to finish.
+
+Swift book reference: ["Tasks and Task Groups → Unstructured Concurrency"](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/concurrency/#Unstructured-Concurrency) explicitly recommends preferring inherited-context `Task { }` over `Task.detached` unless there is a measured reason to leave the surrounding context. Persisting a setting from a tap is not such a reason.
+
+### Pattern A clarification
+
+Pattern A (bare `Task { }` for pure UI work in the app target) now explicitly covers the "fire-and-forget actor call from a SwiftUI Button or `.onChange`" shape, not just the "mutate `@Observable` state" shape. The actor hop at the `await` provides the off-main guarantee; no detach needed.
+
+### Phase 20 reverts (commits to follow this section)
+
+| # | Site | Before | After |
+|---|------|--------|-------|
+| F-P20-01 | `RishiSettings/UI/Telemetry/TelemetrySection.swift:25` | `Task.detached(priority: .userInitiated) { await store.setOptedIn(new) }` | `Task { await store.setOptedIn(new) }` |
+| F-P20-02 | `RishiReader/UI/PDFThemePicker.swift:76` | `Task.detached(priority: .userInitiated) { await store.setTheme(option, for: bookId) }` | `Task { await store.setTheme(option, for: bookId) }` |
+| F-P20-03 | `RishiReader/UI/EPUBThemePicker.swift:83` | (same shape) | (same shape) |
+| F-P20-04 | `RishiReader/UI/EPUBTypographyPicker.swift:130` | (same shape) | (same shape) |
+| F-P20-05 | `RishiAudio/UI/VoiceAndSpeedPicker.swift:61` | (same shape) | (same shape) |
+
+Each reverted site retains a `// KEEP:` annotation so `PackagesTaskAuditTests` continues to pass; the rationale text is updated to cite this rule.
+
+### What Phase 20 confirmed canonical and did NOT change
+
+- All Phase-19 `Task.detached` sites that wrap genuinely heavy CPU/IO (PDFDocument parse, Readium ZIP unpack, FileManager fan-out, image decode, file copy, sentence extraction, composition-root build, IAP listener).
+- All `@preconcurrency import` declarations (PDFKit, ReadiumShared) — upstream framework Sendable annotations still missing in Xcode 16.
+- All 5 hot-path `OSSignposter` intervals — kept always-on; required for TestFlight perf investigation; zero runtime cost when no Instruments trace attached.
+- Both `withTaskGroup` fan-out sites (library covers + positions) — `async let` cannot bind N values at compile time.
+- All `nonisolated(unsafe)` declarations — each is either upstream-constrained (OpaquePointer, NSCache, init-once gate), v1.1 backlog (RishiAppDelegate.shared, tracked as F-P2-02), or tests-only paired with `@Suite(.serialized)`.
+- `unsafeBitCast` in `RishiAppDelegate.didReceiveRemoteNotification` — UIKit overlay still lacks `@Sendable` annotation on `completionHandler`; cast is the documented escape hatch.
+
+### Reviewer addition to the PR-Review Checklist
+
+- [ ] **`Task.detached(priority: ...) { await actor.method(...) }` whose body is exactly one `await` to an actor.**
+  ```bash
+  rg -B1 -A2 "Task\.detached\(priority:" apps/apple --type swift
+  ```
+  Any match whose body is a single `await someActor.method(...)` should be plain `Task { await ... }` per Rule 10. Multi-line bodies doing genuine CPU/IO stay detached.
