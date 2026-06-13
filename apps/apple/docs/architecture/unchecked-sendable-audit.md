@@ -5,10 +5,10 @@ Author: subagent (review before acting on CONVERT items)
 
 ## TL;DR
 
-Audited 47 in-scope `@unchecked Sendable` declarations across the apple
-packages and `rishi/` app target (Tests/ and RishiTesting/ excluded). 20 were
+Audited 50 in-scope `@unchecked Sendable` declarations across the apple
+packages and `rishi/` app target (Tests/ and RishiTesting/ excluded). 24 were
 historical hedges where every stored property was already a Sendable `let` —
-promoted to plain `Sendable` and verified with per-package SPM builds. 27
+promoted to plain `Sendable` and verified with per-package SPM builds. 26
 remain `@unchecked` because they hold genuine non-Sendable state
 (`UserDefaults`, AVFoundation engines, Readium `Publication`, PDFKit
 `PDFDocument`, `var`-mutable observable VMs, MainActor-pinned reference
