@@ -20,7 +20,7 @@ import RishiLogging
 /// column is non-null and uses the all-zero UUID as a sentinel for
 /// "no book". The reverse-mapping here is the mirror of
 /// `ConversationUploader`'s outbound mapping.
-public final class ConversationsFetcher: @unchecked Sendable {
+public final class ConversationsFetcher: Sendable {
 
     /// All-zero UUID sentinel for `bookId == nil` on the wire. Matches the
     /// `ConversationUploader.nilBookIdSentinel` constant — kept duplicated
