@@ -20,13 +20,13 @@ import Foundation
 /// mid-session; until Apple fixes it, voice chat ships WITHOUT CallKit
 /// (no system call UI, no Lock Screen call ringer, no Recents entry).
 /// A smoke test grep-asserts this in `PackageSmokeTests.swift`.
-public enum RishiVoice {
+enum RishiVoice {
     /// Semantic version of the Feature surface. Bump on breaking API changes.
-    public static let version = "0.1.0-scaffold"
+    static let version = "0.1.0-scaffold"
 
     /// SHA of `swift-realtime-openai` pinned by Spike B. Mirrored here as a
     /// compile-time constant so a future drift between Package.swift and
     /// the documented pin is loud (smoke test asserts).
-    public static let realtimeOpenAIPinnedSHA =
+    static let realtimeOpenAIPinnedSHA =
         "46f393d9e2e60724aadc30062f75ee73bbcdb8fc"
 }
