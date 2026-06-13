@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Matches the electron POST shape per .planning/codebase/INTEGRATIONS.md — the
 /// `q` parameter is sent in the request body, not as a query string.
-public struct UsersSearchEndpoint: WorkerEndpointWithBody {
+struct UsersSearchEndpoint: WorkerEndpointWithBody {
     public typealias Response = SearchResponse
 
     public struct Body: Encodable, Sendable, Equatable {

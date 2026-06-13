@@ -4,7 +4,7 @@ import Foundation
 
 /// `POST /v1/sessions` — create a sharing session (host role). Phase 11+
 /// sharing flow consumes this when the host clicks "Start sharing".
-public struct CreateSessionEndpoint: WorkerEndpointWithBody {
+struct CreateSessionEndpoint: WorkerEndpointWithBody {
     public typealias Response = CreateResponse
 
     public struct Body: Encodable, Sendable, Equatable {
@@ -48,7 +48,7 @@ public struct CreateSessionEndpoint: WorkerEndpointWithBody {
 ///
 /// The session id is interpolated into the path; the join token travels in
 /// the body so it never lands in worker logs / proxies as a query param.
-public struct RedeemSessionEndpoint: WorkerEndpointWithBody {
+struct RedeemSessionEndpoint: WorkerEndpointWithBody {
     public typealias Response = RedeemResponse
 
     public struct Body: Encodable, Sendable, Equatable {

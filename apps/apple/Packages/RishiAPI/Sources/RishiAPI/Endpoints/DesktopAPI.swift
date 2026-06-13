@@ -8,7 +8,7 @@ import Foundation
 // MARK: - POST /desktop/start
 
 /// `POST /desktop/start` — begin a magic-link or Google OAuth flow.
-public struct DesktopStartEndpoint: WorkerEndpointWithBody {
+struct DesktopStartEndpoint: WorkerEndpointWithBody {
     public typealias Response = StartResponse
 
     public struct Body: Encodable, Sendable, Equatable {
@@ -52,7 +52,7 @@ public struct DesktopStartEndpoint: WorkerEndpointWithBody {
 
 /// `POST /desktop/poll` — poll until the web flow completes (every 2s, 10min
 /// timeout in the electron client).
-public struct DesktopPollEndpoint: WorkerEndpointWithBody {
+struct DesktopPollEndpoint: WorkerEndpointWithBody {
     public typealias Response = PollResponse
 
     public struct Body: Encodable, Sendable, Equatable {
@@ -92,7 +92,7 @@ public struct DesktopPollEndpoint: WorkerEndpointWithBody {
 // MARK: - POST /desktop/cancel
 
 /// `POST /desktop/cancel` — abort a pending desktop flow.
-public struct DesktopCancelEndpoint: WorkerEndpointWithBody {
+struct DesktopCancelEndpoint: WorkerEndpointWithBody {
     public typealias Response = OkResponse
 
     public struct Body: Encodable, Sendable, Equatable {

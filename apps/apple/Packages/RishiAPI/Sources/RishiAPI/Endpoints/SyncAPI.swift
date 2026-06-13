@@ -49,7 +49,7 @@ public struct SyncUploadURLEndpoint: WorkerEndpointWithBody {
 
 /// `POST /api/sync/download-url` — request a presigned R2 download URL for a
 /// previously-uploaded key.
-public struct SyncDownloadURLEndpoint: WorkerEndpointWithBody {
+struct SyncDownloadURLEndpoint: WorkerEndpointWithBody {
     public typealias Response = PresignedURLResponse
 
     public struct Body: Encodable, Sendable, Equatable {

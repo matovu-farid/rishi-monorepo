@@ -8,7 +8,7 @@ import Foundation
 /// ```json
 /// { "error": { "code": "forbidden", "message": "...", "details": { "reason": "..." } } }
 /// ```
-public struct ErrorEnvelope: Codable, Sendable, Hashable {
+struct ErrorEnvelope: Codable, Sendable, Hashable {
     public let error: Inner
 
     public struct Inner: Codable, Sendable, Hashable {

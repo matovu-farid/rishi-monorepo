@@ -40,7 +40,7 @@ public struct SpeechStreamEndpoint: WorkerStreamingEndpointWithBody {
 /// worker expects); for now the typed ``Body`` captures the intended shape so
 /// feature code can compile against it. The Phase 2 declaration is enough to
 /// pin the response type — Phase 8 only needs to swap the encoder.
-public struct TranscribeEndpoint: WorkerEndpointWithBody {
+struct TranscribeEndpoint: WorkerEndpointWithBody {
     public typealias Response = TranscribeResponse
 
     public struct Body: Encodable, Sendable, Equatable {
