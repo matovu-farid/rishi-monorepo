@@ -12,6 +12,9 @@ public protocol TTSSettingsStore: Sendable {
 
 // MARK: - UserDefaults impl
 
+/// @unchecked Sendable justified: holds `let defaults: UserDefaults`, which
+/// is non-Sendable under Swift 6 strict concurrency despite documented
+/// thread-safe scalar accessors.
 public final class UserDefaultsTTSSettingsStore: TTSSettingsStore, @unchecked Sendable {
 
     private let defaults: UserDefaults

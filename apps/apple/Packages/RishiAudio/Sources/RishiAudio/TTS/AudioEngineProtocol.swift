@@ -93,6 +93,8 @@ public final class AVAudioEngineAdapter: AudioEngineProtocol, @unchecked Sendabl
 /// Test-only AudioEngineProtocol impl. Records every call in order and fires
 /// scheduled-buffer completion handlers synchronously so tests can assert
 /// first-buffer side-effects without sleeping for a real audio render cycle.
+/// @unchecked Sendable justified: test fake with mutable `var _calls` and
+/// `var _isPlaying` guarded by an internal NSLock.
 public final class FakeAudioEngine: AudioEngineProtocol, @unchecked Sendable {
 
     public enum Call: Sendable, Equatable {

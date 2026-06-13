@@ -158,6 +158,8 @@ public final class MPRemoteCommandCenterAdapter: RemoteCommandSurface {
 // MARK: - Fakes (test helpers, ship in main target so downstream test
 // targets can inject without re-declaring the protocol surface)
 
+/// @unchecked Sendable justified: test fake with a mutable `var _calls` array
+/// guarded by an internal NSLock.
 public final class FakeNowPlayingInfoSurface: NowPlayingInfoSurface, @unchecked Sendable {
     public enum Call: Sendable, Equatable {
         case metadata(NowPlayingMetadata)
@@ -194,6 +196,8 @@ public final class FakeNowPlayingInfoSurface: NowPlayingInfoSurface, @unchecked 
     }
 }
 
+/// @unchecked Sendable justified: test fake with mutable `var _calls` and
+/// `var _handlers` guarded by an internal NSLock.
 public final class FakeRemoteCommandSurface: RemoteCommandSurface, @unchecked Sendable {
     public enum Call: Sendable, Equatable {
         case register

@@ -54,6 +54,10 @@ public protocol AudioSessionConfigurator: Sendable {
 #if canImport(AVFAudio) && (os(iOS) || targetEnvironment(macCatalyst))
 import AVFAudio
 
+/// @unchecked Sendable justified: wraps a non-Sendable `AVAudioSession` and
+/// an `NSObjectProtocol` notification-observer token. The session is the
+/// process-wide singleton (thread-safe by Apple's contract); the observer
+/// token is set once at init and removed in deinit.
 public final class AVAudioSessionConfigurator: AudioSessionConfigurator, @unchecked Sendable {
 
     private let session: AVAudioSession
@@ -119,6 +123,8 @@ public final class AVAudioSessionConfigurator: AudioSessionConfigurator, @unchec
 
 // MARK: - Fake (test helper, ships in main target so XCTest-less smoke tests can use it)
 
+/// @unchecked Sendable justified: test helper with mutable `var _configureCalls`
+/// and `var _activeCalls` for assertion capture, guarded by an internal NSLock.
 public final class FakeAudioSessionConfigurator: AudioSessionConfigurator, @unchecked Sendable {
 
     public struct ConfigureCall: Sendable, Equatable {
