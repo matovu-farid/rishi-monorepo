@@ -5,7 +5,7 @@ import RishiUIKit
 /// `@State` mirror that hydrates from the store on `task` and writes back
 /// on `onChange`. The store invokes `TelemetrySink.setEnabled(_:)` so the
 /// app layer can mute Sentry immediately.
-public struct TelemetrySection: View {
+struct TelemetrySection: View {
 
     @State private var optedIn: Bool = true
     private let store: any TelemetryStore

@@ -4,9 +4,9 @@ import RishiUIKit
 /// Read-only About section. Reads version + build from
 /// `Bundle.main.infoDictionary` so the value updates automatically with
 /// every release.
-public struct AboutSection: View {
+struct AboutSection: View {
 
-    public init() {}
+    init() {}
 
     public var body: some View {
         Section {

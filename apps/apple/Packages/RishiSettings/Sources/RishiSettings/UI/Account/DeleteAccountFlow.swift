@@ -11,7 +11,7 @@ import RishiLogging
 /// worker hasn't deleted the row, so the user can retry from the same
 /// signed-in state. Successful deletion calls `onDeleted()` so the parent
 /// can dismiss + transition to signed-out.
-public struct DeleteAccountFlow: View {
+struct DeleteAccountFlow: View {
 
     public let onDelete: () async throws -> Void
     public let onDeleted: () -> Void

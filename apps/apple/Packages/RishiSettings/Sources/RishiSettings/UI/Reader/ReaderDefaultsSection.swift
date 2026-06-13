@@ -11,7 +11,7 @@ import RishiReader
 /// bindings — 11-06 backs them with UserDefaults keys
 /// `reader.defaults.theme` / `reader.defaults.font` so the reader can read
 /// them when opening a freshly imported book.
-public struct ReaderDefaultsSection: View {
+struct ReaderDefaultsSection: View {
 
     @Binding private var defaultTheme: ReaderTheme
     @Binding private var defaultFontFamily: ReaderFontFamily

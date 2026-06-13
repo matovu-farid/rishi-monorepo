@@ -9,7 +9,7 @@ import Foundation
 /// to embed their existing rows. This package owns ONLY the top-level
 /// screen + the Account/About/Telemetry sections; sibling packages own
 /// the rows the user sees in Sync / Reader / Audio sections.
-public enum RishiSettings {
+enum RishiSettings {
     /// Semantic version of the Feature surface. Bump on breaking API changes.
-    public static let version = "0.1.0-scaffold"
+    static let version = "0.1.0-scaffold"
 }

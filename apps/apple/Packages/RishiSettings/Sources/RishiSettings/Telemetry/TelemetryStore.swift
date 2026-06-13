@@ -61,7 +61,7 @@ public final class UserDefaultsTelemetryStore: TelemetryStore, @unchecked Sendab
 }
 
 /// In-memory impl for tests + previews.
-public actor InMemoryTelemetryStore: TelemetryStore {
+actor InMemoryTelemetryStore: TelemetryStore {
     private var value: Bool
     public init(initial: Bool = true) { self.value = initial }
     public func optedIn() async -> Bool { value }

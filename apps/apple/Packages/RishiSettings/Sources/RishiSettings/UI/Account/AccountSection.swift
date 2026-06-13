@@ -9,7 +9,7 @@ import RishiCore
 /// The section takes both callbacks (`onSignOut`, `onShowDeleteFlow`) so
 /// the parent screen owns navigation + auth wiring; this view stays a pure
 /// SwiftUI section with no `@Environment` reach-ins.
-public struct AccountSection: View {
+struct AccountSection: View {
 
     public let user: User
     public let onSignOut: () async -> Void
