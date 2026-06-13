@@ -93,7 +93,7 @@ public struct PDFThemePicker: View {
     }
 }
 
-private final class PreviewSettingsStore: ReaderSettingsStore, @unchecked Sendable {
+private final class PreviewSettingsStore: ReaderSettingsStore, Sendable {
     func theme(for bookId: BookID) async -> ReaderTheme { .default }
     func setTheme(_ theme: ReaderTheme, for bookId: BookID) async { }
     func typography(for bookId: BookID) async -> ReaderTypography { .default }
