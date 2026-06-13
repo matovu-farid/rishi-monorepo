@@ -10,6 +10,9 @@ import AVFAudio
 /// is single-consumer: the decoder yields a chunk, the scheduler reads it
 /// once, no other code touches the buffer.
 public struct PCMChunk: @unchecked Sendable {
+    public typealias ID = UUID
+
+    public let id: UUID = UUID()
     public let buffer: AVAudioPCMBuffer
     public let passageId: String?
     public let isFinal: Bool
