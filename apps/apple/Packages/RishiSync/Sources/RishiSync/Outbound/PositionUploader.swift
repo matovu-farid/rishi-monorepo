@@ -12,7 +12,7 @@ import RishiLogging
 /// single Position row for a book), so `SyncQueueItem.entityId` for a pending
 /// position carries the BOOK id, not the Position UUID. The metadata row's
 /// entity_id thus matches the book id — markClean must use the same id.
-public final class PositionUploader: @unchecked Sendable {
+public final class PositionUploader: Sendable {
 
     public enum UploadError: Error, Sendable {
         case encodingFailed(String)
