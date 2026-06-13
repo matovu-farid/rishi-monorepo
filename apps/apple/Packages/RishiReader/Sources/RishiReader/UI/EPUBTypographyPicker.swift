@@ -131,7 +131,7 @@ public struct EPUBTypographyPicker: View {
     }
 }
 
-private final class EPUBTypographyPreviewStore: ReaderSettingsStore, @unchecked Sendable {
+private final class EPUBTypographyPreviewStore: ReaderSettingsStore, Sendable {
     func theme(for bookId: BookID) async -> ReaderTheme { .default }
     func setTheme(_ theme: ReaderTheme, for bookId: BookID) async { }
     func typography(for bookId: BookID) async -> ReaderTypography { .default }
