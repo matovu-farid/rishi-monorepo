@@ -98,6 +98,25 @@ export function buildRealtimeClientSecretsBody(language: string) {
   } as const
 }
 
+/**
+ * Phase 22-01: TTS R2 cache key.
+ *
+ * Canonical string: "tts-1|" + voice + "|" + speed.toFixed(2) + "|" + text
+ * Hash: SHA-256 of the UTF-8 bytes, hex-encoded lowercase.
+ *
+ * The model literal "tts-1" lets a future bump (e.g. "tts-1-hd") invalidate
+ * the cache namespace cleanly without manual purge. The iOS companion at
+ * apps/apple/Packages/RishiAudio/Sources/RishiAudio/TTS/TTSCacheKey.swift
+ * computes the SAME hex for the SAME (text, voice, speed) tuple — a paired
+ * test in audio-speech-cache.test.ts and TTSCacheKeyTests.swift asserts this
+ * symmetry against the pinned canonical string "tts-1|alloy|1.00|hello world".
+ */
+async function ttsCacheKey(text: string, voice: string, speed: number): Promise<string> {
+  const canonical = `tts-1|${voice}|${speed.toFixed(2)}|${text}`;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /** Constant-time string comparison to prevent timing attacks. */
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -418,6 +437,23 @@ app.post("/api/audio/speech", requireAuth, requireActiveSubscription, async (c) 
         ? speed
         : 1.0;
 
+    // Phase 22-01: R2-backed content-addressed cache gate.
+    // Hits skip both the OpenAI call AND metering; misses preserve all existing
+    // behavior verbatim and fire-and-forget a writeback via waitUntil.
+    const key = await ttsCacheKey(text, validVoice, validSpeed);
+
+    const cached = await c.env.TTS_CACHE.get(key);
+    if (cached !== null) {
+      const bytes = await cached.bytes();
+      return new Response(bytes, {
+        headers: {
+          "Content-Type": "audio/mpeg",
+          "Content-Length": bytes.byteLength.toString(),
+          "X-TTS-Cache": "hit",
+        },
+      });
+    }
+
     const openai = getOpenAI(c.env.OPENAI_API_KEY);
 
     const speech = await generateSpeech({
@@ -436,10 +472,19 @@ app.post("/api/audio/speech", requireAuth, requireActiveSubscription, async (c) 
     );
 
     const audioBytes = speech.audio.uint8Array;
+
+    // Fire-and-forget writeback; put errors must not surface to the response.
+    c.executionCtx.waitUntil(
+      c.env.TTS_CACHE.put(key, audioBytes, {
+        httpMetadata: { contentType: "audio/mpeg" },
+      }).catch((e) => console.error("tts.cache.put.failed", e)),
+    );
+
     return new Response(audioBytes, {
       headers: {
         "Content-Type": "audio/mpeg",
         "Content-Length": audioBytes.byteLength.toString(),
+        "X-TTS-Cache": "miss",
       },
     });
   } catch (error) {
