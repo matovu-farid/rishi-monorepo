@@ -9,76 +9,76 @@ import Foundation
 /// Mirrors electron's RISHI_* Drizzle schema field naming.
 public enum Tables {
 
-    public enum Books {
-        public static let table = "books"
+    enum Books {
+        static let table = "books"
 
-        public static let id              = "id"               // TEXT PK (UUID)
-        public static let userId          = "user_id"          // TEXT
-        public static let title           = "title"            // TEXT
-        public static let author          = "author"           // TEXT?
-        public static let formatType      = "format_type"      // TEXT (epub/pdf/mobi/azw3)
-        public static let addedAt         = "added_at"         // REAL (seconds epoch)
-        public static let openedAt        = "opened_at"        // REAL? (seconds epoch)
-        public static let fileURL         = "file_url"         // TEXT (relative path)
-        public static let coverPath       = "cover_path"       // TEXT?
-        public static let positionId      = "position_id"      // TEXT? FK -> positions.id
-        public static let conversationId  = "conversation_id"  // TEXT? FK -> conversations.id
+        static let id              = "id"               // TEXT PK (UUID)
+        static let userId          = "user_id"          // TEXT
+        static let title           = "title"            // TEXT
+        static let author          = "author"           // TEXT?
+        static let formatType      = "format_type"      // TEXT (epub/pdf/mobi/azw3)
+        static let addedAt         = "added_at"         // REAL (seconds epoch)
+        static let openedAt        = "opened_at"        // REAL? (seconds epoch)
+        static let fileURL         = "file_url"         // TEXT (relative path)
+        static let coverPath       = "cover_path"       // TEXT?
+        static let positionId      = "position_id"      // TEXT? FK -> positions.id
+        static let conversationId  = "conversation_id"  // TEXT? FK -> conversations.id
     }
 
-    public enum Positions {
-        public static let table = "positions"
+    enum Positions {
+        static let table = "positions"
 
-        public static let id               = "id"                // TEXT PK (UUID)
-        public static let bookId           = "book_id"           // TEXT FK -> books.id
-        public static let locator          = "locator"           // TEXT (CFI or page+offset JSON)
-        public static let percentComplete  = "percent_complete"  // REAL 0..1
-        public static let updatedAt        = "updated_at"        // REAL
+        static let id               = "id"                // TEXT PK (UUID)
+        static let bookId           = "book_id"           // TEXT FK -> books.id
+        static let locator          = "locator"           // TEXT (CFI or page+offset JSON)
+        static let percentComplete  = "percent_complete"  // REAL 0..1
+        static let updatedAt        = "updated_at"        // REAL
     }
 
-    public enum Highlights {
-        public static let table = "highlights"
+    enum Highlights {
+        static let table = "highlights"
 
-        public static let id            = "id"             // TEXT PK
-        public static let bookId        = "book_id"        // TEXT FK -> books.id
-        public static let locatorStart  = "locator_start"  // TEXT
-        public static let locatorEnd    = "locator_end"    // TEXT
-        public static let color         = "color"          // TEXT (yellow/green/blue/pink)
-        public static let text          = "text"           // TEXT
-        public static let note          = "note"           // TEXT?
-        public static let createdAt     = "created_at"     // REAL
+        static let id            = "id"             // TEXT PK
+        static let bookId        = "book_id"        // TEXT FK -> books.id
+        static let locatorStart  = "locator_start"  // TEXT
+        static let locatorEnd    = "locator_end"    // TEXT
+        static let color         = "color"          // TEXT (yellow/green/blue/pink)
+        static let text          = "text"           // TEXT
+        static let note          = "note"           // TEXT?
+        static let createdAt     = "created_at"     // REAL
     }
 
-    public enum Conversations {
-        public static let table = "conversations"
+    enum Conversations {
+        static let table = "conversations"
 
-        public static let id         = "id"          // TEXT PK
-        public static let userId     = "user_id"     // TEXT
-        public static let bookId     = "book_id"     // TEXT? FK -> books.id
-        public static let title      = "title"       // TEXT
-        public static let createdAt  = "created_at"  // REAL
-        public static let updatedAt  = "updated_at"  // REAL
+        static let id         = "id"          // TEXT PK
+        static let userId     = "user_id"     // TEXT
+        static let bookId     = "book_id"     // TEXT? FK -> books.id
+        static let title      = "title"       // TEXT
+        static let createdAt  = "created_at"  // REAL
+        static let updatedAt  = "updated_at"  // REAL
     }
 
-    public enum Messages {
-        public static let table = "messages"
+    enum Messages {
+        static let table = "messages"
 
-        public static let id              = "id"               // TEXT PK
-        public static let conversationId  = "conversation_id"  // TEXT FK -> conversations.id
-        public static let role            = "role"             // TEXT (user/assistant/system)
-        public static let content         = "content"          // TEXT
-        public static let toolCalls       = "tool_calls"       // TEXT? (opaque JSON)
-        public static let createdAt       = "created_at"       // REAL
+        static let id              = "id"               // TEXT PK
+        static let conversationId  = "conversation_id"  // TEXT FK -> conversations.id
+        static let role            = "role"             // TEXT (user/assistant/system)
+        static let content         = "content"          // TEXT
+        static let toolCalls       = "tool_calls"       // TEXT? (opaque JSON)
+        static let createdAt       = "created_at"       // REAL
     }
 
-    public enum Users {
-        public static let table = "users"
+    enum Users {
+        static let table = "users"
 
-        public static let id           = "id"            // TEXT PK
-        public static let email        = "email"         // TEXT
-        public static let displayName  = "display_name"  // TEXT?
-        public static let avatarURL    = "avatar_url"    // TEXT?
-        public static let hasPro       = "has_pro"       // INTEGER (0/1)
-        public static let createdAt    = "created_at"    // REAL
+        static let id           = "id"            // TEXT PK
+        static let email        = "email"         // TEXT
+        static let displayName  = "display_name"  // TEXT?
+        static let avatarURL    = "avatar_url"    // TEXT?
+        static let hasPro       = "has_pro"       // INTEGER (0/1)
+        static let createdAt    = "created_at"    // REAL
     }
 
     public enum SyncMetadata {

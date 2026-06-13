@@ -5,7 +5,7 @@ import Foundation
 public enum RishiDB {
 
     /// Marker for the public RishiDB API version. Bump when the surface breaks.
-    public static let apiVersion = "0.2.0-schema"
+    static let apiVersion = "0.2.0-schema"
 
     /// Open (or create) a GRDB `DatabaseQueue` at the given file URL,
     /// configured for the RishiDB schema and ready for use.
