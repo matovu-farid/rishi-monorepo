@@ -74,6 +74,18 @@ struct RootView: View {
 
     @State private var currentUser: User? = nil
     @State private var bootstrapped = false
+    /// Phase 21 perf — gate the signed-in/signed-out branch on the FIRST
+    /// completion of the auth probe. Previously `realBodyContent` rendered
+    /// `signedOutView` whenever `currentUser` was nil, which was true for
+    /// the entire window between view-first-appear and the `.task` body's
+    /// `await auth?.currentUser` returning. On a cold launch with a valid
+    /// keychain session that window is hundreds of ms (actor hop + keychain
+    /// SecItemCopyMatching + observability bookkeeping), so the user saw
+    /// the signed-out screen flash before being swapped to the library.
+    /// `authProbeComplete` defaults to false; the bootstrap `.task` sets it
+    /// to true exactly once after the probe resolves, whether or not a
+    /// session existed.
+    @State private var authProbeComplete = false
 
     /// Phase 18 Plan 18-01 (F-P0-01) — per-tab navigation path. The reader
     /// pushes onto this path so the system back chevron + edge-swipe-from-
@@ -174,7 +186,23 @@ struct RootView: View {
     @ViewBuilder
     private func realBodyContent(deps: AppDependencies) -> some View {
         Group {
-            if let user = currentUser {
+            if !authProbeComplete {
+                // Phase 21 perf — first paint while the keychain probe runs.
+                // Painting `signedOutView` here would flash sign-in UI for
+                // users who ARE signed in (the `.task` below hasn't resolved
+                // yet on the first body evaluation). A blank background
+                // matches the launch screen color so the transition into the
+                // library / signed-out branch is seamless.
+                #if canImport(UIKit)
+                Color(.systemBackground)
+                    .ignoresSafeArea()
+                    .accessibilityHidden(true)
+                #else
+                Color.clear
+                    .ignoresSafeArea()
+                    .accessibilityHidden(true)
+                #endif
+            } else if let user = currentUser {
                 // Phase 12 Plan 12-02 (MAC-02) — sidebar on Mac Catalyst /
                 // iPad regular width class; existing TabView on iPhone
                 // compact. The selection binding is shared so menu-bar
@@ -236,16 +264,36 @@ struct RootView: View {
         .task {
             guard !bootstrapped else { return }
             bootstrapped = true
-            currentUser = await auth?.currentUser
+            // Phase 21 perf — order matters: probe the keychain FIRST and
+            // flip `authProbeComplete` so the body swaps from the blank
+            // loading background straight into the library (or sign-in)
+            // before any of the secondary bootstrap awaits run. Entitlement
+            // refresh + onboarding flag read both touch the worker / disk
+            // and would otherwise extend the loading-background window for
+            // signed-in users who don't need either result before first paint.
+            let probedUser = await auth?.currentUser
+            currentUser = probedUser
+            authProbeComplete = true
             // Phase 11 — gate the first-launch onboarding cover on the
             // persisted flag. Refresh entitlement only when the user has
             // already signed in (signed-out users have nothing to fetch).
             // Phase 19 plan 19-01 — deps is now non-optional inside
             // realBody (services already verified).
-            let completed = await deps.onboardingState.hasCompletedOnboarding()
-            showOnboarding = !completed
-            if currentUser != nil {
-                _ = await deps.entitlementService.refresh()
+            //
+            // Phase 21 perf — `hasCompletedOnboarding()` (UserDefaults
+            // read on a MainActor-isolated store) and
+            // `entitlementService.refresh()` (worker round-trip on an
+            // actor) are independent of each other. Fan them out with
+            // `async let` so the network probe overlaps with the local
+            // onboarding flag read instead of stalling behind it.
+            if probedUser != nil {
+                async let completedAsync = deps.onboardingState.hasCompletedOnboarding()
+                async let entitlementAsync = deps.entitlementService.refresh()
+                let (completed, _) = await (completedAsync, entitlementAsync)
+                showOnboarding = !completed
+            } else {
+                let completed = await deps.onboardingState.hasCompletedOnboarding()
+                showOnboarding = !completed
             }
         }
         // Phase 11 — first-launch onboarding cover. Presented over the
@@ -569,8 +617,15 @@ struct RootView: View {
             }
             .task(id: user.id) {
                 deps.cachedUserId = user.id
-                _ = await deps.sampleBookInstaller.installIfNeeded(ownerId: user.id)
-                _ = await deps.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
+                // Phase 21 perf — sample installers are independent of each
+                // other (different bundle resources, different DB rows). Fan
+                // them out with `async let` so the bundle lookup + file copy
+                // overlap; the joint await at `_ = await (a, b)` resumes once
+                // both finish. `refresh()` STILL has to wait because it reads
+                // the books table that the installers may have just written.
+                async let sample = deps.sampleBookInstaller.installIfNeeded(ownerId: user.id)
+                async let reader = deps.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
+                _ = await (sample, reader)
                 await libraryViewModel?.refresh()
             }
         }
