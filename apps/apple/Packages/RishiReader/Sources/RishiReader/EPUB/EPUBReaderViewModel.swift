@@ -137,11 +137,33 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
         // continuation both land off-main. The result is consumed by a
         // single awaiter (this Task), so the non-Sendable `Publication`
         // crosses the boundary via the detached-task `sending` result.
+        //
+        // Phase 21 audit fix: the position-restore await is hoisted
+        // into the detached block alongside the publication open so the
+        // full round-trip is off-main and only the final assignment
+        // block runs on the caller's isolation (MainActor under
+        // SwiftUI's `.task`). Previously `positionStore.position(for:)`
+        // ran between the parse completion and the `.loaded` write,
+        // which left a tiny but real MainActor-resumed window between
+        // two off-main hops.
+        let bookId = book.id
+        let positionStoreRef = positionStore
         let pub: Publication?
+        let restoredLocator: Locator?
         do {
-            pub = try await Task.detached(priority: .userInitiated) { [loader, documentURL] in
-                try await loader.open(fileURL: documentURL)
+            let result: (Publication, Locator?) = try await Task.detached(priority: .userInitiated) { [loader, documentURL] in
+                let publication = try await loader.open(fileURL: documentURL)
+                let restored: Locator?
+                if let last = try? await positionStoreRef.position(for: bookId),
+                   let wrapper = try? EPUBPositionLocator.decode(jsonString: last.locator) {
+                    restored = wrapper.toReadiumLocator()
+                } else {
+                    restored = nil
+                }
+                return (publication, restored)
             }.value
+            pub = result.0
+            restoredLocator = result.1
         } catch {
             Log.reader.error("EPUBReaderViewModel.load failed for \(self.documentURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             self.loadingState = .failed(reason: error.localizedDescription)
@@ -152,14 +174,14 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
             self.loadingState = .failed(reason: "Loader returned nil publication")
             return
         }
+        // Single MainActor write block — assign publication, title,
+        // latestLocator, and the loaded state atomically on the
+        // caller's isolation after the full off-main round-trip
+        // returns. SwiftUI sees one cohesive transition.
         self.publication = pub
         self.title = pub.metadata.title ?? book.title
-
-        // Restore last position.
-        if let last = try? await positionStore.position(for: book.id),
-           let wrapper = try? EPUBPositionLocator.decode(jsonString: last.locator),
-           let restored = wrapper.toReadiumLocator() {
-            self.latestLocator = restored
+        if let restoredLocator {
+            self.latestLocator = restoredLocator
         }
         self.loadingState = .loaded
     }
