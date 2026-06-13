@@ -32,6 +32,9 @@ public enum Log {
     // calls `Log.installSink(_:)` once at app launch.
     private static let _sinks = SinkRegistry()
 
+    // @unchecked Sendable justified: holds mutable `var sinks` protected by
+    // an internal NSLock; safety is externally provided rather than
+    // compiler-proven, so the unchecked override is required.
     public final class SinkRegistry: @unchecked Sendable {
         private let lock = NSLock()
         private var sinks: [LogSink] = []
@@ -67,6 +70,8 @@ public enum Log {
         _sinks.remove(sink)
     }
 
+    // @unchecked Sendable justified: holds a mutable `var _handler` closure
+    // protected by an internal NSLock; safety is externally provided.
     public final class TestCaptureBox: @unchecked Sendable {
         private let lock = NSLock()
         private var _handler: ((String, LogLevel, [String: String]?) -> Void)?
