@@ -22,6 +22,17 @@ public final class LibraryViewModel {
     public private(set) var filteredBooks: [Book] = []
     public private(set) var positionsByBookId: [BookID: Position] = [:]
 
+    /// Phase 21 Plan 21-01 — cover URL map populated by `refresh()` BEFORE
+    /// it returns, using `BookFileStorage.cachedCoverURLIfFresh` (the
+    /// nonisolated cache fast path). The grid binds directly to this map
+    /// so the first paint after `vm.refresh()` sees real cover URLs
+    /// instead of a gradient placeholder.
+    ///
+    /// Cache-MISS / stale-sidecar entries are deliberately absent so the
+    /// view's gradient fallback renders for them (acceptable per phase
+    /// CONTEXT.md — only the cold-extract case keeps the placeholder).
+    public private(set) var coverURLs: [BookID: URL] = [:]
+
     public var searchText: String = "" {
         didSet { scheduleSearchDebounce(oldValue: oldValue) }
     }
@@ -55,6 +66,7 @@ public final class LibraryViewModel {
             readingNow = []
             filteredBooks = []
             positionsByBookId = [:]
+            coverURLs = [:]
             return
         }
         do {
@@ -81,8 +93,34 @@ public final class LibraryViewModel {
                 }
                 return out
             }
+            // Phase 21 Plan 21-01 — fan out cover-URL resolution INSIDE
+            // refresh() using the nonisolated cache fast path. Mirrors the
+            // position fan-out shape above; `cachedCoverURLIfFresh` returns
+            // synchronously off-actor so each child task is a single fast
+            // file-existence + sidecar-mtime check on the cooperative
+            // executor. We commit the resolved map before returning so the
+            // grid's first paint (which binds to `coverURLs`) sees real
+            // URLs for every cache-warm book, eliminating the gradient
+            // placeholder flash. Cache MISSes intentionally omit the entry
+            // so the gradient fallback renders only when needed.
+            let resolvedCovers: [BookID: URL] = await withTaskGroup(
+                of: (BookID, URL?).self
+            ) { group in
+                for book in loaded {
+                    group.addTask { [storage = self.storage] in
+                        let url = storage.cachedCoverURLIfFresh(for: book)
+                        return (book.id, url)
+                    }
+                }
+                var out: [BookID: URL] = [:]
+                for await (id, url) in group {
+                    if let url { out[id] = url }
+                }
+                return out
+            }
             self.books = loaded
             self.positionsByBookId = positionsByBook
+            self.coverURLs = resolvedCovers
             self.readingNow = Self.deriveReadingNow(books: loaded, positions: positionsByBook)
             self.filteredBooks = LibrarySearchFilter.filter(books: loaded, query: searchText)
         } catch {
@@ -96,6 +134,7 @@ public final class LibraryViewModel {
             try await storage.delete(book)
             books.removeAll { $0.id == book.id }
             positionsByBookId[book.id] = nil
+            coverURLs[book.id] = nil
             readingNow = Self.deriveReadingNow(books: books, positions: positionsByBookId)
             filteredBooks = LibrarySearchFilter.filter(books: books, query: searchText)
         } catch {
