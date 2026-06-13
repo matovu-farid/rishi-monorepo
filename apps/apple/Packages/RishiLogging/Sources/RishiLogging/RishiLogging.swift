@@ -18,7 +18,7 @@ public enum RishiLogging {
     }
 
     /// Marker for the public RishiLogging API version. Bump when the surface breaks.
-    public static let apiVersion = "1.0.0"
+    static let apiVersion = "1.0.0"
 
     /// SET-02 — mute / unmute Sentry uploads at runtime in response to the
     /// user's telemetry opt-in toggle. The Phase 11 `AppTelemetrySink`
