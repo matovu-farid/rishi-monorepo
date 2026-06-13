@@ -550,7 +550,19 @@ struct RootView: View {
                     bookHints[book.id] = book
                     libraryPath.append(ReaderRoute.route(for: book))
                 },
-                onShowSettings: { showSettings = true }
+                onShowSettings: { showSettings = true },
+                onImported: { outcomes in
+                    // Phase 21 follow-up — auto-open the reader when the
+                    // user imported exactly ONE book successfully. Multi-
+                    // book batches stay on the library (we don't push N
+                    // readers). Mirrors the `onOpenBook` path so the
+                    // NavigationLazyBook hint mechanism (c50e91169) kicks
+                    // in for instant first paint.
+                    let successes = outcomes.compactMap(\.book)
+                    guard successes.count == 1, let book = successes.first else { return }
+                    bookHints[book.id] = book
+                    libraryPath.append(ReaderRoute.route(for: book))
+                }
             )
             .navigationDestination(for: ReaderRoute.self) { route in
                 destinationView(for: route, deps: deps, userId: user.id)

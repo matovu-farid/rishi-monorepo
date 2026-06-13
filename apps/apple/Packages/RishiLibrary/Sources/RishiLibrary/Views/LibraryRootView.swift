@@ -45,6 +45,13 @@ public struct LibraryRootView: View {
     /// tests continue to render the same toolbar.
     public let onShowSettings: (() -> Void)?
 
+    /// Phase 21 follow-up — fires once per import batch with the resulting
+    /// outcomes. Host app uses this to auto-open the reader when a SINGLE
+    /// book was imported successfully. Multi-book batches keep the user on
+    /// the library (we don't try to fan out into N readers). `nil` (the
+    /// default) preserves legacy behaviour where the host doesn't react.
+    public let onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)?
+
     /// Phase 18 Plan 18-01 — when non-nil, the host app owns the outer
     /// `NavigationStack(path:)` and this view renders without wrapping its
     /// content in another stack. Required for the reader push migration
@@ -61,10 +68,12 @@ public struct LibraryRootView: View {
     /// Kept for previews + future callers that want the simple shape.
     public init(importCoordinator: ImportCoordinator,
                 onOpenBook: @escaping (Book) -> Void,
-                onShowSettings: (() -> Void)? = nil) {
+                onShowSettings: (() -> Void)? = nil,
+                onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? = nil) {
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
+        self.onImported = onImported
         self.externalPath = nil
     }
 
@@ -74,10 +83,12 @@ public struct LibraryRootView: View {
     public init(path: Binding<NavigationPath>,
                 importCoordinator: ImportCoordinator,
                 onOpenBook: @escaping (Book) -> Void,
-                onShowSettings: (() -> Void)? = nil) {
+                onShowSettings: (() -> Void)? = nil,
+                onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? = nil) {
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
+        self.onImported = onImported
         self.externalPath = path
     }
 
@@ -96,13 +107,18 @@ public struct LibraryRootView: View {
         }
         .librarySearchable(text: $vm.searchText,
                            filteredIsEmpty: !vm.searchText.isEmpty && vm.filteredBooks.isEmpty)
-        .libraryDropDestination(coordinator: importCoordinator) { _ in
+        .libraryDropDestination(coordinator: importCoordinator) { outcomes in
             // KEEP: vm.refresh and reloadCovers both await actor methods
             // (BookStore + storage); outer Task chains the awaits. UI state
             // writes happen inside `refresh` on its own MainActor isolation.
             Task {
                 await vm.refresh()
                 await reloadCovers()
+                // Phase 21 follow-up — surface batch outcomes to host so
+                // single-book imports auto-open the reader. Fire AFTER the
+                // refresh so the host's bookHints + path push see the new
+                // book in `vm.books`.
+                onImported?(outcomes)
             }
         }
         #if canImport(UIKit)
@@ -118,9 +134,11 @@ public struct LibraryRootView: View {
                 // commit the @Observable + @State writes. Detaching would
                 // sever the @Bindable @MainActor capture of `vm`.
                 Task {
-                    _ = await importCoordinator.importBooks(urls)
+                    let outcomes = await importCoordinator.importBooks(urls)
                     await vm.refresh()
                     await reloadCovers()
+                    // Phase 21 follow-up — auto-open hook (see drop above).
+                    onImported?(outcomes)
                 }
             }
         }
