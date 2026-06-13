@@ -138,32 +138,67 @@ public actor BookFileStorage {
     /// The actor still owns the inputs (`rootURL`, `book.coverPath`, `fileManager`)
     /// so the function remains correct under Swift 6 strict concurrency.
     public func cachedCoverURL(for book: Book) async -> URL? {
-        // Path 1 — DB has a `coverPath` recorded at import time. This is the
-        // happy path for books imported after the cover extractor was wired.
+        // Phase 21 follow-up — always prefer the downsampled HEIC cache
+        // even when `book.coverPath` already points at a full-resolution
+        // `cover.png`. Reasoning: AsyncImage decoding a 2000x3000 PNG for
+        // every tile on every library paint is the root cause of the
+        // "covers take a long time to come in" regression. The cache
+        // produces a 600x900 HEIC once, then serves it forever.
+        //
+        // The cache treats the existing `cover.png` (when present) as the
+        // extractor source — that path skips the slow EPUB / PDF re-extract
+        // and only pays the cheap one-time downsample. When `coverPath` is
+        // nil we fall back to the book-file extractor (legacy lazy path).
+        if let cache = coverCache {
+            if let rel = book.coverPath {
+                let coverFileURL = rootURL.appendingPathComponent(rel)
+                if await Self.fileExistsOffActor(path: coverFileURL.path) {
+                    // Use the on-disk PNG as the extractor source — much
+                    // faster than re-opening the EPUB/PDF and avoids the
+                    // ZIP / PDFKit decode entirely.
+                    let extractor = PassthroughDataExtractor(sourceURL: coverFileURL)
+                    if let url = await cache.cachedURL(
+                        for: book.id,
+                        sourceFileURL: coverFileURL,
+                        extractor: extractor
+                    ) {
+                        return url
+                    }
+                    // Cache encode failed (e.g. simulator without HEIC) —
+                    // fall back to the legacy raw-PNG URL so the tile still
+                    // renders something.
+                    return coverFileURL
+                }
+            }
+
+            // No coverPath (or the file is missing) — fall back to the
+            // legacy lazy extraction path. This rescues two legitimate
+            // cases observed in the field:
+            //   1. Books imported before the EPUB extractor was robust
+            //      (DB `coverPath` is NULL even though the file is a valid
+            //      EPUB).
+            //   2. Books whose `cover.png` was deleted out from under us
+            //      by an iCloud restore that didn't include the per-book
+            //      directory.
+            let ext = (book.fileURL as NSString).pathExtension.lowercased()
+            guard let extractor = coverExtractors[ext] else { return nil }
+            let sourceURL = rootURL.appendingPathComponent(book.fileURL)
+            return await cache.cachedURL(
+                for: book.id,
+                sourceFileURL: sourceURL,
+                extractor: extractor
+            )
+        }
+
+        // No cache configured (test fixtures with `coverExtractors: [:]`).
+        // Preserve the legacy "cover.png-only" path.
         if let rel = book.coverPath {
             let url = rootURL.appendingPathComponent(rel)
             if await Self.fileExistsOffActor(path: url.path) {
                 return url
             }
         }
-
-        // Path 2 — fall back to the lazy disk cache. This rescues two
-        // legitimate cases observed in the field:
-        //   1. Books imported before the EPUB extractor was robust (DB
-        //      `coverPath` is NULL even though the file is a valid EPUB).
-        //   2. Books whose `cover.png` was deleted out from under us by an
-        //      iCloud restore that didn't include the per-book directory.
-        // The cache extracts on first miss, persists HEIC, and re-uses it
-        // on subsequent cold launches. Invalidation tracks file mtime.
-        guard let cache = coverCache else { return nil }
-        let ext = (book.fileURL as NSString).pathExtension.lowercased()
-        guard let extractor = coverExtractors[ext] else { return nil }
-        let sourceURL = rootURL.appendingPathComponent(book.fileURL)
-        return await cache.cachedURL(
-            for: book.id,
-            sourceFileURL: sourceURL,
-            extractor: extractor
-        )
+        return nil
     }
 
     /// Phase 19 Plan 19-02 (F-P0-02): dispatch `FileManager.fileExists` into a
@@ -209,6 +244,22 @@ public actor BookFileStorage {
             return String(target.dropFirst(root.count + 1))
         }
         return target
+    }
+
+    /// Phase 21 follow-up — pass-through `CoverExtractor` that just reads
+    /// the raw bytes at `sourceURL` and hands them to `CoverCache`. Used to
+    /// feed an already-extracted on-disk `cover.png` into the downsampling
+    /// cache without paying the EPUB ZIP / PDFKit decode cost again.
+    private struct PassthroughDataExtractor: CoverExtractor {
+        let sourceURL: URL
+
+        func extractCover(from fileURL: URL) async -> Data? {
+            // We ignore `fileURL` and read the URL captured at init time —
+            // this lets the cache key off a different mtime source than the
+            // extractor payload source. Both URLs are the same `cover.png`
+            // in the current call site, so this is purely defensive.
+            try? Data(contentsOf: sourceURL)
+        }
     }
 
     private func titleFallback(from filename: String) -> String {

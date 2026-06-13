@@ -28,16 +28,27 @@ public struct BookCoverImageView: View {
     }
 
     public var body: some View {
+        // Phase 21 follow-up — every branch fills the parent's offered size
+        // via `.frame(maxWidth: .infinity, maxHeight: .infinity)`. Without this,
+        // the AsyncImage's natural intrinsic size (e.g. a 2000x3000 cover) leaks
+        // up through the surrounding `Group` and overrides any
+        // `.aspectRatio(2/3, contentMode: .fit)` the caller applies — producing
+        // ~350pt-tall tiles in a 180pt-wide grid. With the explicit fill, the
+        // aspect-ratio modifier in `LibraryGrid` is now load-bearing again.
         Group {
             if let url = coverURL {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let image):
-                        image.resizable().scaledToFill()
+                        image
+                            .resizable()
+                            .scaledToFill()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     default:
                         gradientFallback
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 gradientFallback
             }

@@ -139,6 +139,51 @@ struct BookFileStorageTests {
         #expect(url == nil)
     }
 
+    /// Phase 21 follow-up — when `coverPath` exists, the cache should be
+    /// populated on first call and re-used (no re-encode) on subsequent
+    /// calls. This is the load-bearing fix for "covers take forever to come
+    /// in" — the cache file MUST sit under `Caches/book-covers/<bookID>.heic`
+    /// after the first paint so subsequent paints are instant.
+    @Test
+    func cachedCoverURL_populatesDownsampledCache_whenCoverPathExists() async throws {
+        let root = makeTempRoot("cached-downsample")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let store = InMemoryBookStore()
+        let storage = makeStorage(rootURL: root, bookStore: store)
+
+        // Import a real PDF so a real `cover.png` lands on disk.
+        let srcDir = makeTempRoot("cached-downsample-src")
+        defer { try? FileManager.default.removeItem(at: srcDir) }
+        let srcPDF = srcDir.appendingPathComponent("doc.pdf")
+        try FixtureBuilders.writeTinyPDF(to: srcPDF)
+        let book = try await storage.importBook(from: srcPDF, ownerId: UUID())
+        #expect(book.coverPath != nil)
+
+        // First call — populates the downsampled HEIC cache.
+        let first = await storage.cachedCoverURL(for: book)
+        #expect(first != nil)
+
+        // The cache file should now exist under
+        // `<root>/Caches/book-covers/<bookID>.heic` (or .heic with a PNG
+        // fallback body on simulators that can't encode HEIC — either way
+        // it's at the same path).
+        let cacheURL = root
+            .appendingPathComponent("Caches", isDirectory: true)
+            .appendingPathComponent("book-covers", isDirectory: true)
+            .appendingPathComponent("\(book.id.uuidString).heic")
+        #expect(FileManager.default.fileExists(atPath: cacheURL.path))
+
+        // The returned URL on a tile paint should be the downsampled cache
+        // (NOT the original full-resolution `cover.png`) so AsyncImage
+        // decodes the small thumbnail instead of the multi-megapixel source.
+        #expect(first?.path == cacheURL.path)
+
+        // Second call — pure cache hit. Same path, no re-encode work.
+        let second = await storage.cachedCoverURL(for: book)
+        #expect(second?.path == cacheURL.path)
+    }
+
     /// Phase 21: rescue path for books imported before the EPUB extractor
     /// was robust. DB row has `coverPath == nil`, but the on-disk file IS a
     /// valid EPUB with a cover — `cachedCoverURL` should lazily extract,

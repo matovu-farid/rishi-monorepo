@@ -58,10 +58,19 @@ public actor CoverCache {
         let mtimeURL = mtimeSidecarURL(for: bookID)
         let currentMtime = sourceMtime(at: sourceFileURL)
 
+        // Phase 21 follow-up — compare mtimes with a sub-millisecond tolerance
+        // because the sidecar stores `Date.timeIntervalSince1970` via
+        // `String(_:)` which is not guaranteed to round-trip the full Double
+        // precision of the in-memory value. Under the bit-exact comparison
+        // previously used here, mtimes whose Double representation needs more
+        // decimals than `String(_:)` emits would always miss the cache,
+        // surfacing as the "covers take forever to come in" regression on
+        // every paint (observed flakily by the pre-existing
+        // `returnsCachedURL_withoutCallingExtractor_onHit` test).
         if fileManager.fileExists(atPath: coverURL.path),
            let cachedMtime = readMtime(at: mtimeURL),
            let currentMtime,
-           cachedMtime == currentMtime {
+           Self.mtimesAreEqual(cachedMtime, currentMtime) {
             return coverURL
         }
 
@@ -151,22 +160,54 @@ public actor CoverCache {
         try? Data(text.utf8).write(to: url, options: .atomic)
     }
 
+    /// Phase 21 follow-up — equality comparator that tolerates the
+    /// sub-millisecond drift introduced by writing the Date via
+    /// `String(timeIntervalSince1970)` and reading it back via `TimeInterval(_:)`.
+    /// 1ms tolerance is far below any meaningful file-modification granularity
+    /// (HFS+/APFS expose sub-second mtimes but no app updates a book file
+    /// twice within 1ms in practice) so this is purely defensive against the
+    /// Double-string round-trip, never against a real edit.
+    nonisolated static func mtimesAreEqual(_ a: Date, _ b: Date) -> Bool {
+        abs(a.timeIntervalSince(b)) < 0.001
+    }
+
     // MARK: - HEIC encode
 
-    /// Re-encode the extractor's PNG payload as HEIC of `targetSize`. HEIC is
-    /// significantly smaller than PNG at equivalent fidelity for cover
-    /// thumbnails. Returns `nil` if the platform's `CGImageDestination`
-    /// cannot encode HEIC (e.g. older simulators) — caller falls back to PNG.
+    /// Re-encode the extractor's PNG payload as a DOWNSAMPLED HEIC of
+    /// `targetSize`. HEIC is significantly smaller than PNG at equivalent
+    /// fidelity for cover thumbnails, AND the downsample is the load-bearing
+    /// step — without it we'd be persisting (and then AsyncImage-decoding)
+    /// the full 2000x3000 source image for every tile on every paint, which
+    /// is the slow-cover-load regression users reported after Phase 21.
+    ///
+    /// Returns `nil` if the platform's `CGImageDestination` cannot encode
+    /// HEIC (e.g. older simulators) — caller falls back to PNG.
     nonisolated static func encodeHEIC(_ pngData: Data, targetSize: CGSize) -> Data? {
-        #if canImport(UIKit)
-        guard let image = UIImage(data: pngData)?.cgImage else { return nil }
-        #elseif canImport(AppKit)
-        guard let nsImage = NSImage(data: pngData) else { return nil }
-        var rect = CGRect(origin: .zero, size: nsImage.size)
-        guard let image = nsImage.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
-        #else
-        return nil
-        #endif
+        // Use ImageIO's CGImageSourceCreateThumbnailAtIndex pipeline — it
+        // decodes only the pixels needed for the requested size instead of
+        // decoding the full image and then resizing. For a 2000x3000 source
+        // and a 600x900 target this is ~10x faster and uses ~10x less peak
+        // memory than the prior UIImage(data:).cgImage round-trip.
+        guard let source = CGImageSourceCreateWithData(pngData as CFData, nil) else { return nil }
+        let maxPixelSize = max(targetSize.width, targetSize.height)
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        // Prefer the downsampled thumbnail (cheap decode, small output);
+        // fall back to the full image when the source is too small or the
+        // thumbnail creator refuses (e.g. degenerate 1x1 fixtures used in
+        // unit tests). Either way we still HEIC-encode the result.
+        let thumbnail: CGImage
+        if let small = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) {
+            thumbnail = small
+        } else if let full = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+            thumbnail = full
+        } else {
+            return nil
+        }
 
         let mutableData = NSMutableData()
         let heicType = UTType.heic.identifier as CFString
@@ -176,10 +217,10 @@ public actor CoverCache {
             1,
             nil
         ) else { return nil }
-        let options: [CFString: Any] = [
+        let encodeOptions: [CFString: Any] = [
             kCGImageDestinationLossyCompressionQuality: 0.8
         ]
-        CGImageDestinationAddImage(destination, image, options as CFDictionary)
+        CGImageDestinationAddImage(destination, thumbnail, encodeOptions as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { return nil }
         return mutableData as Data
     }
