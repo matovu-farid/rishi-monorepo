@@ -5,12 +5,14 @@ import RishiDB
 
 /// GRDB-backed implementation of `SyncMetadataStore`.
 ///
-/// `final class @unchecked Sendable` mirrors `GRDBHighlightStore` — GRDB
+/// `final class ... Sendable` mirrors `GRDBHighlightStore` — the only stored
+/// property is `let dbQueue: any DatabaseWriter` and `DatabaseWriter` is
+/// itself `Sendable`, so the compiler proves Sendable directly. GRDB
 /// serialises writes and (with a `DatabasePool`) parallelises reads, so an
 /// outer actor would double-hop every read/write. The store accepts any
 /// `DatabaseWriter` so production code can pass a `DatabasePool` (concurrent
 /// readers) while tests can pass an in-memory `DatabaseQueue`.
-public final class GRDBSyncMetadataStore: SyncMetadataStore, @unchecked Sendable {
+public final class GRDBSyncMetadataStore: SyncMetadataStore, Sendable {
     private let dbQueue: any DatabaseWriter
 
     public init(dbQueue: any DatabaseWriter) {
