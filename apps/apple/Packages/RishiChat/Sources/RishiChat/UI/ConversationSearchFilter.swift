@@ -10,9 +10,9 @@ import RishiCore
 ///
 /// Matching is case-insensitive AND diacritic-insensitive (Finder/Spotlight
 /// semantics): the needle "cafe" matches the haystack "Café".
-public enum ConversationSearchFilter {
+enum ConversationSearchFilter {
 
-    public static func apply(
+    static func apply(
         conversations: [Conversation],
         messagesByConversation: [ConversationID: [Message]],
         query rawQuery: String

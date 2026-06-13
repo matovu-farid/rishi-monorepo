@@ -13,8 +13,8 @@ public protocol ChatDirtyHook: Sendable {
 
 /// No-op `ChatDirtyHook` for tests, previews, and production until
 /// `SyncEngine` wires the real forwarder in plan 09-06.
-public struct NoopChatDirtyHook: ChatDirtyHook {
-    public init() {}
-    public func conversationDidUpdate(_ id: ConversationID) async {}
-    public func messageDidUpdate(_ id: MessageID) async {}
+struct NoopChatDirtyHook: ChatDirtyHook {
+    init() {}
+    func conversationDidUpdate(_ id: ConversationID) async {}
+    func messageDidUpdate(_ id: MessageID) async {}
 }

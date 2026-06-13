@@ -21,7 +21,7 @@ import RishiLogging
 ///   - `data: {"tool_call":"<json>"}\n\n` → `.toolCall(<json>)`
 ///   - `: <comment>\n\n` → ignored
 ///   - malformed JSON → logged + skipped (DOES NOT abort the stream)
-public actor SSEParser {
+actor SSEParser {
 
     private var buffer = Data()
     private let frameTerminator: Data = Data("\n\n".utf8)

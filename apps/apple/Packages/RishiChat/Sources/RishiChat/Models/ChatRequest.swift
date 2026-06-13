@@ -4,7 +4,7 @@ import RishiCore
 /// Wire DTO for `POST /api/chat`. Cloud RAG (CHAT-03): the worker performs
 /// retrieval; iOS only sends `book_id` (optional context scope) and `query`.
 /// NO embeddings, NO vectors, NO retrieval params — server-owned.
-public struct ChatRequest: Encodable, Sendable, Equatable {
+struct ChatRequest: Encodable, Sendable, Equatable {
     public let bookId: BookID?
     public let query: String
 

@@ -6,7 +6,7 @@ import Foundation
 ///
 /// `tool_call` is an opaque JSON string per Phase 9 contract — v1 does not
 /// introspect tool payloads.
-public struct ChatResponseChunk: Decodable, Sendable, Equatable {
+struct ChatResponseChunk: Decodable, Sendable, Equatable {
     public let delta: String?
     public let toolCall: String?
     public let done: Bool?

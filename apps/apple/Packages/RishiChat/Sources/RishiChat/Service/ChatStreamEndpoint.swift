@@ -10,7 +10,7 @@ import RishiAPI
 /// Phase 9 (Chat) is the primary caller. ``SSEParser`` frames the byte stream
 /// into ``ChatResponseChunk`` events; `ChatService` (plan 09-03) orchestrates
 /// persistence.
-public struct ChatStreamEndpoint: WorkerStreamingEndpointWithBody {
+struct ChatStreamEndpoint: WorkerStreamingEndpointWithBody {
     public let method: HTTPMethod = .POST
     public let path: String = "/api/chat"
     public let body: ChatRequest

@@ -15,7 +15,7 @@ import Foundation
 /// protocols), RishiAuth (current user id, app-layer only), RishiLogging.
 /// Has NO dependency on RishiReader, RishiSync, RishiLibrary, or RishiAudio
 /// (cross-feature wiring is performed at the app layer via protocol seams).
-public enum RishiChat {
+enum RishiChat {
     /// Semantic version of the Feature surface. Bump on breaking API changes.
-    public static let version = "0.1.0-scaffold"
+    static let version = "0.1.0-scaffold"
 }
