@@ -3,6 +3,12 @@ import RishiLogging
 #if canImport(AVFAudio)
 import AVFAudio
 
+private actor ChunkLookup {
+    private var table: [PCMChunk.ID: PCMChunk] = [:]
+    func record(_ chunk: PCMChunk) { table[chunk.id] = chunk }
+    func take(_ id: PCMChunk.ID) -> PCMChunk? { table.removeValue(forKey: id) }
+}
+
 /// Orchestrates streamer → decoder → AVAudioEngine for one TTS playback
 /// session. Owns the coordination of AudioSessionCoordinator and the
 /// observable TTSPlaybackState that SwiftUI binds to.
@@ -58,20 +64,23 @@ public actor TTSEngine {
             let decoder = try decoderFactory(engine.targetFormat)
             activeDecoder = decoder
 
-            // KEEP: actor-owned background pipe; reads from decoder.pcmStream
-            // and forwards back into the actor via `self?.onBufferScheduled`.
-            // The inner `Task { await self?.onBufferComplete(...) }` is a
-            // KEEP for the same reason — both stay on the engine actor's
-            // executor, not main.
-            pipeTask = Task { [weak self, engine] in
-                for await chunk in decoder.pcmStream() {
+            // Local lookup so the engine's completion stream (which yields only
+            // PCMChunk.ID) can be resolved back to the original chunk for
+            // passageId/isFinal handling. `take` removes the entry, so the table
+            // never grows unbounded.
+            let chunkLookup = ChunkLookup()
+            let inspected = decoder.pcmStream().map { [weak self, chunkLookup] chunk -> PCMChunk in
+                await chunkLookup.record(chunk)
+                await self?.onBufferScheduled(chunk: chunk)
+                return chunk
+            }
+
+            pipeTask = Task { [weak self, engine, chunkLookup] in
+                for await finishedId in engine.play(inspected) {
                     if Task.isCancelled { return }
-                    engine.schedule(buffer: chunk) { [weak self] in
-                        // KEEP: AVAudioPlayerNode buffer-complete callback;
-                        // hops back into the engine actor to mark the chunk.
-                        Task { await self?.onBufferComplete(chunk: chunk) }
+                    if let chunk = await chunkLookup.take(finishedId) {
+                        await self?.onBufferComplete(chunk: chunk)
                     }
-                    await self?.onBufferScheduled(chunk: chunk)
                 }
             }
 
@@ -103,7 +112,7 @@ public actor TTSEngine {
     }
 
     public func resume() async {
-        engine.play()
+        engine.resume()
         let observable = state
         await MainActor.run { observable.status = .playing }
     }
@@ -124,7 +133,7 @@ public actor TTSEngine {
         let observable = state
         if !firstBufferScheduled {
             firstBufferScheduled = true
-            engine.play()
+            engine.resume()
             let passageId = chunk.passageId
             await MainActor.run {
                 observable.status = .playing
@@ -151,6 +160,12 @@ public actor TTSEngine {
     }
 
     private func teardown() async {
+        // Cancel BOTH tasks first so neither resists the decoder-finish
+        // signal, then finish the decoder so its pcmStream() completes,
+        // which lets engine.play(_:)'s internal `for try await` exit
+        // cleanly. The completions drain in `pipeTask` ends shortly after
+        // because the engine's continuation calls `.finish()` when the
+        // input ends.
         feedTask?.cancel()
         pipeTask?.cancel()
         feedTask = nil

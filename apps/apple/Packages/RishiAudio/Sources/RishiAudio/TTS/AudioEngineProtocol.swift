@@ -13,9 +13,10 @@ public protocol AudioEngineProtocol: Sendable {
     func attach() throws
     func start() throws
     func stop()
-    func schedule(buffer: PCMChunk, completion: @Sendable @escaping () -> Void)
-    func play()
+    func play<S: AsyncSequence>(_ buffers: S) -> AsyncStream<PCMChunk.ID>
+        where S.Element == PCMChunk, S: Sendable
     func pause()
+    func resume()
 }
 
 // MARK: - Production
@@ -69,13 +70,30 @@ public final class AVAudioEngineAdapter: AudioEngineProtocol, @unchecked Sendabl
         }
     }
 
-    public func schedule(buffer: PCMChunk, completion: @Sendable @escaping () -> Void) {
-        lock.withLock {
-            playerNode.scheduleBuffer(buffer.buffer, completionHandler: completion)
+    public func play<S: AsyncSequence>(_ buffers: S) -> AsyncStream<PCMChunk.ID>
+    where S.Element == PCMChunk, S: Sendable {
+        AsyncStream { continuation in
+            let task = Task { [self] in
+                do {
+                    for try await chunk in buffers {
+                        if Task.isCancelled { break }
+                        let id = chunk.id
+                        self.lock.withLock {
+                            self.playerNode.scheduleBuffer(chunk.buffer) {
+                                continuation.yield(id)
+                            }
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish()
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
-    public func play() {
+    public func resume() {
         lock.withLock {
             if !playerNode.isPlaying { playerNode.play() }
         }
@@ -101,9 +119,11 @@ public final class FakeAudioEngine: AudioEngineProtocol, @unchecked Sendable {
         case attach
         case start
         case stop
-        case schedule(passageId: String?, isFinal: Bool)
-        case play
+        case playStarted
+        case chunkSeen(id: UUID, passageId: String?, isFinal: Bool)
+        case completionEmitted(id: UUID)
         case pause
+        case resume
     }
 
     private let lock = NSLock()
@@ -138,16 +158,31 @@ public final class FakeAudioEngine: AudioEngineProtocol, @unchecked Sendable {
         }
     }
 
-    public func schedule(buffer: PCMChunk, completion: @Sendable @escaping () -> Void) {
-        lock.withLock { _calls.append(.schedule(passageId: buffer.passageId, isFinal: buffer.isFinal)) }
-        // Fire completion synchronously so tests can observe first-buffer effects without a delay.
-        completion()
-    }
-
-    public func play() {
-        lock.withLock {
-            _calls.append(.play)
-            _isPlaying = true
+    public func play<S: AsyncSequence>(_ buffers: S) -> AsyncStream<PCMChunk.ID>
+    where S.Element == PCMChunk, S: Sendable {
+        lock.withLock { _calls.append(.playStarted) }
+        return AsyncStream { continuation in
+            let task = Task { [weak self] in
+                do {
+                    for try await chunk in buffers {
+                        if Task.isCancelled { break }
+                        let id = chunk.id
+                        let passageId = chunk.passageId
+                        let isFinal = chunk.isFinal
+                        self?.lock.withLock {
+                            self?._calls.append(.chunkSeen(id: id, passageId: passageId, isFinal: isFinal))
+                        }
+                        continuation.yield(id)
+                        self?.lock.withLock {
+                            self?._calls.append(.completionEmitted(id: id))
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish()
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
@@ -155,6 +190,13 @@ public final class FakeAudioEngine: AudioEngineProtocol, @unchecked Sendable {
         lock.withLock {
             _calls.append(.pause)
             _isPlaying = false
+        }
+    }
+
+    public func resume() {
+        lock.withLock {
+            _calls.append(.resume)
+            _isPlaying = true
         }
     }
 }
