@@ -5,7 +5,7 @@ import RishiLogging
 
 /// GRDB-backed `ConversationStore`. See `GRDBBookStore` for the `@unchecked
 /// Sendable` rationale.
-public final class GRDBConversationStore: ConversationStore, @unchecked Sendable {
+public final class GRDBConversationStore: ConversationStore, Sendable {
 
     private let dbQueue: any DatabaseWriter
 
