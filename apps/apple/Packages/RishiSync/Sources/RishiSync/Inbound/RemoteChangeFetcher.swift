@@ -11,7 +11,7 @@ import RishiLogging
 /// endpoint call, nothing else. `ChangeApplier` (this package) is the next
 /// step in the engine's inbound wave and turns `[SyncChange]` into local
 /// store writes with conflict resolution.
-public final class RemoteChangeFetcher: @unchecked Sendable {
+public final class RemoteChangeFetcher: Sendable {
 
     private let workerClient: WorkerClient
     private let metadataStore: any SyncMetadataStore
