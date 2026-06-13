@@ -30,6 +30,8 @@ public struct ManageSubscriptionRow: View {
         if entitlement.isGranted {
             Button {
                 isPresenting = true
+                // KEEP: presenter.present() drives AppStore.showManageSubscriptions
+                // which is @MainActor-bound; the @State write must run on main too.
                 Task { @MainActor in
                     await presenter.present()
                     isPresenting = false

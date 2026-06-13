@@ -27,6 +27,9 @@ public actor PositionDebouncer {
         tasks[bookId]?.cancel()
         let commit = self.commit
         let window = self.window
+        // KEEP: PositionDebouncer is an actor; Task body runs off main and only
+        // re-enters the actor for `clear(bookId)`. The commit closure is
+        // @Sendable and supplied by SyncEngine (also off-main).
         tasks[bookId] = Task { [weak self] in
             do {
                 try await Task.sleep(nanoseconds: UInt64(window * 1_000_000_000))

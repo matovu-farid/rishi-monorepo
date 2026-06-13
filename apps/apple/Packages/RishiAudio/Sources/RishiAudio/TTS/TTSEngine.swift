@@ -58,16 +58,25 @@ public actor TTSEngine {
             let decoder = try decoderFactory(engine.targetFormat)
             activeDecoder = decoder
 
+            // KEEP: actor-owned background pipe; reads from decoder.pcmStream
+            // and forwards back into the actor via `self?.onBufferScheduled`.
+            // The inner `Task { await self?.onBufferComplete(...) }` is a
+            // KEEP for the same reason — both stay on the engine actor's
+            // executor, not main.
             pipeTask = Task { [weak self, engine] in
                 for await chunk in decoder.pcmStream() {
                     if Task.isCancelled { return }
                     engine.schedule(buffer: chunk) { [weak self] in
+                        // KEEP: AVAudioPlayerNode buffer-complete callback;
+                        // hops back into the engine actor to mark the chunk.
                         Task { await self?.onBufferComplete(chunk: chunk) }
                     }
                     await self?.onBufferScheduled(chunk: chunk)
                 }
             }
 
+            // KEEP: actor-owned feed loop; consumes mp3 bytes and forwards
+            // them to the active decoder actor. No main hop.
             feedTask = Task { [weak self, streamer, request] in
                 do {
                     for try await mp3 in streamer.stream(request) {

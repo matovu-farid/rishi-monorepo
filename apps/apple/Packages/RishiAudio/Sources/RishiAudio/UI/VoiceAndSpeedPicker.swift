@@ -55,7 +55,10 @@ public struct VoiceAndSpeedPicker: View {
                 let settings = TTSSettings(voice: voice, speed: speed)
                 let store = store
                 let userId = userId
-                Task { await store.save(settings, userId: userId) }
+                // DETACHED: store.save is an actor method (off-main); persist
+                // a copy of `settings`/`userId` and run on userInitiated so the
+                // MainActor view doesn't await persistence inline.
+                Task.detached(priority: .userInitiated) { await store.save(settings, userId: userId) }
                 onDismiss(settings)
             } label: {
                 Text("Done")

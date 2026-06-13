@@ -85,14 +85,18 @@ public final class NowPlayingController {
         // `detach()` drops the strong reference on this side, and the
         // closures are released when `commandSurface.unregister()` runs.
         let handlers = RemoteCommandHandlers(
+            // KEEP: MPRemoteCommandCenter handler hops into the TTSPlaybackControlling
+            // actor (TTSEngine is an actor). Outer Task chains the await; no main work.
             onPlay: {
                 Task { await controller.resume() }
             },
+            // KEEP: same pattern as onPlay — actor hop only.
             onPause: {
                 Task { await controller.pause() }
             },
             onTogglePlayPause: { [weak self] in
                 let isPlaying = self?.state?.status == .playing
+                // KEEP: actor hop only (controller is the TTSEngine actor).
                 Task {
                     if isPlaying {
                         await controller.pause()
@@ -101,12 +105,15 @@ public final class NowPlayingController {
                     }
                 }
             },
+            // KEEP: actor hop only.
             onSkipForward: { seconds in
                 Task { await controller.skip(seconds: seconds) }
             },
+            // KEEP: actor hop only.
             onSkipBackward: { seconds in
                 Task { await controller.skip(seconds: -seconds) }
             },
+            // KEEP: actor hop only.
             onScrub: { seconds in
                 Task { await controller.scrub(toSeconds: seconds) }
             }
@@ -121,6 +128,11 @@ public final class NowPlayingController {
     /// stays minimal.
     private func startObserving(state: TTSPlaybackState) {
         observationTask?.cancel()
+        // KEEP: 50ms poll on @MainActor; reads MainActor @Observable state and
+        // updates MPNowPlayingInfoCenter (MainActor-adjacent). Observation
+        // push refactor deferred to v1.1 ADR backlog (RESEARCH §F-P1-03 /
+        // plan 19-12). MainActor is required here because the read targets
+        // MainActor state and the writes target MediaPlayer surfaces.
         observationTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }

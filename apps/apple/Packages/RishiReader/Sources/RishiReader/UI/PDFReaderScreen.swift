@@ -472,6 +472,10 @@ public struct PDFReaderScreen: View {
         // regardless of whether the user used the system chevron or the
         // edge-swipe pop gesture.
         .onDisappear {
+            // KEEP: viewModel.flush is @MainActor but the underlying
+            // positionStore.upsert is an actor method; outer Task chains the
+            // await. Final mutation of pendingPositionTask is on main, which
+            // is correct since the VM itself is @MainActor.
             Task { await viewModel.flush() }
         }
     }
@@ -501,6 +505,10 @@ public struct PDFReaderScreen: View {
 
     private func saveHighlight(pending: PendingHighlight, color: HighlightColor, note: String?) {
         let store = highlightStore
+        // KEEP: viewModel.createHighlight is @MainActor (writes to @Observable
+        // viewModel.highlights). The store actor hop happens inside; explicit
+        // @MainActor here documents the intent and matches the @State write of
+        // pendingHighlight.
         Task { @MainActor in
             if let store {
                 _ = await viewModel.createHighlight(
@@ -516,6 +524,8 @@ public struct PDFReaderScreen: View {
 
     private func startNoteFlow(for pending: PendingHighlight) {
         let store = highlightStore
+        // KEEP: viewModel.createHighlight is @MainActor; activeSheet is @State
+        // on this view. Both writes need MainActor.
         Task { @MainActor in
             guard let store else {
                 pendingHighlight = nil
@@ -542,6 +552,8 @@ public struct PDFReaderScreen: View {
     private func commitNoteEdit(on highlight: Highlight) {
         let text = editingNoteText
         let store = highlightStore
+        // KEEP: viewModel.updateNote is @MainActor and activeSheet is @State.
+        // The store actor hop happens inside updateNote.
         Task { @MainActor in
             if let store {
                 await viewModel.updateNote(

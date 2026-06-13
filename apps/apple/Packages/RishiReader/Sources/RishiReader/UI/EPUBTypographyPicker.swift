@@ -124,7 +124,10 @@ public struct EPUBTypographyPicker: View {
         let snapshot = typography
         let bookId = self.bookId
         let store = self.store
-        Task { await store.setTypography(snapshot, for: bookId) }
+        // DETACHED: store.setTypography writes to GRDB via ReaderSettingsStore
+        // (actor). The local @State has already updated, so the persist can
+        // run off main without blocking the UI.
+        Task.detached(priority: .userInitiated) { await store.setTypography(snapshot, for: bookId) }
     }
 }
 

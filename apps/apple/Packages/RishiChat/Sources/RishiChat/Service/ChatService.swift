@@ -53,6 +53,9 @@ public actor RishiChatService: ChatService {
         bookId: BookID?
     ) -> AsyncThrowingStream<ChatEvent, Error> {
         AsyncThrowingStream { continuation in
+            // KEEP: nonisolated bridge from sync AsyncThrowingStream init into
+            // the actor's runTurn. Task body runs off main (calling actor is
+            // not MainActor) and forwards into the continuation.
             let task = Task {
                 do {
                     try await self.runTurn(query: query, bookId: bookId, continuation: continuation)
@@ -125,6 +128,10 @@ public actor RishiChatService: ChatService {
         let byteStream = workerClient.stream(endpoint)
         let yieldChannel = AsyncStream<ChatEvent>.makeStream(bufferingPolicy: .unbounded)
 
+        // KEEP: child consumer Task inside the actor; reads WorkerClient bytes
+        // (URLSession runs off main) and yields events into yieldChannel.
+        // Decoupled from the parent so cancellation propagation is sub-100ms
+        // per CHAT-08 budget — see surrounding comment block above.
         let consumer = Task { () async throws -> Bool in
             // Returns true when `.completed` was seen; false on clean stream end.
             for try await chunk in byteStream {

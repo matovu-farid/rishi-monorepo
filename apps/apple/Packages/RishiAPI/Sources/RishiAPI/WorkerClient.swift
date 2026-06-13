@@ -132,6 +132,8 @@ public actor WorkerClient {
         _ endpoint: E
     ) -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream { continuation in
+            // KEEP: nonisolated wrapper; Task body runs off main and bridges
+            // URLSession.bytes into the AsyncThrowingStream continuation.
             let task = Task {
                 do {
                     let request = try await self.buildStreamingRequest(for: endpoint)

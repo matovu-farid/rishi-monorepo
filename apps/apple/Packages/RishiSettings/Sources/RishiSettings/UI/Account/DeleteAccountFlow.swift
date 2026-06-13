@@ -60,6 +60,8 @@ public struct DeleteAccountFlow: View {
 
             if armed {
                 Button(role: .destructive) {
+                    // KEEP: runDelete hops into RishiAuthService (actor) and
+                    // updates local @State (inFlight, error). UI mutation.
                     Task { await runDelete() }
                 } label: {
                     HStack {

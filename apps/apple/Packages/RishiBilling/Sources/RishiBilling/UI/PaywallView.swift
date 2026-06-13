@@ -171,6 +171,8 @@ public struct PaywallView: View {
                     .font(RishiTypography.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+                // KEEP: vm is @MainActor; loadProducts awaits StoreKit on its
+                // own executor and writes back to MainActor @Published state.
                 Button("Retry") { Task { await vm.loadProducts() } }
                     .buttonStyle(.borderedProminent)
             }
@@ -218,6 +220,8 @@ public struct PaywallView: View {
 
     private func subscribeButton(vm: PaywallViewModel) -> some View {
         Button {
+            // KEEP: subscribe() is @MainActor and runs StoreKit.purchase
+            // which suspends until the system sheet returns. UI mutation only.
             Task { await vm.subscribe() }
         } label: {
             Group {
@@ -238,6 +242,8 @@ public struct PaywallView: View {
 
     private func restoreButton(vm: PaywallViewModel) -> some View {
         Button("Restore Purchases") {
+            // KEEP: restore() is @MainActor; updates restoreInFlight @Published
+            // state. UI mutation only.
             Task { await vm.restore() }
         }
         .font(RishiTypography.caption)
@@ -270,6 +276,7 @@ public struct PaywallView: View {
 
     private func manageRow(vm: PaywallViewModel) -> some View {
         Button {
+            // KEEP: openManageSubscriptions presents the system sheet on main.
             Task { await vm.openManageSubscriptions() }
         } label: {
             HStack {

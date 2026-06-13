@@ -25,7 +25,10 @@ public struct LibraryDropDestination: ViewModifier {
         content.dropDestination(for: URL.self) { urls, _ in
             let supported = ImportCoordinator.filterSupported(urls)
             guard !supported.isEmpty else { return false }
-            Task {
+            // DETACHED: importBooks does a file copy + cover extract + DB write
+            // — heavy I/O that belongs off main. Detach with userInitiated and
+            // re-enter MainActor only for the `onImported` callback.
+            Task.detached(priority: .userInitiated) {
                 let outcomes = await coordinator.importBooks(supported)
                 await MainActor.run { onImported(outcomes) }
             }

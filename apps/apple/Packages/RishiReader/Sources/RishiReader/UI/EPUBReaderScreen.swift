@@ -216,12 +216,16 @@ public struct EPUBReaderScreen: View {
                                         // is synthetic.
                                         viewModel.advancePage()
                                         let navigator = coordinatorRef.coordinator?.navigator
+                                        // KEEP: Readium EPUBNavigatorViewController
+                                        // requires @MainActor; goForward is a
+                                        // navigator UI mutation.
                                         Task { @MainActor in
                                             _ = await navigator?.goForward(options: NavigatorGoOptions(animated: true))
                                         }
                                     case .previousPage:
                                         viewModel.advancePage()
                                         let navigator = coordinatorRef.coordinator?.navigator
+                                        // KEEP: Readium navigator UI mutation; @MainActor.
                                         Task { @MainActor in
                                             _ = await navigator?.goBackward(options: NavigatorGoOptions(animated: true))
                                         }
@@ -357,6 +361,7 @@ public struct EPUBReaderScreen: View {
                     onSelect: { link in
                         activeSheet = nil
                         let coordinator = coordinatorRef.coordinator
+                        // KEEP: Readium navigator.go(to:) requires @MainActor.
                         Task { @MainActor in
                             _ = await coordinator?.go(to: link)
                         }
@@ -462,6 +467,10 @@ public struct EPUBReaderScreen: View {
         // regardless of whether the user used the system chevron or the
         // edge-swipe pop gesture.
         .onDisappear {
+            // KEEP: viewModel.flush is @MainActor on EPUBReaderViewModel; the
+            // positionStore.upsert inside is an actor method. UI-state mutation
+            // (pendingPositionTask = nil) needs main; the persist step suspends
+            // off-actor automatically.
             Task { await viewModel.flush() }
         }
     }
@@ -554,6 +563,9 @@ public struct EPUBReaderScreen: View {
 
     private func saveHighlight(pending: SelectionContext, color: HighlightColor) {
         let store = highlightStore
+        // KEEP: viewModel.createHighlight is @MainActor and coordinatorRef
+        // .applyHighlights mutates the Readium navigator decorations API which
+        // is @MainActor. UI state writes follow.
         Task { @MainActor in
             if let store {
                 _ = await viewModel.createHighlight(
@@ -571,6 +583,8 @@ public struct EPUBReaderScreen: View {
 
     private func startNoteFlow(for pending: SelectionContext) {
         let store = highlightStore
+        // KEEP: viewModel.createHighlight is @MainActor, navigator decorations
+        // are @MainActor, activeSheet is @State on this view.
         Task { @MainActor in
             guard let store else {
                 pendingSelection = nil
@@ -599,6 +613,7 @@ public struct EPUBReaderScreen: View {
     private func commitNoteEdit(on highlight: Highlight) {
         let text = noteText
         let store = highlightStore
+        // KEEP: viewModel.updateNote is @MainActor; activeSheet write needs main.
         Task { @MainActor in
             if let store {
                 await viewModel.updateNote(

@@ -40,6 +40,9 @@ public func paywallSubscribeAction(
     onCancel:  @escaping @MainActor () -> Void,
     onError:   @escaping @MainActor (Error) -> Void
 ) {
+    // KEEP: paywall seam. Outer Task is @MainActor because outcome callbacks
+    // are @MainActor and the SwiftUI closure is MainActor-isolated. The
+    // purchase() suspension itself is handled by the purchaseService actor.
     Task { @MainActor in
         do {
             let outcome = try await purchaseService.purchase(productId: productId)

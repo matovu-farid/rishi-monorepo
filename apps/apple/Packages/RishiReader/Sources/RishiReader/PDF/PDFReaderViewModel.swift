@@ -169,6 +169,9 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     private func schedulePositionWrite(pageIndex: Int) {
         pendingPositionTask?.cancel()
         let seconds = debounceSeconds
+        // KEEP: VM is @Observable (not @MainActor) per the class doc-comment;
+        // debounce body sleeps then awaits positionStore.upsert (actor). No
+        // main-bound work.
         pendingPositionTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(seconds))
             if Task.isCancelled { return }

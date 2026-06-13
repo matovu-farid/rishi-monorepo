@@ -40,6 +40,8 @@ public actor FakeTTSChunkSource: TTSChunkSource {
 
     nonisolated public func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream { continuation in
+            // KEEP: nonisolated wrapper on an actor; Task body bridges chunks
+            // into the continuation off the calling actor.
             let task = Task { [chunks, throwAfter] in
                 await self.recordRequest(request)
                 for (index, chunk) in chunks.enumerated() {
@@ -86,6 +88,8 @@ public actor TTSStreamer {
     public nonisolated func stream(_ request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
         let upstream = source.stream(request: request)
         return AsyncThrowingStream { continuation in
+            // KEEP: nonisolated wrapper on an actor; Task body forwards bytes
+            // and emits Log breadcrumbs off the calling actor.
             let task = Task {
                 var byteCount = 0
                 do {

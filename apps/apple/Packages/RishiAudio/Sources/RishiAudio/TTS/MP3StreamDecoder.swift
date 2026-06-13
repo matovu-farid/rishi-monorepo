@@ -100,6 +100,9 @@ public actor MP3StreamDecoder {
             context,
             { ctx, _, propertyID, _ in
                 let me = Unmanaged<MP3StreamDecoder>.fromOpaque(ctx).takeUnretainedValue()
+                // KEEP: AudioFileStream C callback fires off the calling thread
+                // (decoder runs on its own queue); Task hops into the
+                // MP3StreamDecoder actor to process the property change.
                 Task { await me.handleProperty(propertyID) }
             },
             { ctx, byteCount, packetCount, data, descriptions in
@@ -112,6 +115,8 @@ public actor MP3StreamDecoder {
                 } else {
                     descs = []
                 }
+                // KEEP: AudioFileStream C callback; Task hops into the actor
+                // to enqueue the packet copy. No main-bound work.
                 Task { await me.handlePackets(bytes: bytes, descriptions: descs) }
             },
             kAudioFileMP3Type,

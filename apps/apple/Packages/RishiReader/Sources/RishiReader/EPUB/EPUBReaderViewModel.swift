@@ -169,6 +169,8 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
     private func schedulePositionWrite(for locator: Locator) {
         pendingPositionTask?.cancel()
         let seconds = debounceSeconds
+        // KEEP: VM is @Observable (not @MainActor); writePosition awaits
+        // positionStore.upsert (actor). No main-bound work.
         pendingPositionTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(seconds))
             if Task.isCancelled { return }

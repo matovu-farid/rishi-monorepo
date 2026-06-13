@@ -84,6 +84,12 @@ public final class ChatPanelViewModel {
         let bookId = self.bookId
         let state = streamingState
 
+        // KEEP: ChatPanelViewModel is @MainActor; activeTaskHandle drives the
+        // SSE consumer and updates @Observable streamingState. The for-await
+        // over service.stream(...) reads chunks off the @MainActor context;
+        // the heavy URL bytes loop and SSE parse live behind WorkerClient +
+        // ChatService (actors), so this loop only does fast event dispatch
+        // into the streamingState observable.
         activeTaskHandle = Task { [weak self] in
             // Always reload history at the end so the UI shows whatever the
             // service managed to persist (full turn / partial cancel / error).

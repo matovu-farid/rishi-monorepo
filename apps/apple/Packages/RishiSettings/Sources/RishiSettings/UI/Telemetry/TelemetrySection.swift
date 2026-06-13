@@ -19,7 +19,10 @@ public struct TelemetrySection: View {
             Toggle("Share anonymous usage data", isOn: $optedIn)
                 .accessibilityIdentifier("settings-telemetry-toggle")
                 .onChange(of: optedIn) { _, new in
-                    Task { await store.setOptedIn(new) }
+                    // DETACHED: telemetry-opt-in persist hops to a Keychain-backed
+                    // settings store (actor); detach so the toggle returns instantly
+                    // without awaiting the persist on main.
+                    Task.detached(priority: .userInitiated) { await store.setOptedIn(new) }
                 }
                 .task {
                     optedIn = await store.optedIn()

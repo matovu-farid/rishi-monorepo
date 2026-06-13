@@ -124,6 +124,11 @@ public final class LibraryViewModel {
         let snapshotBooks = books
         let snapshotQuery = searchText
         let delay = debounceDuration
+        // KEEP: viewModel is @MainActor and writes filteredBooks (@Observable
+        // state). LibrarySearchFilter.filter is a pure value function on a
+        // snapshot, fast enough to stay on main for v1. If the corpus grows
+        // and Time Profiler shows >1ms here, hoist to Task.detached and write
+        // back via MainActor.run.
         searchTask = Task { @MainActor in
             try? await Task.sleep(for: delay)
             if Task.isCancelled { return }

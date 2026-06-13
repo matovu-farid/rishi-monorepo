@@ -70,7 +70,10 @@ public struct PDFThemePicker: View {
         theme = option
         let bookId = self.bookId
         let store = self.store
-        Task { await store.setTheme(option, for: bookId) }
+        // DETACHED: store.setTheme writes to GRDB via ReaderSettingsStore
+        // (actor). The local @State has already updated, so the persist can
+        // run off main without blocking the UI.
+        Task.detached(priority: .userInitiated) { await store.setTheme(option, for: bookId) }
     }
 
     private func swatch(for theme: ReaderTheme) -> Color {

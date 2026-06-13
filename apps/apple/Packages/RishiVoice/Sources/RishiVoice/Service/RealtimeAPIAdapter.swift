@@ -143,6 +143,9 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     /// Both pumps cancel on `disconnect()`.
     private func startPumps(for convo: Conversation) {
         // Error pump — direct forward from the SDK's AsyncStream<ServerError>.
+        // KEEP: nonisolated adapter actor; the explicit MainActor.run hops are
+        // required to read the SDK's @MainActor @Observable `convo.errors` /
+        // `convo.entries`. Pump loops run on the adapter's executor (off main).
         errorPump = Task { [weak self] in
             let errors = await MainActor.run { convo.errors }
             for await error in errors {
@@ -162,6 +165,9 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // and emit a transcript event for each new finalized message. This is
         // the same shape Spike B used (1Hz status polling) — voice chat tail
         // latency tolerates 200ms cadence.
+        // KEEP: transcript pump runs on the adapter actor's executor; the
+        // 200ms cadence + MainActor.run reads are intentional (Spike B pattern).
+        // Observation push refactor deferred to v1.1 ADR backlog (plan 19-12).
         transcriptPump = Task { [weak self] in
             var lastSeenIndex = 0
             while !Task.isCancelled {

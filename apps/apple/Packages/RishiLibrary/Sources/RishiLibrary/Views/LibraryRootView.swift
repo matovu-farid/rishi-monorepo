@@ -97,6 +97,9 @@ public struct LibraryRootView: View {
         .librarySearchable(text: $vm.searchText,
                            filteredIsEmpty: !vm.searchText.isEmpty && vm.filteredBooks.isEmpty)
         .libraryDropDestination(coordinator: importCoordinator) { _ in
+            // KEEP: vm.refresh and reloadCovers both await actor methods
+            // (BookStore + storage); outer Task chains the awaits. UI state
+            // writes happen inside `refresh` on its own MainActor isolation.
             Task {
                 await vm.refresh()
                 await reloadCovers()
@@ -107,6 +110,13 @@ public struct LibraryRootView: View {
             DocumentPickerView { urls in
                 showDocumentPicker = false
                 guard !urls.isEmpty else { return }
+                // KEEP: closure runs on @MainActor (DocumentPickerView's
+                // onPicked is MainActor-isolated). importBooks is an actor
+                // method (ImportCoordinator actor) so the heavy file copy +
+                // cover extract + DB write runs on the actor's executor, not
+                // main; vm.refresh + reloadCovers re-enter MainActor only to
+                // commit the @Observable + @State writes. Detaching would
+                // sever the @Bindable @MainActor capture of `vm`.
                 Task {
                     _ = await importCoordinator.importBooks(urls)
                     await vm.refresh()
@@ -149,6 +159,9 @@ public struct LibraryRootView: View {
             positionLookup: { vm.position(for: $0) },
             coverURL: { coverURLs[$0.id] },
             onOpen: onOpenBook,
+            // KEEP: vm.delete is @MainActor (LibraryViewModel @MainActor); the
+            // BookFileStorage delete inside it hops to its own actor executor.
+            // Outer Task chains the await; UI-state mutation only.
             onDelete: { book in Task { await vm.delete(book) } }
         )
         .toolbar {

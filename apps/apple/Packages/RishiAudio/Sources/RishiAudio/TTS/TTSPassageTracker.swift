@@ -28,6 +28,10 @@ public actor TTSPassageTracker {
     /// cadence.
     public func attach(state: TTSPlaybackState) async {
         observationTask?.cancel()
+        // KEEP: 50ms poll started from inside the actor; reads MainActor
+        // @Observable state via explicit MainActor.run hop, then forwards to
+        // the actor's `handle` method. Observation push refactor deferred to
+        // v1.1 ADR backlog (RESEARCH §F-P1-03 / plan 19-12).
         observationTask = Task { [weak self] in
             while !Task.isCancelled {
                 let current = await MainActor.run { state.currentPassageId }
@@ -50,6 +54,8 @@ public actor TTSPassageTracker {
         AsyncStream { continuation in
             self.continuation = continuation
             continuation.onTermination = { [weak self] _ in
+                // KEEP: AsyncStream termination callback; Task hops back into
+                // the actor to clear the stored continuation. No main work.
                 Task { await self?.clearContinuation() }
             }
         }

@@ -55,10 +55,14 @@ public struct DocumentPickerView: UIViewControllerRepresentable {
             // UIKit delegate callbacks already arrive on the main thread,
             // but the @MainActor isolation is satisfied explicitly via Task.
             let snapshot = urls
+            // KEEP: UIKit delegate callback; explicit @MainActor hop to
+            // satisfy the @MainActor isolation on `onPicked` from a
+            // non-isolated NSObject method.
             Task { @MainActor in onPicked(snapshot) }
         }
 
         public func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            // KEEP: UIKit delegate callback; explicit @MainActor hop.
             Task { @MainActor in onPicked([]) }
         }
     }

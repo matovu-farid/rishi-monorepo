@@ -147,6 +147,9 @@ public final class ReaderChromeController {
 
         let delay = autoHideDelay
         let sleep = self.sleep
+        // KEEP: ReaderChromeController is @MainActor (writes @Observable
+        // isVisible). Task inherits MainActor so the sleep + write happen on
+        // main; sleep is non-blocking so there's no MainActor stall.
         hideTask = Task { [weak self] in
             do {
                 try await sleep(delay)

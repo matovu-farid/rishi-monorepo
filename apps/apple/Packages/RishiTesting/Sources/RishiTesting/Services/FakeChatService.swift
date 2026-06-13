@@ -20,6 +20,8 @@ public final class FakeChatService: ChatService, @unchecked Sendable {
         lock.lock(); _streamCallCount += 1; lock.unlock()
         let captured = events
         return AsyncThrowingStream { continuation in
+            // KEEP: test fake; nonisolated context yields fixture events into
+            // the continuation. No main work.
             Task {
                 for event in captured {
                     continuation.yield(event)

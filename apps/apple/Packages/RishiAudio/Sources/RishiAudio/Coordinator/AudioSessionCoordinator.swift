@@ -17,6 +17,9 @@ public actor AudioSessionCoordinator {
 
     public init(configurator: any AudioSessionConfigurator) {
         self.configurator = configurator
+        // KEEP: fire-and-forget actor hop from `init`; startInterruptionLoop is
+        // an actor-isolated method that subscribes to the interruption stream.
+        // Outer Task only chains the actor await; no main-bound work.
         Task { await self.startInterruptionLoop() }
     }
 
@@ -82,6 +85,9 @@ public actor AudioSessionCoordinator {
 
     private func startInterruptionLoop() async {
         let stream = configurator.interruptionStream()
+        // KEEP: AsyncStream consumer task started from inside the actor; runs
+        // on the actor's executor (not main) and forwards each event back to
+        // the actor's handleInterruption.
         interruptionTask = Task { [weak self] in
             for await event in stream {
                 await self?.handleInterruption(event)

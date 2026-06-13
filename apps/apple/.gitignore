@@ -2,8 +2,12 @@
 
 # Xcode / SwiftPM build artifacts
 .build/
+build/
 .swiftpm/
 DerivedData/
+
+# Per-package SwiftPM resolutions from dev-host `swift test` runs
+Packages/*/Package.resolved
 *.xcuserstate
 xcuserdata/
 build.log

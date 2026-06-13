@@ -133,6 +133,9 @@ public final class SystemSiwaPresenter: NSObject, SiwaPresenter,
 
     nonisolated public func presentSignInRequest(scopes: Set<SiwaScope>) async throws -> SiwaCredential {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<SiwaCredential, Error>) in
+            // KEEP: ASAuthorizationController requires MainActor presentation;
+            // explicit @MainActor hop to set up the credential request and
+            // assign the continuation on the MainActor-isolated presenter.
             Task { @MainActor in
                 self.continuation = cont
                 let (_, nonceHex) = Nonce.generate()

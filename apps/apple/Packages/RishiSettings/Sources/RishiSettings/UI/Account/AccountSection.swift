@@ -50,6 +50,10 @@ public struct AccountSection: View {
                 }
             }
             Button("Sign Out") {
+                // KEEP: onSignOut is supplied by the host; the underlying
+                // signOut runs against an actor (RishiAuthService). Outer Task
+                // chains the await — final session-store + UI updates are
+                // owned by the host @MainActor callback.
                 Task { await onSignOut() }
             }
             .foregroundStyle(RishiColor.accent)

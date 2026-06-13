@@ -40,6 +40,11 @@ public final class BackgroundTaskCoordinator {
         public init() {}
         public func register(forTaskWithIdentifier id: String, using queue: DispatchQueue?, launchHandler: @MainActor @escaping (BGTask) -> Void) -> Bool {
             BGTaskScheduler.shared.register(forTaskWithIdentifier: id, using: queue) { task in
+                // KEEP: BGTaskScheduler invokes launchHandler on an internal
+                // queue. The launchHandler closure here is @MainActor (Surface
+                // protocol contract) so the hop is required to satisfy the
+                // isolation; the actual sync work in handleProcessing/handleRefresh
+                // is offloaded via runTask below.
                 Task { @MainActor in launchHandler(task) }
             }
         }
@@ -102,11 +107,17 @@ public final class BackgroundTaskCoordinator {
     // MARK: - Launch handlers
 
     private func handleProcessing(task: BGTask) {
+        // KEEP: runTask is the off-main sync wave; `engine` is an actor so the
+        // body runs on the engine's executor, not main. The coordinator itself
+        // is @MainActor so we need main only for the BGTask completion call.
         let runTask = Task { [engine] in
             let wave = await engine.runOnce()
             return wave.errors.isEmpty
         }
         task.expirationHandler = { runTask.cancel() }
+        // KEEP: BGTask.setTaskCompleted(success:) and the @MainActor scheduleAll
+        // both require MainActor isolation; explicit hop after awaiting the
+        // off-main runTask.value.
         Task { @MainActor in
             let ok = (try? await runTask.value) ?? false
             task.setTaskCompleted(success: ok)
@@ -115,11 +126,14 @@ public final class BackgroundTaskCoordinator {
     }
 
     private func handleRefresh(task: BGTask) {
+        // KEEP: same shape as handleProcessing — off-main engine wave; BGTask
+        // completion must land on @MainActor.
         let runTask = Task { [engine] in
             let wave = await engine.runOnce()
             return wave.errors.isEmpty
         }
         task.expirationHandler = { runTask.cancel() }
+        // KEEP: @MainActor needed for BGTask.setTaskCompleted + scheduleAll.
         Task { @MainActor in
             let ok = (try? await runTask.value) ?? false
             task.setTaskCompleted(success: ok)

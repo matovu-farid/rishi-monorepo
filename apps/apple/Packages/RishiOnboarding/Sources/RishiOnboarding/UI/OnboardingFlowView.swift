@@ -44,6 +44,8 @@ public struct OnboardingFlowView: View {
             switch coordinator.currentStage {
             case .welcome:
                 WelcomeScreen(onGetStarted: {
+                    // KEEP: coordinator is an @Observable @MainActor; advance
+                    // mutates currentStage which SwiftUI observes.
                     Task { await coordinator.advance() }
                 })
 
@@ -70,6 +72,9 @@ public struct OnboardingFlowView: View {
             case .sampleOrImport:
                 SampleOrImportScreen(
                     onUseSample: {
+                        // KEEP: onUseSample is supplied by the host
+                        // (SampleBookInstaller actor); coordinator.advance
+                        // updates @MainActor coordinator state.
                         Task {
                             await onUseSample()
                             await coordinator.advance()
@@ -77,9 +82,11 @@ public struct OnboardingFlowView: View {
                     },
                     onImport: {
                         onImport()
+                        // KEEP: coordinator advance only.
                         Task { await coordinator.advance() }
                     },
                     onSkip: {
+                        // KEEP: coordinator advance only.
                         Task { await coordinator.advance() }
                     }
                 )
@@ -87,12 +94,16 @@ public struct OnboardingFlowView: View {
             case .micPrimer:
                 MicPermissionPrimer(
                     onAllow: {
+                        // KEEP: onRequestMic awaits AVAudioApplication permission
+                        // (system sheet) and coordinator.advance updates @MainActor
+                        // observable state.
                         Task {
                             await onRequestMic()
                             await coordinator.advance()
                         }
                     },
                     onSkip: {
+                        // KEEP: coordinator skip-stage only.
                         Task { await coordinator.skipCurrentStage() }
                     }
                 )
@@ -100,18 +111,22 @@ public struct OnboardingFlowView: View {
             case .notificationsPrimer:
                 NotificationsPermissionPrimer(
                     onAllow: {
+                        // KEEP: onRequestNotifications awaits UNUserNotificationCenter
+                        // permission (system sheet) and updates coordinator state.
                         Task {
                             await onRequestNotifications()
                             await coordinator.advance()
                         }
                     },
                     onSkip: {
+                        // KEEP: coordinator skip-stage only.
                         Task { await coordinator.skipCurrentStage() }
                     }
                 )
 
             case .firstReaderHint:
                 FirstReaderHint(onGotIt: {
+                    // KEEP: coordinator advance + onCompleted callback (both UI).
                     Task {
                         await coordinator.advance()
                         onCompleted()

@@ -121,6 +121,10 @@ public actor RealtimeVoiceSession {
 
     private func startStatusObservation() {
         statusObservationTask?.cancel()
+        // KEEP: session is an actor; status poll runs on the actor's executor
+        // at 10Hz to detect reconnect-eligible disconnects. Observation push
+        // refactor deferred to v1.1 ADR backlog (plan 19-12) — Realtime SDK
+        // does not expose a status stream today.
         statusObservationTask = Task { [weak self] in
             guard let self else { return }
             // Poll client status at 10Hz — Spike B confirmed status is a

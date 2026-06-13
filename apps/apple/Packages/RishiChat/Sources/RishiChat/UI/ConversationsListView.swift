@@ -75,6 +75,9 @@ public struct ConversationsListView: View {
             presenting: pendingDelete
         ) { convo in
             Button("Delete", role: .destructive) {
+                // KEEP: delete is a viewModel method that hops onto an actor;
+                // outer Task chains the await. Final @State assignment runs on
+                // the inherited MainActor context.
                 Task {
                     await viewModel.delete(id: convo.id)
                     pendingDelete = nil
