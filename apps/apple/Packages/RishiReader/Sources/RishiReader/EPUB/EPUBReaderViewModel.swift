@@ -40,6 +40,13 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
     public var theme: ReaderTheme = .default
     public var typography: ReaderTypography = .default
 
+    /// Phase 21 Plan 21-03 — observable cold-open loading state.
+    /// `EPUBReaderScreen` overlays a native SwiftUI `ProgressView`
+    /// while this is `.loading`, surfaces an error view on `.failed`,
+    /// and renders the page content normally on `.loaded`. Starts
+    /// `.idle` until ``load()`` runs.
+    public private(set) var loadingState: ReaderLoadingState = .idle
+
     // MARK: - Phase 18 Plan 18-02 — F-P1-01 SwiftUI native haptics
 
     /// Monotonically-increasing trigger value observed by the reader
@@ -118,6 +125,13 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
     /// constructed in `EPUBReaderScreen` from this `publication` value
     /// after `load()` completes, on main, where Readium expects it.
     public func load() async {
+        // Phase 21 Plan 21-03 — flip to .loading BEFORE the detached
+        // parse so the cold-open overlay binds immediately. Lands on
+        // the caller's executor (typically MainActor via SwiftUI's
+        // `.task`) so SwiftUI sees the transition on the same tick the
+        // overlay first renders.
+        self.loadingState = .loading
+
         // DETACHED: Readium ZIP unpack + parse are multi-second on large
         // EPUBs; offload to `.userInitiated` so the body and the awaited
         // continuation both land off-main. The result is consumed by a
@@ -130,10 +144,14 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
             }.value
         } catch {
             Log.reader.error("EPUBReaderViewModel.load failed for \(self.documentURL.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            self.loadingState = .failed(reason: error.localizedDescription)
             return
         }
 
-        guard let pub else { return }
+        guard let pub else {
+            self.loadingState = .failed(reason: "Loader returned nil publication")
+            return
+        }
         self.publication = pub
         self.title = pub.metadata.title ?? book.title
 
@@ -143,6 +161,7 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
            let restored = wrapper.toReadiumLocator() {
             self.latestLocator = restored
         }
+        self.loadingState = .loaded
     }
 
     // MARK: - Locator updates

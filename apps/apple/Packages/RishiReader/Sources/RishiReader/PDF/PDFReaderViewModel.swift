@@ -44,6 +44,14 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     public private(set) var totalPages: Int = 0
     public private(set) var pageIndex: Int = 0
     public private(set) var outline: [PDFOutlineNode] = []
+
+    /// Phase 21 Plan 21-03 — observable cold-open loading state.
+    /// `PDFReaderScreen` overlays a native SwiftUI `ProgressView` while
+    /// this is `.loading`, surfaces an error view on `.failed`, and
+    /// renders the page content normally on `.loaded`. Starts `.idle`
+    /// until ``load()`` runs.
+    public private(set) var loadingState: ReaderLoadingState = .idle
+
     public var theme: ReaderTheme = .default
 
     // MARK: - Phase 18 Plan 18-02 — F-P1-01 SwiftUI native haptics
@@ -121,6 +129,12 @@ public final class PDFReaderViewModel: @unchecked Sendable {
     /// `.task` modifier, so post-load mutations remain observable from
     /// SwiftUI.
     public func load() async {
+        // Phase 21 Plan 21-03 — flip to .loading BEFORE the detached
+        // parse so the cold-open overlay binds immediately. Lands on
+        // the caller's executor (typically MainActor via SwiftUI's
+        // `.task`) so SwiftUI sees the transition on the same tick the
+        // overlay first renders.
+        self.loadingState = .loading
         let loader = self.documentLoader
         let url = self.documentURL
         let loaded: PDFDocument? = await Task.detached(priority: .userInitiated) {
@@ -128,6 +142,7 @@ public final class PDFReaderViewModel: @unchecked Sendable {
         }.value
         guard let doc = loaded else {
             Log.reader.error("Failed to open PDFDocument at \(self.documentURL.path, privacy: .public)")
+            self.loadingState = .failed(reason: "Failed to open PDF document")
             return
         }
         self.document = doc
@@ -139,6 +154,7 @@ public final class PDFReaderViewModel: @unchecked Sendable {
            restored >= 0, restored < totalPages {
             self.pageIndex = restored
         }
+        self.loadingState = .loaded
     }
 
     /// Called by the PDFView delegate (`pdfViewPageChanged`) on every page
