@@ -44,17 +44,17 @@ public protocol EPUBPublicationLoading: Sendable {
 ///      tests), fall back to the original ZIP-asset path so the reader
 ///      never breaks because of a cache fault.
 ///
-/// **Sendability:** Marked `final class @unchecked Sendable` (not `actor`),
-/// mirroring the Phase 5 `PDFReaderViewModel` pattern for non-Sendable
-/// Readium types. The plan source called for an `actor`, but Swift 6 strict
-/// concurrency forbids two things that pattern requires:
+/// **Sendability:** Marked `final class ... Sendable` (compiler-proven, not
+/// `@unchecked`) — the only stored property is `let unpackedCache:
+/// EPUBUnpackedCache?` which is an actor (Sendable). The loader holds no
+/// mutable cross-call state. The plan source called for an `actor`, but
+/// Swift 6 strict concurrency forbids two things that pattern requires:
 /// (1) sending stored non-Sendable `AssetRetriever`/`PublicationOpener`
 /// references to their own nonisolated methods from `self`-isolated context,
 /// and (2) returning the non-Sendable `Publication` from an actor-isolated
-/// method to a nonisolated caller. The pipeline is built fresh per call,
-/// so the loader holds no mutable cross-call state and the Sendable
-/// override is sound.
-public final class EPUBPublicationLoader: EPUBPublicationLoading, @unchecked Sendable {
+/// method to a nonisolated caller. The pipeline is built fresh per call
+/// so non-Sendable Readium types stay as method-local references.
+public final class EPUBPublicationLoader: EPUBPublicationLoading, Sendable {
 
     private let unpackedCache: EPUBUnpackedCache?
 
