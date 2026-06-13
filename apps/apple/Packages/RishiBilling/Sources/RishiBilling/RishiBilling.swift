@@ -14,7 +14,7 @@ import Foundation
 /// Depends DOWN on RishiCore (models), RishiUIKit (tokens), RishiAPI
 /// (WorkerClient + ReceiptVerify endpoint + GetSessionEndpoint), RishiAuth
 /// (KeychainSessionStore for token-bearer reads), RishiLogging.
-public enum RishiBilling {
+enum RishiBilling {
     /// Semantic version of the Feature surface. Bump on breaking API changes.
-    public static let version = "0.1.0-scaffold"
+    static let version = "0.1.0-scaffold"
 }
