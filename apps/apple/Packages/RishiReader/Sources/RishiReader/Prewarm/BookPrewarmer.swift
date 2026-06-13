@@ -62,9 +62,14 @@ extension EPUBUnpackedCache: EPUBWarmCache {
 ///   root so the work runs off the import-flow actor and does not block
 ///   `LibraryViewModel.refresh()`.
 ///
-/// The actor itself holds no per-book state; the two cache references are
-/// the only fields. Wiring lives in `AppDependencies` (Task 2).
-public actor BookPrewarmer {
+/// The dispatcher holds no per-book state; the two cache references are
+/// the only fields and they are themselves `Sendable` (each cache owns
+/// its own isolation domain). Per Phase 20 canonical-simplicity rule:
+/// don't use actor isolation that provides no isolation guarantee — a
+/// stateless dispatcher whose only stored fields are Sendable
+/// references is a `Sendable` struct, not an actor. Wiring lives in
+/// `AppDependencies` (Plan 21-05 Task 2).
+public struct BookPrewarmer: Sendable {
     private let pdfCache: any PDFPageWarmCache
     private let epubCache: any EPUBWarmCache
 
