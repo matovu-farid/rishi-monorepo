@@ -17,7 +17,7 @@ import RishiLogging
 /// anchored); the worker schema column is non-null, so a sentinel zero-UUID
 /// represents "no book" on the wire. The worker translates the sentinel back
 /// to NULL for incremental pulls.
-public final class ConversationUploader: @unchecked Sendable {
+public final class ConversationUploader: Sendable {
 
     public enum UploadError: Error, Sendable {
         case encodingFailed(String)
