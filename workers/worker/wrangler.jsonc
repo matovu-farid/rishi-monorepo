@@ -22,6 +22,10 @@
     {
       "binding": "BOOK_STORAGE",
       "bucket_name": "rishi-books"
+    },
+    {
+      "binding": "TTS_CACHE",
+      "bucket_name": "rishi-tts-cache"
     }
   ],
   "kv_namespaces": [

@@ -123,6 +123,7 @@ export interface CloudflareBindings {
   SENTRY_DSN?: string;
   DB: D1Database;
   BOOK_STORAGE: R2Bucket;
+  TTS_CACHE: R2Bucket;
   R2_ACCESS_KEY_ID: string;
   R2_SECRET_ACCESS_KEY: string;
   CLOUDFLARE_ACCOUNT_ID: string;
