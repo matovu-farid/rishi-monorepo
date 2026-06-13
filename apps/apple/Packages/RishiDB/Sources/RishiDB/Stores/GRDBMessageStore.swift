@@ -8,7 +8,7 @@ import RishiLogging
 /// `Message.toolCalls` — the model already represents it as an opaque JSON
 /// String, so no extra encoding is needed here. `JSONColumnCodec` is
 /// available for future callers that want typed access to the column.
-public final class GRDBMessageStore: MessageStore, @unchecked Sendable {
+public final class GRDBMessageStore: MessageStore, Sendable {
 
     private let dbQueue: any DatabaseWriter
 
