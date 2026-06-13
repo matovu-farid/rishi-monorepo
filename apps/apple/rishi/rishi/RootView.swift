@@ -85,6 +85,19 @@ struct RootView: View {
     /// reopens the same reader pushed on top of the library.
     @State private var libraryPath: NavigationPath = NavigationPath()
 
+    /// Phase 20 perf — transient cache of already-resolved `Book` values
+    /// keyed by `BookID`, populated on every push that originated from a
+    /// site that had the full `Book` in hand (library tap, Mac intent,
+    /// legacy scene-restore B). `NavigationLazyBook` consumes a hint via
+    /// `initialValue:` so the reader paints first frame without a fresh
+    /// `bookStore.book(_:)` round-trip (which previously caused a
+    /// `ProgressView()` flash between tap and first paint).
+    ///
+    /// Intentionally NOT persisted — cold-launch scene restoration leaves
+    /// this empty and `NavigationLazyBook` falls back to its existing
+    /// `.task { bookStore.book(_:) }` DB read.
+    @State private var bookHints: [BookID: Book] = [:]
+
     /// Holds the active reader → sync bridge for the lifetime of the open
     /// reader sheet. The bridge polls the VM and forwards position changes
     /// to `SyncEngine.markPositionDirty`. Cleared on dismiss so its task
@@ -317,6 +330,7 @@ struct RootView: View {
                     let book: Book? = try? await deps.bookStore.book(bookId)
                     guard let book else { return }
                     selectedTab = .library
+                    bookHints[book.id] = book
                     var p = NavigationPath()
                     p.append(ReaderRoute.route(for: book))
                     libraryPath = p
@@ -428,6 +442,7 @@ struct RootView: View {
             // `@State` write that is cheap on MainActor.
             let book = try? await deps.bookStore.book(legacyId)
             guard let book else { return }
+            bookHints[book.id] = book
             var p = NavigationPath()
             p.append(ReaderRoute.route(for: book))
             libraryPath = p
@@ -532,6 +547,7 @@ struct RootView: View {
                 path: $libraryPath,
                 importCoordinator: deps.importCoordinator,
                 onOpenBook: { book in
+                    bookHints[book.id] = book
                     libraryPath.append(ReaderRoute.route(for: book))
                 },
                 onShowSettings: { showSettings = true }
@@ -627,15 +643,15 @@ struct RootView: View {
                                  userId: UserID) -> some View {
         switch route {
         case .pdf(let bookId):
-            NavigationLazyBook(bookId: bookId, deps: deps) { book in
+            NavigationLazyBook(bookId: bookId, hint: bookHints[bookId], deps: deps) { book in
                 pdfReaderDestination(book: book, deps: deps, userId: userId)
             }
         case .epub(let bookId):
-            NavigationLazyBook(bookId: bookId, deps: deps) { book in
+            NavigationLazyBook(bookId: bookId, hint: bookHints[bookId], deps: deps) { book in
                 epubReaderDestination(book: book, deps: deps, userId: userId)
             }
         case .unsupportedFormat(let bookId):
-            NavigationLazyBook(bookId: bookId, deps: deps) { book in
+            NavigationLazyBook(bookId: bookId, hint: bookHints[bookId], deps: deps) { book in
                 EpubPlaceholderView(book: book) {
                     if !libraryPath.isEmpty { libraryPath.removeLast() }
                 }
@@ -947,9 +963,25 @@ private struct PaywallFeature: Identifiable, Equatable {
 private struct NavigationLazyBook<Content: View>: View {
     let bookId: BookID
     let deps: AppDependencies
-    @ViewBuilder let content: (Book) -> Content
+    let content: (Book) -> Content
 
     @State private var book: Book?
+
+    /// Phase 20 perf — accept an optional `hint` so call sites that
+    /// already have the resolved `Book` (library tap, Mac intent, legacy
+    /// scene-restore B) can seed `@State` and skip the
+    /// `bookStore.book(_:)` round-trip entirely. The fallback DB read
+    /// still runs whenever the hint is nil (cold launch scene restore
+    /// path), so existing behaviour is preserved.
+    init(bookId: BookID,
+         hint: Book? = nil,
+         deps: AppDependencies,
+         @ViewBuilder content: @escaping (Book) -> Content) {
+        self.bookId = bookId
+        self.deps = deps
+        self.content = content
+        self._book = State(initialValue: hint)
+    }
 
     var body: some View {
         Group {
@@ -961,7 +993,9 @@ private struct NavigationLazyBook<Content: View>: View {
             }
         }
         .task(id: bookId) {
-            book = try? await deps.bookStore.book(bookId)
+            if book == nil {
+                book = try? await deps.bookStore.book(bookId)
+            }
         }
     }
 }
