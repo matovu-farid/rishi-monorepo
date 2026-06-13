@@ -28,7 +28,9 @@ import CoreGraphics
 /// **Phase 7 contract:** this codec is the wire format for sync —
 /// changes require a format bump (e.g. `pdf-v2`) and a decoder
 /// fallback that still accepts `pdf-v1`.
-public struct PDFHighlightLocator: Codable, Hashable, Sendable {
+public struct PDFHighlightLocator: Codable, Hashable, Sendable, JSONStringCodableLocator {
+
+    static let jsonStringDecodeErrorLabel = "Locator JSON is not valid UTF-8"
 
     /// Schema version tag emitted in encoded JSON.
     public static let format = "pdf-v1"
@@ -85,20 +87,14 @@ public struct PDFHighlightLocator: Codable, Hashable, Sendable {
     /// Encodes to a UTF-8 JSON string suitable for storage in
     /// `RishiCore.Highlight.locatorStart`.
     public func encodedJSONString() throws -> String {
-        let data = try JSONEncoder().encode(self)
-        return String(decoding: data, as: UTF8.self)
+        try encodedToJSONString()
     }
 
     /// Decodes a UTF-8 JSON string produced by ``encodedJSONString()``.
     /// Throws `DecodingError` when the payload is malformed or the
     /// `format` tag does not match ``format``.
     public static func decode(jsonString: String) throws -> PDFHighlightLocator {
-        guard let data = jsonString.data(using: .utf8) else {
-            throw DecodingError.dataCorrupted(
-                .init(codingPath: [], debugDescription: "Locator JSON is not valid UTF-8")
-            )
-        }
-        return try JSONDecoder().decode(PDFHighlightLocator.self, from: data)
+        try decoded(fromJSONString: jsonString)
     }
 }
 

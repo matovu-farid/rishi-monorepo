@@ -22,7 +22,9 @@ import ReadiumShared
 ///
 /// **Phase 7 contract:** wire format for sync — bump to `epub-v2` if
 /// the shape changes; decoder fallback must still accept `epub-v1`.
-public struct EPUBHighlightLocator: Codable, Hashable, Sendable {
+public struct EPUBHighlightLocator: Codable, Hashable, Sendable, JSONStringCodableLocator {
+
+    static let jsonStringDecodeErrorLabel = "Highlight locator JSON is not valid UTF-8"
 
     public static let format = "epub-v1"
 
@@ -69,17 +71,11 @@ public struct EPUBHighlightLocator: Codable, Hashable, Sendable {
     // MARK: - String round-trip
 
     public func encodedJSONString() throws -> String {
-        let data = try JSONEncoder().encode(self)
-        return String(decoding: data, as: UTF8.self)
+        try encodedToJSONString()
     }
 
     public static func decode(jsonString: String) throws -> EPUBHighlightLocator {
-        guard let data = jsonString.data(using: .utf8) else {
-            throw DecodingError.dataCorrupted(
-                .init(codingPath: [], debugDescription: "Highlight locator JSON is not valid UTF-8")
-            )
-        }
-        return try JSONDecoder().decode(EPUBHighlightLocator.self, from: data)
+        try decoded(fromJSONString: jsonString)
     }
 
     public func toReadiumLocator() -> Locator? {

@@ -24,7 +24,9 @@ import ReadiumShared
 /// **Phase 7 contract:** this codec is the wire format for sync —
 /// changes require a format bump (e.g. `epub-v2`) and a decoder
 /// fallback that still accepts `epub-v1`.
-public struct EPUBPositionLocator: Codable, Hashable, Sendable {
+public struct EPUBPositionLocator: Codable, Hashable, Sendable, JSONStringCodableLocator {
+
+    static let jsonStringDecodeErrorLabel = "Position locator JSON is not valid UTF-8"
 
     /// Schema version tag emitted in encoded JSON.
     public static let format = "epub-v1"
@@ -68,18 +70,12 @@ public struct EPUBPositionLocator: Codable, Hashable, Sendable {
 
     /// Encodes to a UTF-8 JSON string suitable for storage in `Position.locator`.
     public func encodedJSONString() throws -> String {
-        let data = try JSONEncoder().encode(self)
-        return String(decoding: data, as: UTF8.self)
+        try encodedToJSONString()
     }
 
     /// Decodes a UTF-8 JSON string produced by ``encodedJSONString()``.
     public static func decode(jsonString: String) throws -> EPUBPositionLocator {
-        guard let data = jsonString.data(using: .utf8) else {
-            throw DecodingError.dataCorrupted(
-                .init(codingPath: [], debugDescription: "Position locator JSON is not valid UTF-8")
-            )
-        }
-        return try JSONDecoder().decode(EPUBPositionLocator.self, from: data)
+        try decoded(fromJSONString: jsonString)
     }
 
     /// Decodes the inner Readium `Locator` payload, if it parses.
