@@ -153,6 +153,27 @@ public struct LibraryRootView: View {
             await vm.refresh()
             await reloadCovers()
         }
+        // Phase 21 follow-up — reload covers whenever the underlying book
+        // set changes. Without this, a refresh that arrives AFTER first
+        // paint (e.g. the host's `.task(id: user.id)` that runs the sample
+        // book installer THEN calls `vm.refresh()`, or the inner `.task`
+        // observing an empty DB before the installer finished) updates
+        // `vm.books` via @Observable, re-renders the tiles, but never
+        // republishes `coverURLs` — every tile falls back to the gradient
+        // placeholder. Tapping a book and navigating back re-runs the
+        // outer `.task` against the now-populated book list, which is why
+        // the symptom is "covers only show up after I open a book and
+        // come back".
+        //
+        // Keying off the book-id list (not `vm.books` directly) collapses
+        // no-op re-orderings — we only want to re-fan-out when the
+        // membership actually changed. The first-paint `.task` above ALSO
+        // calls `reloadCovers()` so the warm-path stays inside the
+        // signposted first-paint interval; this `.task(id:)` is the
+        // catch-up that fires when a later refresh expands the list.
+        .task(id: vm.books.map(\.id)) {
+            await reloadCovers()
+        }
         // Phase 12 Plan 12-01 — Mac menu / ⌘O routes through here so the
         // existing iOS toolbar button and the Catalyst menu share one path.
         .onReceive(NotificationCenter.default.publisher(for: LibraryMacCommandNotification.importBook)) { _ in

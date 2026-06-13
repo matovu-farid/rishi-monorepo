@@ -101,4 +101,45 @@ struct LibraryRootViewReloadCoversTests {
         }
         #expect(result.count == booksList.count / 2)
     }
+
+    // MARK: - Test 4: Regression — covers re-publish when vm.books changes
+    //
+    // Bug shape: prior to this guard, LibraryRootView had a single `.task`
+    // that called `vm.refresh()` then `reloadCovers()` once on first appear.
+    // When a later refresh (host's sample-installer task, drag-drop import,
+    // sync wave) expanded `vm.books`, the @Observable update re-rendered the
+    // tiles but `coverURLs` was never recomputed — every tile fell back to
+    // the gradient placeholder. Tapping a book and returning re-ran the
+    // outer `.task` against the now-populated list, which is why covers
+    // "only show up after I open a book and come back".
+    //
+    // Fix: a second `.task(id: vm.books.map(\.id))` that re-fans-out cover
+    // URLs whenever the book-id membership changes. This source-level test
+    // guards the wiring so it can't silently regress.
+    @Test("LibraryRootView re-runs reloadCovers when vm.books identity changes")
+    func test_libraryRootView_reloadsCoversOnBooksChange() throws {
+        let here = URL(fileURLWithPath: #filePath)
+        let packageRoot = here
+            .deletingLastPathComponent()   // ViewModel/
+            .deletingLastPathComponent()   // RishiLibraryTests/
+            .deletingLastPathComponent()   // Tests/
+            .deletingLastPathComponent()   // RishiLibrary/
+        let src = try String(
+            contentsOf: packageRoot
+                .appendingPathComponent("Sources/RishiLibrary/Views/LibraryRootView.swift"),
+            encoding: .utf8
+        )
+        // The id-driven .task that re-runs reloadCovers when membership
+        // changes. The exact spelling matches the load-bearing call site.
+        #expect(
+            src.contains(".task(id: vm.books.map(\\.id))"),
+            "LibraryRootView must re-fan-out covers when vm.books identity changes — without this, covers only appear after the user opens a book and navigates back."
+        )
+        // And the body of that .task must call reloadCovers — guards a
+        // sneaky regression where someone changes what the id-task does.
+        #expect(
+            src.contains("await reloadCovers()"),
+            "LibraryRootView.task(id:) body must call reloadCovers()."
+        )
+    }
 }
