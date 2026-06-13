@@ -79,6 +79,7 @@ public struct LibraryGrid: View {
         Button {
             onOpen(book)
         } label: {
+            // Plan 21-02 (LibraryCellAspectTests) locks .aspectRatio(2.0 / 3.0, contentMode: .fit) as the cell geometry contract — changing the ratio or dropping the modifier will fail the regression suite.
             // Phase 21 UI pass: the tile is pure cover art at a fixed 2:3
             // portrait aspect ratio (standard book-cover proportion). No
             // title / author labels — they pushed multi-line text into the

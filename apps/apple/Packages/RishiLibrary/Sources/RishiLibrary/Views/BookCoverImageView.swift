@@ -28,6 +28,7 @@ public struct BookCoverImageView: View {
     }
 
     public var body: some View {
+        // Plan 21-02 (LibraryCellAspectTests) locks this invariant — do NOT drop the .frame(maxWidth: .infinity, maxHeight: .infinity) on either branch; the regression suite will fail.
         // Phase 21 follow-up — every branch fills the parent's offered size
         // via `.frame(maxWidth: .infinity, maxHeight: .infinity)`. Without this,
         // the AsyncImage's natural intrinsic size (e.g. a 2000x3000 cover) leaks
