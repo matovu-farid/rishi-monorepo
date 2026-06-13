@@ -117,6 +117,10 @@ public actor SyncEngine {
 
     /// Late-bound back-reference so `PositionDebouncer.commit` can call back
     /// into the engine without capturing `self` mid-init.
+    ///
+    /// @unchecked Sendable justified: holds a mutable `weak var engine`
+    /// that is assigned exactly once at init-end on the actor's executor
+    /// and only read from the debouncer's commit closure thereafter.
     private final class EngineHolder: @unchecked Sendable {
         weak var engine: SyncEngine?
     }
