@@ -3,18 +3,18 @@ import GRDB
 import RishiCore
 import RishiLogging
 
-/// GRDB-backed `BookStore`. Marked `@unchecked Sendable` because the only
-/// mutable state is the injected `DatabaseWriter` (a `DatabaseQueue` or
-/// `DatabasePool`), which is itself Sendable; GRDB serialises writes and
-/// (with a Pool) parallelises reads internally, so the class needs no
-/// additional locking. We prefer a `final class` over an `actor` so callers
-/// can still benefit from the synchronous `dbQueue.read { db in ... }`
-/// ergonomics without an outer actor hop.
+/// GRDB-backed `BookStore`. The class's only stored property is a `let
+/// dbQueue: any DatabaseWriter` — `DatabaseWriter` inherits from `Sendable`,
+/// so the compiler proves Sendable directly. GRDB serialises writes and
+/// (with a Pool) parallelises reads internally, so no extra locking is
+/// needed. We prefer a `final class` over an `actor` so callers can still
+/// benefit from the synchronous `dbQueue.read { db in ... }` ergonomics
+/// without an outer actor hop.
 ///
 /// The store accepts `any DatabaseWriter` so production code can pass a
 /// `DatabasePool` (concurrent readers) while tests can pass an in-memory
 /// `DatabaseQueue`.
-public final class GRDBBookStore: BookStore, @unchecked Sendable {
+public final class GRDBBookStore: BookStore, Sendable {
 
     private let dbQueue: any DatabaseWriter
 
