@@ -67,10 +67,12 @@ struct AppDependenciesBootstrapTests {
     func test_bootstrap_idempotent() async {
         let deps = AppDependencies()
         await deps.bootstrap()
-        let firstQueue = deps.services?.dbQueue
+        let firstQueue = deps.services?.dbQueue as AnyObject?
         await deps.bootstrap()
-        let secondQueue = deps.services?.dbQueue
-        // Same underlying DatabaseQueue reference both times.
+        let secondQueue = deps.services?.dbQueue as AnyObject?
+        // Same underlying GRDB writer reference both times. `dbQueue` is
+        // an `any DatabaseWriter` existential (concretely `DatabasePool`
+        // in production); bridge to `AnyObject` for identity comparison.
         #expect(firstQueue === secondQueue)
     }
 

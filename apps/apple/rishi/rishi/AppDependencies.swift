@@ -240,18 +240,25 @@ final class AppDependencies {
             keychain: keychain
         )
 
-        // 7. Persistence — open the GRDB queue + run migrations. This is
-        // the F-P0-04 hotspot: `RishiDB.makeDatabaseQueue` runs
-        // `Migrations.migrator.migrate(queue)` inline. We are already off
+        // 7. Persistence — open the GRDB pool + run migrations. This is
+        // the F-P0-04 hotspot: `RishiDB.makeDatabasePool` runs
+        // `Migrations.migrator.migrate(pool)` inline. We are already off
         // the MainActor inside this `Task.detached` so the migration
         // runner does not block first-frame paint.
+        //
+        // `DatabasePool` (not `DatabaseQueue`) is the canonical GRDB shape
+        // for this app: N concurrent reader connections + a single writer.
+        // Library cover paint, position fan-out, multi-book queries can
+        // now run `pool.read { ... }` in parallel from a `withTaskGroup`
+        // without serialising on a single shared connection. Writes still
+        // serialise — same semantics as before.
         let documentsURL = FileManager.default.urls(for: .documentDirectory,
                                                     in: .userDomainMask).first!
         let dbURL = documentsURL.appendingPathComponent("rishi.sqlite")
         let dbState = signposter.beginInterval("db.open")
-        let dbQueue: DatabaseQueue
+        let dbQueue: any DatabaseWriter
         do {
-            dbQueue = try RishiDB.makeDatabaseQueue(at: dbURL)
+            dbQueue = try RishiDB.makeDatabasePool(at: dbURL)
         } catch {
             fatalError("Failed to open rishi.sqlite at \(dbURL): \(error)")
         }
@@ -661,7 +668,7 @@ final class AppDependencies {
     var siwaCoordinator: SignInWithAppleCoordinator { services!.siwaCoordinator }
     var authService: RishiAuthService { services!.authService }
 
-    var dbQueue: DatabaseQueue { services!.dbQueue }
+    var dbQueue: any DatabaseWriter { services!.dbQueue }
     var bookStore: any BookStore { services!.bookStore }
     var positionStore: any PositionStore { services!.positionStore }
     var highlightStore: any HighlightStore { services!.highlightStore }
@@ -921,7 +928,7 @@ struct BootstrappedServices: @unchecked Sendable {
     let authService: RishiAuthService
 
     // Persistence + library
-    let dbQueue: DatabaseQueue
+    let dbQueue: any DatabaseWriter
     let bookStore: any BookStore
     let positionStore: any PositionStore
     let highlightStore: any HighlightStore

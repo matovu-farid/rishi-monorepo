@@ -10,9 +10,9 @@ import RishiLogging
 /// available for future callers that want typed access to the column.
 public final class GRDBMessageStore: MessageStore, @unchecked Sendable {
 
-    private let dbQueue: DatabaseQueue
+    private let dbQueue: any DatabaseWriter
 
-    public init(dbQueue: DatabaseQueue) {
+    public init(dbQueue: any DatabaseWriter) {
         self.dbQueue = dbQueue
     }
 

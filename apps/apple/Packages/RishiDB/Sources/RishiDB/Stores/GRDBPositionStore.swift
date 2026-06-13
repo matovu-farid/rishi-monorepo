@@ -7,9 +7,9 @@ import RishiLogging
 /// Sendable` rationale.
 public final class GRDBPositionStore: PositionStore, @unchecked Sendable {
 
-    private let dbQueue: DatabaseQueue
+    private let dbQueue: any DatabaseWriter
 
-    public init(dbQueue: DatabaseQueue) {
+    public init(dbQueue: any DatabaseWriter) {
         self.dbQueue = dbQueue
     }
 

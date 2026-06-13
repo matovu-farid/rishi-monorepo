@@ -8,9 +8,9 @@ import RishiLogging
 /// already serialises access).
 public final class GRDBHighlightStore: HighlightStore, @unchecked Sendable {
 
-    private let dbQueue: DatabaseQueue
+    private let dbQueue: any DatabaseWriter
 
-    public init(dbQueue: DatabaseQueue) {
+    public init(dbQueue: any DatabaseWriter) {
         self.dbQueue = dbQueue
     }
 
