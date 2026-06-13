@@ -146,12 +146,25 @@ public struct EpubCoverExtractor: CoverExtractor {
               let idRange = Range(metaMatch.range(at: 1), in: text) else { return nil }
         let coverId = String(text[idRange])
 
+        // Real-world EPUB 2 OPFs (Calibre, ebookmaker, Gutenberg) emit `<item>`
+        // attributes in any order — most commonly `href` BEFORE `id`. The
+        // previous single regex required `id` first and silently missed every
+        // such book, producing the purple-placeholder bug. Try both orders.
         let escapedId = NSRegularExpression.escapedPattern(for: coverId)
-        let itemPattern = "<item[^>]*id\\s*=\\s*[\"']\(escapedId)[\"'][^>]*href\\s*=\\s*[\"']([^\"']+)[\"']"
-        guard let itemRegex = try? NSRegularExpression(pattern: itemPattern),
-              let itemMatch = itemRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let hrefRange = Range(itemMatch.range(at: 1), in: text) else { return nil }
-        return String(text[hrefRange])
+        let itemPatterns = [
+            // id … href
+            "<item[^>]*id\\s*=\\s*[\"']\(escapedId)[\"'][^>]*href\\s*=\\s*[\"']([^\"']+)[\"']",
+            // href … id
+            "<item[^>]*href\\s*=\\s*[\"']([^\"']+)[\"'][^>]*id\\s*=\\s*[\"']\(escapedId)[\"']",
+        ]
+        for pattern in itemPatterns {
+            if let itemRegex = try? NSRegularExpression(pattern: pattern),
+               let itemMatch = itemRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+               let hrefRange = Range(itemMatch.range(at: 1), in: text) {
+                return String(text[hrefRange])
+            }
+        }
+        return nil
     }
 
     // MARK: - PNG re-encode
