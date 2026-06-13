@@ -16,7 +16,7 @@ import os
 ///
 /// Production code MUST NOT depend on this type; it lives in the main module
 /// only so Swift Testing can find it under `@testable import RishiAuth`.
-final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendable {
+final class InMemoryKeychainBackend: KeychainBackend, Sendable {
 
     private struct Key: Hashable {
         let service: String
