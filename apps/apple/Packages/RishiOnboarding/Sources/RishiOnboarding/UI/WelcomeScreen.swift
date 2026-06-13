@@ -2,7 +2,7 @@ import SwiftUI
 import RishiUIKit
 
 /// First-run welcome screen. ONB-01.
-public struct WelcomeScreen: View {
+struct WelcomeScreen: View {
     public let onGetStarted: () -> Void
 
     public init(onGetStarted: @escaping () -> Void) {

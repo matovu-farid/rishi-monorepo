@@ -7,7 +7,7 @@ import RishiUIKit
 ///
 /// `onAllow` is wired (by 11-06) to call
 /// `AVAudioApplication.requestRecordPermission`.
-public struct MicPermissionPrimer: View {
+struct MicPermissionPrimer: View {
     public let onAllow: () -> Void
     public let onSkip: () -> Void
 

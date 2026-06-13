@@ -16,7 +16,7 @@ import Foundation
 /// notifications request belongs to the app's UNUserNotificationCenter
 /// caller). Primer presents rationale → invokes a closure → app layer
 /// triggers the system permission dialog.
-public enum RishiOnboarding {
+enum RishiOnboarding {
     /// Semantic version of the Feature surface. Bump on breaking API changes.
-    public static let version = "0.1.0-scaffold"
+    static let version = "0.1.0-scaffold"
 }

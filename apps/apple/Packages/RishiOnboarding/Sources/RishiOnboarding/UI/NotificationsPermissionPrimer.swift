@@ -6,7 +6,7 @@ import RishiUIKit
 ///
 /// `onAllow` is wired (by 11-06) to call
 /// `UNUserNotificationCenter.current().requestAuthorization(...)`.
-public struct NotificationsPermissionPrimer: View {
+struct NotificationsPermissionPrimer: View {
     public let onAllow: () -> Void
     public let onSkip: () -> Void
 

@@ -2,7 +2,7 @@ import SwiftUI
 import RishiUIKit
 
 /// ONB-01 step letting the user pick a sample book or import their own.
-public struct SampleOrImportScreen: View {
+struct SampleOrImportScreen: View {
     public let onUseSample: () -> Void
     public let onImport: () -> Void
     public let onSkip: () -> Void

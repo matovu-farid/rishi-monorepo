@@ -3,7 +3,7 @@ import RishiUIKit
 
 /// ONB-01 final visible step. Overlay-style coachmark telling the user to
 /// tap any book cover to start reading.
-public struct FirstReaderHint: View {
+struct FirstReaderHint: View {
     public let onGotIt: () -> Void
 
     public init(onGotIt: @escaping () -> Void) {

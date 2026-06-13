@@ -51,7 +51,7 @@ public final class UserDefaultsOnboardingState: OnboardingState, @unchecked Send
 }
 
 /// Test/preview-only in-memory implementation.
-public actor InMemoryOnboardingState: OnboardingState {
+actor InMemoryOnboardingState: OnboardingState {
     private var completed = false
     private var mic = false
     private var notifs = false
