@@ -21,7 +21,10 @@ final class MacCommandRouter {
 
     private(set) var pendingIntent: MacCommandIntent? = nil
 
-    init() {}
+    /// `nonisolated` so the `AppDependencies` composition root can hold
+    /// this as a `let` property whose initializer runs from the
+    /// nonisolated `AppDependencies.init()`. Body is empty.
+    nonisolated init() {}
 
     /// Replace the current pending intent. UI is expected to consume the
     /// slot via the SwiftUI environment + `.task(id:)` modifier.

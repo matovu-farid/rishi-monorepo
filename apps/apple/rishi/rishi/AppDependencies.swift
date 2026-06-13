@@ -968,6 +968,11 @@ struct BootstrappedServices: @unchecked Sendable {
 @MainActor
 final class UserIdBox {
     var value: UserID? = nil
+
+    /// Mirror the `nonisolated init()` on `AppDependencies` so the
+    /// composition root's `let userIdBox = UserIdBox()` property
+    /// initializer is callable from `AppDependencies`' nonisolated init.
+    nonisolated init() {}
 }
 
 // MARK: - SwiftUI environment keys

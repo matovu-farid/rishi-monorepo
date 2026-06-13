@@ -23,7 +23,12 @@ import SwiftUI
 import RishiCore
 import RishiReader
 
-struct RishiSceneState: Codable, Equatable {
+// Codable conformance lives on a `nonisolated extension` below so the
+// pure-value `encodeForStorage()` / `decodeFromStorage(_:)` helpers can
+// invoke `JSONEncoder().encode(self)` without an actor hop. Under
+// `default-isolation = MainActor` the synthesized Codable witness would
+// otherwise be MainActor-isolated and unusable from nonisolated callers.
+struct RishiSceneState: Equatable, Sendable {
     var selectedTab: MacTab
     var openBookId: BookID?
 
@@ -97,6 +102,39 @@ struct RishiSceneState: Codable, Equatable {
     /// Returns whatever each individual decoder yields; the caller is
     /// responsible for choosing precedence (NavigationPath > ReaderRoute
     /// > bare-UUID legacy DB lookup).
+    // MARK: - Manual nonisolated Codable witness
+    //
+    // Hand-written so it isn't inferred MainActor-isolated by the module's
+    // default-isolation = MainActor. The struct's two stored properties
+    // are themselves Codable + Sendable (`MacTab` enum, `BookID` typealias
+    // for UUID), so this is a mechanical round-trip.
+
+    private enum CodingKeys: String, CodingKey {
+        case selectedTab
+        case openBookId
+    }
+
+    /// Explicit memberwise init — the manual `init(from:)` below suppresses
+    /// the compiler-synthesized one, and `RishiSceneState.default` plus
+    /// preview/test fixtures still need it. Nonisolated so any caller
+    /// (including the off-MainActor decode bundle) can construct one.
+    nonisolated init(selectedTab: MacTab, openBookId: BookID?) {
+        self.selectedTab = selectedTab
+        self.openBookId = openBookId
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.selectedTab = try c.decode(MacTab.self, forKey: .selectedTab)
+        self.openBookId = try c.decodeIfPresent(BookID.self, forKey: .openBookId)
+    }
+
+    nonisolated func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(selectedTab, forKey: .selectedTab)
+        try c.encodeIfPresent(openBookId, forKey: .openBookId)
+    }
+
     nonisolated static func decodeSceneRestoreCells(
         tabRaw: String,
         openBookIdRaw: String
@@ -111,6 +149,12 @@ struct RishiSceneState: Codable, Equatable {
         return (state, path, route, legacyId)
     }
 }
+
+// Conformance declaration kept separate from the struct body so the
+// manually-written `nonisolated init(from:)` / `encode(to:)` witnesses
+// resolve as nonisolated (otherwise default-isolation = MainActor would
+// re-isolate the conformance).
+extension RishiSceneState: Codable {}
 
 // MARK: - Phase 18 Plan 18-01 — ReaderRoute storage bridge
 //

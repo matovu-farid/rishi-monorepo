@@ -30,7 +30,10 @@ final class AppChatRefreshAdapter: ChatSyncRefreshDelegate {
     private weak var activeViewModel: ConversationsListViewModel?
     private var activeUserId: UserID?
 
-    init() {}
+    /// `nonisolated` so the composition root can build this adapter from
+    /// inside the off-MainActor bootstrap fan-out without an actor hop.
+    /// Body is empty — all real work runs on the MainActor methods below.
+    nonisolated init() {}
 
     /// Called from RootView / the Conversations tab when the VM mounts.
     /// `userId` is captured here so we can forward to `refreshAfterSync`
