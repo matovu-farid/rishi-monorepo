@@ -136,6 +136,50 @@ public actor CoverCache {
         cacheDir.appendingPathComponent("\(bookID.uuidString).mtime")
     }
 
+    /// Phase 21 perf — nonisolated cache-hit fast path. The library renders
+    /// N tiles in parallel via `withTaskGroup`; each task previously had to
+    /// hop onto this actor's single-threaded executor just to stat the
+    /// already-warm HEIC sidecar, so the "concurrent" fan-out was secretly
+    /// serialised behind the actor. By exposing the read-only cache-hit
+    /// detection as `nonisolated`, all N stat syscalls truly run concurrently
+    /// on the cooperative executor and the URL is returned without an actor
+    /// hop. On cache MISS (or stale sidecar) we still fall back into
+    /// `cachedURL(for:sourceFileURL:extractor:)` for the write path.
+    ///
+    /// Returns `nil` when the cache is cold OR the mtime sidecar is missing
+    /// OR the source mtime drifted (caller falls back to the slow path).
+    nonisolated func cachedURLIfFresh(
+        for bookID: UUID,
+        sourceFileURL: URL
+    ) -> URL? {
+        let coverURL = cacheDir.appendingPathComponent("\(bookID.uuidString).heic")
+        let mtimeURL = cacheDir.appendingPathComponent("\(bookID.uuidString).mtime")
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: coverURL.path),
+              let cachedMtime = Self.readMtimeNonisolated(at: mtimeURL, fileManager: fm),
+              let currentMtime = Self.sourceMtimeNonisolated(at: sourceFileURL, fileManager: fm),
+              Self.mtimesAreEqual(cachedMtime, currentMtime)
+        else { return nil }
+        return coverURL
+    }
+
+    /// Nonisolated mtime parse for the fast-path; mirrors `readMtime(at:)`
+    /// but takes `FileManager.default` (which is documented thread-safe) so
+    /// it can run on the cooperative executor without an actor hop.
+    private nonisolated static func readMtimeNonisolated(at url: URL, fileManager: FileManager) -> Date? {
+        guard let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8),
+              let interval = TimeInterval(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return nil }
+        return Date(timeIntervalSince1970: interval)
+    }
+
+    /// Nonisolated source-mtime stat for the fast-path.
+    private nonisolated static func sourceMtimeNonisolated(at url: URL, fileManager: FileManager) -> Date? {
+        let attrs = try? fileManager.attributesOfItem(atPath: url.path)
+        return attrs?[.modificationDate] as? Date
+    }
+
     private func ensureCacheDir() {
         if !fileManager.fileExists(atPath: cacheDir.path) {
             try? fileManager.createDirectory(at: cacheDir, withIntermediateDirectories: true)

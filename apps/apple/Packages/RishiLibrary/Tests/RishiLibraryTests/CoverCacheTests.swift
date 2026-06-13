@@ -97,6 +97,74 @@ struct CoverCacheTests {
         #expect(extractor.callCount == 1)
     }
 
+    /// Phase 21 perf — nonisolated cache-hit fast path. The library renders
+    /// N tiles in parallel; previously every "hit" tile had to queue behind
+    /// the CoverCache actor's single executor to stat the sidecar. The
+    /// `cachedURLIfFresh` helper exposes the same hit detection as a
+    /// nonisolated call so all N tiles fan out truly concurrently.
+    @Test
+    func cachedURLIfFresh_returnsHitWithoutActorHop_afterWarmCache() async throws {
+        let dir = makeTempDir("fast-path-hit")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let cacheDir = dir.appendingPathComponent("cache", isDirectory: true)
+        let cache = CoverCache(cacheDir: cacheDir)
+
+        let bookID = UUID()
+        let sourceURL = dir.appendingPathComponent("book.epub")
+        try Data("fake epub".utf8).write(to: sourceURL)
+
+        // Cold cache: fast path returns nil.
+        #expect(cache.cachedURLIfFresh(for: bookID, sourceFileURL: sourceURL) == nil)
+
+        // Warm the cache via the actor-isolated slow path.
+        let extractor = CountingExtractor(result: tinyRedPNG())
+        let warmed = await cache.cachedURL(
+            for: bookID,
+            sourceFileURL: sourceURL,
+            extractor: extractor
+        )
+        #expect(warmed != nil)
+
+        // Warm cache: fast path returns the same HEIC URL with no actor hop
+        // and no extractor invocation.
+        let fast = cache.cachedURLIfFresh(for: bookID, sourceFileURL: sourceURL)
+        #expect(fast != nil)
+        #expect(fast == warmed)
+        #expect(extractor.callCount == 1)
+    }
+
+    /// Phase 21 perf — fast path must invalidate when the source file's
+    /// mtime drifts past the sidecar (book file edited / re-imported). The
+    /// caller then falls through to the slow path that rebuilds the cache.
+    @Test
+    func cachedURLIfFresh_returnsNil_whenSourceMtimeDrifts() async throws {
+        let dir = makeTempDir("fast-path-stale")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let cacheDir = dir.appendingPathComponent("cache", isDirectory: true)
+        let cache = CoverCache(cacheDir: cacheDir)
+
+        let bookID = UUID()
+        let sourceURL = dir.appendingPathComponent("book.epub")
+        try Data("v1".utf8).write(to: sourceURL)
+        let oldDate = Date(timeIntervalSince1970: 1_700_000_000)
+        try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: sourceURL.path)
+
+        let extractor = CountingExtractor(result: tinyRedPNG())
+        _ = await cache.cachedURL(for: bookID, sourceFileURL: sourceURL, extractor: extractor)
+
+        // Warm cache: fast path is a hit.
+        #expect(cache.cachedURLIfFresh(for: bookID, sourceFileURL: sourceURL) != nil)
+
+        // Bump the source mtime past the sidecar tolerance.
+        let newDate = Date(timeIntervalSince1970: 1_800_000_000)
+        try FileManager.default.setAttributes([.modificationDate: newDate], ofItemAtPath: sourceURL.path)
+
+        // Stale: fast path must reject so caller goes to the slow path.
+        #expect(cache.cachedURLIfFresh(for: bookID, sourceFileURL: sourceURL) == nil)
+    }
+
     @Test
     func invalidatesOnSourceFileMtimeChange() async throws {
         let dir = makeTempDir("invalidate")

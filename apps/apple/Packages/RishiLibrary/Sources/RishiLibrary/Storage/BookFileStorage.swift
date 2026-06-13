@@ -142,6 +142,32 @@ public actor BookFileStorage {
         try await bookStore.delete(book.id)
     }
 
+    /// Phase 21 perf — nonisolated cache-hit fast path. Skips BOTH the
+    /// BookFileStorage actor hop AND the CoverCache actor hop when the
+    /// HEIC + mtime sidecar are present and fresh. The library renders N
+    /// tiles in parallel via `withTaskGroup`; previously every tile (even
+    /// cache HITs) had to queue behind the BookFileStorage actor's single
+    /// executor just to compute a relative-to-absolute URL and stat the
+    /// sidecar. With this fast path the warm-cache library paint is
+    /// effectively zero-cost per tile.
+    ///
+    /// Returns `nil` on cold cache / stale sidecar / missing coverPath —
+    /// caller must fall back to the async `cachedCoverURL(for:)` slow path.
+    public nonisolated func cachedCoverURLIfFresh(for book: Book) -> URL? {
+        guard let cache = coverCache else { return nil }
+        let sourceFileURL: URL
+        if let rel = book.coverPath {
+            sourceFileURL = rootURL.appendingPathComponent(rel)
+        } else {
+            // No coverPath — the cache could only exist if a previous
+            // extraction wrote it; key off the book file itself for the
+            // mtime check (matches the slow-path's sourceFileURL in the
+            // legacy-extract branch).
+            sourceFileURL = rootURL.appendingPathComponent(book.fileURL)
+        }
+        return cache.cachedURLIfFresh(for: book.id, sourceFileURL: sourceFileURL)
+    }
+
     /// Returns an absolute URL for a book's cached cover if one was extracted.
     ///
     /// Phase 19 Plan 19-02 (F-P0-02): the `FileManager.fileExists(atPath:)`
@@ -166,6 +192,17 @@ public actor BookFileStorage {
         if let cache = coverCache {
             if let rel = book.coverPath {
                 let coverFileURL = rootURL.appendingPathComponent(rel)
+                // Phase 21 perf — nonisolated cache-hit fast path. The
+                // library renders N tiles via `withTaskGroup`; previously
+                // every "hit" tile still had to queue behind the
+                // CoverCache actor's single executor just to stat the
+                // sidecar. The nonisolated helper checks the HEIC + mtime
+                // sidecar with `FileManager.default` directly, so all N
+                // checks run truly concurrently on the cooperative
+                // executor. We ONLY hop into the actor on miss / stale.
+                if let hit = cache.cachedURLIfFresh(for: book.id, sourceFileURL: coverFileURL) {
+                    return hit
+                }
                 if await Self.fileExistsOffActor(path: coverFileURL.path) {
                     // Use the on-disk PNG as the extractor source — much
                     // faster than re-opening the EPUB/PDF and avoids the
@@ -197,6 +234,12 @@ public actor BookFileStorage {
             let ext = (book.fileURL as NSString).pathExtension.lowercased()
             guard let extractor = coverExtractors[ext] else { return nil }
             let sourceURL = rootURL.appendingPathComponent(book.fileURL)
+            // Phase 21 perf — fast-path the cache HIT for the lazy-extract
+            // branch too: a warm cache should never queue behind the
+            // CoverCache actor on subsequent paints.
+            if let hit = cache.cachedURLIfFresh(for: book.id, sourceFileURL: sourceURL) {
+                return hit
+            }
             return await cache.cachedURL(
                 for: book.id,
                 sourceFileURL: sourceURL,

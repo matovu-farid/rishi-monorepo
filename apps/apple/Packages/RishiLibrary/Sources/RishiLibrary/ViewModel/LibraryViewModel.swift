@@ -108,7 +108,19 @@ public final class LibraryViewModel {
     }
 
     public func coverURL(for book: Book) async -> URL? {
-        await storage.cachedCoverURL(for: book)
+        // Phase 21 perf — nonisolated cache-hit fast path. The library
+        // renders N tiles in parallel via `LibraryRootView.computeCoverURLs`
+        // (`withTaskGroup`); previously every tile (including cache HITs)
+        // had to queue behind the BookFileStorage actor's single executor
+        // and then again behind the CoverCache actor's executor, defeating
+        // the parallel fan-out. The fast path reads HEIC + mtime sidecar
+        // off-actor via FileManager.default, so warm-cache paints fan out
+        // truly concurrently. Cache MISS / stale still falls through to
+        // the slow path which owns the write side under actor isolation.
+        if let hit = storage.cachedCoverURLIfFresh(for: book) {
+            return hit
+        }
+        return await storage.cachedCoverURL(for: book)
     }
 
     // MARK: - Search debounce
