@@ -8,7 +8,7 @@ import RishiUIKit
 /// Plan 04-05 will add `.searchable(...)` and Plan 04-06 mounts this inside
 /// a `NavigationStack` (or `NavigationSplitView` for iPad/Catalyst) fed by
 /// `LibraryViewModel`.
-public struct LibraryView: View {
+struct LibraryView: View {
 
     public let books: [Book]
     public let readingNow: [ReadingNowEntry]

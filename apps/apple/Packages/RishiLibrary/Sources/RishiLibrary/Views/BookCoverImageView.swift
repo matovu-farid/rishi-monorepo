@@ -14,7 +14,7 @@ import RishiUIKit
 ///
 /// ALL visuals come from `RishiColor` / `RishiTypography` / `RishiSpacing` /
 /// `RishiRadius` tokens — no inline hex, RGB literals, or fixed font sizes.
-public struct BookCoverImageView: View {
+struct BookCoverImageView: View {
     public let book: Book
     public let coverURL: URL?
     public let cornerRadius: CGFloat

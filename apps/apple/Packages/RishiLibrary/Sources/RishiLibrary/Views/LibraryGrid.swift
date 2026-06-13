@@ -8,7 +8,7 @@ import RishiUIKit
 ///
 /// The grid is intentionally state-light: it owns ONLY the pending-delete
 /// `Book?` for the confirmation alert. Everything else is upstream input.
-public struct LibraryGrid: View {
+struct LibraryGrid: View {
     public let books: [Book]
     public let positionLookup: (BookID) -> Position?
     public let coverURL: (Book) -> URL?

@@ -7,7 +7,7 @@ import RishiCore
 ///
 /// Zero SwiftUI: Foundation + RishiCore only — so the filter can be unit-tested
 /// in <10ms on every commit without dragging in the UI test harness.
-public enum LibrarySearchFilter {
+enum LibrarySearchFilter {
 
     /// Returns the subset of `books` whose `title`, `author`, OR filename
     /// (`fileURL` basename) contains every whitespace-separated token of
@@ -23,7 +23,7 @@ public enum LibrarySearchFilter {
     /// not have to type the title in the canonical word order.
     ///
     /// Whitespace-only or empty `query` returns the input unchanged.
-    public static func filter(books: [Book], query: String) -> [Book] {
+    static func filter(books: [Book], query: String) -> [Book] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return books }
         let tokens = trimmed

@@ -14,7 +14,7 @@ import RishiUIKit
 ///         filteredIsEmpty: vm.filteredBooks.isEmpty
 ///     )
 /// ```
-public struct LibrarySearchable: ViewModifier {
+struct LibrarySearchable: ViewModifier {
 
     @Binding public var text: String
     public let filteredIsEmpty: Bool
@@ -55,7 +55,7 @@ public struct LibrarySearchable: ViewModifier {
     }
 }
 
-public extension View {
+extension View {
     /// Adds the library-shell `.searchable(...)` + empty-results overlay.
     ///
     /// - Parameter text: bound to `LibraryViewModel.searchText`

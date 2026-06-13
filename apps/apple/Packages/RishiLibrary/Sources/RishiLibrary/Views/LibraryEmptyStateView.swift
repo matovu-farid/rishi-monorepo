@@ -10,8 +10,8 @@ import UIKit
 ///
 /// The hero glyph uses `RishiTypography.titleXL` plus `.imageScale(.large)`
 /// so it scales with Dynamic Type (A11Y-02) — no fixed point size.
-public struct LibraryEmptyStateView: View {
-    public init() {}
+struct LibraryEmptyStateView: View {
+    init() {}
 
     public var body: some View {
         VStack(spacing: RishiSpacing.l) {

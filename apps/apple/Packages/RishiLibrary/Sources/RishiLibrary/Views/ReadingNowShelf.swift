@@ -5,7 +5,7 @@ import RishiUIKit
 /// LIB-05: horizontal shelf showing in-progress books at the top of the
 /// Library screen. Filtered by `ReadingNowEntry.isInProgress(_:)` upstream
 /// (the view itself trusts the caller).
-public struct ReadingNowShelf: View {
+struct ReadingNowShelf: View {
     public let entries: [ReadingNowEntry]
     public let coverURL: (Book) -> URL?
     public let onOpen: (Book) -> Void

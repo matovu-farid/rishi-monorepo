@@ -5,7 +5,7 @@ import RishiCore
 /// shared `ImportCoordinator`. Filters incoming URLs by extension up-front so
 /// the visual drop indicator only highlights when at least one item is a
 /// supported book file.
-public struct LibraryDropDestination: ViewModifier {
+struct LibraryDropDestination: ViewModifier {
 
     public let coordinator: ImportCoordinator
     public let onImported: @MainActor (_ outcomes: [ImportCoordinator.ImportOutcome]) -> Void
@@ -41,7 +41,7 @@ public struct LibraryDropDestination: ViewModifier {
     }
 }
 
-public extension View {
+extension View {
     /// Attach drag-and-drop import to any container (typically the LibraryGrid
     /// root). On iPad accepts inter-app drops from Files split-view; on Mac
     /// Catalyst accepts drops from Finder. No-op on iPhone (the system has no
