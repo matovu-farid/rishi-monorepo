@@ -252,17 +252,27 @@ final class AppDependencies {
         // now run `pool.read { ... }` in parallel from a `withTaskGroup`
         // without serialising on a single shared connection. Writes still
         // serialise — same semantics as before.
+        //
+        // Plan 19-08 F-P2-04 MEDIUM — race the DB open against the
+        // AVAudioEngine alloc (Wave A). Both are independent of each
+        // other and of `workerClient`; the slower of the two now bounds
+        // the cold-launch ProgressView instead of their sum.
         let documentsURL = FileManager.default.urls(for: .documentDirectory,
                                                     in: .userDomainMask).first!
         let dbURL = documentsURL.appendingPathComponent("rishi.sqlite")
-        let dbState = signposter.beginInterval("db.open")
-        let dbQueue: any DatabaseWriter
-        do {
-            dbQueue = try RishiDB.makeDatabasePool(at: dbURL)
-        } catch {
-            fatalError("Failed to open rishi.sqlite at \(dbURL): \(error)")
-        }
-        signposter.endInterval("db.open", dbState)
+
+        // Wave A — independent heavy roots run as child tasks via
+        // `async let`. The DB open (sync, GRDB pool + migrations) and
+        // the AVAudioEngine alloc (MainActor hop + node setup) share no
+        // dependency, so racing them lets the slower of the two bound
+        // the cold-launch ProgressView. The other items in `buildServices`
+        // (auth coordinator, stores, uploaders, fetchers, view models) are
+        // either microseconds of struct allocation OR depend on these two
+        // outputs, so leaving them serial costs nothing measurable.
+        async let dbWriterTask: any DatabaseWriter = Self.openDatabaseWriter(at: dbURL)
+        async let audioStackTask: AudioStack = Self.openAudioStack(workerClient: workerClient)
+
+        let dbQueue = await dbWriterTask
 
         // 8. Stores.
         let bookStore = GRDBBookStore(dbQueue: dbQueue)
@@ -408,12 +418,11 @@ final class AppDependencies {
             await syncEngine.bind(status: syncStatus)
         }
 
-        // 14. Audio / TTS stack (Phase 8).
-        let audioState = signposter.beginInterval("audio.ready")
-        let audioStack = await MainActor.run {
-            Self.makeAudioStack(workerClient: workerClient)
-        }
-        signposter.endInterval("audio.ready", audioState)
+        // 14. Audio / TTS stack (Phase 8) — kicked off in Wave A above so
+        // its AVAudioEngine alloc races the DB open. We harvest the
+        // result here, where the first downstream consumer
+        // (`voicePresenter`) actually needs it.
+        let audioStack = await audioStackTask
 
         // 15. Chat stack (Phase 9).
         let conversationLookup = ConversationLookup(store: conversationStore)
@@ -785,12 +794,46 @@ final class AppDependencies {
     /// Bundle of audio services constructed together so the init body stays
     /// readable. Computed in a static helper because init can't reference
     /// `self` partway through property assignments.
-    fileprivate struct AudioStack {
+    // `@unchecked Sendable` so this can flow back as the result of an
+    // `async let` child task in `buildServices` Wave A (the audio stack
+    // and the DB pool race each other off-main). The contained types are
+    // reference types already used across actor boundaries downstream;
+    // bundling them in this struct doesn't change those invariants.
+    fileprivate struct AudioStack: @unchecked Sendable {
         let coordinator: AudioSessionCoordinator
         let state: TTSPlaybackState
         let engine: TTSEngine
         let settingsStore: any TTSSettingsStore
         let nowPlaying: NowPlayingController
+    }
+
+    // MARK: - Wave A helpers (F-P2-04 medium)
+    //
+    // These two helpers are the parallelised cold-launch roots called
+    // via `async let` from `buildServices`. They are `nonisolated` so the
+    // child task can begin work on its own executor without bouncing to
+    // MainActor for the heavy phase.
+
+    nonisolated internal static func openDatabaseWriter(
+        at dbURL: URL
+    ) async -> any DatabaseWriter {
+        let dbState = signposter.beginInterval("db.open")
+        defer { signposter.endInterval("db.open", dbState) }
+        do {
+            return try RishiDB.makeDatabasePool(at: dbURL)
+        } catch {
+            fatalError("Failed to open rishi.sqlite at \(dbURL): \(error)")
+        }
+    }
+
+    nonisolated fileprivate static func openAudioStack(
+        workerClient: WorkerClient
+    ) async -> AudioStack {
+        let audioState = signposter.beginInterval("audio.ready")
+        defer { signposter.endInterval("audio.ready", audioState) }
+        return await MainActor.run {
+            Self.makeAudioStack(workerClient: workerClient)
+        }
     }
 
     @MainActor

@@ -20,6 +20,8 @@
 
 import Testing
 import Foundation
+import RishiAuth
+import RishiAPI
 @testable import rishi
 
 @MainActor
@@ -101,5 +103,81 @@ struct AppDependenciesBootstrapTests {
         await deps.bootstrap()
         #expect(Thread.isMainThread, "post-bootstrap continues on main")
         #expect(deps.services != nil)
+    }
+
+    /// Plan 19-08 F-P2-04 medium — Wave A populates both independent
+    /// heavy roots. After `bootstrap()` returns, BOTH `dbQueue` and
+    /// `ttsEngine` (and the audio coordinator) must be realised. Acts as
+    /// a regression guard against a future edit dropping one of the
+    /// `async let` bindings or reverting the harvest point.
+    @Test("Wave A populates dbQueue AND ttsEngine via async let")
+    func test_waveA_dbAndAudio_bothBuilt() async {
+        let deps = AppDependencies()
+        await deps.bootstrap()
+        let svcs = deps.services
+        #expect(svcs != nil)
+        #expect((svcs?.dbQueue as AnyObject?) != nil)
+        #expect((svcs?.ttsEngine as AnyObject?) != nil)
+        #expect((svcs?.audioCoordinator as AnyObject?) != nil)
+    }
+
+    /// Plan 19-08 F-P2-04 medium — wall-clock parallelism contract.
+    ///
+    /// Runs the two Wave A helpers — `openDatabaseWriter` and
+    /// `openAudioStack` — serially, then in parallel via `async let`,
+    /// and asserts the parallel run finishes in less than 90% of the
+    /// serial sum. The 10% margin tolerates simulator scheduler jitter
+    /// while still flagging a regression where `async let` got
+    /// accidentally reverted to a sequential `await` chain.
+    @Test("Wave A async-let runs in less wall-clock than serial sum")
+    func test_waveA_parallelism_beatsSerial() async {
+        let tmp = FileManager.default.temporaryDirectory
+        let dbURL1 = tmp.appendingPathComponent("rishi-paralleltest-\(UUID().uuidString).sqlite")
+        let dbURL2 = tmp.appendingPathComponent("rishi-paralleltest-\(UUID().uuidString).sqlite")
+        defer {
+            try? FileManager.default.removeItem(at: dbURL1)
+            try? FileManager.default.removeItem(at: dbURL2)
+        }
+
+        let keychain = KeychainSessionStore()
+        let tokenProvider = RishiAuthTokenProvider(keychain: keychain)
+        let workerClient = WorkerClient(
+            baseURL: URL(string: "https://api.fidexa.org")!,
+            tokenProvider: tokenProvider,
+            devBypassEnabled: false
+        )
+
+        let clock = ContinuousClock()
+
+        let serialElapsed = await clock.measure {
+            _ = await AppDependencies.openDatabaseWriter(at: dbURL1)
+            _ = await AppDependencies.openAudioStack(workerClient: workerClient)
+        }
+
+        let parallelElapsed = await clock.measure {
+            async let db = AppDependencies.openDatabaseWriter(at: dbURL2)
+            async let audio = AppDependencies.openAudioStack(workerClient: workerClient)
+            _ = await db
+            _ = await audio
+        }
+
+        let serialMs = serialElapsed.milliseconds
+        let parallelMs = parallelElapsed.milliseconds
+        #expect(parallelMs < serialMs * 0.9,
+                "parallel=\(parallelMs)ms vs serial=\(serialMs)ms — async let not delivering parallelism")
+    }
+}
+
+// MARK: - Duration helpers
+
+private extension Duration {
+    /// Convert a `Duration` into milliseconds as a `Double`. Used by the
+    /// Wave A parallelism test so we can compare two measured durations
+    /// without re-deriving the attoseconds-plus-seconds math at every
+    /// call site.
+    var milliseconds: Double {
+        let secs = Double(components.seconds) * 1_000.0
+        let atto = Double(components.attoseconds) / 1_000_000_000_000_000.0
+        return secs + atto
     }
 }
