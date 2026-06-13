@@ -13,7 +13,7 @@ import RishiLogging
 /// so the wire shape stays uniform with `ConversationRowWire` and the worker
 /// can apply LWW conflict resolution off a single `(id, updated_at)` pair
 /// across both tables.
-public final class MessageUploader: @unchecked Sendable {
+public final class MessageUploader: Sendable {
 
     public enum UploadError: Error, Sendable {
         case encodingFailed(String)
