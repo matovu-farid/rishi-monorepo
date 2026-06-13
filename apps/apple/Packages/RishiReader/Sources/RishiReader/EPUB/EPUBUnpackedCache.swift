@@ -112,7 +112,23 @@ public actor EPUBUnpackedCache {
     /// Drop the unpacked directory + sidecar for `bookId`. Called when a
     /// book is removed from the library or when a phase-level invalidate
     /// hook fires.
-    public func clear(for bookId: BookID) {
+    ///
+    /// Reentrancy: `performUnpack` suspends across
+    /// `await FileManager.default.unzipItem(...)`. The actor unlocks at
+    /// that suspend point, so a concurrent `clear(for:)` could otherwise
+    /// race the unzip and delete the destination mid-write, leaving a
+    /// half-unpacked tree with a stale mtime sidecar. To close the
+    /// window we cancel the in-flight task first, await its completion
+    /// (which will observe the cancellation between the mkdir and the
+    /// unzip), and only then remove files. The unpack task itself
+    /// cleans up its partial directory on its own cancellation/error
+    /// branches, so the subsequent removeItem calls are idempotent.
+    public func clear(for bookId: BookID) async {
+        if let task = inflight[bookId] {
+            task.cancel()
+            inflight[bookId] = nil
+            _ = await task.value
+        }
         let dir = unpackedDirectoryURL(for: bookId)
         let sidecar = mtimeSidecarURL(for: bookId)
         try? fileManager.removeItem(at: dir)
@@ -143,6 +159,12 @@ public actor EPUBUnpackedCache {
         // (or be empty); a previous failed unpack would have left junk.
         try? fileManager.removeItem(at: dir)
 
+        // Cooperative cancellation gate between mkdir and the multi-second
+        // unzip — a concurrent `clear(for:)` cancels this task, and we
+        // bail BEFORE asking unzipItem to write into a directory the
+        // caller is about to remove.
+        if Task.isCancelled { return nil }
+
         do {
             // ReadiumZIPFoundation's unzipItem is an `async throws` extension
             // on FileManager. We invoke it on FileManager.default (documented
@@ -156,6 +178,17 @@ public actor EPUBUnpackedCache {
             )
             // Clean up partial output so the next attempt starts from a
             // known-empty state.
+            try? fileManager.removeItem(at: dir)
+            return nil
+        }
+
+        // Second cancellation gate — if `clear(for:)` raced us between
+        // the mkdir gate and now, do not publish the sidecar (clear is
+        // about to drop the directory anyway). Skipping the sidecar
+        // write keeps the on-disk state coherent: either the directory
+        // AND sidecar both exist (warm hit) or both are missing (cold),
+        // never sidecar-without-directory.
+        if Task.isCancelled {
             try? fileManager.removeItem(at: dir)
             return nil
         }

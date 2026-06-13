@@ -144,6 +144,55 @@ struct EPUBUnpackedCacheTests {
         #expect(!FileManager.default.fileExists(atPath: sidecar.path))
     }
 
+    @Test("clear during unpack cancels the in-flight task and does not leave a stale sidecar")
+    func clearDuringUnpack_cancelsInflightAndDoesNotLeaveStaleSidecar() async throws {
+        let root = makeTempRootDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = makeCache(rootDirectory: root)
+        let bookId = BookID()
+        let epub = try makeMutableEPUBCopy()
+        defer { try? FileManager.default.removeItem(at: epub) }
+
+        // Kick off the unpack; race a `clear(for:)` against it. The
+        // cancellation gates inside `performUnpack` (one between mkdir
+        // and unzip, one after unzip returns) plus `clear`'s
+        // `task.cancel()` + `await task.value` sequence ensure the
+        // on-disk state is coherent on the way out:
+        //
+        //   - If clear arrives BEFORE unzip completes: the gate after
+        //     unzip returns nil, the partial directory is removed,
+        //     sidecar is never written.
+        //   - If clear arrives AFTER unzip completes: clear awaits the
+        //     unpack task, then removes both directory and sidecar.
+        //
+        // Either way: the invariant we assert is "sidecar-without-
+        // directory cannot happen". A stale sidecar would have
+        // mis-validated the next cold open as a warm hit.
+        async let unpackResult: URL? = cache.unpackIfNeeded(for: bookId, sourceFileURL: epub)
+        async let clearDone: Void = cache.clear(for: bookId)
+        let (_, _) = await (unpackResult, clearDone)
+
+        let dir = root.appendingPathComponent(bookId.uuidString, isDirectory: true)
+        let sidecar = root.appendingPathComponent("\(bookId.uuidString).mtime")
+        let dirExists = FileManager.default.fileExists(atPath: dir.path)
+        let sidecarExists = FileManager.default.fileExists(atPath: sidecar.path)
+
+        // The forbidden state: sidecar present without directory. That
+        // is exactly the half-written-cache bug this fix closes.
+        #expect(!(sidecarExists && !dirExists),
+                "stale sidecar without directory — next cold open would mis-validate as warm")
+
+        // Re-issuing unpackIfNeeded must produce a coherent warm tree
+        // (or at minimum return a non-stale fast-path miss). This
+        // guards against the more subtle failure where the cancelled
+        // unpack left a partial directory tagged with a fresh sidecar.
+        let recovery = await cache.unpackIfNeeded(for: bookId, sourceFileURL: epub)
+        let recoveredDir = try #require(recovery)
+        let contents = try FileManager.default.contentsOfDirectory(atPath: recoveredDir.path)
+        #expect(contents.count > 0,
+                "recovery unpack should produce a non-empty directory")
+    }
+
     @Test("concurrent unpack callers coalesce to a single physical unpack")
     func unpackIfNeededIsIdempotent() async throws {
         let root = makeTempRootDirectory()
