@@ -144,7 +144,12 @@ public actor EPUBUnpackedCache {
         try? fileManager.removeItem(at: dir)
 
         do {
-            try fileManager.unzipItem(at: sourceFileURL, to: dir)
+            // ReadiumZIPFoundation's unzipItem is an `async throws` extension
+            // on FileManager. We invoke it on FileManager.default (documented
+            // Sendable) instead of `self.fileManager` so Swift 6 strict
+            // concurrency does not flag sending the actor-isolated stored
+            // FileManager across the nonisolated async boundary.
+            try await FileManager.default.unzipItem(at: sourceFileURL, to: dir)
         } catch {
             Log.reader.error(
                 "EPUBUnpackedCache unzip failed: \(error.localizedDescription, privacy: .public)"
