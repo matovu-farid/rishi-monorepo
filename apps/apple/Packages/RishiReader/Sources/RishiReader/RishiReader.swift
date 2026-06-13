@@ -10,7 +10,7 @@ import Foundation
 /// RishiDB (GRDB store impls), RishiLogging (os.Logger), and the sibling
 /// Feature package RishiLibrary (BookFileStorage for resolving file URLs).
 /// Has no dependency on RishiAPI or RishiAuth.
-public enum RishiReader {
+enum RishiReader {
     /// Semantic version of the Feature surface. Bump on breaking API changes.
-    public static let version = "0.1.0-scaffold"
+    static let version = "0.1.0-scaffold"
 }
