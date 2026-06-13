@@ -21,7 +21,7 @@ enum SentenceSplitter {
     ///   - "Hello world. How are you?" → ["Hello world.", "How are you?"]
     ///   - Tolerates trailing whitespace, blank lines, and emoji.
     ///   - Empty / whitespace-only input → []
-    static func split(_ text: String) -> [String] {
+    nonisolated static func split(_ text: String) -> [String] {
         guard !text.isEmpty else { return [] }
         var sentences: [String] = []
         text.enumerateSubstrings(
