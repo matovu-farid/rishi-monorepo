@@ -124,8 +124,12 @@ final class AppDependencies {
 
     // MARK: - Init (synchronous, cheap, no IO)
 
-    init() {
-        // Intentionally empty. All heavy work moved to ``bootstrap()``.
+    /// `nonisolated` so SwiftUI's `@State private var deps = AppDependencies()`
+    /// can construct the instance from the struct-level property initializer,
+    /// which the compiler does not prove is on the MainActor even though the
+    /// enclosing `App` body is. Body intentionally empty — all heavy work is
+    /// moved to ``bootstrap()`` so there is nothing here that needs main.
+    nonisolated init() {
         // Plan 19-01 must-have: this initializer returns in under 10ms.
     }
 
