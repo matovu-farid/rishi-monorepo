@@ -9,7 +9,7 @@ import Foundation
 /// `AAResult.passes(largeText:)`. The token-pair audit surface
 /// (`audit(_:)` / `failures(_:)`) lets test suites assert every
 /// (foreground, background) combo we actually ship in the reader chrome.
-public enum ContrastChecker {
+enum ContrastChecker {
 
     /// Component-wise sRGB triple in [0, 1].
     public struct RGB: Equatable, Sendable {

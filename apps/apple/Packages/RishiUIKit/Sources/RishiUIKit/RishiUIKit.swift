@@ -4,6 +4,6 @@
 
 import Foundation
 
-public enum RishiUIKit {
-    public static let apiVersion = "1.0.0"
+enum RishiUIKit {
+    static let apiVersion = "1.0.0"
 }

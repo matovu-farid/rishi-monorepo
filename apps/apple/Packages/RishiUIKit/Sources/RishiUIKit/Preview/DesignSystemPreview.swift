@@ -3,11 +3,11 @@ import SwiftUI
 /// Renders every design token in a scrollable list for visual review.
 /// Use during reviews, snapshot tests, and Xcode previews to confirm tokens
 /// look correct across light/dark/Dynamic Type sizes.
-public struct DesignSystemPreview: View {
+struct DesignSystemPreview: View {
 
-    public init() {}
+    init() {}
 
-    public var body: some View {
+    var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: RishiSpacing.xl) {
                 colorsSection
