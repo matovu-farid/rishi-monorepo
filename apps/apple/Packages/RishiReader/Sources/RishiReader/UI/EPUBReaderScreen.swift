@@ -668,7 +668,7 @@ public struct EPUBReaderScreen: View {
 /// no-ops; reads always return `.default`. Mirrors the same fallback in
 /// `PDFReaderScreen` (kept fileprivate per file so swapping wiring in
 /// `AppDependencies` doesn't accidentally leak into production code paths).
-private final class EphemeralReaderSettingsStore: ReaderSettingsStore, @unchecked Sendable {
+private final class EphemeralReaderSettingsStore: ReaderSettingsStore, Sendable {
     func theme(for bookId: BookID) async -> ReaderTheme { .default }
     func setTheme(_ theme: ReaderTheme, for bookId: BookID) async { /* no-op */ }
     func typography(for bookId: BookID) async -> ReaderTypography { .default }
