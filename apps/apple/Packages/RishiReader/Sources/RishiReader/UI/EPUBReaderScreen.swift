@@ -177,62 +177,62 @@ public struct EPUBReaderScreen: View {
             // that captured horizontal swipes and never forwarded them
             // to Readium's internal paginator, so the user could not
             // swipe pages. Horizontal paging now belongs to
-            // EPUBNavigatorViewController (Readium) end-to-end. The
-            // Color.clear overlay still sits ABOVE the Readium
-            // WKWebView so the SwiftUI `SpatialTapGesture` receives
-            // taps (the WebView's UIKit gesture stack would otherwise
-            // greedily claim them) — `.simultaneousGesture` keeps the
-            // engine's own pan/swipe recognizers active beneath it.
+            // EPUBNavigatorViewController (Readium) end-to-end.
+            //
+            // Phase 21 fix: chrome-toggle / tap-to-page-turn taps are
+            // now intercepted by a UIKit `UITapGestureRecognizer`
+            // attached to the navigator's container view from
+            // ``EPUBReaderView`` (cancelsTouchesInView = false +
+            // shouldRecognizeSimultaneouslyWith = true). The prior
+            // `Color.clear.contentShape(Rectangle())
+            // .simultaneousGesture(SpatialTapGesture)` overlay sat above
+            // the engine and its hit-test region claimed horizontal
+            // pan touches before Readium ever saw `touchesMoved`, so
+            // swipe paging was silently broken. The native UIKit
+            // recognizer fails-fast on pan slop, so horizontal swipes
+            // flow uninterrupted to the engine's pan recognizer.
             GeometryReader { proxy in
-                ZStack {
-                    EPUBReaderView(
-                        viewModel: viewModel,
-                        onSelectionChange: { selection in
-                            handleSelectionChange(selection)
-                        },
-                        coordinatorRef: coordinatorRef
-                    )
-
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .simultaneousGesture(
-                            SpatialTapGesture()
-                                .onEnded { event in
-                                    let resolver = ReaderTapRegionResolver()
-                                    let decision = resolver.decide(
-                                        at: event.location,
-                                        in: readerAreaSize
-                                    )
-                                    switch decision {
-                                    case .toggleChrome:
-                                        withAnimation(.easeInOut(duration: 0.25)) {
-                                            chrome.toggle()
-                                        }
-                                    case .nextPage:
-                                        // Phase 18 Plan 18-02 — F-P1-01: bump
-                                        // the SwiftUI `.sensoryFeedback` trigger
-                                        // on every committed page turn. Readium
-                                        // owns the real position; the counter
-                                        // is synthetic.
-                                        viewModel.advancePage()
-                                        let navigator = coordinatorRef.coordinator?.navigator
-                                        // KEEP: Readium EPUBNavigatorViewController
-                                        // requires @MainActor; goForward is a
-                                        // navigator UI mutation.
-                                        Task { @MainActor in
-                                            _ = await navigator?.goForward(options: NavigatorGoOptions(animated: true))
-                                        }
-                                    case .previousPage:
-                                        viewModel.advancePage()
-                                        let navigator = coordinatorRef.coordinator?.navigator
-                                        // KEEP: Readium navigator UI mutation; @MainActor.
-                                        Task { @MainActor in
-                                            _ = await navigator?.goBackward(options: NavigatorGoOptions(animated: true))
-                                        }
-                                    }
-                                }
+                EPUBReaderView(
+                    viewModel: viewModel,
+                    onSelectionChange: { selection in
+                        handleSelectionChange(selection)
+                    },
+                    onTap: { location in
+                        let resolver = ReaderTapRegionResolver()
+                        let decision = resolver.decide(
+                            at: location,
+                            in: readerAreaSize
                         )
-                }
+                        switch decision {
+                        case .toggleChrome:
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                chrome.toggle()
+                            }
+                        case .nextPage:
+                            // Phase 18 Plan 18-02 — F-P1-01: bump
+                            // the SwiftUI `.sensoryFeedback` trigger
+                            // on every committed page turn. Readium
+                            // owns the real position; the counter
+                            // is synthetic.
+                            viewModel.advancePage()
+                            let navigator = coordinatorRef.coordinator?.navigator
+                            // KEEP: Readium EPUBNavigatorViewController
+                            // requires @MainActor; goForward is a
+                            // navigator UI mutation.
+                            Task { @MainActor in
+                                _ = await navigator?.goForward(options: NavigatorGoOptions(animated: true))
+                            }
+                        case .previousPage:
+                            viewModel.advancePage()
+                            let navigator = coordinatorRef.coordinator?.navigator
+                            // KEEP: Readium navigator UI mutation; @MainActor.
+                            Task { @MainActor in
+                                _ = await navigator?.goBackward(options: NavigatorGoOptions(animated: true))
+                            }
+                        }
+                    },
+                    coordinatorRef: coordinatorRef
+                )
                 .onAppear { readerAreaSize = proxy.size }
                 .onChange(of: proxy.size) { _, newSize in readerAreaSize = newSize }
             }

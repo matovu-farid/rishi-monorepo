@@ -165,65 +165,65 @@ public struct PDFReaderScreen: View {
             // that captured horizontal swipes and never forwarded them
             // to PDFKit's `UIPageViewController`, so the user could not
             // swipe pages. Horizontal paging now belongs to PDFKit
-            // (`PDFView.usePageViewController(true)`) end-to-end. The
-            // Color.clear overlay still sits ABOVE the PDFKit `PDFView`
-            // so the SwiftUI `SpatialTapGesture` receives taps (the
-            // PDFView's UIKit gesture stack would otherwise greedily
-            // claim them) — `.simultaneousGesture` keeps PDFKit's own
-            // pan/swipe recognizers active beneath it.
+            // (`PDFView.usePageViewController(true)`) end-to-end.
+            //
+            // Phase 21 fix: chrome-toggle / tap-to-page-turn taps are
+            // now intercepted by a UIKit `UITapGestureRecognizer`
+            // attached directly to the `PDFView` from ``PDFReaderView``
+            // (cancelsTouchesInView = false +
+            // shouldRecognizeSimultaneouslyWith = true). The prior
+            // `Color.clear.contentShape(Rectangle())
+            // .simultaneousGesture(SpatialTapGesture)` overlay sat
+            // above the PDF and its hit-test region claimed horizontal
+            // pan touches before PDFKit ever saw `touchesMoved`, so
+            // swipe paging was silently broken. The native UIKit
+            // recognizer fails-fast on pan slop so horizontal swipes
+            // flow uninterrupted to PDFKit's pan recognizer.
             GeometryReader { proxy in
-                ZStack {
-                    PDFReaderView(
-                        viewModel: viewModel,
-                        onSelectionChange: { sel in
-                            handleSelectionChange(sel)
-                        },
-                        onPDFViewReady: { view in
-                            pdfViewRef = view
-                        }
-                    )
-
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .simultaneousGesture(
-                            SpatialTapGesture()
-                                .onEnded { event in
-                                    let resolver = ReaderTapRegionResolver()
-                                    let decision = resolver.decide(
-                                        at: event.location,
-                                        in: readerAreaSize
-                                    )
-                                    switch decision {
-                                    case .toggleChrome:
-                                        withAnimation(.easeInOut(duration: 0.25)) {
-                                            chrome.toggle()
-                                        }
-                                    case .nextPage:
-                                        let next = min(viewModel.pageIndex + 1, max(viewModel.totalPages - 1, 0))
-                                        if next == viewModel.pageIndex {
-                                            // Phase 18 Plan 18-02 — F-P1-01:
-                                            // clamp didn't move = boundary hit.
-                                            // Drives `.sensoryFeedback(.warning,
-                                            // trigger: viewModel.lastBoundaryHitTick)`.
-                                            viewModel.hitBoundary()
-                                        } else {
-                                            // Drives `.sensoryFeedback(.impact(.light),
-                                            // trigger: viewModel.currentPageIndex)`.
-                                            viewModel.advancePage()
-                                            viewModel.seek(toPage: next)
-                                        }
-                                    case .previousPage:
-                                        let prev = max(viewModel.pageIndex - 1, 0)
-                                        if prev == viewModel.pageIndex {
-                                            viewModel.hitBoundary()
-                                        } else {
-                                            viewModel.advancePage()
-                                            viewModel.seek(toPage: prev)
-                                        }
-                                    }
-                                }
+                PDFReaderView(
+                    viewModel: viewModel,
+                    onSelectionChange: { sel in
+                        handleSelectionChange(sel)
+                    },
+                    onPDFViewReady: { view in
+                        pdfViewRef = view
+                    },
+                    onTap: { location in
+                        let resolver = ReaderTapRegionResolver()
+                        let decision = resolver.decide(
+                            at: location,
+                            in: readerAreaSize
                         )
-                }
+                        switch decision {
+                        case .toggleChrome:
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                chrome.toggle()
+                            }
+                        case .nextPage:
+                            let next = min(viewModel.pageIndex + 1, max(viewModel.totalPages - 1, 0))
+                            if next == viewModel.pageIndex {
+                                // Phase 18 Plan 18-02 — F-P1-01:
+                                // clamp didn't move = boundary hit.
+                                // Drives `.sensoryFeedback(.warning,
+                                // trigger: viewModel.lastBoundaryHitTick)`.
+                                viewModel.hitBoundary()
+                            } else {
+                                // Drives `.sensoryFeedback(.impact(.light),
+                                // trigger: viewModel.currentPageIndex)`.
+                                viewModel.advancePage()
+                                viewModel.seek(toPage: next)
+                            }
+                        case .previousPage:
+                            let prev = max(viewModel.pageIndex - 1, 0)
+                            if prev == viewModel.pageIndex {
+                                viewModel.hitBoundary()
+                            } else {
+                                viewModel.advancePage()
+                                viewModel.seek(toPage: prev)
+                            }
+                        }
+                    }
+                )
                 .onAppear { readerAreaSize = proxy.size }
                 .onChange(of: proxy.size) { _, newSize in readerAreaSize = newSize }
             }

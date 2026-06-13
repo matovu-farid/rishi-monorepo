@@ -36,6 +36,21 @@ public struct EPUBReaderView: UIViewControllerRepresentable {
     /// the navigator. The screen uses this to anchor the floating
     /// ``EPUBHighlightContextMenu``.
     public let onSelectionChange: (Selection?) -> Void
+    /// Phase 21 — single-tap callback driven by a UIKit
+    /// `UITapGestureRecognizer` attached directly to the engine's
+    /// container view with `cancelsTouchesInView = false`. This replaces
+    /// the prior SwiftUI `Color.clear.contentShape(Rectangle())
+    /// .simultaneousGesture(SpatialTapGesture(...))` overlay above the
+    /// navigator: on iOS 26 the overlay's hit-test region intercepted
+    /// horizontal pan touches too, the SwiftUI gesture system's
+    /// pending-recognition phase blocked Readium's WKWebView pan
+    /// recognizer, and the user could not swipe to the next page. The
+    /// UIKit recognizer only fires on a discrete tap; with
+    /// `cancelsTouchesInView = false` the pan stream still reaches the
+    /// engine and horizontal swipes turn pages again.
+    ///
+    /// `point` is in the container view's coordinate space.
+    public let onTap: (CGPoint) -> Void
     /// Mutable reference holder so the screen can reach the
     /// coordinator after the SwiftUI representable has installed it.
     /// Mirrors the `pdfViewRef` pattern from Phase 5.
@@ -44,16 +59,19 @@ public struct EPUBReaderView: UIViewControllerRepresentable {
     public init(
         viewModel: EPUBReaderViewModel,
         onSelectionChange: @escaping (Selection?) -> Void = { _ in },
+        onTap: @escaping (CGPoint) -> Void = { _ in },
         coordinatorRef: EPUBCoordinatorRef = EPUBCoordinatorRef()
     ) {
         self.viewModel = viewModel
         self.onSelectionChange = onSelectionChange
+        self.onTap = onTap
         self.coordinatorRef = coordinatorRef
     }
 
     public func makeCoordinator() -> EPUBNavigatorCoordinator {
         let c = EPUBNavigatorCoordinator(viewModel: viewModel)
         c.onSelectionChange = onSelectionChange
+        c.onTap = onTap
         coordinatorRef.coordinator = c
         return c
     }
@@ -62,7 +80,9 @@ public struct EPUBReaderView: UIViewControllerRepresentable {
         let container = UIViewController()
         container.view.backgroundColor = backgroundUIColor(viewModel.theme)
         context.coordinator.onSelectionChange = onSelectionChange
+        context.coordinator.onTap = onTap
         coordinatorRef.coordinator = context.coordinator
+        installContainerTapRecognizer(on: container.view, coordinator: context.coordinator)
         attachNavigatorIfReady(into: container, coordinator: context.coordinator)
         return container
     }
@@ -72,8 +92,33 @@ public struct EPUBReaderView: UIViewControllerRepresentable {
         // Refresh closure to track SwiftUI re-renders (the screen owns
         // state that the closure captures — pendingSelection bindings, etc).
         context.coordinator.onSelectionChange = onSelectionChange
+        context.coordinator.onTap = onTap
         coordinatorRef.coordinator = context.coordinator
         attachNavigatorIfReady(into: uiViewController, coordinator: context.coordinator)
+    }
+
+    /// Installs a single-tap `UITapGestureRecognizer` on the container
+    /// view. `cancelsTouchesInView = false` is the critical flag: every
+    /// touch is still delivered to the Readium WKWebView beneath so
+    /// horizontal pan drives page turns. The recognizer's delegate
+    /// returns `true` from
+    /// `gestureRecognizer(_:shouldRecognizeSimultaneouslyWith:)` so the
+    /// engine's pan recognizer is not blocked by recognition arbitration.
+    private func installContainerTapRecognizer(
+        on view: UIView,
+        coordinator: EPUBNavigatorCoordinator
+    ) {
+        let tap = UITapGestureRecognizer(
+            target: coordinator,
+            action: #selector(EPUBNavigatorCoordinator.handleContainerTap(_:))
+        )
+        tap.cancelsTouchesInView = false
+        tap.delaysTouchesBegan = false
+        tap.delaysTouchesEnded = false
+        tap.numberOfTapsRequired = 1
+        tap.numberOfTouchesRequired = 1
+        tap.delegate = coordinator
+        view.addGestureRecognizer(tap)
     }
 
     private func attachNavigatorIfReady(into container: UIViewController, coordinator: EPUBNavigatorCoordinator) {

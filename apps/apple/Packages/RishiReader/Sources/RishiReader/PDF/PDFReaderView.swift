@@ -27,19 +27,38 @@ public struct PDFReaderView: UIViewRepresentable {
     public let viewModel: PDFReaderViewModel
     public var onSelectionChange: (PDFSelection?) -> Void
     public var onPDFViewReady: (PDFView) -> Void
+    /// Phase 21 — single-tap callback driven by a UIKit
+    /// `UITapGestureRecognizer` attached directly to the `PDFView` with
+    /// `cancelsTouchesInView = false`. Replaces the SwiftUI
+    /// `Color.clear.contentShape(Rectangle()).simultaneousGesture(...)`
+    /// overlay that previously sat above the PDF; on iOS 26 that
+    /// overlay's hit-test region intercepted pan touches, blocking
+    /// PDFKit's `UIPageViewController` from receiving the swipe and
+    /// leaving the user unable to turn the page. The UIKit recognizer
+    /// only fires on a discrete tap; with `cancelsTouchesInView = false`
+    /// the pan stream still reaches PDFKit.
+    ///
+    /// `point` is in `PDFView`'s coordinate space.
+    public var onTap: (CGPoint) -> Void
 
     public init(
         viewModel: PDFReaderViewModel,
         onSelectionChange: @escaping (PDFSelection?) -> Void = { _ in },
-        onPDFViewReady: @escaping (PDFView) -> Void = { _ in }
+        onPDFViewReady: @escaping (PDFView) -> Void = { _ in },
+        onTap: @escaping (CGPoint) -> Void = { _ in }
     ) {
         self.viewModel = viewModel
         self.onSelectionChange = onSelectionChange
         self.onPDFViewReady = onPDFViewReady
+        self.onTap = onTap
     }
 
     public func makeCoordinator() -> Coordinator {
-        Coordinator(viewModel: viewModel, onSelectionChange: onSelectionChange)
+        Coordinator(
+            viewModel: viewModel,
+            onSelectionChange: onSelectionChange,
+            onTap: onTap
+        )
     }
 
     public func makeUIView(context: Context) -> PDFView {
@@ -65,6 +84,21 @@ public struct PDFReaderView: UIViewRepresentable {
             name: .PDFViewSelectionChanged,
             object: pdfView
         )
+        // Phase 21 — single-tap recognizer attached directly to the
+        // PDFView with `cancelsTouchesInView = false` so PDFKit's
+        // internal pan recognizer still receives the touch stream and
+        // drives horizontal paging.
+        let tap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleContainerTap(_:))
+        )
+        tap.cancelsTouchesInView = false
+        tap.delaysTouchesBegan = false
+        tap.delaysTouchesEnded = false
+        tap.numberOfTapsRequired = 1
+        tap.numberOfTouchesRequired = 1
+        tap.delegate = context.coordinator
+        pdfView.addGestureRecognizer(tap)
         // Hand the live PDFView up to the screen so it can build the
         // rect-mapping closure for the highlight overlay. Defer until the
         // next main-loop tick so the screen's @State is allowed to mutate.
@@ -77,6 +111,7 @@ public struct PDFReaderView: UIViewRepresentable {
         // Keep the coordinator's closure reference in sync with SwiftUI
         // state diffing — the parent may pass a new closure across re-renders.
         context.coordinator.onSelectionChange = onSelectionChange
+        context.coordinator.onTap = onTap
 
         // Wire the document (and re-wire when load() resolves).
         if uiView.document !== viewModel.document {
@@ -100,16 +135,19 @@ public struct PDFReaderView: UIViewRepresentable {
     }
 
     @MainActor
-    public final class Coordinator: NSObject, PDFViewDelegate {
+    public final class Coordinator: NSObject, PDFViewDelegate, UIGestureRecognizerDelegate {
         let viewModel: PDFReaderViewModel
         var onSelectionChange: (PDFSelection?) -> Void
+        var onTap: (CGPoint) -> Void
 
         init(
             viewModel: PDFReaderViewModel,
-            onSelectionChange: @escaping (PDFSelection?) -> Void
+            onSelectionChange: @escaping (PDFSelection?) -> Void,
+            onTap: @escaping (CGPoint) -> Void
         ) {
             self.viewModel = viewModel
             self.onSelectionChange = onSelectionChange
+            self.onTap = onTap
         }
 
         @objc func pdfViewPageChanged(_ note: Notification) {
@@ -126,6 +164,24 @@ public struct PDFReaderView: UIViewRepresentable {
             // screen treats "empty" as "no selection" via PDFSelectionCoordinator,
             // so forwarding `currentSelection` as-is keeps the boundary simple.
             onSelectionChange(pdfView.currentSelection)
+        }
+
+        @objc func handleContainerTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended,
+                  let view = recognizer.view else { return }
+            onTap(recognizer.location(in: view))
+        }
+
+        /// Allow the tap recognizer to coexist with PDFKit's internal
+        /// pan / tap / pinch recognizers. Without this, recognition
+        /// arbitration delays or cancels the PDFView's pan, which
+        /// reproduces the "can't swipe to next page" symptom users hit
+        /// before Phase 21.
+        public nonisolated func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
         }
     }
 }

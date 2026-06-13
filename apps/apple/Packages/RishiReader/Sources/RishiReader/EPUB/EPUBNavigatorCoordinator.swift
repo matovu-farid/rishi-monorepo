@@ -44,9 +44,26 @@ public final class EPUBNavigatorCoordinator: NSObject {
     /// menu owns the surface.
     public var onSelectionChange: (Selection?) -> Void = { _ in }
 
+    /// Phase 21 — fired by the container-level `UITapGestureRecognizer`
+    /// installed in ``EPUBReaderView``. The screen uses it to drive the
+    /// tap-region resolver (left edge -> previous, center -> chrome
+    /// toggle, right edge -> next). `point` is in the container view's
+    /// coordinate space.
+    public var onTap: (CGPoint) -> Void = { _ in }
+
     public init(viewModel: EPUBReaderViewModel) {
         self.viewModel = viewModel
         super.init()
+    }
+
+    /// Selector wired by
+    /// ``EPUBReaderView/installContainerTapRecognizer(on:coordinator:)``.
+    /// Forwards the tap location to ``onTap`` only when the recognizer
+    /// reports `.ended`.
+    @objc public func handleContainerTap(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended,
+              let view = recognizer.view else { return }
+        onTap(recognizer.location(in: view))
     }
 
     /// Re-applies the supplied highlights as Readium decorations in the
@@ -135,6 +152,22 @@ extension EPUBNavigatorCoordinator: EPUBNavigatorDelegate {
     public func navigator(_ navigator: SelectableNavigator, shouldShowMenuForSelection selection: Selection) -> Bool {
         onSelectionChange(selection)
         return false
+    }
+}
+
+extension EPUBNavigatorCoordinator: UIGestureRecognizerDelegate {
+
+    /// Allow the container-level `UITapGestureRecognizer` to coexist
+    /// with Readium's internal pan / tap / long-press recognizers.
+    /// Without this, UIKit's recognition arbitration may delay or cancel
+    /// the engine's pan recognizer while the tap is pending, which
+    /// reproduces the "can't swipe to next page" symptom users hit
+    /// before Phase 21.
+    public nonisolated func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        true
     }
 }
 #endif
