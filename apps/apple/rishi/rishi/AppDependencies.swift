@@ -387,13 +387,49 @@ final class AppDependencies {
         let apnsDeviceRegistrar = APNsDeviceRegistrar(workerClient: workerClient)
 
         // 10. Import coordinator.
+        //
+        // Phase 21 Plan 21-05 — wire a second consumer onto the existing
+        // onBookImported hook so that, in parallel with Phase 7's
+        // SYNC-01 markBookDirty enqueue, the format-specific persistent
+        // warm cache (PDFThumbnailCache page 0 / EPUBUnpackedCache
+        // unpacked tree) gets populated the moment the book lands on
+        // disk. The pre-warm runs fire-and-forget on
+        // `Task.detached(priority: .userInitiated)` so it never blocks
+        // the import flow or delays the LibraryViewModel.refresh()
+        // that the picker / drop surface fires right after.
+        //
+        // Cache instances are shared with the cold-open path via the
+        // EPUBPublicationLoader / PDFKit readers — both default to
+        // `<systemCaches>/EPUBUnpacked` and `<systemCaches>/PDFThumbnails`
+        // so the warm directories the prewarmer writes here are the
+        // exact directories the readers consult on the next open.
+        let pdfThumbnailCache = PDFThumbnailCache()
+        let epubUnpackedCache = EPUBUnpackedCache()
+        let bookPrewarmer = BookPrewarmer(
+            pdfCache: pdfThumbnailCache,
+            epubCache: epubUnpackedCache
+        )
         let importCoordinator = ImportCoordinator(
             storage: bookFileStorage,
             currentUserId: {
                 await authService.currentUser?.id
             },
-            onBookImported: { [syncEngine] bookId in
+            onBookImported: { [syncEngine, bookStore, bookFileStorage, bookPrewarmer] bookId in
+                // Phase 7 SYNC-01 — enqueue the upload. Preserve this
+                // call exactly: dropping it would silently regress sync.
                 await syncEngine.markBookDirty(bookId)
+                // Phase 21 Plan 21-05 — fire-and-forget pre-warm. We do
+                // NOT await the detached task; the import flow returns
+                // immediately and `LibraryViewModel.refresh()` runs
+                // unblocked. Failures inside `prewarm` are silent by
+                // contract — the cold-open path remains the fallback.
+                Task.detached(priority: .userInitiated) {
+                    guard let book = try? await bookStore.book(bookId),
+                          let book
+                    else { return }
+                    let url = await bookFileStorage.absoluteFileURL(for: book)
+                    await bookPrewarmer.prewarm(book: book, fileURL: url)
+                }
             }
         )
 
