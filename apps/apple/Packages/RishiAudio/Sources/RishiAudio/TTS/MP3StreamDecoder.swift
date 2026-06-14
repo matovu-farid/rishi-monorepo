@@ -45,10 +45,14 @@ public actor MP3StreamDecoder {
     private var pendingPassageId: String?
     private var finished = false
 
-    // Packet buffering between AudioFileStream_PacketsProc callback and the
-    // converter input callback.
-    private var pendingPackets: [Data] = []
-    private var pendingDescriptions: [AudioStreamPacketDescription] = []
+    // Compressed MP3 packet batches awaiting decode. One entry per
+    // AudioFileStream packets callback; the bytes and their batch-relative
+    // packet descriptions are kept together so the descriptions' mStartOffset
+    // values stay aligned with the bytes when we build the per-batch
+    // AVAudioCompressedBuffer at drain time. Concatenating blobs from different
+    // callbacks into one buffer (the previous design) desynced offsets and
+    // truncated playback to the first output buffer.
+    private var batches: [(bytes: Data, descs: [AudioStreamPacketDescription])] = []
 
     public init(targetFormat: AVAudioFormat) throws {
         self.targetFormat = targetFormat
@@ -87,7 +91,7 @@ public actor MP3StreamDecoder {
     /// close the output stream after the last PCMChunk yields.
     public func finish() {
         finished = true
-        flushPendingPackets(isFinal: true)
+        drain(isFinal: true)
         continuation.finish()
     }
 
@@ -153,93 +157,140 @@ public actor MP3StreamDecoder {
     }
 
     fileprivate func handlePackets(bytes: Data, descriptions: [AudioStreamPacketDescription]) {
-        pendingPackets.append(bytes)
-        pendingDescriptions.append(contentsOf: descriptions)
-        flushPendingPackets(isFinal: false)
+        guard !bytes.isEmpty, !descriptions.isEmpty else { return }
+        batches.append((bytes, descriptions))
+        drain(isFinal: false)
     }
 
-    private func flushPendingPackets(isFinal: Bool) {
+    /// Decode every queued compressed batch into PCM, in order, yielding ALL
+    /// produced buffers (not just the first). The previous design capped output
+    /// at a single ~200ms buffer per batch and dropped the remainder, which on
+    /// device played "the first word" then stopped.
+    private func drain(isFinal: Bool) {
         guard let converter, let sourceFormat else {
+            // Format/converter not ready yet (the DataFormat property callback
+            // can land after the first packets callback via the actor Task
+            // hops). Leave the batches queued; a later drain processes them in
+            // order. On a final drain with no converter there is nothing to do.
             if isFinal { emitFinalEmpty() }
             return
         }
-        guard !pendingPackets.isEmpty || isFinal else { return }
-        let totalBytes = pendingPackets.reduce(0) { $0 + $1.count }
-        guard totalBytes > 0 else {
+
+        // Build one AVAudioCompressedBuffer per queued batch. Each batch's
+        // packet descriptions are relative to that batch's own bytes, so a
+        // dedicated buffer per batch keeps mStartOffset aligned. Drop any batch
+        // we cannot describe (guards the "bytes provided but 0 packet
+        // descriptions" converter error seen on device).
+        var queue: [AVAudioCompressedBuffer] = []
+        queue.reserveCapacity(batches.count)
+        for batch in batches {
+            if let compressed = makeCompressedBuffer(batch: batch, sourceFormat: sourceFormat) {
+                queue.append(compressed)
+            }
+        }
+        batches.removeAll(keepingCapacity: true)
+
+        guard !queue.isEmpty else {
             if isFinal { emitFinalEmpty() }
             return
         }
-        // Size the buffer so that byteCapacity (= packetCapacity *
-        // maximumPacketSize) ALWAYS covers totalBytes. Deriving the capacity
-        // purely from the descriptions' count*maxPacketSize can under-allocate
-        // (descriptions and the actually-copied bytes can desync), which makes
-        // `compressed.byteLength = totalBytes` below trip the AVFoundation
-        // assertion `length <= _imp->_byteCapacity` and crash the app. See
-        // CompressedBufferSizing for the guaranteed-safe sizing.
+
+        // Pull-convert loop: the converter calls the input block as needed; we
+        // vend queued compressed buffers in order, then signal end-of-input.
+        // We keep filling fresh PCM buffers until the converter has consumed all
+        // queued input (.inputRanDry) or, when final, flushed (.endOfStream).
+        // Box the cursor so the @Sendable input block can advance it; the actor
+        // serialises access and the block runs synchronously inside convert().
+        final class InputCursor: @unchecked Sendable {
+            var index = 0
+            let buffers: [AVAudioCompressedBuffer]
+            let isFinal: Bool
+            init(_ buffers: [AVAudioCompressedBuffer], isFinal: Bool) {
+                self.buffers = buffers
+                self.isFinal = isFinal
+            }
+        }
+        let cursor = InputCursor(queue, isFinal: isFinal)
+
+        let outputCapacity = AVAudioFrameCount(Double(targetFormat.sampleRate) * 0.5) // 0.5s per pull
+        while true {
+            guard let pcm = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outputCapacity) else { break }
+            var error: NSError?
+            let status = converter.convert(to: pcm, error: &error) { _, outStatus in
+                if cursor.index < cursor.buffers.count {
+                    let next = cursor.buffers[cursor.index]
+                    cursor.index += 1
+                    outStatus.pointee = .haveData
+                    return next
+                }
+                outStatus.pointee = cursor.isFinal ? .endOfStream : .noDataNow
+                return nil
+            }
+
+            if status == .error {
+                Log.event("tts.decoder.convert_error", level: .error, data: [
+                    "error": error?.localizedDescription ?? "unknown",
+                ])
+                break
+            }
+
+            if pcm.frameLength > 0 {
+                continuation.yield(PCMChunk(buffer: pcm, passageId: pendingPassageId, isFinal: false))
+            }
+
+            // .haveData means more output may remain for the same input — keep
+            // pulling. Any other status (.inputRanDry / .endOfStream) means the
+            // queued input is exhausted; stop. Guard against a no-progress spin.
+            if status != .haveData { break }
+            if pcm.frameLength == 0 && cursor.index >= cursor.buffers.count { break }
+        }
+
+        if isFinal { emitFinalEmpty() }
+    }
+
+    /// Build a compressed buffer for a single parser batch, or nil if it cannot
+    /// be safely described (no bytes, no descriptions, or the source format does
+    /// not expose packet descriptions for this VBR stream).
+    private func makeCompressedBuffer(
+        batch: (bytes: Data, descs: [AudioStreamPacketDescription]),
+        sourceFormat: AVAudioFormat
+    ) -> AVAudioCompressedBuffer? {
+        let totalBytes = batch.bytes.count
+        guard totalBytes > 0, !batch.descs.isEmpty else { return nil }
+
+        // Size so byteCapacity (= packetCapacity * maximumPacketSize) always
+        // covers totalBytes; setting byteLength beyond capacity trips an
+        // AVFoundation assertion and crashes. See CompressedBufferSizing.
         guard let sizing = CompressedBufferSizing.make(
-            packetCount: pendingDescriptions.count,
-            packetSizes: pendingDescriptions.map(\.mDataByteSize),
+            packetCount: batch.descs.count,
+            packetSizes: batch.descs.map(\.mDataByteSize),
             totalBytes: totalBytes
-        ) else {
-            if isFinal { emitFinalEmpty() }
-            return
-        }
+        ) else { return nil }
+
         let compressed = AVAudioCompressedBuffer(
             format: sourceFormat,
             packetCapacity: sizing.packetCapacity,
             maximumPacketSize: sizing.maximumPacketSize
         )
 
-        var offset = 0
         let dst = compressed.data.bindMemory(to: UInt8.self, capacity: totalBytes)
-        for chunk in pendingPackets {
-            chunk.withUnsafeBytes { raw in
-                guard let base = raw.baseAddress else { return }
-                memcpy(dst.advanced(by: offset), base, chunk.count)
-            }
-            offset += chunk.count
+        batch.bytes.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            memcpy(dst, base, totalBytes)
         }
         compressed.byteLength = UInt32(totalBytes)
-        compressed.packetCount = AVAudioPacketCount(pendingDescriptions.count)
-        compressed.packetDescriptions?.update(from: pendingDescriptions, count: pendingDescriptions.count)
+        compressed.packetCount = AVAudioPacketCount(batch.descs.count)
 
-        pendingPackets.removeAll(keepingCapacity: true)
-        pendingDescriptions.removeAll(keepingCapacity: true)
-
-        // Convert compressed → PCM via the pull callback API.
-        let outputCapacity = AVAudioFrameCount(Double(targetFormat.sampleRate) * 0.2) // up to 200ms
-        guard let pcm = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outputCapacity) else { return }
-        var error: NSError?
-        // Box the one-shot flag + the compressed buffer so the @Sendable
-        // converter callback can mutate them without sending-region errors.
-        // The actor serialises access; the callback runs synchronously inside
-        // converter.convert(to:error:withInputFrom:).
-        final class ConvertCarrier: @unchecked Sendable {
-            var done = false
-            let compressed: AVAudioCompressedBuffer
-            init(_ buf: AVAudioCompressedBuffer) { self.compressed = buf }
+        guard let packetDescriptions = compressed.packetDescriptions else {
+            // VBR MP3 requires per-packet descriptions; without them the
+            // converter rejects the input ("bytes provided but packet
+            // descriptions (0) only account for 0 bytes"). Drop rather than feed
+            // a buffer that would stall the converter.
+            Log.event("tts.decoder.no_packet_descriptions", level: .error, data: [:])
+            return nil
         }
-        let carrier = ConvertCarrier(compressed)
-        let status = converter.convert(to: pcm, error: &error) { _, outStatus in
-            if carrier.done {
-                outStatus.pointee = .endOfStream
-                return nil
-            }
-            carrier.done = true
-            outStatus.pointee = .haveData
-            return carrier.compressed
-        }
-        if status == .error {
-            Log.event("tts.decoder.convert_error", level: .error, data: [
-                "error": error?.localizedDescription ?? "unknown",
-            ])
-            return
-        }
-        if pcm.frameLength > 0 {
-            continuation.yield(PCMChunk(buffer: pcm, passageId: pendingPassageId, isFinal: isFinal))
-        } else if isFinal {
-            emitFinalEmpty()
-        }
+        packetDescriptions.update(from: batch.descs, count: batch.descs.count)
+        return compressed
     }
 
     private func emitFinalEmpty() {
