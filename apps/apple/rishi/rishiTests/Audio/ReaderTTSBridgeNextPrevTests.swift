@@ -64,6 +64,24 @@ struct ReaderTTSBridgeNextPrevTests {
         #expect(startIds(env.engine) == ["0", "1"])
     }
 
+    @Test("next() switches passages without a full engine stop (keeps the audio session)")
+    func nextDoesNotStopEngine() async {
+        let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .holds) })
+        await env.bridge.start(paragraphs: ["a", "b", "c"])
+        await waitUntil(timeout: 2) { startIds(env.engine) == ["0"] }
+
+        let stopsBefore = env.engine.calls.filter { $0 == .stop }.count
+        await env.bridge.next()
+        await waitUntil(timeout: 2) { startIds(env.engine).last == "1" }
+        let stopsAfter = env.engine.calls.filter { $0 == .stop }.count
+
+        // A full engine stop releases the audio session; re-acquiring it
+        // immediately for the next passage loses the route and plays silently on
+        // device. The switch must rely on start()'s single-session teardown.
+        #expect(stopsAfter == stopsBefore, "next() issued a full engine stop (churns the audio session)")
+        await env.bridge.stop()
+    }
+
     @Test("repeatCurrent() replays the current paragraph from its start")
     func repeatCurrentReplays() async {
         let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .holds) })

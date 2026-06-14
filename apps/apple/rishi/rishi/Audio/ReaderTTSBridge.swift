@@ -229,7 +229,11 @@ final class ReaderTTSBridge {
         advanceTask?.cancel()
         advanceTask = nil
         await prewarmer.cancelAll()
-        await engine.stop()
+        // Do NOT call engine.stop() here: a full stop releases the audio session,
+        // and re-acquiring it immediately for the new passage loses the route on
+        // device (plays silently). engine.start() in playCurrent() is
+        // single-session — it halts the current passage's playback itself while
+        // keeping the session active.
         currentIndex = index
         startAdvanceWatcher()
         await playCurrent()

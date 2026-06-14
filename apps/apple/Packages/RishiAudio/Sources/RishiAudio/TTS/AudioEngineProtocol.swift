@@ -156,6 +156,30 @@ public final class AVAudioEngineAdapter: AudioEngineProtocol, @unchecked Sendabl
     public func pause() {
         lock.withLock { playerNode.pause() }
     }
+
+    // MARK: - Test seam (offline manual rendering)
+    //
+    // The real adapter owns a real-time AVAudioEngine, so audio output can't be
+    // observed in a unit test without hardware. These helpers put the SAME
+    // engine into offline manual-rendering mode so a test can pull rendered
+    // frames and assert the playerNode actually produces audio — including after
+    // a mid-stream stop() (the next/prev path that auto-advance never hits).
+
+    func enableOfflineRendering(format: AVAudioFormat, maximumFrameCount: AVAudioFrameCount) throws {
+        try lock.withLock {
+            try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: maximumFrameCount)
+        }
+    }
+
+    func renderOffline(_ frameCount: AVAudioFrameCount, to buffer: AVAudioPCMBuffer) throws -> AVAudioEngineManualRenderingStatus {
+        try lock.withLock {
+            try engine.renderOffline(frameCount, to: buffer)
+        }
+    }
+
+    var manualRenderingFormat: AVAudioFormat {
+        lock.withLock { engine.manualRenderingFormat }
+    }
 }
 
 #endif
