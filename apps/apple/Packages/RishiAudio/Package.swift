@@ -33,6 +33,9 @@ let package = Package(
                 "RishiCore",
                 "RishiAPI",
                 .product(name: "RishiTesting", package: "RishiTesting"),
+            ],
+            resources: [
+                .copy("Fixtures"),
             ]
         ),
     ]
