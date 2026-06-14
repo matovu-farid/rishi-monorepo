@@ -31,6 +31,83 @@ public nonisolated enum ParagraphChunker {
 
     public nonisolated static let maxParagraphChars = 4096
 
+    /// Short-paragraph threshold (trimmed character count) for the
+    /// indexing-side positional header heuristic. Matches
+    /// `MIN_PARAGRAPH_LENGTH = 50` at
+    /// apps/rishi-electron/src/renderer/src/components/pdf/utils/getPageParagraphs.ts:15.
+    public nonisolated static let minBodyChars = 50
+
+    /// Indexing-side variant of `chunk(_:maxChars:)` that, in addition to
+    /// greedy paragraph packing under `maxChars`, applies the electron
+    /// positional short-paragraph heuristic to fold suspected running
+    /// headers / chapter titles into the body that follows:
+    ///
+    ///   1. Drop the FIRST paragraph if its trimmed length is `< shortThreshold`
+    ///      (suspected running header).
+    ///   2. For every other paragraph whose trimmed length is
+    ///      `< shortThreshold`, merge it into the preceding emitted
+    ///      paragraph with a single `\n` separator.
+    ///   3. Then return the greedy-packed result under `maxChars`.
+    ///
+    /// Note: the merge step concatenates a short tail (`< shortThreshold`
+    /// chars) onto the preceding chunk, so post-merge chunks may exceed
+    /// `maxChars` by up to `shortThreshold - 1` chars. Callers that need
+    /// byte-stable boundaries (TTS / Phase 22 sha256 cache / Phase 24
+    /// paragraph audio cache) MUST keep using `chunk(_:maxChars:)`.
+    ///
+    /// Today this is consumed by `RishiSearch.IndexBuilder` on the oversize
+    /// branch only — per-paragraph rows that already fit under the embed
+    /// cap bypass this method. A future phase will move the heuristic
+    /// upstream to the PDF/EPUB import pipeline where it can drop title
+    /// rows wholesale.
+    public nonisolated static func chunkForIndexing(
+        _ text: String,
+        shortThreshold: Int = minBodyChars,
+        maxChars: Int = maxParagraphChars
+    ) -> [String] {
+        let packed = chunk(text, maxChars: maxChars)
+        return mergeShortParagraphs(packed, minChars: shortThreshold)
+    }
+
+    /// Mirror of the electron `getPageParagraphs.ts:188-219` filter:
+    ///   - first paragraph with trimmed length `< minChars` is DROPPED
+    ///     (suspected header — `filter((p, i) => i !== 0 || p.text.trim().length > MIN`).
+    ///   - subsequent paragraphs with trimmed length `< minChars` are
+    ///     popped + merged into the preceding emitted paragraph with a
+    ///     single newline (`reduce` fallback).
+    ///   - if a short paragraph appears before any body has been emitted,
+    ///     it is appended as-is so we do not silently lose text (electron's
+    ///     `if (!lastParagraph) acc.push(paragraph)` fallback).
+    nonisolated private static func mergeShortParagraphs(
+        _ paragraphs: [String],
+        minChars: Int
+    ) -> [String] {
+        guard !paragraphs.isEmpty else { return paragraphs }
+        var out: [String] = []
+        for (i, p) in paragraphs.enumerated() {
+            let trimmedCount = p
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .count
+            if i == 0 && trimmedCount < minChars {
+                // Drop leading short paragraph (suspected header).
+                continue
+            }
+            if trimmedCount < minChars {
+                if let last = out.popLast() {
+                    out.append(last + "\n" + p)
+                } else {
+                    // No prior body yet — keep so we don't lose text.
+                    // Mirrors electron reducer fallback at
+                    // getPageParagraphs.ts:206-208.
+                    out.append(p)
+                }
+            } else {
+                out.append(p)
+            }
+        }
+        return out
+    }
+
     public nonisolated static func chunk(_ text: String, maxChars: Int = maxParagraphChars) -> [String] {
         guard !text.isEmpty else { return [] }
 

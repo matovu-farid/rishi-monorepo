@@ -9,9 +9,11 @@ import RishiLogging
 /// in Plan 25-11. Inputs are already paragraph-extracted from the source
 /// asset (PDF page text, EPUB resource text) — this builder owns:
 ///
-///   1. Optional subdivision of oversized paragraphs at sentence boundaries
-///      for embedding only (MiniLM truncates at ~256 wordpieces ≈ 1000 chars
-///      — closes RESEARCH OQ-5/OQ-7).
+///   1. Optional greedy sentence packing of oversized paragraphs via
+///      `ParagraphChunker.chunk(_:maxChars:)` for embedding only (MiniLM
+///      truncates at ~256 wordpieces ≈ 1000 chars — closes RESEARCH
+///      OQ-5/OQ-7). The packer accumulates sentences under the cap rather
+///      than embedding one sentence at a time (Plan 26-01).
 ///   2. Calling `BookEmbedder.embed(_:)` for each (sub)chunk.
 ///   3. Adding each vector under the parent paragraph's `chunk_id` so the
 ///      Responder's tool result returns the FULL paragraph text, not a
@@ -30,11 +32,13 @@ public actor IndexBuilder {
     private let embedder: any BookEmbedder
     private let progress: @Sendable (UUID, BookSearchStatus) async -> Void
 
-    /// Paragraphs longer than this get subdivided at sentence boundaries
+    /// Paragraphs longer than this get greedy-packed at sentence boundaries
     /// BEFORE embedding — MiniLM's 64-wordpiece input window can't fit the
     /// tail of a longer paragraph, so the embedding would silently drop it.
     /// Full paragraph text is still what's stored in chunks.db and returned
-    /// to the LLM.
+    /// to the LLM. Sub-chunks are produced via
+    /// `ParagraphChunker.chunk(_:maxChars:)`, which packs sentences under
+    /// the cap rather than emitting one per sentence (Plan 26-01).
     private let maxEmbedChars: Int = 1000
 
     /// Embedding batch granularity — mirrors the Electron analog
@@ -105,10 +109,22 @@ public actor IndexBuilder {
                     let chunkId = nextChunkId
                     nextChunkId += 1
 
+                    // Per Plan 26-02: route oversize paragraphs through
+                    // `chunkForIndexing`, which adds the electron positional
+                    // short-paragraph heuristic on top of greedy sentence
+                    // packing. The heuristic only fires within the oversize
+                    // payload (multi-sub-paragraph after `chunk(_:maxChars:)`).
+                    // Per-paragraph rows whose `.count <= maxEmbedChars` are
+                    // passed through verbatim — moving the header drop to the
+                    // upstream import call site is a future-phase concern,
+                    // documented in the doc comment on `chunkForIndexing`.
                     let embedInputs: [String]
                     if para.text.count > maxEmbedChars {
-                        let sentences = SentenceSplitter.split(para.text)
-                        embedInputs = sentences.isEmpty ? [para.text] : sentences
+                        let packed = ParagraphChunker.chunkForIndexing(
+                            para.text,
+                            maxChars: maxEmbedChars
+                        )
+                        embedInputs = packed.isEmpty ? [para.text] : packed
                     } else {
                         embedInputs = [para.text]
                     }

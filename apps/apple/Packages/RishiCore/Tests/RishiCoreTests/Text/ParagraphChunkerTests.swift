@@ -132,6 +132,20 @@ struct ParagraphChunkerTests {
     }
 
     @Test
+    func chunk_semantics_unchanged_assertion() {
+        // Pin: the existing `chunk(_:maxChars:)` keeps short paragraphs in
+        // place. Plan 26-02 must NOT alter this behaviour — the indexing-side
+        // header drop is opt-in via `chunkForIndexing`.
+        #expect(
+            ParagraphChunker.chunk(
+                "Chapter 1\n\nBody paragraph well past fifty characters of body text content."
+            )
+            ==
+            ["Chapter 1", "Body paragraph well past fifty characters of body text content."]
+        )
+    }
+
+    @Test
     func single_long_sentence_hard_word_splits_under_cap() {
         // A 5000-char "sentence" with no period - must fall through to word-boundary
         // hard split and produce chunks under maxChars=4096 without mid-word splitting.
@@ -150,6 +164,141 @@ struct ParagraphChunkerTests {
             for fragment in chunk.split(separator: " ") {
                 #expect(fragment == "wordtoken", "mid-word split detected: '\(fragment)'")
             }
+        }
+    }
+}
+
+// MARK: - Plan 26-02: chunkForIndexing
+
+/// Tests for the indexing-side positional short-paragraph heuristic ported
+/// from electron `getPageParagraphs.ts:188-219`.
+///
+/// Contract:
+///   1. Drop the first paragraph if its trimmed length is `< minBodyChars`
+///      (suspected running header / chapter title).
+///   2. For every other paragraph whose trimmed length is `< minBodyChars`,
+///      merge it into the preceding emitted paragraph with a single `\n`
+///      separator.
+///   3. Long paragraphs pass through unchanged.
+///
+/// Threshold is exclusive (matches plan `< minChars`). Custom `shortThreshold`
+/// must be respected.
+@Suite("ParagraphChunker.chunkForIndexing")
+struct ParagraphChunkerForIndexingTests {
+
+    /// Body string comfortably above the 50-char minimum.
+    private static let longBody =
+        "First body paragraph that is comfortably above the 50-character minimum threshold for body text."
+    private static let secondBody =
+        "Second body paragraph that is also clearly above the fifty character minimum body threshold."
+
+    @Test
+    func leading_short_paragraph_dropped() {
+        let input = "Chapter 1\n\n" + Self.longBody
+        let out = ParagraphChunker.chunkForIndexing(input)
+        #expect(out == [Self.longBody])
+    }
+
+    @Test
+    func leading_long_paragraph_kept() {
+        let leading =
+            "A long opening paragraph well past fifty characters that is definitely body text."
+        let input = leading + "\n\n" + Self.secondBody
+        let out = ParagraphChunker.chunkForIndexing(input)
+        #expect(out == [leading, Self.secondBody])
+    }
+
+    @Test
+    func midstream_short_paragraph_merged_backward() {
+        let body1 =
+            "Body one is long enough to be a body paragraph by length, comfortably."
+        let body2 = "Body two is also long enough to count as body text content here."
+        let input = body1 + "\n\nPart Two\n\n" + body2
+        let out = ParagraphChunker.chunkForIndexing(input)
+        #expect(out.count == 2)
+        #expect(out[0].contains("Part Two"))
+        #expect(out[0].hasPrefix(body1))
+        #expect(out[1] == body2)
+    }
+
+    @Test
+    func short_sentence_like_paragraph_merged() {
+        let body =
+            "A body paragraph comfortably past the fifty-character minimum threshold."
+        let input = body + "\n\nDone."
+        let out = ParagraphChunker.chunkForIndexing(input)
+        #expect(out.count == 1)
+        #expect(out[0].contains("Done."))
+        #expect(out[0].hasPrefix(body))
+    }
+
+    @Test
+    func all_short_paragraphs_handled_gracefully() {
+        // Fake table of contents. First entry is dropped. Remaining short
+        // paragraphs accumulate via the popLast/append fallback in
+        // `mergeShortParagraphs`.
+        let input = "Chapter 1\n\nChapter 2\n\nChapter 3"
+        let out = ParagraphChunker.chunkForIndexing(input)
+        #expect(out.allSatisfy { !$0.isEmpty })
+    }
+
+    @Test
+    func long_paragraphs_untouched() {
+        let p1 =
+            "Paragraph one that is comfortably above the fifty character minimum threshold."
+        let p2 =
+            "Paragraph two that is also comfortably above the fifty character minimum threshold."
+        let p3 =
+            "Paragraph three is also long enough to clearly count as actual body text content."
+        let input = p1 + "\n\n" + p2 + "\n\n" + p3
+        let out = ParagraphChunker.chunkForIndexing(input)
+        #expect(out == [p1, p2, p3])
+    }
+
+    @Test
+    func custom_shortThreshold_respected() {
+        // With threshold = 10, a 20-char header is kept because 20 >= 10.
+        let header = "Short header twenty."
+        #expect(header.count == 20)
+        let input = header + "\n\n" + Self.longBody
+        let out = ParagraphChunker.chunkForIndexing(input, shortThreshold: 10)
+        #expect(out == [header, Self.longBody])
+    }
+
+    @Test
+    func empty_input_returns_empty() {
+        #expect(ParagraphChunker.chunkForIndexing("") == [])
+    }
+
+    @Test
+    func maxChars_still_respected() {
+        // Multi-paragraph input: tiny header (<50 chars, dropped) + giant
+        // body (> maxChars, must be subdivided via greedy packing). After
+        // the merge pass, every chunk should respect maxChars within the
+        // documented tolerance of `+ shortThreshold` (the merge step can
+        // grow a chunk by concatenating a short tail).
+        let sentence = "This is a coherent sentence with twenty-plus characters. "
+        var giantBody = ""
+        while giantBody.count < 800 {
+            giantBody += sentence
+        }
+        let input = "Chapter 1\n\n" + giantBody + "\n\nDone."
+        let maxChars = 200
+        let shortThreshold = ParagraphChunker.minBodyChars
+        let out = ParagraphChunker.chunkForIndexing(
+            input,
+            shortThreshold: shortThreshold,
+            maxChars: maxChars
+        )
+        // Header dropped, body subdivided into multiple sub-chunks, trailing
+        // "Done." merged into last sub-chunk. Every chunk respects the
+        // documented relaxation: `<= maxChars + shortThreshold`.
+        #expect(!out.isEmpty)
+        for chunk in out {
+            #expect(
+                chunk.count <= maxChars + shortThreshold,
+                "chunk exceeded maxChars + shortThreshold relaxation: \(chunk.count)"
+            )
         }
     }
 }
