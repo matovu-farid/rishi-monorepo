@@ -85,8 +85,46 @@ const env = {
   SENTRY_DSN: "",
 } as unknown as Record<string, unknown>
 
-async function callClientSecrets(query: string = "") {
-  const url = `http://test.local/api/realtime/client_secrets${query}`
+interface ClientSecretsRequestBody {
+  language?: string
+  bookId?: string
+  currentPage?: number
+  pageText?: string
+  outline?: {
+    title: string
+    author?: string
+    chapters: string[]
+  }
+  activeParagraphText?: string
+}
+
+async function callClientSecretsPOST(body?: ClientSecretsRequestBody) {
+  const url = `http://test.local/api/realtime/client_secrets`
+  const init: RequestInit =
+    body === undefined
+      ? { method: "POST" }
+      : {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }
+  const req = new Request(url, init)
+  return app.fetch(
+    req,
+    env,
+    {
+      waitUntil: (_p: Promise<unknown>) => {
+        /* no-op */
+      },
+      passThroughOnException: () => {
+        /* no-op */
+      },
+    } as unknown as ExecutionContext,
+  )
+}
+
+async function callClientSecretsGET() {
+  const url = `http://test.local/api/realtime/client_secrets`
   const req = new Request(url, { method: "GET" })
   return app.fetch(
     req,
@@ -133,30 +171,34 @@ describe("buildRealtimeClientSecretsBody", () => {
   ] as const
 
   it("includes a non-empty transcription.model whenever transcription is set", () => {
-    const body = buildRealtimeClientSecretsBody("en")
+    const body = buildRealtimeClientSecretsBody({ language: "en" })
     const transcription = body.session.audio?.input?.transcription
     expect(transcription, "transcription block must be present").toBeDefined()
     expect(transcription?.model, "transcription.model is required by OpenAI").toBeTruthy()
   })
 
   it("uses a transcription.model OpenAI's realtime API accepts", () => {
-    const body = buildRealtimeClientSecretsBody("en")
+    const body = buildRealtimeClientSecretsBody({ language: "en" })
     expect(ALLOWED_TRANSCRIPTION_MODELS).toContain(body.session.audio.input.transcription.model)
   })
 
   it("propagates the language hint into transcription.language", () => {
-    expect(buildRealtimeClientSecretsBody("fr").session.audio.input.transcription.language).toBe("fr")
-    expect(buildRealtimeClientSecretsBody("ja").session.audio.input.transcription.language).toBe("ja")
+    expect(
+      buildRealtimeClientSecretsBody({ language: "fr" }).session.audio.input.transcription.language,
+    ).toBe("fr")
+    expect(
+      buildRealtimeClientSecretsBody({ language: "ja" }).session.audio.input.transcription.language,
+    ).toBe("ja")
   })
 
   it("uses session.type='realtime' and a known realtime model", () => {
-    const body = buildRealtimeClientSecretsBody("en")
+    const body = buildRealtimeClientSecretsBody({ language: "en" })
     expect(body.session.type).toBe("realtime")
     expect(body.session.model).toBe("gpt-realtime")
   })
 
   it("requests expires_after anchored at created_at with a sensible TTL", () => {
-    const body = buildRealtimeClientSecretsBody("en")
+    const body = buildRealtimeClientSecretsBody({ language: "en" })
     expect(body.expires_after.anchor).toBe("created_at")
     expect(body.expires_after.seconds).toBeGreaterThanOrEqual(10)
     expect(body.expires_after.seconds).toBeLessThanOrEqual(7200)
@@ -164,32 +206,28 @@ describe("buildRealtimeClientSecretsBody", () => {
 })
 
 /**
- * Handler-level tests for GET /api/realtime/client_secrets — Phase 17-05 (Gap 8).
+ * Handler-level tests for POST /api/realtime/client_secrets — Phase 25-06.
  *
- * iOS RishiAPI/Endpoints/RealtimeAPI.swift defines:
+ * Migration from GET to POST is atomic with iOS Plan 25-08. The worker now
+ * accepts a JSON body carrying optional book-context fields and bakes a
+ * book-aware system prompt + the bookContext tool spec into the upstream
+ * OpenAI request.
+ *
+ * iOS contract (response shape) is UNCHANGED:
  *
  *   public struct ClientSecretResponse: Decodable, Sendable, Equatable {
  *     public let clientSecret: String   // "client_secret"
  *     public let sessionId: String      // "session_id"
  *   }
- *
- * The worker previously returned `{client_secret: {value: <jwt>}}` which fails
- * to decode on iOS (clientSecret expects String, gets Object). This suite locks
- * the iOS-shape projection: flat `{client_secret: <string>, session_id: <string>}`.
- *
- * OpenAI's POST /v1/realtime/client_secrets returns a richer payload with a
- * top-level `id` (session id), `value` (JWT secret), and `expires_at`. The
- * worker reads `id` as `session_id`; if OpenAI omits it (defensive), the worker
- * synthesises a `local_<uuid>` for traceability.
  */
-describe("GET /api/realtime/client_secrets handler", () => {
+describe("POST /api/realtime/client_secrets handler", () => {
   it("projects OpenAI {value,expires_at,id} into flat iOS {client_secret,session_id}", async () => {
     setOpenAISuccess({
       value: "sec_abc123",
       expires_at: 1700000000,
       id: "sess_xyz",
     })
-    const res = await callClientSecrets()
+    const res = await callClientSecretsPOST({ language: "en" })
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       client_secret: unknown
@@ -208,7 +246,7 @@ describe("GET /api/realtime/client_secrets handler", () => {
       expires_at: 1700000000,
       // no `id` field — defensive path
     })
-    const res = await callClientSecrets()
+    const res = await callClientSecretsPOST({ language: "en" })
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       client_secret: unknown
@@ -217,8 +255,6 @@ describe("GET /api/realtime/client_secrets handler", () => {
     expect(body.client_secret).toBe("sec_abc")
     expect(typeof body.session_id).toBe("string")
     expect((body.session_id as string).length).toBeGreaterThan(0)
-    // Local fallback is prefixed with `local_` so logs can distinguish a
-    // synthesised id from a real OpenAI session id.
     expect(body.session_id as string).toMatch(/^local_/)
   })
 
@@ -227,7 +263,7 @@ describe("GET /api/realtime/client_secrets handler", () => {
       message: "Request failed with status code 401",
       response: { status: 401, data: { error: "invalid_api_key" } },
     })
-    const res = await callClientSecrets()
+    const res = await callClientSecretsPOST({ language: "en" })
     expect(res.status).toBe(500)
     const body = (await res.json()) as {
       error: string
@@ -238,20 +274,77 @@ describe("GET /api/realtime/client_secrets handler", () => {
     expect(body.detail.upstreamBody).toEqual({ error: "invalid_api_key" })
   })
 
-  it("forwards ?language=es into the OpenAI request body", async () => {
+  it("forwards body language into the OpenAI request transcription block", async () => {
     setOpenAISuccess({
       value: "sec_abc",
       expires_at: 1700000000,
       id: "sess_lang",
     })
-    const res = await callClientSecrets("?language=es")
+    const res = await callClientSecretsPOST({ language: "es" })
     expect(res.status).toBe(200)
-    // Regression: the language hint must reach OpenAI via
-    // buildRealtimeClientSecretsBody — otherwise the realtime session won't
-    // be locale-tuned for the user.
-    const capturedBody = openaiCaptured.body as ReturnType<
-      typeof buildRealtimeClientSecretsBody
-    >
+    const capturedBody = openaiCaptured.body as ReturnType<typeof buildRealtimeClientSecretsBody>
     expect(capturedBody.session.audio.input.transcription.language).toBe("es")
+  })
+
+  // ─── New Phase 25-06 payload-shape gates ──────────────────────────────────
+
+  it("bakes the bookContext tool spec into session.tools", async () => {
+    setOpenAISuccess({ value: "s", expires_at: 1, id: "sid" })
+    await callClientSecretsPOST({ language: "en" })
+    const capturedBody = openaiCaptured.body as ReturnType<typeof buildRealtimeClientSecretsBody>
+    expect(Array.isArray(capturedBody.session.tools)).toBe(true)
+    expect(capturedBody.session.tools.length).toBeGreaterThanOrEqual(1)
+    expect(capturedBody.session.tools[0].name).toBe("bookContext")
+    expect(capturedBody.session.tools[0].type).toBe("function")
+  })
+
+  it("pins the bookContext tool's required parameters to ['queryText']", async () => {
+    setOpenAISuccess({ value: "s", expires_at: 1, id: "sid" })
+    await callClientSecretsPOST({ language: "en" })
+    const capturedBody = openaiCaptured.body as ReturnType<typeof buildRealtimeClientSecretsBody>
+    expect(capturedBody.session.tools[0].parameters.required).toEqual(["queryText"])
+  })
+
+  it("renders book-aware instructions when outline + pageText provided", async () => {
+    setOpenAISuccess({ value: "s", expires_at: 1, id: "sid" })
+    await callClientSecretsPOST({
+      language: "en",
+      outline: { title: "Moby Dick", chapters: ["Loomings"] },
+      pageText: "Call me Ishmael.",
+    })
+    const capturedBody = openaiCaptured.body as ReturnType<typeof buildRealtimeClientSecretsBody>
+    const instructions = capturedBody.session.instructions
+    expect(typeof instructions).toBe("string")
+    expect(instructions).toContain("Moby Dick")
+    expect(instructions).toContain("Call me Ishmael.")
+  })
+
+  it("renders non-empty instructions when no book context provided (no undefined/null)", async () => {
+    setOpenAISuccess({ value: "s", expires_at: 1, id: "sid" })
+    await callClientSecretsPOST({ language: "en" })
+    const capturedBody = openaiCaptured.body as ReturnType<typeof buildRealtimeClientSecretsBody>
+    const instructions = capturedBody.session.instructions
+    expect(typeof instructions).toBe("string")
+    expect((instructions as string).length).toBeGreaterThan(0)
+    expect(instructions).not.toContain("undefined")
+    expect(instructions).not.toContain("null")
+    // Old hardcoded prompt must be gone — replaced by renderRealtimeInstructions.
+    expect(instructions).not.toBe("You are a friendly assistant.")
+  })
+
+  it("handles a POST with no body at all (defaults to language='en')", async () => {
+    setOpenAISuccess({ value: "s", expires_at: 1, id: "sid" })
+    const res = await callClientSecretsPOST(undefined)
+    expect(res.status).toBe(200)
+    const capturedBody = openaiCaptured.body as ReturnType<typeof buildRealtimeClientSecretsBody>
+    expect(capturedBody.session.audio.input.transcription.language).toBe("en")
+    expect(capturedBody.session.tools[0].name).toBe("bookContext")
+  })
+
+  it("GET /api/realtime/client_secrets is not registered (returns 404)", async () => {
+    // Hono returns 404 (not 405) for unmatched routes since the GET handler is
+    // removed entirely in this migration. iOS Plan 25-08 ships POST atomically.
+    const res = await callClientSecretsGET()
+    expect(res.status).toBe(404)
   })
 })
