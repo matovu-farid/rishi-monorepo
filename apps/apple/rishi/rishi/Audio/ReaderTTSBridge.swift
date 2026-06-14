@@ -221,6 +221,13 @@ final class ReaderTTSBridge {
     /// new window. No-op if `index` is out of range.
     func jump(to index: Int) async {
         guard index >= 0, index < paragraphs.count else { return }
+        // Cancel the in-flight advance watcher BEFORE stopping the engine.
+        // engine.stop() sets status .stopped while currentPassageId stays set,
+        // which the live watcher would read as "current passage finished" and
+        // fire advance() concurrently with this jump — racing currentIndex and
+        // playCurrent (observed as an index-out-of-range crash on repeat).
+        advanceTask?.cancel()
+        advanceTask = nil
         await prewarmer.cancelAll()
         await engine.stop()
         currentIndex = index
@@ -240,6 +247,12 @@ final class ReaderTTSBridge {
     /// the first paragraph (a no-op there).
     func previous() async {
         await jump(to: currentIndex - 1)
+    }
+
+    /// User-driven: replay the current paragraph from its start (e.g. the
+    /// listener missed it). No-op when there is no active session.
+    func repeatCurrent() async {
+        await jump(to: currentIndex)
     }
 
     // MARK: - Internals
@@ -304,6 +317,9 @@ final class ReaderTTSBridge {
     private func playCurrent() async {
         guard currentIndex < paragraphs.count else { return }
         let settings = await settingsStore.load(userId: userId)
+        // Re-validate after the await: a racing stop()/jump() may have emptied
+        // `paragraphs` or moved `currentIndex` while we were suspended.
+        guard currentIndex < paragraphs.count else { return }
         let paragraph = paragraphs[currentIndex]
         let request = TTSStreamRequest(
             text: paragraph,

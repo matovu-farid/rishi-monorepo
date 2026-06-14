@@ -64,6 +64,24 @@ struct ReaderTTSBridgeNextPrevTests {
         #expect(startIds(env.engine) == ["0", "1"])
     }
 
+    @Test("repeatCurrent() replays the current paragraph from its start")
+    func repeatCurrentReplays() async {
+        let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .holds) })
+        await env.bridge.start(paragraphs: ["a", "b", "c"])
+        await waitUntil(timeout: 2) { startIds(env.engine) == ["0"] }
+
+        await env.bridge.repeatCurrent()
+        await waitUntil(timeout: 2) { startIds(env.engine) == ["0", "0"] }
+
+        await env.bridge.next()
+        await waitUntil(timeout: 2) { startIds(env.engine).last == "1" }
+
+        await env.bridge.repeatCurrent()
+        await waitUntil(timeout: 2) { startIds(env.engine) == ["0", "0", "1", "1"] }
+
+        await env.bridge.stop()
+    }
+
     @Test("previous() at the first paragraph is a clamped no-op")
     func previousAtStartClamps() async {
         let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .holds) })
