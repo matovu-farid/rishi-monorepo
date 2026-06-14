@@ -22,11 +22,11 @@
 
 import Foundation
 
-enum ParagraphChunker {
+nonisolated enum ParagraphChunker {
 
     static let maxParagraphChars = 4096
 
-    nonisolated static func chunk(_ text: String, maxChars: Int = maxParagraphChars) -> [String] {
+    static func chunk(_ text: String, maxChars: Int = maxParagraphChars) -> [String] {
         guard !text.isEmpty else { return [] }
 
         let rawParagraphs: [String]
