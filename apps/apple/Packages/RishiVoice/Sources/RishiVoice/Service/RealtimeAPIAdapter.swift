@@ -31,9 +31,16 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     // slot — finishing on `disconnect()`.
     private var errorContinuation: AsyncStream<RealtimeClientError>.Continuation?
     private var transcriptContinuation: AsyncStream<RealtimeTranscriptEvent>.Continuation?
+    private var toolCallContinuation: AsyncStream<RealtimeToolCallEvent>.Continuation?
 
     private var errorPump: Task<Void, Never>?
     private var transcriptPump: Task<Void, Never>?
+    private var toolCallPump: Task<Void, Never>?
+
+    /// Tool-call dedupe: tracks which `callId`s have already been emitted to
+    /// the tool-call stream this connection. Cleared on `disconnect()`.
+    /// Lock-guarded (mutated from the toolCallPump task).
+    private var emittedCallIds: Set<String> = []
 
     public init() {}
 
@@ -91,17 +98,22 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         }
         errorPump?.cancel(); errorPump = nil
         transcriptPump?.cancel(); transcriptPump = nil
+        toolCallPump?.cancel(); toolCallPump = nil
 
-        let (errCont, txCont): (
+        let (errCont, txCont, tcCont): (
             AsyncStream<RealtimeClientError>.Continuation?,
-            AsyncStream<RealtimeTranscriptEvent>.Continuation?
+            AsyncStream<RealtimeTranscriptEvent>.Continuation?,
+            AsyncStream<RealtimeToolCallEvent>.Continuation?
         ) = lock.withLock {
             let e = errorContinuation; errorContinuation = nil
             let t = transcriptContinuation; transcriptContinuation = nil
-            return (e, t)
+            let tc = toolCallContinuation; toolCallContinuation = nil
+            emittedCallIds.removeAll()
+            return (e, t, tc)
         }
         errCont?.finish()
         txCont?.finish()
+        tcCont?.finish()
 
         // The SDK's `Conversation` has no public `disconnect()` — dropping the
         // last reference triggers `deinit { client.disconnect() }` which closes
@@ -135,6 +147,60 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         AsyncStream { continuation in
             lock.withLock { transcriptContinuation = continuation }
         }
+    }
+
+    public func toolCallStream() -> AsyncStream<RealtimeToolCallEvent> {
+        AsyncStream { continuation in
+            lock.withLock { toolCallContinuation = continuation }
+        }
+    }
+
+    public func sendToolResult(callId: String, payload: String) async throws {
+        let convo: Conversation? = lock.withLock { self.conversation }
+        guard let convo else {
+            throw RealtimeClientError(
+                code: "not_connected",
+                message: "Cannot send tool result: not connected"
+            )
+        }
+        let outputId = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        do {
+            try await MainActor.run {
+                try convo.send(result: Item.FunctionCallOutput(
+                    id: outputId,
+                    callId: callId,
+                    output: payload
+                ))
+            }
+        } catch {
+            throw RealtimeClientError(
+                code: "send_failed",
+                message: String(describing: error)
+            )
+        }
+        Log.event("voice.tool.result.sent", level: .info, data: [
+            "callId": callId,
+            "payloadBytes": String(payload.utf8.count),
+        ])
+    }
+
+    // MARK: - Readiness gate (RESEARCH OQ-Q11-7)
+
+    /// Returns true when an inbound `Item.FunctionCall` is ready to dispatch.
+    /// The pinned SDK does NOT explicitly flip `status` to `.completed` when
+    /// `responseFunctionCallArgumentsDone` fires (verified by reading the SDK
+    /// at `~/Library/.../swift-realtime-openai/Sources/UI/Conversation.swift`).
+    /// We accept either signal: explicit `.completed` status OR `arguments`
+    /// parses as a valid JSON object.
+    ///
+    /// `internal` (not `public`) so the white-box test target can drive it
+    /// via `@testable import RishiVoice` without exposing it to consumers.
+    internal func isArgumentsReady(fc: Item.FunctionCall) -> Bool {
+        // Robust to SDK enum case-rename (no direct comparison to .completed
+        // because the SDK module is imported lazily by callers).
+        if String(describing: fc.status) == "completed" { return true }
+        guard let data = fc.arguments.data(using: .utf8) else { return false }
+        return (try? JSONSerialization.jsonObject(with: data)) is [String: Any]
     }
 
     // MARK: - Internal pumps
@@ -195,6 +261,43 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
                         cont?.yield(event)
                     }
                     lastSeenIndex = snapshot.count
+                }
+                try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+            }
+        }
+
+        // Tool-call pump — mirrors transcript pump shape but filters `entries`
+        // for `case .functionCall(let fc)`. Per RESEARCH Q3, the SDK ingests
+        // tool calls into `entries` via `conversationItemCreated` (which
+        // appends a not-yet-ready FunctionCall) then mutates the same slot via
+        // `responseFunctionCallArgumentsDelta` / `…Done`. We therefore re-scan
+        // the FULL entries array each tick (not just newly-appended items) so
+        // we catch status flips / argument completion on previously-seen
+        // entries. Per-call dedupe via `emittedCallIds` ensures we emit each
+        // call exactly once.
+        //
+        // Cost: O(entries) per tick; entries are bounded per session and the
+        // .functionCall guard short-circuits non-call items. 200ms cadence
+        // matches transcript pump — voice users tolerate the tail latency.
+        toolCallPump = Task { [weak self] in
+            while !Task.isCancelled {
+                let snapshot: [Item] = await MainActor.run { convo.entries }
+                for item in snapshot {
+                    guard case let .functionCall(fc) = item else { continue }
+                    guard let self else { return }
+                    let alreadyEmitted: Bool = self.lock.withLock {
+                        self.emittedCallIds.contains(fc.callId)
+                    }
+                    if alreadyEmitted { continue }
+                    guard self.isArgumentsReady(fc: fc) else { continue }
+                    self.lock.withLock { _ = self.emittedCallIds.insert(fc.callId) }
+                    let event = RealtimeToolCallEvent(
+                        callId: fc.callId,
+                        name: fc.name,
+                        argumentsJSON: fc.arguments
+                    )
+                    let cont = self.lock.withLock { self.toolCallContinuation }
+                    cont?.yield(event)
                 }
                 try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
             }
