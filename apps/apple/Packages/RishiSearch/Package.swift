@@ -19,6 +19,11 @@ let package = Package(
                 "RishiCore",
                 "RishiLogging",
                 .product(name: "USearch", package: "usearch"),
+            ],
+            resources: [
+                .process("Resources/AllMiniLML6V2.mlmodel"),
+                .process("Resources/vocab.txt"),
+                .copy("Resources/LICENSE-AllMiniLML6V2.txt"),
             ]
         ),
         .testTarget(
