@@ -108,4 +108,14 @@ struct AudioSessionCoordinatorTests {
         let mode = await coord.currentMode
         #expect(mode == .idle)
     }
+
+    @Test("A passage switch (request .tts while already .tts) issues no deactivate")
+    func switchPassageDoesNotChurnSession() async {
+        let fake = FakeAudioSessionConfigurator()
+        let coord = AudioSessionCoordinator(configurator: fake)
+        await coord.requestActiveMode(.tts)
+        await coord.requestActiveMode(.tts) // a passage switch
+        #expect(fake.activeCalls.allSatisfy { $0.active == true }, "a switch must never deactivate the session")
+        #expect(fake.configureCalls.count == 1)
+    }
 }

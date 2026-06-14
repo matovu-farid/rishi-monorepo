@@ -59,7 +59,19 @@ lifecycle.
 
 ---
 
-## 2. PRIMARY NEXT TASK — extract `AudioSessionPolicy` (TDD)
+## 2. DONE — extracted `AudioSessionPolicy` (TDD)
+
+**Status: COMPLETE.** `AudioSessionPolicy` is a pure reducer
+(`Coordinator/AudioSessionPolicy.swift`) with 13 unit tests
+(`AudioSessionPolicyTests.swift`) asserting exact effect arrays. The
+`AudioSessionCoordinator` is now a thin actor that maps its (unchanged) public
+API onto policy events and applies the reducer's effects. The
+`switchPassage`-no-churn invariant is locked at both the pure level and the
+coordinator level (`switchPassageDoesNotChurnSession`). All 111 RishiAudio tests
+green; the iPhone 17 bridge suites green (`nextDoesNotStopEngine` passes against
+the refactored coordinator). `TTSEngine` untouched (public API preserved). The §4
+quick fix is now superseded by this principled version. Original plan below for
+reference.
 
 **Goal:** model the audio session as a pure reducer so all session *decisions*
 are unit-tested; the `AudioSessionCoordinator` becomes a thin actor that only
