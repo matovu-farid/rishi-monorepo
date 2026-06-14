@@ -54,6 +54,14 @@ public actor MP3StreamDecoder {
     // truncated playback to the first output buffer.
     private var batches: [(bytes: Data, descs: [AudioStreamPacketDescription])] = []
 
+    // One-chunk lookahead. We hold back the most recently produced PCM chunk so
+    // that on finish() the LAST real-audio chunk can be re-stamped `isFinal`.
+    // The terminal marker must carry audio: a 0-frame final buffer's
+    // AVAudioPlayerNode completion is unreliable, so the engine would never see
+    // the passage finish (`onBufferComplete(isFinal:)`), never set `.stopped`,
+    // and read-aloud would not auto-advance.
+    private var heldChunk: PCMChunk?
+
     public init(targetFormat: AVAudioFormat) throws {
         self.targetFormat = targetFormat
         var local: AsyncStream<PCMChunk>.Continuation!
@@ -172,7 +180,7 @@ public actor MP3StreamDecoder {
             // can land after the first packets callback via the actor Task
             // hops). Leave the batches queued; a later drain processes them in
             // order. On a final drain with no converter there is nothing to do.
-            if isFinal { emitFinalEmpty() }
+            if isFinal { emitFinalMarker() }
             return
         }
 
@@ -191,7 +199,7 @@ public actor MP3StreamDecoder {
         batches.removeAll(keepingCapacity: true)
 
         guard !queue.isEmpty else {
-            if isFinal { emitFinalEmpty() }
+            if isFinal { emitFinalMarker() }
             return
         }
 
@@ -235,7 +243,13 @@ public actor MP3StreamDecoder {
             }
 
             if pcm.frameLength > 0 {
-                continuation.yield(PCMChunk(buffer: pcm, passageId: pendingPassageId, isFinal: false))
+                // Hold the newest chunk back by one; emit the previously held
+                // chunk as non-final. The final held chunk becomes the isFinal
+                // marker in the finish() branch below.
+                if let previous = heldChunk {
+                    continuation.yield(previous)
+                }
+                heldChunk = PCMChunk(buffer: pcm, passageId: pendingPassageId, isFinal: false)
             }
 
             // .haveData means more output may remain for the same input — keep
@@ -245,7 +259,20 @@ public actor MP3StreamDecoder {
             if pcm.frameLength == 0 && cursor.index >= cursor.buffers.count { break }
         }
 
-        if isFinal { emitFinalEmpty() }
+        if isFinal { emitFinalMarker() }
+    }
+
+    /// Emit the terminal `isFinal` chunk. Prefer re-stamping the last held real
+    /// chunk (so the marker carries audio and its playback completion reliably
+    /// fires); fall back to a 0-frame marker only when no audio was decoded
+    /// (empty/garbage input).
+    private func emitFinalMarker() {
+        if let last = heldChunk {
+            heldChunk = nil
+            continuation.yield(PCMChunk(buffer: last.buffer, passageId: last.passageId, isFinal: true))
+        } else {
+            emitFinalEmpty()
+        }
     }
 
     /// Build a compressed buffer for a single parser batch, or nil if it cannot

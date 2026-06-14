@@ -1,4 +1,47 @@
 import Foundation
+
+/// Decides when a streamed playback's completion stream may finish.
+///
+/// `AVAudioPlayerNode` schedules buffers and invokes a completion handler when
+/// each finishes rendering — asynchronously, AFTER scheduling. The output
+/// AsyncStream must stay open until BOTH the input buffer sequence has ended
+/// AND every scheduled buffer's completion has fired. Finishing as soon as the
+/// input ends (the previous behaviour) drops the still-pending completions —
+/// including the final one — so `TTSEngine.onBufferComplete(isFinal:)` never
+/// runs, `.stopped` is never set, and read-aloud does not auto-advance.
+/// Counts are mutated under the adapter's lock.
+struct PlaybackCompletionAccountant {
+    private var scheduled = 0
+    private var completed = 0
+    private var inputEnded = false
+
+    /// Record that a buffer was scheduled on the player node.
+    mutating func didSchedule() { scheduled += 1 }
+
+    /// Record a buffer-completion callback. Returns true if the output stream
+    /// should finish now (input ended AND all scheduled buffers completed).
+    mutating func didComplete() -> Bool {
+        completed += 1
+        return shouldFinish
+    }
+
+    /// Record that the input buffer sequence ended. Returns true if the output
+    /// stream should finish immediately (all scheduled buffers already done).
+    mutating func didEndInput() -> Bool {
+        inputEnded = true
+        return shouldFinish
+    }
+
+    private var shouldFinish: Bool { inputEnded && completed >= scheduled }
+}
+
+/// Reference box so the audio render thread's completion handlers and the
+/// scheduling loop can share one `PlaybackCompletionAccountant`. Access is
+/// serialised externally through the adapter's lock.
+final class AccountantBox: @unchecked Sendable {
+    var value = PlaybackCompletionAccountant()
+}
+
 #if canImport(AVFAudio)
 import AVFAudio
 
@@ -73,18 +116,29 @@ public final class AVAudioEngineAdapter: AudioEngineProtocol, @unchecked Sendabl
     public func play<S: AsyncSequence>(_ buffers: S) -> AsyncStream<PCMChunk.ID>
     where S.Element == PCMChunk, S: Sendable {
         AsyncStream { continuation in
+            // Track scheduled-vs-completed buffers so the stream stays open
+            // until the LAST buffer has rendered. Boxed because the completion
+            // handlers (audio render thread) and the scheduling loop both mutate
+            // it; all access is serialised through `self.lock`.
+            let box = AccountantBox()
             let task = Task { [self] in
                 do {
                     for try await chunk in buffers {
                         if Task.isCancelled { break }
                         let id = chunk.id
                         self.lock.withLock {
+                            box.value.didSchedule()
                             self.playerNode.scheduleBuffer(chunk.buffer) {
+                                let shouldFinish = self.lock.withLock { box.value.didComplete() }
                                 continuation.yield(id)
+                                if shouldFinish { continuation.finish() }
                             }
                         }
                     }
-                    continuation.finish()
+                    // Input ended. Finish only if every scheduled buffer has
+                    // already completed; otherwise the last didComplete() will.
+                    let shouldFinish = self.lock.withLock { box.value.didEndInput() }
+                    if shouldFinish { continuation.finish() }
                 } catch {
                     continuation.finish()
                 }

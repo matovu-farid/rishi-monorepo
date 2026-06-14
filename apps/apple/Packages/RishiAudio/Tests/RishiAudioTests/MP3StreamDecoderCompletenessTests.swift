@@ -47,9 +47,11 @@ struct MP3StreamDecoderCompletenessTests {
         let decoder = try MP3StreamDecoder(targetFormat: makeTargetFormat())
         let stream = decoder.pcmStream()
 
+        // Count ALL chunks: the final chunk now carries the last real audio
+        // (the terminal marker is the last audio buffer, not a 0-frame buffer).
         let drain = Task<Int, Never> {
             var total = 0
-            for await chunk in stream where !chunk.isFinal {
+            for await chunk in stream {
                 total += Int(chunk.buffer.frameLength)
             }
             return total
@@ -95,6 +97,44 @@ struct MP3StreamDecoderCompletenessTests {
         #expect(
             maxFrames > 0 && spread <= Int(Double(maxFrames) * 0.05),
             "decoded frames depend on input chunking (fine=\(fine), medium=\(medium), coarse=\(coarse)); a correct decoder is slicing-invariant"
+        )
+    }
+
+    /// Collect every chunk (including the final marker) as (frames, isFinal).
+    private func decodeChunkShapes(sliceSize: Int) async throws -> [(frames: Int, isFinal: Bool)] {
+        let mp3 = try loadFixtureMP3()
+        let decoder = try MP3StreamDecoder(targetFormat: makeTargetFormat())
+        let stream = decoder.pcmStream()
+        let drain = Task<[(Int, Bool)], Never> {
+            var out: [(Int, Bool)] = []
+            for await chunk in stream {
+                out.append((Int(chunk.buffer.frameLength), chunk.isFinal))
+            }
+            return out
+        }
+        var index = 0
+        while index < mp3.count {
+            let end = min(index + sliceSize, mp3.count)
+            try await decoder.append(mp3.subdata(in: index..<end), passageId: "0")
+            index = end
+            await Task.yield()
+        }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        await decoder.finish()
+        return await drain.value.map { (frames: $0.0, isFinal: $0.1) }
+    }
+
+    @Test("the terminal isFinal chunk carries audio, not a 0-frame buffer")
+    func finalChunkCarriesAudio() async throws {
+        let chunks = try await decodeChunkShapes(sliceSize: 4096)
+        let finals = chunks.filter(\.isFinal)
+        #expect(finals.count == 1, "exactly one chunk must be marked final, got \(finals.count)")
+        // A 0-frame final buffer's AVAudioPlayerNode completion is unreliable, so
+        // TTSEngine.onBufferComplete(isFinal:) never fires, .stopped is never set,
+        // and read-aloud does not auto-advance. The final marker must carry audio.
+        #expect(
+            finals.first.map { $0.frames > 0 } == true,
+            "the isFinal chunk has \(finals.first?.frames ?? -1) frames; it must carry audio so its playback completion fires"
         )
     }
 
