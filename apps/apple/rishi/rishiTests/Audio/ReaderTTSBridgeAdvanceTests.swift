@@ -1,0 +1,165 @@
+//
+//  ReaderTTSBridgeAdvanceTests.swift
+//  rishiTests
+//
+//  Phase 29 plan 29-03 — bridge-level advance orchestration coverage (D4).
+//
+//  AdvanceWatcherDecisionTests already lock the PURE decision struct. Nothing,
+//  until this file, drives the bridge's start/advance/playCurrent/stop loop
+//  AROUND that decision. These tests construct a ReaderTTSBridge over the
+//  FakeTTSEngine seam (29-01) and assert the reader advances through a
+//  multi-paragraph page without error, including the prewarmed-fast path that
+//  regressed in epub-tts-premature-stop round 2 (29-RESEARCH §3.3, §5.5).
+//
+//  No live audio, no network: FakeTTSEngine scripts TTSPlaybackState transitions
+//  directly, and the TTSPassageTracker forwards currentPassageId into
+//  onPassageChange. The watcher polls every 100ms, so tests poll a recorded box
+//  until the expected passages land (waitUntil) rather than hard-sleeping.
+//
+
+import Foundation
+import Testing
+import RishiAudio
+import RishiCore
+@testable import rishi
+
+@Suite("ReaderTTSBridge advance")
+@MainActor
+struct ReaderTTSBridgeAdvanceTests {
+
+    @Test("advances 0 -> 1 -> 2 in order and tears down at the end")
+    func advancesThroughParagraphsAndTearsDown() async {
+        let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .normal) })
+
+        await env.bridge.start(paragraphs: ["alpha", "bravo", "charlie"])
+
+        // Await the 100ms-poll advance loop reaching the final teardown.
+        await waitUntil(timeout: 5) { env.recorder.sawTeardown }
+
+        await env.bridge.stop()
+
+        // Observed passages 0, 1, 2 in order, then a final nil (teardown).
+        #expect(env.recorder.nonNilIndices == [0, 1, 2])
+        #expect(env.recorder.sawTeardown)
+        // No index ever outside the 0...2 page bounds.
+        #expect(env.recorder.nonNilIndices.allSatisfy { (0...2).contains($0) })
+        // No error/bail: the engine was never scripted to .error.
+        #expect(env.state.status != .error)
+    }
+
+    /// epub-tts-premature-stop, round 2: paragraph 0 is synthesis-bound
+    /// (.normal), but paragraphs 1 and 2 are PREWARMED cache-hits whose entire
+    /// .loading->.playing->.stopped lifecycle elapses inside one 100ms poll. The
+    /// watcher only ever observes a residual .stopped carrying the target
+    /// passage id. The run MUST STILL advance to the end rather than stalling
+    /// after index 0.
+    @Test("prewarmedFast short paragraphs still advance (epub-tts-premature-stop round 2)")
+    func prewarmedFastParagraphsStillAdvance() async {
+        let env = makeBridge(engine: { state in
+            FakeTTSEngine(
+                state: state,
+                default: .prewarmedFast,
+                scriptsByPassageId: ["0": .normal]
+            )
+        })
+
+        await env.bridge.start(paragraphs: ["alpha", "bravo", "charlie"])
+
+        await waitUntil(timeout: 5) { env.recorder.sawTeardown }
+
+        await env.bridge.stop()
+
+        // Did not stall after index 0 — reached index 2 and tore down.
+        #expect(env.recorder.nonNilIndices.contains(2))
+        #expect(env.recorder.nonNilIndices == [0, 1, 2])
+        #expect(env.recorder.sawTeardown)
+    }
+
+    @Test("bails on engine error without advancing past 0")
+    func bailsOnErrorWithoutAdvancing() async {
+        let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .error) })
+
+        await env.bridge.start(paragraphs: ["alpha", "bravo", "charlie"])
+
+        // Give the watcher ample poll ticks; it must NOT advance to index 1.
+        await waitUntil(timeout: 2) { env.state.status == .error }
+        // A couple more ticks to prove no spurious advance follows the error.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        await env.bridge.stop()
+
+        #expect(!env.recorder.nonNilIndices.contains(1))
+        #expect(!env.recorder.nonNilIndices.contains(2))
+    }
+}
+
+// MARK: - Shared test harness
+
+/// A no-op TTSChunkSource so the bridge's `TTSPrewarmer` collaborator can be
+/// constructed without a live WorkerClient. The prewarmer only drains bytes for
+/// read-ahead; an empty stream is a valid no-op for these logic tests.
+struct NoopChunkSource: TTSChunkSource {
+    func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
+        AsyncThrowingStream { $0.finish() }
+    }
+}
+
+/// Records onPassageChange callbacks (both indices and the nil teardown) for
+/// assertions. The bridge invokes onPassageChange on @MainActor, and the suites
+/// here are @MainActor, so a plain class is sufficient (no cross-actor lock).
+@MainActor
+final class PassageChangeRecorder {
+    private(set) var events: [Int?] = []
+
+    func record(_ index: Int?) { events.append(index) }
+
+    var nonNilIndices: [Int] { events.compactMap { $0 } }
+    var sawTeardown: Bool { events.contains(where: { $0 == nil }) }
+}
+
+/// Bundle of the constructed bridge plus the collaborators tests assert against.
+@MainActor
+struct BridgeTestEnv {
+    let bridge: ReaderTTSBridge
+    let engine: FakeTTSEngine
+    let state: TTSPlaybackState
+    let recorder: PassageChangeRecorder
+}
+
+/// Construct a ReaderTTSBridge wired to a FakeTTSEngine (built by `engine` from
+/// the shared TTSPlaybackState) and a recording onPassageChange. Mirrors the
+/// 29-01 smoke-test construction.
+@MainActor
+func makeBridge(engine makeEngine: (TTSPlaybackState) -> FakeTTSEngine) -> BridgeTestEnv {
+    let state = TTSPlaybackState()
+    let engine = makeEngine(state)
+    let tracker = TTSPassageTracker()
+    let prewarmer = TTSPrewarmer(source: NoopChunkSource())
+    let settingsStore = InMemoryTTSSettingsStore()
+    let userId = UserID()
+
+    let recorder = PassageChangeRecorder()
+    let bridge = ReaderTTSBridge(
+        engine: engine,
+        state: state,
+        tracker: tracker,
+        prewarmer: prewarmer,
+        settingsStore: settingsStore,
+        userId: userId,
+        onPassageChange: { index in recorder.record(index) }
+    )
+
+    return BridgeTestEnv(bridge: bridge, engine: engine, state: state, recorder: recorder)
+}
+
+/// Poll `predicate` every 50ms until it is true or `timeout` seconds elapse.
+/// Used instead of a fixed hard-sleep so tests settle as soon as the 100ms
+/// advance-watcher poll lands the expected state.
+@MainActor
+func waitUntil(timeout: TimeInterval, _ predicate: () -> Bool) async {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if predicate() { return }
+        try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+    }
+}
