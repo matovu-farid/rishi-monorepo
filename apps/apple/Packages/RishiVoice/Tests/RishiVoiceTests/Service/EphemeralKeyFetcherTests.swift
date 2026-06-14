@@ -28,17 +28,19 @@ struct EphemeralKeyFetcherTests {
 
     // MARK: - Tests
 
-    @Test("Returns secret + sessionId on 200")
+    @Test("Returns secret + sessionId on 200 (POST + bare path; Phase 25)")
     func returnsSecretOn200() async throws {
         EphemeralKeyStubURLProtocol.reset()
         EphemeralKeyStubURLProtocol.responder = { req in
-            // WorkerClient uses `URL.append(path:)`, which folds the entire
-            // endpoint.path string (including `?language=…`) into the URL
-            // without re-parsing it into the query component. So we assert on
-            // the raw absoluteString rather than path / query separately.
+            // Phase 25 (Plan 25-08) moved this endpoint from GET to POST.
+            // The optional `language` argument lives in the JSON body now —
+            // body-shape assertions live in
+            // `EphemeralKeyFetcherBookContextTests`. Here we only pin that
+            // the path is bare (no `?language=` query) and the method is POST.
             let abs = req.url?.absoluteString ?? ""
             #expect(abs.contains("/api/realtime/client_secrets"))
-            #expect(abs.contains("language=en"))
+            #expect(abs.contains("language=") == false)
+            #expect(req.httpMethod == "POST")
             let body = #"{"client_secret":"sk-ephemeral-xyz","session_id":"sess-123"}"#
             return (200, Data(body.utf8))
         }
@@ -49,13 +51,14 @@ struct EphemeralKeyFetcherTests {
         #expect(key.sessionId == "sess-123")
     }
 
-    @Test("nil language omits ?language= from request")
+    @Test("nil language: POST path stays bare; body omits language (Phase 25)")
     func nilLanguageOmitsQuery() async throws {
         EphemeralKeyStubURLProtocol.reset()
         EphemeralKeyStubURLProtocol.responder = { req in
             let abs = req.url?.absoluteString ?? ""
             #expect(abs.contains("/api/realtime/client_secrets"))
             #expect(abs.contains("language=") == false)
+            #expect(req.httpMethod == "POST")
             let body = #"{"client_secret":"x","session_id":"y"}"#
             return (200, Data(body.utf8))
         }

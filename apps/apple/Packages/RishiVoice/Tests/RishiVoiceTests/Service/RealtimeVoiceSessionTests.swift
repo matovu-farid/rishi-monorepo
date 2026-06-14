@@ -190,9 +190,13 @@ struct RealtimeVoiceSessionTests {
 
 /// Stub conforming to `EphemeralKeyFetching` so tests can inject canned
 /// success/failure responses without going near WorkerClient or URLProtocol.
+///
+/// Phase 25 (Plan 25-08) widened the protocol surface with an optional
+/// `BookContextSnapshot`; the stub ignores it because these tests only
+/// care about the success/failure branch in `RealtimeVoiceSession.start`.
 struct StubEphemeralKeyFetcher: EphemeralKeyFetching, @unchecked Sendable {
     let result: Result<EphemeralKey, Error>
-    func fetch(language: String?) async throws -> EphemeralKey {
+    func fetch(language: String?, bookContext: BookContextSnapshot?) async throws -> EphemeralKey {
         try result.get()
     }
 }
