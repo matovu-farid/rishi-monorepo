@@ -86,22 +86,41 @@ public actor USearchBookSearch: BookSearch {
             throw BookContextSearchError.embeddingFailed(message: String(describing: error))
         }
 
-        let keys: [USearchIndex.Key]
-        let distances: [Float]
+        // Over-fetch to account for `multi: true` collisions — a paragraph
+        // subdivided into N sentence sub-vectors can appear up to N times in
+        // the raw results. We dedupe by key (keeping the best/lowest distance
+        // per key) and trim to k AFTER dedup.
+        let overFetch = max(k * 4, 16)
+        let rawKeys: [USearchIndex.Key]
+        let rawDistances: [Float]
         do {
-            let result = try index.search(vector: queryVec, count: k)
-            keys = result.0
-            distances = result.1
+            let result = try index.search(vector: queryVec, count: overFetch)
+            rawKeys = result.0
+            rawDistances = result.1
         } catch {
             throw BookContextSearchError.underlying(message: String(describing: error))
         }
-        guard !keys.isEmpty else { return [] }
+        guard !rawKeys.isEmpty else { return [] }
 
-        let lookup = try await chunks.lookup(chunkIds: keys)
+        // Dedupe: best distance per key, preserve first-seen order so the
+        // best result still leads.
+        var bestDistance: [USearchIndex.Key: Float] = [:]
+        var orderedKeys: [USearchIndex.Key] = []
+        for (key, distance) in zip(rawKeys, rawDistances) {
+            if let prior = bestDistance[key] {
+                if distance < prior { bestDistance[key] = distance }
+            } else {
+                bestDistance[key] = distance
+                orderedKeys.append(key)
+            }
+        }
+        let trimmedKeys = Array(orderedKeys.prefix(k))
+
+        let lookup = try await chunks.lookup(chunkIds: trimmedKeys)
         var hits: [BookSearchHit] = []
-        hits.reserveCapacity(keys.count)
-        for (key, distance) in zip(keys, distances) {
-            guard let row = lookup[key] else { continue }
+        hits.reserveCapacity(trimmedKeys.count)
+        for key in trimmedKeys {
+            guard let row = lookup[key], let distance = bestDistance[key] else { continue }
             // USearch cosine distance d ∈ [0, 2]. Map to score ∈ [0, 1] where
             // 1.0 = identical, 0.0 = opposite. Clamp for FP safety.
             let score = max(0.0, min(1.0, 1.0 - Double(distance) / 2.0))
@@ -120,7 +139,12 @@ public actor USearchBookSearch: BookSearch {
                 metric: .cos,
                 dimensions: 384,
                 connectivity: 16,
-                quantization: .f32
+                quantization: .f32,
+                // multi: true mirrors IndexBuilder — paragraphs subdivided at
+                // sentence boundaries for embedding share a single chunkId so
+                // the join into chunks.db returns one full-paragraph row per
+                // matched paragraph.
+                multi: true
             )
             try idx.view(path: vectorsURL.path)  // memory-mapped, zero-copy
         } catch {

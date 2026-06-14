@@ -40,7 +40,8 @@ struct USearchBookSearchSuite {
             metric: .cos,
             dimensions: 384,
             connectivity: 16,
-            quantization: .f32
+            quantization: .f32,
+            multi: true
         )
         try idx.reserve(UInt32(max(chunks.count, 1)))
         for c in chunks {
