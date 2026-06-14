@@ -31,6 +31,30 @@ public enum AudioInterruptionEvent: Sendable, Equatable {
     case endedNoResume
 }
 
+/// How `.allowBluetooth` should be realised for a given category.
+///
+/// `.allowBluetooth` in our option set means "route to Bluetooth if available".
+/// AVAudioSession splits this into two incompatible profiles:
+///   - HFP (`.allowBluetooth`): bidirectional, REQUIRES a record-capable
+///     category. Pairing it with `.playback` makes `setCategory` throw
+///     paramErr (-50) — observed on device as `audio.session.mode.failed`.
+///   - A2DP (`.allowBluetoothA2DP`): output-only, valid for playback.
+/// Extracted as a pure function so the rule is testable without AVAudioSession
+/// (which is iOS-only and absent under `swift test` on macOS).
+public enum BluetoothRouting: String, Sendable, Equatable {
+    case none
+    case hfp
+    case a2dp
+}
+
+public func bluetoothRouting(
+    category: AudioSessionCategory,
+    options: AudioSessionOptions
+) -> BluetoothRouting {
+    guard options.contains(.allowBluetooth) else { return .none }
+    return category == .playAndRecord ? .hfp : .a2dp
+}
+
 // MARK: - Protocol
 
 /// Injection seam for AVAudioSession. Production wires
@@ -104,7 +128,14 @@ public final class AVAudioSessionConfigurator: AudioSessionConfigurator, @unchec
         let avCategory: AVAudioSession.Category = (category == .playback) ? .playback : .playAndRecord
         let avMode: AVAudioSession.Mode = (mode == .spokenAudio) ? .spokenAudio : .voiceChat
         var avOptions: AVAudioSession.CategoryOptions = []
-        if options.contains(.allowBluetooth)   { avOptions.insert(.allowBluetooth) }
+        // Map our generic `.allowBluetooth` to the profile valid for the
+        // category. HFP (`.allowBluetooth`) with `.playback` throws -50; output
+        // playback uses A2DP. See `bluetoothRouting`.
+        switch bluetoothRouting(category: category, options: options) {
+        case .none: break
+        case .hfp:  avOptions.insert(.allowBluetooth)
+        case .a2dp: avOptions.insert(.allowBluetoothA2DP)
+        }
         if options.contains(.allowAirPlay)     { avOptions.insert(.allowAirPlay) }
         if options.contains(.defaultToSpeaker) { avOptions.insert(.defaultToSpeaker) }
         try session.setCategory(avCategory, mode: avMode, options: avOptions)
