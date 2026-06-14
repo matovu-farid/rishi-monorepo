@@ -33,8 +33,12 @@ struct ReaderTTSBridgeAdvanceTests {
 
         await env.bridge.start(paragraphs: ["alpha", "bravo", "charlie"])
 
-        // Await the 100ms-poll advance loop reaching the final teardown.
-        await waitUntil(timeout: 5) { env.recorder.sawTeardown }
+        // Await the 100ms-poll advance loop forwarding all three passages.
+        // NOTE: `sawTeardown` is unsuitable as the wait predicate — start()
+        // calls stop() first, which fires onPassageChange(nil) immediately, so
+        // sawTeardown is true before any advance happens. Wait on the real
+        // advance instead.
+        await waitUntil(timeout: 5) { env.recorder.nonNilIndices == [0, 1, 2] }
 
         await env.bridge.stop()
 
@@ -65,7 +69,9 @@ struct ReaderTTSBridgeAdvanceTests {
 
         await env.bridge.start(paragraphs: ["alpha", "bravo", "charlie"])
 
-        await waitUntil(timeout: 5) { env.recorder.sawTeardown }
+        // Wait on the real advance, not sawTeardown (true immediately due to the
+        // start()-time stop()).
+        await waitUntil(timeout: 5) { env.recorder.nonNilIndices == [0, 1, 2] }
 
         await env.bridge.stop()
 

@@ -42,7 +42,10 @@ struct ReaderTTSBridgePageNavTests {
 
         let countBeforeSecondStart = env.recorder.events.count
         await env.bridge.start(paragraphs: ["x", "y", "z"])
-        await waitUntil(timeout: 5) { env.recorder.events.count > countBeforeSecondStart }
+        // Wait for a real passage index after the reset — not just any event:
+        // start() fires onPassageChange(nil) via its internal stop() first, which
+        // would satisfy a bare count check before passage 0 is forwarded.
+        await waitUntil(timeout: 5) { !env.recorder.nonNilIndices(after: countBeforeSecondStart).isEmpty }
 
         // The FIRST onPassageChange after the second start is index 0 (reset).
         let afterReset = env.recorder.nonNilIndices(after: countBeforeSecondStart)
