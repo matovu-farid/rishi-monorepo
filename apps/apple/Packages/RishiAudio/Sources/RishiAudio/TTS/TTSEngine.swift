@@ -189,4 +189,9 @@ public actor TTSEngine {
         Log.event("tts.engine.error", level: .error, data: ["error": message])
     }
 }
+
+// Phase 29 (29-01): TTSEngine already implements the exact start/pause/resume/
+// stop surface ReaderTTSBridge consumes, so conformance is a one-liner with no
+// behavioural change — the Phase 23/24 engine internals stay byte-identical.
+extension TTSEngine: TTSPlaying {}
 #endif
