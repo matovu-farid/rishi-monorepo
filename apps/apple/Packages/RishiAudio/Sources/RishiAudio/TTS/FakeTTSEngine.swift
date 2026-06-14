@@ -45,6 +45,11 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
         /// `.playing`/`.stopped`. Used by 29-03 to assert the bridge bails
         /// (does not advance) when the engine reports a failure.
         case error
+        /// `.loading` -> `.playing` (sets `currentPassageId`) and HOLDS there,
+        /// never reaching `.stopped`, so the advance watcher never auto-advances.
+        /// Used to test user-driven next()/previous() navigation deterministically
+        /// (no auto-advance race).
+        case holds
     }
 
     private let state: TTSPlaybackState
@@ -121,6 +126,17 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
             await MainActor.run {
                 observable.status = .error
                 observable.error = "FakeTTSEngine scripted error"
+            }
+        case .holds:
+            await MainActor.run {
+                observable.status = .loading
+                observable.error = nil
+            }
+            await MainActor.run {
+                observable.status = .playing
+                observable.currentPassageId = passageId
+                // Intentionally never transitions to .stopped: the advance
+                // watcher waits, so only explicit next()/previous() move the head.
             }
         }
     }

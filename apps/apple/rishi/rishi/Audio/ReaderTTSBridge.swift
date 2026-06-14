@@ -228,6 +228,20 @@ final class ReaderTTSBridge {
         await playCurrent()
     }
 
+    /// User-driven: skip forward to the next paragraph and play it. Clamped at
+    /// the last paragraph of the current page/resource (a no-op there). The
+    /// reader view follows via `onPassageChange`, turning the page when the
+    /// target paragraph is off-screen.
+    func next() async {
+        await jump(to: currentIndex + 1)
+    }
+
+    /// User-driven: skip back to the previous paragraph and play it. Clamped at
+    /// the first paragraph (a no-op there).
+    func previous() async {
+        await jump(to: currentIndex - 1)
+    }
+
     // MARK: - Internals
 
     private func startConsumingPassages() {
