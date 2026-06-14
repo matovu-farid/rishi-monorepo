@@ -14,6 +14,7 @@ let package = Package(
         .package(path: "../RishiUIKit"),
         .package(path: "../RishiLogging"),
         .package(path: "../RishiAudio"),
+        .package(path: "../RishiSearch"),
         .package(path: "../RishiTesting"), // test-only consumer
         .package(
             url: "https://github.com/m1guelpf/swift-realtime-openai.git",
@@ -30,6 +31,7 @@ let package = Package(
                 "RishiUIKit",
                 "RishiLogging",
                 "RishiAudio",
+                .product(name: "RishiSearch", package: "RishiSearch"),
                 .product(name: "RealtimeAPI", package: "swift-realtime-openai"),
             ]
         ),
@@ -40,6 +42,7 @@ let package = Package(
                 "RishiCore",
                 "RishiAPI",
                 "RishiAudio",
+                .product(name: "RishiSearch", package: "RishiSearch"),
                 .product(name: "RishiTesting", package: "RishiTesting"),
             ]
         ),
