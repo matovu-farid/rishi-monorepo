@@ -288,6 +288,32 @@ final class AppDependencies {
         // from `<dc:title>` / `<dc:creator>` (EPUB) or PDFKit
         // `documentAttributes` (PDF); when they yield nothing the import path
         // falls back to a filename-derived title.
+        //
+        // Phase 25 Plan 25-11 — construct the RAG indexing hook BEFORE
+        // BookFileStorage so every import schedules a detached background
+        // HNSW + chunks.db build. Embedder construction CAN throw (Core ML
+        // compile + model load on first launch); on failure we fall back to
+        // `IdentityEmbedder` so the app stays up and the cold-start sentinel
+        // covers the user-facing path. The embedder is NOT eagerly pre-warmed
+        // — RESEARCH OQ-4 says prewarm runs inside
+        // `RealtimeVoiceSession.start(bookId:)` only.
+        let embedder: any BookEmbedder
+        do {
+            embedder = try CoreMLMiniLMEmbedder()
+        } catch {
+            Log.event("rag.embedder.fallback_identity", level: .warning, data: [
+                "error": String(describing: error),
+            ])
+            embedder = IdentityEmbedder()
+        }
+        let indexBuilder = IndexBuilder(rootURL: documentsURL, embedder: embedder)
+        let indexingHook = RishiSearchIndexingHook(
+            builder: indexBuilder,
+            extractors: [
+                "pdf": PdfTextExtractor(),
+                "epub": EpubTextExtractor(),
+            ]
+        )
         let bookFileStorage = BookFileStorage(
             rootURL: documentsURL,
             bookStore: bookStore,
@@ -298,7 +324,8 @@ final class AppDependencies {
             metadataExtractors: [
                 "pdf": PDFKitMetadataExtractor(),
                 "epub": EpubMetadataExtractor(),
-            ]
+            ],
+            bookIndexingHook: indexingHook
         )
 
         // 9b. Sync — composition root for the engine + background coordinator.
@@ -478,37 +505,23 @@ final class AppDependencies {
         )
         let chatPresenter = await MainActor.run { ChatPresenterImpl() }
 
-        // 15b. Book-aware RAG stack (Phase 25 Plan 25-10).
+        // 15b. Book-aware RAG stack (Phase 25 Plan 25-10 + 25-11).
         //
-        // Single shared embedder + per-book USearch index facade. Embedder
-        // construction CAN throw (Core ML compile + model load on first launch);
-        // when it does we fall back to `IdentityEmbedder` so the rest of the
-        // app stays up — the cold-start sentinel returned by `USearchBookSearch`
-        // covers the user-facing path until a real index is built. The
-        // sentinel-paths in `BookContextResponder` also keep voice usable
-        // when the index isn't ready yet (e.g. mid-import).
+        // The shared `embedder` was constructed earlier (alongside the
+        // BookFileStorage indexing-hook wiring) so import-time indexing and
+        // query-time search share ONE Core ML model instance — keeps Core ML
+        // compile cost at one-per-process. `USearchBookSearch` is the per-book
+        // facade the voice path queries; cold-start sentinel kicks in when an
+        // index isn't ready yet (mid-import).
         //
         // The embedder is NOT eagerly pre-warmed at app launch — RESEARCH OQ-4
         // says prewarm runs ONLY inside `RealtimeVoiceSession.start(bookId:)`,
         // so users who never use voice never pay the ~500 ms cold-load cost.
-        let embedder: any BookEmbedder
-        do {
-            embedder = try CoreMLMiniLMEmbedder()
-        } catch {
-            Log.event("rag.embedder.fallback_identity", level: .warning, data: [
-                "error": String(describing: error),
-            ])
-            embedder = IdentityEmbedder()
-        }
         let bookSearch = USearchBookSearch(
             rootURL: documentsURL,
             embedder: embedder,
             k: 3
         )
-        // Embedder reference for the prewarm closure. Capturing the protocol
-        // existential `any BookEmbedder` would need `@Sendable` plumbing across
-        // the closure; we know our two concrete conformers are Sendable, so we
-        // pin the closure to the local capture and let the compiler verify.
         let embedderForPrewarm = embedder
         let embedderPrewarm: @Sendable () async -> Void = {
             await embedderForPrewarm.prewarm()

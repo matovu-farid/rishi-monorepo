@@ -10,6 +10,10 @@ let package = Package(
     dependencies: [
         .package(path: "../RishiCore"),
         .package(path: "../RishiLogging"),
+        // Phase 25 Plan 25-11 — consume the BookIndexingHook + PerBookTextExtractor
+        // protocols from RishiLibrary so the production conformer can live in
+        // RishiSearch (no cycle: RishiLibrary does NOT depend on RishiSearch).
+        .package(path: "../RishiLibrary"),
         .package(url: "https://github.com/unum-cloud/usearch", from: "2.25.3"),
         .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.11.0"),
     ],
@@ -19,6 +23,7 @@ let package = Package(
             dependencies: [
                 "RishiCore",
                 "RishiLogging",
+                "RishiLibrary",
                 .product(name: "USearch", package: "usearch"),
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
@@ -33,6 +38,7 @@ let package = Package(
             dependencies: [
                 "RishiSearch",
                 "RishiLogging",
+                "RishiLibrary",
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "USearch", package: "usearch"),
             ]
