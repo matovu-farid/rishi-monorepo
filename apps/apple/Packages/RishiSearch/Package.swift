@@ -11,6 +11,7 @@ let package = Package(
         .package(path: "../RishiCore"),
         .package(path: "../RishiLogging"),
         .package(url: "https://github.com/unum-cloud/usearch", from: "2.25.3"),
+        .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.11.0"),
     ],
     targets: [
         .target(
@@ -19,6 +20,7 @@ let package = Package(
                 "RishiCore",
                 "RishiLogging",
                 .product(name: "USearch", package: "usearch"),
+                .product(name: "GRDB", package: "GRDB.swift"),
             ],
             resources: [
                 .process("Resources/AllMiniLML6V2.mlmodel"),
@@ -28,7 +30,10 @@ let package = Package(
         ),
         .testTarget(
             name: "RishiSearchTests",
-            dependencies: ["RishiSearch"]
+            dependencies: [
+                "RishiSearch",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ]
         ),
     ]
 )
