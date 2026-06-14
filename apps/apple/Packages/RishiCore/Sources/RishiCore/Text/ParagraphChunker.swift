@@ -112,8 +112,23 @@ public nonisolated enum ParagraphChunker {
         guard !text.isEmpty else { return [] }
 
         let rawParagraphs: [String]
-        if text.contains("<p") {
-            rawParagraphs = splitByPTags(text)
+        if text.contains("<") {
+            // Any markup present (full XHTML doc from Readium, or a raw
+            // `<p>` fragment) routes through the tag-aware path. First drop
+            // non-spoken element bodies (`<head>`, `<style>`, `<script>`)
+            // wholesale so their CSS / JS / metadata text never reaches TTS,
+            // then split on `<p>` boundaries (with the outside-`<p>` regions
+            // tag-stripped too). Anything left without `<p>` tags still gets
+            // its inline tags stripped before blank-line splitting.
+            let cleaned = insertBlockBoundaries(removeNonSpokenElements(text))
+            if cleaned.range(of: "<p", options: .caseInsensitive) != nil {
+                rawParagraphs = splitByPTags(cleaned)
+            } else {
+                // Split on blank-line boundaries FIRST, then strip tags per
+                // block. Stripping first would collapse the boundaries we just
+                // inserted (and any source blank lines) into single spaces.
+                rawParagraphs = splitByBlankLines(cleaned).map { stripTags($0) }
+            }
         } else {
             rawParagraphs = splitByBlankLines(text)
         }
@@ -151,7 +166,7 @@ public nonisolated enum ParagraphChunker {
             let outside = NSRange(location: cursor, length: match.range.location - cursor)
             if outside.length > 0 {
                 let chunk = nsText.substring(with: outside)
-                paragraphs.append(contentsOf: splitByBlankLines(chunk))
+                paragraphs.append(contentsOf: splitOutsideRegion(chunk))
             }
             let inside = nsText.substring(with: match.range(at: 1))
             paragraphs.append(stripTags(inside))
@@ -159,9 +174,61 @@ public nonisolated enum ParagraphChunker {
         }
         if cursor < nsText.length {
             let tail = nsText.substring(with: NSRange(location: cursor, length: nsText.length - cursor))
-            paragraphs.append(contentsOf: splitByBlankLines(tail))
+            paragraphs.append(contentsOf: splitOutsideRegion(tail))
         }
         return paragraphs
+    }
+
+    /// Handle a region that sits OUTSIDE any `<p>...</p>` (document scaffold,
+    /// headings, list items, raw blank-line blocks). Inline / block tags here
+    /// (`<h1>`, `<body>`, `<div>`, doctype, closing tags) MUST be stripped so
+    /// markup is never spoken — the prior implementation forwarded these
+    /// straight to `splitByBlankLines`, which leaked the raw XHTML scaffold
+    /// into the TTS chunks (reader-tts-xml-and-loading symptom 1). We strip
+    /// tags first, THEN split the resulting plain text on blank lines.
+    nonisolated private static func splitOutsideRegion(_ region: String) -> [String] {
+        // Split on blank-line boundaries FIRST (so raw blank-line-separated
+        // paragraphs survive as distinct chunks), THEN strip tags per block.
+        // `stripTags` collapses internal whitespace, so doing it before the
+        // blank-line split would merge separate paragraphs into one chunk.
+        return splitByBlankLines(region)
+            .map { stripTags($0) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Block-level HTML elements whose edges should start a new chunk even
+    /// when no blank line separates them. EPUB/XHTML expresses paragraph
+    /// structure with tags (headings, list items, divs) rather than blank
+    /// lines, so the `<p>`-only + blank-line splitters lump a heading, an
+    /// intro paragraph and a `<ul>` list into one chunk. Normalising these
+    /// boundaries into blank lines up front lets the existing splitters break
+    /// on them. Runs of inserted newlines collapse in `scanByBlankLines`, so
+    /// emitting `\n\n` on both sides of every boundary tag is safe.
+    nonisolated private static func insertBlockBoundaries(_ html: String) -> String {
+        let blockTags = "p|div|li|ul|ol|h[1-6]|blockquote|section|article|aside"
+            + "|header|footer|figure|figcaption|table|thead|tbody|tr|pre|hr"
+        let pattern = "</?(?:\(blockTags))\\b[^>]*>"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return html
+        }
+        let range = NSRange(html.startIndex..., in: html)
+        return regex.stringByReplacingMatches(in: html, range: range, withTemplate: "\n\n$0\n\n")
+    }
+
+    /// Remove element bodies that are never spoken: `<head>...</head>`,
+    /// `<style>...</style>`, `<script>...</script>`. Without this the CSS /
+    /// JS / `<title>` / `<meta>` text inside those elements survives tag
+    /// stripping (it is character data, not markup) and gets read aloud.
+    nonisolated private static func removeNonSpokenElements(_ html: String) -> String {
+        var result = html
+        for tag in ["head", "style", "script"] {
+            let pattern = "<\(tag)[^>]*>[\\s\\S]*?</\(tag)>"
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+                let range = NSRange(result.startIndex..., in: result)
+                result = regex.stringByReplacingMatches(in: result, range: range, withTemplate: " ")
+            }
+        }
+        return result
     }
 
     /// Split on blank-line boundaries (`\n\s*\n`).

@@ -88,6 +88,57 @@ struct ParagraphChunkerTests {
     }
 
     @Test
+    func full_xhtml_document_strips_all_markup() {
+        // Regression: an EPUB resource from Readium is a full XHTML doc.
+        // Content OUTSIDE <p> regions (head/title/style/CSS, headings,
+        // doctype, closing tags) must NOT leak into the spoken chunks.
+        let input = """
+        <?xml version="1.0" encoding="utf-8"?>
+        <!DOCTYPE html>
+        <html xmlns="http://www.w3.org/1999/xhtml">
+        <head>
+          <title>Chapter 1</title>
+          <link rel="stylesheet" type="text/css" href="style.css"/>
+          <style>body { margin: 0; } p { text-indent: 1em; }</style>
+        </head>
+        <body>
+          <h1>Chapter One</h1>
+          <p>It was a bright cold day in April.</p>
+          <p>The clocks were striking thirteen.</p>
+        </body>
+        </html>
+        """
+        let out = ParagraphChunker.chunk(input)
+        // No chunk may contain markup or CSS leakage.
+        for chunk in out {
+            #expect(!chunk.contains("<"), "markup leaked into spoken chunk: \(chunk)")
+            #expect(!chunk.contains(">"), "markup leaked into spoken chunk: \(chunk)")
+            #expect(!chunk.contains("margin"), "CSS leaked into spoken chunk: \(chunk)")
+            #expect(!chunk.contains("DOCTYPE"), "doctype leaked into spoken chunk: \(chunk)")
+            #expect(!chunk.contains("stylesheet"), "head leaked into spoken chunk: \(chunk)")
+        }
+        // The real prose survives.
+        let joined = out.joined(separator: " ")
+        #expect(joined.contains("It was a bright cold day in April."))
+        #expect(joined.contains("The clocks were striking thirteen."))
+    }
+
+    @Test
+    func heading_outside_p_is_kept_as_clean_text() {
+        // An <h1> heading sits outside any <p>; its text should be spoken
+        // (stripped of the tag), not dropped and not leaked as markup.
+        let input = "<body><h1>Chapter One</h1><p>Body text here.</p></body>"
+        let out = ParagraphChunker.chunk(input)
+        let joined = out.joined(separator: " ")
+        #expect(joined.contains("Chapter One"))
+        #expect(joined.contains("Body text here."))
+        for chunk in out {
+            #expect(!chunk.contains("<"))
+            #expect(!chunk.contains(">"))
+        }
+    }
+
+    @Test
     func mixed_p_and_blank_line_handled() {
         let input = "<p>HTML para.</p>\n\nRaw para one.\n\nRaw para two."
         let out = ParagraphChunker.chunk(input)
@@ -142,6 +193,54 @@ struct ParagraphChunkerTests {
             )
             ==
             ["Chapter 1", "Body paragraph well past fifty characters of body text content."]
+        )
+    }
+
+    @Test
+    func list_items_split_into_separate_chunks() {
+        // A <ul>/<li> list expresses structure with tags, not blank lines.
+        // Each item should become its own chunk, not collapse into one.
+        let input = "<p>Some of them include:</p><ul><li>Product</li><li>Pricing</li></ul>"
+        #expect(
+            ParagraphChunker.chunk(input)
+            == ["Some of them include:", "Product", "Pricing"]
+        )
+    }
+
+    @Test
+    func list_after_paragraph_not_merged_with_neighbours() {
+        // Screenshot regression: intro paragraph + bullet list + trailing
+        // paragraph were highlighted as ONE chunk. They must be distinct.
+        let input = "<p>Some of them include:</p>"
+            + "<ul><li>Product</li><li>Pricing</li></ul>"
+            + "<p>This is the marketing checklist.</p>"
+        #expect(
+            ParagraphChunker.chunk(input)
+            == ["Some of them include:", "Product", "Pricing", "This is the marketing checklist."]
+        )
+    }
+
+    @Test
+    func heading_and_list_without_p_split_into_blocks() {
+        // Heading + div body + list, none wrapped in <p>. Block-level tags
+        // must still act as chunk boundaries.
+        let input = "<h2>Not Enough Ps</h2>"
+            + "<div>Marketers have long talked about the five Ps.</div>"
+            + "<ul><li>Product</li><li>Pricing</li></ul>"
+        #expect(
+            ParagraphChunker.chunk(input)
+            == ["Not Enough Ps", "Marketers have long talked about the five Ps.", "Product", "Pricing"]
+        )
+    }
+
+    @Test
+    func div_separated_blocks_split_without_p_tags() {
+        // Markup present but NO <p> anywhere (line-127 branch). Block
+        // boundaries must survive instead of collapsing to one chunk.
+        let input = "<div>First block.</div><div>Second block.</div>"
+        #expect(
+            ParagraphChunker.chunk(input)
+            == ["First block.", "Second block."]
         )
     }
 
