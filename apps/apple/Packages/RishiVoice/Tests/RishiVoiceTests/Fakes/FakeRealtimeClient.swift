@@ -24,6 +24,12 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
     private var errorContinuation: AsyncStream<RealtimeClientError>.Continuation?
     private var transcriptContinuation: AsyncStream<RealtimeTranscriptEvent>.Continuation?
 
+    // Tool-call surface (Plan 25-07): inject(toolCall:), sendToolResult, accessor.
+    private var toolCallContinuation: AsyncStream<RealtimeToolCallEvent>.Continuation?
+    private var pendingToolCalls: [RealtimeToolCallEvent] = []
+    private var sentToolResults: [(callId: String, payload: String)] = []
+    private var sendToolResultError: RealtimeClientError?
+
     public init() {}
 
     // MARK: - Test inspection
@@ -78,6 +84,36 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
         lock.withLock { _status = status }
     }
 
+    // MARK: - Tool-call test drivers (Plan 25-07)
+
+    /// Drive a tool-call event through the fake's stream. If no consumer has
+    /// requested `toolCallStream()` yet, the event is queued and replayed when
+    /// the stream is opened. Mirrors the existing `inject(transcript:)` shape
+    /// except for the replay-on-subscribe semantics (Responder unit tests in
+    /// Plan 25-09 may call `inject(toolCall:)` before subscribing).
+    public func inject(toolCall event: RealtimeToolCallEvent) {
+        lock.withLock {
+            if let cont = self.toolCallContinuation {
+                cont.yield(event)
+            } else {
+                self.pendingToolCalls.append(event)
+            }
+        }
+    }
+
+    /// Snapshot of every `(callId, payload)` pair recorded by `sendToolResult`,
+    /// in call order. Used by Plan 25-12 integration tests to assert the
+    /// Responder wrote the expected payload back.
+    public func sentToolResultsSnapshot() -> [(callId: String, payload: String)] {
+        lock.withLock { sentToolResults }
+    }
+
+    /// Stage a one-shot error for the next `sendToolResult(...)` call. Cleared
+    /// after the throw. Subsequent `sendToolResult` calls succeed normally.
+    public func setSendToolResultError(_ error: RealtimeClientError?) {
+        lock.withLock { sendToolResultError = error }
+    }
+
     // MARK: - RealtimeClientAPI
 
     public func connect(ephemeralKey: String) async throws {
@@ -93,18 +129,21 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
     }
 
     public func disconnect() async {
-        let (errCont, txCont): (
+        let (errCont, txCont, tcCont): (
             AsyncStream<RealtimeClientError>.Continuation?,
-            AsyncStream<RealtimeTranscriptEvent>.Continuation?
+            AsyncStream<RealtimeTranscriptEvent>.Continuation?,
+            AsyncStream<RealtimeToolCallEvent>.Continuation?
         ) = lock.withLock {
             _disconnectCalls += 1
             _status = .disconnected
             let e = errorContinuation; errorContinuation = nil
             let t = transcriptContinuation; transcriptContinuation = nil
-            return (e, t)
+            let tc = toolCallContinuation; toolCallContinuation = nil
+            return (e, t, tc)
         }
         errCont?.finish()
         txCont?.finish()
+        tcCont?.finish()
     }
 
     public func currentStatus() async -> RealtimeConnectionStatus {
@@ -120,6 +159,39 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
     public func transcriptStream() -> AsyncStream<RealtimeTranscriptEvent> {
         AsyncStream { continuation in
             lock.withLock { transcriptContinuation = continuation }
+        }
+    }
+
+    public func toolCallStream() -> AsyncStream<RealtimeToolCallEvent> {
+        AsyncStream { continuation in
+            lock.withLock {
+                self.toolCallContinuation = continuation
+                // Replay any tool calls injected before this subscribe — keeps
+                // the Plan 25-09 Responder unit tests order-independent.
+                for pending in self.pendingToolCalls {
+                    continuation.yield(pending)
+                }
+                self.pendingToolCalls = []
+            }
+        }
+    }
+
+    public func sendToolResult(callId: String, payload: String) async throws {
+        let (isConnected, stagedError): (Bool, RealtimeClientError?) = lock.withLock {
+            (self._status == .connected, self.sendToolResultError)
+        }
+        guard isConnected else {
+            throw RealtimeClientError(
+                code: "not_connected",
+                message: "FakeRealtimeClient: not connected"
+            )
+        }
+        if let stagedError {
+            lock.withLock { self.sendToolResultError = nil }
+            throw stagedError
+        }
+        lock.withLock {
+            self.sentToolResults.append((callId: callId, payload: payload))
         }
     }
 }
