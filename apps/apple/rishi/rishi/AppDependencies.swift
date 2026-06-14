@@ -13,6 +13,7 @@ import RishiLibrary
 import RishiLogging
 import RishiOnboarding
 import RishiReader
+import RishiSearch
 import RishiSettings
 import RishiSync
 import RishiVoice
@@ -477,7 +478,43 @@ final class AppDependencies {
         )
         let chatPresenter = await MainActor.run { ChatPresenterImpl() }
 
-        // 16. Voice stack (Phase 10 Plan 10-06).
+        // 15b. Book-aware RAG stack (Phase 25 Plan 25-10).
+        //
+        // Single shared embedder + per-book USearch index facade. Embedder
+        // construction CAN throw (Core ML compile + model load on first launch);
+        // when it does we fall back to `IdentityEmbedder` so the rest of the
+        // app stays up — the cold-start sentinel returned by `USearchBookSearch`
+        // covers the user-facing path until a real index is built. The
+        // sentinel-paths in `BookContextResponder` also keep voice usable
+        // when the index isn't ready yet (e.g. mid-import).
+        //
+        // The embedder is NOT eagerly pre-warmed at app launch — RESEARCH OQ-4
+        // says prewarm runs ONLY inside `RealtimeVoiceSession.start(bookId:)`,
+        // so users who never use voice never pay the ~500 ms cold-load cost.
+        let embedder: any BookEmbedder
+        do {
+            embedder = try CoreMLMiniLMEmbedder()
+        } catch {
+            Log.event("rag.embedder.fallback_identity", level: .warning, data: [
+                "error": String(describing: error),
+            ])
+            embedder = IdentityEmbedder()
+        }
+        let bookSearch = USearchBookSearch(
+            rootURL: documentsURL,
+            embedder: embedder,
+            k: 3
+        )
+        // Embedder reference for the prewarm closure. Capturing the protocol
+        // existential `any BookEmbedder` would need `@Sendable` plumbing across
+        // the closure; we know our two concrete conformers are Sendable, so we
+        // pin the closure to the local capture and let the compiler verify.
+        let embedderForPrewarm = embedder
+        let embedderPrewarm: @Sendable () async -> Void = {
+            await embedderForPrewarm.prewarm()
+        }
+
+        // 16. Voice stack (Phase 10 Plan 10-06 / Phase 25 Plan 25-10).
         let voicePresenter = await MainActor.run {
             VoiceSessionPresenter(
                 coordinator: audioStack.coordinator,
@@ -485,7 +522,9 @@ final class AppDependencies {
                 messageStore: messageStore,
                 conversationLookup: conversationLookup,
                 userIdProvider: { [userIdBox] in userIdBox.value },
-                dirtyHook: voiceDirtyAdapter
+                dirtyHook: voiceDirtyAdapter,
+                bookSearch: bookSearch,
+                embedderPrewarm: embedderPrewarm
             )
         }
 

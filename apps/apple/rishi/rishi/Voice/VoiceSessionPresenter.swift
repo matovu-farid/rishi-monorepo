@@ -27,6 +27,7 @@ import RishiCore
 import RishiAudio
 import RishiAPI
 import RishiChat
+import RishiSearch
 import RishiVoice
 import RishiLogging
 
@@ -58,6 +59,14 @@ final class VoiceSessionPresenter {
     private let dirtyHook: any VoiceTranscriptDirtyHook
     private let micGate: any MicPermissionGate
 
+    // Phase 25 (Plan 25-10) — book-aware RAG wiring. Both optional so the
+    // presenter still works if/when these aren't injected (e.g. tests). When
+    // BOTH bookSearch + bookId are present, RealtimeVoiceSession spawns a
+    // BookContextResponder for the session. embedderPrewarm runs in parallel
+    // with the key fetch when a book id is present.
+    private let bookSearch: (any BookSearch)?
+    private let embedderPrewarm: (@Sendable () async -> Void)?
+
     // MARK: - Per-session state
 
     private var bridgeTask: Task<Void, Never>?
@@ -69,7 +78,9 @@ final class VoiceSessionPresenter {
         conversationLookup: ConversationLookup,
         userIdProvider: @escaping @MainActor () -> UserID?,
         dirtyHook: any VoiceTranscriptDirtyHook,
-        micGate: any MicPermissionGate = SystemMicPermissionGate()
+        micGate: any MicPermissionGate = SystemMicPermissionGate(),
+        bookSearch: (any BookSearch)? = nil,
+        embedderPrewarm: (@Sendable () async -> Void)? = nil
     ) {
         self.state = VoiceSessionState()
         self.coordinator = coordinator
@@ -79,6 +90,8 @@ final class VoiceSessionPresenter {
         self.userIdProvider = userIdProvider
         self.dirtyHook = dirtyHook
         self.micGate = micGate
+        self.bookSearch = bookSearch
+        self.embedderPrewarm = embedderPrewarm
     }
 
     // MARK: - Public lifecycle
@@ -126,12 +139,29 @@ final class VoiceSessionPresenter {
             dirtyHook: dirtyHook
         )
 
+        // Phase 25 (Plan 25-10) — wire the BookContextResponder factory and
+        // embedder prewarm into the session when we have a BookSearch + the
+        // call is bound to a book. The factory closes over the search +
+        // adapter; RealtimeVoiceSession invokes it after connect when bookId
+        // is non-nil.
+        let responderFactory: RealtimeVoiceSession.BookContextResponderFactory? = bookSearch.map { search in
+            return { @Sendable bookId in
+                BookContextResponder(
+                    client: adapter,
+                    search: search,
+                    bookId: bookId
+                )
+            }
+        }
+
         let session = RealtimeVoiceSession(
             micGate: micGate,
             coordinator: coordinator,
             keyFetcher: fetcher,
             client: adapter,
-            state: state
+            state: state,
+            responderFactory: responderFactory,
+            embedderPrewarm: embedderPrewarm
         )
         self.session = session
 
@@ -155,7 +185,15 @@ final class VoiceSessionPresenter {
         }
 
         isPresenting = true
-        await session.start(language: "en")
+        // Phase 25 (Plan 25-10) — forward the bookId so the session can
+        // build a BookContextSnapshot for the worker AND spawn the
+        // BookContextResponder. The reader doesn't currently push
+        // currentPage/pageText/outline/activeParagraphText through this seam;
+        // those finer-grained signals will be added by the reader integration
+        // plan that follows. For now the snapshot carries just bookId, which
+        // is sufficient for the worker to register the `bookContext` tool
+        // and for the on-device Responder to look up passages.
+        await session.start(language: "en", bookId: bookId)
     }
 
     /// Terminate the active session. Idempotent — calls into
