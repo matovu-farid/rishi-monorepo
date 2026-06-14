@@ -30,13 +30,19 @@ public actor BookFileStorage {
     private let metadataExtractors: [String: any MetadataExtractor]
     private let fileManager: FileManager
     private let coverCache: CoverCache?
+    /// Phase 25 Plan 25-11 — fire-and-forget RAG indexing seam. Default
+    /// `NoopBookIndexingHook` so existing call sites (tests, sample-book
+    /// installers) keep working byte-compatibly. Production AppDependencies
+    /// wires a `RishiSearchIndexingHook` from the `RishiSearch` package.
+    private let bookIndexingHook: any BookIndexingHook
 
     public init(
         rootURL: URL,
         bookStore: any BookStore,
         coverExtractors: [String: any CoverExtractor],
         metadataExtractors: [String: any MetadataExtractor] = [:],
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        bookIndexingHook: any BookIndexingHook = NoopBookIndexingHook()
     ) {
         self.rootURL = rootURL
         self.booksDirURL = rootURL.appendingPathComponent("Books", isDirectory: true)
@@ -44,6 +50,7 @@ public actor BookFileStorage {
         self.coverExtractors = coverExtractors
         self.metadataExtractors = metadataExtractors
         self.fileManager = fileManager
+        self.bookIndexingHook = bookIndexingHook
         // Phase 21: opportunistic disk cache for extracted covers. Lives under
         // `<root>/Caches/book-covers/` so we don't pollute the Books layout.
         // The cache is only useful when we have extractors to delegate to; in
@@ -129,6 +136,12 @@ public actor BookFileStorage {
             coverPath: coverPath
         )
         try await bookStore.upsert(book)
+        // Phase 25 Plan 25-11 — fire RAG indexing AFTER the book is openable
+        // (file copied + row upserted). The hook must return quickly (production
+        // conformer spawns a `Task.detached`); we await the hook itself but not
+        // the indexing work. Failures surface via the per-book index.status.json
+        // sidecar, never thrown back through importBook.
+        await bookIndexingHook.scheduleIndexing(for: book, fileURL: destURL)
         return book
     }
 
