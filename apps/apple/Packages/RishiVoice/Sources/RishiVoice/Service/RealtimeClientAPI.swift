@@ -51,6 +51,29 @@ public struct RealtimeClientError: Error, Sendable, Equatable {
     }
 }
 
+/// One tool call surfaced by the realtime peer, ready to dispatch.
+/// `argumentsJSON` is the SDK's `Item.FunctionCall.arguments` string verbatim —
+/// the Responder (Plan 25-09) decodes it into a strongly-typed argument struct
+/// (`struct BookContextArgs: Decodable { let queryText: String }`).
+public struct RealtimeToolCallEvent: Sendable, Equatable {
+    public let callId: String
+    public let name: String
+    public let argumentsJSON: String
+    public let timestamp: Date
+
+    public init(
+        callId: String,
+        name: String,
+        argumentsJSON: String,
+        timestamp: Date = Date()
+    ) {
+        self.callId = callId
+        self.name = name
+        self.argumentsJSON = argumentsJSON
+        self.timestamp = timestamp
+    }
+}
+
 /// Seam isolating `RealtimeVoiceSession` (Plan 10-03) from the
 /// `swift-realtime-openai` SDK. Production impl: `RealtimeAPIAdapter`.
 /// Test impl: `FakeRealtimeClient`.
@@ -78,4 +101,14 @@ public protocol RealtimeClientAPI: Sendable {
 
     /// Transcript-event stream. Finishes when the client disconnects.
     func transcriptStream() -> AsyncStream<RealtimeTranscriptEvent>
+
+    /// Tool-call event stream surfaced by the realtime peer. Finishes when the
+    /// client disconnects. Plan 25-09's `BookContextResponder` consumes this.
+    func toolCallStream() -> AsyncStream<RealtimeToolCallEvent>
+
+    /// Send a tool-call result back to the realtime peer. `callId` MUST match the
+    /// inbound `RealtimeToolCallEvent.callId` verbatim. `payload` is a JSON string —
+    /// the SDK forwards it as `Item.FunctionCallOutput.output`. Throws when not
+    /// connected or when the SDK rejects the send.
+    func sendToolResult(callId: String, payload: String) async throws
 }
