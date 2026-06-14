@@ -169,10 +169,25 @@ public actor MP3StreamDecoder {
             if isFinal { emitFinalEmpty() }
             return
         }
+        // Size the buffer so that byteCapacity (= packetCapacity *
+        // maximumPacketSize) ALWAYS covers totalBytes. Deriving the capacity
+        // purely from the descriptions' count*maxPacketSize can under-allocate
+        // (descriptions and the actually-copied bytes can desync), which makes
+        // `compressed.byteLength = totalBytes` below trip the AVFoundation
+        // assertion `length <= _imp->_byteCapacity` and crash the app. See
+        // CompressedBufferSizing for the guaranteed-safe sizing.
+        guard let sizing = CompressedBufferSizing.make(
+            packetCount: pendingDescriptions.count,
+            packetSizes: pendingDescriptions.map(\.mDataByteSize),
+            totalBytes: totalBytes
+        ) else {
+            if isFinal { emitFinalEmpty() }
+            return
+        }
         let compressed = AVAudioCompressedBuffer(
             format: sourceFormat,
-            packetCapacity: AVAudioPacketCount(pendingDescriptions.count),
-            maximumPacketSize: Int(pendingDescriptions.map(\.mDataByteSize).max() ?? 0)
+            packetCapacity: sizing.packetCapacity,
+            maximumPacketSize: sizing.maximumPacketSize
         )
 
         var offset = 0
