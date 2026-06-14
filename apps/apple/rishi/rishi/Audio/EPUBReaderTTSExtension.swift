@@ -20,6 +20,7 @@
 //
 
 import Foundation
+import RishiCore
 import RishiReader
 import ReadiumShared
 

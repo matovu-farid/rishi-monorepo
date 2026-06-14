@@ -24,6 +24,7 @@
 
 import Foundation
 import PDFKit
+import RishiCore
 import RishiReader
 
 /// MainActor-isolated storage for the per-VM read-aloud index. Default-
