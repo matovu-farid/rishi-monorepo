@@ -36,6 +36,10 @@ import { requireActiveSubscription } from "./billing/sub-gate";
 import { createDb } from "./db/drizzle";
 import { user as userTable } from "@rishi/shared/schema";
 import { getStripeIdsForKey } from "@rishi/shared/billing/stripe-config";
+import {
+  BOOK_CONTEXT_TOOL_SPEC,
+  renderRealtimeInstructions,
+} from "@rishi/shared/voice-chat/build-realtime-agent";
 import { eq } from "drizzle-orm";
 
 // Must stay in sync with apps/rishi-electron/src/renderer/src/lib/languages.ts
@@ -72,14 +76,54 @@ function getOpenAI(apiKey: string): ReturnType<typeof createOpenAI> {
 }
 
 /**
- * Build the request body sent to OpenAI's POST /v1/realtime/client_secrets.
+ * Phase 25-06: the worker now bakes a book-aware system prompt + the
+ * `bookContext` tool spec into the OpenAI realtime session, so the model can
+ * actually invoke the iOS-side Responder. iOS (Plan 25-08) ships the matching
+ * POST body atomically. The legacy `(language: string)` signature is gone —
+ * callers pass an `BuildClientSecretsInput` object, all book-context fields
+ * optional.
  *
- * Extracted as a pure function so we can assert on its shape in tests. OpenAI
- * requires `session.audio.input.transcription.model` whenever the
- * `transcription` object is present — omitting it produces a 400
- * `missing_required_parameter` and breaks voice chat activation.
+ * Notes
+ * - When `outline` / `pageText` / `activeParagraphText` are absent,
+ *   `renderRealtimeInstructions` still produces a coherent generic prompt
+ *   (no "undefined"/"null" leakage) — see packages/shared tests for that
+ *   string-rendering contract.
+ * - OpenAI requires `session.audio.input.transcription.model` whenever the
+ *   `transcription` object is present — omitting it produces a 400
+ *   `missing_required_parameter` and breaks voice chat activation. (Regression
+ *   pinned by buildRealtimeClientSecretsBody tests.)
  */
-export function buildRealtimeClientSecretsBody(language: string) {
+export interface BuildClientSecretsInput {
+  language: string
+  bookId?: string
+  currentPage?: number
+  pageText?: string
+  outline?: {
+    title: string
+    author?: string
+    chapters: string[]
+  }
+  activeParagraphText?: string
+}
+
+export function buildRealtimeClientSecretsBody(input: BuildClientSecretsInput) {
+  // renderOutlineSection reads `outline.author` with a truthy check, so the
+  // shared `BookOutline.author: string | null` and our wire-side
+  // `author?: string` are behaviourally equivalent. Normalize undefined → null
+  // for the type-level handshake.
+  const outline = input.outline
+    ? {
+        title: input.outline.title,
+        author: input.outline.author ?? null,
+        chapters: input.outline.chapters,
+      }
+    : undefined
+  const instructions = renderRealtimeInstructions({
+    pageText: input.pageText ?? "",
+    language: input.language,
+    outline,
+    activeParagraphText: input.activeParagraphText,
+  })
   return {
     expires_after: {
       anchor: "created_at",
@@ -88,10 +132,18 @@ export function buildRealtimeClientSecretsBody(language: string) {
     session: {
       type: "realtime",
       model: "gpt-realtime",
-      instructions: "You are a friendly assistant.",
+      instructions,
+      tools: [
+        {
+          type: "function",
+          name: BOOK_CONTEXT_TOOL_SPEC.name,
+          description: BOOK_CONTEXT_TOOL_SPEC.description,
+          parameters: BOOK_CONTEXT_TOOL_SPEC.parameters,
+        },
+      ],
       audio: {
         input: {
-          transcription: { model: "gpt-4o-mini-transcribe", language },
+          transcription: { model: "gpt-4o-mini-transcribe", language: input.language },
         },
       },
     },
@@ -500,12 +552,27 @@ app.post("/api/audio/speech", requireAuth, requireActiveSubscription, async (c) 
   }
 });
 
-app.get("/api/realtime/client_secrets", requireAuth, requireActiveSubscription, async (c) => {
+// Phase 25-06: POST migration (was GET ?language=). Body shape matches the iOS
+// RishiAPI.RealtimeClientSecretsEndpoint.Body produced in Plan 25-08 — all
+// fields optional so callers without a book (e.g. quick voice without a
+// reader open) still work. Unparseable / empty bodies degrade to
+// `{ language: "en" }`.
+app.post("/api/realtime/client_secrets", requireAuth, requireActiveSubscription, async (c) => {
   try {
-    const language = coerceLanguage(c.req.query("language"));
+    const rawBody = await c.req
+      .json<Partial<BuildClientSecretsInput>>()
+      .catch((): Partial<BuildClientSecretsInput> => ({}));
+    const language = coerceLanguage(rawBody.language);
     const response = await axios.post(
       "https://api.openai.com/v1/realtime/client_secrets",
-      buildRealtimeClientSecretsBody(language),
+      buildRealtimeClientSecretsBody({
+        language,
+        bookId: rawBody.bookId,
+        currentPage: rawBody.currentPage,
+        pageText: rawBody.pageText,
+        outline: rawBody.outline,
+        activeParagraphText: rawBody.activeParagraphText,
+      }),
       {
         headers: {
           Authorization: `Bearer ${c.env.OPENAI_API_KEY}`,
