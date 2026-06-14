@@ -11,7 +11,7 @@ import Foundation
 /// Output vectors are 384-dim and L2-normalized so cosine similarity over
 /// USearch reduces to dot product. Implementations MUST normalize before
 /// returning; the contract is "ready to plug into `index.add(...)`".
-protocol BookEmbedder: Sendable {
+public protocol BookEmbedder: Sendable {
     /// Embed one input string into a 384-element L2-normalized vector.
     /// Implementations may truncate input above the model's sequence
     /// length (64 word pieces for `all-MiniLM-L6-v2` as vendored).

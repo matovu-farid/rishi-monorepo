@@ -32,7 +32,9 @@ let package = Package(
             name: "RishiSearchTests",
             dependencies: [
                 "RishiSearch",
+                "RishiLogging",
                 .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "USearch", package: "usearch"),
             ]
         ),
     ]
