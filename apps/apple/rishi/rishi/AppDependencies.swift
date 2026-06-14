@@ -565,6 +565,7 @@ final class AppDependencies {
             ttsEngine: audioStack.engine,
             ttsSettingsStore: audioStack.settingsStore,
             nowPlayingController: audioStack.nowPlaying,
+            ttsPrewarmer: audioStack.prewarmer,
             syncMetadataStore: syncMetadataStore,
             syncQueue: syncQueue,
             syncStatus: syncStatus,
@@ -731,6 +732,7 @@ final class AppDependencies {
     var ttsEngine: TTSEngine { services!.ttsEngine }
     var ttsSettingsStore: any TTSSettingsStore { services!.ttsSettingsStore }
     var nowPlayingController: NowPlayingController { services!.nowPlayingController }
+    var ttsPrewarmer: TTSPrewarmer { services!.ttsPrewarmer }
 
     var syncMetadataStore: GRDBSyncMetadataStore { services!.syncMetadataStore }
     var syncQueue: SyncQueue { services!.syncQueue }
@@ -843,6 +845,10 @@ final class AppDependencies {
         let engine: TTSEngine
         let settingsStore: any TTSSettingsStore
         let nowPlaying: NowPlayingController
+        // Phase 24 plan 24-03 — prewarmer for paragraph read-ahead. Built
+        // from the SAME `chunkSource` the engine streams from so warm
+        // drains hit the same CachingTTSChunkSource the engine consults.
+        let prewarmer: TTSPrewarmer
     }
 
     // MARK: - Wave A helpers (F-P2-04 medium)
@@ -911,6 +917,11 @@ final class AppDependencies {
         let chunkSource: any TTSChunkSource = ttsCacheStore.map { store in
             CachingTTSChunkSource(upstream: ttsUpstream, store: store)
         } ?? ttsUpstream
+        // Phase 24 plan 24-03 — prewarm next 3-5 paragraphs through the
+        // same CachingTTSChunkSource the engine streams from. A miss
+        // writes the MP3 to disk; a hit is a no-op. ReaderTTSBridge owns
+        // the lockstep.
+        let prewarmer = TTSPrewarmer(source: chunkSource)
         let streamer = TTSStreamer(source: chunkSource)
         let engineAdapter = AVAudioEngineAdapter()
         let engine = TTSEngine(
@@ -930,11 +941,15 @@ final class AppDependencies {
             state: state,
             engine: engine,
             settingsStore: settingsStore,
-            nowPlaying: nowPlaying
+            nowPlaying: nowPlaying,
+            prewarmer: prewarmer
         )
     }
 
-    /// Construct a fresh `ReaderTTSBridge` for one reader sheet.
+    /// Construct a fresh `ReaderTTSBridge` for one reader sheet. Phase 24
+    /// plan 24-03 — the bridge now takes a `TTSPrewarmer` so it can fire
+    /// playback + warm-of-N+1..N+5 in lockstep through the same
+    /// CachingTTSChunkSource the engine streams from.
     @MainActor
     func makeReaderTTSBridge(
         userId: UserID,
@@ -945,6 +960,7 @@ final class AppDependencies {
             engine: ttsEngine,
             state: ttsState,
             tracker: tracker,
+            prewarmer: ttsPrewarmer,
             settingsStore: ttsSettingsStore,
             userId: userId,
             onPassageChange: onPassageChange
@@ -1044,6 +1060,7 @@ struct BootstrappedServices: @unchecked Sendable {
     let ttsEngine: TTSEngine
     let ttsSettingsStore: any TTSSettingsStore
     let nowPlayingController: NowPlayingController
+    let ttsPrewarmer: TTSPrewarmer
 
     // Sync
     let syncMetadataStore: GRDBSyncMetadataStore

@@ -828,7 +828,7 @@ struct RootView: View {
             onReadAloud: FeatureFlags.readAloud ? {
                 // KEEP: outer Task only chains MainActor awaits; the heavy
                 // EPUB resource read + HTML strip is detached inside
-                // startEPUBReadAloud (sentencesForReadAloud) per F-P0-06.
+                // startEPUBReadAloud (paragraphsForReadAloud) per F-P0-06.
                 Task {
                     // BILL-04 — gate Pro features on entitlement.
                     let level = await deps.entitlementService.snapshot()
@@ -907,11 +907,11 @@ struct RootView: View {
         // collect the Sendable [String] result. The extension method is
         // `nonisolated` (see PDFReaderTTSExtension.swift) so this body
         // really does run off MainActor.
-        let sentences = await Task.detached(priority: .userInitiated) {
-            vm.sentencesForReadAloud(document: doc, currentPageIndex: pageIndex)
+        let paragraphs = await Task.detached(priority: .userInitiated) {
+            vm.paragraphsForReadAloud(document: doc, currentPageIndex: pageIndex)
         }.value
         await startReadAloud(
-            sentences: sentences,
+            paragraphs: paragraphs,
             deps: deps,
             userId: userId,
             onPassageChange: { index in vm.currentReadAloudPassageIndex = index }
@@ -924,16 +924,13 @@ struct RootView: View {
         deps: AppDependencies,
         userId: UserID
     ) async {
-        // Phase 20 structured-concurrency audit: `vm.sentencesForReadAloud`
-        // is declared in the app target (MainActor by default), so the
-        // detached task body still re-entered MainActor for the actual
-        // execution — the wrapper was pure noise. Plan 19-08 will hoist
-        // the Readium resource read + `stripHTML` work onto a nonisolated
-        // executor; until then the `await` here at least no longer pretends
-        // to be off-main.
-        let sentences = await vm.sentencesForReadAloud()
+        // Phase 24 plan 24-03: EPUB read-aloud feeds paragraph-shaped
+        // chunks. `vm.paragraphsForReadAloud()` routes through
+        // ParagraphChunker.chunk(_:) which has a native `<p>`-aware path,
+        // so the raw HTML from Readium goes straight in (no pre-strip).
+        let paragraphs = await vm.paragraphsForReadAloud()
         await startReadAloud(
-            sentences: sentences,
+            paragraphs: paragraphs,
             deps: deps,
             userId: userId,
             onPassageChange: { index in vm.currentReadAloudPassageIndex = index }
@@ -941,12 +938,12 @@ struct RootView: View {
     }
 
     private func startReadAloud(
-        sentences: [String],
+        paragraphs: [String],
         deps: AppDependencies,
         userId: UserID,
         onPassageChange: @escaping (Int?) -> Void
     ) async {
-        guard !sentences.isEmpty else { return }
+        guard !paragraphs.isEmpty else { return }
         // Tear down any existing bridge before starting a new session.
         if let existing = readerTTSBridge {
             await existing.stop()
@@ -958,7 +955,7 @@ struct RootView: View {
         readerTTSBridge = bridge
         ttsPickerInitial = await deps.ttsSettingsStore.load(userId: userId)
         showTTSControls = true
-        await bridge.start(sentences: sentences)
+        await bridge.start(paragraphs: paragraphs)
     }
 
     private func stopReadAloud() async {
