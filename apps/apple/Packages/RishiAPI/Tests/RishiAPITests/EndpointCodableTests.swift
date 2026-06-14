@@ -138,12 +138,18 @@ struct EndpointCodableTests {
 
     // MARK: - Realtime + Audio
 
-    @Test func realtimeClientSecretsQueryAppended() {
+    @Test func realtimeClientSecretsIsPOSTWithBareBodyPath() {
+        // Phase 25 (Plan 25-08) migrated this endpoint from GET to POST and
+        // moved the optional `language` argument from a `?language=` query
+        // string into the request body. Path is now a bare literal with no
+        // query string; `language` lives in the JSON body alongside the new
+        // book-context fields. Detailed body-shape tests live in
+        // `Endpoints/RealtimeAPIEndpointTests.swift`.
         let e = RealtimeClientSecretsEndpoint(language: "en")
-        #expect(e.path == "/api/realtime/client_secrets?language=en")
+        #expect(e.path == "/api/realtime/client_secrets")
         let bare = RealtimeClientSecretsEndpoint()
         #expect(bare.path == "/api/realtime/client_secrets")
-        #expect(e.method == .GET)
+        #expect(e.method == .POST)
     }
 
     @Test func realtimeClientSecretsResponseDecodes() throws {

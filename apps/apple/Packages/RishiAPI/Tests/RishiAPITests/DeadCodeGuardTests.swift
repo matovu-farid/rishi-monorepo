@@ -28,8 +28,10 @@ struct DeadCodeGuardTests {
 
         // Pin the canonical path so the GREEN deletion can't accidentally
         // collapse the file in a way that mangles the surviving endpoint.
+        // Method moved from GET to POST in Phase 25 (Plan 25-08) to carry
+        // the book-context body the worker now expects.
         let endpoint = RealtimeClientSecretsEndpoint()
         #expect(endpoint.path == "/api/realtime/client_secrets")
-        #expect(endpoint.method == .GET)
+        #expect(endpoint.method == .POST)
     }
 }
