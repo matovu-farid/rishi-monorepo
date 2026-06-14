@@ -13,14 +13,14 @@ import Foundation
 /// also `.notIndexed` (treated as "no usable index yet") rather than
 /// throwing, because the search path needs a single sentinel to fall back
 /// to without exception handling on the read path.
-struct IndexStatusStore: Sendable {
-    let url: URL
+public struct IndexStatusStore: Sendable {
+    public let url: URL
 
-    init(url: URL) { self.url = url }
+    public init(url: URL) { self.url = url }
 
     /// Read the current status. Returns `.notIndexed` for any read or
     /// decode failure. Never throws.
-    func read() -> BookSearchStatus {
+    public func read() -> BookSearchStatus {
         guard let data = try? Data(contentsOf: url),
               let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else {
             return .notIndexed
@@ -29,7 +29,7 @@ struct IndexStatusStore: Sendable {
     }
 
     /// Atomically write the status. Creates intermediate directories as needed.
-    func write(_ status: BookSearchStatus) throws {
+    public func write(_ status: BookSearchStatus) throws {
         let envelope = Envelope(status: status)
         let dir = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
