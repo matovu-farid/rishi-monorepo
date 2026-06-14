@@ -40,7 +40,7 @@ public struct ReadAloudControlsView: View {
         VStack(alignment: .leading, spacing: RishiSpacing.m) {
             statusLabel
 
-            HStack(spacing: RishiSpacing.l) {
+            HStack(spacing: RishiSpacing.s) {
                 Button(action: onPlayPause) {
                     Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                         .font(RishiTypography.titleM)
@@ -94,15 +94,10 @@ public struct ReadAloudControlsView: View {
                 Spacer()
 
                 Button(action: onOpenPicker) {
-                    HStack(spacing: RishiSpacing.xs) {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(RishiTypography.body)
-                        Text("Voice & Speed")
-                            .font(RishiTypography.body)
-                    }
-                    .foregroundStyle(RishiColor.accent)
-                    .padding(.horizontal, RishiSpacing.s)
-                    .padding(.vertical, RishiSpacing.xs)
+                    Image(systemName: "slider.horizontal.3")
+                        .font(RishiTypography.titleM)
+                        .foregroundStyle(RishiColor.accent)
+                        .frame(width: 44, height: 44)
                 }
                 .accessibilityIdentifier("tts-open-picker")
                 .accessibilityLabel("Voice and Speed")

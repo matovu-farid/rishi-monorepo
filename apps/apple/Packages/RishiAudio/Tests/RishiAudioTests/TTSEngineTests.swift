@@ -80,6 +80,62 @@ struct TTSEngineTests {
         #expect(mode == .idle)
     }
 
+    /// Real MP3 fixture sliced into stream chunks so the decoder produces real
+    /// PCM the FakeAudioEngine can observe (the tiny garbage chunks in
+    /// `makeFixture`'s default decode to nothing).
+    private func loadFixtureMP3Chunks(sliceSize: Int = 4096) throws -> [Data] {
+        let url = try #require(
+            Bundle.module.url(forResource: "alice-p0", withExtension: "mp3", subdirectory: "Fixtures"),
+            "alice-p0.mp3 fixture must be bundled"
+        )
+        let data = try Data(contentsOf: url)
+        var chunks: [Data] = []
+        var i = 0
+        while i < data.count {
+            let end = min(i + sliceSize, data.count)
+            chunks.append(data.subdata(in: i..<end))
+            i = end
+        }
+        return chunks
+    }
+
+    private func poll(timeout: TimeInterval, _ predicate: @Sendable () -> Bool) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if predicate() { return }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    /// Reproduces the reader's prev/next/repeat path: ReaderTTSBridge.jump()
+    /// calls engine.stop() then engine.start(newPassage). The .holds bridge fake
+    /// never exercised the REAL engine's stop-then-start, so this asserts the new
+    /// passage actually reaches the audio engine after a stop().
+    @Test("stop() then start(new passage) plays the new passage (next/prev jump path)")
+    func stopThenStartPlaysNewPassage() async throws {
+        let chunks = try loadFixtureMP3Chunks()
+        let (engine, fakeEngine, _, _) = await MainActor.run { makeFixture(chunks: chunks) }
+
+        @Sendable func sawPassage(_ id: String) -> Bool {
+            fakeEngine.calls.contains { call in
+                if case .chunkSeen(_, id, _) = call { return true }
+                return false
+            }
+        }
+
+        await engine.start(request: TTSStreamRequest(text: "a", voice: "alloy", speed: 1.0, passageId: "0"))
+        await poll(timeout: 5) { sawPassage("0") }
+        #expect(sawPassage("0"), "first passage must reach the engine")
+
+        // The jump sequence: stop the current passage, then start the next.
+        await engine.stop()
+        await engine.start(request: TTSStreamRequest(text: "b", voice: "alloy", speed: 1.0, passageId: "1"))
+        await poll(timeout: 5) { sawPassage("1") }
+
+        #expect(sawPassage("1"), "after stop() + start(new), the NEW passage must play; if not, next/prev do nothing")
+        await engine.stop()
+    }
+
     @Test("Streamer error transitions state to .error or .stopped")
     func streamerErrorTransitionsState() async {
         // throwAfter: 0 makes the FakeTTSChunkSource throw on the very first chunk.
