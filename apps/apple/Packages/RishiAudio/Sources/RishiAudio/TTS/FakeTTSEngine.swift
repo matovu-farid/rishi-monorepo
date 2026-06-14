@@ -41,16 +41,47 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
         /// `.loading` / `.playing`. Used by 29-03 to exercise the watcher's
         /// passage-identity fast path.
         case prewarmedFast
+        /// Drives the injected state to `.error` (sets `error`) with no
+        /// `.playing`/`.stopped`. Used by 29-03 to assert the bridge bails
+        /// (does not advance) when the engine reports a failure.
+        case error
     }
 
     private let state: TTSPlaybackState
-    private let script: Script
+    private let defaultScript: Script
+    /// Optional per-passage script overrides keyed by passage id, so a single
+    /// fake can drive index 0 with `.normal` and indices >= 1 with
+    /// `.prewarmedFast` (the prewarmed-fast-advance reproducer in 29-03).
+    private let scriptsByPassageId: [String: Script]
 
     private let lock = OSAllocatedUnfairLock(initialState: [Call]())
 
     public init(state: TTSPlaybackState, script: Script = .normal) {
         self.state = state
-        self.script = script
+        self.defaultScript = script
+        self.scriptsByPassageId = [:]
+    }
+
+    /// Per-passage scripting. `scriptsByPassageId[passageId]` wins for a request
+    /// carrying that id; otherwise `default` is used. Enables the round-2
+    /// reproducer where the FIRST paragraph is synthesis-bound (`.normal`) and
+    /// every subsequent (prewarmed/cache-hit) paragraph runs its whole lifecycle
+    /// inside one poll (`.prewarmedFast`).
+    public init(
+        state: TTSPlaybackState,
+        default defaultScript: Script,
+        scriptsByPassageId: [String: Script]
+    ) {
+        self.state = state
+        self.defaultScript = defaultScript
+        self.scriptsByPassageId = scriptsByPassageId
+    }
+
+    private func script(for passageId: String?) -> Script {
+        if let passageId, let override = scriptsByPassageId[passageId] {
+            return override
+        }
+        return defaultScript
     }
 
     /// Ordered log of every call made on this fake.
@@ -66,7 +97,7 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
         append(.start(passageId: request.passageId))
         let observable = state
         let passageId = request.passageId
-        switch script {
+        switch script(for: passageId) {
         case .normal:
             await MainActor.run {
                 observable.status = .loading
@@ -85,6 +116,11 @@ public final class FakeTTSEngine: TTSPlaying, @unchecked Sendable {
                 observable.status = .stopped
                 observable.currentPassageId = passageId
                 observable.error = nil
+            }
+        case .error:
+            await MainActor.run {
+                observable.status = .error
+                observable.error = "FakeTTSEngine scripted error"
             }
         }
     }
