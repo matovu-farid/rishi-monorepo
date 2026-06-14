@@ -81,6 +81,12 @@ public struct PDFReaderScreen: View {
     /// presenter is the seam (`ReaderChatPresenter` protocol in this
     /// package, satisfied by `ChatPresenterImpl` at the app layer).
     private let chatPresenter: (any ReaderChatPresenter)?
+    /// Text of the paragraph currently being read aloud, or `nil` when no
+    /// read-aloud session is active. Supplied by the app layer (RootView)
+    /// which owns the TTS bridge + paragraph list. The screen renders it as
+    /// an inline `PDFView.highlightedSelections` highlight that follows the
+    /// spoken passage page-to-page.
+    private let readAloudParagraph: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Chrome visibility is owned by a small `@Observable` controller so
     /// the tap-to-toggle, auto-hide, and VoiceOver behaviors live in a
@@ -135,13 +141,15 @@ public struct PDFReaderScreen: View {
         readerSettingsStore: (any ReaderSettingsStore)? = nil,
         highlightStore: (any HighlightStore)? = nil,
         onReadAloud: (() -> Void)? = nil,
-        chatPresenter: (any ReaderChatPresenter)? = nil
+        chatPresenter: (any ReaderChatPresenter)? = nil,
+        readAloudParagraph: String? = nil
     ) {
         self.viewModel = viewModel
         self.readerSettingsStore = readerSettingsStore
         self.highlightStore = highlightStore
         self.onReadAloud = onReadAloud
         self.chatPresenter = chatPresenter
+        self.readAloudParagraph = readAloudParagraph
     }
 
     /// SwiftUI binding to the @Observable viewModel's theme. Tracks writes so
@@ -187,6 +195,7 @@ public struct PDFReaderScreen: View {
                     },
                     onPDFViewReady: { view in
                         pdfViewRef = view
+                        applyReadAloudHighlight()
                     },
                     onTap: { location in
                         let resolver = ReaderTapRegionResolver()
@@ -333,6 +342,13 @@ public struct PDFReaderScreen: View {
                 viewModel.theme = await settings.theme(for: viewModel.book.id)
             }
         }
+        #if canImport(UIKit)
+        // Read-aloud inline highlight: follow the spoken passage as the TTS
+        // bridge advances (paragraph text changes) and re-resolve it after a
+        // page turn (the selection is page-scoped).
+        .onChange(of: readAloudParagraph) { _, _ in applyReadAloudHighlight() }
+        .onChange(of: viewModel.pageIndex) { _, _ in applyReadAloudHighlight() }
+        #endif
         // Phase 12 Plan 12-01 — Mac menu arrow paging.
         // Phase 18 Plan 18-02 (F-P1-01) — bump the haptic trigger
         // counters so `.sensoryFeedback` fires from Mac arrow keys too.
@@ -507,6 +523,22 @@ public struct PDFReaderScreen: View {
     // MARK: - Selection / highlight flow (UIKit-only)
 
     #if canImport(UIKit)
+    /// Resolves `readAloudParagraph` to a `PDFSelection` on the current page
+    /// and pushes it into `PDFView.highlightedSelections` so the passage is
+    /// tinted without disturbing the user's own text selection. Clears the
+    /// highlight when no passage is active or it is not on the visible page.
+    private func applyReadAloudHighlight() {
+        guard let pdfView = pdfViewRef else { return }
+        guard let paragraph = readAloudParagraph,
+              let page = pdfView.currentPage,
+              let selection = PDFReadAloudHighlighter.selection(in: page, paragraph: paragraph)
+        else {
+            pdfView.highlightedSelections = nil
+            return
+        }
+        pdfView.highlightedSelections = [selection]
+    }
+
     private func handleSelectionChange(_ selection: PDFSelection?) {
         guard let selection,
               let document = viewModel.document,

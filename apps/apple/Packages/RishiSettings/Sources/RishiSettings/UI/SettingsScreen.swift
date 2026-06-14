@@ -41,6 +41,11 @@ public struct SettingsScreen: View {
     /// Telemetry store backing the Privacy toggle.
     public let telemetryStore: any TelemetryStore
 
+    /// Phase 27-06 footer-detection store backing the "Skip page footers when
+    /// indexing" toggle. Defaults to an in-memory store in previews; production
+    /// wiring in `AppDependencies` passes the UserDefaults-backed impl.
+    public let footerDetectionStore: any FooterDetectionStore
+
     /// Entitlement resolver — defaults to `.production` (reads
     /// `ReaderAppEntitlementFlag.isGranted`); tests override.
     public let billingEntitlement: ReaderAppEntitlementFlag.Resolver
@@ -58,6 +63,7 @@ public struct SettingsScreen: View {
         syncStatus: SyncStatus,
         onSyncNow: @escaping @Sendable () -> Void,
         telemetryStore: any TelemetryStore,
+        footerDetectionStore: any FooterDetectionStore,
         billingEntitlement: ReaderAppEntitlementFlag.Resolver = .production,
         onSignOut: @escaping () async -> Void,
         onDelete: @escaping () async throws -> Void,
@@ -75,6 +81,7 @@ public struct SettingsScreen: View {
         self.syncStatus = syncStatus
         self.onSyncNow = onSyncNow
         self.telemetryStore = telemetryStore
+        self.footerDetectionStore = footerDetectionStore
         self.billingEntitlement = billingEntitlement
         self.onSignOut = onSignOut
         self.onDelete = onDelete
@@ -103,6 +110,7 @@ public struct SettingsScreen: View {
                     defaultTheme: $readerTheme,
                     defaultFontFamily: $readerFontFamily
                 )
+                FooterDetectionSection(store: footerDetectionStore)
                 AudioSection(
                     userId: audioUserId,
                     initialSettings: audioInitial,
@@ -162,6 +170,7 @@ private struct SettingsScreenPreviewHost: View {
             ),
             onSyncNow: {},
             telemetryStore: InMemoryTelemetryStore(initial: true),
+            footerDetectionStore: InMemoryFooterDetectionStore(initial: true),
             billingEntitlement: .init(isGranted: true),
             onSignOut: {},
             onDelete: {},

@@ -14,17 +14,26 @@ public struct ReadAloudControlsView: View {
     let onPlayPause: () -> Void
     let onStop: () -> Void
     let onOpenPicker: () -> Void
+    let onPreviousParagraph: () -> Void
+    let onNextParagraph: () -> Void
+    let onRepeatParagraph: () -> Void
 
     public init(
         state: TTSPlaybackState,
         onPlayPause: @escaping () -> Void,
         onStop: @escaping () -> Void,
-        onOpenPicker: @escaping () -> Void
+        onOpenPicker: @escaping () -> Void,
+        onPreviousParagraph: @escaping () -> Void = {},
+        onNextParagraph: @escaping () -> Void = {},
+        onRepeatParagraph: @escaping () -> Void = {}
     ) {
         self.state = state
         self.onPlayPause = onPlayPause
         self.onStop = onStop
         self.onOpenPicker = onOpenPicker
+        self.onPreviousParagraph = onPreviousParagraph
+        self.onNextParagraph = onNextParagraph
+        self.onRepeatParagraph = onRepeatParagraph
     }
 
     public var body: some View {
@@ -52,6 +61,36 @@ public struct ReadAloudControlsView: View {
                 .accessibilityLabel("Stop")
                 .disabled(state.status == .idle || state.status == .stopped)
 
+                Button(action: onPreviousParagraph) {
+                    Image(systemName: "backward.end.fill")
+                        .font(RishiTypography.titleM)
+                        .foregroundStyle(RishiColor.textSecondary)
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityIdentifier("tts-prev-paragraph")
+                .accessibilityLabel("Previous paragraph")
+                .disabled(navigationDisabled)
+
+                Button(action: onRepeatParagraph) {
+                    Image(systemName: "repeat")
+                        .font(RishiTypography.titleM)
+                        .foregroundStyle(RishiColor.textSecondary)
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityIdentifier("tts-repeat-paragraph")
+                .accessibilityLabel("Repeat paragraph")
+                .disabled(navigationDisabled)
+
+                Button(action: onNextParagraph) {
+                    Image(systemName: "forward.end.fill")
+                        .font(RishiTypography.titleM)
+                        .foregroundStyle(RishiColor.textSecondary)
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityIdentifier("tts-next-paragraph")
+                .accessibilityLabel("Next paragraph")
+                .disabled(navigationDisabled)
+
                 Spacer()
 
                 Button(action: onOpenPicker) {
@@ -74,6 +113,11 @@ public struct ReadAloudControlsView: View {
     }
 
     private var isPlaying: Bool { state.status == .playing }
+
+    /// Paragraph navigation only applies while a session is active.
+    private var navigationDisabled: Bool {
+        state.status == .idle || state.status == .stopped
+    }
 
     @ViewBuilder
     private var statusLabel: some View {

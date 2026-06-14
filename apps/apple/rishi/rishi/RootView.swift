@@ -27,6 +27,7 @@ import RishiLogging
 import RishiOnboarding
 import RishiReader
 import RishiSettings
+import RishiUIKit
 #if canImport(PDFKit)
 import PDFKit
 #endif
@@ -130,6 +131,27 @@ struct RootView: View {
     @State private var showTTSControls = false
     @State private var showTTSPicker = false
     @State private var ttsPickerInitial: TTSSettings = .default
+
+    /// Read-aloud inline-highlight state. The TTS bridge reports the active
+    /// passage as a 0-based index into the paragraphs handed to `start`; we
+    /// keep the paragraph list so the index can be resolved back to the
+    /// spoken text and pushed into the reader screen, which draws the inline
+    /// highlight (Readium decoration for EPUB, `PDFView.highlightedSelections`
+    /// for PDF). Held as @State so the closure update re-renders the reader.
+    @State private var readAloudParagraphs: [String] = []
+    @State private var currentReadAloudParagraph: String? = nil
+
+    /// reader-tts-xml-and-loading fix — reader view-models MUST survive
+    /// RootView body recomputes. Previously `pdfReaderDestination` /
+    /// `epubReaderDestination` constructed the VM as a plain `let` local in
+    /// the @ViewBuilder body, so any RootView @State mutation (e.g. tapping
+    /// Read Aloud flips `showTTSControls`/`readerTTSBridge`) rebuilt a fresh
+    /// `.idle` VM. That re-showed the "Opening {book}" cold-open overlay
+    /// (stuck), tore the reader down mid-playback, and left the TTS controls
+    /// sheet bound to a discarded VM (blank white sheet). This @State-held
+    /// cache memoizes one VM per book id so recomputes reuse the loaded
+    /// instance.
+    @State private var readerVMCache = ReaderViewModelCache()
 
     // MARK: - Phase 9 (Chat) state
     //
@@ -730,12 +752,14 @@ struct RootView: View {
     private func pdfReaderDestination(book: Book,
                                       deps: AppDependencies,
                                       userId: UserID) -> some View {
-        let pdfVM = PDFReaderViewModel(
-            book: book,
-            userId: userId,
-            documentURL: pdfFileURL(for: book),
-            positionStore: deps.positionStore
-        )
+        let pdfVM = readerVMCache.pdf(for: book.id) {
+            PDFReaderViewModel(
+                book: book,
+                userId: userId,
+                documentURL: pdfFileURL(for: book),
+                positionStore: deps.positionStore
+            )
+        }
         PDFReaderScreen(
                 viewModel: pdfVM,
                 readerSettingsStore: deps.readerSettingsStore,
@@ -755,7 +779,8 @@ struct RootView: View {
                         await startPDFReadAloud(vm: pdfVM, deps: deps, userId: userId)
                     }
                 } : nil,
-                chatPresenter: deps.chatPresenter
+                chatPresenter: deps.chatPresenter,
+                readAloudParagraph: currentReadAloudParagraph
             )
             // SYNC-03 wiring: install a sync bridge for the lifetime of the
             // reader sheet. The binding cancels its poll task on deinit.
@@ -767,35 +792,14 @@ struct RootView: View {
             }
             .onDisappear {
                 pdfSyncBinding = nil
+                // reader-tts-xml-and-loading fix — drop the cached VM so a
+                // future reopen re-reads the persisted position fresh.
+                readerVMCache.drop(book.id)
                 // KEEP: stopReadAloud cancels the @MainActor bridge; UI-only.
                 Task { await stopReadAloud() }
             }
-            .sheet(isPresented: $showTTSControls) {
-                if let bridge = readerTTSBridge {
-                    ReadAloudControlsView(
-                        state: deps.ttsState,
-                        onPlayPause: {
-                            // KEEP: pause/resume hop into the TTS engine actor;
-                            // outer Task only chains the actor await — no main-
-                            // bound IO.
-                            Task {
-                                if deps.ttsState.status == .playing {
-                                    await bridge.pause()
-                                } else {
-                                    await bridge.resume()
-                                }
-                            }
-                        },
-                        onStop: {
-                            // KEEP: stopReadAloud cancels the @MainActor bridge.
-                            Task { await stopReadAloud() }
-                        },
-                        onOpenPicker: {
-                            showTTSPicker = true
-                        }
-                    )
-                    .presentationDetents([.height(180), .medium])
-                }
+            .overlay(alignment: .bottom) {
+                readAloudControlsOverlay(deps: deps)
             }
             .sheet(isPresented: $showTTSPicker) {
                 VoiceAndSpeedPicker(
@@ -815,12 +819,14 @@ struct RootView: View {
     private func epubReaderDestination(book: Book,
                                        deps: AppDependencies,
                                        userId: UserID) -> some View {
-        let epubVM = EPUBReaderViewModel(
-            book: book,
-            userId: userId,
-            documentURL: pdfFileURL(for: book),
-            positionStore: deps.positionStore
-        )
+        let epubVM = readerVMCache.epub(for: book.id) {
+            EPUBReaderViewModel(
+                book: book,
+                userId: userId,
+                documentURL: pdfFileURL(for: book),
+                positionStore: deps.positionStore
+            )
+        }
         EPUBReaderScreen(
             viewModel: epubVM,
             readerSettingsStore: deps.readerSettingsStore,
@@ -839,7 +845,8 @@ struct RootView: View {
                     await startEPUBReadAloud(vm: epubVM, deps: deps, userId: userId)
                 }
             } : nil,
-            chatPresenter: deps.chatPresenter
+            chatPresenter: deps.chatPresenter,
+            readAloudParagraph: currentReadAloudParagraph
         )
         .task {
             epubSyncBinding = EPUBReaderPositionSyncBinding(
@@ -849,34 +856,14 @@ struct RootView: View {
         }
         .onDisappear {
             epubSyncBinding = nil
+            // reader-tts-xml-and-loading fix — drop the cached VM so a future
+            // reopen re-reads the persisted position fresh.
+            readerVMCache.drop(book.id)
             // KEEP: stopReadAloud cancels the @MainActor bridge.
             Task { await stopReadAloud() }
         }
-        .sheet(isPresented: $showTTSControls) {
-            if let bridge = readerTTSBridge {
-                ReadAloudControlsView(
-                    state: deps.ttsState,
-                    onPlayPause: {
-                        // KEEP: pause/resume routes through the TTS engine
-                        // actor; outer Task only chains the await.
-                        Task {
-                            if deps.ttsState.status == .playing {
-                                await bridge.pause()
-                            } else {
-                                await bridge.resume()
-                            }
-                        }
-                    },
-                    onStop: {
-                        // KEEP: stopReadAloud cancels the @MainActor bridge.
-                        Task { await stopReadAloud() }
-                    },
-                    onOpenPicker: {
-                        showTTSPicker = true
-                    }
-                )
-                .presentationDetents([.height(180), .medium])
-            }
+        .overlay(alignment: .bottom) {
+            readAloudControlsOverlay(deps: deps)
         }
         .sheet(isPresented: $showTTSPicker) {
             VoiceAndSpeedPicker(
@@ -893,6 +880,57 @@ struct RootView: View {
     }
 
     // MARK: - Read Aloud (Phase 8)
+
+    /// Floating Read Aloud controls rendered as a bottom overlay on the book
+    /// screen (replacing the prior `.sheet`), so the page — and its inline
+    /// passage highlight — stays visible while playback runs. Shows nothing
+    /// until a session starts (`showTTSControls` + a live bridge). Styled as a
+    /// floating card: elevated material background, rounded corners, safe-area
+    /// aware, animated in/out.
+    @ViewBuilder
+    private func readAloudControlsOverlay(deps: AppDependencies) -> some View {
+        if showTTSControls, let bridge = readerTTSBridge {
+            ReadAloudControlsView(
+                state: deps.ttsState,
+                onPlayPause: {
+                    // KEEP: pause/resume routes through the TTS engine actor;
+                    // outer Task only chains the await — no main-bound IO.
+                    Task {
+                        if deps.ttsState.status == .playing {
+                            await bridge.pause()
+                        } else {
+                            await bridge.resume()
+                        }
+                    }
+                },
+                onStop: {
+                    // KEEP: stopReadAloud cancels the @MainActor bridge.
+                    Task { await stopReadAloud() }
+                },
+                onOpenPicker: {
+                    showTTSPicker = true
+                },
+                onPreviousParagraph: {
+                    // KEEP: previous() routes through the @MainActor bridge;
+                    // outer Task only chains the await.
+                    Task { await bridge.previous() }
+                },
+                onNextParagraph: {
+                    Task { await bridge.next() }
+                },
+                onRepeatParagraph: {
+                    Task { await bridge.repeatCurrent() }
+                }
+            )
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: RishiRadius.large))
+            .clipShape(RoundedRectangle(cornerRadius: RishiRadius.large))
+            .shadow(radius: RishiSpacing.s)
+            .padding(.horizontal, RishiSpacing.m)
+            .padding(.bottom, RishiSpacing.s)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .animation(.easeInOut(duration: 0.25), value: showTTSControls)
+        }
+    }
 
     private func startPDFReadAloud(
         vm: PDFReaderViewModel,
@@ -914,7 +952,10 @@ struct RootView: View {
             paragraphs: paragraphs,
             deps: deps,
             userId: userId,
-            onPassageChange: { index in vm.currentReadAloudPassageIndex = index }
+            onPassageChange: { index in
+                vm.currentReadAloudPassageIndex = index
+                updateReadAloudParagraph(for: index)
+            }
         )
         #endif
     }
@@ -933,7 +974,10 @@ struct RootView: View {
             paragraphs: paragraphs,
             deps: deps,
             userId: userId,
-            onPassageChange: { index in vm.currentReadAloudPassageIndex = index }
+            onPassageChange: { index in
+                vm.currentReadAloudPassageIndex = index
+                updateReadAloudParagraph(for: index)
+            }
         )
     }
 
@@ -953,9 +997,24 @@ struct RootView: View {
             onPassageChange: onPassageChange
         )
         readerTTSBridge = bridge
+        // Stash the paragraph list so the passage index can be resolved to the
+        // spoken text for the inline reader highlight.
+        readAloudParagraphs = paragraphs
+        currentReadAloudParagraph = nil
         ttsPickerInitial = await deps.ttsSettingsStore.load(userId: userId)
         showTTSControls = true
         await bridge.start(paragraphs: paragraphs)
+    }
+
+    /// Resolves the active passage index to its paragraph text and publishes
+    /// it for the reader screen to highlight. `nil` index (no active passage)
+    /// clears the highlight.
+    private func updateReadAloudParagraph(for index: Int?) {
+        guard let index, readAloudParagraphs.indices.contains(index) else {
+            currentReadAloudParagraph = nil
+            return
+        }
+        currentReadAloudParagraph = readAloudParagraphs[index]
     }
 
     private func stopReadAloud() async {
@@ -965,6 +1024,8 @@ struct RootView: View {
         readerTTSBridge = nil
         showTTSControls = false
         showTTSPicker = false
+        readAloudParagraphs = []
+        currentReadAloudParagraph = nil
     }
 
     private func pdfFileURL(for book: Book) -> URL {
@@ -1017,6 +1078,47 @@ struct RootView: View {
 private struct PaywallFeature: Identifiable, Equatable {
     let name: String
     var id: String { name }
+}
+
+/// reader-tts-xml-and-loading fix — memoizes reader view-models per book id
+/// across RootView body recomputes.
+///
+/// The reader VMs (`PDFReaderViewModel` / `EPUBReaderViewModel`) carry the
+/// loaded document/publication and the `.loaded` `loadingState`. They were
+/// previously constructed as plain `let` locals inside the `@ViewBuilder`
+/// destination functions, so every RootView body recompute (e.g. tapping
+/// Read Aloud, which mutates `showTTSControls` / `readerTTSBridge` @State)
+/// minted a fresh `.idle` VM and handed it to the structurally-identical
+/// reader screen — re-showing the stuck "Opening {book}" cold-open overlay
+/// and detaching the TTS controls sheet from the live VM.
+///
+/// This cache is held in RootView `@State` (stable reference identity), so
+/// the destination functions reuse the same VM instance for a given book id.
+/// Entries are dropped on reader dismiss via `drop(_:)` so reopening a book
+/// re-reads its persisted position from scratch.
+@MainActor
+final class ReaderViewModelCache {
+    private var pdfVMs: [BookID: PDFReaderViewModel] = [:]
+    private var epubVMs: [BookID: EPUBReaderViewModel] = [:]
+
+    func pdf(for id: BookID, make: () -> PDFReaderViewModel) -> PDFReaderViewModel {
+        if let existing = pdfVMs[id] { return existing }
+        let vm = make()
+        pdfVMs[id] = vm
+        return vm
+    }
+
+    func epub(for id: BookID, make: () -> EPUBReaderViewModel) -> EPUBReaderViewModel {
+        if let existing = epubVMs[id] { return existing }
+        let vm = make()
+        epubVMs[id] = vm
+        return vm
+    }
+
+    func drop(_ id: BookID) {
+        pdfVMs.removeValue(forKey: id)
+        epubVMs.removeValue(forKey: id)
+    }
 }
 
 /// Phase 18 Plan 18-01 — async-resolve a `Book` from a `BookID` for use

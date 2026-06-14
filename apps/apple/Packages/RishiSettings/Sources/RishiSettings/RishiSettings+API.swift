@@ -37,6 +37,14 @@
 // UserDefaultsTelemetryStore  — `Telemetry/TelemetryStore.swift`. The production store
 //                                backed by UserDefaults.
 
+// MARK: - Indexing (Phase 27-06)
+//
+// FooterDetectionStore                 — `Indexing/FooterDetectionStore.swift`. Protocol.
+//                                        Persists the "Skip page footers when indexing" toggle.
+// UserDefaultsFooterDetectionStore     — `Indexing/FooterDetectionStore.swift`. The
+//                                        production store backed by UserDefaults; default
+//                                        value TRUE on first run.
+
 // MARK: - Kept public on purpose
 //
 // (Types that LOOK like they could be internal but were deliberately

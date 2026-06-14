@@ -28,7 +28,12 @@ import RishiReader
 // invoke `JSONEncoder().encode(self)` without an actor hop. Under
 // `default-isolation = MainActor` the synthesized Codable witness would
 // otherwise be MainActor-isolated and unusable from nonisolated callers.
-struct RishiSceneState: Equatable, Sendable {
+// `nonisolated` on this value type: it's a `Sendable`, disposable scene-state
+// value whose every member is already annotated `nonisolated` for off-MainActor
+// decode. The project-wide `default-isolation = MainActor` incidentally
+// re-isolates it; opting the type out restores the intended (and only sound)
+// model so its stored properties + synthesized `Equatable` are usable off-main.
+nonisolated struct RishiSceneState: Equatable, Sendable {
     var selectedTab: MacTab
     var openBookId: BookID?
 
@@ -154,7 +159,7 @@ struct RishiSceneState: Equatable, Sendable {
 // manually-written `nonisolated init(from:)` / `encode(to:)` witnesses
 // resolve as nonisolated (otherwise default-isolation = MainActor would
 // re-isolate the conformance).
-extension RishiSceneState: Codable {}
+nonisolated extension RishiSceneState: Codable {}
 
 // MARK: - Phase 18 Plan 18-01 — ReaderRoute storage bridge
 //

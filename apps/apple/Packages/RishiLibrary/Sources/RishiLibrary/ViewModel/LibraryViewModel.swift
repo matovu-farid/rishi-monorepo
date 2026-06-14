@@ -23,14 +23,23 @@ public final class LibraryViewModel {
     public private(set) var positionsByBookId: [BookID: Position] = [:]
 
     /// Phase 21 Plan 21-01 — cover URL map populated by `refresh()` BEFORE
-    /// it returns, using `BookFileStorage.cachedCoverURLIfFresh` (the
-    /// nonisolated cache fast path). The grid binds directly to this map
-    /// so the first paint after `vm.refresh()` sees real cover URLs
-    /// instead of a gradient placeholder.
+    /// it returns. The grid binds directly to this map so the first paint
+    /// after `vm.refresh()` sees real cover URLs instead of a gradient
+    /// placeholder.
     ///
-    /// Cache-MISS / stale-sidecar entries are deliberately absent so the
-    /// view's gradient fallback renders for them (acceptable per phase
-    /// CONTEXT.md — only the cold-extract case keeps the placeholder).
+    /// Resolution order per book (inside `refresh()`'s `withTaskGroup`):
+    ///   1. `BookFileStorage.cachedCoverURLIfFresh` — nonisolated HEIC-cache
+    ///      fast path, returns instantly when the downsampled HEIC + mtime
+    ///      sidecar are present and fresh.
+    ///   2. `BookFileStorage.cachedCoverURL(for:)` — slow path that lazily
+    ///      reads the on-disk `cover.png` (written by `importBook`),
+    ///      downsamples it into the HEIC cache, and returns the cache URL.
+    ///      This is the path that makes newly-imported books render covers
+    ///      on the very next paint instead of staying stuck on the gradient
+    ///      placeholder — see `LibraryViewModelImportCoverRegressionTests`.
+    ///
+    /// Books that have no `cover.png` on disk (extractor returned nil during
+    /// import) end up absent from this map and render the gradient fallback.
     public private(set) var coverURLs: [BookID: URL] = [:]
 
     public var searchText: String = "" {
@@ -94,22 +103,28 @@ public final class LibraryViewModel {
                 return out
             }
             // Phase 21 Plan 21-01 — fan out cover-URL resolution INSIDE
-            // refresh() using the nonisolated cache fast path. Mirrors the
-            // position fan-out shape above; `cachedCoverURLIfFresh` returns
-            // synchronously off-actor so each child task is a single fast
-            // file-existence + sidecar-mtime check on the cooperative
-            // executor. We commit the resolved map before returning so the
-            // grid's first paint (which binds to `coverURLs`) sees real
-            // URLs for every cache-warm book, eliminating the gradient
-            // placeholder flash. Cache MISSes intentionally omit the entry
-            // so the gradient fallback renders only when needed.
+            // refresh() so the grid's first paint (which binds to
+            // `coverURLs`) sees real URLs and skips the gradient placeholder
+            // flash. Each child task tries the nonisolated HEIC-cache fast
+            // path first (`cachedCoverURLIfFresh`) so cache-warm books pay
+            // only a stat syscall on the cooperative executor. On MISS we
+            // fall through to the actor-isolated `cachedCoverURL(for:)`
+            // slow path which lazily warms the HEIC cache from the on-disk
+            // `cover.png` that `importBook` wrote. This second hop is what
+            // makes newly-imported books render their cover on the very
+            // next paint instead of staying stuck on the gradient — locked
+            // by `LibraryViewModelImportCoverRegressionTests`. Subsequent
+            // refreshes hit the warm cache and skip the slow-path entirely.
             let resolvedCovers: [BookID: URL] = await withTaskGroup(
                 of: (BookID, URL?).self
             ) { group in
                 for book in loaded {
                     group.addTask { [storage = self.storage] in
-                        let url = storage.cachedCoverURLIfFresh(for: book)
-                        return (book.id, url)
+                        if let warm = storage.cachedCoverURLIfFresh(for: book) {
+                            return (book.id, warm)
+                        }
+                        let cold = await storage.cachedCoverURL(for: book)
+                        return (book.id, cold)
                     }
                 }
                 var out: [BookID: URL] = [:]

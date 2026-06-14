@@ -90,6 +90,7 @@ struct SettingsScreenSmokeTests {
             syncStatus: SyncStatus(),
             onSyncNow: {},
             telemetryStore: InMemoryTelemetryStore(),
+            footerDetectionStore: InMemoryFooterDetectionStore(initial: true),
             billingEntitlement: .init(isGranted: true),
             onSignOut: {},
             onDelete: {},

@@ -74,6 +74,45 @@ public final class EPUBNavigatorCoordinator: NSObject {
         EPUBDecorationApplier.apply(highlights: highlights, to: nav)
     }
 
+    /// Marks `paragraph` as the active read-aloud passage by replacing the
+    /// single decoration in the `"rishi-tts"` group. The locator is anchored
+    /// to the current resource (`latestLocator`); no-ops until the navigator
+    /// and a locator both exist.
+    public func highlightReadAloudParagraph(_ paragraph: String) {
+        guard let nav = navigator,
+              let locator = viewModel.latestLocator else { return }
+        let decoration = EPUBReadAloudDecorationBuilder.decoration(
+            forParagraph: paragraph,
+            href: locator.href,
+            mediaType: locator.mediaType
+        )
+        nav.apply(decorations: [decoration], in: EPUBReadAloudDecorationBuilder.groupName)
+    }
+
+    /// Clears the active read-aloud passage decoration (called when TTS
+    /// stops). No-ops before the navigator is built.
+    public func clearReadAloudHighlight() {
+        navigator?.apply(decorations: [], in: EPUBReadAloudDecorationBuilder.groupName)
+    }
+
+    /// Follows the active read-aloud paragraph: navigates the viewport to the
+    /// paragraph's locator so the page turns when the spoken paragraph has
+    /// scrolled onto a later page. Uses the SAME text-anchored locator as the
+    /// highlight (`EPUBReadAloudDecorationBuilder.locator`), so a locator on the
+    /// current page is a no-op and one on the next page turns it. No-ops until
+    /// the navigator and a base locator both exist.
+    @discardableResult
+    public func navigateToReadAloudParagraph(_ paragraph: String) async -> Bool {
+        guard let nav = navigator,
+              let base = viewModel.latestLocator else { return false }
+        let locator = EPUBReadAloudDecorationBuilder.locator(
+            forParagraph: paragraph,
+            href: base.href,
+            mediaType: base.mediaType
+        )
+        return await nav.go(to: locator, options: NavigatorGoOptions(animated: true))
+    }
+
     /// Translates our reader settings into Readium's `EPUBPreferences`
     /// and submits them to the navigator. Safe to call before the
     /// navigator is built — no-ops in that case; the screen re-applies

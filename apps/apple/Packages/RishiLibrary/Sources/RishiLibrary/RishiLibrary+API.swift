@@ -42,6 +42,13 @@
 // EpubMetadataExtractor       — `Storage/EpubMetadataExtractor.swift`. MetadataExtractor for EPUB.
 // PDFKitCoverExtractor        — `Storage/PDFKitCoverExtractor.swift`. CoverExtractor for PDF.
 // PDFKitMetadataExtractor     — `Storage/PDFKitMetadataExtractor.swift`. MetadataExtractor for PDF.
+// PdfTextExtractor            — `Indexing/PdfTextExtractor.swift`. PerBookTextExtractor for PDF.
+//                                Phase 27-06: accepts a `FooterDropPolicy` toggle. `.disabled`
+//                                preserves Phase 26 byte-stable output; `.enabled` runs
+//                                FooterMaskBuilder and drops detected page footers.
+// EpubTextExtractor           — `Indexing/EpubTextExtractor.swift`. PerBookTextExtractor for EPUB.
+// FooterDropPolicy            — `Indexing/PdfTextExtractor.swift`. Phase 27-06 toggle enum
+//                                (`.enabled` / `.disabled`) passed to `PdfTextExtractor.init`.
 
 // MARK: - Models / Types
 //

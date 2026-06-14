@@ -307,10 +307,20 @@ final class AppDependencies {
             embedder = IdentityEmbedder()
         }
         let indexBuilder = IndexBuilder(rootURL: documentsURL, embedder: embedder)
+        // Phase 27-06: read the persisted "skip page footers when indexing"
+        // toggle synchronously at hook construction time. Runtime toggle
+        // changes do NOT retroactively reindex already-indexed books — new
+        // imports get the new policy; old indices reflect the policy they
+        // were built with until a fresh reindex.
+        let footerDetectionStore = UserDefaultsFooterDetectionStore()
+        let pdfFooterPolicy: FooterDropPolicy =
+            UserDefaults.standard.bool(forKey: UserDefaultsFooterDetectionStore.storageKey)
+                ? .enabled
+                : .disabled
         let indexingHook = RishiSearchIndexingHook(
             builder: indexBuilder,
             extractors: [
-                "pdf": PdfTextExtractor(),
+                "pdf": PdfTextExtractor(footerPolicy: pdfFooterPolicy),
                 "epub": EpubTextExtractor(),
             ]
         )
@@ -647,6 +657,7 @@ final class AppDependencies {
             restoreService: restoreService,
             workerReceiptVerifier: receiptVerifier,
             telemetryStore: telemetryStore,
+            footerDetectionStore: footerDetectionStore,
             onboardingState: onboardingState,
             onboardingCoordinator: onboardingCoordinator,
             readerDefaults: readerDefaults
@@ -817,6 +828,7 @@ final class AppDependencies {
     var restoreService: RestoreService { services!.restoreService }
     var workerReceiptVerifier: any ReceiptVerifier { services!.workerReceiptVerifier }
     var telemetryStore: any TelemetryStore { services!.telemetryStore }
+    var footerDetectionStore: any FooterDetectionStore { services!.footerDetectionStore }
     var onboardingState: any OnboardingState { services!.onboardingState }
     var onboardingCoordinator: OnboardingCoordinator { services!.onboardingCoordinator }
     var readerDefaults: AppReaderDefaults { services!.readerDefaults }
@@ -1053,6 +1065,7 @@ final class AppDependencies {
             // KEEP: Settings "Sync now" tap → syncEngine actor await; no main IO.
             onSyncNow: { Task { await sync.syncNow() } },
             telemetryStore: telemetryStore,
+            footerDetectionStore: footerDetectionStore,
             onSignOut: {
                 try? await auth.signOut()
                 await MainActor.run { onSignedOut() }
@@ -1152,6 +1165,12 @@ struct BootstrappedServices: @unchecked Sendable {
 
     // Settings + onboarding
     let telemetryStore: any TelemetryStore
+    /// Phase 27-06 — persisted toggle store for the "Skip page footers when
+    /// indexing" setting. Read by `makeSettingsScreen` to bind the UI; the
+    /// PdfTextExtractor reads its value SYNCHRONOUSLY at hook-construction
+    /// time (see Phase 27-06 wire-up note), so runtime toggle changes do
+    /// not retroactively reindex.
+    let footerDetectionStore: any FooterDetectionStore
     let onboardingState: any OnboardingState
     let onboardingCoordinator: OnboardingCoordinator
     let readerDefaults: AppReaderDefaults

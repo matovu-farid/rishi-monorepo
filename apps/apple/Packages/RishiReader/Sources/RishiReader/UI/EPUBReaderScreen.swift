@@ -102,6 +102,11 @@ public struct EPUBReaderScreen: View {
     /// presenter is the seam (`ReaderChatPresenter` protocol in this
     /// package, satisfied by `ChatPresenterImpl` at the app layer).
     private let chatPresenter: (any ReaderChatPresenter)?
+    /// Text of the paragraph currently being read aloud, or `nil` when no
+    /// read-aloud session is active. Supplied by the app layer (RootView).
+    /// The screen renders it as a Readium decoration in the `"rishi-tts"`
+    /// group that follows the spoken passage.
+    private let readAloudParagraph: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// See `PDFReaderScreen` — chrome state lives in a small `@Observable`
     /// controller so tap-to-toggle, auto-hide, and VoiceOver behavior
@@ -156,13 +161,15 @@ public struct EPUBReaderScreen: View {
         readerSettingsStore: (any ReaderSettingsStore)? = nil,
         highlightStore: (any HighlightStore)? = nil,
         onReadAloud: (() -> Void)? = nil,
-        chatPresenter: (any ReaderChatPresenter)? = nil
+        chatPresenter: (any ReaderChatPresenter)? = nil,
+        readAloudParagraph: String? = nil
     ) {
         self.viewModel = viewModel
         self.readerSettingsStore = readerSettingsStore
         self.highlightStore = highlightStore
         self.onReadAloud = onReadAloud
         self.chatPresenter = chatPresenter
+        self.readAloudParagraph = readAloudParagraph
     }
 
     public var body: some View {
@@ -355,6 +362,10 @@ public struct EPUBReaderScreen: View {
         .onChange(of: viewModel.typography) { _, _ in applyPreferences() }
         .onChange(of: viewModel.theme) { _, _ in applyPreferences() }
         .onChange(of: currentSpread) { _, _ in applyPreferences() }
+        // Read-aloud inline highlight: follow the spoken passage as the TTS
+        // bridge advances. The decoration is anchored to the current resource
+        // via the navigator coordinator.
+        .onChange(of: readAloudParagraph) { _, _ in applyReadAloudHighlight() }
         // Phase 18 Plan 18-08 (F-P2-01) — single `.sheet(item:)` driven by
         // the `ReaderSheet?` enum replaces the prior chain of four cascading
         // `.sheet(isPresented:)` modifiers (TOC, typography, theme,
@@ -625,6 +636,23 @@ public struct EPUBReaderScreen: View {
             }
             pendingSelection = nil
             coordinatorRef.coordinator?.clearSelection()
+        }
+    }
+
+    /// Pushes the active read-aloud paragraph into the navigator as a
+    /// `"rishi-tts"` decoration, or clears it when no passage is active.
+    /// No-ops until the navigator coordinator is installed.
+    private func applyReadAloudHighlight() {
+        guard let coordinator = coordinatorRef.coordinator else { return }
+        if let paragraph = readAloudParagraph {
+            coordinator.highlightReadAloudParagraph(paragraph)
+            // Follow the spoken paragraph so the page turns when it has moved
+            // onto a later page (auto-advance and the prev/next/repeat buttons
+            // both flow through here). go(to:) is a no-op when the paragraph is
+            // already on the current page.
+            Task { await coordinator.navigateToReadAloudParagraph(paragraph) }
+        } else {
+            coordinator.clearReadAloudHighlight()
         }
     }
 
