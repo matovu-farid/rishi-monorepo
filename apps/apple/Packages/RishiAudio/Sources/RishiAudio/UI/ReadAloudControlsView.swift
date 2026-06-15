@@ -116,6 +116,15 @@ public struct ReadAloudControlsView: View {
 
     @ViewBuilder
     private var statusLabel: some View {
+        statusText
+            // UI tests read this label's value ("Playing" / "Loading…" /
+            // "Ready" / "Paused" / error) to assert playback state. The
+            // visible text is unchanged — only an identifier is added.
+            .accessibilityIdentifier("tts-status")
+    }
+
+    @ViewBuilder
+    private var statusText: some View {
         switch state.status {
         case .idle, .stopped:
             Text("Ready")

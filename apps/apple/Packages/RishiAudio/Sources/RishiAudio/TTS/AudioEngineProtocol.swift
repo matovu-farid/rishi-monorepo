@@ -1,4 +1,5 @@
 import Foundation
+import RishiLogging
 
 /// Decides when a streamed playback's completion stream may finish.
 ///
@@ -113,19 +114,30 @@ public final class AVAudioEngineAdapter: AudioEngineProtocol, @unchecked Sendabl
     }
 
     public func stop() {
-        lock.withLock {
-            playerNode.stop()
-            if engine.isRunning { engine.stop() }
-        }
+        // DEADLOCK FIX: playerNode.stop()/engine.stop() must NOT run while holding
+        // `lock`. stop() blocks until the audio render thread drains, and the
+        // buffer-completion handlers in play(_:) run on that render thread and
+        // acquire `lock` (box.value.didComplete). Holding `lock` here while
+        // stop() waits on the render thread, which waits on `lock`, deadlocks.
+        // AVAudioPlayerNode/AVAudioEngine stop are internally thread-safe.
+        playerNode.stop()
+        if engine.isRunning { engine.stop() }
     }
 
     public func resetPlayerNode() {
         // Engine stays running; only the player node is reset so the next
         // passage's buffers schedule onto a clean node. Route/session untouched.
-        lock.withLock {
-            playerNode.stop()
-            playerNode.reset()
-        }
+        //
+        // DEADLOCK FIX (same as stop()): playerNode.stop()/reset() must NOT run
+        // under `lock` — stop() waits on the render thread, whose buffer
+        // completion handlers acquire `lock`. This was the read-aloud "stuck on
+        // Loading…" hang on a passage switch (invisible to FakeAudioEngine, which
+        // has no real render thread firing completion handlers).
+        Log.event("tts.adapter.reset.enter", level: .debug)
+        playerNode.stop()
+        Log.event("tts.adapter.reset.stopped", level: .debug)
+        playerNode.reset()
+        Log.event("tts.adapter.reset.done", level: .debug)
     }
 
     public func play<S: AsyncSequence>(_ buffers: S) -> AsyncStream<PCMChunk.ID>

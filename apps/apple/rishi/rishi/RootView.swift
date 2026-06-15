@@ -836,9 +836,15 @@ struct RootView: View {
                 // EPUB resource read + HTML strip is detached inside
                 // startEPUBReadAloud (paragraphsForReadAloud) per F-P0-06.
                 Task {
-                    // BILL-04 — gate Pro features on entitlement.
+                    // BILL-04 — gate Pro features on entitlement. The UI-test
+                    // bypass skips the gate (the live worker downgrades the fake
+                    // user to .free even with the seeded .pro cache).
                     let level = await deps.entitlementService.snapshot()
-                    guard level == .pro else {
+                    var entitled = level == .pro
+                    #if DEBUG
+                    if UITestBypass.isActive { entitled = true }
+                    #endif
+                    guard entitled else {
                         paywallFeature = PaywallFeature(name: "Read Aloud")
                         return
                     }

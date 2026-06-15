@@ -91,6 +91,8 @@ struct LibraryGrid: View {
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
+        // UI tests tap the first cell by this identifier to open a book.
+        .accessibilityIdentifier("library-book-cell")
         .accessibilityLabel(accessibilityText(for: book))
         .accessibilityHint("Double-tap to open. Long-press for actions.")
         .contextMenu {

@@ -210,6 +210,18 @@ final class AppDependencies {
         // 1. Keychain — single instance backing the token provider AND the auth service.
         let keychain = KeychainSessionStore()
 
+        // UITEST — seed a fake authenticated session into the keychain BEFORE
+        // the auth probe (RootView bootstrap `.task` → `auth.currentUser`)
+        // runs, so `RootView.currentUser` resolves non-nil fully offline and
+        // signed-out. DEBUG + `RISHI_UITEST=1` only; no-op otherwise. See
+        // UITestSupport.swift.
+        #if DEBUG
+        await UITestBypass.seedFakeSessionIfNeeded(into: keychain)
+        // Seed the entitlement cache to `.pro` BEFORE EntitlementService is
+        // constructed below, so the Read Aloud Pro gate passes offline.
+        UITestBypass.seedProEntitlementIfNeeded()
+        #endif
+
         // 2. Token provider reads from the same keychain.
         let tokenProvider = RishiAuthTokenProvider(keychain: keychain)
 
@@ -978,9 +990,19 @@ final class AppDependencies {
             Log.event("tts.cache.init.failed", level: .error, data: ["error": "\(error)"])
             ttsCacheStore = nil
         }
-        let chunkSource: any TTSChunkSource = ttsCacheStore.map { store in
+        var chunkSource: any TTSChunkSource = ttsCacheStore.map { store in
             CachingTTSChunkSource(upstream: ttsUpstream, store: store)
         } ?? ttsUpstream
+        // UITEST — swap in a deterministic, fixture-backed offline source so
+        // Read Aloud renders real audio through the production AVAudioEngine
+        // with no worker round-trip and no auth. DEBUG + `RISHI_UITEST=1`
+        // only. See UITestSupport.swift.
+        #if DEBUG
+        if UITestBypass.isActive {
+            chunkSource = FixtureTTSChunkSource()
+            Log.event("uitest.tts.source.swapped", level: .info)
+        }
+        #endif
         // Phase 24 plan 24-03 — prewarm next 3-5 paragraphs through the
         // same CachingTTSChunkSource the engine streams from. A miss
         // writes the MP3 to disk; a hit is a no-op. ReaderTTSBridge owns

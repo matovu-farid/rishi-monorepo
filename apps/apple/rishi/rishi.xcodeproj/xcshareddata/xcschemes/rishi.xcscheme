@@ -47,6 +47,16 @@
                ReferencedContainer = "container:rishi.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "092254AC2FD83186008C5ADE"
+               BuildableName = "rishiUITests.xctest"
+               BlueprintName = "rishiUITests"
+               ReferencedContainer = "container:rishi.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

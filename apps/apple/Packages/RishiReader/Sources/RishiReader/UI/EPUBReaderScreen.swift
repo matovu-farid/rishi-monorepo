@@ -117,15 +117,23 @@ public struct EPUBReaderScreen: View {
         // the NavigationStack and is always reachable when chrome is
         // shown. The iOS edge-swipe-from-left always pops the reader,
         // regardless of chrome state, so the user can never be trapped.
+        // UI tests need the toolbar (Read Aloud button) reachable without relying
+        // on a flaky webview tap-to-toggle; start chrome visible under the
+        // RISHI_UITEST launch flag. DEBUG + env-gated, so never in a release.
+        #if DEBUG
+        let uitestVisible = ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1"
+        #else
+        let uitestVisible = false
+        #endif
         #if canImport(UIKit)
         return ReaderChromeController(
             accessibility: UIKitAccessibilityProvider(),
-            initiallyVisible: false
+            initiallyVisible: uitestVisible
         )
         #else
         return ReaderChromeController(
             accessibility: PreviewAccessibility(),
-            initiallyVisible: false
+            initiallyVisible: uitestVisible
         )
         #endif
     }()
