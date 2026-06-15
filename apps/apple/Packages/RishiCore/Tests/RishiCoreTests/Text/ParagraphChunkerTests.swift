@@ -62,6 +62,32 @@ struct ParagraphChunkerTests {
         #expect(ParagraphChunker.chunk(input) == ["Before.", "After."])
     }
 
+    /// Bug 1 "trailing space" hypothesis (readaloud-nextprev-page): a short
+    /// chapter-title heading with surrounding whitespace must NOT reach TTS as a
+    /// whitespace-only or trailing-space passage. `chunk(_:)` trims every chunk
+    /// and drops empties, so a 27-char title like "Why You Need the Purple Cow"
+    /// surfaces as a clean, non-empty, non-trailing-space passage — and a
+    /// heading that is ONLY whitespace is dropped entirely.
+    @Test
+    func short_title_heading_is_trimmed_not_whitespace_passage() {
+        let title = "Why You Need the Purple Cow"
+        let html = "<h1>  \(title)  </h1><p>Body paragraph that follows the heading.</p>"
+        let out = ParagraphChunker.chunk(html)
+        #expect(out.contains(title), "heading must surface trimmed, exactly: \(out)")
+        // No chunk may be whitespace-only or carry leading/trailing whitespace.
+        for chunk in out {
+            #expect(!chunk.isEmpty)
+            #expect(chunk == chunk.trimmingCharacters(in: .whitespacesAndNewlines),
+                    "chunk has leading/trailing whitespace: \"\(chunk)\"")
+        }
+    }
+
+    @Test
+    func whitespace_only_heading_is_dropped() {
+        let html = "<h1>   </h1><p>Real body text here.</p>"
+        #expect(ParagraphChunker.chunk(html) == ["Real body text here."])
+    }
+
     @Test
     func single_newline_inside_paragraph_preserved() {
         let input = "Line one\nstill paragraph one.\n\nSecond paragraph."
@@ -282,6 +308,45 @@ struct ParagraphChunkerTests {
 ///
 /// Threshold is exclusive (matches plan `< minChars`). Custom `shortThreshold`
 /// must be respected.
+/// Pure start-index math for the read-aloud "Play starts on the current page"
+/// fix (readaloud-nextprev-page bug 2). Maps a within-resource progression to
+/// the paragraph the reader is looking at.
+@Suite("ParagraphChunker.startIndex(forProgression:count:)")
+struct ParagraphChunkerStartIndexTests {
+
+    @Test("progression 0 / nil / negative all start at paragraph 0")
+    func startStaysAtZeroForResourceStart() {
+        #expect(ParagraphChunker.startIndex(forProgression: 0, count: 10) == 0)
+        #expect(ParagraphChunker.startIndex(forProgression: nil, count: 10) == 0)
+        #expect(ParagraphChunker.startIndex(forProgression: -0.5, count: 10) == 0)
+    }
+
+    @Test("mid-resource progression maps to floor(progression * count)")
+    func midProgressionFloors() {
+        // 0.25 * 8 = 2.0 -> 2; 0.5 * 8 = 4; 0.99 * 8 = 7.92 -> 7.
+        #expect(ParagraphChunker.startIndex(forProgression: 0.25, count: 8) == 2)
+        #expect(ParagraphChunker.startIndex(forProgression: 0.5, count: 8) == 4)
+        #expect(ParagraphChunker.startIndex(forProgression: 0.99, count: 8) == 7)
+    }
+
+    @Test("progression >= 1 clamps to the last paragraph, never out of range")
+    func fullProgressionClampsToLast() {
+        #expect(ParagraphChunker.startIndex(forProgression: 1.0, count: 8) == 7)
+        #expect(ParagraphChunker.startIndex(forProgression: 5.0, count: 8) == 7)
+    }
+
+    @Test("empty resource yields 0 (no crash)")
+    func emptyResourceIsZero() {
+        #expect(ParagraphChunker.startIndex(forProgression: 0.5, count: 0) == 0)
+    }
+
+    @Test("non-finite progression (nan/inf) degrades to 0 rather than risking a bad index")
+    func nonFiniteIsZero() {
+        #expect(ParagraphChunker.startIndex(forProgression: .nan, count: 8) == 0)
+        #expect(ParagraphChunker.startIndex(forProgression: .infinity, count: 8) == 0)
+    }
+}
+
 @Suite("ParagraphChunker.chunkForIndexing")
 struct ParagraphChunkerForIndexingTests {
 

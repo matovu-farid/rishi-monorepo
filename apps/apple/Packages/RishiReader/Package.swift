@@ -43,6 +43,17 @@ let package = Package(
                 "RishiDB",
                 "RishiLibrary",
                 .product(name: "RishiTesting", package: "RishiTesting"),
+            ],
+            resources: [
+                // TEST-ONLY fixtures. Do NOT move these to the shipped
+                // Sources/RishiReader/Resources/Bundled dir for purple-cow —
+                // that 489K corpus would bloat the app binary. purple-cow is a
+                // multi-page corpus used only by the read-aloud start-index
+                // property tests. alice is mirrored here (it is ALSO shipped in
+                // the source target) so the test bundle's `Bundle.module` can
+                // resolve it when the package is built via its own scheme.
+                .copy("Fixtures/alice.epub"),
+                .copy("Fixtures/purple-cow.epub"),
             ]
         ),
     ]

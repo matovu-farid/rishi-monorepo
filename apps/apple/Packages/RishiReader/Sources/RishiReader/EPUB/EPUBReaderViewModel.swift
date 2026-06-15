@@ -221,6 +221,33 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
         }
     }
 
+    // MARK: - Read-aloud
+
+    /// Paragraphs for read-aloud, starting at the CURRENT page rather than the
+    /// resource start. Reads the resource the current locator points to, chunks
+    /// it via `ParagraphChunker.chunk(_:)`, and drops the paragraphs that
+    /// precede the locator's within-resource progression so "Play" on a
+    /// forwarded page begins at the paragraph the reader is looking at — not
+    /// paragraph 0 of the resource (the page-1 bug). Returns `[]` on failure.
+    ///
+    /// The returned array is a SLICE from the page's first paragraph onward;
+    /// the read-aloud bridge indexes into it from 0, so the highlight index and
+    /// the spoken paragraph stay aligned with what is on screen.
+    public func paragraphsForReadAloud() async -> [String] {
+        guard let publication = publication,
+              let locator = latestLocator else { return [] }
+        guard let resource = publication.get(locator.href) else { return [] }
+        let result = await resource.read().asString(encoding: .utf8)
+        guard case .success(let html) = result else { return [] }
+        let all = ParagraphChunker.chunk(html)
+        let start = ParagraphChunker.startIndex(
+            forProgression: locator.locations.progression,
+            count: all.count
+        )
+        guard start < all.count else { return [] }
+        return Array(all[start...])
+    }
+
     // MARK: - Debounce
 
     private func schedulePositionWrite(for locator: Locator) {

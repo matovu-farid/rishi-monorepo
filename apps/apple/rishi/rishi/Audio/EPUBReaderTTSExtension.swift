@@ -20,9 +20,7 @@
 //
 
 import Foundation
-import RishiCore
 import RishiReader
-import ReadiumShared
 
 /// MainActor-isolated storage for the per-VM read-aloud index. Mirrors the
 /// PDFReaderTTSExtension store.
@@ -55,17 +53,11 @@ extension EPUBReaderViewModel {
         }
     }
 
-    /// Extract paragraphs from the current Readium resource. Best-effort:
-    /// reads the resource the current locator points to and runs
-    /// `ParagraphChunker.chunk(_:)` over the raw HTML. The chunker's
-    /// `<p>`-aware path (D3) handles tag stripping; we no longer pre-strip
-    /// to plain text. Returns `[]` on failure.
-    public func paragraphsForReadAloud() async -> [String] {
-        guard let publication = publication,
-              let locator = latestLocator else { return [] }
-        guard let resource = publication.get(locator.href) else { return [] }
-        let result = await resource.read().asString(encoding: .utf8)
-        guard case .success(let html) = result else { return [] }
-        return ParagraphChunker.chunk(html)
-    }
+    // NOTE: `paragraphsForReadAloud()` moved into the RishiReader package
+    // (EPUBReaderViewModel) in the readaloud-nextprev-page fix so it can be
+    // exercised by a real-publication property test. The package version is
+    // locator-aware: it slices the resource's paragraphs from the CURRENT
+    // page's progression point rather than always returning index 0 (the
+    // "Play starts from page 1" bug). RootView.startEPUBReadAloud calls that
+    // package method unchanged.
 }
