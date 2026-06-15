@@ -53,6 +53,13 @@ public struct LibraryRootView: View {
     /// tests continue to render the same toolbar.
     public let onShowSettings: (() -> Void)?
 
+    /// Optional Chats entry point. When non-nil, the toolbar surfaces a
+    /// conversations button so a host that has removed the bottom tab bar
+    /// (iPhone compact) can still reach the Chats surface. `nil` (the
+    /// default) hides it — used by the iPad/Mac sidebar layout, where Chats
+    /// is a sidebar entry, and by previews/tests.
+    public let onShowChats: (() -> Void)?
+
     /// Phase 21 follow-up — fires once per import batch with the resulting
     /// outcomes. Host app uses this to auto-open the reader when a SINGLE
     /// book was imported successfully. Multi-book batches keep the user on
@@ -76,10 +83,12 @@ public struct LibraryRootView: View {
     public init(importCoordinator: ImportCoordinator,
                 onOpenBook: @escaping (Book) -> Void,
                 onShowSettings: (() -> Void)? = nil,
+                onShowChats: (() -> Void)? = nil,
                 onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? = nil) {
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
+        self.onShowChats = onShowChats
         self.onImported = onImported
         self.externalPath = nil
     }
@@ -91,10 +100,12 @@ public struct LibraryRootView: View {
                 importCoordinator: ImportCoordinator,
                 onOpenBook: @escaping (Book) -> Void,
                 onShowSettings: (() -> Void)? = nil,
+                onShowChats: (() -> Void)? = nil,
                 onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? = nil) {
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
+        self.onShowChats = onShowChats
         self.onImported = onImported
         self.externalPath = path
     }
@@ -191,6 +202,16 @@ public struct LibraryRootView: View {
             onDelete: { book in Task { await vm.delete(book) } }
         )
         .toolbar {
+            if let onShowChats {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        onShowChats()
+                    } label: {
+                        Label("Chats", systemImage: "bubble.left.and.bubble.right")
+                    }
+                    .accessibilityIdentifier("library.toolbar.chats")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     showDocumentPicker = true

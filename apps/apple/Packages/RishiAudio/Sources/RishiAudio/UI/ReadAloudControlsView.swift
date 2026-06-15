@@ -104,7 +104,9 @@ public struct ReadAloudControlsView: View {
             }
         }
         .padding(RishiSpacing.l)
-        .background(RishiColor.surfaceElevated)
+        // No opaque fill here: the host (RootView) supplies the card surface —
+        // an iOS 26 Liquid Glass effect, or `.regularMaterial` on iOS 18 — so
+        // the panel reads as a translucent floating control over the page.
     }
 
     private var isPlaying: Bool { state.status == .playing }

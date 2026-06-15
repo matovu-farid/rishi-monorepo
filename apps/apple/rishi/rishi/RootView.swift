@@ -32,6 +32,29 @@ import RishiUIKit
 import PDFKit
 #endif
 
+/// Navigation marker pushed onto the Library `NavigationStack` to show the
+/// conversations list on iPhone compact, where the bottom tab bar was removed.
+/// A value type with no payload — there is only ever one conversations list.
+private struct ConversationsRoute: Hashable {}
+
+/// Floating-card surface for the read-aloud controls. iOS 26 gets a native
+/// Liquid Glass effect; iOS 18 falls back to `.regularMaterial`. Both clip to
+/// the same rounded rectangle so the card shape is identical across versions.
+private struct GlassCardBackground: ViewModifier {
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius)
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content
+                .background(.regularMaterial, in: shape)
+                .clipShape(shape)
+        }
+    }
+}
+
 struct RootView: View {
 
     @Environment(\.rishiAuthService) private var auth
@@ -235,14 +258,16 @@ struct RootView: View {
                     library:    { libraryTab(deps: deps, user: user) },
                     chats:      { conversationsTab(deps: deps, user: user) },
                     compactBody: {
-                        TabView(selection: $selectedTab) {
-                            Tab("Library", systemImage: "books.vertical", value: MacTab.library) {
-                                libraryTab(deps: deps, user: user)
-                            }
-                            Tab("Chats", systemImage: "bubble.left.and.bubble.right", value: MacTab.chats) {
-                                conversationsTab(deps: deps, user: user)
-                            }
-                        }
+                        // iPhone (compact): no bottom tab bar. Library is the
+                        // single home; its toolbar Chats button pushes the
+                        // conversations list onto the SAME NavigationStack the
+                        // reader uses (libraryPath). iPad/Mac keep the sidebar
+                        // above, where Chats is a sidebar entry instead.
+                        libraryTab(
+                            deps: deps,
+                            user: user,
+                            onShowChats: { libraryPath.append(ConversationsRoute()) }
+                        )
                     }
                 )
                 .sheet(item: $selectedConversation) { convo in
@@ -606,7 +631,11 @@ struct RootView: View {
     // MARK: - Tabs (Phase 9 wraps Library + Conversations in a TabView)
 
     @ViewBuilder
-    private func libraryTab(deps: AppDependencies, user: User) -> some View {
+    private func libraryTab(
+        deps: AppDependencies,
+        user: User,
+        onShowChats: (() -> Void)? = nil
+    ) -> some View {
         // Phase 18 Plan 18-01 (F-P0-01) — host-owned NavigationStack.
         // LibraryRootView's internal NavigationStack is bypassed via the
         // host-path initializer so the reader can push onto THIS stack and
@@ -621,6 +650,7 @@ struct RootView: View {
                     libraryPath.append(ReaderRoute.route(for: book))
                 },
                 onShowSettings: { showSettings = true },
+                onShowChats: onShowChats,
                 onImported: { outcomes in
                     // Phase 21 follow-up — auto-open the reader when the
                     // user imported exactly ONE book successfully. Multi-
@@ -636,6 +666,9 @@ struct RootView: View {
             )
             .navigationDestination(for: ReaderRoute.self) { route in
                 destinationView(for: route, deps: deps, userId: user.id)
+            }
+            .navigationDestination(for: ConversationsRoute.self) { _ in
+                conversationsDestination(deps: deps, user: user)
             }
             .task(id: user.id) {
                 deps.cachedUserId = user.id
@@ -657,6 +690,27 @@ struct RootView: View {
                 user: user,
                 onSignedOut: { currentUser = nil }
             )
+        }
+    }
+
+    /// Conversations list pushed onto the Library NavigationStack (iPhone
+    /// compact, where the bottom tab bar was removed). Same content as
+    /// ``conversationsTab`` but WITHOUT its own NavigationStack, since the
+    /// host stack (libraryPath) already provides the chrome / back chevron.
+    @ViewBuilder
+    private func conversationsDestination(deps: AppDependencies, user: User) -> some View {
+        let viewModel = deps.makeConversationsListViewModel()
+        ConversationsListView(
+            viewModel: viewModel,
+            userId: user.id,
+            onSelect: { convo in selectedConversation = convo }
+        )
+        .navigationTitle("Conversations")
+        .task {
+            deps.chatRefreshAdapter.setActive(viewModel: viewModel, userId: user.id)
+        }
+        .onDisappear {
+            deps.chatRefreshAdapter.clearActive()
         }
     }
 
@@ -935,8 +989,7 @@ struct RootView: View {
                     Task { await bridge.repeatCurrent() }
                 }
             )
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: RishiRadius.large))
-            .clipShape(RoundedRectangle(cornerRadius: RishiRadius.large))
+            .modifier(GlassCardBackground(cornerRadius: RishiRadius.large))
             .shadow(radius: RishiSpacing.s)
             .padding(.horizontal, RishiSpacing.m)
             .padding(.bottom, RishiSpacing.s)
