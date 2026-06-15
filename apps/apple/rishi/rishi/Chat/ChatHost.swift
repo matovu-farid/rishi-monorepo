@@ -16,6 +16,7 @@ struct ConversationsListHost: View {
     @State private var vm: ConversationsListViewModel
 
     init(
+        vm: ConversationsListViewModel,
         services: BootstrappedServices,
         userId: UserID,
         onSelect: @escaping (Conversation) -> Void
@@ -23,10 +24,7 @@ struct ConversationsListHost: View {
         self.userId = userId
         self.onSelect = onSelect
         self.chatRefreshAdapter = services.chatRefreshAdapter
-        _vm = State(initialValue: ConversationsListViewModel(
-            conversationStore: services.conversationStore,
-            messageStore: services.messageStore
-        ))
+        _vm = State(initialValue: vm)
     }
 
     var body: some View {
@@ -90,12 +88,7 @@ struct ChatPanelHostView: View {
                 userId: userId,
                 bookId: pending.bookId
             ) {
-                vm = ChatPanelViewModel(
-                    conversation: convo,
-                    bookId: pending.bookId,
-                    chatService: services.chatService,
-                    messageStore: services.messageStore
-                )
+                vm = ChatPanelViewModel.make(conversation: convo, services: services)
             }
         }
     }
@@ -113,16 +106,11 @@ struct ConversationChatHost: View {
     let onFreeUserTap: () -> Void
 
     init(
-        conversation: Conversation,
+        vm: ChatPanelViewModel,
         services: BootstrappedServices,
         onFreeUserTap: @escaping () -> Void
     ) {
-        _vm = State(initialValue: ChatPanelViewModel(
-            conversation: conversation,
-            bookId: conversation.bookId,
-            chatService: services.chatService,
-            messageStore: services.messageStore
-        ))
+        _vm = State(initialValue: vm)
         self.services = services
         self.onFreeUserTap = onFreeUserTap
     }

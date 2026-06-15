@@ -80,6 +80,7 @@ struct LibraryTabView: View {
             }
             .navigationDestination(for: ConversationsRoute.self) { _ in
                 ConversationsListHost(
+                    vm: ConversationsListViewModel.make(services: services),
                     services: services,
                     userId: user.id,
                     onSelect: { convo in model.present(conversation: convo) }

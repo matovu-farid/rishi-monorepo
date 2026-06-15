@@ -14,15 +14,10 @@ struct PaywallHost: View {
     let onDismiss: () -> Void
     @State private var vm: PaywallViewModel
 
-    init(feature: PaywallFeature, services: BootstrappedServices, onDismiss: @escaping () -> Void) {
+    init(feature: PaywallFeature, vm: PaywallViewModel, onDismiss: @escaping () -> Void) {
         self.feature = feature
         self.onDismiss = onDismiss
-        _vm = State(initialValue: PaywallViewModel(
-            productService: services.storeKitProductService,
-            purchaseService: services.purchaseService,
-            restoreService: services.restoreService,
-            managePresenter: services.manageSubscriptionPresenter
-        ))
+        _vm = State(initialValue: vm)
     }
 
     var body: some View {

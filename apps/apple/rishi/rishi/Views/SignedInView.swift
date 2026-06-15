@@ -75,7 +75,7 @@ struct SignedInView: View {
         )
         .sheet(item: $model.selectedConversation) { convo in
             ConversationChatHost(
-                conversation: convo,
+                vm: ChatPanelViewModel.make(conversation: convo, services: services),
                 services: services,
                 onFreeUserTap: {
                     model.requestPaywall("Voice Chat")
@@ -105,7 +105,7 @@ struct SignedInView: View {
         .sheet(item: $model.paywallFeature) { feature in
             PaywallHost(
                 feature: feature,
-                services: services,
+                vm: PaywallViewModel.make(services: services),
                 onDismiss: { model.dismissPaywall() }
             )
         }
