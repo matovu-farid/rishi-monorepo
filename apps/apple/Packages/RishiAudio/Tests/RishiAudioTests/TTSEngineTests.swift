@@ -136,6 +136,40 @@ struct TTSEngineTests {
         await engine.stop()
     }
 
+    /// The reader's prev/next/repeat path as it actually runs TODAY:
+    /// `ReaderTTSBridge.jump()` no longer calls `engine.stop()` — it calls
+    /// `engine.start(newPassage)` directly while the current passage is still
+    /// playing, relying on `start()`'s own single-session teardown. The only
+    /// other real-engine test (`stopThenStartPlaysNewPassage`) inserts a
+    /// `stop()` between the two starts, so it does NOT cover this sequence.
+    /// This reproduces the live jump path: start(0) then start(1) with NO stop
+    /// in between, and asserts passage 1 still reaches the audio engine. If the
+    /// back-to-back start tears itself down (next/prev "does nothing"), this
+    /// fails.
+    @Test("start(0) then start(1) with NO stop between plays passage 1 (live jump path)")
+    func startThenStartWithoutStopPlaysNewPassage() async throws {
+        let chunks = try loadFixtureMP3Chunks()
+        let (engine, fakeEngine, _, _) = await MainActor.run { makeFixture(chunks: chunks) }
+
+        @Sendable func sawPassage(_ id: String) -> Bool {
+            fakeEngine.calls.contains { call in
+                if case .chunkSeen(_, id, _) = call { return true }
+                return false
+            }
+        }
+
+        await engine.start(request: TTSStreamRequest(text: "a", voice: "alloy", speed: 1.0, passageId: "0"))
+        await poll(timeout: 5) { sawPassage("0") }
+        #expect(sawPassage("0"), "first passage must reach the engine")
+
+        // The live jump: start the next passage WITHOUT a stop() first.
+        await engine.start(request: TTSStreamRequest(text: "b", voice: "alloy", speed: 1.0, passageId: "1"))
+        await poll(timeout: 5) { sawPassage("1") }
+
+        #expect(sawPassage("1"), "after start(0) -> start(1) with no stop, passage 1 must play; if not, next/prev do nothing")
+        await engine.stop()
+    }
+
     @Test("Streamer error transitions state to .error or .stopped")
     func streamerErrorTransitionsState() async {
         // throwAfter: 0 makes the FakeTTSChunkSource throw on the very first chunk.

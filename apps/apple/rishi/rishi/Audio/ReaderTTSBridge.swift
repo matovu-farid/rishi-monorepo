@@ -26,6 +26,7 @@ import Foundation
 import Observation
 import RishiAudio
 import RishiCore
+import RishiLogging
 
 /// Pure decision logic for the paragraph advance watcher, factored out of
 /// `ReaderTTSBridge.startAdvanceWatcher` so it can be unit-tested without a
@@ -220,7 +221,15 @@ final class ReaderTTSBridge {
     /// at the new index. The fresh `playCurrent()` re-issues warm for the
     /// new window. No-op if `index` is out of range.
     func jump(to index: Int) async {
-        guard index >= 0, index < paragraphs.count else { return }
+        Log.event("tts.bridge.jump", level: .info, data: [
+            "target": String(index),
+            "current": String(currentIndex),
+            "count": String(paragraphs.count),
+        ])
+        guard index >= 0, index < paragraphs.count else {
+            Log.event("tts.bridge.jump.clamped", level: .info, data: ["target": String(index)])
+            return
+        }
         // Cancel the in-flight advance watcher BEFORE stopping the engine.
         // engine.stop() sets status .stopped while currentPassageId stays set,
         // which the live watcher would read as "current passage finished" and
@@ -320,6 +329,7 @@ final class ReaderTTSBridge {
 
     private func playCurrent() async {
         guard currentIndex < paragraphs.count else { return }
+        Log.event("tts.bridge.play_current", level: .info, data: ["index": String(currentIndex)])
         let settings = await settingsStore.load(userId: userId)
         // Re-validate after the await: a racing stop()/jump() may have emptied
         // `paragraphs` or moved `currentIndex` while we were suspended.
