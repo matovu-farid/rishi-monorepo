@@ -71,14 +71,6 @@ struct RootView: View {
     /// view still renders without the composition root in scope.
     @Environment(\.macCommandRouter) private var commandRouter
 
-    /// Phase 12 — bound to the TabView (iPhone compact) AND the sidebar
-    /// `List(selection:)` (iPad regular + Mac Catalyst).
-    /// `MacCommandIntent.selectTab(_)` (and `.focusSearch` /
-    /// `.newConversation`) writes into this so the menu can switch the
-    /// visible surface without touching the underlying `LibraryRootView`
-    /// / `ConversationsListView`.
-    @State private var selectedTab: MacTab = .library
-
     // MARK: - Phase 12 Plan 12-02 — @SceneStorage cells (MAC-05)
     //
     // SwiftUI restores `@SceneStorage` per scene-session, so closing the
@@ -248,27 +240,16 @@ struct RootView: View {
                     .accessibilityHidden(true)
                 #endif
             } else if let user = currentUser {
-                // Phase 12 Plan 12-02 (MAC-02) — sidebar on Mac Catalyst /
-                // iPad regular width class; existing TabView on iPhone
-                // compact. The selection binding is shared so menu-bar
-                // `selectTab(_)` intents land on the same `selectedTab`
-                // regardless of layout mode.
-                RishiSidebarLayout(
-                    selection: $selectedTab,
-                    library:    { libraryTab(deps: deps, user: user) },
-                    chats:      { conversationsTab(deps: deps, user: user) },
-                    compactBody: {
-                        // iPhone (compact): no bottom tab bar. Library is the
-                        // single home; its toolbar Chats button pushes the
-                        // conversations list onto the SAME NavigationStack the
-                        // reader uses (libraryPath). iPad/Mac keep the sidebar
-                        // above, where Chats is a sidebar entry instead.
-                        libraryTab(
-                            deps: deps,
-                            user: user,
-                            onShowChats: { libraryPath.append(ConversationsRoute()) }
-                        )
-                    }
+                // Single home on every device: no bottom tab bar (iPhone) and
+                // no sidebar (iPad/Mac). Library is the root; its toolbar Chats
+                // button pushes the conversations list onto the SAME
+                // NavigationStack the reader uses (libraryPath), so the back
+                // chevron + edge-swipe work everywhere. Menu-bar / ⌘ intents
+                // drive the same stack (see consumePendingMacIntent).
+                libraryTab(
+                    deps: deps,
+                    user: user,
+                    onShowChats: { showConversations() }
                 )
                 .sheet(item: $selectedConversation) { convo in
                     let vm = deps.makeChatPanelViewModel(conversation: convo)
@@ -424,7 +405,6 @@ struct RootView: View {
                 Task {
                     let book: Book? = try? await deps.bookStore.book(bookId)
                     guard let book else { return }
-                    selectedTab = .library
                     bookHints[book.id] = book
                     var p = NavigationPath()
                     p.append(ReaderRoute.route(for: book))
@@ -479,7 +459,6 @@ struct RootView: View {
         // Persist the latest scene state on every visible change. We
         // re-encode the whole struct on each delta so the storage cell
         // always holds an up-to-date snapshot.
-        .onChange(of: selectedTab) { _, _ in persistSceneState() }
         .onChange(of: libraryPath) { _, _ in persistSceneState() }
     }
 
@@ -515,7 +494,6 @@ struct RootView: View {
             tabRaw: selectedTabRaw,
             openBookIdRaw: openBookIdRaw
         )
-        selectedTab = decoded.state.selectedTab
         // Preferred — full NavigationPath via CodableRepresentation.
         if let path = decoded.path {
             libraryPath = path
@@ -550,9 +528,28 @@ struct RootView: View {
     /// existing TestFlight installs upgrade in-place.
     @MainActor
     private func persistSceneState() {
-        let state = RishiSceneState(selectedTab: selectedTab, openBookId: nil)
+        // The tab cell is retained for storage-schema continuity (existing
+        // installs upgrade in-place) but the app no longer has a tab/sidebar
+        // selection — Library is the single home — so it always encodes
+        // `.library`. The reader path is the live restorable state.
+        let state = RishiSceneState(selectedTab: .library, openBookId: nil)
         selectedTabRaw = state.encodeForStorage()
         openBookIdRaw  = NavigationPath.encodeForStorage(libraryPath)
+    }
+
+    /// Reset the Library stack to root (used by Library / import / search
+    /// menu intents now that there is no tab/sidebar selection).
+    private func showLibraryRoot() {
+        libraryPath = NavigationPath()
+    }
+
+    /// Show the conversations list by resetting to the Library root and
+    /// pushing `ConversationsRoute` (used by the Library toolbar Chats button
+    /// and the Chats / New Conversation menu intents).
+    private func showConversations() {
+        var p = NavigationPath()
+        p.append(ConversationsRoute())
+        libraryPath = p
     }
 
     // MARK: - Mac command intent dispatch (Phase 12 Plan 12-01)
@@ -568,20 +565,20 @@ struct RootView: View {
         switch intent {
         case .importBook:
             // LibraryRootView observes `RishiCommand.importBook` and toggles
-            // its document-picker sheet.
-            selectedTab = .library
+            // its document-picker sheet. Bring the Library root to front first.
+            showLibraryRoot()
             NotificationCenter.default.post(name: RishiCommand.importBook, object: nil)
 
         case .newConversation:
-            // Jump to the Chats tab. `ChatPresenterImpl.presentChat` requires
-            // a `BookID`, so for an unbound new conversation we let the
+            // Show the conversations list. `ChatPresenterImpl.presentChat`
+            // requires a `BookID`, so for an unbound new conversation we let the
             // ConversationsListView's "+" affordance own the actual creation
             // path. This keeps the menu command honest (no half-baked book
             // bindings) while still bringing the user to the right surface.
-            selectedTab = .chats
+            showConversations()
 
         case .focusSearch:
-            selectedTab = .library
+            showLibraryRoot()
             NotificationCenter.default.post(name: RishiCommand.focusSearch, object: nil)
 
         case .fontIncrease:
@@ -608,7 +605,12 @@ struct RootView: View {
             }
 
         case .selectTab(let tab):
-            selectedTab = tab
+            // No tab/sidebar anymore — map the surface selection onto the
+            // Library NavigationStack.
+            switch tab {
+            case .library: showLibraryRoot()
+            case .chats:   showConversations()
+            }
 
         case .pageForward:
             NotificationCenter.default.post(name: RishiCommand.pageForward, object: nil)
@@ -693,10 +695,9 @@ struct RootView: View {
         }
     }
 
-    /// Conversations list pushed onto the Library NavigationStack (iPhone
-    /// compact, where the bottom tab bar was removed). Same content as
-    /// ``conversationsTab`` but WITHOUT its own NavigationStack, since the
-    /// host stack (libraryPath) already provides the chrome / back chevron.
+    /// Conversations list pushed onto the Library NavigationStack. The host
+    /// stack (libraryPath) provides the chrome / back chevron, so this renders
+    /// the list WITHOUT wrapping it in its own NavigationStack.
     @ViewBuilder
     private func conversationsDestination(deps: AppDependencies, user: User) -> some View {
         let viewModel = deps.makeConversationsListViewModel()
@@ -711,28 +712,6 @@ struct RootView: View {
         }
         .onDisappear {
             deps.chatRefreshAdapter.clearActive()
-        }
-    }
-
-    @ViewBuilder
-    private func conversationsTab(deps: AppDependencies, user: User) -> some View {
-        // Phase 16-05 — mint the VM once per tab presentation and register
-        // it with `chatRefreshAdapter` so the SyncEngine's inbound chat
-        // merge can call back into refreshAfterSync(userId:). We tear the
-        // registration down in `.onDisappear`.
-        let viewModel = deps.makeConversationsListViewModel()
-        NavigationStack {
-            ConversationsListView(
-                viewModel: viewModel,
-                userId: user.id,
-                onSelect: { convo in selectedConversation = convo }
-            )
-            .task {
-                deps.chatRefreshAdapter.setActive(viewModel: viewModel, userId: user.id)
-            }
-            .onDisappear {
-                deps.chatRefreshAdapter.clearActive()
-            }
         }
     }
 

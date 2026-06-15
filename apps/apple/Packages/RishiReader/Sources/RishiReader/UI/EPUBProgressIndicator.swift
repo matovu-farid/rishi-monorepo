@@ -23,11 +23,21 @@ public struct EPUBProgressIndicator: View {
                 .foregroundStyle(RishiColor.textSecondary)
                 .padding(.horizontal, RishiSpacing.m)
                 .padding(.vertical, RishiSpacing.s)
-                .background(
-                    Capsule().fill(RishiColor.surfaceElevated.opacity(0.85))
-                )
+                .modifier(GlassChipBackground())
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(percent) percent")
+        }
+    }
+}
+
+/// Capsule surface for the progress chip. iOS 26 gets a Liquid Glass effect;
+/// iOS 18 falls back to the translucent elevated-surface fill.
+private struct GlassChipBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: Capsule())
+        } else {
+            content.background(Capsule().fill(RishiColor.surfaceElevated.opacity(0.85)))
         }
     }
 }
