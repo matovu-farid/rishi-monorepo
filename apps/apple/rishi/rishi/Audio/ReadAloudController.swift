@@ -116,6 +116,8 @@ final class ReadAloudController {
                 // Refresh the stash so onPassageChange resolves the highlight
                 // against the new chapter's paragraphs (the index resets to 0).
                 let next = await vm?.paragraphsForFollowingResource() ?? []
+                // weak self is safe here: the controller owns the bridge strongly, so the
+                // bridge cannot invoke this closure after the controller is deallocated.
                 self?.paragraphs = next
                 return next
             }

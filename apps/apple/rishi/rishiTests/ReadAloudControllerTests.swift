@@ -160,8 +160,8 @@ struct ReadAloudControllerTests {
 
         await controller.start(
             paragraphs: ["alpha", "bravo"],
-            onPassageChange: { [controller] index in
-                controller.updateCurrentParagraph(for: index)
+            onPassageChange: { [weak controller] index in
+                controller?.updateCurrentParagraph(for: index)
             }
         )
 
