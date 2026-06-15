@@ -28,33 +28,6 @@ import PDFKit
 
 // MARK: - Helper types (relocated from RootView)
 
-/// Floating-card surface for the read-aloud controls. iOS 26 gets a native
-/// Liquid Glass effect; iOS 18 falls back to `.regularMaterial`. Both clip to
-/// the same rounded rectangle so the card shape is identical across versions.
-struct GlassCardBackground: ViewModifier {
-    let cornerRadius: CGFloat
-
-    func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius)
-        if #available(iOS 26.0, *) {
-            content.glassEffect(.regular, in: shape)
-        } else {
-            content
-                .background(.regularMaterial, in: shape)
-                .clipShape(shape)
-        }
-    }
-}
-
-/// BILL-04 — Identifiable wrapper so `.sheet(item:)` can drive a paywall
-/// keyed by the feature name. String isn't Identifiable in stdlib; using a
-/// dedicated struct keeps the @State binding straightforward.
-/// Internal (not private) so `PaywallHost` (same module) can reference it.
-struct PaywallFeature: Identifiable, Equatable {
-    let name: String
-    var id: String { name }
-}
-
 /// reader-tts-xml-and-loading fix — memoizes reader view-models per book id
 /// across SignedInView body recomputes.
 ///
@@ -93,79 +66,6 @@ final class ReaderViewModelCache {
     func drop(_ id: BookID) {
         pdfVMs.removeValue(forKey: id)
         epubVMs.removeValue(forKey: id)
-    }
-}
-
-/// Phase 18 Plan 18-01 — async-resolve a `Book` from a `BookID` for use
-/// inside a `NavigationStack` destination. The path itself only carries
-/// `ReaderRoute` (Codable + BookID) so scene restoration stays primitive.
-/// This helper performs the `bookStore.book(_:)` lookup on appear,
-/// rendering a `ProgressView` until the book resolves.
-struct NavigationLazyBook<Content: View>: View {
-    let bookId: BookID
-    let bookStore: any BookStore
-    let content: (Book) -> Content
-
-    @State private var book: Book?
-
-    /// Phase 20 perf — accept an optional `hint` so call sites that
-    /// already have the resolved `Book` (library tap, Mac intent, legacy
-    /// scene-restore B) can seed `@State` and skip the
-    /// `bookStore.book(_:)` round-trip entirely. The fallback DB read
-    /// still runs whenever the hint is nil (cold launch scene restore
-    /// path), so existing behaviour is preserved.
-    init(bookId: BookID,
-         hint: Book? = nil,
-         bookStore: any BookStore,
-         @ViewBuilder content: @escaping (Book) -> Content) {
-        self.bookId = bookId
-        self.bookStore = bookStore
-        self.content = content
-        self._book = State(initialValue: hint)
-    }
-
-    var body: some View {
-        Group {
-            if let book {
-                content(book)
-            } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .task(id: bookId) {
-            if book == nil {
-                book = try? await bookStore.book(bookId)
-            }
-        }
-    }
-}
-
-/// Catches `.mobi` / `.azw3` taps — those formats need a converter step
-/// that isn't on the v1 milestone. Shipped here so the library never
-/// silently no-ops when the user taps an unsupported book.
-struct EpubPlaceholderView: View {
-    let book: Book
-    let onClose: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 16) {
-                Image(systemName: "book.closed")
-                    .font(.largeTitle)
-                Text(book.title)
-                    .font(.title3)
-                Text("MOBI / AZW3 aren't supported yet.")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-            }
-            .padding()
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done", action: onClose)
-                }
-            }
-        }
     }
 }
 
