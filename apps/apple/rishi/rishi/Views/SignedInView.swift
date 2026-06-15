@@ -2,10 +2,10 @@
 //  SignedInView.swift
 //  rishi
 //
-//  Extracted from RootView (refactor). Owns the entire signed-in composition:
-//  library NavigationStack, reader destinations, all signed-in sheets
-//  (chat, paywall, settings), read-aloud controls overlay, deep-link
-//  wiring, scene-restoration task, and Mac-command intent dispatch.
+//  Extracted from RootView (refactor). Owns the signed-in composition shell:
+//  the LibraryTabView (library NavigationStack + reader destinations + settings
+//  sheet + deep-link onOpenURL), all signed-in modal sheets (chat, paywall),
+//  scene-restoration task, and Mac-command intent dispatch.
 //
 //  RootView retains only the auth-switch branch (loading / signed-in /
 //  signed-out) and the onboarding cover which spans both auth states.
@@ -16,7 +16,6 @@ import RishiCore
 import RishiAuth
 import RishiBilling
 import RishiChat
-import RishiLibrary
 import RishiOnboarding
 import RishiReader
 import RishiSettings
@@ -54,21 +53,9 @@ struct SignedInView: View {
         self._openBookIdRaw = openBookIdRaw
         self.onSignedOut = onSignedOut
         self.onCacheUserId = onCacheUserId
-        let userId = user.id
-        self._libraryVM = State(initialValue: LibraryViewModel(
-            bookStore: services.bookStore,
-            positionStore: services.positionStore,
-            storage: services.bookFileStorage,
-            currentUserId: { userId }
-        ))
     }
 
     // MARK: - Signed-in @State
-
-    /// Owned by this view so LibraryViewModel lifecycle matches the
-    /// authenticated session. Injected into the environment for
-    /// LibraryRootView and other signed-in consumers via .environment(libraryVM).
-    @State private var libraryVM: LibraryViewModel
 
     /// Shell presentation state: conversation sheet, paywall sheet, settings
     /// sheet, and transient book-hint cache. Extracted into a viewModel so
@@ -83,12 +70,14 @@ struct SignedInView: View {
 
     var body: some View {
         @Bindable var model = model
-        libraryTab(
+        LibraryTabView(
             services: services,
             user: user,
-            onShowChats: { router.showConversations() }
+            model: model,
+            onCacheUserId: onCacheUserId,
+            onShowChats: { router.showConversations() },
+            onSignedOut: onSignedOut
         )
-        .environment(libraryVM)
         .sheet(item: $model.selectedConversation) { convo in
             ConversationChatHost(
                 conversation: convo,
@@ -123,26 +112,6 @@ struct SignedInView: View {
                 feature: feature,
                 services: services,
                 onDismiss: { model.dismissPaywall() }
-            )
-        }
-        // Phase 12 Plan 12-03 — deep-link dispatch via AppRouter.
-        .onOpenURL { url in
-            router.onBookResolved = { book in
-                model.hint(book)
-            }
-            router.onConversationResolved = { convo in
-                model.present(conversation: convo)
-            }
-            router.onFileURL = { [libraryVM] fileURL in
-                Task {
-                    _ = await services.importCoordinator.importBooks([fileURL])
-                    await libraryVM.refresh()
-                }
-            }
-            router.handle(
-                url: url,
-                bookStore: services.bookStore,
-                conversationStore: services.conversationStore
             )
         }
         // Phase 12 Plan 12-01 — drain the Mac command router on every intent change.
@@ -223,72 +192,6 @@ struct SignedInView: View {
         case .sepia: return .sepia
         case .dark:  return .dark
         }
-    }
-
-    // MARK: - Library tab
-
-    @ViewBuilder
-    private func libraryTab(
-        services: BootstrappedServices,
-        user: User,
-        onShowChats: (() -> Void)? = nil
-    ) -> some View {
-        @Bindable var model = model
-        let bindableRouter = Bindable(router)
-        NavigationStack(path: bindableRouter.path) {
-            LibraryRootView(
-                path: bindableRouter.path,
-                importCoordinator: services.importCoordinator,
-                onOpenBook: { book in
-                    model.hint(book)
-                    router.path.append(ReaderRoute.route(for: book))
-                },
-                onShowSettings: { model.requestSettings() },
-                onShowChats: onShowChats,
-                onImported: { outcomes in
-                    let successes = outcomes.compactMap(\.book)
-                    guard successes.count == 1, let book = successes.first else { return }
-                    model.hint(book)
-                    router.path.append(ReaderRoute.route(for: book))
-                }
-            )
-            .navigationDestination(for: ReaderRoute.self) { route in
-                ReaderDestinationView(
-                    route: route,
-                    services: services,
-                    userId: user.id,
-                    hint: model.hint(for: route.bookId),
-                    onRequestPaywall: { model.requestPaywall($0) }
-                )
-            }
-            .navigationDestination(for: ConversationsRoute.self) { _ in
-                conversationsDestination(services: services, user: user)
-            }
-            .task(id: user.id) {
-                onCacheUserId(user.id)
-                async let sample = services.sampleBookInstaller.installIfNeeded(ownerId: user.id)
-                async let reader = services.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
-                _ = await (sample, reader)
-                await libraryVM.refresh()
-            }
-        }
-        .sheet(isPresented: $model.showSettings) {
-            SettingsSheet(
-                services: services,
-                user: user,
-                onSignedOut: onSignedOut
-            )
-        }
-    }
-
-    /// Conversations list pushed onto the Library NavigationStack.
-    @ViewBuilder
-    private func conversationsDestination(services: BootstrappedServices, user: User) -> some View {
-        ConversationsListHost(
-            services: services,
-            userId: user.id,
-            onSelect: { convo in model.present(conversation: convo) }
-        )
     }
 
 }

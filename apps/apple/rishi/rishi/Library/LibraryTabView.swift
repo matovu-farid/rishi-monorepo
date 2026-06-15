@@ -1,0 +1,124 @@
+//
+//  LibraryTabView.swift
+//  rishi
+//
+//  Owns LibraryViewModel and renders the library NavigationStack, including
+//  reader/conversations destinations, the settings sheet, and the deep-link
+//  onOpenURL handler (which needs libraryVM for post-import refresh).
+//
+
+import SwiftUI
+import RishiCore
+import RishiLibrary
+import RishiChat
+import RishiReader
+import RishiSettings
+
+struct LibraryTabView: View {
+
+    let services: BootstrappedServices
+    let user: User
+    let model: SignedInViewModel
+    let onCacheUserId: (UserID) -> Void
+    let onShowChats: () -> Void
+    let onSignedOut: () -> Void
+
+    @Environment(AppRouter.self) private var router
+
+    @State private var libraryVM: LibraryViewModel
+
+    init(
+        services: BootstrappedServices,
+        user: User,
+        model: SignedInViewModel,
+        onCacheUserId: @escaping (UserID) -> Void,
+        onShowChats: @escaping () -> Void,
+        onSignedOut: @escaping () -> Void
+    ) {
+        self.services = services
+        self.user = user
+        self.model = model
+        self.onCacheUserId = onCacheUserId
+        self.onShowChats = onShowChats
+        self.onSignedOut = onSignedOut
+        let userId = user.id
+        _libraryVM = State(initialValue: LibraryViewModel(
+            bookStore: services.bookStore,
+            positionStore: services.positionStore,
+            storage: services.bookFileStorage,
+            currentUserId: { userId }
+        ))
+    }
+
+    var body: some View {
+        let bindableRouter = Bindable(router)
+        NavigationStack(path: bindableRouter.path) {
+            LibraryRootView(
+                path: bindableRouter.path,
+                importCoordinator: services.importCoordinator,
+                onOpenBook: { book in
+                    model.hint(book)
+                    router.path.append(ReaderRoute.route(for: book))
+                },
+                onShowSettings: { model.requestSettings() },
+                onShowChats: onShowChats,
+                onImported: { outcomes in
+                    let successes = outcomes.compactMap(\.book)
+                    guard successes.count == 1, let book = successes.first else { return }
+                    model.hint(book)
+                    router.path.append(ReaderRoute.route(for: book))
+                }
+            )
+            .navigationDestination(for: ReaderRoute.self) { route in
+                ReaderDestinationView(
+                    route: route,
+                    services: services,
+                    userId: user.id,
+                    hint: model.hint(for: route.bookId),
+                    onRequestPaywall: { model.requestPaywall($0) }
+                )
+            }
+            .navigationDestination(for: ConversationsRoute.self) { _ in
+                ConversationsListHost(
+                    services: services,
+                    userId: user.id,
+                    onSelect: { convo in model.present(conversation: convo) }
+                )
+            }
+            .task(id: user.id) {
+                onCacheUserId(user.id)
+                async let sample = services.sampleBookInstaller.installIfNeeded(ownerId: user.id)
+                async let reader = services.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
+                _ = await (sample, reader)
+                await libraryVM.refresh()
+            }
+        }
+        .environment(libraryVM)
+        .sheet(isPresented: Bindable(model).showSettings) {
+            SettingsSheet(
+                services: services,
+                user: user,
+                onSignedOut: onSignedOut
+            )
+        }
+        .onOpenURL { url in
+            router.onBookResolved = { book in
+                model.hint(book)
+            }
+            router.onConversationResolved = { convo in
+                model.present(conversation: convo)
+            }
+            router.onFileURL = { [libraryVM] fileURL in
+                Task {
+                    _ = await services.importCoordinator.importBooks([fileURL])
+                    await libraryVM.refresh()
+                }
+            }
+            router.handle(
+                url: url,
+                bookStore: services.bookStore,
+                conversationStore: services.conversationStore
+            )
+        }
+    }
+}
