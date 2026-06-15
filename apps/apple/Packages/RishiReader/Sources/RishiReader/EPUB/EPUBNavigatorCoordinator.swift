@@ -32,13 +32,27 @@ public final class EPUBNavigatorCoordinator: NSObject {
     public let viewModel: EPUBReaderViewModel
     public private(set) var navigator: EPUBNavigatorViewController?
 
-    /// True only while ``navigateToReadAloudParagraph(_:)`` is driving a
-    /// programmatic `nav.go(to:)`. Read by the `locationDidChange`
-    /// delegate to tag the resulting locator change as auto-follow
-    /// (not a user page-turn), so the VM does not fire
-    /// `onUserNavigation` for it. Both the setter and the delegate run
-    /// on the MainActor, so this needs no synchronization.
-    private var isProgrammaticNavigation = false
+    /// True while a read-aloud session is actively following the spoken
+    /// paragraph. Set by ``EPUBReaderScreen`` from the active-passage binding.
+    /// The view-follow (``navigateToReadAloudParagraph(_:)``) owns navigation
+    /// for the whole session, so EVERY locator change while this is true is
+    /// auto-follow — not a user page-turn — and must NOT fire `onUserNavigation`
+    /// (which would stop the audio the view is following).
+    ///
+    /// Why session-scoped, not per-navigation: the read-aloud target locator is
+    /// text-anchored with NO progression, and within one resource a programmatic
+    /// page turn and a user swipe carry the same href, so the two are
+    /// indistinguishable from a single `locationDidChange`. An animated
+    /// `go(to:)` also delivers its `locationDidChange` ~300ms AFTER it returns,
+    /// so any flag reset tied to the call races the callback (the original bug:
+    /// the late callback was read as a user page-turn and fired
+    /// `onUserNavigation -> stopReadAloud`, halting read-aloud at every page
+    /// boundary). Gating on "is a session following" sidesteps both problems.
+    /// The cost is that a manual page-turn during read-aloud no longer stops it
+    /// (use the Stop control) — the auto-follow would immediately yank the view
+    /// back to the spoken paragraph anyway. Set and read on the MainActor, so
+    /// no synchronization is needed.
+    public var isFollowingReadAloud = false
 
     /// Forwarded to the screen so it can present the highlight context
     /// menu. The closure is also called with `nil` when the user clears
@@ -118,15 +132,10 @@ public final class EPUBNavigatorCoordinator: NSObject {
             href: base.href,
             mediaType: base.mediaType
         )
-        // Tag the locator change that `go(to:)` produces as programmatic
-        // so the delegate suppresses `onUserNavigation`. Set tightly
-        // around the await and reset immediately after it returns rather
-        // than via a function-scope `defer`, so the flag is only raised
-        // for the duration of this navigation.
-        isProgrammaticNavigation = true
-        let didMove = await nav.go(to: locator, options: NavigatorGoOptions(animated: true))
-        isProgrammaticNavigation = false
-        return didMove
+        // The locator change this produces is suppressed via `isFollowingReadAloud`
+        // (a read-aloud session owns navigation for its whole duration), so no
+        // per-call marker is needed here.
+        return await nav.go(to: locator, options: NavigatorGoOptions(animated: true))
     }
 
     /// Translates our reader settings into Readium's `EPUBPreferences`
@@ -185,7 +194,15 @@ public final class EPUBNavigatorCoordinator: NSObject {
 extension EPUBNavigatorCoordinator: EPUBNavigatorDelegate {
 
     public func navigator(_ navigator: any Navigator, locationDidChange locator: Locator) {
-        viewModel.didChangeLocation(locator, isProgrammatic: isProgrammaticNavigation)
+        handleLocationChange(locator)
+    }
+
+    /// Forwards a navigator location change to the view model, tagging it as
+    /// programmatic auto-follow while a read-aloud session is active so the VM
+    /// does not treat it as a user page-turn. Separated from the delegate method
+    /// (which requires a live `Navigator`) so it is unit-testable without one.
+    public func handleLocationChange(_ locator: Locator) {
+        viewModel.didChangeLocation(locator, isProgrammatic: isFollowingReadAloud)
     }
 
     public func navigator(_ navigator: any Navigator, presentExternalURL url: URL) {

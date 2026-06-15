@@ -188,56 +188,44 @@ final class ReadAloudNextParagraphUITests: XCTestCase {
         app.launchEnvironment["RISHI_UITEST"] = "1"
         app.launch()
 
-        let (readAloud, toggle) = startPlayingSession(app)
-        _ = toggle
+        _ = startPlayingSession(app)
 
-        // Confirm we are Playing on the first passage before we begin crossing.
-        let pause = app.descendants(matching: .any)
-            .matching(identifier: "tts-pause").firstMatch
+        // The Stop control exists for the WHOLE life of a session (it is enabled
+        // for loading/playing/paused, only gone when the session is idle or
+        // stopped). We assert on it rather than the play/pause toggle because
+        // the toggle flips between "tts-play" (loading) and "tts-pause"
+        // (playing) on every passage and would flicker; "tts-stop" is stable
+        // while the session lives. The halt we are guarding against calls
+        // stopReadAloud, which tears down the controls overlay entirely — so
+        // "tts-stop" disappearing is the faithful signal of the bug.
+        let stop = app.descendants(matching: .any)
+            .matching(identifier: "tts-stop").firstMatch
         XCTAssertTrue(
-            pause.waitForExistence(timeout: 25),
-            "Session did not reach Playing before the page-boundary sweep."
+            stop.waitForExistence(timeout: 25),
+            "Read-aloud controls never appeared before the page-boundary sweep."
         )
 
         let next = app.descendants(matching: .any)
             .matching(identifier: "tts-next-paragraph").firstMatch
         XCTAssertTrue(next.waitForExistence(timeout: 5), "Next-paragraph button missing.")
 
-        // Step through enough paragraphs to cross at least one page boundary.
-        // 12 presses from near the chapter start clears a phone page (which
-        // holds only a handful of paragraphs) while staying within the ~34
-        // paragraphs of the resource.
+        // Step through paragraphs to cross page boundaries. Each Next moves the
+        // highlight; once it lands on an off-page paragraph the reader
+        // programmatically turns the page, whose delayed locationDidChange used
+        // to stop read-aloud. After each press we let that callback land and
+        // assert the session is still alive ("tts-stop" still present).
         for press in 1...12 {
             robustTap(next)
-
-            // The switch flips to Loading ("tts-play"); let it begin so we
-            // don't observe the stale pre-switch "tts-pause".
-            usleep(800_000)
-
+            // Allow the passage switch AND any delayed page-turn callback to
+            // land before checking the session survived.
+            usleep(2_500_000)
             XCTAssertTrue(
-                pause.waitForExistence(timeout: 15),
-                "After Next #\(press), playback never returned to Playing "
-                + "(\"tts-pause\" missing). If this is the page-crossing press, "
-                + "the new page's paragraph never started — the delayed "
-                + "page-turn navigation stopped read-aloud."
-            )
-
-            // Let any DELAYED locationDidChange from a programmatic page turn
-            // land. If this Next crossed a page boundary on the buggy build,
-            // the late callback fires onUserNavigation -> stopReadAloud here
-            // and tears the session down.
-            usleep(2_000_000)
-
-            // Re-check with a short wait so a transient auto-advance Loading
-            // blip is tolerated, but a stopped session is not.
-            XCTAssertTrue(
-                pause.waitForExistence(timeout: 6),
-                "After Next #\(press), playback STARTED then HALTED — "
-                + "\"tts-pause\" disappeared and did not return. This is the "
-                + "page-boundary stop: the programmatic page turn's delayed "
+                stop.waitForExistence(timeout: 6),
+                "After Next #\(press), the read-aloud session was torn down "
+                + "(\"tts-stop\" gone). A page-crossing advance stopped "
+                + "read-aloud: the programmatic page turn's delayed "
                 + "locationDidChange was misread as a user navigation and "
-                + "fired stopReadAloud. The Read Aloud button still present: "
-                + "\(readAloud.exists)."
+                + "fired stopReadAloud."
             )
         }
     }

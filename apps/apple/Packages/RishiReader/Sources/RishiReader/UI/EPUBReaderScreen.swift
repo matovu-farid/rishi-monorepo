@@ -657,6 +657,11 @@ public struct EPUBReaderScreen: View {
     /// No-ops until the navigator coordinator is installed.
     private func applyReadAloudHighlight() {
         guard let coordinator = coordinatorRef.coordinator else { return }
+        // A non-nil active paragraph means a read-aloud session is following the
+        // text. While it is, the coordinator treats navigator location changes
+        // as auto-follow (not user page-turns) so the follow does not stop the
+        // audio it is chasing; cleared when the session ends (paragraph -> nil).
+        coordinator.isFollowingReadAloud = readAloudParagraph != nil
         if let paragraph = readAloudParagraph {
             coordinator.highlightReadAloudParagraph(paragraph)
             // Follow the spoken paragraph so the page turns when it has moved
