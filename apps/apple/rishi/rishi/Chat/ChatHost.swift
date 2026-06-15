@@ -1,6 +1,7 @@
 import SwiftUI
 import RishiChat
 import RishiCore
+import RishiBilling
 
 /// Host view that owns the ``ConversationsListViewModel`` lifetime.
 ///

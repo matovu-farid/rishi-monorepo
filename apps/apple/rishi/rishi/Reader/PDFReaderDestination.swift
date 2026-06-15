@@ -14,6 +14,7 @@ import RishiReader
 import RishiUIKit
 #if canImport(PDFKit)
 import PDFKit
+import RishiBilling
 #endif
 
 struct PDFReaderDestination: View {
