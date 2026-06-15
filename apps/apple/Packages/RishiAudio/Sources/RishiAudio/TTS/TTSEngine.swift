@@ -49,13 +49,8 @@ public actor TTSEngine {
     public func start(request: TTSStreamRequest) async {
         // Tear down any in-flight session.
         await teardown()
-        // Halt any in-flight playback before reconfiguring (passage switch from
-        // next/prev/repeat). This stops the player node + AVAudioEngine but does
-        // NOT release the audio session — releasing + immediately re-acquiring
-        // the session (what a bridge-level stop() did) loses the audio route on
-        // device and plays silently. The session is only released on a real stop.
-        engine.stop()
         firstBufferScheduled = false
+        Log.event("tts.engine.start.enter", level: .info, data: ["passageId": request.passageId ?? ""])
 
         let observable = state
         await MainActor.run {
@@ -67,6 +62,7 @@ public actor TTSEngine {
         do {
             try engine.attach()
             try engine.start()
+            Log.event("tts.engine.start.running", level: .info, data: ["passageId": request.passageId ?? ""])
             let decoder = try decoderFactory(engine.targetFormat)
             activeDecoder = decoder
 
@@ -106,6 +102,7 @@ public actor TTSEngine {
                     await self?.fail(with: error)
                 }
             }
+            Log.event("tts.engine.start.spawned", level: .info, data: ["passageId": request.passageId ?? ""])
         } catch {
             await fail(with: error)
         }

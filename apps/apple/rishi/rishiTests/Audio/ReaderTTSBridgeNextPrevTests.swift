@@ -64,8 +64,8 @@ struct ReaderTTSBridgeNextPrevTests {
         #expect(startIds(env.engine) == ["0", "1"])
     }
 
-    @Test("next() switches passages without a full engine stop (keeps the audio session)")
-    func nextDoesNotStopEngine() async {
+    @Test("next() fully stops then plays the new passage (same path as auto-advance)")
+    func nextStopsThenPlaysNewPassage() async {
         let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .holds) })
         await env.bridge.start(paragraphs: ["a", "b", "c"])
         await waitUntil(timeout: 2) { startIds(env.engine) == ["0"] }
@@ -75,10 +75,14 @@ struct ReaderTTSBridgeNextPrevTests {
         await waitUntil(timeout: 2) { startIds(env.engine).last == "1" }
         let stopsAfter = env.engine.calls.filter { $0 == .stop }.count
 
-        // A full engine stop releases the audio session; re-acquiring it
-        // immediately for the next passage loses the route and plays silently on
-        // device. The switch must rely on start()'s single-session teardown.
-        #expect(stopsAfter == stopsBefore, "next() issued a full engine stop (churns the audio session)")
+        // Device evidence (next/prev silent): leaving the session active on a
+        // switch (switchPassage no-op, no re-activate) means the AVAudioEngine is
+        // stopped and restarted with no live route -> the whole stream/decoder
+        // pipeline never starts. Auto-advance works precisely because it does a
+        // FULL stop (releasing the session) then a fresh start that re-activates.
+        // A jump must take that same path: stop, then play the new passage.
+        #expect(stopsAfter > stopsBefore, "next() must fully stop (release session) before playing the new passage")
+        #expect(startIds(env.engine).last == "1", "next() must then start the new passage")
         await env.bridge.stop()
     }
 

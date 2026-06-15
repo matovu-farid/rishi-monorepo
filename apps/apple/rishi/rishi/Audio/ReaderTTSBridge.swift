@@ -238,11 +238,14 @@ final class ReaderTTSBridge {
         advanceTask?.cancel()
         advanceTask = nil
         await prewarmer.cancelAll()
-        // Do NOT call engine.stop() here: a full stop releases the audio session,
-        // and re-acquiring it immediately for the new passage loses the route on
-        // device (plays silently). engine.start() in playCurrent() is
-        // single-session — it halts the current passage's playback itself while
-        // keeping the session active.
+        // Full stop BEFORE replaying — this is the same path auto-advance takes
+        // (which plays correctly on device). engine.stop() releases the audio
+        // session to .idle; the following playCurrent() -> engine.start() then
+        // re-acquires it (configure + activate). Device evidence: NOT releasing
+        // here (relying on start()'s single-session teardown while the session
+        // stays .tts) leaves the restarted AVAudioEngine with no live route, so
+        // the stream/decoder pipeline never starts and next/prev play silently.
+        await engine.stop()
         currentIndex = index
         startAdvanceWatcher()
         await playCurrent()
