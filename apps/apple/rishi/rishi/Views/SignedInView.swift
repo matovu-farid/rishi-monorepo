@@ -13,7 +13,6 @@
 
 import SwiftUI
 import RishiCore
-import RishiAudio
 import RishiAuth
 import RishiBilling
 import RishiChat
@@ -22,52 +21,6 @@ import RishiOnboarding
 import RishiReader
 import RishiSettings
 import RishiUIKit
-#if canImport(PDFKit)
-import PDFKit
-#endif
-
-// MARK: - Helper types (relocated from RootView)
-
-/// reader-tts-xml-and-loading fix — memoizes reader view-models per book id
-/// across SignedInView body recomputes.
-///
-/// The reader VMs (`PDFReaderViewModel` / `EPUBReaderViewModel`) carry the
-/// loaded document/publication and the `.loaded` `loadingState`. They were
-/// previously constructed as plain `let` locals inside the `@ViewBuilder`
-/// destination functions, so every body recompute (e.g. tapping
-/// Read Aloud, which mutates `showTTSControls` / `readerTTSBridge` @State)
-/// minted a fresh `.idle` VM and handed it to the structurally-identical
-/// reader screen — re-showing the stuck "Opening {book}" cold-open overlay
-/// and detaching the TTS controls sheet from the live VM.
-///
-/// This cache is held in SignedInView `@State` (stable reference identity), so
-/// the destination functions reuse the same VM instance for a given book id.
-/// Entries are dropped on reader dismiss via `drop(_:)` so reopening a book
-/// re-reads its persisted position from scratch.
-@MainActor
-final class ReaderViewModelCache {
-    private var pdfVMs: [BookID: PDFReaderViewModel] = [:]
-    private var epubVMs: [BookID: EPUBReaderViewModel] = [:]
-
-    func pdf(for id: BookID, make: () -> PDFReaderViewModel) -> PDFReaderViewModel {
-        if let existing = pdfVMs[id] { return existing }
-        let vm = make()
-        pdfVMs[id] = vm
-        return vm
-    }
-
-    func epub(for id: BookID, make: () -> EPUBReaderViewModel) -> EPUBReaderViewModel {
-        if let existing = epubVMs[id] { return existing }
-        let vm = make()
-        epubVMs[id] = vm
-        return vm
-    }
-
-    func drop(_ id: BookID) {
-        pdfVMs.removeValue(forKey: id)
-        epubVMs.removeValue(forKey: id)
-    }
-}
 
 struct SignedInView: View {
 
@@ -117,23 +70,10 @@ struct SignedInView: View {
     /// LibraryRootView and other signed-in consumers via .environment(libraryVM).
     @State private var libraryVM: LibraryViewModel
 
-    /// Phase 8 (TTS) — read-aloud controller. Created once the user opens
-    /// a reader and taps Read Aloud for the first time.
-    @State private var readAloud: ReadAloudController? = nil
-
     /// Shell presentation state: conversation sheet, paywall sheet, settings
     /// sheet, and transient book-hint cache. Extracted into a viewModel so
     /// these concerns are unit-testable independently of the view.
     @State private var model = SignedInViewModel()
-
-    /// SYNC-03 — bridges polling position changes to SyncEngine. Cleared on
-    /// reader dismiss so the poll task cancels via deinit.
-    @State private var pdfSyncBinding: PDFReaderPositionSyncBinding? = nil
-    @State private var epubSyncBinding: EPUBReaderPositionSyncBinding? = nil
-
-    /// reader-tts-xml-and-loading fix — memoizes reader VMs across body
-    /// recomputes so a ReadAloud @State flip doesn't recreate a fresh .idle VM.
-    @State private var readerVMCache = ReaderViewModelCache()
 
     /// Guards the scene-restoration .task so we don't re-run it on every
     /// body refresh. (Moved from RootView because it is signed-in-only logic.)
@@ -313,7 +253,13 @@ struct SignedInView: View {
                 }
             )
             .navigationDestination(for: ReaderRoute.self) { route in
-                destinationView(for: route, services: services, userId: user.id)
+                ReaderDestinationView(
+                    route: route,
+                    services: services,
+                    userId: user.id,
+                    hint: model.hint(for: route.bookId),
+                    onRequestPaywall: { model.requestPaywall($0) }
+                )
             }
             .navigationDestination(for: ConversationsRoute.self) { _ in
                 conversationsDestination(services: services, user: user)
@@ -345,226 +291,4 @@ struct SignedInView: View {
         )
     }
 
-    // MARK: - Navigation destinations
-
-    @ViewBuilder
-    private func destinationView(for route: ReaderRoute,
-                                 services: BootstrappedServices,
-                                 userId: UserID) -> some View {
-        switch route {
-        case .pdf(let bookId):
-            NavigationLazyBook(bookId: bookId, hint: model.hint(for: bookId), bookStore: services.bookStore) { book in
-                pdfReaderDestination(book: book, services: services, userId: userId)
-            }
-        case .epub(let bookId):
-            NavigationLazyBook(bookId: bookId, hint: model.hint(for: bookId), bookStore: services.bookStore) { book in
-                epubReaderDestination(book: book, services: services, userId: userId)
-            }
-        case .unsupportedFormat(let bookId):
-            NavigationLazyBook(bookId: bookId, hint: model.hint(for: bookId), bookStore: services.bookStore) { book in
-                EpubPlaceholderView(book: book) {
-                    if !router.path.isEmpty { router.path.removeLast() }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func pdfReaderDestination(book: Book,
-                                      services: BootstrappedServices,
-                                      userId: UserID) -> some View {
-        let pdfVM = readerVMCache.pdf(for: book.id) {
-            PDFReaderViewModel(
-                book: book,
-                userId: userId,
-                documentURL: pdfFileURL(for: book),
-                positionStore: services.positionStore
-            )
-        }
-        PDFReaderScreen(
-                viewModel: pdfVM,
-                readerSettingsStore: services.readerSettingsStore,
-                highlightStore: services.highlightStore,
-                onReadAloud: FeatureFlags.readAloud ? {
-                    Task {
-                        let level = await services.entitlementService.snapshot()
-                        guard level == .pro else {
-                            model.requestPaywall("Read Aloud")
-                            return
-                        }
-                        if readAloud == nil {
-                            readAloud = ReadAloudController(
-                                ttsEngine: services.ttsEngine,
-                                ttsState: services.ttsState,
-                                ttsSettingsStore: services.ttsSettingsStore,
-                                ttsPrewarmer: services.ttsPrewarmer,
-                                userId: userId
-                            )
-                        }
-                        await readAloud?.startPDF(vm: pdfVM)
-                    }
-                } : nil,
-                chatPresenter: services.chatPresenter,
-                readAloudParagraph: readAloud?.currentParagraph
-            )
-            .task {
-                pdfSyncBinding = PDFReaderPositionSyncBinding(
-                    viewModel: pdfVM,
-                    syncEngine: services.syncEngine
-                )
-            }
-            .onDisappear {
-                pdfSyncBinding = nil
-                readerVMCache.drop(book.id)
-                Task { await readAloud?.stop() }
-            }
-            .overlay(alignment: .bottom) {
-                readAloudControlsOverlay(services: services)
-            }
-            .sheet(isPresented: Binding(
-                get: { readAloud?.showPicker ?? false },
-                set: { if !$0 { readAloud?.showPicker = false } }
-            )) {
-                if let ra = readAloud {
-                    VoiceAndSpeedPicker(
-                        initial: ra.pickerInitial,
-                        userId: userId,
-                        store: services.ttsSettingsStore,
-                        onDismiss: { settings in
-                            ra.pickerInitial = settings
-                            ra.showPicker = false
-                        }
-                    )
-                    .presentationDetents([.medium])
-                }
-            }
-    }
-
-    @ViewBuilder
-    private func epubReaderDestination(book: Book,
-                                       services: BootstrappedServices,
-                                       userId: UserID) -> some View {
-        let epubVM = readerVMCache.epub(for: book.id) {
-            EPUBReaderViewModel(
-                book: book,
-                userId: userId,
-                documentURL: pdfFileURL(for: book),
-                positionStore: services.positionStore
-            )
-        }
-        EPUBReaderScreen(
-            viewModel: epubVM,
-            readerSettingsStore: services.readerSettingsStore,
-            highlightStore: services.highlightStore,
-            onReadAloud: FeatureFlags.readAloud ? {
-                Task {
-                    let level = await services.entitlementService.snapshot()
-                    var entitled = level == .pro
-                    #if DEBUG
-                    if UITestBypass.isActive { entitled = true }
-                    #endif
-                    guard entitled else {
-                        model.requestPaywall("Read Aloud")
-                        return
-                    }
-                    if readAloud == nil {
-                        readAloud = ReadAloudController(
-                            ttsEngine: services.ttsEngine,
-                            ttsState: services.ttsState,
-                            ttsSettingsStore: services.ttsSettingsStore,
-                            ttsPrewarmer: services.ttsPrewarmer,
-                            userId: userId
-                        )
-                    }
-                    await readAloud?.startEPUB(vm: epubVM)
-                }
-            } : nil,
-            chatPresenter: services.chatPresenter,
-            readAloudParagraph: readAloud?.currentParagraph
-        )
-        .task {
-            epubVM.onUserNavigation = { _ in
-                Task { await readAloud?.stop() }
-            }
-            epubSyncBinding = EPUBReaderPositionSyncBinding(
-                viewModel: epubVM,
-                syncEngine: services.syncEngine
-            )
-        }
-        .onDisappear {
-            epubSyncBinding = nil
-            readerVMCache.drop(book.id)
-            Task { await readAloud?.stop() }
-        }
-        .overlay(alignment: .bottom) {
-            readAloudControlsOverlay(services: services)
-        }
-        .sheet(isPresented: Binding(
-            get: { readAloud?.showPicker ?? false },
-            set: { if !$0 { readAloud?.showPicker = false } }
-        )) {
-            if let ra = readAloud {
-                VoiceAndSpeedPicker(
-                    initial: ra.pickerInitial,
-                    userId: userId,
-                    store: services.ttsSettingsStore,
-                    onDismiss: { settings in
-                        ra.pickerInitial = settings
-                        ra.showPicker = false
-                    }
-                )
-                .presentationDetents([.medium])
-            }
-        }
-    }
-
-    // MARK: - Read Aloud overlay (Phase 8)
-
-    @ViewBuilder
-    private func readAloudControlsOverlay(services: BootstrappedServices) -> some View {
-        if let ra = readAloud, ra.showControls, let bridge = ra.bridge {
-            ReadAloudControlsView(
-                state: services.ttsState,
-                onPlayPause: {
-                    Task {
-                        if services.ttsState.status == .playing {
-                            await bridge.pause()
-                        } else {
-                            await bridge.resume()
-                        }
-                    }
-                },
-                onStop: {
-                    Task { await ra.stop() }
-                },
-                onOpenPicker: {
-                    ra.showPicker = true
-                },
-                onPreviousParagraph: {
-                    Task { await bridge.previous() }
-                },
-                onNextParagraph: {
-                    Task { await bridge.next() }
-                },
-                onRepeatParagraph: {
-                    Task { await bridge.repeatCurrent() }
-                }
-            )
-            .modifier(GlassCardBackground(cornerRadius: RishiRadius.large))
-            .shadow(radius: RishiSpacing.s)
-            .padding(.horizontal, RishiSpacing.m)
-            .padding(.bottom, RishiSpacing.s)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-            .animation(.easeInOut(duration: 0.25), value: ra.showControls)
-        }
-    }
-
-    // MARK: - Helpers
-
-    private func pdfFileURL(for book: Book) -> URL {
-        let documentsURL = FileManager.default.urls(
-            for: .documentDirectory, in: .userDomainMask
-        ).first!
-        return documentsURL.appendingPathComponent(book.fileURL)
-    }
 }
