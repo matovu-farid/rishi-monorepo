@@ -56,7 +56,6 @@ public actor TTSEngine {
         // Tear down any in-flight session.
         await teardown()
         firstBufferScheduled = false
-        Log.event("tts.engine.start.enter", level: .info, data: ["passageId": request.passageId ?? ""])
 
         let observable = state
         await MainActor.run {
@@ -78,7 +77,6 @@ public actor TTSEngine {
             } else {
                 engine.resetPlayerNode()
             }
-            Log.event("tts.engine.start.running", level: .info, data: ["passageId": request.passageId ?? ""])
             let decoder = try decoderFactory(engine.targetFormat)
             activeDecoder = decoder
 
@@ -118,7 +116,6 @@ public actor TTSEngine {
                     await self?.fail(with: error)
                 }
             }
-            Log.event("tts.engine.start.spawned", level: .info, data: ["passageId": request.passageId ?? ""])
         } catch {
             await fail(with: error)
         }

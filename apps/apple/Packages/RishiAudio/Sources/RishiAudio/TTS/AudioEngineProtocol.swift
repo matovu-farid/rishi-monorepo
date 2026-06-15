@@ -1,5 +1,4 @@
 import Foundation
-import RishiLogging
 
 /// Decides when a streamed playback's completion stream may finish.
 ///
@@ -133,11 +132,8 @@ public final class AVAudioEngineAdapter: AudioEngineProtocol, @unchecked Sendabl
         // completion handlers acquire `lock`. This was the read-aloud "stuck on
         // Loading…" hang on a passage switch (invisible to FakeAudioEngine, which
         // has no real render thread firing completion handlers).
-        Log.event("tts.adapter.reset.enter", level: .debug)
         playerNode.stop()
-        Log.event("tts.adapter.reset.stopped", level: .debug)
         playerNode.reset()
-        Log.event("tts.adapter.reset.done", level: .debug)
     }
 
     public func play<S: AsyncSequence>(_ buffers: S) -> AsyncStream<PCMChunk.ID>
