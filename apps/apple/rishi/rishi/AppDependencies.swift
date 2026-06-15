@@ -974,29 +974,6 @@ final class AppDependencies {
         )
     }
 
-    /// Construct a fresh `ReaderTTSBridge` for one reader sheet. Phase 24
-    /// plan 24-03 — the bridge now takes a `TTSPrewarmer` so it can fire
-    /// playback + warm-of-N+1..N+5 in lockstep through the same
-    /// CachingTTSChunkSource the engine streams from.
-    @MainActor
-    func makeReaderTTSBridge(
-        userId: UserID,
-        onPassageChange: @escaping (Int?) -> Void,
-        onParagraphsExhausted: @escaping () async -> [String] = { [] }
-    ) -> ReaderTTSBridge {
-        let tracker = TTSPassageTracker()
-        return ReaderTTSBridge(
-            engine: ttsEngine,
-            state: ttsState,
-            tracker: tracker,
-            prewarmer: ttsPrewarmer,
-            settingsStore: ttsSettingsStore,
-            userId: userId,
-            onPassageChange: onPassageChange,
-            onParagraphsExhausted: onParagraphsExhausted
-        )
-    }
-
     // MARK: - Settings factory (Phase 11)
 
     /// Builds the `RishiSettings.SettingsScreen` for the current user,
