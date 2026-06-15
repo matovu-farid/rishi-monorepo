@@ -170,6 +170,48 @@ struct TTSEngineTests {
         await engine.stop()
     }
 
+    /// END-TO-END highlight test (the reader's "which paragraph is lit up").
+    ///
+    /// The in-text highlight is driven by TTSPassageTracker, which mirrors
+    /// `TTSPlaybackState.currentPassageId` — and that id is ONLY set when the
+    /// engine actually schedules a buffer for that passage (onBufferScheduled).
+    /// So "next() lights up paragraph 1" is a hardware-free proxy for "passage 1
+    /// actually started playing". This drives the REAL engine + REAL tracker (not
+    /// the FakeTTSEngine the bridge tests use, which always 'plays') through the
+    /// exact PLAY-then-NEXT sequence the bridge runs: start(0), then jump =
+    /// stop()+start(1). If passage 1 never reaches the audio engine, the tracker
+    /// never emits "1" and the highlight never moves — the bug shows here.
+    @Test("e2e: play then next moves the highlight 0 -> 1 (tracker follows the play head)")
+    func playThenNextMovesHighlight() async throws {
+        let chunks = try loadFixtureMP3Chunks()
+        let (engine, _, state, _) = await MainActor.run { makeFixture(chunks: chunks) }
+        let tracker = TTSPassageTracker()
+        await tracker.attach(state: state)
+
+        let seen = PassageIdBox()
+        let consumer = Task {
+            for await pid in await tracker.passageStream() { seen.append(pid) }
+        }
+
+        // PLAY paragraph 0 -> the highlight must land on "0".
+        await engine.start(request: TTSStreamRequest(text: "alpha", voice: "alloy", speed: 1.0, passageId: "0"))
+        await poll(timeout: 5) { seen.snapshot().contains("0") }
+        #expect(seen.snapshot().contains("0"), "PLAY must highlight paragraph 0")
+
+        // NEXT — the bridge jump is a full stop() then a fresh start() of the
+        // next passage.
+        await engine.stop()
+        await engine.start(request: TTSStreamRequest(text: "bravo", voice: "alloy", speed: 1.0, passageId: "1"))
+        await poll(timeout: 5) { seen.snapshot().contains("1") }
+
+        #expect(seen.snapshot().contains("1"), "NEXT must move the highlight to paragraph 1; if not, next/prev is broken")
+        #expect(seen.snapshot() == ["0", "1"], "highlight must follow the play head 0 then 1, in order")
+
+        consumer.cancel()
+        await engine.stop()
+        await tracker.detach()
+    }
+
     @Test("Streamer error transitions state to .error or .stopped")
     func streamerErrorTransitionsState() async {
         // throwAfter: 0 makes the FakeTTSChunkSource throw on the very first chunk.
@@ -183,5 +225,14 @@ struct TTSEngineTests {
         // Either .error (preferred) or .stopped (if test completes too fast)
         #expect(final == .error || final == .stopped)
     }
+}
+
+/// Thread-safe collector for the tracker's emitted passage ids — the consumer
+/// Task runs off the test's actor, so capture must be Sendable.
+private final class PassageIdBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ids: [String] = []
+    func append(_ id: String) { lock.withLock { ids.append(id) } }
+    func snapshot() -> [String] { lock.withLock { ids } }
 }
 #endif
