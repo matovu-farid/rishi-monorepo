@@ -14,8 +14,11 @@
 
 import SwiftUI
 import RishiAudio
+import RishiAuth
+import RishiBilling
 import RishiCore
 import RishiSettings
+import RishiSync
 
 /// Sheet wrapping `RishiSettings.SettingsScreen`. Presented from the Library
 /// toolbar gear button.

@@ -15,6 +15,7 @@
 
 import SwiftUI
 import RishiAudio
+import RishiBilling
 import RishiCore
 import RishiReader
 import RishiUIKit

@@ -16,6 +16,7 @@ import SwiftUI
 import RishiCore
 import RishiAuth
 import RishiBilling
+import RishiOnboarding
 
 struct RootView: View {
 
