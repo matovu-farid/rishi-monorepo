@@ -84,7 +84,7 @@ struct ChatPanelHostView: View {
             }
         }
         .task(id: pending.id) {
-            guard vm == nil else { return }
+            vm = nil
             if let convo = try? await services.conversationLookup.findOrCreate(
                 userId: userId,
                 bookId: pending.bookId
