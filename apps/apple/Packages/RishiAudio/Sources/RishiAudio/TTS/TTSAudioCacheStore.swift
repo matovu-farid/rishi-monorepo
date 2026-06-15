@@ -35,9 +35,21 @@ public actor TTSAudioCacheStore {
     /// Returns the URL of the cached `.mp3` if it exists, else nil.
     /// Touches the file's modification date so LRU treats it as recently used.
     /// Never returns a `.partial` file.
+    ///
+    /// A 0-byte committed entry is treated as a MISS (and evicted): an empty
+    /// audio file yields no decoder buffer and permanently halts playback on
+    /// every cache hit. Re-synthesising is the only recovery, so we never serve
+    /// (or keep) an empty entry. Guards the observed `tts.cache.hit bytes=0`
+    /// read-aloud stall.
     public func read(key: String) -> URL? {
         let url = finalURL(for: key)
         guard fileManager.fileExists(atPath: url.path) else { return nil }
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        guard size > 0 else {
+            try? fileManager.removeItem(at: url)
+            Log.event("tts.cache.empty_evicted", level: .info, data: ["key_prefix": String(key.prefix(8))])
+            return nil
+        }
         do {
             try fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
         } catch {

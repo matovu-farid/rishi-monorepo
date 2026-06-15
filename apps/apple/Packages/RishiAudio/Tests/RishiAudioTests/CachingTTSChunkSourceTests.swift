@@ -235,4 +235,72 @@ struct CachingTTSChunkSourceTests {
         #expect(try Data(contentsOf: url) == Data([0x01, 0x02, 0x03, 0x04]),
                 "committed bytes must be writer A's, undamaged by the concurrent writer")
     }
+
+    // MARK: - 8. Empty upstream must not poison the cache (read-aloud halt)
+    //
+    // Field repro (user log): the current paragraph plays from cache, the NEXT
+    // paragraph is NOT cached so it forces an upstream (network) call, and that
+    // call returns an EMPTY response. The empty was committed as a 0-byte `.mp3`,
+    // so every later play of that paragraph became a cache HIT serving 0 bytes —
+    // the decoder got no buffer and read-aloud stopped (observed as
+    // `tts.cache.hit bytes=0`). An empty/failed upstream must be treated as a
+    // transient miss, never cached.
+
+    @Test("empty upstream response is NOT committed as a 0-byte cache entry")
+    func emptyUpstreamDoesNotPoisonCache() async throws {
+        let tmp = makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
+        let request = makeRequest(text: "Paragraph the worker synthesises to nothing.")
+        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, speed: request.speed)
+
+        // The uncached next paragraph forces an upstream call that yields NOTHING.
+        let upstream = FakeTTSChunkSource(chunks: [])
+        let cache = CachingTTSChunkSource(upstream: upstream, store: store)
+
+        // First (uncached) play streams zero audio bytes — the audible stall.
+        let firstPlay = try await consume(cache.stream(request: request))
+        #expect(firstPlay.isEmpty, "an empty upstream yields no audio on the uncached play")
+
+        // THE BUG: the empty response must NOT be cached. Before the fix a 0-byte
+        // `.mp3` was committed and read() returned it, so every later play was a
+        // cache hit serving 0 bytes — a permanent halt.
+        let finalURL = tmp.appendingPathComponent("\(key).mp3")
+        #expect(
+            !FileManager.default.fileExists(atPath: finalURL.path),
+            "empty upstream MUST NOT be committed as a 0-byte .mp3 (cache poisoning)"
+        )
+        let hit = await store.read(key: key)
+        #expect(hit == nil, "cache must report a MISS for an empty response, not a 0-byte hit")
+    }
+
+    @Test("a 0-byte committed cache file is treated as a miss and re-synthesised")
+    func zeroByteCacheFileIsTreatedAsMiss() async throws {
+        let tmp = makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
+        let request = makeRequest(text: "Already-poisoned paragraph.")
+        let key = TTSCacheKey.compute(text: request.text, voice: request.voice, speed: request.speed)
+
+        // Simulate a cache poisoned by an older build: a committed but EMPTY .mp3.
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        try Data().write(to: tmp.appendingPathComponent("\(key).mp3"))
+
+        // read() must NOT serve the empty file — that is the `tts.cache.hit
+        // bytes=0` halt.
+        let directHit = await store.read(key: key)
+        #expect(directHit == nil, "a 0-byte cache file must be treated as a miss")
+
+        // A play must therefore fall through to upstream and recover real audio
+        // instead of halting forever on the poisoned entry.
+        let upstream = FakeTTSChunkSource(chunks: [Data([0x01, 0x02, 0x03, 0x04])])
+        let cache = CachingTTSChunkSource(upstream: upstream, store: store)
+        let played = try await consume(cache.stream(request: request))
+        #expect(
+            played == Data([0x01, 0x02, 0x03, 0x04]),
+            "after evicting the 0-byte entry, playback must re-synthesise real audio"
+        )
+    }
 }

@@ -85,13 +85,28 @@ public actor CachingTTSChunkSource: TTSChunkSource {
         }
 
         var committed = false
+        var wroteBytes = 0
         do {
             for try await chunk in upstream.stream(request: request) {
                 try Task.checkCancellation()
                 continuation.yield(chunk)
                 try handle.write(contentsOf: chunk)
+                wroteBytes += chunk.count
             }
             try? handle.close()
+            // Never commit an empty file: a 0-byte cache entry yields no audio
+            // and halts playback on every later hit. An empty upstream response
+            // is treated as a transient failure — discard so the next play
+            // re-synthesises rather than caching silence.
+            guard wroteBytes > 0 else {
+                await store.discard(partial: partialURL)
+                committed = true // nothing to clean up in the catch blocks
+                Log.event("tts.cache.empty_upstream", level: .error, data: [
+                    "key_prefix": String(key.prefix(8)),
+                ])
+                continuation.finish()
+                return
+            }
             try await store.commit(key: key, partial: partialURL)
             committed = true
             continuation.finish()
