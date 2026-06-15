@@ -1,308 +1,128 @@
-# TTS / Read-Aloud Reader — Session Handoff
+# TTS / Read-Aloud Reader — Session Handoff (2026-06-15)
 
-Hand this whole file to a fresh session. It captures the full state of the
-read-aloud (TTS) work, the next primary task (an `AudioSessionPolicy`
-extraction), and **all** remaining work.
-
----
-
-## 0. How to work in this repo (read first)
-
-From `apps/apple/CLAUDE.md` and repo `CLAUDE.md`:
-
-- **Build-first rule.** Before any review/audit, confirm the build is green; a
-  broken build is finding #1.
-- **Never run `xcodebuild rishi` in a subagent** (600s watchdog kills agents).
-  Subagents verify with:
-  - `swift test --package-path apps/apple/Packages/<Pkg>` per touched package.
-  - `xcrun --sdk iphonesimulator swiftc -typecheck <file>` for app-target files
-    under `apps/apple/rishi/` (these aren't in a SwiftPM package).
-  - The **main orchestrator** runs the full `xcodebuild` on the **iPhone 17**
-    simulator as the end gate:
-    `xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:rishiTests/<Suite>`
-- **Commit scope:** only under `apps/apple/Packages/`, `apps/apple/rishi/`,
-  `apps/apple/scripts/`, `apps/apple/fastlane/`, `apps/apple/docs/`. **Never**
-  commit `.planning/` (gitignored) or `apps/mobile/` (a large unrelated set of
-  deletions sits uncommitted in the tree — leave it).
-- **Swift Testing only** (not XCTest). **No emojis.** Default-isolation =
-  MainActor stays the project default.
-- **TDD is mandatory**, including for debugging: write a failing test that
-  *reproduces* the bug first, watch it fail, then fix. Assert
-  **completeness/correctness**, never mere non-emptiness (`> 0`, "not nil").
-  Vary input shape (whole vs sliced) for streaming code.
+Hand this whole file to a fresh session. The hard bug is FIXED and
+device-confirmed by the user ("It works."). What remains is small cleanup plus
+some previously-deferred items.
 
 ---
 
-## 1. The big architectural lesson (why the next task exists)
+## 0. TL;DR
 
-Every TTS bug this session was a **policy** bug. The ones TDD caught were caught
-because we extracted the policy into a **pure, unit-tested decision**:
-
-| Bug | Pure seam that catches it |
-|-----|---------------------------|
-| Decoder truncated to ~200ms | `MP3StreamDecoderCompletenessTests` (assert full-duration + slicing-invariance) |
-| `isFinal` on a 0-frame buffer | decoder "terminal chunk carries audio" test |
-| Adapter finished its stream before buffers rendered | `PlaybackCompletionAccountant` (pure reducer) |
-| Advance-watcher race / index crash | `repeatCurrent` test |
-| Bluetooth `-50` (HFP on playback) | `bluetoothRouting()` pure rule |
-
-The **one bug TDD missed** — next/prev plays silently on device — missed because
-(a) the audio-**session** policy was entangled across `bridge.jump → engine.stop
-→ coordinator.releaseActiveMode`, with no single place to assert "a switch must
-not churn the session", and (b) the *consequence* (churn loses the route) is
-device-only and our fakes don't model it.
-
-**Principle: separate policy (pure, testable) from mechanism (device, thin).**
-The session is the last lifecycle piece not yet extracted. Extracting it makes
-the bug a one-line unit test and retro-covers the `-50` bug under one tested
-lifecycle.
+- **Read-aloud next/previous paragraph now works on device** (user confirmed).
+- Root cause was a **lock-ordering deadlock** in `AVAudioEngineAdapter`, fixed in
+  commit `c8ff9b9a8`. See §2.
+- An **XCUITest that reproduces it on the simulator** was built (the real
+  `AVAudioEngine` path — no fake can hit the deadlock). It reaches the reader +
+  starts read-aloud but its FINAL assertion needs a 1-line selector fix (§3.1).
+- Two cleanup tasks remain (§3) + deferred items (§4).
 
 ---
 
-## 2. DONE — extracted `AudioSessionPolicy` (TDD)
+## 1. How to work in this repo (read first)
 
-**Status: COMPLETE.** `AudioSessionPolicy` is a pure reducer
-(`Coordinator/AudioSessionPolicy.swift`) with 13 unit tests
-(`AudioSessionPolicyTests.swift`) asserting exact effect arrays. The
-`AudioSessionCoordinator` is now a thin actor that maps its (unchanged) public
-API onto policy events and applies the reducer's effects. The
-`switchPassage`-no-churn invariant is locked at both the pure level and the
-coordinator level (`switchPassageDoesNotChurnSession`). All 111 RishiAudio tests
-green; the iPhone 17 bridge suites green (`nextDoesNotStopEngine` passes against
-the refactored coordinator). `TTSEngine` untouched (public API preserved). The §4
-quick fix is now superseded by this principled version. Original plan below for
-reference.
+From repo `CLAUDE.md` and `apps/apple/CLAUDE.md`:
 
-**Goal:** model the audio session as a pure reducer so all session *decisions*
-are unit-tested; the `AudioSessionCoordinator` becomes a thin actor that only
-*applies* effects to the real `AVAudioSession`. This supersedes the quick fix in
-§4 (keep behaviour identical, just make it tested + centralized).
-
-**Files:**
-- `apps/apple/Packages/RishiAudio/Sources/RishiAudio/Coordinator/AudioSessionCoordinator.swift`
-  (actor: holds `ActiveMode` .idle/.tts/.voice; calls `configurator.configure` /
-  `setActive`). This is where the churn lives today: `releaseActiveMode(.tts)` →
-  `setActive(false)`, `requestActiveMode(.tts)` → `configure + setActive(true)`.
-- `apps/apple/Packages/RishiAudio/Sources/RishiAudio/Coordinator/AudioSessionConfigurator.swift`
-  (protocol `AudioSessionConfigurator`; `AVAudioSessionConfigurator` iOS impl;
-  `FakeAudioSessionConfigurator` records `configureCalls` + `activeCalls`).
-  Already contains the extracted pure `bluetoothRouting(category:options:)` +
-  `BluetoothRouting` enum (tested in `AudioSessionBluetoothRoutingTests`).
-
-**Design (mirror `PlaybackCompletionAccountant`):**
-
-```swift
-enum AudioSessionEvent { case beginPassage, switchPassage, endPlayback,
-                              beginVoice, endVoice, interrupted, resume }
-enum AudioSessionEffect: Equatable {
-    case configure(category: AudioSessionCategory, mode: AudioSessionMode, options: AudioSessionOptions)
-    case activate
-    case deactivate(notifyOthers: Bool)
-}
-struct AudioSessionPolicy {
-    private(set) var mode: ActiveMode = .idle
-    mutating func reduce(_ event: AudioSessionEvent) -> [AudioSessionEffect]
-}
-```
-
-**Invariants to assert in `AudioSessionPolicyTests` (RED first):**
-- `reduce(.beginPassage)` from idle → `[.configure(.playback,.spokenAudio,…), .activate]`.
-- `reduce(.switchPassage)` while tts-active → `[]` (NO `.deactivate`, NO
-  reconfigure). **This is the bug-catching invariant.**
-- `reduce(.endPlayback)` → `[.deactivate(notifyOthers: true)]`.
-- voice transitions tear down tts first, etc. (port current behaviour).
-
-**Then:** `AudioSessionCoordinator` calls `policy.reduce(event)` and applies the
-effects via the configurator. Replace `requestActiveMode`/`releaseActiveMode`
-call sites in `TTSEngine` with the event vocabulary:
-- `TTSEngine.start()` for a fresh session → `.beginPassage`.
-- A passage **switch** (next/prev/repeat) must map to `.switchPassage` (no
-  churn). Today `TTSEngine.start()` is called for both fresh start and switch —
-  you may need the bridge/engine to distinguish "switch" from "fresh start"
-  (e.g. a `switchPassage(request:)` entry that skips re-activation), or have the
-  coordinator treat "request .tts while already .tts" as `.switchPassage`.
-- `TTSEngine.stop()` → `.endPlayback`.
-
-**Second lever (optional but recommended):** make `FakeAudioSessionConfigurator`
-*high-fidelity* — model the known device gotcha so an integration test catches
-the class pre-device: after `setActive(false)` immediately followed by
-`setActive(true)`, expose `routeIsActive == false` (or record the churn) so a
-full-flow test can assert "a passage switch never produces an inactive route."
-
-**Acceptance:** all session decisions unit-tested with no device; the
-`switchPassage`-no-churn invariant is locked; existing behaviour for fresh
-start / stop / voice unchanged; full `xcodebuild` green on iPhone 17.
+- **Build-first** before any review/audit. Broken build is finding #1.
+- **Subagents must NOT run `xcodebuild rishi`** (600s watchdog kills agents).
+  - Per-package: `swift test --package-path apps/apple/Packages/<Pkg>`.
+  - App-target files: `xcrun --sdk iphonesimulator swiftc -typecheck <file>` (unreliable with many deps; prefer the orchestrator gate).
+  - **RishiReader cannot `swift test` on macOS** (Readium is iOS-only → dependency-resolution fatalError). Verify it via the iPhone 17 `xcodebuild` gate.
+  - The MAIN orchestrator runs the iPhone 17 `xcodebuild` as the end gate.
+- **Destination:** `platform=iOS Simulator,name=iPhone 17`.
+- **Commit scope:** only `apps/apple/{Packages,rishi,scripts,fastlane,docs}`. NEVER commit `.planning/` (gitignored) or `apps/mobile/` (large unrelated uncommitted deletions sit in the tree — leave them).
+- **Swift Testing** for unit tests; **XCTest only for the XCUITest** (`XCUIApplication` requires it). **No emojis.** Default-isolation = MainActor stays.
+- **TDD / debug-via-failing-test:** reproduce with a failing test FIRST, watch it fail, then fix. Assert completeness, not non-emptiness. The user enforces "revert, watch it fail, apply, watch it pass."
 
 ---
 
-## 3. Committed work this session (all on `main`)
+## 2. THE FIX (committed `c8ff9b9a8`) — the deadlock
 
-| Commit | What | Verified |
-|--------|------|----------|
-| `ac50522fc` | Decoder decodes the **full** MP3 stream (was ~200ms "first word") | host tests + device |
-| `094b0d69f` | A2DP (not HFP) bluetooth for playback → kills `audio.session.mode.failed -50` | host rule test |
-| `9281816d2` | Terminal playback completion → **auto-advance works** | **device-confirmed** |
-| `7d4edf269` | `ReaderTTSBridge.next()/previous()` + tests | host |
-| `c37eeffaf` | Made flaky 29-03 advance/page-nav tests robust | host |
-| `196e2985b` | `repeatCurrent()` + **advance-watcher race / index-crash fix** | host |
-| `af53d1a56` | **WIP snapshot**: bug-4 page-follow, player buttons, RootView wiring, + pre-existing reader/PDF/footer WIP | builds |
-| `bc3a28a42` | Declutter player (icon-only "Voice & Speed", tighter row) + stop→start contract test | builds + device looks good |
+`AVAudioEngineAdapter.resetPlayerNode()` and `stop()` (in
+`Packages/RishiAudio/Sources/RishiAudio/TTS/AudioEngineProtocol.swift`) called
+`playerNode.stop()` / `engine.stop()` **while holding the adapter's `lock`**.
+`playerNode.stop()` blocks until the audio render thread drains; the buffer
+completion handlers in `play(_:)` run on that render thread and acquire the
+**same `lock`** (`box.value.didComplete()`). Classic lock-ordering deadlock →
+the read-aloud player latched on "Loading…" on a passage switch.
 
-**`af53d1a56` caveat:** `apps/apple/rishi/rishi/RootView.swift` carried ~200
-lines of **pre-existing uncommitted** read-aloud-UI WIP (overlay refactor,
-passage wiring) that were swept into that WIP commit. Not individually reviewed.
-Flag to the user if touching RootView.
+Invisible to every unit test because `FakeAudioEngine` has no real render thread
+firing completion handlers. **Only a UI test on the real `AVAudioEngine`
+reproduces it.**
 
----
+Fix: call `playerNode.stop()/reset()` and `engine.stop()` OUTSIDE the lock (the
+lock only needs to guard the `PlaybackCompletionAccountant` box; those
+AVFoundation calls are internally thread-safe).
 
-## 4. Uncommitted in the tree RIGHT NOW (the session-churn quick fix)
-
-The orchestrator was committing this when the handoff was written. If not yet
-committed, commit it (verify `swift test --package-path
-apps/apple/Packages/RishiAudio` first, then `xcodebuild` the bridge suites):
-
-- `AudioEngineProtocol.swift` — added offline-render **test seam** to
-  `AVAudioEngineAdapter`: `enableOfflineRendering`, `renderOffline`,
-  `manualRenderingFormat`.
-- `TTSEngine.swift` — `start()` now calls `engine.stop()` (halts old player node)
-  right after `teardown()`, so a passage switch stops old audio **without
-  releasing the session**.
-- `ReaderTTSBridge.swift` — `jump()` **no longer calls `engine.stop()`** (which
-  released the session). Relies on `engine.start()`'s single-session teardown.
-- `ReaderTTSBridgeNextPrevTests.swift` — `nextDoesNotStopEngine` contract test
-  (RED on the old code; asserts a switch issues no full engine stop).
-- `AVAudioEngineAdapterRenderTests.swift` (untracked) — drives the **real**
-  `AVAudioEngine` via offline rendering through mid-stream-stop → re-play and
-  asserts non-silent output. Proves the adapter itself is correct (eliminated it
-  as the cause). Keep as a regression test.
-
-**This quick fix is a hypothesis-driven fix for the next/prev silence** (the
-session deactivate→immediate-reactivate route loss). It is **NOT device-verified
-yet.** The §2 `AudioSessionPolicy` refactor is the principled version and should
-supersede it — but keep the fix until the refactor lands so device testing isn't
-blocked.
+### How we got here (earlier fixes this session, all still valid + committed)
+- `d8a5a9881` — Bug: Play started from page 1, not the current page. Fixed via pure `ParagraphChunker.startIndex(forProgression:count:)` + locator-aware `EPUBReaderViewModel.paragraphsForReadAloud()`.
+- `f63735900` — **Long-lived AVAudioEngine**: the engine is brought up ONCE per read-aloud session and only the player node is reset per passage (`resetPlayerNode()`), never stop/attach/start. `onBufferComplete(isFinal)` no longer stops the engine/session (only sets `.stopped`). This was necessary groundwork but exposed the deadlock above. `ReaderTTSBridge.jump()` no longer calls `engine.stop()`.
+- Superseded interim attempts (kept in history, do not revert): `796565d43`, `9a04ac434` (AudioSessionPolicy reducer — still in use), `cdeac0cc1`.
+- `9dd3d63b9` — manual page-turn stops stale read-aloud (`EPUBReaderViewModel.onUserNavigation` + coordinator `isProgrammaticNavigation` flag).
 
 ---
 
-## 5. ALL remaining work
+## 3. REMAINING CLEANUP (small, do these first)
 
-### Read-aloud (TTS) — status
-- **DONE — AudioSessionPolicy extraction (§2)** — commit `9a04ac434`.
-- **DONE — Bug 2 (manual page-turn resets TTS)** — commit `9dd3d63b9`. User vs
-  programmatic locator-change discrimination (`onUserNavigation` +
-  coordinator `isProgrammaticNavigation` flag). DEVICE-VERIFY the auto-follow
-  feedback-loop edge: the flag assumes Readium fires `locationDidChange` during
-  `go(to:)`'s await; if it fires just after, auto-follow could be misclassified
-  as a user turn and stop the audio. If auto-follow regresses on device, switch
-  the coordinator flag reset to the next main-actor hop (or match on the target
-  locator) instead of resetting immediately after the await.
-- **RESOLVED BY ANALYSIS — Bug 3 (double-play).** Not reachable: NavigationStack
-  shows one reader at a time; `RootView.startReadAloud` stops the old bridge
-  before creating a new one; `TTSEngine` is an actor whose `start()` tears down
-  prior pipe/feed tasks. A fake-engine two-bridge test would only assert fake
-  behavior, so none added. Residual minor risk = actor reentrancy on rapid
-  double-start; close with a generation token in `TTSEngine.start()` only if it
-  ever manifests on device.
+### 3.1 Finish the XCUITest (make it green = permanent regression guard)
+File: `apps/apple/rishi/rishiUITests/ReadAloudNextParagraphUITests.swift`
+(currently has ONE UNCOMMITTED diagnostic change — a hierarchy XCTAttachment).
 
-### Original list (kept for reference)
-1. **AudioSessionPolicy extraction (§2)** — primary next task.
-2. **Device-verify the next/prev/repeat silence fix** (§4 / §2). Symptom was:
-   pressing next/prev → audio stops, UI shows "Playing", no sound. Expected:
-   the new paragraph plays. If still silent, capture device logs on tap —
-   specifically whether `audio.session.mode.failed` and `tts.engine.first_buffer`
-   fire (existing `Log.event` instrumentation).
-3. **Bug 2 — manual page-turn doesn't reset TTS.** `EPUBReaderViewModel`
-   `didChangeLocation` (≈ line 194, `Packages/RishiReader/.../EPUB/EPUBReaderViewModel.swift`)
-   updates `latestLocator` but never tells the bridge to stop/reload, so audio
-   from the old page keeps playing when the user manually pages. Wire a
-   locator-change → `bridge.stop()` (or reload paragraphs for the new resource).
-   Watch for a feedback loop with **bug-4 auto-follow** (which navigates the view
-   *to* the audio): manual nav should win and stop TTS.
-4. **Bug 3 — two reader sessions can play at once (singleton).** `ttsEngine` and
-   `ttsState` are **app-singletons** built once in `AppDependencies`
-   (`buildServices` / `makeReaderTTSBridge`) and shared by every
-   `ReaderTTSBridge`. Overlapping starts can double-play. The jump race fix
-   (`196e2985b`) and the session fix likely reduced it — **verify**, then enforce
-   single active session (one bridge, guard concurrent starts). Add a test: two
-   bridges over one engine must not interleave passages.
-5. **Bug 4 — device-verify** the view-follows-audio / auto page-turn (committed
-   in `af53d1a56`: `EPUBNavigatorCoordinator.navigateToReadAloudParagraph` +
-   `EPUBReaderScreen.applyReadAloudHighlight` wiring). User confirmed auto-play
-   page-change works; re-confirm after the session refactor and watch for
-   re-centering jank on every paragraph.
-6. **Feature 5 — device-verify** prev/repeat/next buttons actually move audio +
-   turn pages at boundaries. UI committed; bridge `next/previous/repeatCurrent`
-   committed. Cross-**resource** (chapter) boundary is a deferred edge:
-   `paragraphsForReadAloud()` spans one Readium resource; next at the very end
-   currently clamps (no load-next-chapter).
+The test launches with `RISHI_UITEST=1`, opens the sample book (alice), taps
+Read Aloud, and should assert playback returns to "Playing" after Next. It now
+gets all the way into the reader and starts read-aloud, but the FINAL step asserts
+on the `tts-status` `Text` element, which XCUITest does not expose as queryable.
+**Fix:** assert on the player BUTTONS instead — wait for `tts-play`/`tts-pause`
+or `tts-next-paragraph` to exist (the hierarchy DOES expose those), tap
+`tts-next-paragraph`, and assert the controls are still present / not stuck.
+The controls overlay IS appearing (hierarchy showed a bottom element at
+`{{0,726},{402,148}}`); only the status-Text selector fails.
+Run: `xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:rishiUITests/ReadAloudNextParagraphUITests -resultBundlePath /tmp/ui.xcresult` then
+`xcrun xcresulttool get test-results summary --path /tmp/ui.xcresult`.
+(See `reference_apple_uitest_bypass` memory for all the XCUITest gotchas already solved: scheme membership, coordinate taps, onboarding seed, chrome-visible, entitlement bypass, attachment-based diagnostics.)
 
-### Separate initiative
-7. **Task 6 — remove the bottom tab bar app-wide + restyle the reader with native
-   Apple components + Liquid Glass.** User decision: **remove tab bar entirely**
-   (they have other navigation). Then make the reader chrome use built-in
-   SwiftUI components adopting the iOS 26 **Liquid Glass** look the current
-   bottom bar already has. First: confirm the iOS deployment target / SDK
-   supports Liquid Glass, and inspect the current tab bar (`RootView.swift`).
-   Design-heavy; aligns with Phase 18/19/20 native-SwiftUI direction. Needs
-   device iteration. Propose the replacement navigation before deleting the bar.
+### 3.2 Strip the debug breadcrumbs (now that root cause is found)
+Remove the `Log.event` debugging breadcrumbs added this session:
+- `tts.bridge.jump`, `tts.bridge.jump.clamped`, `tts.bridge.play_current` in `rishi/rishi/Audio/ReaderTTSBridge.swift`.
+- `tts.engine.start.enter/.running/.spawned` in `Packages/RishiAudio/.../TTS/TTSEngine.swift`.
+- `tts.adapter.reset.enter/.stopped/.done` in `Packages/RishiAudio/.../TTS/AudioEngineProtocol.swift` (KEEP the deadlock fix + comment; just drop the three Log lines).
+Keep the production `tts.engine.first_buffer`, `tts.stream.*`, `audio.session.mode*` events.
 
-### Hygiene / known issues
-8. **Flaky test:** `CachingTTSChunkSourceTests` "cancelled stream leaves no .mp3
-   and next call is a miss" fails in the full RishiAudio run but **passes in
-   isolation** (cancellation/filesystem timing race). Not caused by this work.
-   Worth hardening (it's about a cancelled stream leaving a `.partial`/`.mp3`).
-9. **RootView WIP** (see §3 caveat) — ~200 lines of pre-existing read-aloud UI
-   were committed in `af53d1a56`; surface to the user if it matters.
+### 3.3 The UI-test bypass scaffolding — decide whether to keep
+`rishi/rishi/UITestSupport.swift` (+ `Resources/uitest-tts.mp3`, the `RISHI_UITEST`
+wiring in `AppDependencies`, the `EPUBReaderScreen` chrome-visible flag, the
+`RootView` entitlement bypass) are all `#if DEBUG` + env-gated, so they never
+ship. Keep them — they power the regression UI test. The `tts-status` /
+`library-book-cell` accessibilityIdentifiers are harmless to keep.
 
 ---
 
-## 6. Key files & seams (map)
+## 4. PREVIOUSLY-DEFERRED WORK (not started)
 
-- **Bridge (app target):** `apps/apple/rishi/rishi/Audio/ReaderTTSBridge.swift`
-  — `@MainActor`. `start/stop/pause/resume/jump/next/previous/repeatCurrent`,
-  `AdvanceWatcherDecision` (pure, tested), `startAdvanceWatcher` (100ms poll),
-  `playCurrent`, `advance`. Holds `any TTSPlaying`.
-- **Engine (RishiAudio):** `Packages/RishiAudio/Sources/RishiAudio/TTS/TTSEngine.swift`
-  — actor. `streamer → decoder → AudioEngineProtocol`. Single-session.
-- **Adapter:** `.../TTS/AudioEngineProtocol.swift` — `AudioEngineProtocol`,
-  `AVAudioEngineAdapter` (real, iOS/macOS), `FakeAudioEngine`,
-  `PlaybackCompletionAccountant` (pure, tested), offline-render test seam.
-- **Decoder:** `.../TTS/MP3StreamDecoder.swift` (+ `CompressedBufferSizing.swift`
-  pure/tested). One-chunk lookahead so the terminal chunk carries audio.
-- **Session:** `.../Coordinator/AudioSessionCoordinator.swift` +
-  `AudioSessionConfigurator.swift` (`bluetoothRouting` pure/tested). **← §2 work.**
-- **Fakes / harness:** `FakeTTSEngine` (scripts: `.normal/.prewarmedFast/.error/.holds`),
-  `FakeAudioEngine`, `FakeAudioSessionConfigurator`, `FakeTTSChunkSource`.
-  Bridge test harness: `rishi/rishiTests/Audio/ReaderTTSBridgeAdvanceTests.swift`
-  (`makeBridge`, `waitUntil`, `PassageChangeRecorder`).
-- **EPUB read-aloud:** `rishi/rishi/Audio/EPUBReaderTTSExtension.swift`
-  (`paragraphsForReadAloud()` — spans one resource),
-  `Packages/RishiReader/.../EPUB/EPUBNavigatorCoordinator.swift`
-  (`navigateToReadAloudParagraph`, `highlightReadAloudParagraph`, `go(to:)`),
-  `EPUBReadAloudDecorationBuilder.locator(forParagraph:href:mediaType:)` (tested),
-  `Packages/RishiReader/.../UI/EPUBReaderScreen.swift` (`applyReadAloudHighlight`).
-- **Player UI:** `Packages/RishiAudio/Sources/RishiAudio/UI/ReadAloudControlsView.swift`
-  (play/pause, stop, prev, repeat, next, settings-icon). Wired in
-  `rishi/rishi/RootView.swift` `readAloudControlsOverlay` (≈ line 892).
+- **Bug 3 (double-play)** — RESOLVED BY ANALYSIS (not reachable: one visible reader; `RootView.startReadAloud` stops the old bridge first; `TTSEngine` actor serialises). No code change.
+- **Device-verify**: view-follows-audio across page boundaries (Bug 4); prev/repeat/next at page boundaries (Feature 5). User confirmed next/prev audio works now; re-confirm page-following.
+- **Task 6 — remove the bottom tab bar app-wide + restyle the reader with native SwiftUI / iOS 26 Liquid Glass.** User decision: remove the tab bar entirely (Library/Chats — they have other navigation). Propose the replacement navigation BEFORE deleting. The UI-test hierarchy confirmed the tab bar (`books.vertical`/`bubble.left.and.bubble.right`) still shows even in the reader. Design-heavy; needs device iteration.
+- **Auth bypass for real (non-test) dev use** — the user once asked for a general dev/test auth bypass to test on simulators. The `RISHI_UITEST` bypass partially covers this (signed-out + offline). If they want an interactive dev bypass, extend it.
+- **Hygiene:** known-flaky `CachingTTSChunkSourceTests "cancelled stream…"` (passes alone, fails in full RishiAudio run). Not caused by this work.
 
-## 7. Verify commands
+---
 
+## 5. KEY CONTEXT / MAP
+
+- **Property-based testing** is now adopted: `x-sheep/swift-property-based`, wired into RishiCore + RishiReader package test targets and the `rishiTests` xcodeproj target (added via the `xcodeproj` Ruby gem). See `reference_property_based_testing` memory. Pure logic → package `swift test`; stateful → iPhone 17 gate.
+- **Audio pipeline:** `ReaderTTSBridge` (app target, `@MainActor`, `start/stop/jump/next/previous/repeatCurrent`, advance watcher) → `TTSEngine` (actor, RishiAudio, long-lived engine) → `AudioEngineProtocol`/`AVAudioEngineAdapter` (+ `FakeAudioEngine`) + `AudioSessionCoordinator`/`AudioSessionPolicy` (pure reducer) + `MP3StreamDecoder` + `TTSPassageTracker` (drives the in-text highlight via `currentPassageId`).
+- **Fixtures:** `alice.epub` (shipped sample, auto-seeds on first launch via `SampleBookInstaller`) and `purple-cow.epub` (TEST-ONLY, in `RishiReader/Tests/.../Fixtures`). `alice-p0.mp3` real TTS fixture in `RishiAudio/Tests/.../Fixtures` (and copied to the app bundle as `uitest-tts.mp3`).
+- The `-50` (`audio.session.mode.failed`) on device is non-fatal (passage 0 plays); it is the bluetooth/category config and was NOT the next/prev cause. Leave unless it surfaces a real symptom.
+
+## 6. Verify commands
 ```bash
-# package suites (fast)
-swift test --package-path apps/apple/Packages/RishiAudio
-swift test --package-path apps/apple/Packages/RishiCore
-# app-target bridge suites (orchestrator only — NOT in a subagent)
+swift test --package-path apps/apple/Packages/RishiAudio   # 113 tests
+swift test --package-path apps/apple/Packages/RishiCore    # incl. property-based startIndex
+# iPhone 17 gates (orchestrator only):
 xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi \
   -destination 'platform=iOS Simulator,name=iPhone 17' \
+  -only-testing:rishiTests/ReaderTTSBridgeLongLivedEngineTests \
   -only-testing:rishiTests/ReaderTTSBridgeNextPrevTests \
-  -only-testing:rishiTests/ReaderTTSBridgeAdvanceTests \
-  -only-testing:rishiTests/ReaderTTSBridgePageNavTests
-# full integrated build gate
-xcodebuild build -project apps/apple/rishi/rishi.xcodeproj -scheme rishi \
-  -destination 'platform=iOS Simulator,name=iPhone 17'
+  -only-testing:rishiTests/ReaderTTSBridgeAdvanceTests
+xcodebuild test ... -only-testing:RishiReader/... (RishiReaderTests/EPUBReadAloudStartIndexTests) via -scheme RishiReader
+xcodebuild test ... -only-testing:rishiUITests/ReadAloudNextParagraphUITests -resultBundlePath /tmp/ui.xcresult
 ```
-
-Known-flaky in the full RishiAudio run: `CachingTTSChunkSource "cancelled
-stream…"` (passes alone). The bridge suites had a latent flake (now fixed in
-`c37eeffaf`): `start()` fires `onPassageChange(nil)` immediately, so wait on real
-forwarded passage indices, never on `sawTeardown`/bare event counts.
