@@ -489,17 +489,7 @@ final class AppDependencies {
         let sampleBookInstaller = SampleBookInstaller(storage: bookFileStorage)
         let sampleReaderInstaller = SampleReaderInstaller(storage: bookFileStorage)
 
-        // 12. Library view model — needs MainActor isolation.
-        let libraryViewModel = await MainActor.run {
-            LibraryViewModel(
-                bookStore: bookStore,
-                positionStore: positionStore,
-                storage: bookFileStorage,
-                currentUserId: { userIdBox.value }
-            )
-        }
-
-        // 13. Bind the @Observable SyncStatus to the engine actor.
+        // 12. Bind the @Observable SyncStatus to the engine actor.
         // KEEP: fire-and-forget; syncEngine is an actor and `bind(status:)`
         // is a cheap field assignment behind the actor hop. No IO.
         Task { [syncEngine, syncStatus] in
@@ -632,7 +622,6 @@ final class AppDependencies {
             importCoordinator: importCoordinator,
             sampleBookInstaller: sampleBookInstaller,
             sampleReaderInstaller: sampleReaderInstaller,
-            libraryViewModel: libraryViewModel,
             readerSettingsStore: readerSettingsStore,
             audioCoordinator: audioStack.coordinator,
             ttsState: audioStack.state,
@@ -799,7 +788,6 @@ final class AppDependencies {
     var importCoordinator: ImportCoordinator { services!.importCoordinator }
     var sampleBookInstaller: SampleBookInstaller { services!.sampleBookInstaller }
     var sampleReaderInstaller: SampleReaderInstaller { services!.sampleReaderInstaller }
-    var libraryViewModel: LibraryViewModel { services!.libraryViewModel }
     var readerSettingsStore: any ReaderSettingsStore { services!.readerSettingsStore }
 
     var audioCoordinator: AudioSessionCoordinator { services!.audioCoordinator }
@@ -1059,7 +1047,6 @@ struct BootstrappedServices: @unchecked Sendable {
     let importCoordinator: ImportCoordinator
     let sampleBookInstaller: SampleBookInstaller
     let sampleReaderInstaller: SampleReaderInstaller
-    let libraryViewModel: LibraryViewModel
     let readerSettingsStore: any ReaderSettingsStore
 
     // Audio / TTS

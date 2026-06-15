@@ -104,7 +104,6 @@ struct RootView: View {
         // (presented from `SettingsSheet`) reads
         // `@Environment(ManageSubscriptionPresenter.self)`.
         realBodyContent(deps: deps)
-            .environment(deps.libraryViewModel)
             .environment(deps.manageSubscriptionPresenter)
     }
 

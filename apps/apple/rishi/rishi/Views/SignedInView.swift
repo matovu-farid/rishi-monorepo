@@ -39,7 +39,36 @@ struct SignedInView: View {
     @Environment(AppRouter.self) private var router
     @Environment(\.macCommandRouter) private var commandRouter
 
+    init(
+        deps: AppDependencies,
+        user: User,
+        selectedTabRaw: Binding<String>,
+        openBookIdRaw: Binding<String>,
+        onSignedOut: @escaping () -> Void
+    ) {
+        self.deps = deps
+        self.user = user
+        self._selectedTabRaw = selectedTabRaw
+        self._openBookIdRaw = openBookIdRaw
+        self.onSignedOut = onSignedOut
+        // services is guaranteed non-nil here: RootView only constructs
+        // SignedInView inside the `if deps.services != nil` / realBody gate.
+        let services = deps.services!
+        let userId = user.id
+        self._libraryVM = State(initialValue: LibraryViewModel(
+            bookStore: services.bookStore,
+            positionStore: services.positionStore,
+            storage: services.bookFileStorage,
+            currentUserId: { userId }
+        ))
+    }
+
     // MARK: - Signed-in @State
+
+    /// Owned by this view so LibraryViewModel lifecycle matches the
+    /// authenticated session. Injected into the environment for
+    /// LibraryRootView and other signed-in consumers via .environment(libraryVM).
+    @State private var libraryVM: LibraryViewModel
 
     /// Phase 8 (TTS) — read-aloud controller. Created once the user opens
     /// a reader and taps Read Aloud for the first time.
@@ -80,6 +109,7 @@ struct SignedInView: View {
             user: user,
             onShowChats: { router.showConversations() }
         )
+        .environment(libraryVM)
         .sheet(item: $selectedConversation) { convo in
             if let services = deps.services {
                 ConversationChatHost(
@@ -130,10 +160,10 @@ struct SignedInView: View {
             router.onConversationResolved = { convo in
                 selectedConversation = convo
             }
-            router.onFileURL = { fileURL in
+            router.onFileURL = { [libraryVM] fileURL in
                 Task {
                     _ = await deps.importCoordinator.importBooks([fileURL])
-                    await deps.services?.libraryViewModel.refresh()
+                    await libraryVM.refresh()
                 }
             }
             router.handle(
@@ -259,7 +289,7 @@ struct SignedInView: View {
                 async let sample = deps.sampleBookInstaller.installIfNeeded(ownerId: user.id)
                 async let reader = deps.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
                 _ = await (sample, reader)
-                await deps.services?.libraryViewModel.refresh()
+                await libraryVM.refresh()
             }
         }
         .sheet(isPresented: $showSettings) {
