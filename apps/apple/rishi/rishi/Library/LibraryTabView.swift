@@ -41,19 +41,14 @@ struct LibraryTabView: View {
         self.onCacheUserId = onCacheUserId
         self.onShowChats = onShowChats
         self.onSignedOut = onSignedOut
-        let userId = user.id
-        _libraryVM = State(initialValue: LibraryViewModel(
-            bookStore: services.bookStore,
-            positionStore: services.positionStore,
-            storage: services.bookFileStorage,
-            currentUserId: { userId }
-        ))
+        _libraryVM = State(initialValue: LibraryViewModel.make(services: services, user: user))
     }
 
     var body: some View {
         let bindableRouter = Bindable(router)
         NavigationStack(path: bindableRouter.path) {
             LibraryRootView(
+                viewModel: libraryVM,
                 path: bindableRouter.path,
                 importCoordinator: services.importCoordinator,
                 onOpenBook: { book in
@@ -94,7 +89,6 @@ struct LibraryTabView: View {
                 await libraryVM.refresh()
             }
         }
-        .environment(libraryVM)
         .sheet(isPresented: Bindable(model).showSettings) {
             SettingsSheet(
                 services: services,

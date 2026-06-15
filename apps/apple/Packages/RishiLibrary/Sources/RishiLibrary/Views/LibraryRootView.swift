@@ -43,7 +43,7 @@ private let librarySignposter = OSSignposter(
 @MainActor
 public struct LibraryRootView: View {
 
-    @Environment(LibraryViewModel.self) private var viewModel
+    private let viewModel: LibraryViewModel
     public let importCoordinator: ImportCoordinator
     public let onOpenBook: (Book) -> Void
 
@@ -80,11 +80,13 @@ public struct LibraryRootView: View {
 
     /// Legacy initializer — wraps content in a self-owned NavigationStack.
     /// Kept for previews + future callers that want the simple shape.
-    public init(importCoordinator: ImportCoordinator,
+    public init(viewModel: LibraryViewModel,
+                importCoordinator: ImportCoordinator,
                 onOpenBook: @escaping (Book) -> Void,
                 onShowSettings: (() -> Void)? = nil,
                 onShowChats: (() -> Void)? = nil,
                 onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? = nil) {
+        self.viewModel = viewModel
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
@@ -96,12 +98,14 @@ public struct LibraryRootView: View {
     /// Phase 18 Plan 18-01 — host-owned NavigationStack initializer. The
     /// rishi app target uses this so the reader can be pushed onto the
     /// SAME stack and the system back chevron / edge-swipe always work.
-    public init(path: Binding<NavigationPath>,
+    public init(viewModel: LibraryViewModel,
+                path: Binding<NavigationPath>,
                 importCoordinator: ImportCoordinator,
                 onOpenBook: @escaping (Book) -> Void,
                 onShowSettings: (() -> Void)? = nil,
                 onShowChats: (() -> Void)? = nil,
                 onImported: (@MainActor ([ImportCoordinator.ImportOutcome]) -> Void)? = nil) {
+        self.viewModel = viewModel
         self.importCoordinator = importCoordinator
         self.onOpenBook = onOpenBook
         self.onShowSettings = onShowSettings
@@ -343,34 +347,34 @@ private enum LibraryRootPreviewFixtures {
 
 #Preview("Root - populated") {
     LibraryRootView(
+        viewModel: LibraryRootPreviewFixtures.makeViewModel(books: LibraryRootPreviewFixtures.populated),
         importCoordinator: LibraryRootPreviewFixtures.makeImportCoordinator(),
         onOpenBook: { _ in }
     )
-    .environment(LibraryRootPreviewFixtures.makeViewModel(books: LibraryRootPreviewFixtures.populated))
 }
 
 #Preview("Root - empty") {
     LibraryRootView(
+        viewModel: LibraryRootPreviewFixtures.makeViewModel(books: []),
         importCoordinator: LibraryRootPreviewFixtures.makeImportCoordinator(),
         onOpenBook: { _ in }
     )
-    .environment(LibraryRootPreviewFixtures.makeViewModel(books: []))
 }
 
 #Preview("Root - with settings button") {
     LibraryRootView(
+        viewModel: LibraryRootPreviewFixtures.makeViewModel(books: LibraryRootPreviewFixtures.populated),
         importCoordinator: LibraryRootPreviewFixtures.makeImportCoordinator(),
         onOpenBook: { _ in },
         onShowSettings: { }
     )
-    .environment(LibraryRootPreviewFixtures.makeViewModel(books: LibraryRootPreviewFixtures.populated))
 }
 
 #Preview("Root - dark mode") {
     LibraryRootView(
+        viewModel: LibraryRootPreviewFixtures.makeViewModel(books: LibraryRootPreviewFixtures.populated),
         importCoordinator: LibraryRootPreviewFixtures.makeImportCoordinator(),
         onOpenBook: { _ in }
     )
-    .environment(LibraryRootPreviewFixtures.makeViewModel(books: LibraryRootPreviewFixtures.populated))
     .preferredColorScheme(.dark)
 }
