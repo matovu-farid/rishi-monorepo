@@ -7,11 +7,17 @@ let package = Package(
     products: [
         .library(name: "RishiCore", targets: ["RishiCore"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/x-sheep/swift-property-based.git", from: "1.0.0"),
+    ],
     targets: [
         .target(name: "RishiCore"),
         .testTarget(
             name: "RishiCoreTests",
-            dependencies: ["RishiCore"]
+            dependencies: [
+                "RishiCore",
+                .product(name: "PropertyBased", package: "swift-property-based"),
+            ]
         ),
     ]
 )
