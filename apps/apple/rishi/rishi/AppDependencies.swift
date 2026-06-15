@@ -847,19 +847,6 @@ final class AppDependencies {
 
     var authServiceForEnvironment: any AuthService { services!.authService }
 
-    // MARK: - Paywall factory (Phase 13 plan 13-05)
-
-    /// Build a fresh `PaywallViewModel` wired to the full IAP graph.
-    @MainActor
-    func makePaywallViewModel() -> PaywallViewModel {
-        PaywallViewModel(
-            productService: storeKitProductService,
-            purchaseService: purchaseService,
-            restoreService: restoreService,
-            managePresenter: manageSubscriptionPresenter
-        )
-    }
-
     // MARK: - Chat factories (Phase 9)
 
     /// Builds a ``ChatPanelViewModel`` for a `(userId, bookId)` pair by

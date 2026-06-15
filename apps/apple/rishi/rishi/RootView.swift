@@ -23,7 +23,6 @@ import RishiAuth
 import RishiBilling
 import RishiChat
 import RishiLibrary
-import RishiLogging
 import RishiOnboarding
 import RishiReader
 import RishiSettings
@@ -343,31 +342,14 @@ struct RootView: View {
         }
         #endif
         // BILL-04 — paywall sheet for free users tapping a Pro feature.
-        // Quick-VPX Task 1 (GAP 1): onSubscribe now invokes the real
-        // PurchaseService via the `paywallSubscribeAction` seam in
-        // RishiBilling. The seam wraps the awaiting `purchase(productId:)`
-        // call in a Task, switches on `PurchaseOutcome`, and routes
-        // success/cancel/error into the three closures below. The
-        // `EntitlementService` observation refreshes entitlement state on
-        // its own snapshot read after a successful purchase — no manual
-        // mutation here. Error breadcrumbs go through `Log.event` via
-        // RishiLogging (the canonical bridge — no direct Sentry call).
+        // PaywallHost owns the PaywallViewModel for the lifetime of the sheet,
+        // routing through the live Wave-3 path (tier selector, subscribe,
+        // restore, manage, 3.1.2 disclosure). deps.services is non-nil here
+        // because realBody is only entered after the outer body guard passes.
         .sheet(item: $paywallFeature) { feature in
-            PaywallView(
-                feature: feature.name,
-                onSubscribe: {
-                    paywallSubscribeAction(
-                        purchaseService: deps.purchaseService,
-                        productId: StoreKitProductService.monthlyProductId,
-                        onSuccess: { paywallFeature = nil },
-                        onCancel:  { paywallFeature = nil },
-                        onError: { _ in
-                            Log.event("paywall.purchase.failed",
-                                      level: .error)
-                            paywallFeature = nil
-                        }
-                    )
-                },
+            PaywallHost(
+                feature: feature,
+                services: deps.services!,
                 onDismiss: { paywallFeature = nil }
             )
         }
@@ -1131,7 +1113,8 @@ struct RootView: View {
 /// BILL-04 — Identifiable wrapper so `.sheet(item:)` can drive a paywall
 /// keyed by the feature name. String isn't Identifiable in stdlib; using a
 /// dedicated struct keeps the @State binding straightforward.
-private struct PaywallFeature: Identifiable, Equatable {
+/// Internal (not private) so `PaywallHost` (same module) can reference it.
+struct PaywallFeature: Identifiable, Equatable {
     let name: String
     var id: String { name }
 }
