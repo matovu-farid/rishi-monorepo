@@ -30,8 +30,8 @@ private let librarySignposter = OSSignposter(
 ///   - toolbar "Import" button presenting `DocumentPickerView`
 ///
 /// Reads `LibraryViewModel` from the SwiftUI environment via
-/// `@Environment(LibraryViewModel.self)` — paired with `.environment(deps.libraryViewModel)`
-/// in `rishiApp` so every descendant sees the same `@Observable` instance.
+/// `@Environment(LibraryViewModel.self)` — paired with `.environment(libraryVM)`
+/// in `SignedInView` so every descendant sees the same `@Observable` instance.
 ///
 /// Phase 21 Plan 21-01 — `LibraryViewModel.refresh()` now owns the cover-URL
 /// fan-out via the nonisolated `BookFileStorage.cachedCoverURLIfFresh` fast

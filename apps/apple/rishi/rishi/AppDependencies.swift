@@ -111,15 +111,15 @@ final class AppDependencies {
     /// from the SwiftUI environment that `RootView` reads.
     let macCommandRouter = MacCommandRouter()
 
-    /// Cached user id pumped in by RootView after the auth session resolves.
-    /// LibraryViewModel reads this synchronously from its currentUserId
-    /// closure so refresh() does not need to hop into the auth actor.
+    /// Cached user id pumped in by SignedInView after the auth session resolves.
+    /// `RishiChatService` and the voice presenter read this synchronously from
+    /// their `currentUserId` closures so they do not need to hop into the auth actor.
     var cachedUserId: UserID? {
         get { userIdBox.value }
         set { userIdBox.value = newValue }
     }
 
-    /// Heap-allocated reference box so the LibraryViewModel + ChatService
+    /// Heap-allocated reference box so the `RishiChatService` + voice presenter
     /// closures can capture a stable seam before `self` is fully wired.
     private let userIdBox = UserIdBox()
 
@@ -1106,10 +1106,11 @@ struct BootstrappedServices: @unchecked Sendable {
     let readerDefaults: AppReaderDefaults
 }
 
-/// Tiny @MainActor-isolated reference box so LibraryViewModel's currentUserId
-/// closure can be constructed before `self` is fully initialised. The closure
-/// captures the box (a reference type), AppDependencies mutates `box.value`,
-/// and LibraryViewModel reads the latest value on every `currentUserId()` call.
+/// Tiny @MainActor-isolated reference box so `RishiChatService` and the voice
+/// presenter's `currentUserId` closures can be constructed before `self` is
+/// fully initialised. The closures capture the box (a reference type),
+/// AppDependencies mutates `box.value`, and consumers read the latest value
+/// on every `currentUserId()` call.
 @MainActor
 final class UserIdBox {
     var value: UserID? = nil

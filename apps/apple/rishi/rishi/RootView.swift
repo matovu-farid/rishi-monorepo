@@ -2,52 +2,21 @@
 //  RootView.swift
 //  rishi
 //
-//  Phase 4 Plan 04-06 — top-level view gating Library vs DebugAuth on the
-//  current authenticated user.
-//  Phase 5 Plan 05-07 — presents PDFReaderScreen as a full-screen cover
-//  when the user taps a .pdf book in the library; .epub books route to
-//  an explicit placeholder until Phase 6.
-//  Phase 6 Plan 06-06 — .epub now opens EPUBReaderScreen for real;
-//  .mobi / .azw3 keep routing to the placeholder until a future phase
-//  adds a converter.
+//  Thin auth-switch shell. Branches on `authProbeComplete` / `currentUser`
+//  to show a loading background, `SignedInView`, or `SignedOutView`.
+//  Owns the `@SceneStorage` cells (passed as bindings to `SignedInView`) and
+//  the first-launch onboarding cover which spans both auth states.
 //
-//  The reader is mounted as a full-screen cover (not a navigationDestination)
-//  because LibraryRootView owns its own NavigationStack. Nesting another
-//  NavigationStack causes split-view weirdness on iPad / Catalyst.
+//  All signed-in composition, helper types, and reader infrastructure live
+//  in `SignedInView.swift`. `OnboardingHost` lives in
+//  `Onboarding/OnboardingHost.swift`.
 //
 
 import SwiftUI
 import RishiCore
-import RishiAudio
 import RishiAuth
 import RishiBilling
-import RishiChat
-import RishiLibrary
-import RishiOnboarding
-import RishiReader
-import RishiSettings
 import RishiUIKit
-#if canImport(PDFKit)
-import PDFKit
-#endif
-
-/// Floating-card surface for the read-aloud controls. iOS 26 gets a native
-/// Liquid Glass effect; iOS 18 falls back to `.regularMaterial`. Both clip to
-/// the same rounded rectangle so the card shape is identical across versions.
-struct GlassCardBackground: ViewModifier {
-    let cornerRadius: CGFloat
-
-    func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius)
-        if #available(iOS 26.0, *) {
-            content.glassEffect(.regular, in: shape)
-        } else {
-            content
-                .background(.regularMaterial, in: shape)
-                .clipShape(shape)
-        }
-    }
-}
 
 struct RootView: View {
 
@@ -99,8 +68,7 @@ struct RootView: View {
         // Phase 19 plan 19-01 — re-inject object-typed environments that
         // used to live on the `WindowGroup` root. They can only be
         // installed once `deps.services` is non-nil, which the outer
-        // `body` guard guarantees here. `LibraryRootView` reads
-        // `@Environment(LibraryViewModel.self)`, and `ManageSubscriptionRow`
+        // `body` guard guarantees here. `ManageSubscriptionRow`
         // (presented from `SettingsSheet`) reads
         // `@Environment(ManageSubscriptionPresenter.self)`.
         realBodyContent(deps: deps)
@@ -229,101 +197,6 @@ struct RootView: View {
     }
 }
 
-/// BILL-04 — Identifiable wrapper so `.sheet(item:)` can drive a paywall
-/// keyed by the feature name. String isn't Identifiable in stdlib; using a
-/// dedicated struct keeps the @State binding straightforward.
-/// Internal (not private) so `PaywallHost` (same module) can reference it.
-struct PaywallFeature: Identifiable, Equatable {
-    let name: String
-    var id: String { name }
-}
-
-/// reader-tts-xml-and-loading fix — memoizes reader view-models per book id
-/// across RootView body recomputes.
-///
-/// The reader VMs (`PDFReaderViewModel` / `EPUBReaderViewModel`) carry the
-/// loaded document/publication and the `.loaded` `loadingState`. They were
-/// previously constructed as plain `let` locals inside the `@ViewBuilder`
-/// destination functions, so every RootView body recompute (e.g. tapping
-/// Read Aloud, which mutates `showTTSControls` / `readerTTSBridge` @State)
-/// minted a fresh `.idle` VM and handed it to the structurally-identical
-/// reader screen — re-showing the stuck "Opening {book}" cold-open overlay
-/// and detaching the TTS controls sheet from the live VM.
-///
-/// This cache is held in RootView `@State` (stable reference identity), so
-/// the destination functions reuse the same VM instance for a given book id.
-/// Entries are dropped on reader dismiss via `drop(_:)` so reopening a book
-/// re-reads its persisted position from scratch.
-@MainActor
-final class ReaderViewModelCache {
-    private var pdfVMs: [BookID: PDFReaderViewModel] = [:]
-    private var epubVMs: [BookID: EPUBReaderViewModel] = [:]
-
-    func pdf(for id: BookID, make: () -> PDFReaderViewModel) -> PDFReaderViewModel {
-        if let existing = pdfVMs[id] { return existing }
-        let vm = make()
-        pdfVMs[id] = vm
-        return vm
-    }
-
-    func epub(for id: BookID, make: () -> EPUBReaderViewModel) -> EPUBReaderViewModel {
-        if let existing = epubVMs[id] { return existing }
-        let vm = make()
-        epubVMs[id] = vm
-        return vm
-    }
-
-    func drop(_ id: BookID) {
-        pdfVMs.removeValue(forKey: id)
-        epubVMs.removeValue(forKey: id)
-    }
-}
-
-/// Phase 18 Plan 18-01 — async-resolve a `Book` from a `BookID` for use
-/// inside a `NavigationStack` destination. The path itself only carries
-/// `ReaderRoute` (Codable + BookID) so scene restoration stays primitive.
-/// This helper performs the `deps.bookStore.book(_:)` lookup on appear,
-/// rendering a `ProgressView` until the book resolves.
-struct NavigationLazyBook<Content: View>: View {
-    let bookId: BookID
-    let deps: AppDependencies
-    let content: (Book) -> Content
-
-    @State private var book: Book?
-
-    /// Phase 20 perf — accept an optional `hint` so call sites that
-    /// already have the resolved `Book` (library tap, Mac intent, legacy
-    /// scene-restore B) can seed `@State` and skip the
-    /// `bookStore.book(_:)` round-trip entirely. The fallback DB read
-    /// still runs whenever the hint is nil (cold launch scene restore
-    /// path), so existing behaviour is preserved.
-    init(bookId: BookID,
-         hint: Book? = nil,
-         deps: AppDependencies,
-         @ViewBuilder content: @escaping (Book) -> Content) {
-        self.bookId = bookId
-        self.deps = deps
-        self.content = content
-        self._book = State(initialValue: hint)
-    }
-
-    var body: some View {
-        Group {
-            if let book {
-                content(book)
-            } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .task(id: bookId) {
-            if book == nil {
-                book = try? await deps.bookStore.book(bookId)
-            }
-        }
-    }
-}
-
 #Preview("Signed in") {
     PreviewPlaceholder(
         title: "Library",
@@ -346,32 +219,4 @@ struct NavigationLazyBook<Content: View>: View {
         subtitle: "Bootstrap task is resolving the current user.",
         variant: "Loading"
     )
-}
-
-/// Catches `.mobi` / `.azw3` taps — those formats need a converter step
-/// that isn't on the v1 milestone. Shipped here so the library never
-/// silently no-ops when the user taps an unsupported book.
-struct EpubPlaceholderView: View {
-    let book: Book
-    let onClose: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 16) {
-                Image(systemName: "book.closed")
-                    .font(.largeTitle)
-                Text(book.title)
-                    .font(.title3)
-                Text("MOBI / AZW3 aren't supported yet.")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-            }
-            .padding()
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done", action: onClose)
-                }
-            }
-        }
-    }
 }
