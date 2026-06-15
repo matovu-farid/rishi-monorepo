@@ -6,11 +6,13 @@
 //
 //  Owns:
 //    - The library NavigationStack path (was RootView.libraryPath @State).
-//    - selectedTab echo value (for @SceneStorage encode; always .library in
-//      the current single-home layout, kept for schema continuity).
 //    - Deep-link dispatch (was RootView.onOpenURL body).
 //    - Scene-state encode/decode (was restoreSceneState / persistSceneState).
 //    - showLibraryRoot / showConversations navigation helpers.
+//
+//  Note: selectedTab was removed — the app unified on a single Library home
+//  (commit cf722170c). persistCells() still writes a hardcoded .library value
+//  to the @SceneStorage tab cell for schema continuity with existing installs.
 //
 //  Side effects that require RootView-owned state (selectedConversation,
 //  libraryViewModel, bookHints) are forwarded via closures threaded at
@@ -40,10 +42,10 @@ final class AppRouter {
     /// Library NavigationStack path. Bind as `Bindable(router).path`.
     var path: NavigationPath = NavigationPath()
 
-    /// Tab selection echo — always `.library` in the current single-home
-    /// layout; retained only so `persistCells()` can write a valid
-    /// `RishiSceneState` JSON cell that forward-compatible installs expect.
-    var selectedTab: MacTab = .library
+    // Note: `selectedTab` has been removed. The app unified on a single
+    // Library home (commit cf722170c); the tab is always `.library`. The
+    // `persistCells()` tab cell is hardcoded to `.library` for storage-schema
+    // continuity with existing installs, but there is nothing live to round-trip.
 
     // MARK: Private helpers
 
@@ -71,11 +73,17 @@ final class AppRouter {
     /// Async cases (book, conversation) spawn a `Task` and invoke the
     /// appropriate callback on the main actor when the DB lookup resolves.
     ///
-    /// - Parameter url:  The URL passed by the system `.onOpenURL` modifier.
-    /// - Parameter deps: Live `AppDependencies`; used for `bookStore` and
-    ///   `conversationStore` async lookups. Pass `nil` to no-op those branches
-    ///   (e.g. in tests that only verify path mutations for sync cases).
-    func handle(url: URL, deps: AppDependencies?) {
+    /// - Parameter url:              The URL passed by the system `.onOpenURL` modifier.
+    /// - Parameter bookStore:        Resolves book IDs from the DB. Pass `nil` to
+    ///                               no-op `.openBook` (e.g. in tests that only verify
+    ///                               sync-path mutations).
+    /// - Parameter conversationStore: Resolves conversation IDs from the DB. Pass `nil`
+    ///                               to no-op `.openConversation`.
+    func handle(
+        url: URL,
+        bookStore: (any BookStore)?,
+        conversationStore: (any ConversationStore)?
+    ) {
         let destination = deepLinks.route(url)
         switch destination {
         case .authCallback:
@@ -93,9 +101,9 @@ final class AppRouter {
             _ = token
 
         case .openBook(let bookId):
-            guard let deps else { return }
+            guard let bookStore else { return }
             Task {
-                let book: Book? = try? await deps.bookStore.book(bookId)
+                let book: Book? = try? await bookStore.book(bookId)
                 guard let book else { return }
                 // Cache hint in RootView for zero-flash first paint.
                 onBookResolved?(book)
@@ -106,9 +114,9 @@ final class AppRouter {
             }
 
         case .openConversation(let conversationId):
-            guard let deps else { return }
+            guard let conversationStore else { return }
             Task {
-                let convo: Conversation? = try? await deps.conversationStore.conversation(conversationId)
+                let convo: Conversation? = try? await conversationStore.conversation(conversationId)
                 guard let convo else { return }
                 onConversationResolved?(convo)
             }
@@ -138,7 +146,7 @@ final class AppRouter {
 
     // MARK: - Scene restoration
 
-    /// Applies the decoded scene-restore cells to `path` and `selectedTab`.
+    /// Applies the decoded scene-restore cells to `path`.
     /// Mirrors `RootView.restoreSceneState()`. Async because the Legacy B
     /// (bare-UUID) path needs a `bookStore` DB lookup.
     ///
@@ -146,15 +154,19 @@ final class AppRouter {
     ///   1. Full NavigationPath via `CodableRepresentation`.
     ///   2. Legacy A — JSON-encoded `ReaderRoute`.
     ///   3. Legacy B — bare `UUID.uuidString` (v0 cell shape), looked up
-    ///      via `deps.bookStore` to build a path entry.
-    func applyRestored(tabRaw: String, openBookIdRaw: String, deps: AppDependencies?) async {
+    ///      via `bookStore` to build a path entry.
+    func applyRestored(
+        tabRaw: String,
+        openBookIdRaw: String,
+        bookStore: (any BookStore)?
+    ) async {
         let decoded = RishiSceneState.decodeSceneRestoreCells(
             tabRaw: tabRaw,
             openBookIdRaw: openBookIdRaw
         )
 
-        // Mirror selectedTab from state so persistCells() round-trips it.
-        selectedTab = decoded.state.selectedTab
+        // selectedTab has been removed (single-home layout); decoded.state.selectedTab
+        // is decoded but not stored — the tab is always .library.
 
         // Preferred — full NavigationPath via CodableRepresentation.
         if let restoredPath = decoded.path {
@@ -171,8 +183,8 @@ final class AppRouter {
         }
 
         // Legacy B — bare UUID.uuidString from the v0 cell.
-        if let legacyId = decoded.legacyId, let deps = deps {
-            let book = try? await deps.bookStore.book(legacyId)
+        if let legacyId = decoded.legacyId, let bookStore {
+            let book = try? await bookStore.book(legacyId)
             guard let book else { return }
             onBookResolved?(book)
             var p = NavigationPath()

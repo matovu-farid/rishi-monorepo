@@ -347,7 +347,11 @@ struct RootView: View {
                     await libraryViewModel?.refresh()
                 }
             }
-            router.handle(url: url, deps: deps)
+            router.handle(
+                url: url,
+                bookStore: deps.services?.bookStore,
+                conversationStore: deps.services?.conversationStore
+            )
         }
         // Phase 12 Plan 12-01 — drain the Mac command router whenever the
         // menu bar / ⌘-shortcut posts a new intent. We use `.task(id:)` so
@@ -370,7 +374,7 @@ struct RootView: View {
             await router.applyRestored(
                 tabRaw: selectedTabRaw,
                 openBookIdRaw: openBookIdRaw,
-                deps: deps
+                bookStore: deps.services?.bookStore
             )
         }
         // Persist the latest scene state on every visible change. Re-encode
