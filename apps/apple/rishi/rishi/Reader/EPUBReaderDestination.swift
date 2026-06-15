@@ -49,6 +49,7 @@ struct EPUBReaderDestination: View {
             readerSettingsStore: services.readerSettingsStore,
             highlightStore: services.highlightStore,
             onReadAloud: FeatureFlags.readAloud ? {
+                // KEEP: read-aloud start gated on entitlement check; MainActor store access
                 Task {
                     let level = await services.entitlementService.snapshot()
                     var entitled = level == .pro
@@ -76,6 +77,7 @@ struct EPUBReaderDestination: View {
             // cross-chapter continuation is handled inside ReadAloudController.startEPUB;
             // here we stop on explicit user navigation away from the active passage).
             vm.onUserNavigation = { _ in
+                // KEEP: stop read-aloud on user-initiated chapter navigation; MainActor
                 Task { await readAloud?.stop() }
             }
             syncBinding = EPUBReaderPositionSyncBinding(
@@ -85,6 +87,7 @@ struct EPUBReaderDestination: View {
         }
         .onDisappear {
             syncBinding = nil
+            // KEEP: stop read-aloud when EPUB reader is dismissed; MainActor
             Task { await readAloud?.stop() }
         }
         .overlay(alignment: .bottom) {

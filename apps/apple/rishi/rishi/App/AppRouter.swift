@@ -102,6 +102,7 @@ final class AppRouter {
 
         case .openBook(let bookId):
             guard let bookStore else { return }
+            // KEEP: resolve deep-linked book from the DB; MainActor store access
             Task {
                 let book: Book? = try? await bookStore.book(bookId)
                 guard let book else { return }
@@ -115,6 +116,7 @@ final class AppRouter {
 
         case .openConversation(let conversationId):
             guard let conversationStore else { return }
+            // KEEP: resolve deep-linked conversation from the DB; MainActor store access
             Task {
                 let convo: Conversation? = try? await conversationStore.conversation(conversationId)
                 guard let convo else { return }

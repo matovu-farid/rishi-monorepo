@@ -46,6 +46,7 @@ struct PDFReaderDestination: View {
             readerSettingsStore: services.readerSettingsStore,
             highlightStore: services.highlightStore,
             onReadAloud: FeatureFlags.readAloud ? {
+                // KEEP: read-aloud start gated on entitlement check; MainActor store access
                 Task {
                     let level = await services.entitlementService.snapshot()
                     guard level == .pro else {
@@ -75,6 +76,7 @@ struct PDFReaderDestination: View {
         }
         .onDisappear {
             syncBinding = nil
+            // KEEP: stop read-aloud when PDF reader is dismissed; MainActor
             Task { await readAloud?.stop() }
         }
         .overlay(alignment: .bottom) {

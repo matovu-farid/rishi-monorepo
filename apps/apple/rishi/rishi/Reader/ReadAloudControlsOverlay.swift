@@ -20,6 +20,7 @@ struct ReadAloudControlsOverlay: View {
             ReadAloudControlsView(
                 state: ttsState,
                 onPlayPause: {
+                    // KEEP: UI play/pause action hops to the MainActor-isolated TTS bridge
                     Task {
                         if ttsState.status == .playing {
                             await bridge.pause()
@@ -29,18 +30,22 @@ struct ReadAloudControlsOverlay: View {
                     }
                 },
                 onStop: {
+                    // KEEP: UI stop action hops to the MainActor-isolated TTS controller
                     Task { await controller.stop() }
                 },
                 onOpenPicker: {
                     controller.showPicker = true
                 },
                 onPreviousParagraph: {
+                    // KEEP: UI previous-paragraph action hops to the MainActor-isolated TTS bridge
                     Task { await bridge.previous() }
                 },
                 onNextParagraph: {
+                    // KEEP: UI next-paragraph action hops to the MainActor-isolated TTS bridge
                     Task { await bridge.next() }
                 },
                 onRepeatParagraph: {
+                    // KEEP: UI repeat-paragraph action hops to the MainActor-isolated TTS bridge
                     Task { await bridge.repeatCurrent() }
                 }
             )

@@ -29,6 +29,7 @@ struct DeepLinkHandlingModifier: ViewModifier {
                     model.present(conversation: convo)
                 }
                 router.onFileURL = { [libraryVM] fileURL in
+                    // KEEP: import dropped file then refresh library; MainActor
                     Task {
                         _ = await services.importCoordinator.importBooks([fileURL])
                         await libraryVM.refresh()
