@@ -32,6 +32,14 @@ public final class EPUBNavigatorCoordinator: NSObject {
     public let viewModel: EPUBReaderViewModel
     public private(set) var navigator: EPUBNavigatorViewController?
 
+    /// True only while ``navigateToReadAloudParagraph(_:)`` is driving a
+    /// programmatic `nav.go(to:)`. Read by the `locationDidChange`
+    /// delegate to tag the resulting locator change as auto-follow
+    /// (not a user page-turn), so the VM does not fire
+    /// `onUserNavigation` for it. Both the setter and the delegate run
+    /// on the MainActor, so this needs no synchronization.
+    private var isProgrammaticNavigation = false
+
     /// Forwarded to the screen so it can present the highlight context
     /// menu. The closure is also called with `nil` when the user clears
     /// the selection — readers should hide the menu in that case.
@@ -110,7 +118,15 @@ public final class EPUBNavigatorCoordinator: NSObject {
             href: base.href,
             mediaType: base.mediaType
         )
-        return await nav.go(to: locator, options: NavigatorGoOptions(animated: true))
+        // Tag the locator change that `go(to:)` produces as programmatic
+        // so the delegate suppresses `onUserNavigation`. Set tightly
+        // around the await and reset immediately after it returns rather
+        // than via a function-scope `defer`, so the flag is only raised
+        // for the duration of this navigation.
+        isProgrammaticNavigation = true
+        let didMove = await nav.go(to: locator, options: NavigatorGoOptions(animated: true))
+        isProgrammaticNavigation = false
+        return didMove
     }
 
     /// Translates our reader settings into Readium's `EPUBPreferences`
@@ -169,7 +185,7 @@ public final class EPUBNavigatorCoordinator: NSObject {
 extension EPUBNavigatorCoordinator: EPUBNavigatorDelegate {
 
     public func navigator(_ navigator: any Navigator, locationDidChange locator: Locator) {
-        viewModel.didChangeLocation(locator)
+        viewModel.didChangeLocation(locator, isProgrammatic: isProgrammaticNavigation)
     }
 
     public func navigator(_ navigator: any Navigator, presentExternalURL url: URL) {

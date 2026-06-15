@@ -104,6 +104,108 @@ struct EPUBReaderViewModelTests {
         #expect(last != nil)
     }
 
+    @Test("didChangeLocation(isProgrammatic: false) fires onUserNavigation once with the locator")
+    func userNavigationFiresOnUserNavigation() async throws {
+        let url = try aliceURL()
+        let store = InMemoryPositionStore()
+        let book = makeBook()
+        let vm = EPUBReaderViewModel(
+            book: book,
+            userId: UUID(),
+            documentURL: url,
+            positionStore: store,
+            debounceSeconds: 5.0
+        )
+        await vm.load()
+
+        let publication = try #require(vm.publication)
+        let firstLink = try #require(publication.readingOrder.first)
+        let href = try #require(RelativeURL(path: firstLink.href))
+        let locator = Locator(
+            href: href,
+            mediaType: firstLink.mediaType ?? .xhtml,
+            locations: Locator.Locations(progression: 0.33, totalProgression: 0.33)
+        )
+
+        let received = LockedBox<[Locator]>([])
+        vm.onUserNavigation = { loc in received.mutate { $0.append(loc) } }
+
+        vm.didChangeLocation(locator, isProgrammatic: false)
+
+        let captured = received.value
+        #expect(captured.count == 1)
+        let got = try #require(captured.first)
+        #expect(String(describing: got.href) == String(describing: locator.href))
+        #expect(got.locations.progression == locator.locations.progression)
+    }
+
+    @Test("didChangeLocation(isProgrammatic: true) does NOT fire onUserNavigation")
+    func programmaticNavigationDoesNotFireOnUserNavigation() async throws {
+        let url = try aliceURL()
+        let store = InMemoryPositionStore()
+        let book = makeBook()
+        let vm = EPUBReaderViewModel(
+            book: book,
+            userId: UUID(),
+            documentURL: url,
+            positionStore: store,
+            debounceSeconds: 5.0
+        )
+        await vm.load()
+
+        let publication = try #require(vm.publication)
+        let firstLink = try #require(publication.readingOrder.first)
+        let href = try #require(RelativeURL(path: firstLink.href))
+        let locator = Locator(
+            href: href,
+            mediaType: firstLink.mediaType ?? .xhtml,
+            locations: Locator.Locations(progression: 0.44, totalProgression: 0.44)
+        )
+
+        let received = LockedBox<[Locator]>([])
+        vm.onUserNavigation = { loc in received.mutate { $0.append(loc) } }
+
+        vm.didChangeLocation(locator, isProgrammatic: true)
+
+        #expect(received.value.isEmpty)
+    }
+
+    @Test("didChangeLocation default (no flag) fires onUserNavigation AND writes position")
+    func defaultCallBehavesAsUserAndPersists() async throws {
+        let url = try aliceURL()
+        let store = InMemoryPositionStore()
+        let book = makeBook()
+        let vm = EPUBReaderViewModel(
+            book: book,
+            userId: UUID(),
+            documentURL: url,
+            positionStore: store,
+            debounceSeconds: 0.1
+        )
+        await vm.load()
+
+        let publication = try #require(vm.publication)
+        let firstLink = try #require(publication.readingOrder.first)
+        let href = try #require(RelativeURL(path: firstLink.href))
+        let locator = Locator(
+            href: href,
+            mediaType: firstLink.mediaType ?? .xhtml,
+            locations: Locator.Locations(progression: 0.55, totalProgression: 0.55)
+        )
+
+        let received = LockedBox<[Locator]>([])
+        vm.onUserNavigation = { loc in received.mutate { $0.append(loc) } }
+
+        vm.didChangeLocation(locator)
+
+        #expect(received.value.count == 1)
+
+        // Position-write behavior unchanged: the debounced write still lands.
+        try await Task.sleep(for: .milliseconds(300))
+        let last = try await store.position(for: book.id)
+        #expect(last != nil)
+    }
+
     @Test("load() restores last locator from store")
     func loadRestoresLastLocator() async throws {
         let url = try aliceURL()
@@ -139,5 +241,30 @@ struct EPUBReaderViewModelTests {
         let restored = try #require(vm.latestLocator)
         let restoredHref = String(describing: restored.href)
         #expect(restoredHref.contains("chapter1.xhtml"))
+    }
+}
+
+/// Minimal thread-safe box so test closures can capture mutable state
+/// without tripping Swift 6 concurrency diagnostics. The VM is
+/// `@unchecked Sendable` and the closure is non-isolated, so the
+/// captured storage must be Sendable.
+private final class LockedBox<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: Value
+
+    init(_ value: Value) {
+        self._value = value
+    }
+
+    var value: Value {
+        lock.lock()
+        defer { lock.unlock() }
+        return _value
+    }
+
+    func mutate(_ body: (inout Value) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        body(&_value)
     }
 }

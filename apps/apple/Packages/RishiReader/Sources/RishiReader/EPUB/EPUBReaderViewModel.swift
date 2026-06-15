@@ -80,6 +80,12 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
         lastBoundaryHitTick &+= 1
     }
 
+    /// Fired only for USER-initiated locator changes (manual page
+    /// turns / chapter switches), never for programmatic auto-follow
+    /// navigation. The app layer wires this to stop stale read-aloud
+    /// (TTS) audio when the reader leaves the page being narrated.
+    public var onUserNavigation: ((Locator) -> Void)?
+
     private let positionStore: any PositionStore
     private let loader: any EPUBPublicationLoading
     private let debounceSeconds: Double
@@ -191,9 +197,19 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
     /// Called by the EPUBNavigatorDelegate (Wave 4 wiring) on every
     /// page turn / chapter switch. Updates `latestLocator` immediately
     /// and debounces a write through `PositionStore`.
-    public func didChangeLocation(_ locator: Locator) {
+    ///
+    /// `isProgrammatic` distinguishes a USER page-turn (default `false`)
+    /// from the read-aloud auto-follow navigation the coordinator drives
+    /// via `nav.go(to:)`. Position-write behavior is identical for both
+    /// cases; only ``onUserNavigation`` is suppressed for programmatic
+    /// changes so the auto-follow does not feed back and kill the audio
+    /// it is following.
+    public func didChangeLocation(_ locator: Locator, isProgrammatic: Bool = false) {
         latestLocator = locator
         schedulePositionWrite(for: locator)
+        if !isProgrammatic {
+            onUserNavigation?(locator)
+        }
     }
 
     /// Flushes any pending debounced write immediately. Call on view dismiss.

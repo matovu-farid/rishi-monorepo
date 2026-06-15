@@ -849,6 +849,13 @@ struct RootView: View {
             readAloudParagraph: currentReadAloudParagraph
         )
         .task {
+            // A manual page-turn / chapter switch leaves the narrated page, so
+            // stop stale read-aloud. The coordinator tags auto-follow
+            // navigations as programmatic, so this fires only on real user
+            // navigation and never feeds back into the view-follows-audio path.
+            epubVM.onUserNavigation = { _ in
+                Task { await stopReadAloud() }
+            }
             epubSyncBinding = EPUBReaderPositionSyncBinding(
                 viewModel: epubVM,
                 syncEngine: deps.syncEngine
