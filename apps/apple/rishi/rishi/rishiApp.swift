@@ -18,6 +18,7 @@ import UIKit
 @main
 struct rishiApp: App {
     @State private var deps = AppDependencies()
+    @State private var router = AppRouter()
 
     #if canImport(UIKit)
     @UIApplicationDelegateAdaptor(RishiAppDelegate.self) private var appDelegate
@@ -41,6 +42,7 @@ struct rishiApp: App {
                 .environment(\.rishiAuthService, deps.services?.authService)
                 .environment(\.appDependencies, deps)
                 .environment(\.macCommandRouter, deps.macCommandRouter)
+                .environment(router)
                 // Phase 19 plan 19-01 — drive the off-main bootstrap from
                 // the WindowGroup root. `.task` runs once when the root
                 // first appears; RootView's outer `if deps.services !=

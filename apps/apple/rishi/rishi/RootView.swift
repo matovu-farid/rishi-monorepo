@@ -31,11 +31,6 @@ import RishiUIKit
 import PDFKit
 #endif
 
-/// Navigation marker pushed onto the Library `NavigationStack` to show the
-/// conversations list on iPhone compact, where the bottom tab bar was removed.
-/// A value type with no payload — there is only ever one conversations list.
-private struct ConversationsRoute: Hashable {}
-
 /// Floating-card surface for the read-aloud controls. iOS 26 gets a native
 /// Liquid Glass effect; iOS 18 falls back to `.regularMaterial`. Both clip to
 /// the same rounded rectangle so the card shape is identical across versions.
@@ -56,6 +51,7 @@ private struct GlassCardBackground: ViewModifier {
 
 struct RootView: View {
 
+    @Environment(AppRouter.self) private var router
     @Environment(\.rishiAuthService) private var auth
     @Environment(\.appDependencies) private var deps
     /// Phase 19 plan 19-01 — LibraryViewModel is now part of the
@@ -101,16 +97,6 @@ struct RootView: View {
     /// to true exactly once after the probe resolves, whether or not a
     /// session existed.
     @State private var authProbeComplete = false
-
-    /// Phase 18 Plan 18-01 (F-P0-01) — per-tab navigation path. The reader
-    /// pushes onto this path so the system back chevron + edge-swipe-from-
-    /// left are always available. Replaces the prior `.fullScreenCover
-    /// (item: $openTarget)` modal that stripped both.
-    ///
-    /// Persisted through `@SceneStorage` via
-    /// `NavigationPath.CodableRepresentation` so a force-quit + relaunch
-    /// reopens the same reader pushed on top of the library.
-    @State private var libraryPath: NavigationPath = NavigationPath()
 
     /// Phase 20 perf — transient cache of already-resolved `Book` values
     /// keyed by `BookID`, populated on every push that originated from a
@@ -235,7 +221,7 @@ struct RootView: View {
                 libraryTab(
                     deps: deps,
                     user: user,
-                    onShowChats: { showConversations() }
+                    onShowChats: { router.showConversations() }
                 )
                 .sheet(item: $selectedConversation) { convo in
                     if let services = deps.services {
@@ -342,72 +328,26 @@ struct RootView: View {
         }
         // Phase 12 Plan 12-03 — every inbound URL (custom `rishi://` scheme
         // OR `https://rishi.fidexa.org/...` Universal Link) is funneled
-        // through `DeepLinkRouter` first. The router produces a typed
-        // `DeepLinkDestination`; we dispatch by case. Legacy file:// import
-        // taps from Files / share-sheet still fall through to the `.unknown`
-        // branch so book imports keep working.
+        // through `AppRouter`, which calls `DeepLinkRouter` internally.
+        // Legacy file:// import taps from Files / share-sheet fall through
+        // to the `.unknown` branch so book imports keep working.
         .onOpenURL { url in
-            // Phase 19 plan 19-01 — deps is non-optional inside realBody.
-            let destination = DeepLinkRouter().route(url)
-            switch destination {
-            case .authCallback:
-                // Phase 3's ASWebAuthenticationSession owns its own callback
-                // capture for Google OAuth, and SiwaPresenter handles SIWA
-                // natively. The Universal-Link variant of the callback is a
-                // v1.1 nice-to-have (e.g. mail-based magic link) — for v1
-                // we no-op rather than introduce a half-wired token consumer
-                // on RishiAuth.AuthService. Tracked in plan 12-06 follow-up.
-                break
-
-            case .shareRedeem(let token):
-                // Phase 12+ — sharing redeem flow is not yet wired into
-                // RishiCore. Silently no-op rather than crash so taps from
-                // future share emails don't dead-end on production builds.
-                _ = token
-
-            case .openBook(let bookId):
-                // KEEP: Phase 20 audit — `deps.bookStore.book` is actor-bound,
-                // so the DB lookup runs off MainActor through the `await`
-                // suspension. The previous `Task.detached` only moved where
-                // the continuation resumed; we still re-enter MainActor for
-                // the `@State` write, which is the canonical pattern.
+            // Wire the side-effect callbacks before dispatching so the
+            // router can populate bookHints and selectedConversation which
+            // are still owned by RootView.
+            router.onBookResolved = { book in
+                bookHints[book.id] = book
+            }
+            router.onConversationResolved = { convo in
+                selectedConversation = convo
+            }
+            router.onFileURL = { fileURL in
                 Task {
-                    let book: Book? = try? await deps.bookStore.book(bookId)
-                    guard let book else { return }
-                    bookHints[book.id] = book
-                    var p = NavigationPath()
-                    p.append(ReaderRoute.route(for: book))
-                    libraryPath = p
-                }
-
-            case .openConversation(let conversationId):
-                // KEEP: Phase 20 audit — same shape as `.openBook`. The
-                // conversation store is actor-bound, so the DB lookup is
-                // already off-main without an explicit `Task.detached` hop.
-                Task {
-                    let convo: Conversation? = try? await deps.conversationStore.conversation(conversationId)
-                    guard let convo else { return }
-                    selectedConversation = convo
-                }
-
-            case .unknown:
-                // Legacy path — `file://` imports from the Files app /
-                // share-sheet still arrive here, as do any URLs the router
-                // can't classify. Gating on `isFileURL` keeps the router
-                // honest (an unknown `https://` URL is NOT a book file).
-                if url.isFileURL {
-                    // KEEP: Phase 20 audit — `importBooks` is actor-bound, so
-                    // the file copy + cover extract + DB write run off the
-                    // MainActor caller via the `await` suspension. The
-                    // `Task.detached` wrapper only relocated the
-                    // continuation; dropping it preserves off-main execution
-                    // while restoring cancellation propagation.
-                    Task {
-                        _ = await deps.importCoordinator.importBooks([url])
-                        await libraryViewModel?.refresh()
-                    }
+                    _ = await deps.importCoordinator.importBooks([fileURL])
+                    await libraryViewModel?.refresh()
                 }
             }
+            router.handle(url: url, deps: deps)
         }
         // Phase 12 Plan 12-01 — drain the Mac command router whenever the
         // menu bar / ⌘-shortcut posts a new intent. We use `.task(id:)` so
@@ -419,106 +359,28 @@ struct RootView: View {
         // Phase 12 Plan 12-02 (MAC-05) — restore selected tab + reader
         // cover from `@SceneStorage` on first appearance. Guarded by
         // `sceneRestored` so a re-render of the body does not retrigger
-        // the bookStore lookup.
+        // the bookStore lookup. Wire the bookHints callback before restoring
+        // so the legacy-B path can populate the hint cache.
         .task {
             guard !sceneRestored else { return }
             sceneRestored = true
-            await restoreSceneState()
+            router.onBookResolved = { book in
+                bookHints[book.id] = book
+            }
+            await router.applyRestored(
+                tabRaw: selectedTabRaw,
+                openBookIdRaw: openBookIdRaw,
+                deps: deps
+            )
         }
-        // Persist the latest scene state on every visible change. We
-        // re-encode the whole struct on each delta so the storage cell
-        // always holds an up-to-date snapshot.
-        .onChange(of: libraryPath) { _, _ in persistSceneState() }
-    }
-
-    // MARK: - Scene restoration (Phase 12 Plan 12-02)
-
-    /// Reads the persisted scene snapshot back into live UI state.
-    ///
-    /// Phase 18 Plan 18-01 — three-step decode chain for forward + backward
-    /// compat across the F-P0-01 migration:
-    ///   1. Preferred: full NavigationPath round-trip via
-    ///      `NavigationPath.CodableRepresentation` (F-P0-05 step 2, native).
-    ///   2. Legacy A: JSON-encoded `ReaderRoute` (intermediate shape used
-    ///      mid-migration if a build with step-1 hadn't shipped yet).
-    ///   3. Legacy B: bare `UUID.uuidString` from the v0 cell — looked up
-    ///      via `deps.bookStore.book(_:)` to recover the format type and
-    ///      promoted to a path entry.
-    ///
-    /// Phase 19 Plan 19-11 (F-P0-05) — the four pure-value decodes are
-    /// now bundled into the `nonisolated`
-    /// `RishiSceneState.decodeSceneRestoreCells(...)` helper so they run
-    /// off the MainActor cold-launch path. The MainActor body below only
-    /// assigns @State and (for the legacy bare-UUID branch) wraps the
-    /// awaited DB hit in `Task.detached` so the continuation resumes
-    /// off-main before we re-enter MainActor for the final path write.
-    ///
-    /// Missing / deleted book or any decode failure leaves the library
-    /// tab visible with an empty path.
-    @MainActor
-    private func restoreSceneState() async {
-        // Bundle every Codable + UUID parse into one nonisolated call so
-        // the JSON-decode work doesn't run on MainActor during cold launch.
-        let decoded = RishiSceneState.decodeSceneRestoreCells(
-            tabRaw: selectedTabRaw,
-            openBookIdRaw: openBookIdRaw
-        )
-        // Preferred — full NavigationPath via CodableRepresentation.
-        if let path = decoded.path {
-            libraryPath = path
-            return
+        // Persist the latest scene state on every visible change. Re-encode
+        // the whole struct on each delta so the storage cell always holds an
+        // up-to-date snapshot.
+        .onChange(of: router.path) { _, _ in
+            let cells = router.persistCells()
+            selectedTabRaw = cells.tabRaw
+            openBookIdRaw  = cells.openBookIdRaw
         }
-        // Legacy A — JSON-encoded ReaderRoute (intermediate shape).
-        if let route = decoded.route {
-            var p = NavigationPath()
-            p.append(route)
-            libraryPath = p
-            return
-        }
-        // Legacy B — bare UUID.uuidString from the v0 cell.
-        if let legacyId = decoded.legacyId, let deps = deps {
-            // Phase 20 structured-concurrency audit: `bookStore.book` is
-            // actor-bound, so the DB lookup runs off MainActor through the
-            // `await` suspension point. The previous `Task.detached` only
-            // moved the continuation; the post-await assignment is a single
-            // `@State` write that is cheap on MainActor.
-            let book = try? await deps.bookStore.book(legacyId)
-            guard let book else { return }
-            bookHints[book.id] = book
-            var p = NavigationPath()
-            p.append(ReaderRoute.route(for: book))
-            libraryPath = p
-        }
-    }
-
-    /// Re-encodes the live UI state into both `@SceneStorage` cells.
-    /// `openBookIdRaw` now holds a `NavigationPath.CodableRepresentation`
-    /// JSON String — the cell key is preserved across the migration so
-    /// existing TestFlight installs upgrade in-place.
-    @MainActor
-    private func persistSceneState() {
-        // The tab cell is retained for storage-schema continuity (existing
-        // installs upgrade in-place) but the app no longer has a tab/sidebar
-        // selection — Library is the single home — so it always encodes
-        // `.library`. The reader path is the live restorable state.
-        let state = RishiSceneState(selectedTab: .library, openBookId: nil)
-        selectedTabRaw = state.encodeForStorage()
-        openBookIdRaw  = NavigationPath.encodeForStorage(libraryPath)
-    }
-
-    /// Reset the Library stack to root (used by Library / import / search
-    /// menu intents now that there is no tab/sidebar selection).
-    private func showLibraryRoot() {
-        libraryPath = NavigationPath()
-    }
-
-    /// Show the conversations list by resetting to the Library root and
-    /// pushing `ConversationsRoute` (used by the Library toolbar Chats button
-    /// and the Chats / New Conversation menu intents).
-    private func showConversations() {
-        var p = NavigationPath()
-        p.append(ConversationsRoute())
-        libraryPath = p
     }
 
     // MARK: - Mac command intent dispatch (Phase 12 Plan 12-01)
@@ -528,14 +390,14 @@ struct RootView: View {
     /// that live inside SwiftPM packages (RishiLibrary, RishiReader) so
     /// those packages do NOT have to import the rishi app target.
     private func consumePendingMacIntent() {
-        guard let router = commandRouter, let intent = router.pendingIntent else { return }
-        defer { router.consume() }
+        guard let cmdRouter = commandRouter, let intent = cmdRouter.pendingIntent else { return }
+        defer { cmdRouter.consume() }
 
         switch intent {
         case .importBook:
             // LibraryRootView observes `RishiCommand.importBook` and toggles
             // its document-picker sheet. Bring the Library root to front first.
-            showLibraryRoot()
+            router.showLibraryRoot()
             NotificationCenter.default.post(name: RishiCommand.importBook, object: nil)
 
         case .newConversation:
@@ -544,10 +406,10 @@ struct RootView: View {
             // ConversationsListView's "+" affordance own the actual creation
             // path. This keeps the menu command honest (no half-baked book
             // bindings) while still bringing the user to the right surface.
-            showConversations()
+            router.showConversations()
 
         case .focusSearch:
-            showLibraryRoot()
+            router.showLibraryRoot()
             NotificationCenter.default.post(name: RishiCommand.focusSearch, object: nil)
 
         case .fontIncrease:
@@ -577,8 +439,8 @@ struct RootView: View {
             // No tab/sidebar anymore — map the surface selection onto the
             // Library NavigationStack.
             switch tab {
-            case .library: showLibraryRoot()
-            case .chats:   showConversations()
+            case .library: router.showLibraryRoot()
+            case .chats:   router.showConversations()
             }
 
         case .pageForward:
@@ -612,13 +474,16 @@ struct RootView: View {
         // host-path initializer so the reader can push onto THIS stack and
         // the system back chevron + edge-swipe-from-left are always
         // available. Nested NavigationStacks crash iPad split-view.
-        NavigationStack(path: $libraryPath) {
+        // Use @Bindable to get a two-way Binding to the @Observable router's
+        // `path` property for the NavigationStack (Swift 6 Observation pattern).
+        let bindableRouter = Bindable(router)
+        NavigationStack(path: bindableRouter.path) {
             LibraryRootView(
-                path: $libraryPath,
+                path: bindableRouter.path,
                 importCoordinator: deps.importCoordinator,
                 onOpenBook: { book in
                     bookHints[book.id] = book
-                    libraryPath.append(ReaderRoute.route(for: book))
+                    router.path.append(ReaderRoute.route(for: book))
                 },
                 onShowSettings: { showSettings = true },
                 onShowChats: onShowChats,
@@ -632,7 +497,7 @@ struct RootView: View {
                     let successes = outcomes.compactMap(\.book)
                     guard successes.count == 1, let book = successes.first else { return }
                     bookHints[book.id] = book
-                    libraryPath.append(ReaderRoute.route(for: book))
+                    router.path.append(ReaderRoute.route(for: book))
                 }
             )
             .navigationDestination(for: ReaderRoute.self) { route in
@@ -700,7 +565,7 @@ struct RootView: View {
         case .unsupportedFormat(let bookId):
             NavigationLazyBook(bookId: bookId, hint: bookHints[bookId], deps: deps) { book in
                 EpubPlaceholderView(book: book) {
-                    if !libraryPath.isEmpty { libraryPath.removeLast() }
+                    if !router.path.isEmpty { router.path.removeLast() }
                 }
             }
         }
