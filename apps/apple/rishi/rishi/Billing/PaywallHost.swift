@@ -26,6 +26,6 @@ struct PaywallHost: View {
     }
 
     var body: some View {
-        PaywallView(viewModel: vm)
+        PaywallView(viewModel: vm, feature: feature.name, onDismiss: onDismiss)
     }
 }

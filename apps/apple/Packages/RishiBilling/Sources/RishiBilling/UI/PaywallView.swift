@@ -52,6 +52,10 @@ public struct PaywallView: View {
 
     private let mode: Mode
 
+    // Stored for the flag-OFF fallback path of the VM-driven init.
+    private let liveFeature: String
+    private let liveOnDismiss: () -> Void
+
     // VM-driven mode state. SwiftUI re-evaluates this view when the
     // observed VM publishes a change.
     @State private var sheetURL: IdentifiedURL?
@@ -60,8 +64,16 @@ public struct PaywallView: View {
 
     /// Wave-3 construction. Pulls products + drives subscribe / restore
     /// / manage through the supplied ``PaywallViewModel``.
-    public init(viewModel: PaywallViewModel) {
+    /// `feature` and `onDismiss` are forwarded to the flag-OFF fallback so
+    /// the neutral body names the real feature and the dismiss button works.
+    public init(
+        viewModel: PaywallViewModel,
+        feature: String = "Rishi Pro",
+        onDismiss: @escaping () -> Void = {}
+    ) {
         self.mode = .live(viewModel)
+        self.liveFeature = feature
+        self.liveOnDismiss = onDismiss
     }
 
     /// Phase-11 carry-over. Renders the neutral fallback body (no
@@ -79,6 +91,10 @@ public struct PaywallView: View {
             onSubscribe: onSubscribe,
             onDismiss: onDismiss
         )
+        // liveFeature / liveOnDismiss are unused for the legacy path but
+        // must be initialised to satisfy Swift's stored-property rules.
+        self.liveFeature = feature
+        self.liveOnDismiss = onDismiss
     }
 
     // MARK: - Body
@@ -100,10 +116,9 @@ public struct PaywallView: View {
         } else {
             // Flag OFF — show the neutral fallback. No forbidden steering
             // string (the old external billing URL copy is removed).
-            // The user sees the same hero glyph + "Rishi Pro" title but
-            // a neutralised body: subscriptions are unavailable until
-            // ASC product setup completes.
-            fallbackBody(feature: "Rishi Pro", onDismiss: {})
+            // Use the feature name and dismiss action supplied at construction
+            // so the sheet names the real feature and the dismiss button works.
+            fallbackBody(feature: liveFeature, onDismiss: liveOnDismiss)
         }
     }
 
