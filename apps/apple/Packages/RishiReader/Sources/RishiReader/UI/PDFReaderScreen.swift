@@ -97,15 +97,28 @@ public struct PDFReaderScreen: View {
         // the NavigationStack and is always reachable when chrome is
         // shown. The iOS edge-swipe-from-left always pops the reader,
         // regardless of chrome state, so the user can never be trapped.
+        // UI tests need the toolbar (Read Aloud button) reachable without relying
+        // on a tap-to-toggle; start chrome visible under the RISHI_UITEST launch
+        // flag. DEBUG + env-gated, so never in a release. Mirrors EPUBReaderScreen.
+        #if DEBUG
+        let uitestVisible = ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1"
+        #else
+        let uitestVisible = false
+        #endif
+        // Under RISHI_UITEST keep the chrome pinned (no 4s auto-hide) so the
+        // toolbar's Read Aloud button stays reachable for the whole test run.
+        let autoHide: Duration = uitestVisible ? .seconds(86_400) : .seconds(4)
         #if canImport(UIKit)
         return ReaderChromeController(
             accessibility: UIKitAccessibilityProvider(),
-            initiallyVisible: false
+            autoHideDelay: autoHide,
+            initiallyVisible: uitestVisible
         )
         #else
         return ReaderChromeController(
             accessibility: PreviewAccessibility(),
-            initiallyVisible: false
+            autoHideDelay: autoHide,
+            initiallyVisible: uitestVisible
         )
         #endif
     }()

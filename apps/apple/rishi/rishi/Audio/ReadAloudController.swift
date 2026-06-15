@@ -90,6 +90,19 @@ final class ReadAloudController {
             onPassageChange: { [weak self, weak vm] index in
                 vm?.currentReadAloudPassageIndex = index
                 self?.updateCurrentParagraph(for: index)
+            },
+            onParagraphsExhausted: { [weak self, weak vm] in
+                // End of the current page — load the next page with selectable
+                // text so narration continues across the page boundary (mirrors
+                // the EPUB cross-chapter handler above). `paragraphsForFollowingPage`
+                // also seeks the live page so the visible page and inline
+                // highlight follow. Refresh the stash so onPassageChange resolves
+                // the highlight against the new page's paragraphs (index resets
+                // to 0). Returns [] at end-of-document, which the bridge treats
+                // as "stop".
+                let next = await vm?.paragraphsForFollowingPage() ?? []
+                self?.paragraphs = next
+                return next
             }
         )
         #endif

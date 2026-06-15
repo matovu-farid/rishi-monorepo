@@ -49,7 +49,11 @@ struct PDFReaderDestination: View {
                 // KEEP: read-aloud start gated on entitlement check; MainActor store access
                 Task {
                     let level = await services.entitlementService.snapshot()
-                    guard level == .pro else {
+                    var entitled = level == .pro
+                    #if DEBUG
+                    if UITestBypass.isActive { entitled = true }
+                    #endif
+                    guard entitled else {
                         onRequestPaywall("Read Aloud")
                         return
                     }

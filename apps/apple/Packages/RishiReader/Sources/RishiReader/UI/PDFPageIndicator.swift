@@ -27,6 +27,9 @@ public struct PDFPageIndicator: View {
             )
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Page \(currentPage) of \(totalPages)")
+            // Stable id so UI tests can read the live page number and assert
+            // read-aloud crossed a page boundary (label carries "Page X of Y").
+            .accessibilityIdentifier("reader.pdf.pageIndicator")
     }
 }
 

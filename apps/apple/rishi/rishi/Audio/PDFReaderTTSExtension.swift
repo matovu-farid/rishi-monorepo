@@ -24,7 +24,6 @@
 
 import Foundation
 import PDFKit
-import RishiCore
 import RishiReader
 
 /// MainActor-isolated storage for the per-VM read-aloud index. Default-
@@ -80,13 +79,9 @@ extension PDFReaderViewModel {
     /// fallback (any paragraph >4096 chars).
     public nonisolated func paragraphsForReadAloud(document: PDFDocument, currentPageIndex: Int) -> [String] {
         guard let page = document.page(at: currentPageIndex) else { return [] }
-        // Prefer layout-aware paragraph boundaries (line geometry) so a page
-        // splits into real paragraphs instead of one page-sized chunk.
-        let blocks = PDFReadAloudParagraphs.extract(from: page)
-        guard !blocks.isEmpty else {
-            // Scanned / no-geometry pages: preserve prior blank-line chunking.
-            return ParagraphChunker.chunk(page.string ?? "")
-        }
-        return blocks.flatMap { ParagraphChunker.chunk($0) }
+        // Shared per-page extraction (layout-aware blocks, blank-line fallback
+        // for scanned pages) — the same source the page-boundary continuation
+        // (`PDFReaderViewModel.paragraphsForFollowingPage()`) uses.
+        return PDFReadAloudParagraphs.paragraphs(from: page)
     }
 }

@@ -153,7 +153,17 @@ public final class PDFReaderViewModel: @unchecked Sendable {
         self.totalPages = doc.pageCount
         self.outline = PDFOutlineExtractor.extract(from: doc)
 
-        if let last = try? await positionStore.position(for: book.id),
+        // Under RISHI_UITEST always open at page 1 (skip position restore) so
+        // read-aloud page-boundary UITests start deterministically with a real
+        // boundary ahead — the persisted position otherwise bleeds between test
+        // methods. DEBUG + env-gated, so never affects a release build.
+        #if DEBUG
+        let uitestFreshStart = ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1"
+        #else
+        let uitestFreshStart = false
+        #endif
+        if !uitestFreshStart,
+           let last = try? await positionStore.position(for: book.id),
            let restored = PDFPositionEncoder.decode(last.locator),
            restored >= 0, restored < totalPages {
             self.pageIndex = restored
@@ -175,6 +185,44 @@ public final class PDFReaderViewModel: @unchecked Sendable {
         guard let doc = document, newIndex >= 0, newIndex < doc.pageCount else { return }
         pageIndex = newIndex
         schedulePositionWrite(pageIndex: newIndex)
+    }
+
+    // MARK: - Read-aloud continuation
+
+    /// Paragraphs for the NEXT page with selectable text after the page
+    /// read-aloud is currently narrating, so playback continues across a page
+    /// boundary instead of halting at the last paragraph of the current page.
+    ///
+    /// Mirrors the EPUB reader's chapter-boundary continuation
+    /// (``EPUBReaderViewModel/paragraphsForFollowingResource()``): it advances
+    /// past any intervening pages that produce zero paragraphs (blank pages,
+    /// image-only separators) and moves the live ``pageIndex`` onto the new
+    /// page via ``seek(toPage:)`` so the visible page — and the inline
+    /// read-aloud highlight — follow narration. Returns `[]` at the end of the
+    /// document (no further non-empty page), which the read-aloud bridge
+    /// treats as "stop".
+    ///
+    /// ``pageIndex`` doubles as the narration cursor: each cross seeks the live
+    /// page onto the page being narrated, so the next exhaustion advances from
+    /// there. The page-turn mutation runs on the MainActor because ``pageIndex``
+    /// drives the @Observable SwiftUI surface and must not be written from a
+    /// background thread.
+    public func paragraphsForFollowingPage() async -> [String] {
+        guard let document else { return [] }
+        let count = document.pageCount
+        let current = await MainActor.run { self.pageIndex }
+        var next = current + 1
+        while next < count {
+            if let page = document.page(at: next) {
+                let paragraphs = PDFReadAloudParagraphs.paragraphs(from: page)
+                if !paragraphs.isEmpty {
+                    await MainActor.run { self.seek(toPage: next) }
+                    return paragraphs
+                }
+            }
+            next += 1
+        }
+        return []
     }
 
     /// Flushes any pending debounced write immediately. Call on view dismiss.

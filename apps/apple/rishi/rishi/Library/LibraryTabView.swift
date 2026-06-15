@@ -86,6 +86,15 @@ struct LibraryTabView: View {
                 async let sample = services.sampleBookInstaller.installIfNeeded(ownerId: user.id)
                 async let reader = services.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
                 _ = await (sample, reader)
+                #if DEBUG
+                // UI-test only: seed a text-dense PDF that stresses the
+                // read-aloud page-boundary extraction race (no-op unless
+                // RISHI_UITEST=1).
+                await UITestDensePDF.installIfNeeded(
+                    storage: services.bookFileStorage,
+                    ownerId: user.id
+                )
+                #endif
                 await libraryVM.refresh()
             }
         }

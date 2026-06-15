@@ -859,8 +859,24 @@ final class AppDependencies {
         // only. See UITestSupport.swift.
         #if DEBUG
         if UITestBypass.isActive {
-            chunkSource = FixtureTTSChunkSource()
-            Log.event("uitest.tts.source.swapped", level: .info)
+            if UITestBypass.latentCachedTTS,
+               let store = try? TTSAudioCacheStore(
+                   directory: FileManager.default.temporaryDirectory
+                       .appendingPathComponent("uitest-tts-\(UUID().uuidString)", isDirectory: true)
+               ) {
+                // Faithful repro of the production path: a latent fixture
+                // (simulated synthesis delay) behind a real cache, with a fresh
+                // per-launch cache dir so each paragraph's first play actually
+                // "synthesizes". Reproduces prewarm-vs-Next timing.
+                chunkSource = CachingTTSChunkSource(
+                    upstream: FixtureTTSChunkSource(synthDelay: UITestBypass.ttsSynthDelay),
+                    store: store
+                )
+                Log.event("uitest.tts.source.latent_cached", level: .info)
+            } else {
+                chunkSource = FixtureTTSChunkSource()
+                Log.event("uitest.tts.source.swapped", level: .info)
+            }
         }
         #endif
         // Phase 24 plan 24-03 — prewarm next 3-5 paragraphs through the
