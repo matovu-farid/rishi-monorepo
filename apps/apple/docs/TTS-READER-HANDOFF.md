@@ -11,10 +11,10 @@ some previously-deferred items.
 - **Read-aloud next/previous paragraph now works on device** (user confirmed).
 - Root cause was a **lock-ordering deadlock** in `AVAudioEngineAdapter`, fixed in
   commit `c8ff9b9a8`. See §2.
-- An **XCUITest that reproduces it on the simulator** was built (the real
-  `AVAudioEngine` path — no fake can hit the deadlock). It reaches the reader +
-  starts read-aloud but its FINAL assertion needs a 1-line selector fix (§3.1).
-- Two cleanup tasks remain (§3) + deferred items (§4).
+- The **XCUITest now passes and is stable** (`5b36fa8ee`) — it drives the real
+  `AVAudioEngine` on the simulator (no fake can hit the deadlock). The cleanup
+  tasks in §3 are DONE; remaining work is the deferred items in §4.
+- Debug breadcrumbs stripped (`2948b80d2`).
 
 ---
 
@@ -61,33 +61,38 @@ AVFoundation calls are internally thread-safe).
 
 ---
 
-## 3. REMAINING CLEANUP (small, do these first)
+## 3. CLEANUP — DONE (`2948b80d2`, `5b36fa8ee`)
 
-### 3.1 Finish the XCUITest (make it green = permanent regression guard)
-File: `apps/apple/rishi/rishiUITests/ReadAloudNextParagraphUITests.swift`
-(currently has ONE UNCOMMITTED diagnostic change — a hierarchy XCTAttachment).
+### 3.1 XCUITest — DONE & stable (`5b36fa8ee`)
+File: `apps/apple/rishi/rishiUITests/ReadAloudNextParagraphUITests.swift`.
+Passes on `name=iPhone 17` (ran green twice; ~23–31s). Three blockers were
+fixed — the handoff's "1-line selector fix" was wrong; it took real infra:
+- Assert on the `tts-pause`/`tts-play` TOGGLE button, not the `tts-status`
+  Text (XCUITest cannot read the Text's value).
+- Pin the reader chrome visible under `RISHI_UITEST` — it auto-hides after 4s,
+  removing the Read Aloud toolbar button mid-test
+  (`EPUBReaderScreen` passes a large `autoHideDelay`).
+- Hide Readium's WKWebView accessibility at the UIKit level under
+  `RISHI_UITEST` (`EPUBReaderView`: `navigator.view.accessibilityElementsHidden`).
+  A SwiftUI `.accessibilityHidden` does NOT reach the web-content process; its
+  Link/StaticText nodes abort XCUITest's app snapshot and make the SwiftUI
+  controls unqueryable.
+- The book opens on the cover (no paragraphs) so the test turns pages until a
+  session starts; a page-turn's user-nav callback is delayed and can stop the
+  fresh session, so the test drains each turn and restarts once if a straggler
+  slips through. Investigation (live os_log capture) CONFIRMED the app's
+  programmatic-nav suppression for auto-follow page turns works correctly — the
+  stop was a test-side race, not Bug 4.
+Run: `xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:rishiUITests/ReadAloudNextParagraphUITests`.
+(See `reference_apple_uitest_bypass` memory for the XCUITest gotchas.)
 
-The test launches with `RISHI_UITEST=1`, opens the sample book (alice), taps
-Read Aloud, and should assert playback returns to "Playing" after Next. It now
-gets all the way into the reader and starts read-aloud, but the FINAL step asserts
-on the `tts-status` `Text` element, which XCUITest does not expose as queryable.
-**Fix:** assert on the player BUTTONS instead — wait for `tts-play`/`tts-pause`
-or `tts-next-paragraph` to exist (the hierarchy DOES expose those), tap
-`tts-next-paragraph`, and assert the controls are still present / not stuck.
-The controls overlay IS appearing (hierarchy showed a bottom element at
-`{{0,726},{402,148}}`); only the status-Text selector fails.
-Run: `xcodebuild test -project apps/apple/rishi/rishi.xcodeproj -scheme rishi -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:rishiUITests/ReadAloudNextParagraphUITests -resultBundlePath /tmp/ui.xcresult` then
-`xcrun xcresulttool get test-results summary --path /tmp/ui.xcresult`.
-(See `reference_apple_uitest_bypass` memory for all the XCUITest gotchas already solved: scheme membership, coordinate taps, onboarding seed, chrome-visible, entitlement bypass, attachment-based diagnostics.)
+### 3.2 Strip debug breadcrumbs — DONE (`2948b80d2`)
+Removed the `tts.bridge.jump*`/`play_current`, `tts.engine.start.*`,
+`tts.adapter.reset.*` breadcrumbs (+ now-unused `RishiLogging` imports). Kept
+the deadlock fix/comment and the production `tts.engine.first_buffer`,
+`tts.stream.*`, `audio.session.mode*` events.
 
-### 3.2 Strip the debug breadcrumbs (now that root cause is found)
-Remove the `Log.event` debugging breadcrumbs added this session:
-- `tts.bridge.jump`, `tts.bridge.jump.clamped`, `tts.bridge.play_current` in `rishi/rishi/Audio/ReaderTTSBridge.swift`.
-- `tts.engine.start.enter/.running/.spawned` in `Packages/RishiAudio/.../TTS/TTSEngine.swift`.
-- `tts.adapter.reset.enter/.stopped/.done` in `Packages/RishiAudio/.../TTS/AudioEngineProtocol.swift` (KEEP the deadlock fix + comment; just drop the three Log lines).
-Keep the production `tts.engine.first_buffer`, `tts.stream.*`, `audio.session.mode*` events.
-
-### 3.3 The UI-test bypass scaffolding — decide whether to keep
+### 3.3 The UI-test bypass scaffolding — KEPT
 `rishi/rishi/UITestSupport.swift` (+ `Resources/uitest-tts.mp3`, the `RISHI_UITEST`
 wiring in `AppDependencies`, the `EPUBReaderScreen` chrome-visible flag, the
 `RootView` entitlement bypass) are all `#if DEBUG` + env-gated, so they never
@@ -99,7 +104,7 @@ ship. Keep them — they power the regression UI test. The `tts-status` /
 ## 4. PREVIOUSLY-DEFERRED WORK (not started)
 
 - **Bug 3 (double-play)** — RESOLVED BY ANALYSIS (not reachable: one visible reader; `RootView.startReadAloud` stops the old bridge first; `TTSEngine` actor serialises). No code change.
-- **Device-verify**: view-follows-audio across page boundaries (Bug 4); prev/repeat/next at page boundaries (Feature 5). User confirmed next/prev audio works now; re-confirm page-following.
+- **Device-verify**: view-follows-audio across page boundaries (Bug 4); prev/repeat/next at page boundaries (Feature 5). User confirmed next/prev audio works now; re-confirm page-following. NOTE: the §3.1 UI-test investigation (live os_log) showed the auto-follow programmatic-nav suppression works on the simulator — 4 consecutive `navigateToReadAloudParagraph` page turns each held `isProgrammaticNavigation` correctly and fired NO spurious `onUserNavigation`. So Bug 4 is largely de-risked; device re-confirm is the only open part.
 - **Task 6 — remove the bottom tab bar app-wide + restyle the reader with native SwiftUI / iOS 26 Liquid Glass.** User decision: remove the tab bar entirely (Library/Chats — they have other navigation). Propose the replacement navigation BEFORE deleting. The UI-test hierarchy confirmed the tab bar (`books.vertical`/`bubble.left.and.bubble.right`) still shows even in the reader. Design-heavy; needs device iteration.
 - **Auth bypass for real (non-test) dev use** — the user once asked for a general dev/test auth bypass to test on simulators. The `RISHI_UITEST` bypass partially covers this (signed-out + offline). If they want an interactive dev bypass, extend it.
 - **Hygiene:** known-flaky `CachingTTSChunkSourceTests "cancelled stream…"` (passes alone, fails in full RishiAudio run). Not caused by this work.
