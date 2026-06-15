@@ -883,15 +883,6 @@ final class AppDependencies {
         )
     }
 
-    /// Builds a fresh ``ConversationsListViewModel`` for the Conversations
-    /// tab.
-    func makeConversationsListViewModel() -> ConversationsListViewModel {
-        ConversationsListViewModel(
-            conversationStore: conversationStore,
-            messageStore: messageStore
-        )
-    }
-
     // MARK: - Audio stack (Phase 8)
 
     /// Bundle of audio services constructed together so the init body stays

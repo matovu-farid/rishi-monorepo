@@ -684,18 +684,12 @@ struct RootView: View {
     /// the list WITHOUT wrapping it in its own NavigationStack.
     @ViewBuilder
     private func conversationsDestination(deps: AppDependencies, user: User) -> some View {
-        let viewModel = deps.makeConversationsListViewModel()
-        ConversationsListView(
-            viewModel: viewModel,
-            userId: user.id,
-            onSelect: { convo in selectedConversation = convo }
-        )
-        .navigationTitle("Conversations")
-        .task {
-            deps.chatRefreshAdapter.setActive(viewModel: viewModel, userId: user.id)
-        }
-        .onDisappear {
-            deps.chatRefreshAdapter.clearActive()
+        if let services = deps.services {
+            ConversationsListHost(
+                services: services,
+                userId: user.id,
+                onSelect: { convo in selectedConversation = convo }
+            )
         }
     }
 
