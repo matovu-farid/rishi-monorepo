@@ -347,11 +347,13 @@ struct RootView: View {
         // restore, manage, 3.1.2 disclosure). deps.services is non-nil here
         // because realBody is only entered after the outer body guard passes.
         .sheet(item: $paywallFeature) { feature in
-            PaywallHost(
-                feature: feature,
-                services: deps.services!,
-                onDismiss: { paywallFeature = nil }
-            )
+            if let services = deps.services {
+                PaywallHost(
+                    feature: feature,
+                    services: services,
+                    onDismiss: { paywallFeature = nil }
+                )
+            }
         }
         // Phase 12 Plan 12-03 — every inbound URL (custom `rishi://` scheme
         // OR `https://rishi.fidexa.org/...` Universal Link) is funneled

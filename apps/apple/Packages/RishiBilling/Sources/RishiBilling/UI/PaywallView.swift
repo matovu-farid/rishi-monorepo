@@ -336,7 +336,7 @@ public struct PaywallView: View {
     /// anti-steering 3.1.1. Instead the body line ends with the neutral
     /// "Subscriptions are temporarily unavailable" copy, matching the
     /// dark-rollout intent until ASC product setup completes.
-    private func fallbackBody(feature: String, onDismiss: () -> Void) -> some View {
+    private func fallbackBody(feature: String, onDismiss: @escaping () -> Void) -> some View {
         VStack(spacing: RishiSpacing.l) {
             Image(systemName: "book.fill")
                 .resizable()
@@ -365,6 +365,10 @@ public struct PaywallView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, RishiSpacing.l)
                 .accessibilityIdentifier("billing-paywall-cta-fallback")
+
+            Button("Done") { onDismiss() }
+                .font(RishiTypography.body)
+                .accessibilityIdentifier("billing-paywall-fallback-dismiss")
         }
         .padding(RishiSpacing.l)
         .background(RishiColor.surfaceElevated.ignoresSafeArea())
