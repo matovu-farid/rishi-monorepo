@@ -172,11 +172,10 @@ struct RootView: View {
     // Conversations tab + chat sheet:
     //   - selectedConversation: row tap from Conversations tab → sheet with
     //     ChatPanelView bound to that conversation
-    //   - chatPanelForPresenter: viewmodel resolved asynchronously from
-    //     deps.chatPresenter.pendingPresentation (reader chat button or
-    //     "Ask about this" selection action)
+    //   - chatPresenter.pendingPresentation: presenter-driven flow (reader
+    //     chat button / "Ask about this") — VM is now owned by
+    //     ChatPanelHostView, not RootView state.
     @State private var selectedConversation: Conversation? = nil
-    @State private var chatPanelForPresenter: ChatPanelViewModel? = nil
 
     // MARK: - Phase 11 (Onboarding + Billing) state
     //
@@ -251,18 +250,12 @@ struct RootView: View {
                     onShowChats: { showConversations() }
                 )
                 .sheet(item: $selectedConversation) { convo in
-                    let vm = deps.makeChatPanelViewModel(conversation: convo)
-                    NavigationStack {
-                        ChatPanelHost(
-                            presenter: deps.voicePresenter,
-                            viewModel: vm,
-                            bookId: convo.bookId,
-                            initialQuote: nil,
+                    if let services = deps.services {
+                        ConversationChatHost(
+                            conversation: convo,
+                            services: services,
                             onFreeUserTap: {
                                 paywallFeature = PaywallFeature(name: "Voice Chat")
-                            },
-                            entitlementProvider: { [deps] in
-                                await deps.entitlementService.snapshot()
                             }
                         )
                     }
@@ -273,16 +266,20 @@ struct RootView: View {
                         set: { newValue in
                             if newValue == nil {
                                 deps.chatPresenter.clear()
-                                chatPanelForPresenter = nil
                             }
                         }
                     )
                 ) { pending in
-                    presenterChatSheet(
-                        pending: pending,
-                        deps: deps,
-                        userId: user.id
-                    )
+                    if let services = deps.services {
+                        ChatPanelHostView(
+                            pending: pending,
+                            userId: user.id,
+                            services: services,
+                            onFreeUserTap: {
+                                paywallFeature = PaywallFeature(name: "Voice Chat")
+                            }
+                        )
+                    }
                 }
             } else {
                 signedOutView
@@ -689,44 +686,6 @@ struct RootView: View {
                 services: services,
                 userId: user.id,
                 onSelect: { convo in selectedConversation = convo }
-            )
-        }
-    }
-
-    /// Resolves the chat-panel viewmodel asynchronously and presents the
-    /// ``ChatPanelView``. Used for the presenter-driven flow (reader chat
-    /// button + "Ask about this" selection action).
-    @ViewBuilder
-    private func presenterChatSheet(
-        pending: ChatPresenterImpl.Pending,
-        deps: AppDependencies,
-        userId: UserID
-    ) -> some View {
-        Group {
-            if let vm = chatPanelForPresenter {
-                NavigationStack {
-                    ChatPanelHost(
-                        presenter: deps.voicePresenter,
-                        viewModel: vm,
-                        bookId: pending.bookId,
-                        initialQuote: pending.initialQuote,
-                        onFreeUserTap: {
-                            paywallFeature = PaywallFeature(name: "Voice Chat")
-                        },
-                        entitlementProvider: { [deps] in
-                            await deps.entitlementService.snapshot()
-                        }
-                    )
-                }
-            } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .task(id: pending.id) {
-            chatPanelForPresenter = await deps.makeChatPanelViewModel(
-                userId: userId,
-                bookId: pending.bookId
             )
         }
     }

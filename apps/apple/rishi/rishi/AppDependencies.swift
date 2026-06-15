@@ -847,42 +847,6 @@ final class AppDependencies {
 
     var authServiceForEnvironment: any AuthService { services!.authService }
 
-    // MARK: - Chat factories (Phase 9)
-
-    /// Builds a ``ChatPanelViewModel`` for a `(userId, bookId)` pair by
-    /// resolving (or minting) the backing ``Conversation`` via
-    /// ``ConversationLookup``.
-    func makeChatPanelViewModel(
-        userId: UserID,
-        bookId: BookID?
-    ) async -> ChatPanelViewModel? {
-        do {
-            let convo = try await conversationLookup.findOrCreate(
-                userId: userId,
-                bookId: bookId
-            )
-            return ChatPanelViewModel(
-                conversation: convo,
-                bookId: bookId,
-                chatService: chatService,
-                messageStore: messageStore
-            )
-        } catch {
-            return nil
-        }
-    }
-
-    /// Builds a ``ChatPanelViewModel`` for a conversation chosen from the
-    /// Conversations tab.
-    func makeChatPanelViewModel(conversation: Conversation) -> ChatPanelViewModel {
-        ChatPanelViewModel(
-            conversation: conversation,
-            bookId: conversation.bookId,
-            chatService: chatService,
-            messageStore: messageStore
-        )
-    }
-
     // MARK: - Audio stack (Phase 8)
 
     /// Bundle of audio services constructed together so the init body stays
