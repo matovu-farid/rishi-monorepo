@@ -121,19 +121,10 @@ struct SignedInView: View {
     /// a reader and taps Read Aloud for the first time.
     @State private var readAloud: ReadAloudController? = nil
 
-    /// Phase 9 (Chat) — drives the .sheet(item:) for conversations-list tap.
-    @State private var selectedConversation: Conversation? = nil
-
-    /// BILL-04 — non-nil while the paywall sheet is presented.
-    @State private var paywallFeature: PaywallFeature? = nil
-
-    /// SYNC-08 — Settings sheet entry point.
-    @State private var showSettings = false
-
-    /// Phase 20 perf — transient hint cache keyed by BookID, populated on
-    /// every push that had the full Book in hand so NavigationLazyBook can
-    /// paint first frame without a fresh bookStore round-trip.
-    @State private var bookHints: [BookID: Book] = [:]
+    /// Shell presentation state: conversation sheet, paywall sheet, settings
+    /// sheet, and transient book-hint cache. Extracted into a viewModel so
+    /// these concerns are unit-testable independently of the view.
+    @State private var model = SignedInViewModel()
 
     /// SYNC-03 — bridges polling position changes to SyncEngine. Cleared on
     /// reader dismiss so the poll task cancels via deinit.
@@ -151,18 +142,19 @@ struct SignedInView: View {
     // MARK: - Body
 
     var body: some View {
+        @Bindable var model = model
         libraryTab(
             services: services,
             user: user,
             onShowChats: { router.showConversations() }
         )
         .environment(libraryVM)
-        .sheet(item: $selectedConversation) { convo in
+        .sheet(item: $model.selectedConversation) { convo in
             ConversationChatHost(
                 conversation: convo,
                 services: services,
                 onFreeUserTap: {
-                    paywallFeature = PaywallFeature(name: "Voice Chat")
+                    model.requestPaywall("Voice Chat")
                 }
             )
         }
@@ -181,25 +173,25 @@ struct SignedInView: View {
                 userId: user.id,
                 services: services,
                 onFreeUserTap: {
-                    paywallFeature = PaywallFeature(name: "Voice Chat")
+                    model.requestPaywall("Voice Chat")
                 }
             )
         }
         // BILL-04 — paywall sheet.
-        .sheet(item: $paywallFeature) { feature in
+        .sheet(item: $model.paywallFeature) { feature in
             PaywallHost(
                 feature: feature,
                 services: services,
-                onDismiss: { paywallFeature = nil }
+                onDismiss: { model.dismissPaywall() }
             )
         }
         // Phase 12 Plan 12-03 — deep-link dispatch via AppRouter.
         .onOpenURL { url in
             router.onBookResolved = { book in
-                bookHints[book.id] = book
+                model.hint(book)
             }
             router.onConversationResolved = { convo in
-                selectedConversation = convo
+                model.present(conversation: convo)
             }
             router.onFileURL = { [libraryVM] fileURL in
                 Task {
@@ -222,7 +214,7 @@ struct SignedInView: View {
             guard !sceneRestored else { return }
             sceneRestored = true
             router.onBookResolved = { book in
-                bookHints[book.id] = book
+                model.hint(book)
             }
             await router.applyRestored(
                 tabRaw: selectedTabRaw,
@@ -301,21 +293,22 @@ struct SignedInView: View {
         user: User,
         onShowChats: (() -> Void)? = nil
     ) -> some View {
+        @Bindable var model = model
         let bindableRouter = Bindable(router)
         NavigationStack(path: bindableRouter.path) {
             LibraryRootView(
                 path: bindableRouter.path,
                 importCoordinator: services.importCoordinator,
                 onOpenBook: { book in
-                    bookHints[book.id] = book
+                    model.hint(book)
                     router.path.append(ReaderRoute.route(for: book))
                 },
-                onShowSettings: { showSettings = true },
+                onShowSettings: { model.requestSettings() },
                 onShowChats: onShowChats,
                 onImported: { outcomes in
                     let successes = outcomes.compactMap(\.book)
                     guard successes.count == 1, let book = successes.first else { return }
-                    bookHints[book.id] = book
+                    model.hint(book)
                     router.path.append(ReaderRoute.route(for: book))
                 }
             )
@@ -333,7 +326,7 @@ struct SignedInView: View {
                 await libraryVM.refresh()
             }
         }
-        .sheet(isPresented: $showSettings) {
+        .sheet(isPresented: $model.showSettings) {
             SettingsSheet(
                 services: services,
                 user: user,
@@ -348,7 +341,7 @@ struct SignedInView: View {
         ConversationsListHost(
             services: services,
             userId: user.id,
-            onSelect: { convo in selectedConversation = convo }
+            onSelect: { convo in model.present(conversation: convo) }
         )
     }
 
@@ -360,15 +353,15 @@ struct SignedInView: View {
                                  userId: UserID) -> some View {
         switch route {
         case .pdf(let bookId):
-            NavigationLazyBook(bookId: bookId, hint: bookHints[bookId], bookStore: services.bookStore) { book in
+            NavigationLazyBook(bookId: bookId, hint: model.hint(for: bookId), bookStore: services.bookStore) { book in
                 pdfReaderDestination(book: book, services: services, userId: userId)
             }
         case .epub(let bookId):
-            NavigationLazyBook(bookId: bookId, hint: bookHints[bookId], bookStore: services.bookStore) { book in
+            NavigationLazyBook(bookId: bookId, hint: model.hint(for: bookId), bookStore: services.bookStore) { book in
                 epubReaderDestination(book: book, services: services, userId: userId)
             }
         case .unsupportedFormat(let bookId):
-            NavigationLazyBook(bookId: bookId, hint: bookHints[bookId], bookStore: services.bookStore) { book in
+            NavigationLazyBook(bookId: bookId, hint: model.hint(for: bookId), bookStore: services.bookStore) { book in
                 EpubPlaceholderView(book: book) {
                     if !router.path.isEmpty { router.path.removeLast() }
                 }
@@ -396,7 +389,7 @@ struct SignedInView: View {
                     Task {
                         let level = await services.entitlementService.snapshot()
                         guard level == .pro else {
-                            paywallFeature = PaywallFeature(name: "Read Aloud")
+                            model.requestPaywall("Read Aloud")
                             return
                         }
                         if readAloud == nil {
@@ -471,7 +464,7 @@ struct SignedInView: View {
                     if UITestBypass.isActive { entitled = true }
                     #endif
                     guard entitled else {
-                        paywallFeature = PaywallFeature(name: "Read Aloud")
+                        model.requestPaywall("Read Aloud")
                         return
                     }
                     if readAloud == nil {
