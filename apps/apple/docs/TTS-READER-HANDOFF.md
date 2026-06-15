@@ -186,7 +186,25 @@ blocked.
 
 ## 5. ALL remaining work
 
-### Read-aloud (TTS) — finish these
+### Read-aloud (TTS) — status
+- **DONE — AudioSessionPolicy extraction (§2)** — commit `9a04ac434`.
+- **DONE — Bug 2 (manual page-turn resets TTS)** — commit `9dd3d63b9`. User vs
+  programmatic locator-change discrimination (`onUserNavigation` +
+  coordinator `isProgrammaticNavigation` flag). DEVICE-VERIFY the auto-follow
+  feedback-loop edge: the flag assumes Readium fires `locationDidChange` during
+  `go(to:)`'s await; if it fires just after, auto-follow could be misclassified
+  as a user turn and stop the audio. If auto-follow regresses on device, switch
+  the coordinator flag reset to the next main-actor hop (or match on the target
+  locator) instead of resetting immediately after the await.
+- **RESOLVED BY ANALYSIS — Bug 3 (double-play).** Not reachable: NavigationStack
+  shows one reader at a time; `RootView.startReadAloud` stops the old bridge
+  before creating a new one; `TTSEngine` is an actor whose `start()` tears down
+  prior pipe/feed tasks. A fake-engine two-bridge test would only assert fake
+  behavior, so none added. Residual minor risk = actor reentrancy on rapid
+  double-start; close with a generation token in `TTSEngine.start()` only if it
+  ever manifests on device.
+
+### Original list (kept for reference)
 1. **AudioSessionPolicy extraction (§2)** — primary next task.
 2. **Device-verify the next/prev/repeat silence fix** (§4 / §2). Symptom was:
    pressing next/prev → audio stops, UI shows "Playing", no sound. Expected:
