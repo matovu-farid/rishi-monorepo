@@ -12,6 +12,7 @@
 
 import Foundation
 import Testing
+import PropertyBased
 import RishiAudio
 import RishiCore
 @testable import rishi
@@ -85,38 +86,39 @@ struct ReaderTTSBridgeNextPrevTests {
         await env.bridge.stop()
     }
 
-    /// PROPERTY-BASED navigation: for a page of N paragraphs, next() from index i
-    /// lands the engine START on passage id String(i+1) for every valid i, and
-    /// previous() from i lands String(i-1). Uses the `.holds` harness so only
-    /// explicit navigation moves the head (no auto-advance race).
-    @Test("next()/previous() land the engine START on the adjacent passage id (property-based)",
-          arguments: Array(0..<5))
-    func navigationLandsAdjacentPassage(startIndex: Int) async {
-        let pageCount = 6
-        let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .holds) })
-        await env.bridge.start(paragraphs: (0..<pageCount).map { "p\($0)" })
-        await waitUntil(timeout: 2) { startIds(env.engine) == ["0"] }
+    /// PROPERTY-BASED navigation (PropertyBased): for ANY generated page size and
+    /// valid start index, next() from i lands the engine START on passage id
+    /// String(i+1) and previous() from i+1 lands String(i). Uses the `.holds`
+    /// harness so only explicit navigation moves the head (no auto-advance race).
+    @Test("next()/previous() land the engine START on the adjacent passage id (property-based)")
+    func navigationLandsAdjacentPassage() async {
+        await propertyCheck(count: 12, input: Gen.int(in: 3 ... 10), Gen.int(in: 0 ... 8)) { pageCount, rawStart in
+            let startIndex = max(0, min(rawStart, pageCount - 2))
+            let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .holds) })
+            await env.bridge.start(paragraphs: (0..<pageCount).map { "p\($0)" })
+            await waitUntil(timeout: 2) { startIds(env.engine) == ["0"] }
 
-        // Walk forward to startIndex so the play head sits there.
-        for target in 1...max(startIndex, 1) where target <= startIndex {
+            // Walk forward to startIndex so the play head sits there.
+            for target in 1...max(startIndex, 1) where target <= startIndex {
+                await env.bridge.next()
+                await waitUntil(timeout: 2) { startIds(env.engine).last == String(target) }
+            }
+            #expect(startIds(env.engine).last == String(startIndex))
+
+            // next() from startIndex -> startIndex+1.
             await env.bridge.next()
-            await waitUntil(timeout: 2) { startIds(env.engine).last == String(target) }
+            await waitUntil(timeout: 2) { startIds(env.engine).last == String(startIndex + 1) }
+            #expect(startIds(env.engine).last == String(startIndex + 1),
+                    "next() from \(startIndex) must START passage \(startIndex + 1)")
+
+            // previous() from startIndex+1 -> startIndex.
+            await env.bridge.previous()
+            await waitUntil(timeout: 2) { startIds(env.engine).last == String(startIndex) }
+            #expect(startIds(env.engine).last == String(startIndex),
+                    "previous() from \(startIndex + 1) must START passage \(startIndex)")
+
+            await env.bridge.stop()
         }
-        #expect(startIds(env.engine).last == String(startIndex))
-
-        // next() from startIndex -> startIndex+1.
-        await env.bridge.next()
-        await waitUntil(timeout: 2) { startIds(env.engine).last == String(startIndex + 1) }
-        #expect(startIds(env.engine).last == String(startIndex + 1),
-                "next() from \(startIndex) must START passage \(startIndex + 1)")
-
-        // previous() from startIndex+1 -> startIndex.
-        await env.bridge.previous()
-        await waitUntil(timeout: 2) { startIds(env.engine).last == String(startIndex) }
-        #expect(startIds(env.engine).last == String(startIndex),
-                "previous() from \(startIndex + 1) must START passage \(startIndex)")
-
-        await env.bridge.stop()
     }
 
     @Test("repeatCurrent() replays the current paragraph from its start")

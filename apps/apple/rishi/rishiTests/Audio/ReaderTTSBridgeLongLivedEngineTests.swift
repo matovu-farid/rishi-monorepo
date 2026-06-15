@@ -30,6 +30,7 @@
 
 import Foundation
 import Testing
+import PropertyBased
 import RishiAudio
 import RishiCore
 @testable import rishi
@@ -81,56 +82,48 @@ struct ReaderTTSBridgeLongLivedEngineTests {
         calls.filter { $0 == kind }.count
     }
 
-    /// Property: for a switch STARTING FROM several different paragraph indices,
-    /// the long-lived engine must not be stopped / re-attached / (re)started.
-    /// Parameterised over many start indices per the user's property-based
-    /// requirement. We jump to `startIndex` first (an in-place switch on the
-    /// long-lived engine), snapshot the lifecycle-call counts, then fire next()
-    /// as a true mid-passage switch and assert the counts stay flat.
-    @Test("a passage switch keeps the AVAudioEngine running: no stop/attach/(re)start (property-based over start indices)",
-          arguments: Array(0..<5))
-    func switchDoesNotChurnTheEngine(startIndex: Int) async {
-        let env = makeEnv()
-        // A page large enough that startIndex and startIndex+1 are both valid.
-        let paragraphs = (0..<8).map { "p\($0)" }
+    /// Property (PropertyBased): for ANY page geometry — a generated page size
+    /// and a generated valid start index — a mid-passage next() switch must not
+    /// stop / re-attach / (re)start the long-lived engine; it only resets the
+    /// player node in place. Generated + shrunk rather than a fixed index set.
+    @Test("a passage switch keeps the AVAudioEngine running: no stop/attach/(re)start (property-based)")
+    func switchDoesNotChurnTheEngine() async {
+        await propertyCheck(count: 12, input: Gen.int(in: 3 ... 10), Gen.int(in: 0 ... 8)) { pageCount, rawStart in
+            // Clamp the generated start so both startIndex and startIndex+1 exist.
+            let startIndex = max(0, min(rawStart, pageCount - 2))
+            let env = makeEnv()
+            let paragraphs = (0..<pageCount).map { "p\($0)" }
 
-        await env.bridge.start(paragraphs: paragraphs)
-        // Wait until the engine has been brought up for passage 0 (attach+start
-        // happen exactly once for the whole session).
-        await waitUntil(timeout: 2) { count(env.audio.calls, .start) >= 1 }
+            await env.bridge.start(paragraphs: paragraphs)
+            // Engine brought up for passage 0 (attach+start happen exactly once).
+            await waitUntil(timeout: 2) { count(env.audio.calls, .start) >= 1 }
 
-        // Move to the start index for this case (also an in-place switch on the
-        // long-lived engine). Wait for that switch's resetNode to land before
-        // snapshotting (startIndex 0 is a no-op jump-to-current, so allow it).
-        let resetsBeforeJump = count(env.audio.calls, .resetNode)
-        await env.bridge.jump(to: startIndex)
-        // jump always replays via playCurrent -> engine.start() -> resetPlayerNode
-        // (engine already running), even for jump-to-current (startIndex 0).
-        await waitUntil(timeout: 2) { count(env.audio.calls, .resetNode) > resetsBeforeJump }
+            // Move to the start index (an in-place switch on the long-lived
+            // engine). jump always replays via engine.start() -> resetPlayerNode.
+            let resetsBeforeJump = count(env.audio.calls, .resetNode)
+            await env.bridge.jump(to: startIndex)
+            await waitUntil(timeout: 2) { count(env.audio.calls, .resetNode) > resetsBeforeJump }
 
-        let stopsAfterStart = count(env.audio.calls, .stop)
-        let attachesAfterStart = count(env.audio.calls, .attach)
-        let startsAfterStart = count(env.audio.calls, .start)
-        let resetsAfterStart = count(env.audio.calls, .resetNode)
+            let stopsAfterStart = count(env.audio.calls, .stop)
+            let attachesAfterStart = count(env.audio.calls, .attach)
+            let startsAfterStart = count(env.audio.calls, .start)
+            let resetsAfterStart = count(env.audio.calls, .resetNode)
 
-        // NEXT while the current passage is still in flight == a true mid-passage
-        // switch — the only condition under which the old stop/restart churn
-        // manifested. With the long-lived engine the player node is reset
-        // (recorded as .resetNode), never stop/start.
-        await env.bridge.next()
-        await waitUntil(timeout: 2) { count(env.audio.calls, .resetNode) > resetsAfterStart }
+            // NEXT while the passage is in flight == a true mid-passage switch.
+            await env.bridge.next()
+            await waitUntil(timeout: 2) { count(env.audio.calls, .resetNode) > resetsAfterStart }
 
-        let calls = env.audio.calls
-        #expect(count(calls, .stop) == stopsAfterStart,
-                "passage switch must NOT stop the AVAudioEngine; startIndex=\(startIndex) calls=\(calls)")
-        #expect(count(calls, .attach) == attachesAfterStart,
-                "passage switch must NOT re-attach the player node; startIndex=\(startIndex) calls=\(calls)")
-        #expect(count(calls, .start) == startsAfterStart,
-                "passage switch must NOT (re)start the AVAudioEngine; startIndex=\(startIndex) calls=\(calls)")
-        // Positive invariant: the long-lived engine path resets the node instead.
-        #expect(count(calls, .resetNode) >= 1,
-                "a switch must reset the player node in place; startIndex=\(startIndex) calls=\(calls)")
+            let calls = env.audio.calls
+            #expect(count(calls, .stop) == stopsAfterStart,
+                    "switch must NOT stop the engine; pageCount=\(pageCount) startIndex=\(startIndex) calls=\(calls)")
+            #expect(count(calls, .attach) == attachesAfterStart,
+                    "switch must NOT re-attach; pageCount=\(pageCount) startIndex=\(startIndex) calls=\(calls)")
+            #expect(count(calls, .start) == startsAfterStart,
+                    "switch must NOT (re)start the engine; pageCount=\(pageCount) startIndex=\(startIndex) calls=\(calls)")
+            #expect(count(calls, .resetNode) >= 1,
+                    "a switch must reset the player node in place; pageCount=\(pageCount) startIndex=\(startIndex) calls=\(calls)")
 
-        await env.bridge.stop()
+            await env.bridge.stop()
+        }
     }
 }
