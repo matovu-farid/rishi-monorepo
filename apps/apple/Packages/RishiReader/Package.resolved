@@ -1,5 +1,5 @@
 {
-  "originHash" : "f1f3204c2b21057ccbf600d8872f85becf104e160536fbad1f0840eed0a617f8",
+  "originHash" : "90e465352131259de346c914b1ed8d00a4603a9999424d11f2f3df74969c4fc6",
   "pins" : [
     {
       "identity" : "cryptoswift",
@@ -62,6 +62,15 @@
       "state" : {
         "revision" : "964c300fb0736699ce945c9edb56ecd62eba27a3",
         "version" : "0.16.0"
+      }
+    },
+    {
+      "identity" : "swift-property-based",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/x-sheep/swift-property-based.git",
+      "state" : {
+        "revision" : "edaffedcd90339544fefb2f045f3fa988d94c794",
+        "version" : "1.2.0"
       }
     },
     {

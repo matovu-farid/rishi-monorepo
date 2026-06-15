@@ -1,4 +1,5 @@
 import Testing
+import PropertyBased
 import Foundation
 import ReadiumShared
 import RishiCore
@@ -87,22 +88,26 @@ struct EPUBReadAloudStartIndexTests {
         try #require(allParagraphs.count >= 3,
                      "content resource must have several paragraphs to exercise the property; got \(allParagraphs.count)")
 
-        // Property: forall P, start paragraph == allParagraphs[startIndex(P)].
-        for step in stride(from: 0.0, through: 0.9, by: 0.1) {
-            let loc = try makeLocator(link: link, progression: step)
+        // Property (PropertyBased): forall progression P generated in [0, 1],
+        // paragraphsForReadAloud() returns the tail slice beginning at
+        // allParagraphs[startIndex(P)]. Generated + shrunk rather than a fixed
+        // stride, over the real publication. count kept modest because each
+        // iteration re-reads + re-chunks the resource.
+        await propertyCheck(count: 40, input: Gen.double(in: 0.0 ... 1.0)) { progression in
+            let loc = try makeLocator(link: link, progression: progression)
             vm.didChangeLocation(loc)
             let fromPage = await vm.paragraphsForReadAloud()
 
             let expectedStart = ParagraphChunker.startIndex(
-                forProgression: step,
+                forProgression: progression,
                 count: allParagraphs.count
             )
             let expectedParagraph = allParagraphs[expectedStart]
 
             #expect(fromPage.first == expectedParagraph,
-                    "progression \(step): read-aloud must start at paragraph index \(expectedStart) (\"\(expectedParagraph.prefix(40))...\"), got \"\(fromPage.first?.prefix(40) ?? "nil")...\"")
+                    "progression \(progression): read-aloud must start at paragraph index \(expectedStart) (\"\(expectedParagraph.prefix(40))...\"), got \"\(fromPage.first?.prefix(40) ?? "nil")...\"")
             #expect(fromPage.count == allParagraphs.count - expectedStart,
-                    "progression \(step): returned slice length must be the tail from \(expectedStart)")
+                    "progression \(progression): returned slice length must be the tail from \(expectedStart)")
         }
     }
 

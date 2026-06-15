@@ -16,6 +16,8 @@ let package = Package(
         .package(path: "../RishiTesting"), // test-only consumer
         // Spike A locked Readium 3.9 (PROVISIONAL PASS).
         .package(url: "https://github.com/readium/swift-toolkit.git", from: "3.9.0"),
+        // Test-only: property-based testing (generators + shrinking).
+        .package(url: "https://github.com/x-sheep/swift-property-based.git", from: "1.0.0"),
     ],
     targets: [
         .target(
@@ -43,6 +45,7 @@ let package = Package(
                 "RishiDB",
                 "RishiLibrary",
                 .product(name: "RishiTesting", package: "RishiTesting"),
+                .product(name: "PropertyBased", package: "swift-property-based"),
             ],
             resources: [
                 // TEST-ONLY fixtures. Do NOT move these to the shipped
