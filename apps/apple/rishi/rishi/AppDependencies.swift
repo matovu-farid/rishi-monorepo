@@ -765,76 +765,6 @@ final class AppDependencies {
     }
     #endif
 
-    // MARK: - Forwarder accessors (compat with pre-bootstrap call sites)
-    //
-    // These force-unwrap `services` and are ONLY safe to read AFTER
-    // `RootView.body` confirms `deps.services != nil`. The 50+ existing
-    // call sites in RootView/SettingsSheet/OnboardingHost reach into the
-    // composition root through these accessors; the outer gate guarantees
-    // the unwrap never traps from a UI rendering path.
-
-    var keychain: KeychainSessionStore { services!.keychain }
-    var tokenProvider: RishiAuthTokenProvider { services!.tokenProvider }
-    var workerClient: WorkerClient { services!.workerClient }
-    var siwaPresenter: SystemSiwaPresenter { services!.siwaPresenter }
-    var siwaCoordinator: SignInWithAppleCoordinator { services!.siwaCoordinator }
-    var authService: RishiAuthService { services!.authService }
-
-    var dbQueue: any DatabaseWriter { services!.dbQueue }
-    var bookStore: any BookStore { services!.bookStore }
-    var positionStore: any PositionStore { services!.positionStore }
-    var highlightStore: any HighlightStore { services!.highlightStore }
-    var bookFileStorage: BookFileStorage { services!.bookFileStorage }
-    var importCoordinator: ImportCoordinator { services!.importCoordinator }
-    var sampleBookInstaller: SampleBookInstaller { services!.sampleBookInstaller }
-    var sampleReaderInstaller: SampleReaderInstaller { services!.sampleReaderInstaller }
-    var readerSettingsStore: any ReaderSettingsStore { services!.readerSettingsStore }
-
-    var audioCoordinator: AudioSessionCoordinator { services!.audioCoordinator }
-    var ttsState: TTSPlaybackState { services!.ttsState }
-    var ttsEngine: TTSEngine { services!.ttsEngine }
-    var ttsSettingsStore: any TTSSettingsStore { services!.ttsSettingsStore }
-    var nowPlayingController: NowPlayingController { services!.nowPlayingController }
-    var ttsPrewarmer: TTSPrewarmer { services!.ttsPrewarmer }
-
-    var syncMetadataStore: GRDBSyncMetadataStore { services!.syncMetadataStore }
-    var syncQueue: SyncQueue { services!.syncQueue }
-    var syncStatus: SyncStatus { services!.syncStatus }
-    var bookUploader: BookUploader { services!.bookUploader }
-    var positionUploader: PositionUploader { services!.positionUploader }
-    var highlightUploader: HighlightUploader { services!.highlightUploader }
-    var remoteChangeFetcher: RemoteChangeFetcher { services!.remoteChangeFetcher }
-    var changeApplier: ChangeApplier { services!.changeApplier }
-    var syncEngine: SyncEngine { services!.syncEngine }
-    var backgroundTaskCoordinator: BackgroundTaskCoordinator { services!.backgroundTaskCoordinator }
-    var apnsDeviceRegistrar: APNsDeviceRegistrar { services!.apnsDeviceRegistrar }
-    var chatRefreshAdapter: AppChatRefreshAdapter { services!.chatRefreshAdapter }
-
-    var conversationStore: any ConversationStore { services!.conversationStore }
-    var messageStore: any MessageStore { services!.messageStore }
-    var conversationLookup: ConversationLookup { services!.conversationLookup }
-    var voiceDirtyAdapter: AppVoiceDirtyAdapter { services!.voiceDirtyAdapter }
-    var chatService: RishiChatService { services!.chatService }
-    var chatPresenter: ChatPresenterImpl { services!.chatPresenter }
-    var voicePresenter: VoiceSessionPresenter { services!.voicePresenter }
-
-    var entitlementService: EntitlementService { services!.entitlementService }
-    var manageSubscriptionPresenter: ManageSubscriptionPresenter { services!.manageSubscriptionPresenter }
-    var storeKitProductService: StoreKitProductService { services!.storeKitProductService }
-    var purchaseService: PurchaseService { services!.purchaseService }
-    var transactionListener: TransactionListener { services!.transactionListener }
-    var entitlementReconciler: EntitlementReconciler { services!.entitlementReconciler }
-    var readerAppEntitlementFlag: ReaderAppEntitlementFlag { services!.readerAppEntitlementFlag }
-    var restoreService: RestoreService { services!.restoreService }
-    var workerReceiptVerifier: any ReceiptVerifier { services!.workerReceiptVerifier }
-    var telemetryStore: any TelemetryStore { services!.telemetryStore }
-    var footerDetectionStore: any FooterDetectionStore { services!.footerDetectionStore }
-    var onboardingState: any OnboardingState { services!.onboardingState }
-    var onboardingCoordinator: OnboardingCoordinator { services!.onboardingCoordinator }
-    var readerDefaults: AppReaderDefaults { services!.readerDefaults }
-
-    var authServiceForEnvironment: any AuthService { services!.authService }
-
     // MARK: - Audio stack (Phase 8)
 
     /// Bundle of audio services constructed together so the init body stays
@@ -962,60 +892,6 @@ final class AppDependencies {
         )
     }
 
-    // MARK: - Settings factory (Phase 11)
-
-    /// Builds the `RishiSettings.SettingsScreen` for the current user,
-    /// wiring every dependency through.
-    @MainActor
-    func makeSettingsScreen(
-        user: User,
-        audioInitial: TTSSettings,
-        onDismiss: @escaping () -> Void,
-        onSignedOut: @escaping () -> Void,
-        onAccountDeleted: @escaping () -> Void
-    ) -> SettingsScreen {
-        let defaults = self.readerDefaults
-        let auth = self.authService
-        let presenter = self.manageSubscriptionPresenter
-        let sync = self.syncEngine
-        return SettingsScreen(
-            user: user,
-            readerTheme: Binding(
-                get: { defaults.theme },
-                set: { defaults.theme = $0 }
-            ),
-            readerFontFamily: Binding(
-                get: { defaults.fontFamily },
-                set: { defaults.fontFamily = $0 }
-            ),
-            audioUserId: user.id,
-            audioInitial: audioInitial,
-            audioStore: ttsSettingsStore,
-            onAudioChange: { _ in },
-            syncStatus: syncStatus,
-            // KEEP: Settings "Sync now" tap → syncEngine actor await; no main IO.
-            onSyncNow: { Task { await sync.syncNow() } },
-            telemetryStore: telemetryStore,
-            footerDetectionStore: footerDetectionStore,
-            onSignOut: {
-                try? await auth.signOut()
-                await MainActor.run { onSignedOut() }
-            },
-            onDelete: {
-                try await auth.deleteAccount()
-            },
-            onDeleted: onAccountDeleted,
-            onManageSubscription: {
-                // KEEP: presenter.present() drives StoreKit's
-                // ManageSubscriptionsView which is a @MainActor sheet —
-                // explicit isolation is required for the SwiftUI surface.
-                Task { @MainActor in
-                    await presenter.present()
-                }
-            },
-            onDismiss: onDismiss
-        )
-    }
 }
 
 // MARK: - BootstrappedServices

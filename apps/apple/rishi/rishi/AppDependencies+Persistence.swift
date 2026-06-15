@@ -1,0 +1,20 @@
+import Foundation
+import RishiDB
+import RishiLibrary
+import RishiReader
+import RishiSearch
+import GRDB
+
+// MARK: - Persistence / library forwarder accessors
+
+extension AppDependencies {
+    var dbQueue: any DatabaseWriter { services!.dbQueue }
+    var bookStore: any BookStore { services!.bookStore }
+    var positionStore: any PositionStore { services!.positionStore }
+    var highlightStore: any HighlightStore { services!.highlightStore }
+    var bookFileStorage: BookFileStorage { services!.bookFileStorage }
+    var importCoordinator: ImportCoordinator { services!.importCoordinator }
+    var sampleBookInstaller: SampleBookInstaller { services!.sampleBookInstaller }
+    var sampleReaderInstaller: SampleReaderInstaller { services!.sampleReaderInstaller }
+    var readerSettingsStore: any ReaderSettingsStore { services!.readerSettingsStore }
+}
