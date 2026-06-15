@@ -161,6 +161,143 @@ final class ReadAloudNextParagraphUITests: XCTestCase {
         )
     }
 
+    /// Regression guard for the PAGE-BOUNDARY halt (Bug 4): read-aloud
+    /// auto/next-advances fine WITHIN a Readium page, but when an advance moves
+    /// the highlight onto a paragraph that is OFF the current page, the reader
+    /// programmatically animates to the next page
+    /// (`EPUBNavigatorCoordinator.navigateToReadAloudParagraph` ->
+    /// `nav.go(to:, animated:true)`). That animated nav delivers a DELAYED
+    /// `locationDidChange`. The coordinator resets `isProgrammaticNavigation`
+    /// synchronously the instant `go(to:)` returns, so the late callback is
+    /// misread as a USER navigation and fires `onUserNavigation -> stopReadAloud`.
+    /// Device symptom (user-confirmed): the new page's first paragraph
+    /// highlights and starts playing, then HALTS a moment later.
+    ///
+    /// Read-aloud paragraphs span the whole chapter (~34 for alice ch.1), so
+    /// pressing Next repeatedly keeps advancing within one resource and is
+    /// guaranteed to eventually step onto an off-page paragraph — triggering
+    /// the programmatic page turn. After EACH Next we require playback to
+    /// return to Playing AND to STAY Playing through a short hold: a
+    /// page-crossing Next that halts will lose "tts-pause" when the delayed
+    /// callback lands and never get it back (the session is stopped, not
+    /// merely loading the next passage). A transient auto-advance blip is
+    /// tolerated because the second wait re-checks for up to 6s.
+    @MainActor
+    func testCrossingPageBoundaryKeepsPlaying() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["RISHI_UITEST"] = "1"
+        app.launch()
+
+        let (readAloud, toggle) = startPlayingSession(app)
+        _ = toggle
+
+        // Confirm we are Playing on the first passage before we begin crossing.
+        let pause = app.descendants(matching: .any)
+            .matching(identifier: "tts-pause").firstMatch
+        XCTAssertTrue(
+            pause.waitForExistence(timeout: 25),
+            "Session did not reach Playing before the page-boundary sweep."
+        )
+
+        let next = app.descendants(matching: .any)
+            .matching(identifier: "tts-next-paragraph").firstMatch
+        XCTAssertTrue(next.waitForExistence(timeout: 5), "Next-paragraph button missing.")
+
+        // Step through enough paragraphs to cross at least one page boundary.
+        // 12 presses from near the chapter start clears a phone page (which
+        // holds only a handful of paragraphs) while staying within the ~34
+        // paragraphs of the resource.
+        for press in 1...12 {
+            robustTap(next)
+
+            // The switch flips to Loading ("tts-play"); let it begin so we
+            // don't observe the stale pre-switch "tts-pause".
+            usleep(800_000)
+
+            XCTAssertTrue(
+                pause.waitForExistence(timeout: 15),
+                "After Next #\(press), playback never returned to Playing "
+                + "(\"tts-pause\" missing). If this is the page-crossing press, "
+                + "the new page's paragraph never started — the delayed "
+                + "page-turn navigation stopped read-aloud."
+            )
+
+            // Let any DELAYED locationDidChange from a programmatic page turn
+            // land. If this Next crossed a page boundary on the buggy build,
+            // the late callback fires onUserNavigation -> stopReadAloud here
+            // and tears the session down.
+            usleep(2_000_000)
+
+            // Re-check with a short wait so a transient auto-advance Loading
+            // blip is tolerated, but a stopped session is not.
+            XCTAssertTrue(
+                pause.waitForExistence(timeout: 6),
+                "After Next #\(press), playback STARTED then HALTED — "
+                + "\"tts-pause\" disappeared and did not return. This is the "
+                + "page-boundary stop: the programmatic page turn's delayed "
+                + "locationDidChange was misread as a user navigation and "
+                + "fired stopReadAloud. The Read Aloud button still present: "
+                + "\(readAloud.exists)."
+            )
+        }
+    }
+
+    /// Drives Library -> open the sample book -> start a Read Aloud session and
+    /// returns once playback has begun (a "tts-play"/"tts-pause" toggle exists).
+    /// Mirrors the proven bootstrap in `testNextParagraphReturnsToPlaying`
+    /// (advance past the cover, drain the page-turn callback, self-heal one
+    /// straggler stop) so both tests share the same reliable starting point.
+    /// Returns the Read Aloud toolbar button and the play/pause toggle.
+    @MainActor
+    private func startPlayingSession(_ app: XCUIApplication) -> (XCUIElement, XCUIElement) {
+        let bookCell = app.descendants(matching: .any)
+            .matching(identifier: "library-book-cell")
+            .firstMatch
+        XCTAssertTrue(
+            bookCell.waitForExistence(timeout: 30),
+            "Library never showed a book cell — auth bypass or sample-book seed failed."
+        )
+        robustTap(bookCell)
+
+        let readAloud = app.descendants(matching: .any)
+            .matching(identifier: "reader.toolbar.readAloud")
+            .firstMatch
+        XCTAssertTrue(
+            readAloud.waitForExistence(timeout: 15),
+            "Read Aloud toolbar button never appeared — reader did not open."
+        )
+
+        let toggle = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier == 'tts-play' OR identifier == 'tts-pause'")
+        ).firstMatch
+
+        var sessionStarted = false
+        for _ in 0..<8 {
+            robustTap(readAloud)
+            if toggle.waitForExistence(timeout: 4) {
+                sessionStarted = true
+                break
+            }
+            turnPageForward(app)
+            usleep(1_500_000)
+        }
+        XCTAssertTrue(
+            sessionStarted,
+            "Read Aloud never started a session on any page."
+        )
+
+        usleep(2_500_000)
+        if !toggle.exists {
+            robustTap(readAloud)
+            XCTAssertTrue(
+                toggle.waitForExistence(timeout: 6),
+                "Read-aloud could not be restarted on the content page after a "
+                + "straggler page-turn navigation stopped the first session."
+            )
+        }
+        return (readAloud, toggle)
+    }
+
     /// Always taps by center coordinate. SwiftUI buttons in scroll views /
     /// overlays frequently report `isHittable=false` (or flap between true and
     /// false), and `element.tap()` then aborts the whole test ("Failed to not
