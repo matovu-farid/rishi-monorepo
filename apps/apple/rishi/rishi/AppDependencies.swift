@@ -972,7 +972,7 @@ struct BootstrappedServices: @unchecked Sendable {
     // Settings + onboarding
     let telemetryStore: any TelemetryStore
     /// Phase 27-06 — persisted toggle store for the "Skip page footers when
-    /// indexing" setting. Read by `makeSettingsScreen` to bind the UI; the
+    /// indexing" setting. Read by `SettingsSheet` to bind the UI; the
     /// PdfTextExtractor reads its value SYNCHRONOUSLY at hook-construction
     /// time (see Phase 27-06 wire-up note), so runtime toggle changes do
     /// not retroactively reindex.

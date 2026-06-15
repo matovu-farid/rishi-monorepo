@@ -24,7 +24,7 @@ import UserNotifications
 #endif
 
 /// Hosts `OnboardingFlowView` and forwards its stage closures into the
-/// existing app services owned by `AppDependencies`.
+/// existing app services.
 ///
 /// The signIn stage's `onSignIn` closure is fire-and-forget: the actual SIWA
 /// surface comes up via the signed-out path in `RootView`. Once
@@ -32,21 +32,21 @@ import UserNotifications
 /// advance.
 struct OnboardingHost: View {
 
-    let dependencies: AppDependencies
+    let services: BootstrappedServices
     let onCompleted: () -> Void
 
     var body: some View {
         OnboardingFlowView(
-            coordinator: dependencies.onboardingCoordinator,
-            onSignIn: { [dependencies] in
+            coordinator: services.onboardingCoordinator,
+            onSignIn: { [services] in
                 // Refresh the entitlement cache once the user is signed in so
-                // the Settings → Subscription section + paywall reflect
+                // the Settings -> Subscription section + paywall reflect
                 // accurate state on first reach.
-                _ = await dependencies.entitlementService.refresh()
+                _ = await services.entitlementService.refresh()
             },
-            onUseSample: { [dependencies] in
-                guard let userId = await dependencies.authService.currentUser?.id else { return }
-                _ = await dependencies.sampleBookInstaller.installIfNeeded(ownerId: userId)
+            onUseSample: { [services] in
+                guard let userId = await services.authService.currentUser?.id else { return }
+                _ = await services.sampleBookInstaller.installIfNeeded(ownerId: userId)
             },
             onImport: {
                 // The user can use the Library import button after onboarding;

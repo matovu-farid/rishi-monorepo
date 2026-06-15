@@ -6,8 +6,8 @@
 //  the full `RishiSettings.SettingsScreen` (Account / Subscription /
 //  Reader Defaults / Audio / Sync / Privacy / About sections).
 //
-//  Composition lives in `AppDependencies.makeSettingsScreen(...)` so this
-//  view only owns:
+//  Receives a `BootstrappedServices` value and constructs `SettingsScreen`
+//  inline. Owns:
 //    1. Loading the initial `TTSSettings` for the Audio section picker.
 //    2. Dismiss + sign-out + delete-account dispatch back to RootView.
 //
@@ -21,7 +21,7 @@ import RishiSettings
 /// toolbar gear button.
 struct SettingsSheet: View {
 
-    let dependencies: AppDependencies
+    let services: BootstrappedServices
     let user: User
     let onSignedOut: () -> Void
 
@@ -32,18 +32,52 @@ struct SettingsSheet: View {
     var body: some View {
         Group {
             if audioLoaded {
-                dependencies.makeSettingsScreen(
+                let defaults = services.readerDefaults
+                let auth = services.authService
+                let presenter = services.manageSubscriptionPresenter
+                let sync = services.syncEngine
+                SettingsScreen(
                     user: user,
+                    readerTheme: Binding(
+                        get: { defaults.theme },
+                        set: { defaults.theme = $0 }
+                    ),
+                    readerFontFamily: Binding(
+                        get: { defaults.fontFamily },
+                        set: { defaults.fontFamily = $0 }
+                    ),
+                    audioUserId: user.id,
                     audioInitial: initialAudio,
-                    onDismiss: { dismiss() },
-                    onSignedOut: {
+                    audioStore: services.ttsSettingsStore,
+                    onAudioChange: { _ in },
+                    syncStatus: services.syncStatus,
+                    // KEEP: Settings "Sync now" tap -> syncEngine actor await; no main IO.
+                    onSyncNow: { Task { await sync.syncNow() } },
+                    telemetryStore: services.telemetryStore,
+                    footerDetectionStore: services.footerDetectionStore,
+                    onSignOut: {
+                        try? await auth.signOut()
+                        await MainActor.run {
+                            dismiss()
+                            onSignedOut()
+                        }
+                    },
+                    onDelete: {
+                        try await auth.deleteAccount()
+                    },
+                    onDeleted: {
                         dismiss()
                         onSignedOut()
                     },
-                    onAccountDeleted: {
-                        dismiss()
-                        onSignedOut()
-                    }
+                    onManageSubscription: {
+                        // KEEP: presenter.present() drives StoreKit's
+                        // ManageSubscriptionsView which is a @MainActor sheet --
+                        // explicit isolation is required for the SwiftUI surface.
+                        Task { @MainActor in
+                            await presenter.present()
+                        }
+                    },
+                    onDismiss: { dismiss() }
                 )
             } else {
                 ProgressView()
@@ -54,7 +88,7 @@ struct SettingsSheet: View {
             // Load once per sheet presentation; the AudioSection picker reads
             // `initialAudio` as its seed value, then persists subsequent
             // changes through `audioStore` itself.
-            initialAudio = await dependencies.ttsSettingsStore.load(userId: user.id)
+            initialAudio = await services.ttsSettingsStore.load(userId: user.id)
             audioLoaded = true
         }
     }

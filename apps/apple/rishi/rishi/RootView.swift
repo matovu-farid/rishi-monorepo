@@ -99,11 +99,12 @@ struct RootView: View {
                 // signed-in sheets, read-aloud controls, deep-link
                 // wiring, scene restore, and Mac-command dispatch.
                 SignedInView(
-                    deps: deps,
+                    services: deps.services!,
                     user: user,
                     selectedTabRaw: $selectedTabRaw,
                     openBookIdRaw: $openBookIdRaw,
-                    onSignedOut: { currentUser = nil }
+                    onSignedOut: { currentUser = nil },
+                    onCacheUserId: { [deps] id in deps.cachedUserId = id }
                 )
             } else {
                 signedOutView
@@ -150,14 +151,14 @@ struct RootView: View {
         #if canImport(UIKit)
         .fullScreenCover(isPresented: $showOnboarding) {
             OnboardingHost(
-                dependencies: deps,
+                services: deps.services!,
                 onCompleted: { showOnboarding = false }
             )
         }
         #else
         .sheet(isPresented: $showOnboarding) {
             OnboardingHost(
-                dependencies: deps,
+                services: deps.services!,
                 onCompleted: { showOnboarding = false }
             )
         }

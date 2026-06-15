@@ -99,11 +99,11 @@ final class ReaderViewModelCache {
 /// Phase 18 Plan 18-01 — async-resolve a `Book` from a `BookID` for use
 /// inside a `NavigationStack` destination. The path itself only carries
 /// `ReaderRoute` (Codable + BookID) so scene restoration stays primitive.
-/// This helper performs the `deps.bookStore.book(_:)` lookup on appear,
+/// This helper performs the `bookStore.book(_:)` lookup on appear,
 /// rendering a `ProgressView` until the book resolves.
 struct NavigationLazyBook<Content: View>: View {
     let bookId: BookID
-    let deps: AppDependencies
+    let bookStore: any BookStore
     let content: (Book) -> Content
 
     @State private var book: Book?
@@ -116,10 +116,10 @@ struct NavigationLazyBook<Content: View>: View {
     /// path), so existing behaviour is preserved.
     init(bookId: BookID,
          hint: Book? = nil,
-         deps: AppDependencies,
+         bookStore: any BookStore,
          @ViewBuilder content: @escaping (Book) -> Content) {
         self.bookId = bookId
-        self.deps = deps
+        self.bookStore = bookStore
         self.content = content
         self._book = State(initialValue: hint)
     }
@@ -135,7 +135,7 @@ struct NavigationLazyBook<Content: View>: View {
         }
         .task(id: bookId) {
             if book == nil {
-                book = try? await deps.bookStore.book(bookId)
+                book = try? await bookStore.book(bookId)
             }
         }
     }
@@ -171,32 +171,36 @@ struct EpubPlaceholderView: View {
 
 struct SignedInView: View {
 
-    let deps: AppDependencies
+    let services: BootstrappedServices
     let user: User
     /// Bindings to the @SceneStorage cells owned by RootView.
     @Binding var selectedTabRaw: String
     @Binding var openBookIdRaw: String
     /// Called when the user signs out from the Settings sheet.
     let onSignedOut: () -> Void
+    /// Called with the resolved user id so the composition root can update
+    /// its cached user id seam (AppDependencies.cachedUserId) without
+    /// SignedInView referencing AppDependencies directly. Fired inside the
+    /// `.task(id: user.id)` attached to the library NavigationStack.
+    let onCacheUserId: (UserID) -> Void
 
     @Environment(AppRouter.self) private var router
     @Environment(\.macCommandRouter) private var commandRouter
 
     init(
-        deps: AppDependencies,
+        services: BootstrappedServices,
         user: User,
         selectedTabRaw: Binding<String>,
         openBookIdRaw: Binding<String>,
-        onSignedOut: @escaping () -> Void
+        onSignedOut: @escaping () -> Void,
+        onCacheUserId: @escaping (UserID) -> Void
     ) {
-        self.deps = deps
+        self.services = services
         self.user = user
         self._selectedTabRaw = selectedTabRaw
         self._openBookIdRaw = openBookIdRaw
         self.onSignedOut = onSignedOut
-        // services is guaranteed non-nil here: RootView only constructs
-        // SignedInView inside the `if deps.services != nil` / realBody gate.
-        let services = deps.services!
+        self.onCacheUserId = onCacheUserId
         let userId = user.id
         self._libraryVM = State(initialValue: LibraryViewModel(
             bookStore: services.bookStore,
@@ -248,52 +252,46 @@ struct SignedInView: View {
 
     var body: some View {
         libraryTab(
-            deps: deps,
+            services: services,
             user: user,
             onShowChats: { router.showConversations() }
         )
         .environment(libraryVM)
         .sheet(item: $selectedConversation) { convo in
-            if let services = deps.services {
-                ConversationChatHost(
-                    conversation: convo,
-                    services: services,
-                    onFreeUserTap: {
-                        paywallFeature = PaywallFeature(name: "Voice Chat")
-                    }
-                )
-            }
+            ConversationChatHost(
+                conversation: convo,
+                services: services,
+                onFreeUserTap: {
+                    paywallFeature = PaywallFeature(name: "Voice Chat")
+                }
+            )
         }
         .sheet(
             item: Binding(
-                get: { deps.chatPresenter.pendingPresentation },
+                get: { services.chatPresenter.pendingPresentation },
                 set: { newValue in
                     if newValue == nil {
-                        deps.chatPresenter.clear()
+                        services.chatPresenter.clear()
                     }
                 }
             )
         ) { pending in
-            if let services = deps.services {
-                ChatPanelHostView(
-                    pending: pending,
-                    userId: user.id,
-                    services: services,
-                    onFreeUserTap: {
-                        paywallFeature = PaywallFeature(name: "Voice Chat")
-                    }
-                )
-            }
+            ChatPanelHostView(
+                pending: pending,
+                userId: user.id,
+                services: services,
+                onFreeUserTap: {
+                    paywallFeature = PaywallFeature(name: "Voice Chat")
+                }
+            )
         }
         // BILL-04 — paywall sheet.
         .sheet(item: $paywallFeature) { feature in
-            if let services = deps.services {
-                PaywallHost(
-                    feature: feature,
-                    services: services,
-                    onDismiss: { paywallFeature = nil }
-                )
-            }
+            PaywallHost(
+                feature: feature,
+                services: services,
+                onDismiss: { paywallFeature = nil }
+            )
         }
         // Phase 12 Plan 12-03 — deep-link dispatch via AppRouter.
         .onOpenURL { url in
@@ -305,14 +303,14 @@ struct SignedInView: View {
             }
             router.onFileURL = { [libraryVM] fileURL in
                 Task {
-                    _ = await deps.importCoordinator.importBooks([fileURL])
+                    _ = await services.importCoordinator.importBooks([fileURL])
                     await libraryVM.refresh()
                 }
             }
             router.handle(
                 url: url,
-                bookStore: deps.services?.bookStore,
-                conversationStore: deps.services?.conversationStore
+                bookStore: services.bookStore,
+                conversationStore: services.conversationStore
             )
         }
         // Phase 12 Plan 12-01 — drain the Mac command router on every intent change.
@@ -329,7 +327,7 @@ struct SignedInView: View {
             await router.applyRestored(
                 tabRaw: selectedTabRaw,
                 openBookIdRaw: openBookIdRaw,
-                bookStore: deps.services?.bookStore
+                bookStore: services.bookStore
             )
         }
         // Persist the latest scene state on every visible path change.
@@ -371,7 +369,7 @@ struct SignedInView: View {
             )
 
         case .selectTheme(let macTheme):
-            deps.readerDefaults.theme = mapReaderTheme(macTheme)
+            services.readerDefaults.theme = mapReaderTheme(macTheme)
 
         case .selectTab(let tab):
             switch tab {
@@ -399,7 +397,7 @@ struct SignedInView: View {
 
     @ViewBuilder
     private func libraryTab(
-        deps: AppDependencies,
+        services: BootstrappedServices,
         user: User,
         onShowChats: (() -> Void)? = nil
     ) -> some View {
@@ -407,7 +405,7 @@ struct SignedInView: View {
         NavigationStack(path: bindableRouter.path) {
             LibraryRootView(
                 path: bindableRouter.path,
-                importCoordinator: deps.importCoordinator,
+                importCoordinator: services.importCoordinator,
                 onOpenBook: { book in
                     bookHints[book.id] = book
                     router.path.append(ReaderRoute.route(for: book))
@@ -422,22 +420,22 @@ struct SignedInView: View {
                 }
             )
             .navigationDestination(for: ReaderRoute.self) { route in
-                destinationView(for: route, deps: deps, userId: user.id)
+                destinationView(for: route, services: services, userId: user.id)
             }
             .navigationDestination(for: ConversationsRoute.self) { _ in
-                conversationsDestination(deps: deps, user: user)
+                conversationsDestination(services: services, user: user)
             }
             .task(id: user.id) {
-                deps.cachedUserId = user.id
-                async let sample = deps.sampleBookInstaller.installIfNeeded(ownerId: user.id)
-                async let reader = deps.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
+                onCacheUserId(user.id)
+                async let sample = services.sampleBookInstaller.installIfNeeded(ownerId: user.id)
+                async let reader = services.sampleReaderInstaller.installIfNeeded(ownerId: user.id)
                 _ = await (sample, reader)
                 await libraryVM.refresh()
             }
         }
         .sheet(isPresented: $showSettings) {
             SettingsSheet(
-                dependencies: deps,
+                services: services,
                 user: user,
                 onSignedOut: onSignedOut
             )
@@ -446,33 +444,31 @@ struct SignedInView: View {
 
     /// Conversations list pushed onto the Library NavigationStack.
     @ViewBuilder
-    private func conversationsDestination(deps: AppDependencies, user: User) -> some View {
-        if let services = deps.services {
-            ConversationsListHost(
-                services: services,
-                userId: user.id,
-                onSelect: { convo in selectedConversation = convo }
-            )
-        }
+    private func conversationsDestination(services: BootstrappedServices, user: User) -> some View {
+        ConversationsListHost(
+            services: services,
+            userId: user.id,
+            onSelect: { convo in selectedConversation = convo }
+        )
     }
 
     // MARK: - Navigation destinations
 
     @ViewBuilder
     private func destinationView(for route: ReaderRoute,
-                                 deps: AppDependencies,
+                                 services: BootstrappedServices,
                                  userId: UserID) -> some View {
         switch route {
         case .pdf(let bookId):
-            NavigationLazyBook(bookId: bookId, hint: bookHints[bookId], deps: deps) { book in
-                pdfReaderDestination(book: book, deps: deps, userId: userId)
+            NavigationLazyBook(bookId: bookId, hint: bookHints[bookId], bookStore: services.bookStore) { book in
+                pdfReaderDestination(book: book, services: services, userId: userId)
             }
         case .epub(let bookId):
-            NavigationLazyBook(bookId: bookId, hint: bookHints[bookId], deps: deps) { book in
-                epubReaderDestination(book: book, deps: deps, userId: userId)
+            NavigationLazyBook(bookId: bookId, hint: bookHints[bookId], bookStore: services.bookStore) { book in
+                epubReaderDestination(book: book, services: services, userId: userId)
             }
         case .unsupportedFormat(let bookId):
-            NavigationLazyBook(bookId: bookId, hint: bookHints[bookId], deps: deps) { book in
+            NavigationLazyBook(bookId: bookId, hint: bookHints[bookId], bookStore: services.bookStore) { book in
                 EpubPlaceholderView(book: book) {
                     if !router.path.isEmpty { router.path.removeLast() }
                 }
@@ -482,46 +478,46 @@ struct SignedInView: View {
 
     @ViewBuilder
     private func pdfReaderDestination(book: Book,
-                                      deps: AppDependencies,
+                                      services: BootstrappedServices,
                                       userId: UserID) -> some View {
         let pdfVM = readerVMCache.pdf(for: book.id) {
             PDFReaderViewModel(
                 book: book,
                 userId: userId,
                 documentURL: pdfFileURL(for: book),
-                positionStore: deps.positionStore
+                positionStore: services.positionStore
             )
         }
         PDFReaderScreen(
                 viewModel: pdfVM,
-                readerSettingsStore: deps.readerSettingsStore,
-                highlightStore: deps.highlightStore,
+                readerSettingsStore: services.readerSettingsStore,
+                highlightStore: services.highlightStore,
                 onReadAloud: FeatureFlags.readAloud ? {
                     Task {
-                        let level = await deps.entitlementService.snapshot()
+                        let level = await services.entitlementService.snapshot()
                         guard level == .pro else {
                             paywallFeature = PaywallFeature(name: "Read Aloud")
                             return
                         }
                         if readAloud == nil {
                             readAloud = ReadAloudController(
-                                ttsEngine: deps.ttsEngine,
-                                ttsState: deps.ttsState,
-                                ttsSettingsStore: deps.ttsSettingsStore,
-                                ttsPrewarmer: deps.ttsPrewarmer,
+                                ttsEngine: services.ttsEngine,
+                                ttsState: services.ttsState,
+                                ttsSettingsStore: services.ttsSettingsStore,
+                                ttsPrewarmer: services.ttsPrewarmer,
                                 userId: userId
                             )
                         }
                         await readAloud?.startPDF(vm: pdfVM)
                     }
                 } : nil,
-                chatPresenter: deps.chatPresenter,
+                chatPresenter: services.chatPresenter,
                 readAloudParagraph: readAloud?.currentParagraph
             )
             .task {
                 pdfSyncBinding = PDFReaderPositionSyncBinding(
                     viewModel: pdfVM,
-                    syncEngine: deps.syncEngine
+                    syncEngine: services.syncEngine
                 )
             }
             .onDisappear {
@@ -530,7 +526,7 @@ struct SignedInView: View {
                 Task { await readAloud?.stop() }
             }
             .overlay(alignment: .bottom) {
-                readAloudControlsOverlay(deps: deps)
+                readAloudControlsOverlay(services: services)
             }
             .sheet(isPresented: Binding(
                 get: { readAloud?.showPicker ?? false },
@@ -540,7 +536,7 @@ struct SignedInView: View {
                     VoiceAndSpeedPicker(
                         initial: ra.pickerInitial,
                         userId: userId,
-                        store: deps.ttsSettingsStore,
+                        store: services.ttsSettingsStore,
                         onDismiss: { settings in
                             ra.pickerInitial = settings
                             ra.showPicker = false
@@ -553,23 +549,23 @@ struct SignedInView: View {
 
     @ViewBuilder
     private func epubReaderDestination(book: Book,
-                                       deps: AppDependencies,
+                                       services: BootstrappedServices,
                                        userId: UserID) -> some View {
         let epubVM = readerVMCache.epub(for: book.id) {
             EPUBReaderViewModel(
                 book: book,
                 userId: userId,
                 documentURL: pdfFileURL(for: book),
-                positionStore: deps.positionStore
+                positionStore: services.positionStore
             )
         }
         EPUBReaderScreen(
             viewModel: epubVM,
-            readerSettingsStore: deps.readerSettingsStore,
-            highlightStore: deps.highlightStore,
+            readerSettingsStore: services.readerSettingsStore,
+            highlightStore: services.highlightStore,
             onReadAloud: FeatureFlags.readAloud ? {
                 Task {
-                    let level = await deps.entitlementService.snapshot()
+                    let level = await services.entitlementService.snapshot()
                     var entitled = level == .pro
                     #if DEBUG
                     if UITestBypass.isActive { entitled = true }
@@ -580,17 +576,17 @@ struct SignedInView: View {
                     }
                     if readAloud == nil {
                         readAloud = ReadAloudController(
-                            ttsEngine: deps.ttsEngine,
-                            ttsState: deps.ttsState,
-                            ttsSettingsStore: deps.ttsSettingsStore,
-                            ttsPrewarmer: deps.ttsPrewarmer,
+                            ttsEngine: services.ttsEngine,
+                            ttsState: services.ttsState,
+                            ttsSettingsStore: services.ttsSettingsStore,
+                            ttsPrewarmer: services.ttsPrewarmer,
                             userId: userId
                         )
                     }
                     await readAloud?.startEPUB(vm: epubVM)
                 }
             } : nil,
-            chatPresenter: deps.chatPresenter,
+            chatPresenter: services.chatPresenter,
             readAloudParagraph: readAloud?.currentParagraph
         )
         .task {
@@ -599,7 +595,7 @@ struct SignedInView: View {
             }
             epubSyncBinding = EPUBReaderPositionSyncBinding(
                 viewModel: epubVM,
-                syncEngine: deps.syncEngine
+                syncEngine: services.syncEngine
             )
         }
         .onDisappear {
@@ -608,7 +604,7 @@ struct SignedInView: View {
             Task { await readAloud?.stop() }
         }
         .overlay(alignment: .bottom) {
-            readAloudControlsOverlay(deps: deps)
+            readAloudControlsOverlay(services: services)
         }
         .sheet(isPresented: Binding(
             get: { readAloud?.showPicker ?? false },
@@ -618,7 +614,7 @@ struct SignedInView: View {
                 VoiceAndSpeedPicker(
                     initial: ra.pickerInitial,
                     userId: userId,
-                    store: deps.ttsSettingsStore,
+                    store: services.ttsSettingsStore,
                     onDismiss: { settings in
                         ra.pickerInitial = settings
                         ra.showPicker = false
@@ -632,13 +628,13 @@ struct SignedInView: View {
     // MARK: - Read Aloud overlay (Phase 8)
 
     @ViewBuilder
-    private func readAloudControlsOverlay(deps: AppDependencies) -> some View {
+    private func readAloudControlsOverlay(services: BootstrappedServices) -> some View {
         if let ra = readAloud, ra.showControls, let bridge = ra.bridge {
             ReadAloudControlsView(
-                state: deps.ttsState,
+                state: services.ttsState,
                 onPlayPause: {
                     Task {
-                        if deps.ttsState.status == .playing {
+                        if services.ttsState.status == .playing {
                             await bridge.pause()
                         } else {
                             await bridge.resume()
