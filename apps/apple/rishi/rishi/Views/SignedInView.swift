@@ -37,7 +37,6 @@ struct SignedInView: View {
     let onCacheUserId: (UserID) -> Void
 
     @Environment(AppRouter.self) private var router
-    @Environment(\.macCommandRouter) private var commandRouter
 
     init(
         services: BootstrappedServices,
@@ -61,10 +60,6 @@ struct SignedInView: View {
     /// sheet, and transient book-hint cache. Extracted into a viewModel so
     /// these concerns are unit-testable independently of the view.
     @State private var model = SignedInViewModel()
-
-    /// Guards the scene-restoration .task so we don't re-run it on every
-    /// body refresh. (Moved from RootView because it is signed-in-only logic.)
-    @State private var sceneRestored = false
 
     // MARK: - Body
 
@@ -115,83 +110,15 @@ struct SignedInView: View {
             )
         }
         // Phase 12 Plan 12-01 — drain the Mac command router on every intent change.
-        .task(id: commandRouter?.pendingIntent) {
-            consumePendingMacIntent()
-        }
-        // Phase 12 Plan 12-02 (MAC-05) — restore selected tab + reader cover.
-        .task {
-            guard !sceneRestored else { return }
-            sceneRestored = true
-            router.onBookResolved = { book in
-                model.hint(book)
-            }
-            await router.applyRestored(
-                tabRaw: selectedTabRaw,
-                openBookIdRaw: openBookIdRaw,
-                bookStore: services.bookStore
-            )
-        }
-        // Persist the latest scene state on every visible path change.
-        .onChange(of: router.path) { _, _ in
-            let cells = router.persistCells()
-            selectedTabRaw = cells.tabRaw
-            openBookIdRaw  = cells.openBookIdRaw
-        }
-    }
-
-    // MARK: - Mac command intent dispatch (Phase 12 Plan 12-01)
-
-    private func consumePendingMacIntent() {
-        guard let cmdRouter = commandRouter, let intent = cmdRouter.pendingIntent else { return }
-        defer { cmdRouter.consume() }
-
-        switch intent {
-        case .importBook:
-            router.showLibraryRoot()
-            NotificationCenter.default.post(name: RishiCommand.importBook, object: nil)
-
-        case .newConversation:
-            router.showConversations()
-
-        case .focusSearch:
-            router.showLibraryRoot()
-            NotificationCenter.default.post(name: RishiCommand.focusSearch, object: nil)
-
-        case .fontIncrease:
-            NotificationCenter.default.post(
-                name: RishiCommand.fontStep, object: nil,
-                userInfo: [RishiCommand.fontStepDeltaKey: +1]
-            )
-
-        case .fontDecrease:
-            NotificationCenter.default.post(
-                name: RishiCommand.fontStep, object: nil,
-                userInfo: [RishiCommand.fontStepDeltaKey: -1]
-            )
-
-        case .selectTheme(let macTheme):
-            services.readerDefaults.theme = mapReaderTheme(macTheme)
-
-        case .selectTab(let tab):
-            switch tab {
-            case .library: router.showLibraryRoot()
-            case .chats:   router.showConversations()
-            }
-
-        case .pageForward:
-            NotificationCenter.default.post(name: RishiCommand.pageForward, object: nil)
-
-        case .pageBackward:
-            NotificationCenter.default.post(name: RishiCommand.pageBackward, object: nil)
-        }
-    }
-
-    private func mapReaderTheme(_ macTheme: MacReaderTheme) -> ReaderTheme {
-        switch macTheme {
-        case .light: return .light
-        case .sepia: return .sepia
-        case .dark:  return .dark
-        }
+        .macCommandDispatch(readerDefaults: services.readerDefaults)
+        // Phase 12 Plan 12-02 (MAC-05) — restore selected tab + reader cover,
+        // and persist the latest scene state on every visible path change.
+        .sceneRestoration(
+            services: services,
+            model: model,
+            tabRaw: $selectedTabRaw,
+            openBookIdRaw: $openBookIdRaw
+        )
     }
 
 }

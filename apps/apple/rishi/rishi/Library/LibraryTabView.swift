@@ -101,24 +101,6 @@ struct LibraryTabView: View {
                 onSignedOut: onSignedOut
             )
         }
-        .onOpenURL { url in
-            router.onBookResolved = { book in
-                model.hint(book)
-            }
-            router.onConversationResolved = { convo in
-                model.present(conversation: convo)
-            }
-            router.onFileURL = { [libraryVM] fileURL in
-                Task {
-                    _ = await services.importCoordinator.importBooks([fileURL])
-                    await libraryVM.refresh()
-                }
-            }
-            router.handle(
-                url: url,
-                bookStore: services.bookStore,
-                conversationStore: services.conversationStore
-            )
-        }
+        .deepLinkHandling(services: services, model: model, libraryVM: libraryVM)
     }
 }
