@@ -61,6 +61,12 @@ let package = Package(
                 // read-aloud continuation ACROSS reading-order resource
                 // (chapter) boundaries, which the smaller fixtures cannot.
                 .copy("Fixtures/rationality.epub"),
+                // Real-world PDF (Velleman, "How to Prove It") — a justified
+                // academic text whose paragraphs are marked by first-line
+                // indentation with NO extra inter-paragraph leading. Exercises
+                // PDF read-aloud paragraph detection on layout that the
+                // vertical-gap heuristic alone cannot split.
+                .copy("Fixtures/how-to-prove-it.pdf"),
             ]
         ),
     ]

@@ -95,4 +95,45 @@ struct PDFReadAloudParagraphsTests {
 
         #expect(paragraphs.count == 1, "got \(paragraphs)")
     }
+
+    // MARK: - First-line-indent layout (real-world fixture)
+
+    /// First text-heavy page in the fixture, skipping front matter (title /
+    /// blank / pages with little selectable text).
+    private func firstBodyPage(of doc: PDFDocument, minChars: Int = 1500) throws -> PDFPage {
+        for i in 0..<doc.pageCount {
+            if let page = doc.page(at: i),
+               (page.string?.count ?? 0) >= minChars {
+                return page
+            }
+        }
+        throw PDFReadAloudParagraphsError.noBodyPage
+    }
+
+    private enum PDFReadAloudParagraphsError: Error { case noBodyPage }
+
+    /// Regression: many books (Velleman, "How to Prove It") mark paragraph
+    /// boundaries with a first-line indent and use the SAME line pitch between
+    /// paragraphs as within them. A vertical-gap-only heuristic never splits
+    /// such a page, so read-aloud highlighted the WHOLE page as one passage.
+    /// A dense body page must yield multiple paragraphs, none of which spans
+    /// (nearly) the entire page.
+    @Test("Indent-delimited paragraphs split on a real PDF page")
+    func indentParagraphsSplitOnRealPDF() throws {
+        let url = try #require(
+            Bundle.module.url(forResource: "how-to-prove-it", withExtension: "pdf")
+        )
+        let doc = try #require(PDFDocument(url: url))
+        let page = try firstBodyPage(of: doc)
+        let pageChars = page.string?.count ?? 0
+
+        let paragraphs = PDFReadAloudParagraphs.extract(from: page)
+
+        #expect(paragraphs.count >= 2, "page collapsed into \(paragraphs.count) block(s)")
+        let longest = paragraphs.map(\.count).max() ?? 0
+        #expect(
+            Double(longest) < 0.9 * Double(pageChars),
+            "longest paragraph (\(longest) chars) spans nearly the whole page (\(pageChars) chars)"
+        )
+    }
 }

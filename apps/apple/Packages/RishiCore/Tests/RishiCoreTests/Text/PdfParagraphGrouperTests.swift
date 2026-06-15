@@ -19,10 +19,10 @@ struct PdfParagraphGrouperTests {
 
     /// A horizontal line of text at vertical position `y` (PDF user space,
     /// origin bottom-left), fixed height so midY pitch == y pitch.
-    private func line(_ text: String, y: CGFloat, height: CGFloat = 10) -> TextItem {
+    private func line(_ text: String, y: CGFloat, x: CGFloat = 50, height: CGFloat = 10) -> TextItem {
         TextItem(
             text: text,
-            frame: CGRect(x: 50, y: y, width: 200, height: height),
+            frame: CGRect(x: x, y: y, width: 200, height: height),
             fontSize: height
         )
     }
@@ -58,6 +58,48 @@ struct PdfParagraphGrouperTests {
         #expect(
             PdfParagraphGrouper.paragraphs(from: lines)
             == ["Para one first para one second", "Para two first para two second"]
+        )
+    }
+
+    @Test
+    func first_line_indent_starts_new_paragraph_without_vertical_gap() {
+        // Justified academic layout (e.g. Velleman, "How to Prove It"): a
+        // uniform 20pt line pitch throughout, paragraphs marked ONLY by a
+        // first-line indent (body margin x=50, indented first lines x=68).
+        // A vertical-gap-only heuristic collapses this into one block; indent
+        // detection must recover the boundaries.
+        let lines = [
+            line("Para one first line", y: 200, x: 68),
+            line("para one second line", y: 180, x: 50),
+            line("para one third line", y: 160, x: 50),
+            line("Para two first line", y: 140, x: 68),
+            line("para two second line", y: 120, x: 50),
+        ]
+        #expect(
+            PdfParagraphGrouper.paragraphs(from: lines)
+            == [
+                "Para one first line para one second line para one third line",
+                "Para two first line para two second line",
+            ]
+        )
+    }
+
+    @Test
+    func leading_flush_line_then_indents_keeps_continuation_separate() {
+        // First visible line is a flush-left continuation of a paragraph that
+        // began on the previous page; the next indented line starts a fresh
+        // paragraph. The continuation must not merge into the indented block.
+        let lines = [
+            line("continued from prior page", y: 200, x: 50),
+            line("New paragraph begins here", y: 180, x: 68),
+            line("and continues on this line", y: 160, x: 50),
+        ]
+        #expect(
+            PdfParagraphGrouper.paragraphs(from: lines)
+            == [
+                "continued from prior page",
+                "New paragraph begins here and continues on this line",
+            ]
         )
     }
 

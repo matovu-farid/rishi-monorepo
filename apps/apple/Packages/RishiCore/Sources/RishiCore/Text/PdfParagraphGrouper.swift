@@ -28,18 +28,37 @@ public nonisolated enum PdfParagraphGrouper {
     /// leading while tolerating the small pitch jitter of normal body lines.
     public nonisolated static let defaultGapRatio: CGFloat = 1.5
 
+    /// Fraction of the median line height by which a line's left edge must
+    /// exceed the page's flush-left margin to count as a first-line indent.
+    /// A typical paragraph indent is ~1em (≈ the line height); 0.4 catches it
+    /// while ignoring the sub-point left-edge jitter of justified body lines.
+    public nonisolated static let defaultIndentRatio: CGFloat = 0.4
+
     /// Group reading-order layout `lines` into paragraph strings.
+    ///
+    /// Two independent signals start a new paragraph:
+    /// - **Vertical gap** — a line-to-line gap larger than `gapRatio *
+    ///   medianPitch` (books that separate paragraphs with extra leading).
+    /// - **First-line indent** — a line whose left edge sits more than
+    ///   `indentRatio * medianHeight` to the right of the page's flush-left
+    ///   margin (justified academic layout that marks paragraphs by indenting
+    ///   the first line with no extra leading — the vertical-gap signal alone
+    ///   collapses such a page into one block).
     ///
     /// - Parameters:
     ///   - lines: one `TextItem` per rendered line, in reading order (top to
     ///     bottom). Empty / whitespace-only lines are ignored.
     ///   - gapRatio: a vertical gap is a paragraph break when it exceeds
     ///     `gapRatio * medianPitch`.
+    ///   - indentRatio: a line is a first-line indent when its left edge
+    ///     exceeds the flush-left margin by more than `indentRatio *
+    ///     medianHeight`.
     /// - Returns: trimmed, non-empty paragraph strings (lines joined by a
     ///   single space). A page with no usable lines yields `[]`.
     public nonisolated static func paragraphs(
         from lines: [TextItem],
-        gapRatio: CGFloat = defaultGapRatio
+        gapRatio: CGFloat = defaultGapRatio,
+        indentRatio: CGFloat = defaultIndentRatio
     ) -> [String] {
         let usable = lines.filter {
             !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -54,11 +73,23 @@ public nonisolated enum PdfParagraphGrouper {
         }
         let medianPitch = median(pitches)
 
+        // Flush-left margin = the most common line left edge (the mode, so a
+        // stray far-left outlier like a drop cap or margin note cannot drag it
+        // down and make every body line look "indented"). Lines starting
+        // notably to its right are paragraph first lines.
+        let leftEdges = usable.map { $0.frame.minX }
+        let margin = mode(of: leftEdges)
+        let medianHeight = median(usable.map { $0.frame.height })
+        let indentThreshold = indentRatio * medianHeight
+
         var blocks: [String] = []
         var current: [String] = [usable[0].text]
         for i in 1..<usable.count {
             let gap = abs(centers[i - 1] - centers[i])
-            if medianPitch > 0 && gap > gapRatio * medianPitch {
+            let gapBreak = medianPitch > 0 && gap > gapRatio * medianPitch
+            let indentBreak = indentThreshold > 0
+                && usable[i].frame.minX - margin > indentThreshold
+            if gapBreak || indentBreak {
                 blocks.append(current.joined(separator: " "))
                 current = [usable[i].text]
             } else {
@@ -70,6 +101,21 @@ public nonisolated enum PdfParagraphGrouper {
         return blocks
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+
+    /// Most frequent value, bucketed to the nearest point to absorb sub-point
+    /// layout jitter. Ties resolve to the smaller (leftmost) bucket, which for
+    /// left edges is the true flush-left margin. Empty input returns 0.
+    nonisolated private static func mode(of values: [CGFloat]) -> CGFloat {
+        guard !values.isEmpty else { return 0 }
+        var counts: [CGFloat: Int] = [:]
+        for value in values {
+            counts[value.rounded(), default: 0] += 1
+        }
+        let best = counts.max { lhs, rhs in
+            lhs.value != rhs.value ? lhs.value < rhs.value : lhs.key > rhs.key
+        }
+        return best?.key ?? 0
     }
 
     nonisolated private static func median(_ values: [CGFloat]) -> CGFloat {
