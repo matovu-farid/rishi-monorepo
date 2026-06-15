@@ -1039,7 +1039,8 @@ final class AppDependencies {
     @MainActor
     func makeReaderTTSBridge(
         userId: UserID,
-        onPassageChange: @escaping (Int?) -> Void
+        onPassageChange: @escaping (Int?) -> Void,
+        onParagraphsExhausted: @escaping () async -> [String] = { [] }
     ) -> ReaderTTSBridge {
         let tracker = TTSPassageTracker()
         return ReaderTTSBridge(
@@ -1049,7 +1050,8 @@ final class AppDependencies {
             prewarmer: ttsPrewarmer,
             settingsStore: ttsSettingsStore,
             userId: userId,
-            onPassageChange: onPassageChange
+            onPassageChange: onPassageChange,
+            onParagraphsExhausted: onParagraphsExhausted
         )
     }
 

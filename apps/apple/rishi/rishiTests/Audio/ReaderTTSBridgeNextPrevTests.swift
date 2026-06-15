@@ -48,21 +48,53 @@ struct ReaderTTSBridgeNextPrevTests {
         #expect(startIds(env.engine) == ["0", "1", "2", "1"])
     }
 
-    @Test("next() at the last paragraph is a clamped no-op (no cross-resource yet)")
-    func nextAtEndClamps() async {
-        let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .holds) })
+    /// Parity with auto-advance: pressing Next on the LAST paragraph of a chapter
+    /// must cross into the next chapter (reusing the same continuation source as
+    /// auto-advance), not clamp. Reproduces the reported bug where the forward
+    /// button refused to cross the chapter boundary while auto-advance did.
+    @Test("next() at the last paragraph crosses into the next chapter (reuses auto-advance)")
+    func nextAtEndCrossesChapter() async {
+        let source = ExhaustionSource([["next-a", "next-b"]]) // one more chapter
+        let env = makeBridge(
+            engine: { state in FakeTTSEngine(state: state, script: .holds) },
+            onExhausted: { source.next() }
+        )
         await env.bridge.start(paragraphs: ["only-a", "only-b"])
         await waitUntil(timeout: 2) { startIds(env.engine) == ["0"] }
 
         await env.bridge.next()
         await waitUntil(timeout: 2) { startIds(env.engine).last == "1" }
 
-        // At the last paragraph: must not start an out-of-range "2".
+        // At the last paragraph: cross into the next chapter (its index resets to
+        // "0"), rather than clamping at "1".
         await env.bridge.next()
-        try? await Task.sleep(nanoseconds: 250_000_000)
+        await waitUntil(timeout: 3) { startIds(env.engine) == ["0", "1", "0"] }
 
         await env.bridge.stop()
-        #expect(startIds(env.engine) == ["0", "1"])
+        #expect(source.callCount >= 1, "next() at the boundary must request the next chapter")
+        #expect(startIds(env.engine) == ["0", "1", "0"])
+    }
+
+    /// At the last paragraph of the LAST chapter (continuation source dry), Next
+    /// must not fabricate an out-of-range passage; it stops cleanly.
+    @Test("next() at the last paragraph of the last chapter does not start out-of-range")
+    func nextAtEndOfBookStops() async {
+        let source = ExhaustionSource([]) // no further chapter
+        let env = makeBridge(
+            engine: { state in FakeTTSEngine(state: state, script: .holds) },
+            onExhausted: { source.next() }
+        )
+        await env.bridge.start(paragraphs: ["only-a", "only-b"])
+        await waitUntil(timeout: 2) { startIds(env.engine) == ["0"] }
+
+        await env.bridge.next()
+        await waitUntil(timeout: 2) { startIds(env.engine).last == "1" }
+
+        await env.bridge.next()
+        await waitUntil(timeout: 2) { source.callCount >= 1 }
+
+        await env.bridge.stop()
+        #expect(startIds(env.engine) == ["0", "1"], "must not start an out-of-range passage at end of book")
     }
 
     @Test("next() does NOT stop the engine on a switch but DOES start the new passage (long-lived engine)")

@@ -79,7 +79,7 @@ public actor CachingTTSChunkSource: TTSChunkSource {
 
         guard let handle = try? FileHandle(forWritingTo: partialURL) else {
             Log.event("tts.cache.openWrite.failed", level: .error, data: [:])
-            await store.discard(key: key)
+            await store.discard(partial: partialURL)
             await passthrough(request: request, into: continuation)
             return
         }
@@ -92,16 +92,16 @@ public actor CachingTTSChunkSource: TTSChunkSource {
                 try handle.write(contentsOf: chunk)
             }
             try? handle.close()
-            try await store.commit(key: key)
+            try await store.commit(key: key, partial: partialURL)
             committed = true
             continuation.finish()
         } catch is CancellationError {
             try? handle.close()
-            if !committed { await store.discard(key: key) }
+            if !committed { await store.discard(partial: partialURL) }
             continuation.finish(throwing: CancellationError())
         } catch {
             try? handle.close()
-            if !committed { await store.discard(key: key) }
+            if !committed { await store.discard(partial: partialURL) }
             continuation.finish(throwing: error)
         }
     }

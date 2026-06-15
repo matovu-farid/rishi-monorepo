@@ -81,6 +81,61 @@ struct ReaderTTSBridgeAdvanceTests {
         #expect(env.recorder.sawTeardown)
     }
 
+    /// Chapter-boundary continuation: when the current batch (a chapter) is
+    /// exhausted, the bridge must ASK for the next batch and keep playing it
+    /// rather than tearing the session down. Reproduces the reported bug —
+    /// read-aloud stops at the last paragraph of a chapter instead of crossing
+    /// into the next chapter's first paragraph.
+    @Test("continues into the next batch on exhaustion instead of stopping")
+    func continuesIntoNextBatchOnExhaustion() async {
+        // One further "chapter" of two paragraphs, then end-of-book ([]).
+        let source = ExhaustionSource([["delta", "echo"]])
+        let env = makeBridge(
+            engine: { state in FakeTTSEngine(state: state, script: .normal) },
+            onExhausted: { source.next() }
+        )
+
+        await env.bridge.start(paragraphs: ["alpha", "bravo", "charlie"])
+
+        // 3 paragraphs of batch 1 + 2 of the continuation batch = 5 engine
+        // starts ONCE continuation works. Today the bridge stops after 3.
+        await waitUntil(timeout: 6) { startedPassageIds(env.engine).count == 5 }
+
+        await env.bridge.stop()
+
+        // Played all three of batch 1 then both of the continuation batch; the
+        // continuation resets the passage index, so ids restart at "0".
+        #expect(startedPassageIds(env.engine) == ["0", "1", "2", "0", "1"])
+        // The bridge actually requested the next batch on exhaustion.
+        #expect(source.callCount >= 1)
+        #expect(env.state.status != .error)
+    }
+
+    /// End of book: when the continuation source returns `[]` (no further
+    /// chapter), the bridge tears the session down exactly once and does not
+    /// loop or keep the engine running.
+    @Test("tears down at end of book when no further chapter is available")
+    func tearsDownAtEndOfBook() async {
+        let source = ExhaustionSource([]) // no further chapters
+        let env = makeBridge(
+            engine: { state in FakeTTSEngine(state: state, script: .normal) },
+            onExhausted: { source.next() }
+        )
+
+        await env.bridge.start(paragraphs: ["alpha", "bravo"])
+
+        await waitUntil(timeout: 5) { env.recorder.nonNilIndices == [0, 1] }
+        // The exhausted batch must trigger a single request for more.
+        await waitUntil(timeout: 2) { source.callCount >= 1 }
+
+        await env.bridge.stop()
+
+        // Only the two real paragraphs played; nothing fabricated past the end.
+        #expect(startedPassageIds(env.engine) == ["0", "1"])
+        #expect(source.callCount >= 1)
+        #expect(env.recorder.sawTeardown)
+    }
+
     @Test("bails on engine error without advancing past 0")
     func bailsOnErrorWithoutAdvancing() async {
         let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .error) })
@@ -136,7 +191,10 @@ struct BridgeTestEnv {
 /// the shared TTSPlaybackState) and a recording onPassageChange. Mirrors the
 /// 29-01 smoke-test construction.
 @MainActor
-func makeBridge(engine makeEngine: (TTSPlaybackState) -> FakeTTSEngine) -> BridgeTestEnv {
+func makeBridge(
+    engine makeEngine: (TTSPlaybackState) -> FakeTTSEngine,
+    onExhausted: @escaping () async -> [String] = { [] }
+) -> BridgeTestEnv {
     let state = TTSPlaybackState()
     let engine = makeEngine(state)
     let tracker = TTSPassageTracker()
@@ -152,10 +210,37 @@ func makeBridge(engine makeEngine: (TTSPlaybackState) -> FakeTTSEngine) -> Bridg
         prewarmer: prewarmer,
         settingsStore: settingsStore,
         userId: userId,
-        onPassageChange: { index in recorder.record(index) }
+        onPassageChange: { index in recorder.record(index) },
+        onParagraphsExhausted: onExhausted
     )
 
     return BridgeTestEnv(bridge: bridge, engine: engine, state: state, recorder: recorder)
+}
+
+/// Scripts successive batches of paragraphs handed back to the bridge when the
+/// current batch is exhausted — a deterministic stand-in for "load the next
+/// EPUB chapter". Yields each batch once in order, then `[]` (end of book).
+@MainActor
+final class ExhaustionSource {
+    private var batches: [[String]]
+    private(set) var callCount = 0
+
+    init(_ batches: [[String]]) { self.batches = batches }
+
+    func next() -> [String] {
+        callCount += 1
+        return batches.isEmpty ? [] : batches.removeFirst()
+    }
+}
+
+/// Passage ids the engine was asked to `start`, in order (drops non-start
+/// calls). The bridge uses `passageId = String(index)`, so a continuation that
+/// resets the index restarts the ids at "0".
+@MainActor
+func startedPassageIds(_ engine: FakeTTSEngine) -> [String] {
+    engine.calls.compactMap { call in
+        if case .start(let id) = call { return id } else { return nil }
+    }
 }
 
 /// Poll `predicate` every 50ms until it is true or `timeout` seconds elapse.

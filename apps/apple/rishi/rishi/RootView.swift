@@ -1022,6 +1022,15 @@ struct RootView: View {
             onPassageChange: { index in
                 vm.currentReadAloudPassageIndex = index
                 updateReadAloudParagraph(for: index)
+            },
+            onParagraphsExhausted: {
+                // End of the current chapter — load the next reading-order
+                // resource so narration continues across the chapter boundary.
+                // Refresh the stash so onPassageChange resolves the highlight
+                // against the new chapter's paragraphs (the index resets to 0).
+                let next = await vm.paragraphsForFollowingResource()
+                readAloudParagraphs = next
+                return next
             }
         )
     }
@@ -1030,7 +1039,8 @@ struct RootView: View {
         paragraphs: [String],
         deps: AppDependencies,
         userId: UserID,
-        onPassageChange: @escaping (Int?) -> Void
+        onPassageChange: @escaping (Int?) -> Void,
+        onParagraphsExhausted: @escaping () async -> [String] = { [] }
     ) async {
         guard !paragraphs.isEmpty else { return }
         // Tear down any existing bridge before starting a new session.
@@ -1039,7 +1049,8 @@ struct RootView: View {
         }
         let bridge = deps.makeReaderTTSBridge(
             userId: userId,
-            onPassageChange: onPassageChange
+            onPassageChange: onPassageChange,
+            onParagraphsExhausted: onParagraphsExhausted
         )
         readerTTSBridge = bridge
         // Stash the paragraph list so the passage index can be resolved to the

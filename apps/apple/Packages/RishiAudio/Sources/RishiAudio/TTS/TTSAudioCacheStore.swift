@@ -49,20 +49,22 @@ public actor TTSAudioCacheStore {
 
     // MARK: - Write (tee path)
 
-    /// Returns the `.partial` URL for the given key. Removes any pre-existing `.partial`
-    /// at that path so callers can start clean. Caller is responsible for writing bytes
-    /// and calling `commit(key:)` on success or `discard(key:)` on cancel/error.
+    /// Opens an INDEPENDENT `.partial` URL for the given key and returns it. Each
+    /// call gets a unique path (`<key>.<token>.mp3.partial`) so two concurrent
+    /// writers for the SAME key (e.g. the engine playing a passage while the
+    /// prewarmer re-warms it) never share — and therefore never clobber — each
+    /// other's in-flight file. Caller writes bytes then calls `commit(key:partial:)`
+    /// on success or `discard(partial:)` on cancel/error.
     public func beginWrite(key: String) throws -> URL {
-        let partial = partialURL(for: key)
-        try? fileManager.removeItem(at: partial)
+        let partial = uniquePartialURL(for: key)
         // Create empty file so caller can open a write handle immediately.
         fileManager.createFile(atPath: partial.path, contents: nil)
         return partial
     }
 
-    /// Atomically promotes `<key>.mp3.partial` to `<key>.mp3`. Runs LRU eviction after.
-    public func commit(key: String) throws {
-        let partial = partialURL(for: key)
+    /// Atomically promotes the given `.partial` to `<key>.mp3`. Runs LRU eviction
+    /// after. Throws `CocoaError(.fileNoSuchFile)` if the partial is gone.
+    public func commit(key: String, partial: URL) throws {
         let final = finalURL(for: key)
         guard fileManager.fileExists(atPath: partial.path) else {
             throw CocoaError(.fileNoSuchFile)
@@ -71,10 +73,10 @@ public actor TTSAudioCacheStore {
         evictIfOver()
     }
 
-    /// Removes the `.partial` for the given key. Does NOT touch the `.mp3`.
-    /// Used on cancel/error to clean up; safe to call even when `.partial` does not exist.
-    public func discard(key: String) {
-        let partial = partialURL(for: key)
+    /// Removes the given `.partial`. Does NOT touch the `.mp3`. Used on
+    /// cancel/error; safe to call when the partial does not exist. Only removes
+    /// the specific file passed in, so a sibling writer's partial is untouched.
+    public func discard(partial: URL) {
         try? fileManager.removeItem(at: partial)
     }
 
@@ -121,7 +123,10 @@ public actor TTSAudioCacheStore {
         directory.appendingPathComponent("\(key).mp3", isDirectory: false)
     }
 
-    private func partialURL(for key: String) -> URL {
-        directory.appendingPathComponent("\(key).mp3.partial", isDirectory: false)
+    /// Per-writer partial path. The token keeps concurrent same-key writers on
+    /// independent files; the `.mp3.partial` suffix keeps them out of the LRU
+    /// scan (which only counts `.mp3`) and invisible to `read`.
+    private func uniquePartialURL(for key: String) -> URL {
+        directory.appendingPathComponent("\(key).\(UUID().uuidString).mp3.partial", isDirectory: false)
     }
 }

@@ -91,6 +91,13 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
     private let debounceSeconds: Double
     private var pendingPositionTask: Task<Void, Never>?
 
+    /// Reading-order resource (chapter) that read-aloud is currently narrating.
+    /// Set by ``paragraphsForReadAloud()`` and advanced by
+    /// ``paragraphsForFollowingResource()`` so chapter continuation does not
+    /// depend on the navigator's (asynchronous) locator updates. Fragment is
+    /// stripped so it matches a reading-order ``Link`` href.
+    private var readAloudResourceHref: AnyURL?
+
     public init(
         book: Book,
         userId: UserID,
@@ -237,6 +244,9 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
         guard let publication = publication,
               let locator = latestLocator else { return [] }
         guard let resource = publication.get(locator.href) else { return [] }
+        // Anchor the read-aloud chapter cursor on the resource we are about to
+        // narrate so ``paragraphsForFollowingResource()`` can advance from here.
+        readAloudResourceHref = locator.href.removingFragment()
         let result = await resource.read().asString(encoding: .utf8)
         guard case .success(let html) = result else { return [] }
         let all = ParagraphChunker.chunk(html)
@@ -246,6 +256,48 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
         )
         guard start < all.count else { return [] }
         return Array(all[start...])
+    }
+
+    /// Paragraphs for the NEXT reading-order resource (chapter) after the one
+    /// read-aloud is currently narrating, so playback continues across a chapter
+    /// boundary instead of halting at the last paragraph of the current chapter.
+    ///
+    /// Advances the read-aloud chapter cursor past any intervening resources
+    /// that chunk to zero paragraphs (covers, blank section breaks) and returns
+    /// the first non-empty chapter's full paragraph list. Returns `[]` at the
+    /// end of the book (no further non-empty resource), which the bridge treats
+    /// as "stop". The cursor falls back to ``latestLocator`` the first time if
+    /// ``paragraphsForReadAloud()`` has not yet run.
+    public func paragraphsForFollowingResource() async -> [String] {
+        guard let publication = publication else { return [] }
+        // Cursor first (set as each chapter starts narrating); fall back to the
+        // live locator before the first chapter's paragraphs were requested.
+        guard let currentHref = readAloudResourceHref ?? latestLocator?.href.removingFragment()
+        else { return [] }
+        let order = publication.readingOrder
+        guard let currentIndex = order.firstIndexWithHREF(currentHref) else { return [] }
+
+        var nextIndex = currentIndex + 1
+        while nextIndex < order.count {
+            let link = order[nextIndex]
+            if let resource = publication.get(link),
+               case .success(let html) = await resource.read().asString(encoding: .utf8) {
+                let paragraphs = ParagraphChunker.chunk(html)
+                if !paragraphs.isEmpty {
+                    readAloudResourceHref = link.url().removingFragment()
+                    // Move the live locator to the new chapter so the
+                    // text-anchored read-aloud follow (which anchors to
+                    // `latestLocator.href`) turns the page into this resource
+                    // rather than failing to find the paragraph in the old one.
+                    if let locator = await publication.locate(link) {
+                        latestLocator = locator
+                    }
+                    return paragraphs
+                }
+            }
+            nextIndex += 1
+        }
+        return []
     }
 
     // MARK: - Debounce

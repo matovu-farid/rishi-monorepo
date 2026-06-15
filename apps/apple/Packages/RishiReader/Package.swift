@@ -57,6 +57,10 @@ let package = Package(
                 // resolve it when the package is built via its own scheme.
                 .copy("Fixtures/alice.epub"),
                 .copy("Fixtures/purple-cow.epub"),
+                // Larger multi-chapter corpus (Pinker, Rationality) — exercises
+                // read-aloud continuation ACROSS reading-order resource
+                // (chapter) boundaries, which the smaller fixtures cannot.
+                .copy("Fixtures/rationality.epub"),
             ]
         ),
     ]

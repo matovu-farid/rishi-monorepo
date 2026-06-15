@@ -143,6 +143,14 @@ final class ReaderTTSBridge {
     private let userId: UserID
     private let onPassageChange: (Int?) -> Void
 
+    /// Source of the NEXT batch of paragraphs when the current batch is
+    /// exhausted. For EPUB this loads the next reading-order resource (the next
+    /// chapter) so read-aloud continues across chapter boundaries instead of
+    /// halting at the last paragraph of a chapter; it returns `[]` at the end of
+    /// the book. The default (`{ [] }`) preserves single-batch behaviour for
+    /// callers (e.g. PDF) that do not stream further paragraphs.
+    private let onParagraphsExhausted: () async -> [String]
+
     /// Number of paragraphs to prewarm ahead of the current play head.
     /// Phase 24 (D1): default 5; configurable knob.
     var readAhead: Int = 5
@@ -159,7 +167,8 @@ final class ReaderTTSBridge {
         prewarmer: TTSPrewarmer,
         settingsStore: any TTSSettingsStore,
         userId: UserID,
-        onPassageChange: @escaping (Int?) -> Void
+        onPassageChange: @escaping (Int?) -> Void,
+        onParagraphsExhausted: @escaping () async -> [String] = { [] }
     ) {
         self.engine = engine
         self.state = state
@@ -168,6 +177,7 @@ final class ReaderTTSBridge {
         self.settingsStore = settingsStore
         self.userId = userId
         self.onPassageChange = onPassageChange
+        self.onParagraphsExhausted = onParagraphsExhausted
     }
 
     // MARK: - Public surface
@@ -248,7 +258,14 @@ final class ReaderTTSBridge {
     /// reader view follows via `onPassageChange`, turning the page when the
     /// target paragraph is off-screen.
     func next() async {
-        await jump(to: currentIndex + 1)
+        if currentIndex + 1 >= paragraphs.count {
+            // Last paragraph of the current chapter: cross into the next chapter
+            // via the SAME continuation auto-advance uses, so the forward button
+            // and auto-advance behave identically at a boundary (no variance).
+            await advanceToNextBatch()
+        } else {
+            await jump(to: currentIndex + 1)
+        }
     }
 
     /// User-driven: skip back to the previous paragraph and play it. Clamped at
@@ -362,10 +379,36 @@ final class ReaderTTSBridge {
     private func advance() async {
         currentIndex += 1
         if currentIndex >= paragraphs.count {
-            await stop()
+            // End of the current batch (e.g. an EPUB chapter) — cross into the
+            // next one.
+            await advanceToNextBatch()
         } else {
             startAdvanceWatcher()
             await playCurrent()
         }
+    }
+
+    /// Loads the next batch of paragraphs (e.g. the next EPUB chapter) via
+    /// `onParagraphsExhausted` and starts it from paragraph 0; an empty result
+    /// means end-of-book and tears the session down. Shared by auto-advance and
+    /// the user-driven Next button so a chapter boundary behaves identically for
+    /// both. Cancels the current advance watcher and stale prewarms before the
+    /// switch (mirrors `jump`) so the old chapter's watcher cannot fire against
+    /// the new index.
+    @discardableResult
+    private func advanceToNextBatch() async -> Bool {
+        advanceTask?.cancel()
+        advanceTask = nil
+        await prewarmer.cancelAll()
+        let next = await onParagraphsExhausted()
+        guard !next.isEmpty else {
+            await stop()
+            return false
+        }
+        paragraphs = next
+        currentIndex = 0
+        startAdvanceWatcher()
+        await playCurrent()
+        return true
     }
 }

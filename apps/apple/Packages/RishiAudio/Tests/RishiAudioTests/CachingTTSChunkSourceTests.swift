@@ -197,4 +197,42 @@ struct CachingTTSChunkSourceTests {
         let calls = await upstream.requests().count
         #expect(calls == 1, "pre-existing .partial MUST be invisible to read — upstream must be invoked")
     }
+
+    // MARK: - 7. Concurrent same-key writers must not clobber each other
+
+    /// Regression for the read-aloud mid-paragraph halt: when the engine plays a
+    /// passage while the prewarmer re-warms the SAME passage (same cache key),
+    /// the two in-flight writers shared one `.partial` path. The second
+    /// `beginWrite` removed the first's partial and a cancel/`discard` then made
+    /// the first's `commit` throw `CocoaError.fileNoSuchFile`, surfacing as
+    /// `tts.engine.error error=... "The file doesn't exist."` and stopping
+    /// playback. Each writer must own an independent partial; discarding one
+    /// must never break another's commit.
+    @Test("concurrent same-key writers use independent partials and do not clobber")
+    func concurrentSameKeyWritersDoNotClobber() async throws {
+        let tmp = makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let store = try TTSAudioCacheStore(directory: tmp, capBytes: 10 * 1024 * 1024)
+        let key = "deadbeefc0ffee"
+
+        // Writer A opens a partial and writes its bytes.
+        let partialA = try await store.beginWrite(key: key)
+        try Data([0x01, 0x02, 0x03, 0x04]).write(to: partialA)
+
+        // Writer B is a second concurrent miss for the SAME key.
+        let partialB = try await store.beginWrite(key: key)
+        #expect(partialB != partialA, "each in-flight writer must get an independent .partial path")
+
+        // Writer B aborts (e.g. prewarm cancelled at a chapter switch) and must
+        // clean up ONLY its own partial.
+        await store.discard(partial: partialB)
+
+        // Writer A must still commit its intact bytes.
+        try await store.commit(key: key, partial: partialA)
+
+        let url = try #require(await store.read(key: key))
+        #expect(try Data(contentsOf: url) == Data([0x01, 0x02, 0x03, 0x04]),
+                "committed bytes must be writer A's, undamaged by the concurrent writer")
+    }
 }
