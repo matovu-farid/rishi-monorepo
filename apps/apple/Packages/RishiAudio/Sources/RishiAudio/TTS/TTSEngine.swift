@@ -29,6 +29,12 @@ public actor TTSEngine {
     private var feedTask: Task<Void, Never>?
     private var activeDecoder: MP3StreamDecoder?
     private var firstBufferScheduled = false
+    /// Long-lived-engine flag. The FIRST passage of a read-aloud session brings
+    /// the engine up (attach + start + session activate); every subsequent
+    /// passage switch only resets the player node — no attach/start/stop, no
+    /// session churn. Cleared in stop()/fail() (the only paths that tear the
+    /// engine down).
+    private var engineRunning = false
 
     public init(
         streamer: TTSStreamer,
@@ -57,11 +63,21 @@ public actor TTSEngine {
             observable.status = .loading
             observable.error = nil
         }
+        // No-op on a switch: an already-active .tts coordinator reduces this to
+        // .switchPassage, which the policy returns [] for (no configure/activate).
         await coordinator.requestActiveMode(.tts)
 
         do {
-            try engine.attach()
-            try engine.start()
+            // Long-lived engine: bring it up ONCE (first passage), then only
+            // reset the player node on every switch/auto-advance — no
+            // attach/start/stop and no session churn mid-session.
+            if !engineRunning {
+                try engine.attach()
+                try engine.start()
+                engineRunning = true
+            } else {
+                engine.resetPlayerNode()
+            }
             Log.event("tts.engine.start.running", level: .info, data: ["passageId": request.passageId ?? ""])
             let decoder = try decoderFactory(engine.targetFormat)
             activeDecoder = decoder
@@ -121,8 +137,10 @@ public actor TTSEngine {
     }
 
     public func stop() async {
+        // The ONLY place the long-lived engine is torn down + session released.
         await teardown()
         engine.stop()
+        engineRunning = false
         await coordinator.releaseActiveMode(.tts)
         let observable = state
         await MainActor.run { observable.status = .stopped }
@@ -154,9 +172,11 @@ public actor TTSEngine {
 
     private func onBufferComplete(chunk: PCMChunk) async {
         if chunk.isFinal {
-            // The last buffer drained — release the session.
-            engine.stop()
-            await coordinator.releaseActiveMode(.tts)
+            // The last buffer of this passage drained. Long-lived engine: do NOT
+            // stop the engine or release the session here — they stay live for
+            // the next passage (switch/auto-advance) or until stop(). Only set
+            // status .stopped so the bridge's advance watcher still fires on the
+            // (.stopped + currentPassageId) post-condition.
             let observable = state
             await MainActor.run { observable.status = .stopped }
         }
@@ -182,6 +202,7 @@ public actor TTSEngine {
     private func fail(with error: Error) async {
         await teardown()
         engine.stop()
+        engineRunning = false
         await coordinator.releaseActiveMode(.tts)
         let message = String(describing: error)
         let observable = state

@@ -56,6 +56,12 @@ public protocol AudioEngineProtocol: Sendable {
     func attach() throws
     func start() throws
     func stop()
+    /// Reset the player node for a new passage WITHOUT stopping the engine or
+    /// touching the audio route/session. Used by the long-lived-engine path so a
+    /// passage switch flushes the previous passage's scheduled buffers and is
+    /// ready to schedule the next one's, while attach/start/stop happen only
+    /// once per read-aloud session.
+    func resetPlayerNode()
     func play<S: AsyncSequence>(_ buffers: S) -> AsyncStream<PCMChunk.ID>
         where S.Element == PCMChunk, S: Sendable
     func pause()
@@ -110,6 +116,15 @@ public final class AVAudioEngineAdapter: AudioEngineProtocol, @unchecked Sendabl
         lock.withLock {
             playerNode.stop()
             if engine.isRunning { engine.stop() }
+        }
+    }
+
+    public func resetPlayerNode() {
+        // Engine stays running; only the player node is reset so the next
+        // passage's buffers schedule onto a clean node. Route/session untouched.
+        lock.withLock {
+            playerNode.stop()
+            playerNode.reset()
         }
     }
 
@@ -197,6 +212,7 @@ public final class FakeAudioEngine: AudioEngineProtocol, @unchecked Sendable {
         case attach
         case start
         case stop
+        case resetNode
         case playStarted
         case chunkSeen(id: UUID, passageId: String?, isFinal: Bool)
         case completionEmitted(id: UUID)
@@ -234,6 +250,12 @@ public final class FakeAudioEngine: AudioEngineProtocol, @unchecked Sendable {
             _calls.append(.stop)
             _isPlaying = false
         }
+    }
+
+    public func resetPlayerNode() {
+        // Records ONLY .resetNode — never .stop/.attach/.start — so the
+        // long-lived-engine detector can assert a switch does not churn.
+        lock.withLock { _calls.append(.resetNode) }
     }
 
     public func play<S: AsyncSequence>(_ buffers: S) -> AsyncStream<PCMChunk.ID>

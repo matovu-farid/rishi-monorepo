@@ -64,8 +64,8 @@ struct ReaderTTSBridgeNextPrevTests {
         #expect(startIds(env.engine) == ["0", "1"])
     }
 
-    @Test("next() fully stops then plays the new passage (same path as auto-advance)")
-    func nextStopsThenPlaysNewPassage() async {
+    @Test("next() does NOT stop the engine on a switch but DOES start the new passage (long-lived engine)")
+    func nextDoesNotStopEngineButPlaysNewPassage() async {
         let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .holds) })
         await env.bridge.start(paragraphs: ["a", "b", "c"])
         await waitUntil(timeout: 2) { startIds(env.engine) == ["0"] }
@@ -75,14 +75,47 @@ struct ReaderTTSBridgeNextPrevTests {
         await waitUntil(timeout: 2) { startIds(env.engine).last == "1" }
         let stopsAfter = env.engine.calls.filter { $0 == .stop }.count
 
-        // Device evidence (next/prev silent): leaving the session active on a
-        // switch (switchPassage no-op, no re-activate) means the AVAudioEngine is
-        // stopped and restarted with no live route -> the whole stream/decoder
-        // pipeline never starts. Auto-advance works precisely because it does a
-        // FULL stop (releasing the session) then a fresh start that re-activates.
-        // A jump must take that same path: stop, then play the new passage.
-        #expect(stopsAfter > stopsBefore, "next() must fully stop (release session) before playing the new passage")
-        #expect(startIds(env.engine).last == "1", "next() must then start the new passage")
+        // Long-lived engine: a passage switch must NOT stop the engine (the old
+        // per-passage stop+restart HUNG mid-render on device and the restarted
+        // engine had no live route). The bridge no longer calls engine.stop() on
+        // jump; the in-place switch happens inside TTSEngine.start() via
+        // resetPlayerNode. The bridge still START-s the new passage id.
+        #expect(stopsAfter == stopsBefore, "next() must NOT stop the engine on a switch (long-lived engine)")
+        #expect(startIds(env.engine).last == "1", "next() must start the new passage")
+        await env.bridge.stop()
+    }
+
+    /// PROPERTY-BASED navigation: for a page of N paragraphs, next() from index i
+    /// lands the engine START on passage id String(i+1) for every valid i, and
+    /// previous() from i lands String(i-1). Uses the `.holds` harness so only
+    /// explicit navigation moves the head (no auto-advance race).
+    @Test("next()/previous() land the engine START on the adjacent passage id (property-based)",
+          arguments: Array(0..<5))
+    func navigationLandsAdjacentPassage(startIndex: Int) async {
+        let pageCount = 6
+        let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .holds) })
+        await env.bridge.start(paragraphs: (0..<pageCount).map { "p\($0)" })
+        await waitUntil(timeout: 2) { startIds(env.engine) == ["0"] }
+
+        // Walk forward to startIndex so the play head sits there.
+        for target in 1...max(startIndex, 1) where target <= startIndex {
+            await env.bridge.next()
+            await waitUntil(timeout: 2) { startIds(env.engine).last == String(target) }
+        }
+        #expect(startIds(env.engine).last == String(startIndex))
+
+        // next() from startIndex -> startIndex+1.
+        await env.bridge.next()
+        await waitUntil(timeout: 2) { startIds(env.engine).last == String(startIndex + 1) }
+        #expect(startIds(env.engine).last == String(startIndex + 1),
+                "next() from \(startIndex) must START passage \(startIndex + 1)")
+
+        // previous() from startIndex+1 -> startIndex.
+        await env.bridge.previous()
+        await waitUntil(timeout: 2) { startIds(env.engine).last == String(startIndex) }
+        #expect(startIds(env.engine).last == String(startIndex),
+                "previous() from \(startIndex + 1) must START passage \(startIndex)")
+
         await env.bridge.stop()
     }
 
@@ -117,35 +150,34 @@ struct ReaderTTSBridgeNextPrevTests {
         #expect(startIds(env.engine) == ["0"])
     }
 
-    /// ROOT-CAUSE DETECTOR for the device next/prev silence — deterministic, no
-    /// real audio. This drives the REAL TTSEngine (over FakeAudioEngine +
-    /// FakeAudioSessionConfigurator), not the FakeTTSEngine the other tests use,
+    /// LONG-LIVED-ENGINE INVARIANT (inverts the former nextReactivatesSession).
+    /// Drives the REAL TTSEngine over FakeAudioEngine + FakeAudioSessionConfigurator
     /// so the actual AVAudioSession decisions are exercised.
     ///
-    /// The bug: a switch that leaves the session in .tts (the AudioSessionPolicy
-    /// switchPassage no-op) restarts the AVAudioEngine with NO fresh session
-    /// activation -> on device the engine has no live route and plays silently.
-    /// The fix makes jump() release + re-acquire the session, so the new passage
-    /// gets a fresh setActive(true). With the fix reverted this test goes red:
-    /// the session is only ever activated once.
-    @Test("next() re-activates the audio session for the new passage (root-cause detector)")
-    func nextReactivatesSession() async {
+    /// A passage switch must NOT churn the session: the session is activated ONCE
+    /// for the read-aloud session (first passage's beginPassage) and a switch
+    /// (AudioSessionPolicy.switchPassage -> []) issues no further setActive(true).
+    /// So `activeCalls.filter { $0.active }.count` stays == 1 across next(). The
+    /// old per-passage release+re-acquire (which this asserts AGAINST) hung on
+    /// device and produced no live route.
+    @Test("next() does NOT re-activate the audio session — activated exactly once for the session")
+    func nextDoesNotReactivateSession() async {
         let fakeConfig = FakeAudioSessionConfigurator()
         let bridge = makeRealEngineBridge(configurator: fakeConfig)
 
         await bridge.start(paragraphs: ["alpha", "bravo", "charlie"])
         await waitUntil(timeout: 2) { fakeConfig.activeCalls.contains { $0.active } }
-        let activationsAfterStart = fakeConfig.activeCalls.filter { $0.active }.count
+        #expect(fakeConfig.activeCalls.filter { $0.active }.count == 1,
+                "session must be activated exactly once on session start; activeCalls=\(fakeConfig.activeCalls)")
 
         // NEXT while passage 0 is still in flight == a true mid-passage switch.
         await bridge.next()
-        await waitUntil(timeout: 2) {
-            fakeConfig.activeCalls.filter { $0.active }.count > activationsAfterStart
-        }
+        // Give the switch time to run playCurrent -> engine.start() (in-place
+        // switch via resetPlayerNode, no session work).
+        await waitUntil(timeout: 1) { false }
 
-        let activations = fakeConfig.activeCalls.filter { $0.active }.count
-        #expect(activations > activationsAfterStart,
-                "next() must re-activate the session for the new passage; activeCalls=\(fakeConfig.activeCalls)")
+        #expect(fakeConfig.activeCalls.filter { $0.active }.count == 1,
+                "next() must NOT re-activate the session on a switch; activeCalls=\(fakeConfig.activeCalls)")
         await bridge.stop()
     }
 }
