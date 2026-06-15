@@ -116,4 +116,70 @@ struct ReaderTTSBridgeNextPrevTests {
         await env.bridge.stop()
         #expect(startIds(env.engine) == ["0"])
     }
+
+    /// ROOT-CAUSE DETECTOR for the device next/prev silence — deterministic, no
+    /// real audio. This drives the REAL TTSEngine (over FakeAudioEngine +
+    /// FakeAudioSessionConfigurator), not the FakeTTSEngine the other tests use,
+    /// so the actual AVAudioSession decisions are exercised.
+    ///
+    /// The bug: a switch that leaves the session in .tts (the AudioSessionPolicy
+    /// switchPassage no-op) restarts the AVAudioEngine with NO fresh session
+    /// activation -> on device the engine has no live route and plays silently.
+    /// The fix makes jump() release + re-acquire the session, so the new passage
+    /// gets a fresh setActive(true). With the fix reverted this test goes red:
+    /// the session is only ever activated once.
+    @Test("next() re-activates the audio session for the new passage (root-cause detector)")
+    func nextReactivatesSession() async {
+        let fakeConfig = FakeAudioSessionConfigurator()
+        let bridge = makeRealEngineBridge(configurator: fakeConfig)
+
+        await bridge.start(paragraphs: ["alpha", "bravo", "charlie"])
+        await waitUntil(timeout: 2) { fakeConfig.activeCalls.contains { $0.active } }
+        let activationsAfterStart = fakeConfig.activeCalls.filter { $0.active }.count
+
+        // NEXT while passage 0 is still in flight == a true mid-passage switch.
+        await bridge.next()
+        await waitUntil(timeout: 2) {
+            fakeConfig.activeCalls.filter { $0.active }.count > activationsAfterStart
+        }
+
+        let activations = fakeConfig.activeCalls.filter { $0.active }.count
+        #expect(activations > activationsAfterStart,
+                "next() must re-activate the session for the new passage; activeCalls=\(fakeConfig.activeCalls)")
+        await bridge.stop()
+    }
+}
+
+/// Yields nothing and never finishes, so a started passage stays "in flight" —
+/// no natural completion releases the audio session. Lets a test fire next() as
+/// a TRUE mid-passage switch (the only condition under which the re-activation
+/// bug manifests; a completed passage would already be back to .idle).
+private struct InfiniteChunkSource: TTSChunkSource {
+    func stream(request: TTSStreamRequest) -> AsyncThrowingStream<Data, Error> {
+        AsyncThrowingStream { _ in }
+    }
+}
+
+/// Builds a bridge over the REAL TTSEngine so the genuine AudioSessionCoordinator
+/// decisions are exercised against the recording FakeAudioSessionConfigurator.
+@MainActor
+private func makeRealEngineBridge(configurator: FakeAudioSessionConfigurator) -> ReaderTTSBridge {
+    let state = TTSPlaybackState()
+    let coordinator = AudioSessionCoordinator(configurator: configurator)
+    let engine = TTSEngine(
+        streamer: TTSStreamer(source: InfiniteChunkSource()),
+        decoderFactory: { try MP3StreamDecoder(targetFormat: $0) },
+        engine: FakeAudioEngine(),
+        coordinator: coordinator,
+        state: state
+    )
+    return ReaderTTSBridge(
+        engine: engine,
+        state: state,
+        tracker: TTSPassageTracker(),
+        prewarmer: TTSPrewarmer(source: InfiniteChunkSource()),
+        settingsStore: InMemoryTTSSettingsStore(),
+        userId: UserID(),
+        onPassageChange: { _ in }
+    )
 }
