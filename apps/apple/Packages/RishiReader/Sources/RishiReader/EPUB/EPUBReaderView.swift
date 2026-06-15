@@ -139,6 +139,20 @@ public struct EPUBReaderView: UIViewControllerRepresentable {
         // Add as child VC + pin to container edges.
         container.addChild(navigator)
         navigator.view.translatesAutoresizingMaskIntoConstraints = false
+        // UI tests (RISHI_UITEST) assert on the SwiftUI toolbar + Read Aloud
+        // controls overlaid on the reader. Readium's WKWebView publishes its
+        // page text as Link/StaticText accessibility nodes (in the web-content
+        // process) whose automation type XCUITest cannot resolve, which aborts
+        // the whole-app accessibility snapshot and makes those sibling controls
+        // unqueryable. A SwiftUI `.accessibilityHidden` does NOT reach the
+        // WKWebView; hiding the navigator's UIKit view subtree does. Touch
+        // handling is unaffected, so tap-to-turn-page still works. DEBUG +
+        // env-gated, so it never affects a release build or real VoiceOver.
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" {
+            navigator.view.accessibilityElementsHidden = true
+        }
+        #endif
         container.view.addSubview(navigator.view)
         NSLayoutConstraint.activate([
             navigator.view.topAnchor.constraint(equalTo: container.view.topAnchor),

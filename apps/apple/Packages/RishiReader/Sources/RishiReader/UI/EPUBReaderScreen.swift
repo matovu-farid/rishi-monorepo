@@ -125,14 +125,19 @@ public struct EPUBReaderScreen: View {
         #else
         let uitestVisible = false
         #endif
+        // Under RISHI_UITEST keep the chrome pinned (no 4s auto-hide) so the
+        // toolbar's Read Aloud button stays reachable for the whole test run.
+        let autoHide: Duration = uitestVisible ? .seconds(86_400) : .seconds(4)
         #if canImport(UIKit)
         return ReaderChromeController(
             accessibility: UIKitAccessibilityProvider(),
+            autoHideDelay: autoHide,
             initiallyVisible: uitestVisible
         )
         #else
         return ReaderChromeController(
             accessibility: PreviewAccessibility(),
+            autoHideDelay: autoHide,
             initiallyVisible: uitestVisible
         )
         #endif
