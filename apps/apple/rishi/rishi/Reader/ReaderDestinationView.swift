@@ -28,7 +28,7 @@ struct ReaderDestinationView: View {
         case .pdf(let bookId):
             NavigationLazyBook(bookId: bookId, hint: hint, bookStore: services.bookStore) { book in
                 PDFReaderDestination(
-                    book: book,
+                    vm: PDFReaderViewModel.make(book: book, userId: userId, services: services),
                     services: services,
                     userId: userId,
                     onRequestPaywall: onRequestPaywall
@@ -37,7 +37,7 @@ struct ReaderDestinationView: View {
         case .epub(let bookId):
             NavigationLazyBook(bookId: bookId, hint: hint, bookStore: services.bookStore) { book in
                 EPUBReaderDestination(
-                    book: book,
+                    vm: EPUBReaderViewModel.make(book: book, userId: userId, services: services),
                     services: services,
                     userId: userId,
                     onRequestPaywall: onRequestPaywall

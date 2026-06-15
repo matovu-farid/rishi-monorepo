@@ -21,7 +21,6 @@ import RishiReader
 import RishiUIKit
 
 struct EPUBReaderDestination: View {
-    let book: Book
     let services: BootstrappedServices
     let userId: UserID
     let onRequestPaywall: (String) -> Void
@@ -31,21 +30,15 @@ struct EPUBReaderDestination: View {
     @State private var syncBinding: EPUBReaderPositionSyncBinding? = nil
 
     init(
-        book: Book,
+        vm: EPUBReaderViewModel,
         services: BootstrappedServices,
         userId: UserID,
         onRequestPaywall: @escaping (String) -> Void
     ) {
-        self.book = book
+        self._vm = State(initialValue: vm)
         self.services = services
         self.userId = userId
         self.onRequestPaywall = onRequestPaywall
-        self._vm = State(initialValue: EPUBReaderViewModel(
-            book: book,
-            userId: userId,
-            documentURL: PDFReaderDestination.fileURL(for: book),
-            positionStore: services.positionStore
-        ))
     }
 
     // MARK: - Body

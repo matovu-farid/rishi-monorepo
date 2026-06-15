@@ -18,7 +18,6 @@ import RishiBilling
 #endif
 
 struct PDFReaderDestination: View {
-    let book: Book
     let services: BootstrappedServices
     let userId: UserID
     let onRequestPaywall: (String) -> Void
@@ -28,30 +27,15 @@ struct PDFReaderDestination: View {
     @State private var syncBinding: PDFReaderPositionSyncBinding? = nil
 
     init(
-        book: Book,
+        vm: PDFReaderViewModel,
         services: BootstrappedServices,
         userId: UserID,
         onRequestPaywall: @escaping (String) -> Void
     ) {
-        self.book = book
+        self._vm = State(initialValue: vm)
         self.services = services
         self.userId = userId
         self.onRequestPaywall = onRequestPaywall
-        self._vm = State(initialValue: PDFReaderViewModel(
-            book: book,
-            userId: userId,
-            documentURL: Self.fileURL(for: book),
-            positionStore: services.positionStore
-        ))
-    }
-
-    // MARK: - File URL helper
-
-    static func fileURL(for book: Book) -> URL {
-        let documentsURL = FileManager.default.urls(
-            for: .documentDirectory, in: .userDomainMask
-        ).first!
-        return documentsURL.appendingPathComponent(book.fileURL)
     }
 
     // MARK: - Body
