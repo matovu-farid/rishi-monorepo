@@ -1,3 +1,0 @@
-// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
-
-exports[`LibraryScreen (#41: Reading Now progress subline) matches the Reading Now pill snapshot with progress subline 1`] = `"Page 7 of 100"`;

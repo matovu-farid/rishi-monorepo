@@ -1,9 +1,0 @@
-{
-  "platforms": ["ios", "android"],
-  "ios": {
-    "modules": ["RishiPdfExtractorModule"]
-  },
-  "android": {
-    "modules": ["expo.modules.rishipdfextractor.RishiPdfExtractorModule"]
-  }
-}
