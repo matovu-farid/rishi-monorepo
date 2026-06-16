@@ -18,6 +18,29 @@ public actor AudioSessionCoordinator {
     private var policy = AudioSessionPolicy()
     private var interruptionTask: Task<Void, Never>?
 
+    /// Per-mode "stop the owner" closures. The coordinator invokes the
+    /// OUTGOING mode's closure before granting a different mode, so the
+    /// displaced owner (TTS engine / voice session) is fully torn down — not
+    /// just its AVAudioSession config. Enforces the single-audio-owner
+    /// invariant at the resource owner. `@Sendable` to cross actor boundaries.
+    private var preemptHandlers: [ActiveMode: @Sendable () async -> Void] = [:]
+
+    /// Register the closure that fully stops the owner of `mode`. Owners call
+    /// this just before they `requestActiveMode(mode)`. Re-registering
+    /// overwrites (e.g. a fresh per-session voice owner).
+    public func registerPreemption(for mode: ActiveMode, handler: @escaping @Sendable () async -> Void) {
+        preemptHandlers[mode] = handler
+    }
+
+    /// Await the outgoing owner's stop closure (if any). The closure typically
+    /// calls back into `releaseActiveMode`, which the actor processes while
+    /// this call is suspended — leaving the policy at `.idle` before the new
+    /// mode is applied.
+    private func preempt(_ mode: ActiveMode) async {
+        guard let handler = preemptHandlers[mode] else { return }
+        await handler()
+    }
+
     public init(configurator: any AudioSessionConfigurator) {
         self.configurator = configurator
         // KEEP: fire-and-forget actor hop from `init`; startInterruptionLoop is
@@ -60,11 +83,15 @@ public actor AudioSessionCoordinator {
         case .idle:
             return
         case .tts:
+            // Owner change: a live voice session must be stopped first.
+            if policy.mode == .voice { await preempt(.voice) }
             // Already in .tts means this is a passage switch (next/prev/repeat),
             // which the policy treats as a no-churn no-op when not suspended.
             apply(policy.reduce(policy.mode == .tts ? .switchPassage : .beginPassage))
             Log.event("audio.session.mode", level: .info, data: ["mode": policy.mode.rawValue])
         case .voice:
+            // Owner change: live read-aloud must be stopped first.
+            if policy.mode == .tts { await preempt(.tts) }
             apply(policy.reduce(.beginVoice))
             Log.event("audio.session.mode", level: .info, data: ["mode": policy.mode.rawValue])
         }
