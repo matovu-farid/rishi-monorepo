@@ -17,13 +17,20 @@ struct LibraryGrid: View {
 
     @State private var pendingDelete: Book?
 
-    /// Fixed 2-column grid. Phase 21 UI pass: the prior adaptive layout
-    /// combined with per-tile text labels produced uneven row heights and
-    /// visible bleed between rows. A fixed 2-column grid + fixed 2:3 aspect
-    /// tiles + no per-tile chrome guarantees a uniform mosaic.
+    /// Fixed-size tile width, identical on iPhone, iPad, and Mac. A 2:3 book
+    /// cover at this width is `coverHeight` tall. Keeping the tile a constant
+    /// size (rather than flexible columns) is what stops a single cover from
+    /// expanding to fill a wide Mac window.
+    static let coverWidth: CGFloat = 150
+    static let coverHeight: CGFloat = coverWidth * 1.5
+
+    /// Adaptive grid of fixed-size tiles: as many `coverWidth`-wide columns as
+    /// fit, wrapping to the next row. This yields ~2 columns on iPhone and many
+    /// on a wide Mac window, while every tile stays the same size. The Phase 21
+    /// uneven-row problem came from per-tile *text labels*; tiles are now pure
+    /// fixed 2:3 cover art, so adaptive packing keeps rows uniform.
     private let columns: [GridItem] = [
-        GridItem(.flexible(), spacing: RishiSpacing.m),
-        GridItem(.flexible(), spacing: RishiSpacing.m)
+        GridItem(.adaptive(minimum: coverWidth, maximum: coverWidth), spacing: RishiSpacing.m)
     ]
 
     public init(books: [Book],
@@ -88,6 +95,7 @@ struct LibraryGrid: View {
             // via the accessibility label below.
             BookCoverImageView(book: book, coverURL: coverURL(book))
                 .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                .frame(width: Self.coverWidth, height: Self.coverHeight)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)

@@ -13,6 +13,7 @@ import RishiLibrary
 import RishiChat
 import RishiReader
 import RishiSettings
+import RishiSync
 
 struct LibraryTabView: View {
 
@@ -95,7 +96,14 @@ struct LibraryTabView: View {
                     ownerId: user.id
                 )
                 #endif
-                await libraryVM.refresh()
+                // SYNC: pull the remote library on shell appearance so a fresh
+                // device (or cold launch with an existing session) shows the
+                // user's whole library, not just locally-cached rows. Shows
+                // cached first, then the synced rows after the wave lands.
+                await model.performInitialLibrarySync(
+                    refresh: { await libraryVM.refresh() },
+                    sync: { _ = await services.syncEngine.runOnce() }
+                )
             }
         }
         .sheet(isPresented: Bindable(model).showSettings) {
