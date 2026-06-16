@@ -29,7 +29,7 @@ struct ReaderToolbarItemTests {
             "reader.toolbar.typography",
             "reader.toolbar.theme",
             "reader.toolbar.readAloud",
-            "reader.toolbar.chat",
+            "reader.toolbar.voice",
         ]
         #expect(Set(ids) == expected)
     }
@@ -41,7 +41,7 @@ struct ReaderToolbarItemTests {
             "reader.toolbar.toc",
             "reader.toolbar.theme",
             "reader.toolbar.readAloud",
-            "reader.toolbar.chat",
+            "reader.toolbar.voice",
         ]
         #expect(Set(ids) == expected)
     }

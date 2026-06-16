@@ -59,8 +59,8 @@
 // ReaderChromeController      — `UI/ReaderChromeController.swift`. Auto-hides the reader
 //                                toolbar after idle, restores it on tap. Manages status-bar
 //                                + navigation-bar visibility.
-// ReaderChatPresenter         — `UI/ReaderChatPresenter.swift`. Protocol the reader uses to
-//                                open the chat panel without depending on RishiChat.
+// ReaderVoicePresenter        — `UI/ReaderVoicePresenter.swift`. Protocol the reader uses to
+//                                launch the voice session without depending on RishiVoice.
 // AccessibilityProviding      — `UI/ReaderChromeController.swift`. Protocol; UIKit-backed
 //                                implementation reads UIAccessibility settings.
 // UIKitAccessibilityProvider  — `UI/ReaderChromeController.swift`. The default implementation.

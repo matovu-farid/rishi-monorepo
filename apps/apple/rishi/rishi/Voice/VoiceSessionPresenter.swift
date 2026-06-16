@@ -2,11 +2,11 @@
 //  VoiceSessionPresenter.swift
 //  rishi
 //
-//  Phase 10 Plan 10-06 — app-layer presenter binding the chat panel's voice
-//  button to the `RealtimeVoiceSession` actor and the SwiftUI
+//  Phase 10 Plan 10-06 — app-layer presenter binding the reader's voice
+//  entry to the `RealtimeVoiceSession` actor and the SwiftUI
 //  `.fullScreenCover` lifecycle. One instance is held by `AppDependencies`
-//  for the app lifetime; ChatPanelHost reads `isPresenting` and calls
-//  `start(bookId:)` / `end()`.
+//  for the app lifetime; `SignedInView` reads `isPresenting` to mount
+//  `VoiceSessionHost`, and `ReaderVoiceEntry` calls `start(bookId:)` / `end()`.
 //
 //  Architecture:
 //  - Owns a single shared `VoiceSessionState` (the @MainActor @Observable
@@ -31,7 +31,7 @@ import RishiSearch
 import RishiVoice
 import RishiLogging
 
-/// App-layer presenter binding the voice button in `ChatPanelHost` to the
+/// App-layer presenter binding the reader's voice entry to the
 /// `RealtimeVoiceSession` actor.
 @MainActor
 @Observable
@@ -41,13 +41,26 @@ final class VoiceSessionPresenter {
     /// `@Bindable` on the host view.
     let state: VoiceSessionState
 
-    /// Drives the `.fullScreenCover(isPresented:)` binding on `ChatPanelHost`.
+    /// Drives the `.fullScreenCover(isPresented:)` binding on `SignedInView`
+    /// that mounts `VoiceSessionHost`.
     /// Flipped to `true` by `start(bookId:)` once a conversation is resolved;
     /// flipped to `false` by `end()` or `dismissFailure()`.
     private(set) var isPresenting: Bool = false
 
     /// The in-flight session, if any. `nil` outside of a presenting window.
     private(set) var session: RealtimeVoiceSession?
+
+    /// The book context the current presentation is bound to. Set at the top
+    /// of `start`, cleared by `end()` / `dismissFailure()`. The
+    /// `VoiceSessionHost` reads this to resolve the text-chat conversation
+    /// when the user opens the in-voice text sheet.
+    private(set) var currentBookId: BookID?
+
+    /// The quote forwarded from the reader's "Ask about this" affordance, if
+    /// any. Set at the top of `start`, cleared by `end()` / `dismissFailure()`.
+    /// Non-nil means the host should auto-open the text-chat sheet prefilled
+    /// with this quote.
+    private(set) var pendingInitialQuote: String?
 
     // MARK: - Injected dependencies
 
@@ -101,12 +114,24 @@ final class VoiceSessionPresenter {
     /// transcript bridge has a stable `ConversationID` to upsert into.
     ///
     /// No-ops if a session is already in flight (presenter is single-session).
-    func start(bookId: BookID?) async {
+    func start(bookId: BookID?, initialQuote: String? = nil) async {
+        // Single-session invariant: claim the presenting slot SYNCHRONOUSLY,
+        // before the first suspension point. Two start() calls can interleave
+        // under MainActor reentrancy (a double-tapped toolbar voice button, or
+        // the toolbar button and the "Ask about this" affordance firing
+        // together). If `isPresenting` were only set after the first `await`
+        // (the conversation lookup), both calls would pass the guard and each
+        // spin up a RealtimeVoiceSession — two WebRTC audio streams at once,
+        // i.e. the "two voices / echo" bug. Claiming the slot here, before any
+        // await, makes the guard reentrancy-safe: at most one live session.
         guard !isPresenting else { return }
+        isPresenting = true
+        currentBookId = bookId
+        pendingInitialQuote = initialQuote
+
         guard let userId = userIdProvider() else {
             state.recordError("Sign in required")
             state.apply(status: .failed(reason: .unknown("Sign in required")))
-            isPresenting = true
             return
         }
 
@@ -126,7 +151,6 @@ final class VoiceSessionPresenter {
             ])
             state.recordError(String(describing: error))
             state.apply(status: .failed(reason: .unknown(String(describing: error))))
-            isPresenting = true
             return
         }
 
@@ -184,7 +208,6 @@ final class VoiceSessionPresenter {
             )
         }
 
-        isPresenting = true
         // Phase 25 (Plan 25-10) — forward the bookId so the session can
         // build a BookContextSnapshot for the worker AND spawn the
         // BookContextResponder. The reader doesn't currently push
@@ -206,6 +229,8 @@ final class VoiceSessionPresenter {
         bridgeTask = nil
         session = nil
         isPresenting = false
+        currentBookId = nil
+        pendingInitialQuote = nil
     }
 
     /// Reset to idle without starting a new session — used by the failure
@@ -217,6 +242,8 @@ final class VoiceSessionPresenter {
         bridgeTask = nil
         session = nil
         isPresenting = false
+        currentBookId = nil
+        pendingInitialQuote = nil
         state.reset()
     }
 }

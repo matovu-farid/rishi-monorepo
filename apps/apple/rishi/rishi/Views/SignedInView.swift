@@ -75,30 +75,27 @@ struct SignedInView: View {
         )
         .sheet(item: $model.selectedConversation) { convo in
             ConversationChatHost(
-                vm: ChatPanelViewModel.make(conversation: convo, services: services),
-                services: services,
-                onFreeUserTap: {
-                    model.requestPaywall("Voice Chat")
-                }
+                vm: ChatPanelViewModel.make(conversation: convo, services: services)
             )
         }
-        .sheet(
-            item: Binding(
-                get: { services.chatPresenter.pendingPresentation },
-                set: { newValue in
-                    if newValue == nil {
-                        services.chatPresenter.clear()
-                    }
+        // Voice is the primary AI surface: the reader toolbar voice button
+        // launches a session via `ReaderVoiceEntry` -> `VoiceSessionPresenter`,
+        // flipping `isPresenting`. This cover hosts the session and its
+        // in-voice text-chat sheet.
+        .fullScreenCover(isPresented: Binding(
+            get: { services.voicePresenter.isPresenting },
+            set: { newValue in
+                if newValue == false {
+                    // KEEP: presenter.end() is @MainActor; tears down the
+                    // cover binding + releases the audio session. UI-bound.
+                    Task { await services.voicePresenter.end() }
                 }
-            )
-        ) { pending in
-            ChatPanelHostView(
-                pending: pending,
-                userId: user.id,
+            }
+        )) {
+            VoiceSessionHost(
+                presenter: services.voicePresenter,
                 services: services,
-                onFreeUserTap: {
-                    model.requestPaywall("Voice Chat")
-                }
+                userId: user.id
             )
         }
         // BILL-04 — paywall sheet.

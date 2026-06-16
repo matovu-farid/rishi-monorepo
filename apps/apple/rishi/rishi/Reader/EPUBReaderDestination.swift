@@ -28,6 +28,10 @@ struct EPUBReaderDestination: View {
     @State private var vm: EPUBReaderViewModel
     @State private var readAloud: ReadAloudController? = nil
     @State private var syncBinding: EPUBReaderPositionSyncBinding? = nil
+    /// Stable bridge satisfying RishiReader's `ReaderVoicePresenter` seam.
+    /// Constructed in `init` so the reference is stable for the screen's
+    /// lifetime.
+    @State private var voiceEntry: ReaderVoiceEntry
 
     init(
         vm: EPUBReaderViewModel,
@@ -39,6 +43,11 @@ struct EPUBReaderDestination: View {
         self.services = services
         self.userId = userId
         self.onRequestPaywall = onRequestPaywall
+        self._voiceEntry = State(initialValue: ReaderVoiceEntry(
+            voicePresenter: services.voicePresenter,
+            entitlementProvider: { await services.entitlementService.snapshot() },
+            onRequestPaywall: onRequestPaywall
+        ))
     }
 
     // MARK: - Body
@@ -69,7 +78,7 @@ struct EPUBReaderDestination: View {
                     await readAloud?.startEPUB(vm: vm)
                 }
             } : nil,
-            chatPresenter: services.chatPresenter,
+            voicePresenter: voiceEntry,
             readAloudParagraph: readAloud?.currentParagraph
         )
         .task {

@@ -122,7 +122,7 @@ struct ReaderA11yLabelsTests {
             "reader.toolbar.toc",
             "reader.toolbar.theme",
             "reader.toolbar.readAloud",
-            "reader.toolbar.chat",
+            "reader.toolbar.voice",
         ]
         for id in pdfIds {
             #expect(pdf.contains(id), "PDFReaderScreen missing identifier \(id)")

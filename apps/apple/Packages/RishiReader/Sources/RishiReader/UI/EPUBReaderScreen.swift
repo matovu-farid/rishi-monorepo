@@ -80,7 +80,7 @@ public struct EPUBReaderScreen: View {
         "reader.toolbar.typography",
         "reader.toolbar.theme",
         "reader.toolbar.readAloud",
-        "reader.toolbar.chat",
+        "reader.toolbar.voice",
     ]
 
     private let viewModel: EPUBReaderViewModel
@@ -96,12 +96,13 @@ public struct EPUBReaderScreen: View {
     /// "Read Aloud" button that invokes this closure. Wiring lives in the
     /// rishi app layer (RishiReader has no dependency on RishiAudio).
     private let onReadAloud: (() -> Void)?
-    /// Plan 09-06 (CHAT-01, CHAT-05) — when non-nil, the toolbar surfaces
-    /// a chat button and the selection context menu gains an "Ask about
-    /// this" affordance. The reader DOES NOT import RishiChat — the
-    /// presenter is the seam (`ReaderChatPresenter` protocol in this
-    /// package, satisfied by `ChatPresenterImpl` at the app layer).
-    private let chatPresenter: (any ReaderChatPresenter)?
+    /// When non-nil, the toolbar surfaces a voice button and the selection
+    /// context menu gains an "Ask about this" affordance. Voice is the
+    /// primary AI surface; the quote routes into a text-chat sheet hosted
+    /// inside the voice surface. The reader DOES NOT import RishiVoice — the
+    /// presenter is the seam (`ReaderVoicePresenter` protocol in this
+    /// package, satisfied at the app layer).
+    private let voicePresenter: (any ReaderVoicePresenter)?
     /// Text of the paragraph currently being read aloud, or `nil` when no
     /// read-aloud session is active. Supplied by the app layer (RootView).
     /// The screen renders it as a Readium decoration in the `"rishi-tts"`
@@ -174,14 +175,14 @@ public struct EPUBReaderScreen: View {
         readerSettingsStore: (any ReaderSettingsStore)? = nil,
         highlightStore: (any HighlightStore)? = nil,
         onReadAloud: (() -> Void)? = nil,
-        chatPresenter: (any ReaderChatPresenter)? = nil,
+        voicePresenter: (any ReaderVoicePresenter)? = nil,
         readAloudParagraph: String? = nil
     ) {
         self.viewModel = viewModel
         self.readerSettingsStore = readerSettingsStore
         self.highlightStore = highlightStore
         self.onReadAloud = onReadAloud
-        self.chatPresenter = chatPresenter
+        self.voicePresenter = voicePresenter
         self.readAloudParagraph = readAloudParagraph
     }
 
@@ -272,12 +273,12 @@ public struct EPUBReaderScreen: View {
                         pendingSelection = nil
                         coordinatorRef.coordinator?.clearSelection()
                     },
-                    onAskAboutThis: chatPresenter.map { presenter in
+                    onAskAboutThis: voicePresenter.map { presenter in
                         {
                             let quote = pending.locator.text
                             pendingSelection = nil
                             coordinatorRef.coordinator?.clearSelection()
-                            presenter.presentChat(
+                            presenter.presentVoice(
                                 bookId: viewModel.book.id,
                                 initialQuote: quote.isEmpty ? nil : quote
                             )
@@ -483,12 +484,12 @@ public struct EPUBReaderScreen: View {
                     .accessibilityLabel(A11yLabel.readerReadAloud)
                 }
 
-                if chatPresenter != nil {
-                    Button(action: chatAction) {
-                        Image(systemName: "bubble.left.and.bubble.right")
+                if voicePresenter != nil {
+                    Button(action: voiceAction) {
+                        Image(systemName: "waveform.circle")
                     }
-                    .accessibilityIdentifier("reader.toolbar.chat")
-                    .accessibilityLabel(A11yLabel.readerOpenChat)
+                    .accessibilityIdentifier("reader.toolbar.voice")
+                    .accessibilityLabel(A11yLabel.readerOpenVoice)
                 }
             }
         }
@@ -551,20 +552,19 @@ public struct EPUBReaderScreen: View {
         #endif
     }
 
-    /// Phase 18 Plan 18-07 (F-P1-05) — chat opener used by the
-    /// `ToolbarItem` (top-bar trailing) and respected from the selection
-    /// menu's "Ask about this" affordance. Mirrors the previous overlay
-    /// toolbar's behavior: bumps chrome user-activity so the auto-hide
-    /// timer resets when the user reaches for chat.
-    private var chatAction: () -> Void {
-        guard let presenter = chatPresenter else {
+    /// Voice opener used by the `ToolbarItem` (top-bar trailing). The
+    /// selection menu's "Ask about this" affordance routes through the same
+    /// presenter with a non-nil quote. Bumps chrome user-activity so the
+    /// auto-hide timer resets when the user reaches for voice.
+    private var voiceAction: () -> Void {
+        guard let presenter = voicePresenter else {
             return { }
         }
         return {
             #if canImport(UIKit)
             chrome.userActivity()
             #endif
-            presenter.presentChat(bookId: viewModel.book.id, initialQuote: nil)
+            presenter.presentVoice(bookId: viewModel.book.id, initialQuote: nil)
         }
     }
 

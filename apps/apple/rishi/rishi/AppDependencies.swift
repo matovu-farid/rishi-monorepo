@@ -515,7 +515,6 @@ final class AppDependencies {
             messageStore: messageStore,
             dirtyHook: voiceDirtyAdapter
         )
-        let chatPresenter = await MainActor.run { ChatPresenterImpl() }
 
         // 15b. Book-aware RAG stack (Phase 25 Plan 25-10 + 25-11).
         //
@@ -646,7 +645,6 @@ final class AppDependencies {
             conversationLookup: conversationLookup,
             voiceDirtyAdapter: voiceDirtyAdapter,
             chatService: chatService,
-            chatPresenter: chatPresenter,
             voicePresenter: voicePresenter,
             entitlementService: entitlementService,
             manageSubscriptionPresenter: manageSubscriptionPresenter,
@@ -969,7 +967,6 @@ struct BootstrappedServices: @unchecked Sendable {
     let conversationLookup: ConversationLookup
     let voiceDirtyAdapter: AppVoiceDirtyAdapter
     let chatService: RishiChatService
-    let chatPresenter: ChatPresenterImpl
 
     // Voice
     let voicePresenter: VoiceSessionPresenter

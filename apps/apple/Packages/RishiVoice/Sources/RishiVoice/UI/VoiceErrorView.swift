@@ -94,7 +94,14 @@ public struct VoiceErrorView: View {
     private var title: String {
         switch reason {
         case .micDenied:    return "Microphone access needed"
-        case .keyFetch:     return "Couldn't start the session"
+        case .keyFetch(let failure):
+            switch failure {
+            case .unauthorized:         return "Sign-in required"
+            case .subscriptionRequired: return "Pro required"
+            case .serviceUnavailable:   return "Voice unavailable"
+            case .network:              return "No connection"
+            case .unknown:              return "Couldn't start the session"
+            }
         case .connect:      return "Couldn't connect"
         case .networkLost:  return "Connection lost"
         case .audioSession: return "Audio setup failed"
@@ -106,8 +113,19 @@ public struct VoiceErrorView: View {
         switch reason {
         case .micDenied:
             return "Allow microphone access in Settings to talk with the AI."
-        case .keyFetch:
-            return "We couldn't reach the server. Check your connection and try again."
+        case .keyFetch(let failure):
+            switch failure {
+            case .unauthorized:
+                return "Your session expired. Sign in again to use voice chat."
+            case .subscriptionRequired:
+                return "Voice chat is a Pro feature."
+            case .serviceUnavailable:
+                return "The voice service is temporarily unavailable. Please try again soon."
+            case .network:
+                return "Check your internet connection and try again."
+            case .unknown(let detail):
+                return detail.isEmpty ? "An unexpected error occurred." : detail
+            }
         case .connect:
             return "The voice service couldn't be reached. Try again in a moment."
         case .networkLost:
@@ -134,6 +152,18 @@ public struct VoiceErrorView: View {
 
 #Preview("Network lost") {
     VoiceErrorView(reason: .networkLost, onRetry: {}, onDismiss: {})
+}
+
+#Preview("Key fetch: sign-in required") {
+    VoiceErrorView(reason: .keyFetch(.unauthorized), onRetry: {}, onDismiss: {})
+}
+
+#Preview("Key fetch: Pro required") {
+    VoiceErrorView(reason: .keyFetch(.subscriptionRequired), onRetry: {}, onDismiss: {})
+}
+
+#Preview("Key fetch: service unavailable") {
+    VoiceErrorView(reason: .keyFetch(.serviceUnavailable), onRetry: {}, onDismiss: {})
 }
 
 #Preview("Unknown") {

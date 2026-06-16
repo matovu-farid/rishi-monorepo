@@ -17,7 +17,7 @@ public enum A11yLabel {
     public static let readerOpenTOC:         String = "Table of contents"
     public static let readerOpenTheme:       String = "Reader theme"
     public static let readerOpenTypography:  String = "Typography settings"
-    public static let readerOpenChat:        String = "Ask about this book"
+    public static let readerOpenVoice:       String = "Start voice chat"
     public static let readerReadAloud:       String = "Read aloud"
     public static let readerStopReadAloud:   String = "Stop reading"
     public static let readerHighlightColor:  String = "Highlight color"

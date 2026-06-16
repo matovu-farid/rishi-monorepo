@@ -150,7 +150,8 @@ public actor RealtimeVoiceSession {
         } catch {
             prewarmTask?.cancel()
             await coordinator.releaseActiveMode(.voice)
-            await fail(reason: .keyFetch, message: String(describing: error))
+            let failure = KeyFetchFailure.classify(error)
+            await fail(reason: .keyFetch(failure), message: Self.keyFetchMessage(failure))
             return
         }
 
@@ -262,6 +263,24 @@ public actor RealtimeVoiceSession {
     }
 
     // MARK: - Helpers
+
+    /// Readable, user-facing message for a classified key-fetch failure.
+    /// Derives from the case rather than dumping `String(describing:)` so the
+    /// recorded error string is presentable, not a raw enum/error dump.
+    private static func keyFetchMessage(_ failure: KeyFetchFailure) -> String {
+        switch failure {
+        case .unauthorized:
+            return "Your session expired. Sign in again to use voice chat."
+        case .subscriptionRequired:
+            return "Voice chat is a Pro feature."
+        case .serviceUnavailable:
+            return "The voice service is temporarily unavailable. Please try again soon."
+        case .network:
+            return "Check your internet connection and try again."
+        case .unknown(let detail):
+            return "Couldn't start the session. \(detail)"
+        }
+    }
 
     @MainActor
     private func push(status: VoiceSessionStatus, error: String? = nil) {

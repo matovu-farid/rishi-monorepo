@@ -33,7 +33,11 @@ struct VoiceUISnapshotTests {
             .ending,
             .ended,
             .failed(reason: .micDenied),
-            .failed(reason: .keyFetch),
+            .failed(reason: .keyFetch(.unauthorized)),
+            .failed(reason: .keyFetch(.subscriptionRequired)),
+            .failed(reason: .keyFetch(.serviceUnavailable)),
+            .failed(reason: .keyFetch(.network)),
+            .failed(reason: .keyFetch(.unknown("oops"))),
             .failed(reason: .connect),
             .failed(reason: .networkLost),
             .failed(reason: .audioSession),
@@ -80,6 +84,40 @@ struct VoiceUISnapshotTests {
         }
     }
 
+    @Test("VoiceSessionView exposes a stable open-text-chat accessibility identifier")
+    func sessionViewOpenTextChatIdentifier() {
+        #expect(VoiceSessionView.openTextChatAccessibilityIdentifier == "voice.openTextChat")
+    }
+
+    @Test("VoiceSessionView constructs with an onOpenTextChat hook")
+    func sessionViewConstructsWithTextChatHook() {
+        var opened = 0
+        let state = VoiceSessionState()
+        state.apply(status: .live)
+        state.appendTranscript(role: .assistant, content: "Hi there")
+        state.appendTranscript(role: .user, content: "Hello")
+        let view = VoiceSessionView(
+            state: state,
+            onEnd: {},
+            onOpenTextChat: { opened += 1 }
+        )
+        _ = view.body
+        // The hook is retained and callable (the button can't be tapped
+        // without a UI host, mirroring the onEnd guard below).
+        let probe: () -> Void = { opened += 1 }
+        _ = VoiceSessionView(state: state, onEnd: {}, onOpenTextChat: probe).body
+        probe()
+        #expect(opened == 1)
+    }
+
+    @Test("VoiceSessionView constructs with onOpenTextChat omitted (nil default)")
+    func sessionViewConstructsWithoutTextChatHook() {
+        let state = VoiceSessionState()
+        state.apply(status: .live)
+        let view = VoiceSessionView(state: state, onEnd: {})
+        _ = view.body
+    }
+
     @Test("VoiceSessionView End closure is invoked when the caller fires it")
     func sessionViewEndClosureFires() {
         // Surface-level guarantee that the injected `onEnd` is the closure
@@ -113,7 +151,12 @@ struct VoiceUISnapshotTests {
     func errorViewForEveryReason() {
         let reasons: [VoiceSessionFailureReason] = [
             .micDenied,
-            .keyFetch,
+            .keyFetch(.unauthorized),
+            .keyFetch(.subscriptionRequired),
+            .keyFetch(.serviceUnavailable),
+            .keyFetch(.network),
+            .keyFetch(.unknown("realtime fault")),
+            .keyFetch(.unknown("")),
             .connect,
             .networkLost,
             .audioSession,

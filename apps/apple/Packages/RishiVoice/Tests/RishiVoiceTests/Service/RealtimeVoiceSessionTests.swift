@@ -50,15 +50,40 @@ struct RealtimeVoiceSessionTests {
         #expect(await fakes.coordinator.currentMode == .idle)
     }
 
-    @Test("Key fetch failure → .failed(.keyFetch); audio mode released")
-    func keyFetchFails() async {
+    @Test(
+        "Key fetch failure → .failed(.keyFetch(classified)); audio mode released",
+        arguments: [
+            (RishiError.unauthenticated, KeyFetchFailure.unauthorized),
+            (RishiError.network(code: "BILLING_INACTIVE", message: "Pro required"), .subscriptionRequired),
+            (RishiError.network(code: "http_4xx", message: "HTTP 404"), .serviceUnavailable),
+            (RishiError.network(code: "http_5xx", message: "HTTP 5xx"), .serviceUnavailable),
+            (RishiError.networkFailure(URLError(.notConnectedToInternet)), .network),
+        ] as [(RishiError, KeyFetchFailure)]
+    )
+    func keyFetchFailsClassified(error: RishiError, expected: KeyFetchFailure) async {
+        let fakes = makeSession(
+            micDecision: .granted,
+            keyFetchResult: .failure(error)
+        )
+        await fakes.session.start()
+        #expect(fakes.state.status == .failed(reason: .keyFetch(expected)))
+        #expect(fakes.client.connectCalls.isEmpty)
+        #expect(await fakes.coordinator.currentMode == .idle)
+    }
+
+    @Test("Key fetch failure with non-RishiError → .keyFetch(.unknown)")
+    func keyFetchFailsUnknown() async {
         struct StubFail: Error {}
         let fakes = makeSession(
             micDecision: .granted,
             keyFetchResult: .failure(StubFail())
         )
         await fakes.session.start()
-        #expect(fakes.state.status == .failed(reason: .keyFetch))
+        if case .failed(.keyFetch(.unknown)) = fakes.state.status {
+            // ok
+        } else {
+            Issue.record("Expected .failed(.keyFetch(.unknown)), got \(fakes.state.status)")
+        }
         #expect(fakes.client.connectCalls.isEmpty)
         #expect(await fakes.coordinator.currentMode == .idle)
     }

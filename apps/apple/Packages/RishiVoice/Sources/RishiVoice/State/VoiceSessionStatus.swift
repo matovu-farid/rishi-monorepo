@@ -1,9 +1,45 @@
 import Foundation
+import RishiCore
+
+/// Why an ephemeral-key fetch failed. Distinguishes the four states that
+/// previously collapsed into one opaque `.keyFetch` reason so the UI (and
+/// logs) can tell "signed out" from "not subscribed" from "server route
+/// missing / down" from "no connectivity".
+public enum KeyFetchFailure: Sendable, Equatable {
+    /// 401 — session expired / signed out.
+    case unauthorized
+    /// 402 — Pro subscription required.
+    case subscriptionRequired
+    /// 404 / 5xx — server route missing or down.
+    case serviceUnavailable
+    /// Transport failure (no connectivity).
+    case network
+    /// Anything else, carries a description.
+    case unknown(String)
+
+    /// Pure mapper from a thrown error (typically `RishiError` from the
+    /// network layer) to a classified key-fetch failure. Unit-testable.
+    public static func classify(_ error: any Error) -> KeyFetchFailure {
+        guard let rishiError = error as? RishiError else {
+            return .unknown(String(describing: error))
+        }
+        switch rishiError {
+        case .unauthenticated:
+            return .unauthorized
+        case .network(let code, _):
+            return code == "BILLING_INACTIVE" ? .subscriptionRequired : .serviceUnavailable
+        case .networkFailure:
+            return .network
+        default:
+            return .unknown(String(describing: error))
+        }
+    }
+}
 
 /// Reason a voice session terminated in `.failed`.
 public enum VoiceSessionFailureReason: Sendable, Equatable {
     case micDenied
-    case keyFetch
+    case keyFetch(KeyFetchFailure)
     case connect
     case networkLost
     case audioSession

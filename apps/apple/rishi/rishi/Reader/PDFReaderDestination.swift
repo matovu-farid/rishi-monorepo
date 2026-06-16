@@ -9,12 +9,12 @@
 
 import SwiftUI
 import RishiAudio
+import RishiBilling
 import RishiCore
 import RishiReader
 import RishiUIKit
 #if canImport(PDFKit)
 import PDFKit
-import RishiBilling
 #endif
 
 struct PDFReaderDestination: View {
@@ -25,6 +25,8 @@ struct PDFReaderDestination: View {
     @State private var vm: PDFReaderViewModel
     @State private var readAloud: ReadAloudController? = nil
     @State private var syncBinding: PDFReaderPositionSyncBinding? = nil
+    /// Stable bridge satisfying RishiReader's `ReaderVoicePresenter` seam.
+    @State private var voiceEntry: ReaderVoiceEntry
 
     init(
         vm: PDFReaderViewModel,
@@ -36,6 +38,11 @@ struct PDFReaderDestination: View {
         self.services = services
         self.userId = userId
         self.onRequestPaywall = onRequestPaywall
+        self._voiceEntry = State(initialValue: ReaderVoiceEntry(
+            voicePresenter: services.voicePresenter,
+            entitlementProvider: { await services.entitlementService.snapshot() },
+            onRequestPaywall: onRequestPaywall
+        ))
     }
 
     // MARK: - Body
@@ -69,7 +76,7 @@ struct PDFReaderDestination: View {
                     await readAloud?.startPDF(vm: vm)
                 }
             } : nil,
-            chatPresenter: services.chatPresenter,
+            voicePresenter: voiceEntry,
             readAloudParagraph: readAloud?.currentParagraph
         )
         .task {

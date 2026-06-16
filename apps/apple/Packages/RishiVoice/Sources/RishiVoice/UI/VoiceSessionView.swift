@@ -14,12 +14,26 @@ import RishiUIKit
 /// system call UI. The End button is plain SwiftUI.
 public struct VoiceSessionView: View {
 
+    /// Accessibility identifier for the optional "open text chat" control.
+    ///
+    /// `nonisolated` because a pure-data `String` constant needs no MainActor
+    /// isolation and the test suite (default isolation `nonisolated`) reads it
+    /// without an `await`. Mirrors the precedent set by
+    /// `EPUBReaderScreen.toolbarAccessibilityIdentifiers` in RishiReader.
+    nonisolated public static let openTextChatAccessibilityIdentifier = "voice.openTextChat"
+
     @Bindable private var state: VoiceSessionState
     private let onEnd: () -> Void
+    private let onOpenTextChat: (() -> Void)?
 
-    public init(state: VoiceSessionState, onEnd: @escaping () -> Void) {
+    public init(
+        state: VoiceSessionState,
+        onEnd: @escaping () -> Void,
+        onOpenTextChat: (() -> Void)? = nil
+    ) {
         self._state = Bindable(wrappedValue: state)
         self.onEnd = onEnd
+        self.onOpenTextChat = onOpenTextChat
     }
 
     public var body: some View {
@@ -79,6 +93,31 @@ public struct VoiceSessionView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(RishiColor.background.ignoresSafeArea())
+        .overlay(alignment: .topTrailing) {
+            openTextChatButton
+        }
+    }
+
+    /// Secondary affordance to switch from the (primary) voice surface into
+    /// text chat. The app layer presents the actual chat UI (which lives in
+    /// RishiChat and must not be imported here). Renders nothing when no hook
+    /// is supplied, so there is no orphan control.
+    @ViewBuilder
+    private var openTextChatButton: some View {
+        if let onOpenTextChat {
+            Button {
+                onOpenTextChat()
+            } label: {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .font(RishiTypography.body)
+                    .foregroundStyle(RishiColor.accent)
+                    .padding(RishiSpacing.s)
+            }
+            .padding(.top, RishiSpacing.l)
+            .padding(.trailing, RishiSpacing.l)
+            .accessibilityIdentifier(Self.openTextChatAccessibilityIdentifier)
+            .accessibilityLabel("Open text chat")
+        }
     }
 
     private var orbColor: Color {
