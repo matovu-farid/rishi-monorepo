@@ -117,6 +117,13 @@ public actor RealtimeVoiceSession {
             return
         }
 
+        // Single-audio-owner invariant: let the coordinator end this session if
+        // another owner (read-aloud TTS) takes the session. end() is our full
+        // teardown and releases .voice itself. [weak self] so the coordinator's
+        // stored closure never retains the per-session actor.
+        await coordinator.registerPreemption(for: .voice) { [weak self] in
+            await self?.end()
+        }
         // Acquire audio session BEFORE fetching the key. If the key fetch
         // fails we already own the session and must release it cleanly.
         await coordinator.requestActiveMode(.voice)
