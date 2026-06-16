@@ -212,6 +212,26 @@ struct TTSEngineTests {
         await tracker.detach()
     }
 
+    @Test("a voice mode request while TTS is playing stops the engine")
+    func voiceRequestStopsTTS() async {
+        // GIVEN the existing harness drives engine.start(request:) to playing,
+        // sharing the SAME coordinator the engine was constructed with.
+        let (engine, fakeEngine, state, coordinator) = await MainActor.run { makeFixture() }
+        let request = TTSStreamRequest(text: "x", voice: "alloy", speed: 1.0, passageId: "p-1")
+        await engine.start(request: request)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        // WHEN another owner asks the shared coordinator for .voice.
+        await coordinator.requestActiveMode(.voice)
+
+        // THEN TTSEngine tore itself down via the registered preempt: stop()
+        // ran (engine stopped, state .stopped, coordinator now in .voice).
+        let status = await MainActor.run { state.status }
+        #expect(status == .stopped)
+        #expect(fakeEngine.calls.contains(.stop))
+        #expect(await coordinator.currentMode == .voice)
+    }
+
     @Test("Streamer error transitions state to .error or .stopped")
     func streamerErrorTransitionsState() async {
         // throwAfter: 0 makes the FakeTTSChunkSource throw on the very first chunk.

@@ -62,6 +62,12 @@ public actor TTSEngine {
             observable.status = .loading
             observable.error = nil
         }
+        // Single-audio-owner invariant: let the coordinator stop us if another
+        // owner (voice) takes the session. stop() is our full teardown and
+        // releases .tts itself, so this is safe to call any time.
+        await coordinator.registerPreemption(for: .tts) { [weak self] in
+            await self?.stop()
+        }
         // No-op on a switch: an already-active .tts coordinator reduces this to
         // .switchPassage, which the policy returns [] for (no configure/activate).
         await coordinator.requestActiveMode(.tts)
