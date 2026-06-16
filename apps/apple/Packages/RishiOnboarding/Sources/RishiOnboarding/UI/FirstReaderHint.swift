@@ -11,28 +11,26 @@ struct FirstReaderHint: View {
     }
 
     public var body: some View {
-        VStack(spacing: RishiSpacing.l) {
-            Spacer(minLength: 0)
+        OnboardingScaffold(actionPlacement: .pinnedToBottom) {
+            VStack(spacing: RishiSpacing.l) {
+                Image(systemName: "hand.tap.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 96, height: 96)
+                    .foregroundStyle(RishiColor.accent)
+                    .accessibilityHidden(true)
 
-            Image(systemName: "hand.tap.fill")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 96, height: 96)
-                .foregroundStyle(RishiColor.accent)
-                .accessibilityHidden(true)
+                Text("Tap a book to open it")
+                    .font(RishiTypography.titleM)
+                    .foregroundStyle(RishiColor.textPrimary)
 
-            Text("Tap a book to open it")
-                .font(RishiTypography.titleM)
-                .foregroundStyle(RishiColor.textPrimary)
-
-            Text("Your library is ready. Tap any book cover to start reading, or use the toolbar to import more.")
-                .font(RishiTypography.body)
-                .foregroundStyle(RishiColor.textSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, RishiSpacing.l)
-
-            Spacer(minLength: 0)
-
+                Text("Your library is ready. Tap any book cover to start reading, or use the toolbar to import more.")
+                    .font(RishiTypography.body)
+                    .foregroundStyle(RishiColor.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, RishiSpacing.l)
+            }
+        } actions: {
             Button(action: onGotIt) {
                 Text("Got it")
                     .frame(maxWidth: .infinity)
@@ -44,8 +42,6 @@ struct FirstReaderHint: View {
             .padding(.bottom, RishiSpacing.l)
             .accessibilityIdentifier("onboarding-hint-gotit")
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(RishiColor.surfaceElevated.ignoresSafeArea())
     }
 }
 

@@ -20,25 +20,27 @@ struct MicPermissionPrimer: View {
     }
 
     public var body: some View {
-        VStack(spacing: RishiSpacing.l) {
-            Image(systemName: "mic.circle.fill")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 80, height: 80)
-                .foregroundStyle(RishiColor.accent)
-                .accessibilityHidden(true)
+        OnboardingScaffold(actionPlacement: .belowContent) {
+            VStack(spacing: RishiSpacing.l) {
+                Image(systemName: "mic.circle.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 80, height: 80)
+                    .foregroundStyle(RishiColor.accent)
+                    .accessibilityHidden(true)
 
-            Text("Talk with the AI about your book")
-                .font(RishiTypography.titleM)
-                .foregroundStyle(RishiColor.textPrimary)
-                .multilineTextAlignment(.center)
+                Text("Talk with the AI about your book")
+                    .font(RishiTypography.titleM)
+                    .foregroundStyle(RishiColor.textPrimary)
+                    .multilineTextAlignment(.center)
 
-            Text("Rishi uses your microphone for voice chat with the AI. Audio is only sent while a conversation is active. You can change this anytime in Settings.")
-                .font(RishiTypography.body)
-                .foregroundStyle(RishiColor.textSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, RishiSpacing.l)
-
+                Text("Rishi uses your microphone for voice chat with the AI. Audio is only sent while a conversation is active. You can change this anytime in Settings.")
+                    .font(RishiTypography.body)
+                    .foregroundStyle(RishiColor.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, RishiSpacing.l)
+            }
+        } actions: {
             VStack(spacing: RishiSpacing.m) {
                 Button(action: onAllow) {
                     Text("Allow microphone")
@@ -55,9 +57,6 @@ struct MicPermissionPrimer: View {
             }
             .padding(.horizontal, RishiSpacing.l)
         }
-        .padding(RishiSpacing.l)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(RishiColor.surfaceElevated.ignoresSafeArea())
     }
 }
 

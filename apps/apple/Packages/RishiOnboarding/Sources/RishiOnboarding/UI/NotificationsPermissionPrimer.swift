@@ -19,25 +19,27 @@ struct NotificationsPermissionPrimer: View {
     }
 
     public var body: some View {
-        VStack(spacing: RishiSpacing.l) {
-            Image(systemName: "bell.badge.fill")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 80, height: 80)
-                .foregroundStyle(RishiColor.accent)
-                .accessibilityHidden(true)
+        OnboardingScaffold(actionPlacement: .belowContent) {
+            VStack(spacing: RishiSpacing.l) {
+                Image(systemName: "bell.badge.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 80, height: 80)
+                    .foregroundStyle(RishiColor.accent)
+                    .accessibilityHidden(true)
 
-            Text("Keep your reading in sync")
-                .font(RishiTypography.titleM)
-                .foregroundStyle(RishiColor.textPrimary)
-                .multilineTextAlignment(.center)
+                Text("Keep your reading in sync")
+                    .font(RishiTypography.titleM)
+                    .foregroundStyle(RishiColor.textPrimary)
+                    .multilineTextAlignment(.center)
 
-            Text("Allow silent background notifications so your library, position, and highlights stay in sync between your iPhone, iPad, and Mac. We never send alerts you'll see — this is just for sync.")
-                .font(RishiTypography.body)
-                .foregroundStyle(RishiColor.textSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, RishiSpacing.l)
-
+                Text("Allow silent background notifications so your library, position, and highlights stay in sync between your iPhone, iPad, and Mac. We never send alerts you'll see — this is just for sync.")
+                    .font(RishiTypography.body)
+                    .foregroundStyle(RishiColor.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, RishiSpacing.l)
+            }
+        } actions: {
             VStack(spacing: RishiSpacing.m) {
                 Button(action: onAllow) {
                     Text("Allow notifications")
@@ -54,9 +56,6 @@ struct NotificationsPermissionPrimer: View {
             }
             .padding(.horizontal, RishiSpacing.l)
         }
-        .padding(RishiSpacing.l)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(RishiColor.surfaceElevated.ignoresSafeArea())
     }
 }
 

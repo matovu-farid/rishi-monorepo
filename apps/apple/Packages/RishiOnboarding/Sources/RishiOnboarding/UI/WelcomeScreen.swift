@@ -10,29 +10,27 @@ struct WelcomeScreen: View {
     }
 
     public var body: some View {
-        VStack(spacing: RishiSpacing.l) {
-            Spacer(minLength: 0)
+        OnboardingScaffold(actionPlacement: .pinnedToBottom) {
+            VStack(spacing: RishiSpacing.l) {
+                Image(systemName: "book.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 96, height: 96)
+                    .foregroundStyle(RishiColor.accent)
+                    .accessibilityHidden(true)
 
-            Image(systemName: "book.fill")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 96, height: 96)
-                .foregroundStyle(RishiColor.accent)
-                .accessibilityHidden(true)
+                Text("Welcome to Rishi")
+                    .font(RishiTypography.titleL)
+                    .foregroundStyle(RishiColor.textPrimary)
 
-            Text("Welcome to Rishi")
-                .font(RishiTypography.titleL)
-                .foregroundStyle(RishiColor.textPrimary)
-
-            VStack(alignment: .leading, spacing: RishiSpacing.m) {
-                bullet("Read EPUB + PDF books on every device")
-                bullet("Highlight passages and add notes")
-                bullet("Ask the AI about what you're reading")
+                VStack(alignment: .leading, spacing: RishiSpacing.m) {
+                    bullet("Read EPUB + PDF books on every device")
+                    bullet("Highlight passages and add notes")
+                    bullet("Ask the AI about what you're reading")
+                }
+                .padding(.horizontal, RishiSpacing.l)
             }
-            .padding(.horizontal, RishiSpacing.l)
-
-            Spacer(minLength: 0)
-
+        } actions: {
             Button(action: onGetStarted) {
                 Text("Get started")
                     .frame(maxWidth: .infinity)
@@ -44,8 +42,6 @@ struct WelcomeScreen: View {
             .padding(.bottom, RishiSpacing.l)
             .accessibilityIdentifier("onboarding-welcome-start")
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(RishiColor.surfaceElevated.ignoresSafeArea())
     }
 
     private func bullet(_ text: String) -> some View {

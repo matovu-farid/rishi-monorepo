@@ -18,26 +18,26 @@ struct SampleOrImportScreen: View {
     }
 
     public var body: some View {
-        VStack(spacing: RishiSpacing.l) {
-            Spacer(minLength: 0)
+        OnboardingScaffold(actionPlacement: .pinnedToBottom) {
+            VStack(spacing: RishiSpacing.l) {
+                Image(systemName: "books.vertical.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 80, height: 80)
+                    .foregroundStyle(RishiColor.accent)
+                    .accessibilityHidden(true)
 
-            Image(systemName: "books.vertical.fill")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 80, height: 80)
-                .foregroundStyle(RishiColor.accent)
-                .accessibilityHidden(true)
+                Text("Add your first book")
+                    .font(RishiTypography.titleM)
+                    .foregroundStyle(RishiColor.textPrimary)
 
-            Text("Add your first book")
-                .font(RishiTypography.titleM)
-                .foregroundStyle(RishiColor.textPrimary)
-
-            Text("Pick a sample to get started, or import an EPUB / PDF from Files (on iPhone or iPad) or drag-and-drop on Mac.")
-                .font(RishiTypography.body)
-                .foregroundStyle(RishiColor.textSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, RishiSpacing.l)
-
+                Text("Pick a sample to get started, or import an EPUB / PDF from Files (on iPhone or iPad) or drag-and-drop on Mac.")
+                    .font(RishiTypography.body)
+                    .foregroundStyle(RishiColor.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, RishiSpacing.l)
+            }
+        } actions: {
             VStack(spacing: RishiSpacing.m) {
                 Button(action: onUseSample) {
                     Text("Use sample book")
@@ -61,11 +61,7 @@ struct SampleOrImportScreen: View {
                     .accessibilityIdentifier("onboarding-sample-skip")
             }
             .padding(.horizontal, RishiSpacing.l)
-
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(RishiColor.surfaceElevated.ignoresSafeArea())
     }
 }
 
