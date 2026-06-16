@@ -14,6 +14,7 @@
 //
 
 import Foundation
+import RishiAPI
 import RishiBilling
 import RishiCore
 import RishiReader
@@ -39,7 +40,24 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
         self.onRequestPaywall = onRequestPaywall
     }
 
-    func presentVoice(bookId: BookID, initialQuote: String?) {
+    func presentVoice(bookId: BookID, context: ReaderVoiceContext, initialQuote: String?) {
+        // Map the reader-local context onto the RishiAPI BookContextSnapshot
+        // here in the app layer (RishiReader must not import RishiAPI). The
+        // outline is ALWAYS non-nil so the worker's system prompt can render
+        // book identity (title/author) even when finer-grained page signals
+        // are absent.
+        let snapshot = BookContextSnapshot(
+            bookId: bookId,
+            currentPage: context.currentPage,
+            pageText: context.pageText,
+            outline: BookOutlineDTO(
+                title: context.title,
+                author: context.author,
+                chapters: context.chapters
+            ),
+            activeParagraphText: context.activeParagraphText
+        )
+
         // KEEP: entitlementProvider() awaits the entitlement actor (off-main
         // internally); voicePresenter.start(...) is @MainActor (drives the
         // .fullScreenCover binding). UI-bound by design.
@@ -50,7 +68,11 @@ final class ReaderVoiceEntry: ReaderVoicePresenter {
             if UITestBypass.isActive { entitled = true }
             #endif
             guard entitled else { onRequestPaywall("Voice Chat"); return }
-            await voicePresenter.start(bookId: bookId, initialQuote: initialQuote)
+            await voicePresenter.start(
+                bookId: bookId,
+                initialQuote: initialQuote,
+                bookContext: snapshot
+            )
         }
     }
 }

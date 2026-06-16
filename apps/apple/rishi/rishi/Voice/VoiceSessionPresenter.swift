@@ -114,7 +114,11 @@ final class VoiceSessionPresenter {
     /// transcript bridge has a stable `ConversationID` to upsert into.
     ///
     /// No-ops if a session is already in flight (presenter is single-session).
-    func start(bookId: BookID?, initialQuote: String? = nil) async {
+    func start(
+        bookId: BookID?,
+        initialQuote: String? = nil,
+        bookContext: BookContextSnapshot? = nil
+    ) async {
         // Single-session invariant: claim the presenting slot SYNCHRONOUSLY,
         // before the first suspension point. Two start() calls can interleave
         // under MainActor reentrancy (a double-tapped toolbar voice button, or
@@ -208,15 +212,23 @@ final class VoiceSessionPresenter {
             )
         }
 
-        // Phase 25 (Plan 25-10) — forward the bookId so the session can
-        // build a BookContextSnapshot for the worker AND spawn the
-        // BookContextResponder. The reader doesn't currently push
-        // currentPage/pageText/outline/activeParagraphText through this seam;
-        // those finer-grained signals will be added by the reader integration
-        // plan that follows. For now the snapshot carries just bookId, which
-        // is sufficient for the worker to register the `bookContext` tool
-        // and for the on-device Responder to look up passages.
-        await session.start(language: "en", bookId: bookId)
+        // Phase 25 (Plan 25-10) + reader-context integration — forward the
+        // bookId so the session can spawn the BookContextResponder, AND thread
+        // the reader's live `bookContext` snapshot (book identity + best-effort
+        // page/outline signals) into the worker so OpenAI gets a book-aware
+        // system prompt. The reader ALWAYS supplies a non-nil `outline`
+        // (title/author) via `ReaderVoiceEntry`, so the model knows the book
+        // even before any page text is captured. When `bookContext` is nil
+        // (e.g. a library-shell launch) the snapshot fields fall back to nil,
+        // reproducing the pre-integration bookId-only behavior.
+        await session.start(
+            language: "en",
+            bookId: bookId,
+            currentPage: bookContext?.currentPage,
+            pageText: bookContext?.pageText,
+            outline: bookContext?.outline,
+            activeParagraphText: bookContext?.activeParagraphText
+        )
     }
 
     /// Terminate the active session. Idempotent — calls into
