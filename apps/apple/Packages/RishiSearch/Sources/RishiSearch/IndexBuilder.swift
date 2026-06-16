@@ -172,6 +172,24 @@ public actor IndexBuilder {
             throw error
         }
     }
+
+    /// Mark a book's index as `.failed` without running a build.
+    ///
+    /// The indexing hook calls this on paths that abort BEFORE `buildIndex`
+    /// runs — an unsupported file extension (no extractor) or a paragraph
+    /// extraction throw. Without it the status sidecar stays missing
+    /// (`.notIndexed`), so `BookSearchStatus.shouldBackfillIndex` stays true
+    /// and every reader-open re-schedules indexing (thrash). `.failed` is
+    /// terminal: backfill skips it and the indexing chip stops polling.
+    ///
+    /// Uses the same `BookIndexLocator` + `IndexStatusStore` the build path
+    /// uses, so the sidecar lands at the canonical `index.status.json` path.
+    public func markFailed(bookId: UUID, reason: String) async {
+        try? locator.ensureBookDir(bookId)
+        let statusStore = IndexStatusStore(url: locator.statusURL(bookId))
+        try? statusStore.write(.failed(reason: reason))
+        await progress(bookId, .failed(reason: reason))
+    }
 }
 
 // MARK: - Helpers

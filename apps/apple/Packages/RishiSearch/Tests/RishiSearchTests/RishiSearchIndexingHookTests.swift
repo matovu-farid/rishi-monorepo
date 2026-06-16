@@ -249,16 +249,56 @@ struct RishiSearchIndexingHookTests {
             fileURL: URL(fileURLWithPath: "/tmp/fixture.pdf")
         )
 
-        // The hook catches the throw inside the detached Task — verify the
-        // sidecar stays in a recoverable state (either never created, or any
-        // earlier `.indexing(...)` sidecar — both are acceptable for the
-        // "non-fatal extraction error" contract). The key invariant is no
-        // vectors.hnsw was written.
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        // The hook catches the throw inside the detached Task and must move
+        // the status sidecar out of `.notIndexed` to `.failed` — otherwise
+        // `BookSearchStatus.shouldBackfillIndex` stays true and every
+        // reader-open re-schedules indexing (thrash). `.failed` is terminal:
+        // no backfill, and the chip stops polling.
         let locator = BookIndexLocator(rootURL: root)
+        let failed = await Self.waitUntil { @Sendable in
+            if case .failed = IndexStatusStore(url: locator.statusURL(bookId)).read() {
+                return true
+            }
+            return false
+        }
+        #expect(failed, "Extractor throw should leave status .failed, not stuck at .notIndexed")
         #expect(
             !FileManager.default.fileExists(atPath: locator.vectorsURL(bookId).path),
             "Extractor throw must not produce a vectors.hnsw file"
+        )
+    }
+
+    @Test("Unknown extension writes a .failed sidecar so status leaves .notIndexed")
+    func unknownExtension_endsAsFailedSidecar() async throws {
+        let root = Self.makeTempRoot()
+        let bookId = UUID()
+        let book = Self.makeBook(id: bookId)
+
+        let builder = IndexBuilder(rootURL: root, embedder: IdentityEmbedder())
+        let hook = RishiSearchIndexingHook(
+            builder: builder,
+            extractors: ["pdf": StubTextExtractor(rows: [(1, "ignored")])]
+        )
+
+        await hook.scheduleIndexing(
+            for: book,
+            fileURL: URL(fileURLWithPath: "/tmp/fixture.unknown")
+        )
+
+        // No registered extractor — the hook must still mark the sidecar
+        // `.failed` so `shouldBackfillIndex` skips it and the reader does not
+        // re-schedule indexing on every open.
+        let locator = BookIndexLocator(rootURL: root)
+        let failed = await Self.waitUntil { @Sendable in
+            if case .failed = IndexStatusStore(url: locator.statusURL(bookId)).read() {
+                return true
+            }
+            return false
+        }
+        #expect(failed, "Unknown extension should leave status .failed, not stuck at .notIndexed")
+        #expect(
+            !FileManager.default.fileExists(atPath: locator.vectorsURL(bookId).path),
+            "Unknown extension must NOT trigger an index build"
         )
     }
 

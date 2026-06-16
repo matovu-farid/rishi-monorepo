@@ -32,15 +32,20 @@ public final class RishiSearchIndexingHook: BookIndexingHook, @unchecked Sendabl
 
     public func scheduleIndexing(for book: Book, fileURL: URL) async {
         let ext = fileURL.pathExtension.lowercased()
-        guard let extractor = extractors[ext] else {
-            Log.event("rag.index.no_extractor", level: .warning, data: [
-                "bookId": book.id.uuidString,
-                "ext": ext,
-            ])
-            return
-        }
         let bookId = book.id
         let builder = self.builder
+        guard let extractor = extractors[ext] else {
+            Log.event("rag.index.no_extractor", level: .warning, data: [
+                "bookId": bookId.uuidString,
+                "ext": ext,
+            ])
+            // No extractor means we will never call buildIndex, so the status
+            // sidecar would stay missing (.notIndexed) and the reader would
+            // re-schedule indexing on every open. Mark .failed (terminal) so
+            // shouldBackfillIndex skips it and the chip stops polling.
+            await builder.markFailed(bookId: bookId, reason: "no extractor for .\(ext)")
+            return
+        }
         // Detached — returns immediately. CONTEXT.md: indexing is non-blocking,
         // failures surface via `index.status.json` (IndexBuilder writes the
         // sidecar). We log scheduling so the cold-start window is observable.
@@ -72,6 +77,14 @@ public final class RishiSearchIndexingHook: BookIndexingHook, @unchecked Sendabl
                     "bookId": bookId.uuidString,
                     "error": String(describing: error),
                 ])
+                // The throw happened before buildIndex could write the sidecar,
+                // so status would be stuck at .notIndexed. Mark .failed
+                // (terminal) so shouldBackfillIndex skips it (no reader-open
+                // thrash) and the chip stops polling.
+                await builder.markFailed(
+                    bookId: bookId,
+                    reason: String(describing: error)
+                )
             }
         }
     }
