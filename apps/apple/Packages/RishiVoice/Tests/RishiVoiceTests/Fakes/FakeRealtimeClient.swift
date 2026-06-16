@@ -15,6 +15,7 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
 
     private let lock = NSLock()
     private var _status: RealtimeConnectionStatus = .disconnected
+    private var _statusScript: [RealtimeConnectionStatus] = []
     private var _connectCalls: [String] = []   // ephemeral keys received, in order
     private var _disconnectCalls = 0
     private var _connectShouldThrow: Error?
@@ -84,6 +85,15 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
         lock.withLock { _status = status }
     }
 
+    /// Queue a deterministic sequence of statuses returned by successive
+    /// `currentStatus()` calls (one popped per call; the queue's last value
+    /// then sticks). Lets reconnect tests model a transient `.disconnected`
+    /// blip vs. a sustained drop without racing real timers. Each popped value
+    /// also becomes the new sticky `_status`.
+    public func scriptStatuses(_ statuses: [RealtimeConnectionStatus]) {
+        lock.withLock { _statusScript = statuses }
+    }
+
     // MARK: - Tool-call test drivers (Plan 25-07)
 
     /// Drive a tool-call event through the fake's stream. If no consumer has
@@ -147,7 +157,12 @@ public final class FakeRealtimeClient: RealtimeClientAPI, @unchecked Sendable {
     }
 
     public func currentStatus() async -> RealtimeConnectionStatus {
-        lock.withLock { _status }
+        lock.withLock {
+            if _statusScript.isEmpty { return _status }
+            let next = _statusScript.removeFirst()
+            _status = next
+            return next
+        }
     }
 
     public func errorStream() -> AsyncStream<RealtimeClientError> {

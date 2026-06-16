@@ -124,6 +124,27 @@ struct RealtimeVoiceSessionTests {
         #expect(fakes.state.status == .live)
     }
 
+    @Test("Reconnect: a single transient .disconnected sample does NOT reconnect")
+    func transientBlipDoesNotReconnect() async throws {
+        let fakes = makeSession(micDecision: .granted)
+        await fakes.session.start()
+        #expect(fakes.state.status == .live)
+
+        // Model one momentary .disconnected status read followed by recovery —
+        // exactly the kind of blip a healthy session can briefly report. The
+        // observer must CONFIRM the drop is sustained before tearing the peer
+        // down; a single sample must be ignored. Without confirmation this
+        // reconnects (connectCalls == 2) and, in production, spawns a second
+        // overlapping voice.
+        fakes.client.scriptStatuses([.disconnected, .connected])
+
+        // Give the observer several poll cycles to consume the blip + recover.
+        try? await Task.sleep(for: .milliseconds(400))
+
+        #expect(fakes.client.connectCalls.count == 1)  // no reconnect
+        #expect(fakes.state.status == .live)
+    }
+
     @Test("Reconnect: 3 consecutive failures → .failed(.networkLost); audio mode released")
     func reconnectExhausted() async throws {
         struct StubFail: Error {}
@@ -198,7 +219,8 @@ struct RealtimeVoiceSessionTests {
             client: client,
             state: state,
             backoff: { _ in .zero },     // tests don't wait
-            maxReconnects: 3
+            maxReconnects: 3,
+            confirmationInterval: .zero  // confirm drops without real delay
         )
         return Fakes(
             session: session,

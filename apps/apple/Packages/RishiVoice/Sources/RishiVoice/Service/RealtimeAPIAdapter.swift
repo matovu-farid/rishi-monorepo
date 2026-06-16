@@ -104,8 +104,45 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         }
         lock.withLock { self.conversation = convo }
         try await convo.connect(ephemeralKey: ephemeralKey)
+        // The SDK's `connect()` returns after the SDP exchange but BEFORE the
+        // WebRTC data channel opens. Until the data channel opens `convo.status`
+        // reports `.disconnected` (its initial value — the SDK only flips it to
+        // `.connected` on `dataChannelDidChangeState(.open)`). Returning here
+        // would make the session's status observer read `.disconnected`, treat
+        // it as a lost connection, and reconnect — spawning a second overlapping
+        // peer (the "two voices" echo) in an endless loop. Wait for the channel
+        // to actually open so "connected" is honest (matches the contract the
+        // FakeRealtimeClient encodes and the SDK's own `waitForConnection()`).
+        try await Self.waitUntilConnected { [convo] in
+            await MainActor.run {
+                if case .connected = convo.status { return true }
+                return false
+            }
+        }
         Log.event("voice.adapter.connected", level: .info)
         startPumps(for: convo)
+    }
+
+    /// Polls `isConnected` until it returns true or `timeout` elapses, throwing
+    /// `RealtimeClientError(code: "connect_timeout")` on timeout. Factored out
+    /// of `connect()` (and `static` + closure-driven) so the white-box test can
+    /// exercise the wait without a live WebRTC peer.
+    static func waitUntilConnected(
+        timeout: Duration = .seconds(15),
+        pollInterval: Duration = .milliseconds(100),
+        isConnected: @Sendable () async -> Bool
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if await isConnected() { return }
+            try await Task.sleep(for: pollInterval)
+        }
+        if await isConnected() { return }
+        throw RealtimeClientError(
+            code: "connect_timeout",
+            message: "WebRTC data channel did not open within \(timeout)"
+        )
     }
 
     /// Cancels the active pumps and releases the current `Conversation` so its

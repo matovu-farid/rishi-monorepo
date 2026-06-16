@@ -46,6 +46,12 @@ public actor RealtimeVoiceSession {
     private let embedderPrewarm: (@Sendable () async -> Void)?
     private let backoff: @Sendable (Int) -> Duration
     private let maxReconnects: Int
+    /// How many additional confirming polls must ALSO read `.disconnected`
+    /// before we treat a drop as real and reconnect. Guards against tearing
+    /// down a healthy session on a single transient status sample.
+    private let disconnectConfirmations: Int
+    /// Delay between confirming polls during `confirmDisconnect()`.
+    private let confirmationInterval: Duration
 
     private var reconnectTask: Task<Void, Never>?
     private var statusObservationTask: Task<Void, Never>?
@@ -72,7 +78,9 @@ public actor RealtimeVoiceSession {
             default: return .seconds(4)
             }
         },
-        maxReconnects: Int = 3
+        maxReconnects: Int = 3,
+        disconnectConfirmations: Int = 3,
+        confirmationInterval: Duration = .milliseconds(150)
     ) {
         self.micGate = micGate
         self.coordinator = coordinator
@@ -83,6 +91,8 @@ public actor RealtimeVoiceSession {
         self.embedderPrewarm = embedderPrewarm
         self.backoff = backoff
         self.maxReconnects = maxReconnects
+        self.disconnectConfirmations = disconnectConfirmations
+        self.confirmationInterval = confirmationInterval
     }
 
     // MARK: - Public lifecycle
@@ -225,13 +235,30 @@ public actor RealtimeVoiceSession {
             // fast without affecting production behavior.
             while !Task.isCancelled {
                 let status = await self.client.currentStatus()
-                if status == .disconnected {
+                if status == .disconnected, await self.confirmDisconnect() {
                     await self.handleTransientDisconnect()
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(100))
             }
         }
+    }
+
+    /// Re-polls the client status to confirm a `.disconnected` reading is a
+    /// real, sustained drop rather than a single transient sample. Returns
+    /// `true` only if every confirming poll ALSO reads `.disconnected`; a
+    /// single recovery to `.connected`/`.connecting` aborts (returns `false`)
+    /// so a healthy session is never torn down and reconnected. This is the
+    /// guard against "eager reconnect" — the realtime peer can momentarily
+    /// report disconnected without the session actually being lost.
+    private func confirmDisconnect() async -> Bool {
+        for _ in 0..<disconnectConfirmations {
+            if isEnding { return false }
+            try? await Task.sleep(for: confirmationInterval)
+            if isEnding { return false }
+            if await client.currentStatus() != .disconnected { return false }
+        }
+        return true
     }
 
     private func handleTransientDisconnect() async {
