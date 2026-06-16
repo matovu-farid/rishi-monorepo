@@ -11,7 +11,9 @@ import SwiftUI
 import RishiAudio
 import RishiBilling
 import RishiCore
+import RishiLibrary
 import RishiReader
+import RishiSearch
 import RishiUIKit
 #if canImport(PDFKit)
 import PDFKit
@@ -84,6 +86,14 @@ struct PDFReaderDestination: View {
                 viewModel: vm,
                 syncEngine: services.syncEngine
             )
+            // Backfill the RAG index for books imported before reader-open
+            // indexing existed. Only `.notIndexed` triggers a build — an
+            // in-flight `.indexing` is left alone and `.failed`/`.ready` are
+            // skipped (see BookSearchStatus.shouldBackfillIndex).
+            if await services.bookSearch.status(bookId: vm.book.id).shouldBackfillIndex {
+                let url = services.bookFileStorage.absoluteFileURL(for: vm.book)
+                await services.indexingHook.scheduleIndexing(for: vm.book, fileURL: url)
+            }
         }
         .onDisappear {
             syncBinding = nil
@@ -97,6 +107,12 @@ struct PDFReaderDestination: View {
                     ttsState: services.ttsState
                 )
             }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            IndexingIndicatorChip(
+                bookId: vm.book.id,
+                bookSearch: services.bookSearch
+            )
         }
         .sheet(isPresented: Binding(
             get: { readAloud?.showPicker ?? false },

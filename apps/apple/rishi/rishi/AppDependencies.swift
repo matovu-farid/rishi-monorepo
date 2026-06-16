@@ -646,6 +646,8 @@ final class AppDependencies {
             voiceDirtyAdapter: voiceDirtyAdapter,
             chatService: chatService,
             voicePresenter: voicePresenter,
+            bookSearch: bookSearch,
+            indexingHook: indexingHook,
             entitlementService: entitlementService,
             manageSubscriptionPresenter: manageSubscriptionPresenter,
             storeKitProductService: productService,
@@ -970,6 +972,15 @@ struct BootstrappedServices: @unchecked Sendable {
 
     // Voice
     let voicePresenter: VoiceSessionPresenter
+
+    // RAG (on-device semantic index)
+    /// Per-book semantic search facade. Exposed so reader destinations can
+    /// query `status(bookId:)` for the indexing chip and the open-time
+    /// backfill decision (`shouldBackfillIndex`).
+    let bookSearch: any BookSearch
+    /// Background index builder. Exposed so reader destinations can backfill
+    /// the RAG index for books imported before indexing existed.
+    let indexingHook: any BookIndexingHook
 
     // Billing
     let entitlementService: EntitlementService
