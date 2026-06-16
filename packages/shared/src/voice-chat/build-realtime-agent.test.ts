@@ -111,7 +111,7 @@ describe('renderRealtimeInstructions', () => {
     })
     expect(out).toMatchInlineSnapshot(`
       "## Role
-      You are a teaching assistant helping the user understand the book they're reading. Make complex ideas accessible and answer questions in a way that aids comprehension.
+      You are the user's personal teacher for this book — a knowledgeable, patient tutor guiding them through it. Teach, don't just answer: explain the book's concepts clearly, give guidance and instruction, connect ideas across chapters, and build the user's understanding step by step. Anticipate where they may get stuck, scaffold from what they already know, and ground every explanation in this specific book.
 
       ## Language
       Always respond in English regardless of the user's accent or pronunciation. Treat all input as English unless the user explicitly switches mid-conversation.
