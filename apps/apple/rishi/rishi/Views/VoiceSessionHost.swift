@@ -66,13 +66,11 @@ struct VoiceSessionHost: View {
                 reason: reason,
                 message: state.lastError,
                 onRetry: {
-                    // KEEP: dismissFailure + start are both @MainActor; the
+                    // KEEP: presenter.retry() is @MainActor; the
                     // .fullScreenCover binding mutates on main. UI-bound.
-                    Task {
-                        let bookId = presenter.currentBookId
-                        presenter.dismissFailure()
-                        await presenter.start(bookId: bookId)
-                    }
+                    // retry() preserves the book context + prefilled quote so
+                    // the retried session is not degraded to bookId-only.
+                    Task { await presenter.retry() }
                 },
                 onDismiss: { presenter.dismissFailure() }
             )

@@ -62,6 +62,13 @@ final class VoiceSessionPresenter {
     /// with this quote.
     private(set) var pendingInitialQuote: String?
 
+    /// The reader's book-context snapshot (title/author/page/active paragraph)
+    /// the current presentation was started with, if any. Set at the top of
+    /// `start`, cleared by `end()` / `dismissFailure()`. Retained so `retry()`
+    /// can restart a failed session with the SAME context instead of a
+    /// degraded bookId-only session.
+    private(set) var currentBookContext: BookContextSnapshot?
+
     // MARK: - Injected dependencies
 
     private let coordinator: AudioSessionCoordinator
@@ -132,6 +139,7 @@ final class VoiceSessionPresenter {
         isPresenting = true
         currentBookId = bookId
         pendingInitialQuote = initialQuote
+        currentBookContext = bookContext
 
         guard let userId = userIdProvider() else {
             state.recordError("Sign in required")
@@ -243,6 +251,20 @@ final class VoiceSessionPresenter {
         isPresenting = false
         currentBookId = nil
         pendingInitialQuote = nil
+        currentBookContext = nil
+    }
+
+    /// Restart a failed session with the SAME context it was started with.
+    /// Captures the book id, prefilled quote, and book-context snapshot BEFORE
+    /// `dismissFailure()` clears them, then restarts with all three — so Retry
+    /// reproduces the original (book-aware, possibly quote-prefilled) session
+    /// rather than degrading to a bookId-only one.
+    func retry() async {
+        let bookId = currentBookId
+        let quote = pendingInitialQuote
+        let context = currentBookContext
+        dismissFailure()
+        await start(bookId: bookId, initialQuote: quote, bookContext: context)
     }
 
     /// Reset to idle without starting a new session — used by the failure
@@ -256,6 +278,7 @@ final class VoiceSessionPresenter {
         isPresenting = false
         currentBookId = nil
         pendingInitialQuote = nil
+        currentBookContext = nil
         state.reset()
     }
 }
