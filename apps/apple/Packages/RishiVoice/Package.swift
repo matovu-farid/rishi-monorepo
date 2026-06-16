@@ -16,9 +16,13 @@ let package = Package(
         .package(path: "../RishiAudio"),
         .package(path: "../RishiSearch"),
         .package(path: "../RishiTesting"), // test-only consumer
+        // Rishi fork (branch rishi-compat): patches the realtime `usage`
+        // token-detail models to be optional so OpenAI's transcription usage
+        // shape decodes (upstream m1guelpf/swift-realtime-openai @46f393d hard-
+        // requires cachedTokens/outputTokenDetails, which OpenAI now omits).
         .package(
-            url: "https://github.com/m1guelpf/swift-realtime-openai.git",
-            revision: "46f393d9e2e60724aadc30062f75ee73bbcdb8fc"
+            url: "https://github.com/matovu-farid/swift-realtime-openai.git",
+            revision: "fa689b775194bb4dcfbbe92c9a709561026458a6"
         ),
     ],
     targets: [

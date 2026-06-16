@@ -112,9 +112,9 @@
     {
       "identity" : "swift-realtime-openai",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/m1guelpf/swift-realtime-openai.git",
+      "location" : "https://github.com/matovu-farid/swift-realtime-openai.git",
       "state" : {
-        "revision" : "46f393d9e2e60724aadc30062f75ee73bbcdb8fc"
+        "revision" : "fa689b775194bb4dcfbbe92c9a709561026458a6"
       }
     },
     {

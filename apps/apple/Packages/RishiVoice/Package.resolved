@@ -1,5 +1,5 @@
 {
-  "originHash" : "7b2db3a33bebc30e92f5fffc85c13ec8a80277bb47ff56c6b128f0e44507543b",
+  "originHash" : "1f2555688be6e461a0674e469a4ba2e3a92e2ab2739fd62d0bbc380e159f6f65",
   "pins" : [
     {
       "identity" : "grdb.swift",
@@ -58,9 +58,9 @@
     {
       "identity" : "swift-realtime-openai",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/m1guelpf/swift-realtime-openai.git",
+      "location" : "https://github.com/matovu-farid/swift-realtime-openai.git",
       "state" : {
-        "revision" : "46f393d9e2e60724aadc30062f75ee73bbcdb8fc"
+        "revision" : "fa689b775194bb4dcfbbe92c9a709561026458a6"
       }
     },
     {
@@ -88,6 +88,15 @@
       "state" : {
         "branch" : "main",
         "revision" : "53d268c89d242791f0771fb022fe4b423f2263d9"
+      }
+    },
+    {
+      "identity" : "zipfoundation",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/readium/ZIPFoundation.git",
+      "state" : {
+        "revision" : "adb49c8bfe060cc187370b12fa081012a6440b86",
+        "version" : "3.0.1"
       }
     }
   ],
