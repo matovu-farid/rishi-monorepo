@@ -259,6 +259,43 @@ public final class PDFReaderViewModel: @unchecked Sendable {
         await writePosition(pageIndex: pageIndex)
     }
 
+    // MARK: - Voice context
+
+    /// Flat chapter titles for the voice model's outline. Derived from the
+    /// PDF Table-of-Contents via pre-order traversal; empty when the document
+    /// has no embedded outline.
+    public var voiceChapters: [String] {
+        outline.flatMap { $0.flattened() }.map(\.label)
+    }
+
+    /// Best-effort text of the current page, extracted synchronously from the
+    /// already-loaded `PDFDocument`. `nil` when the document isn't loaded yet
+    /// or the page has no selectable text (image-only scans). PDFKit's
+    /// per-page text extraction is cheap relative to the document parse, so
+    /// this is safe to call from the synchronous toolbar voice action.
+    public var currentPageText: String? {
+        guard let page = document?.page(at: pageIndex) else { return nil }
+        let paragraphs = PDFReadAloudParagraphs.paragraphs(from: page)
+        guard !paragraphs.isEmpty else { return nil }
+        return paragraphs.joined(separator: "\n\n")
+    }
+
+    /// Build the live reading context handed to the voice session. Title +
+    /// author always come from `book`; `currentPage` is the 1-based live page;
+    /// `chapters` + `pageText` are best-effort from the loaded document.
+    public func voiceContext() -> ReaderVoiceContext {
+        ReaderVoiceContext(
+            title: book.title,
+            author: book.author,
+            chapters: voiceChapters,
+            currentPage: pageIndex + 1,
+            pageText: currentPageText,
+            // The PDF reader has no sub-page "active paragraph" cursor outside
+            // read-aloud; leave nil — page text already grounds the model.
+            activeParagraphText: nil
+        )
+    }
+
     // MARK: - Debounce
 
     private func schedulePositionWrite(pageIndex: Int) {

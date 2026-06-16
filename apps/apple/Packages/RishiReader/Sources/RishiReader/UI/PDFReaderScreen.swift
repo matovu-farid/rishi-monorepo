@@ -284,6 +284,7 @@ public struct PDFReaderScreen: View {
                                 pendingHighlight = nil
                                 presenter.presentVoice(
                                     bookId: viewModel.book.id,
+                                    context: viewModel.voiceContext(),
                                     initialQuote: quote.isEmpty ? nil : quote
                                 )
                             }
@@ -491,7 +492,11 @@ public struct PDFReaderScreen: View {
                 if let voicePresenter {
                     Button {
                         chrome.userActivity()
-                        voicePresenter.presentVoice(bookId: viewModel.book.id, initialQuote: nil)
+                        voicePresenter.presentVoice(
+                            bookId: viewModel.book.id,
+                            context: viewModel.voiceContext(),
+                            initialQuote: nil
+                        )
                     } label: {
                         Image(systemName: "waveform.circle")
                     }

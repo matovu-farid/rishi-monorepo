@@ -228,6 +228,37 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
         }
     }
 
+    // MARK: - Voice context
+
+    /// Flat chapter titles for the voice model's outline, derived from the
+    /// already-parsed Readium manifest TOC. Cheap (in-memory `[Link]`); falls
+    /// back to each entry's href when a TOC entry has no title. Empty before
+    /// the publication finishes loading.
+    public var voiceChapters: [String] {
+        guard let toc = publication?.manifest.tableOfContents else { return [] }
+        return toc.map { $0.title ?? $0.href }
+    }
+
+    /// Build the live reading context handed to the voice session. Title +
+    /// author always come from `book` so the model always knows the book.
+    ///
+    /// `currentPage` is left nil — reflowable EPUB has no fixed integer page
+    /// model. `pageText` / `activeParagraphText` are left nil in v1: surfacing
+    /// the visible text requires the async resource read in
+    /// ``paragraphsForReadAloud()``, which we do not block the synchronous
+    /// toolbar action on. The outline `chapters` + book identity already
+    /// ground the model.
+    public func voiceContext() -> ReaderVoiceContext {
+        ReaderVoiceContext(
+            title: book.title,
+            author: book.author,
+            chapters: voiceChapters,
+            currentPage: nil,
+            pageText: nil,
+            activeParagraphText: nil
+        )
+    }
+
     // MARK: - Read-aloud
 
     /// Paragraphs for read-aloud, starting at the CURRENT page rather than the

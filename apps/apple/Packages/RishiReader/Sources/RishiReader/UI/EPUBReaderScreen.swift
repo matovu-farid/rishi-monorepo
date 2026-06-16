@@ -280,6 +280,7 @@ public struct EPUBReaderScreen: View {
                             coordinatorRef.coordinator?.clearSelection()
                             presenter.presentVoice(
                                 bookId: viewModel.book.id,
+                                context: viewModel.voiceContext(),
                                 initialQuote: quote.isEmpty ? nil : quote
                             )
                         }
@@ -564,7 +565,11 @@ public struct EPUBReaderScreen: View {
             #if canImport(UIKit)
             chrome.userActivity()
             #endif
-            presenter.presentVoice(bookId: viewModel.book.id, initialQuote: nil)
+            presenter.presentVoice(
+                bookId: viewModel.book.id,
+                context: viewModel.voiceContext(),
+                initialQuote: nil
+            )
         }
     }
 

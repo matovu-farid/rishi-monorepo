@@ -19,23 +19,39 @@ struct ReaderVoicePresenterTests {
     final class FakeReaderVoicePresenter: ReaderVoicePresenter {
         struct Call: Equatable {
             let bookId: BookID
+            let context: ReaderVoiceContext
             let initialQuote: String?
         }
         var calls: [Call] = []
 
-        func presentVoice(bookId: BookID, initialQuote: String?) {
-            calls.append(Call(bookId: bookId, initialQuote: initialQuote))
+        func presentVoice(bookId: BookID, context: ReaderVoiceContext, initialQuote: String?) {
+            calls.append(Call(bookId: bookId, context: context, initialQuote: initialQuote))
         }
     }
 
-    @Test("FakeReaderVoicePresenter records a (bookId, nil) call for the toolbar action")
+    /// A minimal context for tests that only care about routing.
+    private func ctx(title: String = "Moby Dick", author: String? = "Herman Melville") -> ReaderVoiceContext {
+        ReaderVoiceContext(
+            title: title,
+            author: author,
+            chapters: [],
+            currentPage: nil,
+            pageText: nil,
+            activeParagraphText: nil
+        )
+    }
+
+    @Test("FakeReaderVoicePresenter records a (bookId, context, nil) call for the toolbar action")
     func toolbarActionRecordsNilQuote() {
         let presenter = FakeReaderVoicePresenter()
         let bookId: BookID = UUID()
+        let context = ctx()
 
-        presenter.presentVoice(bookId: bookId, initialQuote: nil)
+        presenter.presentVoice(bookId: bookId, context: context, initialQuote: nil)
 
-        #expect(presenter.calls == [.init(bookId: bookId, initialQuote: nil)])
+        #expect(presenter.calls == [.init(bookId: bookId, context: context, initialQuote: nil)])
+        #expect(presenter.calls.first?.context.title == "Moby Dick")
+        #expect(presenter.calls.first?.context.author == "Herman Melville")
     }
 
     @Test("FakeReaderVoicePresenter records the quote for the selection action")
@@ -44,7 +60,7 @@ struct ReaderVoicePresenterTests {
         let bookId: BookID = UUID()
         let quote = "It was the best of times, it was the worst of times."
 
-        presenter.presentVoice(bookId: bookId, initialQuote: quote)
+        presenter.presentVoice(bookId: bookId, context: ctx(), initialQuote: quote)
 
         #expect(presenter.calls.count == 1)
         #expect(presenter.calls.first?.bookId == bookId)
@@ -56,12 +72,54 @@ struct ReaderVoicePresenterTests {
         let presenter = FakeReaderVoicePresenter()
         let bookId: BookID = UUID()
 
-        presenter.presentVoice(bookId: bookId, initialQuote: nil)
-        presenter.presentVoice(bookId: bookId, initialQuote: "first quote")
-        presenter.presentVoice(bookId: bookId, initialQuote: "second quote")
+        presenter.presentVoice(bookId: bookId, context: ctx(), initialQuote: nil)
+        presenter.presentVoice(bookId: bookId, context: ctx(), initialQuote: "first quote")
+        presenter.presentVoice(bookId: bookId, context: ctx(), initialQuote: "second quote")
 
         #expect(presenter.calls.count == 3)
         #expect(presenter.calls[1].initialQuote == "first quote")
         #expect(presenter.calls[2].initialQuote == "second quote")
+    }
+
+    // MARK: - ReaderVoiceContext value-type contract
+
+    @Test("ReaderVoiceContext carries title/author/chapters/page fields verbatim")
+    func contextCarriesAllFields() {
+        let context = ReaderVoiceContext(
+            title: "How to Prove It",
+            author: "Daniel Velleman",
+            chapters: ["Sentential Logic", "Quantificational Logic"],
+            currentPage: 12,
+            pageText: "A proof is a careful argument.",
+            activeParagraphText: "A proof is a careful argument."
+        )
+
+        #expect(context.title == "How to Prove It")
+        #expect(context.author == "Daniel Velleman")
+        #expect(context.chapters == ["Sentential Logic", "Quantificational Logic"])
+        #expect(context.currentPage == 12)
+        #expect(context.pageText == "A proof is a careful argument.")
+        #expect(context.activeParagraphText == "A proof is a careful argument.")
+    }
+
+    @Test("ReaderVoiceContext(book:) seeds title+author from the Book, others nil/empty")
+    func contextFromBookSeedsIdentity() {
+        let book = Book(
+            id: UUID(),
+            userId: UUID(),
+            title: "Frankenstein",
+            author: "Mary Shelley",
+            formatType: .epub,
+            fileURL: "frankenstein.epub"
+        )
+
+        let context = ReaderVoiceContext(book: book)
+
+        #expect(context.title == "Frankenstein")
+        #expect(context.author == "Mary Shelley")
+        #expect(context.chapters.isEmpty)
+        #expect(context.currentPage == nil)
+        #expect(context.pageText == nil)
+        #expect(context.activeParagraphText == nil)
     }
 }
