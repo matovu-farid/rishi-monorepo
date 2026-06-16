@@ -1,5 +1,6 @@
 import Foundation
 import RishiCore
+import RishiAPI
 
 /// Why an ephemeral-key fetch failed. Distinguishes the four states that
 /// previously collapsed into one opaque `.keyFetch` reason so the UI (and
@@ -27,7 +28,13 @@ public enum KeyFetchFailure: Sendable, Equatable {
         case .unauthenticated:
             return .unauthorized
         case .network(let code, _):
-            return code == "BILLING_INACTIVE" ? .subscriptionRequired : .serviceUnavailable
+            // Key off the centralised cross-package contract constant rather
+            // than a bare literal. The worker returns HTTP 402 with this code
+            // for a paywall (subscription required); everything else 4xx/5xx
+            // is a service failure.
+            return code == WorkerErrorCode.billingInactive
+                ? .subscriptionRequired
+                : .serviceUnavailable
         case .networkFailure:
             return .network
         default:

@@ -2,6 +2,7 @@ import Testing
 import Foundation
 @testable import RishiVoice
 import RishiCore
+import RishiAPI
 
 /// Unit tests for the pure `KeyFetchFailure.classify` mapper. Each row feeds
 /// a `RishiError` (the type the network layer throws) and asserts the
@@ -18,6 +19,18 @@ struct KeyFetchFailureTests {
     @Test("402 BILLING_INACTIVE maps to .subscriptionRequired")
     func billingInactiveMapsToSubscriptionRequired() {
         let error = RishiError.network(code: "BILLING_INACTIVE", message: "Pro required")
+        #expect(KeyFetchFailure.classify(error) == .subscriptionRequired)
+    }
+
+    @Test("billing-inactive code constant maps to .subscriptionRequired")
+    func billingInactiveConstantMapsToSubscriptionRequired() {
+        // The classifier keys off the centralised cross-package contract
+        // constant rather than a bare literal; this asserts the constant
+        // value still drives the .subscriptionRequired mapping.
+        let error = RishiError.network(
+            code: WorkerErrorCode.billingInactive,
+            message: "Pro required"
+        )
         #expect(KeyFetchFailure.classify(error) == .subscriptionRequired)
     }
 
