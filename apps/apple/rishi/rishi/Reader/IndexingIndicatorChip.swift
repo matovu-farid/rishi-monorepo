@@ -45,13 +45,29 @@ struct IndexingIndicatorChip: View {
             // Poll while the index is forming. `.ready`/`.failed` are terminal
             // for this screen — stop polling so we don't spin a 1s timer for
             // the reader's whole lifetime.
+            //
+            // Defense-in-depth: a persistent `.notIndexed` (no sidecar) would
+            // otherwise loop forever (battery/CPU drain, no UI). Cap consecutive
+            // `.notIndexed` reads and stop polling once we hit it. `.indexing`
+            // means real progress, so it resets the counter. (Bug-2's fix makes
+            // a failed build land on `.failed` promptly; this guards any other
+            // stuck-`.notIndexed`.)
+            let maxConsecutiveNotIndexed = 10
+            var consecutiveNotIndexed = 0
             while !Task.isCancelled {
                 let current = await bookSearch.status(bookId: bookId)
                 status = current
                 switch current {
                 case .ready, .failed:
                     return
-                case .notIndexed, .indexing:
+                case .indexing:
+                    consecutiveNotIndexed = 0
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                case .notIndexed:
+                    consecutiveNotIndexed += 1
+                    if consecutiveNotIndexed >= maxConsecutiveNotIndexed {
+                        return
+                    }
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }
             }
