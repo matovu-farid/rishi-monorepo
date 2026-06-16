@@ -38,8 +38,32 @@ enum UITestBypass {
 
     /// True when the host launched the app with `RISHI_UITEST=1` in the
     /// process environment (set via `XCUIApplication.launchEnvironment`).
+    ///
+    /// ALSO true in live-voice mode (`RISHI_UITEST_LIVE_VOICE=1`) so the
+    /// shared auth / entitlement / book-seed / reader-chrome stubs still
+    /// fire — only the VOICE stack diverges (see `isLiveVoiceActive`).
     nonisolated static var isActive: Bool {
-        ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1"
+        ProcessInfo.processInfo.environment["RISHI_UITEST"] == "1" || isLiveVoiceActive
+    }
+
+    /// True when the host launched with `RISHI_UITEST_LIVE_VOICE=1`. In this
+    /// mode the app reuses every offline RISHI_UITEST stub (sign-in, pro
+    /// entitlement, seeded book, visible reader chrome) BUT runs the REAL
+    /// voice stack — real `RealtimeAPIAdapter` + real `EphemeralKeyFetcher`
+    /// against the live worker/OpenAI — so the live start->end->start
+    /// auto-teardown bug can be reproduced. Opt-in: the live-voice UITest
+    /// skips unless `DEV_BYPASS_SECRET` is also provided.
+    nonisolated static var isLiveVoiceActive: Bool {
+        ProcessInfo.processInfo.environment["RISHI_UITEST_LIVE_VOICE"] == "1"
+    }
+
+    /// The dev-bypass secret forwarded from the test process. The worker's
+    /// `requireAuth` compares `X-Dev-Bypass` timing-safe against its env
+    /// `DEV_BYPASS_SECRET`; in live-voice mode this value is attached to
+    /// outbound worker requests so the realtime client-secret call succeeds
+    /// as `dev-user` with no real session.
+    nonisolated static var devBypassSecret: String? {
+        ProcessInfo.processInfo.environment["DEV_BYPASS_SECRET"]
     }
 
     /// Opt-in (RISHI_UITEST_TTS_LATENT=1): wrap the fixture TTS source in a real

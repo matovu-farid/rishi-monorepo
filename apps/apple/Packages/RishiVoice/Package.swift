@@ -16,13 +16,21 @@ let package = Package(
         .package(path: "../RishiAudio"),
         .package(path: "../RishiSearch"),
         .package(path: "../RishiTesting"), // test-only consumer
-        // Rishi fork (branch rishi-compat): patches the realtime `usage`
-        // token-detail models to be optional so OpenAI's transcription usage
-        // shape decodes (upstream m1guelpf/swift-realtime-openai @46f393d hard-
-        // requires cachedTokens/outputTokenDetails, which OpenAI now omits).
+        // VENDORED, locally-maintained copy of the realtime SDK (we own it; no
+        // upstream-compatibility concern). Absorbed from our fork
+        // matovu-farid/swift-realtime-openai (was pinned revision
+        // 0471374…) into the monorepo so we can patch and keep patching it —
+        // e.g. the `usage` token-detail optional fix and the WebRTC peer-leak
+        // teardown. Edit the source directly under
+        // `apps/apple/Packages/swift-realtime-openai`.
+        .package(path: "../swift-realtime-openai"),
+        // App-level manual control of WebRTC's process-global audio unit so it
+        // re-initializes on every voice session (fixes dead-audio on session 2+).
+        // Mirror the realtime SDK's exact requirement (`branch: "main"`) to avoid
+        // a version conflict — the SDK already pins this package transitively.
         .package(
-            url: "https://github.com/matovu-farid/swift-realtime-openai.git",
-            revision: "0471374392dce1b42b5711f74f9ecdbc421604c6"
+            url: "https://github.com/livekit/webrtc-xcframework.git",
+            branch: "main"
         ),
     ],
     targets: [
@@ -37,6 +45,7 @@ let package = Package(
                 "RishiAudio",
                 .product(name: "RishiSearch", package: "RishiSearch"),
                 .product(name: "RealtimeAPI", package: "swift-realtime-openai"),
+                .product(name: "LiveKitWebRTC", package: "webrtc-xcframework"),
             ]
         ),
         .testTarget(

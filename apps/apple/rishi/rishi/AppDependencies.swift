@@ -227,14 +227,23 @@ final class AppDependencies {
 
         // 3. WorkerClient with dev-bypass gated to DEBUG only.
         #if DEBUG
-        let devBypassEnabled = DevBypassConfig.isEnabled
+        // In live-voice UITest mode force the bypass ON and attach the real
+        // secret (forwarded from the test process), so the realtime
+        // client-secret call authenticates as `dev-user` against the live
+        // worker with no real session. Otherwise honor DevBypassConfig.
+        let devBypassEnabled = UITestBypass.isLiveVoiceActive || DevBypassConfig.isEnabled
+        let devBypassSecret: String? = UITestBypass.isLiveVoiceActive
+            ? UITestBypass.devBypassSecret
+            : nil
         #else
         let devBypassEnabled = false
+        let devBypassSecret: String? = nil
         #endif
         let workerClient = WorkerClient(
             baseURL: baseURL,
             tokenProvider: tokenProvider,
-            devBypassEnabled: devBypassEnabled
+            devBypassEnabled: devBypassEnabled,
+            devBypassSecret: devBypassSecret
         )
 
         // 4-6. Auth presenter + coordinator + service. SystemSiwaPresenter
@@ -539,8 +548,60 @@ final class AppDependencies {
         }
 
         // 16. Voice stack (Phase 10 Plan 10-06 / Phase 25 Plan 25-10).
+        //
+        // Under RISHI_UITEST we swap in offline fakes (client + key fetcher +
+        // granted mic gate) so a voice session reaches `.live` with no worker,
+        // no OpenAI, no WebRTC, and no system mic prompt — letting the
+        // start->end->start reproduction UITest (VoiceRestartUITests) drive the
+        // real presenter/session FSM deterministically. Production wiring is
+        // untouched: the fakes are nil outside RISHI_UITEST (and the whole
+        // UITestVoiceFakes file is `#if DEBUG`-gated), so the presenter falls
+        // back to its production default constructions.
         let voicePresenter = await MainActor.run {
-            VoiceSessionPresenter(
+            #if DEBUG
+            // LIVE-VOICE UITest (RISHI_UITEST_LIVE_VOICE=1) takes precedence
+            // over the offline-fake branch: build the PRODUCTION voice path —
+            // real RealtimeAPIAdapter + real EphemeralKeyFetcher hitting the
+            // live worker/OpenAI (no clientFactory / keyFetcherFactory) AND the
+            // REAL SystemMicPermissionGate (production default). The realtime
+            // SDK hard-checks the OS-level `AVAudioApplication.recordPermission`
+            // at connect; an always-granted app-level gate would NOT satisfy
+            // it. Using the real gate makes `start()` actually request OS mic
+            // permission, so on a physical device the system prompt fires and
+            // the UITest auto-accepts it via a UIInterruptionMonitor (on a
+            // simulator, pre-grant with `simctl privacy ... grant microphone`).
+            if UITestBypass.isLiveVoiceActive {
+                return VoiceSessionPresenter(
+                    coordinator: audioStack.coordinator,
+                    workerClient: workerClient,
+                    messageStore: messageStore,
+                    conversationLookup: conversationLookup,
+                    userIdProvider: { [userIdBox] in userIdBox.value },
+                    dirtyHook: voiceDirtyAdapter,
+                    bookSearch: bookSearch,
+                    embedderPrewarm: embedderPrewarm
+                )
+            }
+            // Plain RISHI_UITEST (non-live): offline fakes — client + key
+            // fetcher + granted mic gate — so the session reaches `.live`
+            // with no network, no OpenAI, no WebRTC, no mic prompt.
+            if UITestBypass.isActive {
+                return VoiceSessionPresenter(
+                    coordinator: audioStack.coordinator,
+                    workerClient: workerClient,
+                    messageStore: messageStore,
+                    conversationLookup: conversationLookup,
+                    userIdProvider: { [userIdBox] in userIdBox.value },
+                    dirtyHook: voiceDirtyAdapter,
+                    micGate: UITestGrantedMicGate(),
+                    bookSearch: bookSearch,
+                    embedderPrewarm: embedderPrewarm,
+                    clientFactory: { UITestFakeRealtimeClient() },
+                    keyFetcherFactory: { UITestFakeEphemeralKeyFetcher() }
+                )
+            }
+            #endif
+            return VoiceSessionPresenter(
                 coordinator: audioStack.coordinator,
                 workerClient: workerClient,
                 messageStore: messageStore,

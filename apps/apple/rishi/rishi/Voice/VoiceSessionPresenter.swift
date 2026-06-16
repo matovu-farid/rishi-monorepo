@@ -87,6 +87,17 @@ final class VoiceSessionPresenter {
     private let bookSearch: (any BookSearch)?
     private let embedderPrewarm: (@Sendable () async -> Void)?
 
+    // Injection seams for the realtime client + ephemeral-key fetcher. Default
+    // to the production constructions so prod behavior is unchanged; UI-test
+    // wiring (AppDependencies under RISHI_UITEST) swaps in offline fakes so a
+    // session can reach `.live` with no network. The client factory closes
+    // over nothing and is invoked once per `start()` (the SDK `Conversation`
+    // is not reusable after disconnect — the same per-session contract the
+    // hardcoded construction had). The key-fetcher factory closes over the
+    // injected `workerClient` for the production default.
+    private let clientFactory: @MainActor () -> any RealtimeClientAPI
+    private let keyFetcherFactory: @MainActor () -> any EphemeralKeyFetching
+
     // MARK: - Per-session state
 
     private var bridgeTask: Task<Void, Never>?
@@ -100,7 +111,9 @@ final class VoiceSessionPresenter {
         dirtyHook: any VoiceTranscriptDirtyHook,
         micGate: any MicPermissionGate = SystemMicPermissionGate(),
         bookSearch: (any BookSearch)? = nil,
-        embedderPrewarm: (@Sendable () async -> Void)? = nil
+        embedderPrewarm: (@Sendable () async -> Void)? = nil,
+        clientFactory: (@MainActor () -> any RealtimeClientAPI)? = nil,
+        keyFetcherFactory: (@MainActor () -> any EphemeralKeyFetching)? = nil
     ) {
         self.state = VoiceSessionState()
         self.coordinator = coordinator
@@ -112,6 +125,11 @@ final class VoiceSessionPresenter {
         self.micGate = micGate
         self.bookSearch = bookSearch
         self.embedderPrewarm = embedderPrewarm
+        // Default to the exact production construction so prod is unchanged.
+        // The key-fetcher default captures `workerClient` (the same value the
+        // hardcoded `EphemeralKeyFetcher(workerClient:)` used).
+        self.clientFactory = clientFactory ?? { RealtimeAPIAdapter() }
+        self.keyFetcherFactory = keyFetcherFactory ?? { EphemeralKeyFetcher(workerClient: workerClient) }
     }
 
     // MARK: - Public lifecycle
@@ -166,10 +184,13 @@ final class VoiceSessionPresenter {
             return
         }
 
-        // Fresh adapter per session — the SDK's `Conversation` is not
-        // reusable after disconnect (deinit closes the WebRTC peer).
-        let adapter = RealtimeAPIAdapter()
-        let fetcher = EphemeralKeyFetcher(workerClient: workerClient)
+        // Fresh client per session — the SDK's `Conversation` is not
+        // reusable after disconnect (deinit closes the WebRTC peer). In
+        // production `clientFactory` builds a `RealtimeAPIAdapter`; under
+        // RISHI_UITEST it builds an offline fake (see AppDependencies) so the
+        // session can reach `.live` with no network.
+        let adapter = clientFactory()
+        let fetcher = keyFetcherFactory()
         let bridge = VoiceTranscriptBridge(
             messageStore: messageStore,
             dirtyHook: dirtyHook

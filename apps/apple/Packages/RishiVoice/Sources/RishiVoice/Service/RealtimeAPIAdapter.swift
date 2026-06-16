@@ -2,6 +2,17 @@ import Foundation
 import RealtimeAPI
 import RishiLogging
 
+// WebRTC's `RTCAudioSession` (LiveKit-prefixed `LKRTCAudioSession`) wraps
+// `AVAudioSession` and exists ONLY on iOS / macCatalyst — the macOS slice of
+// the LiveKitWebRTC xcframework ships neither the header nor the class. Plain
+// macOS voice chat is not a shipping path (the app targets iPhone), so gate the
+// manual-audio control to the platforms where the symbol is real. Without this
+// guard `swift build` on a macOS host (which picks the macos-* slice) fails
+// with "cannot find 'LKRTCAudioSession' in scope".
+#if !os(macOS) || targetEnvironment(macCatalyst)
+import LiveKitWebRTC
+#endif
+
 /// Production impl of `RealtimeClientAPI` backed by `swift-realtime-openai`'s
 /// `Conversation` type.
 ///
@@ -47,6 +58,28 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
 
     public init() {}
 
+    /// One-time, process-global enable of WebRTC's MANUAL audio mode.
+    ///
+    /// WebRTC's audio I/O unit lives in the process-global `LKRTCAudioSession`
+    /// singleton (the LiveKit-prefixed `RTCAudioSession`). In WebRTC's default
+    /// AUTOMATIC mode the VoIP audio unit is initialized once when the first
+    /// peer's audio track is ready; when session 1's peer closes WebRTC tears
+    /// the unit down, and session 2's fresh peer does NOT re-initialize it —
+    /// so session 2 reaches `.live` with dead mic + playout (user speaks, no
+    /// reply). Switching to MANUAL mode hands us deterministic control: WebRTC
+    /// will only (re)initialize the audio unit when we flip `isAudioEnabled`
+    /// true, which we do on every `connect()` (and false on full `disconnect()`).
+    ///
+    /// `useManualAudio` is a plain settable `BOOL` property; per the header it
+    /// does NOT require `lockForConfiguration` (that lock guards only
+    /// `setConfiguration:`/`setActive:`). A `static let` runs its initializer
+    /// exactly once and is thread-safe, giving the idempotent one-time set.
+    private static let _enableManualAudioOnce: Void = {
+        #if !os(macOS) || targetEnvironment(macCatalyst)
+        LKRTCAudioSession.sharedInstance().useManualAudio = true
+        #endif
+    }()
+
     /// PCM 24kHz audio format used for BOTH input and output.
     ///
     /// The OpenAI Realtime API requires the MIME-style type `"audio/pcm"`; a
@@ -87,7 +120,10 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         // producing two concurrent voices. Tearing down here cancels those
         // pumps and drops the old `Conversation` so its `deinit` closes the
         // peer, without touching the stream continuations.
-        teardownActiveConversation()
+        // Ensure WebRTC manual-audio mode is on exactly once (process-global,
+        // idempotent), BEFORE any WebRTC audio init. See `_enableManualAudioOnce`.
+        _ = Self._enableManualAudioOnce
+        await teardownActiveConversation()
         Log.event("voice.adapter.connecting", level: .info)
         let convo = await MainActor.run { () -> Conversation in
             Conversation(debug: false) { session in
@@ -132,6 +168,16 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
             }
         }
         Log.event("voice.adapter.connected", level: .info)
+        // Permit WebRTC to (re)initialize the VoIP audio unit now that the peer
+        // is connected. In manual mode this is what actually starts mic capture
+        // + playout — and it re-runs on EVERY connect, fixing the dead-audio on
+        // session 2+ where the auto-mode unit had been torn down and never
+        // re-created. The AVAudioSession is already active here (the session
+        // calls coordinator.requestActiveMode(.voice) before client.connect()).
+        #if !os(macOS) || targetEnvironment(macCatalyst)
+        LKRTCAudioSession.sharedInstance().isAudioEnabled = true
+        Log.event("voice.audio.unit.enabled", level: .info, data: ["enabled": "true"])
+        #endif
         startPumps(for: convo)
     }
 
@@ -157,22 +203,32 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         )
     }
 
-    /// Cancels the active pumps and releases the current `Conversation` so its
-    /// `deinit` closes the WebRTC peer. Does NOT touch the stream continuations,
-    /// so a reconnect can keep the same transcript/tool/error streams alive.
+    /// Cancels the active pumps and tears down the current `Conversation`,
+    /// closing the WebRTC peer. Does NOT touch the stream continuations, so a
+    /// reconnect can keep the same transcript/tool/error streams alive.
     /// `internal` for white-box testing (mirrors `isArgumentsReady`).
-    internal func teardownActiveConversation() {
+    ///
+    /// We can NOT rely on `Conversation.deinit` to close the peer: the SDK's
+    /// detached event-handling task strongly retains the `Conversation` while
+    /// awaiting `client.events`, and that stream only finishes once the peer
+    /// closes — a retain cycle that keeps the peer (and its audio) alive even
+    /// after we drop our reference. So we explicitly call the vendored
+    /// `Conversation.disconnect()` (cancel task + close peer + finish streams)
+    /// on the main actor before niling.
+    internal func teardownActiveConversation() async {
         errorPump?.cancel(); errorPump = nil
         transcriptPump?.cancel(); transcriptPump = nil
         toolCallPump?.cancel(); toolCallPump = nil
-        // Dropping the last reference to `Conversation` triggers its
-        // `deinit { client.disconnect() }`, closing the WebRTC peer.
+        let convo: Conversation? = lock.withLock { self.conversation }
+        if let convo {
+            await MainActor.run { convo.disconnect() }
+        }
         lock.withLock { self.conversation = nil }
     }
 
     public func disconnect() async {
         // Pump + Conversation teardown is the shared single-peer path.
-        teardownActiveConversation()
+        await teardownActiveConversation()
 
         let (errCont, txCont, tcCont): (
             AsyncStream<RealtimeClientError>.Continuation?,
@@ -188,6 +244,18 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         errCont?.finish()
         txCont?.finish()
         tcCont?.finish()
+
+        // Stop + uninitialize WebRTC's VoIP audio unit on FULL session end so the
+        // next session's connect() forces a clean re-init. Deliberately NOT done
+        // in teardownActiveConversation() — that helper also runs at the top of
+        // connect() on the in-session RECONNECT path, where disabling audio would
+        // kill a live reconnect. Only full disconnect() flips it false. The
+        // AVAudioSession is still active here (the session calls
+        // coordinator.releaseActiveMode(.voice) AFTER client.disconnect()).
+        #if !os(macOS) || targetEnvironment(macCatalyst)
+        LKRTCAudioSession.sharedInstance().isAudioEnabled = false
+        Log.event("voice.audio.unit.enabled", level: .info, data: ["enabled": "false"])
+        #endif
 
         Log.event("voice.adapter.disconnected", level: .info)
     }

@@ -11,6 +11,7 @@ public actor WorkerClient {
     private let session: URLSession
     private let tokenProvider: any TokenProvider
     private let devBypassEnabled: Bool
+    private let devBypassSecret: String?
 
     /// Retry attempt cap (total, including the initial try). Phase 2 fixes this
     /// at 3 per requirement API-01; revisit if 5xx tail-latency becomes a problem.
@@ -20,12 +21,14 @@ public actor WorkerClient {
         baseURL: URL,
         session: URLSession = .shared,
         tokenProvider: any TokenProvider,
-        devBypassEnabled: Bool = false
+        devBypassEnabled: Bool = false,
+        devBypassSecret: String? = nil
     ) {
         self.baseURL = baseURL
         self.session = session
         self.tokenProvider = tokenProvider
         self.devBypassEnabled = devBypassEnabled
+        self.devBypassSecret = devBypassSecret
     }
 
     // MARK: - Non-streaming send
@@ -185,7 +188,7 @@ public actor WorkerClient {
 
         #if DEBUG
         if devBypassEnabled {
-            request.setValue("1", forHTTPHeaderField: "X-Dev-Bypass")
+            request.setValue(devBypassSecret ?? "1", forHTTPHeaderField: "X-Dev-Bypass")
         }
         #endif
 
@@ -209,7 +212,7 @@ public actor WorkerClient {
         }
         #if DEBUG
         if devBypassEnabled {
-            request.setValue("1", forHTTPHeaderField: "X-Dev-Bypass")
+            request.setValue(devBypassSecret ?? "1", forHTTPHeaderField: "X-Dev-Bypass")
         }
         #endif
         if let bodied = endpoint as? (any WorkerStreamingEndpointWithBody) {

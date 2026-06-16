@@ -31,7 +31,7 @@ struct RealtimeAPIAdapterTeardownTests {
         #expect(adapter.transcriptPump != nil)
         #expect(adapter.toolCallPump != nil)
 
-        adapter.teardownActiveConversation()
+        await adapter.teardownActiveConversation()
 
         #expect(adapter.errorPump == nil)
         #expect(adapter.transcriptPump == nil)
@@ -41,7 +41,7 @@ struct RealtimeAPIAdapterTeardownTests {
     @Test("teardownActiveConversation is idempotent when nothing is active")
     func teardownIdempotent() async {
         let adapter = RealtimeAPIAdapter()
-        adapter.teardownActiveConversation()
+        await adapter.teardownActiveConversation()
         #expect(adapter.errorPump == nil)
         #expect(adapter.transcriptPump == nil)
         #expect(adapter.toolCallPump == nil)
