@@ -33,9 +33,12 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     private var transcriptContinuation: AsyncStream<RealtimeTranscriptEvent>.Continuation?
     private var toolCallContinuation: AsyncStream<RealtimeToolCallEvent>.Continuation?
 
-    private var errorPump: Task<Void, Never>?
-    private var transcriptPump: Task<Void, Never>?
-    private var toolCallPump: Task<Void, Never>?
+    // `internal` (not `private`) so the white-box teardown test can assign
+    // sentinel pumps and assert they are cancelled + niled, mirroring how
+    // `isArgumentsReady` is `internal` for `@testable` tests.
+    internal var errorPump: Task<Void, Never>?
+    internal var transcriptPump: Task<Void, Never>?
+    internal var toolCallPump: Task<Void, Never>?
 
     /// Tool-call dedupe: tracks which `callId`s have already been emitted to
     /// the tool-call stream this connection. Cleared on `disconnect()`.
@@ -47,6 +50,15 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
     // MARK: - RealtimeClientAPI
 
     public func connect(ephemeralKey: String) async throws {
+        // Single-peer invariant: opening a new peer always closes the old one
+        // first. On RECONNECT the session re-calls `connect()` WITHOUT a
+        // preceding `disconnect()` (so transcript/tool/error streams stay
+        // alive). Without this teardown, the prior `startPumps` Tasks keep
+        // polling the OLD `Conversation`, retaining its WebRTC peer + audio —
+        // producing two concurrent voices. Tearing down here cancels those
+        // pumps and drops the old `Conversation` so its `deinit` closes the
+        // peer, without touching the stream continuations.
+        teardownActiveConversation()
         Log.event("voice.adapter.connecting", level: .info)
         let convo = await MainActor.run { () -> Conversation in
             Conversation(debug: false) { session in
@@ -90,15 +102,22 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         startPumps(for: convo)
     }
 
-    public func disconnect() async {
-        let convo: Conversation? = lock.withLock {
-            let c = self.conversation
-            self.conversation = nil
-            return c
-        }
+    /// Cancels the active pumps and releases the current `Conversation` so its
+    /// `deinit` closes the WebRTC peer. Does NOT touch the stream continuations,
+    /// so a reconnect can keep the same transcript/tool/error streams alive.
+    /// `internal` for white-box testing (mirrors `isArgumentsReady`).
+    internal func teardownActiveConversation() {
         errorPump?.cancel(); errorPump = nil
         transcriptPump?.cancel(); transcriptPump = nil
         toolCallPump?.cancel(); toolCallPump = nil
+        // Dropping the last reference to `Conversation` triggers its
+        // `deinit { client.disconnect() }`, closing the WebRTC peer.
+        lock.withLock { self.conversation = nil }
+    }
+
+    public func disconnect() async {
+        // Pump + Conversation teardown is the shared single-peer path.
+        teardownActiveConversation()
 
         let (errCont, txCont, tcCont): (
             AsyncStream<RealtimeClientError>.Continuation?,
@@ -115,11 +134,6 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         txCont?.finish()
         tcCont?.finish()
 
-        // The SDK's `Conversation` has no public `disconnect()` — dropping the
-        // last reference triggers `deinit { client.disconnect() }` which closes
-        // the WebRTC peer connection. We retain `convo` only through the local
-        // here, so it goes out of scope at the end of this method.
-        _ = convo
         Log.event("voice.adapter.disconnected", level: .info)
     }
 
