@@ -91,7 +91,7 @@ struct PDFReaderDestination: View {
             // in-flight `.indexing` is left alone and `.failed`/`.ready` are
             // skipped (see BookSearchStatus.shouldBackfillIndex).
             if await services.bookSearch.status(bookId: vm.book.id).shouldBackfillIndex {
-                let url = services.bookFileStorage.absoluteFileURL(for: vm.book)
+                let url = await services.bookFileStorage.absoluteFileURL(for: vm.book)
                 await services.indexingHook.scheduleIndexing(for: vm.book, fileURL: url)
             }
         }
