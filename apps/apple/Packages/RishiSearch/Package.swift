@@ -41,6 +41,10 @@ let package = Package(
                 "RishiLibrary",
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "USearch", package: "usearch"),
+            ],
+            resources: [
+                .copy("Fixtures/how-to-prove-it.pdf"),
+                .copy("Fixtures/rationality.epub"),
             ]
         ),
     ]
