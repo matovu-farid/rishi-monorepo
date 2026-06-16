@@ -47,6 +47,23 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
 
     public init() {}
 
+    /// PCM 24kHz audio format used for BOTH input and output.
+    ///
+    /// The OpenAI Realtime API requires the MIME-style type `"audio/pcm"`; a
+    /// bare `"pcm"` is rejected at session-update time ("Invalid value: 'pcm'.
+    /// Supported values are: 'audio/pcm', 'audio/pcmu', and 'audio/pcma'."),
+    /// which leaves the session non-functional and triggers an endless
+    /// reconnect loop. `Session.AudioFormat` has only an internal memberwise
+    /// init, so we round-trip JSON to build it from outside the SDK module.
+    /// `internal` (not `private`) for white-box testing.
+    static func makePCM24kFormat() -> Session.AudioFormat {
+        let data = try! JSONSerialization.data(withJSONObject: [
+            "rate": 24000,
+            "type": "audio/pcm",
+        ])
+        return try! JSONDecoder().decode(Session.AudioFormat.self, from: data)
+    }
+
     // MARK: - RealtimeClientAPI
 
     public func connect(ephemeralKey: String) async throws {
@@ -66,18 +83,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
                 // server VAD threshold 0.7, silence 700ms, prefix padding 300ms,
                 // voice=alloy, PCM 24kHz.
                 //
-                // Session.AudioFormat exposes only an internal memberwise init,
-                // so we round-trip JSON to build it from outside the module —
-                // mirrors the spike harness.
-                let pcm24k: Session.AudioFormat = {
-                    let data = try! JSONSerialization.data(withJSONObject: [
-                        "rate": 24000,
-                        "type": "pcm",
-                    ])
-                    return try! JSONDecoder().decode(
-                        Session.AudioFormat.self, from: data
-                    )
-                }()
+                let pcm24k = RealtimeAPIAdapter.makePCM24kFormat()
                 let input = Session.Audio.Input(
                     format: pcm24k,
                     noiseReduction: nil,
