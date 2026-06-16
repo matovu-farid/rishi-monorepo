@@ -62,18 +62,20 @@ struct SignedOutView: View {
     @State private var viewModel = SignedOutViewModel(authService: nil)
 
     var body: some View {
-        VStack(spacing: RishiSpacing.l) {
-            Spacer(minLength: 0)
-            wordmark
-            welcomeCopy
-            Spacer(minLength: 0)
-            buttons
-            errorRow
-            Spacer().frame(height: RishiSpacing.l)
+        RishiScreenScaffold(actionPlacement: .pinnedToBottom) {
+            VStack(spacing: RishiSpacing.l) {
+                wordmark
+                welcomeCopy
+            }
+            .padding(.horizontal, RishiSpacing.l)
+        } actions: {
+            VStack(spacing: RishiSpacing.l) {
+                buttons
+                errorRow
+            }
+            .padding(.horizontal, RishiSpacing.l)
+            .padding(.bottom, RishiSpacing.l)
         }
-        .padding(.horizontal, RishiSpacing.l)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(RishiColor.surfaceElevated.ignoresSafeArea())
         .task {
             // Inject the env-resolved service into the eager VM. Safe to
             // call on every .task run because setAuthService is idempotent.

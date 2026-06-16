@@ -19,7 +19,7 @@ struct NotificationsPermissionPrimer: View {
     }
 
     public var body: some View {
-        OnboardingScaffold(actionPlacement: .belowContent) {
+        RishiScreenScaffold(actionPlacement: .belowContent) {
             VStack(spacing: RishiSpacing.l) {
                 Image(systemName: "bell.badge.fill")
                     .resizable()

@@ -27,6 +27,16 @@
 // View.rishiAnimation(...)    — `Modifiers/RishiAnimationModifier.swift`. View extension
 //                                that applies a RishiMotion preset as an animation.
 
+// MARK: - Layout
+//
+// RishiScreenScaffold         — `Layout/RishiScreenScaffold.swift`. Container for full-screen
+//                                "hero + actions" screens (onboarding, sign-in). Full-bleed on
+//                                iPhone/iPad, centered column on Mac Catalyst.
+// RishiScreenLayout           — `Layout/RishiScreenScaffold.swift`. fullBleed vs
+//                                centeredColumn(maxWidth:); `resolve(isMacCatalyst:)` + `current`.
+// RishiScreenActionPlacement  — `Layout/RishiScreenScaffold.swift`. pinnedToBottom vs
+//                                belowContent (full-bleed action placement).
+
 // MARK: - Accessibility
 //
 // A11yLabel                   — `A11y/AccessibleLabels.swift`. Namespace enum of shared

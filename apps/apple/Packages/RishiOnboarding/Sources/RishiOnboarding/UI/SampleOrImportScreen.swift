@@ -18,7 +18,7 @@ struct SampleOrImportScreen: View {
     }
 
     public var body: some View {
-        OnboardingScaffold(actionPlacement: .pinnedToBottom) {
+        RishiScreenScaffold(actionPlacement: .pinnedToBottom) {
             VStack(spacing: RishiSpacing.l) {
                 Image(systemName: "books.vertical.fill")
                     .resizable()

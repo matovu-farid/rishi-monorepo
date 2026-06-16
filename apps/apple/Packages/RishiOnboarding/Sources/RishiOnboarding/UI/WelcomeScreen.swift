@@ -10,7 +10,7 @@ struct WelcomeScreen: View {
     }
 
     public var body: some View {
-        OnboardingScaffold(actionPlacement: .pinnedToBottom) {
+        RishiScreenScaffold(actionPlacement: .pinnedToBottom) {
             VStack(spacing: RishiSpacing.l) {
                 Image(systemName: "book.fill")
                     .resizable()
