@@ -1,5 +1,5 @@
 {
-  "originHash" : "1f2555688be6e461a0674e469a4ba2e3a92e2ab2739fd62d0bbc380e159f6f65",
+  "originHash" : "bd59fa64c62153cf95993e94e15297ea97b881bf4170582414245c37387c3db1",
   "pins" : [
     {
       "identity" : "grdb.swift",
@@ -60,7 +60,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/matovu-farid/swift-realtime-openai.git",
       "state" : {
-        "revision" : "fa689b775194bb4dcfbbe92c9a709561026458a6"
+        "revision" : "0471374392dce1b42b5711f74f9ecdbc421604c6"
       }
     },
     {

@@ -64,6 +64,18 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
         return try! JSONDecoder().decode(Session.AudioFormat.self, from: data)
     }
 
+    /// OpenAI server-side input noise reduction, on top of the device-side
+    /// WebRTC/AVAudioSession processing. near-field suits a held phone or a
+    /// headset (mobile); far-field suits a laptop/desktop built-in mic used
+    /// hands-free.
+    static var inputNoiseReduction: Session.Audio.Input.NoiseReduction {
+        #if targetEnvironment(macCatalyst) || os(macOS)
+        return .farField
+        #else
+        return .nearField
+        #endif
+    }
+
     // MARK: - RealtimeClientAPI
 
     public func connect(ephemeralKey: String) async throws {
@@ -86,7 +98,7 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
                 let pcm24k = RealtimeAPIAdapter.makePCM24kFormat()
                 let input = Session.Audio.Input(
                     format: pcm24k,
-                    noiseReduction: nil,
+                    noiseReduction: RealtimeAPIAdapter.inputNoiseReduction,
                     transcription: nil,
                     turnDetection: .serverVad(
                         prefixPaddingMs: 300,
@@ -228,6 +240,11 @@ public final class RealtimeAPIAdapter: RealtimeClientAPI, @unchecked Sendable {
                     callId: callId,
                     output: payload
                 ))
+                // The Realtime API does NOT auto-continue from a function
+                // output — server-VAD only auto-creates a response on user
+                // speech-stop. Without an explicit response.create here the
+                // model never speaks the answer and the turn hangs forever.
+                try convo.send(event: .createResponse())
             }
         } catch {
             throw RealtimeClientError(

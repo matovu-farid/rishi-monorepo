@@ -16,4 +16,15 @@ struct RealtimeAPIAdapterAudioFormatTests {
         #expect(format.type == "audio/pcm")
         #expect(format.rate == 24000)
     }
+
+    @Test("server-side input noise reduction is set per platform")
+    func inputNoiseReductionIsPlatformAppropriate() {
+        // Mobile (held phone / headset) -> near-field; laptop/desktop
+        // built-in mic used hands-free -> far-field. Must never be unset.
+        #if targetEnvironment(macCatalyst) || os(macOS)
+        #expect(RealtimeAPIAdapter.inputNoiseReduction == .farField)
+        #else
+        #expect(RealtimeAPIAdapter.inputNoiseReduction == .nearField)
+        #endif
+    }
 }

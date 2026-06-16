@@ -124,7 +124,7 @@ struct BookContextResponderTests {
     }
 
     @Test
-    func underlyingSearchError_returnsSentinel() async throws {
+    func underlyingSearchError_returnsFailureMessage() async throws {
         let fake = FakeRealtimeClient()
         try await fake.connect(ephemeralKey: "stub")
         let stub = StubBookSearch(hits: [], status: .ready)
@@ -140,9 +140,11 @@ struct BookContextResponderTests {
         try await Task.sleep(nanoseconds: 100_000_000)
         consumeTask.cancel()
 
+        // A real search failure (not a not-ready index) tells the agent to
+        // inform the user it couldn't retrieve the book context.
         let sent = fake.sentToolResultsSnapshot()
         #expect(sent.count == 1)
-        #expect(sent.first?.payload == BookContextResponder.coldStartSentinel)
+        #expect(sent.first?.payload == BookContextResponder.lookupFailedMessage)
     }
 
     @Test
@@ -168,7 +170,7 @@ struct BookContextResponderTests {
     }
 
     @Test
-    func badJSONArgs_returnsSentinel() async throws {
+    func badJSONArgs_returnsFailureMessage() async throws {
         let fake = FakeRealtimeClient()
         try await fake.connect(ephemeralKey: "stub")
         let stub = StubBookSearch(
@@ -188,7 +190,37 @@ struct BookContextResponderTests {
 
         let sent = fake.sentToolResultsSnapshot()
         #expect(sent.count == 1)
-        #expect(sent.first?.payload == BookContextResponder.coldStartSentinel)
+        #expect(sent.first?.payload == BookContextResponder.lookupFailedMessage)
+    }
+
+    @Test
+    func searchTimeout_returnsFailureMessage() async throws {
+        let fake = FakeRealtimeClient()
+        try await fake.connect(ephemeralKey: "stub")
+        // A search that never returns — exercises the timeout path.
+        let hanging = HangingSearch()
+        let responder = BookContextResponder(
+            client: fake,
+            search: hanging,
+            bookId: UUID(),
+            timeoutSeconds: 0.2
+        )
+        let consumeTask = Task { await responder.consume(stream: fake.toolCallStream()) }
+        defer { consumeTask.cancel() }
+
+        fake.inject(toolCall: RealtimeToolCallEvent(
+            callId: "c-timeout",
+            name: "bookContext",
+            argumentsJSON: "{\"queryText\":\"something to look up\"}"
+        ))
+
+        // Wait past the 0.2s budget.
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+
+        let sent = fake.sentToolResultsSnapshot()
+        #expect(sent.count == 1)
+        #expect(sent.first?.callId == "c-timeout")
+        #expect(sent.first?.payload == BookContextResponder.lookupTimedOutMessage)
     }
 
     @Test
@@ -249,4 +281,16 @@ struct BookContextResponderTests {
         #expect(stub.lastBookId() == bookId)
         #expect(stub.searchCallCount() == 1)
     }
+}
+
+/// `BookSearch` stub whose `search` never returns until cancelled — used to
+/// drive `BookContextResponder`'s lookup-timeout path. Reports `.ready` so the
+/// status gate is passed and the timeout (not the cold-start sentinel) fires.
+private actor HangingSearch: BookSearch {
+    func search(queryText: String, bookId: UUID) async throws -> [BookSearchHit] {
+        try await Task.sleep(nanoseconds: 60_000_000_000) // 60s — far past any test budget
+        return []
+    }
+
+    func status(bookId: UUID) async -> BookSearchStatus { .ready }
 }

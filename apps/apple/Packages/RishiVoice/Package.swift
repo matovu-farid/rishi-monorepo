@@ -22,7 +22,7 @@ let package = Package(
         // requires cachedTokens/outputTokenDetails, which OpenAI now omits).
         .package(
             url: "https://github.com/matovu-farid/swift-realtime-openai.git",
-            revision: "fa689b775194bb4dcfbbe92c9a709561026458a6"
+            revision: "0471374392dce1b42b5711f74f9ecdbc421604c6"
         ),
     ],
     targets: [
