@@ -136,6 +136,59 @@ struct PDFReadAloudPageContinuationTests {
         #expect(vm.pageIndex == 1, "page index should not move past the last page, was \(vm.pageIndex)")
     }
 
+    // MARK: - Backward continuation (Previous at the first paragraph of a page)
+
+    @Test("Preceding page returns the previous page's paragraphs and turns the page back")
+    func crossesIntoPreviousPage() async throws {
+        let url = makeTempURL("prev-two")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeMultiPageTextPDF(to: url, pages: [bodyLines("Alpha"), bodyLines("Beta")])
+
+        let vm = await makeViewModel(documentURL: url)
+        let doc = try #require(vm.document)
+        let expectedPrev = PDFReadAloudParagraphs.paragraphs(from: try #require(doc.page(at: 0)))
+        try #require(!expectedPrev.isEmpty)
+        vm.seek(toPage: 1)
+
+        let prev = await vm.paragraphsForPrecedingPage()
+
+        #expect(!prev.isEmpty, "expected the preceding page's paragraphs, got none")
+        #expect(prev == expectedPrev,
+                "preceding page must be page 0's complete paragraph list; got \(prev)")
+        #expect(vm.pageIndex == 0, "live page should follow narration back to page 0, was \(vm.pageIndex)")
+    }
+
+    @Test("Preceding page skips pages with no selectable text")
+    func skipsEmptyPagesBackward() async throws {
+        let url = makeTempURL("prev-skip")
+        defer { try? FileManager.default.removeItem(at: url) }
+        // page 0 text, page 1 empty (no glyphs), page 2 text.
+        try writeMultiPageTextPDF(to: url, pages: [bodyLines("Alpha"), [], bodyLines("Gamma")])
+
+        let vm = await makeViewModel(documentURL: url)
+        vm.seek(toPage: 2)
+
+        let prev = await vm.paragraphsForPrecedingPage()
+
+        #expect(prev.joined(separator: " ").contains("Alpha"), "should skip the blank page and reach page 0, got \(prev)")
+        #expect(vm.pageIndex == 0, "live page should land on page 0, was \(vm.pageIndex)")
+    }
+
+    @Test("Preceding page returns [] at the start of the document")
+    func stopsAtStartOfDocument() async throws {
+        let url = makeTempURL("prev-start")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeMultiPageTextPDF(to: url, pages: [bodyLines("Alpha"), bodyLines("Beta")])
+
+        let vm = await makeViewModel(documentURL: url)
+        vm.seek(toPage: 0) // first page
+
+        let prev = await vm.paragraphsForPrecedingPage()
+
+        #expect(prev.isEmpty, "before the first page narration should stay put, got \(prev)")
+        #expect(vm.pageIndex == 0, "page index should not move before the first page, was \(vm.pageIndex)")
+    }
+
     // MARK: - Real-fixture coverage (how-to-prove-it.pdf)
     //
     // Synthetic CGContext PDFs above pin the edge cases (empty-page skip,
@@ -200,5 +253,48 @@ struct PDFReadAloudPageContinuationTests {
 
         #expect(following.isEmpty,
                 "no content page follows the last one — must return [] so playback stops")
+    }
+
+    @Test("how-to-prove-it: every content-page boundary continues into the previous content page")
+    func realPDFCrossesEveryContentBoundaryBackward() async throws {
+        let url = try howToProveItURL()
+        let vm = await makeViewModel(documentURL: url)
+        let doc = try #require(vm.document)
+        let content = contentPageIndices(doc: doc)
+        try #require(content.count >= 2, "fixture must have >= 2 content pages to cross a boundary")
+
+        // From each content page (except the first), the preceding page must be
+        // the PREVIOUS content page's COMPLETE paragraph list (skipping any
+        // blank/front-matter pages between them), and the live page must follow
+        // back there. Reuse one VM and re-anchor the cursor via seek() each call.
+        for (k, pageB) in content.dropFirst().enumerated() {
+            let pageA = content[k] // the content page before pageB
+            let expectedPrev = PDFReadAloudParagraphs.paragraphs(from: try #require(doc.page(at: pageA)))
+
+            vm.seek(toPage: pageB)
+            let preceding = await vm.paragraphsForPrecedingPage()
+
+            #expect(!preceding.isEmpty,
+                    "from content page \(pageB), read-aloud must continue back (got nothing)")
+            #expect(preceding == expectedPrev,
+                    "from page \(pageB) the preceding batch must be page \(pageA)'s complete paragraph list")
+            #expect(vm.pageIndex == pageA,
+                    "live page must follow narration back to \(pageA), was \(vm.pageIndex)")
+        }
+    }
+
+    @Test("how-to-prove-it: preceding page returns [] at the first content page")
+    func realPDFStopsAtFirstContentPage() async throws {
+        let url = try howToProveItURL()
+        let vm = await makeViewModel(documentURL: url)
+        let doc = try #require(vm.document)
+        let content = contentPageIndices(doc: doc)
+        let first = try #require(content.first)
+
+        vm.seek(toPage: first)
+        let preceding = await vm.paragraphsForPrecedingPage()
+
+        #expect(preceding.isEmpty,
+                "no content page precedes the first one — must return [] so playback stays put")
     }
 }

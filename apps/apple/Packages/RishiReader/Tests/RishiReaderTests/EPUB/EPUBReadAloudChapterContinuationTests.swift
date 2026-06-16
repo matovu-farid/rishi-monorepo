@@ -125,10 +125,80 @@ struct EPUBReadAloudChapterContinuationTests {
         #expect(following.isEmpty, "no chapter follows the last one — must return [] so playback stops")
     }
 
+    /// Backward parity: from the chapter read-aloud is narrating,
+    /// `paragraphsForPrecedingResource()` returns the PREVIOUS non-empty chapter's
+    /// FULL paragraph list (completeness, not merely non-empty), and moves the
+    /// live locator back into it so the page follows.
+    @MainActor
+    private func assertContinuesIntoPreviousChapter(url: URL) async throws {
+        let vm = try await loadedVM(url: url)
+        let publication = try #require(vm.publication)
+        let order = publication.readingOrder
+
+        let content = try await nonEmptyContentIndices(vm: vm, publication: publication)
+        try #require(content.count >= 2, "fixture must have >= 2 non-empty chapters to cross a boundary")
+
+        let chapterAIndex = content[0]
+        let chapterBIndex = content[1]
+        // Ground truth for the previous chapter's paragraphs, captured independently.
+        let expectedPrev = try await paragraphs(of: order[chapterAIndex], vm: vm)
+        let chapterALeaf = try #require(order[chapterAIndex].href.split(separator: "/").last.map(String.init))
+
+        // Anchor the cursor on chapter B (the resource being narrated), then ask
+        // for the preceding resource.
+        _ = try await paragraphs(of: order[chapterBIndex], vm: vm)
+        let preceding = await vm.paragraphsForPrecedingResource()
+
+        #expect(!preceding.isEmpty,
+                "read-aloud must continue into the previous chapter, not stop at the chapter boundary")
+        #expect(preceding == expectedPrev,
+                "preceding resource must be chapter A's complete paragraph list (skipping any empty resources between A and B)")
+        let landedHref = String(describing: vm.latestLocator?.href)
+        #expect(landedHref.contains(chapterALeaf),
+                "latestLocator must move back into chapter A (\(chapterALeaf)) so the page follows; got \(landedHref)")
+    }
+
+    /// At the start of the book the backward source dries up:
+    /// `paragraphsForPrecedingResource()` returns `[]`, which the bridge
+    /// interprets as "stay put".
+    @MainActor
+    private func assertStopsAtStartOfBook(url: URL) async throws {
+        let vm = try await loadedVM(url: url)
+        let publication = try #require(vm.publication)
+        let order = publication.readingOrder
+
+        let content = try await nonEmptyContentIndices(vm: vm, publication: publication)
+        let firstContentIndex = try #require(content.first)
+
+        // Anchor on the first chapter with prose; there is no preceding chapter.
+        _ = try await paragraphs(of: order[firstContentIndex], vm: vm)
+        let preceding = await vm.paragraphsForPrecedingResource()
+
+        #expect(preceding.isEmpty, "no chapter precedes the first one — must return [] so playback stays put")
+    }
+
     @Test("rationality: read-aloud continues into the next chapter")
     @MainActor
     func rationalityContinuesIntoNextChapter() async throws {
         try await assertContinuesIntoNextChapter(url: rationalityURL())
+    }
+
+    @Test("rationality: read-aloud continues into the previous chapter")
+    @MainActor
+    func rationalityContinuesIntoPreviousChapter() async throws {
+        try await assertContinuesIntoPreviousChapter(url: rationalityURL())
+    }
+
+    @Test("rationality: read-aloud stays put at the start of the book")
+    @MainActor
+    func rationalityStaysPutAtStartOfBook() async throws {
+        try await assertStopsAtStartOfBook(url: rationalityURL())
+    }
+
+    @Test("alice: read-aloud continues into the previous chapter")
+    @MainActor
+    func aliceContinuesIntoPreviousChapter() async throws {
+        try await assertContinuesIntoPreviousChapter(url: aliceURL())
     }
 
     @Test("rationality: read-aloud stops at the end of the book")

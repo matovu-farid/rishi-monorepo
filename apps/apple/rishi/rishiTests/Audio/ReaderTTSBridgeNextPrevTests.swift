@@ -97,6 +97,54 @@ struct ReaderTTSBridgeNextPrevTests {
         #expect(startIds(env.engine) == ["0", "1"], "must not start an out-of-range passage at end of book")
     }
 
+    /// Backward parity with `nextAtEndCrossesChapter`: pressing Previous on the
+    /// FIRST paragraph of a chapter must cross into the PRECEDING chapter and
+    /// land on its LAST paragraph (where a listener expects narration to resume),
+    /// not clamp at index 0. Reproduces the reported bug — Previous at the top of
+    /// a page/chapter is a silent no-op instead of crossing the boundary.
+    @Test("previous() at the first paragraph crosses into the previous chapter's LAST paragraph")
+    func previousAtStartCrossesIntoPreviousBatch() async {
+        let source = ExhaustionSource([["prev-a", "prev-b", "prev-c"]]) // one preceding chapter
+        let env = makeBridge(
+            engine: { state in FakeTTSEngine(state: state, script: .holds) },
+            onBeforeStart: { source.next() }
+        )
+        await env.bridge.start(paragraphs: ["cur-a", "cur-b"])
+        await waitUntil(timeout: 2) { startIds(env.engine) == ["0"] }
+
+        // At the first paragraph: cross BACKWARD into the previous chapter and
+        // land on its LAST paragraph (index 2 of a 3-paragraph batch), rather
+        // than clamping at "0".
+        await env.bridge.previous()
+        await waitUntil(timeout: 3) { startIds(env.engine).last == "2" }
+
+        await env.bridge.stop()
+        #expect(source.callCount >= 1, "previous() at the start must request the previous chapter")
+        #expect(startIds(env.engine) == ["0", "2"],
+                "previous() must land on the previous batch's last paragraph (id 2)")
+    }
+
+    /// At the first paragraph of the FIRST chapter (backward source dry), Previous
+    /// must NOT fabricate an out-of-range passage NOR tear the session down — it
+    /// stays put on the current paragraph so playback is uninterrupted.
+    @Test("previous() at the first paragraph of the first chapter stays put (no previous chapter)")
+    func previousAtBookStartStaysPut() async {
+        let source = ExhaustionSource([]) // no preceding chapter
+        let env = makeBridge(
+            engine: { state in FakeTTSEngine(state: state, script: .holds) },
+            onBeforeStart: { source.next() }
+        )
+        await env.bridge.start(paragraphs: ["cur-a", "cur-b"])
+        await waitUntil(timeout: 2) { startIds(env.engine) == ["0"] }
+
+        await env.bridge.previous()
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        await env.bridge.stop()
+        #expect(startIds(env.engine) == ["0"],
+                "previous() at book start must not fabricate a passage or tear down playback")
+    }
+
     @Test("next() does NOT stop the engine on a switch but DOES start the new passage (long-lived engine)")
     func nextDoesNotStopEngineButPlaysNewPassage() async {
         let env = makeBridge(engine: { state in FakeTTSEngine(state: state, script: .holds) })

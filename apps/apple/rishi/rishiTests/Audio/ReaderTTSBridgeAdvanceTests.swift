@@ -193,7 +193,8 @@ struct BridgeTestEnv {
 @MainActor
 func makeBridge(
     engine makeEngine: (TTSPlaybackState) -> FakeTTSEngine,
-    onExhausted: @escaping () async -> [String] = { [] }
+    onExhausted: @escaping () async -> [String] = { [] },
+    onBeforeStart: @escaping () async -> [String] = { [] }
 ) -> BridgeTestEnv {
     let state = TTSPlaybackState()
     let engine = makeEngine(state)
@@ -211,7 +212,8 @@ func makeBridge(
         settingsStore: settingsStore,
         userId: userId,
         onPassageChange: { index in recorder.record(index) },
-        onParagraphsExhausted: onExhausted
+        onParagraphsExhausted: onExhausted,
+        onParagraphsBeforeStart: onBeforeStart
     )
 
     return BridgeTestEnv(bridge: bridge, engine: engine, state: state, recorder: recorder)

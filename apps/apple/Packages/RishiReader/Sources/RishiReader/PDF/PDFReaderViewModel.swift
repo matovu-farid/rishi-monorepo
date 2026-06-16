@@ -225,6 +225,33 @@ public final class PDFReaderViewModel: @unchecked Sendable {
         return []
     }
 
+    /// Paragraphs for the PREVIOUS page with selectable text before the page
+    /// read-aloud is currently narrating, so pressing Previous on the first
+    /// paragraph of a page continues backward across the page boundary instead
+    /// of being a no-op. The backward mirror of ``paragraphsForFollowingPage()``:
+    /// it steps back past any intervening pages that produce zero paragraphs
+    /// (blank pages, image-only separators) and moves the live ``pageIndex`` onto
+    /// the new page via ``seek(toPage:)`` so the visible page — and the inline
+    /// read-aloud highlight — follow narration. Returns `[]` at the start of the
+    /// document (no earlier non-empty page), which the read-aloud bridge treats
+    /// as "stay put".
+    public func paragraphsForPrecedingPage() async -> [String] {
+        guard let document else { return [] }
+        let current = await MainActor.run { self.pageIndex }
+        var prev = current - 1
+        while prev >= 0 {
+            if let page = document.page(at: prev) {
+                let paragraphs = PDFReadAloudParagraphs.paragraphs(from: page)
+                if !paragraphs.isEmpty {
+                    await MainActor.run { self.seek(toPage: prev) }
+                    return paragraphs
+                }
+            }
+            prev -= 1
+        }
+        return []
+    }
+
     /// Flushes any pending debounced write immediately. Call on view dismiss.
     public func flush() async {
         pendingPositionTask?.cancel()

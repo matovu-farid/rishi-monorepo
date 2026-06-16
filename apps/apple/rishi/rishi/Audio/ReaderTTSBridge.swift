@@ -151,6 +151,17 @@ final class ReaderTTSBridge {
     /// callers (e.g. PDF) that do not stream further paragraphs.
     private let onParagraphsExhausted: () async -> [String]
 
+    /// Source of the PREVIOUS batch of paragraphs when the user presses Previous
+    /// on the FIRST paragraph of the current batch. Symmetric to
+    /// `onParagraphsExhausted`: for EPUB it loads the preceding reading-order
+    /// resource (the previous chapter), for PDF the preceding page with
+    /// selectable text. Returns `[]` at the very start of the book/document (no
+    /// preceding batch), which the bridge treats as "stay put". On a non-empty
+    /// result the bridge lands on the LAST paragraph of that batch (mirroring how
+    /// a reader expects Previous-at-page-top to resume the bottom of the prior
+    /// page). The default (`{ [] }`) preserves clamped single-batch behaviour.
+    private let onParagraphsBeforeStart: () async -> [String]
+
     /// Number of paragraphs to prewarm ahead of the current play head.
     /// Phase 24 (D1): default 5; configurable knob.
     var readAhead: Int = 5
@@ -168,7 +179,8 @@ final class ReaderTTSBridge {
         settingsStore: any TTSSettingsStore,
         userId: UserID,
         onPassageChange: @escaping (Int?) -> Void,
-        onParagraphsExhausted: @escaping () async -> [String] = { [] }
+        onParagraphsExhausted: @escaping () async -> [String] = { [] },
+        onParagraphsBeforeStart: @escaping () async -> [String] = { [] }
     ) {
         self.engine = engine
         self.state = state
@@ -178,6 +190,7 @@ final class ReaderTTSBridge {
         self.userId = userId
         self.onPassageChange = onPassageChange
         self.onParagraphsExhausted = onParagraphsExhausted
+        self.onParagraphsBeforeStart = onParagraphsBeforeStart
     }
 
     // MARK: - Public surface
@@ -268,10 +281,17 @@ final class ReaderTTSBridge {
         }
     }
 
-    /// User-driven: skip back to the previous paragraph and play it. Clamped at
-    /// the first paragraph (a no-op there).
+    /// User-driven: skip back to the previous paragraph and play it. At the
+    /// FIRST paragraph of the current batch, cross BACKWARD into the previous
+    /// batch (previous chapter / page) via the same continuation source, landing
+    /// on its LAST paragraph — symmetric to how `next()` crosses forward at the
+    /// last paragraph. With no previous batch (start of book) this stays put.
     func previous() async {
-        await jump(to: currentIndex - 1)
+        if currentIndex == 0 {
+            await retreatToPreviousBatch()
+        } else {
+            await jump(to: currentIndex - 1)
+        }
     }
 
     /// User-driven: replay the current paragraph from its start (e.g. the
@@ -407,6 +427,32 @@ final class ReaderTTSBridge {
         }
         paragraphs = next
         currentIndex = 0
+        startAdvanceWatcher()
+        await playCurrent()
+        return true
+    }
+
+    /// Loads the PREVIOUS batch (e.g. the previous EPUB chapter / PDF page) via
+    /// `onParagraphsBeforeStart` and starts it from its LAST paragraph — where a
+    /// listener expects narration to resume when stepping back across a boundary.
+    /// An empty result means start-of-book: stay put (do NOT tear down) so the
+    /// current paragraph keeps playing. Mirrors `advanceToNextBatch` but lands on
+    /// the last index instead of 0, and no-ops (rather than stops) when dry.
+    ///
+    /// Loads BEFORE cancelling the watcher: the dry case must leave current
+    /// playback — and its advance watcher — untouched, so we only tear down the
+    /// old watcher once we know there IS a previous batch to switch to. (The
+    /// forward path can cancel first because it always either advances or stops;
+    /// backward-at-start uniquely needs to preserve the live session.)
+    @discardableResult
+    private func retreatToPreviousBatch() async -> Bool {
+        let previous = await onParagraphsBeforeStart()
+        guard !previous.isEmpty else { return false }
+        advanceTask?.cancel()
+        advanceTask = nil
+        await prewarmer.cancelAll()
+        paragraphs = previous
+        currentIndex = previous.count - 1
         startAdvanceWatcher()
         await playCurrent()
         return true

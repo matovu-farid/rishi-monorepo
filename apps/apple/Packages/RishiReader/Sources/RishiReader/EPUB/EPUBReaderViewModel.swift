@@ -300,6 +300,45 @@ public final class EPUBReaderViewModel: @unchecked Sendable {
         return []
     }
 
+    /// Paragraphs for the PREVIOUS reading-order resource (chapter) before the
+    /// one read-aloud is currently narrating, so pressing Previous on the first
+    /// paragraph of a chapter continues backward across the chapter boundary
+    /// instead of being a no-op. The backward mirror of
+    /// ``paragraphsForFollowingResource()``: it steps the read-aloud chapter
+    /// cursor back past any intervening resources that chunk to zero paragraphs
+    /// (covers, blank section breaks) and returns the first non-empty chapter's
+    /// full paragraph list. Returns `[]` at the start of the book (no earlier
+    /// non-empty resource), which the bridge treats as "stay put".
+    public func paragraphsForPrecedingResource() async -> [String] {
+        guard let publication = publication else { return [] }
+        guard let currentHref = readAloudResourceHref ?? latestLocator?.href.removingFragment()
+        else { return [] }
+        let order = publication.readingOrder
+        guard let currentIndex = order.firstIndexWithHREF(currentHref) else { return [] }
+
+        var prevIndex = currentIndex - 1
+        while prevIndex >= 0 {
+            let link = order[prevIndex]
+            if let resource = publication.get(link),
+               case .success(let html) = await resource.read().asString(encoding: .utf8) {
+                let paragraphs = ParagraphChunker.chunk(html)
+                if !paragraphs.isEmpty {
+                    readAloudResourceHref = link.url().removingFragment()
+                    // Move the live locator back to the previous chapter so the
+                    // text-anchored read-aloud follow turns the page into this
+                    // resource rather than failing to find the paragraph in the
+                    // chapter we just left.
+                    if let locator = await publication.locate(link) {
+                        latestLocator = locator
+                    }
+                    return paragraphs
+                }
+            }
+            prevIndex -= 1
+        }
+        return []
+    }
+
     // MARK: - Debounce
 
     private func schedulePositionWrite(for locator: Locator) {

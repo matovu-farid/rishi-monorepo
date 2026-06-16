@@ -103,6 +103,20 @@ final class ReadAloudController {
                 let next = await vm?.paragraphsForFollowingPage() ?? []
                 self?.paragraphs = next
                 return next
+            },
+            onParagraphsBeforeStart: { [weak self, weak vm] in
+                // Start of the current page — load the previous page with
+                // selectable text so Previous on the first paragraph continues
+                // backward across the page boundary (mirror of the forward
+                // handler above). `paragraphsForPrecedingPage` also seeks the
+                // live page back so the visible page and inline highlight follow.
+                // Refresh the stash so onPassageChange resolves the highlight
+                // against the previous page's paragraphs (the bridge lands on its
+                // LAST index). Returns [] at the start of the document, which the
+                // bridge treats as "stay put".
+                let prev = await vm?.paragraphsForPrecedingPage() ?? []
+                self?.paragraphs = prev
+                return prev
             }
         )
         #endif
@@ -133,6 +147,17 @@ final class ReadAloudController {
                 // bridge cannot invoke this closure after the controller is deallocated.
                 self?.paragraphs = next
                 return next
+            },
+            onParagraphsBeforeStart: { [weak self, weak vm] in
+                // Start of the current chapter — load the previous reading-order
+                // resource so Previous on the first paragraph continues backward
+                // across the chapter boundary (mirror of the forward handler).
+                // Refresh the stash so onPassageChange resolves the highlight
+                // against the previous chapter's paragraphs (the bridge lands on
+                // its LAST index). Returns [] at the start of the book.
+                let prev = await vm?.paragraphsForPrecedingResource() ?? []
+                self?.paragraphs = prev
+                return prev
             }
         )
     }
@@ -160,7 +185,8 @@ final class ReadAloudController {
     func start(
         paragraphs: [String],
         onPassageChange: @escaping (Int?) -> Void,
-        onParagraphsExhausted: @escaping () async -> [String] = { [] }
+        onParagraphsExhausted: @escaping () async -> [String] = { [] },
+        onParagraphsBeforeStart: @escaping () async -> [String] = { [] }
     ) async {
         guard !paragraphs.isEmpty else { return }
         // Tear down any existing bridge before starting a new session.
@@ -177,7 +203,8 @@ final class ReadAloudController {
             settingsStore: ttsSettingsStore,
             userId: userId,
             onPassageChange: onPassageChange,
-            onParagraphsExhausted: onParagraphsExhausted
+            onParagraphsExhausted: onParagraphsExhausted,
+            onParagraphsBeforeStart: onParagraphsBeforeStart
         )
         bridge = newBridge
         self.paragraphs = paragraphs
