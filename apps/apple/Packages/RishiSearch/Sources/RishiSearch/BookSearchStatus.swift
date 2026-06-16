@@ -22,3 +22,39 @@ public enum BookSearchStatus: Sendable, Equatable {
     /// summary suitable for logging or surfacing to a debug screen.
     case failed(reason: String)
 }
+
+// MARK: - UI-facing helpers
+
+public extension BookSearchStatus {
+    /// Whether a reader-open backfill should kick off an index build.
+    ///
+    /// True ONLY for `.notIndexed`: an in-flight `.indexing` build must not
+    /// be restarted, a `.failed` build must not be retried on every open
+    /// (avoids thrash), and `.ready` needs no work.
+    var shouldBackfillIndex: Bool {
+        if case .notIndexed = self { return true }
+        return false
+    }
+
+    /// Integer completion percent for an in-progress build, else nil.
+    ///
+    /// Returns 0 when `chunksTotal` is 0 (degenerate empty book) so the chip
+    /// can still render "Indexing…". Integer division floors toward zero.
+    var indexingProgressPercent: Int? {
+        guard case let .indexing(done, total) = self else { return nil }
+        return total > 0 ? done * 100 / total : 0
+    }
+
+    /// Low-salience chip text, or nil when the chip should be hidden.
+    ///
+    /// `.indexing` -> "Indexing… NN%" (or "Indexing…" when total is 0);
+    /// every other case returns nil so the chip disappears once the index
+    /// is ready, never built, or failed.
+    var indicatorText: String? {
+        guard case let .indexing(_, total) = self else { return nil }
+        if total > 0, let percent = indexingProgressPercent {
+            return "Indexing… \(percent)%"
+        }
+        return "Indexing…"
+    }
+}
