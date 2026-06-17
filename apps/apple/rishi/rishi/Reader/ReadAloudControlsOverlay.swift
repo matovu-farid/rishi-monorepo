@@ -15,6 +15,12 @@ struct ReadAloudControlsOverlay: View {
     let controller: ReadAloudController
     let ttsState: TTSPlaybackState
 
+    #if targetEnvironment(macCatalyst)
+    /// Max width of the Read Aloud control bar on Mac so it reads as a
+    /// centered floating player rather than a full-window-width strip.
+    private static let macMaxWidth: CGFloat = 520
+    #endif
+
     var body: some View {
         if controller.showControls, let bridge = controller.bridge {
             ReadAloudControlsView(
@@ -49,6 +55,13 @@ struct ReadAloudControlsOverlay: View {
                     Task { await bridge.repeatCurrent() }
                 }
             )
+            #if targetEnvironment(macCatalyst)
+            // On Mac the reader window can be very wide; a full-bleed control
+            // bar looks oversized. Cap the card to a readable width so it sits
+            // as a centered floating bar (the bottom overlay alignment centers
+            // it horizontally). iOS keeps the full-width bar.
+            .frame(maxWidth: Self.macMaxWidth)
+            #endif
             .modifier(GlassCardBackground(cornerRadius: RishiRadius.large))
             .shadow(radius: RishiSpacing.s)
             .padding(.horizontal, RishiSpacing.m)

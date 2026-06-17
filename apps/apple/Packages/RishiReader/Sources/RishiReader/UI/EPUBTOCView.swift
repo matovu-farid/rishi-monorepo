@@ -29,7 +29,14 @@ public struct EPUBTOCView: View {
     }
 
     public var body: some View {
-        NavigationStack {
+        // A plain header Button is used instead of a `NavigationStack` +
+        // `.toolbar` "Done": on Mac Catalyst the sheet's NavigationStack
+        // bar leaks into the window chrome and its confirmationAction
+        // button does not reliably fire/dismiss. A plain button in the
+        // view body fires on every platform.
+        VStack(spacing: 0) {
+            header
+            Divider()
             Group {
                 if entries.isEmpty {
                     ContentUnavailableView(
@@ -57,16 +64,22 @@ public struct EPUBTOCView: View {
                     .listStyle(.plain)
                 }
             }
-            .navigationTitle("Contents")
-            #if !os(macOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done", action: onClose)
-                }
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private var header: some View {
+        HStack {
+            Text("Contents")
+                .font(RishiTypography.titleM)
+                .foregroundStyle(RishiColor.textPrimary)
+            Spacer()
+            Button("Done", action: onClose)
+                .font(RishiTypography.bodyEmphasized)
+                .foregroundStyle(RishiColor.accent)
+        }
+        .padding(.horizontal, RishiSpacing.l)
+        .padding(.vertical, RishiSpacing.m)
     }
 }
 

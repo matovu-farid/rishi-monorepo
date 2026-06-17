@@ -85,16 +85,24 @@ public final class ReaderChromeController {
     private let sleep: @Sendable (Duration) async throws -> Void
     private var hideTask: Task<Void, Never>?
 
+    /// When true the chrome is pinned: it starts visible and never toggles,
+    /// hides, or auto-hides. Used on Mac Catalyst, where the toolbar (back
+    /// button, voice chat, etc.) is expected to stay visible at all times —
+    /// unlike the immersive tap-to-toggle behavior on iOS.
+    private let alwaysVisible: Bool
+
     public init(
         accessibility: any AccessibilityProviding,
         autoHideDelay: Duration = .seconds(4),
         sleep: @escaping @Sendable (Duration) async throws -> Void = _readerChromeDefaultSleep,
-        initiallyVisible: Bool = false
+        initiallyVisible: Bool = false,
+        alwaysVisible: Bool = false
     ) {
         self.accessibility = accessibility
         self.autoHideDelay = autoHideDelay
         self.sleep = sleep
-        self.isVisible = initiallyVisible
+        self.alwaysVisible = alwaysVisible
+        self.isVisible = alwaysVisible || initiallyVisible
     }
 
     // No explicit `deinit` cancellation: the auto-hide Task captures
@@ -105,6 +113,8 @@ public final class ReaderChromeController {
     /// Flip visibility. If becoming visible, (re)arm the auto-hide timer.
     /// If becoming hidden, cancel any pending dismissal.
     public func toggle() {
+        // Pinned chrome (Mac Catalyst) never toggles — it stays visible.
+        guard !alwaysVisible else { return }
         // Phase 19 Plan 19-08 (F-P2-04) — wrap the chrome-toggle hot path.
         // Pure additive; behavior unchanged. The interval bounds the
         // synchronous body — the auto-hide Task started by show() runs
@@ -128,6 +138,8 @@ public final class ReaderChromeController {
 
     /// Hide the chrome immediately and cancel any pending auto-hide.
     public func hide() {
+        // Pinned chrome (Mac Catalyst) never hides.
+        guard !alwaysVisible else { return }
         cancelAutoHide()
         isVisible = false
     }
@@ -143,6 +155,8 @@ public final class ReaderChromeController {
 
     private func scheduleAutoHide() {
         cancelAutoHide()
+        // Pinned chrome (Mac Catalyst) never auto-hides.
+        guard !alwaysVisible else { return }
         guard !accessibility.isVoiceOverRunning else { return }
 
         let delay = autoHideDelay

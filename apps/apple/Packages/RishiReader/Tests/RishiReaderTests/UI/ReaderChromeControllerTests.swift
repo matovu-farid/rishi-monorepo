@@ -171,6 +171,58 @@ struct ReaderChromeControllerTests {
         #expect(sleeper.sleepCallCount == 0)
     }
 
+    @Test("Always-visible mode starts visible")
+    func alwaysVisibleStartsVisible() {
+        let controller = ReaderChromeController(
+            accessibility: FakeAccessibility(voiceOver: false),
+            autoHideDelay: .seconds(4),
+            sleep: { _ in },
+            alwaysVisible: true
+        )
+        #expect(controller.isVisible == true)
+    }
+
+    @Test("Always-visible mode ignores toggle and stays visible")
+    func alwaysVisibleIgnoresToggle() {
+        let controller = ReaderChromeController(
+            accessibility: FakeAccessibility(voiceOver: false),
+            autoHideDelay: .seconds(4),
+            sleep: { _ in },
+            alwaysVisible: true
+        )
+
+        controller.toggle()
+        #expect(controller.isVisible == true)
+    }
+
+    @Test("Always-visible mode ignores hide")
+    func alwaysVisibleIgnoresHide() {
+        let controller = ReaderChromeController(
+            accessibility: FakeAccessibility(voiceOver: false),
+            autoHideDelay: .seconds(4),
+            sleep: { _ in },
+            alwaysVisible: true
+        )
+
+        controller.hide()
+        #expect(controller.isVisible == true)
+    }
+
+    @Test("Always-visible mode never schedules auto-hide")
+    func alwaysVisibleSkipsAutoHide() async {
+        let sleeper = FakeSleeper()
+        let controller = ReaderChromeController(
+            accessibility: FakeAccessibility(voiceOver: false),
+            autoHideDelay: .seconds(4),
+            sleep: { duration in try await sleeper.sleep(for: duration) },
+            alwaysVisible: true
+        )
+
+        controller.show()
+        #expect(controller.isVisible == true)
+        #expect(sleeper.sleepCallCount == 0)
+    }
+
     @Test("Activity resets the auto-hide timer")
     func activityResetsTimer() async {
         let sleeper = FakeSleeper()

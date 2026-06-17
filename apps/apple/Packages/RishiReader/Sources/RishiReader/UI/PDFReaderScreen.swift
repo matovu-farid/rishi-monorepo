@@ -98,6 +98,10 @@ public struct PDFReaderScreen: View {
     /// `.automatic` so previews / pre-31-04 callers compile unchanged.
     private let pdfViewMode: PDFViewModeSetting
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Pops the reader back to the host NavigationStack (library) — used when
+    /// the cold-open failure alert is dismissed (Phase 21 Plan 21-03 follow-up:
+    /// the custom full-page failure overlay was replaced by a native `.alert`).
+    @Environment(\.dismiss) private var dismiss
     /// Chrome visibility is owned by a small `@Observable` controller so
     /// the tap-to-toggle, auto-hide, and VoiceOver behaviors live in a
     /// single testable seam (see `ReaderChromeController`).
@@ -118,17 +122,26 @@ public struct PDFReaderScreen: View {
         // Under RISHI_UITEST keep the chrome pinned (no 4s auto-hide) so the
         // toolbar's Read Aloud button stays reachable for the whole test run.
         let autoHide: Duration = uitestVisible ? .seconds(86_400) : .seconds(4)
+        // On Mac the toolbar (back button, voice chat, etc.) stays visible at
+        // all times — no immersive tap-to-toggle / auto-hide like on iOS.
+        #if targetEnvironment(macCatalyst)
+        let alwaysVisible = true
+        #else
+        let alwaysVisible = false
+        #endif
         #if canImport(UIKit)
         return ReaderChromeController(
             accessibility: UIKitAccessibilityProvider(),
             autoHideDelay: autoHide,
-            initiallyVisible: uitestVisible
+            initiallyVisible: uitestVisible,
+            alwaysVisible: alwaysVisible
         )
         #else
         return ReaderChromeController(
             accessibility: PreviewAccessibility(),
             autoHideDelay: autoHide,
-            initiallyVisible: uitestVisible
+            initiallyVisible: uitestVisible,
+            alwaysVisible: alwaysVisible
         )
         #endif
     }()
@@ -400,16 +413,25 @@ public struct PDFReaderScreen: View {
         // during the multi-second `PDFDocument(url:)` parse. `.idle`
         // is treated as "still loading" — covers the brief window
         // before `.task` runs `load()` and flips state to `.loading`.
+        // The `.failed` case no longer renders a custom full-page overlay;
+        // it surfaces a native `.alert` (see `.readerColdOpenFailureAlert`
+        // below) that pops the reader on dismiss.
         .overlay {
             switch viewModel.loadingState {
             case .idle, .loading:
                 ReaderColdOpenOverlay(bookTitle: viewModel.book.title)
-            case .failed(let reason):
-                ReaderColdOpenFailureOverlay(bookTitle: viewModel.book.title, reason: reason)
-            case .loaded:
+            case .failed, .loaded:
                 EmptyView()
             }
         }
+        // Phase 21 Plan 21-03 follow-up — native failure alert replaces the
+        // custom full-page `ReaderColdOpenFailureOverlay`. Dismissing it pops
+        // the reader back to the library via `@Environment(\.dismiss)`.
+        .readerColdOpenFailureAlert(
+            bookTitle: viewModel.book.title,
+            reason: coldOpenFailureReason,
+            onDismiss: { dismiss() }
+        )
         // Phase 18 Plan 18-02 — F-P1-01.
         // Native SwiftUI haptics. SwiftUI fires the haptic each time the
         // trigger value changes. Page-turn call sites bump
@@ -491,7 +513,7 @@ public struct PDFReaderScreen: View {
         // TTS sheets are owned by `RootView`. The switch handles them
         // with `EmptyView()` so the enum invariant (exhaustive coverage)
         // holds.
-        .sheet(item: $activeSheet) { sheet in
+        .readerSheet(item: $activeSheet) { sheet in
             switch sheet {
             case .toc:
                 PDFTOCView(
@@ -618,6 +640,12 @@ public struct PDFReaderScreen: View {
             // is correct since the VM itself is @MainActor.
             Task { await viewModel.flush() }
         }
+        // Drive the window appearance from the reader theme so the native
+        // macOS titlebar text ("Library") stays legible. Without this the
+        // titlebar follows the system light/dark trait while the page
+        // background follows viewModel.theme, so a mismatch (e.g. dark
+        // system + light/sepia theme) renders white title on a cream bar.
+        .preferredColorScheme(viewModel.theme == .dark ? .dark : .light)
     }
 
     @ViewBuilder
@@ -627,6 +655,15 @@ public struct PDFReaderScreen: View {
         case .sepia: RishiColor.readerBackgroundSepia.ignoresSafeArea()
         case .dark:  RishiColor.readerBackgroundDark.ignoresSafeArea()
         }
+    }
+
+    /// Maps `loadingState` to the cold-open failure reason: non-nil only when
+    /// `load()` failed, which drives the native `.readerColdOpenFailureAlert`.
+    private var coldOpenFailureReason: String? {
+        if case .failed(let reason) = viewModel.loadingState {
+            return reason
+        }
+        return nil
     }
 
     // MARK: - Selection / highlight flow (UIKit-only)
@@ -842,34 +879,6 @@ private struct ReaderColdOpenOverlay: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Opening \(bookTitle)")
-    }
-}
-
-/// Phase 21 Plan 21-03 — overlay shown when `load()` fails so the user
-/// is never left on a blank screen. Native SwiftUI only.
-private struct ReaderColdOpenFailureOverlay: View {
-    let bookTitle: String
-    let reason: String
-    var body: some View {
-        ZStack {
-            RishiColor.background.ignoresSafeArea()
-            VStack(spacing: RishiSpacing.m) {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.largeTitle)
-                    .foregroundStyle(RishiColor.textPrimary)
-                Text("Could not open \(bookTitle)")
-                    .font(RishiTypography.bodyEmphasized)
-                    .foregroundStyle(RishiColor.textPrimary)
-                Text(reason)
-                    .font(RishiTypography.body)
-                    .foregroundStyle(RishiColor.textPrimary.opacity(0.7))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, RishiSpacing.l)
-                    .lineLimit(3)
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Could not open \(bookTitle). \(reason)")
     }
 }
 
