@@ -24,11 +24,17 @@
 import UIKit
 import PDFKit
 
-/// Which side the INCOMING page enters from. `.fromTrailing` for a next-page /
-/// next-spread turn, `.fromLeading` for a previous-page / previous-spread turn.
+/// Which side the INCOMING page enters from.
+/// - Horizontal (two-up spread paging): `.fromTrailing` next-spread,
+///   `.fromLeading` previous-spread.
+/// - Vertical (Continuous single-page overscroll-to-turn): `.fromBottom` the
+///   next page enters from underneath (turn forward at the page bottom),
+///   `.fromTop` the previous page enters from the top (turn back at the page top).
 enum PDFPageTransitionEdge {
     case fromLeading
     case fromTrailing
+    case fromTop
+    case fromBottom
 }
 
 @MainActor
@@ -48,15 +54,24 @@ enum PDFPageTransitionOverlay {
         snapshot.frame = pdfView.bounds
         pdfView.addSubview(snapshot)
         let width = pdfView.bounds.width
-        // Incoming from trailing => outgoing slides toward leading (negative X),
-        // and vice-versa, so the new page reads as entering from `edge`.
-        let outgoingTranslation = (edge == .fromTrailing) ? -width : width
+        let height = pdfView.bounds.height
+        // The outgoing snapshot slides off toward the edge OPPOSITE to where the
+        // incoming page reads as entering from, revealing the (already-committed)
+        // new page underneath. Horizontal for spread paging; vertical for the
+        // Continuous overscroll turn (next from the bottom, previous from the top).
+        let outgoing: CGAffineTransform
+        switch edge {
+        case .fromTrailing: outgoing = CGAffineTransform(translationX: -width, y: 0)
+        case .fromLeading:  outgoing = CGAffineTransform(translationX: width, y: 0)
+        case .fromBottom:   outgoing = CGAffineTransform(translationX: 0, y: -height)
+        case .fromTop:      outgoing = CGAffineTransform(translationX: 0, y: height)
+        }
         UIView.animate(
             withDuration: duration,
             delay: 0,
             options: [.curveEaseInOut],
             animations: {
-                snapshot.transform = CGAffineTransform(translationX: outgoingTranslation, y: 0)
+                snapshot.transform = outgoing
                 snapshot.alpha = 0.0
             },
             completion: { _ in snapshot.removeFromSuperview() }

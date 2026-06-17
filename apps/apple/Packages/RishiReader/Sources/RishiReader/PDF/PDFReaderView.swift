@@ -546,13 +546,16 @@ public struct PDFReaderView: UIViewRepresentable {
                 viewModel.advancePage()
                 viewModel.seek(toPage: next)
                 resetAccumulator()
-                runTransition(.fromTrailing)
+                // Continuous turns are vertical: forward at the page bottom, the
+                // next page enters from underneath (bottom).
+                runTransition(.fromBottom)
             case .turnPrev:
                 let prev = max(viewModel.pageIndex - 1, 0)
                 viewModel.advancePage()
                 viewModel.seek(toPage: prev)
                 resetAccumulator()
-                runTransition(.fromLeading)
+                // ...and back at the page top, the previous page enters from the top.
+                runTransition(.fromTop)
             case .boundary:
                 viewModel.hitBoundary()
                 resetAccumulator()
