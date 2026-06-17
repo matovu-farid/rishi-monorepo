@@ -678,6 +678,15 @@ public struct PDFReaderScreen: View {
             if let spokenPage = selection.pages.first, pdfView.currentPage !== spokenPage {
                 pdfView.go(to: spokenPage)
             }
+        case .singlePage:
+            // Phase 31 — Single Page has no within-page vertical scroll; just
+            // navigate to the spoken page (same as .twoUpSpread). PDFKit's
+            // UIPageViewController handles the horizontal turn. The non-exhaustive
+            // switch (no default:) compiler-forced this case once Wave 1 added the
+            // effective .singlePage mode (RESEARCH Pitfall 6 safety net).
+            if let spokenPage = selection.pages.first, pdfView.currentPage !== spokenPage {
+                pdfView.go(to: spokenPage)
+            }
         }
         #endif
     }
