@@ -15,6 +15,19 @@ import RishiTesting
 // spread pairing, sizeRestrictions lifecycle, full-screen breakpoint firing).
 // These smoke cases lock only the pure mode-request mapping + the new
 // `layoutMode:` init signature. Swift Testing only; no XCTest.
+//
+// Phase 30 Plan 30-04 note: the genuinely-new Mac gesture glue — the KVO
+// observer on the PDFView's enclosed UIScrollView contentOffset, the Mode-B
+// `.twoUp` `goToNextPage`/`goToPreviousPage` spread turn, and the
+// snapshot-slide `PDFPageTransitionOverlay` — is `targetEnvironment(macCatalyst)`
+// only and is NOT reachable on the iOS test host. It is confirmed by the
+// orchestrator's Mac Catalyst xcodebuild + a hardware pass (RESEARCH Open
+// Questions 1-6: enclosed-scroll-view depth/feel, continuous-vs-windowed
+// overscroll feel, `.twoUp` spread paging, Reduce-Motion slide gate). The
+// Mode-A page-turn DECISION math is already pinned by OverscrollTurnDeciderTests;
+// the cases below re-exercise that pure decider through representative gesture
+// scenarios (accumulate-across-deltas then decide) so the observer's intended
+// turn behavior is regression-locked at the decision boundary.
 @Suite("PDFReaderView smoke", .serialized)
 struct PDFReaderViewSmokeTests {
 
@@ -99,4 +112,90 @@ struct PDFReaderViewSmokeTests {
         )
     }
     #endif
+
+    // MARK: - Phase 30 plan 30-04 — Mode-A gesture scenarios through the pure decider
+
+    /// At the very bottom + repeated DOWN deltas crossing the threshold commits a
+    /// next-page turn — the path the Mac KVO observer drives in Mode A.
+    @Test("at bottom + repeated down deltas crossing threshold -> .turnNext")
+    func atBottomRepeatedDownCommitsTurnNext() {
+        let threshold = OverscrollTurnDecider.defaultThreshold
+        // Simulate the observer accumulating across several same-direction deltas
+        // once the scroll view has bottomed out.
+        var accumulated: CGFloat = 0
+        var lastDirection: ScrollDirection = .none
+        for _ in 0..<5 {
+            accumulated = OverscrollTurnDecider.accumulate(
+                current: accumulated,
+                delta: 20,
+                direction: .down,
+                lastDirection: lastDirection
+            )
+            lastDirection = .down
+        }
+        #expect(accumulated >= threshold)
+
+        let decision = OverscrollTurnDecider.decide(
+            offsetY: 1400,
+            contentHeight: 2000,
+            viewportHeight: 600,   // 1400 + 600 == 2000 -> at bottom edge
+            accumulatedOverscroll: accumulated,
+            direction: .down,
+            isAtFirstPage: false,
+            isAtLastPage: false
+        )
+        #expect(decision == .turnNext)
+    }
+
+    /// Small jitter below the threshold (anti-accidental-flip) stays `.none` even
+    /// at the bottom edge — no page turn on an incidental nudge.
+    @Test("small jitter below threshold at bottom -> .none")
+    func smallJitterBelowThresholdIsNone() {
+        var accumulated: CGFloat = 0
+        accumulated = OverscrollTurnDecider.accumulate(
+            current: accumulated,
+            delta: 4,
+            direction: .down,
+            lastDirection: .none
+        )
+        #expect(accumulated < OverscrollTurnDecider.defaultThreshold)
+
+        let decision = OverscrollTurnDecider.decide(
+            offsetY: 1400,
+            contentHeight: 2000,
+            viewportHeight: 600,
+            accumulatedOverscroll: accumulated,
+            direction: .down,
+            isAtFirstPage: false,
+            isAtLastPage: false
+        )
+        #expect(decision == .none)
+    }
+
+    /// On the LAST page, bottoming out + overscrolling past threshold reports a
+    /// document boundary (warn) instead of flipping past the end.
+    @Test("last page at bottom + over threshold -> .boundary")
+    func lastPageAtBottomReportsBoundary() {
+        var accumulated: CGFloat = 0
+        var lastDirection: ScrollDirection = .none
+        for _ in 0..<4 {
+            accumulated = OverscrollTurnDecider.accumulate(
+                current: accumulated,
+                delta: 25,
+                direction: .down,
+                lastDirection: lastDirection
+            )
+            lastDirection = .down
+        }
+        let decision = OverscrollTurnDecider.decide(
+            offsetY: 1400,
+            contentHeight: 2000,
+            viewportHeight: 600,
+            accumulatedOverscroll: accumulated,
+            direction: .down,
+            isAtFirstPage: false,
+            isAtLastPage: true
+        )
+        #expect(decision == .boundary)
+    }
 }
