@@ -123,7 +123,17 @@ public struct PDFReaderView: UIViewRepresentable {
         // rect-mapping closure for the highlight overlay. Defer until the
         // next main-loop tick so the screen's @State is allowed to mutate.
         let ready = onPDFViewReady
-        DispatchQueue.main.async { ready(pdfView) }
+        let coordinator = context.coordinator
+        DispatchQueue.main.async {
+            ready(pdfView)
+            #if targetEnvironment(macCatalyst)
+            // Phase 30 plan 30-04 — install the Mac-only enclosed-scroll-view
+            // observer once the PDFView has built its internal scroller. The
+            // observer drives Mode A overscroll-to-turn + Mode B spread paging;
+            // iOS never reaches this branch so its paging path is untouched.
+            coordinator.installScrollObserver(on: pdfView)
+            #endif
+        }
         return pdfView
     }
 
@@ -212,6 +222,34 @@ public struct PDFReaderView: UIViewRepresentable {
         /// reconfigure + re-seek. Harmless on iOS (never read there).
         var appliedLayoutMode: PDFReaderLayoutMode?
 
+        #if targetEnvironment(macCatalyst)
+        // MARK: - Phase 30 plan 30-04 — Mac overscroll-to-turn / spread paging
+
+        /// KVO token for the enclosed `UIScrollView`'s `contentOffset`. Stored
+        /// so the observation lives as long as the Coordinator and is torn down
+        /// in `deinit`. Pitfall 5: we OBSERVE the offset — we never assign the
+        /// scroll view's `.delegate`, which would fight PDFKit's own paging.
+        private var contentOffsetObservation: NSKeyValueObservation?
+        /// Weak ref to the live PDFView so the offset callback can commit turns
+        /// and drive the directional slide overlay without retaining the view.
+        private weak var observedPDFView: PDFView?
+        /// Accumulated overscroll past the relevant edge (Mode A). Reset on a
+        /// committed turn and on a scroll-direction change (the latter handled
+        /// inside `OverscrollTurnDecider.accumulate`).
+        private var accumulatedOverscroll: CGFloat = 0
+        /// Previous vertical offset, used to derive the instantaneous scroll
+        /// direction and per-event delta for the accumulator.
+        private var lastOffsetY: CGFloat = 0
+        /// Previous horizontal offset, used to derive a discrete Mode-B swipe
+        /// direction (one swipe = one spread, no accumulator).
+        private var lastOffsetX: CGFloat = 0
+        /// Last scroll direction (Mode A) so the accumulator resets on reversal.
+        private var lastDirection: ScrollDirection = .none
+        /// Debounce flag: while a turn is settling we ignore offset callbacks so
+        /// one overscroll past threshold commits EXACTLY one page/spread turn.
+        private var isTurnSettling: Bool = false
+        #endif
+
         init(
             viewModel: PDFReaderViewModel,
             onSelectionChange: @escaping (PDFSelection?) -> Void,
@@ -254,6 +292,168 @@ public struct PDFReaderView: UIViewRepresentable {
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
             true
+        }
+
+        #if targetEnvironment(macCatalyst)
+        // MARK: - Phase 30 plan 30-04 — Mac scroll observation
+
+        /// First `UIScrollView` descendant of the PDFView, or nil. Pitfall 3:
+        /// the enclosed-scroll-view structure is NOT contractual, so this
+        /// degrades gracefully — never force-unwraps. If no scroll view is
+        /// found, no observer is installed and the gesture is simply absent
+        /// (no crash, no behavior change).
+        private func firstEnclosedScrollView(_ view: UIView) -> UIScrollView? {
+            if let scroll = view as? UIScrollView { return scroll }
+            for sub in view.subviews {
+                if let s = firstEnclosedScrollView(sub) { return s }
+            }
+            return nil
+        }
+
+        /// Installs the KVO observer on the PDFView's enclosed scroll view's
+        /// `contentOffset` (Pitfall 5: observe, do NOT steal the delegate).
+        /// Idempotent — a second call invalidates the prior token first so a
+        /// re-realized scroll view never leaks an observer.
+        func installScrollObserver(on pdfView: PDFView) {
+            contentOffsetObservation?.invalidate()
+            contentOffsetObservation = nil
+            observedPDFView = pdfView
+            guard let scroll = firstEnclosedScrollView(pdfView) else { return }
+            lastOffsetY = scroll.contentOffset.y
+            lastOffsetX = scroll.contentOffset.x
+            // `[.new]` only — the closure reads `scroll` directly. Capture the
+            // Coordinator weakly and hop to the MainActor (the Coordinator is
+            // @MainActor) so the offset callback can touch the VM safely.
+            contentOffsetObservation = scroll.observe(
+                \.contentOffset,
+                options: [.new]
+            ) { [weak self] scrollView, _ in
+                MainActor.assumeIsolated {
+                    self?.handleContentOffsetChange(scrollView)
+                }
+            }
+        }
+
+        /// Routes an offset change to Mode A (overscroll accumulator + decider)
+        /// or Mode B (one discrete swipe = one spread). Mode B is selected when
+        /// the applied layout mode is `.twoUpSpread`; everything else is Mode A.
+        private func handleContentOffsetChange(_ scroll: UIScrollView) {
+            guard !isTurnSettling else { return }
+            if appliedLayoutMode == .twoUpSpread {
+                handleSpreadSwipe(scroll)
+            } else {
+                handleOverscroll(scroll)
+            }
+        }
+
+        /// Mode A — feed geometry into `OverscrollTurnDecider` and commit a turn
+        /// once accumulated overscroll past the edge crosses the threshold.
+        private func handleOverscroll(_ scroll: UIScrollView) {
+            let offsetY = scroll.contentOffset.y
+            let delta = offsetY - lastOffsetY
+            let direction: ScrollDirection = delta > 0 ? .down : (delta < 0 ? .up : .none)
+            // No vertical movement — nothing to accumulate or decide.
+            guard direction != .none else { lastOffsetY = offsetY; return }
+
+            accumulatedOverscroll = OverscrollTurnDecider.accumulate(
+                current: accumulatedOverscroll,
+                delta: delta,
+                direction: direction,
+                lastDirection: lastDirection
+            )
+            lastDirection = direction
+            lastOffsetY = offsetY
+
+            let decision = OverscrollTurnDecider.decide(
+                offsetY: offsetY,
+                contentHeight: scroll.contentSize.height,
+                viewportHeight: scroll.bounds.height,
+                accumulatedOverscroll: accumulatedOverscroll,
+                direction: direction,
+                isAtFirstPage: viewModel.pageIndex <= 0,
+                isAtLastPage: viewModel.pageIndex >= viewModel.totalPages - 1
+            )
+
+            switch decision {
+            case .turnNext:
+                let next = min(viewModel.pageIndex + 1, max(viewModel.totalPages - 1, 0))
+                viewModel.advancePage()
+                viewModel.seek(toPage: next)
+                resetAccumulator()
+                runTransition(.fromTrailing)
+            case .turnPrev:
+                let prev = max(viewModel.pageIndex - 1, 0)
+                viewModel.advancePage()
+                viewModel.seek(toPage: prev)
+                resetAccumulator()
+                runTransition(.fromLeading)
+            case .boundary:
+                viewModel.hitBoundary()
+                resetAccumulator()
+            case .none:
+                break
+            }
+        }
+
+        /// Mode B — a single discrete horizontal scroll/swipe turns exactly one
+        /// spread via `goToNextPage`/`goToPreviousPage` (no accumulator). The
+        /// existing `.PDFViewPageChanged` loop keeps the VM in sync afterward.
+        private func handleSpreadSwipe(_ scroll: UIScrollView) {
+            let offsetX = scroll.contentOffset.x
+            let deltaX = offsetX - lastOffsetX
+            lastOffsetX = offsetX
+            // Ignore sub-pixel jitter; a real swipe moves several points.
+            guard abs(deltaX) >= 1 else { return }
+            guard let pdfView = observedPDFView else { return }
+            if deltaX > 0 {
+                pdfView.goToNextPage(nil)
+                runTransition(.fromTrailing)
+            } else {
+                pdfView.goToPreviousPage(nil)
+                runTransition(.fromLeading)
+            }
+            // Debounce: one discrete swipe = one spread. Settle before the next.
+            beginTurnSettling()
+        }
+
+        /// Resets the Mode-A accumulator and begins the settle debounce so the
+        /// committed turn lands before any further offset callback is honored.
+        private func resetAccumulator() {
+            accumulatedOverscroll = 0
+            lastDirection = .none
+            beginTurnSettling()
+        }
+
+        /// Briefly ignores offset callbacks so the new page/spread settles and
+        /// one overscroll/swipe commits exactly one turn (Pitfall 4 — no
+        /// accidental multi-flips). Re-syncs `lastOffsetY/X` to the settled
+        /// position on resume so the next delta is measured cleanly.
+        private func beginTurnSettling() {
+            isTurnSettling = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                guard let self else { return }
+                if let scroll = self.observedPDFView.flatMap({ self.firstEnclosedScrollView($0) }) {
+                    self.lastOffsetY = scroll.contentOffset.y
+                    self.lastOffsetX = scroll.contentOffset.x
+                }
+                self.isTurnSettling = false
+            }
+        }
+
+        /// Runs the directional snapshot-slide overlay (plan 30-04 Task 2) on
+        /// the live PDFView, showing which side the incoming page enters from.
+        /// No-op when the PDFView is gone or Reduce Motion is on (the overlay
+        /// itself honors the accessibility setting).
+        private func runTransition(_ edge: PDFPageTransitionEdge) {
+            guard let pdfView = observedPDFView else { return }
+            PDFPageTransitionOverlay.run(on: pdfView, edge: edge)
+        }
+        #endif
+
+        deinit {
+            #if targetEnvironment(macCatalyst)
+            contentOffsetObservation?.invalidate()
+            #endif
         }
     }
 }
