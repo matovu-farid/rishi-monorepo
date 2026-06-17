@@ -29,17 +29,17 @@ struct RishiMenuCommands: Commands {
     }
 
     var body: some Commands {
-        // Phase 32 Plan 32-03 — native rishi ▸ Settings… (Cmd+,) under the
-        // app menu (after the "About" item). Mac-only: iOS/iPadOS keep the
-        // in-app gear + sheet (no app menu there). Routes through the same
-        // MacCommandRouter as every other command — the actual
-        // `openWindow(id: "settings")` happens in MacCommandDispatchModifier
-        // (a ViewModifier with the `\.openWindow` env + the single-instance
-        // presenter flag), since a Commands body can't reliably hold either.
+        // Phase 33 Plan 33-04 (Wave 4) — one lightweight Account submenu under
+        // the app menu (after "About"), replacing the Phase 32 Settings…/Cmd+,
+        // window entry (the Settings window is removed this phase). Every item
+        // is a menu command routed through the focused reader-prefs model to an
+        // existing presenter/auth flow/URL — no custom window or sheet (§D).
+        // Mac-only: iOS/iPadOS keep the in-app gear + sheet (no app menu there).
         #if targetEnvironment(macCatalyst)
         CommandGroup(after: .appInfo) {
-            Button("Settings…") { router.send(.showSettings) }
-                .keyboardShortcut(",", modifiers: .command)
+            Menu("Account") {
+                AccountMenuItems()
+            }
         }
         #endif
 
@@ -222,6 +222,46 @@ private struct SyncMenuItems: View {
             return "\(status.pendingCount) pending"
         }
         return "Not synced yet"
+    }
+}
+
+// MARK: - Account submenu (Phase 33 Plan 33-04, Wave 4)
+
+/// One lightweight Account entry point: a disabled email line, a disabled
+/// About version line, then Manage Subscription / Sign Out / Privacy / Terms
+/// commands routed through the focused reader-prefs model (RESEARCH §D). No
+/// custom window or sheet — Manage Subscription drives StoreKit's system sheet
+/// via the existing presenter, legal links open externally, Sign Out reuses the
+/// existing auth flow. The focused value is `nil` until the live SignedInView
+/// mounts, which disables every command before bootstrap with no extra guard.
+private struct AccountMenuItems: View {
+    @FocusedValue(\.readerPrefsMenu) private var prefs
+    var body: some View {
+        // Disabled info: signed-in email (resolved in SignedInView, not via the
+        // async currentUser) + the bundle version (Catalyst has no AppKit about
+        // panel, so About is a disabled line mirroring AboutSection.swift:39-43).
+        Text(prefs?.userEmail ?? "Not signed in")
+            .disabled(true)
+        Text(Self.aboutLine)
+            .disabled(true)
+        Divider()
+        Button("Manage Subscription…") { prefs?.onManageSubscription() }
+            .disabled(prefs == nil)
+        Button("Sign Out") { prefs?.onSignOut() }
+            .disabled(prefs == nil)
+        Divider()
+        Button("Privacy Policy") { prefs?.onOpenPrivacy() }
+            .disabled(prefs == nil)
+        Button("Terms of Use") { prefs?.onOpenTerms() }
+            .disabled(prefs == nil)
+    }
+
+    /// "rishi X.Y (build)" from Bundle.main — mirrors AboutSection's version
+    /// read so the menu line tracks every release automatically.
+    private static var aboutLine: String {
+        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        return "rishi \(short) (\(build))"
     }
 }
 
