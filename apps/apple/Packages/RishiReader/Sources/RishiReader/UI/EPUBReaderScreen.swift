@@ -229,7 +229,7 @@ public struct EPUBReaderScreen: View {
                 EPUBReaderView(
                     viewModel: viewModel,
                     onSelectionChange: { selection in
-                        handleSelectionChange(selection)
+                        highlightInteractor.handleSelectionChange(selection)
                     },
                     onTap: { location in
                         let resolver = ReaderTapRegionResolver()
@@ -243,26 +243,13 @@ public struct EPUBReaderScreen: View {
                                 chrome.toggle()
                             }
                         case .nextPage:
-                            // Phase 18 Plan 18-02 — F-P1-01: bump
-                            // the SwiftUI `.sensoryFeedback` trigger
-                            // on every committed page turn. Readium
-                            // owns the real position; the counter
-                            // is synthetic.
-                            viewModel.advancePage()
-                            let navigator = coordinatorRef.coordinator?.navigator
-                            // KEEP: Readium EPUBNavigatorViewController
-                            // requires @MainActor; goForward is a
-                            // navigator UI mutation.
-                            Task { @MainActor in
-                                _ = await navigator?.goForward(options: NavigatorGoOptions(animated: true))
-                            }
+                            // Phase 18 Plan 18-02 — F-P1-01: the navigator
+                            // helper bumps the SwiftUI `.sensoryFeedback`
+                            // trigger and drives Readium forward. Readium
+                            // owns the real position; the counter is synthetic.
+                            pageNavigator.goNext()
                         case .previousPage:
-                            viewModel.advancePage()
-                            let navigator = coordinatorRef.coordinator?.navigator
-                            // KEEP: Readium navigator UI mutation; @MainActor.
-                            Task { @MainActor in
-                                _ = await navigator?.goBackward(options: NavigatorGoOptions(animated: true))
-                            }
+                            pageNavigator.goPrev()
                         }
                     },
                     coordinatorRef: coordinatorRef
@@ -277,10 +264,10 @@ public struct EPUBReaderScreen: View {
                 EPUBHighlightContextMenu(
                     selectionFrame: pending.frame,
                     onColor: { color in
-                        saveHighlight(pending: pending, color: color)
+                        highlightInteractor.saveHighlight(pending: pending, color: color)
                     },
                     onAddNote: {
-                        startNoteFlow(for: pending)
+                        highlightInteractor.startNoteFlow(for: pending)
                     },
                     onDismiss: {
                         pendingSelection = nil
@@ -385,10 +372,8 @@ public struct EPUBReaderScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: EPUBMacCommandNotification.fontStep)) { note in
             let delta = (note.userInfo?[EPUBMacCommandNotification.fontStepDelta] as? Int) ?? 0
             guard delta != 0 else { return }
-            let current = viewModel.typography.fontSize.points
-            let stepped = ReaderFontSize.clamped(current + Double(delta) * 2.0)
             var typo = viewModel.typography
-            typo.fontSize = stepped
+            typo.fontSize = EPUBFontStepCalculator.step(from: typo.fontSize, delta: delta)
             viewModel.typography = typo
         }
         #if canImport(UIKit)
@@ -401,7 +386,9 @@ public struct EPUBReaderScreen: View {
         // Read-aloud inline highlight: follow the spoken passage as the TTS
         // bridge advances. The decoration is anchored to the current resource
         // via the navigator coordinator.
-        .onChange(of: readAloudParagraph) { _, _ in applyReadAloudHighlight() }
+        .onChange(of: readAloudParagraph) { _, _ in
+            readAloudPresenter.apply(paragraph: readAloudParagraph)
+        }
         // Phase 18 Plan 18-08 (F-P2-01) — single `.sheet(item:)` driven by
         // the `ReaderSheet?` enum replaces the prior chain of four cascading
         // `.sheet(isPresented:)` modifiers (TOC, typography, theme,
@@ -461,7 +448,7 @@ public struct EPUBReaderScreen: View {
                 HighlightNoteEditor(
                     note: $noteText,
                     snippet: hl.text,
-                    onSave: { commitNoteEdit(on: hl) },
+                    onSave: { highlightInteractor.commitNoteEdit(on: hl) },
                     onCancel: { activeSheet = nil }
                 )
             }
@@ -632,105 +619,34 @@ public struct EPUBReaderScreen: View {
         return nil
     }
 
-    // MARK: - Selection / highlight flow (UIKit-only)
+    // MARK: - Extracted coordinators (UIKit-only)
 
     #if canImport(UIKit)
-    private func handleSelectionChange(_ selection: Selection?) {
-        guard let selection,
-              let locator = EPUBSelectionCoordinator.makeLocator(from: selection) else {
-            pendingSelection = nil
-            return
-        }
-        pendingSelection = SelectionContext(locator: locator, frame: selection.frame)
+    /// Drives forward / backward page turns on the Readium navigator. Engine
+    /// knowledge (goForward / goBackward) lives in the helper, not the view
+    /// (Plan 34-03, SRP).
+    private var pageNavigator: EPUBPageNavigator {
+        EPUBPageNavigator(viewModel: viewModel, coordinatorRef: coordinatorRef)
     }
 
-    private func saveHighlight(pending: SelectionContext, color: HighlightColor) {
-        let store = highlightStore
-        // KEEP: viewModel.createHighlight is @MainActor and coordinatorRef
-        // .applyHighlights mutates the Readium navigator decorations API which
-        // is @MainActor. UI state writes follow.
-        Task { @MainActor in
-            if let store {
-                _ = await viewModel.createHighlight(
-                    color: color,
-                    locator: pending.locator,
-                    note: nil,
-                    store: store
-                )
-                coordinatorRef.coordinator?.applyHighlights(viewModel.loadedHighlights)
-            }
-            pendingSelection = nil
-            coordinatorRef.coordinator?.clearSelection()
-        }
+    /// Sequences the read-aloud follow-highlight choreography on the coordinator
+    /// (Plan 34-03, SRP).
+    private var readAloudPresenter: EPUBReadAloudPresenter {
+        EPUBReadAloudPresenter(coordinatorRef: coordinatorRef)
     }
 
-    private func startNoteFlow(for pending: SelectionContext) {
-        let store = highlightStore
-        // KEEP: viewModel.createHighlight is @MainActor, navigator decorations
-        // are @MainActor, activeSheet is @State on this view.
-        Task { @MainActor in
-            guard let store else {
-                pendingSelection = nil
-                return
-            }
-            // Save first with default yellow + empty note, then open the
-            // editor bound to the saved row (mirrors PDF flow).
-            if let saved = await viewModel.createHighlight(
-                color: .yellow,
-                locator: pending.locator,
-                note: nil,
-                store: store
-            ) {
-                coordinatorRef.coordinator?.applyHighlights(viewModel.loadedHighlights)
-                noteText = ""
-                // Phase 18 Plan 18-08 (F-P2-01) — drive the single
-                // .sheet(item:) instead of the prior dedicated
-                // `editingHighlight` @State binding.
-                activeSheet = .highlightNote(saved)
-            }
-            pendingSelection = nil
-            coordinatorRef.coordinator?.clearSelection()
-        }
-    }
-
-    /// Pushes the active read-aloud paragraph into the navigator as a
-    /// `"rishi-tts"` decoration, or clears it when no passage is active.
-    /// No-ops until the navigator coordinator is installed.
-    private func applyReadAloudHighlight() {
-        guard let coordinator = coordinatorRef.coordinator else { return }
-        // A non-nil active paragraph means a read-aloud session is following the
-        // text. While it is, the coordinator treats navigator location changes
-        // as auto-follow (not user page-turns) so the follow does not stop the
-        // audio it is chasing; cleared when the session ends (paragraph -> nil).
-        coordinator.isFollowingReadAloud = readAloudParagraph != nil
-        if let paragraph = readAloudParagraph {
-            coordinator.highlightReadAloudParagraph(paragraph)
-            // Follow the spoken paragraph so the page turns when it has moved
-            // onto a later page (auto-advance and the prev/next/repeat buttons
-            // both flow through here). go(to:) is a no-op when the paragraph is
-            // already on the current page.
-            Task { await coordinator.navigateToReadAloudParagraph(paragraph) }
-        } else {
-            coordinator.clearReadAloudHighlight()
-        }
-    }
-
-    private func commitNoteEdit(on highlight: Highlight) {
-        let text = noteText
-        let store = highlightStore
-        // KEEP: viewModel.updateNote is @MainActor; activeSheet write needs main.
-        Task { @MainActor in
-            if let store {
-                await viewModel.updateNote(
-                    on: highlight,
-                    note: text.isEmpty ? nil : text,
-                    store: store
-                )
-            }
-            // Phase 18 Plan 18-08 (F-P2-01) — dismissing the highlight
-            // editor clears the single-sheet enum.
-            activeSheet = nil
-        }
+    /// Owns the selection -> highlight CRUD choreography. Holds bindings to the
+    /// view's `@State` so the timing of each UI mutation is preserved
+    /// (Plan 34-03, SRP).
+    private var highlightInteractor: EPUBHighlightInteractor {
+        EPUBHighlightInteractor(
+            viewModel: viewModel,
+            coordinatorRef: coordinatorRef,
+            highlightStore: highlightStore,
+            pendingSelection: $pendingSelection,
+            noteText: $noteText,
+            activeSheet: $activeSheet
+        )
     }
 
     // MARK: - Preferences
